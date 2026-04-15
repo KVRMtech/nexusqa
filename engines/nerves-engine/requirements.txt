@@ -1,0 +1,3 @@
+# Nerves Engine — external integrations (Jira, GitHub, Slack, Teams, Webhook)
+-e ../../sdk/nexus-sdk
+httpx>=0.26,<1.0

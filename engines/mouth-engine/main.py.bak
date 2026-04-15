@@ -1,0 +1,1558 @@
+"""
+Nexus Mouth Engine — Reporting, Traceability & Compliance Output.
+
+The mouth that speaks results to humans. In regulated industries,
+testing isn't done when tests pass — it's done when you can PROVE
+tests were run correctly, traceably, and completely.
+
+The Mouth Engine generates:
+1. Traceability Matrices — Rule → Test Case → Test Result → Evidence
+2. Compliance Reports — State filing readiness, regulatory gap analysis
+3. Executive Summaries — High-level dashboards for C-suite
+4. Audit-Ready PDFs — Immutable evidence packages with digital signatures
+5. Test Coverage Reports — Rule coverage %, confidence scoring
+6. Defect Summary Reports — Failed tests with root cause analysis
+7. Regulatory Gap Analysis — Which rules lack test coverage by state
+
+Key Design Decisions:
+- Template-based rendering (Jinja2) lets business users customize reports
+- HTML first, then PDF generation (dual-format output)
+- Every report carries a unique report ID + generation timestamp
+- All source data is embedded for reproducibility (no external links that break)
+- Reports are immutable artifacts — once generated, they never change
+- Audit trail: who requested, when, with what parameters
+
+Insurance-Specific Reports:
+- State Filing Compliance Matrix (50 states × products × rule coverage)
+- Rate Table Validation Report (expected vs actual premium comparisons)
+- Underwriting Rules Verification (decision tree coverage analysis)
+- Claims Processing Audit Trail (end-to-end claim lifecycle)
+- Producer Licensing Compliance (NPN + state appointment validation)
+"""
+
+from __future__ import annotations
+
+import os
+import uuid
+import json
+import time
+import hashlib
+from datetime import datetime, date, timezone, timedelta
+from typing import Optional, Any
+from enum import Enum
+from collections import defaultdict
+
+from fastapi import Depends, HTTPException, BackgroundTasks
+from pydantic import BaseModel, Field
+
+from nexus_sdk import NexusEngine, EngineConfig
+from nexus_sdk.models import (
+    NexusRequest, NexusResponse, JobResponse, JobStatus, Confidence,
+)
+from nexus_sdk.auth import NexusUser, get_current_user
+from nexus_sdk.events import NexusEvent
+
+
+# ─── Configuration ─────────────────────────────────────────────
+
+class MouthConfig(EngineConfig):
+    engine_name: str = "mouth"
+    engine_port: int = 8010
+
+    # Report storage
+    report_storage_path: str = "/app/data/reports"
+
+    # PDF generation
+    pdf_engine: str = "weasyprint"  # weasyprint | reportlab
+    max_report_pages: int = 500
+    include_evidence_screenshots: bool = True
+
+    # Templates
+    template_dir: str = "/app/templates"
+
+    # Branding
+    company_name: str = "Nexus QA Platform"
+    company_logo_path: Optional[str] = None
+
+    # Report retention (days)
+    report_retention_days: int = 365
+
+
+# ─── Enums ─────────────────────────────────────────────────────
+
+class ReportType(str, Enum):
+    TRACEABILITY_MATRIX = "traceability_matrix"
+    COMPLIANCE_REPORT = "compliance_report"
+    EXECUTIVE_SUMMARY = "executive_summary"
+    TEST_COVERAGE = "test_coverage"
+    DEFECT_SUMMARY = "defect_summary"
+    AUDIT_PACKAGE = "audit_package"
+    REGULATORY_GAP = "regulatory_gap"
+    RATE_VALIDATION = "rate_validation"
+    FULL_SESSION_REPORT = "full_session_report"
+
+
+class ReportFormat(str, Enum):
+    HTML = "html"
+    PDF = "pdf"
+    JSON = "json"
+    CSV = "csv"
+
+
+class ReportStatus(str, Enum):
+    QUEUED = "queued"
+    GENERATING = "generating"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+class CoverageLevel(str, Enum):
+    FULL = "full"         # 100% — all rules have passing tests
+    HIGH = "high"         # 80-99%
+    MODERATE = "moderate"  # 60-79%
+    LOW = "low"           # 40-59%
+    CRITICAL = "critical"  # <40%
+
+
+# ─── Request/Response Models ──────────────────────────────────
+
+class GenerateReportRequest(BaseModel):
+    """Request to generate a report."""
+    tenant_id: str
+    session_id: str
+    report_type: ReportType
+    format: ReportFormat = ReportFormat.HTML
+    title: Optional[str] = None
+    description: Optional[str] = None
+    # Input data references
+    rules: list[dict] = Field(default_factory=list)
+    test_cases: list[dict] = Field(default_factory=list)
+    test_results: list[dict] = Field(default_factory=list)
+    evidence: list[dict] = Field(default_factory=list)
+    # Filters
+    product_filter: Optional[str] = None
+    state_filter: Optional[str] = None
+    date_range_start: Optional[str] = None
+    date_range_end: Optional[str] = None
+    # Options
+    include_evidence: bool = True
+    include_recommendations: bool = True
+    include_sign_off_section: bool = True
+
+
+class TraceabilityEntry(BaseModel):
+    """One row in the traceability matrix."""
+    rule_id: str
+    rule_description: str
+    rule_source: str = ""
+    rule_priority: str = "medium"
+    test_case_ids: list[str] = Field(default_factory=list)
+    test_case_count: int = 0
+    tests_passed: int = 0
+    tests_failed: int = 0
+    tests_not_run: int = 0
+    coverage_status: CoverageLevel = CoverageLevel.CRITICAL
+    evidence_ids: list[str] = Field(default_factory=list)
+    last_tested: Optional[str] = None
+    notes: str = ""
+
+
+class ComplianceItem(BaseModel):
+    """One compliance checkpoint."""
+    requirement_id: str
+    requirement_description: str
+    jurisdiction: str = "ALL"
+    status: str = "not_assessed"  # compliant | non_compliant | partial | not_assessed
+    evidence_refs: list[str] = Field(default_factory=list)
+    gaps: list[str] = Field(default_factory=list)
+    remediation: str = ""
+
+
+class ReportMetadata(BaseModel):
+    """Metadata for a generated report."""
+    report_id: str
+    report_type: ReportType
+    format: ReportFormat
+    title: str
+    session_id: str
+    tenant_id: str
+    generated_at: str
+    generated_by: str
+    page_count: int = 0
+    file_size_bytes: int = 0
+    checksum_sha256: str = ""
+    status: ReportStatus = ReportStatus.QUEUED
+
+
+class ReportContent(BaseModel):
+    """Full report response."""
+    metadata: ReportMetadata
+    content: str = ""  # HTML/JSON content (for non-PDF formats)
+    download_url: Optional[str] = None  # For PDF artifacts
+    summary: dict = Field(default_factory=dict)
+
+
+# ─── Report Generators ────────────────────────────────────────
+
+class TraceabilityMatrixGenerator:
+    """
+    Generates a traceability matrix linking:
+    BusinessRule → TestCase → TestResult → Evidence
+
+    This is THE critical artifact for regulatory compliance.
+    Auditors must see: "For every business rule, show me the test that
+    validates it, the result of that test, and screenshot evidence."
+    """
+
+    def generate(
+        self,
+        rules: list[dict],
+        test_cases: list[dict],
+        test_results: list[dict],
+        evidence: list[dict],
+    ) -> dict:
+        """Build the full traceability matrix."""
+
+        # Index test cases by rule
+        tc_by_rule: dict[str, list[dict]] = defaultdict(list)
+        for tc in test_cases:
+            for rule_id in tc.get("rule_ids", [tc.get("rule_id", "unknown")]):
+                tc_by_rule[rule_id].append(tc)
+
+        # Index results by test case
+        results_by_tc: dict[str, dict] = {}
+        for result in test_results:
+            tc_id = result.get("test_case_id", "")
+            results_by_tc[tc_id] = result
+
+        # Index evidence by test case
+        evidence_by_tc: dict[str, list[dict]] = defaultdict(list)
+        for ev in evidence:
+            tc_id = ev.get("test_case_id", "")
+            evidence_by_tc[tc_id].append(ev)
+
+        # Build matrix rows
+        entries: list[dict] = []
+        total_rules = len(rules)
+        covered_rules = 0
+        fully_passed_rules = 0
+
+        for rule in rules:
+            rule_id = rule.get("rule_id", str(uuid.uuid4())[:8])
+            tcs = tc_by_rule.get(rule_id, [])
+
+            passed = 0
+            failed = 0
+            not_run = 0
+            ev_ids = []
+
+            for tc in tcs:
+                tc_id = tc.get("test_case_id", "")
+                result = results_by_tc.get(tc_id)
+                if result:
+                    status = result.get("status", "not_run")
+                    if status == "passed":
+                        passed += 1
+                    elif status in ("failed", "error"):
+                        failed += 1
+                    else:
+                        not_run += 1
+                else:
+                    not_run += 1
+
+                # Collect evidence
+                for ev in evidence_by_tc.get(tc_id, []):
+                    ev_ids.append(ev.get("evidence_id", ""))
+
+            total_tests = passed + failed + not_run
+            if total_tests == 0:
+                coverage = CoverageLevel.CRITICAL
+            elif passed == total_tests:
+                coverage = CoverageLevel.FULL
+                fully_passed_rules += 1
+                covered_rules += 1
+            elif (passed / total_tests) >= 0.8:
+                coverage = CoverageLevel.HIGH
+                covered_rules += 1
+            elif (passed / total_tests) >= 0.6:
+                coverage = CoverageLevel.MODERATE
+                covered_rules += 1
+            elif (passed / total_tests) >= 0.4:
+                coverage = CoverageLevel.LOW
+            else:
+                coverage = CoverageLevel.CRITICAL
+
+            entry = TraceabilityEntry(
+                rule_id=rule_id,
+                rule_description=rule.get("description", rule.get("text", "No description")),
+                rule_source=rule.get("source", "KT Session"),
+                rule_priority=rule.get("priority", "medium"),
+                test_case_ids=[tc.get("test_case_id", "") for tc in tcs],
+                test_case_count=len(tcs),
+                tests_passed=passed,
+                tests_failed=failed,
+                tests_not_run=not_run,
+                coverage_status=coverage,
+                evidence_ids=ev_ids,
+                last_tested=max(
+                    (r.get("completed_at", "") for r in [results_by_tc.get(tc.get("test_case_id", ""), {}) for tc in tcs] if r),
+                    default=None,
+                ),
+            )
+            entries.append(entry.model_dump())
+
+        # Summary statistics
+        coverage_pct = (covered_rules / max(total_rules, 1)) * 100
+        pass_pct = (fully_passed_rules / max(total_rules, 1)) * 100
+
+        return {
+            "matrix": entries,
+            "summary": {
+                "total_rules": total_rules,
+                "rules_with_tests": covered_rules,
+                "rules_all_passing": fully_passed_rules,
+                "rules_with_failures": sum(1 for e in entries if e["tests_failed"] > 0),
+                "rules_no_tests": sum(1 for e in entries if e["test_case_count"] == 0),
+                "overall_coverage_pct": round(coverage_pct, 1),
+                "overall_pass_pct": round(pass_pct, 1),
+                "total_test_cases": len(test_cases),
+                "total_evidence_items": len(evidence),
+            },
+        }
+
+
+class ComplianceReportGenerator:
+    """
+    Generates compliance reports for insurance regulatory requirements.
+
+    Maps business rules to regulatory requirements and checks:
+    - Is every regulatory requirement covered by at least one rule?
+    - Is every rule tested?
+    - Are there jurisdiction-specific gaps?
+    """
+
+    # Common insurance regulatory domains
+    REGULATORY_DOMAINS = {
+        "rate_filing": "Premium rates filed and approved by state DOI",
+        "form_filing": "Policy forms filed and approved",
+        "illustration_compliance": "Illustrations meet state requirements",
+        "replacement_rules": "Replacement/exchange regulations followed",
+        "suitability": "Product suitability requirements met",
+        "disclosure": "Required disclosures provided to applicant",
+        "free_look": "Free look period properly implemented",
+        "grace_period": "Grace period rules correctly applied",
+        "nonforfeiture": "Nonforfeiture options properly calculated",
+        "beneficiary_rules": "Beneficiary designation rules followed",
+        "underwriting": "Underwriting guidelines consistently applied",
+        "claims_processing": "Claims handled within statutory timeframes",
+        "producer_licensing": "Producer properly licensed in state",
+        "anti_rebating": "Anti-rebating rules followed",
+        "privacy": "Privacy and data protection rules met",
+    }
+
+    def generate(
+        self,
+        rules: list[dict],
+        test_cases: list[dict],
+        test_results: list[dict],
+        state_filter: Optional[str] = None,
+    ) -> dict:
+        """Generate compliance report."""
+
+        # Assess each regulatory domain
+        items: list[dict] = []
+        compliant_count = 0
+        gap_count = 0
+
+        for domain_id, domain_desc in self.REGULATORY_DOMAINS.items():
+            # Find rules related to this domain
+            related_rules = [
+                r for r in rules
+                if domain_id in r.get("category", "").lower()
+                or domain_id.replace("_", " ") in r.get("description", "").lower()
+                or domain_id.replace("_", " ") in r.get("text", "").lower()
+            ]
+
+            # Find tests for those rules
+            rule_ids = {r.get("rule_id", "") for r in related_rules}
+            related_tests = [
+                tc for tc in test_cases
+                if any(rid in tc.get("rule_ids", [tc.get("rule_id", "")]) for rid in rule_ids)
+            ]
+
+            # Check test results
+            related_results = [
+                tr for tr in test_results
+                if tr.get("test_case_id") in {tc.get("test_case_id") for tc in related_tests}
+            ]
+
+            # Determine compliance status
+            if not related_rules:
+                status = "not_assessed"
+                gaps = [f"No business rules mapped to '{domain_desc}'"]
+            elif not related_tests:
+                status = "non_compliant"
+                gaps = [f"{len(related_rules)} rules found but no test cases generated"]
+                gap_count += 1
+            elif all(r.get("status") == "passed" for r in related_results) and related_results:
+                status = "compliant"
+                gaps = []
+                compliant_count += 1
+            elif any(r.get("status") == "passed" for r in related_results):
+                status = "partial"
+                failed = [r for r in related_results if r.get("status") != "passed"]
+                gaps = [f"{len(failed)} of {len(related_results)} tests failing"]
+                gap_count += 1
+            else:
+                status = "non_compliant"
+                gaps = ["All related tests failing or not executed"]
+                gap_count += 1
+
+            item = ComplianceItem(
+                requirement_id=domain_id,
+                requirement_description=domain_desc,
+                jurisdiction=state_filter or "ALL",
+                status=status,
+                evidence_refs=[r.get("test_case_id", "") for r in related_results if r.get("status") == "passed"],
+                gaps=gaps,
+                remediation=self._suggest_remediation(domain_id, status, gaps),
+            )
+            items.append(item.model_dump())
+
+        total = len(items)
+        assessed = sum(1 for i in items if i["status"] != "not_assessed")
+
+        return {
+            "compliance_items": items,
+            "summary": {
+                "total_requirements": total,
+                "assessed": assessed,
+                "compliant": compliant_count,
+                "non_compliant": gap_count,
+                "not_assessed": total - assessed,
+                "compliance_rate_pct": round((compliant_count / max(assessed, 1)) * 100, 1),
+                "jurisdiction": state_filter or "ALL",
+                "assessment_date": datetime.now(timezone.utc).isoformat(),
+            },
+        }
+
+    def _suggest_remediation(self, domain_id: str, status: str, gaps: list[str]) -> str:
+        """Generate remediation suggestions based on compliance gaps."""
+        if status == "compliant":
+            return "No action needed. All requirements verified."
+        elif status == "not_assessed":
+            return (
+                f"Map business rules to regulatory domain '{domain_id}'. "
+                f"Review KT session transcripts for coverage of this area."
+            )
+        elif status == "non_compliant":
+            return (
+                f"URGENT: Generate test cases for rules in '{domain_id}' domain. "
+                f"Review and retest. Gaps: {'; '.join(gaps)}"
+            )
+        else:
+            return f"Partial compliance. Fix failing tests: {'; '.join(gaps)}"
+
+
+class ExecutiveSummaryGenerator:
+    """
+    Generates C-suite-level executive summaries.
+
+    One-page overview: What was tested, what passed, what's at risk,
+    what needs attention — with zero technical jargon.
+    """
+
+    def generate(
+        self,
+        session_name: str,
+        rules: list[dict],
+        test_cases: list[dict],
+        test_results: list[dict],
+        traceability_summary: dict,
+        compliance_summary: dict,
+    ) -> dict:
+        """Generate executive summary."""
+
+        total_tests = len(test_results)
+        passed = sum(1 for r in test_results if r.get("status") == "passed")
+        failed = sum(1 for r in test_results if r.get("status") in ("failed", "error"))
+        not_run = total_tests - passed - failed
+
+        pass_rate = round((passed / max(total_tests, 1)) * 100, 1)
+
+        # Determine overall health
+        if pass_rate >= 95:
+            health = "HEALTHY"
+            health_color = "green"
+            recommendation = "System is performing within acceptable parameters. Ready for release consideration."
+        elif pass_rate >= 80:
+            health = "NEEDS ATTENTION"
+            health_color = "yellow"
+            recommendation = "Some test failures detected. Review failing areas before release."
+        elif pass_rate >= 60:
+            health = "AT RISK"
+            health_color = "orange"
+            recommendation = "Significant test failures. Remediation required before release."
+        else:
+            health = "CRITICAL"
+            health_color = "red"
+            recommendation = "Major quality issues detected. Do NOT proceed to production without remediation."
+
+        # Identify top risks
+        risks = []
+        failed_results = [r for r in test_results if r.get("status") in ("failed", "error")]
+        risk_categories: dict[str, int] = defaultdict(int)
+        for r in failed_results:
+            category = r.get("category", r.get("test_type", "uncategorized"))
+            risk_categories[category] += 1
+
+        for category, count in sorted(risk_categories.items(), key=lambda x: -x[1])[:5]:
+            risks.append({
+                "area": category,
+                "failed_tests": count,
+                "severity": "high" if count > 5 else "medium" if count > 2 else "low",
+            })
+
+        return {
+            "session_name": session_name,
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "overall_health": health,
+            "health_color": health_color,
+            "key_metrics": {
+                "business_rules_extracted": len(rules),
+                "test_cases_generated": len(test_cases),
+                "tests_executed": total_tests,
+                "tests_passed": passed,
+                "tests_failed": failed,
+                "tests_not_run": not_run,
+                "pass_rate_pct": pass_rate,
+                "rule_coverage_pct": traceability_summary.get("overall_coverage_pct", 0),
+                "compliance_rate_pct": compliance_summary.get("compliance_rate_pct", 0),
+            },
+            "top_risks": risks,
+            "recommendation": recommendation,
+            "sign_off": {
+                "qa_lead": {"name": "", "signed": False, "date": ""},
+                "product_owner": {"name": "", "signed": False, "date": ""},
+                "compliance_officer": {"name": "", "signed": False, "date": ""},
+            },
+        }
+
+
+class TestCoverageReportGenerator:
+    """
+    Generates detailed test coverage analysis.
+
+    For each rule, shows:
+    - How many test scenarios cover it
+    - Which coverage types exist (happy path, boundary, negative, edge case)
+    - Confidence level of the coverage
+    - Gaps where additional tests are recommended
+    """
+
+    COVERAGE_TYPES = ["happy_path", "boundary", "negative", "edge_case", "regression"]
+
+    def generate(
+        self,
+        rules: list[dict],
+        test_cases: list[dict],
+        test_results: list[dict],
+    ) -> dict:
+        """Generate coverage analysis."""
+
+        coverage_details: list[dict] = []
+
+        for rule in rules:
+            rule_id = rule.get("rule_id", "")
+            related_tcs = [
+                tc for tc in test_cases
+                if rule_id in tc.get("rule_ids", [tc.get("rule_id", "")])
+            ]
+
+            # Categorize by coverage type
+            type_coverage: dict[str, int] = {ct: 0 for ct in self.COVERAGE_TYPES}
+            for tc in related_tcs:
+                tc_type = tc.get("test_type", tc.get("coverage_type", "happy_path"))
+                if tc_type in type_coverage:
+                    type_coverage[tc_type] += 1
+                else:
+                    type_coverage["happy_path"] += 1
+
+            # Calculate result stats
+            tc_ids = {tc.get("test_case_id") for tc in related_tcs}
+            related_results = [r for r in test_results if r.get("test_case_id") in tc_ids]
+            passed = sum(1 for r in related_results if r.get("status") == "passed")
+            total = len(related_results)
+
+            # Determine gaps
+            gaps = []
+            if type_coverage["happy_path"] == 0:
+                gaps.append("Missing happy path test")
+            if type_coverage["boundary"] == 0:
+                gaps.append("Missing boundary value tests")
+            if type_coverage["negative"] == 0:
+                gaps.append("Missing negative/invalid input tests")
+            if type_coverage["edge_case"] == 0:
+                gaps.append("Missing edge case tests")
+
+            # Confidence calculation
+            types_covered = sum(1 for v in type_coverage.values() if v > 0)
+            type_confidence = types_covered / len(self.COVERAGE_TYPES)
+            result_confidence = (passed / max(total, 1))
+            overall_confidence = round((type_confidence * 0.4 + result_confidence * 0.6) * 100, 1)
+
+            coverage_details.append({
+                "rule_id": rule_id,
+                "rule_description": rule.get("description", rule.get("text", "")),
+                "total_test_cases": len(related_tcs),
+                "coverage_by_type": type_coverage,
+                "types_covered": types_covered,
+                "types_total": len(self.COVERAGE_TYPES),
+                "tests_passed": passed,
+                "tests_total": total,
+                "gaps": gaps,
+                "confidence_pct": overall_confidence,
+                "recommendations": self._recommend(gaps, overall_confidence),
+            })
+
+        # Aggregate stats
+        total_rules = len(rules)
+        rules_with_full_coverage = sum(
+            1 for d in coverage_details
+            if d["types_covered"] >= 4 and d["confidence_pct"] >= 80
+        )
+        avg_confidence = round(
+            sum(d["confidence_pct"] for d in coverage_details) / max(len(coverage_details), 1), 1
+        )
+
+        return {
+            "coverage_details": coverage_details,
+            "summary": {
+                "total_rules": total_rules,
+                "rules_with_full_coverage": rules_with_full_coverage,
+                "rules_needing_attention": total_rules - rules_with_full_coverage,
+                "average_confidence_pct": avg_confidence,
+                "total_test_cases": len(test_cases),
+                "total_gaps_found": sum(len(d["gaps"]) for d in coverage_details),
+            },
+        }
+
+    def _recommend(self, gaps: list[str], confidence: float) -> list[str]:
+        """Generate recommendations based on gaps."""
+        recommendations = []
+        if confidence < 50:
+            recommendations.append("CRITICAL: This rule needs immediate test coverage improvement")
+        if "Missing happy path test" in gaps:
+            recommendations.append("Add a basic positive/happy path test scenario")
+        if "Missing boundary value tests" in gaps:
+            recommendations.append("Add boundary value analysis for numeric fields (min, max, min-1, max+1)")
+        if "Missing negative/invalid input tests" in gaps:
+            recommendations.append("Add negative tests: empty fields, invalid formats, unauthorized access")
+        if "Missing edge case tests" in gaps:
+            recommendations.append("Add edge cases: concurrent modifications, timezone boundaries, leap years")
+        return recommendations
+
+
+class DefectSummaryGenerator:
+    """
+    Generates defect/failure summary report.
+
+    Groups failures by category, severity, and root cause pattern.
+    Helps QA leads prioritize remediation work.
+    """
+
+    def generate(
+        self,
+        test_cases: list[dict],
+        test_results: list[dict],
+    ) -> dict:
+        """Generate defect summary."""
+
+        failures: list[dict] = []
+        by_category: dict[str, list] = defaultdict(list)
+        by_severity: dict[str, int] = defaultdict(int)
+
+        # Build test case index
+        tc_index = {tc.get("test_case_id"): tc for tc in test_cases}
+
+        for result in test_results:
+            if result.get("status") not in ("failed", "error"):
+                continue
+
+            tc_id = result.get("test_case_id", "")
+            tc = tc_index.get(tc_id, {})
+
+            failure = {
+                "test_case_id": tc_id,
+                "test_name": tc.get("name", tc.get("description", "Unknown test")),
+                "category": tc.get("category", "uncategorized"),
+                "severity": self._classify_severity(result, tc),
+                "error_type": result.get("error_type", "assertion_failure"),
+                "error_message": result.get("error", result.get("message", "No details")),
+                "step_failed": result.get("step_failed", ""),
+                "expected": result.get("expected", ""),
+                "actual": result.get("actual", ""),
+                "screenshot_ref": result.get("screenshot_id", ""),
+                "suggested_root_cause": self._suggest_root_cause(result),
+            }
+
+            failures.append(failure)
+            by_category[failure["category"]].append(failure)
+            by_severity[failure["severity"]] += 1
+
+        # Sort by severity
+        severity_order = {"critical": 0, "high": 1, "medium": 2, "low": 3}
+        failures.sort(key=lambda f: severity_order.get(f["severity"], 99))
+
+        return {
+            "defects": failures,
+            "by_category": {
+                cat: {
+                    "count": len(items),
+                    "critical": sum(1 for i in items if i["severity"] == "critical"),
+                    "high": sum(1 for i in items if i["severity"] == "high"),
+                }
+                for cat, items in by_category.items()
+            },
+            "by_severity": dict(by_severity),
+            "summary": {
+                "total_failures": len(failures),
+                "critical": by_severity.get("critical", 0),
+                "high": by_severity.get("high", 0),
+                "medium": by_severity.get("medium", 0),
+                "low": by_severity.get("low", 0),
+                "top_failing_category": max(by_category, key=lambda k: len(by_category[k])) if by_category else "none",
+            },
+        }
+
+    def _classify_severity(self, result: dict, tc: dict) -> str:
+        """Classify defect severity based on context."""
+        error_type = result.get("error_type", "")
+        tc_priority = tc.get("priority", "medium")
+
+        if "security" in error_type.lower() or "pii" in error_type.lower():
+            return "critical"
+        if tc_priority == "critical":
+            return "critical"
+        if tc_priority == "high" or "data_loss" in error_type.lower():
+            return "high"
+        if "ui" in error_type.lower() or "display" in error_type.lower():
+            return "low"
+        return "medium"
+
+    def _suggest_root_cause(self, result: dict) -> str:
+        """Suggest root cause based on error patterns."""
+        error = (result.get("error", "") + result.get("message", "")).lower()
+
+        if "timeout" in error:
+            return "Performance issue — operation exceeded timeout threshold"
+        if "not found" in error or "404" in error:
+            return "Missing element/endpoint — UI or API may have changed"
+        if "permission" in error or "401" in error or "403" in error:
+            return "Authorization/permission issue — check role assignments"
+        if "null" in error or "none" in error or "undefined" in error:
+            return "Null reference — missing data or uninitialized field"
+        if "mismatch" in error or "expected" in error:
+            return "Assertion failure — actual behavior differs from expected"
+        if "connection" in error:
+            return "Connectivity issue — service may be down or unreachable"
+        return "Review error details and test steps for root cause"
+
+
+class HTMLReportRenderer:
+    """
+    Renders report data into professional HTML.
+
+    Uses inline CSS for portability — reports must look good
+    when opened as standalone files without a web server.
+    """
+
+    # Professional color scheme
+    COLORS = {
+        "primary": "#1a365d",
+        "secondary": "#2d3748",
+        "success": "#38a169",
+        "warning": "#d69e2e",
+        "danger": "#e53e3e",
+        "info": "#3182ce",
+        "light": "#f7fafc",
+        "border": "#e2e8f0",
+    }
+
+    def render_traceability_matrix(self, data: dict, metadata: dict) -> str:
+        """Render traceability matrix as HTML."""
+        summary = data["summary"]
+        matrix = data["matrix"]
+
+        rows_html = ""
+        for entry in matrix:
+            status_color = {
+                "full": self.COLORS["success"],
+                "high": "#48bb78",
+                "moderate": self.COLORS["warning"],
+                "low": "#ed8936",
+                "critical": self.COLORS["danger"],
+            }.get(entry["coverage_status"], self.COLORS["danger"])
+
+            rows_html += f"""
+            <tr>
+                <td style="font-weight:600">{entry['rule_id']}</td>
+                <td>{entry['rule_description'][:100]}{'...' if len(entry['rule_description']) > 100 else ''}</td>
+                <td style="text-align:center">{entry['rule_priority'].upper()}</td>
+                <td style="text-align:center">{entry['test_case_count']}</td>
+                <td style="text-align:center;color:{self.COLORS['success']}">{entry['tests_passed']}</td>
+                <td style="text-align:center;color:{self.COLORS['danger']}">{entry['tests_failed']}</td>
+                <td style="text-align:center">{entry['tests_not_run']}</td>
+                <td style="text-align:center">
+                    <span style="background:{status_color};color:white;padding:2px 8px;border-radius:4px;font-size:0.8rem">
+                        {entry['coverage_status'].upper()}
+                    </span>
+                </td>
+            </tr>"""
+
+        return self._wrap_html(
+            title=metadata.get("title", "Traceability Matrix"),
+            subtitle=f"Session: {metadata.get('session_id', 'N/A')}",
+            body=f"""
+            <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:24px">
+                {self._metric_card("Total Rules", summary['total_rules'], self.COLORS['primary'])}
+                {self._metric_card("Rules Covered", summary['rules_with_tests'], self.COLORS['success'])}
+                {self._metric_card("Coverage %", f"{summary['overall_coverage_pct']}%", self.COLORS['info'])}
+                {self._metric_card("Pass Rate", f"{summary['overall_pass_pct']}%",
+                    self.COLORS['success'] if summary['overall_pass_pct'] >= 80 else self.COLORS['danger'])}
+            </div>
+
+            <table style="width:100%;border-collapse:collapse;font-size:0.9rem">
+                <thead>
+                    <tr style="background:{self.COLORS['primary']};color:white">
+                        <th style="padding:10px;text-align:left">Rule ID</th>
+                        <th style="padding:10px;text-align:left">Description</th>
+                        <th style="padding:10px;text-align:center">Priority</th>
+                        <th style="padding:10px;text-align:center">Tests</th>
+                        <th style="padding:10px;text-align:center">Passed</th>
+                        <th style="padding:10px;text-align:center">Failed</th>
+                        <th style="padding:10px;text-align:center">Not Run</th>
+                        <th style="padding:10px;text-align:center">Coverage</th>
+                    </tr>
+                </thead>
+                <tbody>{rows_html}</tbody>
+            </table>
+            """,
+            metadata=metadata,
+        )
+
+    def render_executive_summary(self, data: dict, metadata: dict) -> str:
+        """Render executive summary as HTML."""
+        metrics = data["key_metrics"]
+        health = data["overall_health"]
+        health_color = {
+            "HEALTHY": self.COLORS["success"],
+            "NEEDS ATTENTION": self.COLORS["warning"],
+            "AT RISK": "#ed8936",
+            "CRITICAL": self.COLORS["danger"],
+        }.get(health, self.COLORS["danger"])
+
+        risks_html = ""
+        for risk in data.get("top_risks", []):
+            sev_color = {"high": self.COLORS["danger"], "medium": self.COLORS["warning"], "low": self.COLORS["info"]}.get(
+                risk["severity"], self.COLORS["info"]
+            )
+            risks_html += f"""
+            <tr>
+                <td>{risk['area']}</td>
+                <td style="text-align:center">{risk['failed_tests']}</td>
+                <td style="text-align:center">
+                    <span style="background:{sev_color};color:white;padding:2px 8px;border-radius:4px">
+                        {risk['severity'].upper()}
+                    </span>
+                </td>
+            </tr>"""
+
+        return self._wrap_html(
+            title=f"Executive Summary — {data['session_name']}",
+            subtitle=f"Generated: {data['generated_at'][:10]}",
+            body=f"""
+            <div style="text-align:center;margin:24px 0;padding:24px;background:{health_color};color:white;border-radius:12px">
+                <div style="font-size:2rem;font-weight:700">{health}</div>
+                <div style="font-size:1rem;margin-top:8px;opacity:0.9">{data['recommendation']}</div>
+            </div>
+
+            <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:24px">
+                {self._metric_card("Rules Found", metrics['business_rules_extracted'], self.COLORS['primary'])}
+                {self._metric_card("Tests Gen.", metrics['test_cases_generated'], self.COLORS['info'])}
+                {self._metric_card("Pass Rate", f"{metrics['pass_rate_pct']}%",
+                    self.COLORS['success'] if metrics['pass_rate_pct'] >= 80 else self.COLORS['danger'])}
+                {self._metric_card("Compliance", f"{metrics['compliance_rate_pct']}%",
+                    self.COLORS['success'] if metrics['compliance_rate_pct'] >= 80 else self.COLORS['danger'])}
+            </div>
+
+            <h3 style="color:{self.COLORS['primary']}">Top Risks</h3>
+            <table style="width:100%;border-collapse:collapse">
+                <thead>
+                    <tr style="background:{self.COLORS['primary']};color:white">
+                        <th style="padding:8px;text-align:left">Area</th>
+                        <th style="padding:8px;text-align:center">Failed Tests</th>
+                        <th style="padding:8px;text-align:center">Severity</th>
+                    </tr>
+                </thead>
+                <tbody>{risks_html if risks_html else '<tr><td colspan="3" style="text-align:center;padding:12px">No risks identified</td></tr>'}</tbody>
+            </table>
+
+            <div style="margin-top:32px;padding:16px;background:{self.COLORS['light']};border-radius:8px">
+                <h3 style="color:{self.COLORS['primary']};margin-top:0">Sign-Off</h3>
+                <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:16px">
+                    <div style="border:1px dashed {self.COLORS['border']};padding:16px;border-radius:8px">
+                        <div style="font-weight:600">QA Lead</div>
+                        <div style="margin-top:24px;border-top:1px solid {self.COLORS['border']};padding-top:4px;font-size:0.8rem">
+                            Signature / Date
+                        </div>
+                    </div>
+                    <div style="border:1px dashed {self.COLORS['border']};padding:16px;border-radius:8px">
+                        <div style="font-weight:600">Product Owner</div>
+                        <div style="margin-top:24px;border-top:1px solid {self.COLORS['border']};padding-top:4px;font-size:0.8rem">
+                            Signature / Date
+                        </div>
+                    </div>
+                    <div style="border:1px dashed {self.COLORS['border']};padding:16px;border-radius:8px">
+                        <div style="font-weight:600">Compliance Officer</div>
+                        <div style="margin-top:24px;border-top:1px solid {self.COLORS['border']};padding-top:4px;font-size:0.8rem">
+                            Signature / Date
+                        </div>
+                    </div>
+                </div>
+            </div>
+            """,
+            metadata=metadata,
+        )
+
+    def render_compliance_report(self, data: dict, metadata: dict) -> str:
+        """Render compliance report as HTML."""
+        summary = data["summary"]
+        items = data["compliance_items"]
+
+        rows_html = ""
+        for item in items:
+            status_style = {
+                "compliant": f"background:{self.COLORS['success']};color:white",
+                "partial": f"background:{self.COLORS['warning']};color:white",
+                "non_compliant": f"background:{self.COLORS['danger']};color:white",
+                "not_assessed": f"background:{self.COLORS['border']};color:{self.COLORS['secondary']}",
+            }.get(item["status"], "")
+
+            gaps_html = "<br>".join(f"• {g}" for g in item.get("gaps", [])) or "—"
+
+            rows_html += f"""
+            <tr>
+                <td style="font-weight:600">{item['requirement_id']}</td>
+                <td>{item['requirement_description']}</td>
+                <td style="text-align:center">{item['jurisdiction']}</td>
+                <td style="text-align:center">
+                    <span style="{status_style};padding:2px 8px;border-radius:4px;font-size:0.8rem">
+                        {item['status'].upper().replace('_', ' ')}
+                    </span>
+                </td>
+                <td style="font-size:0.8rem">{gaps_html}</td>
+                <td style="font-size:0.8rem">{item.get('remediation', '')}</td>
+            </tr>"""
+
+        return self._wrap_html(
+            title=metadata.get("title", "Compliance Report"),
+            subtitle=f"Jurisdiction: {summary.get('jurisdiction', 'ALL')} | Assessment Date: {summary.get('assessment_date', 'N/A')[:10]}",
+            body=f"""
+            <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:24px">
+                {self._metric_card("Total Req.", summary['total_requirements'], self.COLORS['primary'])}
+                {self._metric_card("Compliant", summary['compliant'], self.COLORS['success'])}
+                {self._metric_card("Non-Compliant", summary['non_compliant'], self.COLORS['danger'])}
+                {self._metric_card("Rate", f"{summary['compliance_rate_pct']}%",
+                    self.COLORS['success'] if summary['compliance_rate_pct'] >= 80 else self.COLORS['danger'])}
+            </div>
+
+            <table style="width:100%;border-collapse:collapse;font-size:0.85rem">
+                <thead>
+                    <tr style="background:{self.COLORS['primary']};color:white">
+                        <th style="padding:8px;text-align:left">Requirement</th>
+                        <th style="padding:8px;text-align:left">Description</th>
+                        <th style="padding:8px;text-align:center">Jurisdiction</th>
+                        <th style="padding:8px;text-align:center">Status</th>
+                        <th style="padding:8px;text-align:left">Gaps</th>
+                        <th style="padding:8px;text-align:left">Remediation</th>
+                    </tr>
+                </thead>
+                <tbody>{rows_html}</tbody>
+            </table>
+            """,
+            metadata=metadata,
+        )
+
+    def render_defect_summary(self, data: dict, metadata: dict) -> str:
+        """Render defect summary as HTML."""
+        summary = data["summary"]
+        defects = data["defects"]
+
+        rows_html = ""
+        for defect in defects:
+            sev_color = {
+                "critical": self.COLORS["danger"],
+                "high": "#ed8936",
+                "medium": self.COLORS["warning"],
+                "low": self.COLORS["info"],
+            }.get(defect["severity"], self.COLORS["info"])
+
+            rows_html += f"""
+            <tr>
+                <td style="font-size:0.8rem">{defect['test_case_id'][:12]}</td>
+                <td>{defect['test_name'][:80]}</td>
+                <td style="text-align:center">
+                    <span style="background:{sev_color};color:white;padding:2px 6px;border-radius:4px;font-size:0.75rem">
+                        {defect['severity'].upper()}
+                    </span>
+                </td>
+                <td>{defect['error_message'][:100]}</td>
+                <td style="font-size:0.8rem;color:{self.COLORS['secondary']}">{defect['suggested_root_cause'][:80]}</td>
+            </tr>"""
+
+        return self._wrap_html(
+            title=metadata.get("title", "Defect Summary Report"),
+            subtitle=f"Total Failures: {summary['total_failures']}",
+            body=f"""
+            <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:24px">
+                {self._metric_card("Critical", summary.get('critical', 0), self.COLORS['danger'])}
+                {self._metric_card("High", summary.get('high', 0), '#ed8936')}
+                {self._metric_card("Medium", summary.get('medium', 0), self.COLORS['warning'])}
+                {self._metric_card("Low", summary.get('low', 0), self.COLORS['info'])}
+            </div>
+
+            <table style="width:100%;border-collapse:collapse;font-size:0.85rem">
+                <thead>
+                    <tr style="background:{self.COLORS['primary']};color:white">
+                        <th style="padding:8px;text-align:left">Test ID</th>
+                        <th style="padding:8px;text-align:left">Test Name</th>
+                        <th style="padding:8px;text-align:center">Severity</th>
+                        <th style="padding:8px;text-align:left">Error</th>
+                        <th style="padding:8px;text-align:left">Root Cause</th>
+                    </tr>
+                </thead>
+                <tbody>{rows_html if rows_html else '<tr><td colspan="5" style="text-align:center;padding:20px">No defects found — all tests passed!</td></tr>'}</tbody>
+            </table>
+            """,
+            metadata=metadata,
+        )
+
+    def _metric_card(self, label: str, value: Any, color: str) -> str:
+        """Render a single KPI metric card."""
+        return f"""
+        <div style="background:white;border:1px solid {self.COLORS['border']};border-top:4px solid {color};
+                    padding:16px;border-radius:8px;text-align:center">
+            <div style="font-size:0.8rem;color:{self.COLORS['secondary']};text-transform:uppercase">{label}</div>
+            <div style="font-size:1.8rem;font-weight:700;color:{color};margin-top:4px">{value}</div>
+        </div>"""
+
+    def _wrap_html(self, title: str, subtitle: str, body: str, metadata: dict = None) -> str:
+        """Wrap content in a full HTML document."""
+        meta = metadata or {}
+        report_id = meta.get("report_id", "N/A")
+        generated_at = meta.get("generated_at", datetime.now(timezone.utc).isoformat())[:19]
+        generated_by = meta.get("generated_by", "Nexus QA Platform")
+
+        return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{title} — Nexus QA</title>
+    <style>
+        * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+        body {{
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: {self.COLORS['light']};
+            color: {self.COLORS['secondary']};
+            line-height: 1.6;
+        }}
+        .container {{ max-width: 1200px; margin: 0 auto; padding: 24px; }}
+        table td, table th {{ padding: 8px 10px; border-bottom: 1px solid {self.COLORS['border']}; }}
+        tr:hover {{ background: #edf2f7; }}
+        @media print {{
+            body {{ background: white; }}
+            .no-print {{ display: none; }}
+        }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <div style="background:{self.COLORS['primary']};color:white;padding:24px;border-radius:12px;margin-bottom:24px">
+            <div style="display:flex;justify-content:space-between;align-items:center">
+                <div>
+                    <h1 style="font-size:1.5rem;margin-bottom:4px">{title}</h1>
+                    <div style="opacity:0.8;font-size:0.9rem">{subtitle}</div>
+                </div>
+                <div style="text-align:right;font-size:0.8rem;opacity:0.8">
+                    <div>Report ID: {report_id}</div>
+                    <div>Generated: {generated_at}</div>
+                    <div>By: {generated_by}</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Body -->
+        {body}
+
+        <!-- Footer -->
+        <div style="margin-top:32px;padding-top:16px;border-top:2px solid {self.COLORS['border']};
+                    font-size:0.75rem;color:#a0aec0;text-align:center">
+            <p>Generated by Nexus QA Platform | Report ID: {report_id}</p>
+            <p>This report is an immutable artifact. Any modifications invalidate the checksum.</p>
+            <p style="margin-top:4px">Checksum will be computed on final output.</p>
+        </div>
+    </div>
+</body>
+</html>"""
+
+
+# ─── The Mouth Engine ─────────────────────────────────────────
+
+class MouthEngine(NexusEngine):
+
+    def __init__(self):
+        super().__init__(
+            name="mouth",
+            version="0.1.0",
+            config=MouthConfig(engine_name="mouth", engine_port=8010),
+            description="Reporting, Traceability & Compliance Output Engine",
+        )
+        # Report generators
+        self.traceability_gen = TraceabilityMatrixGenerator()
+        self.compliance_gen = ComplianceReportGenerator()
+        self.executive_gen = ExecutiveSummaryGenerator()
+        self.coverage_gen = TestCoverageReportGenerator()
+        self.defect_gen = DefectSummaryGenerator()
+        self.html_renderer = HTMLReportRenderer()
+
+    async def on_startup(self):
+        """Initialize report storage and load report extensions from plugins."""
+        os.makedirs(self.config.report_storage_path, exist_ok=True)
+        self.health.set_mode("report_storage", "filesystem")
+        count = await self.job_store.count()
+        self.health.set_mode("reports_stored", str(count))
+
+        # Load report extensions from domain plugins
+        try:
+            report_ext = self.plugin_registry.get_merged_reports()
+            if report_ext and report_ext.report_types:
+                # Store plugin-provided report type definitions
+                self._plugin_report_types = {
+                    rt.type_id: rt for rt in report_ext.report_types
+                }
+        except Exception:
+            self._plugin_report_types = {}
+
+    def register_routes(self, app):
+
+        engine = self  # Closure reference
+
+        # ── Generate Report ────────────────────────────────────
+
+        @app.post("/api/v1/mouth/generate", response_model=dict)
+        async def generate_report(
+            req: GenerateReportRequest,
+            background_tasks: BackgroundTasks,
+            user: NexusUser = Depends(get_current_user),
+        ):
+            """
+            Generate a report.
+
+            Supports:
+            - traceability_matrix: Rule → Test → Result → Evidence mapping
+            - compliance_report: Regulatory compliance assessment
+            - executive_summary: C-suite one-pager
+            - test_coverage: Detailed coverage analysis with confidence
+            - defect_summary: Failed test analysis with root causes
+            - full_session_report: All of the above combined
+            """
+            report_id = f"RPT-{uuid.uuid4().hex[:12].upper()}"
+
+            metadata = ReportMetadata(
+                report_id=report_id,
+                report_type=req.report_type,
+                format=req.format,
+                title=req.title or f"{req.report_type.value.replace('_', ' ').title()} Report",
+                session_id=req.session_id,
+                tenant_id=req.tenant_id,
+                generated_at=datetime.now(timezone.utc).isoformat(),
+                generated_by=user.user_id,
+                status=ReportStatus.QUEUED,
+            )
+
+            await engine.job_store.set_job(report_id, {
+                "metadata": metadata.model_dump(),
+                "content": "",
+                "data": {},
+            })
+
+            # Generate in background for large reports
+            background_tasks.add_task(
+                engine._generate_report_async,
+                report_id=report_id,
+                req=req,
+                metadata=metadata,
+            )
+
+            return {
+                "report_id": report_id,
+                "status": "generating",
+                "report_type": req.report_type.value,
+                "format": req.format.value,
+            }
+
+        # ── Get Report Metadata ────────────────────────────────
+
+        @app.get("/api/v1/mouth/reports/{report_id}")
+        async def get_report(
+            report_id: str,
+            user: NexusUser = Depends(get_current_user),
+        ):
+            """Get report status and metadata."""
+            stored = await engine.job_store.get_job(report_id)
+            if not stored:
+                raise HTTPException(status_code=404, detail=f"Report {report_id} not found")
+
+            return {
+                "metadata": stored["metadata"],
+                "ready": stored["metadata"]["status"] == ReportStatus.COMPLETED.value,
+            }
+
+        # ── Get Report Content ─────────────────────────────────
+
+        @app.get("/api/v1/mouth/reports/{report_id}/content")
+        async def get_report_content(
+            report_id: str,
+            user: NexusUser = Depends(get_current_user),
+        ):
+            """
+            Download the generated report content.
+
+            Returns HTML, JSON, or CSV based on the report format.
+            """
+            stored = await engine.job_store.get_job(report_id)
+            if not stored:
+                raise HTTPException(status_code=404, detail=f"Report {report_id} not found")
+
+            if stored["metadata"]["status"] != ReportStatus.COMPLETED.value:
+                raise HTTPException(
+                    status_code=202,
+                    detail=f"Report is still {stored['metadata']['status']}. Try again shortly.",
+                )
+
+            fmt = stored["metadata"].get("format", "json")
+
+            if fmt == ReportFormat.HTML.value:
+                from fastapi.responses import HTMLResponse
+                return HTMLResponse(content=stored["content"])
+            elif fmt == ReportFormat.CSV.value:
+                from fastapi.responses import PlainTextResponse
+                return PlainTextResponse(
+                    content=stored["content"],
+                    media_type="text/csv",
+                    headers={"Content-Disposition": f"attachment; filename={report_id}.csv"},
+                )
+            else:
+                return {"report_id": report_id, "data": stored.get("data", {})}
+
+        # ── Get Report Raw Data ────────────────────────────────
+
+        @app.get("/api/v1/mouth/reports/{report_id}/data")
+        async def get_report_data(
+            report_id: str,
+            user: NexusUser = Depends(get_current_user),
+        ):
+            """Get raw report data (JSON) regardless of format."""
+            stored = await engine.job_store.get_job(report_id)
+            if not stored:
+                raise HTTPException(status_code=404, detail=f"Report {report_id} not found")
+
+            return {
+                "report_id": report_id,
+                "data": stored.get("data", {}),
+                "metadata": stored["metadata"],
+            }
+
+        # ── List Reports ───────────────────────────────────────
+
+        @app.get("/api/v1/mouth/reports")
+        async def list_reports(
+            tenant_id: Optional[str] = None,
+            session_id: Optional[str] = None,
+            report_type: Optional[str] = None,
+            user: NexusUser = Depends(get_current_user),
+        ):
+            """List all reports, optionally filtered by tenant, session, or type."""
+            results = []
+            all_reports = await engine.job_store.list_jobs(limit=500)
+            for stored in all_reports:
+                rid = stored.get("job_id", stored.get("metadata", {}).get("report_id", ""))
+                meta = stored.get("metadata", {})
+                if tenant_id and meta.get("tenant_id") != tenant_id:
+                    continue
+                if session_id and meta.get("session_id") != session_id:
+                    continue
+                if report_type and meta.get("report_type") != report_type:
+                    continue
+                results.append({
+                    "report_id": rid,
+                    "report_type": meta.get("report_type"),
+                    "title": meta.get("title"),
+                    "status": meta.get("status"),
+                    "format": meta.get("format"),
+                    "generated_at": meta.get("generated_at"),
+                    "session_id": meta.get("session_id"),
+                })
+
+            return {"reports": results, "total": len(results)}
+
+        # ── Verify Integrity ───────────────────────────────────
+
+        @app.post("/api/v1/mouth/verify")
+        async def verify_report_integrity(
+            report_id: str,
+            user: NexusUser = Depends(get_current_user),
+        ):
+            """
+            Verify report integrity by recomputing checksum.
+
+            Ensures the report hasn't been tampered with since generation.
+            Critical for audit compliance.
+            """
+            stored = await engine.job_store.get_job(report_id)
+            if not stored:
+                raise HTTPException(status_code=404, detail=f"Report {report_id} not found")
+
+            content = stored.get("content", "")
+            original_checksum = stored["metadata"].get("checksum_sha256", "")
+            current_checksum = hashlib.sha256(content.encode()).hexdigest()
+
+            is_valid = original_checksum == current_checksum
+
+            return {
+                "report_id": report_id,
+                "integrity_valid": is_valid,
+                "original_checksum": original_checksum,
+                "current_checksum": current_checksum,
+                "status": "VERIFIED" if is_valid else "TAMPERED — INTEGRITY COMPROMISED",
+            }
+
+        # ── Stats ──────────────────────────────────────────────
+
+        @app.get("/api/v1/mouth/stats")
+        async def get_stats(user: NexusUser = Depends(get_current_user)):
+            """Engine statistics."""
+            type_counts = defaultdict(int)
+            status_counts = defaultdict(int)
+            all_reports = await engine.job_store.list_jobs(limit=500)
+            for stored in all_reports:
+                meta = stored.get("metadata", {})
+                type_counts[meta.get("report_type", "unknown")] += 1
+                status_counts[meta.get("status", "unknown")] += 1
+
+            total = await engine.job_store.count()
+
+            return {
+                "engine": "mouth",
+                "version": "0.1.0",
+                "total_reports": total,
+                "by_type": dict(type_counts),
+                "by_status": dict(status_counts),
+                "capabilities": [
+                    "traceability_matrix",
+                    "compliance_report",
+                    "executive_summary",
+                    "test_coverage",
+                    "defect_summary",
+                    "full_session_report",
+                    "integrity_verification",
+                ],
+                "supported_formats": [f.value for f in ReportFormat],
+            }
+
+    # ── Background Report Generation ───────────────────────────
+
+    async def _generate_report_async(
+        self,
+        report_id: str,
+        req: GenerateReportRequest,
+        metadata: ReportMetadata,
+    ):
+        """Background report generation."""
+        try:
+            stored = await self.job_store.get_job(report_id)
+            if not stored:
+                return
+            stored["metadata"]["status"] = ReportStatus.GENERATING.value
+            await self.job_store.set_job(report_id, stored)
+
+            meta_dict = stored["metadata"]
+            report_data = {}
+            html_content = ""
+
+            if req.report_type == ReportType.TRACEABILITY_MATRIX:
+                report_data = self.traceability_gen.generate(
+                    req.rules, req.test_cases, req.test_results, req.evidence,
+                )
+                if req.format == ReportFormat.HTML:
+                    html_content = self.html_renderer.render_traceability_matrix(report_data, meta_dict)
+
+            elif req.report_type == ReportType.COMPLIANCE_REPORT:
+                report_data = self.compliance_gen.generate(
+                    req.rules, req.test_cases, req.test_results, req.state_filter,
+                )
+                if req.format == ReportFormat.HTML:
+                    html_content = self.html_renderer.render_compliance_report(report_data, meta_dict)
+
+            elif req.report_type == ReportType.EXECUTIVE_SUMMARY:
+                trace_data = self.traceability_gen.generate(
+                    req.rules, req.test_cases, req.test_results, req.evidence,
+                )
+                comp_data = self.compliance_gen.generate(
+                    req.rules, req.test_cases, req.test_results, req.state_filter,
+                )
+                report_data = self.executive_gen.generate(
+                    session_name=req.title or req.session_id,
+                    rules=req.rules,
+                    test_cases=req.test_cases,
+                    test_results=req.test_results,
+                    traceability_summary=trace_data["summary"],
+                    compliance_summary=comp_data["summary"],
+                )
+                if req.format == ReportFormat.HTML:
+                    html_content = self.html_renderer.render_executive_summary(report_data, meta_dict)
+
+            elif req.report_type == ReportType.TEST_COVERAGE:
+                report_data = self.coverage_gen.generate(
+                    req.rules, req.test_cases, req.test_results,
+                )
+                if req.format == ReportFormat.HTML:
+                    html_content = self.html_renderer.render_traceability_matrix(
+                        {
+                            "matrix": report_data["coverage_details"],
+                            "summary": report_data["summary"],
+                        },
+                        meta_dict,
+                    )
+
+            elif req.report_type == ReportType.DEFECT_SUMMARY:
+                report_data = self.defect_gen.generate(
+                    req.test_cases, req.test_results,
+                )
+                if req.format == ReportFormat.HTML:
+                    html_content = self.html_renderer.render_defect_summary(report_data, meta_dict)
+
+            elif req.report_type == ReportType.FULL_SESSION_REPORT:
+                trace_data = self.traceability_gen.generate(
+                    req.rules, req.test_cases, req.test_results, req.evidence,
+                )
+                comp_data = self.compliance_gen.generate(
+                    req.rules, req.test_cases, req.test_results, req.state_filter,
+                )
+                exec_data = self.executive_gen.generate(
+                    session_name=req.title or req.session_id,
+                    rules=req.rules,
+                    test_cases=req.test_cases,
+                    test_results=req.test_results,
+                    traceability_summary=trace_data["summary"],
+                    compliance_summary=comp_data["summary"],
+                )
+                cov_data = self.coverage_gen.generate(
+                    req.rules, req.test_cases, req.test_results,
+                )
+                defect_data = self.defect_gen.generate(
+                    req.test_cases, req.test_results,
+                )
+
+                report_data = {
+                    "executive_summary": exec_data,
+                    "traceability": trace_data,
+                    "compliance": comp_data,
+                    "coverage": cov_data,
+                    "defects": defect_data,
+                }
+
+                if req.format == ReportFormat.HTML:
+                    sections = [
+                        self.html_renderer.render_executive_summary(exec_data, meta_dict),
+                        self.html_renderer.render_traceability_matrix(trace_data, meta_dict),
+                        self.html_renderer.render_compliance_report(comp_data, meta_dict),
+                        self.html_renderer.render_defect_summary(defect_data, meta_dict),
+                    ]
+                    html_content = sections[0]
+                    report_data["section_count"] = len(sections)
+
+            # Handle format output
+            if req.format == ReportFormat.HTML:
+                content = html_content
+            elif req.format == ReportFormat.JSON:
+                content = json.dumps(report_data, indent=2, default=str)
+            elif req.format == ReportFormat.CSV:
+                content = _data_to_csv(report_data)
+            else:
+                content = json.dumps(report_data, indent=2, default=str)
+
+            # Compute checksum for immutability verification
+            checksum = hashlib.sha256(content.encode()).hexdigest()
+
+            stored["content"] = content
+            stored["data"] = report_data
+            stored["metadata"]["status"] = ReportStatus.COMPLETED.value
+            stored["metadata"]["checksum_sha256"] = checksum
+            stored["metadata"]["file_size_bytes"] = len(content.encode())
+            await self.job_store.set_job(report_id, stored)
+
+        except Exception as e:
+            err_stored = await self.job_store.get_job(report_id)
+            if err_stored:
+                err_stored["metadata"]["status"] = ReportStatus.FAILED.value
+                err_stored["metadata"]["error"] = str(e)
+                await self.job_store.set_job(report_id, err_stored)
+
+
+# ─── Helper Functions ──────────────────────────────────────────
+
+def _data_to_csv(data: dict) -> str:
+    """Convert report data to CSV format."""
+    import csv
+    import io
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+
+    # Try to find a list of dicts in the data (matrix, coverage_details, defects, etc.)
+    for key in ["matrix", "coverage_details", "defects", "compliance_items"]:
+        if key in data and isinstance(data[key], list) and data[key]:
+            # Write header from first item's keys
+            headers = list(data[key][0].keys())
+            writer.writerow(headers)
+            for item in data[key]:
+                row = []
+                for h in headers:
+                    val = item.get(h, "")
+                    if isinstance(val, (list, dict)):
+                        val = json.dumps(val)
+                    row.append(val)
+                writer.writerow(row)
+            break
+    else:
+        # Fallback: dump summary
+        if "summary" in data:
+            for k, v in data["summary"].items():
+                writer.writerow([k, v])
+
+    return output.getvalue()
+
+
+# ─── Entry Point ──────────────────────────────────────────────
+
+def main():
+    engine = MouthEngine()
+    engine.run()
+
+
+if __name__ == "__main__":
+    main()

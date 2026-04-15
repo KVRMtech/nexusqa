@@ -1,0 +1,96 @@
+# Nexus QA — Prometheus Configuration
+# Scrapes metrics from all engine services
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  scrape_timeout: 10s
+
+scrape_configs:
+  # ── Platform Services ────────────────────────────────────
+  - job_name: 'auth-service'
+    static_configs:
+      - targets: ['auth-service:8000']
+    metrics_path: /metrics
+
+  - job_name: 'gateway'
+    static_configs:
+      - targets: ['gateway:8080']
+    metrics_path: /metrics
+
+  # ── Engine Services ──────────────────────────────────────
+  - job_name: 'shield-engine'
+    static_configs:
+      - targets: ['shield-engine:8001']
+    metrics_path: /metrics
+
+  - job_name: 'ears-engine'
+    static_configs:
+      - targets: ['ears-engine:8002']
+    metrics_path: /metrics
+
+  - job_name: 'eyes-engine'
+    static_configs:
+      - targets: ['eyes-engine:8003']
+    metrics_path: /metrics
+
+  - job_name: 'heart-engine'
+    static_configs:
+      - targets: ['heart-engine:8004']
+    metrics_path: /metrics
+
+  - job_name: 'backbone-engine'
+    static_configs:
+      - targets: ['backbone-engine:8005']
+    metrics_path: /metrics
+
+  - job_name: 'nerves-engine'
+    static_configs:
+      - targets: ['nerves-engine:8006']
+    metrics_path: /metrics
+
+  - job_name: 'legs-engine'
+    static_configs:
+      - targets: ['legs-engine:8007']
+    metrics_path: /metrics
+
+  - job_name: 'hands-engine'
+    static_configs:
+      - targets: ['hands-engine:8008']
+    metrics_path: /metrics
+
+  - job_name: 'spine-engine'
+    static_configs:
+      - targets: ['spine-engine:8009']
+    metrics_path: /metrics
+
+  - job_name: 'mouth-engine'
+    static_configs:
+      - targets: ['mouth-engine:8010']
+    metrics_path: /metrics
+
+  - job_name: 'brain-engine'
+    static_configs:
+      - targets: ['brain-engine:8011']
+    metrics_path: /metrics
+
+  # ── Platform API ─────────────────────────────────────────
+  - job_name: 'platform-api'
+    static_configs:
+      - targets: ['platform-api:8091']
+    metrics_path: /metrics
+
+  # ── OpenTelemetry Collector (self-monitoring) ────────────
+  - job_name: 'otel-collector'
+    static_configs:
+      - targets: ['otel-collector:8888']
+    metrics_path: /metrics
+
+  # ── Infrastructure ───────────────────────────────────────
+  - job_name: 'redis'
+    static_configs:
+      - targets: ['redis:6379']
+
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']

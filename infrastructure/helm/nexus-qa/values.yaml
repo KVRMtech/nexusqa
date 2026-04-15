@@ -1,0 +1,614 @@
+# ═══════════════════════════════════════════════════════════════
+# Nexus QA — Helm Default Values
+# ═══════════════════════════════════════════════════════════════
+# Override these via --values or --set for each environment.
+# See values-staging.yaml / values-production.yaml for presets.
+# ═══════════════════════════════════════════════════════════════
+
+nameOverride: ""
+fullnameOverride: ""
+
+# ─── Global ───────────────────────────────────────────────────
+global:
+  image:
+    registry: ghcr.io
+    prefix: nexus-qa/nexus        # images: <registry>/<prefix>-<service>:<tag>
+    tag: latest
+    pullPolicy: IfNotPresent
+  imagePullSecrets: []
+  #  - name: ghcr-pull-secret
+  storageClass: ""                # leave empty for cluster default
+
+# ─── Shared Secrets ───────────────────────────────────────────
+# REQUIRED — Set via --set or external secrets manager (Vault, ESO).
+# Empty values will cause deployment validation to fail.
+secrets:
+  jwtSecret: ""           # REQUIRED: --set secrets.jwtSecret=<value>
+  postgresPassword: ""    # REQUIRED: --set secrets.postgresPassword=<value>
+  redisPassword: ""
+  neo4jPassword: ""       # REQUIRED: --set secrets.neo4jPassword=<value>
+  minioAccessKey: ""      # REQUIRED: --set secrets.minioAccessKey=<value>
+  minioSecretKey: ""      # REQUIRED: --set secrets.minioSecretKey=<value>
+  grafanaPassword: ""     # REQUIRED: --set secrets.grafanaPassword=<value>
+  shieldEncryptionKey: ""
+  earsHfToken: ""
+
+# ─── External Secrets Operator (ESO) Integration ─────────────
+# When enabled, secrets are pulled from a remote backend
+# (AWS Secrets Manager, HashiCorp Vault, Azure Key Vault, GCP SM)
+# instead of being stored in values.yaml / Helm releases.
+#
+# Prerequisites:
+#   1. Install ESO CRDs:
+#        helm repo add external-secrets https://charts.external-secrets.io
+#        helm install eso external-secrets/external-secrets -n external-secrets --create-namespace
+#   2. Create a ClusterSecretStore or SecretStore pointing to your backend
+#   3. Pre-populate secrets in the backend under the remoteKeyPrefix
+externalSecrets:
+  enabled: false
+  refreshInterval: 1h
+  secretStoreRef:
+    name: ""                        # Name of your SecretStore or ClusterSecretStore
+    kind: ClusterSecretStore        # or SecretStore (namespace-scoped)
+  remoteKeyPrefix: "nexus-qa"       # Key prefix in the secret backend
+  property: ""                      # For JSON secrets: the JSON property name
+  includeShieldKey: false           # Set true if shield-encryption-key exists in backend
+  includeEarsToken: false           # Set true if ears-hf-token exists in backend
+
+# ─── Shared Config ────────────────────────────────────────────
+config:
+  nexusEnv: production
+  logLevel: INFO
+
+# ─── Model Selection ──────────────────────────────────────────
+# Keep model choice explicit per engine so text-only services
+# never inherit the Eyes vision model and Eyes never inherits
+# a small text-only model.
+models:
+  eyes:
+    ollamaModel: llama3.2-vision:11b
+  heart:
+    localProvider: ollama
+    localModel: llama3.2:1b
+  brain:
+    localProvider: ollama
+    localModel: llama3.2:1b
+
+# ═══════════════════════════════════════════════════════════════
+# INFRASTRUCTURE
+# ═══════════════════════════════════════════════════════════════
+
+# ─── Redis ────────────────────────────────────────────────────
+redis:
+  enabled: true
+  image: redis:7-alpine
+  replicas: 1
+  port: 6379
+  maxMemory: 512mb
+  persistence:
+    enabled: true
+    size: 5Gi
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 768Mi
+
+# ─── PostgreSQL ───────────────────────────────────────────────
+postgres:
+  enabled: true
+  image: postgres:16-alpine
+  port: 5432
+  database: nexusqa
+  user: nexus
+  persistence:
+    enabled: true
+    size: 20Gi
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: "1"
+      memory: 2Gi
+
+# ─── Neo4j ────────────────────────────────────────────────────
+neo4j:
+  enabled: true
+  image: neo4j:5-community
+  ports:
+    http: 7474
+    bolt: 7687
+  heapMaxSize: 1G
+  pagecacheSize: 512M
+  persistence:
+    enabled: true
+    dataSize: 20Gi
+    logsSize: 5Gi
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: "2"
+      memory: 3Gi
+
+# ─── Milvus (Vector Store) ───────────────────────────────────
+milvus:
+  enabled: true
+  image: milvusdb/milvus:v2.3.3
+  port: 19530
+  etcd:
+    image: quay.io/coreos/etcd:v3.5.5
+  minio:
+    image: minio/minio:RELEASE.2023-03-20T20-16-18Z
+  persistence:
+    enabled: true
+    size: 30Gi
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: "2"
+      memory: 4Gi
+
+# ─── Ollama (LLM backend for Heart engine) ───────────────────
+ollama:
+  enabled: true
+  image: ollama/ollama:latest
+  port: 11434
+  model: "llama3.1:8b"
+  gpu:
+    enabled: true
+    count: all
+  persistence:
+    enabled: true
+    size: 50Gi
+  resources:
+    requests:
+      cpu: "1"
+      memory: 8Gi
+    limits:
+      cpu: "4"
+      memory: 32Gi
+
+# ═══════════════════════════════════════════════════════════════
+# PLATFORM SERVICES
+# ═══════════════════════════════════════════════════════════════
+
+# ─── Auth Service ─────────────────────────────────────────────
+authService:
+  replicas: 2
+  port: 8000
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  autoscaling:
+    enabled: false
+    minReplicas: 2
+    maxReplicas: 5
+    targetCPU: 70
+
+# ─── API Gateway ─────────────────────────────────────────────
+gateway:
+  replicas: 2
+  port: 8080
+  resources:
+    requests:
+      cpu: 200m
+      memory: 512Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+  autoscaling:
+    enabled: false
+    minReplicas: 2
+    maxReplicas: 10
+    targetCPU: 70
+
+# ─── Platform API ─────────────────────────────────────────────
+platformApi:
+  replicas: 2
+  port: 8091
+  resources:
+    requests:
+      cpu: 200m
+      memory: 512Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+  autoscaling:
+    enabled: false
+    minReplicas: 2
+    maxReplicas: 5
+    targetCPU: 70
+
+# ═══════════════════════════════════════════════════════════════
+# ENGINES
+# ═══════════════════════════════════════════════════════════════
+
+engines:
+  # ─── Shield (PII Redaction) ─────────────────────────────────
+  shield:
+    enabled: true
+    replicas: 2
+    port: 8001
+    gpu: false
+    resources:
+      requests:
+        cpu: 200m
+        memory: 512Mi
+      limits:
+        cpu: "1"
+        memory: 1Gi
+    env: {}
+
+  # ─── Ears (Audio Transcription) ─────────────────────────────
+  ears:
+    enabled: true
+    replicas: 1
+    port: 8002
+    gpu: true
+    gpuCount: 1
+    resources:
+      requests:
+        cpu: "1"
+        memory: 4Gi
+      limits:
+        cpu: "4"
+        memory: 16Gi
+    env:
+      EARS_ALLOW_REMOTE_MODEL_BOOTSTRAP: "false"
+      EARS_REQUIRE_REAL_DIARIZER: "true"
+      EARS_DIARIZER_STARTUP_TIMEOUT_SECONDS: "180"
+      EARS_TRANSCRIBER_STARTUP_TIMEOUT_SECONDS: "180"
+      EARS_DEFAULT_PROCESSING_PROFILE: fast
+      WHISPER_DEVICE: cuda
+      WHISPER_FAST_MODEL_SIZE: medium
+      WHISPER_FAST_COMPUTE_TYPE: float16
+      WHISPER_COMPUTE_TYPE: float16
+      EARS_PREWARM_DIARIZER: "true"
+      PYANNOTE_MODEL_PATH: ./models/pyannote-speaker-3.1
+      PYANNOTE_REQUIRE_MANIFEST: "true"
+      PYANNOTE_BUNDLE_URI: ""
+      PYANNOTE_BUNDLE_SHA256: ""
+      PYANNOTE_REPO_ID: pyannote/speaker-diarization-3.1
+    modelInit:
+      enabled: true
+      mode: verify
+    modelSeedJob:
+      enabled: true
+      mode: prewarm
+      hook: post-install,pre-upgrade
+      hookWeight: "-1"
+    persistence:
+      audio:
+        enabled: true
+        size: 50Gi
+
+  # ─── Eyes (Screen/Video Analysis) ───────────────────────────
+  eyes:
+    enabled: true
+    replicas: 1
+    port: 8003
+    gpu: true
+    gpuCount: 1
+    resources:
+      requests:
+        cpu: "1"
+        memory: 4Gi
+      limits:
+        cpu: "4"
+        memory: 16Gi
+    env:
+      EYES_DEFAULT_PROCESSING_PROFILE: fast
+      EYES_OCR_ALLOW_REMOTE_MODEL_BOOTSTRAP: "false"
+      EYES_OCR_GPU: "true"
+      EYES_FAST_MAX_FRAMES: "12"
+      EYES_FAST_MAX_SCENES: "8"
+      EYES_OCR_MAX_WORKERS: "4"
+      EYES_FAST_REPRESENTATIVE_OCR_ONLY: "true"
+      EYES_FAST_SKIP_OCR: "false"
+      EYES_FAST_OLLAMA_MODEL: llava:7b
+      VISION_DEVICE: cuda
+    modelInit:
+      enabled: true
+      mode: verify
+    modelSeedJob:
+      enabled: true
+      mode: prewarm
+      hook: post-install,pre-upgrade
+      hookWeight: "-1"
+    persistence:
+      frames:
+        enabled: true
+        size: 50Gi
+
+  # ─── Heart (LLM Inference) ─────────────────────────────────
+  heart:
+    enabled: true
+    replicas: 1
+    port: 8004
+    gpu: true
+    gpuCount: 1
+    resources:
+      requests:
+        cpu: "2"
+        memory: 8Gi
+      limits:
+        cpu: "8"
+        memory: 32Gi
+    env:
+      LLM_DEVICE: cuda
+
+  # ─── Backbone (Knowledge Graph + Vector Store) ──────────────
+  backbone:
+    enabled: true
+    replicas: 2
+    port: 8005
+    gpu: false
+    resources:
+      requests:
+        cpu: 250m
+        memory: 512Mi
+      limits:
+        cpu: "1"
+        memory: 2Gi
+    env: {}
+
+  # ─── Nerves (External Integrations) ────────────────────────
+  nerves:
+    enabled: true
+    replicas: 2
+    port: 8006
+    gpu: false
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
+    env: {}
+
+  # ─── Legs (Browser Automation) ──────────────────────────────
+  legs:
+    enabled: true
+    replicas: 2
+    port: 8007
+    gpu: false
+    resources:
+      requests:
+        cpu: 500m
+        memory: 1Gi
+      limits:
+        cpu: "2"
+        memory: 4Gi
+    env: {}
+    persistence:
+      evidence:
+        enabled: true
+        size: 20Gi
+
+  # ─── Hands (Test Data Generation) ──────────────────────────
+  hands:
+    enabled: true
+    replicas: 2
+    port: 8008
+    gpu: false
+    resources:
+      requests:
+        cpu: 200m
+        memory: 512Mi
+      limits:
+        cpu: "1"
+        memory: 1Gi
+    env: {}
+
+  # ─── Spine (Document Ingestion) ────────────────────────────
+  spine:
+    enabled: true
+    replicas: 2
+    port: 8009
+    gpu: false
+    resources:
+      requests:
+        cpu: 250m
+        memory: 512Mi
+      limits:
+        cpu: "1"
+        memory: 2Gi
+    env: {}
+    persistence:
+      documents:
+        enabled: true
+        size: 50Gi
+
+  # ─── Mouth (Report Generation) ─────────────────────────────
+  mouth:
+    enabled: true
+    replicas: 2
+    port: 8010
+    gpu: false
+    resources:
+      requests:
+        cpu: 200m
+        memory: 512Mi
+      limits:
+        cpu: "1"
+        memory: 1Gi
+    env: {}
+    persistence:
+      reports:
+        enabled: true
+        size: 30Gi
+
+  brain:
+    enabled: true
+    replicas: 2
+    port: 8011
+    gpu: false
+    resources:
+      requests:
+        cpu: 250m
+        memory: 512Mi
+      limits:
+        cpu: "1"
+        memory: 2Gi
+    env: {}
+
+# ═══════════════════════════════════════════════════════════════
+# ORCHESTRATORS
+# ═══════════════════════════════════════════════════════════════
+
+orchestrator:
+  replicas: 2
+  port: 8100
+
+# ─── Legacy QA Orchestrator (REMOVED — fully migrated to generic orchestrator) ──
+# qaOrchestrator is no longer deployed. All session/pipeline work
+# routes through the generic orchestrator at port 8100.
+qaOrchestrator:
+  enabled: false
+  replicas: 0
+  port: 8092
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: "1"
+      memory: 2Gi
+  autoscaling:
+    enabled: false
+    minReplicas: 2
+    maxReplicas: 8
+    targetCPU: 70
+
+# ═══════════════════════════════════════════════════════════════
+# FRONTEND CLIENT
+# ═══════════════════════════════════════════════════════════════
+
+client:
+  enabled: true
+  replicas: 2
+  port: 80
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+
+# ═══════════════════════════════════════════════════════════════
+# INGRESS
+# ═══════════════════════════════════════════════════════════════
+
+ingress:
+  enabled: false
+  className: nginx
+  annotations: {}
+  #  cert-manager.io/cluster-issuer: letsencrypt-prod
+  #  nginx.ingress.kubernetes.io/proxy-body-size: 100m
+  host: nexus-qa.example.com
+  tls:
+    enabled: false
+    secretName: nexus-qa-tls
+
+# ═══════════════════════════════════════════════════════════════
+# MONITORING
+# ═══════════════════════════════════════════════════════════════
+
+monitoring:
+  prometheus:
+    enabled: true
+    image: prom/prometheus:v2.48.0
+    port: 9090
+    retentionDays: 30
+    persistence:
+      enabled: true
+      size: 50Gi
+    resources:
+      requests:
+        cpu: 250m
+        memory: 512Mi
+      limits:
+        cpu: "1"
+        memory: 2Gi
+
+  grafana:
+    enabled: true
+    image: grafana/grafana:10.2.0
+    port: 3000
+    persistence:
+      enabled: true
+      size: 5Gi
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
+
+  # ─── ServiceMonitor (Prometheus Operator CRD) ──────────────
+  serviceMonitor:
+    enabled: false                  # Enable when Prometheus Operator is installed
+    interval: 15s
+    scrapeTimeout: 10s
+    additionalLabels: {}            # e.g., release: kube-prometheus-stack
+
+  # ─── PrometheusRule Alerts ──────────────────────────────────
+  alerts:
+    enabled: false                  # Enable when Prometheus Operator is installed
+    additionalLabels: {}            # e.g., release: kube-prometheus-stack
+
+# ═══════════════════════════════════════════════════════════════
+# MODEL CACHE (shared PVC for GPU engines + Ollama)
+# ═══════════════════════════════════════════════════════════════
+
+modelCache:
+  enabled: true
+  size: 100Gi
+  accessMode: ReadWriteMany       # requires RWX storage class (e.g., EFS, NFS)
+
+# ═══════════════════════════════════════════════════════════════
+# SERVICE ACCOUNTS & RBAC
+# ═══════════════════════════════════════════════════════════════
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+# ═══════════════════════════════════════════════════════════════
+# POD-LEVEL DEFAULTS
+# ═══════════════════════════════════════════════════════════════
+
+podSecurityContext:
+  fsGroup: 1000
+  runAsUser: 1000
+  runAsNonRoot: true
+
+containerSecurityContext:
+  readOnlyRootFilesystem: false     # engines write to /tmp
+  allowPrivilegeEscalation: false
+  runAsNonRoot: true
+
+# GPU nodes should be tainted: nvidia.com/gpu=present:NoSchedule
+gpuToleration:
+  key: nvidia.com/gpu
+  operator: Exists
+  effect: NoSchedule
+
+# ─── Network Policies ─────────────────────────────────────────
+networkPolicies:
+  enabled: false                    # enable in production for micro-segmentation

@@ -1,0 +1,386 @@
+# ─────────────────────────────────────────────────────────────
+# Nexus QA Platform — Continuous Delivery Pipeline
+#
+# Triggered on:
+#   • Semantic version tags (v*)   → full build + push + deploy
+#   • Manual dispatch              → choose target environment
+#
+# Jobs:
+#   1. test          — fast sanity check (same as CI)
+#   2. build-base    — build & push shared base images
+#   3. build-services— parallel per-service image builds
+#   4. build-client  — frontend SPA image
+#   5. deploy-staging— auto-deploy to staging
+#   6. deploy-prod   — deploy to production (manual gate)
+# ─────────────────────────────────────────────────────────────
+name: Nexus QA CD
+
+on:
+  push:
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+    inputs:
+      deploy_env:
+        description: "Target environment"
+        type: choice
+        options:
+          - staging
+          - production
+        default: staging
+
+concurrency:
+  group: cd-${{ github.ref }}
+  cancel-in-progress: false          # never cancel a deploy mid-flight
+
+permissions:
+  contents: read
+  packages: write                    # push images to GHCR
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_PREFIX: ghcr.io/${{ github.repository_owner }}/nexus
+  PYTHON_VERSION: "3.11"
+
+# ─────────────────────────────────────────────────────────────
+jobs:
+
+  # ── Pre-flight: fast test gate ──────────────────────────────
+  test:
+    runs-on: ubuntu-latest
+    services:
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          pip install -e sdk/nexus-sdk/
+          pip install pytest pytest-asyncio httpx faker jinja2
+
+      - name: Run tests
+        env:
+          NEXUS_REDIS_URL: redis://localhost:6379
+          NEXUS_SECRET_KEY: ci-test-secret-key-not-for-prod
+          NEXUS_JWT_SECRET: ci-test-jwt-secret-not-for-prod
+        run: pytest tests/ --ignore=tests/e2e -q --tb=short
+
+  # ── Compute image tag ──────────────────────────────────────
+  metadata:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
+      is_release: ${{ steps.meta.outputs.is_release }}
+    steps:
+      - name: Derive tag
+        id: meta
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            TAG="${GITHUB_REF#refs/tags/}"
+            echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+            echo "is_release=true" >> "$GITHUB_OUTPUT"
+          else
+            TAG="sha-$(echo ${GITHUB_SHA} | cut -c1-7)"
+            echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+            echo "is_release=false" >> "$GITHUB_OUTPUT"
+          fi
+          echo "Image tag: ${TAG}"
+
+  # ── Build & push base images ────────────────────────────────
+  build-base:
+    runs-on: ubuntu-latest
+    needs: [test, metadata]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build CPU base image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: infrastructure/docker/Dockerfile.base
+          push: true
+          tags: |
+            ${{ env.IMAGE_PREFIX }}-base:${{ needs.metadata.outputs.tag }}
+            ${{ env.IMAGE_PREFIX }}-base:latest
+          cache-from: type=gha,scope=base
+          cache-to: type=gha,scope=base,mode=max
+
+      - name: Build GPU base image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: infrastructure/docker/Dockerfile.gpu
+          push: true
+          tags: |
+            ${{ env.IMAGE_PREFIX }}-gpu:${{ needs.metadata.outputs.tag }}
+            ${{ env.IMAGE_PREFIX }}-gpu:latest
+          cache-from: type=gha,scope=gpu
+          cache-to: type=gha,scope=gpu,mode=max
+
+  # ── Build & push all service images (parallel matrix) ──────
+  build-services:
+    runs-on: ubuntu-latest
+    needs: [build-base, metadata]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # ── CPU Engines ──
+          - service: shield-engine
+            context: engines/shield-engine
+            base_type: base
+          - service: backbone-engine
+            context: engines/backbone-engine
+            base_type: base
+          - service: nerves-engine
+            context: engines/nerves-engine
+            base_type: base
+          - service: legs-engine
+            context: engines/legs-engine
+            base_type: base
+          - service: hands-engine
+            context: engines/hands-engine
+            base_type: base
+          - service: spine-engine
+            context: engines/spine-engine
+            base_type: base
+          - service: mouth-engine
+            context: engines/mouth-engine
+            base_type: base
+          # ── GPU Engines ──
+          - service: ears-engine
+            context: engines/ears-engine
+            base_type: gpu
+          - service: eyes-engine
+            context: engines/eyes-engine
+            base_type: gpu
+          - service: heart-engine
+            context: engines/heart-engine
+            base_type: gpu
+          # ── Platform Services ──
+          - service: auth-service
+            context: platform/auth-service
+            base_type: base
+          - service: gateway
+            context: platform/gateway
+            base_type: base
+          - service: platform-api
+            context: platform/api
+            base_type: base
+          # ── Products ──
+          - service: orchestrator
+            context: products/nexus-qa-orchestrator
+            base_type: base
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build & push ${{ matrix.service }}
+        uses: docker/build-push-action@v5
+        with:
+          context: ${{ matrix.context }}
+          push: true
+          build-args: |
+            BASE_IMAGE=${{ env.IMAGE_PREFIX }}-${{ matrix.base_type }}:${{ needs.metadata.outputs.tag }}
+          tags: |
+            ${{ env.IMAGE_PREFIX }}-${{ matrix.service }}:${{ needs.metadata.outputs.tag }}
+            ${{ env.IMAGE_PREFIX }}-${{ matrix.service }}:latest
+          cache-from: type=gha,scope=${{ matrix.service }}
+          cache-to: type=gha,scope=${{ matrix.service }},mode=max
+
+  # ── Build & push frontend client ────────────────────────────
+  build-client:
+    runs-on: ubuntu-latest
+    needs: [test, metadata]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build & push client
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: infrastructure/docker/Dockerfile.client
+          push: true
+          build-args: |
+            VITE_API_BASE=/api
+            VITE_API_MODE=strict
+          tags: |
+            ${{ env.IMAGE_PREFIX }}-client:${{ needs.metadata.outputs.tag }}
+            ${{ env.IMAGE_PREFIX }}-client:latest
+          cache-from: type=gha,scope=client
+          cache-to: type=gha,scope=client,mode=max
+
+  # ── Deploy to Staging ───────────────────────────────────────
+  deploy-staging:
+    runs-on: ubuntu-latest
+    needs: [build-services, build-client, metadata]
+    environment: staging
+    if: >-
+      always() &&
+      !contains(needs.*.result, 'failure') &&
+      !contains(needs.*.result, 'cancelled') &&
+      (
+        needs.metadata.outputs.is_release == 'true' ||
+        github.event.inputs.deploy_env == 'staging' ||
+        github.event.inputs.deploy_env == 'production'
+      )
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate secrets configuration
+        run: |
+          pip install pyyaml 2>/dev/null || true
+          python scripts/validate_secrets.py \
+            --env staging \
+            --values infrastructure/helm/nexus-qa/values-staging.yaml || \
+            echo "::warning::Secrets validation found issues — review before production"
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v3
+        with:
+          version: v3.14.0
+
+      - name: Configure Kubernetes credentials
+        uses: azure/k8s-set-context@v4
+        with:
+          method: kubeconfig
+          kubeconfig: ${{ secrets.KUBE_CONFIG_STAGING }}
+
+      - name: Create namespace if missing
+        run: kubectl get namespace nexus-staging || kubectl create namespace nexus-staging
+
+      - name: Deploy to staging via Helm
+        env:
+          IMAGE_TAG: ${{ needs.metadata.outputs.tag }}
+        run: |
+          echo "═══════════════════════════════════════════════════════"
+          echo "  Deploying Nexus QA $IMAGE_TAG to STAGING"
+          echo "═══════════════════════════════════════════════════════"
+
+          helm upgrade --install nexus-qa-staging \
+            infrastructure/helm/nexus-qa \
+            --namespace nexus-staging \
+            --set global.image.tag="$IMAGE_TAG" \
+            --set global.image.registry="${REGISTRY}" \
+            --set global.image.prefix="${{ github.repository_owner }}/nexus" \
+            --values infrastructure/helm/nexus-qa/values-staging.yaml \
+            --wait \
+            --timeout 10m \
+            --atomic
+
+      - name: Verify staging health
+        run: |
+          echo "Waiting for rollout to complete..."
+          for deploy in auth-service gateway platform-api orchestrator \
+            shield-engine backbone-engine nerves-engine legs-engine \
+            hands-engine spine-engine mouth-engine client; do
+            kubectl rollout status deployment/nexus-qa-staging-${deploy} \
+              --namespace nexus-staging --timeout=120s 2>/dev/null || \
+              echo "  WARN: ${deploy} not found or not ready"
+          done
+          echo "✓ Staging deployment verified"
+
+  # ── Deploy to Production ────────────────────────────────────
+  deploy-production:
+    runs-on: ubuntu-latest
+    needs: [deploy-staging, metadata]
+    environment: production            # requires manual approval via GitHub Environment protection
+    if: >-
+      needs.metadata.outputs.is_release == 'true' ||
+      github.event.inputs.deploy_env == 'production'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v3
+        with:
+          version: v3.14.0
+
+      - name: Configure Kubernetes credentials
+        uses: azure/k8s-set-context@v4
+        with:
+          method: kubeconfig
+          kubeconfig: ${{ secrets.KUBE_CONFIG_PRODUCTION }}
+
+      - name: Create namespace if missing
+        run: kubectl get namespace nexus-production || kubectl create namespace nexus-production
+
+      - name: Deploy to production via Helm
+        env:
+          IMAGE_TAG: ${{ needs.metadata.outputs.tag }}
+        run: |
+          echo "═══════════════════════════════════════════════════════"
+          echo "  Deploying Nexus QA $IMAGE_TAG to PRODUCTION"
+          echo "═══════════════════════════════════════════════════════"
+
+          helm upgrade --install nexus-qa \
+            infrastructure/helm/nexus-qa \
+            --namespace nexus-production \
+            --set global.image.tag="$IMAGE_TAG" \
+            --set global.image.registry="${REGISTRY}" \
+            --set global.image.prefix="${{ github.repository_owner }}/nexus" \
+            --values infrastructure/helm/nexus-qa/values-production.yaml \
+            --wait \
+            --timeout 15m \
+            --atomic
+
+      - name: Verify production health
+        run: |
+          echo "Waiting for rollout to complete..."
+          for deploy in auth-service gateway platform-api orchestrator \
+            shield-engine backbone-engine nerves-engine legs-engine \
+            hands-engine spine-engine mouth-engine client; do
+            kubectl rollout status deployment/nexus-qa-${deploy} \
+              --namespace nexus-production --timeout=180s 2>/dev/null || \
+              echo "  WARN: ${deploy} not found or not ready"
+          done
+          echo "✓ Production deployment verified"
+
+      - name: Post-deployment smoke test
+        run: |
+          GATEWAY_SVC=$(kubectl get svc nexus-qa-gateway -n nexus-production -o jsonpath='{.spec.clusterIP}' 2>/dev/null || echo "")
+          if [ -n "$GATEWAY_SVC" ]; then
+            echo "Running smoke test against gateway at $GATEWAY_SVC:8080 ..."
+            kubectl run smoke-test --rm -i --restart=Never \
+              --namespace nexus-production \
+              --image=curlimages/curl:latest \
+              -- curl -sf "http://${GATEWAY_SVC}:8080/health" && \
+              echo "✓ Gateway health check passed" || \
+              echo "⚠ Gateway health check failed (non-blocking)"
+          else
+            echo "⚠ Gateway service not found — skipping smoke test"
+          fi

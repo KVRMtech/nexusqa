@@ -1,0 +1,88 @@
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+
+# ===== SECURITY: Secrets & Credentials =====
+# Environment files (NEVER commit secrets)
+.env
+.env.local
+.env.*.local
+.env.ci
+.env.production
+.env.staging
+
+# Token / credential files
+_token.txt
+_token2.txt
+_token*.txt
+**/credentials.txt
+**/secrets.*
+
+# Private keys & certificates
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.cer
+
+# JWT check script (contains secret references)
+_check_jwt.py
+
+# ===== IDE =====
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ===== OS =====
+.DS_Store
+Thumbs.db
+
+# ===== Virtual environments =====
+.venv/
+venv/
+env/
+
+# ===== Docker =====
+docker-compose.override.yml
+
+# ===== Data (large files — not in git) =====
+/data/
+/models/
+*.wav
+*.mp3
+*.mp4
+*.avi
+*.mov
+
+# ===== Logs =====
+*.log
+logs/
+
+# ===== Test artifacts =====
+.coverage
+htmlcov/
+.pytest_cache/
+test_*_output.txt
+test_output*.txt
+test_full*.txt
+failing_*.txt
+
+# ===== Temp directory =====
+/temp/
+
+# ===== Node (dashboard/client) =====
+node_modules/
+.next/
+
+# ===== Database =====
+*.db
+*.sqlite
+*.sqlite3

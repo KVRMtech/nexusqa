@@ -1,0 +1,716 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# Nexus QA — Full Development Stack (Docker)
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+#  One command to start everything:
+#    docker compose up -d --build
+#
+#  Observe services:
+#    docker compose ps                         # status of all services
+#    docker compose logs -f gateway            # follow one service
+#    docker compose logs -f ears spine         # follow multiple
+#    docker compose logs --tail=50 orchestrator
+#
+#  Stop everything:
+#    docker compose down
+#
+#  Rebuild a single service after code change:
+#    docker compose up -d --build spine
+#
+#  Full reset (wipe data):
+#    docker compose down -v
+#
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# ── Shared env vars injected into every Python service ──────────────────────
+x-common-env: &common-env
+  NEXUS_ENV: development
+  NEXUS_PRODUCT_MODE: ${NEXUS_PRODUCT_MODE:-canonical}
+  NEXUS_JWT_SECRET: ${NEXUS_JWT_SECRET:-test-secret-do-not-use-in-production}
+  JWT_SECRET: ${NEXUS_JWT_SECRET:-test-secret-do-not-use-in-production}
+  REDIS_HOST: redis
+  REDIS_PORT: "6379"
+  REDIS_URL: redis://redis:6379/0
+  POSTGRES_HOST: postgres
+  POSTGRES_PORT: "5432"
+  POSTGRES_USER: ${POSTGRES_USER:-nexus}
+  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-nexus-dev}
+  POSTGRES_DB: ${POSTGRES_DB:-nexus}
+  NEO4J_URI: bolt://neo4j:7687
+  NEO4J_USER: neo4j
+  NEO4J_PASSWORD: ${NEO4J_PASSWORD:-nexus-neo4j-dev}
+  LLM_BACKEND: ollama
+  OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
+  EYES_OLLAMA_BASE_URL: ${EYES_OLLAMA_BASE_URL:-http://ollama:11434}
+  EYES_OLLAMA_MODEL: ${EYES_OLLAMA_MODEL:-llama3.2-vision:11b}
+  LLM_MAX_TOKENS: "2048"
+  GATEWAY_MAX_REQUEST_BODY_MB: "500"
+  MAX_REQUEST_BODY_MB: "500"
+  # Tiered local LLMs — keep text and vision models separate.
+  HEART_OLLAMA_BASE_URL: ${HEART_OLLAMA_BASE_URL:-http://ollama:11434}
+  HEART_OLLAMA_MODEL: ${HEART_OLLAMA_MODEL:-llama3.2:1b}
+  HEART_TIER3_PROVIDER: ${HEART_TIER3_PROVIDER:-ollama}
+  HEART_TIER3_OLLAMA_BASE_URL: ${HEART_TIER3_OLLAMA_BASE_URL:-http://ollama:11434}
+  HEART_TIER3_MODEL: ${HEART_TIER3_MODEL:-llama3.2:1b}
+  HEART_TIER3_TIMEOUT: "600"
+  HEART_TIER3_MAX_RETRIES: "1"
+  BRAIN_OLLAMA_BASE_URL: ${BRAIN_OLLAMA_BASE_URL:-http://ollama:11434}
+  BRAIN_OLLAMA_MODEL: ${BRAIN_OLLAMA_MODEL:-llama3.2:1b}
+  BRAIN_TIER3_PROVIDER: ${BRAIN_TIER3_PROVIDER:-ollama}
+  BRAIN_TIER3_OLLAMA_BASE_URL: ${BRAIN_TIER3_OLLAMA_BASE_URL:-http://ollama:11434}
+  BRAIN_TIER3_MODEL: ${BRAIN_TIER3_MODEL:-llama3.2:1b}
+  BRAIN_TIER3_TIMEOUT: "780"
+  BRAIN_TIER3_MAX_RETRIES: "1"
+
+# ── Standard healthcheck for FastAPI engines ────────────────────────────────
+x-healthcheck: &engine-healthcheck
+  interval: 15s
+  timeout: 5s
+  retries: 5
+  start_period: 30s
+
+# ═══════════════════════════════════════════════════════════════════════════════
+volumes:
+  redis-data:
+  postgres-data:
+  neo4j-data:
+  ollama-data:
+  model-cache:
+  document-storage:
+  evidence-storage:
+  report-storage:
+  upload-storage:
+
+networks:
+  nexus:
+    driver: bridge
+
+# ═══════════════════════════════════════════════════════════════════════════════
+services:
+
+  # ┌─────────────────────────────────────────────────────────────────────────┐
+  # │                        INFRASTRUCTURE                                   │
+  # └─────────────────────────────────────────────────────────────────────────┘
+
+  redis:
+    image: redis:7-alpine
+    container_name: nexus-redis
+    restart: unless-stopped
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis-data:/data
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - nexus
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: nexus-postgres
+    restart: unless-stopped
+    ports:
+      - "${POSTGRES_HOST_PORT:-5433}:5432"
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-nexus}
+      POSTGRES_USER: ${POSTGRES_USER:-nexus}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-nexus-dev}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-nexus}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - nexus
+
+  neo4j:
+    image: neo4j:5-community
+    container_name: nexus-neo4j
+    restart: unless-stopped
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    environment:
+      NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:-nexus-neo4j-dev}
+      NEO4J_PLUGINS: '["apoc"]'
+      NEO4J_server_memory_heap_max__size: 512M
+      NEO4J_server_memory_pagecache_size: 256M
+    volumes:
+      - neo4j-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:7474 || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+    networks:
+      - nexus
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: nexus-ollama
+    restart: unless-stopped
+    ports:
+      - "${OLLAMA_PORT:-11434}:11434"
+    volumes:
+      - ollama-data:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    networks:
+      - nexus
+
+  # ┌─────────────────────────────────────────────────────────────────────────┐
+  # │                        PLATFORM LAYER                                   │
+  # └─────────────────────────────────────────────────────────────────────────┘
+
+  auth-service:
+    build:
+      context: ./platform/auth-service
+      dockerfile: Dockerfile
+      args:
+        BASE_IMAGE: nexus-base:dev
+    container_name: nexus-auth
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      <<: *common-env
+      ENGINE_PORT: "8000"
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8000/health"]
+      <<: *engine-healthcheck
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      base-image:
+        condition: service_completed_successfully
+    networks:
+      - nexus
+
+  gateway:
+    build:
+      context: ./platform/gateway
+      dockerfile: Dockerfile
+      args:
+        BASE_IMAGE: nexus-base:dev
+    container_name: nexus-gateway
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      <<: *common-env
+      ENGINE_PORT: "8080"
+      # Gateway needs to know engine host names (docker service names)
+      AUTH_SERVICE_URL: http://auth-service:8000
+      SHIELD_ENGINE_URL: http://shield:8001
+      EARS_ENGINE_URL: http://ears:8002
+      EYES_ENGINE_URL: http://eyes:8003
+      HEART_ENGINE_URL: http://heart:8004
+      BACKBONE_ENGINE_URL: http://backbone:8005
+      NERVES_ENGINE_URL: http://nerves:8006
+      LEGS_ENGINE_URL: http://legs:8007
+      HANDS_ENGINE_URL: http://hands:8008
+      SPINE_ENGINE_URL: http://spine:8009
+      MOUTH_ENGINE_URL: http://mouth:8010
+      BRAIN_ENGINE_URL: http://brain:8011
+      PLATFORM_API_URL: http://platform-api:8091
+      ORCHESTRATOR_URL: http://orchestrator:8100
+      QA_ORCHESTRATOR_URL: http://qa-orchestrator:8092
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8080/health"]
+      <<: *engine-healthcheck
+    depends_on:
+      auth-service:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      base-image:
+        condition: service_completed_successfully
+    networks:
+      - nexus
+
+  platform-api:
+    build:
+      context: ./platform/api
+      dockerfile: Dockerfile
+      args:
+        BASE_IMAGE: nexus-base:dev
+    container_name: nexus-platform-api
+    restart: unless-stopped
+    ports:
+      - "8091:8091"
+    environment:
+      <<: *common-env
+      ENGINE_PORT: "8091"
+      BRAIN_ENGINE_URL: http://brain:8011
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8091/health"]
+      <<: *engine-healthcheck
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      base-image:
+        condition: service_completed_successfully
+    networks:
+      - nexus
+
+  # ┌─────────────────────────────────────────────────────────────────────────┐
+  # │                        ENGINE LAYER                                     │
+  # │  All engines use CPU base in dev (GPU engines fall back gracefully)     │
+  # └─────────────────────────────────────────────────────────────────────────┘
+
+  shield:
+    build:
+      context: ./engines/shield-engine
+      dockerfile: Dockerfile
+      args:
+        BASE_IMAGE: nexus-base:dev
+    container_name: nexus-shield
+    restart: unless-stopped
+    ports:
+      - "8001:8001"
+    environment:
+      <<: *common-env
+      ENGINE_PORT: "8001"
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8001/health"]
+      <<: *engine-healthcheck
+    depends_on:
+      redis:
+        condition: service_healthy
+      base-image:
+        condition: service_completed_successfully
+    networks:
+      - nexus
+
+  ears:
+    build:
+      context: ./engines/ears-engine
+      dockerfile: Dockerfile
+      args:
+        BASE_IMAGE: nexus-base:dev
+    container_name: nexus-ears
+    restart: unless-stopped
+    volumes:
+      - model-cache:/app/service/models
+    ports:
+      - "8002:8002"
+    environment:
+      <<: *common-env
+      ENGINE_PORT: "8002"
+      # CPU mode in dev (no CUDA)
+      WHISPER_DEVICE: cpu
+      WHISPER_COMPUTE_TYPE: int8
+      # Enable model download on first startup (dev convenience)
+      EARS_ALLOW_REMOTE_MODEL_BOOTSTRAP: "true"
+      # ── Production Whisper: use medium model (1.4GB pre-cached) ──
+      WHISPER_MODEL_SIZE: medium
+      WHISPER_MODEL_PATH: ./models/whisper-medium
+      WHISPER_FAST_MODEL_SIZE: medium
+      WHISPER_FAST_MODEL_PATH: ./models/whisper-medium
+      WHISPER_FAST_COMPUTE_TYPE: int8
+      # Allow enough time for first-time model download
+      EARS_TRANSCRIBER_STARTUP_TIMEOUT_SECONDS: "600"
+      # ── Real diarizer (Pyannote) ──
+      PYANNOTE_MODEL_PATH: ./models/pyannote-speaker-3.1
+      HF_TOKEN: ${HF_TOKEN:-}
+      EARS_DIARIZER_STARTUP_TIMEOUT_SECONDS: "120"
+      EARS_REQUIRE_REAL_DIARIZER: "false"
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8002/health"]
+      <<: *engine-healthcheck
+    depends_on:
+      redis:
+        condition: service_healthy
+      base-image:
+        condition: service_completed_successfully
+    networks:
+      - nexus
+
+  eyes:
+    build:
+      context: ./engines/eyes-engine
+      dockerfile: Dockerfile
+      args:
+        BASE_IMAGE: nexus-base:dev
+    container_name: nexus-eyes
+    restart: unless-stopped
+    volumes:
+      - model-cache:/app/service/models
+    ports:
+      - "8003:8003"
+    environment:
+      <<: *common-env
+      ENGINE_PORT: "8003"
+      VISION_DEVICE: cpu
+      # ── Real OCR (EasyOCR) — no stubs ──
+      EYES_OCR_GPU: "false"
+      EYES_OCR_ALLOW_REMOTE_MODEL_BOOTSTRAP: "true"
+      EYES_OCR_LOAD_TIMEOUT_SECONDS: "120"
+      EYES_OCR_MODEL_DIR: ./models/easyocr
+      EYES_FAST_SKIP_OCR: "false"
+      # ── Visual analysis via Ollama LLaVA ──
+      EYES_OLLAMA_BASE_URL: http://ollama:11434
+      EYES_OLLAMA_MODEL: ${EYES_OLLAMA_MODEL:-llama3.2-vision:11b}
+      EYES_FAST_OLLAMA_MODEL: ${EYES_FAST_OLLAMA_MODEL:-llama3.2-vision:11b}
+      EYES_DEFAULT_PROCESSING_PROFILE: fast
+      EYES_FAST_MAX_FRAMES: "6"
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8003/health"]
+      <<: *engine-healthcheck
+    depends_on:
+      redis:
+        condition: service_healthy
+      ollama:
+        condition: service_healthy
+      base-image:
+        condition: service_completed_successfully
+    networks:
+      - nexus
+
+  heart:
+    profiles: ["full"]
+    build:
+      context: ./engines/heart-engine
+      dockerfile: Dockerfile
+      args:
+        BASE_IMAGE: nexus-base:dev
+    container_name: nexus-heart
+    restart: unless-stopped
+    ports:
+      - "8004:8004"
+    environment:
+      <<: *common-env
+      ENGINE_PORT: "8004"
+      LLM_DEVICE: cpu
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8004/health"]
+      <<: *engine-healthcheck
+    depends_on:
+      redis:
+        condition: service_healthy
+      ollama:
+        condition: service_healthy
+      base-image:
+        condition: service_completed_successfully
+    networks:
+      - nexus
+
+  backbone:
+    profiles: ["full"]
+    build:
+      context: ./engines/backbone-engine
+      dockerfile: Dockerfile
+      args:
+        BASE_IMAGE: nexus-base:dev
+    container_name: nexus-backbone
+    restart: unless-stopped
+    ports:
+      - "8005:8005"
+    environment:
+      <<: *common-env
+      ENGINE_PORT: "8005"
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8005/health"]
+      <<: *engine-healthcheck
+    depends_on:
+      neo4j:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      base-image:
+        condition: service_completed_successfully
+    networks:
+      - nexus
+
+  nerves:
+    profiles: ["full"]
+    build:
+      context: ./engines/nerves-engine
+      dockerfile: Dockerfile
+      args:
+        BASE_IMAGE: nexus-base:dev
+    container_name: nexus-nerves
+    restart: unless-stopped
+    ports:
+      - "8006:8006"
+    environment:
+      <<: *common-env
+      ENGINE_PORT: "8006"
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8006/health"]
+      <<: *engine-healthcheck
+    depends_on:
+      redis:
+        condition: service_healthy
+      base-image:
+        condition: service_completed_successfully
+    networks:
+      - nexus
+
+  legs:
+    profiles: ["full"]
+    build:
+      context: ./engines/legs-engine
+      dockerfile: Dockerfile
+      args:
+        BASE_IMAGE: nexus-base:dev
+    container_name: nexus-legs
+    restart: unless-stopped
+    volumes:
+      - evidence-storage:/data/nexus/evidence
+    ports:
+      - "8007:8007"
+    environment:
+      <<: *common-env
+      ENGINE_PORT: "8007"
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8007/health"]
+      <<: *engine-healthcheck
+    depends_on:
+      redis:
+        condition: service_healthy
+      base-image:
+        condition: service_completed_successfully
+    networks:
+      - nexus
+
+  hands:
+    profiles: ["full"]
+    build:
+      context: ./engines/hands-engine
+      dockerfile: Dockerfile
+      args:
+        BASE_IMAGE: nexus-base:dev
+    container_name: nexus-hands
+    restart: unless-stopped
+    ports:
+      - "8008:8008"
+    environment:
+      <<: *common-env
+      ENGINE_PORT: "8008"
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8008/health"]
+      <<: *engine-healthcheck
+    depends_on:
+      redis:
+        condition: service_healthy
+      base-image:
+        condition: service_completed_successfully
+    networks:
+      - nexus
+
+  spine:
+    build:
+      context: ./engines/spine-engine
+      dockerfile: Dockerfile
+      args:
+        BASE_IMAGE: nexus-base:dev
+    container_name: nexus-spine
+    restart: unless-stopped
+    volumes:
+      - document-storage:/data/nexus/documents
+      - upload-storage:/data/nexus/orchestrator/uploads
+    ports:
+      - "8009:8009"
+    environment:
+      <<: *common-env
+      ENGINE_PORT: "8009"
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8009/health"]
+      <<: *engine-healthcheck
+    depends_on:
+      redis:
+        condition: service_healthy
+      base-image:
+        condition: service_completed_successfully
+    networks:
+      - nexus
+
+  mouth:
+    profiles: ["full"]
+    build:
+      context: ./engines/mouth-engine
+      dockerfile: Dockerfile
+      args:
+        BASE_IMAGE: nexus-base:dev
+    container_name: nexus-mouth
+    restart: unless-stopped
+    volumes:
+      - report-storage:/data/nexus/reports
+    ports:
+      - "8010:8010"
+    environment:
+      <<: *common-env
+      ENGINE_PORT: "8010"
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8010/health"]
+      <<: *engine-healthcheck
+    depends_on:
+      redis:
+        condition: service_healthy
+      base-image:
+        condition: service_completed_successfully
+    networks:
+      - nexus
+
+  brain:
+    build:
+      context: ./engines/brain-engine
+      dockerfile: Dockerfile
+      args:
+        BASE_IMAGE: nexus-base:dev
+    container_name: nexus-brain
+    restart: unless-stopped
+    ports:
+      - "8011:8011"
+    environment:
+      <<: *common-env
+      ENGINE_PORT: "8011"
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8011/health"]
+      <<: *engine-healthcheck
+    depends_on:
+      redis:
+        condition: service_healthy
+      ollama:
+        condition: service_healthy
+      base-image:
+        condition: service_completed_successfully
+    networks:
+      - nexus
+
+  # ┌─────────────────────────────────────────────────────────────────────────┐
+  # │                        ORCHESTRATORS                                    │
+  # └─────────────────────────────────────────────────────────────────────────┘
+
+  orchestrator:
+    build:
+      context: ./products/nexus-qa-orchestrator
+      dockerfile: Dockerfile
+      args:
+        BASE_IMAGE: nexus-base:dev
+    container_name: nexus-orchestrator
+    restart: unless-stopped
+    volumes:
+      - upload-storage:/data/nexus/orchestrator/uploads
+    ports:
+      - "8100:8100"
+    environment:
+      <<: *common-env
+      ENGINE_PORT: "8100"
+      PLATFORM_API_URL: http://platform-api:8091
+      # Engine URLs (container-to-container)
+      SHIELD_ENGINE_URL: http://shield:8001
+      EARS_ENGINE_URL: http://ears:8002
+      EYES_ENGINE_URL: http://eyes:8003
+      HEART_ENGINE_URL: http://heart:8004
+      BACKBONE_ENGINE_URL: http://backbone:8005
+      NERVES_ENGINE_URL: http://nerves:8006
+      LEGS_ENGINE_URL: http://legs:8007
+      HANDS_ENGINE_URL: http://hands:8008
+      SPINE_ENGINE_URL: http://spine:8009
+      MOUTH_ENGINE_URL: http://mouth:8010
+      BRAIN_ENGINE_URL: http://brain:8011
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8100/health"]
+      <<: *engine-healthcheck
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      base-image:
+        condition: service_completed_successfully
+    networks:
+      - nexus
+
+  qa-orchestrator:
+    profiles: ["full"]
+    build:
+      context: ./products/qa-orchestrator
+      dockerfile: Dockerfile
+      args:
+        BASE_IMAGE: nexus-base:dev
+    container_name: nexus-qa-orchestrator
+    restart: unless-stopped
+    ports:
+      - "8092:8092"
+    environment:
+      <<: *common-env
+      ENGINE_PORT: "8092"
+      # Engine URLs (container-to-container)
+      SHIELD_URL: http://shield:8001
+      EARS_URL: http://ears:8002
+      EYES_URL: http://eyes:8003
+      HEART_URL: http://heart:8004
+      BACKBONE_URL: http://backbone:8005
+      NERVES_URL: http://nerves:8006
+      LEGS_URL: http://legs:8007
+      HANDS_URL: http://hands:8008
+      SPINE_URL: http://spine:8009
+      MOUTH_URL: http://mouth:8010
+      BRAIN_URL: http://brain:8011
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8092/health"]
+      <<: *engine-healthcheck
+    depends_on:
+      redis:
+        condition: service_healthy
+      base-image:
+        condition: service_completed_successfully
+    networks:
+      - nexus
+
+  # ┌─────────────────────────────────────────────────────────────────────────┐
+  # │                        UI CLIENT                                        │
+  # └─────────────────────────────────────────────────────────────────────────┘
+
+  client:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/Dockerfile.client
+      args:
+        VITE_API_BASE: /api
+    container_name: nexus-client
+    restart: unless-stopped
+    ports:
+      - "${CLIENT_PORT:-3000}:80"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/ || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    depends_on:
+      gateway:
+        condition: service_healthy
+    networks:
+      - nexus
+
+  # ┌─────────────────────────────────────────────────────────────────────────┐
+  # │                        BUILD HELPER                                     │
+  # │  Builds the shared base image once; all services depend on it          │
+  # └─────────────────────────────────────────────────────────────────────────┘
+
+  base-image:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/Dockerfile.base
+    image: nexus-base:dev
+    container_name: nexus-base-builder
+    command: ["echo", "Base image ready"]
+    networks:
+      - nexus

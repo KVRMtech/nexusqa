@@ -1,0 +1,42 @@
+# Nexus QA — GPU-enabled Dockerfile for ML engines (Ears, Eyes, Heart)
+# Uses NVIDIA CUDA base for GPU inference
+
+FROM nvidia/cuda:12.2.0-runtime-ubuntu22.04 AS base
+
+LABEL maintainer="Nexus QA Platform"
+LABEL description="GPU-enabled image for ML engine services"
+
+# System dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3.11 \
+    python3.11-venv \
+    python3-pip \
+    build-essential \
+    curl \
+    git \
+    ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
+# Symlink python
+RUN ln -sf /usr/bin/python3.11 /usr/bin/python && \
+    ln -sf /usr/bin/python3.11 /usr/bin/python3
+
+# Create non-root user
+RUN groupadd -r nexus && useradd -r -g nexus -m nexus
+
+WORKDIR /app
+
+# Install shared SDK
+COPY sdk/nexus-sdk/ /app/sdk/nexus-sdk/
+RUN pip install --no-cache-dir /app/sdk/nexus-sdk/
+
+# NVIDIA runtime
+ENV NVIDIA_VISIBLE_DEVICES=all
+ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility
+
+HEALTHCHECK --interval=30s --timeout=10s --retries=3 \
+    CMD curl -f http://localhost:${ENGINE_PORT:-8000}/health || exit 1
+
+USER nexus
+
+CMD ["python", "main.py"]

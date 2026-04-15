@@ -1,0 +1,3 @@
+# Heart Engine — LLM inference (rule extraction, analysis)
+-e ../../sdk/nexus-sdk
+httpx>=0.26,<1.0

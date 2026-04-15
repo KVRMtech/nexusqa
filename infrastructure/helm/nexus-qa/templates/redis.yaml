@@ -1,0 +1,115 @@
+{{/*
+=================================================================
+Redis StatefulSet + Service
+=================================================================
+*/}}
+
+{{- if .Values.redis.enabled }}
+
+{{- $fullname := include "nexus-qa.fullname" . }}
+{{- $root := . }}
+
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $fullname }}-redis
+  labels:
+    {{- include "nexus-qa.componentLabels" (dict "root" $root "component" "redis") | nindent 4 }}
+spec:
+  serviceName: {{ $fullname }}-redis
+  replicas: {{ .Values.redis.replicas | default 1 }}
+  selector:
+    matchLabels:
+      {{- include "nexus-qa.componentSelectorLabels" (dict "root" $root "component" "redis") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "nexus-qa.componentLabels" (dict "root" $root "component" "redis") | nindent 8 }}
+    spec:
+      securityContext:
+        fsGroup: 999
+        runAsUser: 999
+        runAsNonRoot: true
+      containers:
+        - name: redis
+          image: {{ .Values.redis.image }}
+          imagePullPolicy: {{ .Values.global.image.pullPolicy }}
+          command:
+            - redis-server
+            - --maxmemory
+            - {{ .Values.redis.maxMemory | quote }}
+            - --maxmemory-policy
+            - allkeys-lru
+            - --appendonly
+            - "yes"
+            - --appendfsync
+            - everysec
+            {{- if .Values.secrets.redisPassword }}
+            - --requirepass
+            - "$(REDIS_PASSWORD)"
+            {{- end }}
+          {{- if .Values.secrets.redisPassword }}
+          env:
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "nexus-qa.secretName" $root }}
+                  key: redis-password
+          {{- end }}
+          ports:
+            - name: redis
+              containerPort: {{ .Values.redis.port }}
+              protocol: TCP
+          resources:
+            {{- toYaml .Values.redis.resources | nindent 12 }}
+          livenessProbe:
+            exec:
+              command: ["redis-cli", "ping"]
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+          readinessProbe:
+            exec:
+              command: ["redis-cli", "ping"]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+          volumeMounts:
+            - name: data
+              mountPath: /data
+  {{- if .Values.redis.persistence.enabled }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- if .Values.global.storageClass }}
+        storageClassName: {{ .Values.global.storageClass | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.redis.persistence.size }}
+  {{- else }}
+      volumes:
+        - name: data
+          emptyDir: {}
+  {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullname }}-redis
+  labels:
+    {{- include "nexus-qa.componentLabels" (dict "root" $root "component" "redis") | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - port: {{ .Values.redis.port }}
+      targetPort: redis
+      protocol: TCP
+      name: redis
+  selector:
+    {{- include "nexus-qa.componentSelectorLabels" (dict "root" $root "component" "redis") | nindent 4 }}
+
+{{- end }}

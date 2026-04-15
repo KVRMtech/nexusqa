@@ -1,0 +1,5 @@
+# Platform API — cross-cutting backend for all UI modules
+-e ../../sdk/nexus-sdk
+psutil>=5.9,<6.0
+structlog>=24.1,<25.0
+locust>=2.23,<3.0

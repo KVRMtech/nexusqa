@@ -1,0 +1,3 @@
+# Nexus QA Orchestrator
+# All runtime dependencies are provided by the nexus-sdk base image.
+# This file exists so the standard per-service Dockerfile pattern works.

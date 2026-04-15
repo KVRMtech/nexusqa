@@ -1,0 +1,174 @@
+{{/*
+=================================================================
+Orchestrator Deployment + Service
+=================================================================
+*/}}
+
+{{- $fullname := include "nexus-qa.fullname" . }}
+{{- $root := . }}
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fullname }}-orchestrator
+  labels:
+    {{- include "nexus-qa.componentLabels" (dict "root" $root "component" "orchestrator") | nindent 4 }}
+spec:
+  {{- if not .Values.orchestrator.autoscaling.enabled }}
+  replicas: {{ .Values.orchestrator.replicas }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "nexus-qa.componentSelectorLabels" (dict "root" $root "component" "orchestrator") | nindent 6 }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        {{- include "nexus-qa.componentLabels" (dict "root" $root "component" "orchestrator") | nindent 8 }}
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") $root | sha256sum }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") $root | sha256sum }}
+    spec:
+      serviceAccountName: {{ .Values.serviceAccount.name | default (include "nexus-qa.fullname" .) }}
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: orchestrator
+          image: {{ include "nexus-qa.image" (dict "root" $root "service" "orchestrator" "tag" "") }}
+          imagePullPolicy: {{ .Values.global.image.pullPolicy }}
+          command: ["python", "-m", "app.main"]
+          ports:
+            - name: http
+              containerPort: {{ .Values.orchestrator.port }}
+              protocol: TCP
+          env:
+            {{- include "nexus-qa.commonEnv" (dict "root" $root) | nindent 12 }}
+            - name: PORT
+              value: {{ .Values.orchestrator.port | quote }}
+            - name: REDIS_HOST
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "nexus-qa.configName" $root }}
+                  key: REDIS_HOST
+            - name: REDIS_PORT
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "nexus-qa.configName" $root }}
+                  key: REDIS_PORT
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "nexus-qa.secretName" $root }}
+                  key: redis-password
+            {{- /* Orchestrator needs all engine URLs */}}
+            - name: SHIELD_ENGINE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "nexus-qa.configName" $root }}
+                  key: SHIELD_ENGINE_URL
+            - name: EARS_ENGINE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "nexus-qa.configName" $root }}
+                  key: EARS_ENGINE_URL
+            - name: EYES_ENGINE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "nexus-qa.configName" $root }}
+                  key: EYES_ENGINE_URL
+            - name: HEART_ENGINE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "nexus-qa.configName" $root }}
+                  key: HEART_ENGINE_URL
+            - name: BACKBONE_ENGINE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "nexus-qa.configName" $root }}
+                  key: BACKBONE_ENGINE_URL
+            - name: NERVES_ENGINE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "nexus-qa.configName" $root }}
+                  key: NERVES_ENGINE_URL
+            - name: LEGS_ENGINE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "nexus-qa.configName" $root }}
+                  key: LEGS_ENGINE_URL
+            - name: HANDS_ENGINE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "nexus-qa.configName" $root }}
+                  key: HANDS_ENGINE_URL
+            - name: SPINE_ENGINE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "nexus-qa.configName" $root }}
+                  key: SPINE_ENGINE_URL
+            - name: MOUTH_ENGINE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "nexus-qa.configName" $root }}
+                  key: MOUTH_ENGINE_URL
+            - name: BRAIN_ENGINE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "nexus-qa.configName" $root }}
+                  key: BRAIN_ENGINE_URL
+          resources:
+            {{- toYaml .Values.orchestrator.resources | nindent 12 }}
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 30
+            timeoutSeconds: 5
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 3
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            failureThreshold: 20
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullname }}-orchestrator
+  labels:
+    {{- include "nexus-qa.componentLabels" (dict "root" $root "component" "orchestrator") | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - port: {{ .Values.orchestrator.port }}
+      targetPort: http
+      protocol: TCP
+      name: http
+  selector:
+    {{- include "nexus-qa.componentSelectorLabels" (dict "root" $root "component" "orchestrator") | nindent 4 }}

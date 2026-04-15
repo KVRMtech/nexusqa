@@ -1,0 +1,303 @@
+{{/*
+=================================================================
+Engine Deployments — one Deployment per enabled engine
+=================================================================
+Each engine block is rendered from .Values.engines.<key>
+GPU engines get tolerations, nodeSelector, and nvidia.com/gpu limits.
+*/}}
+
+{{- $fullname := include "nexus-qa.fullname" . }}
+{{- $root := . }}
+
+{{/* Map of engine key → component name */}}
+{{- $engines := dict
+  "shield"   "shield-engine"
+  "ears"     "ears-engine"
+  "eyes"     "eyes-engine"
+  "heart"    "heart-engine"
+  "backbone" "backbone-engine"
+  "nerves"   "nerves-engine"
+  "legs"     "legs-engine"
+  "hands"    "hands-engine"
+  "spine"    "spine-engine"
+  "mouth"    "mouth-engine"
+  "brain"    "brain-engine"
+}}
+
+{{- range $key, $component := $engines }}
+{{- $svc := index $root.Values.engines $key }}
+{{- if $svc.enabled }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fullname }}-{{ $component }}
+  labels:
+    {{- include "nexus-qa.componentLabels" (dict "root" $root "component" $component) | nindent 4 }}
+spec:
+  replicas: {{ $svc.replicas | default 1 }}
+  selector:
+    matchLabels:
+      {{- include "nexus-qa.componentSelectorLabels" (dict "root" $root "component" $component) | nindent 6 }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        {{- include "nexus-qa.componentLabels" (dict "root" $root "component" $component) | nindent 8 }}
+      annotations:
+        checksum/config: {{ include (print $root.Template.BasePath "/configmap.yaml") $root | sha256sum }}
+        checksum/secret: {{ include (print $root.Template.BasePath "/secret.yaml") $root | sha256sum }}
+    spec:
+      serviceAccountName: {{ $root.Values.serviceAccount.name | default (include "nexus-qa.fullname" $root) }}
+      {{- with $root.Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml $root.Values.podSecurityContext | nindent 8 }}
+      {{- if $svc.gpu }}
+      tolerations:
+        - key: {{ $root.Values.gpuToleration.key }}
+          operator: {{ $root.Values.gpuToleration.operator }}
+          effect: {{ $root.Values.gpuToleration.effect }}
+      nodeSelector:
+        nvidia.com/gpu.present: "true"
+      {{- end }}
+      {{- if and (or (eq $key "ears") (eq $key "eyes")) $root.Values.modelCache.enabled (default false (dig "modelInit" "enabled" false $svc)) }}
+      initContainers:
+        - name: {{ $component }}-model-init
+          image: {{ include "nexus-qa.image" (dict "root" $root "service" $component "tag" "") }}
+          imagePullPolicy: {{ $root.Values.global.image.pullPolicy }}
+          command:
+            - python
+            - scripts/prewarm_models.py
+            - --mode
+            - {{ default "prewarm" (dig "modelInit" "mode" "prewarm" $svc) | quote }}
+          envFrom:
+            - configMapRef:
+                name: {{ include "nexus-qa.configName" $root }}
+            - secretRef:
+                name: {{ include "nexus-qa.secretName" $root }}
+          env:
+            {{- include "nexus-qa.commonEnv" (dict "root" $root) | nindent 12 }}
+            {{- if eq $key "ears" }}
+            {{- if $root.Values.secrets.earsHfToken }}
+            - name: HF_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "nexus-qa.secretName" $root }}
+                  key: ears-hf-token
+            {{- end }}
+            {{- end }}
+            {{- range $envKey, $envVal := ($svc.env | default dict) }}
+            - name: {{ $envKey }}
+              value: {{ $envVal | quote }}
+            {{- end }}
+          {{- if $svc.resources }}
+          resources:
+            requests:
+              {{- toYaml $svc.resources.requests | nindent 14 }}
+            limits:
+              {{- toYaml $svc.resources.limits | nindent 14 }}
+          {{- end }}
+          securityContext:
+            {{- toYaml $root.Values.containerSecurityContext | nindent 12 }}
+          volumeMounts:
+            - name: model-cache
+              mountPath: /app/service/models
+            - name: tmp
+              mountPath: /tmp
+      {{- end }}
+      containers:
+        - name: {{ $component }}
+          image: {{ include "nexus-qa.image" (dict "root" $root "service" $component "tag" "") }}
+          imagePullPolicy: {{ $root.Values.global.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ $svc.port }}
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: {{ include "nexus-qa.configName" $root }}
+            - secretRef:
+                name: {{ include "nexus-qa.secretName" $root }}
+          env:
+            {{- include "nexus-qa.commonEnv" (dict "root" $root) | nindent 12 }}
+            - name: PORT
+              value: {{ $svc.port | quote }}
+            {{- /* Engine-specific env vars */}}
+            {{- if eq $key "backbone" }}
+            - name: NEO4J_URI
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "nexus-qa.configName" $root }}
+                  key: NEO4J_URI
+            - name: NEO4J_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "nexus-qa.secretName" $root }}
+                  key: neo4j-password
+            - name: MILVUS_HOST
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "nexus-qa.configName" $root }}
+                  key: MILVUS_HOST
+            - name: MILVUS_PORT
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "nexus-qa.configName" $root }}
+                  key: MILVUS_PORT
+            {{- end }}
+            {{- if eq $key "shield" }}
+            {{- if $root.Values.secrets.shieldEncryptionKey }}
+            - name: SHIELD_ENCRYPTION_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "nexus-qa.secretName" $root }}
+                  key: shield-encryption-key
+            {{- end }}
+            {{- end }}
+            {{- if eq $key "ears" }}
+            {{- if $root.Values.secrets.earsHfToken }}
+            - name: HF_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "nexus-qa.secretName" $root }}
+                  key: ears-hf-token
+            {{- end }}
+            {{- end }}
+            {{- /* Inject per-engine custom env */}}
+            {{- range $envKey, $envVal := ($svc.env | default dict) }}
+            - name: {{ $envKey }}
+              value: {{ $envVal | quote }}
+            {{- end }}
+          {{- if $svc.resources }}
+          resources:
+            requests:
+              {{- toYaml $svc.resources.requests | nindent 14 }}
+              {{- if and $svc.gpu (gt (int ($svc.gpuCount | default 1)) 0) }}
+              nvidia.com/gpu: {{ $svc.gpuCount | default 1 | quote }}
+              {{- end }}
+            limits:
+              {{- toYaml $svc.resources.limits | nindent 14 }}
+              {{- if and $svc.gpu (gt (int ($svc.gpuCount | default 1)) 0) }}
+              nvidia.com/gpu: {{ $svc.gpuCount | default 1 | quote }}
+              {{- end }}
+          {{- end }}
+          securityContext:
+            {{- toYaml $root.Values.containerSecurityContext | nindent 12 }}
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            failureThreshold: 30
+          volumeMounts:
+            {{- /* Model cache for GPU engines */}}
+            {{- if and $svc.gpu $root.Values.modelCache.enabled }}
+            - name: model-cache
+              {{- if or (eq $key "ears") (eq $key "eyes") }}
+              mountPath: /app/service/models
+              {{- else }}
+              mountPath: /app/models
+              {{- end }}
+            {{- end }}
+            {{- /* Per-engine storage mounts */}}
+            {{- if eq $key "ears" }}
+            {{- if (default false (dig "persistence" "audio" "enabled" false $svc)) }}
+            - name: audio-storage
+              mountPath: /app/audio_files
+            {{- end }}
+            {{- end }}
+            {{- if eq $key "eyes" }}
+            {{- if (default false (dig "persistence" "frames" "enabled" false $svc)) }}
+            - name: frame-storage
+              mountPath: /app/frames
+            {{- end }}
+            {{- end }}
+            {{- if eq $key "legs" }}
+            {{- if (default false (dig "persistence" "evidence" "enabled" false $svc)) }}
+            - name: evidence-storage
+              mountPath: /app/evidence
+            {{- end }}
+            {{- end }}
+            {{- if eq $key "spine" }}
+            {{- if (default false (dig "persistence" "documents" "enabled" false $svc)) }}
+            - name: document-storage
+              mountPath: /app/documents
+            {{- end }}
+            {{- end }}
+            {{- if eq $key "mouth" }}
+            {{- if (default false (dig "persistence" "reports" "enabled" false $svc)) }}
+            - name: report-storage
+              mountPath: /app/reports
+            {{- end }}
+            {{- end }}
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        {{- if and $svc.gpu $root.Values.modelCache.enabled }}
+        - name: model-cache
+          persistentVolumeClaim:
+            claimName: {{ $fullname }}-model-cache
+        {{- end }}
+        {{- if eq $key "ears" }}
+        {{- if (default false (dig "persistence" "audio" "enabled" false $svc)) }}
+        - name: audio-storage
+          persistentVolumeClaim:
+            claimName: {{ $fullname }}-audio-storage
+        {{- end }}
+        {{- end }}
+        {{- if eq $key "eyes" }}
+        {{- if (default false (dig "persistence" "frames" "enabled" false $svc)) }}
+        - name: frame-storage
+          persistentVolumeClaim:
+            claimName: {{ $fullname }}-frame-storage
+        {{- end }}
+        {{- end }}
+        {{- if eq $key "legs" }}
+        {{- if (default false (dig "persistence" "evidence" "enabled" false $svc)) }}
+        - name: evidence-storage
+          persistentVolumeClaim:
+            claimName: {{ $fullname }}-evidence-storage
+        {{- end }}
+        {{- end }}
+        {{- if eq $key "spine" }}
+        {{- if (default false (dig "persistence" "documents" "enabled" false $svc)) }}
+        - name: document-storage
+          persistentVolumeClaim:
+            claimName: {{ $fullname }}-document-storage
+        {{- end }}
+        {{- end }}
+        {{- if eq $key "mouth" }}
+        {{- if (default false (dig "persistence" "reports" "enabled" false $svc)) }}
+        - name: report-storage
+          persistentVolumeClaim:
+            claimName: {{ $fullname }}-report-storage
+        {{- end }}
+        {{- end }}
+        - name: tmp
+          emptyDir: {}
+{{- end }}
+{{- end }}

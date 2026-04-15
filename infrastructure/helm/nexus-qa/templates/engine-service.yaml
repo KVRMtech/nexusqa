@@ -1,0 +1,44 @@
+{{/*
+=================================================================
+Engine Services — ClusterIP for each enabled engine
+=================================================================
+*/}}
+
+{{- $fullname := include "nexus-qa.fullname" . }}
+{{- $root := . }}
+
+{{- $engines := dict
+  "shield"   "shield-engine"
+  "ears"     "ears-engine"
+  "eyes"     "eyes-engine"
+  "heart"    "heart-engine"
+  "backbone" "backbone-engine"
+  "nerves"   "nerves-engine"
+  "legs"     "legs-engine"
+  "hands"    "hands-engine"
+  "spine"    "spine-engine"
+  "mouth"    "mouth-engine"
+  "brain"    "brain-engine"
+}}
+
+{{- range $key, $component := $engines }}
+{{- $svc := index $root.Values.engines $key }}
+{{- if $svc.enabled }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullname }}-{{ $component }}
+  labels:
+    {{- include "nexus-qa.componentLabels" (dict "root" $root "component" $component) | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - port: {{ $svc.port }}
+      targetPort: http
+      protocol: TCP
+      name: http
+  selector:
+    {{- include "nexus-qa.componentSelectorLabels" (dict "root" $root "component" $component) | nindent 4 }}
+{{- end }}
+{{- end }}

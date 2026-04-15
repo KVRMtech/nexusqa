@@ -1,0 +1,105 @@
+{{/*
+=================================================================
+Ollama Deployment + Service (LLM backend)
+=================================================================
+*/}}
+
+{{- if .Values.ollama.enabled }}
+
+{{- $fullname := include "nexus-qa.fullname" . }}
+{{- $root := . }}
+
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $fullname }}-ollama
+  labels:
+    {{- include "nexus-qa.componentLabels" (dict "root" $root "component" "ollama") | nindent 4 }}
+spec:
+  serviceName: {{ $fullname }}-ollama
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "nexus-qa.componentSelectorLabels" (dict "root" $root "component" "ollama") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "nexus-qa.componentLabels" (dict "root" $root "component" "ollama") | nindent 8 }}
+    spec:
+      {{- if .Values.ollama.gpu.enabled }}
+      tolerations:
+        - key: {{ .Values.gpuToleration.key }}
+          operator: {{ .Values.gpuToleration.operator }}
+          effect: {{ .Values.gpuToleration.effect }}
+      nodeSelector:
+        nvidia.com/gpu.present: "true"
+      {{- end }}
+      containers:
+        - name: ollama
+          image: {{ .Values.ollama.image }}
+          imagePullPolicy: {{ .Values.global.image.pullPolicy }}
+          env:
+            - name: OLLAMA_HOST
+              value: "0.0.0.0"
+            - name: OLLAMA_MODELS
+              value: /root/.ollama/models
+          ports:
+            - name: http
+              containerPort: {{ .Values.ollama.port }}
+              protocol: TCP
+          resources:
+            requests:
+              {{- toYaml .Values.ollama.resources.requests | nindent 14 }}
+              {{- if .Values.ollama.gpu.enabled }}
+              nvidia.com/gpu: "1"
+              {{- end }}
+            limits:
+              {{- toYaml .Values.ollama.resources.limits | nindent 14 }}
+              {{- if .Values.ollama.gpu.enabled }}
+              nvidia.com/gpu: "1"
+              {{- end }}
+          livenessProbe:
+            httpGet:
+              path: /api/tags
+              port: http
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            timeoutSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /api/tags
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            timeoutSeconds: 5
+          volumeMounts:
+            - name: model-cache
+              mountPath: /root/.ollama
+      volumes:
+        {{- if .Values.modelCache.enabled }}
+        - name: model-cache
+          persistentVolumeClaim:
+            claimName: {{ $fullname }}-model-cache
+        {{- else }}
+        - name: model-cache
+          emptyDir: {}
+        {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullname }}-ollama
+  labels:
+    {{- include "nexus-qa.componentLabels" (dict "root" $root "component" "ollama") | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - port: {{ .Values.ollama.port }}
+      targetPort: http
+      protocol: TCP
+      name: http
+  selector:
+    {{- include "nexus-qa.componentSelectorLabels" (dict "root" $root "component" "ollama") | nindent 4 }}
+
+{{- end }}

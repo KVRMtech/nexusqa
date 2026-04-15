@@ -1,0 +1,3 @@
+# API Gateway
+-e ../../sdk/nexus-sdk
+httpx>=0.26,<1.0

@@ -1,0 +1,73 @@
+{{/*
+=================================================================
+ConfigMap — shared non-secret configuration for all services
+=================================================================
+*/}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "nexus-qa.configName" . }}
+  labels:
+    {{- include "nexus-qa.labels" . | nindent 4 }}
+data:
+  NEXUS_ENV: {{ .Values.config.nexusEnv | quote }}
+  LOG_LEVEL: {{ .Values.config.logLevel | quote }}
+
+  # ── Redis ──
+  REDIS_URL: {{ printf "redis://:%s@%s-redis:%d/0" (.Values.secrets.redisPassword | default "") (include "nexus-qa.fullname" .) (int .Values.redis.port) | quote }}
+  REDIS_HOST: {{ printf "%s-redis" (include "nexus-qa.fullname" .) | quote }}
+  REDIS_PORT: {{ .Values.redis.port | quote }}
+
+  # ── PostgreSQL ──
+  POSTGRES_HOST: {{ printf "%s-postgres" (include "nexus-qa.fullname" .) | quote }}
+  POSTGRES_PORT: {{ .Values.postgres.port | quote }}
+  POSTGRES_DB: {{ .Values.postgres.database | quote }}
+  POSTGRES_USER: {{ .Values.postgres.user | quote }}
+  DATABASE_URL: {{ printf "postgresql://%s:%s@%s-postgres:%d/%s" .Values.postgres.user .Values.secrets.postgresPassword (include "nexus-qa.fullname" .) (int .Values.postgres.port) .Values.postgres.database | quote }}
+
+  # ── Neo4j ──
+  NEO4J_URI: {{ printf "bolt://%s-neo4j:%d" (include "nexus-qa.fullname" .) (int .Values.neo4j.ports.bolt) | quote }}
+
+  # ── Milvus ──
+  MILVUS_HOST: {{ printf "%s-milvus" (include "nexus-qa.fullname" .) | quote }}
+  MILVUS_PORT: {{ .Values.milvus.port | quote }}
+
+  # ── Ollama ──
+  OLLAMA_BASE_URL: {{ printf "http://%s-ollama:%d" (include "nexus-qa.fullname" .) (int .Values.ollama.port) | quote }}
+  EYES_OLLAMA_BASE_URL: {{ printf "http://%s-ollama:%d" (include "nexus-qa.fullname" .) (int .Values.ollama.port) | quote }}
+  EYES_OLLAMA_MODEL: {{ .Values.models.eyes.ollamaModel | quote }}
+  HEART_OLLAMA_BASE_URL: {{ printf "http://%s-ollama:%d" (include "nexus-qa.fullname" .) (int .Values.ollama.port) | quote }}
+  HEART_OLLAMA_MODEL: {{ .Values.models.heart.localModel | quote }}
+  HEART_TIER3_PROVIDER: {{ .Values.models.heart.localProvider | quote }}
+  HEART_TIER3_OLLAMA_BASE_URL: {{ printf "http://%s-ollama:%d" (include "nexus-qa.fullname" .) (int .Values.ollama.port) | quote }}
+  HEART_TIER3_MODEL: {{ .Values.models.heart.localModel | quote }}
+  BRAIN_OLLAMA_BASE_URL: {{ printf "http://%s-ollama:%d" (include "nexus-qa.fullname" .) (int .Values.ollama.port) | quote }}
+  BRAIN_OLLAMA_MODEL: {{ .Values.models.brain.localModel | quote }}
+  BRAIN_TIER3_PROVIDER: {{ .Values.models.brain.localProvider | quote }}
+  BRAIN_TIER3_OLLAMA_BASE_URL: {{ printf "http://%s-ollama:%d" (include "nexus-qa.fullname" .) (int .Values.ollama.port) | quote }}
+  BRAIN_TIER3_MODEL: {{ .Values.models.brain.localModel | quote }}
+
+  # ── Auth ──
+  AUTH_SERVICE_URL: {{ include "nexus-qa.serviceUrl" (dict "root" . "component" "auth" "port" .Values.authService.port) | quote }}
+
+  # ── Engine Service URLs ──
+  SHIELD_ENGINE_URL: {{ include "nexus-qa.serviceUrl" (dict "root" . "component" "shield-engine" "port" .Values.engines.shield.port) | quote }}
+  EARS_ENGINE_URL: {{ include "nexus-qa.serviceUrl" (dict "root" . "component" "ears-engine" "port" .Values.engines.ears.port) | quote }}
+  EYES_ENGINE_URL: {{ include "nexus-qa.serviceUrl" (dict "root" . "component" "eyes-engine" "port" .Values.engines.eyes.port) | quote }}
+  HEART_ENGINE_URL: {{ include "nexus-qa.serviceUrl" (dict "root" . "component" "heart-engine" "port" .Values.engines.heart.port) | quote }}
+  BACKBONE_ENGINE_URL: {{ include "nexus-qa.serviceUrl" (dict "root" . "component" "backbone-engine" "port" .Values.engines.backbone.port) | quote }}
+  NERVES_ENGINE_URL: {{ include "nexus-qa.serviceUrl" (dict "root" . "component" "nerves-engine" "port" .Values.engines.nerves.port) | quote }}
+  LEGS_ENGINE_URL: {{ include "nexus-qa.serviceUrl" (dict "root" . "component" "legs-engine" "port" .Values.engines.legs.port) | quote }}
+  HANDS_ENGINE_URL: {{ include "nexus-qa.serviceUrl" (dict "root" . "component" "hands-engine" "port" .Values.engines.hands.port) | quote }}
+  SPINE_ENGINE_URL: {{ include "nexus-qa.serviceUrl" (dict "root" . "component" "spine-engine" "port" .Values.engines.spine.port) | quote }}
+  MOUTH_ENGINE_URL: {{ include "nexus-qa.serviceUrl" (dict "root" . "component" "mouth-engine" "port" .Values.engines.mouth.port) | quote }}
+  BRAIN_ENGINE_URL: {{ include "nexus-qa.serviceUrl" (dict "root" . "component" "brain-engine" "port" .Values.engines.brain.port) | quote }}
+
+  # ── Platform Services ──
+  PLATFORM_API_URL: {{ include "nexus-qa.serviceUrl" (dict "root" . "component" "platform-api" "port" .Values.platformApi.port) | quote }}
+
+  # ── Orchestrators ──
+  ORCHESTRATOR_URL: {{ include "nexus-qa.serviceUrl" (dict "root" . "component" "orchestrator" "port" .Values.orchestrator.port) | quote }}
+
+  # ── Gateway ──
+  GATEWAY_URL: {{ include "nexus-qa.serviceUrl" (dict "root" . "component" "gateway" "port" .Values.gateway.port) | quote }}

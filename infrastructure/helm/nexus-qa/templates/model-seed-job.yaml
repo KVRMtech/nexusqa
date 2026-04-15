@@ -1,0 +1,101 @@
+{{/*
+=================================================================
+Model Seed Jobs — explicit one-time cache warmup for Ears and Eyes
+=================================================================
+These jobs seed the shared model cache PVC separately from pod startup.
+Pods themselves should only verify cache presence via init containers.
+*/}}
+
+{{- $fullname := include "nexus-qa.fullname" . }}
+{{- $root := . }}
+{{- $seedableEngines := dict
+  "ears" "ears-engine"
+  "eyes" "eyes-engine"
+}}
+
+{{- range $key, $component := $seedableEngines }}
+{{- $svc := index $root.Values.engines $key }}
+{{- if and $svc.enabled $root.Values.modelCache.enabled (default false (dig "modelSeedJob" "enabled" false $svc)) }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $fullname }}-{{ $component }}-model-seed
+  labels:
+    {{- include "nexus-qa.componentLabels" (dict "root" $root "component" $component) | nindent 4 }}
+  annotations:
+    helm.sh/hook: {{ default "post-install,pre-upgrade" (dig "modelSeedJob" "hook" "post-install,pre-upgrade" $svc) | quote }}
+    helm.sh/hook-weight: {{ default "-1" (dig "modelSeedJob" "hookWeight" "-1" $svc) | quote }}
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 0
+  template:
+    metadata:
+      labels:
+        {{- include "nexus-qa.componentLabels" (dict "root" $root "component" $component) | nindent 8 }}
+    spec:
+      restartPolicy: Never
+      serviceAccountName: {{ $root.Values.serviceAccount.name | default (include "nexus-qa.fullname" $root) }}
+      {{- with $root.Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml $root.Values.podSecurityContext | nindent 8 }}
+      {{- if $svc.gpu }}
+      tolerations:
+        - key: {{ $root.Values.gpuToleration.key }}
+          operator: {{ $root.Values.gpuToleration.operator }}
+          effect: {{ $root.Values.gpuToleration.effect }}
+      nodeSelector:
+        nvidia.com/gpu.present: "true"
+      {{- end }}
+      containers:
+        - name: {{ $component }}-model-seed
+          image: {{ include "nexus-qa.image" (dict "root" $root "service" $component "tag" "") }}
+          imagePullPolicy: {{ $root.Values.global.image.pullPolicy }}
+          command:
+            - python
+            - scripts/prewarm_models.py
+            - --mode
+            - {{ default "prewarm" (dig "modelSeedJob" "mode" "prewarm" $svc) | quote }}
+          envFrom:
+            - configMapRef:
+                name: {{ include "nexus-qa.configName" $root }}
+            - secretRef:
+                name: {{ include "nexus-qa.secretName" $root }}
+          env:
+            {{- include "nexus-qa.commonEnv" (dict "root" $root) | nindent 12 }}
+            {{- if eq $key "ears" }}
+            {{- if $root.Values.secrets.earsHfToken }}
+            - name: HF_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "nexus-qa.secretName" $root }}
+                  key: ears-hf-token
+            {{- end }}
+            {{- end }}
+            {{- range $envKey, $envVal := ($svc.env | default dict) }}
+            - name: {{ $envKey }}
+              value: {{ $envVal | quote }}
+            {{- end }}
+          resources:
+            requests:
+              {{- toYaml $svc.resources.requests | nindent 14 }}
+            limits:
+              {{- toYaml $svc.resources.limits | nindent 14 }}
+          securityContext:
+            {{- toYaml $root.Values.containerSecurityContext | nindent 12 }}
+          volumeMounts:
+            - name: model-cache
+              mountPath: /app/service/models
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: model-cache
+          persistentVolumeClaim:
+            claimName: {{ $fullname }}-model-cache
+        - name: tmp
+          emptyDir: {}
+{{- end }}
+{{- end }}

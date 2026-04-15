@@ -1,0 +1,295 @@
+{{/*
+=================================================================
+Milvus (Vector DB) + etcd + MinIO StatefulSets/Deployments
+=================================================================
+Milvus standalone mode with etcd for metadata and MinIO for storage.
+*/}}
+
+{{- if .Values.milvus.enabled }}
+
+{{- $fullname := include "nexus-qa.fullname" . }}
+{{- $root := . }}
+
+{{/* ═══════ etcd (Milvus metadata) ═══════ */}}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $fullname }}-milvus-etcd
+  labels:
+    {{- include "nexus-qa.componentLabels" (dict "root" $root "component" "milvus-etcd") | nindent 4 }}
+spec:
+  serviceName: {{ $fullname }}-milvus-etcd
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "nexus-qa.componentSelectorLabels" (dict "root" $root "component" "milvus-etcd") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "nexus-qa.componentLabels" (dict "root" $root "component" "milvus-etcd") | nindent 8 }}
+    spec:
+      containers:
+        - name: etcd
+          image: {{ .Values.milvus.etcd.image }}
+          command:
+            - etcd
+            - --advertise-client-urls=http://0.0.0.0:2379
+            - --listen-client-urls=http://0.0.0.0:2379
+            - --data-dir=/etcd-data
+            - --auto-compaction-mode=revision
+            - --auto-compaction-retention=1000
+            - --max-txn-ops=16384
+            - --quota-backend-bytes=4294967296
+          env:
+            - name: ETCD_AUTO_COMPACTION_MODE
+              value: revision
+            - name: ETCD_AUTO_COMPACTION_RETENTION
+              value: "1000"
+          ports:
+            - name: client
+              containerPort: 2379
+              protocol: TCP
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 2379
+            initialDelaySeconds: 15
+            periodSeconds: 15
+          volumeMounts:
+            - name: data
+              mountPath: /etcd-data
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- if .Values.global.storageClass }}
+        storageClassName: {{ .Values.global.storageClass | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: 5Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullname }}-milvus-etcd
+  labels:
+    {{- include "nexus-qa.componentLabels" (dict "root" $root "component" "milvus-etcd") | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - port: 2379
+      targetPort: client
+      protocol: TCP
+      name: client
+  selector:
+    {{- include "nexus-qa.componentSelectorLabels" (dict "root" $root "component" "milvus-etcd") | nindent 4 }}
+
+{{/* ═══════ MinIO (Milvus object storage) ═══════ */}}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $fullname }}-milvus-minio
+  labels:
+    {{- include "nexus-qa.componentLabels" (dict "root" $root "component" "milvus-minio") | nindent 4 }}
+spec:
+  serviceName: {{ $fullname }}-milvus-minio
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "nexus-qa.componentSelectorLabels" (dict "root" $root "component" "milvus-minio") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "nexus-qa.componentLabels" (dict "root" $root "component" "milvus-minio") | nindent 8 }}
+    spec:
+      containers:
+        - name: minio
+          image: {{ .Values.milvus.minio.image }}
+          args: ["server", "/data", "--console-address", ":9001"]
+          env:
+            - name: MINIO_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "nexus-qa.secretName" $root }}
+                  key: minio-access-key
+            - name: MINIO_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "nexus-qa.secretName" $root }}
+                  key: minio-secret-key
+          ports:
+            - name: api
+              containerPort: 9000
+              protocol: TCP
+            - name: console
+              containerPort: 9001
+              protocol: TCP
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 1Gi
+          livenessProbe:
+            httpGet:
+              path: /minio/health/live
+              port: api
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          readinessProbe:
+            httpGet:
+              path: /minio/health/ready
+              port: api
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          volumeMounts:
+            - name: data
+              mountPath: /data
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- if .Values.global.storageClass }}
+        storageClassName: {{ .Values.global.storageClass | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: 20Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullname }}-milvus-minio
+  labels:
+    {{- include "nexus-qa.componentLabels" (dict "root" $root "component" "milvus-minio") | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - port: 9000
+      targetPort: api
+      protocol: TCP
+      name: api
+    - port: 9001
+      targetPort: console
+      protocol: TCP
+      name: console
+  selector:
+    {{- include "nexus-qa.componentSelectorLabels" (dict "root" $root "component" "milvus-minio") | nindent 4 }}
+
+{{/* ═══════ Milvus Standalone ═══════ */}}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $fullname }}-milvus
+  labels:
+    {{- include "nexus-qa.componentLabels" (dict "root" $root "component" "milvus") | nindent 4 }}
+spec:
+  serviceName: {{ $fullname }}-milvus
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "nexus-qa.componentSelectorLabels" (dict "root" $root "component" "milvus") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "nexus-qa.componentLabels" (dict "root" $root "component" "milvus") | nindent 8 }}
+    spec:
+      containers:
+        - name: milvus
+          image: {{ .Values.milvus.image }}
+          command: ["milvus", "run", "standalone"]
+          env:
+            - name: ETCD_ENDPOINTS
+              value: {{ printf "%s-milvus-etcd:2379" $fullname | quote }}
+            - name: MINIO_ADDRESS
+              value: {{ printf "%s-milvus-minio:9000" $fullname | quote }}
+            - name: MINIO_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "nexus-qa.secretName" $root }}
+                  key: minio-access-key
+            - name: MINIO_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "nexus-qa.secretName" $root }}
+                  key: minio-secret-key
+          ports:
+            - name: grpc
+              containerPort: {{ .Values.milvus.port }}
+              protocol: TCP
+            - name: http
+              containerPort: 9091
+              protocol: TCP
+          resources:
+            {{- toYaml .Values.milvus.resources | nindent 12 }}
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 90
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 5
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            timeoutSeconds: 5
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/milvus
+  {{- if .Values.milvus.persistence.enabled }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- if .Values.global.storageClass }}
+        storageClassName: {{ .Values.global.storageClass | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.milvus.persistence.size }}
+  {{- else }}
+      volumes:
+        - name: data
+          emptyDir: {}
+  {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullname }}-milvus
+  labels:
+    {{- include "nexus-qa.componentLabels" (dict "root" $root "component" "milvus") | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - port: {{ .Values.milvus.port }}
+      targetPort: grpc
+      protocol: TCP
+      name: grpc
+    - port: 9091
+      targetPort: http
+      protocol: TCP
+      name: http
+  selector:
+    {{- include "nexus-qa.componentSelectorLabels" (dict "root" $root "component" "milvus") | nindent 4 }}
+
+{{- end }}

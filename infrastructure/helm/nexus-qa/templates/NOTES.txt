@@ -1,0 +1,72 @@
+═══════════════════════════════════════════════════════════════
+ Nexus QA — Deployed Successfully!
+═══════════════════════════════════════════════════════════════
+
+Release:   {{ .Release.Name }}
+Namespace: {{ .Release.Namespace }}
+Status:    deployed
+
+{{- $fullname := include "nexus-qa.fullname" . }}
+
+── Access ──────────────────────────────────────────────────────
+
+{{- if .Values.ingress.enabled }}
+Application URL: https://{{ .Values.ingress.host }}
+{{- else }}
+1. Port-forward the client:
+   kubectl port-forward svc/{{ $fullname }}-client {{ .Values.client.port }}:{{ .Values.client.port }} -n {{ .Release.Namespace }}
+
+2. Port-forward the gateway (API):
+   kubectl port-forward svc/{{ $fullname }}-gateway {{ .Values.gateway.port }}:{{ .Values.gateway.port }} -n {{ .Release.Namespace }}
+{{- end }}
+
+{{- if .Values.monitoring.grafana.enabled }}
+
+── Monitoring ──────────────────────────────────────────────────
+Grafana:
+  kubectl port-forward svc/{{ $fullname }}-grafana {{ .Values.monitoring.grafana.port }}:{{ .Values.monitoring.grafana.port }} -n {{ .Release.Namespace }}
+  Default login: admin / <grafana-password from secret>
+{{- end }}
+
+{{- if .Values.monitoring.prometheus.enabled }}
+Prometheus:
+  kubectl port-forward svc/{{ $fullname }}-prometheus {{ .Values.monitoring.prometheus.port }}:{{ .Values.monitoring.prometheus.port }} -n {{ .Release.Namespace }}
+{{- end }}
+
+── Services ────────────────────────────────────────────────────
+  Auth Service:     {{ $fullname }}-auth:{{ .Values.authService.port }}
+  Gateway:          {{ $fullname }}-gateway:{{ .Values.gateway.port }}
+  Platform API:     {{ $fullname }}-platform-api:{{ .Values.platformApi.port }}
+  Orchestrator:     {{ $fullname }}-orchestrator:{{ .Values.orchestrator.port }}
+  Client (nginx):   {{ $fullname }}-client:{{ .Values.client.port }}
+
+── Engines ─────────────────────────────────────────────────────
+  Shield:   {{ $fullname }}-shield-engine:{{ .Values.engines.shield.port }}
+  Ears:     {{ $fullname }}-ears-engine:{{ .Values.engines.ears.port }}  {{ if .Values.engines.ears.gpu }}(GPU){{ end }}
+  Eyes:     {{ $fullname }}-eyes-engine:{{ .Values.engines.eyes.port }}  {{ if .Values.engines.eyes.gpu }}(GPU){{ end }}
+  Heart:    {{ $fullname }}-heart-engine:{{ .Values.engines.heart.port }} {{ if .Values.engines.heart.gpu }}(GPU){{ end }}
+  Backbone: {{ $fullname }}-backbone-engine:{{ .Values.engines.backbone.port }}
+  Nerves:   {{ $fullname }}-nerves-engine:{{ .Values.engines.nerves.port }}
+  Legs:     {{ $fullname }}-legs-engine:{{ .Values.engines.legs.port }}
+  Hands:    {{ $fullname }}-hands-engine:{{ .Values.engines.hands.port }}
+  Spine:    {{ $fullname }}-spine-engine:{{ .Values.engines.spine.port }}
+  Mouth:    {{ $fullname }}-mouth-engine:{{ .Values.engines.mouth.port }}
+
+── Infrastructure ──────────────────────────────────────────────
+{{- if .Values.redis.enabled }}
+  Redis:    {{ $fullname }}-redis:{{ .Values.redis.port }}
+{{- end }}
+{{- if .Values.postgres.enabled }}
+  Postgres: {{ $fullname }}-postgres:{{ .Values.postgres.port }}
+{{- end }}
+{{- if .Values.neo4j.enabled }}
+  Neo4j:    {{ $fullname }}-neo4j:{{ .Values.neo4j.ports.bolt }} (bolt)
+{{- end }}
+{{- if .Values.milvus.enabled }}
+  Milvus:   {{ $fullname }}-milvus:{{ .Values.milvus.port }}
+{{- end }}
+{{- if .Values.ollama.enabled }}
+  Ollama:   {{ $fullname }}-ollama:{{ .Values.ollama.port }}
+{{- end }}
+
+═══════════════════════════════════════════════════════════════

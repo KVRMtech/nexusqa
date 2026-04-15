@@ -1,0 +1,6 @@
+# Eyes Engine — screen/video analysis
+-e ../../sdk/nexus-sdk
+opencv-python-headless>=4.9,<5.0
+Pillow>=10.2,<11.0
+easyocr>=1.7,<2.0
+httpx>=0.26,<1.0

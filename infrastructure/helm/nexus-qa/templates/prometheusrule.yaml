@@ -1,0 +1,275 @@
+{{/*
+=================================================================
+PrometheusRule — Alerting rules for Prometheus Operator
+=================================================================
+Defines production-grade alerting rules for:
+  1. Service availability (targets down)
+  2. Error rates (5xx budget burn)
+  3. Latency SLOs (P95/P99 breach)
+  4. Infrastructure health (Redis, Postgres, Neo4j)
+  5. Resource saturation (in-flight requests)
+
+Enables:
+  monitoring.alerts.enabled: true
+*/}}
+
+{{- if and .Values.monitoring.alerts .Values.monitoring.alerts.enabled -}}
+{{- $fullname := include "nexus-qa.fullname" . }}
+
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ $fullname }}-alerts
+  labels:
+    {{- include "nexus-qa.labels" . | nindent 4 }}
+    {{- with .Values.monitoring.alerts.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  groups:
+    # ═══════════════════════════════════════════════════════════
+    # Service Availability
+    # ═══════════════════════════════════════════════════════════
+    - name: nexus-qa.availability
+      interval: 30s
+      rules:
+        - alert: NexusServiceDown
+          expr: up == 0
+          for: 2m
+          labels:
+            severity: critical
+            team: platform
+          annotations:
+            summary: "Service {{ "{{ $labels.job }}" }} is DOWN"
+            description: "{{ "{{ $labels.job }}" }} has been unreachable for more than 2 minutes."
+            runbook_url: "https://wiki.internal/runbooks/nexus-service-down"
+
+        - alert: NexusServiceHighRestartRate
+          expr: |
+            increase(kube_pod_container_status_restarts_total{namespace="{{ .Release.Namespace }}"}[15m]) > 3
+          for: 5m
+          labels:
+            severity: warning
+            team: platform
+          annotations:
+            summary: "Pod {{ "{{ $labels.pod }}" }} restarting frequently"
+            description: "{{ "{{ $labels.pod }}" }} has restarted {{ "{{ $value }}" }} times in the last 15 minutes."
+
+        - alert: NexusGatewayDown
+          expr: up{job="gateway"} == 0
+          for: 1m
+          labels:
+            severity: critical
+            team: platform
+            page: "true"
+          annotations:
+            summary: "API Gateway is DOWN — all traffic blocked"
+            description: "The API gateway has been unreachable for more than 1 minute. All user traffic is affected."
+            runbook_url: "https://wiki.internal/runbooks/nexus-gateway-down"
+
+    # ═══════════════════════════════════════════════════════════
+    # Error Rate SLOs
+    # ═══════════════════════════════════════════════════════════
+    - name: nexus-qa.errors
+      interval: 30s
+      rules:
+        - alert: NexusHighErrorRate
+          expr: |
+            (
+              sum(rate(http_requests_total{status_code=~"5.."}[5m])) by (service)
+              /
+              sum(rate(http_requests_total[5m])) by (service)
+            ) > 0.05
+          for: 5m
+          labels:
+            severity: critical
+            team: platform
+          annotations:
+            summary: "High 5xx error rate on {{ "{{ $labels.service }}" }}"
+            description: "{{ "{{ $labels.service }}" }} error rate is {{ "{{ $value | humanizePercentage }}" }} (threshold: 5%) over the last 5 minutes."
+
+        - alert: NexusErrorBudgetBurn
+          expr: |
+            (
+              sum(rate(http_requests_total{status_code=~"5.."}[1h])) by (service)
+              /
+              sum(rate(http_requests_total[1h])) by (service)
+            ) > 0.01
+          for: 15m
+          labels:
+            severity: warning
+            team: platform
+          annotations:
+            summary: "Error budget burn on {{ "{{ $labels.service }}" }}"
+            description: "{{ "{{ $labels.service }}" }} 1-hour error rate is {{ "{{ $value | humanizePercentage }}" }} — burning error budget faster than sustainable for 99.9% SLO."
+
+        - alert: NexusGateway429Spike
+          expr: |
+            sum(rate(http_requests_total{service="gateway", status_code="429"}[5m])) > 10
+          for: 5m
+          labels:
+            severity: warning
+            team: platform
+          annotations:
+            summary: "High rate-limiting on Gateway"
+            description: "Gateway is returning {{ "{{ $value | humanize }}" }} 429 responses/second. Possible abuse or under-provisioning."
+
+    # ═══════════════════════════════════════════════════════════
+    # Latency SLOs
+    # ═══════════════════════════════════════════════════════════
+    - name: nexus-qa.latency
+      interval: 30s
+      rules:
+        - alert: NexusHighP95Latency
+          expr: |
+            histogram_quantile(0.95,
+              sum(rate(http_request_duration_seconds_bucket[5m])) by (le, service)
+            ) > 2
+          for: 10m
+          labels:
+            severity: warning
+            team: platform
+          annotations:
+            summary: "P95 latency elevated on {{ "{{ $labels.service }}" }}"
+            description: "{{ "{{ $labels.service }}" }} P95 latency is {{ "{{ $value | humanizeDuration }}" }} (threshold: 2s) over the last 10 minutes."
+
+        - alert: NexusHighP99Latency
+          expr: |
+            histogram_quantile(0.99,
+              sum(rate(http_request_duration_seconds_bucket[5m])) by (le, service)
+            ) > 5
+          for: 10m
+          labels:
+            severity: critical
+            team: platform
+          annotations:
+            summary: "P99 latency critical on {{ "{{ $labels.service }}" }}"
+            description: "{{ "{{ $labels.service }}" }} P99 latency is {{ "{{ $value | humanizeDuration }}" }} (threshold: 5s) over the last 10 minutes."
+
+        - alert: NexusGatewaySlowResponses
+          expr: |
+            histogram_quantile(0.95,
+              sum(rate(http_request_duration_seconds_bucket{service="gateway"}[5m])) by (le)
+            ) > 1
+          for: 5m
+          labels:
+            severity: warning
+            team: platform
+          annotations:
+            summary: "Gateway P95 latency exceeds 1s"
+            description: "Gateway P95 response time is {{ "{{ $value | humanizeDuration }}" }}. User-facing experience degraded."
+
+    # ═══════════════════════════════════════════════════════════
+    # Saturation & Capacity
+    # ═══════════════════════════════════════════════════════════
+    - name: nexus-qa.saturation
+      interval: 30s
+      rules:
+        - alert: NexusHighInFlightRequests
+          expr: |
+            sum(http_requests_in_progress) by (service) > 100
+          for: 5m
+          labels:
+            severity: warning
+            team: platform
+          annotations:
+            summary: "High in-flight requests on {{ "{{ $labels.service }}" }}"
+            description: "{{ "{{ $labels.service }}" }} has {{ "{{ $value }}" }} concurrent requests. Consider scaling up."
+
+        - alert: NexusEngineQueueSaturated
+          expr: |
+            sum(http_requests_in_progress) by (service) > 50
+            and on(service) (
+              sum(rate(http_requests_total[5m])) by (service) < 1
+            )
+          for: 10m
+          labels:
+            severity: critical
+            team: platform
+          annotations:
+            summary: "Engine {{ "{{ $labels.service }}" }} appears stuck"
+            description: "{{ "{{ $labels.service }}" }} has {{ "{{ $value }}" }} in-flight requests but low throughput — possible deadlock or resource exhaustion."
+
+    # ═══════════════════════════════════════════════════════════
+    # Infrastructure Health
+    # ═══════════════════════════════════════════════════════════
+    - name: nexus-qa.infrastructure
+      interval: 60s
+      rules:
+        - alert: NexusRedisDown
+          expr: up{job="redis"} == 0
+          for: 1m
+          labels:
+            severity: critical
+            team: platform
+            page: "true"
+          annotations:
+            summary: "Redis is DOWN"
+            description: "Redis cache/queue is unreachable. Session management, rate limiting, and inter-service communication affected."
+
+        - alert: NexusRedisHighMemory
+          expr: |
+            redis_memory_used_bytes / redis_memory_max_bytes > 0.85
+          for: 5m
+          labels:
+            severity: warning
+            team: platform
+          annotations:
+            summary: "Redis memory usage above 85%"
+            description: "Redis is using {{ "{{ $value | humanizePercentage }}" }} of max memory. Evictions may occur."
+
+        - alert: NexusRedisHighConnectionCount
+          expr: redis_connected_clients > 500
+          for: 5m
+          labels:
+            severity: warning
+            team: platform
+          annotations:
+            summary: "Redis connection count high"
+            description: "Redis has {{ "{{ $value }}" }} connected clients. Check for connection leaks."
+
+        - alert: NexusPostgresDown
+          expr: up{job="postgres"} == 0
+          for: 1m
+          labels:
+            severity: critical
+            team: platform
+            page: "true"
+          annotations:
+            summary: "PostgreSQL is DOWN"
+            description: "PostgreSQL database is unreachable. Auth and persistent storage unavailable."
+
+        - alert: NexusPostgresHighConnections
+          expr: |
+            pg_stat_activity_count / pg_settings_max_connections > 0.80
+          for: 5m
+          labels:
+            severity: warning
+            team: platform
+          annotations:
+            summary: "PostgreSQL connection pool >80% utilized"
+            description: "{{ "{{ $value | humanizePercentage }}" }} of max connections in use. Consider scaling connections or adding PgBouncer."
+
+        - alert: NexusNeo4jDown
+          expr: up{job="neo4j"} == 0
+          for: 2m
+          labels:
+            severity: critical
+            team: platform
+          annotations:
+            summary: "Neo4j is DOWN"
+            description: "Neo4j graph database is unreachable. Backbone engine knowledge graph queries will fail."
+
+        - alert: NexusPrometheusStorageRunningLow
+          expr: |
+            (prometheus_tsdb_storage_blocks_bytes / (1024*1024*1024)) >
+            ({{ .Values.monitoring.prometheus.persistence.size | trimSuffix "Gi" }} * 0.80)
+          for: 30m
+          labels:
+            severity: warning
+            team: platform
+          annotations:
+            summary: "Prometheus storage >80% utilized"
+            description: "Prometheus TSDB is using {{ "{{ $value | humanize }}" }}GB. Increase retention policy or storage size."
+
+{{- end }}

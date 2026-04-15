@@ -1,0 +1,54 @@
+# ─────────────────────────────────────────────────────────────
+# Nexus QA Platform — Docker Build Context Exclusions
+# Applied when building base images from the repository root.
+# ─────────────────────────────────────────────────────────────
+
+# Python artefacts
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+.tox/
+htmlcov/
+
+# Test / quality
+tests/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+coverage.xml
+
+# JavaScript / frontend build caches
+node_modules/
+
+# Runtime data (never bake into images)
+data/
+logs/
+
+# Version control
+.git/
+.github/
+
+# IDE / OS
+.vscode/
+.idea/
+*.swp
+*.swo
+Thumbs.db
+Desktop.ini
+
+# Environment (secrets must come via env vars / secrets manager)
+.env
+.env.*
+!.env.example
+
+# Documentation (not needed in images)
+*.md
+LICENSE
+
+# Backup files
+*.bak

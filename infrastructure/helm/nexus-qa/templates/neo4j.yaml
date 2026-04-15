@@ -1,0 +1,122 @@
+{{/*
+=================================================================
+Neo4j StatefulSet + Service
+=================================================================
+*/}}
+
+{{- if .Values.neo4j.enabled }}
+
+{{- $fullname := include "nexus-qa.fullname" . }}
+{{- $root := . }}
+
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $fullname }}-neo4j
+  labels:
+    {{- include "nexus-qa.componentLabels" (dict "root" $root "component" "neo4j") | nindent 4 }}
+spec:
+  serviceName: {{ $fullname }}-neo4j
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "nexus-qa.componentSelectorLabels" (dict "root" $root "component" "neo4j") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "nexus-qa.componentLabels" (dict "root" $root "component" "neo4j") | nindent 8 }}
+    spec:
+      securityContext:
+        fsGroup: 7474
+        runAsUser: 7474
+        runAsNonRoot: true
+      containers:
+        - name: neo4j
+          image: {{ .Values.neo4j.image }}
+          imagePullPolicy: {{ .Values.global.image.pullPolicy }}
+          env:
+            - name: NEO4J_AUTH
+              value: {{ printf "neo4j/%s" .Values.secrets.neo4jPassword | quote }}
+            - name: NEO4J_server_memory_heap_max__size
+              value: {{ .Values.neo4j.heapMaxSize | quote }}
+            - name: NEO4J_server_memory_pagecache_size
+              value: {{ .Values.neo4j.pagecacheSize | quote }}
+            - name: NEO4J_PLUGINS
+              value: '["apoc"]'
+            - name: NEO4J_dbms_security_procedures_unrestricted
+              value: "apoc.*"
+          ports:
+            - name: http
+              containerPort: {{ .Values.neo4j.ports.http }}
+              protocol: TCP
+            - name: bolt
+              containerPort: {{ .Values.neo4j.ports.bolt }}
+              protocol: TCP
+          resources:
+            {{- toYaml .Values.neo4j.resources | nindent 12 }}
+          livenessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 5
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            timeoutSeconds: 5
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: logs
+              mountPath: /logs
+  volumeClaimTemplates:
+    {{- if .Values.neo4j.persistence.enabled }}
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- if .Values.global.storageClass }}
+        storageClassName: {{ .Values.global.storageClass | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.neo4j.persistence.dataSize }}
+    - metadata:
+        name: logs
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- if .Values.global.storageClass }}
+        storageClassName: {{ .Values.global.storageClass | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.neo4j.persistence.logsSize }}
+    {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullname }}-neo4j
+  labels:
+    {{- include "nexus-qa.componentLabels" (dict "root" $root "component" "neo4j") | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - port: {{ .Values.neo4j.ports.http }}
+      targetPort: http
+      protocol: TCP
+      name: http
+    - port: {{ .Values.neo4j.ports.bolt }}
+      targetPort: bolt
+      protocol: TCP
+      name: bolt
+  selector:
+    {{- include "nexus-qa.componentSelectorLabels" (dict "root" $root "component" "neo4j") | nindent 4 }}
+
+{{- end }}

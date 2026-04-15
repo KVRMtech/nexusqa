@@ -1,0 +1,137 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --color-nexus: 99 102 241;
+  }
+  html { color-scheme: dark; }
+  body {
+    @apply bg-gray-950 text-gray-100 antialiased;
+  }
+}
+
+@layer components {
+  .btn-primary {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg
+           bg-gradient-to-r from-nexus-600 to-nexus-500 px-4 py-2.5
+           text-sm font-semibold text-white shadow-md shadow-nexus-500/20
+           hover:from-nexus-500 hover:to-nexus-400
+           focus-visible:outline focus-visible:outline-2
+           focus-visible:outline-offset-2 focus-visible:outline-nexus-500
+           disabled:opacity-50 disabled:cursor-not-allowed
+           transition-all duration-200;
+  }
+  .btn-secondary {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg
+           bg-white/[0.06] px-4 py-2.5
+           text-sm font-semibold text-gray-200 shadow-sm ring-1 ring-inset ring-white/10
+           hover:bg-white/[0.1] disabled:opacity-50 disabled:cursor-not-allowed
+           transition-all duration-200;
+  }
+  .btn-danger {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg
+           bg-red-600 px-4 py-2.5
+           text-sm font-semibold text-white shadow-md shadow-red-500/20
+           hover:bg-red-500 disabled:opacity-50 disabled:cursor-not-allowed
+           transition-all duration-200;
+  }
+  .btn-ghost {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg
+           px-3 py-2 text-sm font-medium text-gray-400
+           hover:text-gray-200 hover:bg-white/[0.06]
+           disabled:opacity-50 disabled:cursor-not-allowed
+           transition-all duration-200;
+  }
+  .card {
+    @apply rounded-xl bg-gray-900/80 shadow-lg ring-1 ring-white/[0.06]
+           backdrop-blur-sm;
+  }
+  .card-glow {
+    @apply card shadow-nexus-500/5;
+  }
+  .input-field {
+    @apply block w-full rounded-lg border-0 py-2.5 px-3.5
+           bg-white/[0.05] text-gray-100 shadow-sm
+           ring-1 ring-inset ring-white/10
+           placeholder:text-gray-500
+           focus:ring-2 focus:ring-inset focus:ring-nexus-500
+           sm:text-sm sm:leading-6
+           transition-all duration-200;
+  }
+  .badge {
+    @apply inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold;
+  }
+  .badge-green {
+    @apply badge bg-green-500/15 text-green-400 ring-1 ring-inset ring-green-500/25;
+  }
+  .badge-yellow {
+    @apply badge bg-yellow-500/15 text-yellow-400 ring-1 ring-inset ring-yellow-500/25;
+  }
+  .badge-red {
+    @apply badge bg-red-500/15 text-red-400 ring-1 ring-inset ring-red-500/25;
+  }
+  .badge-blue {
+    @apply badge bg-blue-500/15 text-blue-400 ring-1 ring-inset ring-blue-500/25;
+  }
+  .badge-purple {
+    @apply badge bg-purple-500/15 text-purple-400 ring-1 ring-inset ring-purple-500/25;
+  }
+  .badge-orange {
+    @apply badge bg-orange-500/15 text-orange-400 ring-1 ring-inset ring-orange-500/25;
+  }
+  .badge-gray {
+    @apply badge bg-white/[0.06] text-gray-400 ring-1 ring-inset ring-white/10;
+  }
+  .badge-nexus {
+    @apply badge bg-nexus-500/15 text-nexus-400 ring-1 ring-inset ring-nexus-500/25;
+  }
+  .stat-card {
+    @apply card p-5 relative overflow-hidden;
+  }
+  .stat-card::before {
+    content: '';
+    @apply absolute top-0 left-0 right-0 h-[2px] bg-gradient-to-r from-transparent via-nexus-500 to-transparent opacity-50;
+  }
+  .zone-header {
+    @apply text-[11px] font-bold uppercase tracking-widest text-gray-500;
+  }
+  .page-title {
+    @apply text-2xl font-bold text-white tracking-tight;
+  }
+  .page-subtitle {
+    @apply mt-1 text-sm text-gray-400;
+  }
+  .table-header {
+    @apply text-[11px] font-bold uppercase tracking-wider text-gray-500;
+  }
+}
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { @apply bg-white/10 rounded-full; }
+::-webkit-scrollbar-thumb:hover { @apply bg-white/20; }
+
+/* Animations */
+@keyframes slide-in {
+  from { transform: translateY(8px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes pulse-glow {
+  0%, 100% { box-shadow: 0 0 8px rgba(99, 102, 241, 0.3); }
+  50% { box-shadow: 0 0 20px rgba(99, 102, 241, 0.6); }
+}
+@keyframes gradient-x {
+  0%, 100% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+}
+.animate-slide-in { animation: slide-in 0.25s ease-out; }
+.animate-fade-in { animation: fade-in 0.2s ease-out; }
+.animate-pulse-glow { animation: pulse-glow 2s ease-in-out infinite; }
+.animate-gradient { animation: gradient-x 3s ease infinite; background-size: 200% 200%; }
