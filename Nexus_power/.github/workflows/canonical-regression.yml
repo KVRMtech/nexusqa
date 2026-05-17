@@ -1,0 +1,93 @@
+name: canonical-regression
+
+# Runs the Phase 1 quality regression suite. The functional shard runs
+# on every PR; the soak shard runs nightly and on demand against the
+# regression cluster.
+on:
+  pull_request:
+    paths:
+      - 'sdk/nexus-sdk/nexus_sdk/workflows/**'
+      - 'engines/**'
+      - 'platform/api/**'
+      - 'products/nexus-qa-orchestrator/**'
+      - 'tests/regression/**'
+      - '.github/workflows/canonical-regression.yml'
+  workflow_dispatch:
+    inputs:
+      shard:
+        description: 'functional | soak'
+        required: true
+        default: functional
+      duration_seconds:
+        description: 'Soak duration (seconds, soak shard only)'
+        required: false
+        default: '3600'
+
+jobs:
+  functional:
+    if: github.event_name == 'pull_request' || github.event.inputs.shard == 'functional'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      NEXUS_ORCHESTRATOR_URL: ${{ secrets.REGRESSION_ORCHESTRATOR_URL }}
+      NEXUS_REGRESSION_TOKEN: ${{ secrets.REGRESSION_TOKEN }}
+      NEXUS_REGRESSION_FIXTURE_URL: ${{ secrets.REGRESSION_FIXTURE_URL }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.REGRESSION_AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.REGRESSION_AWS_SECRET_ACCESS_KEY }}
+      AWS_DEFAULT_REGION: ${{ secrets.REGRESSION_AWS_REGION }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: Install test deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e sdk/nexus-sdk
+          pip install pytest pytest-asyncio httpx pyyaml boto3
+      - name: Run functional regression
+        run: pytest tests/regression -m "not soak" -ra --color=yes
+      - name: Upload regression artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: regression-cache-and-reports
+          path: |
+            tests/regression/.cache
+            tests/regression/.pytest_cache
+            tests/regression/golden
+
+  soak:
+    if: github.event.inputs.shard == 'soak'
+    runs-on: ubuntu-latest
+    timeout-minutes: 80
+    env:
+      NEXUS_ORCHESTRATOR_URL: ${{ secrets.REGRESSION_ORCHESTRATOR_URL }}
+      NEXUS_REGRESSION_TOKEN: ${{ secrets.REGRESSION_TOKEN }}
+      NEXUS_REGRESSION_FIXTURE_URL: ${{ secrets.REGRESSION_FIXTURE_URL }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.REGRESSION_AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.REGRESSION_AWS_SECRET_ACCESS_KEY }}
+      AWS_DEFAULT_REGION: ${{ secrets.REGRESSION_AWS_REGION }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: Install runner deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e sdk/nexus-sdk
+          pip install httpx pyyaml boto3
+      - name: Soak (100 uploads/hour, ${{ github.event.inputs.duration_seconds }}s)
+        run: |
+          python -m tests.regression.runner \
+            --orchestrator "$NEXUS_ORCHESTRATOR_URL" \
+            --token "$NEXUS_REGRESSION_TOKEN" \
+            --fixture-id zoom-call-with-audio-01 \
+            --duration ${{ github.event.inputs.duration_seconds || 3600 }} \
+            --rate 100 \
+            --deadline 900 \
+            --target-rate 100 \
+            --target-p95 900

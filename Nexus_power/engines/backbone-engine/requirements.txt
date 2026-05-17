@@ -1,0 +1,5 @@
+# Backbone Engine — knowledge graph + vector store
+-e ../../sdk/nexus-sdk
+neo4j>=5.17,<6.0
+sentence-transformers>=2.5,<3.0
+pymilvus>=2.4,<3.0

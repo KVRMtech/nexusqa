@@ -1,0 +1,406 @@
+{
+  "title": "Nexus QA — Canonical Pipeline (Phase 4)",
+  "uid": "nexus-canonical-pipeline",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": true,
+  "tags": ["nexus", "canonical-pipeline", "workflows"],
+  "timezone": "browser",
+  "refresh": "30s",
+  "time": {"from": "now-3h", "to": "now"},
+  "templating": {
+    "list": [
+      {
+        "name": "kind",
+        "label": "Workflow kind",
+        "type": "query",
+        "datasource": {"type": "prometheus", "uid": "prometheus"},
+        "query": "label_values(nexus_workflow_created_total, kind)",
+        "refresh": 2,
+        "includeAll": true,
+        "multi": true
+      },
+      {
+        "name": "lane",
+        "label": "Queue lane",
+        "type": "query",
+        "datasource": {"type": "prometheus", "uid": "prometheus"},
+        "query": "label_values(nexus_workflow_queue_depth, lane)",
+        "refresh": 2,
+        "includeAll": true,
+        "multi": true
+      },
+      {
+        "name": "engine",
+        "label": "Engine",
+        "type": "query",
+        "datasource": {"type": "prometheus", "uid": "prometheus"},
+        "query": "label_values(nexus_workflow_step_completed_total, engine)",
+        "refresh": 2,
+        "includeAll": true,
+        "multi": true
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "row",
+      "title": "Workflow throughput & terminal mix",
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 0},
+      "collapsed": false
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Workflows created (1h)",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {
+          "expr": "sum by (kind) (increase(nexus_workflow_created_total{kind=~\"$kind\"}[1h]))",
+          "legendFormat": "{{kind}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "thresholds": {"steps": [{"color": "green", "value": null}]}
+        }
+      },
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}},
+      "gridPos": {"h": 4, "w": 6, "x": 0, "y": 1}
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Success rate (1h)",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {
+          "expr": "sum(rate(nexus_workflow_completed_total{status=\"success\",kind=~\"$kind\"}[1h])) / clamp_min(sum(rate(nexus_workflow_completed_total{kind=~\"$kind\"}[1h])), 1e-9)",
+          "legendFormat": "success"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "thresholds": {"mode": "absolute", "steps": [
+            {"color": "red", "value": null},
+            {"color": "yellow", "value": 0.95},
+            {"color": "green", "value": 0.99}
+          ]},
+          "min": 0, "max": 1
+        }
+      },
+      "gridPos": {"h": 4, "w": 6, "x": 6, "y": 1}
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Quarantined (1h)",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"expr": "sum(increase(nexus_workflow_completed_total{status=\"quarantined\",kind=~\"$kind\"}[1h]))"}
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "thresholds"},
+          "thresholds": {"steps": [
+            {"color": "green", "value": null},
+            {"color": "yellow", "value": 1},
+            {"color": "red", "value": 5}
+          ]}
+        }
+      },
+      "gridPos": {"h": 4, "w": 6, "x": 12, "y": 1}
+    },
+    {
+      "id": 5,
+      "type": "stat",
+      "title": "In-flight",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "sum by (kind) (nexus_workflow_in_flight{kind=~\"$kind\"})", "legendFormat": "{{kind}}"}],
+      "gridPos": {"h": 4, "w": 6, "x": 18, "y": 1}
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Terminal state mix",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {
+          "expr": "sum by (status) (rate(nexus_workflow_completed_total{kind=~\"$kind\"}[5m]))",
+          "legendFormat": "{{status}}"
+        }
+      ],
+      "fieldConfig": {"defaults": {"unit": "ops"}},
+      "options": {"legend": {"showLegend": true, "displayMode": "table", "placement": "right"}},
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 5}
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "End-to-end duration (p50 / p95 / p99)",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"expr": "histogram_quantile(0.5, sum by (le) (rate(nexus_workflow_duration_seconds_bucket{kind=~\"$kind\",status=\"success\"}[10m])))", "legendFormat": "p50"},
+        {"expr": "histogram_quantile(0.95, sum by (le) (rate(nexus_workflow_duration_seconds_bucket{kind=~\"$kind\",status=\"success\"}[10m])))", "legendFormat": "p95"},
+        {"expr": "histogram_quantile(0.99, sum by (le) (rate(nexus_workflow_duration_seconds_bucket{kind=~\"$kind\",status=\"success\"}[10m])))", "legendFormat": "p99"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "s"}},
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 5}
+    },
+    {
+      "id": 10,
+      "type": "row",
+      "title": "Step latencies & attempts (per engine)",
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 13},
+      "collapsed": false
+    },
+    {
+      "id": 11,
+      "type": "heatmap",
+      "title": "Step duration heatmap (engine=$engine)",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"expr": "sum by (le) (rate(nexus_workflow_step_duration_seconds_bucket{engine=~\"$engine\"}[5m]))", "format": "heatmap", "legendFormat": "{{le}}"}
+      ],
+      "options": {"calculate": false},
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 14}
+    },
+    {
+      "id": 12,
+      "type": "timeseries",
+      "title": "Step failure rate by engine.step",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {
+          "expr": "sum by (engine, step) (rate(nexus_workflow_step_completed_total{status!=\"success\",engine=~\"$engine\"}[5m]))",
+          "legendFormat": "{{engine}}.{{step}}"
+        }
+      ],
+      "fieldConfig": {"defaults": {"unit": "ops"}},
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 14}
+    },
+    {
+      "id": 13,
+      "type": "bargauge",
+      "title": "Mean step attempts (per engine.step)",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {
+          "expr": "sum by (engine, step) (rate(nexus_workflow_step_attempts_sum[10m])) / clamp_min(sum by (engine, step) (rate(nexus_workflow_step_attempts_count[10m])), 1e-9)",
+          "legendFormat": "{{engine}}.{{step}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {"steps": [
+            {"color": "green", "value": null},
+            {"color": "yellow", "value": 1.5},
+            {"color": "red", "value": 2.5}
+          ]}
+        }
+      },
+      "options": {"orientation": "horizontal", "displayMode": "gradient"},
+      "gridPos": {"h": 8, "w": 24, "x": 0, "y": 22}
+    },
+    {
+      "id": 20,
+      "type": "row",
+      "title": "Queue health",
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 30},
+      "collapsed": false
+    },
+    {
+      "id": 21,
+      "type": "timeseries",
+      "title": "Queue depth per lane",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"expr": "nexus_workflow_queue_depth{lane=~\"$lane\"}", "legendFormat": "{{lane}}"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "short"}},
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 31}
+    },
+    {
+      "id": 22,
+      "type": "timeseries",
+      "title": "Oldest pending age per lane (seconds)",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"expr": "nexus_workflow_queue_oldest_pending_age_seconds{lane=~\"$lane\"}", "legendFormat": "{{lane}}"}
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "thresholds": {"mode": "absolute", "steps": [
+            {"color": "green", "value": null},
+            {"color": "yellow", "value": 120},
+            {"color": "red", "value": 600}
+          ]}
+        }
+      },
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 31}
+    },
+    {
+      "id": 23,
+      "type": "timeseries",
+      "title": "Pending (PEL) per lane",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"expr": "nexus_workflow_queue_pending{lane=~\"$lane\"}", "legendFormat": "{{lane}}"}
+      ],
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 39}
+    },
+    {
+      "id": 24,
+      "type": "timeseries",
+      "title": "DLQ depth per lane",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"expr": "nexus_workflow_dlq_depth{lane=~\"$lane\"}", "legendFormat": "{{lane}}"}
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {"mode": "absolute", "steps": [
+            {"color": "green", "value": null},
+            {"color": "yellow", "value": 1},
+            {"color": "red", "value": 10}
+          ]}
+        }
+      },
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 39}
+    },
+    {
+      "id": 25,
+      "type": "timeseries",
+      "title": "Orphans recovered (per second)",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"expr": "rate(nexus_workflow_orphans_recovered_total[5m])", "legendFormat": "orphans/sec"}
+      ],
+      "gridPos": {"h": 6, "w": 8, "x": 0, "y": 47}
+    },
+    {
+      "id": 26,
+      "type": "timeseries",
+      "title": "Stuck workflows (running + stale heartbeat)",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"expr": "nexus_workflow_stuck_count", "legendFormat": "stuck"}
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {"mode": "absolute", "steps": [
+            {"color": "green", "value": null},
+            {"color": "yellow", "value": 1},
+            {"color": "red", "value": 5}
+          ]}
+        }
+      },
+      "gridPos": {"h": 6, "w": 8, "x": 8, "y": 47}
+    },
+    {
+      "id": 27,
+      "type": "timeseries",
+      "title": "Own-PEL replays (per lane)",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"expr": "rate(nexus_queue_pel_replay_total{lane=~\"$lane\"}[5m])", "legendFormat": "{{lane}}"}
+      ],
+      "gridPos": {"h": 6, "w": 8, "x": 16, "y": 47}
+    },
+    {
+      "id": 40,
+      "type": "row",
+      "title": "Phase 3 — persist-first / enrich-async",
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 53},
+      "collapsed": false
+    },
+    {
+      "id": 41,
+      "type": "stat",
+      "title": "Minimal artifacts persisted (1h)",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"expr": "sum(increase(nexus_artifact_minimal_persisted_total[1h]))"}
+      ],
+      "gridPos": {"h": 4, "w": 6, "x": 0, "y": 54}
+    },
+    {
+      "id": 42,
+      "type": "stat",
+      "title": "Enriched artifacts (1h)",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"expr": "sum(increase(nexus_artifact_enriched_total{degraded=\"false\"}[1h]))", "legendFormat": "clean"},
+        {"expr": "sum(increase(nexus_artifact_enriched_total{degraded=\"true\"}[1h]))", "legendFormat": "degraded"}
+      ],
+      "gridPos": {"h": 4, "w": 6, "x": 6, "y": 54}
+    },
+    {
+      "id": 43,
+      "type": "stat",
+      "title": "Enrichment lag (minimal − enriched, 1h)",
+      "description": "Approximate count of artifacts written as minimal but not yet enriched in the same window. Negative values indicate clearing backlog.",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"expr": "sum(increase(nexus_artifact_minimal_persisted_total[1h])) - sum(increase(nexus_artifact_enriched_total[1h]))"}
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {"steps": [
+            {"color": "green", "value": null},
+            {"color": "yellow", "value": 5},
+            {"color": "red", "value": 20}
+          ]}
+        }
+      },
+      "gridPos": {"h": 4, "w": 6, "x": 12, "y": 54}
+    },
+    {
+      "id": 44,
+      "type": "timeseries",
+      "title": "Vision-degraded events (by reason)",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"expr": "sum by (reason) (rate(nexus_eyes_vision_degraded_total[5m]))", "legendFormat": "{{reason}}"}
+      ],
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 58}
+    },
+    {
+      "id": 45,
+      "type": "timeseries",
+      "title": "OCR frame timeouts (per second)",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"expr": "rate(nexus_eyes_ocr_frame_timeout_total[5m])", "legendFormat": "timeouts/sec"}
+      ],
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 58}
+    },
+    {
+      "id": 46,
+      "type": "timeseries",
+      "title": "Enriched / Minimal ratio (1h windowed)",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {
+          "expr": "sum(rate(nexus_artifact_enriched_total[1h])) / clamp_min(sum(rate(nexus_artifact_minimal_persisted_total[1h])), 1e-9)",
+          "legendFormat": "enriched/minimal"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "thresholds": {"mode": "absolute", "steps": [
+            {"color": "red", "value": null},
+            {"color": "yellow", "value": 0.7},
+            {"color": "green", "value": 0.95}
+          ]}
+        }
+      },
+      "gridPos": {"h": 6, "w": 24, "x": 0, "y": 66}
+    }
+  ]
+}

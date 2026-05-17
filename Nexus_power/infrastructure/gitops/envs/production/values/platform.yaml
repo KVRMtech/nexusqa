@@ -1,0 +1,169 @@
+global:
+  env: production
+  domain: platform.example.com
+  imagePullPolicy: IfNotPresent
+
+# Production storage: cloud object storage, never PVC. Engines run as
+# stateless workloads; durable artifacts live in the bucket below.
+# Override .Values.storage.backend per cloud (s3 | azure | gcs) in the
+# cloud-specific overlay (us-west, eu-central, etc.).
+storage:
+  backend: s3
+  bucket: nexus-platform-production
+  presignExpirySeconds: 900   # tighter expiry in prod
+  s3:
+    region: us-east-1
+    endpoint: ""
+    useSsl: true
+
+engines:
+  defaults:
+    replicas: 3
+    resources:
+      requests:
+        cpu: 500m
+        memory: 1Gi
+      limits:
+        memory: 4Gi
+    # PodDisruptionBudget: at minimum two replicas always available.
+    pdb:
+      enabled: true
+      minAvailable: 2
+    # Topology spread: replicas distributed across zones for HA.
+    topologySpreadConstraints:
+      - maxSkew: 1
+        topologyKey: topology.kubernetes.io/zone
+        whenUnsatisfiable: ScheduleAnyway
+        labelSelector: {}
+  # Production tuning: turn per-frame OCR OFF by default. The legacy
+  # default ON adds ~5 minutes per multi-frame-scene video for form
+  # state extraction; under load that breaks the p95 budget. Tenants
+  # that need form fidelity opt in via their own override.
+  eyes:
+    env:
+      EYES_PER_FRAME_OCR: "false"
+      EYES_FAST_SKIP_OCR: "false"     # rep-frame OCR stays on (cheap)
+      # Higher Whisper-equivalent for eyes? Keep llava:7b in fast.
+      EYES_FAST_OLLAMA_MODEL: "llava:7b"
+
+images:
+  # Pinned digest, not tag. CI writes the digest to a ConfigMap;
+  # release engineering bumps it via PR.
+  digestOverride: REPLACE_WITH_IMAGE_DIGEST
+  registry: REPLACE_WITH_IMAGE_REGISTRY
+
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    # Stricter rate limits at the edge in production.
+    nginx.ingress.kubernetes.io/limit-rps: "50"
+    nginx.ingress.kubernetes.io/limit-rpm: "1500"
+
+externalSecrets:
+  clusterSecretStoreRef: nexus-platform-production
+
+# KEDA queue-driven autoscaling (Phase 1).
+autoscaling:
+  keda:
+    enabled: true
+    redisDbIndex: 3
+    # Replica caps account for the in-pod worker concurrency added in
+    # the throughput pass: each pod now handles 4 CPU workflows in
+    # parallel (1 GPU), so a 20-replica eyes pool effectively processes
+    # ~20 GPU jobs and ~80 CPU prep tasks simultaneously. Caps are set
+    # 3× the legacy values to handle bursts; pendingEntries_cpu is
+    # bumped accordingly so KEDA waits for real backlog before scaling.
+    components:
+      - engine: shield
+        kinds: [cpu]
+        minReplicas: 2
+        maxReplicas: 12
+        pendingEntries_cpu: 32     # shield handler ~10ms, 16 conc/pod
+      - engine: eyes
+        kinds: [cpu, gpu]
+        minReplicas: 4
+        maxReplicas: 60            # 3× legacy ceiling — closes the 240/hr gap
+        pendingEntries_cpu: 12     # 4 conc/pod × 3 backlog
+        pendingEntries_gpu: 1
+        pollingInterval: 10
+        cooldownPeriod: 240
+      - engine: ears
+        kinds: [cpu, gpu]
+        minReplicas: 2
+        maxReplicas: 40            # 2.5× legacy
+        pendingEntries_cpu: 12
+        pendingEntries_gpu: 1
+        pollingInterval: 10
+        cooldownPeriod: 240
+      - engine: heart
+        kinds: [gpu]
+        minReplicas: 1
+        maxReplicas: 12
+        pendingEntries_gpu: 2
+      - engine: backbone
+        kinds: [cpu]
+        minReplicas: 4
+        maxReplicas: 24            # 2× legacy — backbone is I/O-bound, scales well
+        pendingEntries_cpu: 24     # 8 conc/pod × 3 backlog
+      - engine: spine
+        kinds: [cpu, gpu]
+        minReplicas: 2
+        maxReplicas: 16
+        pendingEntries_cpu: 12
+        pendingEntries_gpu: 2
+      - engine: legs
+        kinds: [cpu]
+        minReplicas: 2
+        maxReplicas: 12
+        pendingEntries_cpu: 4
+      - engine: mouth
+        kinds: [cpu]
+        minReplicas: 2
+        maxReplicas: 8
+        pendingEntries_cpu: 8
+      - engine: brain
+        kinds: [cpu, gpu]
+        minReplicas: 1
+        maxReplicas: 6
+        pendingEntries_cpu: 4
+        pendingEntries_gpu: 2
+
+# Argo Rollouts — production progressive delivery.
+# Every user-facing engine + platform service rolls out via canary with
+# SLO-burn analysis gates between weight steps. Background-only engines
+# (shield, hands, brain) are not in this list — their failure modes are
+# tested via analysis runs rather than progressive traffic split.
+rollout:
+  enabled: true
+  components:
+    # Customer hot path
+    - gateway
+    - auth-service
+    - platform-api
+    - orchestrator
+    # User-visible engines
+    - eyes-engine
+    - ears-engine
+    - legs-engine
+    - heart-engine
+    - mouth-engine
+    - spine-engine
+    - backbone-engine
+    - nerves-engine
+  # Steps are left as null → the chart-default 10/25/50/100 with three
+  # analysis gates is used. Tighten per-component via componentOverrides
+  # if a specific service has a steeper SLO.
+  steps: null
+  maxSurge: "25%"
+  maxUnavailable: 0
+  # Conservative: 2-hour window to walk through all steps + analysis.
+  progressDeadlineSeconds: 7200
+  prometheus:
+    address: ""        # default in-cluster <release>-prometheus:9090
+  analysis:
+    slo: "0.995"
+    burnRateThreshold: "14.4"
+    maxErrorRate: "0.005"            # tighter than baseline in prod
+    maxLatencyP95Seconds: "1.0"

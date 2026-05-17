@@ -1,0 +1,49 @@
+global:
+  env: staging
+  domain: staging.platform.example.com
+  imagePullPolicy: IfNotPresent
+
+engines:
+  defaults:
+    replicas: 2
+    resources:
+      requests:
+        cpu: 250m
+        memory: 512Mi
+      limits:
+        memory: 2Gi
+
+images:
+  tagOverride: release-staging
+  registry: REPLACE_WITH_IMAGE_REGISTRY
+
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+
+externalSecrets:
+  clusterSecretStoreRef: nexus-platform-staging
+
+# Staging canary: same default step shape as production (10/25/50/100)
+# but the chart's rollout.staging.shortPauses flag — set below — picks
+# a shorter pause variant so PR pipelines don't block for 2h.
+rollout:
+  enabled: true
+  components:
+    - gateway
+    - auth-service
+    - platform-api
+    - orchestrator
+    - eyes-engine
+    - ears-engine
+    - legs-engine
+    - heart-engine
+  shortPauses: true                   # staging-only flag, read by the chart
+  progressDeadlineSeconds: 1800
+  analysis:
+    slo: "0.99"                       # 99% — looser; canary signal still useful
+    burnRateThreshold: "14.4"
+    maxErrorRate: "0.02"
+    maxLatencyP95Seconds: "2.0"

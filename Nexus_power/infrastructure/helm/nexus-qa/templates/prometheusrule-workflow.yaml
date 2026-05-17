@@ -1,0 +1,225 @@
+{{/*
+=================================================================
+PrometheusRule — Canonical workflow-plane alerts
+=================================================================
+Separate file from the HTTP/infrastructure prometheusrule.yaml so
+operators can audit / route workflow-plane signals independently.
+
+Signals come from sdk/nexus-sdk/nexus_sdk/workflows/metrics.py:
+  - nexus_workflow_step_completed_total{engine,step,status}
+  - nexus_workflow_step_duration_seconds{engine,step,status}
+  - nexus_workflow_deadline_quarantined_total{kind,status}
+  - nexus_workflow_orphans_recovered_total
+  - nexus_workflow_in_flight{kind}
+  - nexus_workflow_dlq_depth{lane}
+
+Plus Redis Stream XLEN exposed by redis_exporter:
+  - redis_stream_length{db,key} (key matches nexus:queue:*)
+
+Enable via: monitoring.alerts.enabled: true + monitoring.alerts.workflow.enabled: true
+*/}}
+
+{{- if and .Values.monitoring.alerts .Values.monitoring.alerts.enabled .Values.monitoring.alerts.workflow }}
+{{- if .Values.monitoring.alerts.workflow.enabled }}
+{{- $fullname := include "nexus-qa.fullname" . }}
+{{- $wf := .Values.monitoring.alerts.workflow }}
+
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ $fullname }}-workflow-alerts
+  labels:
+    {{- include "nexus-qa.labels" . | nindent 4 }}
+    app.kubernetes.io/component: workflow-alerts
+    {{- with .Values.monitoring.alerts.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  groups:
+    # ═══════════════════════════════════════════════════════════
+    # Queue saturation — operators should see backlog before SLO breach
+    # ═══════════════════════════════════════════════════════════
+    - name: nexus-qa.workflow.queues
+      interval: 30s
+      rules:
+        - alert: NexusWorkflowQueueBackup
+          expr: |
+            max by (key) (
+              redis_stream_length{key=~"nexus:queue:.*"}
+            ) > {{ $wf.queueBackupThreshold | default 1000 }}
+          for: 5m
+          labels:
+            severity: warning
+            team: platform
+            component: workflow
+          annotations:
+            summary: "Queue {{ "{{ $labels.key }}" }} backed up"
+            description: |
+              {{ "{{ $labels.key }}" }} has more than
+              {{ $wf.queueBackupThreshold | default 1000 }} pending entries
+              for 5 minutes. KEDA scale-out may be capped, or downstream
+              engine is stalled. Inspect with:
+                docker compose exec redis redis-cli -n 3 XLEN {{ "{{ $labels.key }}" }}
+                kubectl logs -l engine=$(echo {{ "{{ $labels.key }}" }} | cut -d: -f3 | cut -d. -f1)
+            runbook_url: "https://wiki.internal/runbooks/nexus-workflow-queue-backup"
+
+        - alert: NexusWorkflowDLQGrowing
+          expr: |
+            max by (lane) (nexus_workflow_dlq_depth) > 0
+          for: 10m
+          labels:
+            severity: critical
+            team: platform
+            component: workflow
+            page: "true"
+          annotations:
+            summary: "DLQ {{ "{{ $labels.lane }}" }} has entries"
+            description: |
+              Workflows are landing in the dead-letter lane
+              {{ "{{ $labels.lane }}" }} — these have exhausted retries
+              and need operator intervention.
+
+    # ═══════════════════════════════════════════════════════════
+    # Step-level reliability
+    # ═══════════════════════════════════════════════════════════
+    - name: nexus-qa.workflow.reliability
+      interval: 30s
+      rules:
+        - alert: NexusWorkflowStepFailureRate
+          expr: |
+            (
+              sum by (engine, step) (
+                rate(nexus_workflow_step_completed_total{status="failed"}[5m])
+              )
+              /
+              clamp_min(
+                sum by (engine, step) (
+                  rate(nexus_workflow_step_completed_total[5m])
+                ), 0.001
+              )
+            ) > 0.10
+          for: 10m
+          labels:
+            severity: warning
+            team: platform
+            component: workflow
+          annotations:
+            summary: "Step {{ "{{ $labels.engine }}" }}/{{ "{{ $labels.step }}" }} failing > 10%"
+            description: |
+              {{ "{{ $labels.engine }}" }}.{{ "{{ $labels.step }}" }}
+              failure rate is {{ "{{ $value | humanizePercentage }}" }} over
+              10 minutes. Common causes: GPU starvation, transient
+              upstream failure, schema drift. Drill into:
+                kubectl logs -l engine={{ "{{ $labels.engine }}" }}
+
+        - alert: NexusWorkflowOrphansSpike
+          expr: |
+            increase(nexus_workflow_orphans_recovered_total[10m]) > 5
+          for: 10m
+          labels:
+            severity: warning
+            team: platform
+            component: workflow
+          annotations:
+            summary: "Orphan recovery rate elevated"
+            description: |
+              The sweeper recovered {{ "{{ $value }}" }} workflows from
+              dead-heartbeat state in the last 10 minutes. Indicates
+              workers being killed mid-step (OOM, eviction, node death).
+
+        - alert: NexusWorkflowDeadlineBreaches
+          expr: |
+            increase(nexus_workflow_deadline_quarantined_total[1h]) > 10
+          for: 5m
+          labels:
+            severity: warning
+            team: platform
+            component: workflow
+          annotations:
+            summary: "Workflows exceeding deadline at unusual rate"
+            description: |
+              {{ "{{ $value }}" }} workflows quarantined for exceeding
+              their workflow-level deadline in the last hour. Either
+              load is exceeding capacity or per-step deadlines need
+              tuning in sdk/nexus-sdk/nexus_sdk/workflows/plans.py.
+
+    # ═══════════════════════════════════════════════════════════
+    # Step-level latency (p95)
+    # ═══════════════════════════════════════════════════════════
+    - name: nexus-qa.workflow.latency
+      interval: 30s
+      rules:
+        - alert: NexusWorkflowStepP95Breach
+          expr: |
+            histogram_quantile(0.95,
+              sum by (engine, step, le) (
+                rate(nexus_workflow_step_duration_seconds_bucket{status="success"}[10m])
+              )
+            ) > on(engine, step) group_left()
+            (
+              label_replace(
+                {{ $wf.stepP95Thresholds | default "vector(600)" }}
+                , "_", "_", "", ""
+              )
+            )
+          for: 15m
+          labels:
+            severity: warning
+            team: platform
+            component: workflow
+          annotations:
+            summary: "p95 of {{ "{{ $labels.engine }}" }}.{{ "{{ $labels.step }}" }} exceeds budget"
+            description: |
+              Step p95 latency is {{ "{{ $value | humanizeDuration }}" }} —
+              check engine GPU saturation, model warmup, and worker
+              concurrency. Inspect with:
+                kubectl exec -it deploy/{{ "{{ $labels.engine }}" }} -- /tmp/diag.sh
+
+    # ═══════════════════════════════════════════════════════════
+    # Vector store (backbone) — degraded mode would silently break search
+    # ═══════════════════════════════════════════════════════════
+    - name: nexus-qa.workflow.vector
+      interval: 60s
+      rules:
+        - alert: NexusBackboneVectorStoreDown
+          expr: |
+            up{job=~".*milvus.*"} == 0
+          for: 2m
+          labels:
+            severity: critical
+            team: platform
+            component: workflow
+            page: "true"
+          annotations:
+            summary: "Milvus is DOWN"
+            description: |
+              Milvus is unreachable. Backbone's degradation guard will
+              refuse to start; new canonical workflows will stall at
+              backbone.canonicalize. Existing workflows complete but
+              cannot be searched.
+
+        - alert: NexusBackboneInDegradedMode
+          expr: |
+            sum(up{job=~"backbone.*"}) > 0
+            and on() (
+              count(milvus_num_collections{}) == 0
+              or absent(milvus_num_collections)
+            )
+          for: 5m
+          labels:
+            severity: critical
+            team: platform
+            component: workflow
+            page: "true"
+          annotations:
+            summary: "Backbone is running but Milvus is not exporting metrics"
+            description: |
+              Backbone is up but the Milvus vector store appears
+              silent. If NEXUS_ALLOW_DEGRADED_MODE was set true to keep
+              the pod healthy, semantic search is broken without
+              warning. Verify with:
+                kubectl exec deploy/backbone -- curl -s http://localhost:8005/health
+              and check that "vector_store" contains "milvus".
+
+{{- end }}
+{{- end }}

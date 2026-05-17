@@ -1,0 +1,256 @@
+// ═══════════════════════════════════════════════════════════════
+//  MODULE 10 — COMPLIANCE COCKPIT
+//  "Per-jurisdiction compliance status with regulation citations"
+// ═══════════════════════════════════════════════════════════════
+
+import { useState } from 'react';
+import api from '../services/api';
+import { useApiData } from '../hooks/useApiData';
+import { PageHeader } from '../components';
+import { EmptyState } from '../components/EmptyState';
+import {
+  Scale,
+  CheckCircle2,
+  AlertTriangle,
+  XCircle,
+  ChevronDown,
+  ChevronUp,
+  ExternalLink,
+  MapPin,
+  FileText,
+  Clock,
+  RefreshCw,
+  Shield,
+  TrendingUp,
+  TrendingDown,
+} from 'lucide-react';
+import clsx from 'clsx';
+
+// ── Types ─────────────────────────────────────────────────
+
+interface Jurisdiction {
+  id: string;
+  state: string;
+  stateCode: string;
+  overallScore: number;
+  scoreTrend: 'up' | 'down' | 'stable';
+  issues: ComplianceIssue[];
+  lastAudit: string;
+  regulations: number;
+  rulesVerified: number;
+  rulesTotal: number;
+}
+
+interface ComplianceIssue {
+  id: string;
+  severity: 'critical' | 'high' | 'medium' | 'low';
+  title: string;
+  regulation: string;
+  regulationUrl?: string;
+  description: string;
+  status: 'open' | 'remediation' | 'resolved';
+  dueDate?: string;
+}
+
+// ── Empty fallback (production) ─────────────────────────────
+
+const EMPTY_JURISDICTIONS: Jurisdiction[] = [];
+
+const SEVERITY_BADGE: Record<string, string> = {
+  critical: 'badge-red',
+  high: 'badge-yellow',
+  medium: 'badge-blue',
+  low: 'badge-gray',
+};
+
+// ── Component ─────────────────────────────────────────────
+
+export default function ComplianceCockpitPage() {
+  const { data: jurisdictions, isLive } = useApiData(
+    () => api.listComplianceJurisdictions(),
+    EMPTY_JURISDICTIONS,
+  );
+  const [expandedJurisdiction, setExpandedJurisdiction] = useState<string | null>(null);
+
+  const avgScore =
+    jurisdictions.length > 0 ? jurisdictions.reduce((s, j) => s + j.overallScore, 0) / jurisdictions.length : 0;
+  const totalIssues = jurisdictions.reduce((s, j) => s + j.issues.filter((i) => i.status !== 'resolved').length, 0);
+  const criticalIssues = jurisdictions.reduce(
+    (s, j) => s + j.issues.filter((i) => i.severity === 'critical' && i.status !== 'resolved').length,
+    0,
+  );
+  const fullCompliance = jurisdictions.filter((j) => j.issues.filter((i) => i.status !== 'resolved').length === 0).length;
+
+  const scoreColor = (score: number) =>
+    score >= 95 ? 'text-green-400' :
+    score >= 85 ? 'text-cyan-400' :
+    score >= 70 ? 'text-yellow-400' : 'text-red-400';
+
+  const scoreRing = (score: number) =>
+    score >= 95 ? 'text-green-500' :
+    score >= 85 ? 'text-cyan-500' :
+    score >= 70 ? 'text-yellow-500' : 'text-red-500';
+
+  return (
+    <div className="space-y-6 animate-fade-in">
+      {/* Header */}
+      <PageHeader
+        title="Compliance Cockpit"
+        subtitle="Per-jurisdiction regulatory compliance with citation-level traceability."
+        isLive={isLive}
+      />
+
+      {/* Summary */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        <div className="stat-card p-4">
+          <p className="text-[11px] font-medium text-gray-500 uppercase tracking-wider">Avg Compliance</p>
+          <p className={clsx('text-2xl font-bold mt-1', scoreColor(avgScore))}>{avgScore.toFixed(0)}%</p>
+          <p className="text-[11px] text-gray-500 mt-1">across {jurisdictions.length} states</p>
+        </div>
+        <div className="stat-card p-4">
+          <p className="text-[11px] font-medium text-gray-500 uppercase tracking-wider">Open Issues</p>
+          <p className="text-2xl font-bold text-yellow-400 mt-1">{totalIssues}</p>
+          {criticalIssues > 0 && (
+            <p className="text-[11px] text-red-400 mt-1 flex items-center gap-1">
+              <AlertTriangle className="h-3 w-3" /> {criticalIssues} critical
+            </p>
+          )}
+        </div>
+        <div className="stat-card p-4">
+          <p className="text-[11px] font-medium text-gray-500 uppercase tracking-wider">Fully Compliant</p>
+          <p className="text-2xl font-bold text-green-400 mt-1">{fullCompliance}</p>
+          <p className="text-[11px] text-gray-500 mt-1">of {jurisdictions.length} jurisdictions</p>
+        </div>
+        <div className="stat-card p-4">
+          <p className="text-[11px] font-medium text-gray-500 uppercase tracking-wider">Jurisdictions</p>
+          <p className="text-2xl font-bold text-white mt-1">{jurisdictions.length}</p>
+          <p className="text-[11px] text-gray-500 mt-1">
+            {jurisdictions.reduce((s, j) => s + j.regulations, 0)} regulations tracked
+          </p>
+        </div>
+      </div>
+
+      {/* Jurisdiction cards */}
+      <div className="space-y-3">
+        {jurisdictions.length === 0 && (
+          <EmptyState title="No Jurisdictions Configured" description="Add jurisdictions to track regulatory compliance across states." />
+        )}
+        {jurisdictions.map((jur) => {
+          const isExpanded = expandedJurisdiction === jur.id;
+          const openIssues = jur.issues.filter((i) => i.status !== 'resolved');
+          const verifiedPct = jur.rulesTotal > 0 ? ((jur.rulesVerified / jur.rulesTotal) * 100).toFixed(0) : '0';
+
+          return (
+            <div key={jur.id} className="card overflow-hidden">
+              <button
+                onClick={() => setExpandedJurisdiction(isExpanded ? null : jur.id)}
+                className="flex w-full items-center gap-4 p-4 text-left hover:bg-white/[0.02] transition-colors"
+              >
+                {/* Score ring */}
+                <div className="relative h-12 w-12 shrink-0">
+                  <svg viewBox="0 0 36 36" className="h-12 w-12 -rotate-90">
+                    <circle cx="18" cy="18" r="15" fill="none" stroke="currentColor" strokeWidth="2" className="text-white/5" />
+                    <circle
+                      cx="18" cy="18" r="15" fill="none" strokeWidth="2.5"
+                      strokeDasharray={`${(jur.overallScore / 100) * 94.2} 94.2`}
+                      strokeLinecap="round"
+                      className={scoreRing(jur.overallScore)}
+                      stroke="currentColor"
+                    />
+                  </svg>
+                  <span className={clsx('absolute inset-0 flex items-center justify-center text-xs font-bold', scoreColor(jur.overallScore))}>
+                    {jur.overallScore}
+                  </span>
+                </div>
+
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2">
+                    <MapPin className="h-3.5 w-3.5 text-gray-500" />
+                    <h3 className="text-sm font-semibold text-white">{jur.state}</h3>
+                    <span className="text-xs font-mono text-gray-500">{jur.stateCode}</span>
+                    {jur.scoreTrend === 'up' && <TrendingUp className="h-3.5 w-3.5 text-green-400" />}
+                    {jur.scoreTrend === 'down' && <TrendingDown className="h-3.5 w-3.5 text-red-400" />}
+                  </div>
+                  <div className="flex items-center gap-4 mt-1 text-[11px] text-gray-500">
+                    <span>{jur.regulations} regulations</span>
+                    <span>{jur.rulesVerified}/{jur.rulesTotal} rules verified</span>
+                    {openIssues.length > 0 ? (
+                      <span className="text-yellow-400">{openIssues.length} open issues</span>
+                    ) : (
+                      <span className="text-green-400 flex items-center gap-1">
+                        <CheckCircle2 className="h-3 w-3" /> All clear
+                      </span>
+                    )}
+                    <span>Audit: {jur.lastAudit}</span>
+                  </div>
+                </div>
+
+                {/* Rules verification bar */}
+                <div className="w-24 shrink-0 hidden lg:block">
+                  <div className="h-1.5 rounded-full bg-white/5 overflow-hidden">
+                    <div
+                      className={clsx('h-full rounded-full', Number(verifiedPct) >= 95 ? 'bg-green-500' : Number(verifiedPct) >= 80 ? 'bg-yellow-500' : 'bg-red-500')}
+                      style={{ width: `${verifiedPct}%` }}
+                    />
+                  </div>
+                  <p className="text-[10px] text-gray-600 mt-0.5 text-center">{verifiedPct}% verified</p>
+                </div>
+
+                {isExpanded ? <ChevronUp className="h-4 w-4 text-gray-500 shrink-0" /> : <ChevronDown className="h-4 w-4 text-gray-500 shrink-0" />}
+              </button>
+
+              {isExpanded && jur.issues.length > 0 && (
+                <div className="border-t border-white/[0.06] animate-slide-in">
+                  {jur.issues.map((issue) => {
+                    const statusIcon =
+                      issue.status === 'resolved' ? <CheckCircle2 className="h-4 w-4 text-green-400 shrink-0" /> :
+                      issue.status === 'remediation' ? <RefreshCw className="h-4 w-4 text-blue-400 shrink-0" /> :
+                      <AlertTriangle className="h-4 w-4 text-yellow-400 shrink-0" />;
+
+                    return (
+                      <div key={issue.id} className="px-5 py-3 border-b border-white/[0.03] last:border-0 hover:bg-white/[0.02]">
+                        <div className="flex items-start gap-3">
+                          {statusIcon}
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className={SEVERITY_BADGE[issue.severity]}>
+                                {issue.severity.toUpperCase()}
+                              </span>
+                              {issue.status === 'remediation' && <span className="badge-blue">IN REMEDIATION</span>}
+                              {issue.status === 'resolved' && <span className="badge-green">RESOLVED</span>}
+                              <h4 className="text-sm font-medium text-gray-200">{issue.title}</h4>
+                            </div>
+                            <p className="text-xs text-gray-400 mt-1 leading-relaxed">{issue.description}</p>
+                            <div className="flex items-center gap-3 mt-2 text-[11px] text-gray-500">
+                              <span className="flex items-center gap-1 text-teal-400">
+                                <FileText className="h-3 w-3" />
+                                {issue.regulation}
+                                {issue.regulationUrl && <ExternalLink className="h-3 w-3" />}
+                              </span>
+                              {issue.dueDate && (
+                                <span className="flex items-center gap-1">
+                                  <Clock className="h-3 w-3" /> Due: {issue.dueDate}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              {isExpanded && jur.issues.length === 0 && (
+                <div className="border-t border-white/[0.06] p-6 text-center animate-slide-in">
+                  <Shield className="h-8 w-8 text-green-400/40 mx-auto mb-2" />
+                  <p className="text-sm text-gray-400">No compliance issues — fully compliant across all {jur.regulations} regulations.</p>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}

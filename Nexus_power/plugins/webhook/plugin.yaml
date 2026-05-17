@@ -1,0 +1,51 @@
+id: webhook
+version: 1.0.0
+display_name: Generic Webhook
+vendor: nexus-core
+tier: standard
+
+capabilities:
+  - source
+  - surface
+
+auth:
+  method: hmac_signed_webhook
+  scopes: []
+  per_tenant: true
+
+source:
+  events:
+    - id: question.posted
+      type: question.posted
+      handler: handle_question
+      description: Inbound POST containing a question for the orchestrator.
+  rate_limit:
+    per_second: 20
+
+surface:
+  inbound:
+    - id: question.posted
+      type: question.posted
+      handler: handle_question
+  outbound:
+    - id: send_echo
+      description: Signed POST to the tenant's destination URL with the echo payload.
+      required_params:
+        - destination_url
+        - payload
+      retries: 3
+
+routing:
+  tenant_resolver: by_url_path_token
+  tenant_cache_seconds: 300
+
+health:
+  endpoint: https://localhost/health
+  interval_seconds: 60
+  timeout_seconds: 5
+
+min_platform_version: 1.0.0
+tags:
+  - generic
+  - integration
+documentation_url: https://docs.nexus.example.com/integrations/webhook

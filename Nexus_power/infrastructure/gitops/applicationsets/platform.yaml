@@ -1,0 +1,87 @@
+# Generates one Application per cluster for the canonical processing
+# platform Helm chart at infrastructure/helm/nexus-qa/.
+#
+# Environment-specific values live under envs/<env>/values/platform.yaml.
+# The cluster generator labels each cluster with env=<dev|staging|production>;
+# the template substitutes that label into the values file path.
+#
+# Production destinations get an explicit syncPolicy with automated.prune
+# disabled — production sync requires a human approval in the Argo CD UI
+# for any new image tag. Lower envs auto-sync.
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: platform
+  namespace: argocd
+spec:
+  generators:
+    - clusters:
+        selector:
+          matchLabels:
+            argocd.argoproj.io/secret-type: cluster
+          matchExpressions:
+            - key: env
+              operator: In
+              values: [dev, staging, production]
+  template:
+    metadata:
+      name: 'platform-{{name}}'
+      labels:
+        env: '{{metadata.labels.env}}'
+      annotations:
+        argocd.argoproj.io/sync-wave: "10"
+    spec:
+      project: platform
+      sources:
+        - repoURL: ${PLATFORM_REPO_URL}
+          targetRevision: '{{metadata.annotations.platform-target-revision}}'
+          path: infrastructure/helm/nexus-qa
+          helm:
+            releaseName: nexus-qa
+            valueFiles:
+              # Chart's own defaults
+              - values.yaml
+              # Env-specific override stored in the chart directory (existing files)
+              - values-{{metadata.labels.env}}.yaml
+              # Cluster/env overlay maintained under gitops/envs/
+              - $values/infrastructure/gitops/envs/{{metadata.labels.env}}/values/platform.yaml
+        - repoURL: ${PLATFORM_REPO_URL}
+          targetRevision: '{{metadata.annotations.platform-target-revision}}'
+          ref: values
+      destination:
+        server: '{{server}}'
+        namespace: nexus-platform
+      syncPolicy:
+        # Per-env behaviour is encoded by env templates merged from
+        # gitops/envs/<env>/sync-policy.yaml via the cluster annotation
+        # `platform-sync-mode` (auto | manual). The default below is
+        # safe for dev/staging; production clusters carry an annotation
+        # that forces manual approval.
+        automated:
+          prune: false
+          selfHeal: false
+        syncOptions:
+          - CreateNamespace=false
+          - ServerSideApply=true
+          - PrunePropagationPolicy=foreground
+          - PruneLast=true
+          - RespectIgnoreDifferences=true
+          - ApplyOutOfSyncOnly=true
+        retry:
+          limit: 5
+          backoff:
+            duration: 1m
+            factor: 2
+            maxDuration: 15m
+      ignoreDifferences:
+        # The Helm chart's HPA template sets initial replicas; Argo CD
+        # must not fight the HPA on the spec.replicas field after sync.
+        - group: apps
+          kind: Deployment
+          jsonPointers:
+            - /spec/replicas
+        # Argo Rollouts owns spec.replicas on Rollout resources.
+        - group: argoproj.io
+          kind: Rollout
+          jsonPointers:
+            - /spec/replicas

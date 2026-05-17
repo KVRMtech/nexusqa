@@ -1,0 +1,1018 @@
+# ═══════════════════════════════════════════════════════════════
+# Nexus QA — Helm Default Values
+# ═══════════════════════════════════════════════════════════════
+# Override these via --values or --set for each environment.
+# See values-staging.yaml / values-production.yaml for presets.
+# ═══════════════════════════════════════════════════════════════
+
+nameOverride: ""
+fullnameOverride: ""
+
+# ─── Global ───────────────────────────────────────────────────
+global:
+  image:
+    registry: ghcr.io
+    prefix: nexus-qa/nexus        # images: <registry>/<prefix>-<service>:<tag>
+    tag: latest
+    pullPolicy: IfNotPresent
+  imagePullSecrets: []
+  #  - name: ghcr-pull-secret
+  storageClass: ""                # leave empty for cluster default
+
+# ─── Shared Secrets ───────────────────────────────────────────
+# REQUIRED — Set via --set or external secrets manager (Vault, ESO).
+# Empty values will cause deployment validation to fail.
+secrets:
+  jwtSecret: ""           # REQUIRED: --set secrets.jwtSecret=<value>
+  postgresPassword: ""    # REQUIRED: --set secrets.postgresPassword=<value>
+  redisPassword: ""
+  neo4jPassword: ""       # REQUIRED: --set secrets.neo4jPassword=<value>
+  minioAccessKey: ""      # REQUIRED: --set secrets.minioAccessKey=<value>
+  minioSecretKey: ""      # REQUIRED: --set secrets.minioSecretKey=<value>
+  grafanaPassword: ""     # REQUIRED: --set secrets.grafanaPassword=<value>
+  shieldEncryptionKey: ""
+  earsHfToken: ""
+  heartTier1ApiKey: ""    # Optional: best-quality provider secret for Heart
+  heartTier2ApiKey: ""    # Optional: fallback provider secret for Heart
+  brainTier1ApiKey: ""    # Optional: best-quality provider secret for Brain
+  brainTier2ApiKey: ""    # Optional: fallback provider secret for Brain
+  # Cloud object-storage credentials (only set the ones that match storage.backend).
+  s3AccessKey: ""         # AWS / MinIO / R2 access key
+  s3SecretKey: ""         # AWS / MinIO / R2 secret key
+  azureStorageKey: ""     # Azure Blob shared key (skip if using workload identity)
+  azureStorageConnString: ""  # Optional: full connection string
+  gcsServiceAccountJson: ""   # GCP SA JSON (skip if using Workload Identity)
+
+# ─── Object Storage ───────────────────────────────────────────
+# Engines are stateless: PVCs are NOT required when an object-storage
+# backend is configured. The container working dirs use emptyDir.
+#
+# To run fully on-prem with no cloud, set backend: local AND set each
+# engine's persistence.<vol>.mode: pvc.
+storage:
+  backend: s3              # s3 | azure | gcs | local
+  bucket: nexus-artifacts   # S3 bucket / Azure container / GCS bucket
+  presignExpirySeconds: 3600
+  # S3-compatible (AWS, MinIO, R2, B2, Spaces). Leave endpoint empty for AWS.
+  s3:
+    region: us-east-1
+    endpoint: ""           # e.g. "https://minio.dev.svc:9000" for MinIO
+    useSsl: true
+  azure:
+    account: ""            # Azure storage account name (required when backend=azure)
+    container: ""          # Overrides .bucket if set
+    useDefaultCredential: false   # true → workload identity / managed identity
+  gcs:
+    project: ""
+    workloadIdentity: true # true → no SA-file env, no secret mount needed
+
+# ─── External Secrets Operator (ESO) Integration ─────────────
+# When enabled, secrets are pulled from a remote backend
+# (AWS Secrets Manager, HashiCorp Vault, Azure Key Vault, GCP SM)
+# instead of being stored in values.yaml / Helm releases.
+#
+# Prerequisites:
+#   1. Install ESO CRDs:
+#        helm repo add external-secrets https://charts.external-secrets.io
+#        helm install eso external-secrets/external-secrets -n external-secrets --create-namespace
+#   2. Create a ClusterSecretStore or SecretStore pointing to your backend
+#   3. Pre-populate secrets in the backend under the remoteKeyPrefix
+externalSecrets:
+  enabled: false
+  refreshInterval: 1h
+  secretStoreRef:
+    name: ""                        # Name of your SecretStore or ClusterSecretStore
+    kind: ClusterSecretStore        # or SecretStore (namespace-scoped)
+  remoteKeyPrefix: "nexus-qa"       # Key prefix in the secret backend
+  property: ""                      # For JSON secrets: the JSON property name
+  includeShieldKey: false           # Set true if shield-encryption-key exists in backend
+  includeEarsToken: false           # Set true if ears-hf-token exists in backend
+  includeLlmTierKeys: false         # Set true if heart/brain tier API keys exist in backend
+  # Azure backend: when true, pull a single azure-storage-connection-string
+  # from the backend instead of an account-key. Mutually exclusive with
+  # storage.azure.useDefaultCredential.
+  azure:
+    useConnectionString: false
+  # One-shot seed of a new environment's secrets backend from values.
+  # NEVER enable in production — the chart fails template render if
+  # config.nexusEnv == "production". Use only on first dev/staging install
+  # after the ClusterSecretStore is Ready.
+  bootstrap:
+    enabled: false
+
+# ─── Autoscaling (Phase 1 — KEDA queue-driven) ───────────────
+# KEDA installs ScaledObjects that watch Redis Streams XLEN and
+# scale Deployments accordingly. Per-component pendingEntries
+# thresholds tune how quickly each engine reacts to backlog.
+#
+# Each component MUST also have engines.<engine>.replicas set
+# correctly: KEDA's minReplicaCount overrides the Deployment's
+# replicas field once a ScaledObject targets it.
+autoscaling:
+  keda:
+    enabled: false
+    redisAddress: ""       # default <release>-redis:6379
+    redisDbIndex: 3        # matches nexus_sdk.queue.QueueConfig.redis_db
+    redisPasswordSecret: ""
+    redisPasswordKey: redis-password
+    components: []
+    # Example:
+    # components:
+    #   - engine: eyes
+    #     kinds: [cpu, gpu]
+    #     minReplicas: 1
+    #     maxReplicas: 12
+    #     pendingEntries_cpu: 4
+    #     pendingEntries_gpu: 1
+    #     pollingInterval: 15
+    #     cooldownPeriod: 180
+
+# ─── Progressive Delivery (Argo Rollouts) ────────────────────
+# When rollout.enabled is true, Rollout CRs are emitted for each
+# component in `components`. The Rollout takes over scaling of the
+# named Deployment via workloadRef — no pod-spec duplication.
+#
+# Prerequisites:
+#   1. Argo Rollouts controller installed (bootstrapped by
+#      gitops/applicationsets/infra-controllers.yaml, M0.2).
+#   2. Prometheus reachable from the rollouts controller — same
+#      cluster default is fine; override .Values.rollout.prometheus.address
+#      for cross-cluster Prometheus.
+#   3. RED metrics (http_requests_total, http_request_duration_seconds)
+#      exposed by every targeted service.
+rollout:
+  enabled: false
+  # Components that opt in. Names match the Rollout dispatch table in
+  # templates/rollouts.yaml; unknown names are silently ignored.
+  components: []
+  # Default canary steps. Each "analysis" step automatically gets the
+  # service=<component> arg injected so AnalysisTemplate queries scope
+  # to the right service.
+  steps: null   # null → use the default 10/25/50/100 + 3 analysis gates
+  # When true, the chart picks the short-pause variant (30s/1m/2m) for
+  # the default canary timing. Staging overlays flip this on; production
+  # leaves it false so the full 5m/10m/15m pauses give time to react.
+  shortPauses: false
+  maxSurge: "25%"
+  maxUnavailable: 0
+  progressDeadlineSeconds: 7200
+  revisionHistoryLimit: 5
+  # Per-component step / setting overrides:
+  #   componentOverrides:
+  #     eyes-engine:
+  #       steps: [...]
+  componentOverrides: {}
+  prometheus:
+    # Default falls back to the in-cluster <release>-prometheus service.
+    address: ""
+  analysis:
+    slo: "0.995"               # 99.5% availability SLO
+    burnRateThreshold: "14.4"  # fast-burn threshold (1h window)
+    maxErrorRate: "0.01"       # 1% rolling-2m error rate ceiling
+    maxLatencyP95Seconds: "1.5"
+
+# ─── Shared Config ────────────────────────────────────────────
+config:
+  nexusEnv: production
+  logLevel: INFO
+
+# ─── Model Selection ──────────────────────────────────────────
+# Keep model choice explicit per engine so text-only services
+# never inherit the Eyes vision model and Eyes never inherits
+# a small text-only model.
+models:
+  eyes:
+    ollamaModel: llama3.2-vision:11b
+    # Vision tier router config (Fix 6). Off by default — eyes uses
+    # direct Ollama LLaVA. Flip `tier1.provider`/`tier2.provider` on
+    # once cloud API keys are provisioned via the External Secret to
+    # route per-scene calls through Claude/GPT-4V/etc.
+    vision:
+      tier1:
+        provider: ""              # set to "anthropic" to enable
+        model: "claude-sonnet-4-6"
+        timeout: 60
+      tier2:
+        provider: ""              # set to "openai" to enable
+        model: "gpt-4o"
+        timeout: 60
+      tier3:
+        provider: ""              # leave blank → uses Ollama via baseUrl
+        model: "llava:7b"
+        baseUrl: ""               # empty = derive from in-cluster ollama service
+  heart:
+    localProvider: ollama
+    localModel: llama3.2:1b
+    tier1:
+      provider: ""
+      model: ""
+      apiBaseUrl: ""
+      azureEndpoint: ""
+      azureDeployment: ""
+      azureApiVersion: "2024-06-01"
+      geminiBaseUrl: ""
+      timeout: 120
+      maxRetries: 2
+    tier2:
+      provider: ""
+      model: ""
+      apiBaseUrl: ""
+      azureEndpoint: ""
+      azureDeployment: ""
+      azureApiVersion: "2024-06-01"
+      geminiBaseUrl: ""
+      timeout: 90
+      maxRetries: 2
+  brain:
+    localProvider: ollama
+    localModel: llama3.2:1b
+    tier1:
+      provider: ""
+      model: ""
+      apiBaseUrl: ""
+      azureEndpoint: ""
+      azureDeployment: ""
+      azureApiVersion: "2024-06-01"
+      geminiBaseUrl: ""
+      timeout: 120
+      maxRetries: 2
+    tier2:
+      provider: ""
+      model: ""
+      apiBaseUrl: ""
+      azureEndpoint: ""
+      azureDeployment: ""
+      azureApiVersion: "2024-06-01"
+      geminiBaseUrl: ""
+      timeout: 90
+      maxRetries: 2
+
+# ═══════════════════════════════════════════════════════════════
+# INFRASTRUCTURE
+# ═══════════════════════════════════════════════════════════════
+
+# ─── Redis ────────────────────────────────────────────────────
+redis:
+  enabled: true
+  image: redis:7-alpine
+  replicas: 1
+  port: 6379
+  maxMemory: 512mb
+  sentinel:
+    enabled: false           # Enable for HA (3-node master/replica + Sentinel)
+    replicas: 3              # Total Redis nodes (1 master + 2 replicas)
+  persistence:
+    enabled: true
+    size: 5Gi
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 768Mi
+
+# ─── PostgreSQL ───────────────────────────────────────────────
+postgres:
+  enabled: true
+  image: postgres:16-alpine
+  port: 5432
+  database: nexusqa
+  user: nexus
+  persistence:
+    enabled: true
+    size: 20Gi
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: "1"
+      memory: 2Gi
+  # ─── HA via CloudNativePG ───────────────────────────────────
+  # When cnpg.enabled=true, the chart emits a CNPG Cluster custom
+  # resource (templates/postgres-cnpg.yaml) instead of the single
+  # StatefulSet. Requires the CNPG operator to be installed in the
+  # cluster (typically under cnpg-system namespace).
+  cnpg:
+    enabled: false
+    instances: 3                 # primary + 2 sync/async replicas
+    minSyncReplicas: 1
+    maxSyncReplicas: 1
+    image: "ghcr.io/cloudnative-pg/postgresql:16.4"
+    superuserSecret: ""          # leave empty → chart generates name; or point at ESO secret
+    maxConnections: "200"
+    sharedBuffers: "512MB"
+    effectiveCacheSize: "1536MB"
+    # Optional dedicated WAL volume — improves write throughput.
+    walStorage:
+      size: 10Gi
+    # Optional Barman-based S3 backup; uncomment + fill to enable.
+    # backup:
+    #   destinationPath: s3://nexus-pg-backups/production
+    #   endpointURL: ""            # leave blank for AWS S3
+    #   credentialsSecret: nexus-pg-backup-creds
+    #   retentionDays: 30
+    # scheduledBackup:
+    #   schedule: "0 2 * * *"
+
+# ─── PgBouncer (Connection Pooler) ───────────────────────────
+pgbouncer:
+  enabled: false               # Enable for production connection pooling
+  image: bitnami/pgbouncer:1.22.1
+  replicas: 2
+  port: 6432
+  poolMode: transaction        # transaction | session | statement
+  defaultPoolSize: 100         # Max real PG connections per pool
+  minPoolSize: 10
+  maxClientConn: 1000          # Max client connections to PgBouncer
+  reservePoolSize: 5
+  serverIdleTimeout: 300
+  serverLifetime: 3600
+  clientIdleTimeout: 0         # 0 = no timeout
+  queryTimeout: 120
+  queryWaitTimeout: 30
+  metrics: false               # Enable Prometheus exporter sidecar
+  metricsPort: 9127
+  serverTLS: false
+  resources:
+    requests:
+      cpu: 100m
+      memory: 64Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+
+# ─── Neo4j ────────────────────────────────────────────────────
+neo4j:
+  enabled: true
+  image: neo4j:5-community
+  ports:
+    http: 7474
+    bolt: 7687
+  heapMaxSize: 1G
+  pagecacheSize: 512M
+  persistence:
+    enabled: true
+    dataSize: 20Gi
+    logsSize: 5Gi
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: "2"
+      memory: 3Gi
+
+# ─── Milvus (Vector Store) ───────────────────────────────────
+# Image pinned to v2.4.5 to match pymilvus 2.4 in the backbone engine
+# (see engines/backbone-engine/requirements.txt). The dev docker-compose
+# uses the same tag — keep them in lockstep so a feature that works
+# locally doesn't fail in prod on protocol mismatch.
+milvus:
+  enabled: true
+  image: milvusdb/milvus:v2.4.5
+  port: 19530
+  etcd:
+    image: quay.io/coreos/etcd:v3.5.5
+  minio:
+    image: minio/minio:RELEASE.2023-03-20T20-16-18Z
+  persistence:
+    enabled: true
+    size: 30Gi
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: "2"
+      memory: 4Gi
+
+# ─── Ollama (LLM backend for Heart engine) ───────────────────
+ollama:
+  enabled: true
+  image: ollama/ollama:latest
+  port: 11434
+  model: "llama3.1:8b"
+  gpu:
+    enabled: true
+    count: all
+  persistence:
+    enabled: true
+    size: 50Gi
+  resources:
+    requests:
+      cpu: "1"
+      memory: 8Gi
+    limits:
+      cpu: "4"
+      memory: 32Gi
+
+# ═══════════════════════════════════════════════════════════════
+# PLATFORM SERVICES
+# ═══════════════════════════════════════════════════════════════
+
+# ─── Auth Service ─────────────────────────────────────────────
+authService:
+  replicas: 2
+  port: 8000
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  autoscaling:
+    enabled: false
+    minReplicas: 2
+    maxReplicas: 5
+    targetCPU: 70
+
+# ─── API Gateway ─────────────────────────────────────────────
+gateway:
+  replicas: 2
+  port: 8080
+  resources:
+    requests:
+      cpu: 200m
+      memory: 512Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+  autoscaling:
+    enabled: false
+    minReplicas: 2
+    maxReplicas: 10
+    targetCPU: 70
+
+# ─── Platform API ─────────────────────────────────────────────
+platformApi:
+  replicas: 2
+  port: 8091
+  resources:
+    requests:
+      cpu: 200m
+      memory: 512Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+  autoscaling:
+    enabled: false
+    minReplicas: 2
+    maxReplicas: 5
+    targetCPU: 70
+
+# ═══════════════════════════════════════════════════════════════
+# ENGINES
+# ═══════════════════════════════════════════════════════════════
+
+engines:
+  # ─── Shield (PII Redaction) ─────────────────────────────────
+  shield:
+    enabled: true
+    replicas: 2
+    port: 8001
+    gpu: false
+    resources:
+      requests:
+        cpu: 200m
+        memory: 512Mi
+      limits:
+        cpu: "1"
+        memory: 1Gi
+    env: {}
+
+  # ─── Ears (Audio Transcription) ─────────────────────────────
+  ears:
+    enabled: true
+    replicas: 1
+    port: 8002
+    gpu: true
+    gpuCount: 1
+    resources:
+      requests:
+        cpu: "1"
+        memory: 4Gi
+      limits:
+        cpu: "4"
+        memory: 16Gi
+    autoscaling:
+      enabled: false
+      minReplicas: 1
+      maxReplicas: 10
+      targetQueueDepth: 2      # scale up when >2 jobs per replica in queue
+      targetPendingCount: ""   # optional: pending jobs threshold
+      targetCPU: ""            # optional: CPU fallback
+    env:
+      ENGINE_MODE: hybrid      # hybrid (dev), api (prod API pods), worker (prod GPU pods)
+      EARS_ALLOW_REMOTE_MODEL_BOOTSTRAP: "false"
+      EARS_REQUIRE_REAL_DIARIZER: "true"
+      EARS_DIARIZER_STARTUP_TIMEOUT_SECONDS: "180"
+      EARS_TRANSCRIBER_STARTUP_TIMEOUT_SECONDS: "180"
+      EARS_DEFAULT_PROCESSING_PROFILE: fast
+      WHISPER_DEVICE: cuda
+      WHISPER_FAST_MODEL_SIZE: medium
+      WHISPER_FAST_COMPUTE_TYPE: float16
+      WHISPER_COMPUTE_TYPE: float16
+      EARS_PREWARM_DIARIZER: "true"
+      PYANNOTE_MODEL_PATH: ./models/pyannote-speaker-3.1
+      PYANNOTE_REQUIRE_MANIFEST: "true"
+      PYANNOTE_BUNDLE_URI: ""
+      PYANNOTE_BUNDLE_SHA256: ""
+      PYANNOTE_REPO_ID: pyannote/speaker-diarization-3.1
+    modelInit:
+      enabled: true
+      mode: verify
+    modelSeedJob:
+      enabled: true
+      mode: prewarm
+      hook: post-install,pre-upgrade
+      hookWeight: "-1"
+    persistence:
+      audio:
+        # mode: emptyDir → ephemeral working dir (durable copy in object store)
+        # mode: pvc      → legacy PVC mount (RWO) — local/air-gapped clusters only
+        mode: emptyDir
+        # emptyDir sizeLimit (only used when mode=emptyDir)
+        sizeLimit: 10Gi
+        # PVC size (only used when mode=pvc)
+        size: 50Gi
+
+  # ─── Eyes (Screen/Video Analysis) ───────────────────────────
+  eyes:
+    enabled: true
+    replicas: 1
+    port: 8003
+    gpu: true
+    gpuCount: 1
+    resources:
+      requests:
+        cpu: "1"
+        memory: 4Gi
+      limits:
+        cpu: "4"
+        memory: 16Gi
+    autoscaling:
+      enabled: false
+      minReplicas: 1
+      maxReplicas: 8
+      targetQueueDepth: 2
+      targetPendingCount: ""
+      targetCPU: ""
+    env:
+      ENGINE_MODE: hybrid
+      EYES_DEFAULT_PROCESSING_PROFILE: fast
+      EYES_OCR_ALLOW_REMOTE_MODEL_BOOTSTRAP: "false"
+      EYES_OCR_GPU: "true"
+      EYES_FAST_MAX_FRAMES: "12"
+      EYES_FAST_MAX_SCENES: "8"
+      EYES_OCR_MAX_WORKERS: "4"
+      EYES_FAST_REPRESENTATIVE_OCR_ONLY: "true"
+      EYES_FAST_SKIP_OCR: "false"
+      EYES_FAST_OLLAMA_MODEL: llava:7b
+      VISION_DEVICE: cuda
+    modelInit:
+      enabled: true
+      mode: verify
+    modelSeedJob:
+      enabled: true
+      mode: prewarm
+      hook: post-install,pre-upgrade
+      hookWeight: "-1"
+    persistence:
+      frames:
+        mode: emptyDir
+        sizeLimit: 20Gi
+        size: 50Gi
+
+  # ─── Heart (LLM Inference) ─────────────────────────────────
+  heart:
+    enabled: true
+    replicas: 1
+    port: 8004
+    gpu: true
+    gpuCount: 1
+    resources:
+      requests:
+        cpu: "2"
+        memory: 8Gi
+      limits:
+        cpu: "8"
+        memory: 32Gi
+    autoscaling:
+      enabled: false
+      minReplicas: 1
+      maxReplicas: 5
+      targetQueueDepth: ""
+      targetPendingCount: ""
+      targetCPU: 70             # Heart is sync — CPU-based scaling is primary
+    env:
+      ENGINE_MODE: hybrid
+      LLM_DEVICE: cuda
+      HEART_GPU_CONCURRENCY: "1"
+
+  # ─── Backbone (Knowledge Graph + Vector Store) ──────────────
+  backbone:
+    enabled: true
+    replicas: 2
+    port: 8005
+    gpu: false
+    resources:
+      requests:
+        cpu: 250m
+        memory: 512Mi
+      limits:
+        cpu: "1"
+        memory: 2Gi
+    env: {}
+
+  # ─── Nerves (External Integrations) ────────────────────────
+  nerves:
+    enabled: true
+    replicas: 2
+    port: 8006
+    gpu: false
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
+    env: {}
+
+  # ─── Legs (Browser Automation) ──────────────────────────────
+  legs:
+    enabled: true
+    replicas: 2
+    port: 8007
+    gpu: false
+    resources:
+      requests:
+        cpu: 500m
+        memory: 1Gi
+      limits:
+        cpu: "2"
+        memory: 4Gi
+    env: {}
+    persistence:
+      evidence:
+        mode: emptyDir
+        sizeLimit: 5Gi
+        size: 20Gi
+
+  # ─── Hands (Test Data Generation) ──────────────────────────
+  hands:
+    enabled: true
+    replicas: 2
+    port: 8008
+    gpu: false
+    resources:
+      requests:
+        cpu: 200m
+        memory: 512Mi
+      limits:
+        cpu: "1"
+        memory: 1Gi
+    env: {}
+
+  # ─── Spine (Document Ingestion) ────────────────────────────
+  spine:
+    enabled: true
+    replicas: 2
+    port: 8009
+    gpu: false
+    resources:
+      requests:
+        cpu: 250m
+        memory: 512Mi
+      limits:
+        cpu: "1"
+        memory: 2Gi
+    env: {}
+    persistence:
+      documents:
+        mode: emptyDir
+        sizeLimit: 2Gi
+        size: 50Gi
+
+  # ─── Mouth (Report Generation) ─────────────────────────────
+  mouth:
+    enabled: true
+    replicas: 2
+    port: 8010
+    gpu: false
+    resources:
+      requests:
+        cpu: 200m
+        memory: 512Mi
+      limits:
+        cpu: "1"
+        memory: 1Gi
+    env: {}
+    persistence:
+      reports:
+        mode: emptyDir
+        sizeLimit: 2Gi
+        size: 30Gi
+
+  brain:
+    enabled: true
+    replicas: 2
+    port: 8011
+    gpu: false
+    resources:
+      requests:
+        cpu: 250m
+        memory: 512Mi
+      limits:
+        cpu: "1"
+        memory: 2Gi
+    env: {}
+
+# ═══════════════════════════════════════════════════════════════
+# ORCHESTRATORS
+# ═══════════════════════════════════════════════════════════════
+
+orchestrator:
+  replicas: 2
+  port: 8100
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: "1"
+      memory: 2Gi
+  autoscaling:
+    enabled: false
+    minReplicas: 2
+    maxReplicas: 8
+    targetCPU: 70
+
+# ─── Legacy QA Orchestrator (REMOVED — fully migrated to generic orchestrator) ──
+# qaOrchestrator is no longer deployed. All session/pipeline work
+# routes through the generic orchestrator at port 8100.
+qaOrchestrator:
+  enabled: false
+  replicas: 0
+  port: 8092
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: "1"
+      memory: 2Gi
+  autoscaling:
+    enabled: false
+    minReplicas: 2
+    maxReplicas: 8
+    targetCPU: 70
+
+# ═══════════════════════════════════════════════════════════════
+# FRONTEND CLIENT
+# ═══════════════════════════════════════════════════════════════
+
+client:
+  enabled: true
+  replicas: 2
+  port: 80
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+
+# ═══════════════════════════════════════════════════════════════
+# INGRESS
+# ═══════════════════════════════════════════════════════════════
+
+ingress:
+  enabled: false
+  className: nginx
+  annotations: {}
+  #  cert-manager.io/cluster-issuer: letsencrypt-prod
+  #  nginx.ingress.kubernetes.io/proxy-body-size: 100m
+  host: nexus-qa.example.com
+  tls:
+    enabled: false
+    secretName: nexus-qa-tls
+
+# ═══════════════════════════════════════════════════════════════
+# MONITORING
+# ═══════════════════════════════════════════════════════════════
+
+monitoring:
+  prometheus:
+    enabled: true
+    image: prom/prometheus:v2.48.0
+    port: 9090
+    retentionDays: 30
+    persistence:
+      enabled: true
+      size: 50Gi
+    resources:
+      requests:
+        cpu: 250m
+        memory: 512Mi
+      limits:
+        cpu: "1"
+        memory: 2Gi
+
+  grafana:
+    enabled: true
+    image: grafana/grafana:10.2.0
+    port: 3000
+    persistence:
+      enabled: true
+      size: 5Gi
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
+    # Per-dashboard-bundle toggles. The sidecar mounts every ConfigMap
+    # with grafana_dashboard=1 — gating happens at the chart so operators
+    # don't get orphan dashboards when the metrics aren't being scraped.
+    dashboards:
+      canonical:
+        enabled: false      # Flip on once ServiceMonitor + redis_exporter + milvus_exporter are scraping
+
+  # ─── ServiceMonitor (Prometheus Operator CRD) ──────────────
+  serviceMonitor:
+    enabled: false                  # Enable when Prometheus Operator is installed
+    interval: 15s
+    scrapeTimeout: 10s
+    # Targets are scraped in their own namespace by default. Operators
+    # with a centralised observability namespace can pin a namespace here.
+    namespace: ""
+    # Labels propagated onto every emitted ServiceMonitor. Common use:
+    # `release: kube-prometheus-stack` so the operator's selector picks
+    # these up. `additionalLabels` is the canonical name; `labels` is
+    # an alias kept for backwards compatibility with earlier overrides.
+    labels: {}
+    additionalLabels: {}
+    # Relabeling applied to every endpoint. List of metric_relabel_configs
+    # entries (Prometheus Operator schema). Empty list = no relabeling.
+    metricRelabelings: []
+
+  # ─── PrometheusRule Alerts ──────────────────────────────────
+  alerts:
+    enabled: false                  # Enable when Prometheus Operator is installed
+    labels: {}                      # alias of additionalLabels for compat
+    additionalLabels: {}            # e.g., release: kube-prometheus-stack
+    # Canonical workflow-plane alerts. Separate file from the HTTP/infra
+    # alerts so operators can audit / route them independently. Off by
+    # default; flip on once Milvus/redis_exporter export the series the
+    # rules reference (see templates/prometheusrule-workflow.yaml).
+    workflow:
+      enabled: false
+      # XLEN threshold per stream; raise per lane after measuring real
+      # baseline. 1000 is a conservative starting point.
+      queueBackupThreshold: 1000
+      # Optional per-step p95 budgets, expressed as a Prometheus vector.
+      # Default uses one global budget; tune to per-step thresholds once
+      # load test results are in.
+      stepP95Thresholds: "vector(600)"
+
+# ═══════════════════════════════════════════════════════════════
+# MODEL CACHE (shared PVC for GPU engines + Ollama)
+# ═══════════════════════════════════════════════════════════════
+
+modelCache:
+  enabled: true
+  size: 100Gi
+  accessMode: ReadWriteMany       # requires RWX storage class (e.g., EFS, NFS)
+
+# ═══════════════════════════════════════════════════════════════
+# SERVICE ACCOUNTS & RBAC
+# ═══════════════════════════════════════════════════════════════
+
+serviceAccount:
+  create: true
+  name: ""
+  # IRSA / Workload Identity / Azure UAMI annotation slot. Per-env
+  # values overlay sets this to the actual role identifier; the chart
+  # never hardcodes one.
+  annotations: {}
+  # Controls automount of the SA's projected token into pods. Default
+  # true because IRSA / Workload Identity rely on projected tokens.
+  automount: true
+
+# ═══════════════════════════════════════════════════════════════
+# POD-LEVEL DEFAULTS  (PodSecurity restricted compliant)
+# ═══════════════════════════════════════════════════════════════
+#
+# These are HARD defaults the chart enforces. The hardening helpers in
+# _helpers.tpl merge these on top of immutable baseline defaults
+# (runAsNonRoot, drop ALL capabilities, seccomp RuntimeDefault) so an
+# operator can tighten but cannot loosen.
+podSecurityContext:
+  fsGroup: 1000
+  runAsUser: 1000
+  runAsGroup: 1000
+  runAsNonRoot: true
+  fsGroupChangePolicy: OnRootMismatch
+  seccompProfile:
+    type: RuntimeDefault
+
+containerSecurityContext:
+  readOnlyRootFilesystem: true      # engines mount tmp via emptyDir at /tmp
+  allowPrivilegeEscalation: false
+  runAsNonRoot: true
+  runAsUser: 1000
+  runAsGroup: 1000
+  privileged: false
+  seccompProfile:
+    type: RuntimeDefault
+  # capabilities.drop is always [ALL] enforced by the helper; uncomment
+  # the lines below to add specific capabilities only when truly required.
+  # capabilities:
+  #   add: []
+
+# Workload extras (apply to every Deployment via the podSpecCommon helper)
+priorityClassName: ""              # set per env to system-cluster-critical for platform-api etc.
+terminationGracePeriodSeconds: 60
+
+# Pod-level annotations applied to every workload (in addition to the
+# mesh-injection annotations and config/secret checksums). Operator may
+# add scrape opt-ins, vault agent annotations, etc.
+podAnnotations: {}
+
+# Topology spread (HA): replicas distributed across zones + hosts.
+topologySpread:
+  enabled: true
+  maxSkew: 1
+  whenUnsatisfiable: ScheduleAnyway
+
+# ═══════════════════════════════════════════════════════════════
+# SERVICE MESH
+# ═══════════════════════════════════════════════════════════════
+# When enabled, every workload gets the mesh's injection annotation
+# added by the podAnnotations helper. The mesh control plane itself is
+# installed out-of-band via the GitOps infra-controllers ApplicationSet.
+mesh:
+  linkerd:
+    enabled: true
+    proxyLogLevel: "warn,linkerd=info"
+  istio:
+    enabled: false
+
+# GPU nodes should be tainted: nvidia.com/gpu=present:NoSchedule
+gpuToleration:
+  key: nvidia.com/gpu
+  operator: Exists
+  effect: NoSchedule
+
+# Spot capacity toleration — engines that opt in via .spotTolerant: true
+# carry this extra toleration so the scheduler can place them on the
+# gpu-spot node group provisioned by Terraform. Without it spot nodes
+# are inaccessible.
+spotToleration:
+  key: nexus-platform/capacity
+  operator: Equal
+  value: spot
+  effect: NoSchedule
+
+# ─── GPU Queue Metrics Exporter ───────────────────────────────
+# Exposes Redis Streams queue depth as Prometheus metrics for HPA.
+# Required when GPU engine autoscaling is enabled.
+queueMetrics:
+  enabled: false
+  port: 9191
+  intervalSeconds: 10
+  prometheusAdapter:
+    enabled: false   # Set true when prometheus-adapter is installed
+
+# ─── Network Policies ─────────────────────────────────────────
+networkPolicies:
+  # Default ON: deny-by-default ingress AND egress, with explicit tier
+  # allows. The previous default of `false` was acceptable in
+  # docker-compose / single-tenant dev but is unsafe in any multi-tenant
+  # deployment. Operators MUST flip this off explicitly if disabling.
+  enabled: true
+
+# Egress allowlist — engines that legitimately call external services
+# (LLM providers, model downloads) need an explicit external-egress
+# NetworkPolicy. The chart only emits these policies for engines with
+# .egressAllowExternal = true in their per-engine values block.
+egressAllowlist:
+  # Pod and service CIDRs the cluster occupies. Specified here so the
+  # external-egress NetworkPolicy explicitly excludes them, preventing
+  # accidental cross-tier re-opening. Each env overlay should set this
+  # to the cluster's actual CIDRs (Terraform M0.7 emits them).
+  excludeCidrs:
+    - "10.0.0.0/8"
+    - "172.16.0.0/12"
+    - "192.168.0.0/16"
+  externalPorts:
+    - port: 443
+      protocol: TCP
+    - port: 80
+      protocol: TCP

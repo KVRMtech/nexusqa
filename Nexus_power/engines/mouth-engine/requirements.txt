@@ -1,0 +1,4 @@
+# Mouth Engine — report generation
+-e ../../sdk/nexus-sdk
+Jinja2>=3.1,<4.0
+weasyprint>=60.0; sys_platform != "win32"

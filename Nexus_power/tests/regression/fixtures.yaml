@@ -1,0 +1,61 @@
+# Regression fixture manifest. Each entry pins a media file by sha256
+# so the suite is reproducible across clusters / mirrors. The `source`
+# is fetched at test-setup; common backends are s3://, gs://, https://.
+#
+# Add a new fixture:
+#   1. Upload the media to the regression bucket.
+#   2. Compute sha256 (sha256sum on macOS/Linux, certutil -hashfile on Win).
+#   3. Add the entry below + a matching golden in tests/regression/golden/.
+#   4. PR with both files.
+
+version: 1
+
+defaults:
+  source_base: ${NEXUS_REGRESSION_FIXTURE_URL}
+  profile: fast
+
+fixtures:
+  # ── Audio ───────────────────────────────────────────────────
+  - id: kt-call-en-01
+    kind: audio.canonicalize
+    source: audio/kt-call-en-01.wav
+    sha256: "0000000000000000000000000000000000000000000000000000000000000000"
+    duration_seconds: 180
+    description: "3-minute English customer call, two speakers, clear audio."
+
+  - id: kt-call-es-01
+    kind: audio.canonicalize
+    source: audio/kt-call-es-01.wav
+    sha256: "0000000000000000000000000000000000000000000000000000000000000000"
+    duration_seconds: 240
+    description: "Spanish KT call, three speakers, background noise."
+
+  # ── Video ───────────────────────────────────────────────────
+  - id: zoom-screen-share-01
+    kind: video.canonicalize
+    source: video/zoom-screen-share-01.mp4
+    sha256: "0000000000000000000000000000000000000000000000000000000000000000"
+    duration_seconds: 360
+    description: "6-minute Zoom screen share, browser UI, form fills."
+
+  - id: zoom-screen-share-02-pii
+    kind: video.canonicalize
+    source: video/zoom-screen-share-02-pii.mp4
+    sha256: "0000000000000000000000000000000000000000000000000000000000000000"
+    duration_seconds: 240
+    description: "Screen share containing PII; tests Shield redaction in the flow."
+
+  # ── Multimodal ───────────────────────────────────────────────
+  - id: zoom-call-with-audio-01
+    kind: multimodal.canonicalize
+    source: video/zoom-call-with-audio-01.mp4
+    sha256: "0000000000000000000000000000000000000000000000000000000000000000"
+    duration_seconds: 600
+    description: "Full 10-minute multimodal sample for end-to-end measurement."
+
+  # ── Document ─────────────────────────────────────────────────
+  - id: policy-form-01
+    kind: document.canonicalize
+    source: doc/policy-form-01.pdf
+    sha256: "0000000000000000000000000000000000000000000000000000000000000000"
+    description: "Insurance policy PDF with tables and embedded form fields."

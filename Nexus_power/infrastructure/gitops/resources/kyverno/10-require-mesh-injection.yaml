@@ -1,0 +1,48 @@
+# Every pod in the platform namespace must carry the service-mesh
+# sidecar-injection annotation. Without it, inter-service calls fall
+# back to plain HTTP and the mTLS architectural principle is silently
+# violated. This policy makes the principle enforceable.
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: require-mesh-injection
+  annotations:
+    policies.kyverno.io/title: Require service-mesh sidecar injection
+    policies.kyverno.io/category: Networking
+    policies.kyverno.io/severity: high
+    policies.kyverno.io/subject: Pod
+    policies.kyverno.io/description: >-
+      Workloads in mesh-managed namespaces MUST opt in to sidecar
+      injection. Either `linkerd.io/inject: enabled` or
+      `sidecar.istio.io/inject: "true"` must be present on the pod
+      template metadata.
+spec:
+  validationFailureAction: Enforce
+  background: true
+  rules:
+    - name: linkerd-or-istio-annotation-present
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+              namespaceSelector:
+                matchExpressions:
+                  - key: linkerd.io/inject
+                    operator: In
+                    values: [enabled]
+      # Pods are allowed when one of the accepted annotations is set
+      # OR when the namespace is annotated to skip mesh (e.g. for jobs
+      # that must call non-mesh services).
+      validate:
+        message: >-
+          Pods in mesh-managed namespaces must carry either
+          `linkerd.io/inject: enabled` or `sidecar.istio.io/inject: "true"`.
+          The Helm chart's pod-annotations helper sets this automatically;
+          if you see this error, you bypassed the chart.
+        anyPattern:
+          - metadata:
+              annotations:
+                linkerd.io/inject: enabled
+          - metadata:
+              annotations:
+                sidecar.istio.io/inject: "true"

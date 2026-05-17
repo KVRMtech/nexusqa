@@ -1,0 +1,90 @@
+{{/*
+=================================================================
+PodDisruptionBudgets — ensure HA during node maintenance
+=================================================================
+Only created when replicas > 1 to allow safe rolling updates.
+*/}}
+
+{{- $fullname := include "nexus-qa.fullname" . }}
+{{- $root := . }}
+
+{{/* ═══════ Platform Services ═══════ */}}
+{{- if gt (int .Values.authService.replicas) 1 }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ $fullname }}-auth
+  labels:
+    {{- include "nexus-qa.componentLabels" (dict "root" $root "component" "auth") | nindent 4 }}
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      {{- include "nexus-qa.componentSelectorLabels" (dict "root" $root "component" "auth") | nindent 6 }}
+{{- end }}
+
+{{- if gt (int .Values.gateway.replicas) 1 }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ $fullname }}-gateway
+  labels:
+    {{- include "nexus-qa.componentLabels" (dict "root" $root "component" "gateway") | nindent 4 }}
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      {{- include "nexus-qa.componentSelectorLabels" (dict "root" $root "component" "gateway") | nindent 6 }}
+{{- end }}
+
+{{- if gt (int .Values.platformApi.replicas) 1 }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ $fullname }}-platform-api
+  labels:
+    {{- include "nexus-qa.componentLabels" (dict "root" $root "component" "platform-api") | nindent 4 }}
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      {{- include "nexus-qa.componentSelectorLabels" (dict "root" $root "component" "platform-api") | nindent 6 }}
+{{- end }}
+
+{{- if gt (int .Values.orchestrator.replicas) 1 }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ $fullname }}-orchestrator
+  labels:
+    {{- include "nexus-qa.componentLabels" (dict "root" $root "component" "orchestrator") | nindent 4 }}
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      {{- include "nexus-qa.componentSelectorLabels" (dict "root" $root "component" "orchestrator") | nindent 6 }}
+{{- end }}
+
+{{/* ═══════ CPU Engines ═══════ */}}
+{{- $cpuEngines := dict "shield" "shield-engine" "backbone" "backbone-engine" "nerves" "nerves-engine" "legs" "legs-engine" "hands" "hands-engine" "spine" "spine-engine" "mouth" "mouth-engine" }}
+{{- range $key, $component := $cpuEngines }}
+{{- $svc := index $root.Values.engines $key }}
+{{- if and $svc.enabled (gt (int ($svc.replicas | default 1)) 1) }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ $fullname }}-{{ $component }}
+  labels:
+    {{- include "nexus-qa.componentLabels" (dict "root" $root "component" $component) | nindent 4 }}
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      {{- include "nexus-qa.componentSelectorLabels" (dict "root" $root "component" $component) | nindent 6 }}
+{{- end }}
+{{- end }}

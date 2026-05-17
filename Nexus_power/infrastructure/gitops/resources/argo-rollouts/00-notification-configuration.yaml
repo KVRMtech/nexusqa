@@ -1,0 +1,43 @@
+# Argo Rollouts notification routing. The actual webhook URLs are stored
+# in the cloud secret manager and synced into a Kubernetes Secret by an
+# ExternalSecret in the platform Helm chart; this ConfigMap references
+# them via $envsubst at deploy time.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: argo-rollouts-notification-configmap
+  namespace: argo-rollouts
+data:
+  # Trigger conditions. The trigger fires when its `when` expression
+  # evaluates true against the Rollout resource state.
+  trigger.on-rollout-paused: |
+    - send: [slack-release-channel]
+      when: rollout.status.phase == 'Paused'
+  trigger.on-rollout-aborted: |
+    - send: [slack-release-channel, pagerduty-platform]
+      when: rollout.status.phase == 'Degraded'
+  trigger.on-analysis-run-failed: |
+    - send: [slack-release-channel, pagerduty-platform]
+      when: analysisRun.status.phase == 'Failed'
+
+  # Service definitions — the webhook URLs come from a Secret named
+  # `argo-rollouts-notification-secret` provisioned by ESO. The keys in
+  # that Secret (slackToken, pagerdutyToken) are referenced by name here.
+  service.slack: |
+    token: $slackToken
+  service.webhook.pagerduty-platform: |
+    url: https://events.pagerduty.com/v2/enqueue
+    headers:
+      - name: Content-Type
+        value: application/json
+    method: POST
+
+  # Templates for the message body. Generic — no business-logic
+  # hardcoding. The Rollout resource fields are available as template
+  # variables.
+  template.rollout-status: |
+    message: |
+      Rollout `{{ .rollout.metadata.name }}` in `{{ .rollout.metadata.namespace }}`
+      is now `{{ .rollout.status.phase }}`.
+      Revision: `{{ .rollout.status.currentPodHash }}`
+      Time: `{{ .time }}`

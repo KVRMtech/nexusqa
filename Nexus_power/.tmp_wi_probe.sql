@@ -1,0 +1,1 @@
+select column_name from information_schema.columns where table_schema='public' and table_name='workflow_instances' order by ordinal_position; select '---'; select * from workflow_instances where workflow_id = 'c8e34eac-bc1a-44d8-a795-0063092422be';

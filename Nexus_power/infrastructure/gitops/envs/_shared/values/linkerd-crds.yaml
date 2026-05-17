@@ -1,0 +1,5 @@
+# Linkerd CRDs — no configurable values. This file exists so the
+# ApplicationSet template's valueFiles path resolves successfully.
+# Layered after this file, per-env overrides may opt in to specific CRD
+# subsets if the cluster's K8s API server is too old; baseline assumes
+# all CRDs install.

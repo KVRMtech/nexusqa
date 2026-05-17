@@ -1,0 +1,70 @@
+id: confluence
+version: 1.0.0
+display_name: Atlassian Confluence
+vendor: nexus-core
+tier: standard
+
+capabilities:
+  - source
+  - sink
+
+auth:
+  method: oauth2
+  scopes:
+    - read:content:confluence
+    - write:content:confluence
+    - read:space:confluence
+  per_tenant: true
+
+source:
+  events:
+    - id: page.created
+      type: page.created
+      handler: ingest_page
+      description: Confluence page created — ingested via Spine.
+    - id: page.updated
+      type: page.updated
+      handler: ingest_page_update
+      description: Confluence page updated — re-ingested if material change.
+  rate_limit:
+    per_minute: 240
+
+sink:
+  actions:
+    - id: publish_card
+      description: Publish a canonical knowledge_card as a Confluence page.
+      required_params:
+        - space_key
+        - card_id
+        - title
+        - storage_format_body
+      optional_params:
+        - parent_page_id
+        - labels
+      retries: 3
+    - id: update_card_page
+      description: Update an already-published card page (keeps page id).
+      required_params:
+        - page_id
+        - storage_format_body
+      optional_params:
+        - title
+        - labels
+      retries: 3
+  rate_limit:
+    per_minute: 120
+
+routing:
+  tenant_resolver: by_atlassian_cloud_id
+  tenant_cache_seconds: 300
+
+health:
+  endpoint: https://api.atlassian.com/me
+  interval_seconds: 60
+  timeout_seconds: 5
+
+min_platform_version: 1.0.0
+tags:
+  - documentation
+  - integration
+documentation_url: https://developer.atlassian.com/cloud/confluence/rest/v2/

@@ -1,0 +1,63 @@
+id: github
+version: 1.0.0
+display_name: GitHub
+vendor: nexus-core
+tier: standard
+
+capabilities:
+  - sink
+
+auth:
+  method: oauth2
+  scopes:
+    - repo
+    - pull_requests:write
+    - contents:write
+  per_tenant: true
+
+sink:
+  actions:
+    - id: open_pull_request
+      description: Open a PR with the supplied title, body, and patch.
+      required_params:
+        - repo
+        - head_branch
+        - base_branch
+        - title
+      optional_params:
+        - body
+        - reviewers
+        - labels
+        - draft
+      retries: 3
+    - id: comment_on_issue
+      description: Comment on an existing issue or PR.
+      required_params:
+        - repo
+        - issue_number
+        - body
+      retries: 3
+    - id: create_branch
+      description: Create a branch from a base ref.
+      required_params:
+        - repo
+        - branch_name
+        - base_ref
+      retries: 3
+  rate_limit:
+    per_minute: 200
+
+routing:
+  tenant_resolver: by_github_installation_id
+  tenant_cache_seconds: 300
+
+health:
+  endpoint: https://api.github.com/zen
+  interval_seconds: 60
+  timeout_seconds: 5
+
+min_platform_version: 1.0.0
+tags:
+  - source_control
+  - integration
+documentation_url: https://docs.github.com/en/rest

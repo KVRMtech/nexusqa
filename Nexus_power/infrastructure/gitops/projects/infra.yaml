@@ -1,0 +1,59 @@
+# AppProject scoping the infra controllers. Defines exactly which sources
+# may be referenced and which destinations may be deployed-to, so an
+# Application that points at an unexpected chart is rejected by Argo CD
+# at admission time, not at runtime.
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: infra
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  description: |
+    Cluster-level controllers (Argo CD itself, cert-manager, External
+    Secrets Operator, service mesh, Argo Rollouts). Sourced exclusively
+    from approved upstream chart repositories listed in sourceRepos.
+  sourceRepos:
+    - https://argoproj.github.io/argo-helm
+    - https://charts.jetstack.io
+    - https://charts.external-secrets.io
+    - https://helm.linkerd.io/stable
+    - https://helm.linkerd.io/edge
+    - https://prometheus-community.github.io/helm-charts
+    - https://grafana.github.io/helm-charts
+    - https://kyverno.github.io/kyverno
+  destinations:
+    - namespace: argocd
+      server: '*'
+    - namespace: cert-manager
+      server: '*'
+    - namespace: external-secrets
+      server: '*'
+    - namespace: linkerd
+      server: '*'
+    - namespace: linkerd-viz
+      server: '*'
+    - namespace: argo-rollouts
+      server: '*'
+    - namespace: kyverno
+      server: '*'
+    - namespace: kube-system
+      server: '*'
+  clusterResourceWhitelist:
+    - group: '*'
+      kind: '*'
+  namespaceResourceWhitelist:
+    - group: '*'
+      kind: '*'
+  roles:
+    # Sync access for the infra SRE rotation. Grants come from OIDC group
+    # mapping configured in 10-argocd.yaml.
+    - name: sre-sync
+      description: Sync any infra Application
+      policies:
+        - p, proj:infra:sre-sync, applications, sync, infra/*, allow
+        - p, proj:infra:sre-sync, applications, action/*, infra/*, allow
+        - p, proj:infra:sre-sync, applications, override, infra/*, allow
+      groups:
+        - infra-sre

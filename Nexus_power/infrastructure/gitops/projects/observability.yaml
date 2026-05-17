@@ -1,0 +1,34 @@
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: observability
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  description: |
+    Cluster observability stack — kube-prometheus-stack, Loki, Tempo,
+    Grafana. Sources restricted to approved upstream charts. Configuration
+    of dashboards, alert rules, datasources flows from this repo via
+    values overrides under envs/<env>/values/observability.yaml.
+  sourceRepos:
+    - https://prometheus-community.github.io/helm-charts
+    - https://grafana.github.io/helm-charts
+    - ${PLATFORM_REPO_URL}
+  destinations:
+    - namespace: observability
+      server: '*'
+  clusterResourceWhitelist:
+    - group: monitoring.coreos.com
+      kind: '*'
+    - group: rbac.authorization.k8s.io
+      kind: '*'
+  namespaceResourceWhitelist:
+    - group: '*'
+      kind: '*'
+  roles:
+    - name: sre-sync
+      policies:
+        - p, proj:observability:sre-sync, applications, sync, observability/*, allow
+      groups:
+        - infra-sre

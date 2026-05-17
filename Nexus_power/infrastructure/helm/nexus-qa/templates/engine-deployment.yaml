@@ -1,0 +1,315 @@
+{{/*
+=================================================================
+Engine Deployments — one Deployment per enabled engine
+=================================================================
+Each engine block is rendered from .Values.engines.<key>
+GPU engines get tolerations, nodeSelector, and nvidia.com/gpu limits.
+*/}}
+
+{{- $fullname := include "nexus-qa.fullname" . }}
+{{- $root := . }}
+
+{{/* Map of engine key → component name */}}
+{{- $engines := dict
+  "shield"   "shield-engine"
+  "ears"     "ears-engine"
+  "eyes"     "eyes-engine"
+  "heart"    "heart-engine"
+  "backbone" "backbone-engine"
+  "nerves"   "nerves-engine"
+  "legs"     "legs-engine"
+  "hands"    "hands-engine"
+  "spine"    "spine-engine"
+  "mouth"    "mouth-engine"
+  "brain"    "brain-engine"
+}}
+
+{{- range $key, $component := $engines }}
+{{- $svc := index $root.Values.engines $key }}
+{{- if $svc.enabled }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fullname }}-{{ $component }}
+  labels:
+    {{- include "nexus-qa.componentLabels" (dict "root" $root "component" $component) | nindent 4 }}
+spec:
+  replicas: {{ $svc.replicas | default 1 }}
+  selector:
+    matchLabels:
+      {{- include "nexus-qa.componentSelectorLabels" (dict "root" $root "component" $component) | nindent 6 }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        {{- include "nexus-qa.componentLabels" (dict "root" $root "component" $component) | nindent 8 }}
+      annotations:
+        {{- include "nexus-qa.podAnnotations" $root | nindent 8 }}
+    spec:
+      serviceAccountName: {{ $root.Values.serviceAccount.name | default (include "nexus-qa.fullname" $root) }}
+      {{- include "nexus-qa.podSpecCommon" (dict "root" $root "component" $component) | nindent 6 }}
+      {{- with $root.Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- include "nexus-qa.podSecurityContext" $root | nindent 8 }}
+      {{- if $svc.gpu }}
+      tolerations:
+        - key: {{ $root.Values.gpuToleration.key }}
+          operator: {{ $root.Values.gpuToleration.operator }}
+          effect: {{ $root.Values.gpuToleration.effect }}
+        {{- if and $svc.spotTolerant $root.Values.spotToleration }}
+        - key: {{ $root.Values.spotToleration.key }}
+          operator: {{ $root.Values.spotToleration.operator }}
+          {{- if $root.Values.spotToleration.value }}
+          value: {{ $root.Values.spotToleration.value | quote }}
+          {{- end }}
+          effect: {{ $root.Values.spotToleration.effect }}
+        {{- end }}
+      nodeSelector:
+        nvidia.com/gpu.present: "true"
+      {{- end }}
+      {{- if and (or (eq $key "ears") (eq $key "eyes")) $root.Values.modelCache.enabled (default false (dig "modelInit" "enabled" false $svc)) }}
+      initContainers:
+        - name: {{ $component }}-model-init
+          image: {{ include "nexus-qa.image" (dict "root" $root "service" $component "tag" "") }}
+          imagePullPolicy: {{ $root.Values.global.image.pullPolicy }}
+          command:
+            - python
+            - scripts/prewarm_models.py
+            - --mode
+            - {{ default "prewarm" (dig "modelInit" "mode" "prewarm" $svc) | quote }}
+          envFrom:
+            - configMapRef:
+                name: {{ include "nexus-qa.configName" $root }}
+            - secretRef:
+                name: {{ include "nexus-qa.secretName" $root }}
+          env:
+            {{- include "nexus-qa.commonEnv" (dict "root" $root) | nindent 12 }}
+            {{- if eq $key "ears" }}
+            {{- if $root.Values.secrets.earsHfToken }}
+            - name: HF_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "nexus-qa.secretName" $root }}
+                  key: ears-hf-token
+            {{- end }}
+            {{- end }}
+            {{- range $envKey, $envVal := ($svc.env | default dict) }}
+            - name: {{ $envKey }}
+              value: {{ $envVal | quote }}
+            {{- end }}
+          {{- if $svc.resources }}
+          resources:
+            requests:
+              {{- toYaml $svc.resources.requests | nindent 14 }}
+            limits:
+              {{- toYaml $svc.resources.limits | nindent 14 }}
+          {{- end }}
+          securityContext:
+            {{- include "nexus-qa.containerSecurityContext" $root | nindent 12 }}
+          volumeMounts:
+            - name: model-cache
+              mountPath: /app/service/models
+            - name: tmp
+              mountPath: /tmp
+            - name: home-cache
+              mountPath: /home/nexus/.cache
+            - name: var-tmp
+              mountPath: /var/tmp
+      {{- end }}
+      containers:
+        - name: {{ $component }}
+          image: {{ include "nexus-qa.image" (dict "root" $root "service" $component "tag" "") }}
+          imagePullPolicy: {{ $root.Values.global.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ $svc.port }}
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: {{ include "nexus-qa.configName" $root }}
+            - secretRef:
+                name: {{ include "nexus-qa.secretName" $root }}
+          env:
+            {{- include "nexus-qa.commonEnv" (dict "root" $root) | nindent 12 }}
+            {{- include "nexus-qa.storageEnv" $root | nindent 12 }}
+            - name: PORT
+              value: {{ $svc.port | quote }}
+            {{- /* Engine-specific env vars */}}
+            {{- if eq $key "backbone" }}
+            - name: NEO4J_URI
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "nexus-qa.configName" $root }}
+                  key: NEO4J_URI
+            - name: NEO4J_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "nexus-qa.secretName" $root }}
+                  key: neo4j-password
+            - name: MILVUS_HOST
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "nexus-qa.configName" $root }}
+                  key: MILVUS_HOST
+            - name: MILVUS_PORT
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "nexus-qa.configName" $root }}
+                  key: MILVUS_PORT
+            {{- end }}
+            {{- if eq $key "shield" }}
+            {{- if $root.Values.secrets.shieldEncryptionKey }}
+            - name: SHIELD_ENCRYPTION_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "nexus-qa.secretName" $root }}
+                  key: shield-encryption-key
+            {{- end }}
+            {{- end }}
+            {{- if eq $key "ears" }}
+            {{- if $root.Values.secrets.earsHfToken }}
+            - name: HF_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "nexus-qa.secretName" $root }}
+                  key: ears-hf-token
+            {{- end }}
+            {{- end }}
+            {{- /* Inject per-engine custom env */}}
+            {{- range $envKey, $envVal := ($svc.env | default dict) }}
+            - name: {{ $envKey }}
+              value: {{ $envVal | quote }}
+            {{- end }}
+          {{- if $svc.resources }}
+          resources:
+            requests:
+              {{- toYaml $svc.resources.requests | nindent 14 }}
+              {{- if and $svc.gpu (gt (int ($svc.gpuCount | default 1)) 0) }}
+              nvidia.com/gpu: {{ $svc.gpuCount | default 1 | quote }}
+              {{- end }}
+            limits:
+              {{- toYaml $svc.resources.limits | nindent 14 }}
+              {{- if and $svc.gpu (gt (int ($svc.gpuCount | default 1)) 0) }}
+              nvidia.com/gpu: {{ $svc.gpuCount | default 1 | quote }}
+              {{- end }}
+          {{- end }}
+          securityContext:
+            {{- include "nexus-qa.containerSecurityContext" $root | nindent 12 }}
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            failureThreshold: 30
+          volumeMounts:
+            {{- /* Model cache for GPU engines */}}
+            {{- if and $svc.gpu $root.Values.modelCache.enabled }}
+            - name: model-cache
+              {{- if or (eq $key "ears") (eq $key "eyes") }}
+              mountPath: /app/service/models
+              {{- else }}
+              mountPath: /app/models
+              {{- end }}
+            {{- end }}
+            {{- /* Per-engine working-dir mounts. emptyDir (default) or PVC */}}
+            {{- if and (eq $key "ears") (hasKey ($svc.persistence | default dict) "audio") }}
+            - name: audio-storage
+              mountPath: /app/audio_files
+            {{- end }}
+            {{- if and (eq $key "eyes") (hasKey ($svc.persistence | default dict) "frames") }}
+            - name: frame-storage
+              mountPath: /app/frames
+            {{- end }}
+            {{- if and (eq $key "legs") (hasKey ($svc.persistence | default dict) "evidence") }}
+            - name: evidence-storage
+              mountPath: /app/evidence
+            {{- end }}
+            {{- if and (eq $key "spine") (hasKey ($svc.persistence | default dict) "documents") }}
+            - name: document-storage
+              mountPath: /app/documents
+            {{- end }}
+            {{- if and (eq $key "mouth") (hasKey ($svc.persistence | default dict) "reports") }}
+            - name: report-storage
+              mountPath: /app/reports
+            {{- end }}
+            {{- /* GCS workload-identity service-account file mount */}}
+            {{- if and (eq (default "s3" $root.Values.storage.backend) "gcs") (not (default true (default dict (default dict $root.Values.storage).gcs).workloadIdentity)) }}
+            - name: gcs-credentials
+              mountPath: /var/secrets/gcs
+              readOnly: true
+            {{- end }}
+            - name: tmp
+              mountPath: /tmp
+            # Required when readOnlyRootFilesystem is true: a writable
+            # cache directory for libraries that write to $HOME/.cache
+            # (pip, huggingface, EasyOCR runtime caches, etc.).
+            - name: home-cache
+              mountPath: /home/nexus/.cache
+            # Some Python frameworks write to /var/tmp; same rationale.
+            - name: var-tmp
+              mountPath: /var/tmp
+      volumes:
+        {{- if and $svc.gpu $root.Values.modelCache.enabled }}
+        - name: model-cache
+          persistentVolumeClaim:
+            claimName: {{ $fullname }}-model-cache
+        {{- end }}
+        {{- if and (eq $key "ears") (hasKey ($svc.persistence | default dict) "audio") }}
+        {{- include "nexus-qa.persistVolume" (dict "name" "audio-storage" "claimName" (printf "%s-audio-storage" $fullname) "spec" $svc.persistence.audio) | nindent 8 }}
+        {{- end }}
+        {{- if and (eq $key "eyes") (hasKey ($svc.persistence | default dict) "frames") }}
+        {{- include "nexus-qa.persistVolume" (dict "name" "frame-storage" "claimName" (printf "%s-frame-storage" $fullname) "spec" $svc.persistence.frames) | nindent 8 }}
+        {{- end }}
+        {{- if and (eq $key "legs") (hasKey ($svc.persistence | default dict) "evidence") }}
+        {{- include "nexus-qa.persistVolume" (dict "name" "evidence-storage" "claimName" (printf "%s-evidence-storage" $fullname) "spec" $svc.persistence.evidence) | nindent 8 }}
+        {{- end }}
+        {{- if and (eq $key "spine") (hasKey ($svc.persistence | default dict) "documents") }}
+        {{- include "nexus-qa.persistVolume" (dict "name" "document-storage" "claimName" (printf "%s-document-storage" $fullname) "spec" $svc.persistence.documents) | nindent 8 }}
+        {{- end }}
+        {{- if and (eq $key "mouth") (hasKey ($svc.persistence | default dict) "reports") }}
+        {{- include "nexus-qa.persistVolume" (dict "name" "report-storage" "claimName" (printf "%s-report-storage" $fullname) "spec" $svc.persistence.reports) | nindent 8 }}
+        {{- end }}
+        {{- if and (eq (default "s3" $root.Values.storage.backend) "gcs") (not (default true (default dict (default dict $root.Values.storage).gcs).workloadIdentity)) }}
+        - name: gcs-credentials
+          secret:
+            secretName: {{ include "nexus-qa.secretName" $root }}
+            items:
+              - key: gcs-service-account.json
+                path: gcs-service-account.json
+        {{- end }}
+        - name: tmp
+          emptyDir:
+            sizeLimit: 1Gi
+        - name: home-cache
+          emptyDir:
+            sizeLimit: 2Gi
+        - name: var-tmp
+          emptyDir:
+            sizeLimit: 256Mi
+{{- end }}
+{{- end }}

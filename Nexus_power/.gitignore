@@ -1,0 +1,117 @@
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+
+# ===== SECURITY: Secrets & Credentials =====
+# Environment files (NEVER commit secrets)
+.env
+.env.local
+.env.*.local
+.env.ci
+.env.production
+.env.staging
+
+# Token / credential files
+_token.txt
+_token2.txt
+_token*.txt
+**/credentials.txt
+**/secrets.*
+
+# Private keys & certificates
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.cer
+
+# JWT check script (contains secret references)
+_check_jwt.py
+
+# ===== IDE =====
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ===== OS =====
+.DS_Store
+Thumbs.db
+
+# ===== Virtual environments =====
+.venv/
+venv/
+env/
+
+# ===== Docker =====
+docker-compose.override.yml
+
+# ===== Data (large files — not in git) =====
+/data/
+/models/
+*.wav
+*.mp3
+*.mp4
+*.avi
+*.mov
+
+# ===== ML model weights (re-download on pod) =====
+**/models/
+**/.cache/
+**/snapshots/
+*.bin
+*.ckpt
+*.pth
+*.safetensors
+*.onnx
+*.pb
+
+# ===== Eyes-engine extracted frames (test data) =====
+**/data/frames/
+**/data/evidence/
+frames_payload*.json
+zaud.*
+zvid.*
+
+# ===== Logs =====
+*.log
+logs/
+
+# ===== Test artifacts =====
+.coverage
+htmlcov/
+.pytest_cache/
+test_*_output.txt
+test_output*.txt
+test_full*.txt
+failing_*.txt
+
+# ===== Temp directory =====
+/temp/
+
+# ===== Dev scratchpads / diagnostic dumps =====
+# Used by ad-hoc reproduction scripts; never committed to main.
+tmp_*.py
+tmp_*/
+**/tmp_*.py
+**/tmp_*/
+frames_payload_raw.json
+**/frames_payload_raw.json
+**/contact_sheet*.jpg
+**/thumb_*.jpg
+
+# ===== Node (dashboard/client) =====
+node_modules/
+.next/
+
+# ===== Database =====
+*.db
+*.sqlite
+*.sqlite3

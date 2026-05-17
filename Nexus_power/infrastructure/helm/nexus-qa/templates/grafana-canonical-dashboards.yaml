@@ -1,0 +1,296 @@
+{{/*
+=================================================================
+Grafana dashboards for the canonical processing pipeline
+=================================================================
+Three operator-facing dashboards. The Grafana sidecar (already wired
+in monitoring.yaml) picks up ConfigMaps labelled grafana_dashboard=1
+and mounts them automatically.
+
+  1. canonical-pipeline   workflow E2E + per-step latency + reliability
+  2. canonical-queues     per-lane Redis stream depth + consumer count
+                          + DLQ + KEDA scale events
+  3. canonical-engines    per-engine in-flight, restart count, GPU
+                          saturation, vector store health
+
+Gated on monitoring.grafana.dashboards.canonical.enabled — flip off if
+the cluster doesn't run Grafana via this chart.
+*/}}
+
+{{- if and .Values.monitoring.grafana .Values.monitoring.grafana.enabled }}
+{{- if .Values.monitoring.grafana.dashboards }}
+{{- if .Values.monitoring.grafana.dashboards.canonical }}
+{{- if .Values.monitoring.grafana.dashboards.canonical.enabled }}
+{{- $fullname := include "nexus-qa.fullname" . }}
+{{- $root := . }}
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $fullname }}-grafana-dash-canonical-pipeline
+  labels:
+    {{- include "nexus-qa.componentLabels" (dict "root" $root "component" "grafana") | nindent 4 }}
+    grafana_dashboard: "1"
+data:
+  canonical-pipeline.json: |
+    {
+      "title": "Nexus — Canonical Pipeline",
+      "uid": "nexus-canonical-pipeline",
+      "tags": ["nexus", "workflow", "canonical"],
+      "timezone": "browser",
+      "schemaVersion": 39,
+      "version": 1,
+      "refresh": "30s",
+      "time": { "from": "now-1h", "to": "now" },
+      "templating": {
+        "list": [
+          {
+            "name": "datasource",
+            "type": "datasource",
+            "query": "prometheus",
+            "current": { "selected": false, "text": "Prometheus", "value": "Prometheus" }
+          },
+          {
+            "name": "kind",
+            "type": "query",
+            "datasource": { "type": "prometheus", "uid": "${datasource}" },
+            "query": "label_values(nexus_workflow_created_total, kind)",
+            "includeAll": true, "multi": true
+          }
+        ]
+      },
+      "panels": [
+        {
+          "id": 1,
+          "title": "Workflows created / completed (per minute)",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "targets": [
+            { "expr": "sum by (kind) (rate(nexus_workflow_created_total{kind=~\"$kind\"}[5m])) * 60", "legendFormat": "created/{{ "{{" }}kind{{ "}}" }}" },
+            { "expr": "sum by (kind, status) (rate(nexus_workflow_completed_total{kind=~\"$kind\"}[5m])) * 60", "legendFormat": "{{ "{{" }}status{{ "}}" }}/{{ "{{" }}kind{{ "}}" }}" }
+          ],
+          "fieldConfig": { "defaults": { "unit": "wpm" } }
+        },
+        {
+          "id": 2,
+          "title": "End-to-end workflow latency (p50 / p95 / p99)",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "targets": [
+            { "expr": "histogram_quantile(0.50, sum by (kind, le) (rate(nexus_workflow_duration_seconds_bucket{kind=~\"$kind\",status=\"success\"}[10m])))", "legendFormat": "p50/{{ "{{" }}kind{{ "}}" }}" },
+            { "expr": "histogram_quantile(0.95, sum by (kind, le) (rate(nexus_workflow_duration_seconds_bucket{kind=~\"$kind\",status=\"success\"}[10m])))", "legendFormat": "p95/{{ "{{" }}kind{{ "}}" }}" },
+            { "expr": "histogram_quantile(0.99, sum by (kind, le) (rate(nexus_workflow_duration_seconds_bucket{kind=~\"$kind\",status=\"success\"}[10m])))", "legendFormat": "p99/{{ "{{" }}kind{{ "}}" }}" }
+          ],
+          "fieldConfig": { "defaults": { "unit": "s" } }
+        },
+        {
+          "id": 3,
+          "title": "Step duration p95 (by engine/step)",
+          "type": "heatmap",
+          "gridPos": { "h": 10, "w": 24, "x": 0, "y": 8 },
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "targets": [
+            { "expr": "histogram_quantile(0.95, sum by (engine, step, le) (rate(nexus_workflow_step_duration_seconds_bucket{status=\"success\"}[5m])))", "legendFormat": "{{ "{{" }}engine{{ "}}" }}.{{ "{{" }}step{{ "}}" }}", "format": "heatmap" }
+          ],
+          "fieldConfig": { "defaults": { "unit": "s" } }
+        },
+        {
+          "id": 4,
+          "title": "Step failure rate (last 5m)",
+          "type": "stat",
+          "gridPos": { "h": 6, "w": 8, "x": 0, "y": 18 },
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "targets": [
+            { "expr": "sum(rate(nexus_workflow_step_completed_total{status=\"failed\"}[5m])) / clamp_min(sum(rate(nexus_workflow_step_completed_total[5m])), 0.001)", "legendFormat": "failure rate" }
+          ],
+          "fieldConfig": { "defaults": { "unit": "percentunit", "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "yellow", "value": 0.02 }, { "color": "red", "value": 0.10 } ] } } }
+        },
+        {
+          "id": 5,
+          "title": "In-flight workflows (by kind)",
+          "type": "timeseries",
+          "gridPos": { "h": 6, "w": 8, "x": 8, "y": 18 },
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "targets": [
+            { "expr": "sum by (kind) (nexus_workflow_in_flight{kind=~\"$kind\"})", "legendFormat": "{{ "{{" }}kind{{ "}}" }}" }
+          ]
+        },
+        {
+          "id": 6,
+          "title": "Orphan recoveries (sweeper-driven)",
+          "type": "timeseries",
+          "gridPos": { "h": 6, "w": 8, "x": 16, "y": 18 },
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "targets": [
+            { "expr": "increase(nexus_workflow_orphans_recovered_total[5m])", "legendFormat": "orphans" }
+          ]
+        }
+      ]
+    }
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $fullname }}-grafana-dash-canonical-queues
+  labels:
+    {{- include "nexus-qa.componentLabels" (dict "root" $root "component" "grafana") | nindent 4 }}
+    grafana_dashboard: "1"
+data:
+  canonical-queues.json: |
+    {
+      "title": "Nexus — Canonical Queues",
+      "uid": "nexus-canonical-queues",
+      "tags": ["nexus", "workflow", "redis"],
+      "timezone": "browser",
+      "schemaVersion": 39,
+      "version": 1,
+      "refresh": "30s",
+      "time": { "from": "now-1h", "to": "now" },
+      "templating": {
+        "list": [
+          { "name": "datasource", "type": "datasource", "query": "prometheus" }
+        ]
+      },
+      "panels": [
+        {
+          "id": 1,
+          "title": "Pending entries per lane (XLEN)",
+          "type": "timeseries",
+          "gridPos": { "h": 10, "w": 24, "x": 0, "y": 0 },
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "targets": [
+            { "expr": "max by (key) (redis_stream_length{key=~\"nexus:queue:.*\"})", "legendFormat": "{{ "{{" }}key{{ "}}" }}" }
+          ],
+          "alert": null,
+          "fieldConfig": { "defaults": { "unit": "short", "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "yellow", "value": 100 }, { "color": "red", "value": 1000 } ] } } }
+        },
+        {
+          "id": 2,
+          "title": "Consumers attached per lane",
+          "type": "table",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 10 },
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "targets": [
+            { "expr": "max by (key) (redis_stream_groups_consumers{key=~\"nexus:queue:.*\"})", "legendFormat": "{{ "{{" }}key{{ "}}" }}", "instant": true }
+          ]
+        },
+        {
+          "id": 3,
+          "title": "DLQ depth",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 10 },
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "targets": [
+            { "expr": "max by (lane) (nexus_workflow_dlq_depth)", "legendFormat": "{{ "{{" }}lane{{ "}}" }}" }
+          ],
+          "fieldConfig": { "defaults": { "unit": "short", "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "red", "value": 1 } ] } } }
+        },
+        {
+          "id": 4,
+          "title": "KEDA scale events (replica count by deployment)",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 24, "x": 0, "y": 18 },
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "targets": [
+            { "expr": "max by (deployment) (kube_deployment_status_replicas{deployment=~\".*-engine\"})", "legendFormat": "{{ "{{" }}deployment{{ "}}" }}" }
+          ]
+        }
+      ]
+    }
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $fullname }}-grafana-dash-canonical-engines
+  labels:
+    {{- include "nexus-qa.componentLabels" (dict "root" $root "component" "grafana") | nindent 4 }}
+    grafana_dashboard: "1"
+data:
+  canonical-engines.json: |
+    {
+      "title": "Nexus — Canonical Engines",
+      "uid": "nexus-canonical-engines",
+      "tags": ["nexus", "workflow", "engines"],
+      "timezone": "browser",
+      "schemaVersion": 39,
+      "version": 1,
+      "refresh": "30s",
+      "time": { "from": "now-1h", "to": "now" },
+      "templating": {
+        "list": [
+          { "name": "datasource", "type": "datasource", "query": "prometheus" },
+          {
+            "name": "engine",
+            "type": "query",
+            "datasource": { "type": "prometheus", "uid": "${datasource}" },
+            "query": "label_values(nexus_workflow_step_completed_total, engine)",
+            "includeAll": true, "multi": true
+          }
+        ]
+      },
+      "panels": [
+        {
+          "id": 1,
+          "title": "Engine throughput (steps/min)",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "targets": [
+            { "expr": "sum by (engine, status) (rate(nexus_workflow_step_completed_total{engine=~\"$engine\"}[5m])) * 60", "legendFormat": "{{ "{{" }}engine{{ "}}" }}/{{ "{{" }}status{{ "}}" }}" }
+          ]
+        },
+        {
+          "id": 2,
+          "title": "GPU queue depth (ears/eyes/spine)",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "targets": [
+            { "expr": "max by (service) (ears_gpu_queue_depth)", "legendFormat": "ears" },
+            { "expr": "max by (service) (eyes_gpu_queue_depth)", "legendFormat": "eyes" },
+            { "expr": "max by (service) (spine_gpu_queue_depth)", "legendFormat": "spine" }
+          ]
+        },
+        {
+          "id": 3,
+          "title": "Pod restarts (last 15m)",
+          "type": "table",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "targets": [
+            { "expr": "sum by (pod) (increase(kube_pod_container_status_restarts_total{namespace=\"{{ .Release.Namespace }}\"}[15m]))", "legendFormat": "{{ "{{" }}pod{{ "}}" }}", "instant": true }
+          ],
+          "fieldConfig": { "defaults": { "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "yellow", "value": 1 }, { "color": "red", "value": 3 } ] } } }
+        },
+        {
+          "id": 4,
+          "title": "Backbone vector_store mode",
+          "type": "stat",
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "targets": [
+            { "expr": "count(milvus_num_collections{}) or vector(0)", "legendFormat": "milvus collections" }
+          ],
+          "fieldConfig": { "defaults": { "thresholds": { "mode": "absolute", "steps": [ { "color": "red", "value": null }, { "color": "green", "value": 1 } ] } } }
+        },
+        {
+          "id": 5,
+          "title": "Step attempts distribution (per step)",
+          "type": "heatmap",
+          "gridPos": { "h": 10, "w": 24, "x": 0, "y": 16 },
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "targets": [
+            { "expr": "sum by (engine, step, le) (rate(nexus_workflow_step_attempts_bucket[5m]))", "legendFormat": "{{ "{{" }}engine{{ "}}" }}.{{ "{{" }}step{{ "}}" }}", "format": "heatmap" }
+          ]
+        }
+      ]
+    }
+
+{{- end }}
+{{- end }}
+{{- end }}
+{{- end }}

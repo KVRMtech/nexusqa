@@ -1,0 +1,18 @@
+# Dev environment metadata. The Argo CD cluster secret for a dev cluster
+# carries label env=dev and annotation platform-target-revision=<branch>.
+# This file documents the intended values; the bootstrap step writes
+# them to the actual cluster secret in Argo CD.
+env: dev
+# Branch tracked for auto-sync. A merge to main reaches dev clusters
+# within ~3 minutes (Argo CD default poll).
+targetRevision: main
+syncMode: automated
+allowPrune: true
+allowSelfHeal: true
+# Domain conventions for ingress hostnames. Used as a substitution token
+# in envs/dev/values/platform.yaml; never hardcoded in chart templates.
+domain: dev.platform.example.com
+# Region tag for Postgres / S3 / KMS resolution by ESO. Mapped to the
+# cloud provider's region identifier by the ESO ClusterSecretStore for
+# this env (provisioned via Terraform in M0.7).
+region: us-east-1

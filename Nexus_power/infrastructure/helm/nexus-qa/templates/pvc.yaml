@@ -1,0 +1,131 @@
+{{/*
+=================================================================
+PersistentVolumeClaims — only emitted for engines that opt into
+mode: pvc.  Default (mode: emptyDir) makes engines stateless and
+the canonical store is object storage (see values.yaml storage.*).
+=================================================================
+*/}}
+
+{{/* ── Model Cache (shared RWX) ── */}}
+{{- if .Values.modelCache.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "nexus-qa.fullname" . }}-model-cache
+  labels:
+    {{- include "nexus-qa.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    - {{ .Values.modelCache.accessMode | default "ReadWriteMany" }}
+  {{- if .Values.global.storageClass }}
+  storageClassName: {{ .Values.global.storageClass | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.modelCache.size }}
+{{- end }}
+
+{{/* ── Ears Audio Storage (PVC mode only) ── */}}
+{{- if and .Values.engines.ears.enabled (eq (dig "persistence" "audio" "mode" "emptyDir" .Values.engines.ears) "pvc") }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "nexus-qa.fullname" . }}-audio-storage
+  labels:
+    {{- include "nexus-qa.componentLabels" (dict "root" . "component" "ears-engine") | nindent 4 }}
+    nexus-qa.io/storage-mode-pvc-opt-in: "true"
+spec:
+  accessModes:
+    - ReadWriteOnce
+  {{- if .Values.global.storageClass }}
+  storageClassName: {{ .Values.global.storageClass | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.engines.ears.persistence.audio.size }}
+{{- end }}
+
+{{/* ── Eyes Frame Storage (PVC mode only) ── */}}
+{{- if and .Values.engines.eyes.enabled (eq (dig "persistence" "frames" "mode" "emptyDir" .Values.engines.eyes) "pvc") }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "nexus-qa.fullname" . }}-frame-storage
+  labels:
+    {{- include "nexus-qa.componentLabels" (dict "root" . "component" "eyes-engine") | nindent 4 }}
+    nexus-qa.io/storage-mode-pvc-opt-in: "true"
+spec:
+  accessModes:
+    - ReadWriteOnce
+  {{- if .Values.global.storageClass }}
+  storageClassName: {{ .Values.global.storageClass | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.engines.eyes.persistence.frames.size }}
+{{- end }}
+
+{{/* ── Legs Evidence Storage (PVC mode only) ── */}}
+{{- if and .Values.engines.legs.enabled (eq (dig "persistence" "evidence" "mode" "emptyDir" .Values.engines.legs) "pvc") }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "nexus-qa.fullname" . }}-evidence-storage
+  labels:
+    {{- include "nexus-qa.componentLabels" (dict "root" . "component" "legs-engine") | nindent 4 }}
+    nexus-qa.io/storage-mode-pvc-opt-in: "true"
+spec:
+  accessModes:
+    - ReadWriteOnce
+  {{- if .Values.global.storageClass }}
+  storageClassName: {{ .Values.global.storageClass | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.engines.legs.persistence.evidence.size }}
+{{- end }}
+
+{{/* ── Spine Document Storage (PVC mode only) ── */}}
+{{- if and .Values.engines.spine.enabled (eq (dig "persistence" "documents" "mode" "emptyDir" .Values.engines.spine) "pvc") }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "nexus-qa.fullname" . }}-document-storage
+  labels:
+    {{- include "nexus-qa.componentLabels" (dict "root" . "component" "spine-engine") | nindent 4 }}
+    nexus-qa.io/storage-mode-pvc-opt-in: "true"
+spec:
+  accessModes:
+    - ReadWriteOnce
+  {{- if .Values.global.storageClass }}
+  storageClassName: {{ .Values.global.storageClass | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.engines.spine.persistence.documents.size }}
+{{- end }}
+
+{{/* ── Mouth Report Storage (PVC mode only) ── */}}
+{{- if and .Values.engines.mouth.enabled (eq (dig "persistence" "reports" "mode" "emptyDir" .Values.engines.mouth) "pvc") }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "nexus-qa.fullname" . }}-report-storage
+  labels:
+    {{- include "nexus-qa.componentLabels" (dict "root" . "component" "mouth-engine") | nindent 4 }}
+    nexus-qa.io/storage-mode-pvc-opt-in: "true"
+spec:
+  accessModes:
+    - ReadWriteOnce
+  {{- if .Values.global.storageClass }}
+  storageClassName: {{ .Values.global.storageClass | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.engines.mouth.persistence.reports.size }}
+{{- end }}

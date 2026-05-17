@@ -1,0 +1,58 @@
+# KEDA — shared baseline.
+#
+# KEDA scales Deployments based on external triggers (Redis Streams XLEN
+# for the canonical workflow queues). It replaces HPA + Prometheus
+# Adapter for queue-driven scaling; the Argo Rollouts replicas under
+# canary remain HPA-driven (Rollouts works with both).
+
+installCRDs: true
+
+operator:
+  replicaCount: 2
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      memory: 512Mi
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    seccompProfile:
+      type: RuntimeDefault
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop: [ALL]
+
+metricsServer:
+  replicaCount: 2
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      memory: 512Mi
+
+webhooks:
+  enabled: true
+  replicaCount: 2
+
+prometheus:
+  metricServer:
+    enabled: true
+  operator:
+    enabled: true
+  webhooks:
+    enabled: true
+  podMonitor:
+    enabled: true
+
+topologySpreadConstraints:
+  - maxSkew: 1
+    topologyKey: topology.kubernetes.io/zone
+    whenUnsatisfiable: ScheduleAnyway
+    labelSelector:
+      matchLabels:
+        app.kubernetes.io/name: keda-operator

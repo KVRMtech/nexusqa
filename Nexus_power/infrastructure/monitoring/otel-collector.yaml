@@ -1,0 +1,47 @@
+# OpenTelemetry Collector Configuration
+# Receives traces from all Nexus engines and forwards to Tempo
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: "0.0.0.0:4317"
+      http:
+        endpoint: "0.0.0.0:4318"
+
+processors:
+  batch:
+    timeout: 5s
+    send_batch_size: 1024
+    send_batch_max_size: 2048
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 512
+    spike_limit_mib: 128
+  resource:
+    attributes:
+      - key: deployment.environment
+        value: "production"
+        action: upsert
+
+exporters:
+  otlp/tempo:
+    endpoint: "tempo:4317"
+    tls:
+      insecure: true
+  logging:
+    loglevel: warn
+
+extensions:
+  health_check:
+    endpoint: "0.0.0.0:13133"
+  zpages:
+    endpoint: "0.0.0.0:55679"
+
+service:
+  extensions: [health_check, zpages]
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, batch, resource]
+      exporters: [otlp/tempo, logging]

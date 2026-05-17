@@ -1,0 +1,454 @@
+# ═══════════════════════════════════════════════════════════════
+# Nexus QA — Production Environment Overrides
+# ═══════════════════════════════════════════════════════════════
+# Usage:
+#   helm upgrade --install nexus-qa ./infrastructure/helm/nexus-qa \
+#     --namespace nexus-production --create-namespace \
+#     --values infrastructure/helm/nexus-qa/values-production.yaml \
+#     --set global.image.tag=$TAG \
+#     --set secrets.jwtSecret=$JWT_SECRET \
+#     --set secrets.postgresPassword=$PG_PASS \
+#     --set secrets.neo4jPassword=$NEO4J_PASS
+# ═══════════════════════════════════════════════════════════════
+
+config:
+  nexusEnv: production
+  logLevel: WARNING
+
+# ─── Production LLM Tiering (activate with secrets + endpoints) ─────────
+# The chart now supports full Tier 1 / Tier 2 / Tier 3 wiring for Brain
+# and Heart. Keep provider/model selection in values and inject API keys
+# via Secret or ExternalSecret.
+models:
+  heart:
+    localProvider: ollama
+    localModel: llama3.1:70b
+    tier1:
+      provider: azure
+      model: gpt-4o
+      azureEndpoint: ""
+      azureDeployment: ""
+      azureApiVersion: "2024-06-01"
+      timeout: 90
+      maxRetries: 2
+    tier2:
+      provider: openai
+      model: gpt-4o
+      timeout: 90
+      maxRetries: 2
+  brain:
+    localProvider: ollama
+    localModel: llama3.1:70b
+    tier1:
+      provider: anthropic
+      model: claude-opus-4-20250514
+      timeout: 120
+      maxRetries: 2
+    tier2:
+      provider: openai
+      model: gpt-4o
+      timeout: 90
+      maxRetries: 2
+
+# ─── Platform Services: HA replicas + autoscaling ─────────────
+authService:
+  replicas: 3
+  autoscaling:
+    enabled: true
+    minReplicas: 3
+    maxReplicas: 8
+    targetCPU: 65
+
+gateway:
+  replicas: 3
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: "2"
+      memory: 2Gi
+  autoscaling:
+    enabled: true
+    minReplicas: 3
+    maxReplicas: 15
+    targetCPU: 60
+
+platformApi:
+  replicas: 3
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: "2"
+      memory: 2Gi
+  autoscaling:
+    enabled: true
+    minReplicas: 3
+    maxReplicas: 10
+    targetCPU: 65
+
+orchestrator:
+  replicas: 3
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: "2"
+      memory: 4Gi
+  autoscaling:
+    enabled: true
+    minReplicas: 3
+    maxReplicas: 12
+    targetCPU: 65
+
+# ─── Engines: production-grade ────────────────────────────────
+engines:
+  shield:
+    replicas: 3
+    resources:
+      requests:
+        cpu: 500m
+        memory: 1Gi
+      limits:
+        cpu: "2"
+        memory: 2Gi
+
+  ears:
+    replicas: 3
+    gpu: true
+    gpuCount: 1
+    autoscaling:
+      enabled: true
+      minReplicas: 3
+      maxReplicas: 10
+      targetQueueDepth: 2   # Scale up when >2 jobs per replica
+    env:
+      ENGINE_MODE: worker    # Production: dedicated GPU worker pods
+      WHISPER_DEVICE: cuda
+      WHISPER_COMPUTE_TYPE: float16
+    persistence:
+      audio:
+        size: 100Gi
+
+  eyes:
+    replicas: 2
+    gpu: true
+    gpuCount: 1
+    autoscaling:
+      enabled: true
+      minReplicas: 2
+      maxReplicas: 8
+      targetQueueDepth: 2
+    env:
+      ENGINE_MODE: worker
+      VISION_DEVICE: cuda
+    persistence:
+      frames:
+        size: 100Gi
+
+  heart:
+    replicas: 2
+    gpu: true
+    gpuCount: 1
+    autoscaling:
+      enabled: true
+      minReplicas: 2
+      maxReplicas: 5
+      targetCPU: 65
+    resources:
+      requests:
+        cpu: "4"
+        memory: 16Gi
+      limits:
+        cpu: "8"
+        memory: 64Gi
+    env:
+      ENGINE_MODE: hybrid    # Heart is sync — same pod serves API + processes
+      LLM_DEVICE: cuda
+      HEART_GPU_CONCURRENCY: "2"
+
+  backbone:
+    replicas: 3
+    resources:
+      requests:
+        cpu: 500m
+        memory: 1Gi
+      limits:
+        cpu: "2"
+        memory: 4Gi
+    env:
+      # Prod must never silently fall back to the in-memory vector store —
+      # that would break tenant search with zero alerts. If Milvus is
+      # unreachable, backbone refuses to start and KEDA/Argo Rollouts will
+      # block the rollout. Set to "true" in an emergency override only.
+      NEXUS_ALLOW_DEGRADED_MODE: "false"
+
+  nerves:
+    replicas: 3
+
+  legs:
+    replicas: 3
+    resources:
+      requests:
+        cpu: "1"
+        memory: 2Gi
+      limits:
+        cpu: "4"
+        memory: 8Gi
+    persistence:
+      evidence:
+        size: 50Gi
+
+  hands:
+    replicas: 3
+
+  spine:
+    replicas: 3
+    resources:
+      requests:
+        cpu: 500m
+        memory: 1Gi
+      limits:
+        cpu: "2"
+        memory: 4Gi
+    persistence:
+      documents:
+        size: 100Gi
+
+  mouth:
+    replicas: 3
+    persistence:
+      reports:
+        size: 50Gi
+
+# ─── Infrastructure: production sizing ────────────────────────
+redis:
+  maxMemory: 2gb
+  sentinel:
+    enabled: true
+    replicas: 3
+  persistence:
+    size: 20Gi
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: "2"
+      memory: 3Gi
+
+postgres:
+  persistence:
+    size: 100Gi
+  resources:
+    requests:
+      cpu: "1"
+      memory: 2Gi
+    limits:
+      cpu: "4"
+      memory: 8Gi
+  # HA via CloudNativePG — primary + 2 sync replicas, automatic
+  # failover. Requires the CNPG operator pre-installed in cnpg-system.
+  # Validate with `kubectl get crd clusters.postgresql.cnpg.io` before
+  # rolling out.
+  cnpg:
+    enabled: true
+    instances: 3
+    minSyncReplicas: 1
+    maxSyncReplicas: 1
+    maxConnections: "400"           # bumped for KEDA-scaled engines
+    sharedBuffers: "2GB"
+    effectiveCacheSize: "6GB"
+    walStorage:
+      size: 50Gi
+      memory: 8Gi
+
+# ─── PgBouncer: enabled in production ────────────────────────
+pgbouncer:
+  enabled: true
+  replicas: 2
+  defaultPoolSize: 100
+  maxClientConn: 2000
+  metrics: true
+  resources:
+    requests:
+      cpu: 200m
+      memory: 128Mi
+    limits:
+      cpu: "1"
+      memory: 512Mi
+
+neo4j:
+  heapMaxSize: 4G
+  pagecacheSize: 2G
+  persistence:
+    dataSize: 100Gi
+    logsSize: 20Gi
+  resources:
+    requests:
+      cpu: "2"
+      memory: 4Gi
+    limits:
+      cpu: "4"
+      memory: 8Gi
+
+milvus:
+  persistence:
+    size: 100Gi
+  resources:
+    requests:
+      cpu: "2"
+      memory: 4Gi
+    limits:
+      cpu: "4"
+      memory: 8Gi
+
+ollama:
+  gpu:
+    enabled: true
+    count: all
+  persistence:
+    size: 200Gi
+  resources:
+    requests:
+      cpu: "2"
+      memory: 16Gi
+    limits:
+      cpu: "8"
+      memory: 64Gi
+
+# ─── Frontend: HA ─────────────────────────────────────────────
+client:
+  replicas: 3
+
+# ─── Monitoring: full retention ───────────────────────────────
+monitoring:
+  prometheus:
+    retentionDays: 90
+    persistence:
+      size: 200Gi
+    resources:
+      requests:
+        cpu: 500m
+        memory: 2Gi
+      limits:
+        cpu: "2"
+        memory: 4Gi
+
+  grafana:
+    persistence:
+      size: 10Gi
+    # Canonical-pipeline dashboards. Requires ServiceMonitor scraping
+    # the workflow metrics + redis_exporter + milvus exporter.
+    dashboards:
+      canonical:
+        enabled: true
+
+  # Production: observability is mandatory
+  serviceMonitor:
+    enabled: true
+    interval: 15s
+    scrapeTimeout: 10s
+    additionalLabels:
+      release: kube-prometheus-stack
+
+  alerts:
+    enabled: true
+    # Workflow-plane alerts (queue backup, DLQ growth, step failure rate,
+    # orphan recovery spikes, deadline breaches, vector store down).
+    workflow:
+      enabled: true
+      queueBackupThreshold: 1000
+      stepP95Thresholds: "vector(600)"
+    additionalLabels:
+      release: kube-prometheus-stack
+
+modelCache:
+  size: 200Gi
+
+# ─── Ingress: enabled with TLS ───────────────────────────────
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/proxy-body-size: "100m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "300"
+  host: nexus-qa.example.com
+  tls:
+    enabled: true
+    secretName: nexus-qa-tls
+
+# ─── Network Policies: enabled ────────────────────────────────
+networkPolicies:
+  enabled: true
+
+# ─── GPU Queue Metrics: required for GPU auto-scaling ─────────
+queueMetrics:
+  enabled: true
+  port: 9191
+  intervalSeconds: 10
+  prometheusAdapter:
+    enabled: true
+
+# ─── Queue-driven autoscaling (KEDA) — architect followup #2 ──
+# Production posture for 1000+/hr canonical pipeline traffic.
+# Engines scale on Redis Stream XLEN (pending entries) via KEDA.
+# Standard lanes kept warm with min=1; priority lanes start at
+# min=1 too because cold-start of EasyOCR/LLaVA workers is 30-90s
+# and premium tenants can't wait. Operators with cost constraints
+# can drop priority engines to min=0 once they've proven cold-start
+# latency is acceptable.
+#
+# Worker deployments must follow the convention KEDA expects:
+#   nexus-<engine>-<kind>            standard lane
+#   nexus-<engine>-<kind>-priority   priority lane (Phase 6)
+autoscaling:
+  keda:
+    enabled: true
+    redisAddress: ""           # falls back to <release>-redis:6379
+    redisDbIndex: 3
+    redisPasswordSecret: ""
+    redisPasswordKey: redis-password
+    components:
+      - engine: eyes
+        kinds: [cpu, gpu]
+        minReplicas: 1
+        maxReplicas: 12
+        pendingEntries_cpu: 8
+        pendingEntries_gpu: 2
+        pollingInterval: 15
+        cooldownPeriod: 300
+      - engine: ears
+        kinds: [cpu, gpu]
+        minReplicas: 1
+        maxReplicas: 8
+        pendingEntries_cpu: 8
+        pendingEntries_gpu: 2
+        pollingInterval: 15
+        cooldownPeriod: 300
+      - engine: spine
+        kinds: [cpu]
+        minReplicas: 2
+        maxReplicas: 10
+        pendingEntries_cpu: 16
+        pollingInterval: 15
+        cooldownPeriod: 180
+      - engine: shield
+        kinds: [cpu]
+        minReplicas: 1
+        maxReplicas: 6
+        pendingEntries_cpu: 16
+        pollingInterval: 15
+        cooldownPeriod: 300
+      - engine: backbone
+        kinds: [cpu]
+        minReplicas: 1
+        maxReplicas: 4
+        pendingEntries_cpu: 8
+        pollingInterval: 30
+        cooldownPeriod: 600

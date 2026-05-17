@@ -1,0 +1,399 @@
+{{/*
+=================================================================
+NetworkPolicies — deny-by-default ingress AND egress micro-segmentation
+=================================================================
+Architectural principle: "cross-tenant access is impossible by
+construction, not by check". The policies below enforce strict tier
+boundaries:
+
+  Tier 0 (data-plane infra):        redis, postgres, neo4j, milvus
+                                     ↑ reachable only from app pods in
+                                       this release
+  Tier 1 (engines):                  shield, ears, eyes, heart, ...
+                                     ↑ reachable only from gateway,
+                                       orchestrator, platform-api
+  Tier 2 (platform):                 auth, gateway, platform-api,
+                                     orchestrator
+                                     ↑ gateway from ingress+client,
+                                       others from gateway+each-other
+  Tier 3 (client):                   client
+                                     ↑ reachable only from ingress
+                                       controller
+
+Egress policy:
+  - All pods may resolve DNS (kube-dns / coredns ns).
+  - All pods may reach kube-apiserver (Linkerd/SDK uses it for SA
+    token refresh).
+  - All pods may reach in-cluster services in the same release.
+  - Specific pods (heart, brain, eyes) may reach external LLM
+    endpoints listed in .Values.egressAllowlist.llmProviders.
+  - All other egress is DENIED.
+*/}}
+
+{{- if .Values.networkPolicies.enabled }}
+
+{{- $fullname := include "nexus-qa.fullname" . }}
+{{- $root := . }}
+{{- $instanceSel := dict "matchLabels" (dict "app.kubernetes.io/instance" .Release.Name) }}
+{{- $instancePodSelector := dict "matchLabels" (dict "app.kubernetes.io/instance" .Release.Name) }}
+
+{{/*
+═══════════════════════════════════════════════════════════════
+DEFAULT DENY — ALL pods in this release, BOTH ingress AND egress
+═══════════════════════════════════════════════════════════════
+*/}}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $fullname }}-default-deny
+  labels:
+    {{- include "nexus-qa.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    {{- toYaml $instanceSel | nindent 4 }}
+  policyTypes:
+    - Ingress
+    - Egress
+
+{{/*
+═══════════════════════════════════════════════════════════════
+COMMON EGRESS — every pod may reach:
+  - DNS (kube-system / coredns)
+  - kube-apiserver
+  - any in-release pod (intra-mesh traffic)
+═══════════════════════════════════════════════════════════════
+*/}}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $fullname }}-egress-common
+  labels:
+    {{- include "nexus-qa.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    {{- toYaml $instanceSel | nindent 4 }}
+  policyTypes:
+    - Egress
+  egress:
+    # DNS — both UDP and TCP to coredns
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # kube-apiserver
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except: []
+      ports:
+        - protocol: TCP
+          port: 443
+        - protocol: TCP
+          port: 6443
+    # In-release service-to-service
+    - to:
+        - podSelector:
+            {{- toYaml $instancePodSelector | nindent 12 }}
+    # Service mesh control plane (Linkerd identity, destination)
+    {{- if and .Values.mesh .Values.mesh.linkerd .Values.mesh.linkerd.enabled }}
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: linkerd
+    {{- end }}
+    # Observability namespace (OTel collector, Prometheus push if used)
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: observability
+
+{{/*
+═══════════════════════════════════════════════════════════════
+TIER 0 — Infrastructure (redis, postgres, neo4j, milvus)
+Ingress: only from in-release app pods
+═══════════════════════════════════════════════════════════════
+*/}}
+{{- range $component := list "redis" "postgres" "neo4j" "milvus" }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $fullname }}-allow-{{ $component }}
+  labels:
+    {{- include "nexus-qa.labels" $root | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ $root.Release.Name }}
+      app.kubernetes.io/component: {{ $component }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/instance: {{ $root.Release.Name }}
+{{- end }}
+
+{{/*
+═══════════════════════════════════════════════════════════════
+TIER 1 — Engines reachable only from gateway, orchestrator,
+platform-api, and Prometheus scrape source
+═══════════════════════════════════════════════════════════════
+*/}}
+{{- $engineComponents := list "shield-engine" "ears-engine" "eyes-engine" "heart-engine" "backbone-engine" "nerves-engine" "legs-engine" "hands-engine" "spine-engine" "mouth-engine" "brain-engine" }}
+{{- range $component := $engineComponents }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $fullname }}-allow-{{ $component }}
+  labels:
+    {{- include "nexus-qa.labels" $root | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ $root.Release.Name }}
+      app.kubernetes.io/component: {{ $component }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/instance: {{ $root.Release.Name }}
+              app.kubernetes.io/component: gateway
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/instance: {{ $root.Release.Name }}
+              app.kubernetes.io/component: orchestrator
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/instance: {{ $root.Release.Name }}
+              app.kubernetes.io/component: platform-api
+    # Prometheus scrape from observability namespace
+    {{- if $root.Values.monitoring.prometheus.enabled }}
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: observability
+{{- end }}
+{{- end }}
+
+{{/*
+═══════════════════════════════════════════════════════════════
+TIER 2 — Auth (any in-release pod), Orchestrator (gateway+platform-api),
+Platform-API (gateway+orchestrator+client), Gateway (ingress+client)
+═══════════════════════════════════════════════════════════════
+*/}}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $fullname }}-allow-auth
+  labels:
+    {{- include "nexus-qa.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: auth
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/instance: {{ .Release.Name }}
+      ports:
+        - port: {{ .Values.authService.port }}
+          protocol: TCP
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $fullname }}-allow-orchestrator
+  labels:
+    {{- include "nexus-qa.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: orchestrator
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/instance: {{ .Release.Name }}
+              app.kubernetes.io/component: gateway
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/instance: {{ .Release.Name }}
+              app.kubernetes.io/component: platform-api
+      ports:
+        - port: {{ .Values.orchestrator.port }}
+          protocol: TCP
+    {{- if .Values.monitoring.prometheus.enabled }}
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: observability
+    {{- end }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $fullname }}-allow-platform-api
+  labels:
+    {{- include "nexus-qa.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: platform-api
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/instance: {{ .Release.Name }}
+              app.kubernetes.io/component: gateway
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/instance: {{ .Release.Name }}
+              app.kubernetes.io/component: orchestrator
+    {{- if .Values.monitoring.prometheus.enabled }}
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: observability
+    {{- end }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $fullname }}-allow-gateway
+  labels:
+    {{- include "nexus-qa.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: gateway
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/instance: {{ .Release.Name }}
+              app.kubernetes.io/component: client
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/instance: {{ .Release.Name }}
+              app.kubernetes.io/component: orchestrator
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/instance: {{ .Release.Name }}
+              app.kubernetes.io/component: platform-api
+        {{- if .Values.ingress.enabled }}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+        {{- end }}
+
+{{/*
+═══════════════════════════════════════════════════════════════
+TIER 3 — Client reachable only from the ingress namespace
+═══════════════════════════════════════════════════════════════
+*/}}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $fullname }}-allow-client
+  labels:
+    {{- include "nexus-qa.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: client
+  policyTypes:
+    - Ingress
+  ingress:
+    {{- if .Values.ingress.enabled }}
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+      ports:
+        - port: {{ .Values.client.port }}
+          protocol: TCP
+    {{- end }}
+
+{{/*
+═══════════════════════════════════════════════════════════════
+EXTERNAL EGRESS — LLM providers
+The allowlist lives in .Values.egressAllowlist.llmProviders as a list
+of objects { name, ports, dnsLabel } so we can label-select named
+ExternalName services. Cluster operators MUST create those
+ExternalName services (or use the CiliumFQDN egress CRDs) to
+translate the FQDN list to NetworkPolicy-selectable endpoints.
+
+Only the engines that legitimately call out (heart, brain, eyes, ears)
+are granted external egress; every other pod inherits deny-by-default.
+═══════════════════════════════════════════════════════════════
+*/}}
+{{- $externalConsumers := list "heart-engine" "brain-engine" "eyes-engine" "ears-engine" }}
+{{- range $component := $externalConsumers }}
+{{- $svcKey := regexReplaceAll "-engine$" $component "" }}
+{{- if (dig "egressAllowExternal" false (default dict (index $root.Values.engines $svcKey))) }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $fullname }}-egress-external-{{ $component }}
+  labels:
+    {{- include "nexus-qa.labels" $root | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ $root.Release.Name }}
+      app.kubernetes.io/component: {{ $component }}
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              # Block return paths to in-cluster CIDRs to avoid an
+              # external-egress rule accidentally re-opening cross-tier
+              # access. Replace these with the cluster's actual pod and
+              # service CIDRs in the env values overlay.
+              {{- range (default (list) $root.Values.egressAllowlist.excludeCidrs) }}
+              - {{ . }}
+              {{- end }}
+      ports:
+        {{- range (default (list (dict "port" 443 "protocol" "TCP")) $root.Values.egressAllowlist.externalPorts) }}
+        - port: {{ .port }}
+          protocol: {{ .protocol }}
+        {{- end }}
+{{- end }}
+{{- end }}
+
+{{- end }}

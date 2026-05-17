@@ -1,0 +1,58 @@
+id: email
+version: 1.0.0
+display_name: Email (SES)
+vendor: nexus-core
+tier: standard
+
+capabilities:
+  - source
+  - surface
+
+auth:
+  method: api_key
+  scopes:
+    - ses:SendEmail
+    - ses:SendRawEmail
+  per_tenant: true
+
+source:
+  events:
+    - id: ses.received
+      type: ses.received
+      handler: handle_inbound_email
+      description: SNS notification carrying a SES Receive event.
+  rate_limit:
+    per_minute: 600
+
+surface:
+  inbound:
+    - id: ses.received
+      type: ses.received
+      handler: handle_inbound_email
+  outbound:
+    - id: send_email
+      description: SES SendEmail with threaded In-Reply-To / References headers.
+      required_params:
+        - to_address
+        - subject
+        - html_body
+      optional_params:
+        - text_body
+        - in_reply_to
+        - references
+      retries: 3
+
+routing:
+  tenant_resolver: by_sns_topic_arn
+  tenant_cache_seconds: 300
+
+health:
+  endpoint: https://email.amazonaws.com/health
+  interval_seconds: 60
+  timeout_seconds: 5
+
+min_platform_version: 1.0.0
+tags:
+  - email
+  - integration
+documentation_url: https://docs.aws.amazon.com/ses/

@@ -1,0 +1,94 @@
+# ─────────────────────────────────────────────────────────────
+# Nexus QA Platform — Docker Build Context Exclusions
+# Applied when building base images from the repository root.
+# ─────────────────────────────────────────────────────────────
+
+# Python artefacts
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+.tox/
+htmlcov/
+
+# Test / quality
+tests/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+coverage.xml
+
+# JavaScript / frontend build caches
+node_modules/
+
+# Runtime data (never bake into images)
+data/
+logs/
+
+# Version control
+.git/
+.github/
+
+# IDE / OS
+.vscode/
+.idea/
+*.swp
+*.swo
+Thumbs.db
+Desktop.ini
+
+# Environment (secrets must come via env vars / secrets manager)
+.env
+.env.*
+!.env.example
+
+# Documentation (not needed in images)
+*.md
+LICENSE
+
+# Backup files
+*.bak
+*.bak.py
+**/*.bak
+**/*.bak.py
+
+# ─────────────────────────────────────────────────────────────
+# Dev artefacts that must NEVER end up in build contexts
+# ─────────────────────────────────────────────────────────────
+# Local Python toolchain headers / venv stubs that pollute COPY .
+Include/
+Scripts/
+Lib/
+
+# Scratchpad scripts and payload dumps used while diagnosing prod issues
+tmp_*.py
+**/tmp_*.py
+tmp_*/
+**/tmp_*/
+frames_payload_raw.json
+**/frames_payload_raw.json
+
+# Large media samples — never bake into images
+*.mp4
+*.m4a
+*.wav
+*.mp3
+*.mov
+*.avi
+*.webm
+**/*.mp4
+**/*.m4a
+
+# Frame dump directories (e.g. tmp_video_review/) and any contact sheets
+**/contact_sheet*.jpg
+**/thumb_*.jpg
+
+# Diagnostic scripts live in /scripts — Dockerfiles copy them explicitly
+# when needed.  Keeping them out of base contexts avoids build invalidation
+# every time we add a new diagnostic.
+scripts/
+!scripts/.keep

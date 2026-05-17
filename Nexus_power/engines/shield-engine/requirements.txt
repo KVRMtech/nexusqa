@@ -1,0 +1,2 @@
+# Shield Engine — PII redaction & compliance
+-e ../../sdk/nexus-sdk

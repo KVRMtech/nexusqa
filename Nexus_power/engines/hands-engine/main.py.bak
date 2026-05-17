@@ -1,0 +1,1441 @@
+"""
+Nexus Hands Engine — Synthetic Test Data Generation.
+
+The hands that prepare data before tests run. Insurance testing requires
+a combinatorial explosion of test data:
+
+- Age bands (0-17, 18-25, 26-35, 36-45, 46-55, 56-65, 66-75, 76+)
+- Gender (Male, Female, Non-binary)
+- Tobacco status (Smoker, Non-smoker, Former smoker)
+- State/Jurisdiction (50 states + territories, each with unique regs)
+- Product types (Term, Whole, UL, VUL, IUL, Annuity, etc.)
+- Riders (WOP, ADB, GPO, CIR, COLA, etc.)
+- Health classes (Preferred Plus, Preferred, Standard Plus, Standard, Substandard)
+- Beneficiary types (Individual, Trust, Estate, Charity)
+
+The Hands Engine generates:
+1. PII-safe synthetic applicant profiles
+2. Combinatorial test data sets (boundary values, equivalence classes)
+3. Insurance-specific data (policy numbers, NPN, claim numbers)
+4. Rate table boundary test data
+5. Regulatory-compliant state-specific profiles
+
+All data is SYNTHETIC. No real PII is ever generated.
+Every generated record carries a "synthetic" watermark.
+"""
+
+from __future__ import annotations
+
+import os
+import uuid
+import json
+import time
+import random
+import string
+import hashlib
+import itertools
+from datetime import datetime, date, timezone, timedelta
+from typing import Optional, Any
+from enum import Enum
+
+from fastapi import Depends, HTTPException, BackgroundTasks
+from pydantic import BaseModel, Field
+
+from nexus_sdk import NexusEngine, EngineConfig
+from nexus_sdk.models import (
+    NexusRequest, NexusResponse, JobResponse, JobStatus, Confidence,
+)
+from nexus_sdk.auth import NexusUser, get_current_user
+from nexus_sdk.events import NexusEvent
+
+
+# ─── Configuration ─────────────────────────────────────────────
+
+class HandsConfig(EngineConfig):
+    engine_name: str = "hands"
+    engine_port: int = 8008
+
+    # Generation limits
+    max_records_per_request: int = 10_000
+    max_combinations: int = 50_000
+    default_batch_size: int = 500
+
+    # Synthetic data seed (for reproducibility)
+    random_seed: Optional[int] = None
+
+    # Insurance-specific
+    default_jurisdiction: str = "ALL"
+
+
+# ─── Enums & Constants ────────────────────────────────────────
+
+class Gender(str, Enum):
+    MALE = "male"
+    FEMALE = "female"
+    NON_BINARY = "non_binary"
+
+
+class TobaccoStatus(str, Enum):
+    NON_SMOKER = "non_smoker"
+    SMOKER = "smoker"
+    FORMER_SMOKER = "former_smoker"
+
+
+class HealthClass(str, Enum):
+    PREFERRED_PLUS = "preferred_plus"
+    PREFERRED = "preferred"
+    STANDARD_PLUS = "standard_plus"
+    STANDARD = "standard"
+    SUBSTANDARD_A = "substandard_a"
+    SUBSTANDARD_B = "substandard_b"
+    DECLINE = "decline"
+
+
+class ProductType(str, Enum):
+    TERM_10 = "term_10"
+    TERM_15 = "term_15"
+    TERM_20 = "term_20"
+    TERM_30 = "term_30"
+    WHOLE_LIFE = "whole_life"
+    UNIVERSAL_LIFE = "universal_life"
+    VARIABLE_UL = "variable_universal_life"
+    INDEXED_UL = "indexed_universal_life"
+    FINAL_EXPENSE = "final_expense"
+    ANNUITY_FIXED = "annuity_fixed"
+    ANNUITY_VARIABLE = "annuity_variable"
+    ANNUITY_INDEXED = "annuity_indexed"
+
+
+class RiderType(str, Enum):
+    WAIVER_OF_PREMIUM = "wop"
+    ACCIDENTAL_DEATH = "adb"
+    GUARANTEED_PURCHASE = "gpo"
+    CRITICAL_ILLNESS = "cir"
+    COLA = "cola"
+    CHILD_TERM = "child_term"
+    SPOUSE_TERM = "spouse_term"
+    LONG_TERM_CARE = "ltc"
+    RETURN_OF_PREMIUM = "rop"
+    DISABILITY_INCOME = "disability_income"
+
+
+class DataStrategy(str, Enum):
+    """How to generate the test data."""
+    RANDOM = "random"                  # Random sampling
+    BOUNDARY = "boundary"              # Boundary values (min, max, just above, just below)
+    EQUIVALENCE = "equivalence"        # One from each equivalence class
+    PAIRWISE = "pairwise"              # Pairwise combinatorial (covers all pairs)
+    FULL_COMBINATORIAL = "full_combinatorial"  # All possible combos (careful: explosion)
+    RISK_FOCUSED = "risk_focused"      # Prioritize high-risk / edge-case combos
+
+
+# ─── US States + Insurance Regulatory Data ─────────────────────
+
+US_STATES = {
+    "AL": {"name": "Alabama", "min_age_life": 0, "max_age_life": 99, "free_look_days": 10},
+    "AK": {"name": "Alaska", "min_age_life": 0, "max_age_life": 99, "free_look_days": 20},
+    "AZ": {"name": "Arizona", "min_age_life": 0, "max_age_life": 99, "free_look_days": 10},
+    "AR": {"name": "Arkansas", "min_age_life": 0, "max_age_life": 99, "free_look_days": 10},
+    "CA": {"name": "California", "min_age_life": 0, "max_age_life": 99, "free_look_days": 30},
+    "CO": {"name": "Colorado", "min_age_life": 0, "max_age_life": 99, "free_look_days": 10},
+    "CT": {"name": "Connecticut", "min_age_life": 0, "max_age_life": 99, "free_look_days": 10},
+    "DE": {"name": "Delaware", "min_age_life": 0, "max_age_life": 99, "free_look_days": 10},
+    "FL": {"name": "Florida", "min_age_life": 0, "max_age_life": 99, "free_look_days": 14},
+    "GA": {"name": "Georgia", "min_age_life": 0, "max_age_life": 99, "free_look_days": 10},
+    "HI": {"name": "Hawaii", "min_age_life": 0, "max_age_life": 99, "free_look_days": 10},
+    "ID": {"name": "Idaho", "min_age_life": 0, "max_age_life": 99, "free_look_days": 20},
+    "IL": {"name": "Illinois", "min_age_life": 0, "max_age_life": 99, "free_look_days": 10},
+    "IN": {"name": "Indiana", "min_age_life": 0, "max_age_life": 99, "free_look_days": 10},
+    "IA": {"name": "Iowa", "min_age_life": 0, "max_age_life": 99, "free_look_days": 10},
+    "KS": {"name": "Kansas", "min_age_life": 0, "max_age_life": 99, "free_look_days": 10},
+    "KY": {"name": "Kentucky", "min_age_life": 0, "max_age_life": 99, "free_look_days": 10},
+    "LA": {"name": "Louisiana", "min_age_life": 0, "max_age_life": 99, "free_look_days": 10},
+    "ME": {"name": "Maine", "min_age_life": 0, "max_age_life": 99, "free_look_days": 10},
+    "MD": {"name": "Maryland", "min_age_life": 0, "max_age_life": 99, "free_look_days": 10},
+    "MA": {"name": "Massachusetts", "min_age_life": 0, "max_age_life": 99, "free_look_days": 10},
+    "MI": {"name": "Michigan", "min_age_life": 0, "max_age_life": 99, "free_look_days": 10},
+    "MN": {"name": "Minnesota", "min_age_life": 0, "max_age_life": 99, "free_look_days": 10},
+    "MS": {"name": "Mississippi", "min_age_life": 0, "max_age_life": 99, "free_look_days": 10},
+    "MO": {"name": "Missouri", "min_age_life": 0, "max_age_life": 99, "free_look_days": 10},
+    "MT": {"name": "Montana", "min_age_life": 0, "max_age_life": 99, "free_look_days": 20},
+    "NE": {"name": "Nebraska", "min_age_life": 0, "max_age_life": 99, "free_look_days": 10},
+    "NV": {"name": "Nevada", "min_age_life": 0, "max_age_life": 99, "free_look_days": 10},
+    "NH": {"name": "New Hampshire", "min_age_life": 0, "max_age_life": 99, "free_look_days": 10},
+    "NJ": {"name": "New Jersey", "min_age_life": 0, "max_age_life": 99, "free_look_days": 10},
+    "NM": {"name": "New Mexico", "min_age_life": 0, "max_age_life": 99, "free_look_days": 10},
+    "NY": {"name": "New York", "min_age_life": 0, "max_age_life": 99, "free_look_days": 10},
+    "NC": {"name": "North Carolina", "min_age_life": 0, "max_age_life": 99, "free_look_days": 10},
+    "ND": {"name": "North Dakota", "min_age_life": 0, "max_age_life": 99, "free_look_days": 20},
+    "OH": {"name": "Ohio", "min_age_life": 0, "max_age_life": 99, "free_look_days": 10},
+    "OK": {"name": "Oklahoma", "min_age_life": 0, "max_age_life": 99, "free_look_days": 10},
+    "OR": {"name": "Oregon", "min_age_life": 0, "max_age_life": 99, "free_look_days": 10},
+    "PA": {"name": "Pennsylvania", "min_age_life": 0, "max_age_life": 99, "free_look_days": 10},
+    "RI": {"name": "Rhode Island", "min_age_life": 0, "max_age_life": 99, "free_look_days": 10},
+    "SC": {"name": "South Carolina", "min_age_life": 0, "max_age_life": 99, "free_look_days": 10},
+    "SD": {"name": "South Dakota", "min_age_life": 0, "max_age_life": 99, "free_look_days": 10},
+    "TN": {"name": "Tennessee", "min_age_life": 0, "max_age_life": 99, "free_look_days": 10},
+    "TX": {"name": "Texas", "min_age_life": 0, "max_age_life": 99, "free_look_days": 10},
+    "UT": {"name": "Utah", "min_age_life": 0, "max_age_life": 99, "free_look_days": 10},
+    "VT": {"name": "Vermont", "min_age_life": 0, "max_age_life": 99, "free_look_days": 10},
+    "VA": {"name": "Virginia", "min_age_life": 0, "max_age_life": 99, "free_look_days": 10},
+    "WA": {"name": "Washington", "min_age_life": 0, "max_age_life": 99, "free_look_days": 10},
+    "WV": {"name": "West Virginia", "min_age_life": 0, "max_age_life": 99, "free_look_days": 10},
+    "WI": {"name": "Wisconsin", "min_age_life": 0, "max_age_life": 99, "free_look_days": 10},
+    "WY": {"name": "Wyoming", "min_age_life": 0, "max_age_life": 99, "free_look_days": 10},
+    "DC": {"name": "District of Columbia", "min_age_life": 0, "max_age_life": 99, "free_look_days": 10},
+}
+
+# Standard age bands for Life Insurance testing
+AGE_BANDS = [
+    {"label": "juvenile", "min": 0, "max": 17},
+    {"label": "young_adult", "min": 18, "max": 25},
+    {"label": "adult_26_35", "min": 26, "max": 35},
+    {"label": "adult_36_45", "min": 36, "max": 45},
+    {"label": "adult_46_55", "min": 46, "max": 55},
+    {"label": "adult_56_65", "min": 56, "max": 65},
+    {"label": "senior_66_75", "min": 66, "max": 75},
+    {"label": "senior_76_plus", "min": 76, "max": 99},
+]
+
+# Face amounts with boundary values
+FACE_AMOUNTS = [
+    1_000, 5_000, 10_000, 24_999, 25_000, 25_001,
+    50_000, 99_999, 100_000, 100_001,
+    250_000, 499_999, 500_000, 500_001,
+    1_000_000, 2_000_000, 5_000_000, 10_000_000,
+]
+
+# Premium payment frequencies
+PAYMENT_MODES = ["annual", "semi_annual", "quarterly", "monthly", "monthly_eft"]
+
+# Synthetic first & last names (no real PII)
+SYNTHETIC_FIRST_NAMES = [
+    "TestAlpha", "TestBravo", "TestCharlie", "TestDelta", "TestEcho",
+    "TestFoxtrot", "TestGolf", "TestHotel", "TestIndia", "TestJuliet",
+    "TestKilo", "TestLima", "TestMike", "TestNovember", "TestOscar",
+    "TestPapa", "TestQuebec", "TestRomeo", "TestSierra", "TestTango",
+]
+SYNTHETIC_LAST_NAMES = [
+    "SynthOne", "SynthTwo", "SynthThree", "SynthFour", "SynthFive",
+    "SynthSix", "SynthSeven", "SynthEight", "SynthNine", "SynthTen",
+    "SynthEleven", "SynthTwelve", "SynthThirteen", "SynthFourteen", "SynthFifteen",
+]
+
+
+# ─── Request/Response Models ──────────────────────────────────
+
+class GenerateProfilesRequest(NexusRequest):
+    """Request to generate synthetic applicant profiles."""
+    count: int = Field(default=10, ge=1, le=10_000, description="Number of profiles to generate")
+    product_type: Optional[ProductType] = Field(default=None, description="Target product type")
+    jurisdictions: list[str] = Field(
+        default_factory=list,
+        description="State codes to include (empty = all states)",
+    )
+    age_range: Optional[dict] = Field(
+        default=None, description="Override age range: {'min': 18, 'max': 65}",
+    )
+    include_riders: bool = Field(default=True, description="Include rider selections")
+    include_beneficiaries: bool = Field(default=True, description="Include beneficiary info")
+    strategy: DataStrategy = Field(
+        default=DataStrategy.RANDOM, description="Data generation strategy",
+    )
+
+
+class GenerateProfilesResponse(NexusResponse):
+    profiles: list[dict] = Field(default_factory=list)
+    generation_stats: dict = Field(default_factory=dict)
+
+
+class GenerateCombinatorialRequest(NexusRequest):
+    """Request to generate combinatorial test data sets."""
+    dimensions: dict[str, list[Any]] = Field(
+        ...,
+        description="Dimensions to combine: {'age': [25, 45, 65], 'gender': ['M', 'F'], ...}",
+    )
+    strategy: DataStrategy = Field(default=DataStrategy.PAIRWISE)
+    max_combinations: int = Field(default=1000, le=50_000)
+    constraints: list[dict] = Field(
+        default_factory=list,
+        description="Rules to filter combos: [{'if': {'age': '<18'}, 'then': {'product': '!= whole_life'}}]",
+    )
+
+
+class GenerateCombinatorialResponse(NexusResponse):
+    combinations: list[dict] = Field(default_factory=list)
+    total_possible: int = 0
+    total_generated: int = 0
+    coverage_percent: float = 0.0
+
+
+class GenerateBoundaryRequest(NexusRequest):
+    """Request to generate boundary value test data."""
+    field_name: str = Field(..., description="Field to generate boundaries for")
+    field_type: str = Field(default="numeric", description="numeric, date, string")
+    min_value: Optional[Any] = None
+    max_value: Optional[Any] = None
+    boundary_points: list[Any] = Field(
+        default_factory=list,
+        description="Known boundary points (e.g., rate table breaks at age 30, 40, 50)",
+    )
+    include_invalid: bool = Field(
+        default=True, description="Include just-outside-boundary invalid values",
+    )
+
+
+class GenerateBoundaryResponse(NexusResponse):
+    boundary_values: list[dict] = Field(default_factory=list)
+    total_generated: int = 0
+
+
+class GeneratePolicyNumbersRequest(NexusRequest):
+    """Generate synthetic policy/claim numbers matching carrier formats."""
+    format_pattern: str = Field(
+        default="POL-{STATE}-{YEAR}-{SEQ:06d}",
+        description="Pattern: {STATE}, {YEAR}, {SEQ:Nd}, {ALPHA:N}, {DIGIT:N}",
+    )
+    count: int = Field(default=10, ge=1, le=10_000)
+    start_sequence: int = Field(default=1)
+
+
+class GeneratePolicyNumbersResponse(NexusResponse):
+    numbers: list[str] = Field(default_factory=list)
+
+
+class GenerateRateTestDataRequest(NexusRequest):
+    """Generate test data for rate table validation."""
+    product_type: ProductType
+    jurisdictions: list[str] = Field(default_factory=lambda: ["NY", "CA", "TX", "FL", "IL"])
+    include_boundary_ages: bool = Field(default=True)
+    include_all_health_classes: bool = Field(default=True)
+    include_tobacco_variants: bool = Field(default=True)
+    face_amounts: list[int] = Field(default_factory=lambda: [25_000, 100_000, 500_000, 1_000_000])
+
+
+class GenerateRateTestDataResponse(NexusResponse):
+    test_records: list[dict] = Field(default_factory=list)
+    total_generated: int = 0
+    dimensions_covered: dict = Field(default_factory=dict)
+
+
+# ─── Core Data Generation Logic ───────────────────────────────
+
+class SyntheticProfileGenerator:
+    """Generates PII-safe synthetic insurance applicant profiles."""
+
+    def __init__(self, seed: Optional[int] = None):
+        self.rng = random.Random(seed)
+        self._sequence = 0
+
+    def generate_profile(
+        self,
+        product_type: Optional[ProductType] = None,
+        jurisdiction: Optional[str] = None,
+        age_override: Optional[int] = None,
+        gender_override: Optional[Gender] = None,
+        tobacco_override: Optional[TobaccoStatus] = None,
+        health_class_override: Optional[HealthClass] = None,
+    ) -> dict:
+        """Generate one synthetic applicant profile."""
+        self._sequence += 1
+
+        # Select attributes
+        age = age_override or self._random_age(product_type)
+        gender = gender_override or self.rng.choice(list(Gender))
+        state = jurisdiction or self.rng.choice(list(US_STATES.keys()))
+        tobacco = tobacco_override or self._random_tobacco(age)
+        health_class = health_class_override or self._random_health_class(age, tobacco)
+        product = product_type or self._random_product(age)
+
+        # Generate synthetic identity
+        first_name = self.rng.choice(SYNTHETIC_FIRST_NAMES)
+        last_name = self.rng.choice(SYNTHETIC_LAST_NAMES)
+        dob = self._age_to_dob(age)
+
+        # Synthetic SSN (900-xx-xxxx series — reserved for testing by SSA)
+        ssn = f"900-{self.rng.randint(10, 99)}-{self.rng.randint(1000, 9999)}"
+
+        # Synthetic contact info
+        email = f"{first_name.lower()}.{last_name.lower()}.{self._sequence}@synthetic-nexus.test"
+        phone = f"555-{self.rng.randint(100, 999)}-{self.rng.randint(1000, 9999)}"
+        address = self._generate_address(state)
+
+        # Face amount
+        face_amount = self._random_face_amount(product)
+
+        # Riders
+        riders = self._select_riders(product, age) if product else []
+
+        # Beneficiary
+        beneficiary = self._generate_beneficiary()
+
+        profile = {
+            "record_id": str(uuid.uuid4()),
+            "synthetic": True,  # WATERMARK: always True
+            "sequence_number": self._sequence,
+
+            # Applicant
+            "applicant": {
+                "first_name": first_name,
+                "last_name": last_name,
+                "date_of_birth": dob.isoformat(),
+                "age": age,
+                "gender": gender.value,
+                "ssn": ssn,
+                "email": email,
+                "phone": phone,
+                "address": address,
+                "tobacco_status": tobacco.value,
+                "health_class": health_class.value,
+            },
+
+            # Policy
+            "policy": {
+                "product_type": product.value if product else None,
+                "jurisdiction": state,
+                "jurisdiction_name": US_STATES.get(state, {}).get("name", state),
+                "face_amount": face_amount,
+                "payment_mode": self.rng.choice(PAYMENT_MODES),
+                "riders": [r.value for r in riders],
+            },
+
+            # Beneficiary
+            "beneficiary": beneficiary,
+
+            # Regulatory
+            "regulatory": {
+                "free_look_days": US_STATES.get(state, {}).get("free_look_days", 10),
+                "state_approval_required": state in ("NY", "CA", "CT", "MA"),
+            },
+
+            # Test metadata
+            "test_metadata": {
+                "age_band": self._get_age_band(age),
+                "risk_tier": self._compute_risk_tier(age, tobacco, health_class),
+                "boundary_flags": self._check_boundary_flags(age, face_amount),
+            },
+        }
+
+        return profile
+
+    def generate_batch(
+        self,
+        count: int,
+        product_type: Optional[ProductType] = None,
+        jurisdictions: Optional[list[str]] = None,
+        age_range: Optional[dict] = None,
+        strategy: DataStrategy = DataStrategy.RANDOM,
+    ) -> list[dict]:
+        """Generate a batch of profiles using the specified strategy."""
+        profiles = []
+
+        if strategy == DataStrategy.RANDOM:
+            for _ in range(count):
+                jurisdiction = self.rng.choice(jurisdictions) if jurisdictions else None
+                age = None
+                if age_range:
+                    age = self.rng.randint(age_range.get("min", 0), age_range.get("max", 99))
+                profiles.append(self.generate_profile(
+                    product_type=product_type,
+                    jurisdiction=jurisdiction,
+                    age_override=age,
+                ))
+
+        elif strategy == DataStrategy.BOUNDARY:
+            # Generate profiles at every age band boundary
+            boundary_ages = []
+            for band in AGE_BANDS:
+                boundary_ages.extend([
+                    band["min"],
+                    band["min"] + 1 if band["min"] > 0 else 0,
+                    band["max"] - 1 if band["max"] < 99 else 99,
+                    band["max"],
+                ])
+            boundary_ages = sorted(set(boundary_ages))
+
+            states = jurisdictions or list(US_STATES.keys())
+            for age in boundary_ages:
+                for state in states[:min(len(states), max(1, count // len(boundary_ages)))]:
+                    for tobacco in [TobaccoStatus.NON_SMOKER, TobaccoStatus.SMOKER]:
+                        profiles.append(self.generate_profile(
+                            product_type=product_type,
+                            jurisdiction=state,
+                            age_override=age,
+                            tobacco_override=tobacco,
+                        ))
+                        if len(profiles) >= count:
+                            return profiles[:count]
+
+        elif strategy == DataStrategy.EQUIVALENCE:
+            # One representative from each equivalence class
+            genders = list(Gender)
+            tobacco_statuses = list(TobaccoStatus)
+            health_classes = [HealthClass.PREFERRED_PLUS, HealthClass.STANDARD, HealthClass.SUBSTANDARD_A]
+            states = jurisdictions or ["NY", "CA", "TX", "FL", "IL", "OH", "PA", "GA"]
+            representative_ages = [5, 22, 30, 40, 50, 60, 70, 85]
+
+            for age in representative_ages:
+                for gender in genders:
+                    for tobacco in tobacco_statuses:
+                        for hc in health_classes:
+                            state = self.rng.choice(states)
+                            profiles.append(self.generate_profile(
+                                product_type=product_type,
+                                jurisdiction=state,
+                                age_override=age,
+                                gender_override=gender,
+                                tobacco_override=tobacco,
+                                health_class_override=hc,
+                            ))
+                            if len(profiles) >= count:
+                                return profiles[:count]
+
+        elif strategy == DataStrategy.RISK_FOCUSED:
+            # Prioritize high-risk combinations
+            high_risk_ages = [0, 1, 17, 18, 64, 65, 75, 85, 99]
+            high_risk_states = ["NY", "CA", "CT", "MA"]  # Heavy regulation
+            for age in high_risk_ages:
+                for state in high_risk_states:
+                    for tobacco in [TobaccoStatus.SMOKER, TobaccoStatus.FORMER_SMOKER]:
+                        profiles.append(self.generate_profile(
+                            product_type=product_type,
+                            jurisdiction=state,
+                            age_override=age,
+                            tobacco_override=tobacco,
+                        ))
+                        if len(profiles) >= count:
+                            return profiles[:count]
+            # Fill remaining with random
+            while len(profiles) < count:
+                profiles.append(self.generate_profile(product_type=product_type))
+
+        return profiles[:count]
+
+    # ── Private helpers ────────────────────────────────────────
+
+    def _random_age(self, product: Optional[ProductType] = None) -> int:
+        """Generate age appropriate for the product."""
+        if product in (ProductType.FINAL_EXPENSE,):
+            return self.rng.randint(50, 85)
+        elif product in (ProductType.ANNUITY_FIXED, ProductType.ANNUITY_VARIABLE, ProductType.ANNUITY_INDEXED):
+            return self.rng.randint(30, 80)
+        elif product in (ProductType.TERM_10, ProductType.TERM_15, ProductType.TERM_20, ProductType.TERM_30):
+            return self.rng.randint(18, 70)
+        else:
+            return self.rng.randint(0, 99)
+
+    def _random_tobacco(self, age: int) -> TobaccoStatus:
+        if age < 18:
+            return TobaccoStatus.NON_SMOKER
+        weights = [0.70, 0.15, 0.15]
+        return self.rng.choices(list(TobaccoStatus), weights=weights, k=1)[0]
+
+    def _random_health_class(self, age: int, tobacco: TobaccoStatus) -> HealthClass:
+        if age < 18:
+            return HealthClass.STANDARD
+        if tobacco == TobaccoStatus.SMOKER:
+            weights = [0.02, 0.08, 0.15, 0.45, 0.20, 0.08, 0.02]
+        elif tobacco == TobaccoStatus.FORMER_SMOKER:
+            weights = [0.05, 0.15, 0.25, 0.35, 0.12, 0.06, 0.02]
+        else:
+            weights = [0.15, 0.25, 0.30, 0.20, 0.06, 0.03, 0.01]
+        return self.rng.choices(list(HealthClass), weights=weights, k=1)[0]
+
+    def _random_product(self, age: int) -> ProductType:
+        if age < 18:
+            return self.rng.choice([ProductType.WHOLE_LIFE, ProductType.TERM_20])
+        elif age > 75:
+            return self.rng.choice([ProductType.FINAL_EXPENSE, ProductType.WHOLE_LIFE])
+        else:
+            return self.rng.choice(list(ProductType))
+
+    def _random_face_amount(self, product: Optional[ProductType]) -> int:
+        if product == ProductType.FINAL_EXPENSE:
+            return self.rng.choice([5_000, 10_000, 15_000, 20_000, 25_000])
+        elif product in (ProductType.TERM_10, ProductType.TERM_15, ProductType.TERM_20, ProductType.TERM_30):
+            return self.rng.choice([100_000, 250_000, 500_000, 750_000, 1_000_000, 2_000_000])
+        else:
+            return self.rng.choice(FACE_AMOUNTS)
+
+    def _age_to_dob(self, age: int) -> date:
+        today = date.today()
+        birth_year = today.year - age
+        birth_month = self.rng.randint(1, 12)
+        birth_day = self.rng.randint(1, 28)
+        return date(birth_year, birth_month, birth_day)
+
+    def _generate_address(self, state: str) -> dict:
+        street_num = self.rng.randint(100, 9999)
+        streets = ["Test Ave", "Synthetic Blvd", "QA Lane", "Nexus Drive", "Automation Way"]
+        cities = {
+            "NY": "Test York", "CA": "San Testino", "TX": "Testston",
+            "FL": "Synthville", "IL": "Testcago",
+        }
+        return {
+            "street": f"{street_num} {self.rng.choice(streets)}",
+            "city": cities.get(state, f"TestCity-{state}"),
+            "state": state,
+            "zip": f"{self.rng.randint(10000, 99999)}",
+        }
+
+    def _generate_beneficiary(self) -> dict:
+        bene_type = self.rng.choice(["individual", "trust", "estate", "charity"])
+        if bene_type == "individual":
+            return {
+                "type": "individual",
+                "name": f"{self.rng.choice(SYNTHETIC_FIRST_NAMES)} {self.rng.choice(SYNTHETIC_LAST_NAMES)}",
+                "relationship": self.rng.choice(["spouse", "child", "parent", "sibling", "other"]),
+                "percentage": 100,
+            }
+        elif bene_type == "trust":
+            return {
+                "type": "trust",
+                "name": f"Synthetic Family Trust #{self.rng.randint(1000, 9999)}",
+                "percentage": 100,
+            }
+        elif bene_type == "estate":
+            return {"type": "estate", "name": "Estate of Insured", "percentage": 100}
+        else:
+            return {
+                "type": "charity",
+                "name": f"Synthetic Charity Foundation #{self.rng.randint(100, 999)}",
+                "percentage": 100,
+            }
+
+    def _select_riders(self, product: ProductType, age: int) -> list[RiderType]:
+        available = list(RiderType)
+        if age >= 65:
+            available = [r for r in available if r != RiderType.CHILD_TERM]
+        if product in (ProductType.TERM_10, ProductType.TERM_15):
+            available = [r for r in available if r not in (RiderType.LONG_TERM_CARE, RiderType.RETURN_OF_PREMIUM)]
+        count = self.rng.randint(0, min(3, len(available)))
+        return self.rng.sample(available, count)
+
+    def _get_age_band(self, age: int) -> str:
+        for band in AGE_BANDS:
+            if band["min"] <= age <= band["max"]:
+                return band["label"]
+        return "unknown"
+
+    def _compute_risk_tier(self, age: int, tobacco: TobaccoStatus, health_class: HealthClass) -> str:
+        risk_score = 0
+        if age < 18 or age > 70:
+            risk_score += 2
+        if tobacco == TobaccoStatus.SMOKER:
+            risk_score += 3
+        elif tobacco == TobaccoStatus.FORMER_SMOKER:
+            risk_score += 1
+        if health_class in (HealthClass.SUBSTANDARD_A, HealthClass.SUBSTANDARD_B, HealthClass.DECLINE):
+            risk_score += 3
+        elif health_class == HealthClass.STANDARD:
+            risk_score += 1
+
+        if risk_score >= 5:
+            return "high_risk"
+        elif risk_score >= 3:
+            return "elevated_risk"
+        else:
+            return "standard_risk"
+
+    def _check_boundary_flags(self, age: int, face_amount: int) -> list[str]:
+        flags = []
+        for band in AGE_BANDS:
+            if age == band["min"]:
+                flags.append(f"age_band_lower_{band['label']}")
+            if age == band["max"]:
+                flags.append(f"age_band_upper_{band['label']}")
+        # Face amount boundaries
+        boundaries = [25_000, 50_000, 100_000, 250_000, 500_000, 1_000_000]
+        for b in boundaries:
+            if face_amount == b - 1:
+                flags.append(f"just_below_{b}")
+            elif face_amount == b:
+                flags.append(f"at_boundary_{b}")
+            elif face_amount == b + 1:
+                flags.append(f"just_above_{b}")
+        return flags
+
+
+class CombinatorialGenerator:
+    """Generates combinatorial test data using pairwise or full strategies."""
+
+    @staticmethod
+    def generate_pairwise(dimensions: dict[str, list[Any]], max_combinations: int = 1000) -> list[dict]:
+        """
+        Generate pairwise combinations that cover every pair of values
+        at least once. Uses a greedy algorithm.
+        """
+        keys = list(dimensions.keys())
+        if len(keys) < 2:
+            # Only one dimension — just return all values
+            return [{keys[0]: v} for v in dimensions[keys[0]][:max_combinations]]
+
+        # Generate all required pairs
+        uncovered_pairs: set[tuple] = set()
+        for i in range(len(keys)):
+            for j in range(i + 1, len(keys)):
+                for vi in dimensions[keys[i]]:
+                    for vj in dimensions[keys[j]]:
+                        uncovered_pairs.add((i, j, str(vi), str(vj)))
+
+        # Reverse lookup for string→original value
+        value_map: dict[str, dict[str, Any]] = {}
+        for key in keys:
+            value_map[key] = {str(v): v for v in dimensions[key]}
+
+        results = []
+        rng = random.Random(42)
+
+        while uncovered_pairs and len(results) < max_combinations:
+            # Greedy: pick the combination that covers the most uncovered pairs
+            best_combo = {}
+            best_score = -1
+
+            for _ in range(50):  # sample 50 random combos, pick best
+                candidate = {k: str(rng.choice(dimensions[k])) for k in keys}
+                score = 0
+                for i in range(len(keys)):
+                    for j in range(i + 1, len(keys)):
+                        pair = (i, j, candidate[keys[i]], candidate[keys[j]])
+                        if pair in uncovered_pairs:
+                            score += 1
+                if score > best_score:
+                    best_score = score
+                    best_combo = candidate
+
+            if best_score == 0:
+                break
+
+            # Mark pairs as covered
+            for i in range(len(keys)):
+                for j in range(i + 1, len(keys)):
+                    pair = (i, j, best_combo[keys[i]], best_combo[keys[j]])
+                    uncovered_pairs.discard(pair)
+
+            # Restore original types
+            row = {}
+            for k in keys:
+                str_val = best_combo[k]
+                row[k] = value_map[k].get(str_val, str_val)
+            results.append(row)
+
+        return results
+
+    @staticmethod
+    def generate_full(
+        dimensions: dict[str, list[Any]],
+        max_combinations: int = 50_000,
+        constraints: Optional[list[dict]] = None,
+    ) -> list[dict]:
+        """Full Cartesian product (with optional constraints)."""
+        keys = list(dimensions.keys())
+        values = [dimensions[k] for k in keys]
+
+        total_possible = 1
+        for v in values:
+            total_possible *= len(v)
+
+        results = []
+        for combo in itertools.product(*values):
+            row = dict(zip(keys, combo))
+
+            # Apply constraints
+            if constraints and not CombinatorialGenerator._check_constraints(row, constraints):
+                continue
+
+            results.append(row)
+            if len(results) >= max_combinations:
+                break
+
+        return results
+
+    @staticmethod
+    def _check_constraints(row: dict, constraints: list[dict]) -> bool:
+        """Check if a row satisfies all constraints."""
+        for c in constraints:
+            condition = c.get("if", {})
+            action = c.get("then", {})
+
+            # Check if condition matches
+            condition_matches = True
+            for field, check in condition.items():
+                val = row.get(field)
+                if isinstance(check, str):
+                    if check.startswith("<"):
+                        if not (val is not None and float(val) < float(check[1:])):
+                            condition_matches = False
+                    elif check.startswith(">"):
+                        if not (val is not None and float(val) > float(check[1:])):
+                            condition_matches = False
+                    elif check.startswith("!="):
+                        if str(val) == check[2:].strip():
+                            condition_matches = False
+                    else:
+                        if str(val) != str(check):
+                            condition_matches = False
+
+            if condition_matches:
+                # Apply action (filter out if action says exclude)
+                for field, check in action.items():
+                    val = row.get(field)
+                    if isinstance(check, str) and check.startswith("!="):
+                        if str(val) == check[2:].strip():
+                            return False
+                    elif isinstance(check, str) and check.startswith("exclude"):
+                        return False
+        return True
+
+
+class BoundaryValueGenerator:
+    """Generates boundary value test data for insurance fields."""
+
+    @staticmethod
+    def generate(
+        field_name: str,
+        field_type: str = "numeric",
+        min_value: Optional[Any] = None,
+        max_value: Optional[Any] = None,
+        boundary_points: Optional[list] = None,
+        include_invalid: bool = True,
+    ) -> list[dict]:
+        """Generate boundary values for a field."""
+        results = []
+
+        if field_type == "numeric":
+            results = BoundaryValueGenerator._numeric_boundaries(
+                field_name, min_value, max_value, boundary_points or [], include_invalid
+            )
+        elif field_type == "date":
+            results = BoundaryValueGenerator._date_boundaries(
+                field_name, min_value, max_value, boundary_points or [], include_invalid
+            )
+        elif field_type == "string":
+            results = BoundaryValueGenerator._string_boundaries(
+                field_name, min_value, max_value, include_invalid
+            )
+
+        return results
+
+    @staticmethod
+    def _numeric_boundaries(
+        field_name: str,
+        min_val: Optional[float],
+        max_val: Optional[float],
+        points: list,
+        include_invalid: bool,
+    ) -> list[dict]:
+        bvs = []
+        all_points = []
+
+        if min_val is not None:
+            all_points.append(("min", float(min_val)))
+        if max_val is not None:
+            all_points.append(("max", float(max_val)))
+        for p in points:
+            all_points.append(("boundary", float(p)))
+
+        for label, val in all_points:
+            # At boundary
+            bvs.append({
+                "field": field_name,
+                "value": val,
+                "category": f"at_{label}",
+                "expected_valid": True,
+                "description": f"{field_name} exactly at {label} ({val})",
+            })
+            # Just above
+            bvs.append({
+                "field": field_name,
+                "value": val + 1,
+                "category": f"above_{label}",
+                "expected_valid": True if label != "max" else False,
+                "description": f"{field_name} just above {label} ({val + 1})",
+            })
+            # Just below
+            bvs.append({
+                "field": field_name,
+                "value": val - 1,
+                "category": f"below_{label}",
+                "expected_valid": True if label != "min" else False,
+                "description": f"{field_name} just below {label} ({val - 1})",
+            })
+
+        if include_invalid:
+            if min_val is not None:
+                bvs.append({
+                    "field": field_name,
+                    "value": float(min_val) - 100,
+                    "category": "far_below_min",
+                    "expected_valid": False,
+                    "description": f"{field_name} far below minimum",
+                })
+            if max_val is not None:
+                bvs.append({
+                    "field": field_name,
+                    "value": float(max_val) + 100,
+                    "category": "far_above_max",
+                    "expected_valid": False,
+                    "description": f"{field_name} far above maximum",
+                })
+            # Zero and negative
+            bvs.append({
+                "field": field_name, "value": 0,
+                "category": "zero", "expected_valid": min_val is not None and float(min_val) <= 0,
+                "description": f"{field_name} = 0",
+            })
+            bvs.append({
+                "field": field_name, "value": -1,
+                "category": "negative", "expected_valid": False,
+                "description": f"{field_name} = -1 (negative)",
+            })
+
+        return bvs
+
+    @staticmethod
+    def _date_boundaries(
+        field_name: str,
+        min_val: Optional[str],
+        max_val: Optional[str],
+        points: list,
+        include_invalid: bool,
+    ) -> list[dict]:
+        bvs = []
+        today = date.today()
+
+        dates_to_test = []
+        if min_val:
+            d = date.fromisoformat(min_val) if isinstance(min_val, str) else min_val
+            dates_to_test.append(("min", d))
+        if max_val:
+            d = date.fromisoformat(max_val) if isinstance(max_val, str) else max_val
+            dates_to_test.append(("max", d))
+
+        for label, d in dates_to_test:
+            bvs.append({"field": field_name, "value": d.isoformat(), "category": f"at_{label}", "expected_valid": True})
+            bvs.append({"field": field_name, "value": (d + timedelta(days=1)).isoformat(), "category": f"day_after_{label}", "expected_valid": label != "max"})
+            bvs.append({"field": field_name, "value": (d - timedelta(days=1)).isoformat(), "category": f"day_before_{label}", "expected_valid": label != "min"})
+
+        if include_invalid:
+            bvs.append({"field": field_name, "value": "9999-12-31", "category": "far_future", "expected_valid": False})
+            bvs.append({"field": field_name, "value": "1900-01-01", "category": "far_past", "expected_valid": False})
+            bvs.append({"field": field_name, "value": today.isoformat(), "category": "today", "expected_valid": True})
+
+        return bvs
+
+    @staticmethod
+    def _string_boundaries(
+        field_name: str,
+        min_length: Optional[int],
+        max_length: Optional[int],
+        include_invalid: bool,
+    ) -> list[dict]:
+        bvs = []
+        min_len = int(min_length) if min_length else 0
+        max_len = int(max_length) if max_length else 255
+
+        bvs.append({"field": field_name, "value": "A" * min_len, "category": "min_length", "expected_valid": True})
+        bvs.append({"field": field_name, "value": "A" * max_len, "category": "max_length", "expected_valid": True})
+        if min_len > 0:
+            bvs.append({"field": field_name, "value": "A" * (min_len - 1), "category": "below_min_length", "expected_valid": False})
+        bvs.append({"field": field_name, "value": "A" * (max_len + 1), "category": "above_max_length", "expected_valid": False})
+
+        if include_invalid:
+            bvs.append({"field": field_name, "value": "", "category": "empty_string", "expected_valid": min_len == 0})
+            bvs.append({"field": field_name, "value": " " * max_len, "category": "all_spaces", "expected_valid": False})
+            bvs.append({"field": field_name, "value": "A" * max_len + "!@#$%", "category": "special_chars_overflow", "expected_valid": False})
+
+        return bvs
+
+
+class PolicyNumberGenerator:
+    """Generates synthetic policy, claim, and agent numbers."""
+
+    @staticmethod
+    def generate(
+        pattern: str,
+        count: int,
+        start_sequence: int = 1,
+    ) -> list[str]:
+        """
+        Generate numbers from a pattern.
+        Supported tokens:
+          {STATE}     → random 2-letter state code
+          {YEAR}      → current 4-digit year
+          {YY}        → 2-digit year
+          {SEQ:06d}   → zero-padded sequence
+          {ALPHA:N}   → N random uppercase letters
+          {DIGIT:N}   → N random digits
+        """
+        rng = random.Random(42)
+        results = []
+        year4 = str(date.today().year)
+        year2 = year4[-2:]
+        states = list(US_STATES.keys())
+
+        for i in range(count):
+            seq = start_sequence + i
+            number = pattern
+
+            number = number.replace("{STATE}", rng.choice(states))
+            number = number.replace("{YEAR}", year4)
+            number = number.replace("{YY}", year2)
+
+            # Handle {SEQ:Nd} patterns
+            import re
+            seq_match = re.search(r"\{SEQ:(\d+)d\}", number)
+            if seq_match:
+                pad = int(seq_match.group(1))
+                number = number[:seq_match.start()] + str(seq).zfill(pad) + number[seq_match.end():]
+
+            # Handle {ALPHA:N}
+            alpha_match = re.search(r"\{ALPHA:(\d+)\}", number)
+            if alpha_match:
+                n = int(alpha_match.group(1))
+                letters = "".join(rng.choices(string.ascii_uppercase, k=n))
+                number = number[:alpha_match.start()] + letters + number[alpha_match.end():]
+
+            # Handle {DIGIT:N}
+            digit_match = re.search(r"\{DIGIT:(\d+)\}", number)
+            if digit_match:
+                n = int(digit_match.group(1))
+                digits = "".join(rng.choices(string.digits, k=n))
+                number = number[:digit_match.start()] + digits + number[digit_match.end():]
+
+            results.append(number)
+
+        return results
+
+
+class RateTestDataGenerator:
+    """Generates test data specifically for rate table validation."""
+
+    def __init__(self, seed: Optional[int] = None):
+        self.profile_gen = SyntheticProfileGenerator(seed)
+
+    def generate(
+        self,
+        product_type: ProductType,
+        jurisdictions: list[str],
+        face_amounts: list[int],
+        include_boundary_ages: bool = True,
+        include_all_health_classes: bool = True,
+        include_tobacco_variants: bool = True,
+    ) -> list[dict]:
+        """Generate comprehensive rate test data."""
+        records = []
+
+        # Determine ages to test
+        if include_boundary_ages:
+            ages = []
+            for band in AGE_BANDS:
+                ages.extend([band["min"], band["max"]])
+                mid = (band["min"] + band["max"]) // 2
+                ages.append(mid)
+            ages = sorted(set(ages))
+        else:
+            ages = [25, 35, 45, 55, 65]
+
+        # Health classes
+        if include_all_health_classes:
+            health_classes = list(HealthClass)
+        else:
+            health_classes = [HealthClass.PREFERRED, HealthClass.STANDARD, HealthClass.SUBSTANDARD_A]
+
+        # Tobacco
+        if include_tobacco_variants:
+            tobacco_statuses = list(TobaccoStatus)
+        else:
+            tobacco_statuses = [TobaccoStatus.NON_SMOKER, TobaccoStatus.SMOKER]
+
+        # Generate all combinations
+        for state in jurisdictions:
+            for age in ages:
+                for gender in [Gender.MALE, Gender.FEMALE]:
+                    for tobacco in tobacco_statuses:
+                        for hc in health_classes:
+                            for face in face_amounts:
+                                profile = self.profile_gen.generate_profile(
+                                    product_type=product_type,
+                                    jurisdiction=state,
+                                    age_override=age,
+                                    gender_override=gender,
+                                    tobacco_override=tobacco,
+                                    health_class_override=hc,
+                                )
+                                profile["policy"]["face_amount"] = face
+                                profile["rate_test_key"] = (
+                                    f"{state}_{age}_{gender.value}_{tobacco.value}_"
+                                    f"{hc.value}_{face}"
+                                )
+                                records.append(profile)
+
+        return records
+
+
+# ─── The Hands Engine ──────────────────────────────────────────
+
+class HandsEngine(NexusEngine):
+
+    def __init__(self):
+        super().__init__(
+            name="hands",
+            version="0.1.0",
+            config=HandsConfig(engine_name="hands", engine_port=8008),
+            description="Synthetic test data generation for insurance QA",
+        )
+        self.profile_generator: Optional[SyntheticProfileGenerator] = None
+        self.rate_generator: Optional[RateTestDataGenerator] = None
+        self.jobs: dict[str, JobResponse] = {}
+
+    async def on_startup(self):
+        """Initialize generators and load data generator extensions from plugins."""
+        seed = self.config.random_seed if hasattr(self.config, "random_seed") else None
+        self.profile_generator = SyntheticProfileGenerator(seed=seed)
+        self.rate_generator = RateTestDataGenerator(seed=seed)
+        self.health.set_mode("data_generation", "synthetic")
+
+        # Load data generator extensions from domain plugins
+        try:
+            data_gen_ext = self.plugin_registry.get_merged_data_generators()
+            if data_gen_ext:
+                # Store plugin-provided data profiles for runtime use
+                self._plugin_data_profiles = data_gen_ext.data_profiles or []
+                self._plugin_id_patterns = data_gen_ext.id_patterns or []
+        except Exception:
+            self._plugin_data_profiles = []
+            self._plugin_id_patterns = []
+
+        # Subscribe to events: when Heart generates test cases, auto-generate test data
+        if self.event_bus:
+            await self.event_bus.subscribe(
+                "heart.tests.generated",
+                self._on_tests_generated,
+            )
+
+    async def _on_tests_generated(self, event: NexusEvent):
+        """Auto-generate test data when Heart creates test cases."""
+        data = event.data or {}
+        test_cases = data.get("test_cases", [])
+        tenant_id = data.get("tenant_id", "")
+
+        if not test_cases:
+            return
+
+        # Generate profiles matching test requirements
+        profiles = self.profile_generator.generate_batch(
+            count=len(test_cases) * 3,  # 3 data variants per test
+            strategy=DataStrategy.BOUNDARY,
+        )
+
+        # Publish event with generated data
+        if self.event_bus:
+            await self.event_bus.publish(NexusEvent(
+                event_type="hands.data.generated",
+                source="hands",
+                data={
+                    "tenant_id": tenant_id,
+                    "profile_count": len(profiles),
+                    "triggered_by": "heart.tests.generated",
+                },
+            ))
+
+    def register_routes(self, app):
+
+        engine = self  # Closure reference
+
+        # ── Generate Synthetic Profiles ─────────────────────────
+
+        @app.post(
+            "/api/v1/hands/generate-profiles",
+            response_model=GenerateProfilesResponse,
+        )
+        async def generate_profiles(
+            req: GenerateProfilesRequest,
+            user: NexusUser = Depends(get_current_user),
+        ):
+            """
+            Generate synthetic insurance applicant profiles.
+
+            Strategies:
+            - random: Pure random sampling
+            - boundary: Focus on age band boundaries
+            - equivalence: One representative from each class
+            - risk_focused: Prioritize high-risk combinations
+            """
+            start = time.monotonic()
+
+            if req.count > engine.config.max_records_per_request:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Max {engine.config.max_records_per_request} records per request",
+                )
+
+            product = req.product_type
+            jurisdictions = req.jurisdictions or None
+            age_range = req.age_range
+
+            profiles = engine.profile_generator.generate_batch(
+                count=req.count,
+                product_type=product,
+                jurisdictions=jurisdictions,
+                age_range=age_range,
+                strategy=req.strategy,
+            )
+
+            elapsed_ms = (time.monotonic() - start) * 1000
+
+            # Compute stats
+            age_distribution = {}
+            state_distribution = {}
+            tobacco_distribution = {}
+            for p in profiles:
+                band = p.get("test_metadata", {}).get("age_band", "unknown")
+                age_distribution[band] = age_distribution.get(band, 0) + 1
+                state = p.get("policy", {}).get("jurisdiction", "unknown")
+                state_distribution[state] = state_distribution.get(state, 0) + 1
+                tobacco = p.get("applicant", {}).get("tobacco_status", "unknown")
+                tobacco_distribution[tobacco] = tobacco_distribution.get(tobacco, 0) + 1
+
+            return GenerateProfilesResponse(
+                success=True,
+                trace_id=req.trace_id,
+                engine="hands",
+                engine_version="0.1.0",
+                processing_time_ms=elapsed_ms,
+                profiles=profiles,
+                generation_stats={
+                    "total_generated": len(profiles),
+                    "strategy": req.strategy.value,
+                    "age_distribution": age_distribution,
+                    "state_distribution": state_distribution,
+                    "tobacco_distribution": tobacco_distribution,
+                },
+            )
+
+        # ── Generate Combinatorial Data ────────────────────────
+
+        @app.post(
+            "/api/v1/hands/generate-combinatorial",
+            response_model=GenerateCombinatorialResponse,
+        )
+        async def generate_combinatorial(
+            req: GenerateCombinatorialRequest,
+            user: NexusUser = Depends(get_current_user),
+        ):
+            """
+            Generate combinatorial test data.
+
+            Strategies:
+            - pairwise: Cover every pair of values (most efficient)
+            - full_combinatorial: Full Cartesian product (comprehensive but large)
+            """
+            start = time.monotonic()
+
+            # Calculate total possible
+            total_possible = 1
+            for vals in req.dimensions.values():
+                total_possible *= len(vals)
+
+            if req.strategy == DataStrategy.PAIRWISE:
+                combos = CombinatorialGenerator.generate_pairwise(
+                    req.dimensions, req.max_combinations,
+                )
+            elif req.strategy == DataStrategy.FULL_COMBINATORIAL:
+                combos = CombinatorialGenerator.generate_full(
+                    req.dimensions, req.max_combinations, req.constraints,
+                )
+            else:
+                # Default to pairwise
+                combos = CombinatorialGenerator.generate_pairwise(
+                    req.dimensions, req.max_combinations,
+                )
+
+            elapsed_ms = (time.monotonic() - start) * 1000
+            coverage = (len(combos) / max(total_possible, 1)) * 100
+
+            return GenerateCombinatorialResponse(
+                success=True,
+                trace_id=req.trace_id,
+                engine="hands",
+                engine_version="0.1.0",
+                processing_time_ms=elapsed_ms,
+                combinations=combos,
+                total_possible=total_possible,
+                total_generated=len(combos),
+                coverage_percent=round(min(coverage, 100.0), 2),
+            )
+
+        # ── Generate Boundary Values ──────────────────────────
+
+        @app.post(
+            "/api/v1/hands/generate-boundary",
+            response_model=GenerateBoundaryResponse,
+        )
+        async def generate_boundary(
+            req: GenerateBoundaryRequest,
+            user: NexusUser = Depends(get_current_user),
+        ):
+            """
+            Generate boundary value test data for a specific field.
+
+            Produces: at-boundary, just-above, just-below, far-out-of-range,
+            zero, negative, empty, etc.
+            """
+            start = time.monotonic()
+
+            bvs = BoundaryValueGenerator.generate(
+                field_name=req.field_name,
+                field_type=req.field_type,
+                min_value=req.min_value,
+                max_value=req.max_value,
+                boundary_points=req.boundary_points,
+                include_invalid=req.include_invalid,
+            )
+
+            elapsed_ms = (time.monotonic() - start) * 1000
+
+            return GenerateBoundaryResponse(
+                success=True,
+                trace_id=req.trace_id,
+                engine="hands",
+                engine_version="0.1.0",
+                processing_time_ms=elapsed_ms,
+                boundary_values=bvs,
+                total_generated=len(bvs),
+            )
+
+        # ── Generate Policy Numbers ───────────────────────────
+
+        @app.post(
+            "/api/v1/hands/generate-policy-numbers",
+            response_model=GeneratePolicyNumbersResponse,
+        )
+        async def generate_policy_numbers(
+            req: GeneratePolicyNumbersRequest,
+            user: NexusUser = Depends(get_current_user),
+        ):
+            """
+            Generate synthetic policy/claim/agent numbers matching carrier formats.
+
+            Pattern tokens:
+              {STATE}     → Random 2-letter state code
+              {YEAR}      → Current 4-digit year
+              {YY}        → 2-digit year
+              {SEQ:06d}   → Zero-padded sequence number
+              {ALPHA:N}   → N random uppercase letters
+              {DIGIT:N}   → N random digits
+            """
+            numbers = PolicyNumberGenerator.generate(
+                pattern=req.format_pattern,
+                count=req.count,
+                start_sequence=req.start_sequence,
+            )
+
+            return GeneratePolicyNumbersResponse(
+                success=True,
+                trace_id=req.trace_id,
+                engine="hands",
+                engine_version="0.1.0",
+                numbers=numbers,
+            )
+
+        # ── Generate Rate Table Test Data ─────────────────────
+
+        @app.post(
+            "/api/v1/hands/generate-rate-data",
+            response_model=GenerateRateTestDataResponse,
+        )
+        async def generate_rate_data(
+            req: GenerateRateTestDataRequest,
+            background_tasks: BackgroundTasks,
+            user: NexusUser = Depends(get_current_user),
+        ):
+            """
+            Generate comprehensive test data for rate table validation.
+
+            Produces records covering every combination of:
+            - Age (boundary values per age band)
+            - Gender
+            - Tobacco status
+            - Health class
+            - Face amount
+            - Jurisdiction
+
+            This is THE key endpoint for rate table QA.
+            """
+            start = time.monotonic()
+
+            records = engine.rate_generator.generate(
+                product_type=req.product_type,
+                jurisdictions=req.jurisdictions,
+                face_amounts=req.face_amounts,
+                include_boundary_ages=req.include_boundary_ages,
+                include_all_health_classes=req.include_all_health_classes,
+                include_tobacco_variants=req.include_tobacco_variants,
+            )
+
+            elapsed_ms = (time.monotonic() - start) * 1000
+
+            # Coverage stats
+            dimensions_covered = {
+                "jurisdictions": len(req.jurisdictions),
+                "ages": len(set(r["applicant"]["age"] for r in records)),
+                "genders": len(set(r["applicant"]["gender"] for r in records)),
+                "tobacco_statuses": len(set(r["applicant"]["tobacco_status"] for r in records)),
+                "health_classes": len(set(r["applicant"]["health_class"] for r in records)),
+                "face_amounts": len(req.face_amounts),
+            }
+
+            # Publish event
+            if engine.event_bus:
+                try:
+                    await engine.event_bus.publish(NexusEvent(
+                        event_type="hands.rate_data.generated",
+                        source="hands",
+                        data={
+                            "tenant_id": req.tenant_id,
+                            "product_type": req.product_type.value,
+                            "record_count": len(records),
+                        },
+                    ))
+                except Exception:
+                    pass
+
+            return GenerateRateTestDataResponse(
+                success=True,
+                trace_id=req.trace_id,
+                engine="hands",
+                engine_version="0.1.0",
+                processing_time_ms=elapsed_ms,
+                test_records=records,
+                total_generated=len(records),
+                dimensions_covered=dimensions_covered,
+            )
+
+        # ── Stats ─────────────────────────────────────────────
+
+        @app.get("/api/v1/hands/stats")
+        async def get_stats(user: NexusUser = Depends(get_current_user)):
+            """Engine statistics."""
+            return {
+                "engine": "hands",
+                "version": "0.1.0",
+                "capabilities": [
+                    "synthetic_profiles",
+                    "combinatorial_generation",
+                    "boundary_value_analysis",
+                    "policy_number_generation",
+                    "rate_table_test_data",
+                    "pairwise_coverage",
+                ],
+                "supported_products": [p.value for p in ProductType],
+                "supported_strategies": [s.value for s in DataStrategy],
+                "jurisdictions_available": len(US_STATES),
+                "age_bands": len(AGE_BANDS),
+            }
+
+
+# ─── Entry Point ──────────────────────────────────────────────
+
+if __name__ == "__main__":
+    HandsEngine().run()

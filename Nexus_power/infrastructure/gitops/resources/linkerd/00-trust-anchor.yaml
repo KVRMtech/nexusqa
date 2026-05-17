@@ -1,0 +1,36 @@
+# Linkerd trust anchor — a 10-year self-signed root cert that Linkerd
+# uses to validate every workload's identity. The anchor is generated
+# once per cluster and never rotated under normal operations (rotating
+# requires a controlled multi-step linkerd upgrade).
+#
+# Chain:
+#   1. selfsigned-root ClusterIssuer (cert-manager/00-selfsigned-root.yaml)
+#       └── issues this trust anchor (Certificate below)
+#           └── stored as Secret `linkerd-trust-anchor` in the linkerd ns
+#               └── linkerd-identity-issuer (next file) chains off it
+#                   └── stored as Secret `linkerd-identity-issuer`
+#                       └── consumed by Linkerd's identity controller
+#                           └── signs every workload's identity (24h ttl)
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: linkerd-trust-anchor
+  namespace: linkerd
+spec:
+  secretName: linkerd-trust-anchor
+  duration: 87600h0m0s            # 10 years
+  renewBefore: 720h0m0s            # 30 days
+  issuerRef:
+    name: selfsigned-root
+    kind: ClusterIssuer
+    group: cert-manager.io
+  commonName: root.linkerd.cluster.local
+  isCA: true
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  usages:
+    - cert sign
+    - crl sign
+    - server auth
+    - client auth

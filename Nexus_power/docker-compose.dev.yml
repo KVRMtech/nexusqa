@@ -1,0 +1,79 @@
+# ═══════════════════════════════════════════════════════════════
+# Nexus QA — Development Stack (Infrastructure Only)
+# ═══════════════════════════════════════════════════════════════
+# Run: docker compose -f docker-compose.dev.yml up -d
+# This starts ONLY infrastructure services.
+# Engines run locally via Python for fast dev iteration.
+# ═══════════════════════════════════════════════════════════════
+
+volumes:
+  redis-data:
+  postgres-data:
+  neo4j-data:
+  ollama-data:
+
+services:
+
+  redis:
+    image: redis:7-alpine
+    container_name: nexus-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:-nexus-redis-dev}
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-nexus-redis-dev}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: nexus-postgres
+    restart: unless-stopped
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-nexus}
+      POSTGRES_USER: ${POSTGRES_USER:-nexus}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-nexus-dev}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nexus"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  neo4j:
+    image: neo4j:5-community
+    container_name: nexus-neo4j
+    restart: unless-stopped
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    environment:
+      NEO4J_AUTH: neo4j/nexus-neo4j-dev
+      NEO4J_PLUGINS: '["apoc"]'
+      NEO4J_server_memory_heap_max__size: 512M
+      NEO4J_server_memory_pagecache_size: 256M
+    volumes:
+      - neo4j-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:7474 || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: nexus-ollama
+    restart: unless-stopped
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-data:/root/.ollama
+    # CPU-only mode (no GPU required)
+    # After startup, pull a model: docker exec nexus-ollama ollama pull llama3.1:8b

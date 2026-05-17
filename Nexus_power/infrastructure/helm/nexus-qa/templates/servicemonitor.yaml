@@ -1,0 +1,159 @@
+{{/*
+=================================================================
+ServiceMonitor — Prometheus Operator CRDs
+=================================================================
+When using kube-prometheus-stack or the Prometheus Operator,
+these ServiceMonitor resources auto-configure scrape targets
+instead of relying on static scrape_configs in the Prometheus
+ConfigMap.
+
+Enables:
+  monitoring.serviceMonitor.enabled: true
+*/}}
+
+{{- if and .Values.monitoring.serviceMonitor .Values.monitoring.serviceMonitor.enabled -}}
+{{- $fullname := include "nexus-qa.fullname" . }}
+{{- $root := . }}
+{{- $interval := .Values.monitoring.serviceMonitor.interval | default "15s" }}
+{{- $scrapeTimeout := .Values.monitoring.serviceMonitor.scrapeTimeout | default "10s" }}
+{{- $namespace := .Values.monitoring.serviceMonitor.namespace | default .Release.Namespace }}
+
+{{/* ── Platform Services ── */}}
+{{- $platformServices := dict
+  "auth" (dict "port" .Values.authService.port "component" "auth")
+  "gateway" (dict "port" .Values.gateway.port "component" "gateway")
+  "platform-api" (dict "port" .Values.platformApi.port "component" "platform-api")
+  "orchestrator" (dict "port" .Values.orchestrator.port "component" "orchestrator")
+}}
+
+{{- range $name, $svc := $platformServices }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ $fullname }}-{{ $name }}
+  namespace: {{ $namespace }}
+  labels:
+    {{- include "nexus-qa.componentLabels" (dict "root" $root "component" $svc.component) | nindent 4 }}
+    {{- with $root.Values.monitoring.serviceMonitor.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "nexus-qa.componentSelectorLabels" (dict "root" $root "component" $svc.component) | nindent 6 }}
+  namespaceSelector:
+    matchNames:
+      - {{ $root.Release.Namespace }}
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: {{ $interval }}
+      scrapeTimeout: {{ $scrapeTimeout }}
+      {{- with $root.Values.monitoring.serviceMonitor.metricRelabelings }}
+      metricRelabelings:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}
+
+{{/* ── Engines ── */}}
+{{- $engineList := dict
+  "shield" .Values.engines.shield
+  "ears" .Values.engines.ears
+  "eyes" .Values.engines.eyes
+  "heart" .Values.engines.heart
+  "backbone" .Values.engines.backbone
+  "nerves" .Values.engines.nerves
+  "legs" .Values.engines.legs
+  "hands" .Values.engines.hands
+  "spine" .Values.engines.spine
+  "mouth" .Values.engines.mouth
+}}
+
+{{- range $key, $engine := $engineList }}
+{{- if $engine.enabled }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ $fullname }}-{{ $key }}-engine
+  namespace: {{ $namespace }}
+  labels:
+    {{- include "nexus-qa.componentLabels" (dict "root" $root "component" (printf "%s-engine" $key)) | nindent 4 }}
+    {{- with $root.Values.monitoring.serviceMonitor.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "nexus-qa.componentSelectorLabels" (dict "root" $root "component" (printf "%s-engine" $key)) | nindent 6 }}
+  namespaceSelector:
+    matchNames:
+      - {{ $root.Release.Namespace }}
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: {{ $interval }}
+      scrapeTimeout: {{ $scrapeTimeout }}
+      {{- with $root.Values.monitoring.serviceMonitor.metricRelabelings }}
+      metricRelabelings:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}
+{{- end }}
+
+{{/* ── Infrastructure: Redis ── */}}
+{{- if .Values.redis.enabled }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ $fullname }}-redis
+  namespace: {{ $namespace }}
+  labels:
+    {{- include "nexus-qa.componentLabels" (dict "root" $root "component" "redis") | nindent 4 }}
+    {{- with .Values.monitoring.serviceMonitor.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "nexus-qa.componentSelectorLabels" (dict "root" $root "component" "redis") | nindent 6 }}
+  namespaceSelector:
+    matchNames:
+      - {{ .Release.Namespace }}
+  endpoints:
+    - port: metrics
+      path: /metrics
+      interval: {{ $interval }}
+      scrapeTimeout: {{ $scrapeTimeout }}
+{{- end }}
+
+{{/* ── Infrastructure: Prometheus self ── */}}
+{{- if .Values.monitoring.prometheus.enabled }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ $fullname }}-prometheus
+  namespace: {{ $namespace }}
+  labels:
+    {{- include "nexus-qa.componentLabels" (dict "root" $root "component" "prometheus") | nindent 4 }}
+    {{- with .Values.monitoring.serviceMonitor.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "nexus-qa.componentSelectorLabels" (dict "root" $root "component" "prometheus") | nindent 6 }}
+  namespaceSelector:
+    matchNames:
+      - {{ .Release.Namespace }}
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: {{ $interval }}
+      scrapeTimeout: {{ $scrapeTimeout }}
+{{- end }}
+
+{{- end }}

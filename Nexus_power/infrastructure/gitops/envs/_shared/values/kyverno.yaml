@@ -1,0 +1,51 @@
+# Kyverno admission controller — shared baseline.
+#
+# Kyverno enforces the cluster's admission policies (PSS restricted, image
+# signing, required annotations, etc.) defined as Policy / ClusterPolicy
+# CRs in infrastructure/gitops/resources/kyverno/. Without Kyverno running,
+# those CRs do nothing; with it running, a policy violation rejects the
+# offending resource at admission time.
+
+# Admission and background controllers run as HA replica sets.
+admissionController:
+  replicas: 3
+  resources:
+    requests:
+      cpu: 100m
+      memory: 384Mi
+    limits:
+      memory: 1Gi
+backgroundController:
+  replicas: 2
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 512Mi
+reportsController:
+  replicas: 2
+cleanupController:
+  replicas: 2
+
+# Run unprivileged
+securityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  seccompProfile:
+    type: RuntimeDefault
+
+# Prometheus
+serviceMonitor:
+  enabled: true
+  additionalLabels:
+    release: kube-prometheus-stack
+
+# Webhook configurations: fail-closed in production (a Kyverno outage
+# blocks new admissions) and fail-open in dev (so an outage doesn't
+# stop developers). Default below is fail-open; per-env override
+# flips to fail-closed for production.
+config:
+  webhooks:
+    - failurePolicy: Ignore  # dev/staging default
+      timeoutSeconds: 10

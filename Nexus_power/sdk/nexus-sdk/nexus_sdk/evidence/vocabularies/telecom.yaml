@@ -1,0 +1,88 @@
+# Telecommunications vocabulary.
+#
+# Targets carrier-portal demos: provisioning consoles, billing
+# systems (Amdocs, Oracle BRM), trouble-ticket dashboards, and field-
+# tech apps.  Hardware identifiers (IMEI / ESN / MAC) are first-class.
+vertical: telecom
+display_name: Telecommunications
+description: >
+  Subscriber, device, and network identifiers used in carrier and
+  ISP workflows.  Includes international phone formats not covered
+  by the US-centric default baseline.
+
+synonyms:
+  - canonical: account_number
+    aliases:
+      - "Account #"
+      - "Acct No"
+      - "Customer Account"
+      - "BAN"
+      - "Billing Account Number"
+  - canonical: phone_number
+    aliases:
+      - "MDN"
+      - "Mobile Number"
+      - "Phone #"
+      - "MSISDN"
+      - "Subscriber Number"
+  - canonical: device_imei
+    aliases:
+      - "IMEI"
+      - "Device IMEI"
+      - "Handset IMEI"
+  - canonical: sim_iccid
+    aliases:
+      - "ICCID"
+      - "SIM ICCID"
+      - "SIM Card #"
+  - canonical: service_address
+    aliases:
+      - "Service Address"
+      - "Installation Address"
+      - "Premise Address"
+
+pii_patterns:
+  # IMEI — 15 digits.  We don't enforce the Luhn check digit at OCR
+  # time because EasyOCR mis-reads one digit ~5% of the time; the
+  # downstream provisioning system validates the check digit itself.
+  - name: imei
+    regex: "(?i)\\bIMEI[:\\s#]{0,4}(\\d{15})\\b"
+    severity: medium
+    description: International Mobile Equipment Identity (15 digits)
+    redaction: "[REDACTED_IMEI]"
+
+  # ICCID — 19-20 digit SIM identifier.
+  - name: iccid
+    regex: "(?i)\\bICCID[:\\s#]{0,4}(\\d{19,20})\\b"
+    severity: medium
+    description: SIM card serial (ICCID)
+    redaction: "[REDACTED_ICCID]"
+
+  # ESN — 11-digit decimal or 8-hex form (legacy CDMA devices).
+  - name: esn
+    regex: "(?i)\\bESN[:\\s#]{0,4}([0-9A-F]{8}|\\d{11})\\b"
+    severity: medium
+    description: Electronic Serial Number (legacy)
+    redaction: "[REDACTED_ESN]"
+
+  # MAC address — both colon and hyphen separators.
+  - name: mac_address
+    regex: "\\b(?:[0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}\\b"
+    severity: low
+    description: MAC address
+    redaction: "[REDACTED_MAC]"
+
+  # MDN / MSISDN — 10-15 digit subscriber number; require a label
+  # prefix to avoid eating every long number on screen.
+  - name: msisdn
+    regex: "(?i)\\b(?:MDN|MSISDN|Subscriber\\s+(?:#|Number))[:\\s]{0,4}(\\+?\\d{10,15})\\b"
+    severity: high
+    description: Mobile subscriber phone number
+    redaction: "[REDACTED_PHONE]"
+
+  # Billing Account Number — common 8-12 digit form in carrier UIs.
+  - name: ban
+    regex: "(?i)\\bBAN[:\\s#]{0,4}(\\d{8,12})\\b"
+    severity: high
+    description: Billing Account Number
+    redaction: "[REDACTED_BAN]"

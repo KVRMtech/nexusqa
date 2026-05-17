@@ -1,0 +1,43 @@
+# Dev-specific overrides for infrastructure/helm/nexus-qa/values.yaml.
+# This file is layered on top of the chart's own values.yaml and the
+# chart's values-dev.yaml (if present). Only fields that diverge from
+# the chart defaults belong here — every other value is inherited.
+#
+# Architectural rule: this file may set image tags, replica counts,
+# resource requests, ingress hostnames, and ExternalSecret backend
+# references. It must NOT contain raw credentials, model API keys, or
+# any value that should be rotated independently of a deploy.
+
+global:
+  env: dev
+  domain: dev.platform.example.com
+  imagePullPolicy: IfNotPresent
+
+# Resource sizing for dev — small but production-shaped (so resource
+# requests are not lower in production than in dev, only higher).
+engines:
+  defaults:
+    replicas: 1
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        memory: 1Gi
+
+# Pull image tags from the standard CI tagging convention. The CD
+# pipeline writes the most recent dev SHA to a ConfigMap that ArgoCD
+# resolves via a Plugin. Until M0.6 wires that, the tag is the literal
+# branch name "main" and the Deployment's imagePullPolicy keeps it fresh.
+images:
+  tagOverride: main
+  registry: REPLACE_WITH_IMAGE_REGISTRY
+
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-staging
+
+externalSecrets:
+  clusterSecretStoreRef: nexus-platform-dev

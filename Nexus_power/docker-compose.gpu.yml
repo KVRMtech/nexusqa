@@ -1,0 +1,487 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# Nexus QA — Production GPU Stack (Docker Compose)
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# Split architecture for 100+ customer scale:
+#   - API pods:    Accept requests, enqueue to Redis Streams
+#   - Worker pods: Consume from Redis Streams, process on GPU
+#
+# GPU engines (Ears, Eyes) run as separate worker containers.
+# Non-GPU services run as standard containers.
+#
+# Usage:
+#   docker compose -f docker-compose.gpu.yml up -d
+#
+# Scale workers:
+#   docker compose -f docker-compose.gpu.yml up -d --scale ears-worker=3
+#   docker compose -f docker-compose.gpu.yml up -d --scale eyes-worker=2
+#
+# Requirements:
+#   - NVIDIA Container Toolkit installed
+#   - Docker runtime: nvidia
+#   - GPU drivers compatible with CUDA 12.x
+#
+# ═══════════════════════════════════════════════════════════════════════════════
+
+x-common-env: &common-env
+  NEXUS_ENV: production
+  NEXUS_PRODUCT_MODE: ${NEXUS_PRODUCT_MODE:-full}
+  NEXUS_JWT_SECRET: ${NEXUS_JWT_SECRET:?NEXUS_JWT_SECRET is required}
+  JWT_SECRET: ${NEXUS_JWT_SECRET}
+  REDIS_HOST: redis
+  REDIS_PORT: "6379"
+  REDIS_URL: redis://:${REDIS_PASSWORD:-}@redis:6379/0
+  REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+  POSTGRES_HOST: postgres
+  POSTGRES_PORT: "5432"
+  POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER is required}
+  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+  POSTGRES_DB: ${POSTGRES_DB:-nexus}
+  NEO4J_URI: bolt://neo4j:7687
+  NEO4J_USER: neo4j
+  NEO4J_PASSWORD: ${NEO4J_PASSWORD:?NEO4J_PASSWORD is required}
+  LLM_BACKEND: ollama
+  OLLAMA_BASE_URL: http://ollama:11434
+  EYES_OLLAMA_BASE_URL: http://ollama:11434
+  EYES_OLLAMA_MODEL: ${EYES_OLLAMA_MODEL:-llama3.2-vision:11b}
+  HEART_OLLAMA_BASE_URL: http://ollama:11434
+  HEART_OLLAMA_MODEL: ${HEART_OLLAMA_MODEL:-llama3.2:1b}
+  HEART_GPU_CONCURRENCY: ${HEART_GPU_CONCURRENCY:-2}
+  BRAIN_OLLAMA_BASE_URL: http://ollama:11434
+  BRAIN_OLLAMA_MODEL: ${BRAIN_OLLAMA_MODEL:-llama3.2:1b}
+  GATEWAY_MAX_REQUEST_BODY_MB: "500"
+  MAX_REQUEST_BODY_MB: "500"
+  NEXUS_PLUGIN_MODULES: products.nexus_qa.plugin
+
+x-gpu-env: &gpu-env
+  WHISPER_DEVICE: cuda
+  WHISPER_COMPUTE_TYPE: float16
+  EYES_OCR_GPU: "true"
+  LLM_DEVICE: cuda
+
+x-healthcheck: &healthcheck
+  interval: 30s
+  timeout: 10s
+  retries: 3
+  start_period: 60s
+
+services:
+  # ═══════════════════════════════════════════════════════════════
+  # INFRASTRUCTURE
+  # ═══════════════════════════════════════════════════════════════
+
+  redis:
+    image: redis:7-alpine
+    command: >
+      redis-server
+        --appendonly yes
+        --maxmemory 4gb
+        --maxmemory-policy noeviction
+        --requirepass ${REDIS_PASSWORD:-}
+        --save 60 1000
+        --save 300 10
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-}", "ping"]
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-nexus}
+    command: >
+      postgres
+        -c max_connections=500
+        -c shared_buffers=1GB
+        -c effective_cache_size=3GB
+        -c work_mem=16MB
+        -c maintenance_work_mem=512MB
+        -c wal_level=replica
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
+
+  neo4j:
+    image: neo4j:5-community
+    environment:
+      NEO4J_AUTH: neo4j/${NEO4J_PASSWORD}
+      NEO4J_server_memory_heap_max__size: 4G
+      NEO4J_server_memory_pagecache_size: 2G
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    volumes:
+      - neo4j-data:/data
+
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-data:/root/.ollama
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  # ═══════════════════════════════════════════════════════════════
+  # PLATFORM SERVICES (stateless, scale by replica count)
+  # ═══════════════════════════════════════════════════════════════
+
+  auth:
+    build:
+      context: .
+      dockerfile: platform/auth-service/Dockerfile
+    environment:
+      <<: *common-env
+      ENGINE_PORT: "8000"
+    ports:
+      - "8000:8000"
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+
+  gateway:
+    build:
+      context: .
+      dockerfile: platform/gateway/Dockerfile
+    environment:
+      <<: *common-env
+      ENGINE_PORT: "8080"
+    ports:
+      - "8080:8080"
+    depends_on:
+      auth:
+        condition: service_healthy
+
+  platform-api:
+    build:
+      context: .
+      dockerfile: platform/api/Dockerfile
+    environment:
+      <<: *common-env
+      ENGINE_PORT: "8091"
+    ports:
+      - "8091:8091"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # ═══════════════════════════════════════════════════════════════
+  # GPU ENGINES — API PODS (accept HTTP, enqueue to Redis Streams)
+  # ═══════════════════════════════════════════════════════════════
+  # In production K8s, these run as separate Deployments.
+  # In Docker Compose, we combine API+worker in "hybrid" mode
+  # but also allow dedicated worker containers via --scale.
+
+  ears-api:
+    build:
+      context: .
+      dockerfile: engines/ears-engine/Dockerfile
+    environment:
+      <<: [*common-env, *gpu-env]
+      ENGINE_PORT: "8002"
+      ENGINE_MODE: api
+    ports:
+      - "8002:8002"
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD", "curl", "-f", "http://localhost:8002/health"]
+
+  ears-worker:
+    build:
+      context: .
+      dockerfile: engines/ears-engine/Dockerfile
+    environment:
+      <<: [*common-env, *gpu-env]
+      ENGINE_PORT: "18002"
+      ENGINE_MODE: worker
+    deploy:
+      replicas: ${EARS_WORKERS:-2}
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    volumes:
+      - ears-audio:/app/service/data/audio
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD", "curl", "-f", "http://localhost:18002/health"]
+
+  eyes-api:
+    build:
+      context: .
+      dockerfile: engines/eyes-engine/Dockerfile
+    environment:
+      <<: [*common-env, *gpu-env]
+      ENGINE_PORT: "8003"
+      ENGINE_MODE: api
+    ports:
+      - "8003:8003"
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD", "curl", "-f", "http://localhost:8003/health"]
+
+  eyes-worker:
+    build:
+      context: .
+      dockerfile: engines/eyes-engine/Dockerfile
+    environment:
+      <<: [*common-env, *gpu-env]
+      ENGINE_PORT: "18003"
+      ENGINE_MODE: worker
+    deploy:
+      replicas: ${EYES_WORKERS:-2}
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    volumes:
+      - eyes-frames:/app/service/data/frames
+    depends_on:
+      redis:
+        condition: service_healthy
+      ollama:
+        condition: service_started
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD", "curl", "-f", "http://localhost:18003/health"]
+
+  # ═══════════════════════════════════════════════════════════════
+  # GPU ENGINE — Heart (sync, scale by replicas not queue)
+  # ═══════════════════════════════════════════════════════════════
+
+  heart:
+    build:
+      context: .
+      dockerfile: engines/heart-engine/Dockerfile
+    environment:
+      <<: [*common-env, *gpu-env]
+      ENGINE_PORT: "8004"
+      ENGINE_MODE: hybrid
+    ports:
+      - "8004:8004"
+    deploy:
+      replicas: ${HEART_REPLICAS:-2}
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    depends_on:
+      redis:
+        condition: service_healthy
+      ollama:
+        condition: service_started
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD", "curl", "-f", "http://localhost:8004/health"]
+
+  # ═══════════════════════════════════════════════════════════════
+  # NON-GPU ENGINES (CPU-only, no special resource reservations)
+  # ═══════════════════════════════════════════════════════════════
+
+  shield:
+    build:
+      context: .
+      dockerfile: engines/shield-engine/Dockerfile
+    environment:
+      <<: *common-env
+      ENGINE_PORT: "8001"
+      SHIELD_ENCRYPTION_KEY: ${SHIELD_ENCRYPTION_KEY:?SHIELD_ENCRYPTION_KEY is required}
+    ports:
+      - "8001:8001"
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  backbone:
+    build:
+      context: .
+      dockerfile: engines/backbone-engine/Dockerfile
+    environment:
+      <<: *common-env
+      ENGINE_PORT: "8005"
+    ports:
+      - "8005:8005"
+    depends_on:
+      redis:
+        condition: service_healthy
+      neo4j:
+        condition: service_started
+
+  nerves:
+    build:
+      context: .
+      dockerfile: engines/nerves-engine/Dockerfile
+    environment:
+      <<: *common-env
+      ENGINE_PORT: "8006"
+    ports:
+      - "8006:8006"
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  legs:
+    build:
+      context: .
+      dockerfile: engines/legs-engine/Dockerfile
+    environment:
+      <<: *common-env
+      ENGINE_PORT: "8007"
+    ports:
+      - "8007:8007"
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  hands:
+    build:
+      context: .
+      dockerfile: engines/hands-engine/Dockerfile
+    environment:
+      <<: *common-env
+      ENGINE_PORT: "8008"
+    ports:
+      - "8008:8008"
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  spine:
+    build:
+      context: .
+      dockerfile: engines/spine-engine/Dockerfile
+    environment:
+      <<: *common-env
+      ENGINE_PORT: "8009"
+    ports:
+      - "8009:8009"
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+
+  mouth:
+    build:
+      context: .
+      dockerfile: engines/mouth-engine/Dockerfile
+    environment:
+      <<: *common-env
+      ENGINE_PORT: "8010"
+    ports:
+      - "8010:8010"
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  brain:
+    build:
+      context: .
+      dockerfile: engines/brain-engine/Dockerfile
+    environment:
+      <<: *common-env
+      ENGINE_PORT: "8011"
+    ports:
+      - "8011:8011"
+    depends_on:
+      redis:
+        condition: service_healthy
+      ollama:
+        condition: service_started
+
+  # ═══════════════════════════════════════════════════════════════
+  # ORCHESTRATOR
+  # ═══════════════════════════════════════════════════════════════
+
+  orchestrator:
+    build:
+      context: .
+      dockerfile: products/nexus-qa-orchestrator/Dockerfile
+    environment:
+      <<: *common-env
+      ENGINE_PORT: "8100"
+    ports:
+      - "8100:8100"
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  # ═══════════════════════════════════════════════════════════════
+  # QUEUE METRICS EXPORTER (for monitoring/alerting)
+  # ═══════════════════════════════════════════════════════════════
+
+  queue-metrics:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/queue-metrics.Dockerfile
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      REDIS_QUEUE_DB: "3"
+      METRICS_PORT: "9191"
+      GPU_ENGINES: ears,eyes,heart
+    ports:
+      - "9191:9191"
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  # ═══════════════════════════════════════════════════════════════
+  # FRONTEND
+  # ═══════════════════════════════════════════════════════════════
+
+  client:
+    build:
+      context: ./client
+      dockerfile: Dockerfile
+    ports:
+      - "80:80"
+    depends_on:
+      - gateway
+
+volumes:
+  redis-data:
+  postgres-data:
+  neo4j-data:
+  ollama-data:
+  ears-audio:
+  eyes-frames:

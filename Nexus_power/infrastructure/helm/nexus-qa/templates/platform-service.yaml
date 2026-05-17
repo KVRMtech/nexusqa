@@ -1,0 +1,62 @@
+{{/*
+=================================================================
+Platform Services — ClusterIP for auth, gateway, platform-api
+=================================================================
+*/}}
+
+{{- $fullname := include "nexus-qa.fullname" . }}
+{{- $root := . }}
+
+{{/* ═══════ Auth Service ═══════ */}}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullname }}-auth
+  labels:
+    {{- include "nexus-qa.componentLabels" (dict "root" $root "component" "auth") | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - port: {{ .Values.authService.port }}
+      targetPort: http
+      protocol: TCP
+      name: http
+  selector:
+    {{- include "nexus-qa.componentSelectorLabels" (dict "root" $root "component" "auth") | nindent 4 }}
+
+{{/* ═══════ Gateway ═══════ */}}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullname }}-gateway
+  labels:
+    {{- include "nexus-qa.componentLabels" (dict "root" $root "component" "gateway") | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - port: {{ .Values.gateway.port }}
+      targetPort: http
+      protocol: TCP
+      name: http
+  selector:
+    {{- include "nexus-qa.componentSelectorLabels" (dict "root" $root "component" "gateway") | nindent 4 }}
+
+{{/* ═══════ Platform API ═══════ */}}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullname }}-platform-api
+  labels:
+    {{- include "nexus-qa.componentLabels" (dict "root" $root "component" "platform-api") | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - port: {{ .Values.platformApi.port }}
+      targetPort: http
+      protocol: TCP
+      name: http
+  selector:
+    {{- include "nexus-qa.componentSelectorLabels" (dict "root" $root "component" "platform-api") | nindent 4 }}

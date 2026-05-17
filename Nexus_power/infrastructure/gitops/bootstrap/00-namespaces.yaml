@@ -1,0 +1,93 @@
+# Namespaces created before any controller. PodSecurity labels enforced
+# from creation so no later workload can downgrade to privileged.
+# Mesh-injection labels are applied here so any controller installed into
+# these namespaces receives an mTLS-capable sidecar from the start.
+#
+# Namespace names referenced by every downstream Application; if a name
+# changes, the only place to change it is here + envs/<env>/config.yaml.
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: argocd
+  labels:
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted
+    # Argo CD installs into a namespace it manages; mesh injection is
+    # explicitly disabled because its CLI relies on in-pod TLS to its
+    # own repo-server / dex.
+    linkerd.io/inject: disabled
+    istio-injection: disabled
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: cert-manager
+  labels:
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest
+    linkerd.io/inject: disabled
+    istio-injection: disabled
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: external-secrets
+  labels:
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest
+    linkerd.io/inject: enabled
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: linkerd
+  labels:
+    pod-security.kubernetes.io/enforce: privileged
+    pod-security.kubernetes.io/enforce-version: latest
+    linkerd.io/is-control-plane: "true"
+    config.linkerd.io/admission-webhooks: disabled
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: argo-rollouts
+  labels:
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest
+    linkerd.io/inject: enabled
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: keda
+  labels:
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest
+    linkerd.io/inject: enabled
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: observability
+  labels:
+    pod-security.kubernetes.io/enforce: privileged
+    pod-security.kubernetes.io/enforce-version: latest
+    linkerd.io/inject: enabled
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: nexus-platform
+  labels:
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted
+    linkerd.io/inject: enabled
+    # The platform namespace is where every business workload lives.
+    # Inter-tenant isolation inside this namespace is enforced by
+    # NetworkPolicy + Postgres RLS + per-tenant signed-URL prefixes,
+    # not by namespace splitting. See Helm chart templates/networkpolicy.yaml.

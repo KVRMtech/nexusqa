@@ -1,0 +1,10 @@
+# Spine Engine — workflow orchestration
+-e ../../sdk/nexus-sdk
+httpx>=0.26,<1.0
+# Cursor tracking (CursorTracker) needs OpenCV + NumPy for per-frame motion
+# analysis. Headless variant has no Qt/X11 dependency, which is correct for
+# a non-GUI container. Without these the cursor signal path falls back to
+# "cursor: opencv/numpy unavailable" and the cursor_events table stays empty
+# regardless of the source video.
+opencv-python-headless>=4.9
+numpy>=1.26

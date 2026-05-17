@@ -1,0 +1,62 @@
+{{/*
+=================================================================
+Prometheus Adapter Config — Maps Prometheus metrics to K8s custom metrics API
+=================================================================
+Required for HPA to read nexus_queue_depth from Prometheus.
+
+Install prometheus-adapter:
+  helm install prometheus-adapter prometheus-community/prometheus-adapter \
+    --set prometheus.url=http://prometheus.nexus-production:9090 \
+    --set prometheus.port=9090 \
+    -f <this-configmap-values>
+
+This ConfigMap is applied as extra rules to prometheus-adapter.
+*/}}
+
+{{- if and .Values.queueMetrics.enabled .Values.queueMetrics.prometheusAdapter.enabled }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "nexus-qa.fullname" . }}-prometheus-adapter-rules
+  labels:
+    {{- include "nexus-qa.labels" . | nindent 4 }}
+data:
+  rules.yaml: |
+    rules:
+      # Map nexus_queue_depth{engine="ears"} → external metric
+      - seriesQuery: 'nexus_queue_depth{engine!=""}'
+        resources:
+          overrides:
+            engine:
+              group: ""
+              resource: "engine"
+        name:
+          matches: "^(.*)$"
+          as: "nexus_queue_depth"
+        metricsQuery: 'sum(nexus_queue_depth{<<.LabelMatchers>>}) by (engine)'
+
+      # Map nexus_queue_pending → external metric
+      - seriesQuery: 'nexus_queue_pending{engine!=""}'
+        resources:
+          overrides:
+            engine:
+              group: ""
+              resource: "engine"
+        name:
+          matches: "^(.*)$"
+          as: "nexus_queue_pending"
+        metricsQuery: 'sum(nexus_queue_pending{<<.LabelMatchers>>}) by (engine)'
+
+      # Map nexus_queue_consumers → external metric
+      - seriesQuery: 'nexus_queue_consumers{engine!=""}'
+        resources:
+          overrides:
+            engine:
+              group: ""
+              resource: "engine"
+        name:
+          matches: "^(.*)$"
+          as: "nexus_queue_consumers"
+        metricsQuery: 'sum(nexus_queue_consumers{<<.LabelMatchers>>}) by (engine)'
+{{- end }}

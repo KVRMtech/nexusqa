@@ -1,0 +1,14 @@
+# Production cert-manager — extra replicas for HA, tighter resource caps.
+replicaCount: 3
+
+webhook:
+  replicaCount: 3
+cainjector:
+  replicaCount: 3
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    memory: 384Mi

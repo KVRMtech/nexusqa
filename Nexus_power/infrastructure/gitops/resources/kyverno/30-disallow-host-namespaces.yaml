@@ -1,0 +1,35 @@
+# Reject any pod that requests host namespaces, host networking, host
+# PID, or host IPC. Redundant with PSS restricted but kept explicit so
+# the rejection message is precise when this surfaces.
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: disallow-host-namespaces
+  annotations:
+    policies.kyverno.io/title: Disallow host namespaces and host networking
+    policies.kyverno.io/category: Pod Security
+    policies.kyverno.io/severity: high
+    policies.kyverno.io/subject: Pod
+spec:
+  validationFailureAction: Enforce
+  background: true
+  rules:
+    - name: no-host-namespaces
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+              namespaceSelector:
+                matchLabels:
+                  pod-security.kubernetes.io/enforce: restricted
+      validate:
+        message: >-
+          hostPID, hostIPC, hostNetwork, and hostUsers are all forbidden.
+          Workloads that need host-level access run on dedicated nodes
+          under a separate, explicitly-exempted namespace.
+        pattern:
+          spec:
+            =(hostPID): "false"
+            =(hostIPC): "false"
+            =(hostNetwork): "false"
+            =(hostUsers): "true"

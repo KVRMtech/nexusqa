@@ -1,0 +1,729 @@
+@import url('https://fonts.googleapis.com/css2?family=Source+Sans+3:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --color-nexus: 38 112 163;
+    --usaa-navy: #0a2540;
+    --usaa-navy-deep: #051524;
+    --usaa-blue: #2670a3;
+    --usaa-blue-light: #4f8ac3;
+    --usaa-gold: #D9A23A;
+    --usaa-cream: #f8f5ef;
+    --usaa-page: #f5f7fa;
+    --usaa-card: #ffffff;
+    --usaa-text: #0f3250;
+    --usaa-text-muted: #5a7a9c;
+    --usaa-border: rgba(10, 37, 64, 0.08);
+  }
+  html { color-scheme: light; }
+  body {
+    @apply bg-[#f5f7fa] text-[#0f3250] antialiased;
+    font-family: 'Source Sans 3', 'Source Sans Pro', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  }
+}
+
+@layer components {
+  .btn-primary {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg
+           bg-gradient-to-r from-nexus-600 to-nexus-500 px-4 py-2.5
+           text-sm font-semibold text-white shadow-md shadow-nexus-500/20
+           hover:from-nexus-500 hover:to-nexus-400
+           focus-visible:outline focus-visible:outline-2
+           focus-visible:outline-offset-2 focus-visible:outline-nexus-500
+           disabled:opacity-50 disabled:cursor-not-allowed
+           transition-all duration-200;
+  }
+  .btn-secondary {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg
+           bg-white px-4 py-2.5
+           text-sm font-semibold text-[#0a2540] shadow-sm ring-1 ring-inset ring-gray-200
+           hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed
+           transition-all duration-200;
+  }
+  .btn-danger {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg
+           bg-red-600 px-4 py-2.5
+           text-sm font-semibold text-white shadow-md shadow-red-500/20
+           hover:bg-red-500 disabled:opacity-50 disabled:cursor-not-allowed
+           transition-all duration-200;
+  }
+  .btn-ghost {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg
+           px-3 py-2 text-sm font-medium text-slate-500
+           hover:text-[#0a2540] hover:bg-gray-100
+           disabled:opacity-50 disabled:cursor-not-allowed
+           transition-all duration-200;
+  }
+  .card {
+    @apply rounded-xl bg-white shadow-sm ring-1 ring-gray-200;
+  }
+  .card-glow {
+    @apply card shadow-nexus-500/5;
+  }
+  .input-field {
+    @apply block w-full rounded-lg border-0 py-2.5 px-3.5
+           bg-white text-[#0f3250] shadow-sm
+           ring-1 ring-inset ring-gray-200
+           placeholder:text-slate-400
+           focus:ring-2 focus:ring-inset focus:ring-[#2670a3]
+           sm:text-sm sm:leading-6
+           transition-all duration-200;
+  }
+  .badge {
+    @apply inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold;
+  }
+  .badge-green {
+    @apply badge bg-green-500/15 text-green-400 ring-1 ring-inset ring-green-500/25;
+  }
+  .badge-yellow {
+    @apply badge bg-yellow-500/15 text-yellow-400 ring-1 ring-inset ring-yellow-500/25;
+  }
+  .badge-red {
+    @apply badge bg-red-500/15 text-red-400 ring-1 ring-inset ring-red-500/25;
+  }
+  .badge-blue {
+    @apply badge bg-blue-500/15 text-blue-400 ring-1 ring-inset ring-blue-500/25;
+  }
+  .badge-purple {
+    @apply badge bg-purple-500/15 text-purple-400 ring-1 ring-inset ring-purple-500/25;
+  }
+  .badge-orange {
+    @apply badge bg-orange-500/15 text-orange-400 ring-1 ring-inset ring-orange-500/25;
+  }
+  .badge-gray {
+    @apply badge bg-gray-100 text-slate-500 ring-1 ring-inset ring-gray-200;
+  }
+  .badge-nexus {
+    @apply badge bg-nexus-500/15 text-nexus-400 ring-1 ring-inset ring-nexus-500/25;
+  }
+  .stat-card {
+    @apply card p-5 relative overflow-hidden;
+  }
+  .stat-card::before {
+    content: '';
+    @apply absolute top-0 left-0 right-0 h-[2px] bg-gradient-to-r from-transparent via-nexus-500 to-transparent opacity-50;
+  }
+  .zone-header {
+    @apply text-[11px] font-bold uppercase tracking-widest text-gray-500;
+  }
+  .page-title {
+    @apply text-2xl font-bold text-[#0a2540] tracking-tight;
+  }
+  .page-subtitle {
+    @apply mt-1 text-sm text-slate-500;
+  }
+  .table-header {
+    @apply text-[11px] font-bold uppercase tracking-wider text-gray-500;
+  }
+}
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { @apply bg-gray-300 rounded-full; }
+::-webkit-scrollbar-thumb:hover { @apply bg-gray-400; }
+
+/* Animations */
+@keyframes slide-in {
+  from { transform: translateY(8px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes pulse-glow {
+  0%, 100% { box-shadow: 0 0 8px rgba(99, 102, 241, 0.3); }
+  50% { box-shadow: 0 0 20px rgba(99, 102, 241, 0.6); }
+}
+@keyframes gradient-x {
+  0%, 100% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+}
+.animate-slide-in { animation: slide-in 0.25s ease-out; }
+.animate-fade-in { animation: fade-in 0.2s ease-out; }
+.animate-pulse-glow { animation: pulse-glow 2s ease-in-out infinite; }
+.animate-gradient { animation: gradient-x 3s ease infinite; background-size: 200% 200%; }
+
+/* Visual Flow Diagram — animated connections */
+@keyframes flow-dash {
+  to { stroke-dashoffset: -24; }
+}
+@keyframes flow-particle {
+  0%   { offset-distance: 0%; opacity: 0; }
+  10%  { opacity: 1; }
+  90%  { opacity: 1; }
+  100% { offset-distance: 100%; opacity: 0; }
+}
+@keyframes card-enter {
+  from { transform: translateY(20px) scale(0.95); opacity: 0; }
+  to   { transform: translateY(0) scale(1); opacity: 1; }
+}
+@keyframes shimmer {
+  0%   { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+@keyframes stat-count {
+  from { transform: scale(0.5); opacity: 0; }
+  to   { transform: scale(1); opacity: 1; }
+}
+.flow-edge-animated {
+  animation: flow-dash 1s linear infinite;
+}
+.flow-particle {
+  animation: flow-particle 2.5s ease-in-out infinite;
+}
+.card-enter {
+  animation: card-enter 0.5s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+.shimmer-bg {
+  background: linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.03) 50%, transparent 100%);
+  background-size: 200% 100%;
+  animation: shimmer 3s ease-in-out infinite;
+}
+.stat-pop {
+  animation: stat-count 0.6s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+
+/* ═══ Visual Flow Diagram v5 — 3D Animations ═══ */
+
+/* Card entrance with 3D depth */
+@keyframes v5-card-enter {
+  from { transform: translateY(30px) translateZ(-20px) scale(0.92); opacity: 0; }
+  to   { transform: translateY(0) translateZ(0) scale(1); opacity: 1; }
+}
+.v5-card-enter {
+  animation: v5-card-enter 0.7s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+/* Floating ambient blobs */
+@keyframes v5-float-slow {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  33%      { transform: translate(30px, -20px) scale(1.05); }
+  66%      { transform: translate(-20px, 15px) scale(0.95); }
+}
+@keyframes v5-float-medium {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  50%      { transform: translate(-25px, 20px) scale(1.08); }
+}
+@keyframes v5-float-fast {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  25%      { transform: translate(15px, -15px) scale(1.03); }
+  75%      { transform: translate(-10px, 10px) scale(0.97); }
+}
+.v5-float-slow   { animation: v5-float-slow 20s ease-in-out infinite; }
+.v5-float-medium { animation: v5-float-medium 14s ease-in-out infinite; }
+.v5-float-fast   { animation: v5-float-fast 10s ease-in-out infinite; }
+
+/* Floating particles */
+@keyframes v5-particle-drift {
+  0%   { transform: translateY(0) translateX(0) scale(1); opacity: 0; }
+  10%  { opacity: 0.7; }
+  50%  { transform: translateY(-40px) translateX(20px) scale(1.5); }
+  90%  { opacity: 0.7; }
+  100% { transform: translateY(-80px) translateX(-10px) scale(0.8); opacity: 0; }
+}
+.v5-particle {
+  animation: v5-particle-drift 8s ease-in-out infinite;
+}
+
+/* 3D spinner for loading */
+@keyframes v5-spin-3d {
+  from { transform: rotateX(30deg) rotateZ(0deg); }
+  to   { transform: rotateX(30deg) rotateZ(360deg); }
+}
+@keyframes v5-spin-3d-reverse {
+  from { transform: rotateX(-20deg) rotateZ(360deg); }
+  to   { transform: rotateX(-20deg) rotateZ(0deg); }
+}
+.v5-spin-3d         { animation: v5-spin-3d 3s linear infinite; }
+.v5-spin-3d-reverse { animation: v5-spin-3d-reverse 2s linear infinite; }
+
+/* Neon pulse glow on connectors */
+@keyframes v5-pulse {
+  0%, 100% { opacity: 0.12; }
+  50%      { opacity: 0.25; }
+}
+.v5-pulse-glow { animation: v5-pulse 2s ease-in-out infinite; }
+
+/* Step badge ring pulse */
+@keyframes v5-ring {
+  0%, 100% { transform: scale(1); opacity: 0.3; }
+  50%      { transform: scale(1.15); opacity: 0; }
+}
+.v5-ring-pulse { animation: v5-ring 2.5s ease-in-out infinite; }
+
+/* Selected card glow pulse */
+@keyframes v5-selected-pulse {
+  0%, 100% { box-shadow: inset 0 0 40px rgba(99,102,241,0.06), 0 0 30px rgba(99,102,241,0.1); }
+  50%      { box-shadow: inset 0 0 60px rgba(99,102,241,0.12), 0 0 50px rgba(99,102,241,0.2); }
+}
+.v5-selected-glow { animation: v5-selected-pulse 3s ease-in-out infinite; }
+
+/* Counter pop-in */
+@keyframes v5-counter {
+  from { transform: scale(0.4); opacity: 0; }
+  50%  { transform: scale(1.1); }
+  to   { transform: scale(1); opacity: 1; }
+}
+.v5-counter { animation: v5-counter 0.8s cubic-bezier(0.34, 1.56, 0.64, 1) both; }
+
+/* ═══════════════════════════════════════════════════════════════
+   USAA-INSPIRED THEME  —  Light content area, Navy sidebar, Gold CTA
+   Scoped to main.flex-1 so sidebar and pages with data-theme="dark"
+   are untouched. Uses !important to cleanly override tailwind utils.
+   ═══════════════════════════════════════════════════════════════ */
+
+/* Body stays visually "dark" until main content area applies light theme.
+   But we want the login page and everything to feel USAA: switch body to cream/white */
+body {
+  background-color: #f5f7fa !important;
+  color: #0f3250 !important;
+}
+
+/* Top bar (in AppLayout) uses bg-gray-950/90 — keep it deep USAA navy */
+.sticky.top-0.bg-gray-950\/90,
+header.bg-gray-950\/90,
+div.bg-gray-950\/90 {
+  background-color: rgba(10, 37, 64, 0.95) !important;
+  border-color: rgba(255,255,255,0.06) !important;
+}
+
+/* Sidebar (desktop + mobile) — deep USAA navy, cream text */
+.lg\:fixed.lg\:flex .bg-gray-900,
+.fixed.inset-y-0.left-0 .bg-gray-900\/95,
+.fixed.inset-y-0.left-0.bg-gray-900\/95,
+div.bg-gray-900.border-r {
+  background-color: #0a2540 !important;
+}
+.lg\:fixed.lg\:flex .border-r {
+  border-right-color: rgba(255,255,255,0.06) !important;
+}
+
+/* ── Page content area: LIGHT theme ── */
+main.flex-1 {
+  background-color: #f5f7fa !important;
+  color: #0f3250 !important;
+}
+
+/* Backgrounds — invert within main content, excluding opt-out subtrees */
+main.flex-1 .bg-gray-950,
+main.flex-1 .bg-gray-950\/90,
+main.flex-1 .bg-gray-950\/50 {
+  background-color: #f5f7fa !important;
+}
+main.flex-1 .bg-gray-900,
+main.flex-1 .bg-gray-900\/80,
+main.flex-1 .bg-gray-900\/95,
+main.flex-1 .bg-gray-900\/50 {
+  background-color: #ffffff !important;
+}
+main.flex-1 .bg-gray-800,
+main.flex-1 .bg-gray-800\/95,
+main.flex-1 .bg-gray-800\/50 {
+  background-color: #f0f4f9 !important;
+}
+main.flex-1 .bg-gray-700 {
+  background-color: #e2e8f0 !important;
+}
+
+/* Text colors */
+main.flex-1 .text-white             { color: #0a2540 !important; }
+main.flex-1 .text-gray-100          { color: #0f3250 !important; }
+main.flex-1 .text-gray-200          { color: #1a3a5c !important; }
+main.flex-1 .text-gray-300          { color: #2a4a6c !important; }
+main.flex-1 .text-gray-400          { color: #5a7a9c !important; }
+main.flex-1 .text-gray-500          { color: #7a8ba0 !important; }
+main.flex-1 .text-gray-600          { color: #94a3b8 !important; }
+
+/* Translucent overlays → translucent navy on white */
+main.flex-1 .bg-white\/\[0\.02\]   { background-color: rgba(10, 37, 64, 0.02) !important; }
+main.flex-1 .bg-white\/\[0\.04\]   { background-color: rgba(10, 37, 64, 0.03) !important; }
+main.flex-1 .bg-white\/\[0\.05\]   { background-color: rgba(10, 37, 64, 0.04) !important; }
+main.flex-1 .bg-white\/\[0\.06\]   { background-color: rgba(10, 37, 64, 0.05) !important; }
+main.flex-1 .bg-white\/\[0\.08\]   { background-color: rgba(10, 37, 64, 0.06) !important; }
+main.flex-1 .bg-white\/\[0\.1\]    { background-color: rgba(10, 37, 64, 0.08) !important; }
+main.flex-1 .bg-white\/5           { background-color: rgba(10, 37, 64, 0.04) !important; }
+main.flex-1 .bg-white\/10          { background-color: rgba(10, 37, 64, 0.08) !important; }
+main.flex-1 .hover\:bg-white\/\[0\.04\]:hover { background-color: rgba(10, 37, 64, 0.04) !important; }
+main.flex-1 .hover\:bg-white\/\[0\.06\]:hover { background-color: rgba(10, 37, 64, 0.05) !important; }
+main.flex-1 .hover\:bg-white\/\[0\.08\]:hover { background-color: rgba(10, 37, 64, 0.07) !important; }
+main.flex-1 .hover\:bg-white\/\[0\.1\]:hover  { background-color: rgba(10, 37, 64, 0.08) !important; }
+main.flex-1 .hover\:bg-white\/5:hover         { background-color: rgba(10, 37, 64, 0.04) !important; }
+main.flex-1 .hover\:bg-white\/10:hover        { background-color: rgba(10, 37, 64, 0.08) !important; }
+
+/* Borders */
+main.flex-1 .border-white\/\[0\.04\] { border-color: rgba(10, 37, 64, 0.06) !important; }
+main.flex-1 .border-white\/\[0\.06\] { border-color: rgba(10, 37, 64, 0.08) !important; }
+main.flex-1 .border-white\/\[0\.08\] { border-color: rgba(10, 37, 64, 0.1) !important; }
+main.flex-1 .border-white\/\[0\.1\]  { border-color: rgba(10, 37, 64, 0.12) !important; }
+main.flex-1 .border-white\/5         { border-color: rgba(10, 37, 64, 0.06) !important; }
+main.flex-1 .border-white\/10        { border-color: rgba(10, 37, 64, 0.1) !important; }
+main.flex-1 .border-white\/20        { border-color: rgba(10, 37, 64, 0.15) !important; }
+main.flex-1 .border-gray-700         { border-color: #cbd5e1 !important; }
+main.flex-1 .border-gray-800         { border-color: #e2e8f0 !important; }
+
+/* Rings */
+main.flex-1 .ring-white\/\[0\.06\]   { --tw-ring-color: rgba(10, 37, 64, 0.08) !important; }
+main.flex-1 .ring-white\/\[0\.08\]   { --tw-ring-color: rgba(10, 37, 64, 0.1)  !important; }
+main.flex-1 .ring-white\/\[0\.1\]    { --tw-ring-color: rgba(10, 37, 64, 0.12) !important; }
+main.flex-1 .ring-white\/10          { --tw-ring-color: rgba(10, 37, 64, 0.1)  !important; }
+main.flex-1 .ring-white\/20          { --tw-ring-color: rgba(10, 37, 64, 0.15) !important; }
+
+/* Dividers */
+main.flex-1 .divide-white\/\[0\.06\] > :not([hidden]) ~ :not([hidden]) {
+  border-color: rgba(10, 37, 64, 0.08) !important;
+}
+
+/* Placeholder text */
+main.flex-1 ::placeholder { color: #94a3b8 !important; }
+
+/* Shadows — soften for light bg */
+main.flex-1 .shadow-lg,
+main.flex-1 .shadow-xl {
+  box-shadow: 0 4px 14px rgba(10, 37, 64, 0.08), 0 2px 4px rgba(10, 37, 64, 0.04) !important;
+}
+
+/* Scrollbar — light theme */
+main.flex-1 ::-webkit-scrollbar-thumb { background: rgba(10,37,64,0.15) !important; }
+main.flex-1 ::-webkit-scrollbar-thumb:hover { background: rgba(10,37,64,0.25) !important; }
+
+/* ── OPT-OUT: pages with data-theme="dark" keep their own palette ──
+   These rules restore the dark look for VisualFlowDiagramPage etc. */
+main.flex-1 [data-theme="dark"],
+main.flex-1 [data-theme="dark"] * {
+  /* Re-assert dark colors by winning on specificity over above rules */
+}
+main.flex-1 [data-theme="dark"] .text-white    { color: #ffffff !important; }
+main.flex-1 [data-theme="dark"] .text-gray-100 { color: #f3f4f6 !important; }
+main.flex-1 [data-theme="dark"] .text-gray-200 { color: #e5e7eb !important; }
+main.flex-1 [data-theme="dark"] .text-gray-300 { color: #d1d5db !important; }
+main.flex-1 [data-theme="dark"] .text-gray-400 { color: #9ca3af !important; }
+main.flex-1 [data-theme="dark"] .text-gray-500 { color: #6b7280 !important; }
+main.flex-1 [data-theme="dark"] .bg-gray-950   { background-color: #030712 !important; }
+main.flex-1 [data-theme="dark"] .bg-gray-900   { background-color: #111827 !important; }
+main.flex-1 [data-theme="dark"] .bg-gray-800   { background-color: #1f2937 !important; }
+
+/* USAA-style primary button override (applies globally) */
+.btn-primary {
+  background-image: linear-gradient(135deg, #0a2540 0%, #2670a3 100%) !important;
+  box-shadow: 0 2px 8px rgba(10, 37, 64, 0.2) !important;
+}
+.btn-primary:hover {
+  background-image: linear-gradient(135deg, #0f3250 0%, #2e85c2 100%) !important;
+}
+
+/* USAA-style card in light area */
+main.flex-1 .card {
+  background-color: #ffffff !important;
+  box-shadow: 0 1px 3px rgba(10, 37, 64, 0.06), 0 1px 2px rgba(10, 37, 64, 0.04) !important;
+  border: 1px solid rgba(10, 37, 64, 0.08) !important;
+}
+
+/* USAA-style secondary buttons in light area */
+main.flex-1 .btn-secondary {
+  background-color: #ffffff !important;
+  color: #0f3250 !important;
+  box-shadow: 0 1px 2px rgba(10, 37, 64, 0.06) !important;
+  border: 1px solid rgba(10, 37, 64, 0.12) !important;
+}
+main.flex-1 .btn-secondary:hover {
+  background-color: #f0f4f9 !important;
+}
+
+/* Ghost buttons in light area */
+main.flex-1 .btn-ghost {
+  color: #5a7a9c !important;
+}
+main.flex-1 .btn-ghost:hover {
+  color: #0a2540 !important;
+  background-color: rgba(10, 37, 64, 0.04) !important;
+}
+
+/* Input fields in light area */
+main.flex-1 .input-field {
+  background-color: #ffffff !important;
+  color: #0f3250 !important;
+  border: 1px solid rgba(10, 37, 64, 0.15) !important;
+  box-shadow: 0 1px 2px rgba(10, 37, 64, 0.03) !important;
+  --tw-ring-color: rgba(10, 37, 64, 0.15) !important;
+}
+main.flex-1 .input-field:focus {
+  --tw-ring-color: #2670a3 !important;
+  border-color: #2670a3 !important;
+}
+
+/* Badges readable on light bg */
+main.flex-1 .badge-green   { background-color: rgba(16,185,129,0.12) !important; color: #047857 !important; }
+main.flex-1 .badge-yellow  { background-color: rgba(217,162,58,0.15) !important; color: #92661d !important; }
+main.flex-1 .badge-red     { background-color: rgba(239,68,68,0.1)   !important; color: #b91c1c !important; }
+main.flex-1 .badge-blue    { background-color: rgba(38,112,163,0.12) !important; color: #164465 !important; }
+main.flex-1 .badge-purple  { background-color: rgba(139,92,246,0.1)  !important; color: #6d28d9 !important; }
+main.flex-1 .badge-orange  { background-color: rgba(234,88,12,0.1)   !important; color: #9a3412 !important; }
+main.flex-1 .badge-gray    { background-color: rgba(10,37,64,0.06)   !important; color: #475569 !important; }
+main.flex-1 .badge-nexus   { background-color: rgba(38,112,163,0.12) !important; color: #164465 !important; }
+
+/* Gold CTA helper class */
+.btn-gold {
+  background-image: linear-gradient(135deg, #D9A23A 0%, #e0ac2c 100%) !important;
+  color: #0a2540 !important;
+  box-shadow: 0 2px 8px rgba(217, 162, 58, 0.25) !important;
+}
+.btn-gold:hover {
+  background-image: linear-gradient(135deg, #e0ac2c 0%, #f0bb3e 100%) !important;
+}
+
+/* Login page — keep existing but tint toward USAA navy */
+body:has([data-route="/login"]) { background-color: #0a2540 !important; }
+
+/* ═══════════════════════════════════════════════════════════════
+   USAA THEME — EXTENDED OVERRIDES (slate, gray-700, widget polish)
+   ═══════════════════════════════════════════════════════════════ */
+
+/* Slate palette → light USAA equivalents */
+main.flex-1 .bg-slate-950,
+main.flex-1 .bg-slate-900,
+main.flex-1 .bg-slate-900\/50,
+main.flex-1 .bg-slate-900\/80,
+main.flex-1 .bg-slate-900\/95 { background-color: #ffffff !important; }
+main.flex-1 .bg-slate-800,
+main.flex-1 .bg-slate-800\/50,
+main.flex-1 .bg-slate-800\/40,
+main.flex-1 .bg-slate-800\/30 { background-color: #f8fafc !important; }
+main.flex-1 .bg-slate-700,
+main.flex-1 .bg-slate-700\/50 { background-color: #e2e8f0 !important; }
+main.flex-1 .bg-slate-600 { background-color: #cbd5e1 !important; }
+main.flex-1 .hover\:bg-slate-800:hover,
+main.flex-1 .hover\:bg-slate-700:hover { background-color: #f1f5f9 !important; }
+
+/* Gray-700 → light border/divider color */
+main.flex-1 .bg-gray-700,
+main.flex-1 .bg-gray-700\/50 { background-color: #e2e8f0 !important; }
+main.flex-1 .bg-gray-600 { background-color: #cbd5e1 !important; }
+
+/* Slate text on light bg */
+main.flex-1 .text-slate-50,
+main.flex-1 .text-slate-100,
+main.flex-1 .text-slate-200 { color: #0f3250 !important; }
+main.flex-1 .text-slate-300 { color: #1a3a5c !important; }
+main.flex-1 .text-slate-400 { color: #5a7a9c !important; }
+main.flex-1 .text-slate-500 { color: #64748b !important; }
+main.flex-1 .text-slate-600 { color: #475569 !important; }
+
+/* Slate borders */
+main.flex-1 .border-slate-950,
+main.flex-1 .border-slate-900,
+main.flex-1 .border-slate-800,
+main.flex-1 .border-slate-700 { border-color: #e2e8f0 !important; }
+main.flex-1 .border-slate-600,
+main.flex-1 .border-slate-500 { border-color: #cbd5e1 !important; }
+main.flex-1 .border-gray-700 { border-color: #e2e8f0 !important; }
+main.flex-1 .border-gray-800 { border-color: #eef2f7 !important; }
+
+/* Gray placeholder text */
+main.flex-1 .placeholder-gray-500::placeholder,
+main.flex-1 .placeholder-slate-500::placeholder { color: #94a3b8 !important; }
+main.flex-1 .placeholder-gray-400::placeholder,
+main.flex-1 .placeholder-slate-400::placeholder { color: #94a3b8 !important; }
+
+/* Dark→light focus border on inputs */
+main.flex-1 input.bg-gray-800,
+main.flex-1 input.bg-slate-800,
+main.flex-1 textarea.bg-gray-800,
+main.flex-1 textarea.bg-slate-800,
+main.flex-1 select.bg-gray-800,
+main.flex-1 select.bg-slate-800 {
+  background-color: #ffffff !important;
+  color: #0f3250 !important;
+  border-color: rgba(10, 37, 64, 0.15) !important;
+}
+
+/* Stat card progress bars with bg-gray-800 → light track */
+main.flex-1 .bg-gray-800.rounded-full,
+main.flex-1 .bg-gray-700.rounded-full,
+main.flex-1 .bg-slate-800.rounded-full,
+main.flex-1 .bg-slate-700.rounded-full { background-color: #e6ecf3 !important; }
+
+/* ── USAA WIDGET POLISH ──
+   Cards get a soft corporate look: white bg, thin navy border, soft shadow,
+   optional gold top accent when marked .usaa-accent */
+main.flex-1 .card,
+main.flex-1 .rounded-xl.border,
+main.flex-1 .rounded-lg.border {
+  transition: box-shadow 0.2s ease, transform 0.15s ease;
+}
+main.flex-1 .card:hover { box-shadow: 0 4px 16px rgba(10, 37, 64, 0.1), 0 2px 4px rgba(10, 37, 64, 0.06) !important; }
+
+/* Page headers (PageHeader component uses h1 + subtitle) — accent bar */
+main.flex-1 .page-header,
+main.flex-1 [data-page-header] {
+  border-bottom: 1px solid rgba(10, 37, 64, 0.08);
+  padding-bottom: 1rem;
+  position: relative;
+}
+main.flex-1 .page-header::after,
+main.flex-1 [data-page-header]::after {
+  content: '';
+  position: absolute;
+  bottom: -1px; left: 0;
+  width: 56px; height: 3px;
+  background: linear-gradient(90deg, #D9A23A 0%, #e0ac2c 100%);
+  border-radius: 2px;
+}
+
+/* Nexus-branded hover states & gradient buttons → USAA navy */
+main.flex-1 .from-nexus-500,
+main.flex-1 .from-nexus-600 { --tw-gradient-from: #0a2540 var(--tw-gradient-from-position) !important; }
+main.flex-1 .to-nexus-600,
+main.flex-1 .to-nexus-700 { --tw-gradient-to: #2670a3 var(--tw-gradient-to-position) !important; }
+main.flex-1 .from-purple-600,
+main.flex-1 .to-purple-600 { --tw-gradient-to: #2670a3 var(--tw-gradient-to-position) !important; }
+
+/* nexus-* text/bg in light area → USAA navy */
+main.flex-1 .text-nexus-400 { color: #2670a3 !important; }
+main.flex-1 .text-nexus-300 { color: #4f8ac3 !important; }
+main.flex-1 .text-nexus-500 { color: #1d5784 !important; }
+main.flex-1 .bg-nexus-500\/10 { background-color: rgba(38,112,163,0.08) !important; }
+main.flex-1 .bg-nexus-500\/15 { background-color: rgba(38,112,163,0.1) !important; }
+main.flex-1 .bg-nexus-500\/20 { background-color: rgba(38,112,163,0.12) !important; }
+
+/* Large heading text in dark-theme sections → dark navy for readability */
+main.flex-1 h1, main.flex-1 h2, main.flex-1 h3 { color: #0a2540; }
+
+/* Make "StatCard"-style numeric stats pop with USAA navy */
+main.flex-1 .text-3xl.font-bold,
+main.flex-1 .text-4xl.font-bold,
+main.flex-1 .text-5xl.font-bold { color: #0a2540; }
+
+/* Modal overlays with dark bg → keep dim but lighter */
+main.flex-1 .bg-black\/50,
+main.flex-1 .bg-black\/60,
+main.flex-1 .bg-black\/70 { background-color: rgba(10, 37, 64, 0.5) !important; }
+
+/* Floating toolbar rows — subtle USAA slate */
+main.flex-1 .from-gray-900,
+main.flex-1 .to-gray-900,
+main.flex-1 .from-gray-800,
+main.flex-1 .to-gray-800 {
+  --tw-gradient-from: #ffffff var(--tw-gradient-from-position) !important;
+  --tw-gradient-to: #f5f7fa var(--tw-gradient-to-position) !important;
+}
+
+/* Re-assert dark-theme islands */
+main.flex-1 [data-theme="dark"] .bg-slate-900   { background-color: #0f172a !important; }
+main.flex-1 [data-theme="dark"] .bg-slate-800   { background-color: #1e293b !important; }
+main.flex-1 [data-theme="dark"] .text-slate-300 { color: #cbd5e1 !important; }
+main.flex-1 [data-theme="dark"] .text-slate-400 { color: #94a3b8 !important; }
+main.flex-1 [data-theme="dark"] .border-slate-700 { border-color: #334155 !important; }
+main.flex-1 [data-theme="dark"] h1,
+main.flex-1 [data-theme="dark"] h2,
+main.flex-1 [data-theme="dark"] h3 { color: inherit; }
+
+/* ═══════════════════════════════════════════════════════════════
+   USAA THEME — COMPREHENSIVE OVERRIDES (all remaining variants)
+   Covers every bg-gray, bg-slate, border, hover combination
+   found across SessionReplay, MissionDashboard, MissionDetail,
+   E2EArchitect, PersonaGallery, PersonaWorkspace, TestStrategy,
+   CanonicalResult pages.
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ── BACKGROUNDS: all gray opacity variants ── */
+main.flex-1 .bg-gray-900\/30  { background-color: rgba(255,255,255,0.95) !important; }
+main.flex-1 .bg-gray-900\/70  { background-color: rgba(255,255,255,0.98) !important; }
+main.flex-1 .bg-gray-800\/20  { background-color: rgba(240,244,249,0.5) !important; }
+main.flex-1 .bg-gray-800\/30  { background-color: rgba(240,244,249,0.6) !important; }
+main.flex-1 .bg-gray-800\/40  { background-color: rgba(240,244,249,0.7) !important; }
+main.flex-1 .bg-gray-800\/60  { background-color: rgba(240,244,249,0.85) !important; }
+main.flex-1 .bg-gray-800\/70  { background-color: rgba(240,244,249,0.9) !important; }
+main.flex-1 .bg-gray-700\/30  { background-color: rgba(226,232,240,0.5) !important; }
+main.flex-1 .bg-gray-700\/40  { background-color: rgba(226,232,240,0.6) !important; }
+main.flex-1 .bg-gray-600\/50  { background-color: rgba(203,213,225,0.5) !important; }
+main.flex-1 .bg-gray-500\/20  { background-color: rgba(148,163,184,0.12) !important; }
+main.flex-1 .bg-gray-500\/30  { background-color: rgba(148,163,184,0.18) !important; }
+
+/* ── BACKGROUNDS: hover variants ── */
+main.flex-1 .hover\:bg-gray-800:hover,
+main.flex-1 .hover\:bg-gray-800\/30:hover { background-color: #f0f4f9 !important; }
+main.flex-1 .hover\:bg-gray-800\/50:hover { background-color: #eef2f7 !important; }
+main.flex-1 .hover\:bg-gray-800\/70:hover { background-color: #e8ecf3 !important; }
+main.flex-1 .hover\:bg-gray-700:hover     { background-color: #e2e8f0 !important; }
+main.flex-1 .hover\:bg-gray-700\/50:hover { background-color: rgba(226,232,240,0.5) !important; }
+
+/* ── BORDERS: all gray/slate variants ── */
+main.flex-1 .border-gray-600       { border-color: #cbd5e1 !important; }
+main.flex-1 .border-gray-700\/50   { border-color: rgba(226,232,240,0.7) !important; }
+main.flex-1 .border-gray-700\/40   { border-color: rgba(226,232,240,0.6) !important; }
+main.flex-1 .border-gray-700\/30   { border-color: rgba(226,232,240,0.5) !important; }
+main.flex-1 .border-gray-600\/30   { border-color: rgba(203,213,225,0.5) !important; }
+main.flex-1 .border-gray-500\/30   { border-color: rgba(148,163,184,0.3) !important; }
+main.flex-1 .border-slate-700\/50  { border-color: rgba(226,232,240,0.7) !important; }
+main.flex-1 .hover\:border-slate-500:hover { border-color: #94a3b8 !important; }
+
+/* ── TEXT: gray-600/800 on light (should be muted, not invisible) ── */
+main.flex-1 .text-gray-600   { color: #64748b !important; }
+main.flex-1 .text-gray-700   { color: #475569 !important; }
+main.flex-1 .text-gray-800   { color: #334155 !important; }
+main.flex-1 .text-gray-800\/40  { color: rgba(51,65,85,0.5) !important; }
+main.flex-1 .text-gray-800\/50  { color: rgba(51,65,85,0.6) !important; }
+main.flex-1 .text-gray-800\/30  { color: rgba(51,65,85,0.4) !important; }
+
+/* ── HOVER TEXT ── */
+main.flex-1 .hover\:text-gray-200:hover  { color: #0f3250 !important; }
+main.flex-1 .hover\:text-gray-300:hover  { color: #1a3a5c !important; }
+main.flex-1 .hover\:text-slate-400:hover { color: #475569 !important; }
+main.flex-1 .group-hover\:text-slate-400 { color: #475569 !important; }
+main.flex-1 .hover\:text-slate-300:hover { color: #1a3a5c !important; }
+
+/* ── FOCUS STATES ── */
+main.flex-1 .focus\:border-nexus-500:focus { border-color: #2670a3 !important; }
+main.flex-1 .focus\:ring-nexus-500:focus   { --tw-ring-color: rgba(38,112,163,0.5) !important; }
+
+/* ── DIVIDERS ── */
+main.flex-1 .divide-gray-700 > :not([hidden]) ~ :not([hidden])   { border-color: #e2e8f0 !important; }
+main.flex-1 .divide-gray-800 > :not([hidden]) ~ :not([hidden])   { border-color: #eef2f7 !important; }
+main.flex-1 .divide-slate-700 > :not([hidden]) ~ :not([hidden])  { border-color: #e2e8f0 !important; }
+
+/* ── RING COLORS ── */
+main.flex-1 .ring-gray-800      { --tw-ring-color: #e2e8f0 !important; }
+main.flex-1 .ring-gray-700      { --tw-ring-color: #cbd5e1 !important; }
+main.flex-1 .ring-slate-700     { --tw-ring-color: #e2e8f0 !important; }
+main.flex-1 .ring-slate-800     { --tw-ring-color: #eef2f7 !important; }
+
+/* ── GRADIENTS: from-/to- gray/slate ── */
+main.flex-1 .from-gray-950    { --tw-gradient-from: #f5f7fa var(--tw-gradient-from-position) !important; }
+main.flex-1 .to-gray-950      { --tw-gradient-to: #f5f7fa var(--tw-gradient-to-position) !important; }
+main.flex-1 .from-gray-900    { --tw-gradient-from: #ffffff var(--tw-gradient-from-position) !important; }
+main.flex-1 .to-gray-900      { --tw-gradient-to: #f8fafc var(--tw-gradient-to-position) !important; }
+main.flex-1 .from-slate-900   { --tw-gradient-from: #ffffff var(--tw-gradient-from-position) !important; }
+main.flex-1 .to-slate-900     { --tw-gradient-to: #f8fafc var(--tw-gradient-to-position) !important; }
+main.flex-1 .from-slate-800   { --tw-gradient-from: #f8fafc var(--tw-gradient-from-position) !important; }
+main.flex-1 .to-slate-800     { --tw-gradient-to: #f0f4f9 var(--tw-gradient-to-position) !important; }
+
+/* ── ALL INPUTS/TEXTAREAS/SELECTS with dark bg classes ── */
+main.flex-1 input.bg-gray-800,
+main.flex-1 input.bg-gray-900,
+main.flex-1 input.bg-slate-900,
+main.flex-1 textarea.bg-gray-900,
+main.flex-1 textarea.bg-slate-900,
+main.flex-1 select.bg-gray-900,
+main.flex-1 select.bg-slate-900 {
+  background-color: #ffffff !important;
+  color: #0f3250 !important;
+  border-color: rgba(10, 37, 64, 0.15) !important;
+}
+main.flex-1 input:focus,
+main.flex-1 textarea:focus,
+main.flex-1 select:focus {
+  border-color: #2670a3 !important;
+  outline-color: rgba(38,112,163,0.3) !important;
+}
+
+/* ── TOASTS (in main.tsx) ── */
+.bg-gray-900.text-gray-100 {
+  background-color: #0a2540 !important;
+  color: #f8fafc !important;
+}

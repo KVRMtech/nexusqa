@@ -1,0 +1,94 @@
+id: slack
+version: 1.0.0
+display_name: Slack
+vendor: nexus-core
+tier: standard
+
+capabilities:
+  - source
+  - surface
+
+auth:
+  method: oauth2
+  scopes:
+    - channels:history
+    - chat:write
+    - chat:write.public
+    - users:read
+    - im:history
+    - im:write
+  per_tenant: true
+
+source:
+  events:
+    - id: message.channels
+      type: message.channels
+      handler: ingest_message
+      description: Public-channel message events used for question detection.
+    - id: file_shared
+      type: file_shared
+      handler: ingest_file_attachment
+      description: Captures MP4 / audio / PDF attachments for ingestion.
+  rate_limit:
+    per_second: 50
+    burst: 100
+
+surface:
+  inbound:
+    - id: app_mention
+      type: app_mention
+      handler: handle_question
+    - id: message.im
+      type: message.im
+      handler: handle_dm
+  outbound:
+    - id: send_message
+      description: Post a message into a channel.
+      required_params:
+        - channel
+        - text
+      optional_params:
+        - blocks
+        - thread_ts
+      retries: 3
+    - id: send_dm
+      description: Post a DM to a user.
+      required_params:
+        - user_id
+        - text
+      optional_params:
+        - blocks
+      retries: 3
+    - id: send_card
+      description: Post a Block Kit card with action buttons.
+      required_params:
+        - channel
+        - text
+        - blocks
+      retries: 3
+    - id: update_message
+      description: Update an in-place message (e.g., live status).
+      required_params:
+        - channel
+        - ts
+        - text
+      optional_params:
+        - blocks
+      retries: 3
+  rate_limit:
+    per_minute: 100
+
+routing:
+  tenant_resolver: by_workspace_id
+  tenant_cache_seconds: 300
+
+health:
+  endpoint: https://slack.com/api/api.test
+  interval_seconds: 60
+  timeout_seconds: 5
+
+min_platform_version: 1.0.0
+tags:
+  - chat
+  - integration
+documentation_url: https://api.slack.com/apps

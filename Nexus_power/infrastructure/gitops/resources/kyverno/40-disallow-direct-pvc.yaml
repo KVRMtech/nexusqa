@@ -1,0 +1,57 @@
+# M0.4 eliminated the platform's dependence on PVCs in the runtime path:
+# engines move durable artifacts through the StorageBackend abstraction
+# (S3 / Azure Blob / GCS) and use emptyDir for ephemeral working state.
+# This policy is now Enforce in production; an exception is granted for
+# the shared model-cache PVC and for opt-in `mode: pvc` engine volumes
+# (which are only used in air-gapped / no-cloud clusters).
+#
+# Why disallow PVCs in the platform namespace at all? PVCs make pods
+# stateful, which prevents trivial pod restart, breaks pod scheduling
+# under cluster autoscaling, and ties recovery to volume-attach
+# semantics. The platform's design keeps all durable state in the data
+# plane (managed object storage); workloads stay stateless.
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: disallow-direct-pvc-in-platform-namespaces
+  annotations:
+    policies.kyverno.io/title: Disallow PVCs in platform namespaces
+    policies.kyverno.io/category: Architecture
+    policies.kyverno.io/severity: medium
+    policies.kyverno.io/subject: PersistentVolumeClaim
+spec:
+  validationFailureAction: Enforce
+  background: true
+  rules:
+    - name: no-pvc-in-platform
+      match:
+        any:
+          - resources:
+              kinds: [PersistentVolumeClaim]
+              namespaceSelector:
+                matchLabels:
+                  pod-security.kubernetes.io/enforce: restricted
+      # Explicit exemptions:
+      #   1. Shared model-cache PVC (large GPU model weights; intentionally
+      #      a PVC to avoid re-pulling on every pod restart).
+      #   2. Engine working-dir PVCs created when an operator opts in via
+      #      .Values.engines.<engine>.persistence.<vol>.mode: pvc — these
+      #      carry the chart-managed app.kubernetes.io/part-of label.
+      exclude:
+        any:
+          - resources:
+              names:
+                - "*-model-cache"
+          - resources:
+              selector:
+                matchLabels:
+                  app.kubernetes.io/part-of: nexus-qa
+                  nexus-qa.io/storage-mode-pvc-opt-in: "true"
+      validate:
+        message: >-
+          Platform namespaces are stateless by design. Workloads that
+          need durable storage must use the object-storage data plane
+          via the StorageBackend abstraction. PVCs are permitted only
+          for the shared model cache or for explicitly opted-in engine
+          working dirs (mode: pvc + opt-in label).
+        deny: {}

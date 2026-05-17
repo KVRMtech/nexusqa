@@ -1,0 +1,48 @@
+# Every container must declare CPU and memory requests AND memory limits.
+# CPU limits are intentionally NOT required (they harm latency under
+# burst load) but memory limits ARE required so the kernel OOM-killer
+# terminates a runaway container before it can starve neighbours.
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: require-resource-bounds
+  annotations:
+    policies.kyverno.io/title: Require resource requests and memory limits
+    policies.kyverno.io/category: Best Practices
+    policies.kyverno.io/severity: medium
+    policies.kyverno.io/subject: Pod
+spec:
+  validationFailureAction: Enforce
+  background: true
+  rules:
+    - name: requests-and-memory-limits
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+              namespaceSelector:
+                matchLabels:
+                  pod-security.kubernetes.io/enforce: restricted
+      validate:
+        message: >-
+          Every container must set resources.requests.cpu,
+          resources.requests.memory, and resources.limits.memory.
+          CPU limits are NOT required (they hurt latency); memory
+          limits ARE required so the OOM-killer is the failure mode,
+          not a noisy-neighbour starvation.
+        pattern:
+          spec:
+            =(initContainers):
+              - resources:
+                  requests:
+                    cpu: "?*"
+                    memory: "?*"
+                  limits:
+                    memory: "?*"
+            containers:
+              - resources:
+                  requests:
+                    cpu: "?*"
+                    memory: "?*"
+                  limits:
+                    memory: "?*"

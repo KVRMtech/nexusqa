@@ -1,0 +1,42 @@
+# Identity issuer — the intermediate CA that signs every workload's
+# 24h identity cert. Chains off the trust anchor above. Rotates every
+# 48 hours (cert-manager renews 24h before expiry of the 48h duration).
+#
+# This is the Secret Linkerd's identity controller consumes via the
+# `kubernetes.io/tls` scheme configured in the linkerd-control-plane
+# values file.
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: linkerd-trust-anchor
+  namespace: linkerd
+spec:
+  ca:
+    secretName: linkerd-trust-anchor
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: linkerd-identity-issuer
+  namespace: linkerd
+spec:
+  secretName: linkerd-identity-issuer
+  duration: 48h0m0s
+  renewBefore: 24h0m0s
+  issuerRef:
+    name: linkerd-trust-anchor
+    kind: Issuer
+    group: cert-manager.io
+  commonName: identity.linkerd.cluster.local
+  dnsNames:
+    - identity.linkerd.cluster.local
+  isCA: true
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  usages:
+    - cert sign
+    - crl sign
+    - server auth
+    - client auth

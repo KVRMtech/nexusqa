@@ -1,0 +1,36 @@
+# Let's Encrypt staging — for dev / staging environments. Issues real
+# certs but from LE's untrusted staging CA, so we exhaust the pre-prod
+# rate limits, not the production rate limits.
+#
+# DNS01 solver is the only safe choice for wildcard certs and for any
+# environment behind a load balancer that does not accept HTTP-01 traffic.
+# The dns-zones list and the credentials Secret are env-specific — the
+# credentials Secret name is templated below; the actual secret value
+# comes from ESO sync, not from this manifest.
+#
+# acme.email and acme.privateKeySecretRef are pulled from a ConfigMap
+# named `cert-manager-issuer-config` that the env's values/cert-manager.yaml
+# creates. The substitution `${CERT_MANAGER_EMAIL}` is replaced at
+# bootstrap time by the Makefile envsubst pass.
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-staging
+spec:
+  acme:
+    server: https://acme-staging-v02.api.letsencrypt.org/directory
+    email: ${CERT_MANAGER_EMAIL}
+    privateKeySecretRef:
+      name: letsencrypt-staging-account-key
+    solvers:
+      - selector: {}
+        dns01:
+          # Cloud-specific DNS01 solver. The default below uses Route53;
+          # the env-specific override file at
+          # envs/<env>/values/cert-manager.yaml can replace this block
+          # with `cloudDNS` or `azureDNS` etc. without touching this CR.
+          route53:
+            region: ${PRIMARY_REGION}
+            # IRSA — the SA in cert-manager namespace must have the
+            # AmazonRoute53FullAccess (scoped to the platform's hosted
+            # zones). Annotation lives in the cert-manager values file.

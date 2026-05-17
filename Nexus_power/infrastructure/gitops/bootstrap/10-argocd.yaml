@@ -1,0 +1,131 @@
+# Argo CD self-manages once seeded. The Makefile's `bootstrap` target
+# performs the initial install from the upstream chart; this Application
+# takes over reconciliation thereafter. Subsequent Argo CD upgrades flow
+# through Git: bump targetRevision below, merge, Argo CD upgrades itself.
+#
+# Hardening choices encoded in the values block (not parameterised — these
+# are platform-wide invariants, not env-specific):
+#   - Disable insecure flag, force HTTPS + mTLS at edge.
+#   - Disable the default admin account (only OIDC SSO once configured).
+#   - Pin the application controller, repo-server, and server replicas
+#     for HA. Single-replica Argo CD is not production-grade.
+#   - Enable the notifications controller and applicationset controller
+#     in HA mode.
+#   - RBAC defaults to read-only for everyone; named groups granted scope
+#     via the AppProject CRs in 20-argocd-projects.yaml.
+#
+# The repoURL and revision below intentionally point at the upstream
+# Argo CD Helm chart, not at this repo. We follow Argo CD upstream; we
+# do not fork it. Customisations live in the values block.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: argocd
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+  annotations:
+    # Self-management: this app must sync before any other app, hence
+    # sync-wave -10 (lower waves sync first).
+    argocd.argoproj.io/sync-wave: "-10"
+spec:
+  project: infra
+  source:
+    repoURL: https://argoproj.github.io/argo-helm
+    chart: argo-cd
+    targetRevision: 7.7.7
+    helm:
+      releaseName: argocd
+      values: |
+        global:
+          domain: argocd.placeholder.invalid  # overridden per env via values file injection
+        configs:
+          params:
+            server.insecure: false
+            server.disable.auth: false
+            controller.sharding.algorithm: round-robin
+          rbac:
+            policy.default: role:readonly
+            scopes: "[groups]"
+            policy.csv: |
+              # Role definitions are policy data, not code. Add roles here.
+              p, role:platform-release, applications, sync, platform/*, allow
+              p, role:platform-release, applications, action/*, platform/*, allow
+              p, role:infra-sre, applications, *, infra/*, allow
+              p, role:infra-sre, applications, *, observability/*, allow
+              # Group bindings supplied via OIDC; example placeholders below.
+              g, platform-release-engineers, role:platform-release
+              g, infra-sre, role:infra-sre
+        controller:
+          replicas: 3
+          metrics:
+            enabled: true
+            serviceMonitor:
+              enabled: true
+          resources:
+            requests:
+              cpu: 250m
+              memory: 1Gi
+            limits:
+              memory: 2Gi
+        server:
+          replicas: 3
+          autoscaling:
+            enabled: true
+            minReplicas: 3
+            maxReplicas: 6
+          metrics:
+            enabled: true
+            serviceMonitor:
+              enabled: true
+        repoServer:
+          replicas: 3
+          autoscaling:
+            enabled: true
+            minReplicas: 3
+            maxReplicas: 8
+          metrics:
+            enabled: true
+            serviceMonitor:
+              enabled: true
+        applicationSet:
+          replicas: 2
+          metrics:
+            enabled: true
+            serviceMonitor:
+              enabled: true
+        notifications:
+          enabled: true
+          metrics:
+            enabled: true
+            serviceMonitor:
+              enabled: true
+        dex:
+          enabled: true
+        redis-ha:
+          enabled: true
+          haproxy:
+            metrics:
+              enabled: true
+          redis:
+            metrics:
+              enabled: true
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+      allowEmpty: false
+    syncOptions:
+      - CreateNamespace=false
+      - PrunePropagationPolicy=foreground
+      - PruneLast=true
+      - ServerSideApply=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 30s
+        factor: 2
+        maxDuration: 5m

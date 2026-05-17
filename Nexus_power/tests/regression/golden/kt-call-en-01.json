@@ -1,0 +1,14 @@
+{
+  "speakers": 2,
+  "duration_seconds": 180.0,
+  "transcript_word_count": 462,
+  "language": "en",
+  "scenes_count": 0,
+  "_tolerances": {
+    "speakers":              {"kind": "number", "max_rel": 0.0, "abs": 0},
+    "duration_seconds":      {"kind": "number", "max_rel": 0.02},
+    "transcript_word_count": {"kind": "number", "max_rel": 0.10},
+    "language":              {"kind": "string", "max_lev": 0.0},
+    "scenes_count":          {"kind": "number", "max_rel": 0.0, "abs": 0}
+  }
+}

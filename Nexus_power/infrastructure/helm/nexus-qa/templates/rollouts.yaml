@@ -1,0 +1,147 @@
+{{/*
+=================================================================
+Argo Rollouts — canary delivery for opted-in services.
+
+Behavior:
+  - When .Values.rollout.enabled is true AND a component is in
+    .Values.rollout.components, a Rollout CR is emitted for it.
+  - The Rollout references the existing Deployment via workloadRef,
+    so we DO NOT duplicate pod spec. Argo Rollouts takes over scaling.
+  - Strategy steps come from .Values.rollout.steps (overridable per
+    component via .Values.rollout.componentOverrides.<name>.steps).
+  - SLO-burn-rate analysis runs at every analysis step and aborts the
+    rollout on failure.
+
+The Deployment template (engine-deployment.yaml / platform-deployment.yaml)
+remains the single source of truth for pod spec. Operators flip
+.Values.rollout.enabled to opt into canary delivery without changing
+any Deployment.
+=================================================================
+*/}}
+
+{{- if .Values.rollout.enabled }}
+{{- $fullname := include "nexus-qa.fullname" . }}
+{{- $root := . }}
+
+{{/* Component → (deploymentName, port, kind=engine|platform) map */}}
+{{- $components := dict
+  "shield-engine"   (dict "deploy" (printf "%s-shield-engine" $fullname) "kind" "engine")
+  "ears-engine"     (dict "deploy" (printf "%s-ears-engine" $fullname) "kind" "engine")
+  "eyes-engine"     (dict "deploy" (printf "%s-eyes-engine" $fullname) "kind" "engine")
+  "heart-engine"    (dict "deploy" (printf "%s-heart-engine" $fullname) "kind" "engine")
+  "backbone-engine" (dict "deploy" (printf "%s-backbone-engine" $fullname) "kind" "engine")
+  "nerves-engine"   (dict "deploy" (printf "%s-nerves-engine" $fullname) "kind" "engine")
+  "legs-engine"     (dict "deploy" (printf "%s-legs-engine" $fullname) "kind" "engine")
+  "hands-engine"    (dict "deploy" (printf "%s-hands-engine" $fullname) "kind" "engine")
+  "spine-engine"    (dict "deploy" (printf "%s-spine-engine" $fullname) "kind" "engine")
+  "mouth-engine"    (dict "deploy" (printf "%s-mouth-engine" $fullname) "kind" "engine")
+  "brain-engine"    (dict "deploy" (printf "%s-brain-engine" $fullname) "kind" "engine")
+  "gateway"         (dict "deploy" (printf "%s-gateway" $fullname) "kind" "platform")
+  "auth-service"    (dict "deploy" (printf "%s-auth-service" $fullname) "kind" "platform")
+  "platform-api"    (dict "deploy" (printf "%s-platform-api" $fullname) "kind" "platform")
+  "orchestrator"    (dict "deploy" (printf "%s-orchestrator" $fullname) "kind" "platform")
+}}
+
+{{- $short := default false $root.Values.rollout.shortPauses -}}
+{{- $p1 := ternary "30s" "5m" $short -}}
+{{- $p2 := ternary "1m" "10m" $short -}}
+{{- $p3 := ternary "2m" "15m" $short -}}
+{{- $stepsDefault := default (list
+    (dict "setWeight" 10)
+    (dict "pause" (dict "duration" $p1))
+    (dict "analysis" (dict "templates" (list
+      (dict "templateName" (printf "%s-prometheus-up" $fullname))
+      (dict "templateName" (printf "%s-error-rate" $fullname))
+      (dict "templateName" (printf "%s-latency-p95" $fullname))
+      (dict "templateName" (printf "%s-slo-burn-rate" $fullname))
+    )))
+    (dict "setWeight" 25)
+    (dict "pause" (dict "duration" $p2))
+    (dict "analysis" (dict "templates" (list
+      (dict "templateName" (printf "%s-error-rate" $fullname))
+      (dict "templateName" (printf "%s-slo-burn-rate" $fullname))
+    )))
+    (dict "setWeight" 50)
+    (dict "pause" (dict "duration" $p3))
+    (dict "analysis" (dict "templates" (list
+      (dict "templateName" (printf "%s-error-rate" $fullname))
+      (dict "templateName" (printf "%s-slo-burn-rate" $fullname))
+    )))
+    (dict "setWeight" 100)
+  ) $root.Values.rollout.steps -}}
+
+{{- range $comp, $meta := $components }}
+{{- if has $comp $root.Values.rollout.components }}
+
+{{- /* Per-component step override, if any */}}
+{{- $override := dig $comp dict (default dict $root.Values.rollout.componentOverrides) -}}
+{{- $stepsRaw := default $stepsDefault (default list (dig "steps" list $override)) -}}
+
+{{- /* Inject service=<comp> arg into every analysis step that doesn't already define args */}}
+{{- $serviceName := printf "%s-%s" $fullname $comp -}}
+{{- $steps := list -}}
+{{- range $step := $stepsRaw -}}
+  {{- if hasKey $step "analysis" -}}
+    {{- $a := index $step "analysis" -}}
+    {{- $tpls := list -}}
+    {{- range $tpl := (default list (index $a "templates")) -}}
+      {{- $merged := merge (dict "args" (list (dict "name" "service" "value" $serviceName))) $tpl -}}
+      {{- $tpls = append $tpls $merged -}}
+    {{- end -}}
+    {{- $aMerged := merge (dict "templates" $tpls) (omit $a "templates") -}}
+    {{- $steps = append $steps (dict "analysis" $aMerged) -}}
+  {{- else -}}
+    {{- $steps = append $steps $step -}}
+  {{- end -}}
+{{- end -}}
+
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
+metadata:
+  name: {{ $fullname }}-{{ $comp }}
+  labels:
+    {{- include "nexus-qa.componentLabels" (dict "root" $root "component" $comp) | nindent 4 }}
+  annotations:
+    # The notifications subscriptions: trigger names match those in the
+    # argo-rollouts-notification-configmap (M0.2 wiring).
+    notifications.argoproj.io/subscribe.on-rollout-paused.slack: release-channel
+    notifications.argoproj.io/subscribe.on-rollout-aborted.slack: release-channel
+    notifications.argoproj.io/subscribe.on-rollout-aborted.pagerduty-platform: ""
+    notifications.argoproj.io/subscribe.on-analysis-run-failed.slack: release-channel
+spec:
+  # Take over scaling from the Deployment. The Deployment still exists
+  # (single source of truth for pod template); Argo Rollouts manages
+  # its replica counts during canary progression.
+  workloadRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ $meta.deploy }}
+    # The Deployment's replicas field is owned by the Rollout while
+    # the Rollout is healthy. If the Rollout is deleted, the Deployment
+    # resumes management as-is.
+    scaleDown: onsuccess
+
+  # Stable RS keeps serving until the canary is fully promoted.
+  strategy:
+    canary:
+      maxSurge: {{ default "25%" $root.Values.rollout.maxSurge | quote }}
+      maxUnavailable: {{ default "0" $root.Values.rollout.maxUnavailable | quote }}
+      analysis:
+        startingStep: 0
+      # Abort the rollout if any analysis run fails.
+      abortScaleDownDelaySeconds: 30
+      # If the underlying Deployment is updated DURING a canary, restart
+      # the canary from scratch — avoids serving a third version.
+      dynamicStableScale: true
+      steps:
+        {{- toYaml $steps | nindent 8 }}
+
+  # Conservative defaults so a paused canary doesn't time out at 10 min.
+  progressDeadlineSeconds: {{ default 7200 $root.Values.rollout.progressDeadlineSeconds }}
+  revisionHistoryLimit: {{ default 5 $root.Values.rollout.revisionHistoryLimit }}
+  # Block reconciliation while the operator is investigating an alert.
+  paused: false
+{{- end }}
+{{- end }}
+{{- end }}

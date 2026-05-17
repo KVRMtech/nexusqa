@@ -1,0 +1,24 @@
+apiVersion: v2
+name: nexus-qa
+description: >-
+  Nexus QA Platform — AI-powered insurance QA testing platform.
+  Deploys 10 AI engines, 3 platform services, 1 orchestrator,
+  frontend client, and supporting infrastructure.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+
+keywords:
+  - nexus
+  - qa
+  - testing
+  - insurance
+  - ai
+  - kubernetes
+
+home: https://github.com/nexus-qa/nexus-qa
+sources:
+  - https://github.com/nexus-qa/nexus-qa
+
+maintainers:
+  - name: Nexus QA Team

@@ -1,0 +1,279 @@
+# ═══════════════════════════════════════════════════════════════
+# Nexus QA — Staging Environment Overrides
+# ═══════════════════════════════════════════════════════════════
+# Usage:
+#   helm upgrade --install nexus-qa-staging ./infrastructure/helm/nexus-qa \
+#     --namespace nexus-staging --create-namespace \
+#     --values infrastructure/helm/nexus-qa/values-staging.yaml \
+#     --set global.image.tag=$TAG
+# ═══════════════════════════════════════════════════════════════
+
+config:
+  nexusEnv: staging
+  logLevel: DEBUG
+
+# ─── Reduced replicas for cost efficiency ─────────────────────
+authService:
+  replicas: 1
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 250m
+      memory: 256Mi
+
+gateway:
+  replicas: 1
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+platformApi:
+  replicas: 1
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+orchestrator:
+  replicas: 1
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 1Gi
+
+# ─── Engines: single replica, smaller resources ──────────────
+engines:
+  shield:
+    replicas: 1
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
+
+  ears:
+    replicas: 1
+    gpu: false                      # no GPU in staging by default
+    resources:
+      requests:
+        cpu: 500m
+        memory: 2Gi
+      limits:
+        cpu: "2"
+        memory: 4Gi
+    env:
+      WHISPER_DEVICE: cpu
+      WHISPER_COMPUTE_TYPE: int8
+    persistence:
+      audio:
+        size: 10Gi
+
+  eyes:
+    replicas: 1
+    gpu: false
+    resources:
+      requests:
+        cpu: 500m
+        memory: 2Gi
+      limits:
+        cpu: "2"
+        memory: 4Gi
+    env:
+      VISION_DEVICE: cpu
+    persistence:
+      frames:
+        size: 10Gi
+
+  heart:
+    replicas: 1
+    gpu: false
+    resources:
+      requests:
+        cpu: 500m
+        memory: 4Gi
+      limits:
+        cpu: "2"
+        memory: 8Gi
+    env:
+      LLM_DEVICE: cpu
+
+  backbone:
+    replicas: 1
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: 500m
+        memory: 1Gi
+
+  nerves:
+    replicas: 1
+    resources:
+      requests:
+        cpu: 50m
+        memory: 128Mi
+      limits:
+        cpu: 250m
+        memory: 256Mi
+
+  legs:
+    replicas: 1
+    resources:
+      requests:
+        cpu: 250m
+        memory: 512Mi
+      limits:
+        cpu: "1"
+        memory: 2Gi
+    persistence:
+      evidence:
+        size: 5Gi
+
+  hands:
+    replicas: 1
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
+
+  spine:
+    replicas: 1
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: 500m
+        memory: 1Gi
+    persistence:
+      documents:
+        size: 10Gi
+
+  mouth:
+    replicas: 1
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
+    persistence:
+      reports:
+        size: 5Gi
+
+# ─── Infrastructure: smaller footprint ───────────────────────
+redis:
+  persistence:
+    size: 2Gi
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 250m
+      memory: 384Mi
+
+postgres:
+  persistence:
+    size: 5Gi
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 1Gi
+
+neo4j:
+  heapMaxSize: 512M
+  pagecacheSize: 256M
+  persistence:
+    dataSize: 5Gi
+    logsSize: 1Gi
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: "1"
+      memory: 1536Mi
+
+milvus:
+  persistence:
+    size: 10Gi
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: "1"
+      memory: 2Gi
+
+ollama:
+  gpu:
+    enabled: false
+  persistence:
+    size: 20Gi
+  resources:
+    requests:
+      cpu: 500m
+      memory: 4Gi
+    limits:
+      cpu: "2"
+      memory: 8Gi
+
+# ─── Frontend: single replica ────────────────────────────────
+client:
+  replicas: 1
+
+# ─── Monitoring: minimal ─────────────────────────────────────
+monitoring:
+  prometheus:
+    retentionDays: 7
+    persistence:
+      size: 10Gi
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: 500m
+        memory: 1Gi
+
+  grafana:
+    persistence:
+      size: 2Gi
+    resources:
+      requests:
+        cpu: 50m
+        memory: 128Mi
+      limits:
+        cpu: 250m
+        memory: 256Mi
+
+modelCache:
+  size: 30Gi
+
+# ─── Ingress (optional) ──────────────────────────────────────
+ingress:
+  enabled: false
+  host: staging.nexus-qa.example.com

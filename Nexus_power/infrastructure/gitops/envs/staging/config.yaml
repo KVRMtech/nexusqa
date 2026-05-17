@@ -1,0 +1,9 @@
+env: staging
+# Staging tracks a release branch. Merges to main do NOT auto-promote;
+# promotion happens by bumping this revision via PR.
+targetRevision: release/staging
+syncMode: automated
+allowPrune: true
+allowSelfHeal: true
+domain: staging.platform.example.com
+region: us-east-1

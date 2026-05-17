@@ -1,0 +1,31 @@
+# Nexus QA — Base Dockerfile for all Python engines
+# Multi-stage build for smaller production images
+
+FROM python:3.11-slim AS base
+
+LABEL maintainer="Nexus QA Platform"
+LABEL description="Base image for Nexus engine services"
+
+# System dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    curl \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create non-root user
+RUN groupadd -r nexus && useradd -r -g nexus -m nexus
+
+WORKDIR /app
+
+# Install shared SDK first (cache layer)
+COPY sdk/nexus-sdk/ /app/sdk/nexus-sdk/
+RUN pip install --no-cache-dir /app/sdk/nexus-sdk/
+
+# Default healthcheck
+HEALTHCHECK --interval=30s --timeout=10s --retries=3 \
+    CMD curl -f http://localhost:${ENGINE_PORT:-8000}/health || exit 1
+
+USER nexus
+
+CMD ["python", "main.py"]

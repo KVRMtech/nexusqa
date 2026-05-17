@@ -1,0 +1,649 @@
+"""
+Nexus Ears Engine — Speech-to-Text & Speaker Diarization.
+
+Listens to KT session audio, converts to text,
+identifies who said what, and emits redacted transcripts.
+
+Pipeline:
+1. Audio upload (WAV/MP3/WebM) or real-time chunked stream
+2. Preprocessing (FFmpeg normalize + Silero VAD)
+3. Speaker diarization (Pyannote 3.1) — persistent speaker IDs per tenant
+4. Speech-to-text (Whisper v3 Large) with insurance vocabulary boosting
+5. Segment alignment (speaker + timestamps + text)
+6. Emit to Shield for PII redaction before anything touches Backbone
+
+On-prem: All models run locally. No audio leaves the datacenter.
+"""
+
+from __future__ import annotations
+
+import os
+import uuid
+import json
+import asyncio
+import tempfile
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Optional
+from enum import Enum
+
+from fastapi import Depends, HTTPException, UploadFile, File, Form, BackgroundTasks
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field
+
+from nexus_sdk import NexusEngine, EngineConfig
+from nexus_sdk.models import NexusRequest, NexusResponse, JobResponse, JobStatus
+from nexus_sdk.auth import NexusUser, get_current_user
+from nexus_sdk.events import NexusEvent, fire_stub_alert
+
+import structlog
+logger = structlog.get_logger()
+
+
+# ─── Configuration ─────────────────────────────────────────────
+
+class EarsConfig(EngineConfig):
+    engine_name: str = "ears"
+    engine_port: int = 8002
+
+    # Model paths (on-prem, local GPU)
+    whisper_model_size: str = "large-v3"
+    whisper_model_path: str = "./models/whisper-large-v3"
+    whisper_device: str = "cuda"    # "cuda" or "cpu"
+    whisper_compute_type: str = "float16"  # "float16" for GPU, "int8" for CPU
+
+    # Speaker diarization
+    pyannote_model_path: str = "./models/pyannote-speaker-3.1"
+    hf_token: str = ""  # HuggingFace token for gated Pyannote model
+    min_speakers: int = 1
+    max_speakers: int = 10
+
+    # VAD (Voice Activity Detection)
+    vad_threshold: float = 0.5
+
+    # Audio storage
+    audio_storage_path: str = "./data/audio"
+
+    # Chunking for long recordings
+    max_segment_seconds: int = 30
+
+
+# ─── Models ────────────────────────────────────────────────────
+
+class TranscriptionSegment(BaseModel):
+    """A single segment of transcription."""
+    speaker: str = Field(..., description="Speaker label (Speaker_1, Speaker_2, ...)")
+    text: str = Field(..., description="Transcribed text")
+    start_time: float = Field(..., description="Start time in seconds")
+    end_time: float = Field(..., description="End time in seconds")
+    confidence: float = Field(default=0.0, description="Whisper confidence score")
+    language: str = Field(default="en")
+
+
+class TranscriptionResult(BaseModel):
+    """Full transcription of a KT session recording."""
+    job_id: str
+    session_id: str
+    duration_seconds: float
+    segments: list[TranscriptionSegment]
+    speakers: list[str]
+    language: str = "en"
+    word_count: int = 0
+    model_version: str = "whisper-large-v3"
+
+
+class TranscribeRequest(BaseModel):
+    tenant_id: str
+    session_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    language: Optional[str] = "en"
+    num_speakers: Optional[int] = None
+
+
+# ─── Insurance Vocabulary Boost ────────────────────────────────
+
+INSURANCE_VOCABULARY = [
+    # Life Insurance terms
+    "premium", "beneficiary", "annuitant", "policyholder", "underwriting",
+    "mortality table", "cash value", "surrender charge", "death benefit",
+    "term life", "whole life", "universal life", "variable life",
+    "guaranteed issue", "simplified issue", "fully underwritten",
+    "face amount", "rider", "waiver of premium", "accelerated death benefit",
+    "conversion privilege", "incontestability", "contestability period",
+    "suicide clause", "grace period", "lapse", "reinstatement",
+    "nonforfeiture", "reduced paid-up", "extended term",
+
+    # P&C terms
+    "deductible", "coinsurance", "subrogation", "indemnity",
+    "actual cash value", "replacement cost", "occurrence",
+    "claims-made", "aggregate limit", "per occurrence limit",
+    "combined single limit", "bodily injury", "property damage",
+    "personal injury", "advertising injury", "products liability",
+    "completed operations", "additional insured", "named insured",
+    "certificate of insurance", "declarations page", "endorsement",
+    "exclusion", "condition", "insuring agreement",
+
+    # Actuarial / Financial
+    "loss ratio", "combined ratio", "expense ratio",
+    "incurred but not reported", "IBNR", "loss development factor",
+    "credibility", "experience modification", "retrospective rating",
+    "prospective rating", "catastrophe load", "reinsurance",
+    "treaty reinsurance", "facultative reinsurance", "ceding company",
+
+    # System / Compliance
+    "NAIC", "SERFF", "rate filing", "form filing",
+    "market conduct", "MIB", "CLUE report", "MVR",
+    "state filing", "admitted carrier", "surplus lines",
+    "managing general agent", "MGA", "NPN",
+    "producer code", "commission schedule", "hierarchy",
+]
+
+
+# ─── Whisper Wrapper ───────────────────────────────────────────
+
+class WhisperTranscriber:
+    """
+    On-prem Whisper v3 Large transcription.
+    
+    Uses faster-whisper (CTranslate2 backend) for optimal
+    GPU performance. Falls back to CPU int8 if no GPU.
+    """
+
+    def __init__(self, config: EarsConfig):
+        self.config = config
+        self.model = None
+        self._event_bus = None
+        self._stub_fallback_count: int = 0
+
+    async def load_model(self):
+        """Load Whisper model into GPU/CPU memory."""
+        try:
+            from faster_whisper import WhisperModel
+            self.model = WhisperModel(
+                self.config.whisper_model_size,
+                device=self.config.whisper_device,
+                compute_type=self.config.whisper_compute_type,
+                download_root=str(Path(self.config.whisper_model_path).parent),
+            )
+        except ImportError:
+            # Fallback: stub for development without GPU
+            self.model = None
+
+    async def transcribe(
+        self,
+        audio_path: str,
+        language: str = "en",
+    ) -> list[dict]:
+        """
+        Transcribe audio file and return segments.
+        
+        Returns list of {text, start, end, confidence, language}.
+        """
+        if self.model is None:
+            # Development stub — return mock data
+            return self._stub_transcribe(audio_path)
+
+        segments_gen, info = self.model.transcribe(
+            audio_path,
+            language=language,
+            beam_size=5,
+            word_timestamps=True,
+            initial_prompt=self._build_vocabulary_prompt(),
+            vad_filter=True,
+            vad_parameters=dict(
+                threshold=self.config.vad_threshold,
+                min_silence_duration_ms=500,
+            ),
+        )
+
+        segments = []
+        for seg in segments_gen:
+            segments.append({
+                "text": seg.text.strip(),
+                "start": seg.start,
+                "end": seg.end,
+                "confidence": seg.avg_logprob,
+                "language": language,
+            })
+
+        return segments
+
+    def _build_vocabulary_prompt(self) -> str:
+        """Build initial prompt with domain vocabulary for better recognition."""
+        # Use plugin-merged vocabulary if available, else hardcoded fallback
+        terms = getattr(self, '_vocabulary_terms', INSURANCE_VOCABULARY)[:50]
+        return "Domain terminology: " + ", ".join(terms) + "."
+
+    def _stub_transcribe(self, audio_path: str) -> list[dict]:
+        """Development stub when Whisper model is not available."""
+        self._stub_fallback_count += 1
+        logger.warning("ears: whisper stub fallback #%d", self._stub_fallback_count)
+        fire_stub_alert(
+            self._event_bus, "ears", "whisper",
+            fallback_count=self._stub_fallback_count,
+            reason="faster-whisper model not loaded",
+        )
+        return [
+            {
+                "text": "[Stub] This is a development placeholder for transcription.",
+                "start": 0.0,
+                "end": 5.0,
+                "confidence": 0.0,
+                "language": "en",
+            },
+            {
+                "text": "[Stub] Whisper model not loaded. Install faster-whisper for real transcription.",
+                "start": 5.0,
+                "end": 10.0,
+                "confidence": 0.0,
+                "language": "en",
+            },
+        ]
+
+
+# ─── Speaker Diarization ──────────────────────────────────────
+
+class SpeakerDiarizer:
+    """
+    On-prem speaker diarization using Pyannote 3.1.
+    
+    Identifies who is speaking in each segment.
+    Supports persistent speaker identities across sessions
+    (Agent John is always "Speaker_John" for this tenant).
+    """
+
+    def __init__(self, config: EarsConfig):
+        self.config = config
+        self.pipeline = None
+        self._event_bus = None
+        self._stub_fallback_count: int = 0
+        # Persistent speaker embeddings per tenant
+        self._speaker_registry: dict[str, dict[str, list]] = {}  # tenant_id -> {name: embedding}
+
+    async def load_model(self):
+        """Load Pyannote diarization pipeline."""
+        try:
+            from pyannote.audio import Pipeline
+            auth_kwargs = {}
+            if self.config.hf_token:
+                auth_kwargs["use_auth_token"] = self.config.hf_token
+            self.pipeline = Pipeline.from_pretrained(
+                self.config.pyannote_model_path,
+                **auth_kwargs,
+            )
+            if self.config.whisper_device == "cuda":
+                import torch
+                self.pipeline.to(torch.device("cuda"))
+        except (ImportError, Exception):
+            self.pipeline = None
+
+    async def diarize(
+        self,
+        audio_path: str,
+        num_speakers: Optional[int] = None,
+    ) -> list[dict]:
+        """
+        Identify speakers in audio.
+        
+        Returns list of {speaker, start, end}.
+        """
+        if self.pipeline is None:
+            return self._stub_diarize()
+
+        params = {}
+        if num_speakers:
+            params["num_speakers"] = num_speakers
+        else:
+            params["min_speakers"] = self.config.min_speakers
+            params["max_speakers"] = self.config.max_speakers
+
+        diarization = self.pipeline(audio_path, **params)
+
+        segments = []
+        for turn, _, speaker in diarization.itertracks(yield_label=True):
+            segments.append({
+                "speaker": speaker,
+                "start": turn.start,
+                "end": turn.end,
+            })
+
+        return segments
+
+    def _stub_diarize(self) -> list[dict]:
+        """Development stub."""
+        self._stub_fallback_count += 1
+        logger.warning("ears: diarization stub fallback #%d", self._stub_fallback_count)
+        fire_stub_alert(
+            self._event_bus, "ears", "diarizer",
+            fallback_count=self._stub_fallback_count,
+            reason="pyannote pipeline not loaded",
+        )
+        return [
+            {"speaker": "SPEAKER_00", "start": 0.0, "end": 5.0},
+            {"speaker": "SPEAKER_01", "start": 5.0, "end": 10.0},
+        ]
+
+
+# ─── Segment Alignment ────────────────────────────────────────
+
+def align_segments(
+    whisper_segments: list[dict],
+    speaker_segments: list[dict],
+) -> list[TranscriptionSegment]:
+    """
+    Align Whisper transcription segments with speaker diarization.
+    
+    For each Whisper segment, find the overlapping speaker segment
+    and assign the speaker label.
+    """
+    aligned = []
+
+    for wseg in whisper_segments:
+        w_start = wseg["start"]
+        w_end = wseg["end"]
+        w_mid = (w_start + w_end) / 2
+
+        # Find the speaker segment that covers the midpoint
+        best_speaker = "UNKNOWN"
+        best_overlap = 0.0
+
+        for sseg in speaker_segments:
+            s_start = sseg["start"]
+            s_end = sseg["end"]
+
+            # Calculate overlap
+            overlap_start = max(w_start, s_start)
+            overlap_end = min(w_end, s_end)
+            overlap = max(0, overlap_end - overlap_start)
+
+            if overlap > best_overlap:
+                best_overlap = overlap
+                best_speaker = sseg["speaker"]
+
+        aligned.append(TranscriptionSegment(
+            speaker=best_speaker,
+            text=wseg["text"],
+            start_time=w_start,
+            end_time=w_end,
+            confidence=wseg.get("confidence", 0.0),
+            language=wseg.get("language", "en"),
+        ))
+
+    return aligned
+
+
+# ─── The Ears Engine ───────────────────────────────────────────
+
+class EarsEngine(NexusEngine):
+    def __init__(self):
+        self.cfg = EarsConfig()
+        super().__init__(
+            name="ears",
+            version="0.1.0",
+            config=self.cfg,
+            description="Speech-to-Text & Speaker Diarization Engine",
+        )
+        self.transcriber = WhisperTranscriber(self.cfg)
+        self.diarizer = SpeakerDiarizer(self.cfg)
+
+        # GPU concurrency guard — serializes all GPU inference in this process
+        self._gpu_semaphore = None
+
+    async def on_startup(self):
+        """Load ML models into memory and configure from plugins."""
+        self._gpu_semaphore = asyncio.Semaphore(1)
+        # Wire event bus into helper classes
+        self.transcriber._event_bus = self.event_bus
+        self.diarizer._event_bus = self.event_bus
+        # Create audio storage directory
+        os.makedirs(self.cfg.audio_storage_path, exist_ok=True)
+
+        # Load domain vocabulary from plugins (augments hardcoded fallback)
+        try:
+            vocab_ext = self.plugin_registry.get_merged_vocabulary()
+            if vocab_ext and vocab_ext.terms:
+                plugin_terms = [t.term for t in vocab_ext.terms]
+                boost_words = vocab_ext.boost_words or []
+                # Merge plugin vocabulary with hardcoded fallback (plugin takes priority)
+                merged = list(dict.fromkeys(plugin_terms + boost_words + INSURANCE_VOCABULARY))
+                self.transcriber._vocabulary_terms = merged
+                logger.info(
+                    "ears.vocabulary_loaded",
+                    plugin_terms=len(plugin_terms),
+                    boost_words=len(boost_words),
+                    total=len(merged),
+                )
+            else:
+                self.transcriber._vocabulary_terms = INSURANCE_VOCABULARY
+        except Exception:
+            logger.debug("Plugin vocabulary not available, using default vocabulary", exc_info=True)
+            self.transcriber._vocabulary_terms = INSURANCE_VOCABULARY
+
+        # Load models (async so server starts while models load)
+        await self.transcriber.load_model()
+        await self.diarizer.load_model()
+
+        # Report component modes to health endpoint
+        self.health.set_mode("transcriber", "whisper" if self.transcriber.model else "stub")
+        self.health.set_mode("diarizer", "real" if self.diarizer.pipeline else "stub")
+
+    def register_routes(self, app):
+
+        # ── Upload & Transcribe (async job) ────────────────────
+
+        @app.post("/api/v1/ears/transcribe", response_model=JobResponse)
+        async def transcribe(
+            background_tasks: BackgroundTasks,
+            audio: UploadFile = File(..., description="Audio file (WAV/MP3/WebM)"),
+            tenant_id: str = Form(...),
+            session_id: str = Form(default_factory=lambda: str(uuid.uuid4())),
+            language: str = Form(default="en"),
+            num_speakers: Optional[int] = Form(default=None),
+            user: NexusUser = Depends(get_current_user),
+        ):
+            """
+            Upload audio and start transcription job.
+            
+            Returns a job_id to poll for results.
+            Processing pipeline:
+            1. Save audio to disk
+            2. Run speaker diarization
+            3. Run Whisper transcription
+            4. Align speakers with text segments
+            5. Send to Shield for PII redaction
+            6. Store final transcript
+            """
+            job_id = str(uuid.uuid4())
+
+            # Save uploaded audio
+            audio_dir = Path(self.cfg.audio_storage_path) / tenant_id / session_id
+            audio_dir.mkdir(parents=True, exist_ok=True)
+            audio_path = audio_dir / f"{job_id}_{audio.filename}"
+
+            content = await audio.read()
+            audio_path.write_bytes(content)
+
+            # Initialize job (Redis-persisted via SDK JobStore)
+            await self.job_store.set_job(job_id, {
+                "job_id": job_id,
+                "status": JobStatus.QUEUED.value,
+                "tenant_id": tenant_id,
+                "session_id": session_id,
+                "audio_path": str(audio_path),
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "result": None,
+                "error": None,
+            })
+
+            # Run transcription in background
+            background_tasks.add_task(
+                self._run_transcription,
+                job_id=job_id,
+                audio_path=str(audio_path),
+                session_id=session_id,
+                tenant_id=tenant_id,
+                language=language,
+                num_speakers=num_speakers,
+            )
+
+            return JobResponse(
+                success=True,
+                engine="ears",
+                engine_version="0.1.0",
+                job_id=job_id,
+                status=JobStatus.QUEUED,
+            )
+
+        # ── Get Job Status ─────────────────────────────────────
+
+        @app.get("/api/v1/ears/jobs/{job_id}")
+        async def get_job(
+            job_id: str,
+            user: NexusUser = Depends(get_current_user),
+        ):
+            """Get the status and result of a transcription job."""
+            job = await self.job_store.get_job(job_id)
+            if not job:
+                raise HTTPException(status_code=404, detail="Job not found")
+
+            return job
+
+        # ── Get Transcript ─────────────────────────────────────
+
+        @app.get("/api/v1/ears/sessions/{session_id}/transcript")
+        async def get_transcript(
+            session_id: str,
+            user: NexusUser = Depends(get_current_user),
+        ):
+            """Get the transcript for a KT session."""
+            # Find the latest completed job for this session
+            all_jobs = await self.job_store.list_jobs(limit=500)
+            for job in all_jobs:
+                if (
+                    job.get("session_id") == session_id
+                    and job.get("status") == JobStatus.COMPLETED.value
+                ):
+                    return job.get("result")
+
+            raise HTTPException(status_code=404, detail="No transcript found for session")
+
+        # ── List Sessions ──────────────────────────────────────
+
+        @app.get("/api/v1/ears/sessions")
+        async def list_sessions(
+            user: NexusUser = Depends(get_current_user),
+        ):
+            """List all transcription sessions for the current tenant."""
+            sessions = {}
+            all_jobs = await self.job_store.list_jobs(limit=500)
+            for job in all_jobs:
+                if job.get("tenant_id") == user.tenant_id:
+                    sid = job.get("session_id", "")
+                    if sid not in sessions:
+                        sessions[sid] = {
+                            "session_id": sid,
+                            "job_count": 0,
+                            "latest_status": job.get("status"),
+                            "created_at": job.get("created_at"),
+                        }
+                    sessions[sid]["job_count"] += 1
+                    sessions[sid]["latest_status"] = job.get("status")
+
+            return list(sessions.values())
+
+    async def _run_transcription(
+        self,
+        job_id: str,
+        audio_path: str,
+        session_id: str,
+        tenant_id: str,
+        language: str,
+        num_speakers: Optional[int],
+    ):
+        """Background task: full transcription pipeline."""
+        await self.job_store.update_job(job_id, status=JobStatus.PROCESSING.value)
+
+        try:
+            start_time = time.monotonic()
+
+            # Step 1: Speaker diarization
+            async with self._gpu_semaphore:
+                speaker_segments = await self.diarizer.diarize(audio_path, num_speakers)
+
+            # Step 2: Whisper transcription
+            async with self._gpu_semaphore:
+                whisper_segments = await self.transcriber.transcribe(audio_path, language)
+
+            # Step 3: Align speakers with text
+            aligned = align_segments(whisper_segments, speaker_segments)
+
+            # Calculate stats
+            duration = max((s.end_time for s in aligned), default=0.0)
+            speakers = list(set(s.speaker for s in aligned))
+            word_count = sum(len(s.text.split()) for s in aligned)
+
+            elapsed = time.monotonic() - start_time
+
+            result = TranscriptionResult(
+                job_id=job_id,
+                session_id=session_id,
+                duration_seconds=duration,
+                segments=aligned,
+                speakers=speakers,
+                language=language,
+                word_count=word_count,
+            )
+
+            await self.job_store.update_job(
+                job_id,
+                status=JobStatus.COMPLETED.value,
+                result=result.model_dump(),
+                processing_time_seconds=round(elapsed, 2),
+            )
+
+            # Step 4: Emit event for Shield to redact
+            if self.event_bus:
+                full_text = " ".join(s.text for s in aligned)
+                await self.event_bus.publish(NexusEvent(
+                    event_type="ears.transcription.completed",
+                    tenant_id=tenant_id,
+                    trace_id=job_id,
+                    engine="ears",
+                    session_id=session_id,
+                    data={
+                        "job_id": job_id,
+                        "session_id": session_id,
+                        "transcript_text": full_text,
+                        "segment_count": len(aligned),
+                        "speaker_count": len(speakers),
+                        "duration_seconds": duration,
+                    },
+                ))
+
+        except Exception as e:
+            await self.job_store.update_job(
+                job_id,
+                status=JobStatus.FAILED.value,
+                error=str(e),
+            )
+
+            if self.event_bus:
+                await self.event_bus.publish(NexusEvent(
+                    event_type="ears.transcription.failed",
+                    tenant_id=tenant_id,
+                    trace_id=job_id,
+                    engine="ears",
+                    session_id=session_id,
+                    data={"job_id": job_id, "error": str(e)},
+                ))
+
+
+# ─── Entry Point ──────────────────────────────────────────────
+
+def main():
+    engine = EarsEngine()
+    engine.run()
+
+
+if __name__ == "__main__":
+    main()

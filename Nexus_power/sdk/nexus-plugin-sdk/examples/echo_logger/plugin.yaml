@@ -1,0 +1,42 @@
+id: echo_logger
+version: 1.0.0
+display_name: Echo Logger
+vendor: nexus-core
+tier: community
+
+capabilities:
+  - sink
+
+auth:
+  method: none
+  per_tenant: false
+
+sink:
+  actions:
+    - id: log_echo
+      description: Append the inbound echo to the plugin's persistent log file.
+      required_params:
+        - echo_id
+        - question_text
+      optional_params:
+        - topic
+        - confidence
+      idempotent: true
+      retries: 1
+  rate_limit:
+    per_second: 50
+
+routing:
+  tenant_resolver: by_tenant_id
+  tenant_cache_seconds: 60
+
+health:
+  endpoint: file:///healthz
+  interval_seconds: 60
+  timeout_seconds: 5
+
+min_platform_version: 1.0.0
+tags:
+  - reference
+  - logger
+documentation_url: https://docs.nexus.dev/plugins/echo_logger
