@@ -2039,13 +2039,18 @@ class SpineEngine(NexusEngine):
             )
 
             # Build a partial update for the canonical_artifacts row.
-            visual_summary = ""
+            # D6f: collect keyframe descriptions and format them based on
+            # whether vision was degraded — when LLaVA circuit-broke, the
+            # descriptions are raw OCR text and need to be labeled as such.
             frames = visual_analysis.get("frames", [])
-            if frames:
-                descriptions = [
-                    f.get("description", "") for f in frames if f.get("is_keyframe")
-                ]
-                visual_summary = " → ".join(d for d in descriptions if d)[:2000]
+            keyframe_descriptions = [
+                f.get("description", "") for f in frames if f.get("is_keyframe")
+            ]
+            visual_summary = _format_visual_summary(
+                keyframe_descriptions,
+                degraded_stages=degraded_stages,
+                scene_count=visual_analysis.get("total_frames_analyzed", 0),
+            )
 
             # The DB-write function `_update_artifact_enrichment_in_db`
             # recomputes has_real_transcript / has_visual_semantics /
@@ -2062,11 +2067,34 @@ class SpineEngine(NexusEngine):
                 ),
             }
             # Merge visual data into full_artifact_json (JSONB merge).
+            # D6c: eyes_model fallback — when LLaVA circuit broke, the
+            # model_version on visual_analysis is "" which makes the UI's
+            # Model Provenance table show blank. Substitute a meaningful
+            # token so operators see WHAT happened.
+            _eyes_model_raw = visual_analysis.get("model_version") or ""
+            _vision_degraded = any(
+                s in (degraded_stages or [])
+                for s in ("analyze_scenes", "eyes.analyze_scenes")
+            )
+            if not _eyes_model_raw:
+                _eyes_model_resolved = (
+                    "tesseract+llava:7b (vision circuit-open)"
+                    if _vision_degraded else "tesseract (no vision LLM)"
+                )
+            else:
+                _eyes_model_resolved = _eyes_model_raw
+
             full_json_patch = {
                 "visual_analysis": visual_analysis,
                 "visual_graph": visual_graph,
                 "degraded_stages": degraded_stages,
                 "degraded_reasons": degraded_reasons,
+                # D6c: surface the resolved eyes model so the UI's
+                # Model Provenance table renders something useful even
+                # when vision degraded.
+                "model_provenance_patch": {
+                    "eyes_model": _eyes_model_resolved,
+                },
             }
 
             await _update_artifact_enrichment_in_db(
@@ -4057,18 +4085,210 @@ def _compute_quality_gate(
     """
     score = float(semantic_completeness_score or 0.0)
     degraded = list(degraded_stages or [])
+    # Minimal-only artifacts haven't been enriched yet; the quality
+    # gate is moot until update_artifact_enriched runs. Short-circuit
+    # FIRST so the brief minimal window doesn't render as needs_review
+    # in admin SQL queries on quality_gate_outcome (D4 fix).
+    if (artifact_status or "").lower() == "minimal":
+        return True, "pass_with_warnings"
     # Hard floor: a workflow with no transcript text or near-zero score
     # is not safe to act on — flag for human review.
     if score < 0.3 or not has_real_transcript:
         return False, "needs_review"
-    # Minimal-only artifacts haven't been enriched yet; the quality
-    # gate is moot until update_artifact_enriched runs. Treat as pass
-    # so the UI doesn't show a red banner during the enrichment window.
-    if (artifact_status or "").lower() == "minimal":
-        return True, "pass_with_warnings"
     if degraded or not has_visual_semantics or score < 0.5:
         return True, "pass_with_warnings"
     return True, "pass"
+
+
+def _compute_score_breakdown(
+    *,
+    transcript: str,
+    has_real_transcript: bool,
+    has_visual_semantics: bool,
+    scene_count: int,
+    duration_seconds: float,
+    degraded_stages: list[str] | None,
+    pii_entity_count: int | None = None,
+    pii_mode: str | None = None,
+) -> dict:
+    """Compute the four sub-scores the UI's Trust panel needs.
+
+    Each is in [0.0, 1.0]; the UI multiplies by 100 for the ScoreBar
+    component. Returns None for any dimension that wasn't actually
+    measured (e.g. PII when shield ran in gate-only mode), so the UI
+    can show "—" rather than a misleading "0%".
+    """
+    degraded = set(degraded_stages or [])
+
+    # Transcript score: word-count saturated at 100 words = 1.0;
+    # halved when the run was degraded (whisper failed or stub).
+    if not has_real_transcript:
+        t_score: float | None = 0.0 if transcript else None
+    else:
+        words = len(transcript.split())
+        t_score = min(words / 100, 1.0)
+        if any(s in degraded for s in ("ears.transcribe_segments", "ears.align")):
+            t_score *= 0.5
+
+    # Visual score: scene-count saturated at 5 scenes = 1.0; halved
+    # when vision was circuit-broken or partially degraded.
+    if not has_visual_semantics:
+        v_score: float | None = 0.0 if scene_count > 0 else None
+    else:
+        v_score = min(scene_count / 5, 1.0)
+        if any(s in degraded for s in ("analyze_scenes", "eyes.analyze_scenes")):
+            v_score *= 0.5
+
+    # PII score: 1.0 when shield ran in redaction mode (entities
+    # masked), 0.5 when it ran in gate-only mode (detection without
+    # masking), None when shield was skipped/unknown.
+    pii_score: float | None
+    if pii_mode is None:
+        pii_score = None
+    elif pii_mode == "redacted":
+        pii_score = 1.0
+    elif pii_mode == "gate":
+        pii_score = 0.5
+    else:
+        pii_score = None
+
+    # Completeness: transcript 50% + visual 30% + metadata 20%, with
+    # missing dimensions weighted as 0 (the UI gets the real
+    # semantic_completeness_score elsewhere; this is just the
+    # rolled-up display number when the others are missing).
+    t_w = (t_score or 0.0) * 0.5
+    v_w = (v_score or 0.0) * 0.3
+    m_w = (1.0 if (duration_seconds or 0) > 0 else 0.0) * 0.2
+    completeness = round(t_w + v_w + m_w, 3)
+
+    return {
+        "transcript": round(t_score, 3) if t_score is not None else None,
+        "visual": round(v_score, 3) if v_score is not None else None,
+        "pii": pii_score,
+        "completeness": completeness,
+    }
+
+
+def _compute_review_reasons(
+    *,
+    qg_outcome: str,
+    has_real_transcript: bool,
+    has_visual_semantics: bool,
+    transcript: str,
+    scene_count: int,
+    degraded_stages: list[str] | None,
+    degraded_reasons: dict | None = None,
+) -> list[str]:
+    """Generate plain-English reasons explaining the quality_gate
+    outcome. The UI renders these under the orange "This asset needs
+    review" banner — empty list ⇒ no banner ⇒ user confusion.
+
+    Always returns concrete, actionable phrasing the operator can
+    act on. Never returns generic "needs_review" tautologies.
+    """
+    reasons: list[str] = []
+    degraded = list(degraded_stages or [])
+    deg_reasons = dict(degraded_reasons or {})
+
+    if qg_outcome not in {"needs_review", "fail", "pass_with_warnings"}:
+        return reasons
+
+    # Transcript-side reasons (most common cause)
+    if not has_real_transcript:
+        word_count = len(transcript.split()) if transcript else 0
+        if word_count == 0:
+            reasons.append(
+                "Transcript is empty — the audio track did not yield any "
+                "recognizable speech. Re-record with a clearer microphone "
+                "or verify the audio codec."
+            )
+        elif word_count < 10:
+            reasons.append(
+                f"Transcript is too short ({word_count} words) — likely a "
+                "mumbled, clipped, or background-noise-heavy recording. "
+                "The asset is searchable but not action-extractable."
+            )
+        else:
+            reasons.append(
+                "Transcript was detected as a stub/placeholder rather "
+                "than real speech. Audio transcription likely degraded."
+            )
+
+    # Visual-side reasons
+    if not has_visual_semantics and scene_count == 0:
+        reasons.append(
+            "No visual scenes were detected. The recording may be "
+            "audio-only or the video track was unreadable."
+        )
+
+    # Specific degraded-stage explanations (operator-actionable)
+    for stage in degraded:
+        if stage in {"analyze_scenes", "eyes.analyze_scenes"}:
+            detail = deg_reasons.get(stage, "")
+            if "circuit_open" in detail:
+                reasons.append(
+                    "Vision LLM (LLaVA) was unavailable — per-scene "
+                    "descriptions are missing. OCR text was preserved as "
+                    "fallback. Likely a GPU/Ollama outage; rerunning on a "
+                    "GPU-enabled deployment recovers this."
+                )
+            else:
+                reasons.append(
+                    f"Visual scene analysis was degraded ({detail or 'unknown reason'})."
+                )
+        elif stage in {"ears.transcribe_segments", "ears.align"}:
+            reasons.append(
+                f"Audio transcription stage was degraded ({stage}). "
+                "Transcript quality may be lower than usual."
+            )
+        elif stage in {"shield.redact_text", "shield.redact_audio", "shield.redact_video"}:
+            reasons.append(
+                "PII redaction was degraded — review the asset before "
+                "sharing externally."
+            )
+
+    return reasons
+
+
+def _format_visual_summary(
+    raw_descriptions: list[str],
+    *,
+    degraded_stages: list[str] | None,
+    scene_count: int,
+) -> str:
+    """Produce the visual_summary string that the UI surfaces.
+
+    When LLaVA was available, this is a joined run of scene
+    descriptions. When LLaVA failed (circuit-open), the descriptions
+    fall back to raw OCR text which the UI was misrepresenting as a
+    real visual summary. Distinguish these two cases explicitly so
+    the operator can tell apart "the LLM thought about this and
+    wrote a description" vs "we have OCR strings only".
+    """
+    descriptions = [d for d in raw_descriptions if d]
+    degraded = set(degraded_stages or [])
+    vision_degraded = any(
+        s in degraded for s in ("analyze_scenes", "eyes.analyze_scenes")
+    )
+
+    if not descriptions:
+        if vision_degraded:
+            return (
+                "Visual analysis was unavailable for this run (vision LLM "
+                "was offline). No per-scene descriptions could be generated."
+            )
+        return ""
+
+    if vision_degraded:
+        joined = " | ".join(descriptions)[:1800]
+        return (
+            "Visual analysis was unavailable for this run (vision LLM "
+            "was offline). Raw OCR text from screen frames preserved below "
+            "for evidence purposes only — this is not a curated summary:\n\n"
+            + joined
+        )
+
+    return " → ".join(descriptions)[:2000]
 
 
 async def _ensure_tenant_exists(engine: "SpineEngine", tenant_id: str) -> None:
@@ -4261,7 +4481,26 @@ async def _update_artifact_enrichment_in_db(
                 return False
             # Merge JSONB column.
             merged_json = dict(existing.full_artifact_json or {})
-            merged_json.update(full_json_patch)
+
+            # D6c: pull out the model_provenance_patch *before* the
+            # generic merge so the nested dict gets merged rather than
+            # replaced wholesale.
+            _patch = dict(full_json_patch or {})
+            _model_prov_patch = _patch.pop("model_provenance_patch", None)
+            merged_json.update(_patch)
+            if _model_prov_patch:
+                existing_mp = dict(merged_json.get("model_provenance") or {})
+                existing_mp.update(_model_prov_patch)
+                merged_json["model_provenance"] = existing_mp
+                # Also patch run_provenance.model_resolved + engine_versions
+                rp = dict(merged_json.get("run_provenance") or {})
+                if rp:
+                    for _k in ("model_resolved", "engine_versions"):
+                        _d = dict(rp.get(_k) or {})
+                        if "eyes_model" in _model_prov_patch and (not _d.get("eyes")):
+                            _d["eyes"] = _model_prov_patch["eyes_model"]
+                        rp[_k] = _d
+                    merged_json["run_provenance"] = rp
             # Recompute semantic-completeness flags now that we have
             # visual data.
             visual = update_fields.get("visual_summary", "") or existing.visual_summary or ""
@@ -4283,9 +4522,8 @@ async def _update_artifact_enrichment_in_db(
             # meaningful until enrichment runs. Now that we have the full
             # picture (visual + transcript + degraded state), set it once.
             _final_status = update_fields.get("status", "persisted")
-            _degraded = list(
-                (full_json_patch or {}).get("degraded_stages") or []
-            )
+            _degraded = list(_patch.get("degraded_stages") or [])
+            _degraded_reasons = dict(_patch.get("degraded_reasons") or {})
             _qg_passed, _qg_outcome = _compute_quality_gate(
                 semantic_completeness_score=semantic_score,
                 has_real_transcript=has_real_transcript,
@@ -4293,6 +4531,55 @@ async def _update_artifact_enrichment_in_db(
                 degraded_stages=_degraded,
                 artifact_status=_final_status,
             )
+
+            # D6a: compute the score_breakdown the UI's Trust panel
+            # renders as four ScoreBars. Without this the panel shows
+            # four "—" dashes even when we have all the data.
+            _shield_ctx = merged_json.get("shield_context") or {}
+            _score_breakdown = _compute_score_breakdown(
+                transcript=transcript,
+                has_real_transcript=has_real_transcript,
+                has_visual_semantics=has_visual,
+                scene_count=scene_count,
+                duration_seconds=existing.duration_seconds or 0,
+                degraded_stages=_degraded,
+                pii_entity_count=_shield_ctx.get("entity_count"),
+                pii_mode=_shield_ctx.get("mode"),
+            )
+            merged_json["score_breakdown"] = _score_breakdown
+
+            # D6b: review_reasons explain WHY the gate fired. Without
+            # these the orange banner is empty and operators can't tell
+            # what action to take.
+            _review_reasons = _compute_review_reasons(
+                qg_outcome=_qg_outcome,
+                has_real_transcript=has_real_transcript,
+                has_visual_semantics=has_visual,
+                transcript=transcript,
+                scene_count=scene_count,
+                degraded_stages=_degraded,
+                degraded_reasons=_degraded_reasons,
+            )
+            if _review_reasons:
+                merged_json["review_reasons"] = _review_reasons
+
+            # D6e: brain_quality_score fallback so the UI's hero card
+            # never shows "N/A". When brain.quality_gate didn't produce
+            # a score (or LLaVA circuit-broke and brain was skipped),
+            # fall back to semantic_completeness_score so operators see
+            # the rolled-up number we already have.
+            _brain_score = existing.brain_quality_score
+            if _brain_score is None:
+                _brain_score = semantic_score
+
+            # D6d: processing_time_seconds = wall time from artifact
+            # creation to enrichment. Replaces the silent 0.0 default
+            # that drove the "Processings: 0.0s" UI bug.
+            _now = datetime.now(timezone.utc)
+            _created = existing.created_at or _now
+            if _created.tzinfo is None:
+                _created = _created.replace(tzinfo=timezone.utc)
+            _proc_seconds = max((_now - _created).total_seconds(), 0.0)
 
             await session.execute(
                 sa_update(CanonicalArtifactRow)
@@ -4310,6 +4597,9 @@ async def _update_artifact_enrichment_in_db(
                     semantic_completeness_score=semantic_score,
                     quality_gate_passed=_qg_passed,
                     quality_gate_outcome=_qg_outcome,
+                    brain_quality_score=_brain_score,
+                    processing_time_seconds=round(_proc_seconds, 2),
+                    completed_at=_now,
                     full_artifact_json=merged_json,
                 )
             )

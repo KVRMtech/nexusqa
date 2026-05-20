@@ -134,6 +134,16 @@ class OrchestratorConfig(BaseSettings):
         default=10, alias="MAX_CONCURRENT_WORKFLOWS_PER_TENANT",
     )
 
+    # D2 fix: deep profile runs LLaVA per-frame and is GPU-only. CPU
+    # deployments quarantine deep workflows ~13 min in. When this flag
+    # is false, the orchestrator rejects deep profile submissions at
+    # ingress with a clear error message instead of letting them fail
+    # silently downstream. Production GPU deployments should set this
+    # to true via env.
+    deep_profile_enabled: bool = Field(
+        default=False, alias="EYES_DEEP_PROFILE_ENABLED",
+    )
+
 
 # ─── Application Setup ────────────────────────────────────────
 
@@ -1000,10 +1010,16 @@ async def start_workflow(
                 detail="session_id is required for canonical processing. Create a session first.",
             )
 
-        # Auto-extract audio from video when only video was registered.
-        # Mirrors the /process endpoint logic so internal callers benefit too.
         if req.input_data is None:
             req.input_data = {}
+
+        # D1 fix: compute fingerprint over the SOURCE uploads BEFORE
+        # auto-extracting audio (extracted bytes vary between ffmpeg
+        # runs, breaking dedup for identical re-uploads).
+        fingerprint = await _compute_media_fingerprint(req, file_store)
+
+        # Auto-extract audio from video when only video was registered.
+        # Mirrors the /process endpoint logic so internal callers benefit too.
         if (
             req.input_data.get("video_file_id")
             and not req.input_data.get("audio_file_id")
@@ -1013,13 +1029,24 @@ async def start_workflow(
             )
             if extracted_audio_id:
                 req.input_data["audio_file_id"] = extracted_audio_id
-
-        fingerprint = await _compute_media_fingerprint(req, file_store)
         # Inject provenance fields if not already set (API callers should use /process)
         req.input_data.setdefault("source_type", "api_workflow_start")
         req.input_data.setdefault("source_filename", "unknown")
         req.input_data.setdefault("created_by", user.user_id)
         req.input_data.setdefault("processing_profile", config.default_processing_profile)
+
+        # D2 fix: mirror the /process guard so internal callers also get
+        # a clear error rather than a downstream quarantine on CPU.
+        _profile = str(req.input_data.get("processing_profile") or "").lower()
+        if _profile == "deep" and not config.deep_profile_enabled:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "deep profile requires a GPU-enabled deployment. "
+                    "Use 'fast' or 'multimodal' instead, or contact your "
+                    "admin to enable EYES_DEEP_PROFILE_ENABLED."
+                ),
+            )
         if fingerprint:
             cached = await _check_fingerprint_cache(
                 req.tenant_id, fingerprint, config.spine_url
@@ -1295,6 +1322,21 @@ async def start_canonical_processing(
             detail="session_id is required. Create a session first via POST /v1/sessions.",
         )
 
+    # D2 fix: deep profile requires GPU (LLaVA per-frame). On CPU
+    # deployments it quarantines after step deadlines fire. Reject at
+    # ingress with a clear message rather than letting the user wait
+    # 13 min for a "Failed" UI state. Production GPU envs flip the
+    # EYES_DEEP_PROFILE_ENABLED env flag to true.
+    if (processing_profile or "").lower() == "deep" and not config.deep_profile_enabled:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "deep profile requires a GPU-enabled deployment. "
+                "Use 'fast' or 'multimodal' instead, or contact your "
+                "admin to enable EYES_DEEP_PROFILE_ENABLED."
+            ),
+        )
+
     # ── Store uploaded files (500 MB limit per file) ─────────
     MAX_UPLOAD_BYTES = 500 * 1024 * 1024
     audio_file_id: Optional[str] = None
@@ -1340,25 +1382,32 @@ async def start_canonical_processing(
             detail="At least one media file (audio or video) is required.",
         )
 
-    # Auto-extract embedded audio from the video when no separate audio
-    # file was provided.  Without this step, audio_transcription runs
-    # against an empty audio_file_id and the SME's narration is silently
-    # discarded — the most reliable intent signal for downstream action
-    # extraction.  Failure is non-fatal: the chain still runs visually.
-    if video_file_id and not audio_file_id:
-        extracted_audio_id = await _extract_audio_from_video(
-            video_file_id, file_store, tenant_id,
-        )
-        if extracted_audio_id:
-            audio_file_id = extracted_audio_id
-
     # ── Fingerprint dedup ──────────────────────────────────
+    # D1 fix: compute fingerprint over the SOURCE uploads only, BEFORE
+    # auto-extracting audio. ffmpeg-extracted audio bytes vary between
+    # runs (encoder metadata, muxer timestamps) so including them in
+    # the fingerprint made dedup fail for byte-identical re-uploads of
+    # the same video. Hashing the original uploads keeps the
+    # fingerprint deterministic across uploads.
     h = hashlib.sha256()
     for fid in sorted(filter(None, [audio_file_id, video_file_id])):
         file_content = await file_store.read(fid)
         if file_content:
             h.update(file_content)
     fingerprint = h.hexdigest()
+
+    # Auto-extract embedded audio from the video when no separate audio
+    # file was provided.  Without this step, audio_transcription runs
+    # against an empty audio_file_id and the SME's narration is silently
+    # discarded — the most reliable intent signal for downstream action
+    # extraction.  Failure is non-fatal: the chain still runs visually.
+    # NOTE: must run AFTER fingerprint compute (see comment above).
+    if video_file_id and not audio_file_id:
+        extracted_audio_id = await _extract_audio_from_video(
+            video_file_id, file_store, tenant_id,
+        )
+        if extracted_audio_id:
+            audio_file_id = extracted_audio_id
 
     cached = await _check_fingerprint_cache(tenant_id, fingerprint, config.spine_url)
     if cached:
@@ -1621,7 +1670,7 @@ async def start_canonical_processing(
         # purely for tear-down of orchestrator-side resources.
         background_tasks.add_task(
             _release_plane_workflow_resources,
-            new_workflow_id, tenant_id, fingerprint,
+            new_workflow_id, tenant_id, fingerprint, session_id,
         )
 
         return StartWorkflowResponse(
@@ -1702,12 +1751,20 @@ async def start_canonical_processing(
 
 async def _release_plane_workflow_resources(
     workflow_id: str, tenant_id: str, fingerprint: str,
+    session_id: str = "",
 ) -> None:
     """Poll the new workflow_plane for terminal status, then release
-    the admission slot + fingerprint lock. Bounded by the plan's own
-    workflow deadline (~45 min worst case) plus 5-min grace; after
-    that the plane's sweeper has already marked the workflow
-    cancelled, so resources need releasing regardless.
+    the admission slot + fingerprint lock and propagate the terminal
+    state to the session row. Bounded by the plan's own workflow
+    deadline (~45 min worst case) plus 5-min grace; after that the
+    plane's sweeper has already marked the workflow cancelled, so
+    resources need releasing regardless.
+
+    D5 fix (2026-05-18): also PATCHes the session status when the
+    workflow lands terminal. Without this, /process-launched workflows
+    completed in the artifact table but the session row stayed at
+    `scheduled` indefinitely — UI's "Recent Sessions" panel would
+    show "Processing" even though the artifact was 100% complete.
     """
     terminal = {
         PlaneWorkflowStatus.COMPLETED.value,
@@ -1715,6 +1772,7 @@ async def _release_plane_workflow_resources(
         PlaneWorkflowStatus.CANCELLED.value,
         PlaneWorkflowStatus.QUARANTINED.value,
     }
+    final_plane_status: Optional[str] = None
     poll_interval_s = 5.0
     max_wait_s = 3300.0  # 55 min — slightly past the multimodal deadline
     elapsed = 0.0
@@ -1722,6 +1780,7 @@ async def _release_plane_workflow_resources(
         try:
             wf = await workflow_plane.manager.get(workflow_id)
             if wf is not None and wf.status in terminal:
+                final_plane_status = wf.status
                 logger.info(
                     "plane.workflow.terminal wf=%s status=%s — releasing resources",
                     workflow_id, wf.status,
@@ -1756,6 +1815,26 @@ async def _release_plane_workflow_resources(
             "plane.workflow.fp_lock_release_failed wf=%s err=%s",
             workflow_id, exc,
         )
+
+    # D5 fix: flip the session row to match the workflow's terminal
+    # state. Quarantined surfaces as "failed" to the user — the
+    # operational distinction (retry-eligible vs hard-failed) lives
+    # in admin tools, not in the end-user session list.
+    if session_id:
+        _session_status_map = {
+            PlaneWorkflowStatus.COMPLETED.value: "completed",
+            PlaneWorkflowStatus.FAILED.value: "failed",
+            PlaneWorkflowStatus.CANCELLED.value: "cancelled",
+            PlaneWorkflowStatus.QUARANTINED.value: "failed",
+        }
+        target = _session_status_map.get(final_plane_status or "", "failed")
+        try:
+            await _update_session_status(tenant_id, session_id, target)
+        except Exception as exc:
+            logger.warning(
+                "plane.workflow.session_status_update_failed wf=%s session=%s target=%s err=%s",
+                workflow_id, session_id, target, exc,
+            )
 
 
 # Default consumer chains auto-triggered after canonical processing completes.

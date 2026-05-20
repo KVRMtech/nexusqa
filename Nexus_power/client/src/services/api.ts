@@ -519,11 +519,18 @@ class ApiClient {
   }
 
   async createSession(tenantId: string, title: string, sessionType = 'knowledge_transfer') {
+    // Bumped from default 30s to 60s. Defensive: under sustained load
+    // (or a stuttering Docker Desktop bridge), the platform-api/postgres
+    // chain can take >30s to ack a session INSERT, even though the
+    // payload is small. A 30s ceiling here was making the upload flow
+    // fail BEFORE the actual upload POST ran — confusing users with
+    // "timeout of 30000ms exceeded" when the real cause was upstream
+    // congestion. 60s gives the system room to breathe.
     const { data } = await this.client.post('/v1/sessions', {
       tenant_id: tenantId,
       title,
       session_type: sessionType,
-    });
+    }, { timeout: 60_000 });
     return data;
   }
 

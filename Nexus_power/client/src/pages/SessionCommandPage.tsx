@@ -222,20 +222,52 @@ function computeConfidence(stages: { stage_id: string; status: string }[]): {
 function qualityBadgeProps(
   score: number | null,
   outcome: string | null,
-): { label: string; variant: 'green' | 'blue' | 'orange' | 'red' | 'gray' } {
-  if (outcome === 'fail') return { label: 'FAILED', variant: 'red' };
-  if (outcome === 'needs_review') return { label: 'NEEDS REVIEW', variant: 'orange' };
-  if (score == null) return { label: 'PENDING', variant: 'gray' };
-  if (score >= 0.9) return { label: 'EXCELLENT', variant: 'green' };
-  if (score >= 0.7) return { label: 'GOOD', variant: 'blue' };
-  return { label: 'NEEDS REVIEW', variant: 'orange' };
+): { label: string; variant: 'green' | 'blue' | 'orange' | 'red' | 'gray'; tooltip: string } {
+  if (outcome === 'fail') return {
+    label: 'FAILED',
+    variant: 'red',
+    tooltip: 'Quality gate failed — the pipeline produced unusable output for downstream extraction.',
+  };
+  if (outcome === 'needs_review') return {
+    label: 'NEEDS REVIEW',
+    variant: 'orange',
+    tooltip: 'At least one signal is below the auto-trust threshold (short transcript, missing visual semantics, or a degraded engine). Open the asset to see the specific reasons.',
+  };
+  if (score == null) return {
+    label: 'PENDING',
+    variant: 'gray',
+    tooltip: 'Quality gate has not run yet — the artifact is still being enriched.',
+  };
+  if (score >= 0.9) return {
+    label: 'EXCELLENT',
+    variant: 'green',
+    tooltip: 'Quality gate passed with high confidence — safe to drive downstream test generation.',
+  };
+  if (score >= 0.7) return {
+    label: 'GOOD',
+    variant: 'blue',
+    tooltip: 'Quality gate passed — usable evidence for downstream extraction.',
+  };
+  return {
+    label: 'NEEDS REVIEW',
+    variant: 'orange',
+    tooltip: 'Borderline quality — at least one signal is weak. Open the asset to see the specific reasons.',
+  };
 }
 
 function provenanceBadgeProps(
   artifact: { media_fingerprint?: string | null; workflow_id?: string | null },
-): { label: string; variant: 'nexus' | 'purple' } {
-  if (artifact.media_fingerprint && !artifact.workflow_id) return { label: 'Cached', variant: 'purple' };
-  return { label: 'Fresh', variant: 'nexus' };
+): { label: string; variant: 'nexus' | 'purple'; tooltip: string } {
+  if (artifact.media_fingerprint && !artifact.workflow_id) return {
+    label: 'Cached',
+    variant: 'purple',
+    tooltip: 'This artifact was reused from a previous upload with the same media fingerprint — the pipeline did not re-run.',
+  };
+  return {
+    label: 'Fresh',
+    variant: 'nexus',
+    tooltip: 'This artifact was produced by running the full pipeline now (not pulled from cache).',
+  };
 }
 
 function formatElapsed(ms: number | null | undefined): string {
@@ -1608,10 +1640,10 @@ export default function SessionCommandPage() {
                       </p>
                       <StatusLabel status={session.status} />
                       {qBadge && (
-                        <StatusBadge label={qBadge.label} variant={qBadge.variant} />
+                        <StatusBadge label={qBadge.label} variant={qBadge.variant} tooltip={qBadge.tooltip} />
                       )}
                       {pBadge && (
-                        <StatusBadge label={pBadge.label} variant={pBadge.variant} />
+                        <StatusBadge label={pBadge.label} variant={pBadge.variant} tooltip={pBadge.tooltip} />
                       )}
                     </div>
                     <div className="mt-1 flex items-center gap-4 text-xs text-slate-400">
@@ -1643,27 +1675,27 @@ export default function SessionCommandPage() {
 
                   <div className="hidden sm:flex gap-6 text-center shrink-0">
                     {hasArtifact && artifact.brain_quality_score != null ? (
-                      <div>
+                      <div title="Canonical quality score (0-100%) — rolled-up confidence in the artifact's transcript + visual evidence.">
                         <p className="text-lg font-bold text-nexus-400">{(artifact.brain_quality_score * 100).toFixed(0)}%</p>
                         <p className="text-[10px] text-slate-400">Quality</p>
                       </div>
                     ) : (
-                      <div>
+                      <div title="Number of business rules/insights extracted by the brain engine from this session's transcript. Zero typically means the artifact is still enriching or the transcript was too short for rule extraction.">
                         <p className="text-lg font-bold text-[#0a2540]">{session.rules_extracted}</p>
                         <p className="text-[10px] text-slate-400">Insights</p>
                       </div>
                     )}
-                    <div>
+                    <div title="Number of downstream artifacts (test cases, documents) generated from this session.">
                       <p className="text-lg font-bold text-[#0a2540]">{session.tests_generated}</p>
                       <p className="text-[10px] text-slate-400">Documents</p>
                     </div>
-                    {hasArtifact && artifact.processing_time_seconds != null ? (
-                      <div>
+                    {hasArtifact && artifact.processing_time_seconds != null && artifact.processing_time_seconds > 0 ? (
+                      <div title="Wall-clock time the canonical pipeline spent processing this asset (probe → transcribe → vision → persist).">
                         <p className="text-lg font-bold text-slate-600">{formatProcessingTime(artifact.processing_time_seconds)}</p>
                         <p className="text-[10px] text-slate-400">Processing</p>
                       </div>
                     ) : (
-                      <div>
+                      <div title="Confidence score for the session — separate from the canonical quality gate; reflects upstream SME signal.">
                         <p className="text-lg font-bold text-nexus-400">{session.confidence_score}%</p>
                         <p className="text-[10px] text-slate-400">Confidence</p>
                       </div>

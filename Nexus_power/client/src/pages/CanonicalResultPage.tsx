@@ -54,17 +54,94 @@ import {
   ExternalLink,
   Lock,
   MonitorPlay,
+  Copy,
+  Check,
+  Info,
 } from 'lucide-react';
+
+// D6h: small click-to-copy + full-id reveal control. Replaces the
+// `.slice(0, 12)…` truncations that hid the real id from the user.
+// Shows ~12 chars by default so layout stays compact, expands on click,
+// and exposes a copy button so support workflows ("paste this artifact
+// id into the issue tracker") don't require a DB query.
+function IdChip({
+  label,
+  value,
+  colorClass = 'text-slate-600',
+  tooltip,
+}: {
+  label: string;
+  value: string;
+  colorClass?: string;
+  tooltip?: string;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const onCopy = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      // ignore — clipboard unavailable
+    }
+  };
+  const displayed = expanded ? value : `${value.slice(0, 12)}…`;
+  return (
+    <span className="inline-flex items-center gap-1.5" title={tooltip ?? value}>
+      <span className="text-slate-400">{label}:</span>
+      <code
+        className={clsx('font-mono cursor-pointer hover:underline', colorClass)}
+        onClick={() => setExpanded(v => !v)}
+      >
+        {displayed}
+      </code>
+      <button
+        onClick={onCopy}
+        className="text-slate-400 hover:text-slate-600 transition-colors"
+        title="Copy full id"
+      >
+        {copied ? <Check className="h-3 w-3 text-green-500" /> : <Copy className="h-3 w-3" />}
+      </button>
+    </span>
+  );
+}
 
 // ── Helpers ────────────────────────────────────────────────
 
-function qualityGrade(score: number | null): { label: string; color: string; variant: 'green' | 'blue' | 'yellow' | 'orange' | 'red' | 'gray' } {
-  if (score == null) return { label: 'N/A', color: 'text-slate-8000', variant: 'gray' };
+function qualityGrade(score: number | null): { label: string; color: string; variant: 'green' | 'blue' | 'yellow' | 'orange' | 'red' | 'gray'; tooltip: string } {
+  if (score == null) return {
+    label: 'N/A',
+    color: 'text-slate-8000',
+    variant: 'gray',
+    tooltip: 'No quality score available — the brain quality gate did not produce a score for this artifact.',
+  };
   const pct = score * 100;
-  if (pct >= 90) return { label: 'EXCELLENT', color: 'text-green-400', variant: 'green' };
-  if (pct >= 75) return { label: 'GOOD', color: 'text-blue-400', variant: 'blue' };
-  if (pct >= 50) return { label: 'FAIR', color: 'text-yellow-400', variant: 'yellow' };
-  return { label: 'NEEDS REVIEW', color: 'text-orange-400', variant: 'orange' };
+  if (pct >= 90) return {
+    label: 'EXCELLENT',
+    color: 'text-green-400',
+    variant: 'green',
+    tooltip: `Quality score ${pct.toFixed(0)}% — transcript and visual evidence are both strong; safe to drive downstream test generation.`,
+  };
+  if (pct >= 75) return {
+    label: 'GOOD',
+    color: 'text-blue-400',
+    variant: 'blue',
+    tooltip: `Quality score ${pct.toFixed(0)}% — usable evidence for downstream extraction; double-check a few generated artifacts before publishing.`,
+  };
+  if (pct >= 50) return {
+    label: 'FAIR',
+    color: 'text-yellow-400',
+    variant: 'yellow',
+    tooltip: `Quality score ${pct.toFixed(0)}% — partial evidence; downstream outputs will need human curation before being trusted.`,
+  };
+  return {
+    label: 'NEEDS REVIEW',
+    color: 'text-orange-400',
+    variant: 'orange',
+    tooltip: `Quality score ${pct.toFixed(0)}% — one or more pipeline stages produced low-confidence output (short transcript, missing visual semantics, or a degraded engine). Open the "This asset needs review" panel below for the specific reasons.`,
+  };
 }
 
 function formatDuration(seconds: number): string {
@@ -380,15 +457,49 @@ export default function CanonicalResultPage() {
                 {vm.quality_score != null ? `${(vm.quality_score * 100).toFixed(0)}%` : '—'}
               </div>
               <div>
-                <StatusBadge label={grade.label} variant={grade.variant} />
-                <p className="text-xs text-slate-400 mt-1">Canonical Quality Score</p>
+                <StatusBadge label={grade.label} variant={grade.variant} tooltip={grade.tooltip} />
+                <p className="text-xs text-slate-400 mt-1 flex items-center gap-1">
+                  Canonical Quality Score
+                  <Info className="h-3 w-3 text-slate-400" />
+                </p>
               </div>
             </div>
           </div>
-          <div className="text-right text-xs text-slate-400 space-y-0.5 shrink-0">
-            <p>Session: <code className="text-nexus-400 font-mono">{vm.session_id.slice(0, 12)}&hellip;</code></p>
-            {vm.workflow_id && <p>Workflow: <code className="text-purple-400 font-mono">{vm.workflow_id.slice(0, 12)}&hellip;</code></p>}
-            <p>Artifact: <code className="text-blue-400 font-mono">{vm.artifact_id.slice(0, 12)}&hellip;</code></p>
+          <div className="text-right text-xs space-y-0.5 shrink-0">
+            <p>
+              <IdChip
+                label="Session"
+                value={vm.session_id}
+                colorClass="text-nexus-400"
+                tooltip="Click the id to expand. Use the copy icon to grab the full id for support tickets."
+              />
+            </p>
+            {vm.workflow_id && (
+              <p>
+                <IdChip
+                  label="Workflow"
+                  value={vm.workflow_id}
+                  colorClass="text-purple-400"
+                  tooltip="The orchestrator workflow that produced this artifact."
+                />
+              </p>
+            )}
+            <p>
+              <IdChip
+                label="Artifact"
+                value={vm.artifact_id}
+                colorClass="text-blue-400"
+                tooltip="The canonical artifact id — same as the 'Canonical' id shown elsewhere. Use this when referencing the asset in API calls or support tickets."
+              />
+            </p>
+            <p>
+              <IdChip
+                label="Canonical"
+                value={vm.artifact_id}
+                colorClass="text-blue-400"
+                tooltip="The canonical asset's stable id. Identical to the Artifact id above — kept here so it's easy to copy for downstream references."
+              />
+            </p>
           </div>
         </div>
 
@@ -432,6 +543,13 @@ export default function CanonicalResultPage() {
             label={vm.provenance === 'fresh' ? 'Freshly Produced' : vm.provenance === 'cache_reuse' ? 'Cache Reuse' : 'Aliased'}
             variant={provenanceVariant(vm)}
             icon={vm.cache_hit ? <Zap className="h-3 w-3" /> : undefined}
+            tooltip={
+              vm.provenance === 'fresh'
+                ? 'This artifact was produced by running the full pipeline now — not pulled from cache.'
+                : vm.provenance === 'cache_reuse'
+                ? 'A previous upload with the same media fingerprint had already been processed; the same canonical artifact was reused instead of re-running the pipeline.'
+                : 'The artifact was originally produced in a different session and aliased into this one for visibility.'
+            }
           />
         </div>
 
@@ -542,6 +660,15 @@ export default function CanonicalResultPage() {
             label={outcomeLabel(vm.quality_outcome)}
             variant={outcomeVariant(vm.quality_outcome)}
             icon={vm.quality_outcome === 'pass' ? <CheckCircle2 className="h-3 w-3" /> : vm.quality_outcome === 'fail' ? <XCircle className="h-3 w-3" /> : <AlertTriangle className="h-3 w-3" />}
+            tooltip={
+              vm.quality_outcome === 'pass'
+                ? 'All gates passed — transcript, visual evidence, and PII redaction met thresholds.'
+                : vm.quality_outcome === 'fail'
+                ? 'The pipeline produced unusable output for downstream extraction.'
+                : vm.quality_outcome === 'needs_review'
+                ? 'The pipeline produced output but at least one signal is below the auto-trust threshold (e.g., transcript too short, vision LLM offline, low semantic completeness). The list under "This asset needs review" describes the specific reasons; resolve them and re-run, or accept the asset for limited downstream use.'
+                : 'Quality gate outcome unavailable.'
+            }
           />
           {vm.semantic_completeness_score != null && (
             <span className="text-xs text-slate-400">

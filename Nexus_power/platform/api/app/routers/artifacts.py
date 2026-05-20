@@ -1572,6 +1572,88 @@ async def get_workflow(
     raise HTTPException(404, f"Workflow {workflow_id} not found")
 
 
+# D6g: map Phase-12 DAG step names → the UI's 7 canonical-stage IDs
+# (CanonicalResultPage.CANONICAL_STAGES). The UI's getTimelineStage()
+# does substring matching against `event`, so emitting events keyed
+# off the UI stage id makes the Processing Timeline render correctly.
+_DAG_STEP_TO_UI_STAGE: dict[str, str] = {
+    "spine.probe_media": "media_probe",
+    "ears.preprocess": "audio_transcription",
+    "ears.diarize": "audio_transcription",
+    "ears.transcribe_segments": "audio_transcription",
+    "ears.align": "audio_transcription",
+    "eyes.extract_frames": "visual_extraction",
+    "eyes.detect_scenes": "visual_extraction",
+    "eyes.ocr_frames": "visual_extraction",
+    "eyes.analyze_scenes": "visual_extraction",
+    "eyes.analyze_transitions": "visual_extraction",
+    "eyes.build_evidence": "visual_extraction",
+    "shield.redact_audio": "pii_redaction",
+    "shield.redact_video": "pii_redaction",
+    "shield.redact_text": "pii_redaction",
+    "spine.build_visual_graph": "visual_graph_assembly",
+    "spine.persist_minimal_artifact": "artifact_persistence",
+    "spine.update_artifact_enriched": "artifact_persistence",
+    "spine.persist_visual_evidence": "artifact_persistence",
+    "spine.persist_action_evidence": "artifact_persistence",
+    "backbone.canonicalize_multimodal": "canonical_quality_gate",
+}
+
+
+def _build_timeline_from_step_history(rows: list) -> list[dict]:
+    """Aggregate raw workflow_step_history rows into the UI-shaped
+    timeline event stream. Each UI stage gets one `*.start` event
+    (earliest start across its sub-steps) and one `*.complete` event
+    (latest complete). Degraded/failed sub-steps roll up to the
+    parent's status. Without this aggregation, the UI's stage panel
+    is blank — its substring matcher only knows the 7 canonical
+    stage ids, not the 20+ raw DAG step names.
+    """
+    if not rows:
+        return []
+
+    by_stage: dict[str, dict] = {}
+    for row in rows:
+        ui_stage = _DAG_STEP_TO_UI_STAGE.get(row.step_name)
+        if not ui_stage:
+            continue
+        bucket = by_stage.setdefault(
+            ui_stage,
+            {"start": None, "end": None, "status": "completed", "failed": False, "degraded": False},
+        )
+        if row.started_at and (bucket["start"] is None or row.started_at < bucket["start"]):
+            bucket["start"] = row.started_at
+        if row.completed_at and (bucket["end"] is None or row.completed_at > bucket["end"]):
+            bucket["end"] = row.completed_at
+        # The final-attempt status wins for a step; sub-steps with
+        # status=="failed" propagate as degraded at the UI-stage level
+        # (the workflow as a whole only fails if no fallback recovered).
+        if row.status == "failed":
+            bucket["degraded"] = True
+        elif row.status not in ("completed", "skipped"):
+            bucket["failed"] = bucket["failed"] or False
+
+    timeline: list[dict] = []
+    for ui_stage, info in by_stage.items():
+        if info["start"]:
+            timeline.append({
+                "timestamp": info["start"].isoformat(),
+                "event": f"{ui_stage}.start",
+                "detail": f"stage: {ui_stage} started",
+            })
+        if info["end"]:
+            label = "degraded" if info["degraded"] else (
+                "failed" if info["failed"] else "complete"
+            )
+            timeline.append({
+                "timestamp": info["end"].isoformat(),
+                "event": f"{ui_stage}.{label}",
+                "detail": f"stage: {ui_stage} {label}",
+            })
+    timeline.sort(key=lambda e: e["timestamp"])
+    return timeline
+
+
 @router.get("/api/v1/workflows/{workflow_id}/timeline")
 async def get_workflow_timeline(
     workflow_id: str = Path(...),
@@ -1580,10 +1662,19 @@ async def get_workflow_timeline(
 ):
     """Get the execution timeline for a workflow.
 
-    Falls back to orchestrator if workflow not yet in DB.
+    Lookup order:
+      1. Legacy `workflow_instances` row (carries pre-baked timeline JSON)
+      2. Phase-12 plane (`workflow_state` + `workflow_step_history`)
+      3. Orchestrator in-flight fallback
+
+    D6g (2026-05-18): added step #2 — without it, the UI's Processing
+    Timeline section was blank for every Phase-12 workflow because the
+    legacy table lookup missed and the orchestrator endpoint also
+    doesn't know Phase-12 plane workflows.
     """
     factory = require_db()
     async with factory() as db:
+        # 1. Legacy table
         row = await db.get(WorkflowInstanceRow, workflow_id)
         if row:
             return {
@@ -1595,7 +1686,38 @@ async def get_workflow_timeline(
                 "completed_at": row.completed_at,
             }
 
-    # Fallback: query orchestrator for in-flight workflow timeline
+        # 2. Phase-12 plane: assemble from workflow_state + step_history
+        try:
+            from nexus_sdk.workflows.db_models import (
+                WorkflowStateRow as _WfStateRow,
+                WorkflowStepHistoryRow as _WfStepHistRow,
+            )
+            from sqlalchemy import select
+            wf_state = await db.get(_WfStateRow, workflow_id)
+            if wf_state:
+                step_rows = (
+                    await db.execute(
+                        select(_WfStepHistRow)
+                        .where(_WfStepHistRow.workflow_id == workflow_id)
+                        .order_by(_WfStepHistRow.started_at.asc())
+                    )
+                ).scalars().all()
+                _timeline = _build_timeline_from_step_history(list(step_rows))
+                return {
+                    "workflow_id": wf_state.workflow_id,
+                    "chain_name": wf_state.kind,
+                    "status": wf_state.status,
+                    "timeline": _timeline,
+                    "started_at": wf_state.created_at,
+                    "completed_at": wf_state.completed_at,
+                }
+        except Exception as exc:
+            _logger.warning(
+                "timeline.phase12_lookup_failed wf=%s err=%s",
+                workflow_id, exc,
+            )
+
+    # 3. Orchestrator in-flight fallback
     try:
         import httpx as _httpx
         _headers = {}

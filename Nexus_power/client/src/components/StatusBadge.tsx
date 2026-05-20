@@ -33,15 +33,21 @@ interface StatusBadgeProps {
   icon?: React.ReactNode;
   /** Additional CSS classes */
   className?: string;
+  /**
+   * Optional native tooltip text shown on hover. Used to explain
+   * domain labels like "NEEDS REVIEW", "Freshly Produced", etc.,
+   * which clients otherwise have to guess at from the colour alone.
+   */
+  tooltip?: string;
 }
 
 /**
  * Reusable badge component that replaces scattered inline badge styling.
  * Maps semantic names (success, warning, error, etc.) to the Tailwind @layer badge classes.
  */
-export function StatusBadge({ label, variant = 'gray', pulse, icon, className }: StatusBadgeProps) {
+export function StatusBadge({ label, variant = 'gray', pulse, icon, className, tooltip }: StatusBadgeProps) {
   return (
-    <span className={clsx(variantMap[variant], className)}>
+    <span className={clsx(variantMap[variant], className)} title={tooltip}>
       {pulse && (
         <span className="relative mr-1.5 flex h-1.5 w-1.5">
           <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-current opacity-75" />
