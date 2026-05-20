@@ -13,8 +13,11 @@
 #     <GCS_BUCKET> <DB_PASSWORD>
 #
 # Required env BEFORE running:
-#   GH_USER          — your GitHub username
-#   GH_REPO          — repo name (default: nexus-power-snapshot)
+#   GH_USER          — GitHub org/user that owns the repo
+#                      (default: KVRMtech — the private repo with the
+#                      latest D5+D6 fixes shipped 2026-05-19).
+#   GH_REPO          — repo name (default: nexusqa)
+#   GH_BRANCH        — branch to deploy (default: runpod-snapshot)
 #   GH_DEPLOY_KEY    — path to PRIVATE deploy key on Cloud Shell
 #                      (NOT your account-level key; create a repo-scoped
 #                      SSH deploy key in GitHub Settings → Deploy keys).
@@ -33,8 +36,9 @@ REDIS_IP="${4:?REDIS_IP required}"
 GCS_BUCKET="${5:?GCS_BUCKET required}"
 DB_PASSWORD="${6:?DB_PASSWORD required}"
 PROJECT_ID="${PROJECT_ID:-$(gcloud config get-value project 2>/dev/null)}"
-GH_USER="${GH_USER:?Set GH_USER env (your GitHub username)}"
-GH_REPO="${GH_REPO:-nexus-power-snapshot}"
+GH_USER="${GH_USER:-KVRMtech}"
+GH_REPO="${GH_REPO:-nexusqa}"
+GH_BRANCH="${GH_BRANCH:-runpod-snapshot}"
 GH_DEPLOY_KEY="${GH_DEPLOY_KEY:-$HOME/.ssh/runpod_deploy}"
 
 if [[ ! -f "$GH_DEPLOY_KEY" ]]; then
@@ -146,11 +150,15 @@ Host github.com
 SSH
 chmod 600 ~/.ssh/config
 
-echo "[VM] Cloning code from GitHub..."
+echo "[VM] Cloning code from GitHub (${GH_USER}/${GH_REPO}@${GH_BRANCH})..."
 if [ ! -d ~/nexus ]; then
-  git clone git@github.com:${GH_USER}/${GH_REPO}.git ~/nexus
+  git clone --branch "${GH_BRANCH}" \
+    git@github.com:${GH_USER}/${GH_REPO}.git ~/nexus
 else
-  cd ~/nexus && git pull
+  cd ~/nexus
+  git fetch origin "${GH_BRANCH}"
+  git checkout "${GH_BRANCH}"
+  git pull origin "${GH_BRANCH}"
 fi
 cd ~/nexus/Nexus_power
 
