@@ -18,12 +18,20 @@
 #                      latest D5+D6 fixes shipped 2026-05-19).
 #   GH_REPO          — repo name (default: nexusqa)
 #   GH_BRANCH        — branch to deploy (default: runpod-snapshot)
-#   GH_DEPLOY_KEY    — path to PRIVATE deploy key on Cloud Shell
+#
+# Authentication — pick ONE of:
+#   GH_PAT           — fine-grained Personal Access Token, read-only on
+#                      the repo. The VM clones via HTTPS using this PAT.
+#                      Use this when you don't have admin rights to add
+#                      a deploy key (the common case for org repos).
+#   GH_DEPLOY_KEY    — path to PRIVATE SSH deploy key on Cloud Shell
 #                      (NOT your account-level key; create a repo-scoped
 #                      SSH deploy key in GitHub Settings → Deploy keys).
-#                      Default: ~/.ssh/runpod_deploy (the one we made
-#                      earlier; if you already used it for RunPod that's
-#                      fine, it can be reused for GCP too)
+#                      Requires admin on the repo. Default:
+#                      ~/.ssh/runpod_deploy.
+#
+# If neither is set, the script falls back to GH_DEPLOY_KEY at the
+# default path and exits with a helpful error if missing.
 #
 # Time: ~30-60 min first run (image builds + Ollama model pull on GPU).
 
@@ -39,18 +47,23 @@ PROJECT_ID="${PROJECT_ID:-$(gcloud config get-value project 2>/dev/null)}"
 GH_USER="${GH_USER:-KVRMtech}"
 GH_REPO="${GH_REPO:-nexusqa}"
 GH_BRANCH="${GH_BRANCH:-runpod-snapshot}"
+GH_PAT="${GH_PAT:-}"
 GH_DEPLOY_KEY="${GH_DEPLOY_KEY:-$HOME/.ssh/runpod_deploy}"
 
-if [[ ! -f "$GH_DEPLOY_KEY" ]]; then
-  echo "ERROR: deploy key not found at $GH_DEPLOY_KEY" >&2
-  echo "Generate one: ssh-keygen -t ed25519 -f $GH_DEPLOY_KEY -N ''" >&2
-  echo "Then add the .pub to GitHub repo → Settings → Deploy keys." >&2
+# Pick the auth path. PAT wins when set (most common case — no repo
+# admin required). Falls back to SSH deploy key if no PAT.
+if [[ -n "$GH_PAT" ]]; then
+  AUTH_MODE=pat
+elif [[ -f "$GH_DEPLOY_KEY" && -f "${GH_DEPLOY_KEY}.pub" ]]; then
+  AUTH_MODE=ssh
+else
+  echo "ERROR: no GitHub auth configured." >&2
+  echo "Set GH_PAT (fine-grained PAT, read-only on the repo) OR" >&2
+  echo "provide an SSH deploy key at $GH_DEPLOY_KEY" >&2
+  echo "(generate via: ssh-keygen -t ed25519 -f $GH_DEPLOY_KEY -N '')" >&2
   exit 1
 fi
-if [[ ! -f "${GH_DEPLOY_KEY}.pub" ]]; then
-  echo "ERROR: public key not found at ${GH_DEPLOY_KEY}.pub" >&2
-  exit 1
-fi
+echo "Auth mode: $AUTH_MODE"
 
 # ─── Generate the VM-side .env ───────────────────────────────
 
@@ -99,14 +112,27 @@ GCS_BUCKET=${GCS_BUCKET}
 NEXUS_QUEUE_SATURATION_THRESHOLD=400
 EOF
 
-echo "Pushing .env + deploy key to VM..."
+echo "Pushing .env to VM..."
 gcloud compute scp /tmp/nexus_vm.env \
   "${VM_NAME}:~/.env" \
   --zone="$ZONE" --project="$PROJECT_ID"
 
-gcloud compute scp "$GH_DEPLOY_KEY" "${GH_DEPLOY_KEY}.pub" \
-  "${VM_NAME}:~/.ssh/" \
-  --zone="$ZONE" --project="$PROJECT_ID"
+if [[ "$AUTH_MODE" == "ssh" ]]; then
+  echo "Pushing SSH deploy key to VM..."
+  gcloud compute scp "$GH_DEPLOY_KEY" "${GH_DEPLOY_KEY}.pub" \
+    "${VM_NAME}:~/.ssh/" \
+    --zone="$ZONE" --project="$PROJECT_ID"
+else
+  # PAT path: write the token into a tightly-scoped file on the VM,
+  # never embedded in the bootstrap script source (heredoc would
+  # expand $-vars and the token would land in logs).
+  echo "Pushing PAT to VM (read-only file, never echoed)..."
+  TMP_PAT=$(mktemp)
+  printf '%s\n' "$GH_PAT" > "$TMP_PAT"
+  gcloud compute scp "$TMP_PAT" "${VM_NAME}:~/.gh_pat" \
+    --zone="$ZONE" --project="$PROJECT_ID"
+  rm -f "$TMP_PAT"
+fi
 
 # ─── Bootstrap script (runs on the VM) ───────────────────────
 
@@ -138,22 +164,36 @@ fi
 echo "[VM] Verifying GPU passthrough from Docker..."
 sudo docker run --rm --gpus all nvidia/cuda:12.4.0-base-ubuntu22.04 nvidia-smi | head -10
 
-echo "[VM] Setting up SSH config for GitHub deploy key..."
-chmod 600 ~/.ssh/runpod_deploy
-chmod 644 ~/.ssh/runpod_deploy.pub
-cat > ~/.ssh/config <<SSH
+if [ -f ~/.ssh/runpod_deploy ]; then
+  echo "[VM] Setting up SSH config for GitHub deploy key..."
+  chmod 600 ~/.ssh/runpod_deploy
+  chmod 644 ~/.ssh/runpod_deploy.pub
+  cat > ~/.ssh/config <<SSH
 Host github.com
   HostName github.com
   User git
   IdentityFile ~/.ssh/runpod_deploy
   StrictHostKeyChecking accept-new
 SSH
-chmod 600 ~/.ssh/config
+  chmod 600 ~/.ssh/config
+  CLONE_URL="git@github.com:${GH_USER}/${GH_REPO}.git"
+elif [ -f ~/.gh_pat ]; then
+  echo "[VM] Configuring HTTPS clone via PAT..."
+  chmod 600 ~/.gh_pat
+  _GH_PAT_VAL=\$(cat ~/.gh_pat)
+  CLONE_URL="https://oauth2:\${_GH_PAT_VAL}@github.com/${GH_USER}/${GH_REPO}.git"
+  # Store as git credential so subsequent pulls don't need it inline
+  git config --global credential.helper "store --file=\$HOME/.git-credentials"
+  echo "https://oauth2:\${_GH_PAT_VAL}@github.com" > ~/.git-credentials
+  chmod 600 ~/.git-credentials
+else
+  echo "ERROR: no GitHub auth on VM (~/.ssh/runpod_deploy and ~/.gh_pat both missing)"
+  exit 1
+fi
 
 echo "[VM] Cloning code from GitHub (${GH_USER}/${GH_REPO}@${GH_BRANCH})..."
 if [ ! -d ~/nexus ]; then
-  git clone --branch "${GH_BRANCH}" \
-    git@github.com:${GH_USER}/${GH_REPO}.git ~/nexus
+  git clone --branch "${GH_BRANCH}" "\${CLONE_URL}" ~/nexus
 else
   cd ~/nexus
   git fetch origin "${GH_BRANCH}"
