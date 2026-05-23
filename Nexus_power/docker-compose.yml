@@ -514,6 +514,57 @@ services:
       HEART_ENGINE_URL: http://heart:8004
       EYES_ENGINE_URL: http://eyes:8003
       SPINE_ENGINE_URL: http://spine:8009
+      # ── Storage backend (read by nexus_sdk.storage.create_storage) ─
+      # Tells the platform-api ArtifactStore where to fetch raw frames
+      # from when serving annotated PNGs.  Must match the pipeline's
+      # backend so platform-api reads the same objects the pipeline
+      # wrote.  Defaults to local for dev convenience.
+      NEXUS_STORAGE_BACKEND: ${NEXUS_STORAGE_BACKEND:-local}
+      GCS_BUCKET: ${GCS_BUCKET:-}
+      AZURE_STORAGE_ACCOUNT: ${AZURE_STORAGE_ACCOUNT:-}
+      AZURE_STORAGE_CONTAINER: ${AZURE_STORAGE_CONTAINER:-}
+      S3_ENDPOINT: ${S3_ENDPOINT:-}
+      S3_BUCKET: ${S3_BUCKET:-}
+      AWS_REGION: ${AWS_REGION:-}
+      # ── Storyboard Phase 1 — 3-tier LLM router ─────────────────────
+      # Every storyboard task (caption, story, BPMN refine, KG reasoning)
+      # is routed through the provider-agnostic LLMRouter.  Tiers are
+      # named here and selected via per-task LLM_TASK_<NAME> env vars
+      # so swapping providers is a deploy-time decision, not a code change.
+      LLM_TIERS: ${LLM_TIERS:-}
+      LLM_DEFAULT_TIER: ${LLM_DEFAULT_TIER:-}
+      LLM_TIER_TIER_FAST_PROVIDER: ${LLM_TIER_TIER_FAST_PROVIDER:-}
+      LLM_TIER_TIER_FAST_BASE_URL: ${LLM_TIER_TIER_FAST_BASE_URL:-}
+      LLM_TIER_TIER_FAST_API_KEY: ${LLM_TIER_TIER_FAST_API_KEY:-}
+      LLM_TIER_TIER_FAST_MODEL: ${LLM_TIER_TIER_FAST_MODEL:-}
+      LLM_TIER_TIER_FAST_TIMEOUT_S: ${LLM_TIER_TIER_FAST_TIMEOUT_S:-30}
+      LLM_TIER_TIER_FAST_MAX_RETRIES: ${LLM_TIER_TIER_FAST_MAX_RETRIES:-2}
+      LLM_TIER_TIER_FAST_FALLBACK: ${LLM_TIER_TIER_FAST_FALLBACK:-}
+      LLM_TIER_TIER_BALANCED_PROVIDER: ${LLM_TIER_TIER_BALANCED_PROVIDER:-}
+      LLM_TIER_TIER_BALANCED_BASE_URL: ${LLM_TIER_TIER_BALANCED_BASE_URL:-}
+      LLM_TIER_TIER_BALANCED_API_KEY: ${LLM_TIER_TIER_BALANCED_API_KEY:-}
+      LLM_TIER_TIER_BALANCED_MODEL: ${LLM_TIER_TIER_BALANCED_MODEL:-}
+      LLM_TIER_TIER_BALANCED_TIMEOUT_S: ${LLM_TIER_TIER_BALANCED_TIMEOUT_S:-30}
+      LLM_TIER_TIER_BALANCED_MAX_RETRIES: ${LLM_TIER_TIER_BALANCED_MAX_RETRIES:-2}
+      LLM_TIER_TIER_BALANCED_FALLBACK: ${LLM_TIER_TIER_BALANCED_FALLBACK:-}
+      LLM_TIER_TIER_PREMIUM_PROVIDER: ${LLM_TIER_TIER_PREMIUM_PROVIDER:-}
+      LLM_TIER_TIER_PREMIUM_BASE_URL: ${LLM_TIER_TIER_PREMIUM_BASE_URL:-}
+      LLM_TIER_TIER_PREMIUM_API_KEY: ${LLM_TIER_TIER_PREMIUM_API_KEY:-}
+      LLM_TIER_TIER_PREMIUM_MODEL: ${LLM_TIER_TIER_PREMIUM_MODEL:-}
+      LLM_TIER_TIER_PREMIUM_TIMEOUT_S: ${LLM_TIER_TIER_PREMIUM_TIMEOUT_S:-60}
+      LLM_TIER_TIER_PREMIUM_MAX_RETRIES: ${LLM_TIER_TIER_PREMIUM_MAX_RETRIES:-2}
+      LLM_TIER_TIER_PREMIUM_FALLBACK: ${LLM_TIER_TIER_PREMIUM_FALLBACK:-}
+      LLM_TASK_CAPTION: ${LLM_TASK_CAPTION:-}
+      LLM_TASK_STORY: ${LLM_TASK_STORY:-}
+      LLM_TASK_BPMN_REFINE: ${LLM_TASK_BPMN_REFINE:-}
+      LLM_TASK_KG_REASONING: ${LLM_TASK_KG_REASONING:-}
+      # Storyboard derivation knobs — all have defaults in code so this
+      # block is "what to override" not "what to set".  Operators bump
+      # the version envs to force re-derivation across the fleet.
+      STORYBOARD_SCENE_GROUPER_VERSION: ${STORYBOARD_SCENE_GROUPER_VERSION:-v1}
+      STORYBOARD_APP_DEDUP_VERSION: ${STORYBOARD_APP_DEDUP_VERSION:-v1}
+      STORYBOARD_CAPTION_VERSION: ${STORYBOARD_CAPTION_VERSION:-v1}
+      STORYBOARD_ANNOTATION_VERSION: ${STORYBOARD_ANNOTATION_VERSION:-v1}
     healthcheck:
       interval: 15s
       timeout: 5s

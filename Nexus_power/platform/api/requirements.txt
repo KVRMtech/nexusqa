@@ -3,3 +3,16 @@
 psutil>=5.9,<6.0
 structlog>=24.1,<25.0
 locust>=2.23,<3.0
+# Storyboard Phase 1 deps.  The services degrade gracefully when these
+# are missing (fall back to stdlib Levenshtein + last-two-labels TLD
+# extraction) but the production path expects both installed for speed
+# and accuracy.  tldextract uses the Public Suffix List for correct
+# eTLD+1 extraction including country-code TLDs (co.uk, com.au).
+# rapidfuzz is C++-backed and ~50x faster than the pure-Python fallback
+# for the pairwise domain comparison loop.
+tldextract>=5.1,<6.0
+rapidfuzz>=3.5,<4.0
+# Pillow drives the frame_annotator service (Step 5).  Standard CPython
+# wheels are available for Linux/x86_64 so the platform-api image pulls
+# a binary wheel — no compilation step at build time.
+Pillow>=10.0,<12.0

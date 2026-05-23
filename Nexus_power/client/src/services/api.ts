@@ -1131,6 +1131,41 @@ class ApiClient {
     return data;
   }
 
+  // ── Storyboard Phase 1 — picture-first visual evidence ──────────
+  // Triggers lazy derivation on first call.  Returns the composed
+  // storyboard (panels + apps + summary + derivation status).
+  // See platform/api/app/routers/storyboard.py for the payload shape.
+
+  async getStoryboard(
+    artifactId: string,
+  ): Promise<import('../types/canonical').StoryboardPayload> {
+    const { data } = await this.client.get(`/v1/artifacts/${artifactId}/storyboard`);
+    return data;
+  }
+
+  async regenerateStoryboard(
+    artifactId: string,
+  ): Promise<import('../types/canonical').StoryboardPayload> {
+    const { data } = await this.client.post(
+      `/v1/artifacts/${artifactId}/storyboard/regenerate`,
+    );
+    return data;
+  }
+
+  /**
+   * Build an annotated-frame URL the <img> tag can src= directly.
+   * The endpoint is auth-gated (JWT in header), so this is only
+   * usable inside the SPA where the axios interceptor attaches the
+   * token; to use it from a plain <img>, append the token as a
+   * query param (matching the eyes-engine pattern).
+   */
+  getAnnotatedFrameUrl(artifactId: string, frameId: string): string {
+    const token = sessionStorage.getItem('nexus_token') || '';
+    const base = (API_BASE || '/api').replace(/\/$/, '');
+    const path = `${base}/v1/artifacts/${encodeURIComponent(artifactId)}/frames/${encodeURIComponent(frameId)}/annotated.png`;
+    return token ? `${path}?token=${encodeURIComponent(token)}` : path;
+  }
+
   // ── Visual Strict Test Generation — Phase 9 ────────────
 
   async generateTestsFromVisual(

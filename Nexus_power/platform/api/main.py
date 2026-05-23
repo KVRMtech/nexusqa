@@ -90,6 +90,14 @@ from app.knowledge_foundation import (
     shutdown_knowledge_foundation,
 )
 
+# Storyboard Phase 1 — picture-first visual evidence + LLM-driven captions.
+# All derivations are additive to the frozen pipeline outputs.
+from app.routers.storyboard import router as storyboard_router
+from app.services.storyboard import load_config as load_storyboard_config
+from app.services.storyboard.composer import StoryboardComposer
+from app.services.storyboard.frame_annotator import FrameAnnotator
+from app.services.llm import load_config as load_llm_config, LLMRouter
+
 # Existing test_cases router (already modular)
 from routers.test_cases import router as test_cases_router, init_router as init_test_cases
 
@@ -144,16 +152,55 @@ async def lifespan(application: FastAPI):
         config=config,
     )
 
+    # ── Storyboard Phase 1 — picture-first visual evidence ─────────
+    # Initialised even when no LLM is configured; the caption rewriter
+    # falls back to deterministic captions in that case.  Pillow is
+    # optional — when missing, the frame annotator is disabled but
+    # storyboard responses still work (raw frame paths returned).
+    storyboard_config = load_storyboard_config()
+    llm_router = LLMRouter(load_llm_config())
+    application.state.storyboard_config = storyboard_config
+    application.state.llm_router = llm_router
+
+    frame_annotator: FrameAnnotator | None = None
+    try:
+        from nexus_sdk.storage import create_storage
+        from nexus_sdk.storage.artifact_store import ArtifactStore
+
+        artifact_store = ArtifactStore(create_storage())
+        frame_annotator = FrameAnnotator(
+            artifact_store=artifact_store,
+            config=storyboard_config.frame_annotator,
+        )
+    except Exception as exc:  # pragma: no cover - storage init failure
+        logger.warning(
+            "platform_api.frame_annotator_init_failed",
+            error=str(exc)[:200],
+        )
+
+    application.state.frame_annotator = frame_annotator
+    application.state.storyboard_composer = StoryboardComposer(
+        config=storyboard_config,
+        llm_router=llm_router,
+        frame_annotator=frame_annotator,
+    )
+
     logger.info(
         "platform_api.started",
         port=config.port,
         db=is_db_connected(),
         cache=_cache.is_connected,
         knowledge_foundation=foundation_ready,
+        llm_tiers=list(llm_router.config.tiers.keys()),
+        frame_annotator_ready=(
+            frame_annotator is not None and frame_annotator.pil_available
+        ),
     )
     yield
 
     await shutdown_knowledge_foundation(application)
+    if hasattr(application.state, "llm_router") and application.state.llm_router:
+        await application.state.llm_router.close()
     await _cache.close()
     await _http.aclose()
     await close_db()
@@ -228,6 +275,9 @@ app.include_router(scim_router)
 app.include_router(org_awareness_router)
 app.include_router(actions_router)
 app.include_router(marketplace_router)
+
+# Storyboard Phase 1 — picture-first visual evidence
+app.include_router(storyboard_router)
 
 
 # ─── Health ───────────────────────────────────────────────────

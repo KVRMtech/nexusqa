@@ -26,7 +26,7 @@ class ConfigError(ValueError):
     """Raised when an env var is set but cannot be parsed."""
 
 
-def _env_str(name: str, default: str) -> str:
+def _env_str(name: str, default: str = "") -> str:
     raw = os.environ.get(name)
     if raw is None or raw == "":
         return default
@@ -170,37 +170,44 @@ class AppDeduperConfig:
 
 @dataclass(frozen=True)
 class CaptionRewriterConfig:
-    """Tunables for ``caption_rewriter``."""
+    """Tunables for ``caption_rewriter``.
+
+    LLM-specific knobs (URL, API key, model name) intentionally live in
+    the LLM router config — see ``platform/api/app/services/llm/config.py``.
+    The caption rewriter only knows the *task name* and routing tier; it
+    never touches an HTTP client itself.  This means swapping Ollama →
+    OpenAI → Anthropic is a deploy-time env change with no caption-
+    rewriter code change.
+    """
 
     version: str = "v1"
 
-    # Where the LLM lives.  Defaults to the Ollama instance running
-    # next to platform-api in docker-compose.  Swap to an external API
-    # by setting the URL + API key.
-    llm_url: str = "http://ollama:11434"
-    llm_api_key: str = ""
-
-    # Small fast model — captions are short so we do not need the
-    # large LLaVA model that runs the canonical pipeline.  Override
-    # for customers that bring their own model.
-    llm_model: str = "llama3.2:3b"
+    # Task name passed to ``LLMRouter.complete(task=...)``.  Operators
+    # map this to a tier in env via ``LLM_TASK_CAPTION=tier_fast``.
+    # When no LLM is configured (LLM_TIERS empty), the rewriter still
+    # produces deterministic captions via ``primary_action_summary``
+    # fallback — see ``deterministic_caption()``.
+    llm_task_name: str = "caption"
 
     # Hard cap on output length.  The LLM is prompted for "5-8 words"
     # but enforce truncation server-side so a runaway model cannot
     # break the storyboard layout.
     max_words: int = 8
 
-    # Soft minimum — captions shorter than this fall back to weak quality
+    # Soft minimum — captions shorter than this drop to weak quality
     # and the UI may de-emphasise them.
     min_words: int = 2
 
-    # How many captions to generate in one batch.  Smaller = more
-    # serial requests, larger = bigger memory pressure per call.
-    batch_size: int = 16
+    # How many captions to run CONCURRENTLY against the LLM.  Bounded
+    # by a semaphore so a slow LLM does not exhaust the event loop.
+    # Smaller = more serial latency, larger = bigger memory pressure
+    # on the LLM provider.  Ollama on shared GPU often does better
+    # with low concurrency (2-4); paid APIs can take 16+.
+    concurrency: int = 4
 
-    # Per-call timeout.  When the LLM stalls past this the rewriter
-    # records the caption as weak quality and moves on.
-    request_timeout_s: float = 30.0
+    # Per-call timeout override.  None defers to the LLM tier's own
+    # timeout setting (LLM_TIER_<NAME>_TIMEOUT_S).
+    request_timeout_s: float | None = None
 
     # Maximum total wall time for one storyboard's caption pass.
     # Beyond this the composer returns whatever has been generated and
@@ -212,11 +219,20 @@ class CaptionRewriterConfig:
     # captions even on noise for audit.
     skip_noise: bool = True
 
-    # When False, the rewriter falls back to a deterministic non-LLM
-    # caption derived from scene_state_summary + primary_action_summary.
-    # Useful when the LLM is down or for customers who require
-    # deterministic outputs.
+    # When False, the rewriter skips the LLM entirely and uses only
+    # deterministic captions derived from scene_state_summary +
+    # primary_action_summary.  Useful when the LLM is down, for
+    # customers who require deterministic outputs, or for cost
+    # control during bulk backfills.
     use_llm: bool = True
+
+    # Per-LLM-call temperature.  Captions need consistency, not
+    # creativity — keep this low.
+    llm_temperature: float = 0.1
+
+    # Per-LLM-call max output tokens.  20 is plenty for a 5-8 word
+    # caption plus stop-sequence headroom.
+    llm_max_tokens: int = 24
 
 
 @dataclass(frozen=True)
@@ -366,13 +382,8 @@ def load_config() -> StoryboardConfig:
         ),
         caption_rewriter=CaptionRewriterConfig(
             version=_env_str("STORYBOARD_CAPTION_VERSION", "v1"),
-            llm_url=_env_str(
-                "STORYBOARD_CAPTION_LLM_URL",
-                "http://ollama:11434",
-            ),
-            llm_api_key=_env_str("STORYBOARD_CAPTION_LLM_API_KEY", ""),
-            llm_model=_env_str(
-                "STORYBOARD_CAPTION_LLM_MODEL", "llama3.2:3b",
+            llm_task_name=_env_str(
+                "STORYBOARD_CAPTION_LLM_TASK_NAME", "caption",
             ),
             max_words=_env_int(
                 "STORYBOARD_CAPTION_MAX_WORDS", 8, min_value=1,
@@ -380,17 +391,32 @@ def load_config() -> StoryboardConfig:
             min_words=_env_int(
                 "STORYBOARD_CAPTION_MIN_WORDS", 2, min_value=1,
             ),
-            batch_size=_env_int(
-                "STORYBOARD_CAPTION_BATCH_SIZE", 16, min_value=1,
+            concurrency=_env_int(
+                "STORYBOARD_CAPTION_CONCURRENCY", 4, min_value=1,
             ),
-            request_timeout_s=_env_float(
-                "STORYBOARD_CAPTION_REQUEST_TIMEOUT_S", 30.0, min_value=0.5,
+            request_timeout_s=(
+                _env_float(
+                    "STORYBOARD_CAPTION_REQUEST_TIMEOUT_S",
+                    0.0,
+                    min_value=0.0,
+                )
+                if os.environ.get("STORYBOARD_CAPTION_REQUEST_TIMEOUT_S")
+                else None
             ),
             total_timeout_s=_env_float(
                 "STORYBOARD_CAPTION_TOTAL_TIMEOUT_S", 180.0, min_value=1.0,
             ),
             skip_noise=_env_bool("STORYBOARD_CAPTION_SKIP_NOISE", True),
             use_llm=_env_bool("STORYBOARD_CAPTION_USE_LLM", True),
+            llm_temperature=_env_float(
+                "STORYBOARD_CAPTION_LLM_TEMPERATURE",
+                0.1,
+                min_value=0.0,
+                max_value=2.0,
+            ),
+            llm_max_tokens=_env_int(
+                "STORYBOARD_CAPTION_LLM_MAX_TOKENS", 24, min_value=1,
+            ),
         ),
         frame_annotator=FrameAnnotatorConfig(
             version=_env_str("STORYBOARD_ANNOTATION_VERSION", "v1"),

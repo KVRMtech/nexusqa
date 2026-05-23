@@ -33,8 +33,10 @@ import type {
   SceneStateSummary,
   EvidenceStep,
   CursorEvent,
+  StoryboardPayload,
 } from '../types/canonical';
 import { EvidenceStepsPanel } from './components/EvidenceStepsPanel';
+import { StoryboardView } from './components/StoryboardView';
 
 /* ── Helpers ──────────────────────────────────────────────── */
 function fmtMs(ms: number | null): string {
@@ -696,6 +698,19 @@ export default function VisualFlowDiagramPage() {
   const [activeFlowId, setActiveFlowId] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
 
+  // ─── Storyboard tab (Phase 1) ────────────────────────────────
+  // The storyboard view is the new picture-first default.  We fetch
+  // it in parallel with the 3D journey graph so switching tabs is
+  // instant.  When the storyboard endpoint is missing (older
+  // deployment) the tab gracefully shows an empty state.
+  const initialMode = (searchParams.get('view') || 'storyboard') as
+    | 'storyboard'
+    | 'journey';
+  const [viewMode, setViewMode] = useState<'storyboard' | 'journey'>(initialMode);
+  const [storyboard, setStoryboard] = useState<StoryboardPayload | null>(null);
+  const [storyboardLoading, setStoryboardLoading] = useState(true);
+  const [storyboardError, setStoryboardError] = useState<string | null>(null);
+
   /** Phase D.1 — triangulated steps + cursor events for the artifact.
    *  Loaded once per artifact load.  When the endpoints return empty (legacy
    *  artifact processed before persist-action-evidence stage existed), the
@@ -726,6 +741,32 @@ export default function VisualFlowDiagramPage() {
     api.getVisualEvidenceGraph(artifactId)
       .then((g) => { setGraph(g); setLoading(false); })
       .catch((e) => { setError(String(e)); setLoading(false); });
+  }, [artifactId]);
+
+  // Fetch the storyboard payload alongside the visual graph.  This
+  // triggers lazy derivation on the backend so the first viewer of
+  // an artifact pays the LLM cost; subsequent loads are cached.
+  useEffect(() => {
+    if (!artifactId) return;
+    let cancelled = false;
+    setStoryboardLoading(true);
+    setStoryboardError(null);
+    api.getStoryboard(artifactId)
+      .then((payload) => {
+        if (cancelled) return;
+        setStoryboard(payload);
+        setStoryboardLoading(false);
+      })
+      .catch((e) => {
+        if (cancelled) return;
+        const message =
+          (e?.response?.data?.detail as string | undefined) ||
+          (e?.message as string | undefined) ||
+          'Failed to load storyboard';
+        setStoryboardError(message);
+        setStoryboardLoading(false);
+      });
+    return () => { cancelled = true; };
   }, [artifactId]);
 
   // Load triangulated steps + cursor events + per-frame thumbnails
@@ -1102,6 +1143,80 @@ export default function VisualFlowDiagramPage() {
         </div>
       </header>
 
+      {/* ─────────── VIEW MODE TABS (Storyboard vs 3D Journey) ────────────── */}
+      <div
+        className="flex items-center gap-2 px-6 py-2 shrink-0 relative z-10"
+        style={{
+          borderBottom: '1px solid rgba(38,112,163,0.1)',
+          background: 'linear-gradient(180deg, #ffffff, #f8fafc)',
+        }}
+      >
+        <button
+          onClick={() => setViewMode('storyboard')}
+          className={clsx(
+            'flex items-center gap-1.5 px-4 py-1.5 text-xs font-bold rounded-lg transition-all',
+            viewMode === 'storyboard'
+              ? 'text-white shadow'
+              : 'text-slate-500 hover:text-slate-900',
+          )}
+          style={
+            viewMode === 'storyboard'
+              ? { background: 'linear-gradient(135deg, #0a2540, #2670a3)' }
+              : { background: 'rgba(10,37,64,0.04)' }
+          }
+          aria-pressed={viewMode === 'storyboard'}
+        >
+          <Sparkles className="h-3.5 w-3.5" /> Storyboard
+        </button>
+        <button
+          onClick={() => setViewMode('journey')}
+          className={clsx(
+            'flex items-center gap-1.5 px-4 py-1.5 text-xs font-bold rounded-lg transition-all',
+            viewMode === 'journey'
+              ? 'text-white shadow'
+              : 'text-slate-500 hover:text-slate-900',
+          )}
+          style={
+            viewMode === 'journey'
+              ? { background: 'linear-gradient(135deg, #0a2540, #2670a3)' }
+              : { background: 'rgba(10,37,64,0.04)' }
+          }
+          aria-pressed={viewMode === 'journey'}
+        >
+          <GitBranch className="h-3.5 w-3.5" /> 3D Journey
+        </button>
+        <div className="flex-1" />
+        {storyboard && viewMode === 'storyboard' ? (
+          <span className="text-[10px] text-slate-500">
+            {storyboard.summary?.non_noise_panel_count ?? storyboard.panels.length}{' '}
+            panels &middot; {storyboard.summary?.app_count ?? storyboard.apps.length} apps
+          </span>
+        ) : null}
+      </div>
+
+      {viewMode === 'storyboard' && (
+        <div className="flex-1 overflow-auto relative z-10">
+          <div className="max-w-5xl mx-auto px-6 py-6">
+            <StoryboardView
+              payload={storyboard}
+              loading={storyboardLoading}
+              error={storyboardError}
+              artifactId={artifactId ?? ''}
+              layout="vertical"
+              onPanelClick={(panel) => {
+                // Switch to journey mode and focus the underlying scene
+                if (panel.representative_frame_id) {
+                  setSelectedSceneId(null);
+                }
+                setViewMode('journey');
+              }}
+            />
+          </div>
+        </div>
+      )}
+
+      {viewMode === 'journey' && (
+        <>
       {/* ─────────── FLOW TABS ────────────── */}
       {graph.flows && graph.flows.length > 1 && (
         <div className="flex items-center gap-2.5 px-6 py-3.5 overflow-x-auto shrink-0 relative z-10"
@@ -1573,6 +1688,8 @@ export default function VisualFlowDiagramPage() {
           </div>
         )}
       </div>
+        </>
+      )}
     </div>
   );
 }

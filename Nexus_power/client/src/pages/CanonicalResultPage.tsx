@@ -22,7 +22,9 @@ import type {
   QualityScoreBreakdown,
   WorkflowTimelineEntry,
   StallEvent,
+  StoryboardPayload,
 } from '../types/canonical';
+import { StoryboardView } from './components/StoryboardView';
 import clsx from 'clsx';
 import {
   ArrowLeft,
@@ -303,6 +305,13 @@ export default function CanonicalResultPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  // Storyboard hero — loaded once the view model resolves so we know
+  // the artifact_id.  Failure to load is non-fatal; the hero section
+  // shows an empty state.
+  const [storyboard, setStoryboard] = useState<StoryboardPayload | null>(null);
+  const [storyboardLoading, setStoryboardLoading] = useState(false);
+  const [storyboardError, setStoryboardError] = useState<string | null>(null);
+
   useEffect(() => {
     if (!sessionId || !tenantId) return;
     let cancelled = false;
@@ -334,6 +343,32 @@ export default function CanonicalResultPage() {
     load();
     return () => { cancelled = true; };
   }, [sessionId, tenantId]);
+
+  // Once we know the artifact_id, fetch the storyboard for the hero
+  // preview.  Failure is non-fatal.
+  useEffect(() => {
+    const artifactId = vm?.artifact_id;
+    if (!artifactId) return;
+    let cancelled = false;
+    setStoryboardLoading(true);
+    setStoryboardError(null);
+    api.getStoryboard(artifactId)
+      .then((payload) => {
+        if (cancelled) return;
+        setStoryboard(payload);
+        setStoryboardLoading(false);
+      })
+      .catch((e) => {
+        if (cancelled) return;
+        const detail =
+          (e?.response?.data?.detail as string | undefined) ||
+          (e?.message as string | undefined) ||
+          'Failed to load storyboard';
+        setStoryboardError(detail);
+        setStoryboardLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [vm?.artifact_id]);
 
   // ── Loading state ──────────────────────────────────────────
   if (loading) {
@@ -560,6 +595,44 @@ export default function CanonicalResultPage() {
           </p>
         )}
       </div>
+
+      {/* ═══════════════════════════════════════════════════════ */}
+      {/* Section 1.5: Visual Story — picture-first hero preview  */}
+      {/* ═══════════════════════════════════════════════════════ */}
+      {vm.artifact_id ? (
+        <div className="card p-6 space-y-4">
+          <div className="flex items-end justify-between gap-4">
+            <div>
+              <h2 className="text-sm font-semibold text-slate-600">Visual Story</h2>
+              <p className="text-[11px] text-slate-400 mt-0.5">
+                {storyboard
+                  ? `${storyboard.summary?.non_noise_panel_count ?? storyboard.panels.length} panels — picked across the timeline so you see the arc at a glance.`
+                  : 'Picture-first overview of what the SME did during the session.'}
+              </p>
+            </div>
+            <Link
+              to={`/sessions/${sessionId}/visual-flow?artifact_id=${vm.artifact_id}`}
+              className="text-[11px] font-bold text-indigo-600 hover:text-indigo-800 inline-flex items-center gap-1"
+            >
+              Open full storyboard <ChevronRight className="h-3 w-3" />
+            </Link>
+          </div>
+          <StoryboardView
+            payload={storyboard}
+            loading={storyboardLoading}
+            error={storyboardError}
+            artifactId={vm.artifact_id}
+            layout="hero"
+            onPanelClick={() => {
+              if (sessionId && vm.artifact_id) {
+                navigate(
+                  `/sessions/${sessionId}/visual-flow?artifact_id=${vm.artifact_id}&view=storyboard`,
+                );
+              }
+            }}
+          />
+        </div>
+      ) : null}
 
       {/* ═══════════════════════════════════════════════════════ */}
       {/* Section 2: Evidence Story                               */}

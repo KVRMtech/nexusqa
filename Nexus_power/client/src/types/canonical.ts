@@ -1235,3 +1235,89 @@ export interface PlaywrightExportError {
   message: string;
   unmet_gates: string[];
 }
+
+// ─── Storyboard Phase 1 — picture-first visual evidence ────────
+// Matches the Pydantic models in
+// ``platform/api/app/routers/storyboard.py``.  Don't add fields
+// here without also updating the router — the frontend treats
+// these as the source of truth.
+
+/** One canonical (dedup'd) application detected in the recording. */
+export interface StoryboardApp {
+  grouping_id: string;
+  display_label: string;
+  canonical_name: string;
+  canonical_domain: string;
+  app_type: string;
+  scene_count: number;
+  first_scene_index: number;
+  last_scene_index: number;
+  confidence: number;
+  /** How the deduper grouped this app instance. */
+  dedup_basis: string;
+}
+
+/** One comic-strip panel — the UI's primary rendering unit. */
+export interface StoryboardPanel {
+  panel_id: string;
+  panel_index: number;
+  scene_count: number;
+  in_scene_action_count: number;
+  start_ms: number;
+  end_ms: number;
+  duration_ms: number;
+  /** 5-8 word imperative caption.  May be empty before LLM rewriter runs. */
+  caption_short: string;
+  /** Longer narrative caption for the drill-down detail view. */
+  caption_long: string;
+  /** strong | degraded | weak — how confident we are in the caption. */
+  caption_quality: string;
+  /** strong | degraded | weak — overall panel quality. */
+  panel_quality: string;
+  completeness_confidence: number;
+  is_noise: boolean;
+  noise_reason: string;
+  representative_frame_id: string | null;
+  representative_frame_path: string;
+  /** GET this URL to fetch the annotated PNG.  Null when no frame. */
+  annotated_frame_url: string | null;
+  annotated_frame_available: boolean;
+  app: StoryboardApp | null;
+}
+
+/** Per-step run flags for observability — exposed to the UI for transparency. */
+export interface StoryboardDerivation {
+  scene_grouper_version: string;
+  app_deduper_version: string;
+  caption_rewriter_version: string;
+  frame_annotator_version: string;
+  ran_scene_grouper: boolean;
+  ran_app_deduper: boolean;
+  ran_caption_rewriter: boolean;
+  ran_frame_annotator: boolean;
+  derivation_elapsed_ms: number;
+  storyboard_total_ms: number;
+}
+
+/** Top-level payload returned by ``GET /api/v1/artifacts/{id}/storyboard``. */
+export interface StoryboardPayload {
+  artifact_id: string;
+  visual_e2e_status: string | null;
+  panels: StoryboardPanel[];
+  apps: StoryboardApp[];
+  summary: {
+    panel_count?: number;
+    non_noise_panel_count?: number;
+    noise_panel_count?: number;
+    app_count?: number;
+    total_in_scene_actions?: number;
+    duration_ms?: number;
+    strong_panels?: number;
+    degraded_panels?: number;
+    weak_panels?: number;
+    source_filename?: string;
+    brain_quality_score?: number | null;
+    [k: string]: unknown;
+  };
+  derivation: StoryboardDerivation;
+}
