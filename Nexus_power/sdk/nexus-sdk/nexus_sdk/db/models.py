@@ -2033,3 +2033,258 @@ class E2ETestRunStepRow(Base):
         Index("ix_test_run_step_scenario", "artifact_id", "scenario_id", "step_number"),
         Index("ix_test_run_step_tenant", "tenant_id"),
     )
+
+
+# ─── Storyboard Phase 1 — Additive Derivations ────────────────
+#
+# The following four tables are populated post-pipeline by the
+# storyboard composer service.  They never replace pipeline-owned
+# tables; they cache derived projections that turn the raw
+# visual-evidence graph into a picture-first storyboard the user
+# can browse, share and export.
+#
+# All four follow the v1 conventions used throughout this file:
+# tenant_id on every row (for RLS migration 030_storyboard_phase1),
+# deterministic uuid5 primary keys (idempotent UPSERT), and version
+# columns so re-derivation does not require a schema change.
+
+
+class AppGroupingRow(Base):
+    """
+    Deduplicated application instance.
+
+    The pipeline emits one ``AppInstanceRow`` per detected boundary, which
+    means OCR-corrupted window titles ("Wivwquardianlife.com",
+    "wwwquardianlife.com") get filed as separate apps.  The app deduper
+    folds these into one canonical grouping keyed by registered domain
+    (or normalized window title for desktop apps), so the storyboard and
+    BPMN swimlanes show one lane per real application.
+    """
+
+    __tablename__ = "app_groupings"
+
+    grouping_id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_new_id)
+    artifact_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("canonical_artifacts.artifact_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    tenant_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    session_id: Mapped[str] = mapped_column(String(64), nullable=False)
+
+    canonical_name: Mapped[str] = mapped_column(String(500), default="", nullable=False)
+    canonical_domain: Mapped[str] = mapped_column(String(500), default="", nullable=False)
+    app_type: Mapped[str] = mapped_column(String(50), default="unknown", nullable=False)
+    display_label: Mapped[str] = mapped_column(String(500), default="", nullable=False)
+
+    member_instance_ids: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
+    total_scene_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    first_scene_index: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    last_scene_index: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+    confidence: Mapped[float] = mapped_column(Float, default=1.0, nullable=False)
+    dedup_basis: Mapped[str] = mapped_column(String(50), default="single_instance", nullable=False)
+    dedup_evidence: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+
+    deduper_version: Mapped[str] = mapped_column(String(50), default="v1", nullable=False)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utc_now, nullable=False,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utc_now, nullable=False,
+    )
+
+    __table_args__ = (
+        Index("ix_app_groupings_artifact", "artifact_id"),
+        Index("ix_app_groupings_tenant_session", "tenant_id", "session_id"),
+        Index("ix_app_groupings_canonical_domain", "tenant_id", "canonical_domain"),
+    )
+
+
+class StoryboardPanelRow(Base):
+    """
+    A single comic-strip panel in the storyboard.
+
+    Replaces ``visual_scenes`` as the primary unit the storyboard UI
+    renders.  Each panel collapses one or more adjacent same-screen
+    scenes (so 50 form-fill scenes on the same Quote Form become one
+    panel with ``in_scene_action_count = 50``).
+    """
+
+    __tablename__ = "storyboard_panels"
+
+    panel_id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_new_id)
+    artifact_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("canonical_artifacts.artifact_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    tenant_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    session_id: Mapped[str] = mapped_column(String(64), nullable=False)
+
+    panel_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    first_scene_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("visual_scenes.scene_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    last_scene_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("visual_scenes.scene_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    scene_count: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+
+    app_grouping_id: Mapped[str | None] = mapped_column(
+        String(64),
+        ForeignKey("app_groupings.grouping_id", ondelete="SET NULL"),
+        nullable=True,
+    )
+
+    representative_frame_id: Mapped[str | None] = mapped_column(
+        String(64),
+        ForeignKey("visual_frames.frame_id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    representative_frame_asset_path: Mapped[str] = mapped_column(
+        String(1000), default="", nullable=False,
+    )
+
+    start_ms: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    end_ms: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    duration_ms: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+    caption_short: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    caption_long: Mapped[str] = mapped_column(Text, default="", nullable=False)
+
+    in_scene_action_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    panel_quality: Mapped[str] = mapped_column(String(20), default="weak", nullable=False)
+    completeness_confidence: Mapped[float] = mapped_column(
+        Float, default=0.0, nullable=False,
+    )
+
+    is_noise: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    noise_reason: Mapped[str] = mapped_column(String(200), default="", nullable=False)
+
+    grouper_version: Mapped[str] = mapped_column(String(50), default="v1", nullable=False)
+    grouper_signals: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utc_now, nullable=False,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utc_now, nullable=False,
+    )
+
+    __table_args__ = (
+        Index("ix_storyboard_panels_artifact_panel", "artifact_id", "panel_index"),
+        Index("ix_storyboard_panels_tenant_session", "tenant_id", "session_id"),
+        Index("ix_storyboard_panels_app_grouping", "app_grouping_id"),
+    )
+
+
+class SceneCaptionRow(Base):
+    """
+    Short imperative caption per scene, generated by the caption rewriter.
+
+    The pipeline stores verbose LLaVA descriptions on ``visual_frames``
+    ("The interface displays a form with multiple input fields...").
+    Those are useful as detector input but not as user-facing captions.
+    This table stores 5-8 word imperative captions ("Filled email field",
+    "Submitted quote form") plus an optional fuller narrative for the
+    drill-down view.
+
+    Captions are keyed by (scene_id, generator_version) so bumping the
+    version forces re-generation without dropping existing rows.
+    """
+
+    __tablename__ = "scene_captions"
+
+    caption_id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_new_id)
+    scene_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("visual_scenes.scene_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    artifact_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("canonical_artifacts.artifact_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    tenant_id: Mapped[str] = mapped_column(String(64), nullable=False)
+
+    short_caption: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    narrative_caption: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    caption_quality: Mapped[str] = mapped_column(String(20), default="weak", nullable=False)
+
+    generator_model: Mapped[str] = mapped_column(String(100), default="", nullable=False)
+    generator_version: Mapped[str] = mapped_column(String(50), default="v1", nullable=False)
+    input_signals: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    generation_latency_ms: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utc_now, nullable=False,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utc_now, nullable=False,
+    )
+
+    __table_args__ = (
+        Index("ix_scene_captions_artifact", "artifact_id"),
+        Index("ix_scene_captions_tenant", "tenant_id"),
+    )
+
+
+class AnnotatedFrameCacheRow(Base):
+    """
+    Cached metadata for a server-rendered annotated PNG.
+
+    The frame annotator service composites cursor markers, click points,
+    OCR bounding boxes and a short caption banner onto the raw frame
+    image and writes the result to the same object store as the raw
+    frame, under an ``annotated/v{version}/`` prefix.
+
+    This row records the asset path, dimensions, signal manifest and
+    render latency.  Re-rendering is triggered by bumping
+    ``annotation_version``; the new asset path includes the version, so
+    stale PNGs remain available until garbage-collected.
+    """
+
+    __tablename__ = "annotated_frame_cache"
+
+    cache_id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_new_id)
+    frame_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("visual_frames.frame_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    artifact_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("canonical_artifacts.artifact_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    tenant_id: Mapped[str] = mapped_column(String(64), nullable=False)
+
+    annotation_version: Mapped[str] = mapped_column(String(50), default="v1", nullable=False)
+    asset_path: Mapped[str] = mapped_column(String(1000), nullable=False)
+    content_type: Mapped[str] = mapped_column(String(50), default="image/png", nullable=False)
+
+    width_px: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    height_px: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    size_bytes: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+    annotation_signals: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    render_latency_ms: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utc_now, nullable=False,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utc_now, nullable=False,
+    )
+
+    __table_args__ = (
+        Index("ix_annotated_frame_cache_artifact", "artifact_id"),
+        Index("ix_annotated_frame_cache_tenant", "tenant_id"),
+    )
