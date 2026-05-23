@@ -1,74 +1,28 @@
-# ═══════════════════════════════════════════════════════════════════════════════
-# Nexus QA — Full Development Stack (Docker)
-# ═══════════════════════════════════════════════════════════════════════════════
-#
-#  One command to start everything:
-#    docker compose up -d --build
-#
-#  Observe services:
-#    docker compose ps                         # status of all services
-#    docker compose logs -f gateway            # follow one service
-#    docker compose logs -f ears spine         # follow multiple
-#    docker compose logs --tail=50 orchestrator
-#
-#  Stop everything:
-#    docker compose down
-#
-#  Rebuild a single service after code change:
-#    docker compose up -d --build spine
-#
-#  Full reset (wipe data):
-#    docker compose down -v
-#
-# ═══════════════════════════════════════════════════════════════════════════════
-
-# ── Shared env vars injected into every Python service ──────────────────────
-x-common-env: &common-env
+x-common-env:
   NEXUS_ENV: development
   NEXUS_PRODUCT_MODE: ${NEXUS_PRODUCT_MODE:-canonical}
-  # /data is owned by root in the engine images; the appuser cannot mkdir
-  # there. /app/service/data is created (writable) by the engine
-  # Dockerfiles, so anchor LocalStorage there. Each engine still mounts
-  # its modality-specific subdir (frame-storage:/app/service/data/frames,
-  # audio-storage:/app/service/data/audio, etc.).
   NEXUS_STORAGE_PATH: ${NEXUS_STORAGE_PATH:-/app/service/data}
-  # Required for engines to bring up canonical workflow workers — when
-  # unset, every engine logs `workflow_workers_disabled` and the queue
-  # lanes never get a consumer group, so workflows time out.
   NEXUS_ORCHESTRATOR_URL: ${NEXUS_ORCHESTRATOR_URL:-http://orchestrator:8100}
   NEXUS_JWT_SECRET: ${NEXUS_JWT_SECRET:-test-secret-do-not-use-in-production}
   JWT_SECRET: ${NEXUS_JWT_SECRET:-test-secret-do-not-use-in-production}
   REDIS_HOST: redis
-  REDIS_PORT: "6379"
+  REDIS_PORT: '6379'
   REDIS_URL: redis://redis:6379/0
   POSTGRES_HOST: postgres
-  POSTGRES_PORT: "5432"
+  POSTGRES_PORT: '5432'
   POSTGRES_USER: ${POSTGRES_USER:-nexus}
   POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-nexus-dev}
   POSTGRES_DB: ${POSTGRES_DB:-nexus}
   NEO4J_URI: bolt://neo4j:7687
   NEO4J_USER: neo4j
   NEO4J_PASSWORD: ${NEO4J_PASSWORD:-nexus-neo4j-dev}
-  # Backbone vector store — points at the `full`-profile Milvus stack.
-  # Engines outside the full profile (eyes, ears, spine, etc.) ignore
-  # these vars; they only show up in MilvusVectorStore.connect().
   MILVUS_HOST: ${MILVUS_HOST:-milvus}
-  MILVUS_PORT: "${MILVUS_PORT:-19530}"
+  MILVUS_PORT: ${MILVUS_PORT:-19530}
   LLM_BACKEND: ollama
   OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
   EYES_OLLAMA_BASE_URL: ${EYES_OLLAMA_BASE_URL:-http://ollama:11434}
   EYES_OLLAMA_MODEL: ${EYES_OLLAMA_MODEL:-moondream}
   EYES_OLLAMA_INFERENCE_TIMEOUT: ${EYES_OLLAMA_INFERENCE_TIMEOUT:-600}
-  # Vision tier router (Phase 14 — Fix 6).  Operator opt-in: set
-  # EYES_VISION_TIER1_PROVIDER=anthropic and EYES_VISION_TIER1_API_KEY to
-  # route per-scene LLaVA-replacement calls through Claude/GPT-4V/etc.
-  # Falls back to direct Ollama LLaVA (the legacy path) automatically
-  # when no tier is configured — production launches on Tier 3 only
-  # until cloud API keys are provisioned.
-  # NOTE: per-scene calls are routed; the scene-transition LLM pass
-  # (analyze_transition_pair) still uses direct Ollama because the
-  # vision SDK does not yet expose a transition-pair API. That's the
-  # Phase 14.5 follow-up.
   EYES_VISION_TIER1_PROVIDER: ${EYES_VISION_TIER1_PROVIDER:-}
   EYES_VISION_TIER1_MODEL: ${EYES_VISION_TIER1_MODEL:-claude-sonnet-4-6}
   EYES_VISION_TIER1_API_KEY: ${EYES_VISION_TIER1_API_KEY:-}
@@ -80,194 +34,176 @@ x-common-env: &common-env
   EYES_VISION_TIER3_PROVIDER: ${EYES_VISION_TIER3_PROVIDER:-}
   EYES_VISION_TIER3_MODEL: ${EYES_VISION_TIER3_MODEL:-llava:7b}
   EYES_VISION_TIER3_BASE_URL: ${EYES_VISION_TIER3_BASE_URL:-http://ollama:11434}
-  LLM_MAX_TOKENS: "2048"
-  GATEWAY_MAX_REQUEST_BODY_MB: "500"
-  MAX_REQUEST_BODY_MB: "500"
-  # Tiered local LLMs — keep text and vision models separate.
+  LLM_MAX_TOKENS: '2048'
+  GATEWAY_MAX_REQUEST_BODY_MB: '500'
+  MAX_REQUEST_BODY_MB: '500'
   HEART_OLLAMA_BASE_URL: ${HEART_OLLAMA_BASE_URL:-http://ollama:11434}
   HEART_OLLAMA_MODEL: ${HEART_OLLAMA_MODEL:-llama3.2:1b}
   HEART_TIER3_PROVIDER: ${HEART_TIER3_PROVIDER:-ollama}
   HEART_TIER3_OLLAMA_BASE_URL: ${HEART_TIER3_OLLAMA_BASE_URL:-http://ollama:11434}
   HEART_TIER3_MODEL: ${HEART_TIER3_MODEL:-llama3.2:1b}
-  HEART_TIER3_TIMEOUT: "600"
-  HEART_TIER3_MAX_RETRIES: "1"
+  HEART_TIER3_TIMEOUT: '600'
+  HEART_TIER3_MAX_RETRIES: '1'
   BRAIN_OLLAMA_BASE_URL: ${BRAIN_OLLAMA_BASE_URL:-http://ollama:11434}
   BRAIN_OLLAMA_MODEL: ${BRAIN_OLLAMA_MODEL:-llama3.2:1b}
   BRAIN_TIER3_PROVIDER: ${BRAIN_TIER3_PROVIDER:-ollama}
   BRAIN_TIER3_OLLAMA_BASE_URL: ${BRAIN_TIER3_OLLAMA_BASE_URL:-http://ollama:11434}
   BRAIN_TIER3_MODEL: ${BRAIN_TIER3_MODEL:-llama3.2:1b}
-  BRAIN_TIER3_TIMEOUT: "780"
-  BRAIN_TIER3_MAX_RETRIES: "1"
-
-# ── Standard healthcheck for FastAPI engines ────────────────────────────────
-x-healthcheck: &engine-healthcheck
+  BRAIN_TIER3_TIMEOUT: '780'
+  BRAIN_TIER3_MAX_RETRIES: '1'
+x-healthcheck:
   interval: 15s
   timeout: 5s
   retries: 5
   start_period: 30s
-
-# ═══════════════════════════════════════════════════════════════════════════════
 volumes:
-  redis-data:
-  postgres-data:
-  neo4j-data:
-  ollama-data:
-  model-cache:
-  document-storage:
-  evidence-storage:
-  report-storage:
-  upload-storage:
-  frame-storage:
-  audio-storage:
-  # Milvus stack (full profile only)
-  etcd-data:
-  minio-data:
-  milvus-data:
-
+  redis-data: null
+  postgres-data: null
+  neo4j-data: null
+  ollama-data: null
+  model-cache: null
+  document-storage: null
+  evidence-storage: null
+  report-storage: null
+  upload-storage: null
+  frame-storage: null
+  audio-storage: null
+  etcd-data: null
+  minio-data: null
+  milvus-data: null
 networks:
   nexus:
     driver: bridge
-
-# ═══════════════════════════════════════════════════════════════════════════════
 services:
-
-  # ┌─────────────────────────────────────────────────────────────────────────┐
-  # │                        INFRASTRUCTURE                                   │
-  # └─────────────────────────────────────────────────────────────────────────┘
-
   redis:
     image: redis:7-alpine
     container_name: nexus-redis
     restart: unless-stopped
     ports:
-      - "${REDIS_PORT:-6379}:6379"
+    - ${REDIS_PORT:-6379}:6379
     volumes:
-      - redis-data:/data
+    - redis-data:/data
     command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test:
+      - CMD
+      - redis-cli
+      - ping
       interval: 10s
       timeout: 5s
       retries: 5
     networks:
-      - nexus
-
+    - nexus
   postgres:
     image: postgres:16-alpine
     container_name: nexus-postgres
     restart: unless-stopped
     ports:
-      - "${POSTGRES_HOST_PORT:-5433}:5432"
+    - ${POSTGRES_HOST_PORT:-5433}:5432
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-nexus}
       POSTGRES_USER: ${POSTGRES_USER:-nexus}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-nexus-dev}
     volumes:
-      - postgres-data:/var/lib/postgresql/data
+    - postgres-data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-nexus}"]
+      test:
+      - CMD-SHELL
+      - pg_isready -U ${POSTGRES_USER:-nexus}
       interval: 10s
       timeout: 5s
       retries: 5
     networks:
-      - nexus
-
+    - nexus
   neo4j:
     image: neo4j:5-community
     container_name: nexus-neo4j
     restart: unless-stopped
     ports:
-      - "7474:7474"
-      - "7687:7687"
+    - 7474:7474
+    - 7687:7687
     environment:
       NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:-nexus-neo4j-dev}
       NEO4J_PLUGINS: '["apoc"]'
       NEO4J_server_memory_heap_max__size: 512M
       NEO4J_server_memory_pagecache_size: 256M
     volumes:
-      - neo4j-data:/data
+    - neo4j-data:/data
     healthcheck:
-      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:7474 || exit 1"]
+      test:
+      - CMD-SHELL
+      - wget --no-verbose --tries=1 --spider http://localhost:7474 || exit 1
       interval: 15s
       timeout: 10s
       retries: 5
     networks:
-      - nexus
-
+    - nexus
   ollama:
     image: ollama/ollama:latest
     container_name: nexus-ollama
     restart: unless-stopped
     ports:
-      - "${OLLAMA_PORT:-11434}:11434"
+    - ${OLLAMA_PORT:-11434}:11434
     volumes:
-      - ollama-data:/root/.ollama
+    - ollama-data:/root/.ollama
     environment:
-      # Keep the most-recent vision model resident so per-call cold-loads
-      # (5-15 s on CPU) stop dominating long-video pipelines.
-      OLLAMA_KEEP_ALIVE: ${OLLAMA_KEEP_ALIVE:-10m}
-      # Concurrent inference slots.  CPU-only: keep at 1 (one moondream
-      # forward pass already saturates the cores).  GPU prod: 2-4.
-      OLLAMA_NUM_PARALLEL: ${OLLAMA_NUM_PARALLEL:-1}
-      # Hard-cap models in RAM to avoid evict/reload thrash under memory
-      # pressure on shared dev hosts.
-      OLLAMA_MAX_LOADED_MODELS: ${OLLAMA_MAX_LOADED_MODELS:-1}
-    # ── GPU passthrough (uncomment for production / GPU dev hosts) ──
-    # Requires nvidia-container-toolkit on the host. With a single GPU
-    # this drops moondream latency from ~25 s/frame to ~1-3 s/frame and
-    # makes llava:7b viable.
-    # deploy:
-    #   resources:
-    #     reservations:
-    #       devices:
-    #         - driver: nvidia
-    #           count: all
-    #           capabilities: [gpu]
+      OLLAMA_KEEP_ALIVE: '-1'
+      OLLAMA_NUM_PARALLEL: '1'
+      OLLAMA_MAX_LOADED_MODELS: '1'
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+      OLLAMA_LLM_LIBRARY: cuda_v13
     healthcheck:
-      test: ["CMD", "ollama", "list"]
+      test:
+      - CMD
+      - ollama
+      - list
       interval: 15s
       timeout: 10s
       retries: 5
       start_period: 30s
     networks:
-      - nexus
-
-  # ┌─────────────────────────────────────────────────────────────────────────┐
-  # │                   VECTOR STORE — Milvus standalone                      │
-  # └─────────────────────────────────────────────────────────────────────────┘
-  # Milvus 2.x needs etcd (metadata) + an S3-compatible object store
-  # (MinIO) alongside the standalone server. All three live under the
-  # `full` profile so they only run when backbone is exercised. Without
-  # them, backbone refuses to start (NEXUS_ALLOW_DEGRADED_MODE=false in
-  # prod parity). Removing `profiles:` here promotes them to default-on.
-
+    - nexus
+    deploy:
+      resources:
+        reservations:
+          devices:
+          - driver: nvidia
+            count: all
+            capabilities:
+            - gpu
   etcd:
-    profiles: ["full"]
+    profiles:
+    - full
     image: quay.io/coreos/etcd:v3.5.5
     container_name: nexus-etcd
     restart: unless-stopped
     environment:
       ETCD_AUTO_COMPACTION_MODE: revision
-      ETCD_AUTO_COMPACTION_RETENTION: "1000"
-      ETCD_QUOTA_BACKEND_BYTES: "4294967296"
-      ETCD_SNAPSHOT_COUNT: "50000"
+      ETCD_AUTO_COMPACTION_RETENTION: '1000'
+      ETCD_QUOTA_BACKEND_BYTES: '4294967296'
+      ETCD_SNAPSHOT_COUNT: '50000'
     command:
-      - etcd
-      - -advertise-client-urls=http://etcd:2379
-      - -listen-client-urls=http://0.0.0.0:2379
-      - --data-dir=/etcd
+    - etcd
+    - -advertise-client-urls=http://etcd:2379
+    - -listen-client-urls=http://0.0.0.0:2379
+    - --data-dir=/etcd
     volumes:
-      - etcd-data:/etcd
+    - etcd-data:/etcd
     healthcheck:
-      test: ["CMD", "etcdctl", "endpoint", "health"]
+      test:
+      - CMD
+      - etcdctl
+      - endpoint
+      - health
       interval: 10s
       timeout: 5s
       retries: 5
     networks:
-      - nexus
-
+    - nexus
   minio:
-    profiles: ["full"]
+    profiles:
+    - full
     image: minio/minio:RELEASE.2023-03-20T20-16-18Z
     container_name: nexus-minio
     restart: unless-stopped
@@ -276,55 +212,59 @@ services:
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
     command: minio server /minio_data --console-address ":9001"
     volumes:
-      - minio-data:/minio_data
+    - minio-data:/minio_data
     ports:
-      - "${MINIO_API_PORT:-9000}:9000"
-      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+    - ${MINIO_API_PORT:-9000}:9000
+    - ${MINIO_CONSOLE_PORT:-9001}:9001
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      test:
+      - CMD
+      - curl
+      - -f
+      - http://localhost:9000/minio/health/live
       interval: 10s
       timeout: 5s
       retries: 5
     networks:
-      - nexus
-
+    - nexus
   milvus:
-    profiles: ["full"]
+    profiles:
+    - full
     image: milvusdb/milvus:v2.4.5
     container_name: nexus-milvus
     restart: unless-stopped
-    command: ["milvus", "run", "standalone"]
+    command:
+    - milvus
+    - run
+    - standalone
     environment:
       ETCD_ENDPOINTS: etcd:2379
       MINIO_ADDRESS: minio:9000
       MINIO_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-minioadmin}
       MINIO_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
-      # Milvus's bundled MinIO client expects bucket "a-bucket"; create
-      # it on first boot via auto-create-bucket.
       COMMON_STORAGETYPE: minio
     volumes:
-      - milvus-data:/var/lib/milvus
+    - milvus-data:/var/lib/milvus
     ports:
-      - "${MILVUS_PORT:-19530}:19530"
-      - "${MILVUS_METRICS_PORT:-9091}:9091"
+    - ${MILVUS_PORT:-19530}:19530
+    - ${MILVUS_METRICS_PORT:-9091}:9091
     depends_on:
       etcd:
         condition: service_healthy
       minio:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9091/healthz"]
+      test:
+      - CMD
+      - curl
+      - -f
+      - http://localhost:9091/healthz
       interval: 15s
       timeout: 10s
       retries: 10
       start_period: 60s
     networks:
-      - nexus
-
-  # ┌─────────────────────────────────────────────────────────────────────────┐
-  # │                        PLATFORM LAYER                                   │
-  # └─────────────────────────────────────────────────────────────────────────┘
-
+    - nexus
   auth-service:
     build:
       context: ./platform/auth-service
@@ -334,13 +274,71 @@ services:
     container_name: nexus-auth
     restart: unless-stopped
     ports:
-      - "8000:8000"
+    - 8000:8000
     environment:
-      <<: *common-env
-      ENGINE_PORT: "8000"
+      NEXUS_ENV: development
+      NEXUS_PRODUCT_MODE: ${NEXUS_PRODUCT_MODE:-canonical}
+      NEXUS_STORAGE_PATH: ${NEXUS_STORAGE_PATH:-/app/service/data}
+      NEXUS_ORCHESTRATOR_URL: ${NEXUS_ORCHESTRATOR_URL:-http://orchestrator:8100}
+      NEXUS_JWT_SECRET: ${NEXUS_JWT_SECRET:-test-secret-do-not-use-in-production}
+      JWT_SECRET: ${NEXUS_JWT_SECRET:-test-secret-do-not-use-in-production}
+      REDIS_HOST: redis
+      REDIS_PORT: '6379'
+      REDIS_URL: redis://redis:6379/0
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: '5432'
+      POSTGRES_USER: ${POSTGRES_USER:-nexus}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-nexus-dev}
+      POSTGRES_DB: ${POSTGRES_DB:-nexus}
+      NEO4J_URI: bolt://neo4j:7687
+      NEO4J_USER: neo4j
+      NEO4J_PASSWORD: ${NEO4J_PASSWORD:-nexus-neo4j-dev}
+      MILVUS_HOST: ${MILVUS_HOST:-milvus}
+      MILVUS_PORT: ${MILVUS_PORT:-19530}
+      LLM_BACKEND: ollama
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
+      EYES_OLLAMA_BASE_URL: ${EYES_OLLAMA_BASE_URL:-http://ollama:11434}
+      EYES_OLLAMA_MODEL: ${EYES_OLLAMA_MODEL:-moondream}
+      EYES_OLLAMA_INFERENCE_TIMEOUT: ${EYES_OLLAMA_INFERENCE_TIMEOUT:-600}
+      EYES_VISION_TIER1_PROVIDER: ${EYES_VISION_TIER1_PROVIDER:-}
+      EYES_VISION_TIER1_MODEL: ${EYES_VISION_TIER1_MODEL:-claude-sonnet-4-6}
+      EYES_VISION_TIER1_API_KEY: ${EYES_VISION_TIER1_API_KEY:-}
+      EYES_VISION_TIER1_TIMEOUT: ${EYES_VISION_TIER1_TIMEOUT:-60}
+      EYES_VISION_TIER2_PROVIDER: ${EYES_VISION_TIER2_PROVIDER:-}
+      EYES_VISION_TIER2_MODEL: ${EYES_VISION_TIER2_MODEL:-gpt-4o}
+      EYES_VISION_TIER2_API_KEY: ${EYES_VISION_TIER2_API_KEY:-}
+      EYES_VISION_TIER2_TIMEOUT: ${EYES_VISION_TIER2_TIMEOUT:-60}
+      EYES_VISION_TIER3_PROVIDER: ${EYES_VISION_TIER3_PROVIDER:-}
+      EYES_VISION_TIER3_MODEL: ${EYES_VISION_TIER3_MODEL:-llava:7b}
+      EYES_VISION_TIER3_BASE_URL: ${EYES_VISION_TIER3_BASE_URL:-http://ollama:11434}
+      LLM_MAX_TOKENS: '2048'
+      GATEWAY_MAX_REQUEST_BODY_MB: '500'
+      MAX_REQUEST_BODY_MB: '500'
+      HEART_OLLAMA_BASE_URL: ${HEART_OLLAMA_BASE_URL:-http://ollama:11434}
+      HEART_OLLAMA_MODEL: ${HEART_OLLAMA_MODEL:-llama3.2:1b}
+      HEART_TIER3_PROVIDER: ${HEART_TIER3_PROVIDER:-ollama}
+      HEART_TIER3_OLLAMA_BASE_URL: ${HEART_TIER3_OLLAMA_BASE_URL:-http://ollama:11434}
+      HEART_TIER3_MODEL: ${HEART_TIER3_MODEL:-llama3.2:1b}
+      HEART_TIER3_TIMEOUT: '600'
+      HEART_TIER3_MAX_RETRIES: '1'
+      BRAIN_OLLAMA_BASE_URL: ${BRAIN_OLLAMA_BASE_URL:-http://ollama:11434}
+      BRAIN_OLLAMA_MODEL: ${BRAIN_OLLAMA_MODEL:-llama3.2:1b}
+      BRAIN_TIER3_PROVIDER: ${BRAIN_TIER3_PROVIDER:-ollama}
+      BRAIN_TIER3_OLLAMA_BASE_URL: ${BRAIN_TIER3_OLLAMA_BASE_URL:-http://ollama:11434}
+      BRAIN_TIER3_MODEL: ${BRAIN_TIER3_MODEL:-llama3.2:1b}
+      BRAIN_TIER3_TIMEOUT: '780'
+      BRAIN_TIER3_MAX_RETRIES: '1'
+      ENGINE_PORT: '8000'
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:8000/health"]
-      <<: *engine-healthcheck
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+      test:
+      - CMD
+      - curl
+      - -sf
+      - http://localhost:8000/health
     depends_on:
       postgres:
         condition: service_healthy
@@ -349,8 +347,7 @@ services:
       base-image:
         condition: service_completed_successfully
     networks:
-      - nexus
-
+    - nexus
   gateway:
     build:
       context: ./platform/gateway
@@ -360,11 +357,61 @@ services:
     container_name: nexus-gateway
     restart: unless-stopped
     ports:
-      - "8080:8080"
+    - 8080:8080
     environment:
-      <<: *common-env
-      ENGINE_PORT: "8080"
-      # Gateway needs to know engine host names (docker service names)
+      NEXUS_ENV: development
+      NEXUS_PRODUCT_MODE: ${NEXUS_PRODUCT_MODE:-canonical}
+      NEXUS_STORAGE_PATH: ${NEXUS_STORAGE_PATH:-/app/service/data}
+      NEXUS_ORCHESTRATOR_URL: ${NEXUS_ORCHESTRATOR_URL:-http://orchestrator:8100}
+      NEXUS_JWT_SECRET: ${NEXUS_JWT_SECRET:-test-secret-do-not-use-in-production}
+      JWT_SECRET: ${NEXUS_JWT_SECRET:-test-secret-do-not-use-in-production}
+      REDIS_HOST: redis
+      REDIS_PORT: '6379'
+      REDIS_URL: redis://redis:6379/0
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: '5432'
+      POSTGRES_USER: ${POSTGRES_USER:-nexus}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-nexus-dev}
+      POSTGRES_DB: ${POSTGRES_DB:-nexus}
+      NEO4J_URI: bolt://neo4j:7687
+      NEO4J_USER: neo4j
+      NEO4J_PASSWORD: ${NEO4J_PASSWORD:-nexus-neo4j-dev}
+      MILVUS_HOST: ${MILVUS_HOST:-milvus}
+      MILVUS_PORT: ${MILVUS_PORT:-19530}
+      LLM_BACKEND: ollama
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
+      EYES_OLLAMA_BASE_URL: ${EYES_OLLAMA_BASE_URL:-http://ollama:11434}
+      EYES_OLLAMA_MODEL: ${EYES_OLLAMA_MODEL:-moondream}
+      EYES_OLLAMA_INFERENCE_TIMEOUT: ${EYES_OLLAMA_INFERENCE_TIMEOUT:-600}
+      EYES_VISION_TIER1_PROVIDER: ${EYES_VISION_TIER1_PROVIDER:-}
+      EYES_VISION_TIER1_MODEL: ${EYES_VISION_TIER1_MODEL:-claude-sonnet-4-6}
+      EYES_VISION_TIER1_API_KEY: ${EYES_VISION_TIER1_API_KEY:-}
+      EYES_VISION_TIER1_TIMEOUT: ${EYES_VISION_TIER1_TIMEOUT:-60}
+      EYES_VISION_TIER2_PROVIDER: ${EYES_VISION_TIER2_PROVIDER:-}
+      EYES_VISION_TIER2_MODEL: ${EYES_VISION_TIER2_MODEL:-gpt-4o}
+      EYES_VISION_TIER2_API_KEY: ${EYES_VISION_TIER2_API_KEY:-}
+      EYES_VISION_TIER2_TIMEOUT: ${EYES_VISION_TIER2_TIMEOUT:-60}
+      EYES_VISION_TIER3_PROVIDER: ${EYES_VISION_TIER3_PROVIDER:-}
+      EYES_VISION_TIER3_MODEL: ${EYES_VISION_TIER3_MODEL:-llava:7b}
+      EYES_VISION_TIER3_BASE_URL: ${EYES_VISION_TIER3_BASE_URL:-http://ollama:11434}
+      LLM_MAX_TOKENS: '2048'
+      GATEWAY_MAX_REQUEST_BODY_MB: '500'
+      MAX_REQUEST_BODY_MB: '500'
+      HEART_OLLAMA_BASE_URL: ${HEART_OLLAMA_BASE_URL:-http://ollama:11434}
+      HEART_OLLAMA_MODEL: ${HEART_OLLAMA_MODEL:-llama3.2:1b}
+      HEART_TIER3_PROVIDER: ${HEART_TIER3_PROVIDER:-ollama}
+      HEART_TIER3_OLLAMA_BASE_URL: ${HEART_TIER3_OLLAMA_BASE_URL:-http://ollama:11434}
+      HEART_TIER3_MODEL: ${HEART_TIER3_MODEL:-llama3.2:1b}
+      HEART_TIER3_TIMEOUT: '600'
+      HEART_TIER3_MAX_RETRIES: '1'
+      BRAIN_OLLAMA_BASE_URL: ${BRAIN_OLLAMA_BASE_URL:-http://ollama:11434}
+      BRAIN_OLLAMA_MODEL: ${BRAIN_OLLAMA_MODEL:-llama3.2:1b}
+      BRAIN_TIER3_PROVIDER: ${BRAIN_TIER3_PROVIDER:-ollama}
+      BRAIN_TIER3_OLLAMA_BASE_URL: ${BRAIN_TIER3_OLLAMA_BASE_URL:-http://ollama:11434}
+      BRAIN_TIER3_MODEL: ${BRAIN_TIER3_MODEL:-llama3.2:1b}
+      BRAIN_TIER3_TIMEOUT: '780'
+      BRAIN_TIER3_MAX_RETRIES: '1'
+      ENGINE_PORT: '8080'
       AUTH_SERVICE_URL: http://auth-service:8000
       SHIELD_ENGINE_URL: http://shield:8001
       EARS_ENGINE_URL: http://ears:8002
@@ -381,8 +428,15 @@ services:
       ORCHESTRATOR_URL: http://orchestrator:8100
       QA_ORCHESTRATOR_URL: http://qa-orchestrator:8092
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:8080/health"]
-      <<: *engine-healthcheck
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+      test:
+      - CMD
+      - curl
+      - -sf
+      - http://localhost:8080/health
     depends_on:
       auth-service:
         condition: service_healthy
@@ -391,8 +445,7 @@ services:
       base-image:
         condition: service_completed_successfully
     networks:
-      - nexus
-
+    - nexus
   platform-api:
     build:
       context: ./platform/api
@@ -402,21 +455,75 @@ services:
     container_name: nexus-platform-api
     restart: unless-stopped
     ports:
-      - "8091:8091"
+    - 8091:8091
     environment:
-      <<: *common-env
-      ENGINE_PORT: "8091"
+      NEXUS_ENV: development
+      NEXUS_PRODUCT_MODE: ${NEXUS_PRODUCT_MODE:-canonical}
+      NEXUS_STORAGE_PATH: ${NEXUS_STORAGE_PATH:-/app/service/data}
+      NEXUS_ORCHESTRATOR_URL: ${NEXUS_ORCHESTRATOR_URL:-http://orchestrator:8100}
+      NEXUS_JWT_SECRET: ${NEXUS_JWT_SECRET:-test-secret-do-not-use-in-production}
+      JWT_SECRET: ${NEXUS_JWT_SECRET:-test-secret-do-not-use-in-production}
+      REDIS_HOST: redis
+      REDIS_PORT: '6379'
+      REDIS_URL: redis://redis:6379/0
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: '5432'
+      POSTGRES_USER: ${POSTGRES_USER:-nexus}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-nexus-dev}
+      POSTGRES_DB: ${POSTGRES_DB:-nexus}
+      NEO4J_URI: bolt://neo4j:7687
+      NEO4J_USER: neo4j
+      NEO4J_PASSWORD: ${NEO4J_PASSWORD:-nexus-neo4j-dev}
+      MILVUS_HOST: ${MILVUS_HOST:-milvus}
+      MILVUS_PORT: ${MILVUS_PORT:-19530}
+      LLM_BACKEND: ollama
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
+      EYES_OLLAMA_BASE_URL: ${EYES_OLLAMA_BASE_URL:-http://ollama:11434}
+      EYES_OLLAMA_MODEL: ${EYES_OLLAMA_MODEL:-moondream}
+      EYES_OLLAMA_INFERENCE_TIMEOUT: ${EYES_OLLAMA_INFERENCE_TIMEOUT:-600}
+      EYES_VISION_TIER1_PROVIDER: ${EYES_VISION_TIER1_PROVIDER:-}
+      EYES_VISION_TIER1_MODEL: ${EYES_VISION_TIER1_MODEL:-claude-sonnet-4-6}
+      EYES_VISION_TIER1_API_KEY: ${EYES_VISION_TIER1_API_KEY:-}
+      EYES_VISION_TIER1_TIMEOUT: ${EYES_VISION_TIER1_TIMEOUT:-60}
+      EYES_VISION_TIER2_PROVIDER: ${EYES_VISION_TIER2_PROVIDER:-}
+      EYES_VISION_TIER2_MODEL: ${EYES_VISION_TIER2_MODEL:-gpt-4o}
+      EYES_VISION_TIER2_API_KEY: ${EYES_VISION_TIER2_API_KEY:-}
+      EYES_VISION_TIER2_TIMEOUT: ${EYES_VISION_TIER2_TIMEOUT:-60}
+      EYES_VISION_TIER3_PROVIDER: ${EYES_VISION_TIER3_PROVIDER:-}
+      EYES_VISION_TIER3_MODEL: ${EYES_VISION_TIER3_MODEL:-llava:7b}
+      EYES_VISION_TIER3_BASE_URL: ${EYES_VISION_TIER3_BASE_URL:-http://ollama:11434}
+      LLM_MAX_TOKENS: '2048'
+      GATEWAY_MAX_REQUEST_BODY_MB: '500'
+      MAX_REQUEST_BODY_MB: '500'
+      HEART_OLLAMA_BASE_URL: ${HEART_OLLAMA_BASE_URL:-http://ollama:11434}
+      HEART_OLLAMA_MODEL: ${HEART_OLLAMA_MODEL:-llama3.2:1b}
+      HEART_TIER3_PROVIDER: ${HEART_TIER3_PROVIDER:-ollama}
+      HEART_TIER3_OLLAMA_BASE_URL: ${HEART_TIER3_OLLAMA_BASE_URL:-http://ollama:11434}
+      HEART_TIER3_MODEL: ${HEART_TIER3_MODEL:-llama3.2:1b}
+      HEART_TIER3_TIMEOUT: '600'
+      HEART_TIER3_MAX_RETRIES: '1'
+      BRAIN_OLLAMA_BASE_URL: ${BRAIN_OLLAMA_BASE_URL:-http://ollama:11434}
+      BRAIN_OLLAMA_MODEL: ${BRAIN_OLLAMA_MODEL:-llama3.2:1b}
+      BRAIN_TIER3_PROVIDER: ${BRAIN_TIER3_PROVIDER:-ollama}
+      BRAIN_TIER3_OLLAMA_BASE_URL: ${BRAIN_TIER3_OLLAMA_BASE_URL:-http://ollama:11434}
+      BRAIN_TIER3_MODEL: ${BRAIN_TIER3_MODEL:-llama3.2:1b}
+      BRAIN_TIER3_TIMEOUT: '780'
+      BRAIN_TIER3_MAX_RETRIES: '1'
+      ENGINE_PORT: '8091'
       BRAIN_ENGINE_URL: http://brain:8011
-      # Phase 3+P4 — Test Studio routes /api/v1/e2e-architect/generate
-      # through the heart engine.  The router default
-      # ("http://localhost:8005") points to backbone in-container, so
-      # the env var must be set explicitly here.
       HEART_ENGINE_URL: http://heart:8004
       EYES_ENGINE_URL: http://eyes:8003
       SPINE_ENGINE_URL: http://spine:8009
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:8091/health"]
-      <<: *engine-healthcheck
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+      test:
+      - CMD
+      - curl
+      - -sf
+      - http://localhost:8091/health
     depends_on:
       postgres:
         condition: service_healthy
@@ -425,13 +532,7 @@ services:
       base-image:
         condition: service_completed_successfully
     networks:
-      - nexus
-
-  # ┌─────────────────────────────────────────────────────────────────────────┐
-  # │                        ENGINE LAYER                                     │
-  # │  All engines use CPU base in dev (GPU engines fall back gracefully)     │
-  # └─────────────────────────────────────────────────────────────────────────┘
-
+    - nexus
   shield:
     build:
       context: ./engines/shield-engine
@@ -441,27 +542,80 @@ services:
     container_name: nexus-shield
     restart: unless-stopped
     volumes:
-      # Phase A — canonical_pipeline_plan passes raw upload paths to
-      # shield's redact_audio/redact_video gate handlers. Mount the
-      # same upload-storage volume orchestrator + spine use so the
-      # paths resolve identically inside this container.
-      - upload-storage:/data/nexus/orchestrator/uploads
+    - upload-storage:/data/nexus/orchestrator/uploads
     ports:
-      - "8001:8001"
+    - 8001:8001
     environment:
-      <<: *common-env
-      ENGINE_PORT: "8001"
+      NEXUS_ENV: development
+      NEXUS_PRODUCT_MODE: ${NEXUS_PRODUCT_MODE:-canonical}
+      NEXUS_STORAGE_PATH: ${NEXUS_STORAGE_PATH:-/app/service/data}
+      NEXUS_ORCHESTRATOR_URL: ${NEXUS_ORCHESTRATOR_URL:-http://orchestrator:8100}
+      NEXUS_JWT_SECRET: ${NEXUS_JWT_SECRET:-test-secret-do-not-use-in-production}
+      JWT_SECRET: ${NEXUS_JWT_SECRET:-test-secret-do-not-use-in-production}
+      REDIS_HOST: redis
+      REDIS_PORT: '6379'
+      REDIS_URL: redis://redis:6379/0
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: '5432'
+      POSTGRES_USER: ${POSTGRES_USER:-nexus}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-nexus-dev}
+      POSTGRES_DB: ${POSTGRES_DB:-nexus}
+      NEO4J_URI: bolt://neo4j:7687
+      NEO4J_USER: neo4j
+      NEO4J_PASSWORD: ${NEO4J_PASSWORD:-nexus-neo4j-dev}
+      MILVUS_HOST: ${MILVUS_HOST:-milvus}
+      MILVUS_PORT: ${MILVUS_PORT:-19530}
+      LLM_BACKEND: ollama
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
+      EYES_OLLAMA_BASE_URL: ${EYES_OLLAMA_BASE_URL:-http://ollama:11434}
+      EYES_OLLAMA_MODEL: ${EYES_OLLAMA_MODEL:-moondream}
+      EYES_OLLAMA_INFERENCE_TIMEOUT: ${EYES_OLLAMA_INFERENCE_TIMEOUT:-600}
+      EYES_VISION_TIER1_PROVIDER: ${EYES_VISION_TIER1_PROVIDER:-}
+      EYES_VISION_TIER1_MODEL: ${EYES_VISION_TIER1_MODEL:-claude-sonnet-4-6}
+      EYES_VISION_TIER1_API_KEY: ${EYES_VISION_TIER1_API_KEY:-}
+      EYES_VISION_TIER1_TIMEOUT: ${EYES_VISION_TIER1_TIMEOUT:-60}
+      EYES_VISION_TIER2_PROVIDER: ${EYES_VISION_TIER2_PROVIDER:-}
+      EYES_VISION_TIER2_MODEL: ${EYES_VISION_TIER2_MODEL:-gpt-4o}
+      EYES_VISION_TIER2_API_KEY: ${EYES_VISION_TIER2_API_KEY:-}
+      EYES_VISION_TIER2_TIMEOUT: ${EYES_VISION_TIER2_TIMEOUT:-60}
+      EYES_VISION_TIER3_PROVIDER: ${EYES_VISION_TIER3_PROVIDER:-}
+      EYES_VISION_TIER3_MODEL: ${EYES_VISION_TIER3_MODEL:-llava:7b}
+      EYES_VISION_TIER3_BASE_URL: ${EYES_VISION_TIER3_BASE_URL:-http://ollama:11434}
+      LLM_MAX_TOKENS: '2048'
+      GATEWAY_MAX_REQUEST_BODY_MB: '500'
+      MAX_REQUEST_BODY_MB: '500'
+      HEART_OLLAMA_BASE_URL: ${HEART_OLLAMA_BASE_URL:-http://ollama:11434}
+      HEART_OLLAMA_MODEL: ${HEART_OLLAMA_MODEL:-llama3.2:1b}
+      HEART_TIER3_PROVIDER: ${HEART_TIER3_PROVIDER:-ollama}
+      HEART_TIER3_OLLAMA_BASE_URL: ${HEART_TIER3_OLLAMA_BASE_URL:-http://ollama:11434}
+      HEART_TIER3_MODEL: ${HEART_TIER3_MODEL:-llama3.2:1b}
+      HEART_TIER3_TIMEOUT: '600'
+      HEART_TIER3_MAX_RETRIES: '1'
+      BRAIN_OLLAMA_BASE_URL: ${BRAIN_OLLAMA_BASE_URL:-http://ollama:11434}
+      BRAIN_OLLAMA_MODEL: ${BRAIN_OLLAMA_MODEL:-llama3.2:1b}
+      BRAIN_TIER3_PROVIDER: ${BRAIN_TIER3_PROVIDER:-ollama}
+      BRAIN_TIER3_OLLAMA_BASE_URL: ${BRAIN_TIER3_OLLAMA_BASE_URL:-http://ollama:11434}
+      BRAIN_TIER3_MODEL: ${BRAIN_TIER3_MODEL:-llama3.2:1b}
+      BRAIN_TIER3_TIMEOUT: '780'
+      BRAIN_TIER3_MAX_RETRIES: '1'
+      ENGINE_PORT: '8001'
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:8001/health"]
-      <<: *engine-healthcheck
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+      test:
+      - CMD
+      - curl
+      - -sf
+      - http://localhost:8001/health
     depends_on:
       redis:
         condition: service_healthy
       base-image:
         condition: service_completed_successfully
     networks:
-      - nexus
-
+    - nexus
   ears:
     build:
       context: ./engines/ears-engine
@@ -471,53 +625,100 @@ services:
     container_name: nexus-ears
     restart: unless-stopped
     volumes:
-      - model-cache:/app/service/models
-      - audio-storage:/app/service/data/audio
-      # Phase A — canonical_pipeline_plan passes audio_file_path
-      # pointing at the orchestrator's upload directory. Share the
-      # same volume so ears.preprocess can read the file off disk.
-      - upload-storage:/data/nexus/orchestrator/uploads
+    - model-cache:/app/service/models
+    - audio-storage:/app/service/data/audio
+    - upload-storage:/data/nexus/orchestrator/uploads
     ports:
-      - "8002:8002"
+    - 8002:8002
     environment:
-      <<: *common-env
-      ENGINE_PORT: "8002"
+      NEXUS_ENV: development
+      NEXUS_PRODUCT_MODE: ${NEXUS_PRODUCT_MODE:-canonical}
+      NEXUS_STORAGE_PATH: ${NEXUS_STORAGE_PATH:-/app/service/data}
+      NEXUS_ORCHESTRATOR_URL: ${NEXUS_ORCHESTRATOR_URL:-http://orchestrator:8100}
+      NEXUS_JWT_SECRET: ${NEXUS_JWT_SECRET:-test-secret-do-not-use-in-production}
+      JWT_SECRET: ${NEXUS_JWT_SECRET:-test-secret-do-not-use-in-production}
+      REDIS_HOST: redis
+      REDIS_PORT: '6379'
+      REDIS_URL: redis://redis:6379/0
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: '5432'
+      POSTGRES_USER: ${POSTGRES_USER:-nexus}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-nexus-dev}
+      POSTGRES_DB: ${POSTGRES_DB:-nexus}
+      NEO4J_URI: bolt://neo4j:7687
+      NEO4J_USER: neo4j
+      NEO4J_PASSWORD: ${NEO4J_PASSWORD:-nexus-neo4j-dev}
+      MILVUS_HOST: ${MILVUS_HOST:-milvus}
+      MILVUS_PORT: ${MILVUS_PORT:-19530}
+      LLM_BACKEND: ollama
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
+      EYES_OLLAMA_BASE_URL: ${EYES_OLLAMA_BASE_URL:-http://ollama:11434}
+      EYES_OLLAMA_MODEL: ${EYES_OLLAMA_MODEL:-moondream}
+      EYES_OLLAMA_INFERENCE_TIMEOUT: ${EYES_OLLAMA_INFERENCE_TIMEOUT:-600}
+      EYES_VISION_TIER1_PROVIDER: ${EYES_VISION_TIER1_PROVIDER:-}
+      EYES_VISION_TIER1_MODEL: ${EYES_VISION_TIER1_MODEL:-claude-sonnet-4-6}
+      EYES_VISION_TIER1_API_KEY: ${EYES_VISION_TIER1_API_KEY:-}
+      EYES_VISION_TIER1_TIMEOUT: ${EYES_VISION_TIER1_TIMEOUT:-60}
+      EYES_VISION_TIER2_PROVIDER: ${EYES_VISION_TIER2_PROVIDER:-}
+      EYES_VISION_TIER2_MODEL: ${EYES_VISION_TIER2_MODEL:-gpt-4o}
+      EYES_VISION_TIER2_API_KEY: ${EYES_VISION_TIER2_API_KEY:-}
+      EYES_VISION_TIER2_TIMEOUT: ${EYES_VISION_TIER2_TIMEOUT:-60}
+      EYES_VISION_TIER3_PROVIDER: ${EYES_VISION_TIER3_PROVIDER:-}
+      EYES_VISION_TIER3_MODEL: ${EYES_VISION_TIER3_MODEL:-llava:7b}
+      EYES_VISION_TIER3_BASE_URL: ${EYES_VISION_TIER3_BASE_URL:-http://ollama:11434}
+      LLM_MAX_TOKENS: '2048'
+      GATEWAY_MAX_REQUEST_BODY_MB: '500'
+      MAX_REQUEST_BODY_MB: '500'
+      HEART_OLLAMA_BASE_URL: ${HEART_OLLAMA_BASE_URL:-http://ollama:11434}
+      HEART_OLLAMA_MODEL: ${HEART_OLLAMA_MODEL:-llama3.2:1b}
+      HEART_TIER3_PROVIDER: ${HEART_TIER3_PROVIDER:-ollama}
+      HEART_TIER3_OLLAMA_BASE_URL: ${HEART_TIER3_OLLAMA_BASE_URL:-http://ollama:11434}
+      HEART_TIER3_MODEL: ${HEART_TIER3_MODEL:-llama3.2:1b}
+      HEART_TIER3_TIMEOUT: '600'
+      HEART_TIER3_MAX_RETRIES: '1'
+      BRAIN_OLLAMA_BASE_URL: ${BRAIN_OLLAMA_BASE_URL:-http://ollama:11434}
+      BRAIN_OLLAMA_MODEL: ${BRAIN_OLLAMA_MODEL:-llama3.2:1b}
+      BRAIN_TIER3_PROVIDER: ${BRAIN_TIER3_PROVIDER:-ollama}
+      BRAIN_TIER3_OLLAMA_BASE_URL: ${BRAIN_TIER3_OLLAMA_BASE_URL:-http://ollama:11434}
+      BRAIN_TIER3_MODEL: ${BRAIN_TIER3_MODEL:-llama3.2:1b}
+      BRAIN_TIER3_TIMEOUT: '780'
+      BRAIN_TIER3_MAX_RETRIES: '1'
+      ENGINE_PORT: '8002'
       EARS_DEFAULT_PROCESSING_PROFILE: fast
-      # CPU mode in dev (no CUDA)
       WHISPER_DEVICE: cpu
       WHISPER_COMPUTE_TYPE: int8
-      # Enable model download on first startup (dev convenience)
-      EARS_ALLOW_REMOTE_MODEL_BOOTSTRAP: "true"
-      # ── Production Whisper: use medium model (1.4GB pre-cached) ──
+      EARS_ALLOW_REMOTE_MODEL_BOOTSTRAP: 'true'
       WHISPER_MODEL_SIZE: medium
       WHISPER_MODEL_PATH: ./models/whisper-medium
       WHISPER_FAST_MODEL_SIZE: tiny
       WHISPER_FAST_MODEL_PATH: ./models/whisper-tiny
       WHISPER_FAST_COMPUTE_TYPE: int8
-      # Allow enough time for first-time model download
-      EARS_TRANSCRIBER_STARTUP_TIMEOUT_SECONDS: "600"
-      # ── Diarization settings ──
-      EARS_SKIP_DIARIZATION_FAST: "true"
-      EARS_DIARIZATION_INFERENCE_TIMEOUT_SECONDS: "120"
-      # ── CTranslate2 thread control (prevent deadlock on CPU) ──
-      CT2_INTER_THREADS: "1"
-      OMP_NUM_THREADS: "4"
-      # ── Real diarizer (Pyannote) ──
+      EARS_TRANSCRIBER_STARTUP_TIMEOUT_SECONDS: '600'
+      EARS_SKIP_DIARIZATION_FAST: 'true'
+      EARS_DIARIZATION_INFERENCE_TIMEOUT_SECONDS: '120'
+      CT2_INTER_THREADS: '1'
+      OMP_NUM_THREADS: '4'
       PYANNOTE_MODEL_PATH: ./models/pyannote-speaker-3.1
       HF_TOKEN: ${HF_TOKEN:-}
-      EARS_DIARIZER_STARTUP_TIMEOUT_SECONDS: "120"
-      EARS_REQUIRE_REAL_DIARIZER: "false"
+      EARS_DIARIZER_STARTUP_TIMEOUT_SECONDS: '120'
+      EARS_REQUIRE_REAL_DIARIZER: 'false'
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:8002/health"]
-      <<: *engine-healthcheck
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+      test:
+      - CMD
+      - curl
+      - -sf
+      - http://localhost:8002/health
     depends_on:
       redis:
         condition: service_healthy
       base-image:
         condition: service_completed_successfully
     networks:
-      - nexus
-
+    - nexus
   eyes:
     build:
       context: .
@@ -527,192 +728,125 @@ services:
     container_name: nexus-eyes
     restart: unless-stopped
     volumes:
-      - model-cache:/app/service/models
-      - frame-storage:/app/service/data/frames
-      # Phase A — canonical_pipeline_plan passes video_file_path
-      # pointing at the orchestrator's upload directory. Mount the
-      # same volume so eyes.extract_frames sees the raw video.
-      - upload-storage:/data/nexus/orchestrator/uploads
+    - model-cache:/app/service/models
+    - frame-storage:/app/service/data/frames
+    - upload-storage:/data/nexus/orchestrator/uploads
     cpus: '4.0'
     ports:
-      - "8003:8003"
+    - 8003:8003
     environment:
-      <<: *common-env
-      ENGINE_PORT: "8003"
+      NEXUS_ENV: development
+      NEXUS_PRODUCT_MODE: ${NEXUS_PRODUCT_MODE:-canonical}
+      NEXUS_STORAGE_PATH: ${NEXUS_STORAGE_PATH:-/app/service/data}
+      NEXUS_ORCHESTRATOR_URL: ${NEXUS_ORCHESTRATOR_URL:-http://orchestrator:8100}
+      NEXUS_JWT_SECRET: ${NEXUS_JWT_SECRET:-test-secret-do-not-use-in-production}
+      JWT_SECRET: ${NEXUS_JWT_SECRET:-test-secret-do-not-use-in-production}
+      REDIS_HOST: redis
+      REDIS_PORT: '6379'
+      REDIS_URL: redis://redis:6379/0
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: '5432'
+      POSTGRES_USER: ${POSTGRES_USER:-nexus}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-nexus-dev}
+      POSTGRES_DB: ${POSTGRES_DB:-nexus}
+      NEO4J_URI: bolt://neo4j:7687
+      NEO4J_USER: neo4j
+      NEO4J_PASSWORD: ${NEO4J_PASSWORD:-nexus-neo4j-dev}
+      MILVUS_HOST: ${MILVUS_HOST:-milvus}
+      MILVUS_PORT: ${MILVUS_PORT:-19530}
+      LLM_BACKEND: ollama
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
+      EYES_OLLAMA_BASE_URL: ${EYES_OLLAMA_BASE_URL:-http://ollama:11434}
+      EYES_OLLAMA_MODEL: ${EYES_OLLAMA_MODEL:-moondream}
+      EYES_OLLAMA_INFERENCE_TIMEOUT: ${EYES_OLLAMA_INFERENCE_TIMEOUT:-180}
+      EYES_VISION_TIER1_PROVIDER: ${EYES_VISION_TIER1_PROVIDER:-}
+      EYES_VISION_TIER1_MODEL: ${EYES_VISION_TIER1_MODEL:-}
+      EYES_VISION_TIER1_API_KEY: ${EYES_VISION_TIER1_API_KEY:-}
+      EYES_VISION_TIER1_TIMEOUT: ${EYES_VISION_TIER1_TIMEOUT:-120}
+      EYES_VISION_TIER2_PROVIDER: ${EYES_VISION_TIER2_PROVIDER:-}
+      EYES_VISION_TIER2_MODEL: ${EYES_VISION_TIER2_MODEL:-}
+      EYES_VISION_TIER2_API_KEY: ${EYES_VISION_TIER2_API_KEY:-}
+      EYES_VISION_TIER2_TIMEOUT: ${EYES_VISION_TIER2_TIMEOUT:-120}
+      EYES_VISION_TIER3_PROVIDER: ${EYES_VISION_TIER3_PROVIDER:-}
+      EYES_VISION_TIER3_MODEL: ${EYES_VISION_TIER3_MODEL:-}
+      EYES_VISION_TIER3_BASE_URL: ${EYES_VISION_TIER3_BASE_URL:-}
+      LLM_MAX_TOKENS: '2048'
+      GATEWAY_MAX_REQUEST_BODY_MB: '500'
+      MAX_REQUEST_BODY_MB: '500'
+      HEART_OLLAMA_BASE_URL: ${HEART_OLLAMA_BASE_URL:-http://ollama:11434}
+      HEART_OLLAMA_MODEL: ${HEART_OLLAMA_MODEL:-llama3.2:1b}
+      HEART_TIER3_PROVIDER: ${HEART_TIER3_PROVIDER:-ollama}
+      HEART_TIER3_OLLAMA_BASE_URL: ${HEART_TIER3_OLLAMA_BASE_URL:-http://ollama:11434}
+      HEART_TIER3_MODEL: ${HEART_TIER3_MODEL:-llama3.2:1b}
+      HEART_TIER3_TIMEOUT: '600'
+      HEART_TIER3_MAX_RETRIES: '1'
+      BRAIN_OLLAMA_BASE_URL: ${BRAIN_OLLAMA_BASE_URL:-http://ollama:11434}
+      BRAIN_OLLAMA_MODEL: ${BRAIN_OLLAMA_MODEL:-llama3.2:1b}
+      BRAIN_TIER3_PROVIDER: ${BRAIN_TIER3_PROVIDER:-ollama}
+      BRAIN_TIER3_OLLAMA_BASE_URL: ${BRAIN_TIER3_OLLAMA_BASE_URL:-http://ollama:11434}
+      BRAIN_TIER3_MODEL: ${BRAIN_TIER3_MODEL:-llama3.2:1b}
+      BRAIN_TIER3_TIMEOUT: '780'
+      BRAIN_TIER3_MAX_RETRIES: '1'
+      ENGINE_PORT: '8003'
       VISION_DEVICE: cpu
-      # ── Real OCR (EasyOCR) — no stubs ──
       EYES_OCR_GPU: ${EYES_OCR_GPU:-false}
       EYES_OCR_ALLOW_REMOTE_MODEL_BOOTSTRAP: ${EYES_OCR_ALLOW_REMOTE_MODEL_BOOTSTRAP:-true}
       EYES_OCR_LOAD_TIMEOUT_SECONDS: ${EYES_OCR_LOAD_TIMEOUT_SECONDS:-120}
       EYES_OCR_MODEL_DIR: ${EYES_OCR_MODEL_DIR:-./models/easyocr}
-      # Production-safe default = 1 (architect P0 #3). EasyOCR threads
-      # can't be killed on timeout, so >1 worker means one hung frame
-      # leaks one thread permanently — under load this saturates the
-      # executor and every subsequent OCR call queues forever. Operators
-      # with 16GB+ RAM AND a known-good corpus can bump to 2; 4 OOMs
-      # WSL2 8GB. The default of 1 is safest for first-deploy / 1000+/hr.
       EYES_OCR_MAX_WORKERS: ${EYES_OCR_MAX_WORKERS:-1}
-      # Per-frame timeout. Lowered from 90s to 60s in 1000+/hr posture
-      # so a stuck frame surfaces faster and we don't lose 90s of
-      # executor capacity per timeout.
       EYES_OCR_FRAME_TIMEOUT_SECONDS: ${EYES_OCR_FRAME_TIMEOUT_SECONDS:-60}
-      # ── Visual analysis via Ollama (model + endpoint) ────────────
-      EYES_OLLAMA_BASE_URL: ${EYES_OLLAMA_BASE_URL:-http://ollama:11434}
-      EYES_OLLAMA_MODEL: ${EYES_OLLAMA_MODEL:-moondream}
       EYES_FAST_OLLAMA_MODEL: ${EYES_FAST_OLLAMA_MODEL:-moondream}
-      # Per-call ceiling for a single Ollama request.  Used to be 600 s
-      # which let one hung call burn 10 min before failover.  180 s is
-      # safe for moondream on CPU; bump to 300 s if running llava:7b on CPU.
-      EYES_OLLAMA_INFERENCE_TIMEOUT: ${EYES_OLLAMA_INFERENCE_TIMEOUT:-180}
-      # Hold the vision model resident in Ollama RAM between scenes/chunks.
       EYES_OLLAMA_KEEP_ALIVE: ${EYES_OLLAMA_KEEP_ALIVE:-10m}
-      # Cap LLaVA generated tokens — JSON schema fits in <800 tokens.
       EYES_OLLAMA_NUM_PREDICT: ${EYES_OLLAMA_NUM_PREDICT:-768}
       EYES_OLLAMA_NUM_CTX: ${EYES_OLLAMA_NUM_CTX:-4096}
       NEXUS_ALLOW_DEGRADED_MODE: ${NEXUS_ALLOW_DEGRADED_MODE:-true}
-      # ── Processing profiles ──────────────────────────────────────
-      # multimodal = full LLaVA enrichment (default for production).
-      # fast       = OCR-only on representative frames; cheap.
-      # deep       = LLaVA on every frame (very expensive — opt-in only).
       EYES_DEFAULT_PROCESSING_PROFILE: ${EYES_DEFAULT_PROCESSING_PROFILE:-multimodal}
       EYES_FAST_MAX_FRAMES: ${EYES_FAST_MAX_FRAMES:-30}
       EYES_FAST_MAX_SCENES: ${EYES_FAST_MAX_SCENES:-8}
       EYES_FAST_REPRESENTATIVE_OCR_ONLY: ${EYES_FAST_REPRESENTATIVE_OCR_ONLY:-true}
-      # Production-safe default (architect P0 #3): for `fast` profile,
-      # skip OCR entirely. Scene description + LLaVA still produce useful
-      # signal; OCR is the failure-prone bottleneck. Operators who need
-      # OCR-grounded results should run `multimodal` (GPU) instead.
       EYES_FAST_SKIP_OCR: ${EYES_FAST_SKIP_OCR:-true}
       EYES_MULTIMODAL_MAX_FRAMES: ${EYES_MULTIMODAL_MAX_FRAMES:-60}
-      # CPU-safe default = 3 scenes (architect followup). Was 30, which
-      # for a typical multi-page form flow meant 30 × ~30s LLaVA calls
-      # = 15 min of GPU/CPU time and exceeded the 600s analyze_scenes
-      # deadline. GPU operators with a healthy Ollama pool override to
-      # 30 to get full enrichment. CPU/dev deployments cap at 3 so the
-      # pipeline finishes within the deadline even at full coverage.
       EYES_MULTIMODAL_MAX_SCENES: ${EYES_MULTIMODAL_MAX_SCENES:-3}
-      # New: per-scene LLaVA timeout. 30s is enough on warm GPU; CPU
-      # users can bump but should reduce MAX_SCENES first.
       EYES_LLAVA_PER_SCENE_TIMEOUT_S: ${EYES_LLAVA_PER_SCENE_TIMEOUT_S:-30}
-      # Stage budget for the whole analyze_scenes step. < step deadline
-      # (600s in plans.py) so a hang surfaces as timeout → degraded
-      # fallback instead of step-deadline quarantine.
       EYES_ANALYZE_SCENES_STAGE_BUDGET_S: ${EYES_ANALYZE_SCENES_STAGE_BUDGET_S:-480}
-      # Circuit breaker: after N consecutive LLaVA failures within a
-      # single analyze_scenes invocation, stop calling Ollama for
-      # remaining scenes and use OCR-only descriptions.
       EYES_LLAVA_CIRCUIT_THRESHOLD: ${EYES_LLAVA_CIRCUIT_THRESHOLD:-2}
-      # ── Per-frame LLaVA (intra-page step capture) ──────────────────────
-      # When OFF (legacy): one LLaVA call per scene; the rep-frame description
-      # is duplicated across every frame in that scene → all frames inside one
-      # page have identical descriptions and the step extractor cannot diff
-      # form-field interactions.
-      # When ON: every non-representative frame in a multi-frame enriched
-      # scene gets its own LLaVA call so each frame carries an independent
-      # description.  Combined with the SDK step extractor, this is what
-      # surfaces "user typed value", "user selected option", "user clicked
-      # button" inside one logical page (one URL).  Cost: up to N extra LLaVA
-      # calls per artifact, capped by EYES_PER_FRAME_LLAVA_LIMIT.  Profile
-      # gate enforced at runtime: only multimodal/deep trigger this path.
       EYES_PER_FRAME_LLAVA: ${EYES_PER_FRAME_LLAVA:-true}
       EYES_PER_FRAME_LLAVA_LIMIT: ${EYES_PER_FRAME_LLAVA_LIMIT:-60}
-      # ── Per-frame OCR (multi-frame scenes only) ────────────
-      # When true (and profile multimodal/deep), every frame inside a scene
-      # with ≥3 frames receives its own OCR pass instead of inheriting
-      # the rep frame's text.  Lets the step extractor see typed values
-      # and selected options between consecutive frames inside one URL.
-      # CPU EasyOCR runs ~30-60 s/frame so this adds time, but without it
-      # multi-frame form-fill scenes all share the representative frame's
-      # OCR text — meaning the bottom panel can never show what the user
-      # actually typed/selected. Default ON; set EYES_PER_FRAME_OCR=false
-      # to revert when wall time matters more than form-state fidelity.
       EYES_PER_FRAME_OCR: ${EYES_PER_FRAME_OCR:-true}
-      # ── OCR languages (comma-separated EasyOCR codes) ──────
-      # Determines which UI languages OCR can read.  Adding a language
-      # adds ~50-200 MB to the model cache and is harmless for existing
-      # languages.  Common multi-locale value: "en,es,fr,de,ja,zh".
       EYES_OCR_LANGUAGES: ${EYES_OCR_LANGUAGES:-en}
-      # ── Memory hygiene (long-video mode) ───────────────────
-      # Hard ceiling (MiB) above which the analyzer aggressively drops
-      # interim buffers (raw frames, OCR results, transition cache).
-      # 0 disables the watchdog (legacy).  Default tuned for 4-vCPU /
-      # 4 GB Ollama-on-CPU dev hosts; raise on production multi-GPU.
       EYES_MEMORY_CEILING_MB: ${EYES_MEMORY_CEILING_MB:-2048}
       EYES_AGGRESSIVE_FRAME_EVICTION: ${EYES_AGGRESSIVE_FRAME_EVICTION:-true}
-      # ── Vision tier router (Tier 1 / 2 / 3) ────────────────
-      # When ANY EYES_VISION_TIER{N}_PROVIDER var is set, the eyes
-      # VisualAnalyzer auto-routes through nexus_sdk.vision instead of
-      # the legacy direct-Ollama path.  Tiers fall back in order:
-      # tier1 → tier2 → tier3 on retriable failure.  Non-retriable
-      # failures (auth, missing model) poison a tier for the rest of
-      # the process so a misconfigured cloud key does not slow every
-      # call.  Leave all unset to keep the legacy single-Ollama path.
-      #
-      # Recommended production layout:
-      #   tier1 = anthropic claude-sonnet-4-6 (best UI understanding)
-      #   tier2 = openai gpt-4o (cost-balanced multi-region fallback)
-      #   tier3 = ollama llama3.2-vision:11b (on-prem backup, GPU only)
-      EYES_VISION_TIER1_PROVIDER: ${EYES_VISION_TIER1_PROVIDER:-}
-      EYES_VISION_TIER1_MODEL: ${EYES_VISION_TIER1_MODEL:-}
-      EYES_VISION_TIER1_API_KEY: ${EYES_VISION_TIER1_API_KEY:-}
       EYES_VISION_TIER1_BASE_URL: ${EYES_VISION_TIER1_BASE_URL:-}
-      EYES_VISION_TIER1_TIMEOUT: ${EYES_VISION_TIER1_TIMEOUT:-120}
       EYES_VISION_TIER1_RETRIES: ${EYES_VISION_TIER1_RETRIES:-1}
-      EYES_VISION_TIER2_PROVIDER: ${EYES_VISION_TIER2_PROVIDER:-}
-      EYES_VISION_TIER2_MODEL: ${EYES_VISION_TIER2_MODEL:-}
-      EYES_VISION_TIER2_API_KEY: ${EYES_VISION_TIER2_API_KEY:-}
       EYES_VISION_TIER2_BASE_URL: ${EYES_VISION_TIER2_BASE_URL:-}
-      EYES_VISION_TIER2_TIMEOUT: ${EYES_VISION_TIER2_TIMEOUT:-120}
       EYES_VISION_TIER2_RETRIES: ${EYES_VISION_TIER2_RETRIES:-1}
-      EYES_VISION_TIER3_PROVIDER: ${EYES_VISION_TIER3_PROVIDER:-}
-      EYES_VISION_TIER3_MODEL: ${EYES_VISION_TIER3_MODEL:-}
       EYES_VISION_TIER3_API_KEY: ${EYES_VISION_TIER3_API_KEY:-}
-      EYES_VISION_TIER3_BASE_URL: ${EYES_VISION_TIER3_BASE_URL:-}
       EYES_VISION_TIER3_TIMEOUT: ${EYES_VISION_TIER3_TIMEOUT:-180}
       EYES_VISION_TIER3_RETRIES: ${EYES_VISION_TIER3_RETRIES:-1}
       EYES_VISION_TIER_ORDER: ${EYES_VISION_TIER_ORDER:-1,2,3}
-      # ── Frame extraction tuning ──────────────────────────────────
-      # 0.025 catches single-character text-input changes (dHash on 9x8
-      # downsample, a single-char change typically toggles 2-3% of bits).
-      # Raise to 0.04 if downstream OCR/LLaVA stages start flooding.
       EYES_FRAME_DIFF_THRESHOLD: ${EYES_FRAME_DIFF_THRESHOLD:-0.025}
-      # 2 fps baseline keeps worst-case gap under 0.5 s before adaptive
-      # slow-down kicks in; lowered baseline only on very long passive
-      # recordings (>30 min) by overriding in .env.
       EYES_MAX_FPS_EXTRACT: ${EYES_MAX_FPS_EXTRACT:-2.0}
       EYES_ADAPTIVE_SAMPLING: ${EYES_ADAPTIVE_SAMPLING:-true}
-      # ── Long-video chunking ──────────────────────────────────────
       EYES_CHUNK_THRESHOLD_SECONDS: ${EYES_CHUNK_THRESHOLD_SECONDS:-600}
       EYES_CHUNK_DURATION_SECONDS: ${EYES_CHUNK_DURATION_SECONDS:-300}
-      # CPU dev: 1.  GPU prod (>=8 vCPU): 2-4 for ~30-50% wall-time cut.
       EYES_CHUNK_CONCURRENCY: ${EYES_CHUNK_CONCURRENCY:-1}
-      # ── Phase 2 (Wave A) feature flag ────────────────────────────
-      # When false (default): visual evidence pipeline behaves identically
-      # to the Wave-A release.  When true, three correctness upgrades take
-      # effect SIMULTANEOUSLY (they share the flag because they were
-      # designed to land as one unit):
-      #   A1  Scene-level guard signals (has_keyframe_boundary,
-      #       visible_text_fingerprint) populated and persisted.
-      #   A2  Intelligent same-URL scene merging: chrome-stripped
-      #       structural fingerprint + raw OCR + active anti-merge guards.
-      #       Replaces the Phase-1 "merge effectively disabled" stop-gap.
-      #   A3  Canonical action_kind taxonomy enforced; unmappable controls
-      #       are dropped instead of emitting the meaningless "interact" verb.
-      # Roll-out plan: leave OFF on production, enable in staging/dev to
-      # generate side-by-side comparisons before flipping prod.
       EYES_PHASE2_GUARDS: ${EYES_PHASE2_GUARDS:-false}
-      # ── Wave B1: transition-pair LLM (two frames per step) ─────────────
-      # Second vision pass: last frame of scene N + first frame of scene N+1.
-      # Multimodal profile + real Ollama only; default off. Requires a model
-      # that accepts multiple images per /api/chat (e.g. llava), not all
-      # vision models do.
       EYES_TRANSITION_LLM: ${EYES_TRANSITION_LLM:-false}
       EYES_TRANSITION_LLM_MAX_PAIRS: ${EYES_TRANSITION_LLM_MAX_PAIRS:-30}
       EYES_TRANSITION_LLM_MIN_CONFIDENCE: ${EYES_TRANSITION_LLM_MIN_CONFIDENCE:-0.65}
       EYES_TRANSITION_LLM_NUM_PREDICT: ${EYES_TRANSITION_LLM_NUM_PREDICT:-384}
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:8003/health"]
-      <<: *engine-healthcheck
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+      test:
+      - CMD
+      - curl
+      - -sf
+      - http://localhost:8003/health
     depends_on:
       redis:
         condition: service_healthy
@@ -721,10 +855,18 @@ services:
       base-image:
         condition: service_completed_successfully
     networks:
-      - nexus
-
+    - nexus
+    deploy:
+      resources:
+        reservations:
+          devices:
+          - driver: nvidia
+            count: all
+            capabilities:
+            - gpu
   heart:
-    profiles: ["full"]
+    profiles:
+    - full
     build:
       context: ./engines/heart-engine
       dockerfile: Dockerfile
@@ -733,14 +875,72 @@ services:
     container_name: nexus-heart
     restart: unless-stopped
     ports:
-      - "8004:8004"
+    - 8004:8004
     environment:
-      <<: *common-env
-      ENGINE_PORT: "8004"
+      NEXUS_ENV: development
+      NEXUS_PRODUCT_MODE: ${NEXUS_PRODUCT_MODE:-canonical}
+      NEXUS_STORAGE_PATH: ${NEXUS_STORAGE_PATH:-/app/service/data}
+      NEXUS_ORCHESTRATOR_URL: ${NEXUS_ORCHESTRATOR_URL:-http://orchestrator:8100}
+      NEXUS_JWT_SECRET: ${NEXUS_JWT_SECRET:-test-secret-do-not-use-in-production}
+      JWT_SECRET: ${NEXUS_JWT_SECRET:-test-secret-do-not-use-in-production}
+      REDIS_HOST: redis
+      REDIS_PORT: '6379'
+      REDIS_URL: redis://redis:6379/0
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: '5432'
+      POSTGRES_USER: ${POSTGRES_USER:-nexus}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-nexus-dev}
+      POSTGRES_DB: ${POSTGRES_DB:-nexus}
+      NEO4J_URI: bolt://neo4j:7687
+      NEO4J_USER: neo4j
+      NEO4J_PASSWORD: ${NEO4J_PASSWORD:-nexus-neo4j-dev}
+      MILVUS_HOST: ${MILVUS_HOST:-milvus}
+      MILVUS_PORT: ${MILVUS_PORT:-19530}
+      LLM_BACKEND: ollama
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
+      EYES_OLLAMA_BASE_URL: ${EYES_OLLAMA_BASE_URL:-http://ollama:11434}
+      EYES_OLLAMA_MODEL: ${EYES_OLLAMA_MODEL:-moondream}
+      EYES_OLLAMA_INFERENCE_TIMEOUT: ${EYES_OLLAMA_INFERENCE_TIMEOUT:-600}
+      EYES_VISION_TIER1_PROVIDER: ${EYES_VISION_TIER1_PROVIDER:-}
+      EYES_VISION_TIER1_MODEL: ${EYES_VISION_TIER1_MODEL:-claude-sonnet-4-6}
+      EYES_VISION_TIER1_API_KEY: ${EYES_VISION_TIER1_API_KEY:-}
+      EYES_VISION_TIER1_TIMEOUT: ${EYES_VISION_TIER1_TIMEOUT:-60}
+      EYES_VISION_TIER2_PROVIDER: ${EYES_VISION_TIER2_PROVIDER:-}
+      EYES_VISION_TIER2_MODEL: ${EYES_VISION_TIER2_MODEL:-gpt-4o}
+      EYES_VISION_TIER2_API_KEY: ${EYES_VISION_TIER2_API_KEY:-}
+      EYES_VISION_TIER2_TIMEOUT: ${EYES_VISION_TIER2_TIMEOUT:-60}
+      EYES_VISION_TIER3_PROVIDER: ${EYES_VISION_TIER3_PROVIDER:-}
+      EYES_VISION_TIER3_MODEL: ${EYES_VISION_TIER3_MODEL:-llava:7b}
+      EYES_VISION_TIER3_BASE_URL: ${EYES_VISION_TIER3_BASE_URL:-http://ollama:11434}
+      LLM_MAX_TOKENS: '2048'
+      GATEWAY_MAX_REQUEST_BODY_MB: '500'
+      MAX_REQUEST_BODY_MB: '500'
+      HEART_OLLAMA_BASE_URL: ${HEART_OLLAMA_BASE_URL:-http://ollama:11434}
+      HEART_OLLAMA_MODEL: ${HEART_OLLAMA_MODEL:-llama3.2:1b}
+      HEART_TIER3_PROVIDER: ${HEART_TIER3_PROVIDER:-ollama}
+      HEART_TIER3_OLLAMA_BASE_URL: ${HEART_TIER3_OLLAMA_BASE_URL:-http://ollama:11434}
+      HEART_TIER3_MODEL: ${HEART_TIER3_MODEL:-llama3.2:1b}
+      HEART_TIER3_TIMEOUT: '600'
+      HEART_TIER3_MAX_RETRIES: '1'
+      BRAIN_OLLAMA_BASE_URL: ${BRAIN_OLLAMA_BASE_URL:-http://ollama:11434}
+      BRAIN_OLLAMA_MODEL: ${BRAIN_OLLAMA_MODEL:-llama3.2:1b}
+      BRAIN_TIER3_PROVIDER: ${BRAIN_TIER3_PROVIDER:-ollama}
+      BRAIN_TIER3_OLLAMA_BASE_URL: ${BRAIN_TIER3_OLLAMA_BASE_URL:-http://ollama:11434}
+      BRAIN_TIER3_MODEL: ${BRAIN_TIER3_MODEL:-llama3.2:1b}
+      BRAIN_TIER3_TIMEOUT: '780'
+      BRAIN_TIER3_MAX_RETRIES: '1'
+      ENGINE_PORT: '8004'
       LLM_DEVICE: cpu
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:8004/health"]
-      <<: *engine-healthcheck
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+      test:
+      - CMD
+      - curl
+      - -sf
+      - http://localhost:8004/health
     depends_on:
       redis:
         condition: service_healthy
@@ -749,10 +949,10 @@ services:
       base-image:
         condition: service_completed_successfully
     networks:
-      - nexus
-
+    - nexus
   backbone:
-    profiles: ["full"]
+    profiles:
+    - full
     build:
       context: ./engines/backbone-engine
       dockerfile: Dockerfile
@@ -761,18 +961,72 @@ services:
     container_name: nexus-backbone
     restart: unless-stopped
     ports:
-      - "8005:8005"
+    - 8005:8005
     environment:
-      <<: *common-env
-      ENGINE_PORT: "8005"
-      # Production parity: Milvus + Neo4j must be reachable. The Milvus
-      # stack (etcd + minio + milvus) lives in this same `full` profile.
-      # Set NEXUS_ALLOW_DEGRADED_MODE=true at the shell to opt into the
-      # in-memory fallback during transient debugging — do not commit it.
-      NEXUS_ALLOW_DEGRADED_MODE: ${NEXUS_ALLOW_DEGRADED_MODE:-false}
+      NEXUS_ENV: development
+      NEXUS_PRODUCT_MODE: ${NEXUS_PRODUCT_MODE:-canonical}
+      NEXUS_STORAGE_PATH: ${NEXUS_STORAGE_PATH:-/app/service/data}
+      NEXUS_ORCHESTRATOR_URL: ${NEXUS_ORCHESTRATOR_URL:-http://orchestrator:8100}
+      NEXUS_JWT_SECRET: ${NEXUS_JWT_SECRET:-test-secret-do-not-use-in-production}
+      JWT_SECRET: ${NEXUS_JWT_SECRET:-test-secret-do-not-use-in-production}
+      REDIS_HOST: redis
+      REDIS_PORT: '6379'
+      REDIS_URL: redis://redis:6379/0
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: '5432'
+      POSTGRES_USER: ${POSTGRES_USER:-nexus}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-nexus-dev}
+      POSTGRES_DB: ${POSTGRES_DB:-nexus}
+      NEO4J_URI: bolt://neo4j:7687
+      NEO4J_USER: neo4j
+      NEO4J_PASSWORD: ${NEO4J_PASSWORD:-nexus-neo4j-dev}
+      MILVUS_HOST: ${MILVUS_HOST:-milvus}
+      MILVUS_PORT: ${MILVUS_PORT:-19530}
+      LLM_BACKEND: ollama
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
+      EYES_OLLAMA_BASE_URL: ${EYES_OLLAMA_BASE_URL:-http://ollama:11434}
+      EYES_OLLAMA_MODEL: ${EYES_OLLAMA_MODEL:-moondream}
+      EYES_OLLAMA_INFERENCE_TIMEOUT: ${EYES_OLLAMA_INFERENCE_TIMEOUT:-600}
+      EYES_VISION_TIER1_PROVIDER: ${EYES_VISION_TIER1_PROVIDER:-}
+      EYES_VISION_TIER1_MODEL: ${EYES_VISION_TIER1_MODEL:-claude-sonnet-4-6}
+      EYES_VISION_TIER1_API_KEY: ${EYES_VISION_TIER1_API_KEY:-}
+      EYES_VISION_TIER1_TIMEOUT: ${EYES_VISION_TIER1_TIMEOUT:-60}
+      EYES_VISION_TIER2_PROVIDER: ${EYES_VISION_TIER2_PROVIDER:-}
+      EYES_VISION_TIER2_MODEL: ${EYES_VISION_TIER2_MODEL:-gpt-4o}
+      EYES_VISION_TIER2_API_KEY: ${EYES_VISION_TIER2_API_KEY:-}
+      EYES_VISION_TIER2_TIMEOUT: ${EYES_VISION_TIER2_TIMEOUT:-60}
+      EYES_VISION_TIER3_PROVIDER: ${EYES_VISION_TIER3_PROVIDER:-}
+      EYES_VISION_TIER3_MODEL: ${EYES_VISION_TIER3_MODEL:-llava:7b}
+      EYES_VISION_TIER3_BASE_URL: ${EYES_VISION_TIER3_BASE_URL:-http://ollama:11434}
+      LLM_MAX_TOKENS: '2048'
+      GATEWAY_MAX_REQUEST_BODY_MB: '500'
+      MAX_REQUEST_BODY_MB: '500'
+      HEART_OLLAMA_BASE_URL: ${HEART_OLLAMA_BASE_URL:-http://ollama:11434}
+      HEART_OLLAMA_MODEL: ${HEART_OLLAMA_MODEL:-llama3.2:1b}
+      HEART_TIER3_PROVIDER: ${HEART_TIER3_PROVIDER:-ollama}
+      HEART_TIER3_OLLAMA_BASE_URL: ${HEART_TIER3_OLLAMA_BASE_URL:-http://ollama:11434}
+      HEART_TIER3_MODEL: ${HEART_TIER3_MODEL:-llama3.2:1b}
+      HEART_TIER3_TIMEOUT: '600'
+      HEART_TIER3_MAX_RETRIES: '1'
+      BRAIN_OLLAMA_BASE_URL: ${BRAIN_OLLAMA_BASE_URL:-http://ollama:11434}
+      BRAIN_OLLAMA_MODEL: ${BRAIN_OLLAMA_MODEL:-llama3.2:1b}
+      BRAIN_TIER3_PROVIDER: ${BRAIN_TIER3_PROVIDER:-ollama}
+      BRAIN_TIER3_OLLAMA_BASE_URL: ${BRAIN_TIER3_OLLAMA_BASE_URL:-http://ollama:11434}
+      BRAIN_TIER3_MODEL: ${BRAIN_TIER3_MODEL:-llama3.2:1b}
+      BRAIN_TIER3_TIMEOUT: '780'
+      BRAIN_TIER3_MAX_RETRIES: '1'
+      ENGINE_PORT: '8005'
+      NEXUS_ALLOW_DEGRADED_MODE: 'true'
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:8005/health"]
-      <<: *engine-healthcheck
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+      test:
+      - CMD
+      - curl
+      - -sf
+      - http://localhost:8005/health
     depends_on:
       neo4j:
         condition: service_healthy
@@ -783,10 +1037,10 @@ services:
       base-image:
         condition: service_completed_successfully
     networks:
-      - nexus
-
+    - nexus
   nerves:
-    profiles: ["full"]
+    profiles:
+    - full
     build:
       context: ./engines/nerves-engine
       dockerfile: Dockerfile
@@ -795,23 +1049,81 @@ services:
     container_name: nexus-nerves
     restart: unless-stopped
     ports:
-      - "8006:8006"
+    - 8006:8006
     environment:
-      <<: *common-env
-      ENGINE_PORT: "8006"
+      NEXUS_ENV: development
+      NEXUS_PRODUCT_MODE: ${NEXUS_PRODUCT_MODE:-canonical}
+      NEXUS_STORAGE_PATH: ${NEXUS_STORAGE_PATH:-/app/service/data}
+      NEXUS_ORCHESTRATOR_URL: ${NEXUS_ORCHESTRATOR_URL:-http://orchestrator:8100}
+      NEXUS_JWT_SECRET: ${NEXUS_JWT_SECRET:-test-secret-do-not-use-in-production}
+      JWT_SECRET: ${NEXUS_JWT_SECRET:-test-secret-do-not-use-in-production}
+      REDIS_HOST: redis
+      REDIS_PORT: '6379'
+      REDIS_URL: redis://redis:6379/0
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: '5432'
+      POSTGRES_USER: ${POSTGRES_USER:-nexus}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-nexus-dev}
+      POSTGRES_DB: ${POSTGRES_DB:-nexus}
+      NEO4J_URI: bolt://neo4j:7687
+      NEO4J_USER: neo4j
+      NEO4J_PASSWORD: ${NEO4J_PASSWORD:-nexus-neo4j-dev}
+      MILVUS_HOST: ${MILVUS_HOST:-milvus}
+      MILVUS_PORT: ${MILVUS_PORT:-19530}
+      LLM_BACKEND: ollama
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
+      EYES_OLLAMA_BASE_URL: ${EYES_OLLAMA_BASE_URL:-http://ollama:11434}
+      EYES_OLLAMA_MODEL: ${EYES_OLLAMA_MODEL:-moondream}
+      EYES_OLLAMA_INFERENCE_TIMEOUT: ${EYES_OLLAMA_INFERENCE_TIMEOUT:-600}
+      EYES_VISION_TIER1_PROVIDER: ${EYES_VISION_TIER1_PROVIDER:-}
+      EYES_VISION_TIER1_MODEL: ${EYES_VISION_TIER1_MODEL:-claude-sonnet-4-6}
+      EYES_VISION_TIER1_API_KEY: ${EYES_VISION_TIER1_API_KEY:-}
+      EYES_VISION_TIER1_TIMEOUT: ${EYES_VISION_TIER1_TIMEOUT:-60}
+      EYES_VISION_TIER2_PROVIDER: ${EYES_VISION_TIER2_PROVIDER:-}
+      EYES_VISION_TIER2_MODEL: ${EYES_VISION_TIER2_MODEL:-gpt-4o}
+      EYES_VISION_TIER2_API_KEY: ${EYES_VISION_TIER2_API_KEY:-}
+      EYES_VISION_TIER2_TIMEOUT: ${EYES_VISION_TIER2_TIMEOUT:-60}
+      EYES_VISION_TIER3_PROVIDER: ${EYES_VISION_TIER3_PROVIDER:-}
+      EYES_VISION_TIER3_MODEL: ${EYES_VISION_TIER3_MODEL:-llava:7b}
+      EYES_VISION_TIER3_BASE_URL: ${EYES_VISION_TIER3_BASE_URL:-http://ollama:11434}
+      LLM_MAX_TOKENS: '2048'
+      GATEWAY_MAX_REQUEST_BODY_MB: '500'
+      MAX_REQUEST_BODY_MB: '500'
+      HEART_OLLAMA_BASE_URL: ${HEART_OLLAMA_BASE_URL:-http://ollama:11434}
+      HEART_OLLAMA_MODEL: ${HEART_OLLAMA_MODEL:-llama3.2:1b}
+      HEART_TIER3_PROVIDER: ${HEART_TIER3_PROVIDER:-ollama}
+      HEART_TIER3_OLLAMA_BASE_URL: ${HEART_TIER3_OLLAMA_BASE_URL:-http://ollama:11434}
+      HEART_TIER3_MODEL: ${HEART_TIER3_MODEL:-llama3.2:1b}
+      HEART_TIER3_TIMEOUT: '600'
+      HEART_TIER3_MAX_RETRIES: '1'
+      BRAIN_OLLAMA_BASE_URL: ${BRAIN_OLLAMA_BASE_URL:-http://ollama:11434}
+      BRAIN_OLLAMA_MODEL: ${BRAIN_OLLAMA_MODEL:-llama3.2:1b}
+      BRAIN_TIER3_PROVIDER: ${BRAIN_TIER3_PROVIDER:-ollama}
+      BRAIN_TIER3_OLLAMA_BASE_URL: ${BRAIN_TIER3_OLLAMA_BASE_URL:-http://ollama:11434}
+      BRAIN_TIER3_MODEL: ${BRAIN_TIER3_MODEL:-llama3.2:1b}
+      BRAIN_TIER3_TIMEOUT: '780'
+      BRAIN_TIER3_MAX_RETRIES: '1'
+      ENGINE_PORT: '8006'
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:8006/health"]
-      <<: *engine-healthcheck
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+      test:
+      - CMD
+      - curl
+      - -sf
+      - http://localhost:8006/health
     depends_on:
       redis:
         condition: service_healthy
       base-image:
         condition: service_completed_successfully
     networks:
-      - nexus
-
+    - nexus
   legs:
-    profiles: ["full"]
+    profiles:
+    - full
     build:
       context: ./engines/legs-engine
       dockerfile: Dockerfile
@@ -820,30 +1132,84 @@ services:
     container_name: nexus-legs
     restart: unless-stopped
     volumes:
-      - evidence-storage:/data/nexus/evidence
+    - evidence-storage:/data/nexus/evidence
     ports:
-      - "8007:8007"
+    - 8007:8007
     environment:
-      <<: *common-env
-      ENGINE_PORT: "8007"
-      # legs has its own EVIDENCE_STORAGE_PATH config field (not the
-      # common NEXUS_STORAGE_PATH). Point both at the chowned mount so
-      # LocalStorage AND the engine's own makedirs both succeed.
+      NEXUS_ENV: development
+      NEXUS_PRODUCT_MODE: ${NEXUS_PRODUCT_MODE:-canonical}
       NEXUS_STORAGE_PATH: /data/nexus/evidence
+      NEXUS_ORCHESTRATOR_URL: ${NEXUS_ORCHESTRATOR_URL:-http://orchestrator:8100}
+      NEXUS_JWT_SECRET: ${NEXUS_JWT_SECRET:-test-secret-do-not-use-in-production}
+      JWT_SECRET: ${NEXUS_JWT_SECRET:-test-secret-do-not-use-in-production}
+      REDIS_HOST: redis
+      REDIS_PORT: '6379'
+      REDIS_URL: redis://redis:6379/0
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: '5432'
+      POSTGRES_USER: ${POSTGRES_USER:-nexus}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-nexus-dev}
+      POSTGRES_DB: ${POSTGRES_DB:-nexus}
+      NEO4J_URI: bolt://neo4j:7687
+      NEO4J_USER: neo4j
+      NEO4J_PASSWORD: ${NEO4J_PASSWORD:-nexus-neo4j-dev}
+      MILVUS_HOST: ${MILVUS_HOST:-milvus}
+      MILVUS_PORT: ${MILVUS_PORT:-19530}
+      LLM_BACKEND: ollama
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
+      EYES_OLLAMA_BASE_URL: ${EYES_OLLAMA_BASE_URL:-http://ollama:11434}
+      EYES_OLLAMA_MODEL: ${EYES_OLLAMA_MODEL:-moondream}
+      EYES_OLLAMA_INFERENCE_TIMEOUT: ${EYES_OLLAMA_INFERENCE_TIMEOUT:-600}
+      EYES_VISION_TIER1_PROVIDER: ${EYES_VISION_TIER1_PROVIDER:-}
+      EYES_VISION_TIER1_MODEL: ${EYES_VISION_TIER1_MODEL:-claude-sonnet-4-6}
+      EYES_VISION_TIER1_API_KEY: ${EYES_VISION_TIER1_API_KEY:-}
+      EYES_VISION_TIER1_TIMEOUT: ${EYES_VISION_TIER1_TIMEOUT:-60}
+      EYES_VISION_TIER2_PROVIDER: ${EYES_VISION_TIER2_PROVIDER:-}
+      EYES_VISION_TIER2_MODEL: ${EYES_VISION_TIER2_MODEL:-gpt-4o}
+      EYES_VISION_TIER2_API_KEY: ${EYES_VISION_TIER2_API_KEY:-}
+      EYES_VISION_TIER2_TIMEOUT: ${EYES_VISION_TIER2_TIMEOUT:-60}
+      EYES_VISION_TIER3_PROVIDER: ${EYES_VISION_TIER3_PROVIDER:-}
+      EYES_VISION_TIER3_MODEL: ${EYES_VISION_TIER3_MODEL:-llava:7b}
+      EYES_VISION_TIER3_BASE_URL: ${EYES_VISION_TIER3_BASE_URL:-http://ollama:11434}
+      LLM_MAX_TOKENS: '2048'
+      GATEWAY_MAX_REQUEST_BODY_MB: '500'
+      MAX_REQUEST_BODY_MB: '500'
+      HEART_OLLAMA_BASE_URL: ${HEART_OLLAMA_BASE_URL:-http://ollama:11434}
+      HEART_OLLAMA_MODEL: ${HEART_OLLAMA_MODEL:-llama3.2:1b}
+      HEART_TIER3_PROVIDER: ${HEART_TIER3_PROVIDER:-ollama}
+      HEART_TIER3_OLLAMA_BASE_URL: ${HEART_TIER3_OLLAMA_BASE_URL:-http://ollama:11434}
+      HEART_TIER3_MODEL: ${HEART_TIER3_MODEL:-llama3.2:1b}
+      HEART_TIER3_TIMEOUT: '600'
+      HEART_TIER3_MAX_RETRIES: '1'
+      BRAIN_OLLAMA_BASE_URL: ${BRAIN_OLLAMA_BASE_URL:-http://ollama:11434}
+      BRAIN_OLLAMA_MODEL: ${BRAIN_OLLAMA_MODEL:-llama3.2:1b}
+      BRAIN_TIER3_PROVIDER: ${BRAIN_TIER3_PROVIDER:-ollama}
+      BRAIN_TIER3_OLLAMA_BASE_URL: ${BRAIN_TIER3_OLLAMA_BASE_URL:-http://ollama:11434}
+      BRAIN_TIER3_MODEL: ${BRAIN_TIER3_MODEL:-llama3.2:1b}
+      BRAIN_TIER3_TIMEOUT: '780'
+      BRAIN_TIER3_MAX_RETRIES: '1'
+      ENGINE_PORT: '8007'
       EVIDENCE_STORAGE_PATH: /data/nexus/evidence
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:8007/health"]
-      <<: *engine-healthcheck
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+      test:
+      - CMD
+      - curl
+      - -sf
+      - http://localhost:8007/health
     depends_on:
       redis:
         condition: service_healthy
       base-image:
         condition: service_completed_successfully
     networks:
-      - nexus
-
+    - nexus
   hands:
-    profiles: ["full"]
+    profiles:
+    - full
     build:
       context: ./engines/hands-engine
       dockerfile: Dockerfile
@@ -852,21 +1218,78 @@ services:
     container_name: nexus-hands
     restart: unless-stopped
     ports:
-      - "8008:8008"
+    - 8008:8008
     environment:
-      <<: *common-env
-      ENGINE_PORT: "8008"
+      NEXUS_ENV: development
+      NEXUS_PRODUCT_MODE: ${NEXUS_PRODUCT_MODE:-canonical}
+      NEXUS_STORAGE_PATH: ${NEXUS_STORAGE_PATH:-/app/service/data}
+      NEXUS_ORCHESTRATOR_URL: ${NEXUS_ORCHESTRATOR_URL:-http://orchestrator:8100}
+      NEXUS_JWT_SECRET: ${NEXUS_JWT_SECRET:-test-secret-do-not-use-in-production}
+      JWT_SECRET: ${NEXUS_JWT_SECRET:-test-secret-do-not-use-in-production}
+      REDIS_HOST: redis
+      REDIS_PORT: '6379'
+      REDIS_URL: redis://redis:6379/0
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: '5432'
+      POSTGRES_USER: ${POSTGRES_USER:-nexus}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-nexus-dev}
+      POSTGRES_DB: ${POSTGRES_DB:-nexus}
+      NEO4J_URI: bolt://neo4j:7687
+      NEO4J_USER: neo4j
+      NEO4J_PASSWORD: ${NEO4J_PASSWORD:-nexus-neo4j-dev}
+      MILVUS_HOST: ${MILVUS_HOST:-milvus}
+      MILVUS_PORT: ${MILVUS_PORT:-19530}
+      LLM_BACKEND: ollama
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
+      EYES_OLLAMA_BASE_URL: ${EYES_OLLAMA_BASE_URL:-http://ollama:11434}
+      EYES_OLLAMA_MODEL: ${EYES_OLLAMA_MODEL:-moondream}
+      EYES_OLLAMA_INFERENCE_TIMEOUT: ${EYES_OLLAMA_INFERENCE_TIMEOUT:-600}
+      EYES_VISION_TIER1_PROVIDER: ${EYES_VISION_TIER1_PROVIDER:-}
+      EYES_VISION_TIER1_MODEL: ${EYES_VISION_TIER1_MODEL:-claude-sonnet-4-6}
+      EYES_VISION_TIER1_API_KEY: ${EYES_VISION_TIER1_API_KEY:-}
+      EYES_VISION_TIER1_TIMEOUT: ${EYES_VISION_TIER1_TIMEOUT:-60}
+      EYES_VISION_TIER2_PROVIDER: ${EYES_VISION_TIER2_PROVIDER:-}
+      EYES_VISION_TIER2_MODEL: ${EYES_VISION_TIER2_MODEL:-gpt-4o}
+      EYES_VISION_TIER2_API_KEY: ${EYES_VISION_TIER2_API_KEY:-}
+      EYES_VISION_TIER2_TIMEOUT: ${EYES_VISION_TIER2_TIMEOUT:-60}
+      EYES_VISION_TIER3_PROVIDER: ${EYES_VISION_TIER3_PROVIDER:-}
+      EYES_VISION_TIER3_MODEL: ${EYES_VISION_TIER3_MODEL:-llava:7b}
+      EYES_VISION_TIER3_BASE_URL: ${EYES_VISION_TIER3_BASE_URL:-http://ollama:11434}
+      LLM_MAX_TOKENS: '2048'
+      GATEWAY_MAX_REQUEST_BODY_MB: '500'
+      MAX_REQUEST_BODY_MB: '500'
+      HEART_OLLAMA_BASE_URL: ${HEART_OLLAMA_BASE_URL:-http://ollama:11434}
+      HEART_OLLAMA_MODEL: ${HEART_OLLAMA_MODEL:-llama3.2:1b}
+      HEART_TIER3_PROVIDER: ${HEART_TIER3_PROVIDER:-ollama}
+      HEART_TIER3_OLLAMA_BASE_URL: ${HEART_TIER3_OLLAMA_BASE_URL:-http://ollama:11434}
+      HEART_TIER3_MODEL: ${HEART_TIER3_MODEL:-llama3.2:1b}
+      HEART_TIER3_TIMEOUT: '600'
+      HEART_TIER3_MAX_RETRIES: '1'
+      BRAIN_OLLAMA_BASE_URL: ${BRAIN_OLLAMA_BASE_URL:-http://ollama:11434}
+      BRAIN_OLLAMA_MODEL: ${BRAIN_OLLAMA_MODEL:-llama3.2:1b}
+      BRAIN_TIER3_PROVIDER: ${BRAIN_TIER3_PROVIDER:-ollama}
+      BRAIN_TIER3_OLLAMA_BASE_URL: ${BRAIN_TIER3_OLLAMA_BASE_URL:-http://ollama:11434}
+      BRAIN_TIER3_MODEL: ${BRAIN_TIER3_MODEL:-llama3.2:1b}
+      BRAIN_TIER3_TIMEOUT: '780'
+      BRAIN_TIER3_MAX_RETRIES: '1'
+      ENGINE_PORT: '8008'
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:8008/health"]
-      <<: *engine-healthcheck
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+      test:
+      - CMD
+      - curl
+      - -sf
+      - http://localhost:8008/health
     depends_on:
       redis:
         condition: service_healthy
       base-image:
         condition: service_completed_successfully
     networks:
-      - nexus
-
+    - nexus
   spine:
     build:
       context: .
@@ -876,37 +1299,85 @@ services:
     container_name: nexus-spine
     restart: unless-stopped
     volumes:
-      - document-storage:/data/nexus/documents
-      - upload-storage:/data/nexus/orchestrator/uploads
+    - document-storage:/data/nexus/documents
+    - upload-storage:/data/nexus/orchestrator/uploads
     ports:
-      - "8009:8009"
+    - 8009:8009
     environment:
-      <<: *common-env
-      ENGINE_PORT: "8009"
-      # spine's Dockerfile chowns /data/nexus/documents to the nexus user
-      # but the global default /app/service/data is root-owned. Override
-      # the storage anchor here so LocalStorage.mkdir() lands inside the
-      # writable, mounted document-storage volume.
+      NEXUS_ENV: development
+      NEXUS_PRODUCT_MODE: ${NEXUS_PRODUCT_MODE:-canonical}
       NEXUS_STORAGE_PATH: /data/nexus/documents
-      # Phase 2 (Wave A) feature flag — see comment on the eyes service for
-      # the full contract.  Spine reads this flag inside `persist-visual-frames`
-      # to decide whether to back-fill detected_controls / entry_action /
-      # exit_action onto enriched_scenes after Phase 6/7.  When false the
-      # back-fill block is skipped — pure parity with the Wave-A release.
+      NEXUS_ORCHESTRATOR_URL: ${NEXUS_ORCHESTRATOR_URL:-http://orchestrator:8100}
+      NEXUS_JWT_SECRET: ${NEXUS_JWT_SECRET:-test-secret-do-not-use-in-production}
+      JWT_SECRET: ${NEXUS_JWT_SECRET:-test-secret-do-not-use-in-production}
+      REDIS_HOST: redis
+      REDIS_PORT: '6379'
+      REDIS_URL: redis://redis:6379/0
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: '5432'
+      POSTGRES_USER: ${POSTGRES_USER:-nexus}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-nexus-dev}
+      POSTGRES_DB: ${POSTGRES_DB:-nexus}
+      NEO4J_URI: bolt://neo4j:7687
+      NEO4J_USER: neo4j
+      NEO4J_PASSWORD: ${NEO4J_PASSWORD:-nexus-neo4j-dev}
+      MILVUS_HOST: ${MILVUS_HOST:-milvus}
+      MILVUS_PORT: ${MILVUS_PORT:-19530}
+      LLM_BACKEND: ollama
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
+      EYES_OLLAMA_BASE_URL: ${EYES_OLLAMA_BASE_URL:-http://ollama:11434}
+      EYES_OLLAMA_MODEL: ${EYES_OLLAMA_MODEL:-moondream}
+      EYES_OLLAMA_INFERENCE_TIMEOUT: ${EYES_OLLAMA_INFERENCE_TIMEOUT:-600}
+      EYES_VISION_TIER1_PROVIDER: ${EYES_VISION_TIER1_PROVIDER:-}
+      EYES_VISION_TIER1_MODEL: ${EYES_VISION_TIER1_MODEL:-claude-sonnet-4-6}
+      EYES_VISION_TIER1_API_KEY: ${EYES_VISION_TIER1_API_KEY:-}
+      EYES_VISION_TIER1_TIMEOUT: ${EYES_VISION_TIER1_TIMEOUT:-60}
+      EYES_VISION_TIER2_PROVIDER: ${EYES_VISION_TIER2_PROVIDER:-}
+      EYES_VISION_TIER2_MODEL: ${EYES_VISION_TIER2_MODEL:-gpt-4o}
+      EYES_VISION_TIER2_API_KEY: ${EYES_VISION_TIER2_API_KEY:-}
+      EYES_VISION_TIER2_TIMEOUT: ${EYES_VISION_TIER2_TIMEOUT:-60}
+      EYES_VISION_TIER3_PROVIDER: ${EYES_VISION_TIER3_PROVIDER:-}
+      EYES_VISION_TIER3_MODEL: ${EYES_VISION_TIER3_MODEL:-llava:7b}
+      EYES_VISION_TIER3_BASE_URL: ${EYES_VISION_TIER3_BASE_URL:-http://ollama:11434}
+      LLM_MAX_TOKENS: '2048'
+      GATEWAY_MAX_REQUEST_BODY_MB: '500'
+      MAX_REQUEST_BODY_MB: '500'
+      HEART_OLLAMA_BASE_URL: ${HEART_OLLAMA_BASE_URL:-http://ollama:11434}
+      HEART_OLLAMA_MODEL: ${HEART_OLLAMA_MODEL:-llama3.2:1b}
+      HEART_TIER3_PROVIDER: ${HEART_TIER3_PROVIDER:-ollama}
+      HEART_TIER3_OLLAMA_BASE_URL: ${HEART_TIER3_OLLAMA_BASE_URL:-http://ollama:11434}
+      HEART_TIER3_MODEL: ${HEART_TIER3_MODEL:-llama3.2:1b}
+      HEART_TIER3_TIMEOUT: '600'
+      HEART_TIER3_MAX_RETRIES: '1'
+      BRAIN_OLLAMA_BASE_URL: ${BRAIN_OLLAMA_BASE_URL:-http://ollama:11434}
+      BRAIN_OLLAMA_MODEL: ${BRAIN_OLLAMA_MODEL:-llama3.2:1b}
+      BRAIN_TIER3_PROVIDER: ${BRAIN_TIER3_PROVIDER:-ollama}
+      BRAIN_TIER3_OLLAMA_BASE_URL: ${BRAIN_TIER3_OLLAMA_BASE_URL:-http://ollama:11434}
+      BRAIN_TIER3_MODEL: ${BRAIN_TIER3_MODEL:-llama3.2:1b}
+      BRAIN_TIER3_TIMEOUT: '780'
+      BRAIN_TIER3_MAX_RETRIES: '1'
+      ENGINE_PORT: '8009'
       EYES_PHASE2_GUARDS: ${EYES_PHASE2_GUARDS:-false}
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:8009/health"]
-      <<: *engine-healthcheck
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+      test:
+      - CMD
+      - curl
+      - -sf
+      - http://localhost:8009/health
     depends_on:
       redis:
         condition: service_healthy
       base-image:
         condition: service_completed_successfully
     networks:
-      - nexus
-
+    - nexus
   mouth:
-    profiles: ["full"]
+    profiles:
+    - full
     build:
       context: ./engines/mouth-engine
       dockerfile: Dockerfile
@@ -915,28 +1386,81 @@ services:
     container_name: nexus-mouth
     restart: unless-stopped
     volumes:
-      - report-storage:/data/nexus/reports
+    - report-storage:/data/nexus/reports
     ports:
-      - "8010:8010"
+    - 8010:8010
     environment:
-      <<: *common-env
-      ENGINE_PORT: "8010"
-      # mouth has its own REPORT_STORAGE_PATH config field. Point both
-      # the common SDK storage anchor and the mouth-specific one at the
-      # chowned mount.
+      NEXUS_ENV: development
+      NEXUS_PRODUCT_MODE: ${NEXUS_PRODUCT_MODE:-canonical}
       NEXUS_STORAGE_PATH: /data/nexus/reports
+      NEXUS_ORCHESTRATOR_URL: ${NEXUS_ORCHESTRATOR_URL:-http://orchestrator:8100}
+      NEXUS_JWT_SECRET: ${NEXUS_JWT_SECRET:-test-secret-do-not-use-in-production}
+      JWT_SECRET: ${NEXUS_JWT_SECRET:-test-secret-do-not-use-in-production}
+      REDIS_HOST: redis
+      REDIS_PORT: '6379'
+      REDIS_URL: redis://redis:6379/0
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: '5432'
+      POSTGRES_USER: ${POSTGRES_USER:-nexus}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-nexus-dev}
+      POSTGRES_DB: ${POSTGRES_DB:-nexus}
+      NEO4J_URI: bolt://neo4j:7687
+      NEO4J_USER: neo4j
+      NEO4J_PASSWORD: ${NEO4J_PASSWORD:-nexus-neo4j-dev}
+      MILVUS_HOST: ${MILVUS_HOST:-milvus}
+      MILVUS_PORT: ${MILVUS_PORT:-19530}
+      LLM_BACKEND: ollama
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
+      EYES_OLLAMA_BASE_URL: ${EYES_OLLAMA_BASE_URL:-http://ollama:11434}
+      EYES_OLLAMA_MODEL: ${EYES_OLLAMA_MODEL:-moondream}
+      EYES_OLLAMA_INFERENCE_TIMEOUT: ${EYES_OLLAMA_INFERENCE_TIMEOUT:-600}
+      EYES_VISION_TIER1_PROVIDER: ${EYES_VISION_TIER1_PROVIDER:-}
+      EYES_VISION_TIER1_MODEL: ${EYES_VISION_TIER1_MODEL:-claude-sonnet-4-6}
+      EYES_VISION_TIER1_API_KEY: ${EYES_VISION_TIER1_API_KEY:-}
+      EYES_VISION_TIER1_TIMEOUT: ${EYES_VISION_TIER1_TIMEOUT:-60}
+      EYES_VISION_TIER2_PROVIDER: ${EYES_VISION_TIER2_PROVIDER:-}
+      EYES_VISION_TIER2_MODEL: ${EYES_VISION_TIER2_MODEL:-gpt-4o}
+      EYES_VISION_TIER2_API_KEY: ${EYES_VISION_TIER2_API_KEY:-}
+      EYES_VISION_TIER2_TIMEOUT: ${EYES_VISION_TIER2_TIMEOUT:-60}
+      EYES_VISION_TIER3_PROVIDER: ${EYES_VISION_TIER3_PROVIDER:-}
+      EYES_VISION_TIER3_MODEL: ${EYES_VISION_TIER3_MODEL:-llava:7b}
+      EYES_VISION_TIER3_BASE_URL: ${EYES_VISION_TIER3_BASE_URL:-http://ollama:11434}
+      LLM_MAX_TOKENS: '2048'
+      GATEWAY_MAX_REQUEST_BODY_MB: '500'
+      MAX_REQUEST_BODY_MB: '500'
+      HEART_OLLAMA_BASE_URL: ${HEART_OLLAMA_BASE_URL:-http://ollama:11434}
+      HEART_OLLAMA_MODEL: ${HEART_OLLAMA_MODEL:-llama3.2:1b}
+      HEART_TIER3_PROVIDER: ${HEART_TIER3_PROVIDER:-ollama}
+      HEART_TIER3_OLLAMA_BASE_URL: ${HEART_TIER3_OLLAMA_BASE_URL:-http://ollama:11434}
+      HEART_TIER3_MODEL: ${HEART_TIER3_MODEL:-llama3.2:1b}
+      HEART_TIER3_TIMEOUT: '600'
+      HEART_TIER3_MAX_RETRIES: '1'
+      BRAIN_OLLAMA_BASE_URL: ${BRAIN_OLLAMA_BASE_URL:-http://ollama:11434}
+      BRAIN_OLLAMA_MODEL: ${BRAIN_OLLAMA_MODEL:-llama3.2:1b}
+      BRAIN_TIER3_PROVIDER: ${BRAIN_TIER3_PROVIDER:-ollama}
+      BRAIN_TIER3_OLLAMA_BASE_URL: ${BRAIN_TIER3_OLLAMA_BASE_URL:-http://ollama:11434}
+      BRAIN_TIER3_MODEL: ${BRAIN_TIER3_MODEL:-llama3.2:1b}
+      BRAIN_TIER3_TIMEOUT: '780'
+      BRAIN_TIER3_MAX_RETRIES: '1'
+      ENGINE_PORT: '8010'
       REPORT_STORAGE_PATH: /data/nexus/reports
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:8010/health"]
-      <<: *engine-healthcheck
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+      test:
+      - CMD
+      - curl
+      - -sf
+      - http://localhost:8010/health
     depends_on:
       redis:
         condition: service_healthy
       base-image:
         condition: service_completed_successfully
     networks:
-      - nexus
-
+    - nexus
   brain:
     build:
       context: ./engines/brain-engine
@@ -946,14 +1470,72 @@ services:
     container_name: nexus-brain
     restart: unless-stopped
     ports:
-      - "8011:8011"
+    - 8011:8011
     environment:
-      <<: *common-env
-      ENGINE_PORT: "8011"
-      NEXUS_ALLOW_DEGRADED_MODE: "true"
+      NEXUS_ENV: development
+      NEXUS_PRODUCT_MODE: ${NEXUS_PRODUCT_MODE:-canonical}
+      NEXUS_STORAGE_PATH: ${NEXUS_STORAGE_PATH:-/app/service/data}
+      NEXUS_ORCHESTRATOR_URL: ${NEXUS_ORCHESTRATOR_URL:-http://orchestrator:8100}
+      NEXUS_JWT_SECRET: ${NEXUS_JWT_SECRET:-test-secret-do-not-use-in-production}
+      JWT_SECRET: ${NEXUS_JWT_SECRET:-test-secret-do-not-use-in-production}
+      REDIS_HOST: redis
+      REDIS_PORT: '6379'
+      REDIS_URL: redis://redis:6379/0
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: '5432'
+      POSTGRES_USER: ${POSTGRES_USER:-nexus}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-nexus-dev}
+      POSTGRES_DB: ${POSTGRES_DB:-nexus}
+      NEO4J_URI: bolt://neo4j:7687
+      NEO4J_USER: neo4j
+      NEO4J_PASSWORD: ${NEO4J_PASSWORD:-nexus-neo4j-dev}
+      MILVUS_HOST: ${MILVUS_HOST:-milvus}
+      MILVUS_PORT: ${MILVUS_PORT:-19530}
+      LLM_BACKEND: ollama
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
+      EYES_OLLAMA_BASE_URL: ${EYES_OLLAMA_BASE_URL:-http://ollama:11434}
+      EYES_OLLAMA_MODEL: ${EYES_OLLAMA_MODEL:-moondream}
+      EYES_OLLAMA_INFERENCE_TIMEOUT: ${EYES_OLLAMA_INFERENCE_TIMEOUT:-600}
+      EYES_VISION_TIER1_PROVIDER: ${EYES_VISION_TIER1_PROVIDER:-}
+      EYES_VISION_TIER1_MODEL: ${EYES_VISION_TIER1_MODEL:-claude-sonnet-4-6}
+      EYES_VISION_TIER1_API_KEY: ${EYES_VISION_TIER1_API_KEY:-}
+      EYES_VISION_TIER1_TIMEOUT: ${EYES_VISION_TIER1_TIMEOUT:-60}
+      EYES_VISION_TIER2_PROVIDER: ${EYES_VISION_TIER2_PROVIDER:-}
+      EYES_VISION_TIER2_MODEL: ${EYES_VISION_TIER2_MODEL:-gpt-4o}
+      EYES_VISION_TIER2_API_KEY: ${EYES_VISION_TIER2_API_KEY:-}
+      EYES_VISION_TIER2_TIMEOUT: ${EYES_VISION_TIER2_TIMEOUT:-60}
+      EYES_VISION_TIER3_PROVIDER: ${EYES_VISION_TIER3_PROVIDER:-}
+      EYES_VISION_TIER3_MODEL: ${EYES_VISION_TIER3_MODEL:-llava:7b}
+      EYES_VISION_TIER3_BASE_URL: ${EYES_VISION_TIER3_BASE_URL:-http://ollama:11434}
+      LLM_MAX_TOKENS: '2048'
+      GATEWAY_MAX_REQUEST_BODY_MB: '500'
+      MAX_REQUEST_BODY_MB: '500'
+      HEART_OLLAMA_BASE_URL: ${HEART_OLLAMA_BASE_URL:-http://ollama:11434}
+      HEART_OLLAMA_MODEL: ${HEART_OLLAMA_MODEL:-llama3.2:1b}
+      HEART_TIER3_PROVIDER: ${HEART_TIER3_PROVIDER:-ollama}
+      HEART_TIER3_OLLAMA_BASE_URL: ${HEART_TIER3_OLLAMA_BASE_URL:-http://ollama:11434}
+      HEART_TIER3_MODEL: ${HEART_TIER3_MODEL:-llama3.2:1b}
+      HEART_TIER3_TIMEOUT: '600'
+      HEART_TIER3_MAX_RETRIES: '1'
+      BRAIN_OLLAMA_BASE_URL: ${BRAIN_OLLAMA_BASE_URL:-http://ollama:11434}
+      BRAIN_OLLAMA_MODEL: ${BRAIN_OLLAMA_MODEL:-llama3.2:1b}
+      BRAIN_TIER3_PROVIDER: ${BRAIN_TIER3_PROVIDER:-ollama}
+      BRAIN_TIER3_OLLAMA_BASE_URL: ${BRAIN_TIER3_OLLAMA_BASE_URL:-http://ollama:11434}
+      BRAIN_TIER3_MODEL: ${BRAIN_TIER3_MODEL:-llama3.2:1b}
+      BRAIN_TIER3_TIMEOUT: '780'
+      BRAIN_TIER3_MAX_RETRIES: '1'
+      ENGINE_PORT: '8011'
+      NEXUS_ALLOW_DEGRADED_MODE: 'true'
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:8011/health"]
-      <<: *engine-healthcheck
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+      test:
+      - CMD
+      - curl
+      - -sf
+      - http://localhost:8011/health
     depends_on:
       redis:
         condition: service_healthy
@@ -962,12 +1544,7 @@ services:
       base-image:
         condition: service_completed_successfully
     networks:
-      - nexus
-
-  # ┌─────────────────────────────────────────────────────────────────────────┐
-  # │                        ORCHESTRATORS                                    │
-  # └─────────────────────────────────────────────────────────────────────────┘
-
+    - nexus
   orchestrator:
     build:
       context: ./products/nexus-qa-orchestrator
@@ -977,20 +1554,65 @@ services:
     container_name: nexus-orchestrator
     restart: unless-stopped
     volumes:
-      - upload-storage:/data/nexus/orchestrator/uploads
+    - upload-storage:/data/nexus/orchestrator/uploads
     ports:
-      - "8100:8100"
+    - 8100:8100
     environment:
-      <<: *common-env
-      ENGINE_PORT: "8100"
-      # Production-safe default (architect P0 #3, adopted 2026-05-16):
-      # `fast` is the safe baseline for 1000+/hr posture. GPU operators
-      # opt into multimodal by overriding this env var. The `multimodal`
-      # path requires a healthy Ollama + LLaVA backend; on CPU/marginal
-      # hardware it burns budgets and quarantines workflows.
+      NEXUS_ENV: development
+      NEXUS_PRODUCT_MODE: ${NEXUS_PRODUCT_MODE:-canonical}
+      NEXUS_STORAGE_PATH: ${NEXUS_STORAGE_PATH:-/app/service/data}
+      NEXUS_ORCHESTRATOR_URL: ${NEXUS_ORCHESTRATOR_URL:-http://orchestrator:8100}
+      NEXUS_JWT_SECRET: ${NEXUS_JWT_SECRET:-test-secret-do-not-use-in-production}
+      JWT_SECRET: ${NEXUS_JWT_SECRET:-test-secret-do-not-use-in-production}
+      REDIS_HOST: redis
+      REDIS_PORT: '6379'
+      REDIS_URL: redis://redis:6379/0
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: '5432'
+      POSTGRES_USER: ${POSTGRES_USER:-nexus}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-nexus-dev}
+      POSTGRES_DB: ${POSTGRES_DB:-nexus}
+      NEO4J_URI: bolt://neo4j:7687
+      NEO4J_USER: neo4j
+      NEO4J_PASSWORD: ${NEO4J_PASSWORD:-nexus-neo4j-dev}
+      MILVUS_HOST: ${MILVUS_HOST:-milvus}
+      MILVUS_PORT: ${MILVUS_PORT:-19530}
+      LLM_BACKEND: ollama
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
+      EYES_OLLAMA_BASE_URL: ${EYES_OLLAMA_BASE_URL:-http://ollama:11434}
+      EYES_OLLAMA_MODEL: ${EYES_OLLAMA_MODEL:-moondream}
+      EYES_OLLAMA_INFERENCE_TIMEOUT: ${EYES_OLLAMA_INFERENCE_TIMEOUT:-600}
+      EYES_VISION_TIER1_PROVIDER: ${EYES_VISION_TIER1_PROVIDER:-}
+      EYES_VISION_TIER1_MODEL: ${EYES_VISION_TIER1_MODEL:-claude-sonnet-4-6}
+      EYES_VISION_TIER1_API_KEY: ${EYES_VISION_TIER1_API_KEY:-}
+      EYES_VISION_TIER1_TIMEOUT: ${EYES_VISION_TIER1_TIMEOUT:-60}
+      EYES_VISION_TIER2_PROVIDER: ${EYES_VISION_TIER2_PROVIDER:-}
+      EYES_VISION_TIER2_MODEL: ${EYES_VISION_TIER2_MODEL:-gpt-4o}
+      EYES_VISION_TIER2_API_KEY: ${EYES_VISION_TIER2_API_KEY:-}
+      EYES_VISION_TIER2_TIMEOUT: ${EYES_VISION_TIER2_TIMEOUT:-60}
+      EYES_VISION_TIER3_PROVIDER: ${EYES_VISION_TIER3_PROVIDER:-}
+      EYES_VISION_TIER3_MODEL: ${EYES_VISION_TIER3_MODEL:-llava:7b}
+      EYES_VISION_TIER3_BASE_URL: ${EYES_VISION_TIER3_BASE_URL:-http://ollama:11434}
+      LLM_MAX_TOKENS: '2048'
+      GATEWAY_MAX_REQUEST_BODY_MB: '500'
+      MAX_REQUEST_BODY_MB: '500'
+      HEART_OLLAMA_BASE_URL: ${HEART_OLLAMA_BASE_URL:-http://ollama:11434}
+      HEART_OLLAMA_MODEL: ${HEART_OLLAMA_MODEL:-llama3.2:1b}
+      HEART_TIER3_PROVIDER: ${HEART_TIER3_PROVIDER:-ollama}
+      HEART_TIER3_OLLAMA_BASE_URL: ${HEART_TIER3_OLLAMA_BASE_URL:-http://ollama:11434}
+      HEART_TIER3_MODEL: ${HEART_TIER3_MODEL:-llama3.2:1b}
+      HEART_TIER3_TIMEOUT: '600'
+      HEART_TIER3_MAX_RETRIES: '1'
+      BRAIN_OLLAMA_BASE_URL: ${BRAIN_OLLAMA_BASE_URL:-http://ollama:11434}
+      BRAIN_OLLAMA_MODEL: ${BRAIN_OLLAMA_MODEL:-llama3.2:1b}
+      BRAIN_TIER3_PROVIDER: ${BRAIN_TIER3_PROVIDER:-ollama}
+      BRAIN_TIER3_OLLAMA_BASE_URL: ${BRAIN_TIER3_OLLAMA_BASE_URL:-http://ollama:11434}
+      BRAIN_TIER3_MODEL: ${BRAIN_TIER3_MODEL:-llama3.2:1b}
+      BRAIN_TIER3_TIMEOUT: '780'
+      BRAIN_TIER3_MAX_RETRIES: '1'
+      ENGINE_PORT: '8100'
       ORCHESTRATOR_DEFAULT_PROCESSING_PROFILE: ${ORCHESTRATOR_DEFAULT_PROCESSING_PROFILE:-fast}
       PLATFORM_API_URL: http://platform-api:8091
-      # Engine URLs (container-to-container)
       SHIELD_ENGINE_URL: http://shield:8001
       EARS_ENGINE_URL: http://ears:8002
       EYES_ENGINE_URL: http://eyes:8003
@@ -1003,8 +1625,15 @@ services:
       MOUTH_ENGINE_URL: http://mouth:8010
       BRAIN_ENGINE_URL: http://brain:8011
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:8100/health"]
-      <<: *engine-healthcheck
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+      test:
+      - CMD
+      - curl
+      - -sf
+      - http://localhost:8100/health
     depends_on:
       postgres:
         condition: service_healthy
@@ -1013,10 +1642,10 @@ services:
       base-image:
         condition: service_completed_successfully
     networks:
-      - nexus
-
+    - nexus
   qa-orchestrator:
-    profiles: ["full"]
+    profiles:
+    - full
     build:
       context: ./products/qa-orchestrator
       dockerfile: Dockerfile
@@ -1025,11 +1654,61 @@ services:
     container_name: nexus-qa-orchestrator
     restart: unless-stopped
     ports:
-      - "8092:8092"
+    - 8092:8092
     environment:
-      <<: *common-env
-      ENGINE_PORT: "8092"
-      # Engine URLs (container-to-container)
+      NEXUS_ENV: development
+      NEXUS_PRODUCT_MODE: ${NEXUS_PRODUCT_MODE:-canonical}
+      NEXUS_STORAGE_PATH: ${NEXUS_STORAGE_PATH:-/app/service/data}
+      NEXUS_ORCHESTRATOR_URL: ${NEXUS_ORCHESTRATOR_URL:-http://orchestrator:8100}
+      NEXUS_JWT_SECRET: ${NEXUS_JWT_SECRET:-test-secret-do-not-use-in-production}
+      JWT_SECRET: ${NEXUS_JWT_SECRET:-test-secret-do-not-use-in-production}
+      REDIS_HOST: redis
+      REDIS_PORT: '6379'
+      REDIS_URL: redis://redis:6379/0
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: '5432'
+      POSTGRES_USER: ${POSTGRES_USER:-nexus}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-nexus-dev}
+      POSTGRES_DB: ${POSTGRES_DB:-nexus}
+      NEO4J_URI: bolt://neo4j:7687
+      NEO4J_USER: neo4j
+      NEO4J_PASSWORD: ${NEO4J_PASSWORD:-nexus-neo4j-dev}
+      MILVUS_HOST: ${MILVUS_HOST:-milvus}
+      MILVUS_PORT: ${MILVUS_PORT:-19530}
+      LLM_BACKEND: ollama
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
+      EYES_OLLAMA_BASE_URL: ${EYES_OLLAMA_BASE_URL:-http://ollama:11434}
+      EYES_OLLAMA_MODEL: ${EYES_OLLAMA_MODEL:-moondream}
+      EYES_OLLAMA_INFERENCE_TIMEOUT: ${EYES_OLLAMA_INFERENCE_TIMEOUT:-600}
+      EYES_VISION_TIER1_PROVIDER: ${EYES_VISION_TIER1_PROVIDER:-}
+      EYES_VISION_TIER1_MODEL: ${EYES_VISION_TIER1_MODEL:-claude-sonnet-4-6}
+      EYES_VISION_TIER1_API_KEY: ${EYES_VISION_TIER1_API_KEY:-}
+      EYES_VISION_TIER1_TIMEOUT: ${EYES_VISION_TIER1_TIMEOUT:-60}
+      EYES_VISION_TIER2_PROVIDER: ${EYES_VISION_TIER2_PROVIDER:-}
+      EYES_VISION_TIER2_MODEL: ${EYES_VISION_TIER2_MODEL:-gpt-4o}
+      EYES_VISION_TIER2_API_KEY: ${EYES_VISION_TIER2_API_KEY:-}
+      EYES_VISION_TIER2_TIMEOUT: ${EYES_VISION_TIER2_TIMEOUT:-60}
+      EYES_VISION_TIER3_PROVIDER: ${EYES_VISION_TIER3_PROVIDER:-}
+      EYES_VISION_TIER3_MODEL: ${EYES_VISION_TIER3_MODEL:-llava:7b}
+      EYES_VISION_TIER3_BASE_URL: ${EYES_VISION_TIER3_BASE_URL:-http://ollama:11434}
+      LLM_MAX_TOKENS: '2048'
+      GATEWAY_MAX_REQUEST_BODY_MB: '500'
+      MAX_REQUEST_BODY_MB: '500'
+      HEART_OLLAMA_BASE_URL: ${HEART_OLLAMA_BASE_URL:-http://ollama:11434}
+      HEART_OLLAMA_MODEL: ${HEART_OLLAMA_MODEL:-llama3.2:1b}
+      HEART_TIER3_PROVIDER: ${HEART_TIER3_PROVIDER:-ollama}
+      HEART_TIER3_OLLAMA_BASE_URL: ${HEART_TIER3_OLLAMA_BASE_URL:-http://ollama:11434}
+      HEART_TIER3_MODEL: ${HEART_TIER3_MODEL:-llama3.2:1b}
+      HEART_TIER3_TIMEOUT: '600'
+      HEART_TIER3_MAX_RETRIES: '1'
+      BRAIN_OLLAMA_BASE_URL: ${BRAIN_OLLAMA_BASE_URL:-http://ollama:11434}
+      BRAIN_OLLAMA_MODEL: ${BRAIN_OLLAMA_MODEL:-llama3.2:1b}
+      BRAIN_TIER3_PROVIDER: ${BRAIN_TIER3_PROVIDER:-ollama}
+      BRAIN_TIER3_OLLAMA_BASE_URL: ${BRAIN_TIER3_OLLAMA_BASE_URL:-http://ollama:11434}
+      BRAIN_TIER3_MODEL: ${BRAIN_TIER3_MODEL:-llama3.2:1b}
+      BRAIN_TIER3_TIMEOUT: '780'
+      BRAIN_TIER3_MAX_RETRIES: '1'
+      ENGINE_PORT: '8092'
       SHIELD_URL: http://shield:8001
       EARS_URL: http://ears:8002
       EYES_URL: http://eyes:8003
@@ -1042,20 +1721,22 @@ services:
       MOUTH_URL: http://mouth:8010
       BRAIN_URL: http://brain:8011
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:8092/health"]
-      <<: *engine-healthcheck
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+      test:
+      - CMD
+      - curl
+      - -sf
+      - http://localhost:8092/health
     depends_on:
       redis:
         condition: service_healthy
       base-image:
         condition: service_completed_successfully
     networks:
-      - nexus
-
-  # ┌─────────────────────────────────────────────────────────────────────────┐
-  # │                        UI CLIENT                                        │
-  # └─────────────────────────────────────────────────────────────────────────┘
-
+    - nexus
   client:
     build:
       context: .
@@ -1065,9 +1746,11 @@ services:
     container_name: nexus-client
     restart: unless-stopped
     ports:
-      - "${CLIENT_PORT:-3000}:80"
+    - ${CLIENT_PORT:-3000}:80
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/ || exit 1"]
+      test:
+      - CMD-SHELL
+      - wget -qO- http://127.0.0.1/ || exit 1
       interval: 15s
       timeout: 5s
       retries: 3
@@ -1075,19 +1758,32 @@ services:
       gateway:
         condition: service_healthy
     networks:
-      - nexus
-
-  # ┌─────────────────────────────────────────────────────────────────────────┐
-  # │                        BUILD HELPER                                     │
-  # │  Builds the shared base image once; all services depend on it          │
-  # └─────────────────────────────────────────────────────────────────────────┘
-
+    - nexus
   base-image:
     build:
       context: .
       dockerfile: infrastructure/docker/Dockerfile.base
     image: nexus-base:dev
     container_name: nexus-base-builder
-    command: ["echo", "Base image ready"]
+    command:
+    - echo
+    - Base image ready
     networks:
-      - nexus
+    - nexus
+  ollama-warmup:
+    image: curlimages/curl:latest
+    container_name: nexus-ollama-warmup
+    depends_on:
+      ollama:
+        condition: service_healthy
+    networks:
+    - nexus
+    restart: 'no'
+    command:
+    - sh
+    - -c
+    - 'echo "Waiting for ollama..."; until curl -sf http://ollama:11434/api/tags >/dev/null;
+      do sleep 2; done; echo "Triggering model load with infinite keep_alive...";
+      curl -sf -X POST http://ollama:11434/api/generate -H "Content-Type: application/json"
+      -d ''{"model":"llava:7b","prompt":"warmup","keep_alive":-1,"stream":false,"options":{"num_predict":1,"num_gpu":999}}''
+      > /dev/null; echo "Warmup complete. Model is locked in GPU memory."'

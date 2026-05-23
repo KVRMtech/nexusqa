@@ -2438,6 +2438,14 @@ class EyesEngine(NexusEngine, GPUWorkerMixin):
         # Cache last enriched analysis so unenriched scenes can inherit it
         last_enriched_analysis: dict = {}
 
+        logger.warning(
+            "diag.analyze_scenes.entry",
+            scene_count=len(scenes),
+            enriched_count=len(enriched_set),
+            scenes_for_enrichment_arg=(len(scenes_for_enrichment) if scenes_for_enrichment is not None else None),
+            processing_profile=processing_profile,
+        )
+
         # Per-frame LLaVA budget tracker — shared across all scenes in this
         # artifact.  Once exhausted, remaining non-representative frames in
         # multi-frame scenes fall back to the rep-frame analysis so the
