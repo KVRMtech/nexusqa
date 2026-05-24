@@ -168,9 +168,17 @@ async def lifespan(application: FastAPI):
         from nexus_sdk.storage.artifact_store import ArtifactStore
 
         artifact_store = ArtifactStore(create_storage())
+        # eyes_base_url defaults to the docker-network hostname so the
+        # annotator can fetch raw frames via the same HTTP route the
+        # browser uses, regardless of the eyes storage backend.
+        eyes_base_url = os.environ.get(
+            "NEXUS_EYES_ENGINE_URL",
+            os.environ.get("EYES_ENGINE_URL", "http://nexus-eyes:8003"),
+        )
         frame_annotator = FrameAnnotator(
             artifact_store=artifact_store,
             config=storyboard_config.frame_annotator,
+            eyes_base_url=eyes_base_url,
         )
     except Exception as exc:  # pragma: no cover - storage init failure
         logger.warning(
@@ -201,6 +209,8 @@ async def lifespan(application: FastAPI):
     await shutdown_knowledge_foundation(application)
     if hasattr(application.state, "llm_router") and application.state.llm_router:
         await application.state.llm_router.close()
+    if hasattr(application.state, "frame_annotator") and application.state.frame_annotator:
+        await application.state.frame_annotator.close()
     await _cache.close()
     await _http.aclose()
     await close_db()

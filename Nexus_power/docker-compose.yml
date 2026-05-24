@@ -1352,6 +1352,12 @@ services:
     volumes:
     - document-storage:/data/nexus/documents
     - upload-storage:/data/nexus/orchestrator/uploads
+    # Phase 1.7 fix — mount the shared frame-storage volume that eyes
+    # writes to.  The cursor tracker reads frame_path (relative,
+    # resolved from workdir /app/service) so it can scan each frame for
+    # mouse position.  Without this mount the tracker found 0 frames on
+    # disk and silently produced 0 cursor_events for every artifact.
+    - frame-storage:/app/service/data/frames
     ports:
     - 8009:8009
     environment:

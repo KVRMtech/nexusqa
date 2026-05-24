@@ -381,6 +381,7 @@ class StoryboardComposer:
         artifact_id: str,
         tenant_id: str,
         force_regenerate: bool = False,
+        auth_token: str = "",
     ) -> StoryboardResponse | None:
         """Return the storyboard for one artifact, deriving on miss/stale.
 
@@ -388,6 +389,10 @@ class StoryboardComposer:
         cross-tenant.  Otherwise always returns a payload (possibly
         with empty panels if the pipeline has not yet produced visual
         evidence).
+
+        ``auth_token`` is the caller's JWT.  It is forwarded to the
+        frame annotator so eyes-engine accepts service-to-service
+        fetches under the same tenant isolation as the user request.
         """
         started = time.monotonic()
 
@@ -401,6 +406,7 @@ class StoryboardComposer:
             artifact_id=artifact_id,
             tenant_id=tenant_id,
             force=force_regenerate,
+            auth_token=auth_token,
         )
         derivation_elapsed_ms = int((time.monotonic() - derivation_started) * 1000)
 
@@ -459,6 +465,7 @@ class StoryboardComposer:
         artifact_id: str,
         tenant_id: str,
         force: bool,
+        auth_token: str = "",
     ) -> dict[str, bool]:
         """Run any missing-or-stale derivation step.
 
@@ -546,6 +553,7 @@ class StoryboardComposer:
                             tenant_id=tenant_id,
                             annotator=self._frame_annotator,
                             concurrency=4,
+                            auth_token=auth_token,
                         ),
                         timeout=self._config.composer.derivation_timeout_s,
                     )

@@ -495,18 +495,41 @@ interface SceneCardProps {
   index: number;
   actionLabel: string;
   actionIcon: React.ElementType;
+  /** Phase 1.7 — when provided, the card prefers this annotated PNG
+   *  URL over the raw frame.  Falls back to the raw frame on load
+   *  error so card never shows a broken image. */
+  annotatedImgUrl?: string | null;
 }
 
 function SceneCard3D({
   scene, controls, isSelected, onClick, stepNumber, color, appName, index,
-  actionLabel, actionIcon: ActionIcon,
+  actionLabel, actionIcon: ActionIcon, annotatedImgUrl,
 }: SceneCardProps) {
   const autoReadyCount = controls.filter((c) => c.automation_ready).length;
-  const imgUrl = scene.representative_frame_asset_path
+
+  // Phase 1.7 — append JWT to annotated URL so the <img> tag can
+  // auth.  Raw frame URLs already have the token appended by
+  // api.getFrameImageUrl.
+  const annotatedWithToken = useMemo(() => {
+    if (!annotatedImgUrl) return null;
+    const token = sessionStorage.getItem('nexus_token') || '';
+    const sep = annotatedImgUrl.includes('?') ? '&' : '?';
+    return token ? `${annotatedImgUrl}${sep}token=${encodeURIComponent(token)}` : annotatedImgUrl;
+  }, [annotatedImgUrl]);
+
+  const rawImgUrl = scene.representative_frame_asset_path
     ? api.getFrameImageUrl(scene.representative_frame_asset_path)
     : scene.representative_frame_id
       ? api.getFrameImageUrl(scene.representative_frame_id)
       : null;
+
+  // Two-tier fallback: annotated first, raw second.  We track
+  // ``annotatedFailed`` so a single 404 silently degrades to raw
+  // without flashing a broken image.
+  const [annotatedFailed, setAnnotatedFailed] = useState(false);
+  const imgUrl = annotatedFailed
+    ? rawImgUrl
+    : (annotatedWithToken ?? rawImgUrl);
   const domain = extractDomain(scene.detected_url);
   const cardRef = useRef<HTMLDivElement>(null);
 
@@ -602,7 +625,16 @@ function SceneCard3D({
               alt={humanScreenName(scene) || `Step ${stepNumber}`}
               className="h-full w-full object-cover transition-transform duration-500 group-hover:scale-108"
               loading="lazy"
-              onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
+              onError={(e) => {
+                // Phase 1.7 — first failure: try the raw frame.
+                // Second failure: hide the image so the placeholder
+                // beneath shows.
+                if (!annotatedFailed && annotatedWithToken && rawImgUrl) {
+                  setAnnotatedFailed(true);
+                  return;
+                }
+                (e.target as HTMLImageElement).style.display = 'none';
+              }}
             />
           ) : (
             <div className="h-full flex items-center justify-center">
@@ -724,6 +756,14 @@ export default function VisualFlowDiagramPage() {
     frame_asset_path: string;
     timestamp_seconds: number;
     is_keyframe: boolean;
+    // Phase 1.7 — per-frame evidence fields used by the new scene
+    // detail panel.  Always returned by the backend; optional in the
+    // type so we degrade gracefully if a row is missing one.
+    extracted_text?: string;
+    url_or_path?: string;
+    ui_elements_json?: Array<Record<string, unknown>>;
+    scene_id?: string | null;
+    ocr_confidence?: number;
   }>>([]);
   const [selectedStepId, setSelectedStepId] = useState<string | null>(null);
   /** Phase D.2 — overlay coordinates that the step-replay layer renders
@@ -738,7 +778,12 @@ export default function VisualFlowDiagramPage() {
   useEffect(() => {
     if (!artifactId) return;
     setLoading(true);
-    api.getVisualEvidenceGraph(artifactId)
+    // Phase 1.7 — request storyboard overlays so the journey rail
+    // can use dedup'd app names, LLM captions, annotated thumbnails,
+    // and noise filtering.  Backwards-compat: backend ignores the
+    // flag when storyboard derivations haven't run yet (empty
+    // overlay fields, journey renders with the original heuristics).
+    api.getVisualEvidenceGraph(artifactId, { includeStoryboardOverlays: true })
       .then((g) => { setGraph(g); setLoading(false); })
       .catch((e) => { setError(String(e)); setLoading(false); });
   }, [artifactId]);
@@ -789,16 +834,96 @@ export default function VisualFlowDiagramPage() {
   }, [artifactId]);
 
   /* ── Derived data ── */
+  // Phase 1.7 \u2014 prefer the storyboard composer's dedup'd app names
+  // (e.g. "Guardian Life Insurance" instead of "Wivwquardianlife.com")
+  // when the backend supplied them via app_groupings.  Falls back to
+  // the raw app_instance.app_name for legacy artifacts.
   const appNameMap = useMemo(() => {
-    if (!graph) return new Map<string, string>();
     const m = new Map<string, string>();
+    if (!graph) return m;
+
     graph.app_instances.forEach((inst) => {
-      let name = inst.app_name ?? inst.app_type ?? 'Application';
+      let name = '';
+      // Look up the dedup'd grouping that contains this instance.
+      for (const g of graph.app_groupings ?? []) {
+        const members = (g as unknown as { member_instance_ids?: string[] })
+          .member_instance_ids ?? [];
+        if (members.includes(inst.instance_id)) {
+          name = g.display_label || g.canonical_name || g.canonical_domain || '';
+          break;
+        }
+      }
+      // Fall back to raw app_instance name when no grouping match
+      // (legacy artifact or storyboard derivations not run yet).
+      if (!name) {
+        name = inst.app_name ?? inst.app_type ?? 'Application';
+      }
       if (name.length > 24) name = name.slice(0, 21) + '\u2026';
       m.set(inst.instance_id, name);
     });
     return m;
   }, [graph]);
+
+  // Phase 1.7 \u2014 quick lookup for the LLM short caption per scene.
+  // When present, the card's actionLabel uses this string verbatim
+  // (it's already a 5-8 word imperative caption from llama3.2:3b).
+  // When missing, deriveActionLabel() falls through to the existing
+  // heuristic so legacy artifacts still render captions.
+  const captionByScene = useMemo(() => {
+    const m = new Map<string, string>();
+    if (!graph?.scene_captions) return m;
+    for (const [sceneId, c] of Object.entries(graph.scene_captions)) {
+      if (c?.short) m.set(sceneId, c.short);
+    }
+    return m;
+  }, [graph]);
+
+  // Phase 1.7 defect-fix \u2014 clean flow tab labels.
+  //
+  // The visual_flows table stores raw flow_label values like
+  // "Wivwquardianlife.com - Ivwquardianlife" (OCR-corrupted).  We
+  // override that with the canonical app grouping's display_label
+  // when the storyboard composer has dedup'd the flow's scenes into
+  // a known grouping.
+  //
+  // Logic: for each flow, find the scenes that belong to it, look up
+  // their app_grouping_id via scene_to_app_grouping, and use the
+  // dominant grouping's display_label.  Falls back to flow.flow_label
+  // for legacy artifacts or flows with no scene mapping.
+  const cleanFlowLabel = useCallback(
+    (flow: VisualFlow): string => {
+      if (!graph) return flow.flow_label || '';
+      const groupingCount = new Map<string, number>();
+      const flowScenes = graph.scenes.filter((s) => s.flow_id === flow.flow_id);
+      const s2g = graph.scene_to_app_grouping || {};
+      for (const scene of flowScenes) {
+        const gid = s2g[scene.scene_id];
+        if (gid) groupingCount.set(gid, (groupingCount.get(gid) || 0) + 1);
+      }
+      if (groupingCount.size === 0) return flow.flow_label || '';
+      // Pick the grouping with the most scenes in this flow
+      let dominantId = '';
+      let dominantCount = 0;
+      for (const [gid, cnt] of groupingCount) {
+        if (cnt > dominantCount) {
+          dominantCount = cnt;
+          dominantId = gid;
+        }
+      }
+      const grouping = (graph.app_groupings || []).find(
+        (g) => g.grouping_id === dominantId,
+      );
+      if (!grouping) return flow.flow_label || '';
+      return (
+        grouping.display_label
+        || grouping.canonical_name
+        || grouping.canonical_domain
+        || flow.flow_label
+        || ''
+      );
+    },
+    [graph],
+  );
 
   const controlsByScene = useMemo(() => {
     if (!graph) return new Map<string, EvidenceControl[]>();
@@ -821,20 +946,129 @@ export default function VisualFlowDiagramPage() {
     return m;
   }, [graph]);
 
+  // Phase 1.7 — noise filter.  Set of scene_ids the storyboard
+  // composer flagged as noise (e.g. "New Tab" cards).  Filtered out
+  // of flowGroups by default; a toggle in the header lets the user
+  // reveal them when investigating gaps.
+  const noiseSceneIds = useMemo(() => {
+    return new Set<string>(graph?.noise_scene_ids ?? []);
+  }, [graph]);
+  const [showNoiseScenes, setShowNoiseScenes] = useState(false);
+
+  // Phase 1.7 Day 4 — Session at a Glance is collapsible.  Auto-
+  // collapses when the user selects a scene so the bottom detail
+  // panel has room (without this, the page was squeezed and the
+  // user couldn't scroll back up).  Manual toggle lets the user
+  // expand it again at any time.
+  const [glanceCollapsed, setGlanceCollapsed] = useState(false);
+  useEffect(() => {
+    if (selectedSceneId) setGlanceCollapsed(true);
+  }, [selectedSceneId]);
+
+  // Phase 1.7 Day 4 — Session at a Glance.
+  //
+  // Pre-computes the header card's data: hero scene (the last non-
+  // noise scene — usually the WOW moment, e.g. quote result page),
+  // visible app groupings (any grouping whose scenes are not 100%
+  // noise), total non-noise duration, and a per-quality breakdown
+  // counted from the underlying VisualSceneRow.scene_quality field.
+  //
+  // Returns null when the artifact has no non-noise scenes — the
+  // header simply doesn't render in that case (the user is staring
+  // at a pure-noise session and the journey rail's empty state
+  // explains why).
+  const sessionGlance = useMemo(() => {
+    if (!graph) return null;
+    const nonNoiseScenes = graph.scenes.filter(
+      (s) => !noiseSceneIds.has(s.scene_id),
+    );
+    if (nonNoiseScenes.length === 0) return null;
+
+    // Hero = last non-noise scene chronologically (the "WOW moment").
+    // For Guardian Life this is the Quote Result page; for other
+    // demos it's whatever the user ended on.
+    const sortedByTime = [...nonNoiseScenes].sort(
+      (a, b) => (a.scene_index ?? 0) - (b.scene_index ?? 0),
+    );
+    const heroScene = sortedByTime[sortedByTime.length - 1];
+    const heroAnnotatedRaw = graph.annotated_frame_urls?.[heroScene.scene_id];
+    const heroCaption = graph.scene_captions?.[heroScene.scene_id]?.short || '';
+
+    // Append JWT to the annotated URL so an unauthenticated <img>
+    // tag can load it.
+    let heroAnnotatedUrl: string | null = null;
+    if (heroAnnotatedRaw) {
+      const token = sessionStorage.getItem('nexus_token') || '';
+      const sep = heroAnnotatedRaw.includes('?') ? '&' : '?';
+      heroAnnotatedUrl = token
+        ? `${heroAnnotatedRaw}${sep}token=${encodeURIComponent(token)}`
+        : heroAnnotatedRaw;
+    }
+
+    // Total non-noise duration: min start_ms to max end_ms.
+    const startMs = Math.min(
+      ...nonNoiseScenes.map((s) => s.start_ms ?? 0),
+    );
+    const endMs = Math.max(
+      ...nonNoiseScenes.map((s) => s.end_ms ?? 0),
+    );
+    const totalDurationMs = Math.max(0, endMs - startMs);
+
+    // Visible app groupings — keep any grouping that has at least one
+    // non-noise scene mapped to it.  This silently hides the "Web
+    // Application — New Tab" grouping when all its scenes are noise.
+    const visibleApps = (graph.app_groupings ?? []).filter((g) => {
+      if (!graph.scene_to_app_grouping) return true;
+      for (const [sid, gid] of Object.entries(graph.scene_to_app_grouping)) {
+        if (gid === g.grouping_id && !noiseSceneIds.has(sid)) return true;
+      }
+      return false;
+    });
+
+    // Scene quality counts (non-noise only).
+    let strong = 0;
+    let degraded = 0;
+    let weak = 0;
+    for (const s of nonNoiseScenes) {
+      const q = (s.scene_quality ?? 'weak').toLowerCase();
+      if (q === 'strong') strong += 1;
+      else if (q === 'degraded') degraded += 1;
+      else weak += 1;
+    }
+
+    return {
+      heroScene,
+      heroAnnotatedUrl,
+      heroCaption,
+      totalDurationMs,
+      visibleApps,
+      strong,
+      degraded,
+      weak,
+      noiseCount: noiseSceneIds.size,
+      nonNoiseSceneCount: nonNoiseScenes.length,
+    };
+  }, [graph, noiseSceneIds]);
+
   const flowGroups = useMemo(() => {
     if (!graph) return [];
     const flows = graph.flows ?? [];
     const groups: Array<{ flow: VisualFlow; scenes: VisualScene[]; edges: VisualFlowEdge[] }> = [];
+    const sceneIsVisible = (s: VisualScene) =>
+      showNoiseScenes || !noiseSceneIds.has(s.scene_id);
     for (const flow of flows) {
       if (activeFlowId && flow.flow_id !== activeFlowId) continue;
-      const scenes = graph.scenes.filter((s) => s.flow_id === flow.flow_id).sort((a, b) => a.scene_index - b.scene_index);
+      const scenes = graph.scenes
+        .filter((s) => s.flow_id === flow.flow_id && sceneIsVisible(s))
+        .sort((a, b) => a.scene_index - b.scene_index);
       const sceneIds = new Set(scenes.map((s) => s.scene_id));
       const edges = graph.edges.filter((e) => sceneIds.has(e.from_scene_id) && sceneIds.has(e.to_scene_id));
       if (scenes.length > 0) groups.push({ flow, scenes, edges });
     }
     if (!activeFlowId) {
       const flowSceneIds = new Set(flows.flatMap((f) => graph.scenes.filter((s) => s.flow_id === f.flow_id).map((s) => s.scene_id)));
-      const unassigned = graph.scenes.filter((s) => !flowSceneIds.has(s.scene_id));
+      const unassigned = graph.scenes
+        .filter((s) => !flowSceneIds.has(s.scene_id) && sceneIsVisible(s));
       if (unassigned.length > 0) {
         groups.push({
           flow: { flow_id: '__unassigned__', flow_label: 'Other Screens', scene_count: unassigned.length, is_noise: true } as VisualFlow,
@@ -844,7 +1078,7 @@ export default function VisualFlowDiagramPage() {
       }
     }
     return groups;
-  }, [graph, activeFlowId]);
+  }, [graph, activeFlowId, noiseSceneIds, showNoiseScenes]);
 
   const gateResult = useMemo(() => {
     if (!graph) return { can_generate: false, reasons: [] as string[], action_confirmed_count: 0, automation_ready_count: 0 };
@@ -889,14 +1123,378 @@ export default function VisualFlowDiagramPage() {
 
   const selectedActionLabel = useMemo(() => {
     if (!selectedScene) return null;
-    return deriveActionLabel(
+    // Phase 1.7 — prefer the LLM short caption when available, same
+    // policy used by the flow-rail cards.  Falls back to the
+    // heuristic for legacy artifacts.
+    const llmCaption = captionByScene.get(selectedScene.scene_id);
+    const heuristic = deriveActionLabel(
       selectedScene,
       selectedControls,
       selectedPrevScene,
       selectedIncomingEdge?.edge_type,
       selectedIncomingEdge,
     );
-  }, [selectedScene, selectedControls, selectedPrevScene, selectedIncomingEdge]);
+    return llmCaption
+      ? { action: llmCaption, icon: heuristic.icon, quality: 'strong' as const }
+      : heuristic;
+  }, [selectedScene, selectedControls, selectedPrevScene, selectedIncomingEdge, captionByScene]);
+
+  // Phase 1.7 defect-fix — unified scene actions derivation.
+  //
+  // The frozen pipeline writes action data into THREE different
+  // tables/columns; the original "Page actions & form fields"
+  // section only read from `evidence_controls`, missing 80% of the
+  // action signal.  This memo combines all three:
+  //
+  //   1. scene_state_summary.frame_actions  — per-frame action
+  //      timeline with action_kind + target_label + timestamps.
+  //      Pipeline detects: open_overlay, state_change, click,
+  //      enter_text, select_option, navigate, etc.
+  //   2. evidence_controls                  — detected UI elements
+  //      (buttons, dropdowns, text fields) with playwright_selector
+  //      + automation_ready flag.
+  //   3. visual_flow_edges.primary_action_summary
+  //                                          — the dominant action
+  //      that led TO this scene (action_label + action_value).
+  //
+  // The result is rendered as a chronological timeline of user
+  // actions PLUS a separate list of detected form controls.  Low-
+  // confidence noise (empty target_label + confidence < 0.5) is
+  // filtered out so the timeline stays readable.
+  type SceneActionRow = {
+    kind: 'frame_action' | 'control';
+    timestamp_s: number | null;
+    verb: string;
+    target: string;
+    type_label: string;
+    confidence: number;
+    automation_ready?: boolean;
+    evidence_signals?: string[];
+    value?: string;
+    control_id?: string;
+  };
+
+  const sceneActions = useMemo(() => {
+    if (!selectedScene) {
+      return {
+        userActions: [] as SceneActionRow[],
+        weakActions: [] as SceneActionRow[],
+        controls: [] as SceneActionRow[],
+        incomingEdgeLabel: '',
+        incomingEdgeValue: '',
+      };
+    }
+
+    const verbMap: Record<string, string> = {
+      open_overlay: 'Opened',
+      close_overlay: 'Closed',
+      state_change: 'Changed',
+      click: 'Clicked',
+      click_cta: 'Clicked',
+      enter_text: 'Entered',
+      select_option: 'Selected',
+      submit_form: 'Submitted',
+      navigate: 'Navigated to',
+      review: 'Reviewed',
+      scroll: 'Scrolled',
+      scroll_or_repaint: 'Page updated',
+      user_interaction: 'User interaction',
+    };
+
+    // Loose OCR-garbage filter.  Only drops the most egregious cases
+    // so the user sees the full action stream:
+    //   - 50+ char unbroken alphanumeric strings (the
+    //     "suymiuyqyuymnntbztlci..." 78-char monsters)
+    //   - targets with no letters at all
+    // EVERYTHING ELSE is kept — even short OCR-corrupted words like
+    // "informatlon" or "ivuquardianlife" — because the user evaluates
+    // them in context and a partially-corrupted label is still
+    // useful evidence for building a test case.
+    const isLikelyGarbage = (text: string): boolean => {
+      if (!text) return true;
+      const trimmed = text.trim();
+      if (!trimmed) return true;
+      // Pure-symbol target with no letters.
+      if (!/[a-zA-Z]/.test(trimmed)) return true;
+      // Catastrophically long string (50+ chars unbroken alphanumeric).
+      // This catches the 78-char OCR-monsters while leaving
+      // legitimate domain-looking targets ("annualincome",
+      // "screenwhereyoucan") alone.
+      if (/[a-z0-9]{50,}/i.test(trimmed)) return true;
+      return false;
+    };
+
+    // Phase 1.7 iteration 5 — single bucket, no confidence
+    // threshold gate.  The user wants to SEE every action the
+    // pipeline detected (selecting, dropdown, click, etc.) and
+    // judge quality themselves via the inline "weak" badge.
+    // Hiding low-confidence actions removed too much useful signal.
+    const userActions: SceneActionRow[] = [];
+    const weakActions: SceneActionRow[] = []; // kept for type compat, unused
+    const frameActions = selectedScene.scene_state_summary?.frame_actions || [];
+    for (const fa of frameActions) {
+      const hasTarget = (fa.target_label || '').trim().length > 0;
+      const hasDelta = (fa.delta_text || '').trim().length > 0;
+
+      // Drop ONLY when there is literally no signal — empty target,
+      // empty delta, AND very low confidence.  Otherwise show it.
+      if (!hasTarget && !hasDelta && fa.confidence < 0.3) continue;
+
+      const rawTarget = fa.target_label || (fa.delta_text || '').split(/\s+/).slice(0, 5).join(' ');
+      if (isLikelyGarbage(rawTarget)) continue;
+
+      const target = rawTarget.length > 40 ? rawTarget.slice(0, 40) + '…' : rawTarget;
+
+      const verb = verbMap[fa.action_kind] || fa.action_kind;
+      userActions.push({
+        kind: 'frame_action',
+        timestamp_s: fa.from_timestamp_s,
+        verb,
+        target,
+        type_label: fa.action_kind.replace(/_/g, ' '),
+        confidence: fa.confidence,
+        evidence_signals: fa.evidence_signals,
+      });
+    }
+    userActions.sort((a, b) => (a.timestamp_s ?? 0) - (b.timestamp_s ?? 0));
+
+    // Evidence controls — detected UI elements (separate from
+    // user_actions because controls are static "what's on the page"
+    // signals, not "what the user did").
+    const controls: SceneActionRow[] = [];
+    const order = (c: EvidenceControl): number => {
+      const t = (c.element_type || '').toLowerCase();
+      const k = (c.action_kind || '').toLowerCase();
+      if (k === 'enter_text' || t === 'input' || t === 'textarea' || t === 'text_field') return 0;
+      if (t === 'select' || t === 'dropdown' || k === 'select_option') return 1;
+      if (t === 'radio') return 2;
+      if (t === 'checkbox' || k === 'check' || k === 'toggle') return 3;
+      if (t === 'button' || k === 'click_cta' || k === 'submit_form') return 4;
+      if (t === 'link') return 5;
+      return 6;
+    };
+    const sortedControls = [...selectedControls].sort((a, b) => order(a) - order(b));
+    for (const c of sortedControls) {
+      const t = (c.element_type || '').toLowerCase();
+      const k = (c.action_kind || '').toLowerCase();
+      const typeLabel =
+        k === 'enter_text' ? 'text field'
+        : (t === 'select' || t === 'dropdown') ? 'dropdown'
+        : t === 'radio' ? 'radio'
+        : t === 'checkbox' ? 'checkbox'
+        : t === 'button' ? 'button'
+        : t === 'link' ? 'link'
+        : t || 'control';
+      const verb =
+        k === 'enter_text' ? 'Entered'
+        : k === 'select_option' ? 'Selected'
+        : k === 'toggle' || k === 'check' ? 'Toggled'
+        : k === 'submit_form' ? 'Submitted'
+        : k === 'click_cta' ? 'Clicked'
+        : '';
+      const value =
+        (c as unknown as { observed_value?: string }).observed_value
+        || (c as unknown as { default_value?: string }).default_value
+        || (c as unknown as { placeholder_text?: string }).placeholder_text
+        || '';
+      controls.push({
+        kind: 'control',
+        timestamp_s: null,
+        verb,
+        target: (c.display_label || c.label_text || '').trim() || '(unlabeled)',
+        type_label: typeLabel,
+        confidence: c.selector_confidence || 0,
+        automation_ready: c.automation_ready,
+        value: value || undefined,
+        control_id: c.control_id,
+      });
+    }
+
+    // Incoming-edge dominant action — what brought the user TO this
+    // scene.  Surfaced as a header line above the timeline.
+    const edgeSummary = selectedIncomingEdge?.primary_action_summary;
+    const incomingEdgeLabel = (edgeSummary?.action_label || '').trim();
+    const incomingEdgeValue = ((edgeSummary as unknown as { action_value?: string })?.action_value || '').trim();
+
+    return {
+      userActions,
+      weakActions,
+      controls,
+      incomingEdgeLabel,
+      incomingEdgeValue,
+    };
+  }, [selectedScene, selectedControls, selectedIncomingEdge]);
+
+  // Phase 1.7 — toggle for weak-confidence frame_actions.  Default
+  // hidden so the timeline shows only high-signal actions.
+  const [showWeakActions, setShowWeakActions] = useState(false);
+
+  // Phase 1.7 iteration 6 — per-frame evidence for the selected scene.
+  //
+  // Audit found scene_state_summary.frame_actions is largely OCR-noise
+  // (target_label values like "ivuquardianlife", "screenwhereyoucan"
+  // are mangled OCR strings, not real field names).  The real signal
+  // lives in visual_frames.ui_elements_json: an LLM-derived list of
+  // detected buttons / text_fields / dropdowns per frame, each with a
+  // confidence score, an action_kind ("click" / "enter_text" /
+  // "select_option") and an observed_value.  This memo:
+  //
+  //   1. Picks all frames belonging to the selected scene (filtered
+  //      from allFrames by scene_id).
+  //   2. Flattens ui_elements_json across those frames, dedupes by
+  //      element text + element_type, and keeps the highest-confidence
+  //      occurrence — so the user sees "Sign in (button)" once even
+  //      when it appears on 9 consecutive frames.
+  //   3. Detects URL deltas (when url_or_path changes between frames)
+  //      so even scenes with no UI elements show navigation evidence.
+  //   4. Computes a `data_quality` verdict the banner reads to decide
+  //      whether to warn the user about pipeline gaps.
+  type DetectedElement = {
+    element_type: string;
+    text: string;
+    confidence: number;
+    action_kind: string;
+    observed_value: string;
+    frame_index: number;
+    persistence_count: number;
+  };
+  type FrameOcrRow = {
+    frame_index: number;
+    timestamp_s: number;
+    is_keyframe: boolean;
+    ocr_preview: string;
+    url: string;
+  };
+  type UrlChange = {
+    frame_index: number;
+    from_url: string;
+    to_url: string;
+    timestamp_s: number;
+  };
+
+  const sceneFrameEvidence = useMemo(() => {
+    if (!selectedScene || allFrames.length === 0) {
+      return {
+        elements: [] as DetectedElement[],
+        urlChanges: [] as UrlChange[],
+        frameRows: [] as FrameOcrRow[],
+        dataQuality: 'no_scene' as const,
+      };
+    }
+
+    const sceneFrames = allFrames
+      .filter((f) => f.scene_id === selectedScene.scene_id)
+      .sort((a, b) => a.frame_index - b.frame_index);
+
+    if (sceneFrames.length === 0) {
+      return {
+        elements: [] as DetectedElement[],
+        urlChanges: [] as UrlChange[],
+        frameRows: [] as FrameOcrRow[],
+        dataQuality: 'no_frames' as const,
+      };
+    }
+
+    // Aggregate ui_elements_json across all frames in the scene.  Dedupe
+    // by (element_type, normalized text) keeping the highest-confidence
+    // occurrence so the user sees "Sign in" once, not 9 times.
+    const elemKey = (et: string, text: string) =>
+      `${et}::${text.trim().toLowerCase()}`;
+    const elementMap = new Map<string, DetectedElement>();
+
+    for (const frame of sceneFrames) {
+      const uiList = frame.ui_elements_json || [];
+      if (!Array.isArray(uiList)) continue;
+      for (const elem of uiList) {
+        const e = elem as Record<string, unknown>;
+        const et = (e.element_type as string | undefined) || '';
+        const text = ((e.text as string | undefined) || '').trim();
+        if (!et || !text) continue;
+        const conf = (e.confidence as number | undefined) ?? 0;
+        const props = (e.properties as Record<string, unknown> | undefined) || {};
+        const actionKind = (props.action_kind as string | undefined) || '';
+        const observedValue = (props.observed_value as string | undefined) || '';
+        const persistence = (props.persistence_count as number | undefined) ?? 1;
+
+        const k = elemKey(et, text);
+        const existing = elementMap.get(k);
+        if (!existing || conf > existing.confidence) {
+          elementMap.set(k, {
+            element_type: et,
+            text,
+            confidence: conf,
+            action_kind: actionKind,
+            observed_value: observedValue,
+            frame_index: frame.frame_index,
+            persistence_count: persistence,
+          });
+        }
+      }
+    }
+    const elements = Array.from(elementMap.values()).sort((a, b) => {
+      // Order: text_field → dropdown → radio → checkbox → button → link
+      const rank = (et: string) => {
+        const t = et.toLowerCase();
+        if (t === 'text_field' || t === 'input' || t === 'textarea') return 0;
+        if (t === 'select' || t === 'dropdown') return 1;
+        if (t === 'radio') return 2;
+        if (t === 'checkbox') return 3;
+        if (t === 'button') return 4;
+        if (t === 'link') return 5;
+        return 6;
+      };
+      const r = rank(a.element_type) - rank(b.element_type);
+      if (r !== 0) return r;
+      return b.confidence - a.confidence;
+    });
+
+    // URL deltas — surface every change in url_or_path between adjacent
+    // frames.  This is the cleanest navigation signal we have on
+    // scenes where ui_elements_json is empty (the form-fill scenes 8-11
+    // in the audited artifact).
+    const urlChanges: UrlChange[] = [];
+    let prevUrl = '';
+    for (const frame of sceneFrames) {
+      const u = (frame.url_or_path || '').trim();
+      if (!u) continue;
+      if (u !== prevUrl && prevUrl) {
+        urlChanges.push({
+          frame_index: frame.frame_index,
+          from_url: prevUrl,
+          to_url: u,
+          timestamp_s: frame.timestamp_seconds,
+        });
+      }
+      if (u) prevUrl = u;
+    }
+
+    // Per-frame OCR rows for the filmstrip.  We show one row per
+    // frame in the scene with: timestamp, keyframe flag, first 120
+    // chars of extracted_text, and the url_or_path.  This is the
+    // last-resort signal when no structured UI/control data exists.
+    const frameRows: FrameOcrRow[] = sceneFrames.map((f) => ({
+      frame_index: f.frame_index,
+      timestamp_s: f.timestamp_seconds,
+      is_keyframe: f.is_keyframe,
+      ocr_preview: ((f.extracted_text || '').trim()).slice(0, 200),
+      url: (f.url_or_path || '').trim(),
+    }));
+
+    // Data quality verdict — drives the banner.
+    //   strong   : ui_elements present, evidence_controls present
+    //   degraded : url changes OR a few elements, but no controls
+    //   weak     : nothing structured, only OCR text
+    let dataQuality: 'strong' | 'degraded' | 'weak' | 'no_scene' | 'no_frames';
+    if (elements.length >= 3 && selectedControls.length >= 2) {
+      dataQuality = 'strong';
+    } else if (elements.length > 0 || urlChanges.length > 0 || selectedControls.length > 0) {
+      dataQuality = 'degraded';
+    } else {
+      dataQuality = 'weak';
+    }
+
+    return { elements, urlChanges, frameRows, dataQuality };
+  }, [selectedScene, allFrames, selectedControls]);
 
   /** Phase D.1 — triangulated steps filtered to the selected scene.
    *  When no scene is selected, the panel shows all steps in chronological
@@ -948,6 +1546,121 @@ export default function VisualFlowDiagramPage() {
     }
     return m;
   }, [cursorEvents]);
+
+  /** Phase 1.7 iter 6 — synthesized cursor_events for the selected scene.
+   *
+   * Many SME recordings don't show the mouse cursor, so the motion-based
+   * CursorTracker produces zero real events.  The spine engine's
+   * /synthesize-clicks endpoint runs an additive synthesizer that emits
+   * events with detection_method ∈ { url_delta, ocr_new_block,
+   * ocr_removed_block, ui_element_change, control_value,
+   * frame_action_promotion }.
+   *
+   * This memo:
+   *   1. Builds a frame_id → scene_id lookup from allFrames
+   *   2. Filters cursor_events to those belonging to the selected scene
+   *      AND whose detection_method != 'motion' (synthesized only)
+   *   3. Sorts chronologically + dedupes per frame
+   *
+   * Output rows feed the new "Inferred user actions" detail-panel section.
+   */
+  const sceneSyntheticClicks = useMemo(() => {
+    if (!selectedScene || cursorEvents.length === 0) return [];
+    const frameToScene = new Map<string, string | null>();
+    for (const f of allFrames) {
+      if (f.frame_id) frameToScene.set(f.frame_id, f.scene_id ?? null);
+    }
+    const seenFrameIdx = new Set<number>();
+    const filtered = cursorEvents
+      .filter((e) =>
+        e.detection_method !== 'motion'
+        && e.frame_id
+        && frameToScene.get(e.frame_id) === selectedScene.scene_id,
+      )
+      .sort((a, b) => a.timestamp_ms - b.timestamp_ms);
+
+    const out: Array<{
+      method: string;
+      methodLabel: string;
+      methodColor: string;
+      target: string;
+      observedValue: string;
+      actionVerb: string;
+      timestamp_s: number;
+      confidence: number;
+      corroborating: number;
+      isClick: boolean;
+    }> = [];
+    // Allow multiple events per frame when target_labels differ
+    // (e.g. Gender=Male AND Smoker=Yes captured on the same frame).
+    // Dedup key is (frame_index, lowercased target_label).
+    const seenKey = new Set<string>();
+    for (const e of filtered) {
+      const meta = e.metadata_json || {};
+      const target = String(
+        (meta.target_label as string | undefined)
+          || (meta.element_text as string | undefined)
+          || (meta.control_label as string | undefined)
+          || (meta.delta_text as string | undefined)
+          || (meta.to_url as string | undefined)
+          || 'user interaction'
+      );
+      const dedupKey = `${e.frame_index}::${target.toLowerCase()}`;
+      if (seenKey.has(dedupKey)) continue;
+      seenKey.add(dedupKey);
+      const observedValue = String(
+        (meta.observed_value as string | undefined)
+          || (meta.control_value as string | undefined)
+          || ''
+      );
+      const actionKind = String((meta.action_kind as string | undefined) || '');
+      const actionVerb =
+        actionKind === 'enter_text' ? 'Entered'
+        : actionKind === 'select_option' ? 'Selected'
+        : actionKind === 'check' || actionKind === 'toggle' ? 'Toggled'
+        : actionKind === 'submit_form' ? 'Submitted'
+        : e.is_click ? 'Clicked'
+        : 'Interacted';
+      const corr = Array.isArray(meta.corroborating_methods)
+        ? (meta.corroborating_methods as string[]).length
+        : 0;
+      const methodMap: Record<string, { label: string; color: string }> = {
+        url_delta: { label: 'URL navigation', color: '#6366f1' },
+        ocr_new_block: { label: 'New UI text', color: '#10b981' },
+        ocr_removed_block: { label: 'UI dismissed', color: '#f59e0b' },
+        ui_element_change: { label: 'Button gone', color: '#0369a1' },
+        control_value: { label: 'Form value', color: '#047857' },
+        frame_action_promotion: { label: 'Click detected', color: '#7c3aed' },
+        form_value_inferred: { label: 'Form field entered', color: '#047857' },
+        // Strategy 7 Case A: domain-free placeholder→value first fill.
+        placeholder_transition: { label: 'Field filled', color: '#0f766e' },
+        // Strategy 7 Case B: re-edit (typed John then changed to Mary).
+        field_re_edit: { label: 'Field re-edited', color: '#be185d' },
+        // Strategy 7 Case C / Strategy 8: punctuation-only label.
+        labelled_value_change: { label: 'Field value', color: '#15803d' },
+        // Strategy 11: captcha / masked / blurred — value unreadable.
+        field_interaction_unreadable: { label: 'Field touched (value hidden)', color: '#dc2626' },
+        // Strategy 9: SME narrated this action; OCR didn't catch it.
+        audio_intent: { label: 'Narrated action', color: '#0891b2' },
+        // Strategy 10: scroll / viewport change.
+        viewport_shift: { label: 'Scrolled', color: '#737373' },
+      };
+      const m = methodMap[e.detection_method as string] || { label: e.detection_method as string, color: '#64748b' };
+      out.push({
+        method: e.detection_method as string,
+        methodLabel: m.label,
+        methodColor: m.color,
+        target: target.length > 60 ? target.slice(0, 60) + '…' : target,
+        observedValue: observedValue.length > 80 ? observedValue.slice(0, 80) + '…' : observedValue,
+        actionVerb,
+        timestamp_s: e.timestamp_ms / 1000,
+        confidence: e.confidence,
+        corroborating: corr,
+        isClick: e.is_click,
+      });
+    }
+    return out;
+  }, [selectedScene, cursorEvents, allFrames]);
 
   /** Phase D.2 — step replay handler.  When a step is selected:
    *    1. update selectedStepId so the panel highlights the row
@@ -1217,6 +1930,232 @@ export default function VisualFlowDiagramPage() {
 
       {viewMode === 'journey' && (
         <>
+      {/* ─────────── SESSION AT A GLANCE (Phase 1.7 Day 4) ─────────
+          Hero + apps + quality breakdown at the top of the journey
+          tab.  Gives the user a one-screen overview of a long demo
+          before they scroll into the flow rail.
+          Collapsible: auto-collapses when a scene is selected so the
+          bottom detail panel has vertical room.  A click target on
+          the header bar re-expands it.  This fixes the "screen
+          squeezed" defect that happened when both the hero and the
+          detail panel were vying for the same screen real estate. */}
+      {sessionGlance && (
+        <div
+          className="px-6 py-3 shrink-0 relative z-10"
+          style={{
+            borderBottom: '1px solid rgba(38,112,163,0.08)',
+            background: 'linear-gradient(180deg, #ffffff, #f8fafc)',
+          }}
+        >
+          {/* Compact header bar — always visible.  Click to toggle. */}
+          <button
+            type="button"
+            onClick={() => setGlanceCollapsed((v) => !v)}
+            className="w-full flex items-center gap-3 text-left group"
+            aria-expanded={!glanceCollapsed}
+          >
+            <ChevronRight
+              className="h-4 w-4 text-slate-500 shrink-0 transition-transform"
+              style={{
+                transform: glanceCollapsed ? 'rotate(0deg)' : 'rotate(90deg)',
+              }}
+            />
+            <div className="font-black text-slate-900 text-sm">
+              Session at a Glance
+            </div>
+            <div className="text-[11px] text-slate-500 flex items-center gap-1">
+              <span>{fmtDuration(0, sessionGlance.totalDurationMs)}</span>
+              <span>·</span>
+              <span>
+                {sessionGlance.visibleApps.length} app
+                {sessionGlance.visibleApps.length === 1 ? '' : 's'}
+              </span>
+              <span>·</span>
+              <span>
+                {sessionGlance.nonNoiseSceneCount} scene
+                {sessionGlance.nonNoiseSceneCount === 1 ? '' : 's'}
+              </span>
+            </div>
+
+            {/* Inline quality + app pills when collapsed — keeps the
+                glance information density visible at all times. */}
+            {glanceCollapsed && (
+              <div className="ml-auto flex items-center gap-1.5 text-[10px] font-bold">
+                <span className="text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200">
+                  {sessionGlance.strong} STRONG
+                </span>
+                {sessionGlance.degraded > 0 && (
+                  <span className="text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded border border-amber-200">
+                    {sessionGlance.degraded} DEG
+                  </span>
+                )}
+                {sessionGlance.weak > 0 && (
+                  <span className="text-red-700 bg-red-50 px-1.5 py-0.5 rounded border border-red-200">
+                    {sessionGlance.weak} WEAK
+                  </span>
+                )}
+                {sessionGlance.visibleApps.slice(0, 3).map((app, i) => {
+                  const color = FLOW_COLORS[i % FLOW_COLORS.length];
+                  return (
+                    <span
+                      key={app.grouping_id}
+                      className="flex items-center gap-1 text-slate-700 bg-white px-1.5 py-0.5 rounded border border-slate-200 max-w-[160px] truncate"
+                    >
+                      <span
+                        className="w-1.5 h-1.5 rounded-full shrink-0"
+                        style={{ background: color.from }}
+                      />
+                      <span className="truncate">{app.display_label}</span>
+                    </span>
+                  );
+                })}
+              </div>
+            )}
+          </button>
+
+          {/* Expanded body — hero + apps + quality (only when not collapsed) */}
+          {!glanceCollapsed && (
+          <div className="mt-3 space-y-3">
+
+          <div className="grid grid-cols-12 gap-4">
+            {/* Hero — last non-noise frame + caption */}
+            <div className="col-span-12 md:col-span-7 rounded-xl overflow-hidden relative bg-slate-100"
+              style={{ border: '1px solid rgba(38,112,163,0.12)', minHeight: 200 }}
+            >
+              {sessionGlance.heroAnnotatedUrl ? (
+                <img
+                  src={sessionGlance.heroAnnotatedUrl}
+                  alt={sessionGlance.heroCaption || 'Hero frame'}
+                  className="w-full h-full object-cover"
+                  style={{ minHeight: 200, maxHeight: 280 }}
+                  loading="lazy"
+                  onError={(e) => {
+                    (e.target as HTMLImageElement).style.display = 'none';
+                  }}
+                />
+              ) : (
+                <div className="h-full min-h-[200px] flex items-center justify-center text-slate-400 text-xs">
+                  <MonitorPlay className="h-6 w-6 opacity-40 mr-2" />
+                  Hero frame pending annotation
+                </div>
+              )}
+              {sessionGlance.heroCaption && (
+                <div
+                  className="absolute bottom-0 left-0 right-0 px-4 py-2 text-white"
+                  style={{
+                    background:
+                      'linear-gradient(180deg, rgba(10,37,64,0) 0%, rgba(10,37,64,0.85) 100%)',
+                  }}
+                >
+                  <div className="text-sm font-bold tracking-tight">
+                    {sessionGlance.heroCaption}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Apps panel — one row per dedup'd grouping */}
+            <div className="col-span-12 md:col-span-5 rounded-xl overflow-hidden"
+              style={{
+                background: 'linear-gradient(180deg, #ffffff, #fafbfc)',
+                border: '1px solid rgba(38,112,163,0.12)',
+              }}
+            >
+              <div className="px-3 py-2 text-[10px] font-black uppercase tracking-wider text-slate-500 border-b border-slate-100">
+                Apps in session
+              </div>
+              <div className="divide-y divide-slate-100 max-h-[244px] overflow-y-auto">
+                {sessionGlance.visibleApps.map((app, idx) => {
+                  const color = FLOW_COLORS[idx % FLOW_COLORS.length];
+                  return (
+                    <div key={app.grouping_id} className="flex items-center gap-2.5 px-3 py-2">
+                      <div
+                        className="w-2.5 h-2.5 rounded-full shrink-0"
+                        style={{ background: color.from }}
+                      />
+                      <div className="min-w-0 flex-1">
+                        <div className="text-[12px] font-bold text-slate-900 truncate">
+                          {app.display_label}
+                        </div>
+                        <div className="text-[10px] text-slate-500">
+                          {app.scene_count} scene{app.scene_count === 1 ? '' : 's'}
+                          {' · '}
+                          {app.dedup_basis === 'exact_domain'
+                            ? 'verified'
+                            : app.dedup_basis === 'fuzzy_domain'
+                            ? 'OCR-corrected'
+                            : app.dedup_basis === 'shared_suffix'
+                            ? 'OCR-corrected'
+                            : app.dedup_basis === 'window_title_normalized'
+                            ? 'desktop app'
+                            : 'detected'}
+                        </div>
+                      </div>
+                      <div className="text-[10px] text-slate-400 shrink-0">
+                        {Math.round((app.confidence || 0) * 100)}%
+                      </div>
+                    </div>
+                  );
+                })}
+                {sessionGlance.visibleApps.length === 0 && (
+                  <div className="px-3 py-4 text-[11px] text-slate-400 text-center">
+                    No apps detected
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* Quality breakdown chips */}
+          <div className="flex items-center gap-3 text-[10px] font-bold pt-1">
+            <span className="text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
+              {sessionGlance.strong} STRONG
+            </span>
+            <span className="text-amber-700 bg-amber-50 px-2 py-0.5 rounded border border-amber-200">
+              {sessionGlance.degraded} DEGRADED
+            </span>
+            <span className="text-red-700 bg-red-50 px-2 py-0.5 rounded border border-red-200">
+              {sessionGlance.weak} WEAK
+            </span>
+            {sessionGlance.noiseCount > 0 && (
+              <span className="text-slate-600 bg-slate-100 px-2 py-0.5 rounded border border-slate-200">
+                {sessionGlance.noiseCount} NOISE (hidden)
+              </span>
+            )}
+          </div>
+          </div>
+          )}
+        </div>
+      )}
+
+      {/* ─────────── NOISE FILTER TOGGLE (Phase 1.7) ────────────── */}
+      {noiseSceneIds.size > 0 && (
+        <div
+          className="flex items-center gap-2 px-6 py-2 shrink-0 relative z-10 text-[11px]"
+          style={{
+            borderBottom: '1px solid rgba(38,112,163,0.08)',
+            background: 'linear-gradient(180deg, #ffffff, #fafbfc)',
+          }}
+        >
+          <span className="text-slate-500">
+            {showNoiseScenes
+              ? `Showing all ${graph.scenes.length} scenes (including ${noiseSceneIds.size} noise)`
+              : `${noiseSceneIds.size} noise scene${noiseSceneIds.size === 1 ? '' : 's'} hidden`}
+          </span>
+          <button
+            onClick={() => setShowNoiseScenes((v) => !v)}
+            className="ml-auto px-2 py-0.5 rounded text-[10px] font-bold transition-all"
+            style={{
+              background: showNoiseScenes ? 'rgba(38,112,163,0.15)' : 'rgba(10,37,64,0.05)',
+              color: showNoiseScenes ? '#2670a3' : '#475569',
+              border: `1px solid ${showNoiseScenes ? 'rgba(38,112,163,0.25)' : 'rgba(10,37,64,0.1)'}`,
+            }}
+          >
+            {showNoiseScenes ? 'Hide noise' : 'Show noise'}
+          </button>
+        </div>
+      )}
+
       {/* ─────────── FLOW TABS ────────────── */}
       {graph.flows && graph.flows.length > 1 && (
         <div className="flex items-center gap-2.5 px-6 py-3.5 overflow-x-auto shrink-0 relative z-10"
@@ -1256,7 +2195,7 @@ export default function VisualFlowDiagramPage() {
                 } : { border: '1px solid rgba(10,37,64,0.06)' }}
               >
                 <span className="w-3.5 h-3.5 rounded-full shrink-0" style={{ background: `linear-gradient(135deg, ${fc.from}, ${fc.to})`, boxShadow: `0 0 8px rgba(${fc.glow},0.4)` }} />
-                {flow.flow_label}
+                {cleanFlowLabel(flow)}
                 {flow.is_interleaved && (
                   <span className="text-[8px] font-black px-1.5 py-0.5 rounded-full" style={{ background: 'rgba(245,158,11,0.15)', color: '#d97706', border: '1px solid rgba(245,158,11,0.3)' }}>
                     {flow.visit_count}× visits
@@ -1324,7 +2263,18 @@ export default function VisualFlowDiagramPage() {
                       const isConfirmed = edge?.edge_type === 'action_confirmed_transition';
                       const prevScene = i > 0 ? scenes[i - 1] : null;
                       const ctrls = controlsByScene.get(scene.scene_id) ?? [];
-                      const { action, icon, quality } = deriveActionLabel(scene, ctrls, prevScene, incomingEdge?.edge_type, incomingEdge);
+                      // Phase 1.7 — prefer the LLM-generated short
+                      // caption from the storyboard composer when
+                      // available.  It's a 5-8 word imperative
+                      // ("Filled email field") instead of the
+                      // heuristic's "Fills form" / "Action needs
+                      // review" verbiage.  Fall through to the
+                      // existing heuristic for legacy artifacts.
+                      const llmCaption = captionByScene.get(scene.scene_id);
+                      const heuristic = deriveActionLabel(scene, ctrls, prevScene, incomingEdge?.edge_type, incomingEdge);
+                      const action = llmCaption || heuristic.action;
+                      const icon = heuristic.icon;
+                      const quality = llmCaption ? 'strong' : heuristic.quality;
 
                       // Fix #1: detect chronological gap — other-app scenes occurred between
                       // this scene and the previous one in this (interleaved) flow.
@@ -1348,6 +2298,7 @@ export default function VisualFlowDiagramPage() {
                             index={i}
                             actionLabel={action}
                             actionIcon={icon}
+                            annotatedImgUrl={graph.annotated_frame_urls?.[scene.scene_id]}
                           />
                           {i < scenes.length - 1 && (
                             <FlowConnector3D
@@ -1373,69 +2324,124 @@ export default function VisualFlowDiagramPage() {
       </div>
 
       {/* ─────────────── DETAIL PANEL ─────────────── */}
-      {/* max-h was 280px which clipped the EvidenceStepsPanel out of view
-          for any scene with >2 steps. Now 70vh + overflow-y-auto so the
-          per-scene action timeline (Gender = Male etc.) is visible and
-          scrollable. */}
+      {/* Phase 1.7 layout-squeeze fix: capped at 55vh (was 70vh).
+          Iteration 2: thicker top border + box-shadow above so there's
+          a visible separation from the flow rail (user reported "no
+          space between bottom and above panel"). */}
       <div
         className={clsx(
           'shrink-0 transition-all duration-500 ease-out relative z-10',
-          selectedScene ? 'max-h-[70vh] opacity-100 translate-y-0 overflow-y-auto' : 'max-h-0 opacity-0 translate-y-4 overflow-hidden',
+          selectedScene ? 'max-h-[55vh] opacity-100 translate-y-0 overflow-y-auto' : 'max-h-0 opacity-0 translate-y-4 overflow-hidden',
         )}
         style={{
-          borderTop: selectedScene ? '1px solid rgba(38,112,163,0.15)' : 'none',
+          borderTop: selectedScene ? '3px solid #2670a3' : 'none',
           background: selectedScene ? 'linear-gradient(180deg, #ffffff, #f8fafc)' : 'transparent',
           backdropFilter: selectedScene ? 'blur(20px)' : 'none',
+          boxShadow: selectedScene
+            ? '0 -8px 24px -8px rgba(10,37,64,0.18), 0 -2px 0 rgba(38,112,163,0.06)'
+            : 'none',
         }}
       >
         {selectedScene && (
           <div className="px-5 py-4 v5-card-enter">
             <div className="flex items-start gap-4">
-              {/* Thumbnail with 3D tilt */}
+              {/* Thumbnail \u2014 Phase 1.7: prefer annotated PNG with raw
+                  fallback so the detail panel shows the same overlay
+                  the flow rail card does. */}
               <div
-                className="w-48 h-28 rounded-xl overflow-hidden shrink-0 relative group"
+                className="w-56 h-32 rounded-xl overflow-hidden shrink-0 relative group"
                 style={{
                   background: 'linear-gradient(135deg, #f8fafc, #eef2f7)',
                   border: '2px solid rgba(38,112,163,0.2)',
                   boxShadow: '0 12px 40px rgba(10,37,64,0.12), 0 0 30px rgba(10,37,64,0.04)',
-                  transform: 'none',
                 }}
               >
                 {(() => {
-                  const url = selectedScene.representative_frame_asset_path
+                  const annotatedRaw = graph?.annotated_frame_urls?.[selectedScene.scene_id];
+                  const annotatedUrl = annotatedRaw
+                    ? (() => {
+                        const token = sessionStorage.getItem('nexus_token') || '';
+                        const sep = annotatedRaw.includes('?') ? '&' : '?';
+                        return token
+                          ? `${annotatedRaw}${sep}token=${encodeURIComponent(token)}`
+                          : annotatedRaw;
+                      })()
+                    : null;
+                  const rawUrl = selectedScene.representative_frame_asset_path
                     ? api.getFrameImageUrl(selectedScene.representative_frame_asset_path)
                     : selectedScene.representative_frame_id
                       ? api.getFrameImageUrl(selectedScene.representative_frame_id)
                       : null;
+                  const url = annotatedUrl ?? rawUrl;
                   return url ? (
-                    <img src={url} alt="" className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} />
+                    <img
+                      src={url}
+                      alt=""
+                      className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
+                      onError={(e) => {
+                        // Fall back to raw if annotated 404s.
+                        const img = e.target as HTMLImageElement;
+                        if (annotatedUrl && img.src.includes(annotatedRaw || '') && rawUrl) {
+                          img.src = rawUrl;
+                          return;
+                        }
+                        img.style.display = 'none';
+                      }}
+                    />
                   ) : (
                     <div className="w-full h-full flex items-center justify-center"><MonitorPlay className="h-8 w-8 text-slate-600/40" /></div>
                   );
                 })()}
-                <div className="absolute inset-0 bg-gradient-to-t from-black/30 to-transparent" />
               </div>
 
               {/* Info */}
               <div className="flex-1 min-w-0 space-y-3">
                 <div>
-                  <h3 className="text-sm font-black text-slate-900">
-                    {humanScreenName(selectedScene)}
+                  {/* LLM caption headline \u2014 picture-first design.
+                      Falls back to humanScreenName when no caption. */}
+                  <h3 className="text-base font-black text-slate-900 leading-tight">
+                    {captionByScene.get(selectedScene.scene_id) || humanScreenName(selectedScene)}
                   </h3>
-                  <div className="flex items-center gap-4 mt-2 text-xs text-slate-600">
+                  {/* Screen title \u2014 subtitle when caption is the headline */}
+                  {captionByScene.get(selectedScene.scene_id) && humanScreenName(selectedScene) && (
+                    <p className="text-[11px] text-slate-500 mt-0.5">
+                      Screen: {humanScreenName(selectedScene)}
+                    </p>
+                  )}
+                  <div className="flex items-center gap-4 mt-2 text-xs text-slate-600 flex-wrap">
                     <span className="flex items-center gap-1.5">
                       <Clock className="h-3.5 w-3.5 text-slate-600/60" />
                       {fmtMs(selectedScene.start_ms)} {'\u2192'} {fmtMs(selectedScene.end_ms)}
+                      {' \u00b7 '}
+                      <span className="text-slate-500">{fmtSceneDuration(selectedScene)}</span>
                     </span>
+                    {/* Canonical app badge \u2014 Phase 1.7: prefer
+                        dedup'd grouping label. */}
+                    {(() => {
+                      const groupingId =
+                        graph?.scene_to_app_grouping?.[selectedScene.scene_id];
+                      const grouping =
+                        groupingId &&
+                        graph?.app_groupings?.find((g) => g.grouping_id === groupingId);
+                      const appLabel = grouping
+                        ? grouping.display_label
+                        : appNameMap.get(selectedScene.app_instance_id ?? '') ?? '';
+                      return appLabel ? (
+                        <span className="flex items-center gap-1.5 text-indigo-600 font-bold">
+                          <Box className="h-3.5 w-3.5" />
+                          {appLabel}
+                        </span>
+                      ) : null;
+                    })()}
                     {selectedScene.detected_url && (
-                      <span className="flex items-center gap-1.5 text-blue-400/80">
+                      <span className="flex items-center gap-1.5 text-blue-500/80">
                         <ExternalLink className="h-3.5 w-3.5" />
                         {extractDomain(selectedScene.detected_url)}
                       </span>
                     )}
                   </div>
                   {selectedScene.detected_url && (
-                    <p className="text-[10px] text-slate-600 mt-1.5 font-mono truncate">{selectedScene.detected_url}</p>
+                    <p className="text-[10px] text-slate-500 mt-1.5 font-mono truncate">{selectedScene.detected_url}</p>
                   )}
                 </div>
 
@@ -1647,6 +2653,564 @@ export default function VisualFlowDiagramPage() {
                     </div>
                   );
                 })()}
+
+                {/* Phase 1.7 iteration 6 — data-quality banner.
+                    Audit revealed the pipeline did not capture per-field
+                    form actions for the form-fill scenes (0 evidence
+                    controls + 0 ui_elements_json on scenes 8-11 of the
+                    test artifact).  Telling the user honestly what
+                    signals are available is better than padding the
+                    panel with OCR noise that looks rich but isn't. */}
+                {sceneFrameEvidence.dataQuality !== 'no_scene' && (
+                  <div
+                    className="rounded-xl px-3 py-2 text-[11px]"
+                    style={{
+                      background:
+                        sceneFrameEvidence.dataQuality === 'strong' ? 'rgba(16,185,129,0.08)'
+                        : sceneFrameEvidence.dataQuality === 'degraded' ? 'rgba(234,179,8,0.08)'
+                        : 'rgba(239,68,68,0.07)',
+                      border:
+                        sceneFrameEvidence.dataQuality === 'strong' ? '1px solid rgba(16,185,129,0.25)'
+                        : sceneFrameEvidence.dataQuality === 'degraded' ? '1px solid rgba(234,179,8,0.3)'
+                        : '1px solid rgba(239,68,68,0.25)',
+                    }}
+                  >
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className="text-[9px] font-black uppercase tracking-widest text-slate-500">
+                        Data quality
+                      </span>
+                      <span
+                        className="text-[10px] font-black px-2 py-0.5 rounded-full uppercase tracking-wider"
+                        style={{
+                          background:
+                            sceneFrameEvidence.dataQuality === 'strong' ? 'rgba(16,185,129,0.18)'
+                            : sceneFrameEvidence.dataQuality === 'degraded' ? 'rgba(234,179,8,0.18)'
+                            : 'rgba(239,68,68,0.18)',
+                          color:
+                            sceneFrameEvidence.dataQuality === 'strong' ? '#047857'
+                            : sceneFrameEvidence.dataQuality === 'degraded' ? '#a16207'
+                            : '#b91c1c',
+                        }}
+                      >
+                        {sceneFrameEvidence.dataQuality === 'strong' ? '✓ rich'
+                          : sceneFrameEvidence.dataQuality === 'degraded' ? '⚠ partial'
+                          : '⚠ page-level only'}
+                      </span>
+                      <span className="text-[10px] text-slate-600 ml-auto">
+                        {sceneFrameEvidence.elements.length} UI elements ·{' '}
+                        {selectedControls.length} controls ·{' '}
+                        {sceneFrameEvidence.urlChanges.length} URL changes ·{' '}
+                        {sceneFrameEvidence.frameRows.length} frames
+                      </span>
+                    </div>
+                    <p className="text-[10px] text-slate-600 leading-snug">
+                      {sceneFrameEvidence.dataQuality === 'strong' && (
+                        <>This scene has structured UI affordances and form controls — every action below is grounded in detected elements.</>
+                      )}
+                      {sceneFrameEvidence.dataQuality === 'degraded' && (
+                        <>Partial structured signal. Some buttons/fields detected; per-field values may be missing. Page-level navigation evidence is reliable.</>
+                      )}
+                      {sceneFrameEvidence.dataQuality === 'weak' && (
+                        <>This scene was processed without per-field detection. Only page-level OCR and URL transitions are available — no granular form actions exist for this video. Re-record with cursor tracking enabled for richer detail.</>
+                      )}
+                    </p>
+                  </div>
+                )}
+
+                {/* Phase 1.7 iter 6 — INFERRED user actions (synthesized
+                    cursor_events from /synthesize-clicks).
+                    These are the additive-fallback events for recordings
+                    that don't show the mouse cursor.  Each row carries:
+                      • the detection method (URL nav / new UI text /
+                        button gone / form value / click detected)
+                      • a confidence badge
+                      • the inferred target label (button text, URL,
+                        control name, OCR delta)
+                      • a "corroborated by N" chip when multiple
+                        synthesis strategies agreed on the same frame.
+                    Real motion-detected events (detection_method='motion')
+                    are NOT shown here — those flow through the existing
+                    EvidenceStepsPanel below. */}
+                {sceneSyntheticClicks.length > 0 && (
+                  <div
+                    className="rounded-xl px-3 py-2.5 space-y-2"
+                    style={{
+                      background: 'rgba(124,58,237,0.05)',
+                      border: '1px solid rgba(124,58,237,0.22)',
+                    }}
+                  >
+                    <div className="flex items-center gap-2">
+                      <p className="text-[10px] font-black uppercase tracking-widest text-violet-700">
+                        Inferred user actions on this page
+                      </p>
+                      <span className="text-[10px] text-slate-500">
+                        ({sceneSyntheticClicks.length})
+                      </span>
+                      <span
+                        className="text-[9px] text-violet-700 ml-auto italic px-1.5 py-0.5 rounded"
+                        style={{ background: 'rgba(124,58,237,0.12)' }}
+                        title="No mouse cursor visible in this recording — these clicks were inferred from URL changes, OCR deltas, UI element disappearance, form values, and pipeline frame_actions"
+                      >
+                        synthesized (no cursor in recording)
+                      </span>
+                    </div>
+                    <ul className="space-y-1 overflow-y-auto pr-1" style={{ maxHeight: '220px' }}>
+                      {sceneSyntheticClicks.map((c, idx) => (
+                        <li
+                          key={`syn-${idx}`}
+                          className="flex items-start gap-2 text-[11px] leading-snug py-1 px-1.5 rounded"
+                          style={{ background: 'rgba(255,255,255,0.75)' }}
+                        >
+                          <span className="text-[10px] font-mono text-slate-500 shrink-0 mt-0.5">
+                            {`${Math.floor(c.timestamp_s / 60)}:${String(Math.floor(c.timestamp_s % 60)).padStart(2, '0')}`}
+                          </span>
+                          <span className="flex-1 min-w-0">
+                            <div className="flex items-baseline gap-1.5 flex-wrap">
+                              <span className="font-bold text-slate-900">{c.actionVerb}</span>
+                              <span className="text-slate-800 break-words">{c.target}</span>
+                              {c.observedValue && (
+                                <span
+                                  className="font-mono text-[11px] font-bold px-1.5 py-px rounded whitespace-nowrap"
+                                  style={{
+                                    background: 'rgba(16,185,129,0.18)',
+                                    color: '#065f46',
+                                    border: '1px solid rgba(16,185,129,0.35)',
+                                  }}
+                                >
+                                  = {c.observedValue}
+                                </span>
+                              )}
+                              <span
+                                className="px-1 py-px rounded text-[8px] uppercase font-black tracking-wider whitespace-nowrap"
+                                style={{
+                                  background: 'rgba(124,58,237,0.1)',
+                                  color: c.methodColor,
+                                }}
+                              >
+                                {c.methodLabel}
+                              </span>
+                              {c.corroborating > 0 && (
+                                <span
+                                  className="px-1 py-px rounded text-[8px] uppercase font-black tracking-wider whitespace-nowrap"
+                                  style={{
+                                    background: 'rgba(16,185,129,0.12)',
+                                    color: '#047857',
+                                  }}
+                                  title={`Corroborated by ${c.corroborating} additional synthesis strategy(s)`}
+                                >
+                                  +{c.corroborating} agree
+                                </span>
+                              )}
+                              {c.confidence < 0.5 && (
+                                <span
+                                  className="px-1 py-px rounded text-[8px] uppercase font-black tracking-wider whitespace-nowrap"
+                                  style={{
+                                    background: 'rgba(234,179,8,0.12)',
+                                    color: '#a16207',
+                                  }}
+                                  title={`Confidence ${(c.confidence * 100).toFixed(0)}%`}
+                                >
+                                  ⚠ weak
+                                </span>
+                              )}
+                            </div>
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+
+                {/* Phase 1.7 iteration 6 — detected UI elements from
+                    visual_frames.ui_elements_json.  This is the REAL
+                    structured action signal: LLM-derived buttons,
+                    text_fields, dropdowns with action_kind and
+                    observed_value.  Renders only when the pipeline
+                    actually detected elements; otherwise the panel
+                    falls back to URL changes + frame filmstrip. */}
+                {sceneFrameEvidence.elements.length > 0 && (
+                  <div
+                    className="rounded-xl px-3 py-2.5 space-y-2"
+                    style={{
+                      background: 'rgba(56,189,248,0.06)',
+                      border: '1px solid rgba(56,189,248,0.25)',
+                    }}
+                  >
+                    <div className="flex items-center gap-2">
+                      <p className="text-[10px] font-black uppercase tracking-widest text-sky-700">
+                        Detected on-page UI elements
+                      </p>
+                      <span className="text-[10px] text-slate-500">
+                        ({sceneFrameEvidence.elements.length})
+                      </span>
+                      <span className="text-[9px] text-slate-500 ml-auto italic">
+                        from per-frame UI detection
+                      </span>
+                    </div>
+                    <ul className="space-y-1 overflow-y-auto pr-1" style={{ maxHeight: '180px' }}>
+                      {sceneFrameEvidence.elements.map((e, idx) => {
+                        const verb =
+                          e.action_kind === 'enter_text' ? 'Enter text'
+                          : e.action_kind === 'select_option' ? 'Select'
+                          : e.action_kind === 'click' ? 'Click'
+                          : 'Interact';
+                        const typeColor =
+                          e.element_type === 'button' ? '#0369a1'
+                          : e.element_type === 'text_field' ? '#047857'
+                          : e.element_type === 'select' || e.element_type === 'dropdown' ? '#7c3aed'
+                          : '#475569';
+                        return (
+                          <li
+                            key={`uie-${idx}`}
+                            className="flex items-start gap-2 text-[11px] leading-snug py-1 px-1.5 rounded"
+                            style={{ background: 'rgba(255,255,255,0.7)' }}
+                          >
+                            <span className="flex-1 min-w-0">
+                              <div className="flex items-baseline gap-1.5 flex-wrap">
+                                <span className="font-bold text-slate-900">{verb}</span>
+                                <span className="text-slate-800 break-words">{e.text}</span>
+                                <span
+                                  className="px-1 py-px rounded text-[8px] uppercase font-black tracking-wider"
+                                  style={{ background: 'rgba(56,189,248,0.12)', color: typeColor }}
+                                >
+                                  {e.element_type.replace('_', ' ')}
+                                </span>
+                                {e.confidence < 0.5 && (
+                                  <span
+                                    className="px-1 py-px rounded text-[8px] uppercase font-black tracking-wider"
+                                    style={{ background: 'rgba(234,179,8,0.12)', color: '#a16207' }}
+                                    title={`Confidence ${(e.confidence * 100).toFixed(0)}%`}
+                                  >
+                                    ⚠ weak
+                                  </span>
+                                )}
+                              </div>
+                              {e.observed_value && (
+                                <div
+                                  className="text-[10px] text-slate-700 font-mono mt-0.5 px-2 py-0.5 rounded inline-block max-w-full break-words"
+                                  style={{
+                                    background: 'rgba(10,37,64,0.04)',
+                                    border: '1px solid rgba(10,37,64,0.08)',
+                                  }}
+                                >
+                                  = {e.observed_value.length > 80 ? e.observed_value.slice(0, 80) + '…' : e.observed_value}
+                                </div>
+                              )}
+                            </span>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  </div>
+                )}
+
+                {/* Phase 1.7 iteration 6 — URL deltas inside the scene.
+                    For form-fill scenes where no UI elements were
+                    detected, the URL change is often the only reliable
+                    evidence the user navigated to a different page
+                    state (e.g. "?quote-tool-tab-Disability-1"). */}
+                {sceneFrameEvidence.urlChanges.length > 0 && (
+                  <div
+                    className="rounded-xl px-3 py-2 space-y-1.5"
+                    style={{
+                      background: 'rgba(99,102,241,0.05)',
+                      border: '1px solid rgba(99,102,241,0.2)',
+                    }}
+                  >
+                    <div className="flex items-center gap-2">
+                      <p className="text-[10px] font-black uppercase tracking-widest text-indigo-700">
+                        URL transitions in this scene
+                      </p>
+                      <span className="text-[10px] text-slate-500">
+                        ({sceneFrameEvidence.urlChanges.length})
+                      </span>
+                    </div>
+                    <ul className="space-y-1">
+                      {sceneFrameEvidence.urlChanges.map((u, idx) => (
+                        <li
+                          key={`url-${idx}`}
+                          className="text-[10px] font-mono leading-snug rounded px-2 py-1"
+                          style={{ background: 'rgba(255,255,255,0.7)' }}
+                        >
+                          <div className="text-slate-500">
+                            @ {Math.floor(u.timestamp_s / 60)}:{String(Math.floor(u.timestamp_s % 60)).padStart(2, '0')} · frame #{u.frame_index}
+                          </div>
+                          <div className="text-slate-700 break-words">
+                            <span className="text-slate-400">from</span> {u.from_url.slice(0, 80)}{u.from_url.length > 80 ? '…' : ''}
+                          </div>
+                          <div className="text-indigo-700 break-words font-bold">
+                            <span className="text-slate-400 font-normal">to</span> {u.to_url.slice(0, 80)}{u.to_url.length > 80 ? '…' : ''}
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+
+                {/* Phase 1.7 iteration 6 — per-frame OCR filmstrip.
+                    The "last-resort" evidence layer: every frame in the
+                    scene with its OCR text and URL.  When data quality
+                    is "weak" this is what the user has to work with
+                    for building a test case.  Collapsed by default
+                    (max-h 140px) and scrollable. */}
+                {sceneFrameEvidence.frameRows.length > 0 && (
+                  <details
+                    className="rounded-xl px-3 py-2"
+                    style={{
+                      background: 'rgba(15,23,42,0.03)',
+                      border: '1px solid rgba(15,23,42,0.1)',
+                    }}
+                  >
+                    <summary className="cursor-pointer flex items-center gap-2 list-none">
+                      <p className="text-[10px] font-black uppercase tracking-widest text-slate-700">
+                        Per-frame evidence (OCR + URL)
+                      </p>
+                      <span className="text-[10px] text-slate-500">
+                        ({sceneFrameEvidence.frameRows.length} frames)
+                      </span>
+                      <span className="text-[9px] text-slate-400 ml-auto">click to expand</span>
+                    </summary>
+                    <ul
+                      className="space-y-1 overflow-y-auto pr-1 mt-2"
+                      style={{ maxHeight: '180px' }}
+                    >
+                      {sceneFrameEvidence.frameRows.map((f) => (
+                        <li
+                          key={`fr-${f.frame_index}`}
+                          className="text-[10px] leading-snug rounded px-2 py-1"
+                          style={{ background: 'rgba(255,255,255,0.7)' }}
+                        >
+                          <div className="flex items-center gap-1.5 mb-0.5">
+                            <span className="font-mono text-slate-500">
+                              #{f.frame_index} @ {Math.floor(f.timestamp_s / 60)}:{String(Math.floor(f.timestamp_s % 60)).padStart(2, '0')}
+                            </span>
+                            {f.is_keyframe && (
+                              <span
+                                className="px-1 py-px rounded text-[8px] uppercase font-black tracking-wider"
+                                style={{ background: 'rgba(16,185,129,0.15)', color: '#047857' }}
+                              >
+                                key
+                              </span>
+                            )}
+                            {f.url && (
+                              <span className="font-mono text-indigo-600 truncate" title={f.url}>
+                                {f.url.slice(0, 60)}{f.url.length > 60 ? '…' : ''}
+                              </span>
+                            )}
+                          </div>
+                          {f.ocr_preview && (
+                            <div className="text-slate-700 break-words">
+                              {f.ocr_preview}{f.ocr_preview.length >= 200 ? '…' : ''}
+                            </div>
+                          )}
+                        </li>
+                      ))}
+                    </ul>
+                  </details>
+                )}
+
+                {/* Phase 1.7 iteration 6 — legacy OCR-derived signals.
+                    These are heuristic state_change / open_overlay /
+                    user_interaction rows extracted from OCR text deltas.
+                    They can be noisy (target_label often contains
+                    mangled OCR like "ivuquardianlife") so they're now
+                    rendered as a collapsed "Additional OCR signals"
+                    section AFTER the real ui_elements_json data above.
+                    Kept because some scenes have legitimate signal
+                    here (e.g. "Opened indemnity" on scene 8). */}
+                {(sceneActions.userActions.length > 0
+                  || sceneActions.controls.length > 0
+                  || sceneActions.incomingEdgeLabel) && (
+                  <details
+                    className="rounded-xl px-3 py-2.5 space-y-3"
+                    style={{
+                      background: 'linear-gradient(135deg, rgba(16,185,129,0.04), rgba(56,189,248,0.03))',
+                      border: '1px solid rgba(16,185,129,0.15)',
+                    }}
+                  >
+                    <summary className="cursor-pointer flex items-center justify-between list-none mb-2">
+                      <p className="text-[9px] font-black uppercase tracking-widest text-slate-500">
+                        Additional OCR-derived signals (legacy)
+                      </p>
+                      <span
+                        className="text-[10px] font-black px-2 py-0.5 rounded-full"
+                        style={{
+                          background: 'rgba(16,185,129,0.12)',
+                          color: '#047857',
+                          border: '1px solid rgba(16,185,129,0.25)',
+                        }}
+                      >
+                        {sceneActions.userActions.length + sceneActions.controls.length} signals · click to expand
+                      </span>
+                    </summary>
+
+                    {/* Dominant navigation action — what got the user
+                        TO this scene.  Shown as a header line so the
+                        E2E test author sees the entry point first. */}
+                    {sceneActions.incomingEdgeLabel && (
+                      <div className="text-[11px] leading-snug rounded px-2 py-1.5"
+                        style={{
+                          background: 'rgba(99,102,241,0.06)',
+                          border: '1px solid rgba(99,102,241,0.2)',
+                        }}
+                      >
+                        <span className="text-[9px] font-black uppercase tracking-widest text-slate-500 mr-1.5">Entry:</span>
+                        <span className="font-bold text-indigo-700">
+                          {sceneActions.incomingEdgeLabel}
+                        </span>
+                        {sceneActions.incomingEdgeValue && (
+                          <div className="text-[10px] text-slate-600 mt-0.5 font-mono break-words">
+                            {sceneActions.incomingEdgeValue.length > 160
+                              ? sceneActions.incomingEdgeValue.slice(0, 160) + '…'
+                              : sceneActions.incomingEdgeValue}
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Subsection 1: User actions on this page
+                        (chronological timeline from frame_actions).
+                        Phase 1.7 iteration 5 — single bucket: every
+                        action is shown by default with a "weak" badge
+                        on low-confidence rows.  User judges quality
+                        in context; hiding low-confidence rows removed
+                        too much signal for E2E test-case building. */}
+                    {sceneActions.userActions.length > 0 && (
+                      <div className="space-y-1.5">
+                        <div className="flex items-center gap-2">
+                          <p className="text-[10px] font-black uppercase tracking-widest text-emerald-700">
+                            User actions on this page
+                          </p>
+                          <span className="text-[10px] text-slate-500">
+                            ({sceneActions.userActions.length})
+                          </span>
+                          <span className="text-[9px] text-slate-400 ml-auto italic">
+                            yellow ⚠ = low-confidence
+                          </span>
+                        </div>
+                        <ul
+                          className="space-y-1 overflow-y-auto pr-1"
+                          style={{ maxHeight: '240px' }}
+                        >
+                          {sceneActions.userActions.map((a, idx) => (
+                            <li
+                              key={`a-${idx}`}
+                              className="flex items-start gap-2 text-[11px] leading-snug py-1 px-1.5 rounded"
+                              style={{
+                                background: a.confidence >= 0.6
+                                  ? 'rgba(255,255,255,0.85)'
+                                  : 'rgba(255,255,255,0.5)',
+                              }}
+                            >
+                              <span className="text-[10px] font-mono text-slate-500 shrink-0 mt-0.5">
+                                {a.timestamp_s != null
+                                  ? `${Math.floor(a.timestamp_s / 60)}:${String(Math.floor(a.timestamp_s % 60)).padStart(2, '0')}`
+                                  : ''}
+                              </span>
+                              <span className="flex-1 min-w-0 flex items-baseline gap-1.5 flex-wrap">
+                                <span className="font-bold text-slate-900">{a.verb}</span>
+                                <span className="text-slate-800">{a.target}</span>
+                                <span
+                                  className="px-1 py-px rounded text-[8px] uppercase font-black tracking-wider whitespace-nowrap"
+                                  style={{
+                                    background: 'rgba(16,185,129,0.1)',
+                                    color: '#047857',
+                                  }}
+                                >
+                                  {a.type_label}
+                                </span>
+                                {a.confidence < 0.5 && (
+                                  <span
+                                    className="px-1 py-px rounded text-[8px] uppercase font-black tracking-wider whitespace-nowrap"
+                                    style={{
+                                      background: 'rgba(234,179,8,0.12)',
+                                      color: '#a16207',
+                                    }}
+                                    title={`Confidence ${(a.confidence * 100).toFixed(0)}%`}
+                                  >
+                                    ⚠ weak
+                                  </span>
+                                )}
+                              </span>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+
+                    {/* Subsection 2: Detected form controls
+                        (sorted by element type for narrative coherence). */}
+                    {sceneActions.controls.length > 0 && (
+                      <div className="space-y-1.5">
+                        <div className="flex items-center gap-2">
+                          <p className="text-[10px] font-black uppercase tracking-widest text-blue-700">
+                            Detected form controls
+                          </p>
+                          <span className="text-[10px] text-slate-500">
+                            ({sceneActions.controls.length})
+                          </span>
+                          <span className="text-[9px] text-slate-500 ml-auto">
+                            (yellow ⚡ = automation-ready)
+                          </span>
+                        </div>
+                        <ul
+                          className="space-y-1 overflow-y-auto pr-1"
+                          style={{ maxHeight: '180px' }}
+                        >
+                          {sceneActions.controls.map((c) => (
+                            <li key={c.control_id} className="flex items-start gap-2 text-[11px] leading-snug py-1 px-1.5 rounded"
+                              style={{ background: 'rgba(255,255,255,0.7)' }}
+                            >
+                              <span className="flex-1 min-w-0">
+                                <div className="flex items-baseline gap-1.5 flex-wrap">
+                                  {c.verb && (
+                                    <span className="font-bold text-slate-900">{c.verb}</span>
+                                  )}
+                                  <span className="font-bold text-slate-900 break-words">
+                                    {c.target}
+                                  </span>
+                                  <span
+                                    className="px-1 py-px rounded text-[8px] uppercase font-black tracking-wider"
+                                    style={{
+                                      background: 'rgba(56,189,248,0.12)',
+                                      color: '#0369a1',
+                                    }}
+                                  >
+                                    {c.type_label}
+                                  </span>
+                                  {c.automation_ready && (
+                                    <span
+                                      className="px-1 py-px rounded text-[8px] uppercase font-black tracking-wider flex items-center gap-0.5"
+                                      style={{
+                                        background: 'rgba(245,158,11,0.12)',
+                                        color: '#a16207',
+                                      }}
+                                      title="Selector is grounded and ready for Playwright/Cypress automation"
+                                    >
+                                      <Zap className="h-2.5 w-2.5" />
+                                      auto-ready
+                                    </span>
+                                  )}
+                                </div>
+                                {c.value && (
+                                  <div
+                                    className="text-[10px] text-slate-700 font-mono mt-0.5 px-2 py-0.5 rounded inline-block max-w-full break-words"
+                                    style={{
+                                      background: 'rgba(10,37,64,0.04)',
+                                      border: '1px solid rgba(10,37,64,0.08)',
+                                    }}
+                                  >
+                                    {c.value.length > 80 ? c.value.slice(0, 80) + '…' : c.value}
+                                  </div>
+                                )}
+                              </span>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                  </details>
+                )}
 
                 {/* Phase D.1 — triangulated user-action timeline.  Renders
                     one card per detected step with confidence ribbon,

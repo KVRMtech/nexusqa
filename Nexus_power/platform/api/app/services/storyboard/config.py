@@ -167,6 +167,23 @@ class AppDeduperConfig:
     # country-code TLDs.
     use_public_suffix_list: bool = True
 
+    # Phase 1.5 hardening — Tier 3 fuzzy match.
+    # Strip leading [wvqiy]{1,5} prefix runs before retrying fuzzy
+    # match.  Catches OCR errors at the start of the domain ("Wivw"
+    # for "www.").  Safe in practice because the regex requires the
+    # next char to be a consonant, which rules out legitimate domains
+    # like ``wikipedia.org`` (next char is a vowel — won't strip).
+    enable_ocr_prefix_strip: bool = True
+
+    # Phase 1.5 hardening — Tier 4 shared-suffix merge.
+    # When two candidate domains have the same TLD and share this many
+    # trailing characters, merge them regardless of total Levenshtein
+    # distance.  Defends against long OCR-corrupted prefixes (e.g.
+    # ``Wivwquardianlife.com`` vs ``guardianlife.com`` share 15 chars
+    # of suffix but Levenshtein is 5).
+    enable_shared_suffix_merge: bool = True
+    shared_suffix_min_chars: int = 10
+
 
 @dataclass(frozen=True)
 class CaptionRewriterConfig:
@@ -378,6 +395,17 @@ def load_config() -> StoryboardConfig:
             ),
             use_public_suffix_list=_env_bool(
                 "STORYBOARD_APP_DEDUP_USE_PSL", True,
+            ),
+            enable_ocr_prefix_strip=_env_bool(
+                "STORYBOARD_APP_DEDUP_OCR_PREFIX_STRIP", True,
+            ),
+            enable_shared_suffix_merge=_env_bool(
+                "STORYBOARD_APP_DEDUP_SHARED_SUFFIX_MERGE", True,
+            ),
+            shared_suffix_min_chars=_env_int(
+                "STORYBOARD_APP_DEDUP_SHARED_SUFFIX_MIN_CHARS",
+                10,
+                min_value=1,
             ),
         ),
         caption_rewriter=CaptionRewriterConfig(

@@ -112,6 +112,19 @@ def _composer_from_request(request: Request):
     return composer
 
 
+def _bearer_token(request: Request) -> str:
+    """Extract the raw JWT from the Authorization header.
+
+    Forwarded to eyes-engine on service-to-service frame fetches so
+    that eyes can enforce the same tenant isolation the user request
+    already passed.  Returns ``""`` when no token is present.
+    """
+    raw = request.headers.get("authorization") or ""
+    if raw.lower().startswith("bearer "):
+        return raw[len("bearer "):].strip()
+    return raw.strip()
+
+
 def _frame_annotator_from_request(request: Request):
     annotator = getattr(request.app.state, "frame_annotator", None)
     if annotator is None:
@@ -191,12 +204,14 @@ async def get_storyboard(
 ) -> StoryboardPayload:
     composer = _composer_from_request(request)
     tenant_id = user["tenant_id"]
+    token = _bearer_token(request)
     async with tenant_scoped_session(tenant_id) as session:
         response = await composer.get_storyboard(
             session,
             artifact_id=artifact_id,
             tenant_id=tenant_id,
             force_regenerate=False,
+            auth_token=token,
         )
     if response is None:
         raise HTTPException(status_code=404, detail="artifact not found")
@@ -248,12 +263,14 @@ async def regenerate_storyboard(
 ) -> StoryboardPayload:
     composer = _composer_from_request(request)
     tenant_id = user["tenant_id"]
+    token = _bearer_token(request)
     async with tenant_scoped_session(tenant_id) as session:
         response = await composer.get_storyboard(
             session,
             artifact_id=artifact_id,
             tenant_id=tenant_id,
             force_regenerate=True,
+            auth_token=token,
         )
     if response is None:
         raise HTTPException(status_code=404, detail="artifact not found")
@@ -305,11 +322,13 @@ async def get_annotated_frame(
 ) -> Response:
     annotator = _frame_annotator_from_request(request)
     tenant_id = user["tenant_id"]
+    token = _bearer_token(request)
     async with tenant_scoped_session(tenant_id) as session:
         annotated = await annotator.annotate_frame(
             session,
             frame_id=frame_id,
             tenant_id=tenant_id,
+            auth_token=token,
         )
     if annotated is None:
         raise HTTPException(status_code=404, detail="frame not found")

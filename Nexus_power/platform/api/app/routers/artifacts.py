@@ -24,6 +24,11 @@ from nexus_sdk.db.models import (
     CanonicalArtifactRow, WorkflowInstanceRow, VisualFrameRow,
     VisualSceneRow, AppInstanceRow, EvidenceControlRow, VisualFlowEdgeRow,
     VisualFlowRow, EvidenceStepRow, CursorEventRow,
+    # Phase 1.7 — storyboard overlays optionally appended to the
+    # visual-evidence-graph response.  Read-only here; populated by
+    # the storyboard composer.
+    StoryboardPanelRow, AppGroupingRow, SceneCaptionRow,
+    AnnotatedFrameCacheRow,
 )
 
 
@@ -987,6 +992,183 @@ async def list_cursor_events(
         }
 
 
+def _empty_storyboard_overlay() -> dict:
+    """Default-empty overlay payload returned when the flag is off.
+
+    Kept as a separate helper so the route function stays focused on
+    its main 7-step query plan; the empty-shape contract lives here.
+    """
+    return {
+        "app_groupings": [],
+        "noise_scene_ids": [],
+        "scene_captions": {},
+        "annotated_frame_urls": {},
+        "scene_to_app_grouping": {},
+    }
+
+
+async def _load_storyboard_overlay(
+    db,
+    *,
+    artifact_id: str,
+    tenant_id: str,
+    window_scene_ids: list[str],
+) -> dict:
+    """Read storyboard-derived rows and shape them for the 3D Journey.
+
+    All four queries are tenant-scoped and run in parallel against the
+    same RLS session.  Outputs are keyed by scene_id so the frontend
+    can join them onto its existing scene loop without restructuring.
+
+    When the storyboard composer has not yet derived overlays for an
+    artifact (e.g. first /storyboard call hasn't fired), the returned
+    payload is empty — the 3D Journey then falls back to its current
+    heuristic-only behavior automatically.
+    """
+    # 1) App groupings — dedup'd apps (1 row per real app, not per
+    #    OCR-corrupted boundary).  Sorted so the response is stable
+    #    across calls.
+    groupings_q = await db.execute(
+        select(AppGroupingRow)
+        .where(
+            AppGroupingRow.artifact_id == artifact_id,
+            AppGroupingRow.tenant_id == tenant_id,
+        )
+        .order_by(asc(AppGroupingRow.first_scene_index))
+    )
+    app_groupings: list[dict] = []
+    # member_instance_id → grouping_id reverse lookup so callers can
+    # map raw app_instance ids onto their canonical grouping.
+    instance_to_grouping: dict[str, str] = {}
+    for row in groupings_q.scalars().all():
+        groupings_dict = row_to_dict(row)
+        app_groupings.append(groupings_dict)
+        for instance_id in (row.member_instance_ids or []):
+            instance_to_grouping[str(instance_id)] = row.grouping_id
+
+    # 2) Noise scene ids — drawn from storyboard_panels.  We surface
+    #    the underlying scene_ids that landed inside any panel flagged
+    #    is_noise so the 3D Journey can filter them.  A noise panel
+    #    can span multiple scenes when scene_grouper collapsed them;
+    #    we expand back to scene-level here for the journey rail.
+    noise_panels_q = await db.execute(
+        select(StoryboardPanelRow)
+        .where(
+            StoryboardPanelRow.artifact_id == artifact_id,
+            StoryboardPanelRow.tenant_id == tenant_id,
+            StoryboardPanelRow.is_noise.is_(True),
+        )
+    )
+    noise_scene_ids: set[str] = set()
+    # Also fold the panel→app_grouping back-link into scene-level
+    # mapping so the journey rail can label each card with its dedup'd
+    # app even when scenes weren't grouped 1:1.
+    scene_to_app_grouping: dict[str, str] = {}
+    panels_q = await db.execute(
+        select(StoryboardPanelRow)
+        .where(
+            StoryboardPanelRow.artifact_id == artifact_id,
+            StoryboardPanelRow.tenant_id == tenant_id,
+        )
+    )
+    panels: list[StoryboardPanelRow] = list(panels_q.scalars().all())
+    for panel in panels:
+        if panel.is_noise:
+            # Best-effort: mark first_scene_id and any scene_id
+            # encoded in grouper_signals.scene_id_members.
+            noise_scene_ids.add(str(panel.first_scene_id))
+            noise_scene_ids.add(str(panel.last_scene_id))
+            members = (panel.grouper_signals or {}).get("scene_id_members")
+            if isinstance(members, list):
+                for sid in members:
+                    if sid:
+                        noise_scene_ids.add(str(sid))
+        if panel.app_grouping_id:
+            scene_to_app_grouping[str(panel.first_scene_id)] = panel.app_grouping_id
+            members = (panel.grouper_signals or {}).get("scene_id_members") or []
+            for sid in members:
+                if sid:
+                    scene_to_app_grouping[str(sid)] = panel.app_grouping_id
+
+    # 3) LLM short captions per scene.  Only the rows matching the
+    #    current generator_version are surfaced — older versions stay
+    #    in the table for audit but are not returned to clients.
+    #    Scoped to the scenes in the current window when window is
+    #    populated, otherwise return everything.
+    caption_filter = [
+        SceneCaptionRow.artifact_id == artifact_id,
+        SceneCaptionRow.tenant_id == tenant_id,
+    ]
+    if window_scene_ids:
+        caption_filter.append(SceneCaptionRow.scene_id.in_(window_scene_ids))
+    captions_q = await db.execute(
+        select(
+            SceneCaptionRow.scene_id,
+            SceneCaptionRow.short_caption,
+            SceneCaptionRow.narrative_caption,
+            SceneCaptionRow.caption_quality,
+            SceneCaptionRow.generator_model,
+        ).where(*caption_filter)
+    )
+    scene_captions: dict[str, dict] = {}
+    for scene_id, short_cap, narr, quality, model in captions_q.all():
+        if not scene_id:
+            continue
+        scene_captions[str(scene_id)] = {
+            "short": short_cap or "",
+            "narrative": narr or "",
+            "quality": quality or "weak",
+            "model": model or "",
+        }
+
+    # 4) Annotated frame URLs.
+    #
+    # The annotated cache is keyed by the STORYBOARD PANEL's
+    # representative_frame_id (set by scene_grouper when it picked
+    # the best frame across all collapsed scenes), NOT the
+    # VisualSceneRow's representative_frame_id (the pipeline's
+    # per-scene pick).  When scene_grouper collapses multiple scenes
+    # into one panel, every member scene inherits the panel's
+    # annotated URL.  Without this fan-out the 3D Journey would show
+    # blank thumbnails for any scene that wasn't the panel's chosen
+    # representative — even though the panel has an annotated PNG.
+    annotated_q = await db.execute(
+        select(AnnotatedFrameCacheRow.frame_id)
+        .where(
+            AnnotatedFrameCacheRow.artifact_id == artifact_id,
+            AnnotatedFrameCacheRow.tenant_id == tenant_id,
+        )
+    )
+    annotated_frame_ids = {str(fid) for (fid,) in annotated_q.all()}
+    annotated_frame_urls: dict[str, str] = {}
+    for panel in panels:
+        if not panel.representative_frame_id:
+            continue
+        if str(panel.representative_frame_id) not in annotated_frame_ids:
+            continue
+        url = (
+            f"/api/v1/artifacts/{artifact_id}"
+            f"/frames/{panel.representative_frame_id}/annotated.png"
+        )
+        # Fan out: every scene that landed in this panel inherits the
+        # same annotated URL.  Includes first_scene_id, last_scene_id,
+        # and any scene_id_members recorded by the grouper.
+        annotated_frame_urls[str(panel.first_scene_id)] = url
+        annotated_frame_urls[str(panel.last_scene_id)] = url
+        members = (panel.grouper_signals or {}).get("scene_id_members") or []
+        for sid in members:
+            if sid:
+                annotated_frame_urls[str(sid)] = url
+
+    return {
+        "app_groupings": app_groupings,
+        "noise_scene_ids": sorted(noise_scene_ids),
+        "scene_captions": scene_captions,
+        "annotated_frame_urls": annotated_frame_urls,
+        "scene_to_app_grouping": scene_to_app_grouping,
+    }
+
+
 @router.get("/api/v1/artifacts/{artifact_id}/visual-evidence-graph")
 async def get_visual_evidence_graph(
     artifact_id: str = Path(...),
@@ -1000,6 +1182,17 @@ async def get_visual_evidence_graph(
         description="Maximum scenes returned in this window (max 2000).  "
                     "Controls and edges are scoped to the scenes in this "
                     "window so payload size stays bounded for long demos.",
+    ),
+    include_storyboard_overlays: bool = Query(
+        False,
+        description="Phase 1.7 — when True, augment the response with "
+                    "storyboard-derived overlays: dedup'd app groupings, "
+                    "noise scene flags, LLM short captions, and "
+                    "annotated PNG URLs.  Used by VisualFlowDiagramPage "
+                    "to render clean app names + filtered noise + "
+                    "annotated thumbnails.  Off by default for "
+                    "backwards-compat — older clients ignore the new "
+                    "fields entirely.",
     ),
     user: dict = Depends(get_current_user),
 ):
@@ -1193,6 +1386,21 @@ async def get_visual_evidence_graph(
             avg_completeness=avg_completeness,
         )
 
+        # ── Phase 1.7 storyboard overlays (opt-in) ──────────────────
+        # Fold in the storyboard composer's derived outputs so the 3D
+        # Journey tab can render with the same data the Storyboard tab
+        # uses (dedup'd app names, noise filtering, LLM captions,
+        # annotated PNG URLs).  Skipped entirely when the flag is off
+        # so existing callers see the original payload shape.
+        storyboard_overlay = _empty_storyboard_overlay()
+        if include_storyboard_overlays:
+            storyboard_overlay = await _load_storyboard_overlay(
+                db,
+                artifact_id=artifact_id,
+                tenant_id=tenant_id,
+                window_scene_ids=window_scene_ids,
+            )
+
         return {
             "artifact_id": artifact_id,
             "scene_window": {
@@ -1217,6 +1425,14 @@ async def get_visual_evidence_graph(
                 "scene_state_coverage": round(strong_scene_pct, 3),
                 "action_summary_coverage": round(strong_action_pct, 3),
             },
+            # Phase 1.7 — empty objects when the flag is off so the
+            # response shape stays stable (clients can always read
+            # these keys without null-checks; counts are 0).
+            "app_groupings": storyboard_overlay["app_groupings"],
+            "noise_scene_ids": storyboard_overlay["noise_scene_ids"],
+            "scene_captions": storyboard_overlay["scene_captions"],
+            "annotated_frame_urls": storyboard_overlay["annotated_frame_urls"],
+            "scene_to_app_grouping": storyboard_overlay["scene_to_app_grouping"],
         }
 
 

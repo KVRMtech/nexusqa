@@ -259,6 +259,71 @@ def _char_overlap_ratio(a: str, b: str) -> float:
     return len(bi_a & bi_b) / len(union)
 
 
+# Phase 1.5 hardening — OCR prefix stripping + shared-suffix merge.
+#
+# The pipeline's OCR layer often misreads the leading "www." of a URL
+# as the noise sequences below.  Stripping them before fuzzy-matching
+# catches the dominant remaining false-negative class:
+#
+#   Wivwquardianlife.com  →  strip "Wivw"  →  quardianlife.com
+#   wwwguardianlife.com   →  strip "ww"    →  wguardianlife.com
+#
+# After stripping, both compare cleanly against the canonical
+# ``guardianlife.com`` with Levenshtein 1 (q→g or stray w insertion).
+#
+# Conservative pattern: only strip when the leading prefix is 1-5
+# chars of [wvqiy] AND the next character is a consonant.  This
+# avoids stripping the leading "w" of legitimate domains like
+# ``wikipedia.org`` (next char is "i", a vowel — won't strip).
+_OCR_PREFIX_NOISE_RE = re.compile(
+    r"^[wvqiy]{1,5}(?=[bcdfghjklmnpqrstvwxz])",
+    re.IGNORECASE,
+)
+
+
+def _strip_ocr_prefix_noise(domain: str) -> str:
+    """Strip a leading [wvqiy]{1,5} run before a consonant.
+
+    Returns the stripped string when something WAS removed; otherwise
+    returns the input unchanged.  Callers use the difference between
+    input and output as a signal that prefix-stripping was applied.
+    """
+    if not domain:
+        return ""
+    return _OCR_PREFIX_NOISE_RE.sub("", domain.lower(), count=1)
+
+
+def _shared_suffix_length(a: str, b: str) -> int:
+    """Length of the longest common suffix of two strings.
+
+    Used to detect OCR-prefix-corruption: ``Wivwquardianlife.com`` and
+    ``guardianlife.com`` share the 15-char suffix ``uardianlife.com``,
+    a much stronger signal than full-string Levenshtein for this class
+    of error.
+    """
+    if not a or not b:
+        return 0
+    a_lower = a.lower()
+    b_lower = b.lower()
+    n = min(len(a_lower), len(b_lower))
+    i = 0
+    while i < n and a_lower[-1 - i] == b_lower[-1 - i]:
+        i += 1
+    return i
+
+
+def _last_dot_label(domain: str) -> str:
+    """Return the last dot-delimited label of a domain (the TLD).
+
+    Used to require a TLD match before applying the suffix-merge
+    heuristic so we never merge ``stripe.com`` with ``stripe.io``.
+    """
+    if not domain:
+        return ""
+    parts = domain.lower().rsplit(".", 1)
+    return parts[-1] if len(parts) > 1 else ""
+
+
 # ── Clustering ────────────────────────────────────────────────────────────────
 
 
@@ -295,6 +360,14 @@ def _is_fuzzy_domain_match(
 ) -> tuple[bool, dict]:
     """Decide whether two domain strings are likely the same after OCR.
 
+    Match tiers, in order:
+      1. Identical strings → exact_match.
+      2. Levenshtein within threshold AND bigram overlap → fuzzy_domain.
+      3. (Optional) After stripping leading OCR-noise prefix from both
+         sides, Levenshtein within threshold → fuzzy_domain_after_strip.
+      4. (Optional) Same TLD AND shared suffix >=
+         shared_suffix_min_chars → shared_suffix.
+
     Returns ``(match, evidence_dict)``.  When True the caller should
     place the candidate into the same cluster as ``existing``.
     """
@@ -303,27 +376,76 @@ def _is_fuzzy_domain_match(
     if candidate == existing:
         return True, {"basis": "exact_match", "distance": 0, "overlap": 1.0}
 
+    # Tier 2 — straight Levenshtein + bigram overlap.
     distance = _levenshtein(candidate, existing)
+    overlap = _char_overlap_ratio(candidate, existing)
+
+    direct_ok = (
+        distance <= config.domain_levenshtein_max
+        and overlap >= config.domain_min_overlap_ratio
+    )
+    if direct_ok:
+        return True, {
+            "basis": "fuzzy_domain",
+            "distance": distance,
+            "overlap": round(overlap, 3),
+        }
+
+    # Tier 3 — strip OCR prefix noise from both sides and retry.
+    if config.enable_ocr_prefix_strip:
+        cand_stripped = _strip_ocr_prefix_noise(candidate)
+        exist_stripped = _strip_ocr_prefix_noise(existing)
+        # Only worth comparing when at least one side actually had a
+        # prefix to strip — otherwise this would re-run the same check
+        # as Tier 2.
+        if cand_stripped != candidate or exist_stripped != existing:
+            stripped_distance = _levenshtein(cand_stripped, exist_stripped)
+            stripped_overlap = _char_overlap_ratio(cand_stripped, exist_stripped)
+            if (
+                stripped_distance <= config.domain_levenshtein_max
+                and stripped_overlap >= config.domain_min_overlap_ratio
+            ):
+                return True, {
+                    "basis": "fuzzy_domain_after_strip",
+                    "distance": distance,
+                    "stripped_candidate": cand_stripped,
+                    "stripped_existing": exist_stripped,
+                    "stripped_distance": stripped_distance,
+                    "stripped_overlap": round(stripped_overlap, 3),
+                }
+
+    # Tier 4 — shared-suffix merge.  Same TLD + N+ shared trailing
+    # characters is a strong signal that two strings name the same
+    # site even when total Levenshtein is large (long OCR-corrupted
+    # prefix).  We require the TLD match to avoid false positives
+    # like ``stripe.com`` vs ``stripe.io`` (both end with ``stripe.``
+    # but TLD differs).
+    if config.enable_shared_suffix_merge:
+        cand_tld = _last_dot_label(candidate)
+        exist_tld = _last_dot_label(existing)
+        if cand_tld and cand_tld == exist_tld:
+            shared = _shared_suffix_length(candidate, existing)
+            if shared >= config.shared_suffix_min_chars:
+                return True, {
+                    "basis": "shared_suffix",
+                    "tld": cand_tld,
+                    "shared_suffix_length": shared,
+                    "candidate_length": len(candidate),
+                    "existing_length": len(existing),
+                }
+
+    # No tier matched — return the strongest "why not" reason.
     if distance > config.domain_levenshtein_max:
         return False, {
             "basis": "levenshtein_too_far",
             "distance": distance,
             "threshold": config.domain_levenshtein_max,
         }
-
-    overlap = _char_overlap_ratio(candidate, existing)
-    if overlap < config.domain_min_overlap_ratio:
-        return False, {
-            "basis": "overlap_too_low",
-            "distance": distance,
-            "overlap": overlap,
-            "threshold": config.domain_min_overlap_ratio,
-        }
-
-    return True, {
-        "basis": "fuzzy_domain",
+    return False, {
+        "basis": "overlap_too_low",
         "distance": distance,
-        "overlap": round(overlap, 3),
+        "overlap": overlap,
+        "threshold": config.domain_min_overlap_ratio,
     }
 
 
@@ -384,10 +506,36 @@ def _cluster_instances(
                     config=config,
                 )
                 if match:
-                    # Absorb ``other`` into ``host``.  Keep the longer
-                    # canonical_domain (assume it has more correct
-                    # characters) and union the evidence.
-                    if len(other.canonical_domain) > len(host.canonical_domain):
+                    # Absorb ``other`` into ``host``.  Pick the
+                    # cleanest-looking canonical_domain to display.
+                    #
+                    # Preference tiers:
+                    #   1. Clean (survives _strip_ocr_prefix_noise
+                    #      unchanged) wins over dirty.  Catches
+                    #      "Wivwquardianlife.com" → "guardianlife.com".
+                    #   2. Among two clean names, LONGER wins.  OCR
+                    #      drops chars more often than adds them, so
+                    #      the longer clean form is usually the real
+                    #      domain.  Catches "googe.com" (typo) vs
+                    #      "google.com" (real) → real wins.
+                    #   3. Among two dirty names, keep the host (no
+                    #      swap) — we can't reliably tell which has
+                    #      less corruption.
+                    host_clean = (
+                        _strip_ocr_prefix_noise(host.canonical_domain)
+                        == host.canonical_domain.lower()
+                    )
+                    other_clean = (
+                        _strip_ocr_prefix_noise(other.canonical_domain)
+                        == other.canonical_domain.lower()
+                    )
+                    prefer_other = False
+                    if other_clean and not host_clean:
+                        prefer_other = True
+                    elif other_clean and host_clean:
+                        if len(other.canonical_domain) > len(host.canonical_domain):
+                            prefer_other = True
+                    if prefer_other:
                         host.canonical_domain = other.canonical_domain
                         host.representative_app_name = (
                             other.representative_app_name or host.representative_app_name
@@ -503,13 +651,27 @@ def _clusters_to_candidates(
         elif cluster.dedup_basis == "single_instance":
             confidence = min(confidence, 1.0)
 
-        # Display label — prefer the longest non-empty app_name across
-        # members, falling back to the canonical domain.
-        names = sorted(
-            {m.instance.app_name for m in cluster.members if m.instance.app_name},
-            key=len,
-            reverse=True,
-        )
+        # Display label — prefer the cleanest-looking app_name and
+        # use length as tiebreaker.  Sort key tiers:
+        #   1. Clean (survives OCR prefix-strip unchanged) wins over
+        #      dirty (had to be stripped).  Handles cases like
+        #      "Wivwquardianlife.com" vs "guardianlife.com" → clean wins.
+        #   2. Among equally-clean names, LONGER wins.  OCR more often
+        #      drops characters than adds them, so the longer form is
+        #      usually the original.  Handles "googe.com" (typo) vs
+        #      "google.com" (real) → real wins.
+        unique_names = {
+            m.instance.app_name
+            for m in cluster.members
+            if m.instance.app_name
+        }
+        def _name_sort_key(n: str) -> tuple[int, int]:
+            is_dirty = 0 if _strip_ocr_prefix_noise(n) == n.lower() else 1
+            # Negative length so longer (clean) names sort first within
+            # the same dirty tier.
+            return (is_dirty, -len(n))
+
+        names = sorted(unique_names, key=_name_sort_key)
         display_label = (
             names[0]
             if names

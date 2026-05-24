@@ -417,6 +417,13 @@ class ApiClient {
     frame_asset_path: string;
     timestamp_seconds: number;
     is_keyframe: boolean;
+    // Phase 1.7 — extended fields the backend already returns via
+    // row_to_dict.  Optional so older callers stay compatible.
+    extracted_text?: string;
+    url_or_path?: string;
+    ui_elements_json?: Array<Record<string, unknown>>;
+    scene_id?: string | null;
+    ocr_confidence?: number;
   }>> {
     const out: Array<{
       frame_id: string;
@@ -424,6 +431,11 @@ class ApiClient {
       frame_asset_path: string;
       timestamp_seconds: number;
       is_keyframe: boolean;
+      extracted_text?: string;
+      url_or_path?: string;
+      ui_elements_json?: Array<Record<string, unknown>>;
+      scene_id?: string | null;
+      ocr_confidence?: number;
     }> = [];
     let page = 1;
     while (true) {
@@ -1126,8 +1138,16 @@ class ApiClient {
 
   async getVisualEvidenceGraph(
     artifactId: string,
+    options?: { includeStoryboardOverlays?: boolean },
   ): Promise<import('../types/canonical').VisualEvidenceGraph> {
-    const { data } = await this.client.get(`/v1/artifacts/${artifactId}/visual-evidence-graph`);
+    const params: Record<string, string> = {};
+    if (options?.includeStoryboardOverlays) {
+      params.include_storyboard_overlays = 'true';
+    }
+    const { data } = await this.client.get(
+      `/v1/artifacts/${artifactId}/visual-evidence-graph`,
+      { params },
+    );
     return data;
   }
 

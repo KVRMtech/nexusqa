@@ -11,7 +11,7 @@
 //  the StoryboardPayload (see client/src/types/canonical.ts).
 // ═══════════════════════════════════════════════════════════════
 
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { MonitorPlay, AlertTriangle, Sparkles, Clock, Layers } from 'lucide-react';
 import clsx from 'clsx';
 import api from '../../services/api';
@@ -67,11 +67,13 @@ function Panel({
   layout: 'vertical' | 'hero';
   onClick?: (panel: StoryboardPanel) => void;
 }) {
-  // Prefer the explicit URL the backend gave us; fall back to building
-  // it from the artifact + frame id when missing (older composer).
-  const frameUrl = useMemo(() => {
+  // Annotated PNG URL — first preference.  When this 404s (because
+  // the raw source frame isn't reachable from platform-api's storage
+  // backend, or annotation hasn't been precomputed) we silently fall
+  // back to the raw frame served by the eyes-engine.  Users always
+  // get a usable image.
+  const annotatedUrl = useMemo(() => {
     if (panel.annotated_frame_url) {
-      // Append the JWT so a plain <img> tag works.
       const token = sessionStorage.getItem('nexus_token') || '';
       const sep = panel.annotated_frame_url.includes('?') ? '&' : '?';
       return token
@@ -83,6 +85,23 @@ function Panel({
     }
     return null;
   }, [panel, artifactId]);
+
+  // Raw frame URL via eyes-engine — fallback when annotation isn't
+  // available.  Uses the asset path the pipeline wrote to.
+  const rawFrameUrl = useMemo(() => {
+    if (!panel.representative_frame_path) return null;
+    return api.getFrameImageUrl
+      ? api.getFrameImageUrl(panel.representative_frame_path)
+      : null;
+  }, [panel.representative_frame_path]);
+
+  const [annotatedFailed, setAnnotatedFailed] = useState(false);
+  const [rawFailed, setRawFailed] = useState(false);
+  const frameUrl =
+    annotatedFailed && rawFrameUrl
+      ? rawFrameUrl
+      : annotatedUrl ?? rawFrameUrl;
+  const showingFallback = annotatedFailed && Boolean(rawFrameUrl);
 
   const caption = (panel.caption_short || '').trim();
   const isHero = layout === 'hero';
@@ -117,19 +136,42 @@ function Panel({
               'w-full h-full object-cover',
               'transition-transform duration-500 group-hover:scale-[1.02]',
             )}
-            onError={(e) => {
-              // Hide the broken image so the placeholder underneath shows.
-              (e.target as HTMLImageElement).style.opacity = '0';
+            onError={() => {
+              // First failure: try the raw frame.  Second failure:
+              // surface the placeholder underneath.
+              if (!annotatedFailed && rawFrameUrl) {
+                setAnnotatedFailed(true);
+                return;
+              }
+              setRawFailed(true);
             }}
           />
         ) : null}
 
-        {/* Placeholder behind the image — shown when the image fails
-            (annotated PNG not yet generated, or raw frame missing). */}
-        <div className="absolute inset-0 flex flex-col items-center justify-center text-slate-400 text-xs gap-2 -z-0">
-          <MonitorPlay className="h-8 w-8 opacity-40" />
-          <span>{frameUrl ? 'Annotated frame pending…' : 'No representative frame'}</span>
-        </div>
+        {/* Placeholder shown only when both annotated AND raw fail. */}
+        {(!frameUrl || rawFailed) ? (
+          <div className="absolute inset-0 flex flex-col items-center justify-center text-slate-400 text-xs gap-2">
+            <MonitorPlay className="h-8 w-8 opacity-40" />
+            <span>
+              {!panel.representative_frame_id
+                ? 'No representative frame'
+                : 'Frame unavailable'}
+            </span>
+          </div>
+        ) : null}
+
+        {/* Tiny indicator when we silently fell back to the raw frame
+            so operators can see that annotation is missing without a
+            broken image. */}
+        {showingFallback && !rawFailed ? (
+          <div
+            className="absolute top-3 right-3 px-2 py-0.5 rounded-md text-[9px] font-bold uppercase tracking-wider bg-slate-900/70 text-slate-200 backdrop-blur-sm pointer-events-none"
+            style={{ zIndex: 1 }}
+            title="Annotated PNG not yet rendered; showing raw frame"
+          >
+            raw
+          </div>
+        ) : null}
 
         {/* Top-right cluster: panel quality badge + app badge */}
         <div className="absolute top-3 right-3 flex items-center gap-1.5">

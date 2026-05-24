@@ -16,3 +16,10 @@ rapidfuzz>=3.5,<4.0
 # wheels are available for Linux/x86_64 so the platform-api image pulls
 # a binary wheel — no compilation step at build time.
 Pillow>=10.0,<12.0
+# gcloud-aio-storage is the GCS backend driver loaded by
+# nexus_sdk.storage when NEXUS_STORAGE_BACKEND=gcs.  Required for
+# the frame annotator to upload annotated PNGs to the same bucket
+# the canonical pipeline reads from.  Without this dependency the
+# storage init silently degrades and uploads fail with
+# ModuleNotFoundError at write time.
+gcloud-aio-storage>=9.0,<10.0

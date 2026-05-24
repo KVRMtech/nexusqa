@@ -958,6 +958,32 @@ export interface EvidenceStep {
 }
 
 /** Phase A.3 — per-frame cursor reading + click/drag flags. */
+/** detection_method values used by the cursor pipeline:
+ *    motion              — real, motion-detected cursor (CursorTracker SDK)
+ *    template / ml       — alternative real-cursor detectors
+ *    url_delta           — synthesized: URL changed between adjacent frames
+ *    ocr_new_block       — synthesized: new OCR token cluster appeared
+ *    ocr_removed_block   — synthesized: OCR cluster disappeared
+ *    ui_element_change   — synthesized: button/link visible-then-gone
+ *    control_value       — synthesized: evidence_control has observed_value
+ *    frame_action_promotion — synthesized: pipeline's own frame_action
+ *                             with action_kind in click/open_overlay/etc.
+ *
+ *  Synthesized events have cursor_x = cursor_y = 0 and carry rich
+ *  metadata under metadata_json describing what triggered the inference.
+ */
+export type CursorEventDetectionMethod =
+  | 'motion' | 'template' | 'ml'
+  | 'url_delta' | 'ocr_new_block' | 'ocr_removed_block'
+  | 'ui_element_change' | 'control_value' | 'frame_action_promotion'
+  | 'form_value_inferred'    // insurance-vocabulary regex (Strategy 6)
+  | 'placeholder_transition' // GENERIC placeholder→value first fill (Strategy 7 Case A)
+  | 'field_re_edit'          // value changed again after first fill (Strategy 7 Case B)
+  | 'labelled_value_change'  // label learned by punctuation, no placeholder (Strategy 7 Case C / Strategy 8)
+  | 'field_interaction_unreadable' // captcha / masked / blurred (Strategy 11)
+  | 'audio_intent'           // SME narration anchored to a frame (Strategy 9)
+  | 'viewport_shift';        // scroll / focus / pane change (Strategy 10)
+
 export interface CursorEvent {
   event_id: string;
   frame_id: string | null;
@@ -968,7 +994,7 @@ export interface CursorEvent {
   velocity: number;
   is_click: boolean;
   is_drag: boolean;
-  detection_method: 'motion' | 'template' | 'ml';
+  detection_method: CursorEventDetectionMethod;
   confidence: number;
   metadata_json: Record<string, unknown>;
 }
@@ -1012,6 +1038,41 @@ export interface VisualFrame {
   application_type: string;
   llava_description: string;
   scene_id: string | null;
+}
+
+/** A single UI element detected on a frame (Phase 1.7 — surfaced from
+ *  visual_frames.ui_elements_json so the 3D Journey detail panel can show
+ *  real button/text-field/dropdown affordances instead of OCR deltas). */
+export interface FrameUiElement {
+  element_type: string | null;
+  text: string | null;
+  confidence: number;
+  properties?: {
+    label?: string;
+    entity_id?: string;
+    action_kind?: string;
+    inferred_from?: string;
+    observed_value?: string;
+    persistence_count?: number;
+  };
+  bbox?: number[];
+}
+
+/** Phase 1.7 — extended frame row exposed by /api/v1/artifacts/{id}/frames.
+ *  The backend already returns these columns via row_to_dict; this type
+ *  matches the actual wire shape so the frontend can render per-frame
+ *  evidence (OCR, URL, UI elements) without a separate request. */
+export interface FrameRowExtended {
+  frame_id: string;
+  frame_index: number;
+  frame_asset_path: string;
+  timestamp_seconds: number;
+  is_keyframe: boolean;
+  extracted_text?: string;
+  url_or_path?: string;
+  ui_elements_json?: FrameUiElement[];
+  scene_id?: string | null;
+  ocr_confidence?: number;
 }
 
 /** An app instance (Phase 5): a contiguous range of scenes in the same application. */
@@ -1165,6 +1226,25 @@ export interface VisualEvidenceGraph {
   };
   /** Phase 8: four-level readiness (not_ready | preview_only | ready | strong_ready). */
   visual_e2e_status?: 'not_ready' | 'preview_only' | 'ready' | 'strong_ready';
+
+  // Phase 1.7 storyboard overlays — populated only when the page
+  // requests ``?include_storyboard_overlays=true``.  Older endpoint
+  // versions or backends without storyboard data return empty
+  // objects/arrays, so callers can read them unconditionally.
+
+  /** Dedup'd app groupings (1 entry per real app, not per OCR boundary). */
+  app_groupings?: StoryboardApp[];
+  /** Scene IDs flagged as noise by the storyboard composer (hide by default). */
+  noise_scene_ids?: string[];
+  /** scene_id → short LLM caption + narrative + quality + model. */
+  scene_captions?: Record<
+    string,
+    { short: string; narrative: string; quality: string; model: string }
+  >;
+  /** scene_id → annotated PNG endpoint URL (auth-gated, JWT required). */
+  annotated_frame_urls?: Record<string, string>;
+  /** scene_id → app_grouping_id (replaces the raw AppInstance lookup). */
+  scene_to_app_grouping?: Record<string, string>;
 }
 
 /** Gate result for the visual flow approval surface (Phase 8). */

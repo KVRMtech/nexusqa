@@ -12,12 +12,13 @@ the frame, click point highlighted, OCR text boxes outlined, and a
 caption banner along the bottom.  The result is cached in the
 artifact store under a versioned prefix so subsequent reads are cheap.
 
-Inputs are read via the same ``ArtifactStore`` SDK class the pipeline
-uses, so storage backend changes (local → GCS → S3) do not require
-any changes here.  Outputs go to the same store under a different
-namespace (``frames``) and a versioned subprefix so re-rendering
-after a style change writes to a new path and old PNGs can be garbage
-collected lazily.
+Raw frames are fetched via the eyes-engine HTTP API
+(``GET /api/v1/eyes/frames/<asset_path>``) rather than directly
+through ``ArtifactStore``.  This decouples platform-api from caring
+which storage backend the pipeline used — eyes always returns the
+bytes from wherever it wrote them.  Annotated outputs are still
+written through ``ArtifactStore`` to platform-api's configured
+backend so the cache survives container restarts.
 
 Production safety
 =================
@@ -53,7 +54,9 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from typing import Sequence
+from urllib.parse import quote
 
+import httpx
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -182,7 +185,6 @@ class RenderedAnnotation:
 def _render_overlays(
     raw_bytes: bytes,
     inputs: FrameAnnotationInputs,
-    *,
     config: FrameAnnotatorConfig,
 ) -> RenderedAnnotation:
     """Pure transform: decode → draw → encode.  Not async, called from a worker.
@@ -517,6 +519,20 @@ class FrameAnnotator:
     Constructed once at platform-api startup (FastAPI ``app.state``)
     and reused for every request.  Thread-safe by virtue of httpx +
     Pillow both being safe to call from multiple coroutines.
+
+    Raw-frame fetch strategy
+    ------------------------
+    Instead of using ``ArtifactStore.download_bytes(asset_path)`` we
+    issue an HTTP GET against the eyes-engine's internal frame route
+    (``http://nexus-eyes:8003/api/v1/eyes/frames/<asset_path>``).
+    This sidesteps any storage-backend mismatch between platform-api
+    and eyes — eyes always serves bytes from wherever it wrote them
+    (local disk, GCS, S3, ...) including 307 redirects to signed URLs.
+
+    Annotated PNGs are still written through ``ArtifactStore`` so the
+    cache survives container restarts.  When platform-api is on local
+    storage, this means the cache lives on its own volume; when on
+    GCS it lives in the shared bucket.
     """
 
     def __init__(
@@ -524,13 +540,75 @@ class FrameAnnotator:
         *,
         artifact_store: ArtifactStore,
         config: FrameAnnotatorConfig,
+        eyes_base_url: str = "http://nexus-eyes:8003",
     ) -> None:
         self._store = artifact_store
         self._config = config
+        self._eyes_base_url = eyes_base_url.rstrip("/")
+        # Long-lived client — shared across requests.  Per-call
+        # timeouts override the default via httpx.Timeout argument.
+        # follow_redirects=True so eyes' 307→signed-URL redirect works.
+        self._http = httpx.AsyncClient(
+            timeout=httpx.Timeout(config.render_timeout_s),
+            follow_redirects=True,
+        )
 
     @property
     def pil_available(self) -> bool:
         return _PIL_AVAILABLE
+
+    async def close(self) -> None:
+        """Close the HTTP client.  Call at platform-api shutdown."""
+        try:
+            await self._http.aclose()
+        except Exception:  # pragma: no cover - defensive
+            pass
+
+    async def _fetch_raw_via_eyes(
+        self, asset_path: str, *, auth_token: str,
+    ) -> bytes | None:
+        """GET raw frame bytes from eyes-engine HTTP API.
+
+        ``auth_token`` is the user's JWT; eyes-engine enforces the same
+        tenant isolation it does for browser frame requests so we
+        cannot accidentally surface cross-tenant content even if a
+        caller passed the wrong tenant_id.  Returns ``None`` on any
+        error (network, 4xx, 5xx) so the caller can degrade.
+        """
+        if not asset_path:
+            return None
+        # The asset path is tenant/session/wf/.../frames/foo.png with
+        # slashes inside.  Eyes-engine treats the whole tail as a
+        # path-parameter so we forward the slashes literally.  Each
+        # path SEGMENT still needs URL-safe encoding (handle spaces,
+        # plus-signs, etc.) — quote with safe='/' preserves the slashes.
+        safe_path = quote(asset_path.lstrip("/"), safe="/")
+        url = f"{self._eyes_base_url}/api/v1/eyes/frames/{safe_path}"
+        headers: dict[str, str] = {}
+        if auth_token:
+            headers["Authorization"] = f"Bearer {auth_token}"
+        try:
+            response = await self._http.get(url, headers=headers)
+        except httpx.HTTPError as exc:
+            logger.warning(
+                "storyboard.frame_annotator.eyes_transport_error",
+                extra={
+                    "asset_path": asset_path,
+                    "error": f"{type(exc).__name__}: {str(exc)[:200]}",
+                },
+            )
+            return None
+        if response.status_code >= 400:
+            logger.warning(
+                "storyboard.frame_annotator.eyes_http_error",
+                extra={
+                    "asset_path": asset_path,
+                    "status": response.status_code,
+                    "body_preview": response.text[:200],
+                },
+            )
+            return None
+        return response.content
 
     async def annotate_frame(
         self,
@@ -538,6 +616,7 @@ class FrameAnnotator:
         *,
         frame_id: str,
         tenant_id: str,
+        auth_token: str = "",
         caption_override: str | None = None,
         bypass_cache: bool = False,
     ) -> AnnotatedFrame | None:
@@ -609,24 +688,29 @@ class FrameAnnotator:
                         },
                     )
 
-        # Cache miss — fetch + render + write.
+        # Cache miss — fetch via eyes HTTP, render, then upload + record.
         if not inputs.frame_asset_path:
             return None
 
         try:
             raw_bytes = await asyncio.wait_for(
-                self._store.download_bytes(inputs.frame_asset_path),
+                self._fetch_raw_via_eyes(
+                    inputs.frame_asset_path, auth_token=auth_token,
+                ),
                 timeout=config.render_timeout_s,
             )
-        except (asyncio.TimeoutError, Exception) as exc:  # pragma: no cover
+        except asyncio.TimeoutError:
             logger.warning(
-                "storyboard.frame_annotator.fetch_failed",
+                "storyboard.frame_annotator.fetch_timeout",
                 extra={
                     "frame_id": frame_id,
                     "asset_path": inputs.frame_asset_path,
-                    "error": str(exc)[:200],
+                    "timeout_s": config.render_timeout_s,
                 },
             )
+            return None
+        if raw_bytes is None:
+            # _fetch_raw_via_eyes already logged the underlying error.
             return None
 
         # Render in a thread so Pillow does not block the event loop.
@@ -783,12 +867,17 @@ async def precompute_panel_frames(
     tenant_id: str,
     annotator: FrameAnnotator,
     concurrency: int = 4,
+    auth_token: str = "",
 ) -> AnnotatorBatchResult:
     """Render annotated PNGs for every panel's representative frame.
 
     Called by the composer after captions are generated so that the
     storyboard response can return ready-to-display URLs.  Safe to
     call repeatedly — uses the cache on hit.
+
+    ``auth_token`` is forwarded to eyes-engine for raw-frame fetches.
+    Empty string is acceptable when called from internal contexts
+    where eyes is configured to allow same-network traffic.
     """
     started = time.monotonic()
     panels_q = await session.execute(
@@ -812,6 +901,7 @@ async def precompute_panel_frames(
                 session,
                 frame_id=frame_id,
                 tenant_id=tenant_id,
+                auth_token=auth_token,
                 caption_override=caption,
             )
 

@@ -3465,6 +3465,294 @@ class SpineEngine(NexusEngine):
                 "errors": errors,
             }
 
+        # ── Phase 1.7 — Synthesize Clicks (cursor-less fallback) ──
+        #
+        # Many SME screen recordings strip the mouse cursor (Windows
+        # accessibility settings, certain capture tools), which causes
+        # the motion-based CursorTracker to produce zero events.  That
+        # cascade kills evidence_steps for the artifact even though the
+        # rest of the pipeline (OCR, LLaVA, controls) clearly shows the
+        # user did interact.
+        #
+        # This endpoint is an ADDITIVE fallback — it does not modify the
+        # frozen canonical pipeline.  It can be called after
+        # ``/persist-action-evidence`` for any artifact whose
+        # cursor_events table is empty (or sparse).  It reads the same
+        # frame / scene / control data the rest of the pipeline persisted,
+        # runs :func:`nexus_sdk.evidence.click_synthesizer.synthesize_clicks`,
+        # and bulk-inserts the resulting CursorEvent records with
+        # ``detection_method`` ∈ {url_delta, ocr_new_block,
+        # ocr_removed_block, ui_element_change, control_value}.
+        #
+        # Because the triangulator's ``_cursor_signal`` reader keys on
+        # ``frame_index`` and ``is_click`` only (not detection_method),
+        # synthesized events feed evidence_steps generation immediately
+        # without any triangulator change.
+
+        @app.post("/api/v1/spine/synthesize-clicks")
+        async def synthesize_clicks_endpoint(
+            request: dict = None,
+            user: NexusUser = Depends(get_current_user),
+        ):
+            """Synthesize cursor-click events for an artifact whose
+            recording does not contain a visible mouse cursor.
+
+            Request body:
+                {
+                    "tenant_id": str,
+                    "artifact_id": str,
+                    "replace_existing": bool,  # default True — delete
+                                               # prior synthesized events
+                                               # (detection_method != 'motion')
+                                               # before inserting fresh ones
+                }
+
+            Response:
+                {
+                    "success": bool,
+                    "artifact_id": str,
+                    "events_synthesized": int,
+                    "events_persisted": int,
+                    "by_detection_method": {method: count, ...},
+                    "errors": [str, ...]
+                }
+            """
+            if request is None:
+                request = {}
+
+            tenant_id = request.get("tenant_id", "")
+            artifact_id = request.get("artifact_id", "")
+            replace_existing = bool(request.get("replace_existing", True))
+
+            errors: list[str] = []
+            events_persisted = 0
+            by_method: dict[str, int] = {}
+
+            if not artifact_id:
+                return {
+                    "success": False,
+                    "artifact_id": artifact_id,
+                    "events_synthesized": 0,
+                    "events_persisted": 0,
+                    "by_detection_method": {},
+                    "errors": ["artifact_id required"],
+                }
+            if not hasattr(engine, "db_pool") or not engine.db_pool:
+                return {
+                    "success": False,
+                    "artifact_id": artifact_id,
+                    "events_synthesized": 0,
+                    "events_persisted": 0,
+                    "by_detection_method": {},
+                    "errors": ["database not available"],
+                }
+
+            from nexus_sdk.db.models import (
+                VisualFrameRow, VisualSceneRow, EvidenceControlRow,
+                CursorEventRow, CanonicalArtifactRow, TranscriptSegmentRow,
+            )
+            from sqlalchemy import select as sa_select, text as sa_text
+            from sqlalchemy.dialects.postgresql import insert as pg_insert
+            from nexus_sdk.evidence.click_synthesizer import synthesize_clicks
+            from nexus_sdk.evidence.step_persistence import cursor_events_to_db_rows
+
+            # ── Load frames, scenes, controls, transcripts, session_id ──
+            frames: list[dict] = []
+            scenes: list[dict] = []
+            controls: list[dict] = []
+            transcript_segments: list[dict] = []
+            session_id = ""
+            try:
+                async with engine.db_pool() as load_session:
+                    if tenant_id:
+                        await load_session.execute(
+                            sa_text(
+                                "SELECT set_config('nexus.current_tenant_id', :tid, true)"
+                            ),
+                            {"tid": tenant_id},
+                        )
+                    art = await load_session.execute(
+                        sa_select(CanonicalArtifactRow).where(
+                            CanonicalArtifactRow.artifact_id == artifact_id,
+                        )
+                    )
+                    art_row = art.scalars().first()
+                    if art_row is None:
+                        return {
+                            "success": False,
+                            "artifact_id": artifact_id,
+                            "events_synthesized": 0,
+                            "events_persisted": 0,
+                            "by_detection_method": {},
+                            "errors": ["artifact not found"],
+                        }
+                    session_id = art_row.session_id or ""
+
+                    f_rows = await load_session.execute(
+                        sa_select(VisualFrameRow).where(
+                            VisualFrameRow.artifact_id == artifact_id,
+                        ).order_by(VisualFrameRow.frame_index)
+                    )
+                    for f in f_rows.scalars().all():
+                        frames.append({
+                            "frame_id": f.frame_id,
+                            "frame_index": int(f.frame_index or 0),
+                            "timestamp_seconds": float(f.timestamp_seconds or 0.0),
+                            "extracted_text": f.extracted_text or "",
+                            "url_or_path": f.url_or_path or "",
+                            "ui_elements_json": f.ui_elements_json or [],
+                        })
+
+                    s_rows = await load_session.execute(
+                        sa_select(VisualSceneRow).where(
+                            VisualSceneRow.artifact_id == artifact_id,
+                        ).order_by(VisualSceneRow.scene_index)
+                    )
+                    for s in s_rows.scalars().all():
+                        scenes.append({
+                            "scene_id": s.scene_id,
+                            "scene_index": int(s.scene_index or 0),
+                            "scene_state_summary": s.scene_state_summary or {},
+                        })
+
+                    c_rows = await load_session.execute(
+                        sa_select(EvidenceControlRow).where(
+                            EvidenceControlRow.artifact_id == artifact_id,
+                        )
+                    )
+                    for c in c_rows.scalars().all():
+                        controls.append({
+                            "control_id": c.control_id,
+                            "frame_id": c.frame_id or "",
+                            "label_text": c.label_text or "",
+                            "display_label": c.display_label or "",
+                            "observed_value": c.observed_value or "",
+                            "value_text": c.value_text or "",
+                            "element_type": c.element_type or "",
+                            "action_kind": c.action_kind or "",
+                        })
+
+                    # Phase 1.7 — load transcript segments so the audio-
+                    # intent strategy can surface narrated actions OCR
+                    # missed (fast typing / blurred text / masked input).
+                    # The DB schema is post-PII-redaction
+                    # (text_redacted / start_ms / end_ms / ordinal),
+                    # which differs from the SDK ORM model.  We use
+                    # raw SQL here for resilience to that drift.
+                    if session_id:
+                        t_rows = await load_session.execute(
+                            sa_text("""
+                                SELECT text_redacted AS seg_text,
+                                       start_ms,
+                                       end_ms,
+                                       ordinal
+                                FROM transcript_segments
+                                WHERE session_id = :sid
+                                ORDER BY ordinal
+                            """),
+                            {"sid": session_id},
+                        )
+                        for r in t_rows:
+                            m = r._mapping
+                            transcript_segments.append({
+                                "text": m["seg_text"] or "",
+                                "start_time": float(m["start_ms"] or 0) / 1000.0,
+                                "end_time": float(m["end_ms"] or 0) / 1000.0,
+                                "segment_index": int(m["ordinal"] or 0),
+                            })
+            except Exception as exc:
+                errors.append(f"load: {exc}")
+                return {
+                    "success": False,
+                    "artifact_id": artifact_id,
+                    "events_synthesized": 0,
+                    "events_persisted": 0,
+                    "by_detection_method": {},
+                    "errors": errors,
+                }
+
+            if not frames:
+                return {
+                    "success": True,
+                    "artifact_id": artifact_id,
+                    "events_synthesized": 0,
+                    "events_persisted": 0,
+                    "by_detection_method": {},
+                    "errors": ["no frames"],
+                }
+
+            # ── Run the synthesizer ──────────────────────────────
+            try:
+                events = synthesize_clicks(
+                    frames=frames,
+                    controls=controls,
+                    scenes=scenes,
+                    transcript_segments=transcript_segments,
+                )
+            except Exception as exc:
+                errors.append(f"synthesize: {exc}")
+                return {
+                    "success": False,
+                    "artifact_id": artifact_id,
+                    "events_synthesized": 0,
+                    "events_persisted": 0,
+                    "by_detection_method": {},
+                    "errors": errors,
+                }
+
+            events_synthesized = len(events)
+            for e in events:
+                by_method[e.detection_method] = by_method.get(e.detection_method, 0) + 1
+
+            # ── Persist (delete prior synthesized rows, then insert) ──
+            try:
+                frame_id_lookup = {
+                    int(f["frame_index"]): f["frame_id"] for f in frames if f.get("frame_id")
+                }
+                rows = cursor_events_to_db_rows(
+                    events=events,
+                    artifact_id=artifact_id,
+                    tenant_id=tenant_id,
+                    session_id=session_id,
+                    frame_id_lookup=frame_id_lookup,
+                )
+
+                async with engine.db_pool() as write_session:
+                    if tenant_id:
+                        await write_session.execute(
+                            sa_text(
+                                "SELECT set_config('nexus.current_tenant_id', :tid, true)"
+                            ),
+                            {"tid": tenant_id},
+                        )
+                    if replace_existing:
+                        await write_session.execute(
+                            sa_text(
+                                "DELETE FROM cursor_events "
+                                "WHERE artifact_id = :aid "
+                                "AND detection_method <> 'motion'"
+                            ),
+                            {"aid": artifact_id},
+                        )
+                    if rows:
+                        await write_session.execute(
+                            CursorEventRow.__table__.insert(),
+                            rows,
+                        )
+                        events_persisted = len(rows)
+                    await write_session.commit()
+            except Exception as exc:
+                errors.append(f"persist: {exc}")
+
+            return {
+                "success": len(errors) == 0,
+                "artifact_id": artifact_id,
+                "events_synthesized": events_synthesized,
+                "events_persisted": events_persisted,
+                "by_detection_method": by_method,
+                "errors": errors,
+            }
+
         # ── Update Artifact Quality Gate ──────────────────────
 
         @app.post("/api/v1/spine/artifacts/{artifact_id}/quality-gate")
