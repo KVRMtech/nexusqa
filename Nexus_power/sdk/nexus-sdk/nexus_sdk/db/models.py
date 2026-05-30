@@ -2288,3 +2288,90 @@ class AnnotatedFrameCacheRow(Base):
         Index("ix_annotated_frame_cache_artifact", "artifact_id"),
         Index("ix_annotated_frame_cache_tenant", "tenant_id"),
     )
+
+
+class SceneActionRow(Base):
+    """
+    Multimodal-LLM-extracted semantic user action per scene.
+
+    The canonical pipeline's frame-action extractor (OCR-text-diff)
+    produces signals like "text 'TX' appeared on the page" but cannot
+    interpret that as "user selected TX from a State dropdown".  That
+    semantic interpretation is what this table stores — one row per
+    scene with the LLM's structured view of what the user did:
+
+        verb=select, target_label="What state do you live in?",
+        target_kind=dropdown, value="TX",
+        confidence=0.95, automation_ready=True,
+        reasoning="Dropdown showed 'TX' in After frame after being
+                   blank in Before frame."
+
+    Actions are keyed by (scene_id, extractor_version) so bumping
+    the version forces re-extraction without dropping existing rows.
+
+    Populated by ``platform/api/app/services/storyboard/action_extractor.py``;
+    consumed by the visual-flow API response, the 3D Journey bottom
+    detail panel, the test exporters (Cypress/Playwright/Gherkin), and
+    the quality gate (a new ``action_evidence_coverage`` signal).
+
+    See migration 031_scene_actions for the DDL.  See
+    ``memory/action_capture_extraction_limit.md`` for why frame-diff
+    extraction is insufficient and this LLM layer is needed.
+    """
+
+    __tablename__ = "scene_actions"
+
+    action_id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_new_id)
+    scene_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("visual_scenes.scene_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    artifact_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("canonical_artifacts.artifact_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    tenant_id: Mapped[str] = mapped_column(String(64), nullable=False)
+
+    # Ordinal within (scene_id, extractor_version).  0 for single-action
+    # scenes (the common case); 0,1,2,...,N-1 for long-form-fill scenes
+    # where the LLM extracted multiple distinct actions.  See migration
+    # 033_scene_actions_subaction_index.
+    subaction_index: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+    # Structured action shape (see schemas.SceneAction Pydantic model).
+    verb: Mapped[str] = mapped_column(String(20), default="none", nullable=False)
+    target_label: Mapped[str] = mapped_column(String(500), default="", nullable=False)
+    target_kind: Mapped[str] = mapped_column(String(20), default="other", nullable=False)
+    value: Mapped[str | None] = mapped_column(Text, nullable=True)
+    confidence: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    automation_ready: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False,
+    )
+    reasoning: Mapped[str] = mapped_column(String(500), default="", nullable=False)
+
+    # Reconciliation: which existing pipeline signals corroborated the LLM
+    # output.  Keys include ocr_text_match, control_match, cursor_event_match,
+    # url_changed, audio_intent_match, sources (list).
+    evidence_signals: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+
+    # Provenance + cost tracking.
+    extractor_model: Mapped[str] = mapped_column(String(100), default="", nullable=False)
+    extractor_version: Mapped[str] = mapped_column(String(50), default="v1", nullable=False)
+    generation_latency_ms: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    prompt_tokens: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    completion_tokens: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utc_now, nullable=False,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utc_now, nullable=False,
+    )
+
+    __table_args__ = (
+        Index("ix_scene_actions_artifact", "artifact_id"),
+        Index("ix_scene_actions_tenant", "tenant_id"),
+        Index("ix_scene_actions_verb_kind", "tenant_id", "verb", "target_kind"),
+    )

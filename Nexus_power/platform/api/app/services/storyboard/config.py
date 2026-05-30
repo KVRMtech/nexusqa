@@ -327,6 +327,88 @@ class ComposerConfig:
 
 
 @dataclass(frozen=True)
+class ActionExtractorConfig:
+    """Tunables for ``action_extractor``.
+
+    The extractor calls a multimodal LLM per scene with before/after
+    frame screenshots + OCR text + URL + any existing cursor/control
+    signals.  The LLM returns a structured ``SceneAction`` Pydantic
+    object that gets reconciled with the existing pipeline signals
+    and written to the ``scene_actions`` table.
+
+    Defaults target Claude Sonnet 4.6 with image input + prompt
+    caching.  Per-recording cost averages ~$0.10-0.20 with caching;
+    self-hosted vision models are supported via the LLM router tier
+    abstraction for tenants with on-prem requirements.
+
+    See ``platform/api/app/services/storyboard/action_extractor.py``.
+    """
+
+    # Stamped on every scene_actions row.  Bumping this in env
+    # (STORYBOARD_ACTION_EXTRACTOR_VERSION) forces re-extraction of
+    # every artifact in the database without dropping rows.
+    version: str = "v1"
+
+    # Task name passed to ``LLMRouter.complete(task=...)``.  Operators
+    # map this to a vision-capable tier in env via
+    # ``LLM_TASK_ACTION_EXTRACTION=tier_vision``.  When no LLM tier is
+    # configured the extractor falls back to a deterministic shape
+    # built from existing evidence_controls (action_kind + label only,
+    # no value capture) so the storyboard stays usable offline.
+    llm_task_name: str = "action_extraction"
+
+    # How many scene extractions to run CONCURRENTLY.  Bounded by a
+    # semaphore so a slow LLM does not exhaust the event loop.
+    # Anthropic tier supports 5-10 reliably; self-hosted is usually 1-2.
+    concurrency: int = 4
+
+    # Per-call timeout override.  None defers to the LLM tier's own
+    # timeout setting (LLM_TIER_<NAME>_TIMEOUT_S).  Multimodal calls
+    # are typically 5-15s so the tier default of 30s is usually
+    # adequate; bump only when self-hosted models are slow.
+    request_timeout_s: float | None = None
+
+    # Maximum total wall time for one artifact's action-extraction
+    # pass.  Beyond this the composer returns whatever has been
+    # generated and schedules the rest for the next request.
+    total_timeout_s: float = 300.0
+
+    # When True, action extraction for noise-flagged panels is skipped
+    # (saves LLM tokens on filtered-out scenes).  Toggle off if you
+    # need actions on noise scenes for audit.
+    skip_noise: bool = True
+
+    # Per-LLM-call temperature.  Action extraction needs deterministic
+    # structured output — keep at 0 or near-0.
+    llm_temperature: float = 0.0
+
+    # Per-LLM-call max output tokens.  The structured JSON output is
+    # typically 100-200 tokens; 512 leaves headroom for verbose
+    # reasoning fields without blowing the budget.
+    llm_max_tokens: int = 512
+
+    # Confidence floor below which an extracted action is recorded
+    # but marked automation_ready=False regardless of what the LLM
+    # claimed.  Test exporters can opt out by reading these too.
+    min_confidence_for_automation: float = 0.65
+
+    # When True, sends BOTH the before-scene and after-scene
+    # representative frames to the LLM (consumes ~2x tokens but is
+    # the only way to detect transitions like dropdown selection).
+    # Disable only when latency or cost pressure is severe AND a
+    # before/after diff is not needed for the workflow type.
+    include_before_frame: bool = True
+
+    # Maximum dimensions for the frame screenshots sent to the LLM,
+    # in pixels.  The Anthropic vision API has a 5 MB per-image hard
+    # limit; UI screenshots at 1568x1568 routinely PNG-encode to
+    # 3-5 MB which can silently 400 the request.  1024 with JPEG q85
+    # encoding (see _maybe_downsize) typically lands at 150-400 KB
+    # per image — well under the limit and fast.  0 = no resize.
+    image_max_dimension_px: int = 1024
+
+
+@dataclass(frozen=True)
 class StoryboardConfig:
     """Aggregate config holder — one instance is created at startup."""
 
@@ -334,6 +416,7 @@ class StoryboardConfig:
     app_deduper: AppDeduperConfig = field(default_factory=AppDeduperConfig)
     caption_rewriter: CaptionRewriterConfig = field(default_factory=CaptionRewriterConfig)
     frame_annotator: FrameAnnotatorConfig = field(default_factory=FrameAnnotatorConfig)
+    action_extractor: ActionExtractorConfig = field(default_factory=ActionExtractorConfig)
     composer: ComposerConfig = field(default_factory=ComposerConfig)
 
 
@@ -500,6 +583,55 @@ def load_config() -> StoryboardConfig:
             ),
             asset_path_prefix=_env_str(
                 "STORYBOARD_ANNOTATION_ASSET_PATH_PREFIX", "annotated",
+            ),
+        ),
+        action_extractor=ActionExtractorConfig(
+            version=_env_str("STORYBOARD_ACTION_EXTRACTOR_VERSION", "v1"),
+            llm_task_name=_env_str(
+                "STORYBOARD_ACTION_EXTRACTOR_LLM_TASK_NAME", "action_extraction",
+            ),
+            concurrency=_env_int(
+                "STORYBOARD_ACTION_EXTRACTOR_CONCURRENCY", 4, min_value=1,
+            ),
+            request_timeout_s=(
+                _env_float(
+                    "STORYBOARD_ACTION_EXTRACTOR_REQUEST_TIMEOUT_S",
+                    0.0,
+                    min_value=0.0,
+                )
+                if os.environ.get("STORYBOARD_ACTION_EXTRACTOR_REQUEST_TIMEOUT_S")
+                else None
+            ),
+            total_timeout_s=_env_float(
+                "STORYBOARD_ACTION_EXTRACTOR_TOTAL_TIMEOUT_S",
+                300.0,
+                min_value=1.0,
+            ),
+            skip_noise=_env_bool(
+                "STORYBOARD_ACTION_EXTRACTOR_SKIP_NOISE", True,
+            ),
+            llm_temperature=_env_float(
+                "STORYBOARD_ACTION_EXTRACTOR_LLM_TEMPERATURE",
+                0.0,
+                min_value=0.0,
+                max_value=2.0,
+            ),
+            llm_max_tokens=_env_int(
+                "STORYBOARD_ACTION_EXTRACTOR_LLM_MAX_TOKENS", 512, min_value=1,
+            ),
+            min_confidence_for_automation=_env_float(
+                "STORYBOARD_ACTION_EXTRACTOR_MIN_AUTOMATION_CONFIDENCE",
+                0.65,
+                min_value=0.0,
+                max_value=1.0,
+            ),
+            include_before_frame=_env_bool(
+                "STORYBOARD_ACTION_EXTRACTOR_INCLUDE_BEFORE_FRAME", True,
+            ),
+            image_max_dimension_px=_env_int(
+                "STORYBOARD_ACTION_EXTRACTOR_IMAGE_MAX_DIMENSION_PX",
+                1568,
+                min_value=0,
             ),
         ),
         composer=ComposerConfig(

@@ -25,6 +25,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
+import dataclasses
 from typing import Awaitable, Callable
 
 from .config import LLMConfig, LLMTierConfig
@@ -168,18 +169,14 @@ class LLMRouter:
             response = await provider.complete(request)
             if response.finish_reason != FinishReason.ERROR:
                 # Success — annotate retries / fall-back state and return.
-                return CompletionResponse(
-                    text=response.text,
-                    finish_reason=response.finish_reason,
-                    tier=response.tier,
-                    provider=response.provider,
-                    model=response.model,
-                    prompt_tokens=response.prompt_tokens,
-                    completion_tokens=response.completion_tokens,
-                    latency_ms=response.latency_ms,
+                # Use dataclasses.replace() to copy ALL fields (including
+                # tool_calls + cache_read_tokens + cache_creation_tokens
+                # added in Phase 1) — forgetting any of these silently
+                # drops them on the way out of the router.
+                return dataclasses.replace(
+                    response,
                     retries=attempt,
                     fell_back=fell_back,
-                    error_detail=response.error_detail,
                 )
 
             last_response = response
@@ -235,18 +232,10 @@ class LLMRouter:
                 fell_back=fell_back,
                 error_detail="router_no_response",
             )
-        return CompletionResponse(
-            text=last_response.text,
-            finish_reason=last_response.finish_reason,
-            tier=last_response.tier,
-            provider=last_response.provider,
-            model=last_response.model,
-            prompt_tokens=last_response.prompt_tokens,
-            completion_tokens=last_response.completion_tokens,
-            latency_ms=last_response.latency_ms,
+        return dataclasses.replace(
+            last_response,
             retries=tier.max_retries,
             fell_back=fell_back,
-            error_detail=last_response.error_detail,
         )
 
     async def _get_provider(self, tier: LLMTierConfig) -> LLMProvider:

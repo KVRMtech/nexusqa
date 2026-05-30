@@ -53,13 +53,21 @@ from .providers import (
     build_provider,
 )
 from .router import LLMRouter, LLMRouterError, NoLLMConfiguredError
-from .types import CompletionRequest, CompletionResponse, FinishReason
+from .types import (
+    CompletionRequest,
+    CompletionResponse,
+    FinishReason,
+    ImageContent,
+    ToolCall,
+    ToolDefinition,
+)
 
 __all__ = [
     "AnthropicProvider",
     "CompletionRequest",
     "CompletionResponse",
     "FinishReason",
+    "ImageContent",
     "LLMConfig",
     "LLMConfigError",
     "LLMError",
@@ -71,6 +79,8 @@ __all__ = [
     "NoLLMConfiguredError",
     "OllamaProvider",
     "OpenAICompatProvider",
+    "ToolCall",
+    "ToolDefinition",
     "build_provider",
     "load_config",
 ]

@@ -27,6 +27,7 @@ All providers:
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import logging
 import time
@@ -35,7 +36,14 @@ from typing import Protocol
 import httpx
 
 from .config import LLMTierConfig
-from .types import CompletionRequest, CompletionResponse, FinishReason
+from .types import (
+    CompletionRequest,
+    CompletionResponse,
+    FinishReason,
+    ImageContent,
+    ToolCall,
+    ToolDefinition,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -118,6 +126,19 @@ def _coerce_timeout(request: CompletionRequest, tier_timeout: float) -> float:
     return float(tier_timeout)
 
 
+def _b64_encode_bytes(data: bytes) -> str:
+    """Encode raw image bytes to a base64 ASCII string.
+
+    Used by the vision-capable providers to attach inline images in
+    the API request body.  Returns the bare base64 (no ``data:`` URI
+    prefix) since Anthropic and OpenAI both want just the encoded
+    bytes.
+    """
+    if not data:
+        return ""
+    return base64.b64encode(data).decode("ascii")
+
+
 # ── Ollama ────────────────────────────────────────────────────────────────────
 
 
@@ -145,9 +166,36 @@ class OllamaProvider:
 
     async def complete(self, request: CompletionRequest) -> CompletionResponse:
         messages: list[dict] = []
+
+        # Compose the system message.  When ``tools`` are present we
+        # append the tool's input_schema as a JSON Schema reference so
+        # the model knows the exact shape to output.  Ollama's tool API
+        # support varies by model and isn't reliable enough for
+        # production; we use ``format: "json"`` + schema-in-prompt
+        # instead, which works across every Ollama model.
+        system_parts: list[str] = []
         if request.system:
-            messages.append({"role": "system", "content": request.system})
-        messages.append({"role": "user", "content": request.prompt})
+            system_parts.append(request.system)
+        if request.tools:
+            tool = request.tools[0]  # Phase 1 uses exactly one tool.
+            system_parts.append(
+                f"You MUST respond with ONLY a JSON object matching this "
+                f"schema (no prose, no markdown):\n\n{json.dumps(tool.input_schema)}"
+            )
+        if system_parts:
+            messages.append({"role": "system", "content": "\n\n".join(system_parts)})
+
+        # User message — attach base64-encoded images alongside the
+        # text prompt when this is a multimodal call.  Ollama's chat
+        # API accepts ``images: [base64...]`` on the user message for
+        # any vision-capable model (llava, llama3.2-vision, moondream,
+        # gemma3, qwen2-vl, etc.).
+        user_message: dict = {"role": "user", "content": request.prompt}
+        if request.images:
+            user_message["images"] = [
+                _b64_encode_bytes(img.data) for img in request.images
+            ]
+        messages.append(user_message)
 
         options: dict = {
             "temperature": request.temperature,
@@ -164,7 +212,11 @@ class OllamaProvider:
             "stream": False,
             "options": options,
         }
-        if request.response_format == "json":
+        # When tools are present we force JSON output mode — Ollama
+        # constrains the model's output to syntactically valid JSON.
+        # The action_extractor's fallback path parses this JSON against
+        # the SceneAction Pydantic schema.
+        if request.response_format == "json" or request.tools:
             body["format"] = "json"
 
         timeout = _coerce_timeout(request, self._config.timeout_s)
@@ -404,6 +456,33 @@ class AnthropicProvider:
     Anthropic uses ``x-api-key`` (not ``Authorization: Bearer``) and
     requires an ``anthropic-version`` header.  System prompts are a
     separate top-level field rather than a message role.
+
+    Vision support
+    --------------
+    When ``CompletionRequest.images`` is non-empty, the provider builds
+    the user message as a content array with image blocks first, then
+    the text block.  Anthropic's vision API accepts inline base64
+    images via ``{type: "image", source: {type: "base64", media_type,
+    data}}``.
+
+    Tool use (structured output)
+    ----------------------------
+    When ``CompletionRequest.tools`` is non-empty, the provider passes
+    the tools array and (optionally) a ``tool_choice`` override.  If
+    the LLM uses a tool, the response carries a ``tool_use`` block;
+    we parse the arguments dict and return it as a ``ToolCall`` in
+    ``CompletionResponse.tool_calls``.  ``finish_reason`` is set to
+    ``TOOL_USE`` so callers know to read tool_calls instead of text.
+
+    Prompt caching
+    --------------
+    When ``CompletionRequest.enable_prompt_cache`` is True, the system
+    prompt and tools are marked ``cache_control: {type: "ephemeral"}``.
+    Anthropic stores the cached portion for ~5 min; subsequent calls
+    within that window reuse the cache and pay ~10% of the normal
+    input price for those tokens.  Cache hit telemetry is surfaced in
+    ``CompletionResponse.cache_read_tokens`` and
+    ``cache_creation_tokens``.
     """
 
     name: str = "anthropic"
@@ -425,18 +504,7 @@ class AnthropicProvider:
         )
 
     async def complete(self, request: CompletionRequest) -> CompletionResponse:
-        body: dict = {
-            "model": self._config.model,
-            "messages": [{"role": "user", "content": request.prompt}],
-            "max_tokens": request.max_tokens,
-            "temperature": request.temperature,
-        }
-        if request.system:
-            body["system"] = request.system
-        if request.top_p is not None:
-            body["top_p"] = request.top_p
-        if request.stop_sequences:
-            body["stop_sequences"] = list(request.stop_sequences)
+        body = self._build_request_body(request)
 
         timeout = _coerce_timeout(request, self._config.timeout_s)
         start = _now_ms()
@@ -481,16 +549,34 @@ class AnthropicProvider:
                 latency_ms=latency_ms,
             )
 
-        text_blocks = payload.get("content") or []
+        content_blocks = payload.get("content") or []
         text = "".join(
             block.get("text", "")
-            for block in text_blocks
+            for block in content_blocks
             if isinstance(block, dict) and block.get("type") == "text"
         ).strip()
+
+        # Extract tool_use blocks when present.  When the LLM was given
+        # tools and chose to use one, the response will have a
+        # ``tool_use`` content block instead of (or in addition to) a
+        # text block.
+        tool_calls: list[ToolCall] = []
+        for block in content_blocks:
+            if not isinstance(block, dict):
+                continue
+            if block.get("type") != "tool_use":
+                continue
+            tool_calls.append(ToolCall(
+                name=str(block.get("name", "")),
+                arguments=dict(block.get("input", {})),
+                tool_call_id=str(block.get("id", "")),
+            ))
+
         finish = self._map_finish_reason(payload.get("stop_reason"))
         usage = payload.get("usage") or {}
 
-        if not text:
+        # When the LLM used a tool, prefer that path even if there's no text.
+        if not text and not tool_calls:
             finish = FinishReason.ERROR
 
         return CompletionResponse(
@@ -504,8 +590,89 @@ class AnthropicProvider:
             latency_ms=latency_ms,
             retries=0,
             fell_back=False,
-            error_detail="" if text else "anthropic_empty_response",
+            error_detail="" if (text or tool_calls) else "anthropic_empty_response",
+            tool_calls=tuple(tool_calls),
+            cache_read_tokens=usage.get("cache_read_input_tokens"),
+            cache_creation_tokens=usage.get("cache_creation_input_tokens"),
         )
+
+    def _build_request_body(self, request: CompletionRequest) -> dict:
+        """Translate the unified CompletionRequest into Anthropic's body shape.
+
+        Extracted to a helper so the vision/tool/cache branches are
+        each independently testable without spinning up an HTTP mock.
+        """
+        # Build the user-message content.  Plain-text-only requests
+        # keep the legacy ``content: <string>`` shape for backwards
+        # compatibility; multimodal requests promote to the content-array
+        # form Anthropic requires for image input.
+        if request.images:
+            content_parts: list[dict] = []
+            for img in request.images:
+                content_parts.append({
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": img.media_type,
+                        "data": _b64_encode_bytes(img.data),
+                    },
+                })
+            content_parts.append({"type": "text", "text": request.prompt})
+            user_content: object = content_parts
+        else:
+            user_content = request.prompt
+
+        body: dict = {
+            "model": self._config.model,
+            "messages": [{"role": "user", "content": user_content}],
+            "max_tokens": request.max_tokens,
+            "temperature": request.temperature,
+        }
+        if request.system:
+            # System prompts ALSO accept the content-array form when we
+            # need cache_control on them.  Use plain string when no
+            # caching needed to keep the request body lean.
+            if request.enable_prompt_cache:
+                body["system"] = [{
+                    "type": "text",
+                    "text": request.system,
+                    "cache_control": {"type": "ephemeral"},
+                }]
+            else:
+                body["system"] = request.system
+        if request.top_p is not None:
+            body["top_p"] = request.top_p
+        if request.stop_sequences:
+            body["stop_sequences"] = list(request.stop_sequences)
+
+        # Tools and tool_choice.  When caching is enabled the tool
+        # definitions are also marked cache_control on the LAST tool —
+        # Anthropic caches everything up to that breakpoint.
+        if request.tools:
+            tools_list: list[dict] = []
+            for idx, tool in enumerate(request.tools):
+                tool_dict: dict = {
+                    "name": tool.name,
+                    "description": tool.description,
+                    "input_schema": tool.input_schema,
+                }
+                # Mark the last tool with cache_control when caching is on,
+                # so the cache breakpoint covers all tool definitions.
+                if request.enable_prompt_cache and idx == len(request.tools) - 1:
+                    tool_dict["cache_control"] = {"type": "ephemeral"}
+                tools_list.append(tool_dict)
+            body["tools"] = tools_list
+
+            if request.tool_choice:
+                if request.tool_choice == "any":
+                    body["tool_choice"] = {"type": "any"}
+                else:
+                    body["tool_choice"] = {
+                        "type": "tool",
+                        "name": request.tool_choice,
+                    }
+
+        return body
 
     @staticmethod
     def _map_finish_reason(raw: str | None) -> FinishReason:

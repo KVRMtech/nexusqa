@@ -47,12 +47,14 @@ from nexus_sdk.db.models import (
     AnnotatedFrameCacheRow,
     AppGroupingRow,
     CanonicalArtifactRow,
+    SceneActionRow,
     SceneCaptionRow,
     StoryboardPanelRow,
     VisualFrameRow,
 )
 
 from ..llm import LLMRouter
+from .action_extractor import extract_actions_for_artifact
 from .app_deduper import rededuplicate_artifact
 from .caption_rewriter import rewrite_artifact_captions
 from .config import StoryboardConfig
@@ -113,10 +115,12 @@ class DerivationStatus:
     app_deduper_version: str
     caption_rewriter_version: str
     frame_annotator_version: str
+    action_extractor_version: str
     ran_scene_grouper: bool
     ran_app_deduper: bool
     ran_caption_rewriter: bool
     ran_frame_annotator: bool
+    ran_action_extractor: bool
     derivation_elapsed_ms: int
     storyboard_total_ms: int
 
@@ -207,6 +211,23 @@ async def _needs_caption_rewriter(
         artifact_id=artifact_id,
         tenant_id=tenant_id,
         version_column=SceneCaptionRow.generator_version,
+    )
+    return current is None or current != target_version
+
+
+async def _needs_action_extractor(
+    session: AsyncSession,
+    *,
+    artifact_id: str,
+    tenant_id: str,
+    target_version: str,
+) -> bool:
+    current = await _max_version(
+        session,
+        table=SceneActionRow,
+        artifact_id=artifact_id,
+        tenant_id=tenant_id,
+        version_column=SceneActionRow.extractor_version,
     )
     return current is None or current != target_version
 
@@ -433,10 +454,12 @@ class StoryboardComposer:
                 app_deduper_version=self._config.app_deduper.version,
                 caption_rewriter_version=self._config.caption_rewriter.version,
                 frame_annotator_version=self._config.frame_annotator.version,
+                action_extractor_version=self._config.action_extractor.version,
                 ran_scene_grouper=ran["scene_grouper"],
                 ran_app_deduper=ran["app_deduper"],
                 ran_caption_rewriter=ran["caption_rewriter"],
                 ran_frame_annotator=ran["frame_annotator"],
+                ran_action_extractor=ran["action_extractor"],
                 derivation_elapsed_ms=derivation_elapsed_ms,
                 storyboard_total_ms=total_ms,
             ),
@@ -480,6 +503,7 @@ class StoryboardComposer:
             "app_deduper": False,
             "caption_rewriter": False,
             "frame_annotator": False,
+            "action_extractor": False,
         }
 
         session_id = await self._session_id_for_artifact(session, artifact_id, tenant_id)
@@ -536,6 +560,37 @@ class StoryboardComposer:
                 router=self._llm_router,
             )
             ran["caption_rewriter"] = True
+
+        action_extractor_due = force or await _needs_action_extractor(
+            session,
+            artifact_id=artifact_id,
+            tenant_id=tenant_id,
+            target_version=self._config.action_extractor.version,
+        )
+        # Action extractor also re-runs when scene groupings changed,
+        # since new scenes need new actions extracted.
+        if action_extractor_due or scene_grouper_due:
+            try:
+                await asyncio.wait_for(
+                    extract_actions_for_artifact(
+                        session,
+                        artifact_id=artifact_id,
+                        tenant_id=tenant_id,
+                        config=self._config.action_extractor,
+                        router=self._llm_router,
+                        auth_token=auth_token,
+                    ),
+                    timeout=self._config.action_extractor.total_timeout_s,
+                )
+                ran["action_extractor"] = True
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "storyboard.composer.action_extractor_timeout",
+                    extra={
+                        "artifact_id": artifact_id,
+                        "timeout_s": self._config.action_extractor.total_timeout_s,
+                    },
+                )
 
         if self._frame_annotator and self._frame_annotator.pil_available:
             annotator_due = force or await _needs_frame_annotator(

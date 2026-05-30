@@ -12,6 +12,72 @@ from enum import Enum
 from typing import Literal
 
 
+@dataclass(frozen=True)
+class ImageContent:
+    """One image attached to a multimodal LLM call.
+
+    The provider adapter is responsible for converting this into its
+    native shape (Anthropic vision blocks, OpenAI image_url parts,
+    etc.).  Application code only needs to load the bytes and declare
+    the media type.
+
+    Why bytes (not a URL): we run inside the platform-api container
+    where the frames live behind the eyes-engine HTTP API or in the
+    artifact store.  Most providers accept base64-encoded inline
+    images, so passing bytes is the lowest-common-denominator and
+    avoids exposing internal asset URLs to third-party services.
+    """
+
+    data: bytes
+    """Raw image bytes.  Will be base64-encoded by the provider adapter."""
+
+    media_type: Literal["image/png", "image/jpeg", "image/webp", "image/gif"] = "image/png"
+    """MIME type.  Anthropic supports these four; OpenAI/Ollama subset overlap."""
+
+
+@dataclass(frozen=True)
+class ToolDefinition:
+    """A tool the LLM can choose to call, exposing a JSON Schema for structured output.
+
+    Used by the action_extractor service to constrain the LLM's output
+    to a SceneAction shape: register a tool named ``record_scene_action``
+    whose ``input_schema`` is ``SceneAction.model_json_schema()``, then
+    set ``tool_choice = "record_scene_action"`` to force the LLM to
+    produce a tool_use block rather than free-form text.
+
+    The provider adapter converts this into the native tool format
+    (Anthropic ``tools`` array, OpenAI ``tools`` array of type
+    ``function``).
+    """
+
+    name: str
+    """Unique identifier for this tool within the request."""
+
+    description: str
+    """One-sentence explanation shown to the LLM.  Helps it decide when to use the tool."""
+
+    input_schema: dict
+    """JSON Schema (typically from ``BaseModel.model_json_schema()``) describing the tool's required arguments."""
+
+
+@dataclass(frozen=True)
+class ToolCall:
+    """One tool_use block from the LLM, returned in CompletionResponse.tool_calls.
+
+    Populated by the Anthropic provider when ``stop_reason == "tool_use"``
+    and by the OpenAI-compatible provider when ``finish_reason == "tool_calls"``.
+    """
+
+    name: str
+    """Tool name the LLM chose to call."""
+
+    arguments: dict
+    """Parsed JSON arguments the LLM provided.  Already json.loads'd."""
+
+    tool_call_id: str = ""
+    """Provider-supplied id for this call.  Used when sending tool results back in multi-turn flows; unused in single-shot extraction."""
+
+
 class FinishReason(str, Enum):
     """Why generation stopped, mapped from provider-specific reasons.
 
@@ -80,6 +146,34 @@ class CompletionRequest:
     # Free-form per-call metadata that the router includes in logs.
     metadata: dict = field(default_factory=dict)
 
+    # ── Multimodal inputs (vision tiers) ────────────────────────────────
+    # When non-empty, the provider adapter attaches these images to the
+    # user message before the text prompt.  Providers that don't support
+    # vision return an ERROR finish reason rather than silently dropping
+    # the images.  Anthropic supports up to 100 images per request;
+    # OpenAI supports a smaller cap; Ollama support varies by model.
+    images: tuple[ImageContent, ...] = ()
+
+    # ── Tool use / structured output ────────────────────────────────────
+    # When non-empty, the LLM may produce a tool_use response instead of
+    # free-form text.  Set ``tool_choice`` to force a specific tool.
+    # The action_extractor uses this to constrain output to the
+    # SceneAction Pydantic schema with no prose parsing.
+    tools: tuple[ToolDefinition, ...] = ()
+
+    # ``None`` = LLM may freely use any of the provided tools or none.
+    # ``"any"`` = LLM MUST use one of the provided tools.
+    # ``"<tool_name>"`` = LLM MUST use the named tool.
+    tool_choice: str | None = None
+
+    # ── Prompt caching ──────────────────────────────────────────────────
+    # When True and the provider supports caching (Anthropic Sonnet/Opus),
+    # the system prompt + tool definitions are marked cache_control:
+    # ephemeral.  Subsequent calls within ~5 min reuse the cache, cutting
+    # input tokens by ~80% on the cached portion.  Safe to enable
+    # unconditionally — providers that don't support it ignore the flag.
+    enable_prompt_cache: bool = False
+
 
 @dataclass(frozen=True)
 class CompletionResponse:
@@ -118,3 +212,17 @@ class CompletionResponse:
     # Diagnostic — populated by the router on errors.  Never expose to
     # end-users (may contain provider error messages, model names, etc.)
     error_detail: str = ""
+
+    # ── Tool use (structured output) ────────────────────────────────────
+    # Populated when the LLM chose to invoke one of the tools in the
+    # request.  Empty tuple for plain text responses.  Callers that
+    # expected tool use should check ``finish_reason == TOOL_USE`` and
+    # read ``tool_calls`` instead of ``text``.
+    tool_calls: tuple = ()  # tuple[ToolCall, ...] — annotated loosely to avoid forward-ref cycles
+
+    # ── Cache hit telemetry (when prompt caching is enabled) ────────────
+    # Anthropic reports cache_creation_input_tokens and
+    # cache_read_input_tokens in the usage dict.  Surfaced here so
+    # downstream services can track cache effectiveness.
+    cache_read_tokens: int | None = None
+    cache_creation_tokens: int | None = None

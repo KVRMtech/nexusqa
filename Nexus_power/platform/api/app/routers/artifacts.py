@@ -28,7 +28,7 @@ from nexus_sdk.db.models import (
     # visual-evidence-graph response.  Read-only here; populated by
     # the storyboard composer.
     StoryboardPanelRow, AppGroupingRow, SceneCaptionRow,
-    AnnotatedFrameCacheRow,
+    AnnotatedFrameCacheRow, SceneActionRow,
 )
 
 
@@ -992,6 +992,242 @@ async def list_cursor_events(
         }
 
 
+def _canonicalize_scene_urls(
+    scenes: list[dict],
+    *,
+    app_groupings: list[dict],
+    scene_to_app_grouping: dict[str, str],
+) -> None:
+    """Mutate each scene's ``detected_url`` to use the canonical hostname.
+
+    OCR routinely misreads URL bar text (``usaa.com`` → ``Msdd.com``).
+    The app_deduper has already identified canonical domains for each
+    grouping; we use them here to clean the URL hostname while
+    preserving the OCR'd path/query/fragment (which is usually correct
+    because OCR does better on lowercase + slashes than on logos /
+    address-bar fonts).
+
+    Strategy
+    --------
+    1. Determine the artifact's DOMINANT canonical_domain — the
+       canonical_domain of the app_grouping with the highest
+       ``total_scene_count``.  When all groupings are small or none
+       have canonical_domain, we leave URLs alone (single-app heuristic
+       can't safely fire on multi-app journeys without more signal).
+    2. For each scene, find the grouping it belongs to via
+       ``scene_to_app_grouping``.
+    3. If that grouping's canonical_domain matches the dominant, use
+       its hostname directly.
+    4. If the grouping's scene_count is much smaller than the dominant
+       AND its canonical_domain looks like an OCR ghost (different
+       from the dominant on a single-app artifact), substitute the
+       dominant hostname.  Preserves path/query/fragment.
+    5. When no rewrite is possible (no groupings, multi-app, or path
+       parsing fails), leave the URL alone.
+
+    Side effect: each scene_dict gets a new key
+    ``canonical_url`` (the cleaned form) alongside the original
+    ``detected_url`` (kept for audit).  Frontend should prefer
+    ``canonical_url`` when present.
+    """
+    if not scenes or not app_groupings:
+        return
+
+    # 1) Find dominant grouping's canonical_domain.
+    #
+    # Real internet domains are case-insensitive but always RENDER
+    # lowercase in browser URL bars (~99% of pages).  OCR misreads of
+    # logos / address-bar fonts often produce mixed-case strings ("Msdd",
+    # "Wivw") which masquerade as canonical_domain on an OCR-ghost
+    # grouping.  When picking the artifact's dominant domain, prefer
+    # the highest-scene-count grouping whose canonical_domain is
+    # ALL-LOWERCASE.  Only fall back to mixed-case candidates when no
+    # clean candidate exists.
+    def _is_clean_domain(s: str) -> bool:
+        """True when ``s`` looks like a real lowercase domain."""
+        if not s:
+            return False
+        # Must have at least one dot (no bare hostnames) and be all-lower
+        # in the part before the slash.
+        if "." not in s:
+            return False
+        if s != s.lower():
+            return False
+        # Reject obvious noise (very short subdomains, no TLD).
+        labels = s.split(".")
+        if any(len(lbl) < 2 for lbl in labels):
+            return False
+        return True
+
+    dominant_domain = ""
+    dominant_count = 0
+    # First pass — only consider clean (lowercase) candidates.
+    for g in app_groupings:
+        cd = (g.get("canonical_domain") or "").strip()
+        if not _is_clean_domain(cd):
+            continue
+        count = int(g.get("total_scene_count") or 0)
+        if count > dominant_count:
+            dominant_count = count
+            dominant_domain = cd.lower()
+    # Second pass — fall back to any candidate (even mixed-case) when
+    # no clean one exists.  This avoids breaking artifacts that have
+    # legitimately mixed-case canonical_domains (rare but possible).
+    if not dominant_domain:
+        for g in app_groupings:
+            cd = (g.get("canonical_domain") or "").strip().lower()
+            if not cd or "." not in cd:
+                continue
+            count = int(g.get("total_scene_count") or 0)
+            if count > dominant_count:
+                dominant_count = count
+                dominant_domain = cd
+    if not dominant_domain:
+        return
+
+    # Find the dominant grouping ITSELF (its full row) so we can use its
+    # canonical_name / display_label when rewriting ghost groupings.
+    dominant_grouping_row: dict | None = None
+    for g in app_groupings:
+        if (g.get("canonical_domain") or "").strip().lower() == dominant_domain:
+            dominant_grouping_row = g
+            break
+
+    # ── Rewrite app_groupings that look like OCR ghosts of the dominant.
+    #
+    # A grouping is rewritten ONLY when:
+    #   1. It is web_ui app_type (don't touch desktop/mainframe/email apps)
+    #   2. It has a non-empty canonical_domain (don't touch native UIs
+    #      that legitimately have no URL — "Web Application — New Tab",
+    #      "Desktop Application — ...", etc.)
+    #   3. Its canonical_domain differs from the dominant
+    #   4. EITHER its canonical_domain is dirty (uppercase / no dot)
+    #      OR its canonical_name has uppercase first-letter while the
+    #      dominant's name is all-lowercase (typical OCR misread
+    #      signature — real domains render lowercase)
+    #
+    # For each ghost grouping we substitute its name/domain/label with
+    # the dominant's values.  The grouping_id stays the same so
+    # scene_to_app_grouping mappings continue to work; only the
+    # human-visible labels change.  This makes the "Msdd.com" tab in
+    # the flow rail disappear because the ghost grouping now reports
+    # canonical_name="usaa.com".
+    def _name_looks_like_ocr_ghost(name: str) -> bool:
+        """True when the canonical_name has mixed-case letters before
+        the .com / .net / .io / etc, which is the dominant OCR-misread
+        signature for browser-bar domain text."""
+        if not name:
+            return False
+        # Strip after first dot: "Msdd.com" → "Msdd", "usaa.com" → "usaa"
+        head = name.split(".", 1)[0]
+        if not head:
+            return False
+        # Real domains render lowercase in URL bars.  Any uppercase
+        # letter in the head portion is a strong OCR-misread signal.
+        return any(ch.isupper() for ch in head)
+
+    for g in app_groupings:
+        cd = (g.get("canonical_domain") or "").strip()
+        cn = (g.get("canonical_name") or "").strip()
+        app_type = (g.get("app_type") or "").lower()
+
+        # Rule 1: never touch non-web-ui app types.
+        if app_type != "web_ui":
+            continue
+
+        # Rule 2: never touch native/empty-domain groupings.  These are
+        # things like "Web Application — New Tab" or desktop apps
+        # misclassified as web_ui — they legitimately have no domain.
+        if not cd:
+            continue
+
+        # Rule 3: never touch the dominant itself.
+        if cd.lower() == dominant_domain:
+            continue
+
+        # Rule 4: rewrite iff the grouping looks like an OCR ghost.
+        is_ghost = (not _is_clean_domain(cd)) or _name_looks_like_ocr_ghost(cn)
+        if not is_ghost:
+            continue  # legit secondary app (multi-app session) — leave alone
+
+        if dominant_grouping_row is not None:
+            g["canonical_name"] = dominant_grouping_row.get("canonical_name") or dominant_domain
+            g["canonical_domain"] = dominant_grouping_row.get("canonical_domain") or dominant_domain
+            g["display_label"] = dominant_grouping_row.get("display_label") or dominant_domain
+        else:
+            g["canonical_name"] = dominant_domain
+            g["canonical_domain"] = dominant_domain
+            g["display_label"] = dominant_domain
+
+    # 2) Build grouping_id → (canonical_domain, scene_count) lookup.
+    grouping_lookup: dict[str, tuple[str, int]] = {}
+    for g in app_groupings:
+        gid = g.get("grouping_id")
+        if not gid:
+            continue
+        grouping_lookup[str(gid)] = (
+            (g.get("canonical_domain") or "").strip().lower(),
+            int(g.get("total_scene_count") or 0),
+        )
+
+    # 3) Multi-app heuristic — if any non-dominant grouping has a
+    # comparable scene_count (>=50% of dominant) AND that grouping's
+    # domain is also lowercase-clean (not an OCR ghost), treat the
+    # journey as multi-app and don't cross-substitute hostnames.
+    # Mixed-case "competing" groupings are treated as ghosts and the
+    # dominant lowercase domain wins.
+    multi_app = any(
+        cnt >= max(1, int(dominant_count * 0.5))
+        and dom != dominant_domain
+        and _is_clean_domain(dom)
+        for dom, cnt in grouping_lookup.values()
+        if dom  # ignore empty-domain (desktop apps)
+    )
+
+    # 4) Per-scene rewrite.
+    from urllib.parse import urlparse
+
+    for scene in scenes:
+        raw_url = (scene.get("detected_url") or "").strip()
+        if not raw_url:
+            continue
+
+        scene_id = str(scene.get("scene_id") or "")
+        grouping_id = scene_to_app_grouping.get(scene_id) or ""
+        grouping_domain, grouping_count = grouping_lookup.get(grouping_id, ("", 0))
+
+        # Choose the hostname to use.
+        # - Single-app journey: always use the dominant.
+        # - Multi-app: use the scene's own grouping domain when it has
+        #   enough scenes (real app); fall back to dominant when grouping
+        #   looks like a ghost (low scene_count).
+        ghost_threshold = max(1, int(dominant_count * 0.25))
+        if multi_app and grouping_domain and grouping_count >= ghost_threshold:
+            target_hostname = grouping_domain
+        else:
+            target_hostname = dominant_domain
+
+        # Parse the OCR'd URL.  When it's not a well-formed URL,
+        # synthesize a clean one from scratch using the dominant.
+        try:
+            parsed = urlparse(raw_url if "://" in raw_url else "https://" + raw_url)
+            path = parsed.path or ""
+            query = ("?" + parsed.query) if parsed.query else ""
+            fragment = ("#" + parsed.fragment) if parsed.fragment else ""
+            scheme = parsed.scheme or "https"
+            current_hostname = (parsed.hostname or "").strip().lower()
+        except Exception:  # pragma: no cover - urlparse rarely raises
+            path, query, fragment, scheme, current_hostname = "", "", "", "https", ""
+
+        # No-op when the OCR hostname already matches the target.
+        if current_hostname == target_hostname:
+            scene["canonical_url"] = raw_url
+            continue
+
+        canonical = f"{scheme}://{target_hostname}{path}{query}{fragment}"
+        scene["canonical_url"] = canonical
+
+
 def _empty_storyboard_overlay() -> dict:
     """Default-empty overlay payload returned when the flag is off.
 
@@ -1004,6 +1240,7 @@ def _empty_storyboard_overlay() -> dict:
         "scene_captions": {},
         "annotated_frame_urls": {},
         "scene_to_app_grouping": {},
+        "scene_actions": {},
     }
 
 
@@ -1160,12 +1397,69 @@ async def _load_storyboard_overlay(
             if sid:
                 annotated_frame_urls[str(sid)] = url
 
+    # 5) Scene actions — the multimodal-LLM-extracted semantic actions
+    #    (verb / target / value / confidence / reasoning) per scene.
+    #    Keyed by scene_id like scene_captions so the frontend can join
+    #    them onto its existing scene loop.  Drives the 3D Journey
+    #    bottom detail panel ("user selected TX from State dropdown")
+    #    and the test-export pipeline.
+    #
+    # Phase 1.6 — each value is now a LIST.  Long form-fill scenes
+    # contribute multiple rows (one per detected action) ordered by
+    # subaction_index.  Short scenes return a list of length 1 (or
+    # empty when no row was extracted).  Older clients read
+    # ``scene_actions[scene_id][0]`` for backwards-compatible single-
+    # action rendering.
+    action_filter = [
+        SceneActionRow.artifact_id == artifact_id,
+        SceneActionRow.tenant_id == tenant_id,
+    ]
+    if window_scene_ids:
+        action_filter.append(SceneActionRow.scene_id.in_(window_scene_ids))
+    actions_q = await db.execute(
+        select(
+            SceneActionRow.scene_id,
+            SceneActionRow.subaction_index,
+            SceneActionRow.verb,
+            SceneActionRow.target_label,
+            SceneActionRow.target_kind,
+            SceneActionRow.value,
+            SceneActionRow.confidence,
+            SceneActionRow.automation_ready,
+            SceneActionRow.reasoning,
+            SceneActionRow.evidence_signals,
+            SceneActionRow.extractor_model,
+        )
+        .where(*action_filter)
+        .order_by(
+            SceneActionRow.scene_id.asc(),
+            SceneActionRow.subaction_index.asc(),
+        )
+    )
+    scene_actions: dict[str, list[dict]] = {}
+    for sid, sub_idx, verb, target_label, target_kind, value, conf, auto_ready, reasoning, ev, model in actions_q.all():
+        if not sid:
+            continue
+        scene_actions.setdefault(str(sid), []).append({
+            "subaction_index": int(sub_idx or 0),
+            "verb": verb or "none",
+            "target_label": target_label or "",
+            "target_kind": target_kind or "other",
+            "value": value,  # may be null
+            "confidence": float(conf or 0.0),
+            "automation_ready": bool(auto_ready),
+            "reasoning": reasoning or "",
+            "evidence_signals": ev or {},
+            "extractor_model": model or "",
+        })
+
     return {
         "app_groupings": app_groupings,
         "noise_scene_ids": sorted(noise_scene_ids),
         "scene_captions": scene_captions,
         "annotated_frame_urls": annotated_frame_urls,
         "scene_to_app_grouping": scene_to_app_grouping,
+        "scene_actions": scene_actions,
     }
 
 
@@ -1401,6 +1695,22 @@ async def get_visual_evidence_graph(
                 window_scene_ids=window_scene_ids,
             )
 
+        # Phase 1.5 — URL canonicalization.
+        #
+        # OCR routinely misreads URL bar text (e.g. ``usaa.com`` →
+        # ``Msdd.com``), producing scene.detected_url values that don't
+        # match the customer's actual application.  The app_deduper has
+        # already identified the dominant canonical_domain across the
+        # artifact's groupings (weighted by scene_count), so we use
+        # that as ground truth for the hostname when the per-scene OCR
+        # disagrees.  Path/query/fragment from the OCR'd URL are
+        # preserved.
+        _canonicalize_scene_urls(
+            scenes,
+            app_groupings=storyboard_overlay.get("app_groupings") or [],
+            scene_to_app_grouping=storyboard_overlay.get("scene_to_app_grouping") or {},
+        )
+
         return {
             "artifact_id": artifact_id,
             "scene_window": {
@@ -1433,6 +1743,7 @@ async def get_visual_evidence_graph(
             "scene_captions": storyboard_overlay["scene_captions"],
             "annotated_frame_urls": storyboard_overlay["annotated_frame_urls"],
             "scene_to_app_grouping": storyboard_overlay["scene_to_app_grouping"],
+            "scene_actions": storyboard_overlay["scene_actions"],
         }
 
 

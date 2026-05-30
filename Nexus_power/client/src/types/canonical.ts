@@ -1012,6 +1012,12 @@ export interface VisualScene {
   screen_name: string | null;
   ocr_text: string | null;
   detected_url: string | null;
+  /** Phase 1.5 — OCR-cleaned URL.  Hostname rewritten to the artifact's
+   *  dominant canonical_domain when the OCR'd hostname looks like a
+   *  misread (e.g. "Msdd.com" replaced with "usaa.com").  Path/query
+   *  preserved.  Frontend should prefer this over detected_url when
+   *  present. */
+  canonical_url?: string | null;
   start_ms: number | null;
   end_ms: number | null;
   app_instance_id: string | null;
@@ -1245,6 +1251,47 @@ export interface VisualEvidenceGraph {
   annotated_frame_urls?: Record<string, string>;
   /** scene_id → app_grouping_id (replaces the raw AppInstance lookup). */
   scene_to_app_grouping?: Record<string, string>;
+  /** scene_id → list of multimodal-LLM-extracted semantic actions
+   *  in chronological order (subaction_index ascending).  Single-action
+   *  scenes return a list of length 1; long form-fill scenes return
+   *  one entry per detected field change. */
+  scene_actions?: Record<string, SceneAction[]>;
+}
+
+/** Semantic action extracted from a scene by the multimodal LLM
+ *  action_extractor.  One entry per scene in scene_actions.  See
+ *  Nexus_power/platform/api/app/services/storyboard/schemas.py
+ *  for the producing Pydantic model. */
+export interface SceneAction {
+  /** 0-based ordinal within the scene.  0 for single-action scenes; 0,1,2... for long form-fill scenes. */
+  subaction_index?: number;
+  /** What the user did: click | type | select | scroll | navigate | submit | hover | none. */
+  verb: 'click' | 'type' | 'select' | 'scroll' | 'navigate' | 'submit' | 'hover' | 'none';
+  /** Label of the element acted on (e.g. "What state do you live in?"). */
+  target_label: string;
+  /** UI element kind. */
+  target_kind:
+    | 'button' | 'link' | 'dropdown' | 'text_field'
+    | 'checkbox' | 'radio' | 'menu_item' | 'tab' | 'other';
+  /** Value entered or selected (e.g. "TX").  Null when verb has no value. */
+  value: string | null;
+  /** 0.0-1.0 LLM confidence, post-reconciliation. */
+  confidence: number;
+  /** True when verb + target + value are unambiguous enough to drive a test step. */
+  automation_ready: boolean;
+  /** One-sentence LLM justification citing the visual evidence. */
+  reasoning: string;
+  /** Snapshot of which existing pipeline signals corroborated the LLM. */
+  evidence_signals?: {
+    ocr_text_match?: boolean;
+    control_match?: boolean;
+    cursor_event_match?: boolean;
+    url_changed?: boolean;
+    audio_intent_match?: boolean;
+    sources?: string[];
+  };
+  /** Fully-qualified extractor model (e.g. "anthropic/claude-sonnet-4-6"). */
+  extractor_model?: string;
 }
 
 /** Gate result for the visual flow approval surface (Phase 8). */

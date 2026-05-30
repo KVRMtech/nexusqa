@@ -34,6 +34,7 @@ import type {
   EvidenceStep,
   CursorEvent,
   StoryboardPayload,
+  SceneAction,
 } from '../types/canonical';
 import { EvidenceStepsPanel } from './components/EvidenceStepsPanel';
 import { StoryboardView } from './components/StoryboardView';
@@ -955,6 +956,153 @@ export default function VisualFlowDiagramPage() {
   }, [graph]);
   const [showNoiseScenes, setShowNoiseScenes] = useState(false);
 
+  // Phase 1.7 defect-fix — consolidate spurious flow tabs.
+  //
+  // graph.flows comes from the canonical flow_segmenter, which opens a
+  // new flow every time the per-scene boundary score exceeds 0.5.
+  // Domain change alone weighs 0.4, so a single frame of OCR misreading
+  // the URL (e.g. real usaa.com → "msdd.com" for one frame) is enough
+  // to start a brand-new flow.  Each OCR slip → a separate tab in the
+  // header, even though the user only visited one site.
+  //
+  // The storyboard app_deduper already merges OCR-corrupted
+  // app_instances into canonical app_groupings.  We piggy-back on that
+  // here: every flow is mapped to its dominant app_grouping (the same
+  // mechanism cleanFlowLabel uses), then flows sharing a grouping are
+  // folded into a single tab with summed visit_count + scene_count.
+  //
+  // Three filter rules, all data-derived (no hardcoded domains):
+  //   1. Drop a flow when every one of its scenes is in noise_scene_ids
+  //      — the composer already classified those scenes as noise.
+  //   2. Merge flows sharing the same dominant app_grouping_id — one
+  //      tab per real application, not one per OCR boundary.
+  //   3. Drop a flow with no grouping mapping AND no real time spent
+  //      (visit_count == non_noise_scene_count, scene_count ≤ 2) —
+  //      the dominant signature of a single-frame OCR-only flow.
+  //
+  // When `showNoiseScenes` is on the consolidation is bypassed so the
+  // raw shape is visible for debugging.
+  type ConsolidatedFlow = {
+    flow_id: string;
+    member_flow_ids: string[];
+    label: string;
+    visit_count: number;
+    is_interleaved: boolean;
+    scene_count: number;
+    is_noise: boolean;
+    grouping_id: string | null;
+  };
+
+  const consolidatedFlows = useMemo<ConsolidatedFlow[]>(() => {
+    if (!graph) return [];
+    const flows = graph.flows ?? [];
+    if (showNoiseScenes) {
+      return flows.map((f) => ({
+        flow_id: f.flow_id,
+        member_flow_ids: [f.flow_id],
+        label: cleanFlowLabel(f),
+        visit_count: f.visit_count ?? 1,
+        is_interleaved: !!f.is_interleaved,
+        scene_count: f.scene_count,
+        is_noise: !!f.is_noise,
+        grouping_id: null,
+      }));
+    }
+
+    const s2g = graph.scene_to_app_grouping || {};
+    const scenesByFlow = new Map<string, VisualScene[]>();
+    for (const s of graph.scenes) {
+      if (!s.flow_id) continue;
+      const list = scenesByFlow.get(s.flow_id) ?? [];
+      list.push(s);
+      scenesByFlow.set(s.flow_id, list);
+    }
+
+    const result: ConsolidatedFlow[] = [];
+    const byGrouping = new Map<string, ConsolidatedFlow>();
+
+    for (const flow of flows) {
+      const flowScenes = scenesByFlow.get(flow.flow_id) ?? [];
+      const nonNoise = flowScenes.filter(
+        (s) => !noiseSceneIds.has(s.scene_id),
+      );
+      if (nonNoise.length === 0) continue;
+
+      const counts = new Map<string, number>();
+      for (const s of flowScenes) {
+        const gid = s2g[s.scene_id];
+        if (gid) counts.set(gid, (counts.get(gid) ?? 0) + 1);
+      }
+      let dominantId: string | null = null;
+      let dominantCount = 0;
+      for (const [gid, cnt] of counts) {
+        if (cnt > dominantCount) {
+          dominantCount = cnt;
+          dominantId = gid;
+        }
+      }
+
+      const incomingVisits = flow.visit_count ?? 1;
+
+      if (
+        dominantId === null
+        && incomingVisits === nonNoise.length
+        && nonNoise.length <= 2
+      ) {
+        continue;
+      }
+
+      const label = cleanFlowLabel(flow);
+
+      if (dominantId !== null) {
+        const existing = byGrouping.get(dominantId);
+        if (existing) {
+          existing.member_flow_ids.push(flow.flow_id);
+          existing.visit_count += incomingVisits;
+          existing.is_interleaved = true;
+          existing.scene_count += nonNoise.length;
+          existing.is_noise = existing.is_noise && !!flow.is_noise;
+        } else {
+          const entry: ConsolidatedFlow = {
+            flow_id: flow.flow_id,
+            member_flow_ids: [flow.flow_id],
+            label,
+            visit_count: incomingVisits,
+            is_interleaved: !!flow.is_interleaved,
+            scene_count: nonNoise.length,
+            is_noise: !!flow.is_noise,
+            grouping_id: dominantId,
+          };
+          byGrouping.set(dominantId, entry);
+          result.push(entry);
+        }
+      } else {
+        result.push({
+          flow_id: flow.flow_id,
+          member_flow_ids: [flow.flow_id],
+          label,
+          visit_count: incomingVisits,
+          is_interleaved: !!flow.is_interleaved,
+          scene_count: nonNoise.length,
+          is_noise: !!flow.is_noise,
+          grouping_id: null,
+        });
+      }
+    }
+    return result;
+  }, [graph, noiseSceneIds, showNoiseScenes, cleanFlowLabel]);
+
+  // When a consolidated tab is active, flowGroups must include scenes
+  // from every member flow_id, not just the anchor.  Empty set when no
+  // tab is selected (all flows visible).
+  const activeMemberFlowIds = useMemo<Set<string> | null>(() => {
+    if (!activeFlowId) return null;
+    const entry = consolidatedFlows.find((cf) =>
+      cf.member_flow_ids.includes(activeFlowId),
+    );
+    return entry ? new Set(entry.member_flow_ids) : new Set([activeFlowId]);
+  }, [activeFlowId, consolidatedFlows]);
+
   // Phase 1.7 Day 4 — Session at a Glance is collapsible.  Auto-
   // collapses when the user selects a scene so the bottom detail
   // panel has room (without this, the page was squeezed and the
@@ -1050,6 +1198,17 @@ export default function VisualFlowDiagramPage() {
     };
   }, [graph, noiseSceneIds]);
 
+  // Set of flow_ids surfaced by the consolidation pass — used to drop
+  // dropped/blip flows from the rail too, so the body and the tab list
+  // agree on which flows are real.
+  const consolidatedFlowIdSet = useMemo<Set<string>>(() => {
+    const s = new Set<string>();
+    for (const cf of consolidatedFlows) {
+      for (const fid of cf.member_flow_ids) s.add(fid);
+    }
+    return s;
+  }, [consolidatedFlows]);
+
   const flowGroups = useMemo(() => {
     if (!graph) return [];
     const flows = graph.flows ?? [];
@@ -1057,7 +1216,10 @@ export default function VisualFlowDiagramPage() {
     const sceneIsVisible = (s: VisualScene) =>
       showNoiseScenes || !noiseSceneIds.has(s.scene_id);
     for (const flow of flows) {
-      if (activeFlowId && flow.flow_id !== activeFlowId) continue;
+      if (activeMemberFlowIds && !activeMemberFlowIds.has(flow.flow_id)) continue;
+      // When no specific tab is active, restrict to flows the
+      // consolidation kept — keeps the rail and the tab bar in sync.
+      if (!activeMemberFlowIds && !consolidatedFlowIdSet.has(flow.flow_id)) continue;
       const scenes = graph.scenes
         .filter((s) => s.flow_id === flow.flow_id && sceneIsVisible(s))
         .sort((a, b) => a.scene_index - b.scene_index);
@@ -1078,7 +1240,7 @@ export default function VisualFlowDiagramPage() {
       }
     }
     return groups;
-  }, [graph, activeFlowId, noiseSceneIds, showNoiseScenes]);
+  }, [graph, activeFlowId, activeMemberFlowIds, consolidatedFlowIdSet, noiseSceneIds, showNoiseScenes]);
 
   const gateResult = useMemo(() => {
     if (!graph) return { can_generate: false, reasons: [] as string[], action_confirmed_count: 0, automation_ready_count: 0 };
@@ -2157,7 +2319,7 @@ export default function VisualFlowDiagramPage() {
       )}
 
       {/* ─────────── FLOW TABS ────────────── */}
-      {graph.flows && graph.flows.length > 1 && (
+      {consolidatedFlows.length > 1 && (
         <div className="flex items-center gap-2.5 px-6 py-3.5 overflow-x-auto shrink-0 relative z-10"
           style={{ borderBottom: '1px solid rgba(38,112,163,0.1)', background: 'linear-gradient(180deg, #ffffff, #f8fafc)', backdropFilter: 'blur(12px)' }}>
           <button
@@ -2174,19 +2336,19 @@ export default function VisualFlowDiagramPage() {
           >
             <Eye className="h-3.5 w-3.5" />
             All Flows
-            <span className="text-[10px] opacity-50">({graph.summary.total_scenes})</span>
+            <span className="text-[10px] opacity-50">({consolidatedFlows.reduce((sum, cf) => sum + cf.scene_count, 0)})</span>
           </button>
-          {graph.flows.map((flow: VisualFlow, fi: number) => {
+          {consolidatedFlows.map((cf, fi) => {
             const fc = FLOW_COLORS[fi % FLOW_COLORS.length];
-            const isActive = activeFlowId === flow.flow_id;
+            const isActive = activeMemberFlowIds?.has(cf.flow_id) ?? false;
             return (
               <button
-                key={flow.flow_id}
-                onClick={() => setActiveFlowId(flow.flow_id)}
+                key={cf.flow_id}
+                onClick={() => setActiveFlowId(cf.flow_id)}
                 className={clsx(
                   'flex items-center gap-2.5 rounded-xl px-5 py-2.5 text-xs font-bold transition-all whitespace-nowrap',
                   isActive ? 'text-slate-900' : 'text-slate-500 hover:text-slate-800',
-                  flow.is_noise && 'opacity-40',
+                  cf.is_noise && 'opacity-40',
                 )}
                 style={isActive ? {
                   background: `linear-gradient(135deg, ${fc.bg}, ${fc.bg.replace('0.15', '0.06')})`,
@@ -2195,13 +2357,13 @@ export default function VisualFlowDiagramPage() {
                 } : { border: '1px solid rgba(10,37,64,0.06)' }}
               >
                 <span className="w-3.5 h-3.5 rounded-full shrink-0" style={{ background: `linear-gradient(135deg, ${fc.from}, ${fc.to})`, boxShadow: `0 0 8px rgba(${fc.glow},0.4)` }} />
-                {cleanFlowLabel(flow)}
-                {flow.is_interleaved && (
+                {cf.label}
+                {cf.is_interleaved && cf.visit_count > 1 && (
                   <span className="text-[8px] font-black px-1.5 py-0.5 rounded-full" style={{ background: 'rgba(245,158,11,0.15)', color: '#d97706', border: '1px solid rgba(245,158,11,0.3)' }}>
-                    {flow.visit_count}× visits
+                    {cf.visit_count}× visits
                   </span>
                 )}
-                <span className="text-[10px] opacity-50">({flow.scene_count})</span>
+                <span className="text-[10px] opacity-50">({cf.scene_count})</span>
               </button>
             );
           })}
@@ -2236,16 +2398,16 @@ export default function VisualFlowDiagramPage() {
             return (
               <Fragment key={flow.flow_id}>
               <div className="space-y-3">
-                {(flowGroups.length > 1 || (graph.flows?.length ?? 0) > 1) && (
+                {(flowGroups.length > 1 || consolidatedFlows.length > 1) && (
                   <div className="px-5 flex items-center gap-2.5 v5-card-enter">
                     <div className="h-8 w-1.5 rounded-full" style={{ background: `linear-gradient(180deg, ${fc.from}, ${fc.to})`, boxShadow: `0 0 12px rgba(${fc.glow},0.3)` }} />
                     <div>
                       <h2 className="text-sm font-black text-slate-900 flex items-center gap-1.5">
-                        {flow.flow_label}
+                        {cleanFlowLabel(flow)}
                         <ChevronRight className="h-3 w-3 text-slate-600" />
                       </h2>
                       <p className="text-[9px] text-slate-500 font-medium">
-                        {flow.scene_count} screen{flow.scene_count !== 1 ? 's' : ''}
+                        {scenes.length} screen{scenes.length !== 1 ? 's' : ''}
                         {flow.is_noise && <span className="text-yellow-500/60 ml-1">{'\u00B7'} noise</span>}
                       </p>
                     </div>
@@ -2433,15 +2595,15 @@ export default function VisualFlowDiagramPage() {
                         </span>
                       ) : null;
                     })()}
-                    {selectedScene.detected_url && (
+                    {(selectedScene.canonical_url || selectedScene.detected_url) && (
                       <span className="flex items-center gap-1.5 text-blue-500/80">
                         <ExternalLink className="h-3.5 w-3.5" />
-                        {extractDomain(selectedScene.detected_url)}
+                        {extractDomain(selectedScene.canonical_url || selectedScene.detected_url)}
                       </span>
                     )}
                   </div>
-                  {selectedScene.detected_url && (
-                    <p className="text-[10px] text-slate-500 mt-1.5 font-mono truncate">{selectedScene.detected_url}</p>
+                  {(selectedScene.canonical_url || selectedScene.detected_url) && (
+                    <p className="text-[10px] text-slate-500 mt-1.5 font-mono truncate">{selectedScene.canonical_url || selectedScene.detected_url}</p>
                   )}
                 </div>
 
@@ -2465,6 +2627,124 @@ export default function VisualFlowDiagramPage() {
                     <span className="text-slate-500">interactive</span>
                   </div>
                 </div>
+
+                {/* ── Phase 1.6 scene_actions — multimodal LLM extraction.
+                       Now renders a LIST of actions per scene (long form-fill
+                       scenes can have 5+ actions in chronological order).
+                       Each entry shows verb chip + target + value + confidence
+                       + reasoning.  Single-action scenes render exactly one
+                       card; multi-action scenes stack cards with a small
+                       index badge so the chronological order is obvious. */}
+                {(() => {
+                  const raw = graph.scene_actions?.[selectedScene.scene_id];
+                  // Accept both the new list shape (Phase 1.6+) and the
+                  // legacy single-object shape (Phase 1 - 1.5) so the
+                  // panel keeps working across mixed-version artifacts.
+                  const actions: SceneAction[] = Array.isArray(raw)
+                    ? raw
+                    : raw
+                    ? [raw as unknown as SceneAction]
+                    : [];
+                  if (actions.length === 0) return null;
+                  const verbStyles: Record<string, { bg: string; fg: string }> = {
+                    click:    { bg: 'rgba(56,189,248,0.15)', fg: '#0369a1' },
+                    type:     { bg: 'rgba(168,85,247,0.15)', fg: '#7e22ce' },
+                    select:   { bg: 'rgba(16,185,129,0.15)', fg: '#047857' },
+                    submit:   { bg: 'rgba(239,68,68,0.15)',  fg: '#b91c1c' },
+                    navigate: { bg: 'rgba(245,158,11,0.15)', fg: '#b45309' },
+                    scroll:   { bg: 'rgba(148,163,184,0.18)',fg: '#475569' },
+                    hover:    { bg: 'rgba(148,163,184,0.18)',fg: '#475569' },
+                    none:     { bg: 'rgba(148,163,184,0.10)',fg: '#94a3b8' },
+                  };
+                  return (
+                    <div className="rounded-xl px-3 py-3 space-y-2.5"
+                      style={{
+                        background: 'linear-gradient(135deg, rgba(16,185,129,0.06), rgba(56,189,248,0.04))',
+                        border: '1px solid rgba(16,185,129,0.25)',
+                        boxShadow: '0 4px 16px rgba(16,185,129,0.08)',
+                      }}>
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="text-[9px] font-black uppercase tracking-widest text-slate-500">
+                          User actions (vision-extracted)
+                          {actions.length > 1 && (
+                            <span className="ml-1.5 text-slate-400 font-bold">· {actions.length}</span>
+                          )}
+                        </p>
+                      </div>
+                      {actions.map((sa, i) => {
+                        const vs = verbStyles[sa.verb] ?? verbStyles.none;
+                        const confColor =
+                          sa.confidence >= 0.85 ? '#047857'
+                          : sa.confidence >= 0.65 ? '#a16207'
+                          : '#b91c1c';
+                        return (
+                          <div
+                            key={`${sa.subaction_index ?? i}-${sa.verb}-${sa.target_label}`}
+                            className="rounded-lg px-2.5 py-2 space-y-1.5"
+                            style={{
+                              background: 'rgba(255,255,255,0.55)',
+                              border: '1px solid rgba(16,185,129,0.15)',
+                            }}
+                          >
+                            <div className="flex items-center gap-2 flex-wrap">
+                              {actions.length > 1 && (
+                                <span
+                                  className="inline-flex items-center justify-center w-5 h-5 rounded-full text-[9px] font-black"
+                                  style={{ background: 'rgba(56,189,248,0.15)', color: '#0369a1' }}
+                                >
+                                  {(sa.subaction_index ?? i) + 1}
+                                </span>
+                              )}
+                              <span
+                                className="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-black uppercase tracking-wider"
+                                style={{ background: vs.bg, color: vs.fg }}
+                              >
+                                {sa.verb}
+                              </span>
+                              {sa.target_label && (
+                                <span className="text-[12px] font-bold text-slate-900 break-words">
+                                  {sa.target_label}
+                                </span>
+                              )}
+                              <span
+                                className="text-[10px] font-bold ml-auto"
+                                style={{ color: confColor }}
+                              >
+                                {Math.round(sa.confidence * 100)}%
+                              </span>
+                              {sa.automation_ready && (
+                                <span
+                                  className="inline-flex items-center px-1.5 py-0.5 rounded-md text-[9px] font-bold uppercase"
+                                  style={{ background: 'rgba(16,185,129,0.15)', color: '#047857' }}
+                                >
+                                  auto
+                                </span>
+                              )}
+                            </div>
+                            {sa.value !== null && sa.value !== undefined && sa.value !== '' && (
+                              <div className="flex items-baseline gap-2">
+                                <span className="text-[9px] font-black uppercase tracking-widest text-slate-500">
+                                  value
+                                </span>
+                                <span
+                                  className="px-2 py-0.5 rounded-md text-[12px] font-mono font-bold text-slate-900"
+                                  style={{ background: 'rgba(255,255,255,0.75)', border: '1px solid rgba(16,185,129,0.25)' }}
+                                >
+                                  {sa.value}
+                                </span>
+                              </div>
+                            )}
+                            {sa.reasoning && (
+                              <p className="text-[10px] italic text-slate-600 leading-snug">
+                                {sa.reasoning}
+                              </p>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  );
+                })()}
 
                 {/* ── Step Narrative — ALWAYS rendered so the bottom panel
                        never looks empty even when controls are sparse.  Surfaces

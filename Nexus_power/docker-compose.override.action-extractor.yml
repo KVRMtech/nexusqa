@@ -1,0 +1,118 @@
+# Action extractor (Phase 1.5) — additive env override + full LLM tier ladder.
+#
+# This override:
+#   * Defines a 5-tier LLM ladder (premium → balanced → fast_cloud → vision → fast)
+#   * Routes the multimodal action_extraction task to tier_premium (Claude
+#     Sonnet 4.6) with automatic fallback to GPT-4o → Gemini → llava
+#   * Keeps caption_rewriter on tier_fast (Ollama llama3.2:3b — text only)
+#   * Bumps STORYBOARD_ACTION_EXTRACTOR_VERSION to v3 to force re-derivation
+#     of every artifact with the new Sonnet pipeline
+#
+# Apply by copying alongside docker-compose.yml on the VM as
+# ``docker-compose.override.yml`` — compose auto-merges override files.
+# API keys are read from /home/harik/nexus/Nexus_power/.env (mode 600) so
+# they never appear in this file or in git.
+#
+# Rollback: delete this file and restart platform-api.  Composer's
+# freshness check then sees no scene_actions rows at the new version
+# and treats their absence as acceptable (the visual-flow frontend
+# conditional gracefully hides the green panel).
+services:
+  platform-api:
+    environment:
+      # ── Tier enrollment (order doesn't affect routing; routing uses
+      # LLM_TASK_* and per-tier FALLBACK chains) ──────────────────────
+      LLM_TIERS: tier_premium,tier_balanced,tier_fast_cloud,tier_vision,tier_fast
+
+      # ── Task routing ──────────────────────────────────────────────
+      # Captions stay on the existing free local model.  Action
+      # extraction goes to Sonnet 4.6, with auto-fallback through the
+      # chain on transient failures.
+      LLM_TASK_ACTION_EXTRACTION: tier_premium
+      LLM_TASK_CAPTION: tier_fast
+
+      # ── tier_premium — Claude Sonnet 4.6 (PRIMARY for action_extraction)
+      LLM_TIER_TIER_PREMIUM_PROVIDER: anthropic
+      LLM_TIER_TIER_PREMIUM_BASE_URL: https://api.anthropic.com
+      LLM_TIER_TIER_PREMIUM_MODEL: claude-sonnet-4-6
+      LLM_TIER_TIER_PREMIUM_API_KEY: ${ANTHROPIC_API_KEY:-}
+      LLM_TIER_TIER_PREMIUM_TIMEOUT_S: '120.0'
+      LLM_TIER_TIER_PREMIUM_MAX_RETRIES: '2'
+      LLM_TIER_TIER_PREMIUM_FALLBACK: tier_balanced
+
+      # ── tier_balanced — OpenAI GPT-4o (FALLBACK 1)
+      LLM_TIER_TIER_BALANCED_PROVIDER: openai_compat
+      LLM_TIER_TIER_BALANCED_BASE_URL: https://api.openai.com/v1
+      LLM_TIER_TIER_BALANCED_MODEL: gpt-4o
+      LLM_TIER_TIER_BALANCED_API_KEY: ${OPENAI_API_KEY:-}
+      LLM_TIER_TIER_BALANCED_TIMEOUT_S: '120.0'
+      LLM_TIER_TIER_BALANCED_MAX_RETRIES: '2'
+      LLM_TIER_TIER_BALANCED_FALLBACK: tier_fast_cloud
+
+      # ── tier_fast_cloud — Gemini 2.0 Flash via Google's OpenAI-compat
+      #     endpoint (FALLBACK 2; cheap + fast vision)
+      LLM_TIER_TIER_FAST_CLOUD_PROVIDER: openai_compat
+      LLM_TIER_TIER_FAST_CLOUD_BASE_URL: https://generativelanguage.googleapis.com/v1beta/openai
+      LLM_TIER_TIER_FAST_CLOUD_MODEL: gemini-2.0-flash
+      LLM_TIER_TIER_FAST_CLOUD_API_KEY: ${GEMINI_API_KEY:-}
+      LLM_TIER_TIER_FAST_CLOUD_TIMEOUT_S: '60.0'
+      LLM_TIER_TIER_FAST_CLOUD_MAX_RETRIES: '1'
+      LLM_TIER_TIER_FAST_CLOUD_FALLBACK: tier_vision
+
+      # ── tier_vision — Local Ollama llava:7b (FALLBACK 3; last-resort vision)
+      LLM_TIER_TIER_VISION_PROVIDER: ollama
+      LLM_TIER_TIER_VISION_BASE_URL: http://ollama:11434
+      LLM_TIER_TIER_VISION_MODEL: llava:7b
+      LLM_TIER_TIER_VISION_TIMEOUT_S: '120.0'
+      LLM_TIER_TIER_VISION_MAX_RETRIES: '1'
+
+      # ── tier_fast — Local Ollama llama3.2:3b (CAPTIONS — text only)
+      # Inherited from base compose; declared here for clarity.
+      LLM_TIER_TIER_FAST_PROVIDER: ollama
+      LLM_TIER_TIER_FAST_BASE_URL: http://ollama:11434
+      LLM_TIER_TIER_FAST_MODEL: llama3.2:3b
+      LLM_TIER_TIER_FAST_TIMEOUT_S: '30.0'
+      LLM_TIER_TIER_FAST_MAX_RETRIES: '1'
+
+      # ── Force re-derivation across all artifacts ──────────────────
+      # v1 — initial Phase 1 deploy (per-scene llava call).
+      # v2 — Phase 1.5: journey-context + URL canonicalization +
+      #      verb=none→navigate override.
+      # v3 — Phase 1.5+Sonnet: tier_premium routes to Claude Sonnet 4.6.
+      #      Sonnet rejected images due to JPEG bytes with image/png
+      #      media_type mismatch; only 6/17 scenes got GPT-4o fallback rows.
+      # v4 — Force re-encode every image through Pillow to PNG before
+      #      sending, guaranteeing media_type matches actual bytes.
+      # v5 — Pass JWT as ?token= query param to eyes-engine (not Bearer
+      #      header); the route only honours the query form.
+      # v6 — JPEG q85 (not PNG) + 1024px max dimension (was 1568) so
+      #      image payload fits Anthropic's 5 MB/image limit.  Plus
+      #      app-grouping canonicalization rewrites ghost Msdd.com
+      #      labels.  Plus richer error logging.
+      # v7 — Fix LLMRouter response reconstruction dropping tool_calls.
+      #      Use dataclasses.replace() instead of manual field copy so
+      #      new fields (tool_calls, cache_read_tokens) propagate from
+      #      the provider through the router back to the caller.
+      # v8 — Multi-action per scene.  Long scenes (≥5s) sample 4
+      #      intra-scene frames and the LLM returns a LIST of actions
+      #      (one per detected field change).  Schema: scene_actions
+      #      gets a ``subaction_index`` column; constraint moves from
+      #      (scene_id, version) to (scene_id, version, subaction_index).
+      #      See migration 033.
+      # v9 — System+user prompt rewrite.  v8 prompt still said "ONE
+      #      action" so Sonnet ignored the list contract and returned
+      #      length-1 even on long scenes.  v9 explicitly instructs
+      #      pairwise frame comparison and lists 3-7 actions for
+      #      typical form-fill pages.
+      # v10 — Two improvements:
+      #      1. Very-long scenes (≥10s) now sample 8 frames instead
+      #         of 4 — catches faster form-fill cadences.
+      #      2. When LLM returns an empty action list, write a
+      #         verb=none placeholder row instead of dropping the
+      #         scene entirely — keeps the journey visually complete.
+      # v11 — Safety net: _fallback_result always emits at least one
+      #      action (verb=none placeholder when no controls AND no
+      #      LLM output).  Closes the gap where scenes silently
+      #      dropped on LLM failure / no-controls combinations.
+      STORYBOARD_ACTION_EXTRACTOR_VERSION: v11
+      STORYBOARD_ACTION_EXTRACTOR_IMAGE_MAX_DIMENSION_PX: '1024'
