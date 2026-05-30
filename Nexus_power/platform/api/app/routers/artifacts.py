@@ -29,6 +29,10 @@ from nexus_sdk.db.models import (
     # the storyboard composer.
     StoryboardPanelRow, AppGroupingRow, SceneCaptionRow,
     AnnotatedFrameCacheRow, SceneActionRow,
+    # Phase 2 — URL-keyed page visits + their actions and form
+    # snapshots.  Read-only here; populated by the page_visit /
+    # page_action / form_snapshot extractors.
+    PageVisitRow, PageActionRow,
 )
 
 
@@ -1233,6 +1237,10 @@ def _empty_storyboard_overlay() -> dict:
 
     Kept as a separate helper so the route function stays focused on
     its main 7-step query plan; the empty-shape contract lives here.
+
+    Phase 2 keys (page_visits, page_actions, form_snapshots) are
+    included so clients can read these unconditionally without
+    null-checks.
     """
     return {
         "app_groupings": [],
@@ -1241,6 +1249,10 @@ def _empty_storyboard_overlay() -> dict:
         "annotated_frame_urls": {},
         "scene_to_app_grouping": {},
         "scene_actions": {},
+        # Phase 2 — URL-keyed surfaces.
+        "page_visits": [],
+        "page_actions": {},
+        "form_snapshots": {},
     }
 
 
@@ -1453,6 +1465,137 @@ async def _load_storyboard_overlay(
             "extractor_model": model or "",
         })
 
+    # 6) Page visits — Phase 2.0 URL-keyed log.  Independent of scenes;
+    #    surfaces every distinct URL the user visited (even when
+    #    scene_grouper merged 9 form sub-pages into one scene because
+    #    their layout was identical).  Sorted by sequence_index so the
+    #    payload matches the recording's chronology.  Form snapshot
+    #    (label → value dict) is folded into each visit row so test
+    #    exporters can iterate once.
+    page_visits_q = await db.execute(
+        select(
+            PageVisitRow.page_visit_id,
+            PageVisitRow.sequence_index,
+            PageVisitRow.location,
+            PageVisitRow.url_host,
+            PageVisitRow.url_path,
+            PageVisitRow.url_query,
+            PageVisitRow.canonical_host,
+            PageVisitRow.first_seen_ms,
+            PageVisitRow.last_seen_ms,
+            PageVisitRow.duration_ms,
+            PageVisitRow.frame_count,
+            PageVisitRow.source,
+            PageVisitRow.extraction_confidence,
+            PageVisitRow.primary_scene_id,
+            PageVisitRow.form_snapshot,
+            PageVisitRow.form_snapshot_signals,
+            PageVisitRow.extractor_version,
+            PageVisitRow.form_snapshot_extractor_version,
+        )
+        .where(
+            PageVisitRow.artifact_id == artifact_id,
+            PageVisitRow.tenant_id == tenant_id,
+        )
+        .order_by(PageVisitRow.sequence_index.asc())
+    )
+    page_visits: list[dict] = []
+    form_snapshots: dict[str, dict] = {}
+    for (
+        visit_id, seq_idx, location, url_host, url_path, url_query,
+        canonical_host, first_seen, last_seen, duration, frame_count,
+        source, extraction_conf, primary_scene_id,
+        form_snapshot, snapshot_signals, extractor_v, snapshot_extractor_v,
+    ) in page_visits_q.all():
+        snapshot = form_snapshot or {}
+        snapshot_meta = snapshot_signals or {}
+        page_visits.append({
+            "page_visit_id": str(visit_id),
+            "sequence_index": int(seq_idx or 0),
+            "location": location or "",
+            "url_host": url_host or "",
+            "url_path": url_path or "",
+            "url_query": url_query or "",
+            "canonical_host": canonical_host or "",
+            "first_seen_ms": int(first_seen or 0),
+            "last_seen_ms": int(last_seen or 0),
+            "duration_ms": int(duration or 0),
+            "frame_count": int(frame_count or 0),
+            "source": source or "url_regex",
+            "extraction_confidence": float(extraction_conf or 0.0),
+            "primary_scene_id": (
+                str(primary_scene_id) if primary_scene_id else None
+            ),
+            "form_snapshot": snapshot,
+            "form_snapshot_signals": snapshot_meta,
+            "extractor_version": extractor_v or "",
+            "form_snapshot_extractor_version": snapshot_extractor_v or "",
+        })
+        if snapshot:
+            form_snapshots[str(visit_id)] = {
+                "fields": snapshot,
+                "field_kinds": snapshot_meta.get("field_kinds") or {},
+                "visible_field_count": snapshot_meta.get(
+                    "visible_field_count", len(snapshot),
+                ),
+                "overall_confidence": float(
+                    snapshot_meta.get("overall_confidence", 0.0) or 0.0,
+                ),
+                "page_intent": snapshot_meta.get("page_intent", "") or "",
+                "source_frame_asset_path": snapshot_meta.get(
+                    "source_frame_asset_path", "",
+                ) or "",
+                "extractor_model": snapshot_meta.get("extractor_model", "") or "",
+                "extractor_version": snapshot_extractor_v or "",
+            }
+
+    # 7) Page actions — Phase 2.1.  One LIST per page_visit_id, ordered
+    #    by subaction_index so multi-action pages return chronological
+    #    sequences.  Same shape as scene_actions so test exporters can
+    #    iterate uniformly.
+    page_actions_q = await db.execute(
+        select(
+            PageActionRow.page_visit_id,
+            PageActionRow.subaction_index,
+            PageActionRow.verb,
+            PageActionRow.target_label,
+            PageActionRow.target_kind,
+            PageActionRow.value,
+            PageActionRow.confidence,
+            PageActionRow.automation_ready,
+            PageActionRow.reasoning,
+            PageActionRow.evidence_signals,
+            PageActionRow.extractor_model,
+        )
+        .where(
+            PageActionRow.artifact_id == artifact_id,
+            PageActionRow.tenant_id == tenant_id,
+        )
+        .order_by(
+            PageActionRow.page_visit_id.asc(),
+            PageActionRow.subaction_index.asc(),
+        )
+    )
+    page_actions: dict[str, list[dict]] = {}
+    for (
+        visit_id, sub_idx, verb, target_label, target_kind, value,
+        conf, auto_ready, reasoning, ev, model,
+    ) in page_actions_q.all():
+        if not visit_id:
+            continue
+        page_actions.setdefault(str(visit_id), []).append({
+            "subaction_index": int(sub_idx or 0),
+            "verb": verb or "none",
+            "target_label": target_label or "",
+            "target_kind": target_kind or "other",
+            "value": value,
+            "confidence": float(conf or 0.0),
+            "automation_ready": bool(auto_ready),
+            "reasoning": reasoning or "",
+            "evidence_signals": ev or {},
+            "extractor_model": model or "",
+        })
+
     return {
         "app_groupings": app_groupings,
         "noise_scene_ids": sorted(noise_scene_ids),
@@ -1460,6 +1603,10 @@ async def _load_storyboard_overlay(
         "annotated_frame_urls": annotated_frame_urls,
         "scene_to_app_grouping": scene_to_app_grouping,
         "scene_actions": scene_actions,
+        # Phase 2 surfaces — URL-keyed.
+        "page_visits": page_visits,
+        "page_actions": page_actions,
+        "form_snapshots": form_snapshots,
     }
 
 
@@ -1744,6 +1891,12 @@ async def get_visual_evidence_graph(
             "annotated_frame_urls": storyboard_overlay["annotated_frame_urls"],
             "scene_to_app_grouping": storyboard_overlay["scene_to_app_grouping"],
             "scene_actions": storyboard_overlay["scene_actions"],
+            # Phase 2 — URL-keyed page visits + their actions + form
+            # snapshots.  Always present (possibly empty) so the
+            # frontend + test exporters can iterate without null checks.
+            "page_visits": storyboard_overlay["page_visits"],
+            "page_actions": storyboard_overlay["page_actions"],
+            "form_snapshots": storyboard_overlay["form_snapshots"],
         }
 
 

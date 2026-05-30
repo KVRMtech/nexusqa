@@ -409,6 +409,190 @@ class ActionExtractorConfig:
 
 
 @dataclass(frozen=True)
+class PageVisitExtractorConfig:
+    """Tunables for ``page_visit_extractor`` (Phase 2.0).
+
+    The page visit extractor scans every frame's ``extracted_text`` for
+    URLs and produces a chronological log of distinct page visits.
+    Falls back to ``visual_frames.screen_name`` and
+    ``app_instances.window_title`` for non-web recordings.  When ALL
+    fallbacks fail it can optionally call a multimodal LLM on the first
+    representative frame to read the location off the pixels.
+
+    Generic across all UI domains — no hardcoded host lists, no
+    customer-specific URL patterns.  Canonicalisation reuses the same
+    dominant-host logic the app_deduper applies to scene URLs.
+
+    See ``platform/api/app/services/storyboard/page_visit_extractor.py``.
+    """
+
+    # Stamped on every page_visits row.  Bumping this in env
+    # (STORYBOARD_PAGE_VISIT_EXTRACTOR_VERSION) forces re-extraction
+    # of every artifact in the database without dropping rows.
+    version: str = "v1"
+
+    # URL detection regex.  Configurable so operators can tighten it
+    # for tenants whose OCR is noisy (false-positive URLs).  Default
+    # matches http(s):// and www. prefixes; bare domain names are not
+    # matched because OCR routinely misreads UI strings as bare domains
+    # ("login.tail" etc.).
+    url_regex_pattern: str = (
+        r"(?:https?://|www\.)"
+        r"[A-Za-z0-9][A-Za-z0-9\-]{0,62}"
+        r"(?:\.[A-Za-z0-9][A-Za-z0-9\-]{0,62}){1,4}"
+        r"(?:/[^\s\"'<>]*)?"
+    )
+
+    # Minimum number of contiguous frames a URL must appear in before
+    # it is recorded as a distinct page visit.  Filters OCR-flicker
+    # where a URL appears for one frame mid-scroll and disappears.
+    min_frames_for_visit: int = 1
+
+    # When True, two adjacent visits to the SAME canonical URL with
+    # the same query string are merged into one row even when their
+    # frame_index runs are non-contiguous (e.g. a brief loading-tab
+    # frame in the middle).  When False, every contiguous run is its
+    # own row.  Default keeps the visit log clean for QA review.
+    merge_adjacent_same_url: bool = True
+
+    # When True, fall back to ``visual_frames.screen_name`` when no
+    # URL is detected on a frame.  Disable for pure web tenants where
+    # screen_name fallback is always noise.
+    enable_screen_name_fallback: bool = True
+
+    # When True, fall back to ``app_instances.window_title`` (or
+    # ``apps.window_title``) when neither URL nor screen_name is
+    # available.  Disable for tenants whose pipeline does not record
+    # window titles.
+    enable_window_title_fallback: bool = True
+
+    # When True, call a multimodal LLM on the first frame of any visit
+    # whose location is still empty after all deterministic fallbacks.
+    # Adds ~$0.001 per visit; defaults OFF because the deterministic
+    # path covers ~99% of real recordings.  Enable for low-confidence
+    # tenants.
+    enable_llm_inference: bool = False
+
+    # Task name used when calling the LLM router for llm_inferred.
+    llm_task_name: str = "page_visit_inference"
+
+    # Per-LLM-call temperature.
+    llm_temperature: float = 0.0
+
+    # Per-LLM-call max output tokens.
+    llm_max_tokens: int = 64
+
+    # Image downsizing — see ``ActionExtractorConfig.image_max_dimension_px``.
+    image_max_dimension_px: int = 1024
+
+
+@dataclass(frozen=True)
+class PageActionExtractorConfig:
+    """Tunables for ``page_action_extractor`` (Phase 2.1).
+
+    Per-URL parallel of the scene-keyed ``action_extractor``.  Each
+    page visit gets a multimodal LLM call with intra-visit sampled
+    frames and produces 0..N PageAction rows keyed by
+    (page_visit_id, extractor_version, subaction_index).
+
+    The two extractors run side-by-side; ``scene_actions`` stays
+    populated for backwards compat (existing 3D Journey UI reads it)
+    while ``page_actions`` is the new source for test exporters.
+
+    See ``platform/api/app/services/storyboard/page_action_extractor.py``.
+    """
+
+    version: str = "v1"
+
+    # Task name passed to ``LLMRouter.complete(task=...)``.  Operators
+    # map this to a vision-capable tier in env via
+    # ``LLM_TASK_PAGE_ACTION_EXTRACTION=tier_premium``.  When no tier
+    # is configured, falls back to no-LLM (page action rows still
+    # written with verb=none + low confidence).
+    llm_task_name: str = "page_action_extraction"
+
+    concurrency: int = 4
+
+    # Per-call timeout override.  None defers to the LLM tier's own
+    # timeout setting.
+    request_timeout_s: float | None = None
+
+    # Maximum total wall time for one artifact's full page-action pass.
+    total_timeout_s: float = 300.0
+
+    # Per-LLM-call temperature.  Keep near zero for structured output.
+    llm_temperature: float = 0.0
+
+    # Per-LLM-call max output tokens.
+    llm_max_tokens: int = 768
+
+    # Confidence floor below which automation_ready is forced False.
+    min_confidence_for_automation: float = 0.65
+
+    # Max frames sampled per page visit.  Visits ≥ very-long
+    # duration get the higher cap; short visits get the lower one.
+    # Defaults match the scene-keyed extractor's intra-frame sampling
+    # so token budgets are predictable.
+    frames_per_visit_default: int = 4
+    frames_per_visit_long: int = 6
+    frames_per_visit_very_long: int = 8
+
+    # Visit-duration thresholds (seconds) that pick which frame count
+    # the extractor uses.  Mirror LONG / VERY_LONG in action_extractor.
+    long_visit_threshold_s: float = 5.0
+    very_long_visit_threshold_s: float = 10.0
+
+    # Image downsizing budget — see ActionExtractorConfig.
+    image_max_dimension_px: int = 1024
+
+
+@dataclass(frozen=True)
+class FormSnapshotExtractorConfig:
+    """Tunables for ``form_snapshot_extractor`` (Phase 2.2).
+
+    Captures the final state of every form field visible on a page
+    visit.  Each visit triggers ONE multimodal LLM call on the LAST
+    representative frame; the LLM returns a list of (label, value,
+    kind, confidence) which gets flattened into the JSONB
+    ``page_visits.form_snapshot`` column.
+
+    Why per-visit (not per-action): the snapshot answers "what state
+    did the user leave the page in" — useful for test assertions
+    independent of how the user got there.  PageActions answer "how
+    did the user fill the form".  Both are needed for high-fidelity
+    QA export.
+
+    See ``platform/api/app/services/storyboard/form_snapshot_extractor.py``.
+    """
+
+    version: str = "v1"
+
+    llm_task_name: str = "form_snapshot_extraction"
+
+    concurrency: int = 4
+
+    # Skip pages with no form fields (the LLM rejects them with empty
+    # output anyway, but this saves the call).  Heuristic: skip when
+    # the page's last-frame OCR text has fewer than this many input-
+    # candidate tokens (label-looking words ending in ':' or '?').
+    skip_when_input_candidates_below: int = 2
+
+    request_timeout_s: float | None = None
+    total_timeout_s: float = 240.0
+
+    llm_temperature: float = 0.0
+    llm_max_tokens: int = 1024
+
+    # When True, the extractor only runs on page visits with a non-
+    # empty URL (web pages).  Disable to capture form state on
+    # desktop / mainframe pages too.
+    web_only: bool = False
+
+    # Image downsizing budget.
+    image_max_dimension_px: int = 1024
+
+
+@dataclass(frozen=True)
 class StoryboardConfig:
     """Aggregate config holder — one instance is created at startup."""
 
@@ -417,6 +601,15 @@ class StoryboardConfig:
     caption_rewriter: CaptionRewriterConfig = field(default_factory=CaptionRewriterConfig)
     frame_annotator: FrameAnnotatorConfig = field(default_factory=FrameAnnotatorConfig)
     action_extractor: ActionExtractorConfig = field(default_factory=ActionExtractorConfig)
+    page_visit_extractor: PageVisitExtractorConfig = field(
+        default_factory=PageVisitExtractorConfig,
+    )
+    page_action_extractor: PageActionExtractorConfig = field(
+        default_factory=PageActionExtractorConfig,
+    )
+    form_snapshot_extractor: FormSnapshotExtractorConfig = field(
+        default_factory=FormSnapshotExtractorConfig,
+    )
     composer: ComposerConfig = field(default_factory=ComposerConfig)
 
 
@@ -631,6 +824,172 @@ def load_config() -> StoryboardConfig:
             image_max_dimension_px=_env_int(
                 "STORYBOARD_ACTION_EXTRACTOR_IMAGE_MAX_DIMENSION_PX",
                 1568,
+                min_value=0,
+            ),
+        ),
+        page_visit_extractor=PageVisitExtractorConfig(
+            version=_env_str("STORYBOARD_PAGE_VISIT_EXTRACTOR_VERSION", "v1"),
+            url_regex_pattern=_env_str(
+                "STORYBOARD_PAGE_VISIT_URL_REGEX",
+                PageVisitExtractorConfig.url_regex_pattern,
+            ),
+            min_frames_for_visit=_env_int(
+                "STORYBOARD_PAGE_VISIT_MIN_FRAMES", 1, min_value=1,
+            ),
+            merge_adjacent_same_url=_env_bool(
+                "STORYBOARD_PAGE_VISIT_MERGE_ADJACENT_SAME_URL", True,
+            ),
+            enable_screen_name_fallback=_env_bool(
+                "STORYBOARD_PAGE_VISIT_SCREEN_NAME_FALLBACK", True,
+            ),
+            enable_window_title_fallback=_env_bool(
+                "STORYBOARD_PAGE_VISIT_WINDOW_TITLE_FALLBACK", True,
+            ),
+            enable_llm_inference=_env_bool(
+                "STORYBOARD_PAGE_VISIT_LLM_INFERENCE", False,
+            ),
+            llm_task_name=_env_str(
+                "STORYBOARD_PAGE_VISIT_LLM_TASK_NAME", "page_visit_inference",
+            ),
+            llm_temperature=_env_float(
+                "STORYBOARD_PAGE_VISIT_LLM_TEMPERATURE",
+                0.0,
+                min_value=0.0,
+                max_value=2.0,
+            ),
+            llm_max_tokens=_env_int(
+                "STORYBOARD_PAGE_VISIT_LLM_MAX_TOKENS", 64, min_value=1,
+            ),
+            image_max_dimension_px=_env_int(
+                "STORYBOARD_PAGE_VISIT_IMAGE_MAX_DIMENSION_PX",
+                1024,
+                min_value=0,
+            ),
+        ),
+        page_action_extractor=PageActionExtractorConfig(
+            version=_env_str("STORYBOARD_PAGE_ACTION_EXTRACTOR_VERSION", "v1"),
+            llm_task_name=_env_str(
+                "STORYBOARD_PAGE_ACTION_EXTRACTOR_LLM_TASK_NAME",
+                "page_action_extraction",
+            ),
+            concurrency=_env_int(
+                "STORYBOARD_PAGE_ACTION_EXTRACTOR_CONCURRENCY",
+                4,
+                min_value=1,
+            ),
+            request_timeout_s=(
+                _env_float(
+                    "STORYBOARD_PAGE_ACTION_EXTRACTOR_REQUEST_TIMEOUT_S",
+                    0.0,
+                    min_value=0.0,
+                )
+                if os.environ.get(
+                    "STORYBOARD_PAGE_ACTION_EXTRACTOR_REQUEST_TIMEOUT_S",
+                )
+                else None
+            ),
+            total_timeout_s=_env_float(
+                "STORYBOARD_PAGE_ACTION_EXTRACTOR_TOTAL_TIMEOUT_S",
+                300.0,
+                min_value=1.0,
+            ),
+            llm_temperature=_env_float(
+                "STORYBOARD_PAGE_ACTION_EXTRACTOR_LLM_TEMPERATURE",
+                0.0,
+                min_value=0.0,
+                max_value=2.0,
+            ),
+            llm_max_tokens=_env_int(
+                "STORYBOARD_PAGE_ACTION_EXTRACTOR_LLM_MAX_TOKENS",
+                768,
+                min_value=1,
+            ),
+            min_confidence_for_automation=_env_float(
+                "STORYBOARD_PAGE_ACTION_EXTRACTOR_MIN_AUTOMATION_CONFIDENCE",
+                0.65,
+                min_value=0.0,
+                max_value=1.0,
+            ),
+            frames_per_visit_default=_env_int(
+                "STORYBOARD_PAGE_ACTION_EXTRACTOR_FRAMES_DEFAULT",
+                4,
+                min_value=1,
+            ),
+            frames_per_visit_long=_env_int(
+                "STORYBOARD_PAGE_ACTION_EXTRACTOR_FRAMES_LONG",
+                6,
+                min_value=1,
+            ),
+            frames_per_visit_very_long=_env_int(
+                "STORYBOARD_PAGE_ACTION_EXTRACTOR_FRAMES_VERY_LONG",
+                8,
+                min_value=1,
+            ),
+            long_visit_threshold_s=_env_float(
+                "STORYBOARD_PAGE_ACTION_EXTRACTOR_LONG_THRESHOLD_S",
+                5.0,
+                min_value=0.0,
+            ),
+            very_long_visit_threshold_s=_env_float(
+                "STORYBOARD_PAGE_ACTION_EXTRACTOR_VERY_LONG_THRESHOLD_S",
+                10.0,
+                min_value=0.0,
+            ),
+            image_max_dimension_px=_env_int(
+                "STORYBOARD_PAGE_ACTION_EXTRACTOR_IMAGE_MAX_DIMENSION_PX",
+                1024,
+                min_value=0,
+            ),
+        ),
+        form_snapshot_extractor=FormSnapshotExtractorConfig(
+            version=_env_str("STORYBOARD_FORM_SNAPSHOT_EXTRACTOR_VERSION", "v1"),
+            llm_task_name=_env_str(
+                "STORYBOARD_FORM_SNAPSHOT_EXTRACTOR_LLM_TASK_NAME",
+                "form_snapshot_extraction",
+            ),
+            concurrency=_env_int(
+                "STORYBOARD_FORM_SNAPSHOT_EXTRACTOR_CONCURRENCY",
+                4,
+                min_value=1,
+            ),
+            skip_when_input_candidates_below=_env_int(
+                "STORYBOARD_FORM_SNAPSHOT_SKIP_INPUT_CANDIDATES_BELOW",
+                2,
+                min_value=0,
+            ),
+            request_timeout_s=(
+                _env_float(
+                    "STORYBOARD_FORM_SNAPSHOT_EXTRACTOR_REQUEST_TIMEOUT_S",
+                    0.0,
+                    min_value=0.0,
+                )
+                if os.environ.get(
+                    "STORYBOARD_FORM_SNAPSHOT_EXTRACTOR_REQUEST_TIMEOUT_S",
+                )
+                else None
+            ),
+            total_timeout_s=_env_float(
+                "STORYBOARD_FORM_SNAPSHOT_EXTRACTOR_TOTAL_TIMEOUT_S",
+                240.0,
+                min_value=1.0,
+            ),
+            llm_temperature=_env_float(
+                "STORYBOARD_FORM_SNAPSHOT_EXTRACTOR_LLM_TEMPERATURE",
+                0.0,
+                min_value=0.0,
+                max_value=2.0,
+            ),
+            llm_max_tokens=_env_int(
+                "STORYBOARD_FORM_SNAPSHOT_EXTRACTOR_LLM_MAX_TOKENS",
+                1024,
+                min_value=1,
+            ),
+            web_only=_env_bool(
+                "STORYBOARD_FORM_SNAPSHOT_EXTRACTOR_WEB_ONLY", False,
+            ),
+            image_max_dimension_px=_env_int(
+                "STORYBOARD_FORM_SNAPSHOT_EXTRACTOR_IMAGE_MAX_DIMENSION_PX",
+                1024,
                 min_value=0,
             ),
         ),

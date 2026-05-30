@@ -127,6 +127,107 @@ def _build_cy_ts(
     return "\n".join(lines)
 
 
+def _build_url_coverage_cy(
+    page_visits: list[dict],
+    page_actions: dict[str, list[dict]],
+    form_snapshots: dict[str, dict],
+) -> str:
+    """Emit a Cypress spec walking the URL log + asserting form snapshots.
+
+    Same idea as the Playwright variant — one ``it`` per distinct URL
+    visited, with cy.visit + assertions derived from the form snapshot.
+    """
+    if not page_visits:
+        return ""
+
+    lines: list[str] = [
+        "/// <reference types=\"cypress\" />",
+        "",
+        "// URL Coverage — generated from Phase 2 page_visits + form_snapshots.",
+        "// One spec block per distinct URL visited.",
+        "",
+        "describe('URL Coverage', () => {",
+    ]
+
+    for visit in page_visits:
+        location = (visit.get("location") or "").strip()
+        if not location:
+            continue
+        seq = visit.get("sequence_index")
+        visit_id = visit.get("page_visit_id") or ""
+        snapshot = form_snapshots.get(visit_id) or {}
+        intent = (snapshot.get("page_intent") or "").strip()
+        test_title = " — ".join(p for p in [
+            f"#{seq:02d}" if isinstance(seq, int) else f"#{seq}",
+            intent,
+            location,
+        ] if p)
+
+        lines.append(f"  it({json.dumps(test_title)}, () => {{")
+        if location.startswith("http://") or location.startswith("https://"):
+            lines.append(f"    cy.visit({json.dumps(location)});")
+        else:
+            lines.append(
+                f"    // Native UI page — runner must open: {location}"
+            )
+
+        fields: dict[str, str] = snapshot.get("fields") or {}
+        field_kinds: dict[str, str] = snapshot.get("field_kinds") or {}
+        if fields:
+            lines.append("    // Final form snapshot for this page:")
+            for label, value in fields.items():
+                if not label:
+                    continue
+                kind = (field_kinds.get(label) or "other").lower()
+                value_str = str(value or "")
+                label_re = json.dumps(label)
+                if kind in ("checkbox", "radio"):
+                    if value_str.lower() in ("true", "on", "yes", "checked"):
+                        lines.append(
+                            f"    cy.contains('label', {label_re}).find('input').should('be.checked');"
+                        )
+                    else:
+                        lines.append(
+                            f"    cy.contains('label', {label_re}).find('input').should('not.be.checked');"
+                        )
+                elif kind in ("dropdown", "text_field"):
+                    if value_str:
+                        lines.append(
+                            f"    cy.contains('label', {label_re}).siblings('input,select').should('have.value', {json.dumps(value_str)});"
+                        )
+                    else:
+                        lines.append(
+                            f"    cy.contains({label_re}).should('be.visible');"
+                        )
+                else:
+                    if value_str:
+                        lines.append(
+                            f"    cy.contains({json.dumps(value_str[:120])}).should('be.visible');"
+                        )
+                    else:
+                        lines.append(
+                            f"    cy.contains({json.dumps(label[:120])}).should('be.visible');"
+                        )
+
+        actions = page_actions.get(visit_id) or []
+        if actions:
+            lines.append("    // Captured actions on this page (for reference):")
+            for action in actions:
+                verb = (action.get("verb") or "").lower()
+                target = (action.get("target_label") or "")[:120]
+                value = action.get("value")
+                value_repr = json.dumps(value) if value is not None else "null"
+                lines.append(
+                    f"    // - {verb}: target={json.dumps(target)} value={value_repr}"
+                )
+
+        lines.append("  });")
+
+    lines.append("});")
+    lines.append("")
+    return "\n".join(lines)
+
+
 class CypressExporter(TestExporter):
     format_id = "cypress"
     label = "Cypress (.cy.ts)"
@@ -139,6 +240,14 @@ class CypressExporter(TestExporter):
                 app_name = self.ctx.inst_name_map.get(inst_id, inst_id) or "App"
                 spec = _build_cy_ts(app_name, tcs, self.ctx.controls_by_id)
                 zf.writestr(f"{safe_name(app_name)}.cy.ts", spec)
+            # Phase 2 — URL coverage spec, when extractor data is available.
+            coverage = _build_url_coverage_cy(
+                self.ctx.page_visits,
+                self.ctx.page_actions,
+                self.ctx.form_snapshots,
+            )
+            if coverage:
+                zf.writestr("url-coverage.cy.ts", coverage)
         buf.seek(0)
         return ExportBundle(
             payload=buf.getvalue(),

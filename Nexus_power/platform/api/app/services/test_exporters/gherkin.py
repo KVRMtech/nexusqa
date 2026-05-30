@@ -110,6 +110,106 @@ def _build_feature(
     return "\n".join(lines)
 
 
+def _build_url_coverage_feature(
+    page_visits: list[dict],
+    page_actions: dict[str, list[dict]],
+    form_snapshots: dict[str, dict],
+) -> str:
+    """Emit a Gherkin .feature walking the URL log + asserting form state.
+
+    One Scenario per distinct URL visited.  The captured action sequence
+    becomes the When/And steps; the form snapshot becomes the Then
+    assertions.  Reads cleanly for business stakeholders who want to
+    audit "what page did the user really go through".
+    """
+    if not page_visits:
+        return ""
+
+    lines: list[str] = [
+        "# URL Coverage — generated from Phase 2 page_visits + form_snapshots.",
+        "# One scenario per distinct URL the user visited.  Independent of the",
+        "# canonical scene-keyed flow so merged-scene URLs still surface here.",
+        "",
+        "Feature: URL Coverage",
+        "",
+    ]
+
+    for visit in page_visits:
+        location = (visit.get("location") or "").strip()
+        if not location:
+            continue
+        seq = visit.get("sequence_index")
+        visit_id = visit.get("page_visit_id") or ""
+        snapshot = form_snapshots.get(visit_id) or {}
+        intent = (snapshot.get("page_intent") or "").strip()
+
+        title_parts = [
+            f"#{seq:02d}" if isinstance(seq, int) else f"#{seq}",
+            intent,
+            location,
+        ]
+        title = " — ".join(p for p in title_parts if p)
+
+        lines.append("  @url-coverage")
+        lines.append(f"  Scenario: {title}")
+        if location.startswith("http://") or location.startswith("https://"):
+            lines.append(f"    Given I open \"{location}\"")
+        else:
+            lines.append(f"    Given I open the page \"{location}\"")
+
+        # Replay captured actions as When/And.
+        actions = page_actions.get(visit_id) or []
+        first_when = True
+        for action in actions:
+            verb = (action.get("verb") or "").lower()
+            target = (action.get("target_label") or "").strip()
+            value = action.get("value")
+            keyword = "When" if first_when else "And"
+            if verb == "type" and value:
+                lines.append(f"    {keyword} I type \"{value}\" into \"{target}\"")
+            elif verb == "select" and value:
+                lines.append(f"    {keyword} I select \"{value}\" from \"{target}\"")
+            elif verb == "click":
+                lines.append(f"    {keyword} I click \"{target}\"")
+            elif verb == "submit":
+                lines.append(f"    {keyword} I submit \"{target}\"")
+            elif verb == "navigate":
+                lines.append(f"    {keyword} I navigate via \"{target}\"")
+            elif verb == "hover":
+                lines.append(f"    {keyword} I hover over \"{target}\"")
+            elif verb == "none":
+                continue  # placeholder rows skipped in narrative
+            else:
+                lines.append(f"    {keyword} I {verb} \"{target}\"")
+            first_when = False
+
+        # Form snapshot → Then assertions.
+        fields: dict[str, str] = snapshot.get("fields") or {}
+        first_then = True
+        for label, value in fields.items():
+            if not label:
+                continue
+            keyword = "Then" if first_then else "And"
+            value_str = str(value or "")
+            if value_str:
+                lines.append(
+                    f"    {keyword} the \"{label}\" field shows \"{value_str}\""
+                )
+            else:
+                lines.append(f"    {keyword} the \"{label}\" field is present")
+            first_then = False
+
+        # Evidence footer.
+        confidence = snapshot.get("overall_confidence")
+        if confidence:
+            lines.append(
+                f"    # Snapshot confidence: {float(confidence):.2f}"
+            )
+        lines.append("")
+
+    return "\n".join(lines)
+
+
 class GherkinExporter(TestExporter):
     format_id = "gherkin"
     label = "Gherkin (.feature)"
@@ -122,6 +222,14 @@ class GherkinExporter(TestExporter):
                 app_name = self.ctx.inst_name_map.get(inst_id, inst_id) or "App"
                 content = _build_feature(app_name, tcs)
                 zf.writestr(f"{safe_name(app_name)}.feature", content)
+            # Phase 2 — URL coverage feature, when extractor data is available.
+            coverage = _build_url_coverage_feature(
+                self.ctx.page_visits,
+                self.ctx.page_actions,
+                self.ctx.form_snapshots,
+            )
+            if coverage:
+                zf.writestr("url-coverage.feature", coverage)
         buf.seek(0)
         return ExportBundle(
             payload=buf.getvalue(),

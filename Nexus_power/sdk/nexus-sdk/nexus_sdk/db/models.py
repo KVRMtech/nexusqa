@@ -2375,3 +2375,165 @@ class SceneActionRow(Base):
         Index("ix_scene_actions_tenant", "tenant_id"),
         Index("ix_scene_actions_verb_kind", "tenant_id", "verb", "target_kind"),
     )
+
+
+class PageVisitRow(Base):
+    """
+    URL-keyed chronological log of distinct pages the user visited.
+
+    Phase 2.0 — independent of scene boundaries.  The canonical
+    pipeline's ``scene_grouper`` merges visually-similar consecutive
+    frames; for QA test generation we need every distinct URL captured
+    so generated tests can navigate to each one.
+
+    Each row represents one contiguous visit to a single ``location``
+    (URL for web, window_title for desktop, screen_name for native).
+    A user who visited ``/state`` → ``/gender`` → ``/state`` produces
+    three rows because each is a separate contiguous visit; the
+    sequence_index preserves order.
+
+    Populated by ``platform/api/app/services/storyboard/page_visit_extractor.py``
+    via URL regex over ``visual_frames.extracted_text`` (with native-UI
+    fallback to window_title / screen_name).  Consumed by
+    ``page_action_extractor`` and ``form_snapshot_extractor`` and by
+    the test exporters.
+
+    See migration 034_page_visits for the DDL.
+    """
+
+    __tablename__ = "page_visits"
+
+    page_visit_id: Mapped[str] = mapped_column(
+        String(64), primary_key=True, default=_new_id,
+    )
+    artifact_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("canonical_artifacts.artifact_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    tenant_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    session_id: Mapped[str] = mapped_column(String(64), default="", nullable=False)
+
+    sequence_index: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    location: Mapped[str] = mapped_column(String(2000), default="", nullable=False)
+    url_host: Mapped[str] = mapped_column(String(500), default="", nullable=False)
+    url_path: Mapped[str] = mapped_column(String(2000), default="", nullable=False)
+    url_query: Mapped[str] = mapped_column(String(2000), default="", nullable=False)
+    canonical_host: Mapped[str] = mapped_column(String(500), default="", nullable=False)
+
+    first_seen_ms: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    last_seen_ms: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    duration_ms: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    frame_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+    # url_regex | url_scene | window_title | screen_name_ocr | llm_inferred
+    source: Mapped[str] = mapped_column(String(40), default="url_regex", nullable=False)
+    extraction_confidence: Mapped[float] = mapped_column(
+        Float, default=1.0, nullable=False,
+    )
+
+    primary_scene_id: Mapped[str | None] = mapped_column(
+        String(64),
+        ForeignKey("visual_scenes.scene_id", ondelete="SET NULL"),
+        nullable=True,
+    )
+
+    form_snapshot: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    form_snapshot_signals: Mapped[dict] = mapped_column(
+        JSON, default=dict, nullable=False,
+    )
+
+    extractor_version: Mapped[str] = mapped_column(
+        String(50), default="v1", nullable=False,
+    )
+    form_snapshot_extractor_version: Mapped[str] = mapped_column(
+        String(50), default="", nullable=False,
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utc_now, nullable=False,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utc_now, nullable=False,
+    )
+
+    __table_args__ = (
+        Index("ix_page_visits_artifact_sequence", "artifact_id", "sequence_index"),
+        Index("ix_page_visits_tenant_session", "tenant_id", "session_id"),
+        Index("ix_page_visits_canonical_host", "tenant_id", "canonical_host"),
+    )
+
+
+class PageActionRow(Base):
+    """
+    Semantic user actions keyed by page_visit instead of scene.
+
+    Phase 2.1 — schema parity with SceneActionRow but parented by
+    ``page_visit_id``.  Lets the action_extractor emit one or more
+    rows per URL visited rather than per (merged) scene.  When a
+    long-form-fill page (e.g. USAA `/personal-information/birthdate`)
+    contained 3 distinct actions, this table holds 3 rows for that
+    page_visit_id distinguished by ``subaction_index``.
+
+    Consumed by test exporters (Cypress / Playwright / Gherkin) which
+    iterate page_visits in order and emit one test step per
+    page_action.
+
+    See migration 035_page_actions for the DDL.
+    """
+
+    __tablename__ = "page_actions"
+
+    page_action_id: Mapped[str] = mapped_column(
+        String(64), primary_key=True, default=_new_id,
+    )
+    page_visit_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("page_visits.page_visit_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    artifact_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("canonical_artifacts.artifact_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    tenant_id: Mapped[str] = mapped_column(String(64), nullable=False)
+
+    subaction_index: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+    verb: Mapped[str] = mapped_column(String(20), default="none", nullable=False)
+    target_label: Mapped[str] = mapped_column(String(500), default="", nullable=False)
+    target_kind: Mapped[str] = mapped_column(String(20), default="other", nullable=False)
+    value: Mapped[str | None] = mapped_column(Text, nullable=True)
+    confidence: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    automation_ready: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False,
+    )
+    reasoning: Mapped[str] = mapped_column(String(500), default="", nullable=False)
+
+    evidence_signals: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+
+    extractor_model: Mapped[str] = mapped_column(String(100), default="", nullable=False)
+    extractor_version: Mapped[str] = mapped_column(
+        String(50), default="v1", nullable=False,
+    )
+    generation_latency_ms: Mapped[int] = mapped_column(
+        Integer, default=0, nullable=False,
+    )
+    prompt_tokens: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    completion_tokens: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utc_now, nullable=False,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utc_now, nullable=False,
+    )
+
+    __table_args__ = (
+        Index("ix_page_actions_artifact", "artifact_id"),
+        Index("ix_page_actions_tenant", "tenant_id"),
+        Index("ix_page_actions_visit_sub", "page_visit_id", "subaction_index"),
+        Index("ix_page_actions_verb_kind", "tenant_id", "verb", "target_kind"),
+    )

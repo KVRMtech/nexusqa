@@ -116,3 +116,37 @@ services:
       #      dropped on LLM failure / no-controls combinations.
       STORYBOARD_ACTION_EXTRACTOR_VERSION: v11
       STORYBOARD_ACTION_EXTRACTOR_IMAGE_MAX_DIMENSION_PX: '1024'
+
+      # ── Phase 2 — URL-keyed extractors ───────────────────────────
+      #
+      # Phase 2.0 — page_visits (URL log).  Deterministic tiers 1-4
+      # cover ~99% of real recordings; LLM inference (tier 5) is OFF
+      # by default.  Bump version to force re-extraction.
+      STORYBOARD_PAGE_VISIT_EXTRACTOR_VERSION: v1
+      STORYBOARD_PAGE_VISIT_LLM_INFERENCE: 'false'
+      STORYBOARD_PAGE_VISIT_MERGE_ADJACENT_SAME_URL: 'true'
+      STORYBOARD_PAGE_VISIT_SCREEN_NAME_FALLBACK: 'true'
+      STORYBOARD_PAGE_VISIT_WINDOW_TITLE_FALLBACK: 'true'
+
+      # Phase 2.1 — page_actions (per-URL Sonnet extraction).  Routes
+      # through the same tier ladder as scene-keyed action extraction.
+      STORYBOARD_PAGE_ACTION_EXTRACTOR_VERSION: v1
+      STORYBOARD_PAGE_ACTION_EXTRACTOR_CONCURRENCY: '4'
+      STORYBOARD_PAGE_ACTION_EXTRACTOR_FRAMES_DEFAULT: '4'
+      STORYBOARD_PAGE_ACTION_EXTRACTOR_FRAMES_LONG: '6'
+      STORYBOARD_PAGE_ACTION_EXTRACTOR_FRAMES_VERY_LONG: '8'
+      STORYBOARD_PAGE_ACTION_EXTRACTOR_IMAGE_MAX_DIMENSION_PX: '1024'
+
+      # Phase 2.2 — form_snapshots (per-URL final form state).
+      STORYBOARD_FORM_SNAPSHOT_EXTRACTOR_VERSION: v1
+      STORYBOARD_FORM_SNAPSHOT_EXTRACTOR_CONCURRENCY: '4'
+      STORYBOARD_FORM_SNAPSHOT_SKIP_INPUT_CANDIDATES_BELOW: '2'
+      STORYBOARD_FORM_SNAPSHOT_EXTRACTOR_WEB_ONLY: 'false'
+      STORYBOARD_FORM_SNAPSHOT_EXTRACTOR_IMAGE_MAX_DIMENSION_PX: '1024'
+
+      # Phase 2 tasks route to the same vision-capable tier ladder as
+      # the scene-keyed action extractor.  The router falls back tier
+      # by tier on transient errors.
+      LLM_TASK_PAGE_ACTION_EXTRACTION: tier_premium
+      LLM_TASK_FORM_SNAPSHOT_EXTRACTION: tier_premium
+      LLM_TASK_PAGE_VISIT_INFERENCE: tier_fast_cloud

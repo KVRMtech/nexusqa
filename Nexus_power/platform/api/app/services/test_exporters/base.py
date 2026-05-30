@@ -49,6 +49,24 @@ class ExportContext:
     scenarios_skipped_by_state: dict[str, int] = field(default_factory=dict)
     total_scenarios_before_filter: int = 0
 
+    # Phase 2 — URL-keyed surfaces.  Each is empty when the page_visit
+    # / page_action / form_snapshot extractors have not yet run.
+    # Exporters append a URL-coverage appendix when these are non-empty,
+    # giving QA engineers a per-URL view of the test plan independent
+    # of how the canonical pipeline grouped frames into scenes.
+    #
+    # ``page_visits``    — list of {page_visit_id, sequence_index,
+    #                       location, canonical_host, url_path, ...,
+    #                       form_snapshot, form_snapshot_signals}
+    # ``page_actions``   — {page_visit_id: [{subaction_index, verb,
+    #                       target_label, target_kind, value, ...}]}
+    # ``form_snapshots`` — {page_visit_id: {fields, field_kinds,
+    #                       visible_field_count, overall_confidence,
+    #                       page_intent, ...}}
+    page_visits: list[dict] = field(default_factory=list)
+    page_actions: dict[str, list[dict]] = field(default_factory=dict)
+    form_snapshots: dict[str, dict] = field(default_factory=dict)
+
 
 @dataclass
 class ExportBundle:

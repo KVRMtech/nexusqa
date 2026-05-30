@@ -47,6 +47,8 @@ from nexus_sdk.db.models import (
     AnnotatedFrameCacheRow,
     AppGroupingRow,
     CanonicalArtifactRow,
+    PageActionRow,
+    PageVisitRow,
     SceneActionRow,
     SceneCaptionRow,
     StoryboardPanelRow,
@@ -58,7 +60,10 @@ from .action_extractor import extract_actions_for_artifact
 from .app_deduper import rededuplicate_artifact
 from .caption_rewriter import rewrite_artifact_captions
 from .config import StoryboardConfig
+from .form_snapshot_extractor import extract_form_snapshots_for_artifact
 from .frame_annotator import FrameAnnotator, precompute_panel_frames
+from .page_action_extractor import extract_page_actions_for_artifact
+from .page_visit_extractor import extract_page_visits_for_artifact
 from .scene_grouper import regroup_artifact
 
 logger = logging.getLogger(__name__)
@@ -116,11 +121,17 @@ class DerivationStatus:
     caption_rewriter_version: str
     frame_annotator_version: str
     action_extractor_version: str
+    page_visit_extractor_version: str
+    page_action_extractor_version: str
+    form_snapshot_extractor_version: str
     ran_scene_grouper: bool
     ran_app_deduper: bool
     ran_caption_rewriter: bool
     ran_frame_annotator: bool
     ran_action_extractor: bool
+    ran_page_visit_extractor: bool
+    ran_page_action_extractor: bool
+    ran_form_snapshot_extractor: bool
     derivation_elapsed_ms: int
     storyboard_total_ms: int
 
@@ -228,6 +239,57 @@ async def _needs_action_extractor(
         artifact_id=artifact_id,
         tenant_id=tenant_id,
         version_column=SceneActionRow.extractor_version,
+    )
+    return current is None or current != target_version
+
+
+async def _needs_page_visit_extractor(
+    session: AsyncSession,
+    *,
+    artifact_id: str,
+    tenant_id: str,
+    target_version: str,
+) -> bool:
+    current = await _max_version(
+        session,
+        table=PageVisitRow,
+        artifact_id=artifact_id,
+        tenant_id=tenant_id,
+        version_column=PageVisitRow.extractor_version,
+    )
+    return current is None or current != target_version
+
+
+async def _needs_page_action_extractor(
+    session: AsyncSession,
+    *,
+    artifact_id: str,
+    tenant_id: str,
+    target_version: str,
+) -> bool:
+    current = await _max_version(
+        session,
+        table=PageActionRow,
+        artifact_id=artifact_id,
+        tenant_id=tenant_id,
+        version_column=PageActionRow.extractor_version,
+    )
+    return current is None or current != target_version
+
+
+async def _needs_form_snapshot_extractor(
+    session: AsyncSession,
+    *,
+    artifact_id: str,
+    tenant_id: str,
+    target_version: str,
+) -> bool:
+    current = await _max_version(
+        session,
+        table=PageVisitRow,
+        artifact_id=artifact_id,
+        tenant_id=tenant_id,
+        version_column=PageVisitRow.form_snapshot_extractor_version,
     )
     return current is None or current != target_version
 
@@ -455,11 +517,23 @@ class StoryboardComposer:
                 caption_rewriter_version=self._config.caption_rewriter.version,
                 frame_annotator_version=self._config.frame_annotator.version,
                 action_extractor_version=self._config.action_extractor.version,
+                page_visit_extractor_version=(
+                    self._config.page_visit_extractor.version
+                ),
+                page_action_extractor_version=(
+                    self._config.page_action_extractor.version
+                ),
+                form_snapshot_extractor_version=(
+                    self._config.form_snapshot_extractor.version
+                ),
                 ran_scene_grouper=ran["scene_grouper"],
                 ran_app_deduper=ran["app_deduper"],
                 ran_caption_rewriter=ran["caption_rewriter"],
                 ran_frame_annotator=ran["frame_annotator"],
                 ran_action_extractor=ran["action_extractor"],
+                ran_page_visit_extractor=ran["page_visit_extractor"],
+                ran_page_action_extractor=ran["page_action_extractor"],
+                ran_form_snapshot_extractor=ran["form_snapshot_extractor"],
                 derivation_elapsed_ms=derivation_elapsed_ms,
                 storyboard_total_ms=total_ms,
             ),
@@ -504,6 +578,9 @@ class StoryboardComposer:
             "caption_rewriter": False,
             "frame_annotator": False,
             "action_extractor": False,
+            "page_visit_extractor": False,
+            "page_action_extractor": False,
+            "form_snapshot_extractor": False,
         }
 
         session_id = await self._session_id_for_artifact(session, artifact_id, tenant_id)
@@ -589,6 +666,124 @@ class StoryboardComposer:
                     extra={
                         "artifact_id": artifact_id,
                         "timeout_s": self._config.action_extractor.total_timeout_s,
+                    },
+                )
+
+        # ── Phase 2.0 — page_visits.  URL-keyed log independent of
+        # scene boundaries.  Always re-runs when a new artifact_version
+        # is configured or when scenes were regrouped (the canonical
+        # pipeline's url discovery feeds the visit fallbacks).
+        page_visit_due = force or await _needs_page_visit_extractor(
+            session,
+            artifact_id=artifact_id,
+            tenant_id=tenant_id,
+            target_version=self._config.page_visit_extractor.version,
+        )
+        if page_visit_due or scene_grouper_due:
+            try:
+                await extract_page_visits_for_artifact(
+                    session,
+                    artifact_id=artifact_id,
+                    tenant_id=tenant_id,
+                    config=self._config.page_visit_extractor,
+                    router=(
+                        self._llm_router
+                        if self._config.page_visit_extractor.enable_llm_inference
+                        else None
+                    ),
+                    auth_token=auth_token,
+                )
+                ran["page_visit_extractor"] = True
+            except Exception as exc:  # pragma: no cover - degrade gracefully
+                logger.warning(
+                    "storyboard.composer.page_visit_extractor_failed",
+                    extra={
+                        "artifact_id": artifact_id,
+                        "error": str(exc)[:200],
+                    },
+                )
+
+        # ── Phase 2.1 — page_actions.  Per-URL action breakdown.  Runs
+        # after page_visits so the visit set is fresh.
+        page_action_due = force or await _needs_page_action_extractor(
+            session,
+            artifact_id=artifact_id,
+            tenant_id=tenant_id,
+            target_version=self._config.page_action_extractor.version,
+        )
+        if page_action_due or page_visit_due or scene_grouper_due:
+            try:
+                await asyncio.wait_for(
+                    extract_page_actions_for_artifact(
+                        session,
+                        artifact_id=artifact_id,
+                        tenant_id=tenant_id,
+                        config=self._config.page_action_extractor,
+                        router=self._llm_router,
+                        auth_token=auth_token,
+                    ),
+                    timeout=self._config.page_action_extractor.total_timeout_s,
+                )
+                ran["page_action_extractor"] = True
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "storyboard.composer.page_action_extractor_timeout",
+                    extra={
+                        "artifact_id": artifact_id,
+                        "timeout_s": (
+                            self._config.page_action_extractor.total_timeout_s
+                        ),
+                    },
+                )
+            except Exception as exc:  # pragma: no cover
+                logger.warning(
+                    "storyboard.composer.page_action_extractor_failed",
+                    extra={
+                        "artifact_id": artifact_id,
+                        "error": str(exc)[:200],
+                    },
+                )
+
+        # ── Phase 2.2 — form_snapshots.  Per-URL final form state.
+        # Independent of page_actions; runs in parallel-equivalent
+        # sequence (sequential here because composer is single-threaded
+        # per artifact request).
+        form_snapshot_due = force or await _needs_form_snapshot_extractor(
+            session,
+            artifact_id=artifact_id,
+            tenant_id=tenant_id,
+            target_version=self._config.form_snapshot_extractor.version,
+        )
+        if form_snapshot_due or page_visit_due or scene_grouper_due:
+            try:
+                await asyncio.wait_for(
+                    extract_form_snapshots_for_artifact(
+                        session,
+                        artifact_id=artifact_id,
+                        tenant_id=tenant_id,
+                        config=self._config.form_snapshot_extractor,
+                        router=self._llm_router,
+                        auth_token=auth_token,
+                    ),
+                    timeout=self._config.form_snapshot_extractor.total_timeout_s,
+                )
+                ran["form_snapshot_extractor"] = True
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "storyboard.composer.form_snapshot_extractor_timeout",
+                    extra={
+                        "artifact_id": artifact_id,
+                        "timeout_s": (
+                            self._config.form_snapshot_extractor.total_timeout_s
+                        ),
+                    },
+                )
+            except Exception as exc:  # pragma: no cover
+                logger.warning(
+                    "storyboard.composer.form_snapshot_extractor_failed",
+                    extra={
+                        "artifact_id": artifact_id,
+                        "error": str(exc)[:200],
                     },
                 )
 

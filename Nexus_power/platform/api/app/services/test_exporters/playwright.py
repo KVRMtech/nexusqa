@@ -130,6 +130,113 @@ def _build_spec_ts(
     return "\n".join(lines)
 
 
+def _build_url_coverage_spec(
+    page_visits: list[dict],
+    page_actions: dict[str, list[dict]],
+    form_snapshots: dict[str, dict],
+) -> str:
+    """Emit a Playwright spec that walks the URL log and asserts each page's
+    final form snapshot.
+
+    Generated only when the Phase 2 page_visit / form_snapshot extractors
+    have produced data.  Complementary to the per-app test specs — gives
+    QA engineers an explicit URL-by-URL view of the workflow that
+    survives the scene_grouper merging multiple distinct URLs into one
+    scene.
+
+    Each visited URL becomes one test that:
+      1. Navigates to the URL.
+      2. For every captured form field, asserts the value (or selector
+         existence when no value was visible).
+    """
+    if not page_visits:
+        return ""
+
+    lines: list[str] = [
+        "import { test, expect } from '@playwright/test';",
+        "",
+        "// URL Coverage — generated from Phase 2 page_visits + form_snapshots.",
+        "// One test per distinct URL the user visited.  Use this to spot-",
+        "// check page-level state independent of the scene-keyed action flow.",
+        "",
+    ]
+
+    for visit in page_visits:
+        location = (visit.get("location") or "").strip()
+        if not location:
+            continue
+        seq = visit.get("sequence_index")
+        visit_id = visit.get("page_visit_id") or ""
+        snapshot = form_snapshots.get(visit_id) or {}
+        intent = (snapshot.get("page_intent") or "").strip()
+
+        title_parts = [f"#{seq:02d}" if isinstance(seq, int) else f"#{seq}"]
+        if intent:
+            title_parts.append(intent)
+        title_parts.append(location)
+        test_title = " — ".join(p for p in title_parts if p)
+
+        lines.append(f"test({json.dumps(test_title)}, async ({{ page }}) => {{")
+        if location.startswith("http://") or location.startswith("https://"):
+            lines.append(f"  await page.goto({json.dumps(location)});")
+        else:
+            lines.append(f"  // Native UI page — automation runner must open: {location}")
+
+        fields: dict[str, str] = (snapshot.get("fields") or {})
+        field_kinds: dict[str, str] = (snapshot.get("field_kinds") or {})
+        if fields:
+            lines.append("  // Final form snapshot for this page:")
+            for label, value in fields.items():
+                if not label:
+                    continue
+                kind = (field_kinds.get(label) or "other").lower()
+                value_str = str(value or "")
+                if kind in ("checkbox", "radio"):
+                    if value_str.lower() in ("true", "on", "yes", "checked"):
+                        lines.append(
+                            f"  await expect(page.getByLabel({json.dumps(label)})).toBeChecked();"
+                        )
+                    else:
+                        lines.append(
+                            f"  await expect(page.getByLabel({json.dumps(label)})).not.toBeChecked();"
+                        )
+                elif kind in ("dropdown", "text_field"):
+                    if value_str:
+                        lines.append(
+                            f"  await expect(page.getByLabel({json.dumps(label)})).toHaveValue({json.dumps(value_str)});"
+                        )
+                    else:
+                        lines.append(
+                            f"  await expect(page.getByLabel({json.dumps(label)})).toBeVisible();"
+                        )
+                else:
+                    if value_str:
+                        lines.append(
+                            f"  await expect(page.getByText({json.dumps(value_str[:120])})).toBeVisible();"
+                        )
+                    else:
+                        lines.append(
+                            f"  await expect(page.getByText({json.dumps(label[:120])})).toBeVisible();"
+                        )
+
+        actions = page_actions.get(visit_id) or []
+        if actions:
+            lines.append("  // Captured actions on this page (for reference):")
+            for action in actions:
+                verb = (action.get("verb") or "").lower()
+                target = (action.get("target_label") or "")[:120]
+                value = action.get("value")
+                value_repr = json.dumps(value) if value is not None else "null"
+                lines.append(
+                    f"  // - {verb}: target={json.dumps(target)} value={value_repr}"
+                )
+
+        lines.append("});")
+        lines.append("")
+
+    return "\n".join(lines)
+
+
 class PlaywrightExporter(TestExporter):
     format_id = "playwright"
     label = "Playwright (.spec.ts)"
@@ -142,6 +249,17 @@ class PlaywrightExporter(TestExporter):
                 app_name = self.ctx.inst_name_map.get(inst_id, inst_id) or "App"
                 spec = _build_spec_ts(app_name, tcs, self.ctx.controls_by_id)
                 zf.writestr(f"{safe_name(app_name)}.spec.ts", spec)
+            # Phase 2 — emit the URL-coverage spec when extractor data
+            # is available.  Goes into a separate file so existing
+            # downstream Playwright configs that look for ``*.spec.ts``
+            # pick it up automatically without changes.
+            coverage = _build_url_coverage_spec(
+                self.ctx.page_visits,
+                self.ctx.page_actions,
+                self.ctx.form_snapshots,
+            )
+            if coverage:
+                zf.writestr("url-coverage.spec.ts", coverage)
         buf.seek(0)
         return ExportBundle(
             payload=buf.getvalue(),

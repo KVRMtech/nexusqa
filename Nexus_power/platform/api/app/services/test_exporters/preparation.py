@@ -265,6 +265,14 @@ async def prepare_export_context(
                 break
         tc_by_inst.setdefault(inst_id, []).append(tc)
 
+    # Phase 2 — pull URL-keyed surfaces off the graph response when
+    # the page extractors have populated them.  All three keys are
+    # always present (empty when extractors haven't run yet) so the
+    # access pattern is unconditional.
+    page_visits = graph.get("page_visits", []) or []
+    page_actions = graph.get("page_actions", {}) or {}
+    form_snapshots = graph.get("form_snapshots", {}) or {}
+
     return ExportContext(
         artifact_id=artifact_id,
         tenant_id=tenant_id,
@@ -276,4 +284,7 @@ async def prepare_export_context(
         inst_name_map=inst_name_map,
         scenarios_skipped_by_state=skipped_states,
         total_scenarios_before_filter=total_before_state_filter,
+        page_visits=page_visits,
+        page_actions=page_actions,
+        form_snapshots=form_snapshots,
     )
