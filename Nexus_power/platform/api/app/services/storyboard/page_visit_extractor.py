@@ -172,18 +172,56 @@ def _build_url_pattern(pattern: str) -> re.Pattern:
         ) from exc
 
 
+# Tier 1.5 fallback — matches PATH-ONLY URL shapes with 2+ segments.
+#
+# OCR routinely mangles browser address-bar text by:
+#   * Dropping the scheme (https://) entirely
+#   * Mis-reading the dot in the host as a space ("Msdd com" instead of
+#     "Msdd.com")
+#   * Splitting words inside the path ("public" + space + "personal-")
+#
+# After all that, the deeper path segments often survive intact — e.g.
+# the OCR text contains literal "/personal-information/military-status"
+# even though the host portion was destroyed.  This fallback recovers
+# those by matching path-shaped substrings of 2+ segments where each
+# segment looks URL-shaped (lowercase letters / digits / hyphens).
+#
+# 2-segment minimum avoids matching things like trailing "/ok" in
+# button labels or "/Yes" in unrelated UI text.
+_PATH_ONLY_PATTERN = re.compile(
+    r"/[a-z][a-z0-9\-]{2,}(?:/[a-z][a-z0-9\-]{2,}){1,}",
+    re.IGNORECASE,
+)
+
+
 def _first_url_match(text: str, pattern: re.Pattern) -> str:
-    """Return the first URL-shaped substring in ``text`` (or '')."""
+    """Return the strongest URL-shaped substring in ``text`` (or '').
+
+    Tries the configured strict pattern first (scheme or www.).  When
+    that misses, falls back to a path-only matcher that recovers OCR-
+    corrupted URLs where the host was destroyed but the path survived.
+
+    For path-only matches we pick the LONGEST hit — the deepest path
+    is typically the page-specific URL we want to track, while shorter
+    paths (e.g. "/insurance") are usually parent-section prefixes that
+    appear in nav text alongside the real URL.
+    """
     if not text:
         return ""
     match = pattern.search(text)
-    if not match:
+    if match:
+        raw = match.group(0)
+        # Strip surrounding punctuation that the regex doesn't consume
+        # (trailing periods, commas, closing parens — OCR routinely picks
+        # these up as part of the URL).
+        return raw.rstrip(".,);:!?\"'>")
+
+    # Tier 1.5 — path-only fallback (OCR-corrupted address bars).
+    candidates = _PATH_ONLY_PATTERN.findall(text)
+    if not candidates:
         return ""
-    raw = match.group(0)
-    # Strip surrounding punctuation that the regex doesn't consume
-    # (trailing periods, commas, closing parens — OCR routinely picks
-    # these up as part of the URL).
-    return raw.rstrip(".,);:!?\"'>")
+    longest = max(candidates, key=len)
+    return longest.rstrip(".,);:!?\"'>")
 
 
 def _parse_url_parts(url: str) -> tuple[str, str, str]:
@@ -371,12 +409,16 @@ def _resolve_frame_location(
     app_instance: AppInstanceRow | None,
     url_pattern: re.Pattern,
     config: PageVisitExtractorConfig,
+    dominant_host: str = "",
 ) -> _FrameLocation:
     """Apply the 4 deterministic tiers (LLM tier handled separately).
 
     Tier order:
       1. Frame OCR — strongest signal; the URL was literally read off
-         the screen.
+         the screen.  Also tries a path-only fallback that recovers
+         OCR-corrupted URLs where the scheme + host were destroyed
+         but path segments survived; in that case we synthesize the
+         host from the artifact's dominant canonical_host.
       2. Scene detected_url — the canonical pipeline already attached
          a URL to the parent scene.
       3. Frame page_title / scene screen_name — non-URL UI title text
@@ -405,7 +447,22 @@ def _resolve_frame_location(
         url = _first_url_match(candidate_text, url_pattern)
         if url:
             host, path, query = _parse_url_parts(url)
-            base.raw_location = url
+            # Path-only match (Tier 1.5): _first_url_match's fallback
+            # returned a bare /path/... string with no scheme.  Synthesize
+            # the host from the artifact's dominant canonical_host so
+            # downstream grouping + URL canonicalisation work uniformly.
+            # Two visits with different paths still distinguish; visits
+            # to the same path under the dominant host still merge.
+            if not host and url.startswith("/") and dominant_host:
+                host = dominant_host
+                # The raw_location stays as the canonical full URL so
+                # the API surface shows a clean https://host/path.
+                synthesized = f"https://{dominant_host}{path}"
+                if query:
+                    synthesized += f"?{query}"
+                base.raw_location = synthesized
+            else:
+                base.raw_location = url
             base.source = PageVisitSource.URL_REGEX
             base.url_host = host
             base.url_path = path
@@ -455,12 +512,16 @@ async def _fetch_frame_bytes(
     asset_path: str,
     *,
     auth_token: str,
+    max_retries: int = 4,
 ) -> bytes | None:
-    """Fetch one frame from eyes-engine.
+    """Fetch one frame from eyes-engine with retry-on-429 backoff.
 
     Identical contract to action_extractor — JWT goes as both Bearer
     header and ``?token=`` query param because eyes-engine only honours
     the query form on the frames route.
+
+    Phase 2 v3 — eyes-engine enforces ~120 req/min and Phase 2 fires
+    multiple extractors in parallel.  Backoff: 1s, 2s, 4s, 8s capped.
     """
     if not asset_path:
         return None
@@ -471,24 +532,42 @@ async def _fetch_frame_bytes(
     if auth_token:
         params["token"] = auth_token
         headers["Authorization"] = f"Bearer {auth_token}"
-    try:
-        response = await http_client.get(url, headers=headers, params=params)
-    except httpx.HTTPError as exc:
-        logger.warning(
-            "storyboard.page_visit_extractor.frame_transport_error",
-            extra={
-                "asset_path": asset_path,
-                "error": f"{type(exc).__name__}: {str(exc)[:200]}",
-            },
-        )
-        return None
-    if response.status_code >= 400:
-        logger.warning(
-            "storyboard.page_visit_extractor.frame_http_error",
-            extra={"asset_path": asset_path, "status": response.status_code},
-        )
-        return None
-    return response.content
+
+    last_status: int | None = None
+    last_body_preview = ""
+    for attempt in range(max_retries + 1):
+        try:
+            response = await http_client.get(url, headers=headers, params=params)
+        except httpx.HTTPError as exc:
+            logger.warning(
+                f"storyboard.page_visit_extractor.frame_transport_error "
+                f"asset_path={asset_path!r} url={url!r} attempt={attempt} "
+                f"error={type(exc).__name__}: {str(exc)[:200]}"
+            )
+            return None
+        if response.status_code < 400:
+            return response.content
+        last_status = response.status_code
+        last_body_preview = response.text[:200] if response.text else "(empty)"
+
+        retryable = response.status_code == 429 or 500 <= response.status_code < 600
+        if not retryable or attempt >= max_retries:
+            break
+
+        retry_after_header = response.headers.get("Retry-After")
+        if retry_after_header and retry_after_header.isdigit():
+            delay = min(int(retry_after_header), 8)
+        else:
+            delay = min(2 ** attempt, 8)
+        await asyncio.sleep(delay)
+
+    logger.warning(
+        f"storyboard.page_visit_extractor.frame_http_error "
+        f"asset_path={asset_path!r} url={url!r} "
+        f"status={last_status} body={last_body_preview!r} "
+        f"after_retries={max_retries}"
+    )
+    return None
 
 
 def _maybe_downsize(data: bytes, max_dimension_px: int) -> tuple[bytes, str]:
@@ -883,6 +962,7 @@ async def extract_page_visits_for_artifact(
             app_instance=inst,
             url_pattern=url_pattern,
             config=config,
+            dominant_host=signals.dominant_canonical_host,
         )
         frame_locations.append(loc)
 

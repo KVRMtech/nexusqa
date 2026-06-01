@@ -37,7 +37,14 @@ services:
       LLM_TIER_TIER_PREMIUM_MODEL: claude-sonnet-4-6
       LLM_TIER_TIER_PREMIUM_API_KEY: ${ANTHROPIC_API_KEY:-}
       LLM_TIER_TIER_PREMIUM_TIMEOUT_S: '120.0'
-      LLM_TIER_TIER_PREMIUM_MAX_RETRIES: '2'
+      # Raised 2→4 (2026-05-31): a 16-way concurrent Sonnet load test
+      # showed ~19% HTTP 429 under burst.  The page_action +
+      # form_snapshot extractors were falling back to GPT-4o on every
+      # call (sparse, value-less output) because 2 short retries
+      # couldn't clear the rate-limit window.  4 retries + the router's
+      # exponential backoff (0.25/0.5/1/2s) gives Sonnet enough chances
+      # to land.  Paired with the concurrency reduction below.
+      LLM_TIER_TIER_PREMIUM_MAX_RETRIES: '4'
       LLM_TIER_TIER_PREMIUM_FALLBACK: tier_balanced
 
       # ── tier_balanced — OpenAI GPT-4o (FALLBACK 1)
@@ -122,7 +129,19 @@ services:
       # Phase 2.0 — page_visits (URL log).  Deterministic tiers 1-4
       # cover ~99% of real recordings; LLM inference (tier 5) is OFF
       # by default.  Bump version to force re-extraction.
-      STORYBOARD_PAGE_VISIT_EXTRACTOR_VERSION: v1
+      #
+      # v1 — Initial deploy.  Tier 1 regex required scheme/www.  Live
+      #      test on 72be675e showed OCR captures URLs as
+      #      "Msdd comlinsurance/.../personal-information/X" (no
+      #      scheme, space in host), so Tier 1 missed every USAA
+      #      sub-page — only the canonical pipeline's scene URL
+      #      survived through Tier 2.  4 sub-pages in OCR; 1 captured.
+      # v2 — Add Tier 1.5 path-only fallback that recovers OCR-
+      #      corrupted URLs by matching /<seg>/<seg>... shapes and
+      #      synthesizing the host from the dominant canonical_host.
+      #      Recovers all USAA /personal-information/* sub-pages that
+      #      survived OCR.
+      STORYBOARD_PAGE_VISIT_EXTRACTOR_VERSION: v2
       STORYBOARD_PAGE_VISIT_LLM_INFERENCE: 'false'
       STORYBOARD_PAGE_VISIT_MERGE_ADJACENT_SAME_URL: 'true'
       STORYBOARD_PAGE_VISIT_SCREEN_NAME_FALLBACK: 'true'
@@ -130,17 +149,91 @@ services:
 
       # Phase 2.1 — page_actions (per-URL Sonnet extraction).  Routes
       # through the same tier ladder as scene-keyed action extraction.
-      STORYBOARD_PAGE_ACTION_EXTRACTOR_VERSION: v1
-      STORYBOARD_PAGE_ACTION_EXTRACTOR_CONCURRENCY: '4'
+      #
+      # v1 — Initial deploy.  Live test on 72be675e showed:
+      #      * Sonnet sometimes returned text-payload instead of
+      #        tool_use → "invalid_text_output" warning → fallback
+      #        produced fewer rows than expected.
+      #      * no_frames code path returned actions=[] silently —
+      #        visits whose every frame fetch failed got dropped from
+      #        page_actions entirely.
+      #      Result: 6 actions for 14 v2 visits.
+      # v2 — Prompt strengthening: "You MUST respond by calling the
+      #      record_page_actions tool — do not return prose or text
+      #      JSON".  Plus _no_frames_fallback emits a placeholder so
+      #      visits are always represented.  Plus visible f-string
+      #      logging so the next failure has diagnosable detail.
+      #      Live test: actions 17→37, but f-string logs revealed two
+      #      remaining bugs: (a) eyes-engine 429 rate-limit, (b) GPT-4o
+      #      fallback returns ```python record_page_actions([...])```
+      #      code blocks that the JSON parser couldn't read, plus it
+      #      uses key "target" not "target_label".
+      # v3 — Frame fetch retries on 429/5xx with 1/2/4/8s backoff
+      #      (honoring Retry-After).  Text-fallback parser extracts
+      #      the bracketed arg list from GPT-4o python code-blocks and
+      #      normalizes the "target"→"target_label" alias.
+      #      Live test: STILL 100% GPT-4o fallback — every action row's
+      #      extractor_model was gpt-4o, producing sparse value-less
+      #      actions and 0 form snapshots.  Root cause (confirmed by a
+      #      16-way concurrent Sonnet load test → 19% 429): Anthropic
+      #      rate-limit under the parallel extractor burst, not a code
+      #      bug.  Scene action_extractor (concurrency 4) ran first and
+      #      ate the per-minute Sonnet budget; page extractors then
+      #      429'd and fell back.
+      # v4 — No logic change.  Concurrency 4→2 to stay under Anthropic's
+      #      burst limit (extractors run sequentially in the composer,
+      #      so peak concurrent Sonnet load = one extractor's
+      #      concurrency).  Paired with tier_premium MAX_RETRIES 2→4.
+      #      Version bumped only to force re-derivation.
+      #      Live test: Sonnet now wins (7 Sonnet / 2 GPT-4o), and the
+      #      address-bar + nav actions extract well — BUT the
+      #      /personal-information form pages still got 0 actions.
+      #      Root cause: the extractor processed ALL page_visit versions
+      #      (11 stale v1 rows + 14 current v2), exhausting the
+      #      total_timeout on duplicates before reaching the form pages.
+      # v5 — Code fix: page_action + form_snapshot now filter
+      #      page_visits to the CURRENT (max) extractor version, so the
+      #      LLM budget is spent only on the 14 real visits.  Version
+      #      bumped to force re-derivation under the new code.
+      STORYBOARD_PAGE_ACTION_EXTRACTOR_VERSION: v5
+      STORYBOARD_PAGE_ACTION_EXTRACTOR_CONCURRENCY: '2'
       STORYBOARD_PAGE_ACTION_EXTRACTOR_FRAMES_DEFAULT: '4'
       STORYBOARD_PAGE_ACTION_EXTRACTOR_FRAMES_LONG: '6'
       STORYBOARD_PAGE_ACTION_EXTRACTOR_FRAMES_VERY_LONG: '8'
       STORYBOARD_PAGE_ACTION_EXTRACTOR_IMAGE_MAX_DIMENSION_PX: '1024'
 
       # Phase 2.2 — form_snapshots (per-URL final form state).
-      STORYBOARD_FORM_SNAPSHOT_EXTRACTOR_VERSION: v1
-      STORYBOARD_FORM_SNAPSHOT_EXTRACTOR_CONCURRENCY: '4'
-      STORYBOARD_FORM_SNAPSHOT_SKIP_INPUT_CANDIDATES_BELOW: '2'
+      #
+      # v1 — Initial deploy.  Live test on 72be675e showed every
+      #      frame fetch failing with frame_http_error but status
+      #      detail was hidden inside Python logging's extra={} dict
+      #      so the failure was undiagnosable from docker logs.
+      #      Result: 0 snapshots written.
+      # v2 — Switch frame fetch + LLM error logs to f-string format
+      #      so the HTTP status + body preview appear in docker
+      #      logs.  Plus stronger system prompt requiring tool use.
+      #      Live test: f-string logs revealed the root cause — every
+      #      frame fetch was HTTP 429 (eyes-engine 120 req/min limit,
+      #      saturated by parallel extractors).  Still 0 snapshots.
+      # v3 — Frame fetch retries on 429/5xx with 1/2/4/8s backoff.
+      #      Plus GPT-4o python code-block fallback parser.
+      #      Live test: still 0 snapshots — same Anthropic rate-limit
+      #      fallback as page_action (see v4 note above).
+      # v4 — No logic change.  Concurrency 4→2 + tier_premium retries
+      #      2→4.  Version bumped only to force re-derivation.
+      #      Live test: still 0 snapshots.  Two causes: (a) processed
+      #      stale page_visit versions, exhausting timeout before the
+      #      form pages; (b) the "skip pages with <2 label-shaped OCR
+      #      tokens" heuristic filtered out the form pages because this
+      #      artifact's OCR is too corrupted to match the label pattern.
+      # v5 — Code fix: filter page_visits to current version (same as
+      #      page_action).  Plus disable the OCR heuristic skip
+      #      (SKIP_INPUT_CANDIDATES_BELOW 2→0) so every visit gets a
+      #      snapshot attempt and the LLM itself decides if a form is
+      #      present — robust to bad OCR.
+      STORYBOARD_FORM_SNAPSHOT_EXTRACTOR_VERSION: v5
+      STORYBOARD_FORM_SNAPSHOT_EXTRACTOR_CONCURRENCY: '2'
+      STORYBOARD_FORM_SNAPSHOT_SKIP_INPUT_CANDIDATES_BELOW: '0'
       STORYBOARD_FORM_SNAPSHOT_EXTRACTOR_WEB_ONLY: 'false'
       STORYBOARD_FORM_SNAPSHOT_EXTRACTOR_IMAGE_MAX_DIMENSION_PX: '1024'
 

@@ -51,6 +51,7 @@ import io
 import json
 import logging
 import os
+import re
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -58,7 +59,7 @@ from typing import Sequence
 from urllib.parse import quote
 
 import httpx
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -151,16 +152,33 @@ async def _collect_visit_inputs(
     config: PageActionExtractorConfig,
 ) -> list[_VisitInputs]:
     """Bulk-load visits + their candidate frames in a fixed number of selects."""
-    # Pull every visit regardless of its extractor_version stamp.  The
-    # composer guarantees visit + action extractors run in sequence, so
-    # all visible visits are current.  When two versions co-exist
-    # (mid-deploy), we prefer the most recent by sequence — the unique
-    # constraint on page_visits keeps the set consistent.
+    # Pull visits at the CURRENT page_visit extractor version only.
+    #
+    # page_visits keeps prior versions for audit (the page_visit
+    # extractor's _delete_stale_visits only prunes within a version).
+    # If we processed every version we'd waste the LLM budget — and the
+    # per-artifact total_timeout — re-deriving actions for stale rows,
+    # starving the current visits (observed live: 11 stale v1 rows +
+    # 14 current v2 rows meant the form pages near the end never got
+    # processed before the timeout).  Resolve the max version first,
+    # then filter to it.
+    max_version_q = await session.execute(
+        select(func.max(PageVisitRow.extractor_version))
+        .where(
+            PageVisitRow.artifact_id == artifact_id,
+            PageVisitRow.tenant_id == tenant_id,
+        )
+    )
+    current_visit_version = max_version_q.scalar()
+    if current_visit_version is None:
+        return []
+
     visits_q = await session.execute(
         select(PageVisitRow)
         .where(
             PageVisitRow.artifact_id == artifact_id,
             PageVisitRow.tenant_id == tenant_id,
+            PageVisitRow.extractor_version == current_visit_version,
         )
         .order_by(PageVisitRow.sequence_index.asc())
     )
@@ -263,22 +281,25 @@ _SYSTEM_PROMPT = """You analyse a sequence of screenshots from ONE PAGE in a scr
 
 You will receive:
   - 1..8 screenshots IN CHRONOLOGICAL ORDER showing this page over time.
-    * Adjacent frames may show small changes (one field filled, one checkbox toggled).
-    * Each transition between adjacent frames is potentially ONE user action.
+    * For SHORT pages (a click that navigated, a single typed word) you'll get 1-2 frames.
+    * For LONG form-fill pages (10+ seconds where the user changed several fields on the same URL) you'll get 4-8 frames sampled across the page's duration. EACH transition between adjacent frames may represent a separate user action — read them as a film strip, not as a single before/after pair.
   - The page's URL or location.
-  - The location of the PREVIOUS page and NEXT page in the user's journey.
-  - OCR text from the last frame as a hint (OCR is noisy — trust the pixels).
+  - The location of the PREVIOUS page and NEXT page in the user's journey (JOURNEY CONTEXT — use this to infer what actions this page must have contained, especially when on-page changes are subtle).
+  - OCR text from the last frame as a hint (OCR is often noisy; trust the pixels).
 
-Call the ``record_page_actions`` tool ONCE with a LIST of actions in chronological order. RULES:
+You MUST respond by calling the ``record_page_actions`` tool ONCE with a LIST of actions, in chronological order. Do NOT respond with prose, JSON in plaintext, or anything other than a tool call.
 
-  * **Single-action pages** (a click that navigated, a single typed word): return a list of length 1.
-  * **Form-fill pages** (multiple frames show different fields filling): return ONE action per field changed.  Example: a personal-information page where the user filled 5 fields returns a list of length 5.
-  * **Idle pages** (frames identical, no on-page activity): return ``[]``.
-  * **The cursor may be INVISIBLE**.  Infer actions from value changes, page transitions, journey context — NOT from a visible cursor.
-  * For verb=select on dropdowns/menus, the value is the SELECTED option (e.g. 'TX'); target_label is the field's prompt (e.g. 'What state do you live in?').  NEVER put the selected value in target_label.
-  * For verb=type, value is the typed text.  Mask passwords with value=null.
-  * confidence per action: ~0.95 when a frame unambiguously shows the value; drop to ~0.5 when ambiguous.
-  * automation_ready True only when verb + target + value (when applicable) are unambiguous enough for a Playwright test to reproduce.
+RULES:
+
+  * **Single-action pages** (a click that navigated, a single typed word, a hover): return a list of length 1.
+  * **Long form-fill pages** (multiple frames show different fields being filled — State then Gender then Age etc.): return ONE action per field change. Example: for a Personal Information page where the user filled 5 fields, return a list of length 5 in order.
+  * **Idle pages**: return an empty list `[]` only when frames are visually identical AND the URL did not change AND journey shows no progression.
+  * **Detect changes BETWEEN adjacent frames**: for each pair of adjacent frames (frame[i] → frame[i+1]), ask "what did the user do here?" — that's one action.  Different field values appearing across frames almost always means separate type/select actions, NOT one bulk action.
+  * **The cursor may be INVISIBLE**.  Infer actions from value changes, page transitions, and journey context — not from a visible cursor.
+  * For verb=select on a dropdown/menu, the value is the SELECTED option (e.g. 'TX'), target_label is the field's prompt (e.g. 'What state do you live in?'). NEVER put the selected value in target_label.
+  * For verb=type, the value is the typed text. Mask passwords with value=null.
+  * confidence MUST reflect actual certainty per action: ~0.95 when a frame unambiguously shows the value; drop to ~0.5 when ambiguous.
+  * automation_ready is True only when verb + target + value are unambiguous enough for a Playwright test to reproduce.
   * reasoning is ONE short sentence per action citing the specific visual evidence.
   * Work generically across any UI domain — insurance, banking, healthcare, internal tools."""
 
@@ -304,11 +325,14 @@ def _build_user_prompt(inputs: _VisitInputs) -> str:
     )
     sections.append(
         "Extract EVERY distinct user action visible across the frames, "
-        "in chronological order.  Compare ADJACENT frames pairwise — "
-        "each transition that changed a value or focus represents a "
-        "separate action.  Return a LIST of actions via the "
-        "record_page_actions tool.  Empty list = no detectable "
-        "interaction (the user just viewed the page)."
+        "in chronological order.  For LONG pages with multiple frames, "
+        "compare ADJACENT frames pairwise and identify each transition as "
+        "a separate action — a 24-second form-fill page typically shows "
+        "3-7 distinct actions (e.g. select State, select Gender, type "
+        "Age, type Height, type Weight, click Tobacco option, click "
+        "Submit).  You MUST respond by calling the record_page_actions "
+        "tool — do not return prose or text JSON.  Empty list = no "
+        "detectable user activity."
     )
     return "\n\n".join(sections)
 
@@ -405,8 +429,23 @@ async def _fetch_frame_bytes(
     asset_path: str,
     *,
     auth_token: str,
+    max_retries: int = 4,
 ) -> bytes | None:
-    """Fetch one frame from eyes-engine.  Same contract as action_extractor."""
+    """Fetch one frame from eyes-engine.
+
+    Same contract as action_extractor — JWT goes as both Bearer header
+    and ``?token=`` query param.
+
+    Adds retry-with-backoff on HTTP 429 (eyes-engine enforces ~120 req/min)
+    and other transient 5xx codes.  Phase 2 fires multiple extractors
+    in parallel (page_action + form_snapshot + scene action_extractor)
+    against the same eyes-engine; without retry, the second extractor to
+    hit eyes-engine in a saturated minute returns 0 frames and produces
+    empty rows.
+
+    Backoff schedule: 1s, 2s, 4s, 8s (caps the worst-case slow visit
+    at ~15s of waiting before giving up).
+    """
     if not asset_path:
         return None
     safe_path = quote(asset_path.lstrip("/"), safe="/")
@@ -416,24 +455,46 @@ async def _fetch_frame_bytes(
     if auth_token:
         params["token"] = auth_token
         headers["Authorization"] = f"Bearer {auth_token}"
-    try:
-        response = await http_client.get(url, headers=headers, params=params)
-    except httpx.HTTPError as exc:
-        logger.warning(
-            "storyboard.page_action_extractor.frame_transport_error",
-            extra={
-                "asset_path": asset_path,
-                "error": f"{type(exc).__name__}: {str(exc)[:200]}",
-            },
-        )
-        return None
-    if response.status_code >= 400:
-        logger.warning(
-            "storyboard.page_action_extractor.frame_http_error",
-            extra={"asset_path": asset_path, "status": response.status_code},
-        )
-        return None
-    return response.content
+
+    last_status: int | None = None
+    last_body_preview = ""
+    for attempt in range(max_retries + 1):
+        try:
+            response = await http_client.get(url, headers=headers, params=params)
+        except httpx.HTTPError as exc:
+            logger.warning(
+                f"storyboard.page_action_extractor.frame_transport_error "
+                f"asset_path={asset_path!r} url={url!r} attempt={attempt} "
+                f"error={type(exc).__name__}: {str(exc)[:200]}"
+            )
+            return None
+        if response.status_code < 400:
+            return response.content
+        last_status = response.status_code
+        last_body_preview = response.text[:200] if response.text else "(empty)"
+
+        # Retry on rate-limit + transient 5xx; bail immediately on 4xx
+        # that aren't 429 (auth issues won't fix themselves).
+        retryable = response.status_code == 429 or 500 <= response.status_code < 600
+        if not retryable or attempt >= max_retries:
+            break
+
+        # 1s, 2s, 4s, 8s — capped.  Honor Retry-After when eyes-engine
+        # gives us a concrete hint.
+        retry_after_header = response.headers.get("Retry-After")
+        if retry_after_header and retry_after_header.isdigit():
+            delay = min(int(retry_after_header), 8)
+        else:
+            delay = min(2 ** attempt, 8)
+        await asyncio.sleep(delay)
+
+    logger.warning(
+        f"storyboard.page_action_extractor.frame_http_error "
+        f"asset_path={asset_path!r} url={url!r} "
+        f"status={last_status} body={last_body_preview!r} "
+        f"after_retries={max_retries}"
+    )
+    return None
 
 
 def _maybe_downsize(data: bytes, max_dimension_px: int) -> tuple[bytes, str]:
@@ -504,6 +565,62 @@ def _strip_code_fence(text: str) -> str:
     return text
 
 
+# Pattern for OpenAI/Gemini code-block responses that simulate a tool
+# call instead of using the tool_use API.  GPT-4o has been observed
+# returning:
+#   ```python
+#   record_page_actions([{...}, {...}])
+#   ```
+# After ``_strip_code_fence`` removes the fences, the remaining text is
+# ``record_page_actions([{...}, {...}])`` — not valid JSON.  This regex
+# extracts the bracketed argument list so the JSON parser can consume it.
+_PYTHON_TOOL_CALL_PATTERN = re.compile(
+    r"(?:record_page_actions|record_scene_actions)\s*\(\s*(\[.*\])\s*\)",
+    re.DOTALL,
+)
+
+
+def _extract_python_tool_args(text: str) -> str | None:
+    """Pull the bracketed arg list out of a ``record_page_actions(...)`` call.
+
+    Returns the inner ``[...]`` substring (still raw text, JSON-shaped)
+    or ``None`` when no such pattern is present.  The caller passes the
+    result to ``json.loads`` after fixing Python-isms like ``None`` →
+    ``null`` and ``True`` → ``true``.
+    """
+    match = _PYTHON_TOOL_CALL_PATTERN.search(text)
+    if not match:
+        return None
+    inner = match.group(1)
+    # Best-effort Python-to-JSON conversion.  Won't handle every edge
+    # case (e.g. raw f-strings) but covers the dominant GPT-4o pattern.
+    inner = re.sub(r"\bNone\b", "null", inner)
+    inner = re.sub(r"\bTrue\b", "true", inner)
+    inner = re.sub(r"\bFalse\b", "false", inner)
+    return inner
+
+
+def _normalize_action_dict(raw: object) -> dict:
+    """Normalise a loosely-shaped action dict from a text-fallback parse.
+
+    Fallback tiers (notably GPT-4o) drift from the PageAction schema in
+    small ways even when the structure is sound.  Observed live on
+    artifact 72be675e:
+      * Uses ``target`` instead of ``target_label`` — copy it across
+        when ``target_label`` is absent so the field isn't lost.
+
+    Pydantic ignores unknown keys by default, so the stray ``target``
+    is harmless once we've lifted its value.  Tool-use responses
+    (the primary path) never hit this — they're already schema-valid.
+    """
+    if not isinstance(raw, dict):
+        return raw  # let Pydantic raise a clear error downstream
+    d = dict(raw)
+    if not d.get("target_label") and d.get("target"):
+        d["target_label"] = d["target"]
+    return d
+
+
 def _empty_visit_result(visit_id: str) -> _ExtractionResult:
     """Empty result for visits we deliberately skip (e.g. unreadable location)."""
     return _ExtractionResult(
@@ -555,6 +672,40 @@ def _fallback_result(
     )
 
 
+def _no_frames_fallback(inputs: _VisitInputs) -> _ExtractionResult:
+    """Emit a placeholder for visits whose every frame fetch failed.
+
+    Before this fallback existed, no_frames visits returned ``actions=[]``
+    which got filtered out at persistence — silently dropping the visit
+    from page_actions.  v3 — emit a placeholder so the visit is always
+    represented downstream; the reconciliation step may even promote
+    verb=none → navigate when the next visit's URL differs.
+    """
+    placeholder = PageAction(
+        verb=SceneActionVerb.NONE,
+        target_label="",
+        target_kind=SceneActionTargetKind.OTHER,
+        value=None,
+        confidence=0.20,
+        automation_ready=False,
+        reasoning=(
+            "All frame fetches failed for this page; emitting a "
+            "placeholder so the visit is not silently dropped."
+        ),
+    )
+    action, evidence = _reconcile(placeholder, inputs)
+    evidence.sources.append("no_frames_fallback")
+    return _ExtractionResult(
+        page_visit_id=inputs.page_visit_id,
+        actions=[action],
+        evidence=evidence,
+        model="(no_frames)",
+        latency_ms=0,
+        prompt_tokens=0,
+        completion_tokens=0,
+    )
+
+
 async def _extract_one_visit(
     inputs: _VisitInputs,
     *,
@@ -581,22 +732,15 @@ async def _extract_one_visit(
 
     if not images:
         logger.warning(
-            "storyboard.page_action_extractor.no_frames_available",
-            extra={
-                "page_visit_id": inputs.page_visit_id,
-                "sampled_count": len(inputs.sampled_frame_paths),
-            },
+            f"storyboard.page_action_extractor.no_frames_available "
+            f"visit={inputs.page_visit_id} "
+            f"sampled_count={len(inputs.sampled_frame_paths)} "
+            f"first_path={inputs.sampled_frame_paths[0] if inputs.sampled_frame_paths else '(none)'}"
         )
-        # Same shape as the LLM-error path so persistence treats it uniformly.
-        return _ExtractionResult(
-            page_visit_id=inputs.page_visit_id,
-            actions=[],
-            evidence=ExtractionEvidence(sources=["no_frames"]),
-            model="(no_frames)",
-            latency_ms=0,
-            prompt_tokens=0,
-            completion_tokens=0,
-        )
+        # v3 — emit a placeholder so the visit is always represented
+        # downstream.  Previously this returned actions=[] which got
+        # silently filtered out at persistence.
+        return _no_frames_fallback(inputs)
 
     tool = _page_action_tool()
 
@@ -645,36 +789,48 @@ async def _extract_one_visit(
                     break
                 except ValueError as exc:
                     logger.warning(
-                        "storyboard.page_action_extractor.invalid_tool_args",
-                        extra={
-                            "page_visit_id": inputs.page_visit_id,
-                            "args_preview": json.dumps(call.arguments)[:300],
-                            "error": str(exc)[:200],
-                        },
+                        f"storyboard.page_action_extractor.invalid_tool_args "
+                        f"visit={inputs.page_visit_id} "
+                        f"error={str(exc)[:200]!r} "
+                        f"args_preview={json.dumps(call.arguments)[:300]!r}"
                     )
 
     if action_list is None and response.text:
         try:
             payload = _strip_code_fence(response.text)
-            data = json.loads(payload)
+            data = None
+            try:
+                data = json.loads(payload)
+            except json.JSONDecodeError:
+                # Fallback tiers (GPT-4o) sometimes simulate the tool
+                # call as a Python expression: record_page_actions([...]).
+                # Extract the bracketed arg list and retry.
+                inner = _extract_python_tool_args(response.text)
+                if inner is not None:
+                    data = json.loads(inner)
+                else:
+                    raise
             if isinstance(data, list):
                 action_list = PageActionList(actions=[
-                    PageAction.model_validate(a) for a in data
+                    PageAction.model_validate(_normalize_action_dict(a)) for a in data
                 ])
             elif isinstance(data, dict) and "actions" in data:
+                data["actions"] = [
+                    _normalize_action_dict(a) for a in data.get("actions", [])
+                ]
                 action_list = PageActionList.model_validate(data)
             else:
                 action_list = PageActionList(actions=[
-                    PageAction.model_validate(data),
+                    PageAction.model_validate(_normalize_action_dict(data)),
                 ])
         except (json.JSONDecodeError, ValueError) as exc:
             logger.warning(
-                "storyboard.page_action_extractor.invalid_text_output",
-                extra={
-                    "page_visit_id": inputs.page_visit_id,
-                    "raw_text": response.text[:300],
-                    "error": str(exc)[:200],
-                },
+                f"storyboard.page_action_extractor.invalid_text_output "
+                f"visit={inputs.page_visit_id} "
+                f"provider={response.provider} model={response.model} "
+                f"finish={response.finish_reason.value} "
+                f"error={str(exc)[:200]!r} "
+                f"raw_text={response.text[:300]!r}"
             )
 
     if action_list is None:

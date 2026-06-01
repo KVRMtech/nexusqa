@@ -66,7 +66,7 @@ from typing import Sequence
 from urllib.parse import quote
 
 import httpx
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from nexus_sdk.db.models import (
@@ -151,11 +151,28 @@ async def _collect_snapshot_inputs(
     distinguish "value already there from a prior page" vs "value just
     typed".
     """
+    # Filter to the CURRENT page_visit version only (page_visits keeps
+    # prior versions for audit).  Without this we'd attempt snapshots
+    # for stale rows and exhaust the per-artifact timeout before the
+    # current form pages are reached — see the matching note in
+    # page_action_extractor._collect_visit_inputs.
+    max_version_q = await session.execute(
+        select(func.max(PageVisitRow.extractor_version))
+        .where(
+            PageVisitRow.artifact_id == artifact_id,
+            PageVisitRow.tenant_id == tenant_id,
+        )
+    )
+    current_visit_version = max_version_q.scalar()
+    if current_visit_version is None:
+        return []
+
     visits_q = await session.execute(
         select(PageVisitRow)
         .where(
             PageVisitRow.artifact_id == artifact_id,
             PageVisitRow.tenant_id == tenant_id,
+            PageVisitRow.extractor_version == current_visit_version,
         )
         .order_by(PageVisitRow.sequence_index.asc())
     )
@@ -251,7 +268,7 @@ You will receive:
   - The page's URL or location.
   - OCR text from the last frame as a hint (noisy — trust the pixels).
 
-Call the ``record_form_snapshot`` tool ONCE with a LIST of FormField objects, ONE per visible form field:
+You MUST respond by calling the ``record_form_snapshot`` tool — do NOT respond with prose, plaintext JSON, or anything other than a tool call.  Pass a LIST of FormField objects, ONE per visible form field:
 
   * label — the field's visible prompt as the user reads it (e.g. 'What state do you live in?').  Strip trailing colons / question marks for cleanliness.
   * value — the final value visible in the field.  Empty string when the field is blank.  PASSWORD fields MUST be returned with value="" (never reveal masked text).
@@ -293,7 +310,16 @@ async def _fetch_frame_bytes(
     asset_path: str,
     *,
     auth_token: str,
+    max_retries: int = 4,
 ) -> bytes | None:
+    """Fetch one frame from eyes-engine with retry-on-429 backoff.
+
+    Phase 2 v3 — eyes-engine enforces ~120 req/min and Phase 2 fires
+    multiple extractors in parallel.  Without retry, the extractor
+    that runs LAST in the composer chain (form_snapshot) consistently
+    hit 429 and produced zero rows.  Backoff schedule: 1s, 2s, 4s, 8s
+    capped, honoring Retry-After when eyes-engine provides it.
+    """
     if not asset_path:
         return None
     safe_path = quote(asset_path.lstrip("/"), safe="/")
@@ -303,24 +329,42 @@ async def _fetch_frame_bytes(
     if auth_token:
         params["token"] = auth_token
         headers["Authorization"] = f"Bearer {auth_token}"
-    try:
-        response = await http_client.get(url, headers=headers, params=params)
-    except httpx.HTTPError as exc:
-        logger.warning(
-            "storyboard.form_snapshot_extractor.frame_transport_error",
-            extra={
-                "asset_path": asset_path,
-                "error": f"{type(exc).__name__}: {str(exc)[:200]}",
-            },
-        )
-        return None
-    if response.status_code >= 400:
-        logger.warning(
-            "storyboard.form_snapshot_extractor.frame_http_error",
-            extra={"asset_path": asset_path, "status": response.status_code},
-        )
-        return None
-    return response.content
+
+    last_status: int | None = None
+    last_body_preview = ""
+    for attempt in range(max_retries + 1):
+        try:
+            response = await http_client.get(url, headers=headers, params=params)
+        except httpx.HTTPError as exc:
+            logger.warning(
+                f"storyboard.form_snapshot_extractor.frame_transport_error "
+                f"asset_path={asset_path!r} url={url!r} attempt={attempt} "
+                f"error={type(exc).__name__}: {str(exc)[:200]}"
+            )
+            return None
+        if response.status_code < 400:
+            return response.content
+        last_status = response.status_code
+        last_body_preview = response.text[:200] if response.text else "(empty)"
+
+        retryable = response.status_code == 429 or 500 <= response.status_code < 600
+        if not retryable or attempt >= max_retries:
+            break
+
+        retry_after_header = response.headers.get("Retry-After")
+        if retry_after_header and retry_after_header.isdigit():
+            delay = min(int(retry_after_header), 8)
+        else:
+            delay = min(2 ** attempt, 8)
+        await asyncio.sleep(delay)
+
+    logger.warning(
+        f"storyboard.form_snapshot_extractor.frame_http_error "
+        f"asset_path={asset_path!r} url={url!r} "
+        f"status={last_status} body={last_body_preview!r} "
+        f"after_retries={max_retries}"
+    )
+    return None
 
 
 def _maybe_downsize(data: bytes, max_dimension_px: int) -> tuple[bytes, str]:
@@ -372,6 +416,30 @@ def _strip_code_fence(text: str) -> str:
     if text.endswith("```"):
         text = text[:-3].rstrip()
     return text
+
+
+# Fallback tiers (GPT-4o) sometimes simulate the tool call as a Python
+# expression instead of using tool_use:
+#   record_form_snapshot([{...}, {...}])           # bare list of fields
+#   record_form_snapshot({"fields": [...], ...})   # full dict
+# This pulls the inner argument (list or dict literal) so the JSON
+# parser can consume it.
+_PYTHON_TOOL_CALL_PATTERN = re.compile(
+    r"record_form_snapshot\s*\(\s*([\[{].*[\]}])\s*\)",
+    re.DOTALL,
+)
+
+
+def _extract_python_tool_args(text: str) -> str | None:
+    """Pull the inner literal out of a ``record_form_snapshot(...)`` call."""
+    match = _PYTHON_TOOL_CALL_PATTERN.search(text)
+    if not match:
+        return None
+    inner = match.group(1)
+    inner = re.sub(r"\bNone\b", "null", inner)
+    inner = re.sub(r"\bTrue\b", "true", inner)
+    inner = re.sub(r"\bFalse\b", "false", inner)
+    return inner
 
 
 # ── Per-visit extraction ────────────────────────────────────────────────────
@@ -484,18 +552,24 @@ async def _extract_one_visit(
                     break
                 except ValueError as exc:
                     logger.warning(
-                        "storyboard.form_snapshot_extractor.invalid_tool_args",
-                        extra={
-                            "page_visit_id": inputs.page_visit_id,
-                            "args_preview": json.dumps(call.arguments)[:300],
-                            "error": str(exc)[:200],
-                        },
+                        f"storyboard.form_snapshot_extractor.invalid_tool_args "
+                        f"visit={inputs.page_visit_id} "
+                        f"error={str(exc)[:200]!r} "
+                        f"args_preview={json.dumps(call.arguments)[:300]!r}"
                     )
 
     if parsed is None and response.text:
         try:
             payload = _strip_code_fence(response.text)
-            data = json.loads(payload)
+            try:
+                data = json.loads(payload)
+            except json.JSONDecodeError:
+                # GPT-4o code-block fallback: record_form_snapshot([...]).
+                inner = _extract_python_tool_args(response.text)
+                if inner is not None:
+                    data = json.loads(inner)
+                else:
+                    raise
             if isinstance(data, list):
                 parsed = FormSnapshotLLMResponse(
                     fields=[FormField.model_validate(f) for f in data],
@@ -504,12 +578,12 @@ async def _extract_one_visit(
                 parsed = FormSnapshotLLMResponse.model_validate(data)
         except (json.JSONDecodeError, ValueError) as exc:
             logger.warning(
-                "storyboard.form_snapshot_extractor.invalid_text_output",
-                extra={
-                    "page_visit_id": inputs.page_visit_id,
-                    "raw_text": response.text[:300],
-                    "error": str(exc)[:200],
-                },
+                f"storyboard.form_snapshot_extractor.invalid_text_output "
+                f"visit={inputs.page_visit_id} "
+                f"provider={response.provider} model={response.model} "
+                f"finish={response.finish_reason.value} "
+                f"error={str(exc)[:200]!r} "
+                f"raw_text={response.text[:300]!r}"
             )
 
     if parsed is None:
