@@ -330,7 +330,28 @@ class OpenAICompatProvider:
         messages: list[dict] = []
         if request.system:
             messages.append({"role": "system", "content": request.system})
-        messages.append({"role": "user", "content": request.prompt})
+
+        # User message.  Plain-text requests keep the simple string
+        # content shape; multimodal requests promote to the OpenAI
+        # content-array form with ``image_url`` parts (data URIs), which
+        # GPT-4o / GPT-4.1 / Gemini's OpenAI-compat endpoint all accept.
+        # Without this the images were silently dropped and the model
+        # replied "I need to see the screenshot".
+        if request.images:
+            content_parts: list[dict] = [
+                {"type": "text", "text": request.prompt},
+            ]
+            for img in request.images:
+                b64 = _b64_encode_bytes(img.data)
+                content_parts.append({
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:{img.media_type};base64,{b64}",
+                    },
+                })
+            messages.append({"role": "user", "content": content_parts})
+        else:
+            messages.append({"role": "user", "content": request.prompt})
 
         body: dict = {
             "model": self._config.model,
@@ -345,6 +366,30 @@ class OpenAICompatProvider:
             body["stop"] = list(request.stop_sequences)
         if request.response_format == "json":
             body["response_format"] = {"type": "json_object"}
+
+        # Tools — translate the unified ToolDefinition into OpenAI's
+        # function-calling shape, and force the tool when requested so
+        # the model returns structured arguments instead of prose.
+        if request.tools:
+            body["tools"] = [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": tool.name,
+                        "description": tool.description,
+                        "parameters": tool.input_schema,
+                    },
+                }
+                for tool in request.tools
+            ]
+            if request.tool_choice:
+                if request.tool_choice == "any":
+                    body["tool_choice"] = "required"
+                else:
+                    body["tool_choice"] = {
+                        "type": "function",
+                        "function": {"name": request.tool_choice},
+                    }
 
         timeout = _coerce_timeout(request, self._config.timeout_s)
         start = _now_ms()
@@ -405,7 +450,36 @@ class OpenAICompatProvider:
         finish = self._map_finish_reason(choice.get("finish_reason"))
         usage = payload.get("usage") or {}
 
-        if not text:
+        # Parse OpenAI tool/function calls.  Unlike Anthropic (where the
+        # arguments are already a JSON object), OpenAI returns
+        # ``function.arguments`` as a JSON-encoded STRING, so we decode
+        # it into a dict to match the unified ToolCall shape.
+        tool_calls: list[ToolCall] = []
+        for raw_call in (message.get("tool_calls") or []):
+            if not isinstance(raw_call, dict):
+                continue
+            fn = raw_call.get("function") or {}
+            raw_args = fn.get("arguments")
+            if isinstance(raw_args, str):
+                try:
+                    args = json.loads(raw_args) if raw_args.strip() else {}
+                except json.JSONDecodeError:
+                    args = {}
+            elif isinstance(raw_args, dict):
+                args = raw_args
+            else:
+                args = {}
+            tool_calls.append(ToolCall(
+                name=str(fn.get("name", "")),
+                arguments=args,
+                tool_call_id=str(raw_call.get("id", "")),
+            ))
+
+        # A tool-only response (no content text) is a SUCCESS, not an
+        # error — the old code marked it ERROR and dropped the call.
+        if tool_calls and finish is FinishReason.UNKNOWN:
+            finish = FinishReason.TOOL_USE
+        if not text and not tool_calls:
             finish = FinishReason.ERROR
 
         return CompletionResponse(
@@ -419,7 +493,8 @@ class OpenAICompatProvider:
             latency_ms=latency_ms,
             retries=0,
             fell_back=False,
-            error_detail="" if text else "openai_compat_empty_response",
+            error_detail="" if (text or tool_calls) else "openai_compat_empty_response",
+            tool_calls=tuple(tool_calls),
         )
 
     @staticmethod
