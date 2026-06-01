@@ -180,7 +180,20 @@ services:
       #      location before grouping so distinct SPA sub-pages split
       #      into distinct visits.  Generic (no domain assumptions),
       #      bounded by VISION_MAX_FRAMES, cached after first derivation.
-      STORYBOARD_PAGE_VISIT_EXTRACTOR_VERSION: v6
+      # v7 — No page_visit code change; forces re-derivation now that the
+      #      openai_compat provider fix lets the vision pass actually
+      #      receive images (Anthropic credits are down, so vision runs
+      #      on the GPT-4o fallback).  Direct test confirmed GPT-4o reads
+      #      deep address-bar URLs OCR missed (birthdate, etc.).
+      #      Result: vision recovered the deep URLs (coverage-needs,
+      #      clean estimate, personal-information/*) BUT over-fragmented
+      #      to 37 visits — the heading-label fallback created noisy
+      #      per-frame splits mixed with URL keys.
+      # v8 — Vision override is now URL-AUTHORITATIVE: group only on
+      #      vision URLs (stable); heading label is a last resort only
+      #      for frames with no URL from any source.  Collapses the
+      #      fragmentation back toward the true distinct-page count.
+      STORYBOARD_PAGE_VISIT_EXTRACTOR_VERSION: v8
       STORYBOARD_PAGE_VISIT_MERGE_PATH_PREFIX: 'true'
       STORYBOARD_PAGE_VISIT_PATH_PREFIX_MIN_SEGMENTS: '2'
       STORYBOARD_PAGE_VISIT_VISION_IDENTITY: 'true'

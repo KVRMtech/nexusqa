@@ -835,17 +835,25 @@ async def _apply_vision_page_identity(
     """Override per-frame locations using a bounded vision identity pass.
 
     Samples up to ``vision_identity_max_frames`` frames evenly across
-    the artifact, reads each one's page identity via the LLM, and — when
-    the read is confident and MORE SPECIFIC than the deterministic
-    location — rewrites that frame's location so the grouping pass
+    the artifact, reads each one's page identity via the LLM, and makes
+    the vision-read URL AUTHORITATIVE for that frame so the grouping pass
     separates SPA sub-pages OCR could not.
 
-    "More specific" means: the vision URL has a deeper path than the
-    deterministic one, OR the deterministic location had no URL and the
-    vision read produced a heading label.  When only a heading is
-    available (URL unreadable / unchanged), the heading becomes the
-    frame's location so distinct sub-pages (different headings) split
-    into distinct visits even under one shell URL.
+    URL-first by design (learned the hard way): an earlier version also
+    promoted the vision HEADING to the grouping key when no deeper URL
+    was found.  Headings vary frame-to-frame ("Birth gender" vs "What's
+    your birth gender?") and mix with URL keys, which over-fragmented one
+    artifact from 10 to 37 visits.  Now we group ONLY on vision URLs
+    (stable) and fall back to a heading label ONLY for frames that have
+    no URL from any source at all (genuinely location-less).
+
+    Override rule per sampled frame (confidence >= min):
+      * vision URL with >= 2 path segments AND at least as deep as the
+        current path  → adopt it (host canonicalised by the grouping
+        pass).  Replaces OCR-garbled paths (e.g. "publicfestimate" →
+        the clean "/.../estimate") and recovers shell-masked sub-pages.
+      * else, only if the frame currently has NO url and NO raw_location
+        → use the heading as a last-resort label.
 
     Returns the number of frames whose location was overridden.
     """
@@ -889,39 +897,31 @@ async def _apply_vision_page_identity(
         vurl = (ident.url or "").strip()
         vtitle = (ident.page_title or "").strip()
 
-        # Path 1 — vision read a URL with a deeper path than we have.
+        # Path 1 (primary) — vision read a real URL.  Adopt it when it
+        # is a deep path (>= 2 segments) and at least as deep as what we
+        # already have, so we never replace a good deep OCR URL with a
+        # shallower vision read, but we DO replace shell/garbled paths.
         if vurl:
             vhost, vpath, vquery = _parse_url_parts(vurl)
             cur_depth = len(_path_segments(loc.url_path))
             new_depth = len(_path_segments(vpath))
-            if vhost and new_depth > cur_depth:
+            if vhost and new_depth >= 2 and new_depth >= cur_depth:
                 loc.raw_location = vurl
-                loc.url_host = vhost
+                loc.url_host = vhost  # canonicalised later by _canonical_key
                 loc.url_path = vpath
                 loc.url_query = vquery
                 loc.source = PageVisitSource.LLM_INFERRED
                 overridden += 1
                 continue
 
-        # Path 2 — no deeper URL, but a heading label distinguishes the
-        # sub-page.  Encode it as a stable non-URL location so grouping
-        # separates differing headings.  Keep the canonical host as a
-        # prefix when known so the step still reads as "host — heading".
-        if vtitle:
-            host = loc.url_host or dominant_host
-            label = f"{host} — {vtitle}" if host else vtitle
-            # Only override when this adds information: either we had no
-            # location, or the heading differs from what a bare shell URL
-            # conveys.  We always set source=llm_inferred for audit.
-            if label.lower() != (loc.raw_location or "").lower():
-                loc.raw_location = label[:2000]
-                # Clear URL parts so grouping keys on the heading label
-                # (host stays inside raw_location for display).
-                loc.url_host = ""
-                loc.url_path = ""
-                loc.url_query = ""
-                loc.source = PageVisitSource.LLM_INFERRED
-                overridden += 1
+        # Path 2 (last resort) — only for frames with NO URL from any
+        # source.  Use the heading as a coarse label so a genuinely
+        # location-less screen still appears.  NOT used to split frames
+        # that already have a URL (that was the over-fragmentation bug).
+        if vtitle and not loc.url_host and not loc.raw_location:
+            loc.raw_location = vtitle[:2000]
+            loc.source = PageVisitSource.LLM_INFERRED
+            overridden += 1
 
     if overridden:
         logger.info(
