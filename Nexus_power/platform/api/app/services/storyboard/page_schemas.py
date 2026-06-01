@@ -319,6 +319,60 @@ class PageActionList(BaseModel):
     )
 
 
+# ── Vision page identity (generic SPA sub-page recovery) ─────────────────────
+
+
+class PageIdentity(BaseModel):
+    """One frame's page identity as read by a multimodal LLM from pixels.
+
+    The deterministic tiers (OCR regex, scene URL, screen_name) fail on
+    single-page apps: the address bar keeps one shell URL while the user
+    moves through many client-side sub-pages, and Tesseract OCR often
+    can't read the address bar at all.  A vision model reading the
+    actual screenshot recovers what OCR missed — both the URL (when any
+    of it is legible) and a short page label from the on-screen heading
+    (which distinguishes sub-pages even when the URL is identical).
+
+    Used as the ``record_page_identity`` tool's output schema.  Generic:
+    no domain assumptions — works for any web / desktop / mobile UI.
+    """
+
+    url: str = Field(
+        "",
+        max_length=2000,
+        description=(
+            "The FULL URL from the browser address bar if ANY part is "
+            "legible — best effort, include the deepest path you can "
+            "read.  Empty string when there is no address bar or it is "
+            "unreadable.  Do NOT invent a URL."
+        ),
+    )
+    page_title: str = Field(
+        "",
+        max_length=200,
+        description=(
+            "A SHORT label for this page taken from its main heading or "
+            "the question/field it asks (e.g. 'Birth gender', 'Height "
+            "and weight', 'Coverage needs', 'Military status').  This is "
+            "what distinguishes one SPA sub-page from the next when the "
+            "URL does not change.  Empty when no clear heading."
+        ),
+    )
+    confidence: float = Field(
+        0.0,
+        ge=0.0,
+        le=1.0,
+        description="0..1 confidence in the page identification.",
+    )
+
+    @field_validator("url", "page_title", mode="before")
+    @classmethod
+    def _strip(cls, v):
+        if isinstance(v, str):
+            return v.strip()
+        return v
+
+
 # ── Form snapshot ────────────────────────────────────────────────────────────
 
 
@@ -481,6 +535,7 @@ __all__ = [
     "FormSnapshotLLMResponse",
     "PageAction",
     "PageActionList",
+    "PageIdentity",
     "PageVisit",
     "PageVisitSource",
 ]

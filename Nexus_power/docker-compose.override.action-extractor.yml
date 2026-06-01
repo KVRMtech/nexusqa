@@ -169,9 +169,24 @@ services:
       #      visits whose shorter path (>= 2 segments) is a segment-prefix
       #      of the longer, adopting the deeper path + unioning the window.
       #      Gated by STORYBOARD_PAGE_VISIT_MERGE_PATH_PREFIX (default on).
-      STORYBOARD_PAGE_VISIT_EXTRACTOR_VERSION: v5
+      # v6 — Vision page-identity pass.  OCR cannot read the USAA SPA
+      #      address bar: gender/birthdate/cardiovascular have ZERO
+      #      footprint in OCR text AND in the frozen pipeline's own
+      #      per-frame vision descriptions, and coverage-needs/estimate
+      #      are captured as page content but their URL was never OCR'd.
+      #      The new pass runs Sonnet over sampled frames to read each
+      #      page's identity (address-bar URL if legible, else heading
+      #      label) directly from pixels, then overrides the per-frame
+      #      location before grouping so distinct SPA sub-pages split
+      #      into distinct visits.  Generic (no domain assumptions),
+      #      bounded by VISION_MAX_FRAMES, cached after first derivation.
+      STORYBOARD_PAGE_VISIT_EXTRACTOR_VERSION: v6
       STORYBOARD_PAGE_VISIT_MERGE_PATH_PREFIX: 'true'
       STORYBOARD_PAGE_VISIT_PATH_PREFIX_MIN_SEGMENTS: '2'
+      STORYBOARD_PAGE_VISIT_VISION_IDENTITY: 'true'
+      STORYBOARD_PAGE_VISIT_VISION_MAX_FRAMES: '120'
+      STORYBOARD_PAGE_VISIT_VISION_CONCURRENCY: '2'
+      STORYBOARD_PAGE_VISIT_VISION_MIN_CONFIDENCE: '0.5'
       STORYBOARD_PAGE_VISIT_LLM_INFERENCE: 'false'
       STORYBOARD_PAGE_VISIT_MERGE_ADJACENT_SAME_URL: 'true'
       STORYBOARD_PAGE_VISIT_SCREEN_NAME_FALLBACK: 'true'
@@ -279,3 +294,6 @@ services:
       LLM_TASK_PAGE_ACTION_EXTRACTION: tier_premium
       LLM_TASK_FORM_SNAPSHOT_EXTRACTION: tier_premium
       LLM_TASK_PAGE_VISIT_INFERENCE: tier_fast_cloud
+      # Vision page-identity reads tiny URL-bar text + headings, so it
+      # needs the strongest vision tier (Sonnet) with GPT-4o fallback.
+      LLM_TASK_PAGE_VISIT_IDENTITY: tier_premium

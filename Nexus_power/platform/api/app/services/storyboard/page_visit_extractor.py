@@ -70,6 +70,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import json
 import logging
 import os
 import re
@@ -92,9 +93,15 @@ from nexus_sdk.db.models import (
     VisualSceneRow,
 )
 
-from ..llm import CompletionRequest, FinishReason, ImageContent, LLMRouter
+from ..llm import (
+    CompletionRequest,
+    FinishReason,
+    ImageContent,
+    LLMRouter,
+    ToolDefinition,
+)
 from .config import PageVisitExtractorConfig
-from .page_schemas import PageVisit, PageVisitSource
+from .page_schemas import PageIdentity, PageVisit, PageVisitSource
 
 
 try:  # pragma: no cover - optional dependency
@@ -713,6 +720,217 @@ async def _llm_infer_location(
     return candidate[:2000]
 
 
+# ── Vision page-identity pass (generic SPA sub-page recovery) ─────────────────
+
+
+_VISION_IDENTITY_SYSTEM = """You read ONE screenshot from a screen recording of a web/desktop/mobile workflow and identify the page being shown.
+
+Call the ``record_page_identity`` tool ONCE with:
+  - url: the FULL URL from the browser address bar if ANY part is legible — include the deepest path you can read.  Empty string if there is no address bar or it cannot be read.  NEVER invent a URL.
+  - page_title: a SHORT label from the page's MAIN heading or the question/field it is asking the user (e.g. "Birth gender", "Height and weight", "Coverage needs", "Military status", "Date of birth").  This is what tells two single-page-app sub-pages apart when the URL does not change.  Empty if there is no clear heading.
+  - confidence: 0..1.
+
+Read only what is actually visible.  Do not guess."""
+
+
+def _page_identity_tool() -> ToolDefinition:
+    """LLM tool forcing a PageIdentity-shaped response."""
+    return ToolDefinition(
+        name="record_page_identity",
+        description=(
+            "Record the page shown in this screenshot: its address-bar "
+            "URL (if legible) and a short heading label."
+        ),
+        input_schema=PageIdentity.model_json_schema(),
+    )
+
+
+async def _vision_page_identity(
+    *,
+    router: LLMRouter,
+    config: PageVisitExtractorConfig,
+    http_client: httpx.AsyncClient,
+    auth_token: str,
+    frame_asset_path: str,
+    correlation_id: str,
+) -> PageIdentity | None:
+    """Read one frame's page identity (URL + heading) via multimodal LLM.
+
+    Returns ``None`` on any failure (frame fetch, router error, invalid
+    output) so the caller keeps the deterministic location.  This is the
+    pixel-reading recovery path for SPA sub-pages OCR cannot see.
+    """
+    if not frame_asset_path:
+        return None
+    raw = await _fetch_frame_bytes(
+        http_client, frame_asset_path, auth_token=auth_token,
+    )
+    if not raw:
+        return None
+    raw, media_type = _maybe_downsize(raw, config.image_max_dimension_px)
+    image = ImageContent(data=raw, media_type=media_type)
+    tool = _page_identity_tool()
+
+    request = CompletionRequest(
+        system=_VISION_IDENTITY_SYSTEM,
+        prompt=(
+            "Identify this page. Read the address-bar URL if legible and "
+            "a short heading label. Respond only via record_page_identity."
+        ),
+        max_tokens=256,
+        temperature=0.0,
+        correlation_id=correlation_id,
+        images=(image,),
+        tools=(tool,),
+        tool_choice=tool.name,
+        enable_prompt_cache=True,
+        metadata={"task": config.vision_identity_task_name},
+    )
+    try:
+        response = await router.complete(
+            task=config.vision_identity_task_name, request=request,
+        )
+    except Exception as exc:  # pragma: no cover - router degrades on tier miss
+        logger.info(
+            f"storyboard.page_visit_extractor.vision_identity_unavailable "
+            f"error={str(exc)[:200]}"
+        )
+        return None
+
+    if response.finish_reason == FinishReason.ERROR:
+        return None
+    # Prefer the structured tool call; fall back to JSON-in-text.
+    if response.tool_calls:
+        for call in response.tool_calls:
+            if call.name == tool.name:
+                try:
+                    return PageIdentity.model_validate(call.arguments)
+                except ValueError:
+                    pass
+    if response.text:
+        try:
+            txt = response.text.strip()
+            if txt.startswith("```"):
+                nl = txt.find("\n")
+                if nl > 0:
+                    txt = txt[nl + 1:]
+                if txt.endswith("```"):
+                    txt = txt[:-3]
+            return PageIdentity.model_validate(json.loads(txt))
+        except (json.JSONDecodeError, ValueError):
+            return None
+    return None
+
+
+async def _apply_vision_page_identity(
+    frame_locations: list[_FrameLocation],
+    *,
+    router: LLMRouter,
+    config: PageVisitExtractorConfig,
+    http_client: httpx.AsyncClient,
+    auth_token: str,
+    artifact_id: str,
+    dominant_host: str,
+) -> int:
+    """Override per-frame locations using a bounded vision identity pass.
+
+    Samples up to ``vision_identity_max_frames`` frames evenly across
+    the artifact, reads each one's page identity via the LLM, and — when
+    the read is confident and MORE SPECIFIC than the deterministic
+    location — rewrites that frame's location so the grouping pass
+    separates SPA sub-pages OCR could not.
+
+    "More specific" means: the vision URL has a deeper path than the
+    deterministic one, OR the deterministic location had no URL and the
+    vision read produced a heading label.  When only a heading is
+    available (URL unreadable / unchanged), the heading becomes the
+    frame's location so distinct sub-pages (different headings) split
+    into distinct visits even under one shell URL.
+
+    Returns the number of frames whose location was overridden.
+    """
+    if not frame_locations:
+        return 0
+
+    # Sample frames evenly when over the cap.
+    cap = max(1, config.vision_identity_max_frames)
+    if len(frame_locations) > cap:
+        step = (len(frame_locations) - 1) / max(1, cap - 1)
+        idxs = sorted({
+            min(len(frame_locations) - 1, int(round(i * step)))
+            for i in range(cap)
+        })
+    else:
+        idxs = list(range(len(frame_locations)))
+
+    semaphore = asyncio.Semaphore(max(1, config.vision_identity_concurrency))
+    min_conf = config.vision_identity_min_confidence
+
+    async def _one(i: int) -> tuple[int, PageIdentity | None]:
+        loc = frame_locations[i]
+        async with semaphore:
+            ident = await _vision_page_identity(
+                router=router,
+                config=config,
+                http_client=http_client,
+                auth_token=auth_token,
+                frame_asset_path=loc.frame_asset_path,
+                correlation_id=f"{artifact_id}:vid:{loc.frame_index}",
+            )
+        return i, ident
+
+    results = await asyncio.gather(*(_one(i) for i in idxs))
+
+    overridden = 0
+    for i, ident in results:
+        if ident is None or ident.confidence < min_conf:
+            continue
+        loc = frame_locations[i]
+        vurl = (ident.url or "").strip()
+        vtitle = (ident.page_title or "").strip()
+
+        # Path 1 — vision read a URL with a deeper path than we have.
+        if vurl:
+            vhost, vpath, vquery = _parse_url_parts(vurl)
+            cur_depth = len(_path_segments(loc.url_path))
+            new_depth = len(_path_segments(vpath))
+            if vhost and new_depth > cur_depth:
+                loc.raw_location = vurl
+                loc.url_host = vhost
+                loc.url_path = vpath
+                loc.url_query = vquery
+                loc.source = PageVisitSource.LLM_INFERRED
+                overridden += 1
+                continue
+
+        # Path 2 — no deeper URL, but a heading label distinguishes the
+        # sub-page.  Encode it as a stable non-URL location so grouping
+        # separates differing headings.  Keep the canonical host as a
+        # prefix when known so the step still reads as "host — heading".
+        if vtitle:
+            host = loc.url_host or dominant_host
+            label = f"{host} — {vtitle}" if host else vtitle
+            # Only override when this adds information: either we had no
+            # location, or the heading differs from what a bare shell URL
+            # conveys.  We always set source=llm_inferred for audit.
+            if label.lower() != (loc.raw_location or "").lower():
+                loc.raw_location = label[:2000]
+                # Clear URL parts so grouping keys on the heading label
+                # (host stays inside raw_location for display).
+                loc.url_host = ""
+                loc.url_path = ""
+                loc.url_query = ""
+                loc.source = PageVisitSource.LLM_INFERRED
+                overridden += 1
+
+    if overridden:
+        logger.info(
+            f"storyboard.page_visit_extractor.vision_identity "
+            f"artifact={artifact_id} sampled={len(idxs)} overridden={overridden}"
+        )
+    return overridden
+
+
 # ── Grouping pass ────────────────────────────────────────────────────────────
 
 
@@ -1091,6 +1309,42 @@ async def extract_page_visits_for_artifact(
             dominant_host=signals.dominant_canonical_host,
         )
         frame_locations.append(loc)
+
+    # ── Vision page-identity pass (generic SPA sub-page recovery) ───
+    # Runs BEFORE grouping so vision-recovered locations split SPA
+    # sub-pages OCR could not see (gender / birthdate / coverage-needs).
+    # Bounded + concurrency-limited; cached after first derivation.
+    if config.enable_vision_page_identity and router is not None:
+        vis_owns_client = http_client is None
+        vis_client = http_client or httpx.AsyncClient(
+            timeout=httpx.Timeout(
+                config.request_timeout_s
+                if getattr(config, "request_timeout_s", None)
+                else 60.0
+            ),
+            follow_redirects=True,
+        )
+        try:
+            await _apply_vision_page_identity(
+                frame_locations,
+                router=router,
+                config=config,
+                http_client=vis_client,
+                auth_token=auth_token,
+                artifact_id=artifact_id,
+                dominant_host=signals.dominant_canonical_host,
+            )
+        except Exception as exc:  # pragma: no cover - degrade gracefully
+            logger.warning(
+                f"storyboard.page_visit_extractor.vision_identity_failed "
+                f"artifact={artifact_id} error={str(exc)[:200]}"
+            )
+        finally:
+            if vis_owns_client:
+                try:
+                    await vis_client.aclose()
+                except Exception:  # pragma: no cover
+                    pass
 
     # ── Group contiguous frames with the same canonical key ────────
     @dataclass

@@ -490,8 +490,43 @@ class PageVisitExtractorConfig:
     # tenants.
     enable_llm_inference: bool = False
 
+    # ── Vision page-identity pass (generic SPA sub-page recovery) ──────
+    # When True, run a multimodal LLM over sampled frames to read each
+    # frame's page identity (URL from the address bar + a short heading
+    # label) DIRECTLY FROM PIXELS, then override the deterministic
+    # per-frame location before grouping.  This recovers single-page-app
+    # sub-pages that OCR cannot read — the address bar keeps one shell
+    # URL while the heading changes (gender → birthdate → ...), and
+    # Tesseract OCR frequently can't read the address bar at all.
+    # Generic: no domain assumptions.  Costs one LLM call per sampled
+    # frame, so it is bounded by ``vision_identity_max_frames`` and
+    # cached after the first derivation.  OFF by default (cost); enable
+    # per-deployment via STORYBOARD_PAGE_VISIT_VISION_IDENTITY.
+    enable_vision_page_identity: bool = False
+
+    # Hard cap on frames sent to the vision identity pass.  Frames are
+    # sampled evenly across the artifact when the count exceeds this, so
+    # a 2-hour recording stays affordable.  60-120 covers typical demos.
+    vision_identity_max_frames: int = 120
+
+    # Concurrency for the vision identity pass.  Kept low (2) because the
+    # premium tier (Sonnet) rate-limits ~16-way concurrency; the pass
+    # runs sequentially against the same Anthropic budget as the other
+    # extractors.
+    vision_identity_concurrency: int = 2
+
+    # Minimum confidence a vision identity must report before it
+    # overrides the deterministic location.  Guards against low-quality
+    # reads polluting the page log.
+    vision_identity_min_confidence: float = 0.5
+
     # Task name used when calling the LLM router for llm_inferred.
     llm_task_name: str = "page_visit_inference"
+
+    # Task name for the vision page-identity pass.  Routes to a vision-
+    # capable tier (e.g. tier_premium / Sonnet) via
+    # LLM_TASK_PAGE_VISIT_IDENTITY.
+    vision_identity_task_name: str = "page_visit_identity"
 
     # Per-LLM-call temperature.
     llm_temperature: float = 0.0
@@ -871,8 +906,26 @@ def load_config() -> StoryboardConfig:
             enable_llm_inference=_env_bool(
                 "STORYBOARD_PAGE_VISIT_LLM_INFERENCE", False,
             ),
+            enable_vision_page_identity=_env_bool(
+                "STORYBOARD_PAGE_VISIT_VISION_IDENTITY", False,
+            ),
+            vision_identity_max_frames=_env_int(
+                "STORYBOARD_PAGE_VISIT_VISION_MAX_FRAMES", 120, min_value=1,
+            ),
+            vision_identity_concurrency=_env_int(
+                "STORYBOARD_PAGE_VISIT_VISION_CONCURRENCY", 2, min_value=1,
+            ),
+            vision_identity_min_confidence=_env_float(
+                "STORYBOARD_PAGE_VISIT_VISION_MIN_CONFIDENCE",
+                0.5,
+                min_value=0.0,
+                max_value=1.0,
+            ),
             llm_task_name=_env_str(
                 "STORYBOARD_PAGE_VISIT_LLM_TASK_NAME", "page_visit_inference",
+            ),
+            vision_identity_task_name=_env_str(
+                "STORYBOARD_PAGE_VISIT_VISION_TASK_NAME", "page_visit_identity",
             ),
             llm_temperature=_env_float(
                 "STORYBOARD_PAGE_VISIT_LLM_TEMPERATURE",

@@ -681,14 +681,20 @@ class StoryboardComposer:
         )
         if page_visit_due or scene_grouper_due:
             try:
+                _pv_cfg = self._config.page_visit_extractor
                 await extract_page_visits_for_artifact(
                     session,
                     artifact_id=artifact_id,
                     tenant_id=tenant_id,
-                    config=self._config.page_visit_extractor,
+                    config=_pv_cfg,
+                    # Router is needed for BOTH the optional Tier-5 URL
+                    # inference and the vision page-identity pass.
                     router=(
                         self._llm_router
-                        if self._config.page_visit_extractor.enable_llm_inference
+                        if (
+                            _pv_cfg.enable_llm_inference
+                            or _pv_cfg.enable_vision_page_identity
+                        )
                         else None
                     ),
                     auth_token=auth_token,
