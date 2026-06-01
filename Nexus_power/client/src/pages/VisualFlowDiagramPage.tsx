@@ -35,6 +35,7 @@ import type {
   CursorEvent,
   StoryboardPayload,
   SceneAction,
+  PageVisit,
 } from '../types/canonical';
 import { EvidenceStepsPanel } from './components/EvidenceStepsPanel';
 import { StoryboardView } from './components/StoryboardView';
@@ -712,6 +713,198 @@ function SceneCard3D({
         )}
       </div>
     </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════
+   PHASE 2 — Pages & Form Values panel
+   ───────────────────────────────────────────────────────────
+   Renders the URL-keyed page_visits log, each page's extracted
+   actions, and the final form snapshot (label → value).  This is
+   the surface that survives the canonical pipeline merging several
+   distinct URLs into one scene — every distinct page the user
+   visited shows here with the data the user entered on it.
+   ═══════════════════════════════════════════════════════════ */
+const PAGE_VERB_STYLES: Record<string, { bg: string; fg: string }> = {
+  click:    { bg: 'rgba(56,189,248,0.15)', fg: '#0369a1' },
+  type:     { bg: 'rgba(168,85,247,0.15)', fg: '#7e22ce' },
+  select:   { bg: 'rgba(16,185,129,0.15)', fg: '#047857' },
+  submit:   { bg: 'rgba(239,68,68,0.15)',  fg: '#b91c1c' },
+  navigate: { bg: 'rgba(245,158,11,0.15)', fg: '#b45309' },
+  scroll:   { bg: 'rgba(148,163,184,0.18)',fg: '#475569' },
+  hover:    { bg: 'rgba(148,163,184,0.18)',fg: '#475569' },
+  none:     { bg: 'rgba(148,163,184,0.10)',fg: '#94a3b8' },
+};
+
+function PageVisitsPanel({ graph }: { graph: VisualEvidenceGraph }) {
+  const [open, setOpen] = useState(true);
+  const visits: PageVisit[] = graph.page_visits ?? [];
+  const pageActions = graph.page_actions ?? {};
+  const formSnapshots = graph.form_snapshots ?? {};
+
+  // Only render the section when the Phase 2 extractors have produced
+  // data.  Older artifacts (pre-Phase-2) return empty arrays and the
+  // panel stays hidden so the page looks unchanged for them.
+  if (visits.length === 0) return null;
+
+  const visitsWithForm = visits.filter(
+    (v) => v.form_snapshot && Object.keys(v.form_snapshot).length > 0,
+  ).length;
+  const totalActions = Object.values(pageActions).reduce(
+    (n, list) => n + (list?.length ?? 0), 0,
+  );
+
+  const displayLocation = (v: PageVisit): string => {
+    if (v.location) return v.location;
+    if (v.canonical_host) return `${v.canonical_host}${v.url_path || ''}`;
+    return '(location not detected)';
+  };
+
+  return (
+    <section className="px-6 py-3 shrink-0 relative z-10">
+      <div
+        className="rounded-2xl overflow-hidden"
+        style={{
+          background: 'linear-gradient(135deg, rgba(56,189,248,0.05), rgba(16,185,129,0.04))',
+          border: '1px solid rgba(56,189,248,0.22)',
+          boxShadow: '0 6px 24px rgba(38,112,163,0.08)',
+        }}
+      >
+        {/* Header / toggle */}
+        <button
+          onClick={() => setOpen((o) => !o)}
+          className="w-full flex items-center gap-3 px-4 py-3 text-left"
+          style={{ background: 'rgba(255,255,255,0.4)' }}
+        >
+          <div className="p-1.5 rounded-lg" style={{ background: 'rgba(56,189,248,0.15)' }}>
+            <Globe className="h-4 w-4" style={{ color: '#0369a1' }} />
+          </div>
+          <div className="min-w-0">
+            <div className="text-[12px] font-black text-slate-900 leading-tight">
+              Pages &amp; Form Values
+              <span className="ml-2 text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                URL-keyed · independent of scene grouping
+              </span>
+            </div>
+            <div className="text-[10px] text-slate-500 font-semibold">
+              {visits.length} page{visits.length === 1 ? '' : 's'} visited
+              {' · '}{totalActions} action{totalActions === 1 ? '' : 's'}
+              {' · '}{visitsWithForm} with form data
+            </div>
+          </div>
+          <ChevronRight
+            className="h-4 w-4 ml-auto text-slate-400 transition-transform"
+            style={{ transform: open ? 'rotate(90deg)' : 'none' }}
+          />
+        </button>
+
+        {open && (
+          <div className="px-3 pb-3 pt-1 space-y-2 max-h-[460px] overflow-y-auto">
+            {visits.map((v) => {
+              const actions = pageActions[v.page_visit_id] ?? [];
+              const snap = formSnapshots[v.page_visit_id];
+              const fields = (snap?.fields ?? v.form_snapshot ?? {}) as Record<string, string>;
+              const fieldEntries = Object.entries(fields);
+              const isWeb = v.location?.startsWith('http');
+              return (
+                <div
+                  key={v.page_visit_id}
+                  className="rounded-xl px-3 py-2.5"
+                  style={{
+                    background: 'rgba(255,255,255,0.6)',
+                    border: '1px solid rgba(56,189,248,0.15)',
+                  }}
+                >
+                  {/* URL row */}
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span
+                      className="inline-flex items-center justify-center min-w-[22px] h-[22px] px-1.5 rounded-full text-[10px] font-black"
+                      style={{ background: 'rgba(38,112,163,0.12)', color: '#0369a1' }}
+                    >
+                      {v.sequence_index}
+                    </span>
+                    {isWeb ? (
+                      <Globe className="h-3.5 w-3.5 shrink-0" style={{ color: '#0369a1' }} />
+                    ) : (
+                      <Layers className="h-3.5 w-3.5 shrink-0" style={{ color: '#7e22ce' }} />
+                    )}
+                    <span className="text-[12px] font-bold text-slate-900 break-all">
+                      {displayLocation(v)}
+                    </span>
+                    <span className="flex items-center gap-1 text-[9px] text-slate-400 font-semibold ml-auto">
+                      <Clock className="h-2.5 w-2.5" />
+                      {fmtDuration(v.first_seen_ms, v.last_seen_ms)}
+                    </span>
+                    <span
+                      className="inline-flex items-center px-1.5 py-0.5 rounded-md text-[8px] font-bold uppercase tracking-wide"
+                      style={{ background: 'rgba(148,163,184,0.15)', color: '#64748b' }}
+                      title={`source: ${v.source} · confidence ${Math.round((v.extraction_confidence ?? 0) * 100)}%`}
+                    >
+                      {v.source.replace(/_/g, ' ')}
+                    </span>
+                  </div>
+
+                  {/* Actions */}
+                  {actions.length > 0 && (
+                    <div className="mt-2 flex flex-wrap gap-1.5">
+                      {actions.map((a, i) => {
+                        const vs = PAGE_VERB_STYLES[a.verb] ?? PAGE_VERB_STYLES.none;
+                        if (a.verb === 'none' && !a.target_label) return null;
+                        return (
+                          <span
+                            key={`${a.subaction_index ?? i}-${a.verb}`}
+                            className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] font-semibold"
+                            style={{ background: vs.bg, color: vs.fg }}
+                          >
+                            <span className="font-black uppercase">{a.verb}</span>
+                            {a.target_label && <span className="text-slate-700">{a.target_label}</span>}
+                            {a.value && (
+                              <span className="font-black text-slate-900">= {a.value}</span>
+                            )}
+                          </span>
+                        );
+                      })}
+                    </div>
+                  )}
+
+                  {/* Form snapshot */}
+                  {fieldEntries.length > 0 && (
+                    <div
+                      className="mt-2 rounded-lg px-2.5 py-2"
+                      style={{ background: 'rgba(16,185,129,0.06)', border: '1px solid rgba(16,185,129,0.18)' }}
+                    >
+                      <div className="flex items-center gap-1.5 mb-1.5">
+                        <FormInput className="h-3 w-3" style={{ color: '#047857' }} />
+                        <span className="text-[9px] font-black uppercase tracking-widest text-emerald-700">
+                          Form values captured
+                        </span>
+                        {snap?.page_intent && (
+                          <span className="text-[9px] text-slate-500 font-semibold italic">
+                            · {snap.page_intent}
+                          </span>
+                        )}
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1">
+                        {fieldEntries.map(([label, value]) => (
+                          <div key={label} className="flex items-baseline gap-1.5 text-[11px] min-w-0">
+                            <span className="text-slate-500 font-semibold truncate" title={label}>
+                              {label}:
+                            </span>
+                            <span className="text-slate-900 font-black break-words">
+                              {value || '—'}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </section>
   );
 }
 
@@ -2017,6 +2210,9 @@ export default function VisualFlowDiagramPage() {
           )}
         </div>
       </header>
+
+      {/* ─────────── PHASE 2 — Pages & Form Values (URL-keyed) ────────────── */}
+      <PageVisitsPanel graph={graph} />
 
       {/* ─────────── VIEW MODE TABS (Storyboard vs 3D Journey) ────────────── */}
       <div

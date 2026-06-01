@@ -1256,6 +1256,68 @@ export interface VisualEvidenceGraph {
    *  scenes return a list of length 1; long form-fill scenes return
    *  one entry per detected field change. */
   scene_actions?: Record<string, SceneAction[]>;
+
+  // Phase 2 — URL-keyed surfaces.  Independent of scene boundaries:
+  // the canonical pipeline merges visually-similar frames into one
+  // scene, but these capture every distinct URL the user visited
+  // (so 9 form sub-pages on the same layout each get a row).  Empty
+  // until the page_visit / page_action / form_snapshot extractors run.
+
+  /** Chronological log of distinct pages visited (URL for web,
+   *  window/screen title for native).  Ordered by sequence_index. */
+  page_visits?: PageVisit[];
+  /** page_visit_id → list of actions on that page (subaction_index
+   *  ascending).  Same shape as scene_actions but keyed by URL. */
+  page_actions?: Record<string, SceneAction[]>;
+  /** page_visit_id → final form state captured on that page. */
+  form_snapshots?: Record<string, FormSnapshot>;
+}
+
+/** One contiguous visit to a single location (Phase 2).  Mirrors the
+ *  ``page_visits`` row.  See page_visit_extractor.py. */
+export interface PageVisit {
+  page_visit_id: string;
+  /** 0-based chronological position within the artifact. */
+  sequence_index: number;
+  /** Canonical location string — full URL for web, title for native. */
+  location: string;
+  url_host: string;
+  url_path: string;
+  url_query: string;
+  /** Host after OCR-ghost canonicalisation (e.g. Msdd.com → usaa.com). */
+  canonical_host: string;
+  first_seen_ms: number;
+  last_seen_ms: number;
+  duration_ms: number;
+  frame_count: number;
+  /** How the location was discovered. */
+  source: 'url_regex' | 'url_scene' | 'window_title' | 'screen_name_ocr' | 'llm_inferred';
+  /** 0.0–1.0 confidence in the extraction. */
+  extraction_confidence: number;
+  /** Best-effort link to the canonical scene this visit fell within. */
+  primary_scene_id?: string | null;
+  /** Final form state (label → value).  Empty when no form was visible. */
+  form_snapshot?: Record<string, string>;
+  form_snapshot_signals?: Record<string, unknown>;
+  extractor_version?: string;
+  form_snapshot_extractor_version?: string;
+}
+
+/** Final form state captured on one page visit (Phase 2).  See
+ *  form_snapshot_extractor.py. */
+export interface FormSnapshot {
+  /** label → final value the user left in the field. */
+  fields: Record<string, string>;
+  /** Optional label → input kind (text_field | dropdown | checkbox | …). */
+  field_kinds?: Record<string, string>;
+  visible_field_count: number;
+  /** 0.0–1.0 aggregate confidence in the snapshot. */
+  overall_confidence: number;
+  /** One-phrase description of the page's purpose. */
+  page_intent?: string;
+  source_frame_asset_path?: string;
+  extractor_model?: string;
+  extractor_version?: string;
 }
 
 /** Semantic action extracted from a scene by the multimodal LLM
