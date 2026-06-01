@@ -225,11 +225,17 @@ services:
       #      page_visits to the CURRENT (max) extractor version, so the
       #      LLM budget is spent only on the 14 real visits.  Version
       #      bumped to force re-derivation under the new code.
-      STORYBOARD_PAGE_ACTION_EXTRACTOR_VERSION: v5
+      # v6 — SPA defrag (page_visit v5) merged the quote-shell ping-pong
+      #      into one /insurance/life/iwa visit with a much wider time
+      #      window (17 frames); the fixed 8-frame "very long" sample
+      #      then spread too thin and missed the gender step.  Raise
+      #      very-long sampling 8->12 to recover multi-field coverage on
+      #      merged SPA pages.  Version bumped to re-derive actions only.
+      STORYBOARD_PAGE_ACTION_EXTRACTOR_VERSION: v6
       STORYBOARD_PAGE_ACTION_EXTRACTOR_CONCURRENCY: '2'
       STORYBOARD_PAGE_ACTION_EXTRACTOR_FRAMES_DEFAULT: '4'
       STORYBOARD_PAGE_ACTION_EXTRACTOR_FRAMES_LONG: '6'
-      STORYBOARD_PAGE_ACTION_EXTRACTOR_FRAMES_VERY_LONG: '8'
+      STORYBOARD_PAGE_ACTION_EXTRACTOR_FRAMES_VERY_LONG: '12'
       STORYBOARD_PAGE_ACTION_EXTRACTOR_IMAGE_MAX_DIMENSION_PX: '1024'
 
       # Phase 2.2 — form_snapshots (per-URL final form state).
