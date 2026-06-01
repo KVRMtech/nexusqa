@@ -1169,7 +1169,7 @@ class ApiClient {
     // a few seconds.
     const { data } = await this.client.get(
       `/v1/artifacts/${artifactId}/storyboard`,
-      { timeout: 180_000 },
+      { timeout: 300_000 },
     );
     return data;
   }

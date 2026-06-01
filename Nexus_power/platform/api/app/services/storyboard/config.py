@@ -472,6 +472,23 @@ class PageVisitExtractorConfig:
     # ``/insurance/life/iwa``, but ``/insurance/life`` (2 segments) may.
     path_prefix_min_segments: int = 2
 
+    # When True, collapse visits that refer to the SAME logical page but
+    # whose paths differ only in representation — OCR's truncated tail
+    # ``/personal-information/height-weight`` vs vision's full
+    # ``/insurance/.../personal-information/height-weight`` (share the
+    # SUFFIX, not a prefix), or OCR's run-together ``publicfestimate``
+    # vs vision's clean ``estimate``.  Visits under the same canonical
+    # host are grouped by their LAST path segment (with a substring
+    # fallback for run-together OCR), keeping one row per logical page.
+    # This is a GLOBAL merge (not adjacency-bound) so interspersed
+    # fragments of one page collapse to a single step.
+    merge_same_page_tail: bool = True
+
+    # Minimum last-segment length for the substring fallback in the
+    # same-page-tail merge (so short generic segments like "state" only
+    # match exactly, while "estimate" can absorb "publicfestimate").
+    same_page_tail_min_substring: int = 6
+
     # When True, fall back to ``visual_frames.screen_name`` when no
     # URL is detected on a frame.  Disable for pure web tenants where
     # screen_name fallback is always noise.
@@ -896,6 +913,12 @@ def load_config() -> StoryboardConfig:
             ),
             path_prefix_min_segments=_env_int(
                 "STORYBOARD_PAGE_VISIT_PATH_PREFIX_MIN_SEGMENTS", 2, min_value=1,
+            ),
+            merge_same_page_tail=_env_bool(
+                "STORYBOARD_PAGE_VISIT_MERGE_SAME_PAGE_TAIL", True,
+            ),
+            same_page_tail_min_substring=_env_int(
+                "STORYBOARD_PAGE_VISIT_SAME_PAGE_TAIL_MIN_SUBSTRING", 6, min_value=2,
             ),
             enable_screen_name_fallback=_env_bool(
                 "STORYBOARD_PAGE_VISIT_SCREEN_NAME_FALLBACK", True,

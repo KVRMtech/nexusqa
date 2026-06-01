@@ -1056,6 +1056,95 @@ def _merge_path_prefix_fragments(drafts: list, min_segments: int) -> list:
     return merged
 
 
+def _last_segment(path: str) -> str:
+    segs = _path_segments(path)
+    return segs[-1] if segs else ""
+
+
+def _same_page_tail(tail_a: str, tail_b: str, min_substring: int) -> bool:
+    """True when two last-path-segments denote the same logical page.
+
+    Exact match, or — to absorb OCR run-together garble like
+    ``publicfestimate`` vs the clean ``estimate`` — one is a substring
+    of the other and the shorter is at least ``min_substring`` chars
+    (so short generic segments like ``state`` only match exactly).
+    """
+    if not tail_a or not tail_b:
+        return False
+    if tail_a == tail_b:
+        return True
+    short, long_ = sorted([tail_a, tail_b], key=len)
+    return len(short) >= min_substring and short in long_
+
+
+def _merge_same_page_tail(drafts: list, min_substring: int) -> list:
+    """Collapse visits that are the SAME logical page in different
+    representations — the cross-source deduplicator.
+
+    The prefix defragmenter only merges adjacent visits whose paths are
+    prefix-related.  But OCR and vision often disagree on the WHOLE
+    prefix: OCR yields the truncated tail ``/personal-information/X``
+    while vision yields the full ``/insurance/.../personal-information/X``
+    — they share the SUFFIX, not a prefix — and these fragments are
+    interspersed across the SPA stretch, not adjacent.  This GLOBAL pass
+    groups URL visits by (canonical_host, last-path-segment) and keeps a
+    single row per logical page (first-seen order preserved, window +
+    frames unioned, the deepest/cleanest path adopted).
+
+    Non-URL visits (window_title / screen_name) pass through untouched.
+    """
+    if len(drafts) < 2:
+        return drafts
+    result: list = []
+    # Each entry: (canonical_host, tail, index_in_result)
+    index: list[tuple[str, str]] = []
+    for d in drafts:
+        host = getattr(d, "canonical_host", "")
+        if not host or not getattr(d, "path", ""):
+            result.append(d)
+            continue
+        tail = _last_segment(d.path)
+        matched = -1
+        for ri, (rhost, rtail) in enumerate(index):
+            if rhost == host and _same_page_tail(tail, rtail, min_substring):
+                matched = ri
+                break
+        if matched < 0:
+            index.append((host, tail))
+            result.append(d)
+        else:
+            # result index for this logical page: the i-th URL entry maps
+            # to its position in result.  Rebuild target by scanning.
+            tgt = _nth_url_entry(result, matched)
+            if tgt is None:
+                index.append((host, tail))
+                result.append(d)
+                continue
+            tgt.first_seen_ms = min(tgt.first_seen_ms, d.first_seen_ms)
+            tgt.last_seen_ms = max(tgt.last_seen_ms, d.last_seen_ms)
+            tgt.frame_count += d.frame_count
+            # Prefer the deeper / cleaner representation.
+            if len(_path_segments(d.path)) > len(_path_segments(tgt.path)):
+                tgt.path = d.path
+                tgt.query = d.query
+                tgt.url_host = d.url_host or tgt.url_host
+                tgt.source = d.source
+                tgt.raw_location = d.raw_location
+    return result
+
+
+def _nth_url_entry(result: list, n: int):
+    """Return the n-th URL-bearing draft in ``result`` (matches the
+    ordering used to build the (host, tail) index)."""
+    count = -1
+    for d in result:
+        if getattr(d, "canonical_host", "") and getattr(d, "path", ""):
+            count += 1
+            if count == n:
+                return d
+    return None
+
+
 # ── Persistence ──────────────────────────────────────────────────────────────
 
 
@@ -1434,6 +1523,20 @@ async def extract_page_visits_for_artifact(
         if len(drafts) != before:
             logger.info(
                 f"storyboard.page_visit_extractor.spa_defrag "
+                f"artifact={artifact_id} merged={before}->{len(drafts)}"
+            )
+
+    # ── Same-page-tail dedup — collapse cross-source duplicate
+    # representations of one logical page (OCR truncated tail vs vision
+    # full path; OCR-garbled vs clean).  GLOBAL (not adjacency-bound).
+    if config.merge_same_page_tail:
+        before = len(drafts)
+        drafts = _merge_same_page_tail(
+            drafts, config.same_page_tail_min_substring,
+        )
+        if len(drafts) != before:
+            logger.info(
+                f"storyboard.page_visit_extractor.tail_dedup "
                 f"artifact={artifact_id} merged={before}->{len(drafts)}"
             )
 

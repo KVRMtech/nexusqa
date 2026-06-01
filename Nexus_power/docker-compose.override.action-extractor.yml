@@ -191,14 +191,23 @@ services:
       #      per-frame splits mixed with URL keys.
       # v8 — Vision override is now URL-AUTHORITATIVE: group only on
       #      vision URLs (stable); heading label is a last resort only
-      #      for frames with no URL from any source.  Collapses the
-      #      fragmentation back toward the true distinct-page count.
-      STORYBOARD_PAGE_VISIT_EXTRACTOR_VERSION: v8
+      #      for frames with no URL from any source.  29 rows, all 13
+      #      logical pages present but with duplicate representations
+      #      (OCR tail vs vision full; "publicfestimate" vs "estimate").
+      # v9 — Same-page-tail dedup: GLOBAL merge of URL visits by
+      #      (canonical_host, last-path-segment) with a substring
+      #      fallback for OCR run-together garble — collapses the
+      #      duplicate representations to one row per logical page.
+      #      Plus vision concurrency 2->6 (runs on GPT-4o, whose OpenAI
+      #      rate limits are generous) to cut the ~452s derive.
+      STORYBOARD_PAGE_VISIT_EXTRACTOR_VERSION: v9
       STORYBOARD_PAGE_VISIT_MERGE_PATH_PREFIX: 'true'
       STORYBOARD_PAGE_VISIT_PATH_PREFIX_MIN_SEGMENTS: '2'
+      STORYBOARD_PAGE_VISIT_MERGE_SAME_PAGE_TAIL: 'true'
+      STORYBOARD_PAGE_VISIT_SAME_PAGE_TAIL_MIN_SUBSTRING: '6'
       STORYBOARD_PAGE_VISIT_VISION_IDENTITY: 'true'
       STORYBOARD_PAGE_VISIT_VISION_MAX_FRAMES: '120'
-      STORYBOARD_PAGE_VISIT_VISION_CONCURRENCY: '2'
+      STORYBOARD_PAGE_VISIT_VISION_CONCURRENCY: '6'
       STORYBOARD_PAGE_VISIT_VISION_MIN_CONFIDENCE: '0.5'
       STORYBOARD_PAGE_VISIT_LLM_INFERENCE: 'false'
       STORYBOARD_PAGE_VISIT_MERGE_ADJACENT_SAME_URL: 'true'
