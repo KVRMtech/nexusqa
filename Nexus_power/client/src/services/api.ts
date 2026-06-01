@@ -1159,7 +1159,18 @@ class ApiClient {
   async getStoryboard(
     artifactId: string,
   ): Promise<import('../types/canonical').StoryboardPayload> {
-    const { data } = await this.client.get(`/v1/artifacts/${artifactId}/storyboard`);
+    // The first call for an artifact (or any call while a version is
+    // stale) triggers the full composer derivation — scene grouping,
+    // captions, action + page + form-snapshot extraction — which runs
+    // the multimodal LLM and can take 1-3 minutes.  The default 30s
+    // client timeout surfaced as "Storyboard not ready / timeout of
+    // 30000ms exceeded" whenever the user opened the tab mid-derivation.
+    // Give it a generous budget; subsequent cache-hit reads return in
+    // a few seconds.
+    const { data } = await this.client.get(
+      `/v1/artifacts/${artifactId}/storyboard`,
+      { timeout: 180_000 },
+    );
     return data;
   }
 

@@ -1472,6 +1472,21 @@ async def _load_storyboard_overlay(
     #    payload matches the recording's chronology.  Form snapshot
     #    (label → value dict) is folded into each visit row so test
     #    exporters can iterate once.
+    #
+    # CRITICAL: filter to the CURRENT (max) extractor_version.
+    # page_visits keeps prior versions for audit (the extractor's
+    # stale-row cleanup only prunes within a version), so without this
+    # filter we return every version interleaved — e.g. v1 (11 rows) +
+    # v2 (14 rows) = 25 rows with duplicate sequence_index values, which
+    # the UI renders as duplicate/interleaved pages.
+    current_page_visit_version = (
+        select(func.max(PageVisitRow.extractor_version))
+        .where(
+            PageVisitRow.artifact_id == artifact_id,
+            PageVisitRow.tenant_id == tenant_id,
+        )
+        .scalar_subquery()
+    )
     page_visits_q = await db.execute(
         select(
             PageVisitRow.page_visit_id,
@@ -1496,6 +1511,7 @@ async def _load_storyboard_overlay(
         .where(
             PageVisitRow.artifact_id == artifact_id,
             PageVisitRow.tenant_id == tenant_id,
+            PageVisitRow.extractor_version == current_page_visit_version,
         )
         .order_by(PageVisitRow.sequence_index.asc())
     )
@@ -1553,6 +1569,22 @@ async def _load_storyboard_overlay(
     #    by subaction_index so multi-action pages return chronological
     #    sequences.  Same shape as scene_actions so test exporters can
     #    iterate uniformly.
+    #
+    # CRITICAL: filter to the CURRENT (max) extractor_version — same
+    # reason as page_visits above.  page_actions accumulated v1..v5
+    # (101 rows) during the deploy iteration; without this filter the
+    # UI stacks 4-5 versions of actions on every page.  The current
+    # action version's rows are keyed to the current visit version's
+    # page_visit_ids (the extractor filters visits to max version), so
+    # the two filters stay consistent.
+    current_page_action_version = (
+        select(func.max(PageActionRow.extractor_version))
+        .where(
+            PageActionRow.artifact_id == artifact_id,
+            PageActionRow.tenant_id == tenant_id,
+        )
+        .scalar_subquery()
+    )
     page_actions_q = await db.execute(
         select(
             PageActionRow.page_visit_id,
@@ -1570,6 +1602,7 @@ async def _load_storyboard_overlay(
         .where(
             PageActionRow.artifact_id == artifact_id,
             PageActionRow.tenant_id == tenant_id,
+            PageActionRow.extractor_version == current_page_action_version,
         )
         .order_by(
             PageActionRow.page_visit_id.asc(),

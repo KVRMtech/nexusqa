@@ -737,7 +737,6 @@ const PAGE_VERB_STYLES: Record<string, { bg: string; fg: string }> = {
 };
 
 function PageVisitsPanel({ graph }: { graph: VisualEvidenceGraph }) {
-  const [open, setOpen] = useState(true);
   const visits: PageVisit[] = graph.page_visits ?? [];
   const pageActions = graph.page_actions ?? {};
   const formSnapshots = graph.form_snapshots ?? {};
@@ -761,7 +760,7 @@ function PageVisitsPanel({ graph }: { graph: VisualEvidenceGraph }) {
   };
 
   return (
-    <section className="px-6 py-3 shrink-0 relative z-10">
+    <section className="relative z-10">
       <div
         className="rounded-2xl overflow-hidden"
         style={{
@@ -770,10 +769,9 @@ function PageVisitsPanel({ graph }: { graph: VisualEvidenceGraph }) {
           boxShadow: '0 6px 24px rgba(38,112,163,0.08)',
         }}
       >
-        {/* Header / toggle */}
-        <button
-          onClick={() => setOpen((o) => !o)}
-          className="w-full flex items-center gap-3 px-4 py-3 text-left"
+        {/* Header (static summary — the tab owns the scroll) */}
+        <div
+          className="w-full flex items-center gap-3 px-4 py-3"
           style={{ background: 'rgba(255,255,255,0.4)' }}
         >
           <div className="p-1.5 rounded-lg" style={{ background: 'rgba(56,189,248,0.15)' }}>
@@ -792,14 +790,9 @@ function PageVisitsPanel({ graph }: { graph: VisualEvidenceGraph }) {
               {' · '}{visitsWithForm} with form data
             </div>
           </div>
-          <ChevronRight
-            className="h-4 w-4 ml-auto text-slate-400 transition-transform"
-            style={{ transform: open ? 'rotate(90deg)' : 'none' }}
-          />
-        </button>
+        </div>
 
-        {open && (
-          <div className="px-3 pb-3 pt-1 space-y-2 max-h-[460px] overflow-y-auto">
+        <div className="px-3 pb-3 pt-1 space-y-2">
             {visits.map((v) => {
               const actions = pageActions[v.page_visit_id] ?? [];
               const snap = formSnapshots[v.page_visit_id];
@@ -901,8 +894,7 @@ function PageVisitsPanel({ graph }: { graph: VisualEvidenceGraph }) {
                 </div>
               );
             })}
-          </div>
-        )}
+        </div>
       </div>
     </section>
   );
@@ -931,8 +923,9 @@ export default function VisualFlowDiagramPage() {
   // deployment) the tab gracefully shows an empty state.
   const initialMode = (searchParams.get('view') || 'storyboard') as
     | 'storyboard'
-    | 'journey';
-  const [viewMode, setViewMode] = useState<'storyboard' | 'journey'>(initialMode);
+    | 'journey'
+    | 'pages';
+  const [viewMode, setViewMode] = useState<'storyboard' | 'journey' | 'pages'>(initialMode);
   const [storyboard, setStoryboard] = useState<StoryboardPayload | null>(null);
   const [storyboardLoading, setStoryboardLoading] = useState(true);
   const [storyboardError, setStoryboardError] = useState<string | null>(null);
@@ -2211,10 +2204,7 @@ export default function VisualFlowDiagramPage() {
         </div>
       </header>
 
-      {/* ─────────── PHASE 2 — Pages & Form Values (URL-keyed) ────────────── */}
-      <PageVisitsPanel graph={graph} />
-
-      {/* ─────────── VIEW MODE TABS (Storyboard vs 3D Journey) ────────────── */}
+      {/* ─────────── VIEW MODE TABS (Storyboard / 3D Journey / Pages) ─────── */}
       <div
         className="flex items-center gap-2 px-6 py-2 shrink-0 relative z-10"
         style={{
@@ -2256,6 +2246,26 @@ export default function VisualFlowDiagramPage() {
         >
           <GitBranch className="h-3.5 w-3.5" /> 3D Journey
         </button>
+        {/* Phase 2 — only show the Pages tab when URL-keyed data exists. */}
+        {(graph.page_visits?.length ?? 0) > 0 && (
+          <button
+            onClick={() => setViewMode('pages')}
+            className={clsx(
+              'flex items-center gap-1.5 px-4 py-1.5 text-xs font-bold rounded-lg transition-all',
+              viewMode === 'pages'
+                ? 'text-white shadow'
+                : 'text-slate-500 hover:text-slate-900',
+            )}
+            style={
+              viewMode === 'pages'
+                ? { background: 'linear-gradient(135deg, #0a2540, #2670a3)' }
+                : { background: 'rgba(10,37,64,0.04)' }
+            }
+            aria-pressed={viewMode === 'pages'}
+          >
+            <Globe className="h-3.5 w-3.5" /> Pages &amp; Forms
+          </button>
+        )}
         <div className="flex-1" />
         {storyboard && viewMode === 'storyboard' ? (
           <span className="text-[10px] text-slate-500">
@@ -2282,6 +2292,18 @@ export default function VisualFlowDiagramPage() {
                 setViewMode('journey');
               }}
             />
+          </div>
+        </div>
+      )}
+
+      {/* Phase 2 — Pages & Forms tab.  Owns the full content area (its
+          own scroll) so it never compresses the 3D journey — this is
+          the fix for the "click expands panel → journey squeezes"
+          defect from the earlier inline placement. */}
+      {viewMode === 'pages' && (
+        <div className="flex-1 overflow-auto relative z-10">
+          <div className="max-w-5xl mx-auto px-6 py-6">
+            <PageVisitsPanel graph={graph} />
           </div>
         </div>
       )}
