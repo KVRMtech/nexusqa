@@ -160,7 +160,18 @@ services:
       #      _name_looks_like_ocr_ghost rule) from both the dominant pick
       #      and the rival count.  "Msdd.com" is now correctly treated as
       #      a ghost of usaa.com → single-app → msdd rewritten to usaa.
-      STORYBOARD_PAGE_VISIT_EXTRACTOR_VERSION: v4
+      # v5 — SPA defragmentation.  The USAA quote flow is a single-page
+      #      app: one address-bar URL spans many client-side steps and
+      #      the OCR vs scene-URL sources disagreed on the trailing path
+      #      segment frame-to-frame, fragmenting one logical page into a
+      #      5-visit ping-pong (/insurance/life ⇄ /insurance/life/iwa).
+      #      _merge_path_prefix_fragments now folds consecutive same-host
+      #      visits whose shorter path (>= 2 segments) is a segment-prefix
+      #      of the longer, adopting the deeper path + unioning the window.
+      #      Gated by STORYBOARD_PAGE_VISIT_MERGE_PATH_PREFIX (default on).
+      STORYBOARD_PAGE_VISIT_EXTRACTOR_VERSION: v5
+      STORYBOARD_PAGE_VISIT_MERGE_PATH_PREFIX: 'true'
+      STORYBOARD_PAGE_VISIT_PATH_PREFIX_MIN_SEGMENTS: '2'
       STORYBOARD_PAGE_VISIT_LLM_INFERENCE: 'false'
       STORYBOARD_PAGE_VISIT_MERGE_ADJACENT_SAME_URL: 'true'
       STORYBOARD_PAGE_VISIT_SCREEN_NAME_FALLBACK: 'true'

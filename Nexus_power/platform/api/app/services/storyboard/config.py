@@ -455,6 +455,23 @@ class PageVisitExtractorConfig:
     # own row.  Default keeps the visit log clean for QA review.
     merge_adjacent_same_url: bool = True
 
+    # When True, collapse consecutive same-host visits whose paths are
+    # in a segment-prefix relationship (e.g. ``/insurance/life`` and
+    # ``/insurance/life/iwa``).  This is the single-page-app (SPA)
+    # defragmenter: SPAs keep one address-bar URL while the user moves
+    # through many client-side sub-steps, and the OCR + scene-URL
+    # sources disagree on the trailing segment frame-to-frame, so one
+    # logical page fragments into a ping-pong run of short visits.
+    # Merging adopts the LONGER (more specific) path and unions the
+    # time window + frame count.
+    merge_path_prefix_fragments: bool = True
+
+    # Minimum number of leading path segments the SHORTER path must have
+    # before a prefix-merge fires.  Guards the shallow landing page:
+    # ``/insurance`` (1 segment) must NOT be merged into the quote SPA
+    # ``/insurance/life/iwa``, but ``/insurance/life`` (2 segments) may.
+    path_prefix_min_segments: int = 2
+
     # When True, fall back to ``visual_frames.screen_name`` when no
     # URL is detected on a frame.  Disable for pure web tenants where
     # screen_name fallback is always noise.
@@ -838,6 +855,12 @@ def load_config() -> StoryboardConfig:
             ),
             merge_adjacent_same_url=_env_bool(
                 "STORYBOARD_PAGE_VISIT_MERGE_ADJACENT_SAME_URL", True,
+            ),
+            merge_path_prefix_fragments=_env_bool(
+                "STORYBOARD_PAGE_VISIT_MERGE_PATH_PREFIX", True,
+            ),
+            path_prefix_min_segments=_env_int(
+                "STORYBOARD_PAGE_VISIT_PATH_PREFIX_MIN_SEGMENTS", 2, min_value=1,
             ),
             enable_screen_name_fallback=_env_bool(
                 "STORYBOARD_PAGE_VISIT_SCREEN_NAME_FALLBACK", True,

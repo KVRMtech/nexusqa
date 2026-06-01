@@ -767,6 +767,77 @@ def _canonicalise_host(host: str, dominant_host: str, single_app: bool) -> str:
     return h
 
 
+# ── SPA path-prefix defragmentation ───────────────────────────────────────────
+
+
+def _path_segments(path: str) -> list[str]:
+    """Split a URL path into non-empty segments."""
+    return [s for s in (path or "").split("/") if s]
+
+
+def _can_prefix_merge(a, b, min_segments: int) -> bool:
+    """True when two adjacent visit drafts are the same logical SPA page.
+
+    Both must be URL visits (non-empty canonical_host) on the SAME host,
+    and the shorter path must be a leading-segment prefix of the longer
+    (equal counts as a prefix).  The shorter path must have at least
+    ``min_segments`` segments so a shallow landing page like
+    ``/insurance`` is never absorbed into a deep flow like
+    ``/insurance/life/iwa``.
+
+    Operates by attribute access so it works on the grouping pass's
+    local ``_VisitDraft`` dataclass without importing it.
+    """
+    if not getattr(a, "canonical_host", "") or not getattr(b, "canonical_host", ""):
+        return False
+    if a.canonical_host != b.canonical_host:
+        return False
+    sa, sb = _path_segments(a.path), _path_segments(b.path)
+    if not sa or not sb:
+        return False
+    shorter, longer = (sa, sb) if len(sa) <= len(sb) else (sb, sa)
+    if len(shorter) < min_segments:
+        return False
+    return longer[: len(shorter)] == shorter
+
+
+def _merge_path_prefix_fragments(drafts: list, min_segments: int) -> list:
+    """Collapse consecutive same-host visits whose paths are in a
+    segment-prefix relationship — the single-page-app defragmenter.
+
+    An SPA keeps one address-bar URL while the user moves through many
+    client-side steps; the OCR and scene-URL sources disagree on the
+    trailing segment frame-to-frame, so one logical page fragments into
+    a ping-pong run of short visits (e.g. ``/insurance/life`` ⇄
+    ``/insurance/life/iwa`` five times).  This pass walks the draft list
+    once and folds each draft into the previous when they are
+    prefix-mergeable, adopting the LONGER (more specific) path and
+    unioning the time window + frame count.
+
+    Genuinely distinct consecutive pages (different leading segments, or
+    a sub-1-segment shallow page) are left untouched.
+    """
+    if len(drafts) < 2:
+        return drafts
+    merged = [drafts[0]]
+    for d in drafts[1:]:
+        prev = merged[-1]
+        if _can_prefix_merge(prev, d, min_segments):
+            prev.last_seen_ms = max(prev.last_seen_ms, d.last_seen_ms)
+            prev.frame_count += d.frame_count
+            # Adopt the deeper path so the merged visit carries the most
+            # specific URL the user actually reached.
+            if len(_path_segments(d.path)) > len(_path_segments(prev.path)):
+                prev.path = d.path
+                prev.query = d.query
+                prev.url_host = d.url_host or prev.url_host
+                prev.source = d.source
+                prev.raw_location = d.raw_location
+            continue
+        merged.append(d)
+    return merged
+
+
 # ── Persistence ──────────────────────────────────────────────────────────────
 
 
@@ -1096,6 +1167,21 @@ async def extract_page_visits_for_artifact(
     # ── Filter visits that fall below the per-visit minimum frame count
     if config.min_frames_for_visit > 1:
         drafts = [d for d in drafts if d.frame_count >= config.min_frames_for_visit]
+
+    # ── SPA defragmentation — collapse path-prefix ping-pong runs ──
+    # Runs BEFORE Tier-5 LLM inference and PageVisit construction so the
+    # merged visit's wider time window feeds the downstream page_action
+    # and form_snapshot extractors (better frame coverage of the form).
+    if config.merge_path_prefix_fragments:
+        before = len(drafts)
+        drafts = _merge_path_prefix_fragments(
+            drafts, config.path_prefix_min_segments,
+        )
+        if len(drafts) != before:
+            logger.info(
+                f"storyboard.page_visit_extractor.spa_defrag "
+                f"artifact={artifact_id} merged={before}->{len(drafts)}"
+            )
 
     # ── Tier 5 — optional LLM inference for visits with no location ─
     if (
