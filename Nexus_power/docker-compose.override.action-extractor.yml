@@ -141,7 +141,26 @@ services:
       #      synthesizing the host from the dominant canonical_host.
       #      Recovers all USAA /personal-information/* sub-pages that
       #      survived OCR.
-      STORYBOARD_PAGE_VISIT_EXTRACTOR_VERSION: v2
+      #      Live UI review found hosts inconsistent: some visits showed
+      #      msdd.com, others usaa.com, for the same single-app journey.
+      #      The canonicaliser only rewrote "dirty" (mixed-case) hosts,
+      #      so the clean-lowercase OCR ghost "msdd.com" (a misread of
+      #      "usaa.com" sharing no characters) slipped through while the
+      #      router rewrote scenes to usaa.com → mismatch.
+      # v3 — _canonicalise_host now rewrites ANY non-dominant host to the
+      #      dominant when the artifact is single-app (no rival clean
+      #      domain), mirroring the router's _canonicalize_scene_urls.
+      #      BUT the dominant-resolver only looked at canonical_domain;
+      #      the OCR ghost was stored as canonical_domain="msdd.com"
+      #      (clean lowercase) + canonical_name="Msdd.com" (uppercase M),
+      #      with the SAME scene_count (4) as the real usaa.com grouping.
+      #      So it read as 2 clean rival domains → multi-app → no rewrite.
+      # v4 — Dominant-resolver now also reads canonical_name and excludes
+      #      ghost-named groupings (uppercase head, the router's
+      #      _name_looks_like_ocr_ghost rule) from both the dominant pick
+      #      and the rival count.  "Msdd.com" is now correctly treated as
+      #      a ghost of usaa.com → single-app → msdd rewritten to usaa.
+      STORYBOARD_PAGE_VISIT_EXTRACTOR_VERSION: v4
       STORYBOARD_PAGE_VISIT_LLM_INFERENCE: 'false'
       STORYBOARD_PAGE_VISIT_MERGE_ADJACENT_SAME_URL: 'true'
       STORYBOARD_PAGE_VISIT_SCREEN_NAME_FALLBACK: 'true'

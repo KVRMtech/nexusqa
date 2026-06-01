@@ -274,6 +274,11 @@ class _ArtifactSignals:
     # raw URL host in that case.
     dominant_canonical_host: str = ""
 
+    # True when the artifact is effectively single-app (no rival clean
+    # domain).  Gates the aggressive "rewrite every non-dominant host to
+    # the dominant" rule — see _canonicalise_host.
+    dominant_single_app: bool = False
+
 
 async def _load_artifact_signals(
     session: AsyncSession,
@@ -319,7 +324,7 @@ async def _load_artifact_signals(
         i.instance_id: i for i in insts_q.scalars().all() if i.instance_id
     }
 
-    dominant = await _resolve_dominant_canonical_host(
+    dominant, single_app = await _resolve_dominant_canonical_host(
         session, artifact_id=artifact_id, tenant_id=tenant_id,
     )
 
@@ -331,6 +336,7 @@ async def _load_artifact_signals(
         scene_by_id=scene_by_id,
         app_instance_by_id=app_instance_by_id,
         dominant_canonical_host=dominant,
+        dominant_single_app=single_app,
     )
 
 
@@ -339,15 +345,23 @@ async def _resolve_dominant_canonical_host(
     *,
     artifact_id: str,
     tenant_id: str,
-) -> str:
+) -> tuple[str, bool]:
     """Pick the artifact's dominant canonical_domain from app_groupings.
 
     Mirrors the heuristic used by ``_canonicalize_scene_urls`` in
-    ``routers/artifacts.py``.  Returns the lowercase canonical host of
-    the largest grouping whose canonical_domain is "clean" (lowercase,
-    has at least one dot, no single-letter labels).  Returns empty
-    string when no dominant can be determined — the caller then
-    skips canonicalisation and preserves OCR'd hosts.
+    ``routers/artifacts.py``.  Returns ``(dominant_host, single_app)``:
+
+      * ``dominant_host`` — lowercase canonical host of the largest
+        grouping whose canonical_domain is "clean" (lowercase, has at
+        least one dot, no single-letter labels).  Empty string when no
+        dominant can be determined.
+      * ``single_app`` — True when NO other clean domain has a scene
+        count within 50% of the dominant's.  When single_app is True it
+        is safe to rewrite every non-dominant host to the dominant
+        (OCR ghosts like ``Msdd.com`` for ``usaa.com`` share no
+        characters, so only the dominant-host rule can collapse them).
+        When False the journey is genuinely multi-app and secondary
+        hosts must be preserved.
 
     Kept self-contained here so the extractor remains testable in
     isolation; the router's heuristic is the authoritative single
@@ -355,7 +369,11 @@ async def _resolve_dominant_canonical_host(
     host rule.
     """
     groupings_q = await session.execute(
-        select(AppGroupingRow.canonical_domain, AppGroupingRow.total_scene_count)
+        select(
+            AppGroupingRow.canonical_domain,
+            AppGroupingRow.canonical_name,
+            AppGroupingRow.total_scene_count,
+        )
         .where(
             AppGroupingRow.artifact_id == artifact_id,
             AppGroupingRow.tenant_id == tenant_id,
@@ -363,7 +381,7 @@ async def _resolve_dominant_canonical_host(
     )
     rows = list(groupings_q.all())
     if not rows:
-        return ""
+        return "", False
 
     def _is_clean(s: str) -> bool:
         if not s or "." not in s:
@@ -373,30 +391,60 @@ async def _resolve_dominant_canonical_host(
         labels = s.split(".")
         return all(len(lbl) >= 2 for lbl in labels)
 
-    # First pass: clean candidates only.
-    dominant = ""
-    best_count = 0
-    for domain, count in rows:
+    def _name_is_ghost(name: str) -> bool:
+        """Mirror the router's ``_name_looks_like_ocr_ghost``.
+
+        Real domains render lowercase in the browser bar, so an
+        uppercase letter in the canonical_name's head (before the first
+        dot) is the dominant OCR-misread signature.  Critically, the
+        ``canonical_domain`` is often already lower-cased (e.g.
+        ``msdd.com``) so it looks clean — only the ``canonical_name``
+        ("Msdd.com") preserves the uppercase tell.  Without this check
+        a ghost grouping is mistaken for a legitimate second app and
+        the artifact reads as multi-app.
+        """
+        if not name:
+            return False
+        head = name.split(".", 1)[0]
+        return any(ch.isupper() for ch in head)
+
+    # Candidates = clean domain AND non-ghost name.  A ghost grouping
+    # can neither be the dominant nor count as a rival.
+    candidates: list[tuple[str, int]] = []
+    for domain, name, count in rows:
         d = (domain or "").strip()
         if not _is_clean(d):
             continue
-        c = int(count or 0)
-        if c > best_count:
-            best_count = c
-            dominant = d.lower()
-    if dominant:
-        return dominant
+        if _name_is_ghost((name or "").strip()):
+            continue
+        candidates.append((d.lower(), int(count or 0)))
 
-    # Fallback: accept any host-shaped candidate.
-    for domain, count in rows:
+    if candidates:
+        candidates.sort(key=lambda x: x[1], reverse=True)
+        dominant, best_count = candidates[0]
+        # single_app when no OTHER candidate rivals the dominant
+        # (>= 50% of its scene count).
+        rival_threshold = max(1, int(best_count * 0.5))
+        rivals = [c for _, c in candidates if c >= rival_threshold]
+        single_app = len(rivals) <= 1
+        return dominant, single_app
+
+    # Fallback: no clean non-ghost candidate.  Accept any host-shaped
+    # domain (including ghosts), picking the highest count.  Treat as
+    # single-app only when there's exactly one such candidate.
+    fallback_dominant = ""
+    fallback_best = 0
+    host_shaped = 0
+    for domain, _name, count in rows:
         d = (domain or "").strip().lower()
         if not d or "." not in d:
             continue
+        host_shaped += 1
         c = int(count or 0)
-        if c > best_count:
-            best_count = c
-            dominant = d
-    return dominant
+        if c > fallback_best:
+            fallback_best = c
+            fallback_dominant = d
+    return fallback_dominant, host_shaped <= 1
 
 
 # ── Frame-level location resolution ──────────────────────────────────────────
@@ -668,7 +716,9 @@ async def _llm_infer_location(
 # ── Grouping pass ────────────────────────────────────────────────────────────
 
 
-def _canonical_key(loc: _FrameLocation, dominant_host: str) -> tuple[str, str, str]:
+def _canonical_key(
+    loc: _FrameLocation, dominant_host: str, single_app: bool,
+) -> tuple[str, str, str]:
     """Return the (canonical_host, path, query) key used to group frames.
 
     Two adjacent frames with the same key get merged into one
@@ -677,20 +727,28 @@ def _canonical_key(loc: _FrameLocation, dominant_host: str) -> tuple[str, str, s
     still merge while differing titles split.
     """
     if loc.url_host:
-        canonical_host = _canonicalise_host(loc.url_host, dominant_host)
+        canonical_host = _canonicalise_host(loc.url_host, dominant_host, single_app)
         return (canonical_host, loc.url_path, loc.url_query)
     return ("", "", loc.raw_location.lower())
 
 
-def _canonicalise_host(host: str, dominant_host: str) -> str:
+def _canonicalise_host(host: str, dominant_host: str, single_app: bool) -> str:
     """Apply the dominant-host substitution rule.
 
-    When the host looks like an OCR ghost of the dominant (mixed-case
-    head with the same TLD), replace it with the dominant.  Otherwise
-    preserve the raw host.
+    Mirrors ``_canonicalize_scene_urls`` in the router so page_visit
+    hosts match the hosts shown on scenes.  Rewrites to the dominant
+    host in two cases:
 
-    Same rule as ``_canonicalize_scene_urls`` in the router — kept in
-    sync so URLs the extractor writes match URLs the router emits.
+      1. The OCR'd host looks like a ghost (mixed-case head, or a label
+         shorter than 2 chars) — always rewritten.
+      2. ``single_app`` is True and the host simply differs from the
+         dominant — rewritten even when it's a clean lowercase domain.
+         This is the case the old heuristic missed: an OCR misread like
+         ``usaa.com`` → ``Msdd.com`` produces a clean lowercase domain
+         that shares NO characters with the real one, so only the
+         "single-app artifact → one canonical host" rule can collapse
+         it.  Guarded by ``single_app`` so genuine multi-app journeys
+         keep their distinct secondary hosts.
     """
     if not host or not dominant_host:
         return host
@@ -699,15 +757,12 @@ def _canonicalise_host(host: str, dominant_host: str) -> str:
     if h == dominant_host:
         return h
 
-    # If the OCR'd host has mixed-case letters in the head OR is not a
-    # clean lowercase domain, prefer the dominant.  Don't rewrite when
-    # the host looks legitimate (multi-app journeys).
     head = host.split(".", 1)[0]
     is_dirty = (
         any(ch.isupper() for ch in head)
         or any(len(lbl) < 2 for lbl in host.split("."))
     )
-    if is_dirty:
+    if is_dirty or single_app:
         return dominant_host
     return h
 
@@ -985,6 +1040,7 @@ async def extract_page_visits_for_artifact(
     current: _VisitDraft | None = None
     current_key: tuple[str, str, str] | None = None
     dominant = signals.dominant_canonical_host
+    single_app = signals.dominant_single_app
 
     for loc in frame_locations:
         # Frames with no detectable location get folded into the
@@ -993,7 +1049,7 @@ async def extract_page_visits_for_artifact(
         # nothing precedes them.  This is what produces a clean
         # chronological log: brief loading frames don't create
         # spurious empty-location visits.
-        key = _canonical_key(loc, dominant)
+        key = _canonical_key(loc, dominant, single_app)
         if key == ("", "", ""):
             if current is not None:
                 current.last_seen_ms = max(
@@ -1077,7 +1133,7 @@ async def extract_page_visits_for_artifact(
                     d.url_host = host
                     d.path = path
                     d.query = query
-                    d.canonical_host = _canonicalise_host(host, dominant)
+                    d.canonical_host = _canonicalise_host(host, dominant, single_app)
                 d.raw_location = inferred
                 d.source = PageVisitSource.LLM_INFERRED
         finally:
