@@ -749,6 +749,54 @@ async def _upsert_groupings(
         }
         for c in candidates
     ]
+
+    # Collapse rows that share a grouping_id BEFORE the bulk upsert.
+    # The grouping_id is a deterministic uuid5 of the grouping key, so
+    # two candidates that key identically (e.g. several OCR-garbled
+    # empty-domain window-title groupings on one artifact) produce the
+    # same grouping_id.  Postgres rejects an INSERT ... ON CONFLICT DO
+    # UPDATE whose VALUES contain the same conflict key twice
+    # ("ON CONFLICT DO UPDATE command cannot affect row a second time"),
+    # which 500s the whole composer.  Merge collisions here: union the
+    # member instance ids, sum the scene count, widen the scene-index
+    # range, and keep the highest confidence.  Idempotent + lossless.
+    merged_by_id: dict[str, dict] = {}
+    for r in rows:
+        gid = r["grouping_id"]
+        existing = merged_by_id.get(gid)
+        if existing is None:
+            merged_by_id[gid] = r
+            continue
+        members = list(existing.get("member_instance_ids") or [])
+        for m in (r.get("member_instance_ids") or []):
+            if m not in members:
+                members.append(m)
+        existing["member_instance_ids"] = members
+        existing["total_scene_count"] = (
+            int(existing.get("total_scene_count") or 0)
+            + int(r.get("total_scene_count") or 0)
+        )
+        existing["first_scene_index"] = min(
+            int(existing.get("first_scene_index") or 0),
+            int(r.get("first_scene_index") or 0),
+        )
+        existing["last_scene_index"] = max(
+            int(existing.get("last_scene_index") or 0),
+            int(r.get("last_scene_index") or 0),
+        )
+        if float(r.get("confidence") or 0.0) > float(existing.get("confidence") or 0.0):
+            existing["confidence"] = r["confidence"]
+            existing["canonical_name"] = r["canonical_name"]
+            existing["canonical_domain"] = r["canonical_domain"]
+            existing["display_label"] = r["display_label"]
+            existing["dedup_basis"] = r["dedup_basis"]
+    if len(merged_by_id) != len(rows):
+        logger.warning(
+            "storyboard.app_deduper.duplicate_grouping_ids_merged "
+            f"artifact={artifact_id} rows={len(rows)} unique={len(merged_by_id)}"
+        )
+    rows = list(merged_by_id.values())
+
     stmt = pg_insert(AppGroupingRow.__table__).values(rows)
     update_columns = {
         col.name: stmt.excluded[col.name]
