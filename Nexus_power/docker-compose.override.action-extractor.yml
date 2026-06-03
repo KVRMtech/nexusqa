@@ -28,7 +28,7 @@ services:
       # Captions stay on the existing free local model.  Action
       # extraction goes to Sonnet 4.6, with auto-fallback through the
       # chain on transient failures.
-      LLM_TASK_ACTION_EXTRACTION: tier_premium
+      LLM_TASK_ACTION_EXTRACTION: tier_balanced
       LLM_TASK_CAPTION: tier_fast
 
       # ── tier_premium — Claude Sonnet 4.6 (PRIMARY for action_extraction)
@@ -313,9 +313,16 @@ services:
       # Phase 2 tasks route to the same vision-capable tier ladder as
       # the scene-keyed action extractor.  The router falls back tier
       # by tier on transient errors.
-      LLM_TASK_PAGE_ACTION_EXTRACTION: tier_premium
-      LLM_TASK_FORM_SNAPSHOT_EXTRACTION: tier_premium
+      LLM_TASK_PAGE_ACTION_EXTRACTION: tier_balanced
+      LLM_TASK_FORM_SNAPSHOT_EXTRACTION: tier_balanced
       LLM_TASK_PAGE_VISIT_INFERENCE: tier_fast_cloud
       # Vision page-identity reads tiny URL-bar text + headings, so it
       # needs the strongest vision tier (Sonnet) with GPT-4o fallback.
-      LLM_TASK_PAGE_VISIT_IDENTITY: tier_premium
+      LLM_TASK_PAGE_VISIT_IDENTITY: tier_balanced
+
+  # Raise the per-client rate limit so the storyboard derivation can
+  # burst-fetch frames for the vision/form/page-action LLM passes
+  # without tripping the default 120 rpm (caused 429 frame loss).
+  eyes:
+    environment:
+      NEXUS_RATE_LIMIT_RPM: '3000'
