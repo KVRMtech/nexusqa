@@ -40,7 +40,7 @@ import time
 from dataclasses import dataclass
 from typing import Mapping
 
-from sqlalchemy import desc, func, select
+from sqlalchemy import desc, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from nexus_sdk.db.models import (
@@ -587,6 +587,48 @@ class StoryboardComposer:
         if not session_id:
             return ran  # artifact has no session_id → nothing to derive
 
+        async def _arm_rls() -> None:
+            """(Re-)set the transaction-local RLS tenant variable.
+
+            ``commit``/``rollback`` end the transaction and reset the
+            ``is_local=true`` setting, so every checkpoint/recover must
+            re-arm it before the next step's reads/writes run.
+            """
+            await session.execute(
+                text("SELECT set_config('nexus.current_tenant_id', :tid, true)"),
+                {"tid": str(tenant_id)},
+            )
+
+        async def _checkpoint() -> None:
+            """Persist a COMPLETED step so it survives a later step's
+            timeout or a client disconnect.
+
+            Derivation runs every extractor sequentially inside the
+            request's single DB transaction, and ``tenant_scoped_session``
+            commits ONLY on clean exit.  A 300s client timeout therefore
+            cancels the request mid-derivation → rollback → every step's
+            output is lost → the next call re-derives from scratch and
+            never converges (page_visits stay empty forever).  Committing
+            after each step that finished makes derivation incremental +
+            idempotent: a later timeout keeps the earlier steps, and the
+            next call's freshness checks skip them.  Only ever called
+            after a step ran to completion, never after a cancellation.
+            """
+            await session.commit()
+            await _arm_rls()
+
+        async def _recover() -> None:
+            """Discard a cancelled/failed step's partial writes.
+
+            A ``wait_for`` timeout cancels the extractor mid-statement,
+            which can leave the session unusable for ``commit``.  Roll it
+            back (dropping only this step's incomplete work — prior steps
+            were already ``_checkpoint``-ed) and re-arm RLS so the
+            remaining steps + the outer commit still run.
+            """
+            await session.rollback()
+            await _arm_rls()
+
         scene_grouper_due = force or await _needs_scene_grouper(
             session,
             artifact_id=artifact_id,
@@ -602,6 +644,7 @@ class StoryboardComposer:
                 config=self._config.scene_grouper,
             )
             ran["scene_grouper"] = True
+            await _checkpoint()
 
         app_deduper_due = force or await _needs_app_deduper(
             session,
@@ -618,6 +661,7 @@ class StoryboardComposer:
                 config=self._config.app_deduper,
             )
             ran["app_deduper"] = True
+            await _checkpoint()
 
         caption_due = force or await _needs_caption_rewriter(
             session,
@@ -637,6 +681,7 @@ class StoryboardComposer:
                 router=self._llm_router,
             )
             ran["caption_rewriter"] = True
+            await _checkpoint()
 
         action_extractor_due = force or await _needs_action_extractor(
             session,
@@ -660,6 +705,7 @@ class StoryboardComposer:
                     timeout=self._config.action_extractor.total_timeout_s,
                 )
                 ran["action_extractor"] = True
+                await _checkpoint()
             except asyncio.TimeoutError:
                 logger.warning(
                     "storyboard.composer.action_extractor_timeout",
@@ -668,6 +714,7 @@ class StoryboardComposer:
                         "timeout_s": self._config.action_extractor.total_timeout_s,
                     },
                 )
+                await _recover()
 
         # ── Phase 2.0 — page_visits.  URL-keyed log independent of
         # scene boundaries.  Always re-runs when a new artifact_version
@@ -680,26 +727,45 @@ class StoryboardComposer:
             target_version=self._config.page_visit_extractor.version,
         )
         if page_visit_due or scene_grouper_due:
+            _pv_cfg = self._config.page_visit_extractor
             try:
-                _pv_cfg = self._config.page_visit_extractor
-                await extract_page_visits_for_artifact(
-                    session,
-                    artifact_id=artifact_id,
-                    tenant_id=tenant_id,
-                    config=_pv_cfg,
-                    # Router is needed for BOTH the optional Tier-5 URL
-                    # inference and the vision page-identity pass.
-                    router=(
-                        self._llm_router
-                        if (
-                            _pv_cfg.enable_llm_inference
-                            or _pv_cfg.enable_vision_page_identity
-                        )
-                        else None
+                # Bounded like its siblings: the vision page-identity pass
+                # can otherwise run unbounded (premium tier rate-limiting /
+                # failing over to a slow local model over up to
+                # vision_identity_max_frames frames) and blow the request
+                # budget.  The extractor commits per-frame-batch internally,
+                # so a timeout keeps whatever was already read.
+                await asyncio.wait_for(
+                    extract_page_visits_for_artifact(
+                        session,
+                        artifact_id=artifact_id,
+                        tenant_id=tenant_id,
+                        config=_pv_cfg,
+                        # Router is needed for BOTH the optional Tier-5 URL
+                        # inference and the vision page-identity pass.
+                        router=(
+                            self._llm_router
+                            if (
+                                _pv_cfg.enable_llm_inference
+                                or _pv_cfg.enable_vision_page_identity
+                            )
+                            else None
+                        ),
+                        auth_token=auth_token,
                     ),
-                    auth_token=auth_token,
+                    timeout=_pv_cfg.total_timeout_s,
                 )
                 ran["page_visit_extractor"] = True
+                await _checkpoint()
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "storyboard.composer.page_visit_extractor_timeout",
+                    extra={
+                        "artifact_id": artifact_id,
+                        "timeout_s": _pv_cfg.total_timeout_s,
+                    },
+                )
+                await _recover()
             except Exception as exc:  # pragma: no cover - degrade gracefully
                 logger.warning(
                     "storyboard.composer.page_visit_extractor_failed",
@@ -708,6 +774,7 @@ class StoryboardComposer:
                         "error": str(exc)[:200],
                     },
                 )
+                await _recover()
 
         # ── Phase 2.1 — page_actions.  Per-URL action breakdown.  Runs
         # after page_visits so the visit set is fresh.
@@ -731,6 +798,7 @@ class StoryboardComposer:
                     timeout=self._config.page_action_extractor.total_timeout_s,
                 )
                 ran["page_action_extractor"] = True
+                await _checkpoint()
             except asyncio.TimeoutError:
                 logger.warning(
                     "storyboard.composer.page_action_extractor_timeout",
@@ -741,6 +809,7 @@ class StoryboardComposer:
                         ),
                     },
                 )
+                await _recover()
             except Exception as exc:  # pragma: no cover
                 logger.warning(
                     "storyboard.composer.page_action_extractor_failed",
@@ -749,6 +818,7 @@ class StoryboardComposer:
                         "error": str(exc)[:200],
                     },
                 )
+                await _recover()
 
         # ── Phase 2.2 — form_snapshots.  Per-URL final form state.
         # Independent of page_actions; runs in parallel-equivalent
@@ -774,6 +844,7 @@ class StoryboardComposer:
                     timeout=self._config.form_snapshot_extractor.total_timeout_s,
                 )
                 ran["form_snapshot_extractor"] = True
+                await _checkpoint()
             except asyncio.TimeoutError:
                 logger.warning(
                     "storyboard.composer.form_snapshot_extractor_timeout",
@@ -784,6 +855,7 @@ class StoryboardComposer:
                         ),
                     },
                 )
+                await _recover()
             except Exception as exc:  # pragma: no cover
                 logger.warning(
                     "storyboard.composer.form_snapshot_extractor_failed",
@@ -792,6 +864,7 @@ class StoryboardComposer:
                         "error": str(exc)[:200],
                     },
                 )
+                await _recover()
 
         if self._frame_annotator and self._frame_annotator.pil_available:
             annotator_due = force or await _needs_frame_annotator(
@@ -814,7 +887,9 @@ class StoryboardComposer:
                         timeout=self._config.composer.derivation_timeout_s,
                     )
                     ran["frame_annotator"] = True
+                    await _checkpoint()
                 except asyncio.TimeoutError:
+                    await _recover()
                     logger.warning(
                         "storyboard.composer.frame_annotator_timeout",
                         extra={

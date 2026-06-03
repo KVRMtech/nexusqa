@@ -554,6 +554,14 @@ class PageVisitExtractorConfig:
     # Image downsizing — see ``ActionExtractorConfig.image_max_dimension_px``.
     image_max_dimension_px: int = 1024
 
+    # Hard wall-clock budget for the whole page_visit derivation (incl.
+    # the vision page-identity pass).  The composer wraps the extractor
+    # in ``asyncio.wait_for(total_timeout_s)`` so a slow vision pass
+    # (e.g. the premium tier rate-limiting or failing over to a slow
+    # local model) can never blow the request budget — matches the
+    # bound the action/page_action/form_snapshot extractors already have.
+    total_timeout_s: float = 240.0
+
 
 @dataclass(frozen=True)
 class PageActionExtractorConfig:
@@ -963,6 +971,11 @@ def load_config() -> StoryboardConfig:
                 "STORYBOARD_PAGE_VISIT_IMAGE_MAX_DIMENSION_PX",
                 1024,
                 min_value=0,
+            ),
+            total_timeout_s=_env_float(
+                "STORYBOARD_PAGE_VISIT_EXTRACTOR_TOTAL_TIMEOUT_S",
+                240.0,
+                min_value=1.0,
             ),
         ),
         page_action_extractor=PageActionExtractorConfig(

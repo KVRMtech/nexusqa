@@ -874,20 +874,50 @@ async def _apply_vision_page_identity(
     semaphore = asyncio.Semaphore(max(1, config.vision_identity_concurrency))
     min_conf = config.vision_identity_min_confidence
 
+    # Internal wall-clock budget so this pass ALWAYS returns control to
+    # the caller in time for the grouping + UPSERT step to run, even when
+    # the vision tier is degraded (e.g. the premium provider is out of
+    # credit and every call fails over to a slow local model).  Frames
+    # not reached by the deadline simply keep their deterministic
+    # location — partial vision enrichment, never a lost derivation.
+    # Reserve a slice of the extractor's total budget for persistence.
+    budget_s = max(10.0, float(config.total_timeout_s) - 30.0)
+    deadline = time.monotonic() + budget_s
+    timed_out = 0
+
     async def _one(i: int) -> tuple[int, PageIdentity | None]:
+        nonlocal timed_out
+        if time.monotonic() >= deadline:
+            return i, None
         loc = frame_locations[i]
         async with semaphore:
-            ident = await _vision_page_identity(
-                router=router,
-                config=config,
-                http_client=http_client,
-                auth_token=auth_token,
-                frame_asset_path=loc.frame_asset_path,
-                correlation_id=f"{artifact_id}:vid:{loc.frame_index}",
-            )
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return i, None
+            try:
+                ident = await asyncio.wait_for(
+                    _vision_page_identity(
+                        router=router,
+                        config=config,
+                        http_client=http_client,
+                        auth_token=auth_token,
+                        frame_asset_path=loc.frame_asset_path,
+                        correlation_id=f"{artifact_id}:vid:{loc.frame_index}",
+                    ),
+                    timeout=remaining,
+                )
+            except asyncio.TimeoutError:
+                timed_out += 1
+                return i, None
         return i, ident
 
     results = await asyncio.gather(*(_one(i) for i in idxs))
+    if timed_out:
+        logger.warning(
+            f"storyboard.page_visit_extractor.vision_identity_budget_hit "
+            f"artifact={artifact_id} budget_s={budget_s:.0f} "
+            f"skipped={timed_out}/{len(idxs)} (deterministic locations kept)"
+        )
 
     overridden = 0
     for i, ident in results:
