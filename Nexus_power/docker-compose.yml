@@ -932,6 +932,10 @@ services:
       NEXUS_PRODUCT_MODE: ${NEXUS_PRODUCT_MODE:-canonical}
       NEXUS_STORAGE_PATH: ${NEXUS_STORAGE_PATH:-/app/service/data}
       NEXUS_ORCHESTRATOR_URL: ${NEXUS_ORCHESTRATOR_URL:-http://orchestrator:8100}
+      # heart fetches the visual-evidence graph from platform-api (e2e-architect /
+      # Test Studio).  Without this it defaults to localhost:8000 inside the
+      # container → "visual_graph_fetch_failed: All connection attempts failed".
+      PLATFORM_API_URL: ${PLATFORM_API_URL:-http://platform-api:8091}
       NEXUS_JWT_SECRET: ${NEXUS_JWT_SECRET:-test-secret-do-not-use-in-production}
       JWT_SECRET: ${NEXUS_JWT_SECRET:-test-secret-do-not-use-in-production}
       REDIS_HOST: redis
