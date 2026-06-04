@@ -2593,3 +2593,46 @@ class FactoryTestCaseRow(Base):
         Index("ix_factory_test_cases_tenant_status", "tenant_id", "status"),
         Index("ix_factory_test_cases_tenant_priority", "tenant_id", "priority"),
     )
+
+
+class CombinationReserveRow(Base):
+    """The lossless "store everything" reserve for combination generation.
+
+    One row per artifact (migration ``037_combination_reserve``).  Holds the
+    full captured option domains + the generation spec, so any combination can
+    be reconstructed on demand; the bounded risk-ranked subset is promoted into
+    ``factory_test_cases``.  Additive — no frozen table modified.
+    """
+
+    __tablename__ = "e2e_combination_reserve"
+
+    reserve_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    artifact_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("canonical_artifacts.artifact_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    tenant_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    session_id: Mapped[str] = mapped_column(String(64), default="", nullable=False)
+
+    option_domains: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    generation_spec: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+
+    combination_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    selected_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    status: Mapped[str] = mapped_column(String(20), default="reserve", nullable=False)
+
+    generator_version: Mapped[str] = mapped_column(
+        String(50), default="v1", nullable=False,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utc_now, nullable=False,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utc_now, onupdate=_utc_now, nullable=False,
+    )
+
+    __table_args__ = (
+        Index("ix_combination_reserve_artifact", "artifact_id"),
+        Index("ix_combination_reserve_tenant", "tenant_id"),
+    )

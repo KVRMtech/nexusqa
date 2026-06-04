@@ -9,6 +9,7 @@ rows that the new run no longer produces.
 
 from __future__ import annotations
 
+import uuid
 from typing import Any
 
 from sqlalchemy import delete, func, select
@@ -16,12 +17,14 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from nexus_sdk.db.models import (
+    CombinationReserveRow,
     FactoryTestCaseRow,
     PageActionRow,
     PageVisitRow,
 )
 from nexus_sdk.models import ProductionTestCase
 
+from .combinations import generate_combination_cases
 from .generator import (
     DemonstratedGenerationResult,
     PageActionInput,
@@ -30,6 +33,7 @@ from .generator import (
 )
 
 GENERATOR_VERSION = "v1"
+_RESERVE_NAMESPACE = "test-factory-reserve"
 
 
 async def _latest_version(
@@ -82,6 +86,7 @@ async def _load_current_pages_and_actions(
                 str(k): ("" if val is None else str(val))
                 for k, val in (v.form_snapshot or {}).items()
             },
+            form_snapshot_signals=dict(v.form_snapshot_signals or {}),
             first_seen_ms=v.first_seen_ms or 0,
             duration_ms=v.duration_ms or 0,
         )
@@ -117,7 +122,7 @@ async def _load_current_pages_and_actions(
 
 def _row_values(
     tc: ProductionTestCase, *, artifact_id: str, tenant_id: str, session_id: str,
-    result: DemonstratedGenerationResult,
+    confidence: str, source_evidence: dict[str, Any],
 ) -> dict[str, Any]:
     return {
         "test_case_id": tc.test_id,
@@ -128,29 +133,49 @@ def _row_values(
         "description": tc.description or "",
         "priority": tc.priority or "P2_medium",
         "test_type": tc.type or "functional",
-        "confidence": "demonstrated",
+        "confidence": confidence,
         "status": "active",
         "step_count": len(tc.steps),
         "tags": list(tc.tags or []),
         "test_case": tc.model_dump(mode="json"),
-        "source_evidence": {
-            "page_groups": result.page_groups,
-            "visits_total": result.visits_total,
-            "visits_used": result.visits_used,
-            "fields_demonstrated": result.fields_demonstrated,
-            "excluded_placeholder_fields": result.excluded_placeholder_fields,
-        },
+        "source_evidence": source_evidence,
         "generator_version": GENERATOR_VERSION,
     }
+
+
+async def _upsert_case(session: AsyncSession, values: dict[str, Any]) -> None:
+    stmt = pg_insert(FactoryTestCaseRow).values(**values)
+    await session.execute(stmt.on_conflict_do_update(
+        index_elements=[FactoryTestCaseRow.test_case_id],
+        set_={
+            k: values[k] for k in (
+                "name", "description", "priority", "test_type", "confidence",
+                "status", "step_count", "tags", "test_case", "source_evidence",
+                "generator_version",
+            )
+        } | {"updated_at": func.now()},
+    ))
+
+
+def _dominant_host(visits: list[PageVisitInput]) -> str:
+    for v in visits:
+        if v.canonical_host:
+            return v.canonical_host
+    for v in visits:
+        if v.url_host:
+            return v.url_host
+    return ""
 
 
 async def generate_and_store(
     session: AsyncSession, *, artifact_id: str, tenant_id: str, session_id: str = "",
 ) -> dict[str, Any]:
-    """Generate demonstrated test cases for an artifact and persist them.
+    """Generate demonstrated + combination test cases and persist them.
 
+    * Demonstrated functional E2E  → ``factory_test_cases`` (confidence=demonstrated)
+    * Critical combinations (grounded available options) → ``factory_test_cases``
+      (confidence=available) + the full spec into ``e2e_combination_reserve``.
     Idempotent: UPSERTs by ``test_case_id`` and prunes stale active rows.
-    Returns a summary dict.
     """
     visits, actions = await _load_current_pages_and_actions(
         session, artifact_id=artifact_id,
@@ -159,35 +184,43 @@ async def generate_and_store(
     result = generate_demonstrated_test_cases(
         artifact_id=artifact_id, page_visits=visits, page_actions=actions,
     )
+    demonstrated_meta = {
+        "page_groups": result.page_groups,
+        "visits_total": result.visits_total,
+        "visits_used": result.visits_used,
+        "fields_demonstrated": result.fields_demonstrated,
+        "excluded_placeholder_fields": result.excluded_placeholder_fields,
+    }
 
     new_ids: list[str] = []
     for tc in result.test_cases:
         values = _row_values(
             tc, artifact_id=artifact_id, tenant_id=tenant_id,
-            session_id=session_id, result=result,
+            session_id=session_id, confidence="demonstrated",
+            source_evidence=demonstrated_meta,
         )
         new_ids.append(values["test_case_id"])
-        stmt = pg_insert(FactoryTestCaseRow).values(**values)
-        stmt = stmt.on_conflict_do_update(
-            index_elements=[FactoryTestCaseRow.test_case_id],
-            set_={
-                "name": values["name"],
-                "description": values["description"],
-                "priority": values["priority"],
-                "test_type": values["test_type"],
-                "confidence": values["confidence"],
-                "status": values["status"],
-                "step_count": values["step_count"],
-                "tags": values["tags"],
-                "test_case": values["test_case"],
-                "source_evidence": values["source_evidence"],
-                "generator_version": values["generator_version"],
-                "updated_at": func.now(),
+        await _upsert_case(session, values)
+
+    # ── Phase 2 — critical combinations from captured option domains ──────
+    base_case = result.test_cases[0] if result.test_cases else None
+    combo = generate_combination_cases(
+        artifact_id=artifact_id, base_case=base_case,
+        page_visits=visits, host=_dominant_host(visits),
+    )
+    for tc in combo.active:
+        values = _row_values(
+            tc, artifact_id=artifact_id, tenant_id=tenant_id,
+            session_id=session_id, confidence="available",
+            source_evidence={
+                "combination": True,
+                "base_test_id": combo.generation_spec.get("base_test_id"),
             },
         )
-        await session.execute(stmt)
+        new_ids.append(values["test_case_id"])
+        await _upsert_case(session, values)
 
-    # Prune active demonstrated rows this run no longer produces.
+    # Prune active rows this run no longer produces.
     prune = delete(FactoryTestCaseRow).where(
         FactoryTestCaseRow.artifact_id == artifact_id,
         FactoryTestCaseRow.status == "active",
@@ -196,16 +229,44 @@ async def generate_and_store(
     if new_ids:
         prune = prune.where(FactoryTestCaseRow.test_case_id.notin_(new_ids))
     await session.execute(prune)
+
+    # ── Reserve — store the full option space + spec (lossless) ───────────
+    reserve_id = str(uuid.uuid5(
+        uuid.NAMESPACE_URL, f"{_RESERVE_NAMESPACE}:{artifact_id}:{GENERATOR_VERSION}",
+    ))
+    reserve_values = {
+        "reserve_id": reserve_id,
+        "artifact_id": artifact_id,
+        "tenant_id": tenant_id,
+        "session_id": session_id or "",
+        "option_domains": combo.option_domains,
+        "generation_spec": combo.generation_spec,
+        "combination_count": combo.full_count,
+        "selected_count": combo.selected_count,
+        "status": "reserve",
+        "generator_version": GENERATOR_VERSION,
+    }
+    res_stmt = pg_insert(CombinationReserveRow).values(**reserve_values)
+    await session.execute(res_stmt.on_conflict_do_update(
+        index_elements=[CombinationReserveRow.reserve_id],
+        set_={
+            k: reserve_values[k] for k in (
+                "option_domains", "generation_spec", "combination_count",
+                "selected_count", "status",
+            )
+        } | {"updated_at": func.now()},
+    ))
+
     await session.commit()
 
     return {
         "artifact_id": artifact_id,
-        "generated": len(result.test_cases),
-        "page_groups": result.page_groups,
-        "visits_total": result.visits_total,
-        "visits_used": result.visits_used,
-        "fields_demonstrated": result.fields_demonstrated,
-        "excluded_placeholder_fields": result.excluded_placeholder_fields,
+        "demonstrated": len(result.test_cases),
+        "combinations_active": combo.selected_count,
+        "combinations_full_space": combo.full_count,
+        "option_domains": len(combo.option_domains),
+        "generated": len(new_ids),
+        **demonstrated_meta,
         "generator_version": GENERATOR_VERSION,
     }
 
@@ -322,3 +383,27 @@ async def load_active_production_cases(
         )
     ).scalars().all()
     return [ProductionTestCase(**r.test_case) for r in rows if r.test_case]
+
+
+async def get_reserve(
+    session: AsyncSession, *, artifact_id: str,
+) -> dict[str, Any] | None:
+    """Return the stored combination reserve (full option space + spec)."""
+    row = (
+        await session.execute(
+            select(CombinationReserveRow)
+            .where(CombinationReserveRow.artifact_id == artifact_id)
+            .order_by(CombinationReserveRow.created_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        return None
+    return {
+        "artifact_id": artifact_id,
+        "option_domains": row.option_domains,
+        "generation_spec": row.generation_spec,
+        "combination_count": row.combination_count,
+        "selected_count": row.selected_count,
+        "status": row.status,
+    }

@@ -74,6 +74,7 @@ class PageVisitInput:
     canonical_host: str
     source: str
     form_snapshot: Mapping[str, str]
+    form_snapshot_signals: Mapping[str, object] = field(default_factory=dict)
     first_seen_ms: int = 0
     duration_ms: int = 0
 

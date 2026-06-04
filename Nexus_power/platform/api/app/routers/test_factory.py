@@ -102,6 +102,23 @@ async def list_test_cases(
         )
 
 
+@router.get("/api/v1/test-factory/{artifact_id}/reserve")
+async def get_reserve(
+    artifact_id: str = PathParam(..., min_length=1, max_length=64),
+    user: dict = Depends(get_current_user),
+):
+    tenant_id = user["tenant_id"]
+    async with tenant_scoped_session(tenant_id) as session:
+        await _require_artifact(session, artifact_id, tenant_id)
+        reserve = await factory_service.get_reserve(session, artifact_id=artifact_id)
+    if reserve is None:
+        raise HTTPException(
+            status_code=404,
+            detail="no combination reserve for this artifact — run /generate first",
+        )
+    return reserve
+
+
 @router.get("/api/v1/test-factory/{artifact_id}/export")
 async def export_test_cases(
     artifact_id: str = PathParam(..., min_length=1, max_length=64),
