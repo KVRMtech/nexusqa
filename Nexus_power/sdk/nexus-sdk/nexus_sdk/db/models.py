@@ -2537,3 +2537,59 @@ class PageActionRow(Base):
         Index("ix_page_actions_visit_sub", "page_visit_id", "subaction_index"),
         Index("ix_page_actions_verb_kind", "tenant_id", "verb", "target_kind"),
     )
+
+
+class FactoryTestCaseRow(Base):
+    """Stored output of the Test Factory — one generated production test case.
+
+    Additive store (migration ``036_factory_test_cases``) for
+    ``nexus_sdk.models.ProductionTestCase`` objects derived from the frozen
+    Pages & Forms evidence (``page_visits`` / ``page_actions``).  The full
+    serialized case lives in ``test_case`` (JSON); the scalar columns exist so
+    the API can filter + paginate without parsing the blob.
+
+    ``status`` is ``active`` (bounded, delivered/executed suite) or ``reserve``
+    (stored-for-future combinations — Phase 2).  ``test_case_id`` is the
+    generator's deterministic uuid5, so re-generation UPSERTs in place.
+    """
+
+    __tablename__ = "factory_test_cases"
+
+    test_case_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    artifact_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("canonical_artifacts.artifact_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    tenant_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    session_id: Mapped[str] = mapped_column(String(64), default="", nullable=False)
+
+    name: Mapped[str] = mapped_column(String(500), default="", nullable=False)
+    description: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    priority: Mapped[str] = mapped_column(String(40), default="P2_medium", nullable=False)
+    test_type: Mapped[str] = mapped_column(String(40), default="functional", nullable=False)
+    confidence: Mapped[str] = mapped_column(
+        String(40), default="demonstrated", nullable=False,
+    )
+    status: Mapped[str] = mapped_column(String(20), default="active", nullable=False)
+    step_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+    tags: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
+    test_case: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    source_evidence: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+
+    generator_version: Mapped[str] = mapped_column(
+        String(50), default="v1", nullable=False,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utc_now, nullable=False,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utc_now, onupdate=_utc_now, nullable=False,
+    )
+
+    __table_args__ = (
+        Index("ix_factory_test_cases_artifact_status", "artifact_id", "status"),
+        Index("ix_factory_test_cases_tenant_status", "tenant_id", "status"),
+        Index("ix_factory_test_cases_tenant_priority", "tenant_id", "priority"),
+    )

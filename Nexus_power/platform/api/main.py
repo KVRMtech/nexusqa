@@ -94,6 +94,9 @@ from app.knowledge_foundation import (
 # All derivations are additive to the frozen pipeline outputs.
 from app.routers.storyboard import router as storyboard_router
 from app.services.storyboard import load_config as load_storyboard_config
+# Test Factory Phase 1 — demonstrated functional E2E from Pages & Forms.
+# Additive: reads frozen evidence, writes only factory_test_cases.
+from app.routers.test_factory import router as test_factory_router
 from app.services.storyboard.composer import StoryboardComposer
 from app.services.storyboard.frame_annotator import FrameAnnotator
 from app.services.llm import load_config as load_llm_config, LLMRouter
@@ -288,6 +291,7 @@ app.include_router(marketplace_router)
 
 # Storyboard Phase 1 — picture-first visual evidence
 app.include_router(storyboard_router)
+app.include_router(test_factory_router)
 
 
 # ─── Health ───────────────────────────────────────────────────
