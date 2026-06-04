@@ -19,16 +19,20 @@ Additive router.  Reads frozen Pages & Forms data; writes only the additive
 from __future__ import annotations
 
 import io
+import json
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, Path as PathParam, Query
+import httpx
+from fastapi import APIRouter, Depends, HTTPException, Path as PathParam, Query, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 
 from nexus_sdk.db.models import CanonicalArtifactRow
+from nexus_sdk.security.envelope import EnvelopeBlob
 
 from ..auth import get_current_user
 from ..database import tenant_scoped_session
+from .integrations import integration_installations
 from ..services.test_factory import service as factory_service
 from ..services.test_factory.delivery import (
     EXPORT_MEDIA_TYPES,
@@ -36,6 +40,7 @@ from ..services.test_factory.delivery import (
     build_excel,
     build_json,
 )
+from ..services.test_factory.delivery.connectors import CONNECTORS, build_connector
 
 router = APIRouter(tags=["Test Factory"])
 _logger = logging.getLogger(__name__)
@@ -152,3 +157,79 @@ async def export_test_cases(
         media_type=EXPORT_MEDIA_TYPES[fmt],
         headers={"Content-Disposition": f"attachment; filename={filename}"},
     )
+
+
+@router.post("/api/v1/test-factory/{artifact_id}/push/{tool}")
+async def push_to_tm_tool(
+    request: Request,
+    artifact_id: str = PathParam(..., min_length=1, max_length=64),
+    tool: str = PathParam(..., min_length=1, max_length=40),
+    user: dict = Depends(get_current_user),
+):
+    """Push the active test suite into a test-management tool.
+
+    Credentials are decrypted at call time from the tenant's connected
+    ``integration_installations`` row (envelope-encrypted) — never hardcoded.
+    """
+    tool = tool.lower()
+    if tool not in CONNECTORS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"unsupported tool '{tool}' (supported: {', '.join(CONNECTORS)})",
+        )
+    envelope = getattr(request.app.state, "envelope_service", None)
+    if envelope is None:
+        raise HTTPException(status_code=503, detail="envelope_service unavailable")
+
+    tenant_id = user["tenant_id"]
+    async with tenant_scoped_session(tenant_id) as session:
+        await _require_artifact(session, artifact_id, tenant_id)
+        inst = (
+            await session.execute(
+                select(integration_installations).where(
+                    integration_installations.c.tenant_id == tenant_id,
+                    integration_installations.c.integration_id == tool,
+                    integration_installations.c.status == "connected",
+                )
+            )
+        ).mappings().first()
+        if inst is None:
+            raise HTTPException(
+                status_code=409,
+                detail=f"no connected '{tool}' integration for this tenant — install it first",
+            )
+        cases = await factory_service.load_active_production_cases(
+            session, artifact_id=artifact_id,
+        )
+
+    if not cases:
+        raise HTTPException(
+            status_code=404,
+            detail="no generated test cases for this artifact — run /generate first",
+        )
+
+    blob_bytes = inst.get("encrypted_credentials")
+    if not blob_bytes:
+        raise HTTPException(
+            status_code=409, detail=f"'{tool}' integration has no stored credentials",
+        )
+    try:
+        plaintext = await envelope.decrypt(
+            tenant_id,
+            EnvelopeBlob.from_bytes(bytes(blob_bytes)),
+            expected_aad=tool.encode("utf-8"),
+        )
+        credentials = json.loads(plaintext.decode("utf-8"))
+    except Exception as exc:
+        _logger.warning("test_factory.push.credential_decrypt_failed tool=%s err=%s", tool, exc)
+        raise HTTPException(status_code=502, detail=f"could not decrypt '{tool}' credentials")
+
+    try:
+        connector = build_connector(tool, credentials, dict(inst.get("config") or {}))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+    async with httpx.AsyncClient(timeout=60.0) as http:
+        result = await connector.push(cases, http)
+
+    return {"success": result.failed == 0, **result.as_dict()}
