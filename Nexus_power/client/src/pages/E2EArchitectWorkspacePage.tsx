@@ -23,6 +23,7 @@ import { DemoDiffPanel } from '../components/DemoDiffPanel';
 import { ConfidenceChip } from '../components/ConfidenceChip';
 import { SceneFrameWithOverlays } from '../components/SceneFrameWithOverlays';
 import { AppTimeline } from '../components/AppTimeline';
+import TestCasesPanel from '../components/TestCasesPanel';
 import { useArtifactProgress } from '../hooks/useArtifactProgress';
 import type {
   E2EArchitectResponse,
@@ -72,7 +73,7 @@ import {
 // ── Configs ─────────────────────────────────────────────────
 
 type PageState = 'loading' | 'generating' | 'ready' | 'error' | 'prerequisites';
-type ViewMode = 'engineer' | 'reviewer';
+type ViewMode = 'engineer' | 'reviewer' | 'test-cases';
 
 interface StepSelection {
   scenarioId: string;
@@ -944,6 +945,20 @@ export default function E2EArchitectWorkspacePage() {
             >
               <Users className="h-3.5 w-3.5" /> Reviewer
             </button>
+            <button
+              role="tab"
+              aria-selected={viewMode === 'test-cases'}
+              onClick={() => setViewMode('test-cases')}
+              className={clsx(
+                'flex items-center gap-1.5 rounded-md px-2.5 py-1 transition-colors',
+                viewMode === 'test-cases'
+                  ? 'bg-white text-emerald-700 shadow-sm font-medium'
+                  : 'text-slate-500 hover:text-slate-700',
+              )}
+              title="Test Cases — grounded from Pages & Forms (demonstrated + combinations)"
+            >
+              <Sparkles className="h-3.5 w-3.5" /> Test Cases
+            </button>
           </div>
 
           {/* P4: Co-Architect dock toggle */}
@@ -1054,8 +1069,18 @@ export default function E2EArchitectWorkspacePage() {
         </div>
       )}
 
+      {/* ── Test Cases (Pages & Forms) — grounded test factory ─ */}
+      {viewMode === 'test-cases' && (
+        <div className="flex-1 min-h-0 overflow-y-auto p-6">
+          <TestCasesPanel artifactId={artifactId} />
+        </div>
+      )}
+
       {/* ── 3-Panel Layout (left | center | right) ─────────── */}
-      <div className="flex flex-1 min-h-0 overflow-hidden">
+      <div
+        className="flex flex-1 min-h-0 overflow-hidden"
+        style={{ display: viewMode === 'test-cases' ? 'none' : undefined }}
+      >
 
         {/* ═══ LEFT PANEL: System Model ═══ */}
         <div className="w-80 shrink-0 border-r border-gray-200 overflow-y-auto p-4 space-y-4 bg-white/40">

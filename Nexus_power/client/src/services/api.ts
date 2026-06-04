@@ -1310,6 +1310,60 @@ class ApiClient {
     return data;
   }
 
+  // ── Test Factory (Pages & Forms → grounded test cases) ──────────────
+  /** Generate demonstrated + combination test cases from Pages & Forms. */
+  async generateTestFactory(artifactId: string): Promise<any> {
+    const { data } = await this.client.post(
+      `/v1/test-factory/${artifactId}/generate`, {},
+    );
+    return data;
+  }
+
+  /** Aggregate counts for the Test Cases summary. */
+  async getTestFactorySummary(artifactId: string): Promise<any> {
+    const { data } = await this.client.get(
+      `/v1/test-factory/${artifactId}/summary`,
+    );
+    return data;
+  }
+
+  /** Paginated list of generated test cases (full ProductionTestCase each). */
+  async listTestFactoryCases(
+    artifactId: string, page = 1, limit = 50, status = 'active',
+  ): Promise<any> {
+    const { data } = await this.client.get(
+      `/v1/test-factory/${artifactId}/test-cases`,
+      { params: { page, limit, status } },
+    );
+    return data;
+  }
+
+  /** Capture available field options (vision) then regenerate combinations. */
+  async captureTestFactoryOptions(artifactId: string): Promise<any> {
+    const { data } = await this.client.post(
+      `/v1/test-factory/${artifactId}/capture-options`, {},
+      { timeout: 300_000 },
+    );
+    return data;
+  }
+
+  /** Download the suite as Excel / CSV / JSON (blob). */
+  async exportTestFactory(artifactId: string, format = 'excel'): Promise<Blob> {
+    const resp = await this.client.get(
+      `/v1/test-factory/${artifactId}/export`,
+      { params: { format }, responseType: 'blob' },
+    );
+    return resp.data as Blob;
+  }
+
+  /** Push the suite into a test-management tool (qtest|testrail|zephyr|xray). */
+  async pushTestFactory(artifactId: string, tool: string): Promise<any> {
+    const { data } = await this.client.post(
+      `/v1/test-factory/${artifactId}/push/${tool}`, {},
+    );
+    return data;
+  }
+
   /** Per-scenario last-run + flake summary. Already merged into the
    *  e2e_architect response; this endpoint is for refresh-friendly polling. */
   async getScenarioRunsSummary(
