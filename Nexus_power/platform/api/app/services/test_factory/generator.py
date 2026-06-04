@@ -114,6 +114,8 @@ class _PageGroup:
     visit_ids: list[str] = field(default_factory=list)
     # ordered (label, value) candidates collected across the group's frames
     field_candidates: list[tuple[str, str]] = field(default_factory=list)
+    # required field labels seen on the page (even when left empty)
+    required_labels: list[str] = field(default_factory=list)
     actions: list[PageActionInput] = field(default_factory=list)
 
 
@@ -164,6 +166,20 @@ def _is_real_value(label: str, value: str | None) -> bool:
     if nlabel and (nlabel.startswith(nvalue) or nvalue.startswith(nlabel)):
         if len(nvalue) < len(nlabel) and not any(c.isdigit() for c in v):
             return False
+    # Abbreviation-style placeholder: the value shares its FIRST token with the
+    # field label, is short, and carries no specifics — e.g. "Flight no." under
+    # "Flight number".  Generic: reasons about token/shape only.
+    vw = v.split()
+    lw = _strip_required(label)[0].split()
+    if (
+        vw and lw
+        and len(vw) <= 2
+        and len(v) <= 14
+        and not any(c.isdigit() for c in v)
+        and _norm(vw[0])
+        and _norm(vw[0]) == _norm(lw[0])
+    ):
+        return False
     return True
 
 
@@ -187,12 +203,17 @@ def _best_label(labels: Sequence[str], value: str) -> str:
 
 
 def _page_name(url_path: str, location: str) -> str:
-    """Human page name from the last meaningful URL path segment."""
+    """Human page name from the last MEANINGFUL URL path segment.
+
+    Skips short locale/section segments (``/en/us``, ``/fsr``) so the name
+    reflects the actual page (``choose flights``) rather than a routing token.
+    Falls back to ``home`` for locale-only roots.
+    """
     segs = [s for s in (url_path or "").split("/") if s]
-    if segs:
-        return segs[-1].replace("-", " ").replace("_", " ").strip()
-    loc = (location or "").strip()
-    return loc[:60] if loc else "page"
+    for seg in reversed(segs):
+        if len(seg) > 3 and not seg.isdigit():
+            return seg.replace("-", " ").replace("_", " ").strip()
+    return "home"
 
 
 def _full_url(group: _PageGroup) -> str:
@@ -248,6 +269,9 @@ def _segment(
             continue
         current.visit_ids.append(visit.page_visit_id)
         for label, value in (visit.form_snapshot or {}).items():
+            clean, required = _strip_required(label)
+            if required and clean:
+                current.required_labels.append(clean)
             if _is_real_value(label, value):
                 current.field_candidates.append((label.strip(), value.strip()))
         current.actions.extend(actions_by_visit.get(visit.page_visit_id, []))
@@ -264,51 +288,67 @@ def _resolve_fields(group: _PageGroup) -> tuple[list[tuple[str, str]], list[str]
       * required_present  — [label] required fields that appeared (even if the
                             user did not fill them — demonstrated as *present*)
     """
-    # Last real value per exact label (later frames win — final state).
-    last_value: dict[str, str] = {}
-    label_order: list[str] = []
-    required_present: list[str] = []
-    seen_required: set[str] = set()
+    # (label → latest (seq, value)) for real, non-boolean fields; track toggles.
+    last: dict[str, tuple[int, str]] = {}
+    order: list[str] = []
+    toggle_state: dict[str, bool] = {}
+    toggle_order: list[str] = []
+    for seq, (label, value) in enumerate(group.field_candidates):
+        if _is_boolean(value):
+            clean = _strip_required(label)[0]
+            if clean not in toggle_state:
+                toggle_order.append(clean)
+            toggle_state[clean] = _is_true(value)  # final captured state wins
+            continue
+        if label not in last:
+            order.append(label)
+        last[label] = (seq, value)
 
-    # Required-but-empty fields appear in the snapshot as label "(required)"
-    # with an empty value; capture them from the RAW group snapshots.
-    for label, value in group.field_candidates:
-        if label not in last_value:
-            label_order.append(label)
-        last_value[label] = value
+    entries = [(label, last[label][0], last[label][1]) for label in order]
 
-    text_pairs: list[tuple[str, str]] = []
-    enabled_toggles: list[str] = []
-    # Collapse labels that share a value.
+    # Cluster labels whose normalized clean form prefixes another
+    # ("date" ⊂ "dates") — one logical field — and keep the LATEST-seen value
+    # (the user's final state), dropping abandoned intermediate values.
+    used = [False] * len(entries)
+    chosen: list[tuple[str, str]] = []
+    for i in range(len(entries)):
+        if used[i]:
+            continue
+        ni = _norm(_strip_required(entries[i][0])[0])
+        cluster = [i]
+        used[i] = True
+        for j in range(i + 1, len(entries)):
+            if used[j]:
+                continue
+            nj = _norm(_strip_required(entries[j][0])[0])
+            if ni and nj and (ni.startswith(nj) or nj.startswith(ni)):
+                cluster.append(j)
+                used[j] = True
+        best = max(cluster, key=lambda k: entries[k][1])
+        chosen.append((_strip_required(entries[best][0])[0], entries[best][2]))
+
+    # Collapse labels that share the same VALUE to one (cleanest) label.
     by_value: dict[str, list[str]] = {}
-    for label in label_order:
-        value = last_value[label]
-        if _is_boolean(value):
-            if _is_true(value):
-                enabled_toggles.append(_strip_required(label)[0])
-            continue
+    for label, value in chosen:
         by_value.setdefault(_norm(value), []).append(label)
-
-    emitted_value: set[str] = set()
-    for label in label_order:
-        value = last_value[label]
-        if _is_boolean(value):
+    text_pairs: list[tuple[str, str]] = []
+    seen_value: set[str] = set()
+    for label, value in chosen:
+        nv = _norm(value)
+        if nv in seen_value:
             continue
-        nvalue = _norm(value)
-        if nvalue in emitted_value:
-            continue
-        emitted_value.add(nvalue)
-        text_pairs.append((_best_label(by_value[nvalue], value), value))
+        seen_value.add(nv)
+        text_pairs.append((_best_label(by_value[nv], value), value))
 
-    # De-dup toggles while preserving order.
-    seen_tog: set[str] = set()
-    toggles = [t for t in enabled_toggles if not (t in seen_tog or seen_tog.add(t))]
+    # Emit only toggles whose FINAL captured state is ON — drops a toggle the
+    # user turned on then off (e.g. Round-trip → One-way).
+    toggles = [t for t in toggle_order if toggle_state.get(t)]
 
-    # Required-present: scan raw labels (incl. empty-valued) for "(required)".
-    for label, _value in group.field_candidates:
-        clean, req = _strip_required(label)
-        if req and _norm(clean) not in seen_required:
-            seen_required.add(_norm(clean))
+    seen_req: set[str] = set()
+    required_present: list[str] = []
+    for clean in group.required_labels:
+        if _norm(clean) and _norm(clean) not in seen_req:
+            seen_req.add(_norm(clean))
             required_present.append(clean)
 
     return text_pairs, toggles, required_present
@@ -397,46 +437,33 @@ def _build_steps(groups: Sequence[_PageGroup]) -> tuple[list[ProductionTestStep]
 
 
 def _interaction_steps(group: _PageGroup, next_url: str) -> list[ProductionTestStep]:
-    """Click/hover/etc. steps from the group's actions (deduped, ordered)."""
-    out: list[ProductionTestStep] = []
-    seen: set[tuple[str, str]] = set()
-    ordered = sorted(group.actions, key=lambda a: a.subaction_index)
-    for a in ordered:
-        verb = (a.verb or "").strip().lower()
-        label = (a.target_label or "").strip()
-        if verb in _SKIP_VERBS or verb in _FILL_VERBS:
-            continue  # fills already represented from the form snapshot
-        if verb not in _INTERACT_VERBS and verb not in {"hover", "scroll"}:
-            continue
-        if not label:
-            continue
-        key = (verb, _norm(label))
-        if key in seen:
-            continue
-        seen.add(key)
-        if verb in {"click", "press", "tap"}:
-            action = f"Click '{label}'"
-            expected = (
-                f"The application proceeds to {next_url}" if next_url
-                else f"'{label}' is activated"
-            )
-        elif verb in {"check", "toggle"}:
-            action = f"Toggle '{label}'"
-            expected = f"'{label}' state changes"
-        elif verb == "hover":
-            action = f"Hover over '{label}'"
-            expected = f"'{label}' menu/options are revealed"
-        else:  # scroll
-            action = f"Scroll to '{label}'"
-            expected = f"'{label}' is visible"
-        out.append(ProductionTestStep(
-            step_number=0,
-            action=action,
-            expected=expected,
-            expected_result=expected,
-            selector=_locator(label, a.target_kind),
-        ))
-    return out
+    """The SUBMIT action for the page — the final click/press in the group.
+
+    Hovers, scrolls, and earlier exploratory clicks (menu tabs, abandoned
+    side-trips) are dropped: only the last click before the page advances is
+    part of the demonstrated forward flow.  ``group.actions`` is already in
+    chronological (visit → subaction) order.
+    """
+    clicks = [
+        a for a in group.actions
+        if (a.verb or "").strip().lower() in {"click", "press", "tap"}
+        and (a.target_label or "").strip()
+    ]
+    if not clicks:
+        return []
+    a = clicks[-1]
+    label = a.target_label.strip()
+    expected = (
+        f"The application proceeds to {next_url}" if next_url
+        else f"'{label}' is activated"
+    )
+    return [ProductionTestStep(
+        step_number=0,
+        action=f"Click '{label}'",
+        expected=expected,
+        expected_result=expected,
+        selector=_locator(label, a.target_kind),
+    )]
 
 
 # ─── Public entry point ──────────────────────────────────────────────────────
@@ -460,6 +487,8 @@ def generate_demonstrated_test_cases(
     actions_by_visit: dict[str, list[PageActionInput]] = {}
     for act in actions:
         actions_by_visit.setdefault(act.page_visit_id, []).append(act)
+    for lst in actions_by_visit.values():
+        lst.sort(key=lambda a: a.subaction_index)
 
     groups = _segment(visits, actions_by_visit)
 
