@@ -25,7 +25,7 @@ import logging
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Path as PathParam, Query, Request
 from fastapi.responses import StreamingResponse
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from nexus_sdk.db.models import CanonicalArtifactRow
 from nexus_sdk.security.envelope import EnvelopeBlob
@@ -34,6 +34,9 @@ from ..auth import get_current_user
 from ..database import tenant_scoped_session
 from .integrations import integration_installations
 from ..services.test_factory import service as factory_service
+from ..services.test_factory.options_extractor import (
+    extract_field_options_for_artifact,
+)
 from ..services.test_factory.delivery import (
     EXPORT_MEDIA_TYPES,
     build_csv,
@@ -78,6 +81,49 @@ async def generate_test_cases(
             session_id=getattr(art, "session_id", "") or "",
         )
     return {"success": True, **summary}
+
+
+def _bearer(request: Request) -> str:
+    raw = request.headers.get("authorization") or ""
+    return raw[7:].strip() if raw.lower().startswith("bearer ") else raw.strip()
+
+
+@router.post("/api/v1/test-factory/{artifact_id}/capture-options")
+async def capture_options(
+    request: Request,
+    artifact_id: str = PathParam(..., min_length=1, max_length=64),
+    user: dict = Depends(get_current_user),
+):
+    """Capture available field options (vision) into form_snapshot_signals, then
+    regenerate so grounded combinations materialise.
+
+    Uses the shared LLM router (from the storyboard composer).  Costs one vision
+    call per page; only options actually visible in frames are captured.
+    """
+    tenant_id = user["tenant_id"]
+    composer = getattr(request.app.state, "storyboard_composer", None)
+    llm_router = getattr(composer, "_llm_router", None) if composer else None
+    if llm_router is None:
+        raise HTTPException(status_code=503, detail="LLM router unavailable")
+    token = _bearer(request)
+
+    async with tenant_scoped_session(tenant_id) as session:
+        art = await _require_artifact(session, artifact_id, tenant_id)
+        options = await extract_field_options_for_artifact(
+            session, artifact_id=artifact_id, tenant_id=tenant_id,
+            router=llm_router, auth_token=token,
+        )
+        await session.commit()
+        # commit reset the transaction-local RLS var — re-arm before regenerate.
+        await session.execute(
+            text("SELECT set_config('nexus.current_tenant_id', :tid, true)"),
+            {"tid": str(tenant_id)},
+        )
+        regenerated = await factory_service.generate_and_store(
+            session, artifact_id=artifact_id, tenant_id=tenant_id,
+            session_id=getattr(art, "session_id", "") or "",
+        )
+    return {"success": True, "options_capture": options, "regenerated": regenerated}
 
 
 @router.get("/api/v1/test-factory/{artifact_id}/summary")
