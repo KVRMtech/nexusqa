@@ -75,6 +75,10 @@ import {
 type PageState = 'loading' | 'generating' | 'ready' | 'error' | 'prerequisites';
 type ViewMode = 'engineer' | 'reviewer' | 'test-cases';
 
+// Visual-scenario CSV / script Export are superseded by the Test Cases tab
+// (grounded Excel/CSV today, Playwright/Gherkin next). Hidden, code retained.
+const SHOW_VISUAL_EXPORTS = false;
+
 interface StepSelection {
   scenarioId: string;
   stepNumber: number;
@@ -337,7 +341,7 @@ export default function E2EArchitectWorkspacePage() {
   const [playwrightGateErrors, setPlaywrightGateErrors] = useState<string[]>([]);
 
   // ── Phase A state ───────────────────────────────────────
-  const [viewMode, setViewMode] = useState<ViewMode>('test-cases');
+  const [viewMode, setViewMode] = useState<ViewMode>('engineer');
   const [selectedStep, setSelectedStep] = useState<StepSelection | null>(null);
   const [selectedSceneId, setSelectedSceneId] = useState<string | null>(null);
   // Phase 3 — user-clicked control via the SceneFrameWithOverlays bbox.
@@ -989,16 +993,14 @@ export default function E2EArchitectWorkspacePage() {
             <GitCompare className="h-3.5 w-3.5" /> Demo Diff
           </button>
 
-          {viewMode !== 'test-cases' && (
-            <button
-              onClick={() => loadArchitect(true)}
-              className="rounded-lg bg-nexus-600/80 px-3 py-1.5 text-xs font-medium text-white hover:bg-nexus-500 transition-colors flex items-center gap-1.5"
-            >
-              <Sparkles className="h-3.5 w-3.5" /> Regenerate
-            </button>
-          )}
+          <button
+            onClick={() => loadArchitect(true)}
+            className="rounded-lg bg-nexus-600/80 px-3 py-1.5 text-xs font-medium text-white hover:bg-nexus-500 transition-colors flex items-center gap-1.5"
+          >
+            <Sparkles className="h-3.5 w-3.5" /> Regenerate
+          </button>
 
-          {isEngineer && (
+          {isEngineer && SHOW_VISUAL_EXPORTS && (
             <>
               <button
                 onClick={() => exportE2EScenarioCSV(scenarios, `e2e-scenarios-${artifactId.slice(0, 8)}.csv`)}
@@ -1015,7 +1017,7 @@ export default function E2EArchitectWorkspacePage() {
             </>
           )}
 
-          {viewMode === 'reviewer' && (
+          {!isEngineer && (
             <button
               disabled
               className="rounded-lg bg-emerald-100 px-3 py-1.5 text-xs font-medium text-emerald-700 transition-colors flex items-center gap-1.5 cursor-not-allowed opacity-70"
