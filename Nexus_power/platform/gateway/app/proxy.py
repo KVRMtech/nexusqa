@@ -195,8 +195,20 @@ async def proxy_request(
             },
         )
 
-        # Build response with correlation ID
-        response_headers = dict(resp.headers)
+        # Build response with correlation ID.  Strip hop-by-hop / framing
+        # headers: the buffered Response computes its own Content-Length, so
+        # carrying the upstream Transfer-Encoding: chunked alongside it yields
+        # an invalid header pair that strict proxies (nginx) reject with 502 —
+        # this previously broke binary downloads (Excel/CSV exports).  Also drop
+        # Content-Encoding: httpx already decoded the body.
+        _DROP_HEADERS = {
+            "transfer-encoding", "content-length", "content-encoding",
+            "connection", "keep-alive",
+        }
+        response_headers = {
+            k: v for k, v in resp.headers.items()
+            if k.lower() not in _DROP_HEADERS
+        }
         response_headers[REQUEST_ID_HEADER] = request_id
 
         return Response(
