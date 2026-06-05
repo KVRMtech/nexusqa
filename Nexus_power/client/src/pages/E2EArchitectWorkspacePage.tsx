@@ -921,6 +921,7 @@ export default function E2EArchitectWorkspacePage() {
             role="tablist"
             aria-label="View mode"
           >
+            {SHOW_VISUAL_EXPORTS && (
             <button
               role="tab"
               aria-selected={isEngineer}
@@ -935,6 +936,8 @@ export default function E2EArchitectWorkspacePage() {
             >
               <Code2 className="h-3.5 w-3.5" /> Engineer
             </button>
+            )}
+            {SHOW_VISUAL_EXPORTS && (
             <button
               role="tab"
               aria-selected={!isEngineer}
@@ -949,6 +952,7 @@ export default function E2EArchitectWorkspacePage() {
             >
               <Users className="h-3.5 w-3.5" /> Reviewer
             </button>
+            )}
             <button
               role="tab"
               aria-selected={viewMode === 'test-cases'}
