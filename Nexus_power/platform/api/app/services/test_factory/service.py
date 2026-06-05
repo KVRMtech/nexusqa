@@ -25,6 +25,7 @@ from nexus_sdk.db.models import (
 from nexus_sdk.models import ProductionTestCase
 
 from .combinations import generate_combination_cases
+from .negatives import CATEGORY_GENERATORS
 from .generator import (
     DemonstratedGenerationResult,
     PageActionInput,
@@ -271,6 +272,53 @@ async def generate_and_store(
     }
 
 
+async def generate_category(
+    session: AsyncSession, *, artifact_id: str, tenant_id: str, category: str,
+    session_id: str = "",
+) -> dict[str, Any]:
+    """On-demand generate a non-demonstrated category (negative|boundary|error_state).
+
+    Grounded generators only; cases stored with confidence=inferred and
+    test_type=<category>. Idempotent per category.
+    """
+    gen = CATEGORY_GENERATORS.get(category)
+    if gen is None:
+        raise ValueError(f"unknown category '{category}'")
+
+    visits, actions = await _load_current_pages_and_actions(
+        session, artifact_id=artifact_id,
+    )
+    demo = generate_demonstrated_test_cases(
+        artifact_id=artifact_id, page_visits=visits, page_actions=actions,
+    )
+    base = demo.test_cases[0] if demo.test_cases else None
+    cases = gen(
+        artifact_id=artifact_id, base_case=base,
+        page_visits=visits, host=_dominant_host(visits),
+    )
+
+    new_ids: list[str] = []
+    for tc in cases:
+        values = _row_values(
+            tc, artifact_id=artifact_id, tenant_id=tenant_id,
+            session_id=session_id, confidence="inferred",
+            source_evidence={"category": category},
+        )
+        new_ids.append(values["test_case_id"])
+        await _upsert_case(session, values)
+
+    prune = delete(FactoryTestCaseRow).where(
+        FactoryTestCaseRow.artifact_id == artifact_id,
+        FactoryTestCaseRow.status == "active",
+        FactoryTestCaseRow.test_type == category,
+    )
+    if new_ids:
+        prune = prune.where(FactoryTestCaseRow.test_case_id.notin_(new_ids))
+    await session.execute(prune)
+    await session.commit()
+    return {"category": category, "generated": len(cases)}
+
+
 async def summarize(
     session: AsyncSession, *, artifact_id: str,
 ) -> dict[str, Any]:
@@ -300,6 +348,26 @@ async def summarize(
             .group_by(FactoryTestCaseRow.status)
         )
     ).all()
+    by_type_rows = (
+        await session.execute(
+            select(FactoryTestCaseRow.test_type, func.count())
+            .where(
+                FactoryTestCaseRow.artifact_id == artifact_id,
+                FactoryTestCaseRow.status == "active",
+            )
+            .group_by(FactoryTestCaseRow.test_type)
+        )
+    ).all()
+    by_conf_rows = (
+        await session.execute(
+            select(FactoryTestCaseRow.confidence, func.count())
+            .where(
+                FactoryTestCaseRow.artifact_id == artifact_id,
+                FactoryTestCaseRow.status == "active",
+            )
+            .group_by(FactoryTestCaseRow.confidence)
+        )
+    ).all()
 
     return {
         "artifact_id": artifact_id,
@@ -308,18 +376,27 @@ async def summarize(
         "reserve": sum(c for _s, c in by_status_rows if _s == "reserve"),
         "by_priority": {p: int(c) for p, c in by_priority_rows},
         "by_status": {s: int(c) for s, c in by_status_rows},
+        "by_type": {t: int(c) for t, c in by_type_rows},
+        "by_confidence": {c0: int(c) for c0, c in by_conf_rows},
     }
 
 
 async def list_paginated(
     session: AsyncSession, *, artifact_id: str, page: int, limit: int,
-    status: str = "active",
+    status: str = "active", test_type: str | None = None,
 ) -> dict[str, Any]:
-    """Server-side paginated listing — the UI fetches one page at a time."""
-    base = (
+    """Server-side paginated listing — the UI fetches one page at a time.
+
+    Optional ``test_type`` filter lets the UI fetch a small capped slice per
+    category (e.g. 5 demonstrated) without pulling the whole suite.
+    """
+    base = [
         FactoryTestCaseRow.artifact_id == artifact_id,
         FactoryTestCaseRow.status == status,
-    )
+    ]
+    if test_type:
+        base.append(FactoryTestCaseRow.test_type == test_type)
+    base = tuple(base)
     total = (
         await session.execute(
             select(func.count()).select_from(FactoryTestCaseRow).where(*base)

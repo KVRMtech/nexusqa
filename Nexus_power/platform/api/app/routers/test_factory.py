@@ -126,6 +126,31 @@ async def capture_options(
     return {"success": True, "options_capture": options, "regenerated": regenerated}
 
 
+_CATEGORIES = {"negative", "boundary", "error_state"}
+
+
+@router.post("/api/v1/test-factory/{artifact_id}/generate/{category}")
+async def generate_category_endpoint(
+    artifact_id: str = PathParam(..., min_length=1, max_length=64),
+    category: str = PathParam(..., min_length=1, max_length=40),
+    user: dict = Depends(get_current_user),
+):
+    """On-demand generate a non-demonstrated category (negative|boundary|error_state)."""
+    if category not in _CATEGORIES:
+        raise HTTPException(
+            status_code=422,
+            detail=f"unknown category '{category}' (use: {', '.join(sorted(_CATEGORIES))})",
+        )
+    tenant_id = user["tenant_id"]
+    async with tenant_scoped_session(tenant_id) as session:
+        art = await _require_artifact(session, artifact_id, tenant_id)
+        result = await factory_service.generate_category(
+            session, artifact_id=artifact_id, tenant_id=tenant_id,
+            category=category, session_id=getattr(art, "session_id", "") or "",
+        )
+    return {"success": True, **result}
+
+
 @router.get("/api/v1/test-factory/{artifact_id}/summary")
 async def get_summary(
     artifact_id: str = PathParam(..., min_length=1, max_length=64),
@@ -143,13 +168,15 @@ async def list_test_cases(
     page: int = Query(1, ge=1, description="1-based page number"),
     limit: int = Query(25, ge=1, le=200, description="Test cases per page"),
     status: str = Query("active", pattern="^(active|reserve)$"),
+    type: str | None = Query(None, description="filter by category/test_type"),
     user: dict = Depends(get_current_user),
 ):
     tenant_id = user["tenant_id"]
     async with tenant_scoped_session(tenant_id) as session:
         await _require_artifact(session, artifact_id, tenant_id)
         return await factory_service.list_paginated(
-            session, artifact_id=artifact_id, page=page, limit=limit, status=status,
+            session, artifact_id=artifact_id, page=page, limit=limit,
+            status=status, test_type=type,
         )
 
 

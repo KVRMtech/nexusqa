@@ -1329,11 +1329,21 @@ class ApiClient {
 
   /** Paginated list of generated test cases (full ProductionTestCase each). */
   async listTestFactoryCases(
-    artifactId: string, page = 1, limit = 50, status = 'active',
+    artifactId: string, page = 1, limit = 50, status = 'active', type?: string,
   ): Promise<any> {
+    const params: Record<string, any> = { page, limit, status };
+    if (type) params.type = type;
     const { data } = await this.client.get(
-      `/v1/test-factory/${artifactId}/test-cases`,
-      { params: { page, limit, status } },
+      `/v1/test-factory/${artifactId}/test-cases`, { params },
+    );
+    return data;
+  }
+
+  /** On-demand generate a non-demonstrated category (negative|boundary|error_state). */
+  async generateTestFactoryCategory(artifactId: string, category: string): Promise<any> {
+    const { data } = await this.client.post(
+      `/v1/test-factory/${artifactId}/generate/${category}`, {},
+      { timeout: 120_000 },
     );
     return data;
   }
