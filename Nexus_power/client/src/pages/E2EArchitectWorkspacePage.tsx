@@ -970,6 +970,7 @@ export default function E2EArchitectWorkspacePage() {
           </div>
 
           {/* P4: Co-Architect dock toggle */}
+          {SHOW_VISUAL_EXPORTS && (
           <button
             onClick={() => setCoArchitectOpen(o => !o)}
             className={clsx(
@@ -982,6 +983,7 @@ export default function E2EArchitectWorkspacePage() {
           >
             <Bot className="h-3.5 w-3.5" /> Co-Architect
           </button>
+          )}
 
           {/* P7: Demo Diff toggle */}
           <button

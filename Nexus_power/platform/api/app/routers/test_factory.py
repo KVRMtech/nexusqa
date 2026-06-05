@@ -25,6 +25,7 @@ import logging
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Path as PathParam, Query, Request
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, Field
 from sqlalchemy import select, text
 
 from nexus_sdk.db.models import CanonicalArtifactRow
@@ -37,6 +38,7 @@ from ..services.test_factory import service as factory_service
 from ..services.test_factory.options_extractor import (
     extract_field_options_for_artifact,
 )
+from ..services.test_factory.assistant import answer as assistant_answer
 from ..services.test_factory.delivery import (
     EXPORT_MEDIA_TYPES,
     build_csv,
@@ -86,6 +88,33 @@ async def generate_test_cases(
 def _bearer(request: Request) -> str:
     raw = request.headers.get("authorization") or ""
     return raw[7:].strip() if raw.lower().startswith("bearer ") else raw.strip()
+
+
+class AssistantRequest(BaseModel):
+    message: str = Field(..., min_length=1, max_length=4000)
+    history: list[dict] = Field(default_factory=list)
+
+
+@router.post("/api/v1/test-factory/{artifact_id}/assistant")
+async def assistant(
+    request: Request,
+    body: AssistantRequest,
+    artifact_id: str = PathParam(..., min_length=1, max_length=64),
+    user: dict = Depends(get_current_user),
+):
+    """Co-Architect (repointed) — grounded QA copilot over Pages & Forms data."""
+    tenant_id = user["tenant_id"]
+    composer = getattr(request.app.state, "storyboard_composer", None)
+    llm_router = getattr(composer, "_llm_router", None) if composer else None
+    if llm_router is None:
+        raise HTTPException(status_code=503, detail="LLM router unavailable")
+
+    async with tenant_scoped_session(tenant_id) as session:
+        await _require_artifact(session, artifact_id, tenant_id)
+        return await assistant_answer(
+            session, artifact_id=artifact_id, tenant_id=tenant_id,
+            message=body.message, history=body.history, router=llm_router,
+        )
 
 
 @router.post("/api/v1/test-factory/{artifact_id}/capture-options")

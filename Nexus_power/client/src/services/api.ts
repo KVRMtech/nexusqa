@@ -1339,6 +1339,17 @@ class ApiClient {
     return data;
   }
 
+  /** Co-Architect (repointed) — grounded QA-copilot chat over Pages & Forms. */
+  async assistantTestFactory(
+    artifactId: string, message: string, history: { role: string; content: string }[] = [],
+  ): Promise<any> {
+    const { data } = await this.client.post(
+      `/v1/test-factory/${artifactId}/assistant`, { message, history },
+      { timeout: 120_000 },
+    );
+    return data;
+  }
+
   /** On-demand generate a non-demonstrated category (negative|boundary|error_state). */
   async generateTestFactoryCategory(artifactId: string, category: string): Promise<any> {
     const { data } = await this.client.post(

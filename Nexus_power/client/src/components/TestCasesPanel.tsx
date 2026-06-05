@@ -9,8 +9,8 @@
  */
 import { useCallback, useEffect, useState } from 'react';
 import {
-  AlertTriangle, CheckCircle2, Download, FileSpreadsheet, FlaskConical,
-  Loader2, ShieldAlert, Sparkles, Upload,
+  AlertTriangle, Bot, CheckCircle2, Download, FileSpreadsheet, FlaskConical,
+  Loader2, Send, ShieldAlert, Sparkles, Upload,
 } from 'lucide-react';
 import { api } from '../services/api';
 
@@ -126,6 +126,8 @@ export default function TestCasesPanel({ artifactId }: { artifactId: string }) {
         </div>
       </div>
 
+      <CoArchitectChat artifactId={artifactId} />
+
       {notice && <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-[11px] text-emerald-800">{notice}</div>}
       {error && <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-[11px] text-amber-800 flex items-center gap-2"><AlertTriangle className="h-3.5 w-3.5" />{error}</div>}
 
@@ -209,6 +211,65 @@ function TestCaseCard({ row, accent }: { row: CaseRow; accent: string }) {
               ))}
             </tbody>
           </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CoArchitectChat({ artifactId }: { artifactId: string }) {
+  const [open, setOpen] = useState(false);
+  const [messages, setMessages] = useState<{ role: string; content: string }[]>([]);
+  const [input, setInput] = useState('');
+  const [sending, setSending] = useState(false);
+
+  const send = async () => {
+    const q = input.trim();
+    if (!q || sending) return;
+    const history = messages.slice(-6);
+    setMessages((m) => [...m, { role: 'user', content: q }]);
+    setInput(''); setSending(true);
+    try {
+      const res = await api.assistantTestFactory(artifactId, q, history);
+      setMessages((m) => [...m, { role: 'assistant', content: res.answer || '(no answer)' }]);
+    } catch (e: any) {
+      setMessages((m) => [...m, { role: 'assistant', content: 'Error: ' + (e?.response?.data?.detail || String(e)) }]);
+    } finally { setSending(false); }
+  };
+
+  return (
+    <div className="rounded-2xl overflow-hidden" style={{ border: '1px solid rgba(124,58,237,0.25)', background: 'rgba(124,58,237,0.03)' }}>
+      <button onClick={() => setOpen((o) => !o)} className="w-full flex items-center gap-2 px-4 py-2.5 text-left">
+        <Bot className="h-4 w-4" style={{ color: '#7c3aed' }} />
+        <span className="text-[12px] font-black text-slate-900">Co-Architect</span>
+        <span className="text-[10px] text-slate-400 font-semibold">· grounded in your recording · GPT-4o</span>
+        <span className="ml-auto text-[10px] text-violet-600 font-semibold">{open ? 'Hide' : 'Ask'}</span>
+      </button>
+      {open && (
+        <div className="px-3 pb-3 space-y-2">
+          <div className="max-h-64 overflow-y-auto space-y-2">
+            {messages.length === 0 && (
+              <p className="text-[11px] text-slate-400 px-1">
+                Ask about your recording or the generated tests — e.g. “What did the user fill in?”, “Explain the negative tests”, “Which tests cover the traveler page?”
+              </p>
+            )}
+            {messages.map((m, i) => (
+              <div key={i}
+                className={`rounded-lg px-3 py-2 text-[11px] ${m.role === 'user' ? 'bg-violet-100 text-violet-900 ml-8' : 'bg-white border border-slate-200 text-slate-700 mr-8'}`}
+                style={{ whiteSpace: 'pre-wrap' }}>{m.content}</div>
+            ))}
+            {sending && <div className="flex items-center gap-1.5 text-[11px] text-slate-400 px-1"><Loader2 className="h-3 w-3 animate-spin" /> thinking…</div>}
+          </div>
+          <div className="flex items-center gap-2">
+            <input value={input} onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') void send(); }}
+              placeholder="Ask Co-Architect…" disabled={sending}
+              className="flex-1 rounded-lg border border-slate-200 px-3 py-1.5 text-[12px] focus:outline-none focus:border-violet-400" />
+            <button onClick={() => void send()} disabled={sending || !input.trim()}
+              className="flex items-center gap-1 rounded-lg px-3 py-1.5 text-xs font-medium bg-violet-600 text-white hover:bg-violet-500 disabled:opacity-50">
+              <Send className="h-3.5 w-3.5" /> Send
+            </button>
+          </div>
         </div>
       )}
     </div>
