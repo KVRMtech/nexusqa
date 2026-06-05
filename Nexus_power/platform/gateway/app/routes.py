@@ -41,6 +41,8 @@ def build_route_table(cfg: GatewayConfig) -> dict[str, str]:
         "/api/v1/missions": cfg.platform_api_url,
         "/api/v1/test-strategy": cfg.platform_api_url,
         "/api/v1/e2e-architect": cfg.platform_api_url,
+        # Test Factory — Pages & Forms → grounded test cases (additive)
+        "/api/v1/test-factory": cfg.platform_api_url,
         # Platform API passthrough — modules
         "/api/v1/sessions": cfg.platform_api_url,
         "/api/v1/sme": cfg.platform_api_url,
