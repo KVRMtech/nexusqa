@@ -250,6 +250,9 @@ function TestCaseCard({ row, hero }: { row: CaseRow; hero?: boolean }) {
 
       {open && (
         <div className="px-3 pb-3 overflow-x-auto">
+          {row.description && (
+            <p className="text-[11px] text-slate-500 mb-2 leading-snug">{row.description}</p>
+          )}
           <table className="w-full text-[11px] border-collapse">
             <thead>
               <tr className="text-slate-400 text-left">

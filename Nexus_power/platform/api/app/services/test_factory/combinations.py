@@ -20,6 +20,7 @@ preserved.
 
 from __future__ import annotations
 
+import re
 import uuid
 from dataclasses import dataclass, field
 from itertools import combinations as _itercombos
@@ -51,33 +52,95 @@ class CombinationResult:
     selected_count: int
 
 
+# Vision over-capture guards: dates aren't enums, nav-menus aren't form choices.
+_DATE_RX = re.compile(
+    r"\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec|20\d\d|\d{1,2}/\d{1,2})\b",
+    re.IGNORECASE,
+)
+_ACTION_VERBS = frozenset({
+    "book", "add", "find", "manage", "view", "see", "learn", "install", "sign",
+    "go", "start", "explore", "get", "check", "open", "browse", "shop",
+})
+
+
+def _is_date_like(opt: str) -> bool:
+    return bool(_DATE_RX.search(opt))
+
+
+def _is_action_phrase(opt: str) -> bool:
+    words = opt.strip().split()
+    return len(words) >= 2 and words[0].lower().rstrip(".,") in _ACTION_VERBS
+
+
+def _opt_key(options: Sequence[str]) -> frozenset:
+    return frozenset(_norm(o) for o in options)
+
+
 def harvest_option_domains(page_visits: Iterable[PageVisitInput]) -> list[OptionDomain]:
     """Collect fields that captured >= 2 distinct options (real choices).
 
     Source: ``form_snapshot_signals[label] = {selected, options[], required}``.
     Only fields whose options were actually observed become axes.
+
+    Quality guards against vision over-capture (a field is dropped, never
+    guessed):
+      * date fields read as enums (options that look like dates) — those are
+        boundary tests, not combination axes;
+      * navigation menus mis-read as choice controls (most options are action
+        phrases like "Book a flight" / "Add to your trip");
+      * semantically-duplicate axes (two labels with the SAME option set, e.g.
+        "Flight" and "Trip Type" both = [Roundtrip, One-way]) — kept once.
     """
-    domains: dict[str, OptionDomain] = {}
+    candidates: list[OptionDomain] = []
+    seen_labels: set[str] = set()
     for visit in page_visits:
         signals = getattr(visit, "form_snapshot_signals", None) or {}
         for label, meta in signals.items():
             if not isinstance(meta, Mapping):
                 continue
-            raw_opts = meta.get("options") or []
+            clean = label.strip()
+            if not clean or clean in seen_labels:
+                continue
             opts = list(dict.fromkeys(
-                str(o).strip() for o in raw_opts if str(o).strip()
+                str(o).strip() for o in (meta.get("options") or []) if str(o).strip()
             ))
             if len(opts) < 2:
                 continue
             selected = str(meta.get("selected") or "").strip()
-            domains[label.strip()] = OptionDomain(
-                field_label=label.strip(),
-                selected=selected,
+            # Principled axis bar: only fields the user ACTUALLY selected a
+            # value in (demonstrated interaction) become combination axes.
+            # Drops navigation menus the user merely hovered (no selection).
+            if not selected:
+                continue
+            # Drop date-like and navigation-menu fields.
+            if sum(_is_date_like(o) for o in opts) >= (len(opts) + 1) // 2:
+                continue
+            if sum(_is_action_phrase(o) for o in opts) >= 2:
+                continue
+            seen_labels.add(clean)
+            candidates.append(OptionDomain(
+                field_label=clean,
+                selected=str(meta.get("selected") or "").strip(),
                 options=opts,
                 source="signals",
                 required=bool(meta.get("required")),
-            )
-    return list(domains.values())
+            ))
+
+    # De-duplicate semantically-identical axes (same option set) — keep the
+    # most descriptive label (more words, then longer).
+    by_set: dict[frozenset, OptionDomain] = {}
+    for dom in candidates:
+        key = _opt_key(dom.options)
+        existing = by_set.get(key)
+        if existing is None:
+            by_set[key] = dom
+            continue
+        better = max(
+            (existing, dom),
+            key=lambda d: (len(d.field_label.split()), len(d.field_label)),
+        )
+        by_set[key] = better
+    return list(by_set.values())
 
 
 def _pairwise(axes: Sequence[tuple[str, list[str]]]) -> list[dict[str, str]]:
