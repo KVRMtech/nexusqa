@@ -373,6 +373,30 @@ def _resolve_fields(group: _PageGroup) -> tuple[list[tuple[str, str]], list[str]
 # ─── Step construction ───────────────────────────────────────────────────────
 
 
+def _observed(
+    *, verb: str = "", label: str = "", kind: str = "", value: str = "",
+    url: str = "", provenance: str = "demonstrated",
+) -> dict:
+    """The real signal captured in the recording for a step + its provenance.
+
+    Stored as additive ``observed`` / ``provenance`` fields on the step (the
+    step model allows extras).  This is the evidence column the UI surfaces and
+    the raw material a script generator consumes (verb + label + role + value +
+    url -> getByRole(...).fill(...)).  ``provenance`` keeps it honest:
+      * ``demonstrated`` — directly seen in the video
+      * ``available``    — a captured available option (not demonstrated)
+      * ``inferred``     — derived (negative/boundary/un-captured transition)
+    Only non-empty signals are included — never invented.
+    """
+    obs = {
+        k: v for k, v in (
+            ("verb", verb), ("label", label), ("kind", kind),
+            ("value", value), ("url", url),
+        ) if v
+    }
+    return {"observed": obs, "provenance": provenance}
+
+
 def _build_steps(groups: Sequence[_PageGroup]) -> tuple[list[ProductionTestStep], int]:
     """Build ordered, logically-reconstructed test steps from page groups."""
     steps: list[ProductionTestStep] = []
@@ -396,6 +420,7 @@ def _build_steps(groups: Sequence[_PageGroup]) -> tuple[list[ProductionTestStep]
                 expected=f"The {page_name} page is displayed",
                 expected_result=f"The {page_name} page is displayed",
                 selector=f"url={url}",
+                **_observed(verb="navigate", url=url),
             ))
         else:
             steps.append(ProductionTestStep(
@@ -404,6 +429,7 @@ def _build_steps(groups: Sequence[_PageGroup]) -> tuple[list[ProductionTestStep]
                 expected=f"URL path is {group.url_path or canon} and the {page_name} page is displayed",
                 expected_result=f"URL path is {group.url_path or canon} and the {page_name} page is displayed",
                 selector=f"url={canon}",
+                **_observed(verb="navigate", url=group.url_path or canon),
             ))
 
         text_fields, toggles, required_present = _resolve_fields(group)
@@ -419,6 +445,7 @@ def _build_steps(groups: Sequence[_PageGroup]) -> tuple[list[ProductionTestStep]
                 expected_result=f"'{label}' shows '{value}'",
                 selector=_locator(label, "field"),
                 data_ref=value,
+                **_observed(verb="type", label=label, kind="field", value=value),
             ))
 
         # 3) Toggles the user turned on.
@@ -430,6 +457,7 @@ def _build_steps(groups: Sequence[_PageGroup]) -> tuple[list[ProductionTestStep]
                 expected=f"'{label}' is selected",
                 expected_result=f"'{label}' is selected",
                 selector=_locator(label, "field"),
+                **_observed(verb="select", label=label, kind="toggle"),
             ))
 
         # 4) Pure interactions the user performed (clicks/hovers/etc.), in order.
@@ -450,6 +478,7 @@ def _build_steps(groups: Sequence[_PageGroup]) -> tuple[list[ProductionTestStep]
                 action=f"Proceed to the {next_name} page",
                 expected=f"The {next_name} page opens",
                 expected_result=f"The {next_name} page opens",
+                **_observed(verb="navigate", provenance="inferred"),
             ))
 
         # 5) Required-but-unfilled fields: assert presence (demonstrated as shown),
@@ -462,6 +491,7 @@ def _build_steps(groups: Sequence[_PageGroup]) -> tuple[list[ProductionTestStep]
                 action=f"Verify the form requires: {joined}",
                 expected=f"Required fields are present: {joined}",
                 expected_result=f"Required fields are present: {joined}",
+                **_observed(verb="assert_required", label=joined, kind="form"),
             ))
 
     return steps, fields_used
@@ -494,6 +524,7 @@ def _interaction_steps(group: _PageGroup, next_url: str) -> list[ProductionTestS
         expected=expected,
         expected_result=expected,
         selector=_locator(label, a.target_kind),
+        **_observed(verb=(a.verb or "click").strip().lower(), label=label, kind=a.target_kind or "button"),
     )]
 
 

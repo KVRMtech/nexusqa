@@ -29,8 +29,33 @@ HEADERS = [
     "Test Steps",
     "Test Data",
     "Expected Result",
+    "Observed in Recording",
 ]
-_COL_WIDTHS = [8, 34, 46, 62, 28, 50]
+_COL_WIDTHS = [8, 34, 46, 62, 28, 50, 42]
+
+# How the signal behind a step was sourced — keeps the evidence column honest.
+_PROV_LABEL = {
+    "demonstrated": "Observed",
+    "available": "Option (captured)",
+    "inferred": "Inferred",
+}
+
+
+def _observed_cell(step) -> str:
+    """Compact evidence string captured in the recording, prefixed by provenance."""
+    o = getattr(step, "observed", None) or {}
+    prov = _PROV_LABEL.get(getattr(step, "provenance", "") or "", "")
+    if o.get("url"):
+        ev = f"navigate -> {o['url']}"
+    elif o:
+        tgt = f'"{o.get("label")}"' if o.get("label") else ""
+        val = f' = "{o.get("value")}"' if o.get("value") else ""
+        ev = f'{o.get("verb", "")} {tgt}{val}'.strip()
+    else:
+        ev = ""
+    if prov and ev:
+        return f"{prov}: {ev}"
+    return prov or ev
 
 EXPORT_MEDIA_TYPES = {
     "excel": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -56,7 +81,7 @@ def _step_rows(tc: ProductionTestCase) -> list[tuple]:
     description = tc.description or ""
     steps = tc.steps or []
     if not steps:
-        return [(1, name, description, "(No steps defined)", "", "")]
+        return [(1, name, description, "(No steps defined)", "", "", "")]
     for idx, st in enumerate(steps, start=1):
         s_no = st.step_number if st.step_number is not None else idx
         rows.append((
@@ -66,6 +91,7 @@ def _step_rows(tc: ProductionTestCase) -> list[tuple]:
             st.action or "",
             getattr(st, "data_ref", None) or "",
             _expected(st),
+            _observed_cell(st),
         ))
     return rows
 
@@ -88,13 +114,14 @@ def build_excel(test_cases: Sequence[ProductionTestCase]) -> bytes:
     row = 2
     for tc in test_cases:
         start = row
-        for s_no, name, desc, action, data, expected in _step_rows(tc):
+        for s_no, name, desc, action, data, expected, observed in _step_rows(tc):
             ws.cell(row=row, column=1, value=s_no)
             ws.cell(row=row, column=2, value=name)
             ws.cell(row=row, column=3, value=desc)
             ws.cell(row=row, column=4, value=action)
             ws.cell(row=row, column=5, value=data)
             ws.cell(row=row, column=6, value=expected)
+            ws.cell(row=row, column=7, value=observed)
             row += 1
         # Merge Name + Description across this test case's steps.
         if row - start > 1:

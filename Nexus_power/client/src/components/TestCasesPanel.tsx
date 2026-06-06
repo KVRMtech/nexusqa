@@ -14,10 +14,29 @@ import {
 } from 'lucide-react';
 import { api } from '../services/api';
 
+interface Observed {
+  verb?: string; label?: string; kind?: string; value?: string; url?: string;
+}
 interface Step {
   step_number?: number; action?: string; data_ref?: string;
   expected?: string; expected_result?: string;
+  observed?: Observed; provenance?: string;
 }
+
+// Compact, honest evidence string from the signal captured in the recording.
+function evidenceText(o?: Observed): string {
+  if (!o || Object.keys(o).length === 0) return '';
+  if (o.url) return `navigate → ${o.url}`;
+  const tgt = o.label ? `"${o.label}"` : '';
+  const val = o.value ? ` = "${o.value}"` : '';
+  return `${o.verb || ''} ${tgt}${val}`.trim();
+}
+// Provenance badge: how grounded this step is.
+const PROV: Record<string, { label: string; bg: string; fg: string }> = {
+  demonstrated: { label: 'Observed', bg: 'rgba(34,197,94,0.14)', fg: '#15803d' },
+  available: { label: 'Option', bg: 'rgba(245,158,11,0.16)', fg: '#b45309' },
+  inferred: { label: 'Inferred', bg: 'rgba(100,116,139,0.14)', fg: '#475569' },
+};
 interface ProductionTestCase {
   name?: string; description?: string; steps?: Step[];
   priority?: string; type?: string; tags?: string[];
@@ -198,17 +217,31 @@ function TestCaseCard({ row, accent }: { row: CaseRow; accent: string }) {
               <th className="font-semibold py-1 pr-2 w-8">S.No</th>
               <th className="font-semibold py-1 pr-2">Test Step</th>
               <th className="font-semibold py-1 pr-2">Test Data</th>
-              <th className="font-semibold py-1">Expected Result</th>
+              <th className="font-semibold py-1 pr-2">Expected Result</th>
+              <th className="font-semibold py-1">Observed in Recording</th>
             </tr></thead>
             <tbody>
-              {steps.map((s, i) => (
+              {steps.map((s, i) => {
+                const ev = evidenceText(s.observed);
+                const prov = PROV[s.provenance || ''] || null;
+                return (
                 <tr key={i} className="border-t border-slate-100 align-top">
                   <td className="py-1.5 pr-2 text-slate-400 font-mono">{s.step_number ?? i + 1}</td>
                   <td className="py-1.5 pr-2 text-slate-800">{s.action}</td>
                   <td className="py-1.5 pr-2">{s.data_ref ? <span className="rounded px-1.5 py-0.5 font-semibold" style={{ background: 'rgba(56,189,248,0.12)', color: '#0369a1' }}>{s.data_ref}</span> : <span className="text-slate-300">—</span>}</td>
-                  <td className="py-1.5 text-slate-600">{s.expected_result || s.expected || ''}</td>
+                  <td className="py-1.5 pr-2 text-slate-600">{s.expected_result || s.expected || ''}</td>
+                  <td className="py-1.5">
+                    {ev ? (
+                      <div className="flex flex-col gap-0.5">
+                        {prov && <span className="self-start rounded px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide" style={{ background: prov.bg, color: prov.fg }}>{prov.label}</span>}
+                        <span className="font-mono text-[10px] text-slate-500 leading-tight">{ev}</span>
+                      </div>
+                    ) : (
+                      prov ? <span className="rounded px-1.5 py-0.5 text-[9px] font-bold uppercase" style={{ background: prov.bg, color: prov.fg }}>{prov.label}</span> : <span className="text-slate-300">—</span>
+                    )}
+                  </td>
                 </tr>
-              ))}
+              );})}
             </tbody>
           </table>
         </div>

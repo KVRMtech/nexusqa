@@ -249,10 +249,14 @@ def _build_combo_case(
                 new.expected = f"'{label}' shows '{value}'"
                 new.expected_result = new.expected
                 new.data_ref = value
+                new.observed = {"verb": "type", "label": label, "kind": "field", "value": value}
+                new.provenance = "available"  # captured option, not demonstrated
             elif sel and _norm(sel.group(1)) in axis_options.get(nlabel, set()):
                 new.action = f"Select '{value}'"
                 new.expected = f"'{value}' is selected"
                 new.expected_result = new.expected
+                new.observed = {"verb": "select", "label": value, "kind": "toggle"}
+                new.provenance = "available"
         steps.append(new)
 
     desc_combo = ", ".join(f"{k}={v}" for k, v in combo.items())

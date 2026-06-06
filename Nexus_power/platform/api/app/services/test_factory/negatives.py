@@ -102,6 +102,7 @@ def generate_negative_cases(
                 action=f"Fill all other required fields with valid values: {joined}",
                 expected=f"The fields {joined} contain valid values",
                 expected_result=f"The fields {joined} contain valid values",
+                observed={}, provenance="inferred",
             ))
         steps.append(ProductionTestStep(
             step_number=0,
@@ -110,6 +111,7 @@ def generate_negative_cases(
             expected=f"A validation error is shown for '{fieldname}' (required field)",
             expected_result=f"A validation error is shown for '{fieldname}' (required field)",
             selector=f"label={fieldname}",
+            observed={"verb": "submit", "label": fieldname}, provenance="inferred",
         ))
         _renumber(steps)
         name = f"Negative: missing required '{fieldname}' ({host})"[:500]
@@ -173,6 +175,8 @@ def generate_boundary_cases(
                     st.data_ref = val
                     st.expected = f"'{fieldname}' is validated (accepted or rejected) for the boundary value"
                     st.expected_result = st.expected
+                    st.observed = {"verb": "type", "label": fieldname, "kind": kind, "value": val}
+                    st.provenance = "inferred"
             _renumber(steps)
             cases.append(ProductionTestCase(
                 test_id=str(uuid.uuid5(
