@@ -262,19 +262,23 @@ async def extract_outcomes_for_artifact(
             except Exception:  # pragma: no cover
                 pass
 
-    outcomes_by_visit = {vid: out for vid, out in results if out}
+    outcomes_by_visit = dict(results)  # all scanned visits (clears stale)
 
     actions_with_outcome = 0
     for visit_id, rows in actions_by_visit.items():
         outcomes = outcomes_by_visit.get(visit_id) or {}
-        if not outcomes:
-            continue
         for row in rows:
             after = outcomes.get(_norm(row.target_label))
-            if not after:
-                continue
             merged = dict(row.evidence_signals or {})
-            merged["after"] = after
+            if after:
+                if merged.get("after") == after:
+                    continue  # unchanged
+                merged["after"] = after
+                actions_with_outcome += 1
+            elif "after" in merged:
+                merged.pop("after", None)  # clear stale outcome
+            else:
+                continue
             await session.execute(
                 update(PageActionRow)
                 .where(
@@ -283,7 +287,6 @@ async def extract_outcomes_for_artifact(
                 )
                 .values(evidence_signals=merged)
             )
-            actions_with_outcome += 1
 
     return {
         "visits_scanned": len(inputs),

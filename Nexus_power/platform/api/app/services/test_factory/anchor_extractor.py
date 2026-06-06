@@ -61,12 +61,15 @@ class AnchorItem(BaseModel):
     element_label: str = Field(description="The visible label/text of the element the user interacted with.")
     anchor_text: str = Field(
         default="",
-        description="The nearest STABLE visible landmark that locates this element — "
-        "the table-row label, section heading, or card title it belongs to. "
-        "Empty if the element has no distinguishing surrounding context.",
+        description="ONLY set this when the SAME label appears on MULTIPLE elements "
+        "on the page (a control repeated across table rows / list items / cards). "
+        "Then give the SHORT identifying text of that element's own row/card/section "
+        "(a few words — e.g. a row's key value or a section title). If the element is "
+        "UNIQUE on the page, leave this EMPTY. Never use a field's value or an "
+        "unrelated nearby label, and never a full sentence or paragraph.",
     )
     anchor_kind: str = Field(
-        default="", description="row | section | card | column | group | dialog",
+        default="", description="row | list_item | card | column | group",
     )
 
 
@@ -89,14 +92,19 @@ def _anchor_tool() -> ToolDefinition:
 
 _SYSTEM_PROMPT = (
     "You are a meticulous UI analyst. You are given screenshots of a page and a "
-    "list of elements the user interacted with (by their visible label). For each "
-    "element, identify the nearest STABLE visible landmark that pinpoints WHERE it "
-    "sits — e.g. the table row it is in (identified by that row's text), the "
-    "section heading above it, the card/panel title, or the column header. This is "
-    "what tells apart several identical controls (e.g. multiple 'Select' buttons). "
-    "Use ONLY context visible in the screenshots; if an element has no "
-    "distinguishing surrounding text, leave its anchor empty. You MUST respond by "
-    "calling the record_element_anchors tool."
+    "list of elements the user interacted with (by their visible label). An anchor "
+    "is ONLY needed to tell apart REPEATED controls — the same label appearing on "
+    "several elements, e.g. a 'Select' button in every row of a results table, or "
+    "an 'Edit' link in each list item. For such an element, give the SHORT "
+    "identifying text of its OWN row / list item / card (a few words).\n"
+    "CRITICAL RULES:\n"
+    "- If an element is UNIQUE on the page (only one element has that label, like a "
+    "single 'Find flights' or 'Accept cookies' button), you MUST leave its anchor "
+    "EMPTY. A unique element needs no anchor, and a wrong anchor is worse than none.\n"
+    "- NEVER use a form field's value (e.g. a selected 'Economy') or an unrelated "
+    "nearby label as an anchor.\n"
+    "- The anchor must be SHORT (a few words) — never a full sentence or paragraph.\n"
+    "You MUST respond by calling the record_element_anchors tool."
 )
 
 
@@ -182,11 +190,14 @@ async def _extract_one(
         for a in parsed.anchors:
             lbl = (a.element_label or "").strip()
             anchor = (a.anchor_text or "").strip()
-            if not lbl or not anchor:
+            # A real locating landmark is short. Drop empties and anything
+            # sentence/paragraph-length (e.g. a whole cookie-banner blurb) — those
+            # are not usable locators and only add noise.
+            if not lbl or not anchor or len(anchor) > 60 or len(anchor.split()) > 8:
                 continue
             out[_norm(lbl)] = {
-                "label": anchor[:200],
-                "kind": (a.anchor_kind or "").strip()[:40] or "section",
+                "label": anchor,
+                "kind": (a.anchor_kind or "").strip()[:40] or "row",
                 "source": "vision",
                 "extractor_version": ANCHOR_EXTRACTOR_VERSION,
             }
@@ -272,19 +283,24 @@ async def extract_anchors_for_artifact(
             except Exception:  # pragma: no cover
                 pass
 
-    anchors_by_visit = {vid: anc for vid, anc in results if anc}
+    # All scanned visits (anchors dict may be empty → clears stale anchors).
+    anchors_by_visit = dict(results)
 
     actions_anchored = 0
     for visit_id, rows in actions_by_visit.items():
         anchors = anchors_by_visit.get(visit_id) or {}
-        if not anchors:
-            continue
         for row in rows:
             anchor = anchors.get(_norm(row.target_label))
-            if not anchor:
-                continue
             merged = dict(row.evidence_signals or {})
-            merged["anchor"] = anchor
+            if anchor:
+                if merged.get("anchor") == anchor:
+                    continue  # unchanged
+                merged["anchor"] = anchor
+                actions_anchored += 1
+            elif "anchor" in merged:
+                merged.pop("anchor", None)  # stricter pass: clear a stale anchor
+            else:
+                continue
             await session.execute(
                 update(PageActionRow)
                 .where(
@@ -293,7 +309,6 @@ async def extract_anchors_for_artifact(
                 )
                 .values(evidence_signals=merged)
             )
-            actions_anchored += 1
 
     return {
         "visits_scanned": len(inputs),
