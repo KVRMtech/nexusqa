@@ -166,6 +166,7 @@ export default function TestCasesPanel({ artifactId }: { artifactId: string }) {
           {btn('Generate', () => run('generate', () => api.generateTestFactory(artifactId)), 'bg-emerald-600 text-white hover:bg-emerald-500', <Sparkles className="h-3.5 w-3.5" />, 'generate')}
           {btn('Capture options', () => run('capture', () => api.captureTestFactoryOptions(artifactId), 'Captured options + regenerated combinations.'), 'bg-sky-100 text-sky-700 hover:bg-sky-200', <Sparkles className="h-3.5 w-3.5" />, 'capture')}
           {btn('Where it sits', () => run('anchors', () => api.captureTestFactoryAnchors(artifactId), 'Captured element anchors + regenerated.'), 'bg-sky-100 text-sky-700 hover:bg-sky-200', <Sparkles className="h-3.5 w-3.5" />, 'anchors')}
+          {btn('What happens next', () => run('outcomes', () => api.captureTestFactoryOutcomes(artifactId), 'Captured action outcomes + regenerated.'), 'bg-sky-100 text-sky-700 hover:bg-sky-200', <Sparkles className="h-3.5 w-3.5" />, 'outcomes')}
           <span className="w-px h-5 bg-slate-200" />
           {btn('Negative', () => run('negative', () => api.generateTestFactoryCategory(artifactId, 'negative')), 'bg-rose-100 text-rose-700 hover:bg-rose-200', <ShieldAlert className="h-3.5 w-3.5" />, 'negative')}
           {btn('Boundary', () => run('boundary', () => api.generateTestFactoryCategory(artifactId, 'boundary')), 'bg-violet-100 text-violet-700 hover:bg-violet-200', <ShieldAlert className="h-3.5 w-3.5" />, 'boundary')}

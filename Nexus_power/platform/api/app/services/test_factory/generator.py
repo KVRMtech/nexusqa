@@ -93,6 +93,10 @@ class PageActionInput:
     # (captured by the anchor-extractor into page_actions.evidence_signals).
     anchor: str = ""
     anchor_kind: str = ""
+    # "What happened after" — the visible outcome of the action (captured by the
+    # after-extractor): drives the step's wait condition + assertion.
+    after_outcome: str = ""
+    after_detail: str = ""
 
 
 @dataclass
@@ -519,16 +523,25 @@ def _interaction_steps(group: _PageGroup, next_url: str) -> list[ProductionTestS
     a = clicks[-1]
     label = a.target_label.strip()
     anchor = (a.anchor or "").strip()
+    after = (a.after_detail or "").strip()
     # Fold the anchor into the step so a repeated control is unambiguous:
     # "Click 'Select' in the '10:30 AM' row".
     where = f" in the '{anchor}' {a.anchor_kind or 'section'}" if anchor else ""
-    expected = (
-        f"The application proceeds to {next_url}" if next_url
-        else f"'{label}'{where} is activated"
-    )
+    # The Expected Result reflects the OBSERVED outcome (wait + assertion):
+    # navigation, a results panel appearing, a validation error, etc.
+    if next_url:
+        expected = f"The application proceeds to {next_url}"
+        if after:
+            expected = f"{expected}; {after}"
+    elif after:
+        expected = after
+    else:
+        expected = f"'{label}'{where} is activated"
     obs = _observed(verb=(a.verb or "click").strip().lower(), label=label, kind=a.target_kind or "button")
     if anchor:
         obs["observed"]["anchor"] = anchor
+    if a.after_outcome:
+        obs["observed"]["after"] = after or a.after_outcome
     return [ProductionTestStep(
         step_number=0,
         action=f"Click '{label}'{where}",
