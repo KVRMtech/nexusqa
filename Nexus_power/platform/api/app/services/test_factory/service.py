@@ -21,6 +21,7 @@ from nexus_sdk.db.models import (
     FactoryTestCaseRow,
     PageActionRow,
     PageVisitRow,
+    VisualFrameRow,
 )
 from nexus_sdk.models import ProductionTestCase
 
@@ -55,6 +56,37 @@ async def _latest_version(
     return res.scalar_one_or_none()
 
 
+async def _frame_refs(
+    session: AsyncSession, artifact_id: str, visit_rows,
+) -> dict[str, str]:
+    """Representative frame asset path per visit — the last captured frame within
+    the visit's time window (the page's final visible state).  Same mapping the
+    vision extractors use; here it just gives each step a real screenshot."""
+    if not visit_rows:
+        return {}
+    frames = (
+        await session.execute(
+            select(VisualFrameRow.timestamp_seconds, VisualFrameRow.frame_asset_path)
+            .where(VisualFrameRow.artifact_id == artifact_id)
+            .order_by(VisualFrameRow.frame_index.asc())
+        )
+    ).all()
+    frames = [(int((ts or 0.0) * 1000), path) for ts, path in frames if path]
+    if not frames:
+        return {}
+    out: dict[str, str] = {}
+    for v in visit_rows:
+        lo = v.first_seen_ms or 0
+        hi = v.last_seen_ms or lo
+        chosen = ""
+        for ts_ms, path in frames:
+            if lo <= ts_ms <= hi:
+                chosen = path  # keep the last within the window
+        if chosen:
+            out[v.page_visit_id] = chosen
+    return out
+
+
 async def _load_current_pages_and_actions(
     session: AsyncSession, *, artifact_id: str,
 ) -> tuple[list[PageVisitInput], list[PageActionInput]]:
@@ -74,6 +106,8 @@ async def _load_current_pages_and_actions(
         )
     ).scalars().all()
 
+    frame_ref_by_visit = await _frame_refs(session, artifact_id, visit_rows)
+
     visits = [
         PageVisitInput(
             page_visit_id=v.page_visit_id,
@@ -91,6 +125,7 @@ async def _load_current_pages_and_actions(
             form_snapshot_signals=dict(v.form_snapshot_signals or {}),
             first_seen_ms=v.first_seen_ms or 0,
             duration_ms=v.duration_ms or 0,
+            frame_ref=frame_ref_by_visit.get(v.page_visit_id, ""),
         )
         for v in visit_rows
     ]

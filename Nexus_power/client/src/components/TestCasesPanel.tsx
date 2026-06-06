@@ -9,7 +9,7 @@
  */
 import { useCallback, useEffect, useState } from 'react';
 import {
-  AlertTriangle, Bot, CheckCircle2, Download, FileSpreadsheet, FlaskConical,
+  AlertTriangle, Bot, Camera, CheckCircle2, Download, FileSpreadsheet, FlaskConical,
   Loader2, Send, ShieldAlert, Sparkles, Upload,
 } from 'lucide-react';
 import { api } from '../services/api';
@@ -33,6 +33,7 @@ interface Step {
   expected?: string; expected_result?: string;
   observed?: Observed; provenance?: string;
   confidence?: string; confidence_reason?: string;
+  screenshot?: string;
 }
 
 // Compact, honest evidence string from the signal captured in the recording.
@@ -281,14 +282,22 @@ function TestCaseCard({ row, accent, showDetails }: { row: CaseRow; accent: stri
                   <td className="py-1.5 pr-2 text-slate-600">{s.expected_result || s.expected || ''}</td>
                   {showDetails && (
                   <td className="py-1.5 pr-2">
-                    {ev ? (
-                      <div className="flex flex-col gap-0.5">
-                        {prov && <span className="self-start rounded px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide" style={{ background: prov.bg, color: prov.fg }}>{prov.label}</span>}
-                        <span className="font-mono text-[10px] text-slate-500 leading-tight">{ev}</span>
-                      </div>
-                    ) : (
-                      prov ? <span className="rounded px-1.5 py-0.5 text-[9px] font-bold uppercase" style={{ background: prov.bg, color: prov.fg }}>{prov.label}</span> : <span className="text-slate-300">—</span>
-                    )}
+                    <div className="flex flex-col gap-0.5">
+                      {ev ? (
+                        <>
+                          {prov && <span className="self-start rounded px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide" style={{ background: prov.bg, color: prov.fg }}>{prov.label}</span>}
+                          <span className="font-mono text-[10px] text-slate-500 leading-tight">{ev}</span>
+                        </>
+                      ) : (
+                        prov ? <span className="self-start rounded px-1.5 py-0.5 text-[9px] font-bold uppercase" style={{ background: prov.bg, color: prov.fg }}>{prov.label}</span> : !s.screenshot && <span className="text-slate-300">—</span>
+                      )}
+                      {s.screenshot && (
+                        <a href={api.getFrameImageUrl(s.screenshot)} target="_blank" rel="noopener noreferrer"
+                          className="self-start inline-flex items-center gap-1 text-[10px] font-semibold text-sky-600 hover:text-sky-700">
+                          <Camera className="h-3 w-3" /> screenshot
+                        </a>
+                      )}
+                    </div>
                   </td>
                   )}
                   {showDetails && (

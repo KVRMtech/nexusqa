@@ -77,6 +77,8 @@ class PageVisitInput:
     form_snapshot_signals: Mapping[str, object] = field(default_factory=dict)
     first_seen_ms: int = 0
     duration_ms: int = 0
+    # Representative frame asset path (the page's screenshot) — per-step proof.
+    frame_ref: str = ""
 
 
 @dataclass(frozen=True)
@@ -120,6 +122,7 @@ class _PageGroup:
     url_query: str
     canonical_host: str
     location: str
+    frame_ref: str = ""
     visit_ids: list[str] = field(default_factory=list)
     # ordered (label, value) candidates collected across the group's frames
     field_candidates: list[tuple[str, str]] = field(default_factory=list)
@@ -286,11 +289,14 @@ def _segment(
                 url_query=visit.url_query.strip(),
                 canonical_host=visit.canonical_host.strip(),
                 location=visit.location.strip(),
+                frame_ref=visit.frame_ref or "",
             )
             groups.append(current)
         if current is None:
             # URL-less frames before the first real navigation = browser chrome.
             continue
+        if not current.frame_ref and visit.frame_ref:
+            current.frame_ref = visit.frame_ref
         current.visit_ids.append(visit.page_visit_id)
         for label, value in (visit.form_snapshot or {}).items():
             clean, required = _strip_required(label)
@@ -417,6 +423,7 @@ def _build_steps(groups: Sequence[_PageGroup]) -> tuple[list[ProductionTestStep]
         page_name = _page_name(group.url_path, group.location)
         next_canon = _canonical_url(groups[gi + 1]) if gi + 1 < len(groups) else ""
         next_path = groups[gi + 1].url_path if gi + 1 < len(groups) else ""
+        group_start = len(steps)  # tag this group's steps with its screenshot
 
         # 1) Navigation onto the page.  The entry step navigates to the full URL;
         #    every later assertion checks the PATH only (see _canonical_url).
@@ -501,6 +508,11 @@ def _build_steps(groups: Sequence[_PageGroup]) -> tuple[list[ProductionTestStep]
                 expected_result=f"Required fields are present: {joined}",
                 **_observed(verb="assert_required", label=joined, kind="form"),
             ))
+
+        # Tag every step on this page with the page's screenshot (proof per step).
+        if group.frame_ref:
+            for st in steps[group_start:]:
+                st.screenshot = group.frame_ref
 
     return steps, fields_used
 
