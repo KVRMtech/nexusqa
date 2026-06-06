@@ -32,6 +32,7 @@ interface Step {
   step_number?: number; action?: string; data_ref?: string;
   expected?: string; expected_result?: string;
   observed?: Observed; provenance?: string;
+  confidence?: string; confidence_reason?: string;
 }
 
 // Compact, honest evidence string from the signal captured in the recording.
@@ -238,6 +239,8 @@ function TestCaseCard({ row, accent, showDetails }: { row: CaseRow; accent: stri
   const [open, setOpen] = useState(false);
   const steps = row.test_case?.steps || [];
   const demo = row.confidence === 'demonstrated';
+  const reviewCount = steps.filter((s) => s.confidence === 'review').length;
+  const scored = steps.some((s) => s.confidence);
   return (
     <div className="rounded-xl mb-2 overflow-hidden" style={{ background: 'rgba(255,255,255,0.7)', border: `1px solid ${accent}33` }}>
       <button onClick={() => setOpen((o) => !o)} className="w-full flex items-center gap-2 px-3 py-2.5 text-left">
@@ -245,6 +248,11 @@ function TestCaseCard({ row, accent, showDetails }: { row: CaseRow; accent: stri
               : <Sparkles className="h-4 w-4 shrink-0" style={{ color: accent }} />}
         <span className="text-[12px] font-bold text-slate-900 break-words">{row.name}</span>
         <span className="ml-auto shrink-0 rounded-full px-2 py-0.5 text-[9px] font-black uppercase" style={{ background: `${accent}22`, color: accent }}>{row.confidence}</span>
+        {showDetails && scored && (
+          reviewCount > 0
+            ? <span className="shrink-0 inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[9px] font-black" style={{ background: 'rgba(245,158,11,0.16)', color: '#b45309' }}><AlertTriangle className="h-3 w-3" /> {reviewCount} to review</span>
+            : <span className="shrink-0 inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[9px] font-black" style={{ background: 'rgba(34,197,94,0.14)', color: '#15803d' }}><CheckCircle2 className="h-3 w-3" /> all solid</span>
+        )}
         <span className="shrink-0 text-[9px] text-slate-400 font-semibold">{row.step_count} steps · {row.priority}</span>
       </button>
       {open && (
@@ -256,7 +264,8 @@ function TestCaseCard({ row, accent, showDetails }: { row: CaseRow; accent: stri
               <th className="font-semibold py-1 pr-2">Test Step</th>
               <th className="font-semibold py-1 pr-2">Test Data</th>
               <th className="font-semibold py-1 pr-2">Expected Result</th>
-              {showDetails && <th className="font-semibold py-1">Observed in Recording</th>}
+              {showDetails && <th className="font-semibold py-1 pr-2">Observed in Recording</th>}
+              {showDetails && <th className="font-semibold py-1">Confidence</th>}
             </tr></thead>
             <tbody>
               {steps.map((s, i) => {
@@ -269,7 +278,7 @@ function TestCaseCard({ row, accent, showDetails }: { row: CaseRow; accent: stri
                   <td className="py-1.5 pr-2">{s.data_ref ? <span className="rounded px-1.5 py-0.5 font-semibold" style={{ background: 'rgba(56,189,248,0.12)', color: '#0369a1' }}>{s.data_ref}</span> : <span className="text-slate-300">—</span>}</td>
                   <td className="py-1.5 pr-2 text-slate-600">{s.expected_result || s.expected || ''}</td>
                   {showDetails && (
-                  <td className="py-1.5">
+                  <td className="py-1.5 pr-2">
                     {ev ? (
                       <div className="flex flex-col gap-0.5">
                         {prov && <span className="self-start rounded px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide" style={{ background: prov.bg, color: prov.fg }}>{prov.label}</span>}
@@ -278,6 +287,15 @@ function TestCaseCard({ row, accent, showDetails }: { row: CaseRow; accent: stri
                     ) : (
                       prov ? <span className="rounded px-1.5 py-0.5 text-[9px] font-bold uppercase" style={{ background: prov.bg, color: prov.fg }}>{prov.label}</span> : <span className="text-slate-300">—</span>
                     )}
+                  </td>
+                  )}
+                  {showDetails && (
+                  <td className="py-1.5" title={s.confidence_reason || ''}>
+                    {s.confidence === 'high' ? (
+                      <span className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[9px] font-bold" style={{ background: 'rgba(34,197,94,0.14)', color: '#15803d' }}><CheckCircle2 className="h-3 w-3" /> Solid</span>
+                    ) : s.confidence === 'review' ? (
+                      <span className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[9px] font-bold cursor-help" style={{ background: 'rgba(245,158,11,0.16)', color: '#b45309' }}><AlertTriangle className="h-3 w-3" /> Review</span>
+                    ) : <span className="text-slate-300">—</span>}
                   </td>
                   )}
                 </tr>

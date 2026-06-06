@@ -25,6 +25,7 @@ from nexus_sdk.db.models import (
 from nexus_sdk.models import ProductionTestCase
 
 from .combinations import generate_combination_cases
+from .confidence import annotate as annotate_confidence, compute_ambiguous_labels
 from .negatives import CATEGORY_GENERATORS
 from .generator import (
     DemonstratedGenerationResult,
@@ -185,6 +186,7 @@ async def generate_and_store(
     result = generate_demonstrated_test_cases(
         artifact_id=artifact_id, page_visits=visits, page_actions=actions,
     )
+    ambiguous = compute_ambiguous_labels(actions)
     demonstrated_meta = {
         "page_groups": result.page_groups,
         "visits_total": result.visits_total,
@@ -195,6 +197,7 @@ async def generate_and_store(
 
     new_ids: list[str] = []
     for tc in result.test_cases:
+        annotate_confidence(tc, ambiguous)
         values = _row_values(
             tc, artifact_id=artifact_id, tenant_id=tenant_id,
             session_id=session_id, confidence="demonstrated",
@@ -210,6 +213,7 @@ async def generate_and_store(
         page_visits=visits, host=_dominant_host(visits),
     )
     for tc in combo.active:
+        annotate_confidence(tc, ambiguous)
         values = _row_values(
             tc, artifact_id=artifact_id, tenant_id=tenant_id,
             session_id=session_id, confidence="available",
@@ -296,9 +300,11 @@ async def generate_category(
         artifact_id=artifact_id, base_case=base,
         page_visits=visits, host=_dominant_host(visits),
     )
+    ambiguous = compute_ambiguous_labels(actions)
 
     new_ids: list[str] = []
     for tc in cases:
+        annotate_confidence(tc, ambiguous)
         values = _row_values(
             tc, artifact_id=artifact_id, tenant_id=tenant_id,
             session_id=session_id, confidence="inferred",

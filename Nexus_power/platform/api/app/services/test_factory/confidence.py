@@ -1,0 +1,97 @@
+"""Per-step confidence scoring (Phase 2).
+
+Honest, grounded flag — never a guess dressed as certainty.  Each step is scored
+``high`` (solid, automate as-is) or ``review`` (a human should glance before it
+goes into an automated suite), with a plain-language reason.
+
+Signals (all derived from what was actually captured — no invention):
+  * ``inferred`` provenance (negative / boundary / un-captured transition) →
+    review: it was derived, not directly observed.
+  * the target label appears multiple times in the same page's captured actions
+    (ambiguous) → review: we can't yet pinpoint which element (anchor capture,
+    Phase 3, will close this).
+  * no usable handle captured (neither a label nor a URL) → review.
+  * otherwise → high: a directly-observed step with a clear, named element or a
+    verifiable URL.
+
+Stored additively on each step as ``confidence`` + ``confidence_reason`` (the
+step model allows extras — no schema change).  Display is gated by the same
+role/toggle as the evidence column.
+"""
+
+from __future__ import annotations
+
+from typing import Iterable
+
+from .generator import PageActionInput, _norm
+
+HIGH = "high"
+REVIEW = "review"
+
+
+def compute_ambiguous_labels(actions: Iterable[PageActionInput]) -> set[str]:
+    """Normalized labels that appear on 2+ distinct actions within one page.
+
+    A repeated label on the same page means the visible name alone can't
+    uniquely locate the element (e.g. five 'Select' buttons).  Until anchor
+    capture lands, those steps are flagged for review rather than trusted.
+    """
+    per_page: dict[str, dict[str, int]] = {}
+    for a in actions:
+        label = (a.target_label or "").strip()
+        if not label:
+            continue
+        key = _norm(label)
+        if not key:
+            continue
+        bucket = per_page.setdefault(a.page_visit_id, {})
+        bucket[key] = bucket.get(key, 0) + 1
+    ambiguous: set[str] = set()
+    for bucket in per_page.values():
+        for key, count in bucket.items():
+            if count > 1:
+                ambiguous.add(key)
+    return ambiguous
+
+
+def score_step(step, ambiguous: set[str]) -> tuple[str, str]:
+    """Return (level, reason) for one step."""
+    prov = (getattr(step, "provenance", "") or "")
+    obs = getattr(step, "observed", None) or {}
+    label = (obs.get("label") or "").strip()
+    url = (obs.get("url") or "").strip()
+    nlabel = _norm(label)
+
+    if prov == "inferred":
+        return REVIEW, (
+            "Derived step — not directly observed in the recording. "
+            "Confirm before adding to an automated suite."
+        )
+    if nlabel and nlabel in ambiguous:
+        return REVIEW, (
+            f"'{label}' appears multiple times on the page — the exact element "
+            "isn't pinpointed yet (anchor capture pending)."
+        )
+    if not label and not url:
+        return REVIEW, "No clear element handle was captured — confirm the target."
+    if url and not label:
+        return HIGH, "Verified by the page URL."
+    return HIGH, "Directly observed with a clear, named element."
+
+
+def annotate(test_case, ambiguous: set[str]) -> tuple[int, int]:
+    """Annotate each step in-place with confidence + reason.
+
+    Returns (high_count, review_count).
+    """
+    high = 0
+    review = 0
+    for step in (test_case.steps or []):
+        level, reason = score_step(step, ambiguous)
+        step.confidence = level
+        step.confidence_reason = reason
+        if level == HIGH:
+            high += 1
+        else:
+            review += 1
+    return high, review

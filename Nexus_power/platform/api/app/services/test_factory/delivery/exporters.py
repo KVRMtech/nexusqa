@@ -31,20 +31,35 @@ _BASE_HEADERS = [
     "Expected Result",
 ]
 _OBSERVED_HEADER = "Observed in Recording"
+_CONFIDENCE_HEADER = "Confidence"
 _BASE_WIDTHS = [8, 34, 46, 62, 28, 50]
 _OBSERVED_WIDTH = 42
+_CONFIDENCE_WIDTH = 40
 
 # Full layout (kept for callers/tests that want the column reference).
-HEADERS = _BASE_HEADERS + [_OBSERVED_HEADER]
+HEADERS = _BASE_HEADERS + [_OBSERVED_HEADER, _CONFIDENCE_HEADER]
 
 
 def _headers(include_details: bool) -> list[str]:
-    """Column layout — the technical evidence column is opt-in (role/toggle)."""
-    return _BASE_HEADERS + ([_OBSERVED_HEADER] if include_details else [])
+    """Column layout — the technical columns are opt-in (role/toggle)."""
+    extra = [_OBSERVED_HEADER, _CONFIDENCE_HEADER] if include_details else []
+    return _BASE_HEADERS + extra
 
 
 def _col_widths(include_details: bool) -> list[int]:
-    return _BASE_WIDTHS + ([_OBSERVED_WIDTH] if include_details else [])
+    extra = [_OBSERVED_WIDTH, _CONFIDENCE_WIDTH] if include_details else []
+    return _BASE_WIDTHS + extra
+
+
+def _confidence_cell(step) -> str:
+    """Plain-language confidence for the export."""
+    level = (getattr(step, "confidence", "") or "")
+    reason = (getattr(step, "confidence_reason", "") or "")
+    if not level:
+        return ""
+    if level == "high":
+        return "Solid"
+    return f"Review — {reason}" if reason else "Review"
 
 # How the signal behind a step was sourced — keeps the evidence column honest.
 _PROV_LABEL = {
@@ -96,7 +111,7 @@ def _step_rows(tc: ProductionTestCase, include_details: bool = False) -> list[tu
     steps = tc.steps or []
     if not steps:
         base = (1, name, description, "(No steps defined)", "", "")
-        return [base + ((("",) if include_details else ()))]
+        return [base + (("", "") if include_details else ())]
     for idx, st in enumerate(steps, start=1):
         s_no = st.step_number if st.step_number is not None else idx
         base = (
@@ -107,7 +122,8 @@ def _step_rows(tc: ProductionTestCase, include_details: bool = False) -> list[tu
             getattr(st, "data_ref", None) or "",
             _expected(st),
         )
-        rows.append(base + ((_observed_cell(st),) if include_details else ()))
+        extra = (_observed_cell(st), _confidence_cell(st)) if include_details else ()
+        rows.append(base + extra)
     return rows
 
 
