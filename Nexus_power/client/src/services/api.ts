@@ -1386,6 +1386,15 @@ class ApiClient {
     return data;
   }
 
+  /** One-click enrichment: options + anchors + outcomes (vision) + regenerate. */
+  async enrichTestFactory(artifactId: string): Promise<any> {
+    const { data } = await this.client.post(
+      `/v1/test-factory/${artifactId}/enrich`, {},
+      { timeout: 600_000 },
+    );
+    return data;
+  }
+
   /** Download the suite as Excel / CSV / JSON (blob). */
   async exportTestFactory(artifactId: string, format = 'excel', details = false): Promise<Blob> {
     const resp = await this.client.get(

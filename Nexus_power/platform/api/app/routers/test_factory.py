@@ -236,6 +236,57 @@ async def capture_outcomes(
     return {"success": True, "outcome_capture": outcomes, "regenerated": regenerated}
 
 
+@router.post("/api/v1/test-factory/{artifact_id}/enrich")
+async def enrich(
+    request: Request,
+    artifact_id: str = PathParam(..., min_length=1, max_length=64),
+    user: dict = Depends(get_current_user),
+):
+    """One-click enrichment: run all vision capture passes (available options,
+    'where it sits' anchors, 'what happened after' outcomes) then regenerate
+    ONCE. Replaces the separate capture buttons so users never have to know the
+    internal passes. Each pass only records what is visible in frames.
+    """
+    tenant_id = user["tenant_id"]
+    composer = getattr(request.app.state, "storyboard_composer", None)
+    llm_router = getattr(composer, "_llm_router", None) if composer else None
+    if llm_router is None:
+        raise HTTPException(status_code=503, detail="LLM router unavailable")
+    token = _bearer(request)
+
+    async with tenant_scoped_session(tenant_id) as session:
+        art = await _require_artifact(session, artifact_id, tenant_id)
+        options = await extract_field_options_for_artifact(
+            session, artifact_id=artifact_id, tenant_id=tenant_id,
+            router=llm_router, auth_token=token,
+        )
+        anchors = await extract_anchors_for_artifact(
+            session, artifact_id=artifact_id, tenant_id=tenant_id,
+            router=llm_router, auth_token=token,
+        )
+        outcomes = await extract_outcomes_for_artifact(
+            session, artifact_id=artifact_id, tenant_id=tenant_id,
+            router=llm_router, auth_token=token,
+        )
+        await session.commit()
+        # commit reset the transaction-local RLS var — re-arm before regenerate.
+        await session.execute(
+            text("SELECT set_config('nexus.current_tenant_id', :tid, true)"),
+            {"tid": str(tenant_id)},
+        )
+        regenerated = await factory_service.generate_and_store(
+            session, artifact_id=artifact_id, tenant_id=tenant_id,
+            session_id=getattr(art, "session_id", "") or "",
+        )
+    return {
+        "success": True,
+        "options_capture": options,
+        "anchor_capture": anchors,
+        "outcome_capture": outcomes,
+        "regenerated": regenerated,
+    }
+
+
 _CATEGORIES = {"negative", "boundary", "error_state"}
 
 
