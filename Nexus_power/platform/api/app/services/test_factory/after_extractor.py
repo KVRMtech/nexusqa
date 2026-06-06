@@ -64,8 +64,8 @@ class OutcomeItem(BaseModel):
     detail: str = Field(
         default="",
         description="A short, concrete description of the visible result "
-        "(e.g. 'flight results list appears', \"validation error 'Gender is required'\"). "
-        "Empty if nothing observable changed.",
+        "(e.g. 'a results list appears', 'a validation error is shown next to the "
+        "field', 'a confirmation dialog opens'). Empty if nothing observable changed.",
     )
 
 

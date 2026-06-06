@@ -28,8 +28,15 @@ from .generator import PageVisitInput, _norm, _strip_required
 
 _TEST_ID_NAMESPACE = uuid.UUID("6f9619ff-8b86-d011-b42d-00cf4fc964ff")
 
+# Language-neutral first (ISO + numeric separators); English months are a hint.
 _DATE_RX = re.compile(
-    r"\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec|20\d\d|\d{1,2}[/-]\d{1,2})\b",
+    r"\b("
+    r"\d{4}-\d{1,2}-\d{1,2}"                 # ISO 2026-06-12
+    r"|\d{1,2}[/.\-]\d{1,2}[/.\-]\d{2,4}"    # 12/06/2026  12.06.26
+    r"|\d{1,2}[/.\-]\d{1,2}"                 # 12/06
+    r"|(?:19|20)\d\d"                         # a year
+    r"|jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec"  # English month hint only
+    r")\b",
     re.IGNORECASE,
 )
 _ERROR_RX = re.compile(

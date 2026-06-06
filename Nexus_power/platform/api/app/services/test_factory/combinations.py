@@ -58,10 +58,20 @@ class CombinationResult:
 
 
 # Vision over-capture guards: dates aren't enums, nav-menus aren't form choices.
+# Date detection is language-NEUTRAL first (ISO + numeric separators work in any
+# locale); English month names are only an extra hint, never the sole signal.
 _DATE_RX = re.compile(
-    r"\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec|20\d\d|\d{1,2}/\d{1,2})\b",
+    r"\b("
+    r"\d{4}-\d{1,2}-\d{1,2}"                 # ISO 2026-06-12
+    r"|\d{1,2}[/.\-]\d{1,2}[/.\-]\d{2,4}"    # 12/06/2026  12.06.26  6-12-2026
+    r"|\d{1,2}[/.\-]\d{1,2}"                 # 12/06
+    r"|(?:19|20)\d\d"                         # a year
+    r"|jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec"  # English month hint only
+    r")\b",
     re.IGNORECASE,
 )
+# English-convenience hint for nav-menu detection; the PRIMARY menu guard is the
+# language-neutral average-phrase-length check in harvest_option_domains.
 _ACTION_VERBS = frozenset({
     "book", "add", "find", "manage", "view", "see", "learn", "install", "sign",
     "go", "start", "explore", "get", "check", "open", "browse", "shop",
@@ -119,6 +129,13 @@ def harvest_option_domains(page_visits: Iterable[PageVisitInput]) -> list[Option
                 continue
             # Drop date-like and navigation-menu fields.
             if sum(_is_date_like(o) for o in opts) >= (len(opts) + 1) // 2:
+                continue
+            # Language-neutral menu guard: real enum values are short noun-like
+            # tokens (Economy / Business, Male / Female, One-way / Roundtrip);
+            # navigation items and sentences are long phrases. Average word count
+            # separates them without any language-specific word list.
+            avg_words = sum(len(o.split()) for o in opts) / max(1, len(opts))
+            if avg_words >= 3.0:
                 continue
             if sum(_is_action_phrase(o) for o in opts) >= 2:
                 continue
