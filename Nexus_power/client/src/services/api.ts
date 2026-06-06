@@ -1369,10 +1369,10 @@ class ApiClient {
   }
 
   /** Download the suite as Excel / CSV / JSON (blob). */
-  async exportTestFactory(artifactId: string, format = 'excel'): Promise<Blob> {
+  async exportTestFactory(artifactId: string, format = 'excel', details = false): Promise<Blob> {
     const resp = await this.client.get(
       `/v1/test-factory/${artifactId}/export`,
-      { params: { format }, responseType: 'blob' },
+      { params: { format, details }, responseType: 'blob' },
     );
     return resp.data as Blob;
   }

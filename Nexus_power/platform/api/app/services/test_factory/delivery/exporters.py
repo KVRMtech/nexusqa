@@ -22,16 +22,29 @@ from openpyxl.utils import get_column_letter
 
 from nexus_sdk.models import ProductionTestCase
 
-HEADERS = [
+_BASE_HEADERS = [
     "S.No",
     "Test Case Name",
     "Test Case Description",
     "Test Steps",
     "Test Data",
     "Expected Result",
-    "Observed in Recording",
 ]
-_COL_WIDTHS = [8, 34, 46, 62, 28, 50, 42]
+_OBSERVED_HEADER = "Observed in Recording"
+_BASE_WIDTHS = [8, 34, 46, 62, 28, 50]
+_OBSERVED_WIDTH = 42
+
+# Full layout (kept for callers/tests that want the column reference).
+HEADERS = _BASE_HEADERS + [_OBSERVED_HEADER]
+
+
+def _headers(include_details: bool) -> list[str]:
+    """Column layout — the technical evidence column is opt-in (role/toggle)."""
+    return _BASE_HEADERS + ([_OBSERVED_HEADER] if include_details else [])
+
+
+def _col_widths(include_details: bool) -> list[int]:
+    return _BASE_WIDTHS + ([_OBSERVED_WIDTH] if include_details else [])
 
 # How the signal behind a step was sourced — keeps the evidence column honest.
 _PROV_LABEL = {
@@ -74,54 +87,55 @@ def _expected(step) -> str:
             or getattr(step, "expected", None) or "")
 
 
-def _step_rows(tc: ProductionTestCase) -> list[tuple]:
-    """Return (s_no, name, description, action, data, expected) per step."""
+def _step_rows(tc: ProductionTestCase, include_details: bool = False) -> list[tuple]:
+    """Return one row per step. The trailing 'Observed in Recording' cell is
+    included only when ``include_details`` (role/toggle gated)."""
     rows: list[tuple] = []
     name = tc.name or ""
     description = tc.description or ""
     steps = tc.steps or []
     if not steps:
-        return [(1, name, description, "(No steps defined)", "", "", "")]
+        base = (1, name, description, "(No steps defined)", "", "")
+        return [base + ((("",) if include_details else ()))]
     for idx, st in enumerate(steps, start=1):
         s_no = st.step_number if st.step_number is not None else idx
-        rows.append((
+        base = (
             s_no,
             name,
             description,
             st.action or "",
             getattr(st, "data_ref", None) or "",
             _expected(st),
-            _observed_cell(st),
-        ))
+        )
+        rows.append(base + ((_observed_cell(st),) if include_details else ()))
     return rows
 
 
-def build_excel(test_cases: Sequence[ProductionTestCase]) -> bytes:
-    """Render the suite to a styled .xlsx in the standard format."""
+def build_excel(test_cases: Sequence[ProductionTestCase], include_details: bool = False) -> bytes:
+    """Render the suite to a styled .xlsx. The Observed column is opt-in."""
+    headers = _headers(include_details)
+    widths = _col_widths(include_details)
+    ncols = len(headers)
+
     wb = Workbook()
     ws = wb.active
     ws.title = "Test Cases"
 
-    for col, header in enumerate(HEADERS, start=1):
+    for col, header in enumerate(headers, start=1):
         cell = ws.cell(row=1, column=col, value=header)
         cell.fill = _HEADER_FILL
         cell.font = _HEADER_FONT
         cell.alignment = Alignment(vertical="center", horizontal="center", wrap_text=True)
         cell.border = _BORDER
-    for i, width in enumerate(_COL_WIDTHS, start=1):
+    for i, width in enumerate(widths, start=1):
         ws.column_dimensions[get_column_letter(i)].width = width
 
     row = 2
     for tc in test_cases:
         start = row
-        for s_no, name, desc, action, data, expected, observed in _step_rows(tc):
-            ws.cell(row=row, column=1, value=s_no)
-            ws.cell(row=row, column=2, value=name)
-            ws.cell(row=row, column=3, value=desc)
-            ws.cell(row=row, column=4, value=action)
-            ws.cell(row=row, column=5, value=data)
-            ws.cell(row=row, column=6, value=expected)
-            ws.cell(row=row, column=7, value=observed)
+        for record in _step_rows(tc, include_details):
+            for col, value in enumerate(record, start=1):
+                ws.cell(row=row, column=col, value=value)
             row += 1
         # Merge Name + Description across this test case's steps.
         if row - start > 1:
@@ -130,34 +144,35 @@ def build_excel(test_cases: Sequence[ProductionTestCase]) -> bytes:
                 ws.cell(start, col).alignment = Alignment(vertical="top", wrap_text=True)
 
     for r in range(2, row):
-        for c in range(1, len(HEADERS) + 1):
+        for c in range(1, ncols + 1):
             cell = ws.cell(r, c)
             cell.border = _BORDER
-            if not (c in (2, 3)):
+            if c not in (2, 3):
                 cell.alignment = Alignment(vertical="top", wrap_text=True)
 
     ws.freeze_panes = "A2"
     if row > 2:
-        ws.auto_filter.ref = f"A1:{get_column_letter(len(HEADERS))}{row - 1}"
+        ws.auto_filter.ref = f"A1:{get_column_letter(ncols)}{row - 1}"
 
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()
 
 
-def build_csv(test_cases: Sequence[ProductionTestCase]) -> bytes:
-    """Render the suite to CSV in the standard format (UTF-8 BOM for Excel)."""
+def build_csv(test_cases: Sequence[ProductionTestCase], include_details: bool = False) -> bytes:
+    """Render the suite to CSV (UTF-8 BOM for Excel). Observed column is opt-in."""
     out = io.StringIO()
     writer = csv.writer(out)
-    writer.writerow(HEADERS)
+    writer.writerow(_headers(include_details))
     for tc in test_cases:
-        for row in _step_rows(tc):
+        for row in _step_rows(tc, include_details):
             writer.writerow(list(row))
     return out.getvalue().encode("utf-8-sig")
 
 
-def build_json(test_cases: Sequence[ProductionTestCase]) -> bytes:
-    """Render the suite to JSON (full ProductionTestCase objects)."""
+def build_json(test_cases: Sequence[ProductionTestCase], include_details: bool = False) -> bytes:
+    """Render the suite to JSON (full objects — the machine format always carries
+    the observed evidence the script generator consumes)."""
     import json
     payload = {
         "version": "1.0",

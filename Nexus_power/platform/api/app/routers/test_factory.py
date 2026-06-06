@@ -230,6 +230,7 @@ async def get_reserve(
 async def export_test_cases(
     artifact_id: str = PathParam(..., min_length=1, max_length=64),
     format: str = Query("excel", description="excel | csv | json"),
+    details: bool = Query(False, description="include the 'Observed in Recording' evidence column (role/toggle gated in the UI)"),
     user: dict = Depends(get_current_user),
 ):
     fmt = (format or "excel").lower()
@@ -252,7 +253,7 @@ async def export_test_cases(
             detail="no generated test cases for this artifact — run /generate first",
         )
 
-    payload = _BUILDERS[fmt](cases)
+    payload = _BUILDERS[fmt](cases, details)
     filename = f"nexus-testcases-{artifact_id[:8]}.{_EXTENSIONS[fmt]}"
     return StreamingResponse(
         io.BytesIO(payload),

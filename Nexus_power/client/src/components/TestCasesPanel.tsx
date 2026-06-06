@@ -13,6 +13,17 @@ import {
   Loader2, Send, ShieldAlert, Sparkles, Upload,
 } from 'lucide-react';
 import { api } from '../services/api';
+import { useAuth } from '../contexts/AuthContext';
+
+// Role-based default for the technical "automation details" columns
+// (Observed in Recording, Confidence). Automation-focused roles see them by
+// default; functional test engineers, business analysts and domain experts get
+// the clean test case and can opt in via the checkbox. The data is ALWAYS
+// stored — this governs display only.
+function defaultShowDetails(role?: string): boolean {
+  const r = (role || '').toLowerCase();
+  return r === 'admin' || r.includes('automation') || r.includes('sdet');
+}
 
 interface Observed {
   verb?: string; label?: string; kind?: string; value?: string; url?: string;
@@ -58,12 +69,31 @@ const SECTIONS: { type: string; label: string; accent: string; badge: string }[]
 ];
 
 export default function TestCasesPanel({ artifactId }: { artifactId: string }) {
+  const { user } = useAuth();
   const [summary, setSummary] = useState<any>(null);
   const [bySection, setBySection] = useState<Record<string, CaseRow[]>>({});
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+
+  // Role-aware display of the technical evidence columns. An explicit user
+  // choice (persisted per user) overrides the role default; the underlying
+  // data is always stored regardless.
+  const prefKey = `nexus_tc_details_${user?.user_id || 'anon'}`;
+  const [showDetails, setShowDetails] = useState<boolean>(() => {
+    const saved = typeof localStorage !== 'undefined' ? localStorage.getItem(prefKey) : null;
+    if (saved === 'on') return true;
+    if (saved === 'off') return false;
+    return defaultShowDetails(user?.role);
+  });
+  const toggleDetails = () => {
+    setShowDetails((v) => {
+      const nv = !v;
+      try { localStorage.setItem(prefKey, nv ? 'on' : 'off'); } catch { /* ignore */ }
+      return nv;
+    });
+  };
 
   const refresh = useCallback(async () => {
     if (!artifactId) return;
@@ -96,7 +126,7 @@ export default function TestCasesPanel({ artifactId }: { artifactId: string }) {
   const download = async (format: string) => {
     setBusy(`export:${format}`); setError(null);
     try {
-      const blob = await api.exportTestFactory(artifactId, format);
+      const blob = await api.exportTestFactory(artifactId, format, showDetails);
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
@@ -147,6 +177,14 @@ export default function TestCasesPanel({ artifactId }: { artifactId: string }) {
 
       <CoArchitectChat artifactId={artifactId} />
 
+      <div className="flex items-center gap-2 px-1">
+        <label className="flex items-center gap-1.5 text-[11px] font-semibold text-slate-500 cursor-pointer select-none">
+          <input type="checkbox" checked={showDetails} onChange={toggleDetails} className="h-3.5 w-3.5 accent-emerald-600" />
+          Show automation details
+        </label>
+        <span className="text-[10px] text-slate-400">Observed-in-recording evidence — for automation engineers. Always stored; shown only when ticked.</span>
+      </div>
+
       {notice && <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-[11px] text-emerald-800">{notice}</div>}
       {error && <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-[11px] text-amber-800 flex items-center gap-2"><AlertTriangle className="h-3.5 w-3.5" />{error}</div>}
 
@@ -171,7 +209,7 @@ export default function TestCasesPanel({ artifactId }: { artifactId: string }) {
                 <span className="text-[11px] font-black uppercase tracking-wide" style={{ color: s.accent }}>{s.label}</span>
                 <span className="rounded-full px-1.5 py-0.5 text-[9px] font-black" style={{ background: s.badge, color: s.accent }}>{count}</span>
               </div>
-              {items.map((row) => <TestCaseCard key={row.test_case_id} row={row} accent={s.accent} />)}
+              {items.map((row) => <TestCaseCard key={row.test_case_id} row={row} accent={s.accent} showDetails={showDetails} />)}
               {more > 0 && (
                 <div className="rounded-xl border border-dashed px-3 py-2.5 flex items-center gap-2 flex-wrap"
                   style={{ borderColor: s.badge }}>
@@ -196,7 +234,7 @@ export default function TestCasesPanel({ artifactId }: { artifactId: string }) {
   );
 }
 
-function TestCaseCard({ row, accent }: { row: CaseRow; accent: string }) {
+function TestCaseCard({ row, accent, showDetails }: { row: CaseRow; accent: string; showDetails: boolean }) {
   const [open, setOpen] = useState(false);
   const steps = row.test_case?.steps || [];
   const demo = row.confidence === 'demonstrated';
@@ -218,7 +256,7 @@ function TestCaseCard({ row, accent }: { row: CaseRow; accent: string }) {
               <th className="font-semibold py-1 pr-2">Test Step</th>
               <th className="font-semibold py-1 pr-2">Test Data</th>
               <th className="font-semibold py-1 pr-2">Expected Result</th>
-              <th className="font-semibold py-1">Observed in Recording</th>
+              {showDetails && <th className="font-semibold py-1">Observed in Recording</th>}
             </tr></thead>
             <tbody>
               {steps.map((s, i) => {
@@ -230,6 +268,7 @@ function TestCaseCard({ row, accent }: { row: CaseRow; accent: string }) {
                   <td className="py-1.5 pr-2 text-slate-800">{s.action}</td>
                   <td className="py-1.5 pr-2">{s.data_ref ? <span className="rounded px-1.5 py-0.5 font-semibold" style={{ background: 'rgba(56,189,248,0.12)', color: '#0369a1' }}>{s.data_ref}</span> : <span className="text-slate-300">—</span>}</td>
                   <td className="py-1.5 pr-2 text-slate-600">{s.expected_result || s.expected || ''}</td>
+                  {showDetails && (
                   <td className="py-1.5">
                     {ev ? (
                       <div className="flex flex-col gap-0.5">
@@ -240,6 +279,7 @@ function TestCaseCard({ row, accent }: { row: CaseRow; accent: string }) {
                       prov ? <span className="rounded px-1.5 py-0.5 text-[9px] font-bold uppercase" style={{ background: prov.bg, color: prov.fg }}>{prov.label}</span> : <span className="text-slate-300">—</span>
                     )}
                   </td>
+                  )}
                 </tr>
               );})}
             </tbody>
