@@ -262,23 +262,24 @@ async def extract_outcomes_for_artifact(
             except Exception:  # pragma: no cover
                 pass
 
-    outcomes_by_visit = dict(results)  # all scanned visits (clears stale)
+    outcomes_by_visit = dict(results)
 
+    # Outcomes are STICKY: a previously-captured outcome is kept unless a new run
+    # gives a DIFFERENT non-empty one. Vision is non-deterministic, so an outcome
+    # the model simply didn't re-mention this pass must not be dropped. (Anchors,
+    # which can be actively wrong, keep clear-stale semantics — outcomes don't.)
     actions_with_outcome = 0
     for visit_id, rows in actions_by_visit.items():
         outcomes = outcomes_by_visit.get(visit_id) or {}
         for row in rows:
             after = outcomes.get(_norm(row.target_label))
+            if not after:
+                continue  # sticky: keep whatever was there
             merged = dict(row.evidence_signals or {})
-            if after:
-                if merged.get("after") == after:
-                    continue  # unchanged
-                merged["after"] = after
-                actions_with_outcome += 1
-            elif "after" in merged:
-                merged.pop("after", None)  # clear stale outcome
-            else:
-                continue
+            if merged.get("after") == after:
+                continue  # unchanged
+            merged["after"] = after
+            actions_with_outcome += 1
             await session.execute(
                 update(PageActionRow)
                 .where(

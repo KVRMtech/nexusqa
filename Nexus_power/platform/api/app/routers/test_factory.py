@@ -44,6 +44,7 @@ from ..services.test_factory.anchor_extractor import (
 from ..services.test_factory.after_extractor import (
     extract_outcomes_for_artifact,
 )
+from ..services.test_factory.enrich_extractor import enrich_artifact
 from ..services.test_factory.assistant import answer as assistant_answer
 from ..services.test_factory.delivery import (
     EXPORT_MEDIA_TYPES,
@@ -256,15 +257,7 @@ async def enrich(
 
     async with tenant_scoped_session(tenant_id) as session:
         art = await _require_artifact(session, artifact_id, tenant_id)
-        options = await extract_field_options_for_artifact(
-            session, artifact_id=artifact_id, tenant_id=tenant_id,
-            router=llm_router, auth_token=token,
-        )
-        anchors = await extract_anchors_for_artifact(
-            session, artifact_id=artifact_id, tenant_id=tenant_id,
-            router=llm_router, auth_token=token,
-        )
-        outcomes = await extract_outcomes_for_artifact(
+        capture = await enrich_artifact(
             session, artifact_id=artifact_id, tenant_id=tenant_id,
             router=llm_router, auth_token=token,
         )
@@ -278,13 +271,7 @@ async def enrich(
             session, artifact_id=artifact_id, tenant_id=tenant_id,
             session_id=getattr(art, "session_id", "") or "",
         )
-    return {
-        "success": True,
-        "options_capture": options,
-        "anchor_capture": anchors,
-        "outcome_capture": outcomes,
-        "regenerated": regenerated,
-    }
+    return {"success": True, "enrichment": capture, "regenerated": regenerated}
 
 
 _CATEGORIES = {"negative", "boundary", "error_state"}
