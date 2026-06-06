@@ -107,17 +107,19 @@ async def _load_current_pages_and_actions(
                 )
             )
         ).scalars().all()
-        actions = [
-            PageActionInput(
+        actions = []
+        for a in action_rows:
+            anchor_sig = (a.evidence_signals or {}).get("anchor") or {}
+            actions.append(PageActionInput(
                 page_visit_id=a.page_visit_id,
                 subaction_index=a.subaction_index,
                 verb=a.verb or "",
                 target_label=a.target_label or "",
                 target_kind=a.target_kind or "",
                 value=a.value,
-            )
-            for a in action_rows
-        ]
+                anchor=str(anchor_sig.get("label") or ""),
+                anchor_kind=str(anchor_sig.get("kind") or ""),
+            ))
 
     return visits, actions
 

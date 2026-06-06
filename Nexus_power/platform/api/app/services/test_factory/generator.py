@@ -89,6 +89,10 @@ class PageActionInput:
     target_label: str
     target_kind: str
     value: str | None
+    # "Where it sits" — the nearest stable landmark that locates the element
+    # (captured by the anchor-extractor into page_actions.evidence_signals).
+    anchor: str = ""
+    anchor_kind: str = ""
 
 
 @dataclass
@@ -514,17 +518,24 @@ def _interaction_steps(group: _PageGroup, next_url: str) -> list[ProductionTestS
         return []
     a = clicks[-1]
     label = a.target_label.strip()
+    anchor = (a.anchor or "").strip()
+    # Fold the anchor into the step so a repeated control is unambiguous:
+    # "Click 'Select' in the '10:30 AM' row".
+    where = f" in the '{anchor}' {a.anchor_kind or 'section'}" if anchor else ""
     expected = (
         f"The application proceeds to {next_url}" if next_url
-        else f"'{label}' is activated"
+        else f"'{label}'{where} is activated"
     )
+    obs = _observed(verb=(a.verb or "click").strip().lower(), label=label, kind=a.target_kind or "button")
+    if anchor:
+        obs["observed"]["anchor"] = anchor
     return [ProductionTestStep(
         step_number=0,
-        action=f"Click '{label}'",
+        action=f"Click '{label}'{where}",
         expected=expected,
         expected_result=expected,
         selector=_locator(label, a.target_kind),
-        **_observed(verb=(a.verb or "click").strip().lower(), label=label, kind=a.target_kind or "button"),
+        **obs,
     )]
 
 

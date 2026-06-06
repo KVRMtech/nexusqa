@@ -67,7 +67,8 @@ def score_step(step, ambiguous: set[str]) -> tuple[str, str]:
             "Derived step — not directly observed in the recording. "
             "Confirm before adding to an automated suite."
         )
-    if nlabel and nlabel in ambiguous:
+    has_anchor = bool((obs.get("anchor") or "").strip())
+    if nlabel and nlabel in ambiguous and not has_anchor:
         return REVIEW, (
             f"'{label}' appears multiple times on the page — the exact element "
             "isn't pinpointed yet (anchor capture pending)."

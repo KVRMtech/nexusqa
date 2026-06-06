@@ -1368,6 +1368,15 @@ class ApiClient {
     return data;
   }
 
+  /** Capture per-action "where it sits" anchors (vision) + regenerate. */
+  async captureTestFactoryAnchors(artifactId: string): Promise<any> {
+    const { data } = await this.client.post(
+      `/v1/test-factory/${artifactId}/capture-anchors`, {},
+      { timeout: 300_000 },
+    );
+    return data;
+  }
+
   /** Download the suite as Excel / CSV / JSON (blob). */
   async exportTestFactory(artifactId: string, format = 'excel', details = false): Promise<Blob> {
     const resp = await this.client.get(

@@ -38,6 +38,9 @@ from ..services.test_factory import service as factory_service
 from ..services.test_factory.options_extractor import (
     extract_field_options_for_artifact,
 )
+from ..services.test_factory.anchor_extractor import (
+    extract_anchors_for_artifact,
+)
 from ..services.test_factory.assistant import answer as assistant_answer
 from ..services.test_factory.delivery import (
     EXPORT_MEDIA_TYPES,
@@ -153,6 +156,45 @@ async def capture_options(
             session_id=getattr(art, "session_id", "") or "",
         )
     return {"success": True, "options_capture": options, "regenerated": regenerated}
+
+
+@router.post("/api/v1/test-factory/{artifact_id}/capture-anchors")
+async def capture_anchors(
+    request: Request,
+    artifact_id: str = PathParam(..., min_length=1, max_length=64),
+    user: dict = Depends(get_current_user),
+):
+    """Capture per-action 'where it sits' anchors (vision) into
+    page_actions.evidence_signals, then regenerate so steps gain the anchor.
+
+    Uses the shared LLM router. One vision call per page; only landmarks
+    actually visible in frames are recorded — repeated controls become
+    unambiguous ('Click Select in the 10:30 AM row').
+    """
+    tenant_id = user["tenant_id"]
+    composer = getattr(request.app.state, "storyboard_composer", None)
+    llm_router = getattr(composer, "_llm_router", None) if composer else None
+    if llm_router is None:
+        raise HTTPException(status_code=503, detail="LLM router unavailable")
+    token = _bearer(request)
+
+    async with tenant_scoped_session(tenant_id) as session:
+        art = await _require_artifact(session, artifact_id, tenant_id)
+        anchors = await extract_anchors_for_artifact(
+            session, artifact_id=artifact_id, tenant_id=tenant_id,
+            router=llm_router, auth_token=token,
+        )
+        await session.commit()
+        # commit reset the transaction-local RLS var — re-arm before regenerate.
+        await session.execute(
+            text("SELECT set_config('nexus.current_tenant_id', :tid, true)"),
+            {"tid": str(tenant_id)},
+        )
+        regenerated = await factory_service.generate_and_store(
+            session, artifact_id=artifact_id, tenant_id=tenant_id,
+            session_id=getattr(art, "session_id", "") or "",
+        )
+    return {"success": True, "anchor_capture": anchors, "regenerated": regenerated}
 
 
 _CATEGORIES = {"negative", "boundary", "error_state"}
