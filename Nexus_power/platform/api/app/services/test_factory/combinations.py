@@ -33,6 +33,11 @@ from .generator import PageVisitInput, _norm  # reuse normalization
 _TEST_ID_NAMESPACE = uuid.UUID("6f9619ff-8b86-d011-b42d-00cf4fc964ff")
 _DEFAULT_MAX_ACTIVE = 40
 
+# Toggle / radio / segmented-control steps render as "Select '<option>'"
+# (the option label, not the field label), so a combination override has to
+# match them by the axis's OPTION set, not by the field name.
+_SELECT_RX = re.compile(r"^Select '(.+?)'\s*$")
+
 
 @dataclass
 class OptionDomain:
@@ -219,18 +224,35 @@ def _build_combo_case(
     base: ProductionTestCase, combo: Mapping[str, str], host: str,
     artifact_id: str, domains: Mapping[str, OptionDomain],
 ) -> ProductionTestCase:
-    """Clone the demonstrated base, overriding only the axis fields' fills."""
+    """Clone the demonstrated base, overriding the axis fields' demonstrated value.
+
+    A value can appear in the base in two shapes — both must be overridden, or
+    the variant silently duplicates the demonstrated case:
+      * a text/select FILL:  ``Enter '<value>' in the '<field>' field``
+      * a toggle/radio PICK:  ``Select '<option>'``  (option label, not field)
+    """
     norm_combo = {_norm(k): (k, v) for k, v in combo.items()}
+    # Per axis: the normalized set of its captured options, to recognise the
+    # toggle step that currently picks the demonstrated option.
+    axis_options = {
+        nlabel: {_norm(o) for o in (domains[label].options if label in domains else [])}
+        for nlabel, (label, _v) in norm_combo.items()
+    }
     steps: list[ProductionTestStep] = []
     for st in base.steps:
         new = st.model_copy(deep=True)
-        action = st.action or ""
+        action = (st.action or "")
+        sel = _SELECT_RX.match(action.strip())
         for nlabel, (label, value) in norm_combo.items():
             if f"in the '{label}' field" in action:
                 new.action = f"Enter '{value}' in the '{label}' field"
                 new.expected = f"'{label}' shows '{value}'"
                 new.expected_result = new.expected
                 new.data_ref = value
+            elif sel and _norm(sel.group(1)) in axis_options.get(nlabel, set()):
+                new.action = f"Select '{value}'"
+                new.expected = f"'{value}' is selected"
+                new.expected_result = new.expected
         steps.append(new)
 
     desc_combo = ", ".join(f"{k}={v}" for k, v in combo.items())
@@ -300,12 +322,21 @@ def generate_combination_cases(
 
     combos = _pairwise(axes)
     combos.sort(key=lambda c: _risk(c, domain_map), reverse=True)
-    selected = combos[:max_active]
 
-    active = [
-        _build_combo_case(base_case, combo, host, artifact_id, domain_map)
-        for combo in selected
-    ]
+    # Keep only variants that actually DIFFER from the demonstrated base.  A
+    # combo whose generated steps are identical to the base (because its values
+    # match what the recording already showed) adds no coverage — drop it.
+    # This is robust to a noisy captured `selected` signal: the source of truth
+    # is the base case's own steps, not the OCR-reported selection.  Generic.
+    base_sig = [s.action for s in (base_case.steps or [])]
+    active: list[ProductionTestCase] = []
+    for combo in combos:
+        case = _build_combo_case(base_case, combo, host, artifact_id, domain_map)
+        if [s.action for s in case.steps] == base_sig:
+            continue
+        active.append(case)
+        if len(active) >= max_active:
+            break
 
     spec = {
         "strategy": "pairwise",

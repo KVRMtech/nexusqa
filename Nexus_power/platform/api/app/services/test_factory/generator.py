@@ -228,6 +228,21 @@ def _full_url(group: _PageGroup) -> str:
     return url
 
 
+def _canonical_url(group: _PageGroup) -> str:
+    """Stable URL for ASSERTIONS — path only, query string dropped.
+
+    Query strings carry volatile, per-session values (ids, tokens, dates,
+    cart/session keys) that differ on every run.  Asserting on them makes a
+    test fail on replay and can contradict the demonstrated form values
+    (e.g. a date typed in the form vs a re-encoded date in the URL).  Generic
+    rule for any application: assert on the path, never the query.
+    """
+    host = group.url_host
+    if not host:
+        return group.location
+    return f"https://{host}{group.url_path}"
+
+
 def _locator(target_label: str, target_kind: str) -> str:
     """Neutral, resilient locator hint (label/role based, not brittle CSS).
 
@@ -366,11 +381,13 @@ def _build_steps(groups: Sequence[_PageGroup]) -> tuple[list[ProductionTestStep]
 
     for gi, group in enumerate(groups):
         url = _full_url(group)
+        canon = _canonical_url(group)
         page_name = _page_name(group.url_path, group.location)
-        next_url = _full_url(groups[gi + 1]) if gi + 1 < len(groups) else ""
+        next_canon = _canonical_url(groups[gi + 1]) if gi + 1 < len(groups) else ""
         next_path = groups[gi + 1].url_path if gi + 1 < len(groups) else ""
 
-        # 1) Navigation onto the page.
+        # 1) Navigation onto the page.  The entry step navigates to the full URL;
+        #    every later assertion checks the PATH only (see _canonical_url).
         n += 1
         if gi == 0:
             steps.append(ProductionTestStep(
@@ -383,10 +400,10 @@ def _build_steps(groups: Sequence[_PageGroup]) -> tuple[list[ProductionTestStep]
         else:
             steps.append(ProductionTestStep(
                 step_number=n,
-                action=f"Verify the application navigated to {url}",
-                expected=f"URL is {group.url_path or url} and the {page_name} page is displayed",
-                expected_result=f"URL is {group.url_path or url} and the {page_name} page is displayed",
-                selector=f"url={url}",
+                action=f"Verify the application navigated to {canon}",
+                expected=f"URL path is {group.url_path or canon} and the {page_name} page is displayed",
+                expected_result=f"URL path is {group.url_path or canon} and the {page_name} page is displayed",
+                selector=f"url={canon}",
             ))
 
         text_fields, toggles, required_present = _resolve_fields(group)
@@ -416,11 +433,24 @@ def _build_steps(groups: Sequence[_PageGroup]) -> tuple[list[ProductionTestStep]
             ))
 
         # 4) Pure interactions the user performed (clicks/hovers/etc.), in order.
-        interaction_steps = _interaction_steps(group, next_url)
+        interaction_steps = _interaction_steps(group, next_canon)
         for st in interaction_steps:
             n += 1
             st.step_number = n
             steps.append(st)
+
+        # 4b) The page advances but NO action was captured to cause it: insert an
+        #     explicit transition step instead of silently jumping to the next
+        #     page.  Honest + generic — every app has un-captured transitions.
+        if next_path and not interaction_steps:
+            n += 1
+            next_name = _page_name(groups[gi + 1].url_path, groups[gi + 1].location)
+            steps.append(ProductionTestStep(
+                step_number=n,
+                action=f"Proceed to the {next_name} page",
+                expected=f"The {next_name} page opens",
+                expected_result=f"The {next_name} page opens",
+            ))
 
         # 5) Required-but-unfilled fields: assert presence (demonstrated as shown),
         #    never assert entry (the user did not fill them).

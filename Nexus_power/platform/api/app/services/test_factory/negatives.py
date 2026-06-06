@@ -82,13 +82,27 @@ def generate_negative_cases(
     if base_case is None:
         return []
     cases: list[ProductionTestCase] = []
-    for fieldname in _required_fields(page_visits):
+    required = _required_fields(page_visits)
+    for fieldname in required:
         steps = _clone_steps(base_case)
         # Drop any fill step for this field; the negative LEAVES it empty.
         steps = [
             s for s in steps
             if f"in the '{fieldname}'" not in (s.action or "")
         ]
+        # Isolate the field under test: fill EVERY OTHER required field with a
+        # valid value first, so the only omission is this one.  Without this the
+        # test leaves all required fields empty and the error can't be
+        # attributed to the target.  Generic for any form.
+        others = [f for f in required if _norm(f) != _norm(fieldname)]
+        if others:
+            joined = ", ".join(others)
+            steps.append(ProductionTestStep(
+                step_number=0,
+                action=f"Fill all other required fields with valid values: {joined}",
+                expected=f"The fields {joined} contain valid values",
+                expected_result=f"The fields {joined} contain valid values",
+            ))
         steps.append(ProductionTestStep(
             step_number=0,
             action=f"Leave the required field '{fieldname}' empty and submit",
@@ -122,7 +136,11 @@ def _value_kind(value: str) -> str:
         return ""
     if _DATE_RX.search(v):
         return "date"
-    if re.fullmatch(r"[$£€]?\d[\d,.]*\s*\w*", v) and any(c.isdigit() for c in v):
+    # PURE number only (optionally a currency prefix / decimals).  A value with
+    # trailing words — "1 Adult", "2 bags", "3 rooms" — is a discrete option
+    # label from a stepper/dropdown, NOT a free numeric input, so zero/huge
+    # boundaries are invalid for it.  Generic guard across applications.
+    if re.fullmatch(r"[$£€]?\d[\d,]*(\.\d+)?", v):
         return "number"
     return ""
 
