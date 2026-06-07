@@ -138,14 +138,16 @@ export default function TestCasesPanel({ artifactId }: { artifactId: string }) {
     finally { setBusy(''); }
   };
 
-  const downloadPlaywright = async (category = '') => {
-    setBusy(category ? `playwright:${category}` : 'playwright'); setError(null);
+  const downloadPlaywright = async (category = '', testCaseId = '') => {
+    const key = testCaseId ? `playwright:tc:${testCaseId}` : (category ? `playwright:${category}` : 'playwright');
+    setBusy(key); setError(null);
     try {
-      const blob = await api.getPlaywrightBundle(artifactId, category);
+      const blob = await api.getPlaywrightBundle(artifactId, { category, testCaseId });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `nexus-playwright-${artifactId.slice(0, 8)}${category ? '-' + category : ''}.zip`;
+      const suffix = testCaseId ? `-${testCaseId.slice(0, 8)}` : (category ? `-${category}` : '');
+      a.download = `nexus-playwright-${artifactId.slice(0, 8)}${suffix}.zip`;
       a.click(); URL.revokeObjectURL(url);
     } catch (e: any) { setError(e?.response?.data?.detail || String(e)); }
     finally { setBusy(''); }
@@ -232,7 +234,7 @@ export default function TestCasesPanel({ artifactId }: { artifactId: string }) {
                   </button>
                 )}
               </div>
-              {items.map((row) => <TestCaseCard key={row.test_case_id} row={row} accent={s.accent} showDetails={showDetails} />)}
+              {items.map((row) => <TestCaseCard key={row.test_case_id} row={row} accent={s.accent} showDetails={showDetails} busy={busy} onPlaywright={(id) => downloadPlaywright('', id)} />)}
               {more > 0 && (
                 <div className="rounded-xl border border-dashed px-3 py-2.5 flex items-center gap-2 flex-wrap"
                   style={{ borderColor: s.badge }}>
@@ -257,7 +259,7 @@ export default function TestCasesPanel({ artifactId }: { artifactId: string }) {
   );
 }
 
-function TestCaseCard({ row, accent, showDetails }: { row: CaseRow; accent: string; showDetails: boolean }) {
+function TestCaseCard({ row, accent, showDetails, busy, onPlaywright }: { row: CaseRow; accent: string; showDetails: boolean; busy?: string; onPlaywright?: (id: string) => void }) {
   const [open, setOpen] = useState(false);
   const steps = row.test_case?.steps || [];
   const demo = row.confidence === 'demonstrated';
@@ -265,7 +267,8 @@ function TestCaseCard({ row, accent, showDetails }: { row: CaseRow; accent: stri
   const scored = steps.some((s) => s.confidence);
   return (
     <div className="rounded-xl mb-2 overflow-hidden" style={{ background: 'rgba(255,255,255,0.7)', border: `1px solid ${accent}33` }}>
-      <button onClick={() => setOpen((o) => !o)} className="w-full flex items-center gap-2 px-3 py-2.5 text-left">
+      <div className="flex items-center">
+      <button onClick={() => setOpen((o) => !o)} className="flex-1 min-w-0 flex items-center gap-2 px-3 py-2.5 text-left">
         {demo ? <CheckCircle2 className="h-4 w-4 shrink-0" style={{ color: accent }} />
               : <Sparkles className="h-4 w-4 shrink-0" style={{ color: accent }} />}
         <span className="text-[12px] font-bold text-slate-900 break-words">{row.name}</span>
@@ -277,6 +280,14 @@ function TestCaseCard({ row, accent, showDetails }: { row: CaseRow; accent: stri
         )}
         <span className="shrink-0 text-[9px] text-slate-400 font-semibold">{row.step_count} steps · {row.priority}</span>
       </button>
+      {showDetails && onPlaywright && (
+        <button onClick={() => onPlaywright(row.test_case_id)} disabled={!!busy}
+          title="Generate Playwright for this test case"
+          className="shrink-0 mr-2 flex items-center gap-1 rounded-md px-2 py-1 text-[10px] font-semibold bg-indigo-50 text-indigo-700 hover:bg-indigo-100 disabled:opacity-50">
+          {busy === `playwright:tc:${row.test_case_id}` ? <Loader2 className="h-3 w-3 animate-spin" /> : <FileCode2 className="h-3 w-3" />} Playwright
+        </button>
+      )}
+      </div>
       {open && (
         <div className="px-3 pb-3 overflow-x-auto">
           {row.description && <p className="text-[11px] text-slate-500 mb-2 leading-snug">{row.description}</p>}

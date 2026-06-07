@@ -391,15 +391,19 @@ async def generate_playwright(
         description="optional single category: functional | combination | negative | "
         "boundary | error_state. Empty = the whole active suite.",
     ),
+    test_case_id: str = Query(
+        "", description="optional single test case id (takes precedence over category).",
+    ),
     user: dict = Depends(get_current_user),
 ):
-    """Deterministically compile the active suite (or one category) into a
-    runnable Playwright project (zip). Read-only + ZERO LLM: grounded in the
-    stored observed evidence, same suite in -> byte-identical project out. The
-    buyer owns the emitted code.
+    """Deterministically compile the active suite, one category, or one specific
+    test case into a runnable Playwright project (zip). Read-only + ZERO LLM:
+    grounded in the stored observed evidence, same suite in -> byte-identical
+    project out. The buyer owns the emitted code.
     """
     tenant_id = user["tenant_id"]
     cat = (category or "").strip().lower()
+    tcid = (test_case_id or "").strip()
     async with tenant_scoped_session(tenant_id) as session:
         await _require_artifact(session, artifact_id, tenant_id)
         cases = await factory_service.load_active_production_cases(
@@ -410,10 +414,14 @@ async def generate_playwright(
         visits, _ = await factory_service._load_current_pages_and_actions(
             session, artifact_id=artifact_id,
         )
-    if cat:
+    if tcid:
+        cases = [c for c in cases if (getattr(c, "test_id", "") or "") == tcid]
+    elif cat:
         cases = [c for c in cases if (getattr(c, "type", "") or "").lower() == cat]
     if not cases:
         detail = (
+            "test case not found or not active"
+            if tcid else
             f"no active '{cat}' test cases — generate that category first"
             if cat else
             "no generated test cases for this artifact — run /generate first"
@@ -430,7 +438,7 @@ async def generate_playwright(
             info.external_attr = 0o644 << 16
             zf.writestr(info, content)
 
-    suffix = f"-{cat}" if cat else ""
+    suffix = f"-{tcid[:8]}" if tcid else (f"-{cat}" if cat else "")
     filename = f"nexus-playwright-{artifact_id[:8]}{suffix}.zip"
     return StreamingResponse(
         io.BytesIO(buf.getvalue()),

@@ -1378,12 +1378,18 @@ class ApiClient {
   }
 
   /** Download the deterministic, grounded Playwright project (zip).
-   *  category = '' downloads the whole active suite; a category name
-   *  (functional|combination|negative|boundary|error_state) downloads just that. */
-  async getPlaywrightBundle(artifactId: string, category = ''): Promise<Blob> {
+   *  Empty opts = whole active suite; {category} = one category;
+   *  {testCaseId} = one specific test case (takes precedence). */
+  async getPlaywrightBundle(
+    artifactId: string,
+    opts: { category?: string; testCaseId?: string } = {},
+  ): Promise<Blob> {
+    const params: Record<string, string> = {};
+    if (opts.testCaseId) params.test_case_id = opts.testCaseId;
+    else if (opts.category) params.category = opts.category;
     const resp = await this.client.get(
       `/v1/test-factory/${artifactId}/playwright`,
-      { params: category ? { category } : {}, responseType: 'blob' },
+      { params, responseType: 'blob' },
     );
     return resp.data as Blob;
   }
