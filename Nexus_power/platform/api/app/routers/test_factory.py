@@ -47,6 +47,7 @@ from ..services.test_factory.after_extractor import (
 )
 from ..services.test_factory.enrich_extractor import enrich_artifact
 from ..services.script_factory import build_field_meta, compile_project
+from ..services.script_factory.triage import assemble_triage
 from ..services.test_factory.assistant import answer as assistant_answer
 from ..services.test_factory.delivery import (
     EXPORT_MEDIA_TYPES,
@@ -445,6 +446,21 @@ async def generate_playwright(
         media_type="application/zip",
         headers={"Content-Disposition": f"attachment; filename={filename}"},
     )
+
+
+@router.get("/api/v1/test-factory/{artifact_id}/triage")
+async def get_triage(
+    artifact_id: str = PathParam(..., min_length=1, max_length=64),
+    user: dict = Depends(get_current_user),
+):
+    """Grounded triage board: per-scenario verdict (real-regression / selector-drift
+    / visual-change / flake / needs-review) joined to the captured baseline, plus
+    the 'need you / don't need you' tally. Read-only, $0 LLM. Empty board when no
+    runs have been ingested yet."""
+    tenant_id = user["tenant_id"]
+    async with tenant_scoped_session(tenant_id) as session:
+        await _require_artifact(session, artifact_id, tenant_id)
+        return await assemble_triage(session, artifact_id=artifact_id, tenant_id=tenant_id)
 
 
 @router.post("/api/v1/test-factory/{artifact_id}/push/{tool}")
