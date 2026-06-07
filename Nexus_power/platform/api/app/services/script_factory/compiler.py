@@ -25,6 +25,26 @@ _DATE_RX = re.compile(
     r"|jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\b",
     re.IGNORECASE,
 )
+# First alphabetic token of a value — used for a TOLERANT value assertion that
+# survives normalization/autocomplete ("Austin AUS" -> "Austin, TX (AUS)").
+_TOKEN_RX = re.compile(r"[A-Za-z]{2,}")
+
+
+def _assert_token(value: str) -> str:
+    m = _TOKEN_RX.search(value or "")
+    return m.group(0) if m else ""
+
+
+def _a11y_note(observed: dict) -> str | None:
+    """Flag a control with no observed accessible name (a11y-weakness surfacing).
+
+    We never silently drop to a brittle locator: when the app gives us no
+    role/name to anchor on, we say so."""
+    if not (observed.get("label") or "").strip():
+        return ("// a11y-weakness: no accessible name observed for this control — "
+                "locator is a best-effort fallback; add a label/aria-label for "
+                "reliable automation.")
+    return None
 
 
 def _norm(text: str) -> str:
@@ -150,6 +170,9 @@ def _action_lines(step, field_meta: dict) -> list[str]:
             )
     elif verb == "type":
         kind = _refine_kind(observed, field_meta)
+        note = _a11y_note(observed)
+        if note:
+            out.append(note)
         if kind == "select":
             out.append(f"await {_label_locator(observed)}.selectOption('{js_str(value)}');")
         elif kind == "date":
@@ -158,17 +181,32 @@ def _action_lines(step, field_meta: dict) -> list[str]:
                 f"// review: '{js_str(label)}' looks like a date control — confirm "
                 "the picker accepts this value/format."
             )
-        else:  # text
+        else:  # text (incl. possible autocomplete)
             loc = _label_locator(observed)
             out.append(f"const field = {loc};")
             out.append(f"await field.fill('{js_str(value)}');")
-            out.append(f"await expect(field).toHaveValue('{js_str(value)}');")
+            tok = _assert_token(value)
+            if tok:
+                # Tolerant: a committed/normalized value (e.g. an autocomplete
+                # rewriting "Austin AUS" -> "Austin, TX (AUS)") still passes; a
+                # blank/failed entry still fails. Never an exact-keystroke mirror.
+                out.append(
+                    f"await expect(field).toHaveValue(/{tok}/i); "
+                    "// tolerant: survives normalization/autocomplete"
+                )
     elif verb == "select":
         kind = _refine_kind(observed, field_meta)
-        if kind in ("radio", "checkbox", "toggle"):
+        if kind in ("radio", "checkbox"):
+            # Control type CONFIRMED by captured signals -> assert the resulting
+            # state so a no-op click cannot pass green.
+            name = js_str(value or label)
+            loc = f"page.getByRole('{kind}', {{ name: '{name}' }})"
+            out.append(f"await {loc}.check();")
+            out.append(f"await expect({loc}).toBeChecked();")
+        elif kind == "toggle":
             name = js_str(label)
-            # Role-tolerant: prefer radio-by-name, fall back to the visible option
-            # text — handles both radio groups and segmented buttons.
+            # Role UNCONFIRMED -> role-tolerant locator (radio name OR visible
+            # text); no state assertion we cannot safely make.
             out.append(
                 f"await page.getByRole('radio', {{ name: '{name}' }})"
                 f".or(page.getByText('{name}', {{ exact: true }})).first().click();"
@@ -197,6 +235,11 @@ def compile_case(tc, field_meta: dict | None = None) -> str:
     steps = list(getattr(tc, "steps", None) or [])
     high = sum(1 for s in steps if _confidence(s) == "high")
     review = sum(1 for s in steps if _confidence(s) == "review")
+    weak_a11y = sum(
+        1 for s in steps
+        if (_observed(s).get("verb") or "").strip().lower() in ("type", "select", "click")
+        and not (_observed(s).get("label") or "").strip()
+    )
 
     # Consent/cookie clicks are handled as defensive SETUP after navigation, not
     # as a provenance-late mid-flow step that the overlay would have blocked.
@@ -211,6 +254,9 @@ def compile_case(tc, field_meta: dict | None = None) -> str:
     if description:
         out.append(f"// {description}")
     out.append(f"// Confidence: {high} solid step(s), {review} need review.")
+    if weak_a11y:
+        out.append(f"// a11y: {weak_a11y} control(s) had no observed accessible name "
+                   "(flagged inline) — improving the app's labels makes these reliable.")
     out.append("")
     out.append("import { test, expect } from '@playwright/test';")
     out.append("")
