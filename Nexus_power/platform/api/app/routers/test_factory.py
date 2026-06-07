@@ -386,13 +386,20 @@ async def export_test_cases(
 @router.get("/api/v1/test-factory/{artifact_id}/playwright")
 async def generate_playwright(
     artifact_id: str = PathParam(..., min_length=1, max_length=64),
+    category: str = Query(
+        "",
+        description="optional single category: functional | combination | negative | "
+        "boundary | error_state. Empty = the whole active suite.",
+    ),
     user: dict = Depends(get_current_user),
 ):
-    """Deterministically compile the active suite into a runnable Playwright
-    project (zip). Read-only + ZERO LLM: grounded in the stored observed evidence,
-    same suite in -> byte-identical project out. The buyer owns the emitted code.
+    """Deterministically compile the active suite (or one category) into a
+    runnable Playwright project (zip). Read-only + ZERO LLM: grounded in the
+    stored observed evidence, same suite in -> byte-identical project out. The
+    buyer owns the emitted code.
     """
     tenant_id = user["tenant_id"]
+    cat = (category or "").strip().lower()
     async with tenant_scoped_session(tenant_id) as session:
         await _require_artifact(session, artifact_id, tenant_id)
         cases = await factory_service.load_active_production_cases(
@@ -403,11 +410,15 @@ async def generate_playwright(
         visits, _ = await factory_service._load_current_pages_and_actions(
             session, artifact_id=artifact_id,
         )
+    if cat:
+        cases = [c for c in cases if (getattr(c, "type", "") or "").lower() == cat]
     if not cases:
-        raise HTTPException(
-            status_code=404,
-            detail="no generated test cases for this artifact — run /generate first",
+        detail = (
+            f"no active '{cat}' test cases — generate that category first"
+            if cat else
+            "no generated test cases for this artifact — run /generate first"
         )
+        raise HTTPException(status_code=404, detail=detail)
 
     files = compile_project(cases, build_field_meta(visits))
     buf = io.BytesIO()
@@ -419,7 +430,8 @@ async def generate_playwright(
             info.external_attr = 0o644 << 16
             zf.writestr(info, content)
 
-    filename = f"nexus-playwright-{artifact_id[:8]}.zip"
+    suffix = f"-{cat}" if cat else ""
+    filename = f"nexus-playwright-{artifact_id[:8]}{suffix}.zip"
     return StreamingResponse(
         io.BytesIO(buf.getvalue()),
         media_type="application/zip",

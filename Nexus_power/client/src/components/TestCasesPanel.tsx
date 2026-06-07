@@ -138,14 +138,14 @@ export default function TestCasesPanel({ artifactId }: { artifactId: string }) {
     finally { setBusy(''); }
   };
 
-  const downloadPlaywright = async () => {
-    setBusy('playwright'); setError(null);
+  const downloadPlaywright = async (category = '') => {
+    setBusy(category ? `playwright:${category}` : 'playwright'); setError(null);
     try {
-      const blob = await api.getPlaywrightBundle(artifactId);
+      const blob = await api.getPlaywrightBundle(artifactId, category);
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `nexus-playwright-${artifactId.slice(0, 8)}.zip`;
+      a.download = `nexus-playwright-${artifactId.slice(0, 8)}${category ? '-' + category : ''}.zip`;
       a.click(); URL.revokeObjectURL(url);
     } catch (e: any) { setError(e?.response?.data?.detail || String(e)); }
     finally { setBusy(''); }
@@ -224,6 +224,13 @@ export default function TestCasesPanel({ artifactId }: { artifactId: string }) {
               <div className="flex items-center gap-2 px-1 pb-1">
                 <span className="text-[11px] font-black uppercase tracking-wide" style={{ color: s.accent }}>{s.label}</span>
                 <span className="rounded-full px-1.5 py-0.5 text-[9px] font-black" style={{ background: s.badge, color: s.accent }}>{count}</span>
+                {showDetails && (
+                  <button onClick={() => downloadPlaywright(s.type)} disabled={!!busy}
+                    title={`Generate Playwright for ${s.label} only`}
+                    className="ml-auto flex items-center gap-1 rounded-md px-2 py-0.5 text-[10px] font-semibold bg-indigo-50 text-indigo-700 hover:bg-indigo-100 disabled:opacity-50">
+                    {busy === `playwright:${s.type}` ? <Loader2 className="h-3 w-3 animate-spin" /> : <FileCode2 className="h-3 w-3" />} Playwright
+                  </button>
+                )}
               </div>
               {items.map((row) => <TestCaseCard key={row.test_case_id} row={row} accent={s.accent} showDetails={showDetails} />)}
               {more > 0 && (

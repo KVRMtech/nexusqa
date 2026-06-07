@@ -1377,11 +1377,13 @@ class ApiClient {
     return data;
   }
 
-  /** Download the deterministic, grounded Playwright project (zip). */
-  async getPlaywrightBundle(artifactId: string): Promise<Blob> {
+  /** Download the deterministic, grounded Playwright project (zip).
+   *  category = '' downloads the whole active suite; a category name
+   *  (functional|combination|negative|boundary|error_state) downloads just that. */
+  async getPlaywrightBundle(artifactId: string, category = ''): Promise<Blob> {
     const resp = await this.client.get(
       `/v1/test-factory/${artifactId}/playwright`,
-      { responseType: 'blob' },
+      { params: category ? { category } : {}, responseType: 'blob' },
     );
     return resp.data as Blob;
   }
