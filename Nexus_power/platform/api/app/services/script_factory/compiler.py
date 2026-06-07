@@ -283,7 +283,17 @@ def compile_case(tc, field_meta: dict | None = None) -> str:
     out.append("")
     out.append("import { test, expect } from '@playwright/test';")
     out.append("")
-    out.append(f"test('{js_str(name)}', async ({{ page }}) => {{")
+    test_id = js_str(getattr(tc, "test_id", "") or "")
+    if test_id:
+        # Carry the test-case id so the Nexus reporter can map a run's failure
+        # back to this test's capture-time baseline (grounded triage).
+        out.append(
+            f"test('{js_str(name)}', "
+            f"{{ annotation: [{{ type: 'nexus-test-id', description: '{test_id}' }}] }}, "
+            "async ({ page }) => {"
+        )
+    else:
+        out.append(f"test('{js_str(name)}', async ({{ page }}) => {{")
 
     consent_emitted = False
     for step in flow:
@@ -346,7 +356,7 @@ export default defineConfig({
   fullyParallel: true,
   forbidOnly: true,
   retries: 0,
-  reporter: [['list'], ['html', { open: 'never' }]],
+  reporter: [['list'], ['html', { open: 'never' }], ['./nexus-reporter.ts']],
   use: {
     trace: 'on-first-retry',
     screenshot: 'only-on-failure',
@@ -369,6 +379,111 @@ _TSCONFIG = """\
     "types": ["node"]
   }
 }
+"""
+
+
+_NEXUS_REPORTER_TS = """\
+// Nexus reporter — ships this run's results back to your Nexus platform so the
+// Grounded Triage view can show baseline-vs-actual + a verdict for each failure.
+// 100% yours: edit or delete freely. It is a NO-OP unless NEXUS_ENDPOINT,
+// NEXUS_TOKEN and NEXUS_ARTIFACT_ID are set in the environment, so normal local
+// runs are unaffected. Requires Node 18+ (global fetch).
+import type { Reporter, FullResult, TestCase, TestResult } from '@playwright/test/reporter';
+
+const ENDPOINT = process.env.NEXUS_ENDPOINT || '';
+const TOKEN = process.env.NEXUS_TOKEN || '';
+const ARTIFACT_ID = process.env.NEXUS_ARTIFACT_ID || '';
+
+type StepRecord = {
+  test_name: string;
+  scenario_id: string;
+  step_number: number;
+  status: string;
+  duration_ms: number;
+  error_message: string;
+};
+
+function mapRunStatus(s: string): string {
+  if (s === 'passed') return 'passed';
+  if (s === 'timedOut') return 'timed_out';
+  if (s === 'skipped') return 'skipped';
+  if (s === 'interrupted') return 'broken';
+  return 'failed';
+}
+
+export default class NexusReporter implements Reporter {
+  private steps: StepRecord[] = [];
+  private startedAt = new Date(0).toISOString();
+
+  onBegin(): void {
+    this.startedAt = new Date().toISOString();
+  }
+
+  onTestEnd(test: TestCase, result: TestResult): void {
+    const ann = test.annotations.find((a) => a.type === 'nexus-test-id');
+    const scenarioId = (ann?.description || '').slice(0, 64);
+    const skipped = result.status === 'skipped';
+    const observed = result.steps.filter((s) => /^step \\d+:/.test(s.title));
+    if (observed.length === 0) {
+      this.steps.push({
+        test_name: test.title,
+        scenario_id: scenarioId,
+        step_number: 0,
+        status: mapRunStatus(result.status),
+        duration_ms: Math.round(result.duration),
+        error_message: (result.error?.message || '').slice(0, 8000),
+      });
+      return;
+    }
+    for (const s of observed) {
+      const m = s.title.match(/^step (\\d+):/);
+      this.steps.push({
+        test_name: test.title,
+        scenario_id: scenarioId,
+        step_number: m ? parseInt(m[1], 10) : 0,
+        status: skipped ? 'skipped' : s.error ? 'failed' : 'passed',
+        duration_ms: Math.round(s.duration),
+        error_message: (s.error?.message || '').slice(0, 8000),
+      });
+    }
+  }
+
+  async onEnd(result: FullResult): Promise<void> {
+    if (!ENDPOINT || !TOKEN || !ARTIFACT_ID) {
+      console.warn('[nexus-reporter] NEXUS_ENDPOINT/TOKEN/ARTIFACT_ID not set — results not uploaded.');
+      return;
+    }
+    const body = {
+      artifact_id: ARTIFACT_ID,
+      ci_run_id: process.env.NEXUS_RUN_ID || process.env.GITHUB_RUN_ID || '',
+      ci_commit_sha: process.env.GITHUB_SHA || process.env.CI_COMMIT_SHA || '',
+      ci_pipeline_url: process.env.NEXUS_PIPELINE_URL || '',
+      environment: process.env.NEXUS_ENV || 'ci',
+      status: mapRunStatus(result.status),
+      started_at: this.startedAt,
+      completed_at: new Date().toISOString(),
+      steps: this.steps,
+    };
+    try {
+      const resp = await fetch(`${ENDPOINT.replace(/\\/$/, '')}/api/v1/test-runs/ingest`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${TOKEN}` },
+        body: JSON.stringify(body),
+      });
+      console.log(`[nexus-reporter] uploaded ${this.steps.length} step result(s) -> HTTP ${resp.status}`);
+    } catch (e) {
+      console.warn('[nexus-reporter] upload failed:', (e as Error).message);
+    }
+  }
+}
+"""
+
+_ENV_EXAMPLE = """\
+# Upload run results to Nexus for the Grounded Triage view (baseline-vs-actual +
+# a verdict per failure). Leave unset to run normally with no upload.
+NEXUS_ENDPOINT=https://your-nexus-host
+NEXUS_TOKEN=your-api-jwt
+NEXUS_ARTIFACT_ID=your-artifact-id
 """
 
 
@@ -412,5 +527,7 @@ def compile_project(cases: Iterable, field_meta: dict | None = None) -> dict[str
     files["package.json"] = _PACKAGE_JSON
     files["playwright.config.ts"] = _PLAYWRIGHT_CONFIG
     files["tsconfig.json"] = _TSCONFIG
+    files["nexus-reporter.ts"] = _NEXUS_REPORTER_TS
+    files[".env.example"] = _ENV_EXAMPLE
     files["README.md"] = _readme(len(cases), high, review)
     return files
