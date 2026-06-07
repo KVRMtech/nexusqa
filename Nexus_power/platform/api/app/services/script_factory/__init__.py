@@ -16,6 +16,6 @@ Principles (enforced by construction):
 Additive: reads stored cases only; never modifies the frozen capture pipeline.
 """
 
-from .compiler import compile_case, compile_project
+from .compiler import build_field_meta, compile_case, compile_project
 
-__all__ = ["compile_case", "compile_project"]
+__all__ = ["build_field_meta", "compile_case", "compile_project"]

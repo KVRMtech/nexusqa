@@ -46,7 +46,7 @@ from ..services.test_factory.after_extractor import (
     extract_outcomes_for_artifact,
 )
 from ..services.test_factory.enrich_extractor import enrich_artifact
-from ..services.script_factory import compile_project
+from ..services.script_factory import build_field_meta, compile_project
 from ..services.test_factory.assistant import answer as assistant_answer
 from ..services.test_factory.delivery import (
     EXPORT_MEDIA_TYPES,
@@ -398,13 +398,18 @@ async def generate_playwright(
         cases = await factory_service.load_active_production_cases(
             session, artifact_id=artifact_id,
         )
+        # Deterministic kind-awareness: captured control type + options per field
+        # (read-only over existing signals; no LLM, no pipeline mutation).
+        visits, _ = await factory_service._load_current_pages_and_actions(
+            session, artifact_id=artifact_id,
+        )
     if not cases:
         raise HTTPException(
             status_code=404,
             detail="no generated test cases for this artifact — run /generate first",
         )
 
-    files = compile_project(cases)
+    files = compile_project(cases, build_field_meta(visits))
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
         for path, content in sorted(files.items()):

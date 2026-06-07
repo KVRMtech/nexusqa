@@ -1,18 +1,34 @@
 """Deterministic ProductionTestCase -> Playwright TypeScript compiler.
 
-Pure string compilation (no LLM, no I/O, no Date/random) — the same case always
-produces byte-identical code. Reads only the OBSERVED evidence already stored on
-each step.
+Phase 2 (runnable): kind-aware actions, load-bearing UNPROVEN skips,
+consent-as-setup, anchored URL assertions, test.step grouping + evidence
+comments. Pure string compilation — no LLM, no I/O, no Date/random — so the same
+case always produces byte-identical code.
+
+Kind refinement is DETERMINISTIC, from data already captured
+(form_snapshot_signals: control type + options; plus the value's own pattern).
+No new vision pass, no cost, and it never modifies the frozen capture pipeline.
 """
 
 from __future__ import annotations
 
+import json
 import re
-from typing import Iterable, Sequence
+from typing import Iterable
 
-from .locators import element_locator, js_regex_literal, js_str, url_path
+from .locators import js_regex_literal, js_str, url_path
 
 _SLUG_RX = re.compile(r"[^a-z0-9]+")
+_CONSENT_RX = re.compile(r"cookie|consent|accept all|accept cookies", re.IGNORECASE)
+_DATE_RX = re.compile(
+    r"\b(\d{4}-\d{1,2}-\d{1,2}|\d{1,2}[/.\-]\d{1,2}"
+    r"|jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\b",
+    re.IGNORECASE,
+)
+
+
+def _norm(text: str) -> str:
+    return " ".join((text or "").lower().split())
 
 
 def _slug(text: str, fallback: str = "test") -> str:
@@ -32,104 +48,210 @@ def _observed(step) -> dict:
     return getattr(step, "observed", None) or {}
 
 
-def _compile_step(step) -> list[str]:
-    """TypeScript lines for one step, prefixed with a provenance comment."""
+def _is_consent(step) -> bool:
+    o = _observed(step)
+    if (o.get("verb") or "").strip().lower() != "click":
+        return False
+    return bool(_CONSENT_RX.search(o.get("label", "") or ""))
+
+
+# ─── Deterministic kind refinement (from already-captured signals) ────────────
+
+
+def build_field_meta(visits: Iterable) -> dict[str, dict]:
+    """Map normalized label -> {control, options, required} from the captured
+    form_snapshot_signals. Read-only over existing data; no LLM."""
+    meta: dict[str, dict] = {}
+    for v in visits:
+        signals = getattr(v, "form_snapshot_signals", None) or {}
+        for label, sig in signals.items():
+            if not isinstance(sig, dict):
+                continue
+            key = _norm(label)
+            if not key:
+                continue
+            opts = [str(o).strip() for o in (sig.get("options") or []) if str(o).strip()]
+            meta[key] = {
+                "control": (sig.get("type") or "").strip().lower(),
+                "options": opts,
+                "required": bool(sig.get("required")),
+            }
+    return meta
+
+
+def _refine_kind(observed: dict, field_meta: dict) -> str:
+    """text | select | date | radio | checkbox | toggle — deterministic."""
+    base = (observed.get("kind") or "").strip().lower()
+    if base == "toggle":
+        return "toggle"
+    fm = field_meta.get(_norm(observed.get("label", ""))) or {}
+    control = fm.get("control", "")
+    options = fm.get("options") or []
+    if control == "checkbox":
+        return "checkbox"
+    if control in ("radio", "segmented"):
+        return "radio"
+    if control in ("select", "dropdown", "combobox") or len(options) >= 2:
+        return "select"
+    if _DATE_RX.search(observed.get("value", "") or ""):
+        return "date"
+    return "text"
+
+
+def _label_locator(observed: dict) -> str:
+    label = js_str(observed.get("label", ""))
+    anchor = js_str(observed.get("anchor", ""))
+    el = f"getByLabel('{label}')"
+    if anchor:
+        return f"page.getByRole('row', {{ name: '{anchor}' }}).{el}"
+    return f"page.{el}"
+
+
+def _role_locator(observed: dict, role: str) -> str:
+    label = js_str(observed.get("label", ""))
+    anchor = js_str(observed.get("anchor", ""))
+    el = f"getByRole('{role}', {{ name: '{label}' }})"
+    if anchor:
+        return f"page.getByRole('row', {{ name: '{anchor}' }}).{el}"
+    return f"page.{el}"
+
+
+# ─── Per-step action emission ─────────────────────────────────────────────────
+
+
+def _action_lines(step, field_meta: dict) -> list[str]:
+    """Kind-aware Playwright lines for one (observed) step."""
     observed = _observed(step)
     verb = (observed.get("verb") or "").strip().lower()
-    value = observed.get("value", "")
-    url = observed.get("url", "")
-    label = observed.get("label", "")
-    after = (observed.get("after") or "").strip()
-    n = getattr(step, "step_number", None)
+    value = observed.get("value", "") or ""
+    url = observed.get("url", "") or ""
+    label = observed.get("label", "") or ""
     action = (getattr(step, "action", "") or "").strip()
-    prov = _provenance(step)
-
-    tag = "observed" if prov == "demonstrated" else (prov or "step")
-    lines = [f"  // step {n} — {tag}: {action}"]
-
-    # Honest stub: un-observed (inferred) or low-confidence steps are flagged,
-    # never invented — they fail toward review, not a fake green.
-    if prov == "inferred" or _confidence(step) == "review":
-        lines.append("  // TODO(human): not directly observed in the recording — "
-                     "confirm the action/locator before relying on this step.")
-        lines.append(f"  //   intent: {action}")
-        return lines
+    after = (observed.get("after") or "").strip()
+    out: list[str] = []
 
     if verb == "navigate":
         if action.startswith("Open ") and url:
-            lines.append(f"  await page.goto('{js_str(url)}');")
+            out.append(f"await page.goto('{js_str(url)}');")
         else:
             path = url_path(url)
             if path:
-                lines.append(f"  await expect(page).toHaveURL({js_regex_literal(path)});")
+                out.append(
+                    f"await expect(page).toHaveURL({js_regex_literal(path)}, "
+                    "{ timeout: 30000 });"
+                )
             else:
-                lines.append(f"  // observed navigation: {action}")
+                out.append(f"// observed navigation: {action}")
     elif verb == "assert_required":
-        fields = [f.strip() for f in str(label).split(",") if f.strip()]
-        for fld in fields:
-            lines.append(f"  await expect(page.getByLabel('{js_str(fld)}')).toBeVisible();")
+        for fld in [f.strip() for f in str(label).split(",") if f.strip()]:
+            out.append(
+                f"await expect(page.getByLabel('{js_str(fld)}')).toBeVisible(); "
+                "// field present"
+            )
     elif verb == "type":
-        loc = element_locator(observed)
-        lines.append(f"  await {loc}.fill('{js_str(value)}');")
-        # Semantic, step-anchored assertion: the value actually persisted.
-        lines.append(f"  await expect({loc}).toHaveValue('{js_str(value)}');")
+        kind = _refine_kind(observed, field_meta)
+        if kind == "select":
+            out.append(f"await {_label_locator(observed)}.selectOption('{js_str(value)}');")
+        elif kind == "date":
+            out.append(f"await {_label_locator(observed)}.fill('{js_str(value)}');")
+            out.append(
+                f"// review: '{js_str(label)}' looks like a date control — confirm "
+                "the picker accepts this value/format."
+            )
+        else:  # text
+            loc = _label_locator(observed)
+            out.append(f"const field = {loc};")
+            out.append(f"await field.fill('{js_str(value)}');")
+            out.append(f"await expect(field).toHaveValue('{js_str(value)}');")
     elif verb == "select":
-        loc = element_locator(observed)
-        if (observed.get("kind") or "").strip().lower() == "toggle":
-            lines.append(f"  await {loc}.click();")
+        kind = _refine_kind(observed, field_meta)
+        if kind in ("radio", "checkbox", "toggle"):
+            name = js_str(label)
+            # Role-tolerant: prefer radio-by-name, fall back to the visible option
+            # text — handles both radio groups and segmented buttons.
+            out.append(
+                f"await page.getByRole('radio', {{ name: '{name}' }})"
+                f".or(page.getByText('{name}', {{ exact: true }})).first().click();"
+            )
         else:
-            lines.append(f"  await {loc}.selectOption('{js_str(value)}');")
+            out.append(f"await {_label_locator(observed)}.selectOption('{js_str(value)}');")
     elif verb == "click":
-        loc = element_locator(observed)
-        lines.append(f"  await {loc}.click();")
+        role = "link" if (observed.get("kind") or "").strip().lower() == "link" else "button"
+        out.append(f"await {_role_locator(observed, role)}.click();")
     else:
-        lines.append(f"  // (no executable action derived) {action}")
+        out.append(f"// (no executable action derived) {action}")
 
-    # The observed outcome is carried as evidence. A locatable assertion for it
-    # is synthesized in a later phase; here it is recorded honestly, not faked.
     if after:
-        lines.append(f"  // observed outcome: {after}")
-    return lines
+        out.append(f"// observed outcome: {after}")
+    return out
 
 
-def compile_case(tc) -> str:
-    """Compile one ProductionTestCase to a Playwright .spec.ts file (string)."""
+# ─── Case + project compilation ───────────────────────────────────────────────
+
+
+def compile_case(tc, field_meta: dict | None = None) -> str:
+    """Compile one ProductionTestCase to a runnable Playwright .spec.ts (string)."""
+    field_meta = field_meta or {}
     name = (getattr(tc, "name", None) or "Generated test").strip()
     description = (getattr(tc, "description", None) or "").strip()
     steps = list(getattr(tc, "steps", None) or [])
     high = sum(1 for s in steps if _confidence(s) == "high")
     review = sum(1 for s in steps if _confidence(s) == "review")
 
-    header = [
+    # Consent/cookie clicks are handled as defensive SETUP after navigation, not
+    # as a provenance-late mid-flow step that the overlay would have blocked.
+    consent_present = any(_is_consent(s) for s in steps)
+    flow = [s for s in steps if not _is_consent(s)]
+
+    out: list[str] = [
         "// GENERATED by Nexus Script Factory — deterministic, grounded in a real recording.",
-        "// Every locator/assertion is derived from OBSERVED evidence (role + label +",
-        "// value + anchor + outcome). No LLM, no inference. Edit freely — you own this code.",
+        "// Locators/actions/assertions derive from OBSERVED evidence (kind-aware). No LLM.",
+        "// Edit freely — you own this code. UNPROVEN steps are skipped honestly, not faked.",
     ]
     if description:
-        header.append(f"// {description}")
-    header.append(f"// Confidence: {high} solid step(s), {review} need review (see TODO).")
-
-    body: list[str] = []
-    for step in steps:
-        body.extend(_compile_step(step))
-        body.append("")
-    if body and body[-1] == "":
-        body.pop()
-
-    out: list[str] = []
-    out.extend(header)
+        out.append(f"// {description}")
+    out.append(f"// Confidence: {high} solid step(s), {review} need review.")
     out.append("")
     out.append("import { test, expect } from '@playwright/test';")
     out.append("")
     out.append(f"test('{js_str(name)}', async ({{ page }}) => {{")
-    out.extend(body)
+
+    consent_emitted = False
+    for step in flow:
+        n = getattr(step, "step_number", None)
+        action = (getattr(step, "action", "") or "").strip()
+        observed = _observed(step)
+        verb = (observed.get("verb") or "").strip().lower()
+
+        # Load-bearing honesty: un-observed / review steps STOP the test with an
+        # UNPROVEN skip — so no downstream assertion runs across the gap and
+        # false-reds. (Never a fake green, never a silent jump.)
+        if _provenance(step) == "inferred" or _confidence(step) == "review":
+            out.append(f"  // step {n} — {action}")
+            reason = f"UNPROVEN: step {n} not directly observed — {action}"
+            out.append(f"  test.skip(true, {json.dumps(reason)});")
+            continue
+
+        out.append(f"  await test.step({json.dumps(f'step {n}: {action}')}, async () => {{")
+        out.append(f"    // evidence: provenance={_provenance(step) or 'n/a'}, "
+                   f"confidence={_confidence(step) or 'n/a'}")
+        for line in _action_lines(step, field_meta):
+            out.append(f"    {line}")
+        out.append("  });")
+
+        if (consent_present and not consent_emitted
+                and verb == "navigate" and action.startswith("Open ")):
+            consent_emitted = True
+            out.append("  // dismiss a consent/cookie overlay if present (defensive setup)")
+            out.append("  const __consent = page.getByRole('button', "
+                       "{ name: /accept|agree|allow|got it/i });")
+            out.append("  if (await __consent.isVisible().catch(() => false)) "
+                       "await __consent.click();")
+
     out.append("});")
     out.append("")
     return "\n".join(out)
 
-
-# ─── Minimal runnable scaffold (Phase 1 ships a runnable project; POM/fixtures/
-#     data tables / CI presets arrive in Phase 2) ──────────────────────────────
 
 _PACKAGE_JSON = """\
 {
@@ -185,20 +307,21 @@ def _readme(case_count: int, high: int, review: int) -> str:
     return (
         "# Nexus-generated Playwright suite\n\n"
         "Deterministically generated from a real, recorded session — grounded in "
-        "observed evidence (role + label + value + anchor + outcome), no LLM.\n\n"
+        "observed evidence (kind-aware locators/actions + outcome), no LLM.\n\n"
         f"- Test specs: {case_count}\n"
-        f"- Solid steps: {high}  ·  Steps needing review (TODO): {review}\n\n"
+        f"- Solid steps: {high}  ·  Steps needing review: {review}\n\n"
         "## Run\n\n"
         "```bash\nnpm install\nnpx playwright install --with-deps\nnpm test\n```\n\n"
         "You own this code — edit it like any hand-written Playwright suite. Steps "
-        "marked `TODO(human)` were not directly observed in the recording; confirm "
-        "them before relying on the test.\n"
+        "skipped with `UNPROVEN` were not directly observed in the recording; "
+        "implement the gating action before relying on the rest of that test.\n"
     )
 
 
-def compile_project(cases: Iterable) -> dict[str, str]:
+def compile_project(cases: Iterable, field_meta: dict | None = None) -> dict[str, str]:
     """Compile active cases into a runnable Playwright project (path -> content)."""
     cases = list(cases)
+    field_meta = field_meta or {}
     files: dict[str, str] = {}
     used: dict[str, int] = {}
     high = review = 0
@@ -209,14 +332,13 @@ def compile_project(cases: Iterable) -> dict[str, str]:
         kind = _slug(getattr(tc, "type", "") or "functional", "functional")
         base = _slug(getattr(tc, "name", "") or "test", "test")
         key = f"tests/{kind}/{base}"
-        # de-duplicate filenames deterministically
         if key in used:
             used[key] += 1
             path = f"{key}-{used[key]}.spec.ts"
         else:
             used[key] = 0
             path = f"{key}.spec.ts"
-        files[path] = compile_case(tc)
+        files[path] = compile_case(tc, field_meta)
 
     files["package.json"] = _PACKAGE_JSON
     files["playwright.config.ts"] = _PLAYWRIGHT_CONFIG

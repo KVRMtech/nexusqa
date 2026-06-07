@@ -39,9 +39,12 @@ def js_str(value: str) -> str:
 
 
 def js_regex_literal(path: str) -> str:
-    """A JS regex literal that matches the given URL path (metachars escaped)."""
+    """A JS regex literal matching the URL path as a whole SEGMENT (not a
+    substring) — followed by '/', '?', '#', or end-of-string. Prevents the
+    substring false-green where '/checkout' also matches '/checkout-error'.
+    Host-agnostic (no host/scheme anchoring) by design."""
     escaped = _RE_META.sub(r"\\\1", path or "")
-    return f"/{escaped}/"
+    return f"/{escaped}(?:\\/|\\?|#|$)/"
 
 
 def element_locator(observed: dict) -> str:
