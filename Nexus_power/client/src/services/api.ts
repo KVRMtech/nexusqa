@@ -1377,6 +1377,12 @@ class ApiClient {
     return data;
   }
 
+  /** Grounded triage board: per-failure verdict + baseline, + need-you tally. */
+  async getTriage(artifactId: string): Promise<any> {
+    const { data } = await this.client.get(`/v1/test-factory/${artifactId}/triage`);
+    return data;
+  }
+
   /** Download the deterministic, grounded Playwright project (zip).
    *  Empty opts = whole active suite; {category} = one category;
    *  {testCaseId} = one specific test case (takes precedence). */

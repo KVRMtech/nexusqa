@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import { api } from '../services/api';
 import { useAuth } from '../contexts/AuthContext';
+import TriagePanel from './TriagePanel';
 
 // Role-based default for the technical "automation details" columns
 // (Observed in Recording, Confidence). Automation-focused roles see them by
@@ -255,6 +256,8 @@ export default function TestCasesPanel({ artifactId }: { artifactId: string }) {
           );
         })
       )}
+
+      {showDetails && total > 0 && <TriagePanel artifactId={artifactId} />}
     </section>
   );
 }
