@@ -595,3 +595,130 @@ def root_cause_hints(
         )
 
     return hints
+
+
+# ─── Verdict reducer ─────────────────────────────────────────────────────
+#
+# Rolls the deterministic per-failure signals (drift, flake, outcome
+# contradiction, locator resolution) into ONE conservative label per failure,
+# so a red build reads "3 real / 9 drift / 2 flake — only 3 need you".
+#
+# Safety doctrine (non-negotiable): a failure is auto-dismissed (selector_drift
+# / visual_change / flake) ONLY when there is POSITIVE evidence it is not a real
+# regression — the flow still reaches the recorded outcome. Any outcome
+# contradiction, or any unexplained red, is real_regression or needs_review,
+# NEVER dimmed. Mis-bucketing a real bug into the "don't need you" stack is the
+# one unacceptable error, so the reducer fails toward "needs_review".
+
+VERDICT_PASSED = "passed"
+VERDICT_REAL_REGRESSION = "real_regression"
+VERDICT_SELECTOR_DRIFT = "selector_drift"
+VERDICT_VISUAL_CHANGE = "visual_change"
+VERDICT_FLAKE = "flake"
+VERDICT_NEEDS_REVIEW = "needs_review"
+
+# Verdicts safe to dim as "don't need a human right now".
+VERDICT_DISMISSABLE = frozenset({
+    VERDICT_SELECTOR_DRIFT, VERDICT_VISUAL_CHANGE, VERDICT_FLAKE,
+})
+
+_LOCATOR_MISSING_RE = re.compile(
+    r"not found|resolved to 0|no element|strict mode violation|waiting for (?:locator|element)|"
+    r"element is not (?:visible|attached)",
+    re.IGNORECASE,
+)
+
+
+@dataclass
+class Verdict:
+    label: str
+    confidence: float  # 0.0..1.0
+    justification: str
+
+
+def classify_failure(
+    *,
+    failed: bool,
+    is_flaky: bool,
+    selector_drifted: bool,
+    bbox_drifted: bool,
+    outcome_contradicted: bool,
+    error_message: str = "",
+) -> Verdict:
+    """Deterministic, conservative verdict for one failing scenario.
+
+    Inputs are signals the engine already computes:
+      * outcome_contradicted — the recording's expected outcome is no longer on
+        the page (root_cause_hints' OCR check) — the strongest real-bug signal.
+      * selector_drifted / bbox_drifted — from detect_drift.
+      * is_flaky — from detect_flake (>=2 pass<->fail transitions).
+      * error_message — used only to detect locator-not-found.
+    """
+    if not failed:
+        return Verdict(VERDICT_PASSED, 1.0, "Step passed.")
+
+    # 1. The page produced something other than what the recording produced.
+    if outcome_contradicted:
+        return Verdict(
+            VERDICT_REAL_REGRESSION, 0.9,
+            "The expected outcome from the recording is no longer present on the "
+            "page (the assertion target is gone) — a real regression, not a "
+            "locator issue.",
+        )
+
+    locator_missing = bool(_LOCATOR_MISSING_RE.search(error_message or ""))
+
+    # 2. Selector changed but the flow still reaches the recorded outcome.
+    if selector_drifted and not locator_missing:
+        return Verdict(
+            VERDICT_SELECTOR_DRIFT, 0.85,
+            "The control's selector changed since the recording (expected != "
+            "resolved) but the flow still reaches the recorded outcome — cosmetic "
+            "selector drift, not a broken flow.",
+        )
+
+    # 3. The element only moved on screen; still resolved, outcome intact.
+    if bbox_drifted and not locator_missing:
+        return Verdict(
+            VERDICT_VISUAL_CHANGE, 0.7,
+            "The element moved on screen but the flow still reaches the recorded "
+            "outcome — a visual/layout change, not a broken flow.",
+        )
+
+    # 4. Alternates pass<->fail with no deterministic selector/outcome cause.
+    if is_flaky and not selector_drifted and not bbox_drifted and not locator_missing:
+        return Verdict(
+            VERDICT_FLAKE, 0.75,
+            "This scenario alternates pass/fail across runs with no selector or "
+            "outcome change — environmental flake, not a code defect.",
+        )
+
+    # 5. Anything else fails toward a human — never auto-dismissed.
+    if locator_missing:
+        return Verdict(
+            VERDICT_NEEDS_REVIEW, 0.5,
+            "The locator could not be found and the flow's outcome cannot be "
+            "proven intact — could be a rename or a real removal; needs a human.",
+        )
+    return Verdict(
+        VERDICT_NEEDS_REVIEW, 0.4,
+        "Failed with no detectable selector drift, outcome contradiction, or "
+        "flake pattern — needs a human.",
+    )
+
+
+def tally_verdicts(verdicts: list[Verdict]) -> dict:
+    """Board summary: counts per label + the 'need you / don't need you' split."""
+    by_label: dict[str, int] = {}
+    for v in verdicts:
+        by_label[v.label] = by_label.get(v.label, 0) + 1
+    failures = [v for v in verdicts if v.label != VERDICT_PASSED]
+    need_you = sum(1 for v in failures if v.label not in VERDICT_DISMISSABLE)
+    dont_need_you = sum(1 for v in failures if v.label in VERDICT_DISMISSABLE)
+    return {
+        "total": len(verdicts),
+        "failures": len(failures),
+        "need_you": need_you,
+        "dont_need_you": dont_need_you,
+        "by_label": by_label,
+    }

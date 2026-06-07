@@ -81,6 +81,14 @@ detect_drift = _module.detect_drift
 detect_flake_from_pass_fail_sequence = _module.detect_flake_from_pass_fail_sequence
 extract_scenario_id_from_test_name = _module.extract_scenario_id_from_test_name
 root_cause_hints = _module.root_cause_hints
+classify_failure = _module.classify_failure
+tally_verdicts = _module.tally_verdicts
+VERDICT_REAL_REGRESSION = _module.VERDICT_REAL_REGRESSION
+VERDICT_SELECTOR_DRIFT = _module.VERDICT_SELECTOR_DRIFT
+VERDICT_VISUAL_CHANGE = _module.VERDICT_VISUAL_CHANGE
+VERDICT_FLAKE = _module.VERDICT_FLAKE
+VERDICT_NEEDS_REVIEW = _module.VERDICT_NEEDS_REVIEW
+VERDICT_PASSED = _module.VERDICT_PASSED
 
 
 # ─── Scenario ID parsing ─────────────────────────────────────────────────
@@ -300,6 +308,90 @@ def test_root_cause_bbox_drift_hint():
     print("[OK] root_cause_hints flags bbox drift with pixel distance")
 
 
+# ─── Verdict reducer (BUILD #2) ──────────────────────────────────────────
+
+
+def test_verdict_passed_when_not_failed():
+    v = classify_failure(failed=False, is_flaky=False, selector_drifted=False,
+                         bbox_drifted=False, outcome_contradicted=False)
+    assert v.label == VERDICT_PASSED
+    print("[OK] verdict: passed when not failed")
+
+
+def test_verdict_real_regression_on_outcome_contradiction():
+    v = classify_failure(failed=True, is_flaky=False, selector_drifted=False,
+                         bbox_drifted=False, outcome_contradicted=True)
+    assert v.label == VERDICT_REAL_REGRESSION and v.confidence >= 0.8
+    print("[OK] verdict: real_regression on outcome contradiction")
+
+
+def test_verdict_selector_drift_when_outcome_intact():
+    v = classify_failure(failed=True, is_flaky=False, selector_drifted=True,
+                         bbox_drifted=False, outcome_contradicted=False,
+                         error_message="assertion failed")
+    assert v.label == VERDICT_SELECTOR_DRIFT
+    print("[OK] verdict: selector_drift when selector changed but outcome intact")
+
+
+def test_verdict_visual_change_on_bbox_only():
+    v = classify_failure(failed=True, is_flaky=False, selector_drifted=False,
+                         bbox_drifted=True, outcome_contradicted=False)
+    assert v.label == VERDICT_VISUAL_CHANGE
+    print("[OK] verdict: visual_change on bbox movement only")
+
+
+def test_verdict_flake_when_no_deterministic_cause():
+    v = classify_failure(failed=True, is_flaky=True, selector_drifted=False,
+                         bbox_drifted=False, outcome_contradicted=False)
+    assert v.label == VERDICT_FLAKE
+    print("[OK] verdict: flake when alternating with no selector/outcome cause")
+
+
+def test_verdict_locator_missing_needs_review_not_dismissed():
+    # Locator not found, no outcome proof -> a human, NEVER auto-dismissed.
+    v = classify_failure(failed=True, is_flaky=False, selector_drifted=False,
+                         bbox_drifted=False, outcome_contradicted=False,
+                         error_message="locator not found: getByRole('button')")
+    assert v.label == VERDICT_NEEDS_REVIEW
+    print("[OK] verdict: locator-not-found -> needs_review (not dismissed)")
+
+
+def test_verdict_unexplained_red_needs_review():
+    v = classify_failure(failed=True, is_flaky=False, selector_drifted=False,
+                         bbox_drifted=False, outcome_contradicted=False,
+                         error_message="some other error")
+    assert v.label == VERDICT_NEEDS_REVIEW
+    print("[OK] verdict: unexplained red -> needs_review")
+
+
+def test_verdict_real_regression_beats_flake_SAFETY():
+    # THE critical safety property: a real outcome contradiction must NEVER be
+    # buried as flake, even if the scenario is historically flaky.
+    v = classify_failure(failed=True, is_flaky=True, selector_drifted=True,
+                         bbox_drifted=True, outcome_contradicted=True)
+    assert v.label == VERDICT_REAL_REGRESSION, \
+        "SAFETY VIOLATION: a real regression was not surfaced over flake/drift"
+    print("[OK] verdict SAFETY: real_regression takes precedence over flake/drift")
+
+
+def test_tally_need_you_split():
+    verdicts = [
+        classify_failure(failed=True, is_flaky=False, selector_drifted=False,
+                         bbox_drifted=False, outcome_contradicted=True),   # real
+        classify_failure(failed=True, is_flaky=False, selector_drifted=True,
+                         bbox_drifted=False, outcome_contradicted=False),  # drift
+        classify_failure(failed=True, is_flaky=True, selector_drifted=False,
+                         bbox_drifted=False, outcome_contradicted=False),  # flake
+        classify_failure(failed=False, is_flaky=False, selector_drifted=False,
+                         bbox_drifted=False, outcome_contradicted=False),  # passed
+    ]
+    t = tally_verdicts(verdicts)
+    assert t["total"] == 4 and t["failures"] == 3
+    assert t["need_you"] == 1 and t["dont_need_you"] == 2
+    assert t["by_label"][VERDICT_REAL_REGRESSION] == 1
+    print("[OK] tally: 3 failures -> 1 need-you, 2 don't-need-you")
+
+
 if __name__ == "__main__":
     test_extract_scenario_id_from_playwright_test_names()
     test_drift_detects_selector_change()
@@ -316,4 +408,13 @@ if __name__ == "__main__":
     test_root_cause_ocr_missing_assertion_target()
     test_root_cause_no_hints_when_no_signal()
     test_root_cause_bbox_drift_hint()
+    test_verdict_passed_when_not_failed()
+    test_verdict_real_regression_on_outcome_contradiction()
+    test_verdict_selector_drift_when_outcome_intact()
+    test_verdict_visual_change_on_bbox_only()
+    test_verdict_flake_when_no_deterministic_cause()
+    test_verdict_locator_missing_needs_review_not_dismissed()
+    test_verdict_unexplained_red_needs_review()
+    test_verdict_real_regression_beats_flake_SAFETY()
+    test_tally_need_you_split()
     print("\nAll P6 feedback smoke tests passed.")
