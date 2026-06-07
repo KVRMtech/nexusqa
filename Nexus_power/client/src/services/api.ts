@@ -1377,6 +1377,15 @@ class ApiClient {
     return data;
   }
 
+  /** Download the deterministic, grounded Playwright project (zip). */
+  async getPlaywrightBundle(artifactId: string): Promise<Blob> {
+    const resp = await this.client.get(
+      `/v1/test-factory/${artifactId}/playwright`,
+      { responseType: 'blob' },
+    );
+    return resp.data as Blob;
+  }
+
   /** Capture per-action "what happened after" outcomes (vision) + regenerate. */
   async captureTestFactoryOutcomes(artifactId: string): Promise<any> {
     const { data } = await this.client.post(

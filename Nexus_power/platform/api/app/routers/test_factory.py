@@ -21,6 +21,7 @@ from __future__ import annotations
 import io
 import json
 import logging
+import zipfile
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Path as PathParam, Query, Request
@@ -45,6 +46,7 @@ from ..services.test_factory.after_extractor import (
     extract_outcomes_for_artifact,
 )
 from ..services.test_factory.enrich_extractor import enrich_artifact
+from ..services.script_factory import compile_project
 from ..services.test_factory.assistant import answer as assistant_answer
 from ..services.test_factory.delivery import (
     EXPORT_MEDIA_TYPES,
@@ -377,6 +379,45 @@ async def export_test_cases(
     return StreamingResponse(
         io.BytesIO(payload),
         media_type=EXPORT_MEDIA_TYPES[fmt],
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
+
+
+@router.get("/api/v1/test-factory/{artifact_id}/playwright")
+async def generate_playwright(
+    artifact_id: str = PathParam(..., min_length=1, max_length=64),
+    user: dict = Depends(get_current_user),
+):
+    """Deterministically compile the active suite into a runnable Playwright
+    project (zip). Read-only + ZERO LLM: grounded in the stored observed evidence,
+    same suite in -> byte-identical project out. The buyer owns the emitted code.
+    """
+    tenant_id = user["tenant_id"]
+    async with tenant_scoped_session(tenant_id) as session:
+        await _require_artifact(session, artifact_id, tenant_id)
+        cases = await factory_service.load_active_production_cases(
+            session, artifact_id=artifact_id,
+        )
+    if not cases:
+        raise HTTPException(
+            status_code=404,
+            detail="no generated test cases for this artifact — run /generate first",
+        )
+
+    files = compile_project(cases)
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for path, content in sorted(files.items()):
+            # Fixed timestamp -> the zip bytes are reproducible too, not just the code.
+            info = zipfile.ZipInfo(path, date_time=(1980, 1, 1, 0, 0, 0))
+            info.compress_type = zipfile.ZIP_DEFLATED
+            info.external_attr = 0o644 << 16
+            zf.writestr(info, content)
+
+    filename = f"nexus-playwright-{artifact_id[:8]}.zip"
+    return StreamingResponse(
+        io.BytesIO(buf.getvalue()),
+        media_type="application/zip",
         headers={"Content-Disposition": f"attachment; filename={filename}"},
     )
 

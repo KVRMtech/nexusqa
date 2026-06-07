@@ -9,7 +9,7 @@
  */
 import { useCallback, useEffect, useState } from 'react';
 import {
-  AlertTriangle, Bot, Camera, CheckCircle2, Download, FileSpreadsheet, FlaskConical,
+  AlertTriangle, Bot, Camera, CheckCircle2, Download, FileCode2, FileSpreadsheet, FlaskConical,
   Loader2, Send, ShieldAlert, Sparkles, Upload,
 } from 'lucide-react';
 import { api } from '../services/api';
@@ -138,6 +138,19 @@ export default function TestCasesPanel({ artifactId }: { artifactId: string }) {
     finally { setBusy(''); }
   };
 
+  const downloadPlaywright = async () => {
+    setBusy('playwright'); setError(null);
+    try {
+      const blob = await api.getPlaywrightBundle(artifactId);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `nexus-playwright-${artifactId.slice(0, 8)}.zip`;
+      a.click(); URL.revokeObjectURL(url);
+    } catch (e: any) { setError(e?.response?.data?.detail || String(e)); }
+    finally { setBusy(''); }
+  };
+
   const total = summary?.total ?? 0;
 
   const btn = (label: string, onClick: () => void, cls: string, icon: any, key: string) => (
@@ -174,6 +187,7 @@ export default function TestCasesPanel({ artifactId }: { artifactId: string }) {
           {btn('Excel', () => download('excel'), 'bg-slate-100 text-slate-700 hover:bg-slate-200', <FileSpreadsheet className="h-3.5 w-3.5" />, 'export:excel')}
           {btn('CSV', () => download('csv'), 'bg-slate-100 text-slate-700 hover:bg-slate-200', <Download className="h-3.5 w-3.5" />, 'export:csv')}
           {btn('Push', () => run('push', () => api.pushTestFactory(artifactId, 'qtest'), 'Pushed to qTest.'), 'bg-violet-100 text-violet-700 hover:bg-violet-200', <Upload className="h-3.5 w-3.5" />, 'push')}
+          {showDetails && btn('Generate Playwright', downloadPlaywright, 'bg-indigo-600 text-white hover:bg-indigo-500', <FileCode2 className="h-3.5 w-3.5" />, 'playwright')}
         </div>
       </div>
 
