@@ -782,6 +782,21 @@ async def _poll_heal(run_id: str, ctx: dict) -> None:
             )
         else:
             job.update(healed=False, heal_version=None, heal_reason=ev["reason"])
+            # Flywheel (default-OFF) — a fix that was attempted but did NOT prove
+            # green is a negative label (what doesn't work). De-identified; gated.
+            try:
+                async with tenant_scoped_session(tenant_id) as session:
+                    await flywheel_ledger.record_label(
+                        session, tenant_id=tenant_id,
+                        decision_point=ctx.get("fix_kind", "control_kind_fix"),
+                        artifact_id=artifact_id, scenario_id=ctx["scenario_id"],
+                        verified_green=False, human_decision_enum="not_promoted",
+                        engine_verdict_enum=(ev.get("verdict") or ""),
+                        git_commit=os.getenv("NEXUS_GIT_COMMIT", ""),
+                    )
+                    await session.commit()
+            except Exception:
+                pass  # capture is best-effort; never affect the heal flow
     except Exception as exc:  # never let a verify error masquerade as a heal
         job.update(healed=False, heal_version=None, heal_reason=f"verify error: {exc}")
     await _persist_job(run_id)  # durable terminal heal outcome (survives restart)
@@ -1734,6 +1749,13 @@ async def save_version(
             script_source=body.script_source, data_json=dict(body.data or {}),
             author=str(user.get("email") or user.get("user_id") or ""),
             note=body.note,
+        )
+        # Flywheel (default-OFF) — a human hand-edit of the generated script is a
+        # recording->test correction. De-identified: only the fact, never the source.
+        await flywheel_ledger.record_label(
+            session, tenant_id=tenant_id, decision_point="script_edit",
+            artifact_id=artifact_id, test_case_id=body.test_id, scenario_id=body.test_id,
+            human_decision_enum="edited", git_commit=os.getenv("NEXUS_GIT_COMMIT", ""),
         )
         result = {
             "script_version_id": row.script_version_id,
