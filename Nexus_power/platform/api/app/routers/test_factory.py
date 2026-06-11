@@ -59,6 +59,7 @@ from ..services.script_factory import runner_client
 from ..services.script_factory import versions as script_versions
 from ..services.script_factory.triage import assemble_triage
 from ..services.oracle_scorecard import compute_artifact_scorecard
+from ..services.test_factory.provenance import build_rtm
 from ..services.diff_and_heal import self_heal
 from ..services.diff_and_heal import heal_capture_store
 from ..services.flywheel import ledger as flywheel_ledger
@@ -2085,6 +2086,30 @@ async def get_oracle_scorecard(
         return await compute_artifact_scorecard(
             session, artifact_id=artifact_id, tenant_id=tenant_id,
         )
+
+
+@router.get("/api/v1/test-factory/{artifact_id}/rtm")
+async def get_rtm(
+    artifact_id: str = PathParam(..., min_length=1, max_length=64),
+    user: dict = Depends(get_current_user),
+):
+    """Requirements Traceability Matrix (Phase 2 provenance) — per test, the chain
+    requirement (the recorded human behavior) → step → emitted assertion, with each
+    assertion's oracle_kind + a grounded flag, and an `unproven` honesty flag for
+    steps with no grounded oracle. The audit artifact a regulated buyer asks for.
+    Read-only, $0 LLM, no migration; assertion code is byte-identical to the
+    compiled spec (anti-drift), so the RTM can never lie about what runs."""
+    tenant_id = user["tenant_id"]
+    async with tenant_scoped_session(tenant_id) as session:
+        await _require_artifact(session, artifact_id, tenant_id)
+        cases = await factory_service.load_active_production_cases(
+            session, artifact_id=artifact_id,
+        )
+        visits, _ = await factory_service._load_current_pages_and_actions(
+            session, artifact_id=artifact_id,
+        )
+        field_meta = build_field_meta(visits)
+    return {"artifact_id": artifact_id, "tests": [build_rtm(tc, field_meta) for tc in cases]}
 
 
 @router.post("/api/v1/test-factory/{artifact_id}/push/{tool}")

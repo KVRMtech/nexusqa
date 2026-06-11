@@ -1435,6 +1435,12 @@ class ApiClient {
     return data;
   }
 
+  /** Requirements Traceability Matrix: requirement(recorded)→step→assertion, grounded flags + unproven. */
+  async getRtm(artifactId: string): Promise<any> {
+    const { data } = await this.client.get(`/v1/test-factory/${artifactId}/rtm`);
+    return data;
+  }
+
   /** THIS RUN: per-scenario, per-step pass/fail timeline for the single latest run. */
   async getLatestRunTimeline(artifactId: string): Promise<any> {
     const { data } = await this.client.get(`/v1/test-factory/${artifactId}/runs/latest`);
