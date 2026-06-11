@@ -20,6 +20,7 @@ underlying state table also has Postgres RLS enforcing tenant_isolation.
 from __future__ import annotations
 
 import logging
+import os
 
 from fastapi import APIRouter, Depends, HTTPException, Path
 from pydantic import BaseModel, Field
@@ -27,8 +28,9 @@ from sqlalchemy import select
 
 from nexus_sdk.db.models import CanonicalArtifactRow
 
-from ..database import require_db
+from ..database import require_db, tenant_scoped_session
 from ..auth import get_current_user
+from ..services.flywheel import ledger as flywheel_ledger
 from ..services.e2e_lifecycle import (
     fetch_scenario_states_map,
     transition_scenario,
@@ -133,11 +135,28 @@ async def transition_scenario_state(
             tenant_id=tenant_id,
             session_id=session_id,
         )
-        return {
+        result = {
             "success": True,
             "state": state_row,
             "allowed_next_states": allowed_next_states(state_row["state"]),
         }
+
+    # Flywheel (Phase 2): record the human's lifecycle DECISION — a de-identified
+    # state-transition enum, never raw text. A SEPARATE best-effort session so a
+    # pre-migration insert can never roll back the transition above; gated
+    # default-OFF (capture_enabled short-circuits before any DB work).
+    if flywheel_ledger.capture_enabled():
+        try:
+            async with tenant_scoped_session(tenant_id) as fly:
+                await flywheel_ledger.record_label(
+                    fly, tenant_id=tenant_id, decision_point="scenario_lifecycle",
+                    artifact_id=artifact_id, scenario_id=scenario_id,
+                    human_decision_enum=f"transition_to:{(req.new_state or '')[:18]}",
+                    git_commit=os.getenv("NEXUS_GIT_COMMIT", ""),
+                )
+        except Exception:  # capture is optional — never affect the transition
+            pass
+    return result
 
 
 @router.post(

@@ -259,7 +259,7 @@ export default function TestCasesPanel(
                   </button>
                 )}
               </div>
-              {items.map((row) => <TestCaseCard key={row.test_case_id} row={row} accent={s.accent} showDetails={showDetails} busy={busy} onPlaywright={(id) => downloadPlaywright('', id)} />)}
+              {items.map((row) => <TestCaseCard key={row.test_case_id} row={row} accent={s.accent} showDetails={showDetails} busy={busy} artifactId={artifactId} onPlaywright={(id) => downloadPlaywright('', id)} />)}
               {more > 0 && (
                 <div className="rounded-xl border border-dashed px-3 py-2.5 flex items-center gap-2 flex-wrap"
                   style={{ borderColor: s.badge }}>
@@ -311,7 +311,40 @@ export default function TestCasesPanel(
   );
 }
 
-function TestCaseCard({ row, accent, showDetails, busy, onPlaywright }: { row: CaseRow; accent: string; showDetails: boolean; busy?: string; onPlaywright?: (id: string) => void }) {
+// A value-conflict (keystroke reading ≠ form-snapshot reading) the human resolves.
+// Records ONLY the de-identified CHOICE enum server-side (never the value); the
+// flywheel persists it only when capture is enabled. Additive — the chip is
+// unchanged when unresolved.
+function ValueConflictResolve(
+  { artifactId, testId, conflict }: { artifactId: string; testId: string; conflict: { typed?: string; committed?: string } },
+) {
+  const [done, setDone] = useState<string>('');
+  const [sending, setSending] = useState(false);
+  const resolve = async (choice: 'typed' | 'committed' | 'other') => {
+    setSending(true);
+    try { await api.resolveValueConflict(artifactId, testId, choice); setDone(choice); }
+    catch { /* best-effort; leave unresolved so the user can retry */ }
+    finally { setSending(false); }
+  };
+  return (
+    <span className="self-start rounded px-1.5 py-0.5 text-[9px] font-semibold leading-tight flex flex-col gap-1" style={{ background: 'rgba(234,179,8,0.16)', color: '#a16207' }}>
+      <span title="The keystroke reading and the form-snapshot reading disagree — confirm the intended value.">
+        ⚠ typed '{conflict.typed}' vs snapshot '{conflict.committed}'
+      </span>
+      {done ? (
+        <span className="text-emerald-700">✓ resolved: {done === 'committed' ? 'snapshot' : done}</span>
+      ) : (
+        <span className="flex items-center gap-1">
+          <button disabled={sending} onClick={() => resolve('typed')} className="rounded px-1 py-0.5 bg-white/70 hover:bg-white font-bold disabled:opacity-50">Use typed</button>
+          <button disabled={sending} onClick={() => resolve('committed')} className="rounded px-1 py-0.5 bg-white/70 hover:bg-white font-bold disabled:opacity-50">Use snapshot</button>
+          <button disabled={sending} onClick={() => resolve('other')} className="rounded px-1 py-0.5 bg-white/70 hover:bg-white font-bold disabled:opacity-50">Other</button>
+        </span>
+      )}
+    </span>
+  );
+}
+
+function TestCaseCard({ row, accent, showDetails, busy, artifactId, onPlaywright }: { row: CaseRow; accent: string; showDetails: boolean; busy?: string; artifactId: string; onPlaywright?: (id: string) => void }) {
   const [open, setOpen] = useState(false);
   const steps = row.test_case?.steps || [];
   const demo = row.confidence === 'demonstrated';
@@ -387,10 +420,7 @@ function TestCaseCard({ row, accent, showDetails, busy, onPlaywright }: { row: C
                         prov ? <span className="self-start rounded px-1.5 py-0.5 text-[9px] font-bold uppercase" style={{ background: prov.bg, color: prov.fg }}>{prov.label}</span> : !s.screenshot && <span className="text-slate-300">—</span>
                       )}
                       {(s.observed as any)?.value_conflict && (
-                        <span className="self-start rounded px-1.5 py-0.5 text-[9px] font-semibold leading-tight" style={{ background: 'rgba(234,179,8,0.16)', color: '#a16207' }}
-                          title="The keystroke reading and the form-snapshot reading disagree — confirm the intended value.">
-                          ⚠ typed '{(s.observed as any).value_conflict.typed}' vs snapshot '{(s.observed as any).value_conflict.committed}'
-                        </span>
+                        <ValueConflictResolve artifactId={artifactId} testId={row.test_case_id} conflict={(s.observed as any).value_conflict} />
                       )}
                       {s.screenshot && (
                         <a href={api.getFrameImageUrl(s.screenshot)} target="_blank" rel="noopener noreferrer"

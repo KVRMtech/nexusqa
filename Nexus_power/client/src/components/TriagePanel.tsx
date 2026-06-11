@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Camera, Copy, Download, Loader2, RefreshCw, ShieldAlert } from 'lucide-react';
+import { Camera, Check, Copy, Download, Flag, Loader2, RefreshCw, ShieldAlert } from 'lucide-react';
 import { api } from '../services/api';
 
 // Verdict styling + which stack a failure belongs to. Mirrors the backend
@@ -132,7 +132,7 @@ export default function TriagePanel({ artifactId, scopeIds }: { artifactId: stri
             })}
           </div>
           <div className="space-y-2">
-            {scenarios.map((s) => <TriageCard key={s.scenario_id} s={s} />)}
+            {scenarios.map((s) => <TriageCard key={s.scenario_id} s={s} artifactId={artifactId} />)}
           </div>
         </>
       )}
@@ -140,7 +140,7 @@ export default function TriagePanel({ artifactId, scopeIds }: { artifactId: stri
   );
 }
 
-function TriageCard({ s }: { s: Scenario }) {
+function TriageCard({ s, artifactId }: { s: Scenario; artifactId: string }) {
   const v = VERDICT[s.verdict] || { label: s.verdict, bg: 'rgba(100,116,139,0.12)', fg: '#475569', needYou: true };
   return (
     <div className="rounded-xl p-3" style={{ background: 'rgba(255,255,255,0.85)', border: `1px solid ${v.fg}33` }}>
@@ -174,6 +174,56 @@ function TriageCard({ s }: { s: Scenario }) {
           <Download className="h-3 w-3" /> Download .md
         </button>
       </div>
+      <div className="mt-2 pt-2 border-t border-slate-100">
+        <VerdictFeedback artifactId={artifactId} s={s} />
+      </div>
+    </div>
+  );
+}
+
+// The DIRECT oracle label: a human confirms or OVERRIDES the engine's grounded
+// verdict. De-identified server-side (verdict enums only — never raw text); the
+// flywheel persists it only when capture is enabled, but the action always
+// succeeds. This is the highest-value correction the system can learn from.
+function VerdictFeedback({ artifactId, s }: { artifactId: string; s: Scenario }) {
+  const [state, setState] = useState<'idle' | 'sending' | 'done' | 'error'>('idle');
+  const [msg, setMsg] = useState('');
+  const isRegression = s.verdict === 'real_regression';
+
+  const send = async (agrees: boolean, corrected: string) => {
+    setState('sending');
+    try {
+      await api.triageFeedback(artifactId, s.scenario_id, { verdict: s.verdict, agrees, corrected_verdict: corrected });
+      setMsg(agrees ? 'Confirmed — thanks' : 'Override recorded — thanks');
+      setState('done');
+    } catch { setState('error'); }
+  };
+
+  if (state === 'done') {
+    return <span className="flex items-center gap-1 text-[10px] font-semibold text-emerald-600"><Check className="h-3 w-3" /> {msg}</span>;
+  }
+  return (
+    <div className="flex items-center gap-2 flex-wrap">
+      <span className="text-[9px] uppercase font-bold text-slate-400">Is this verdict right?</span>
+      <button disabled={state === 'sending'} onClick={() => send(true, '')}
+        title="Confirm the engine's verdict — teaches the grounded oracle"
+        className="flex items-center gap-1 rounded-md px-2 py-1 text-[10px] font-semibold bg-emerald-50 text-emerald-700 hover:bg-emerald-100 disabled:opacity-50">
+        <Check className="h-3 w-3" /> Correct
+      </button>
+      {isRegression ? (
+        <button disabled={state === 'sending'} onClick={() => send(false, 'flake')}
+          title="The engine called this a real bug, but it isn't — record the correction"
+          className="flex items-center gap-1 rounded-md px-2 py-1 text-[10px] font-semibold bg-slate-100 text-slate-600 hover:bg-slate-200 disabled:opacity-50">
+          <Flag className="h-3 w-3" /> Not a real bug
+        </button>
+      ) : (
+        <button disabled={state === 'sending'} onClick={() => send(false, 'real_regression')}
+          title="The engine dismissed this, but it IS a real bug — record the correction"
+          className="flex items-center gap-1 rounded-md px-2 py-1 text-[10px] font-semibold bg-rose-50 text-rose-700 hover:bg-rose-100 disabled:opacity-50">
+          <Flag className="h-3 w-3" /> Actually a real bug
+        </button>
+      )}
+      {state === 'error' && <span className="text-[9px] text-amber-600">couldn't record</span>}
     </div>
   );
 }

@@ -1457,6 +1457,27 @@ class ApiClient {
     return data;
   }
 
+  /** Human CONFIRMS or OVERRIDES the engine's grounded verdict — the direct oracle
+   *  label. De-identified server-side (verdict enums only); flywheel capture gated. */
+  async triageFeedback(
+    artifactId: string, scenarioId: string,
+    body: { verdict?: string; agrees: boolean; corrected_verdict?: string },
+  ): Promise<any> {
+    const { data } = await this.client.post(
+      `/v1/test-factory/${artifactId}/triage/${encodeURIComponent(scenarioId)}/feedback`, body);
+    return data;
+  }
+
+  /** Human resolves a value-conflict (typed vs committed vs other). De-identified
+   *  server-side (choice enum only — never the value); flywheel capture gated. */
+  async resolveValueConflict(
+    artifactId: string, testId: string, choice: 'typed' | 'committed' | 'other',
+  ): Promise<any> {
+    const { data } = await this.client.post(
+      `/v1/test-factory/${artifactId}/value-conflict/resolve`, { test_id: testId, choice });
+    return data;
+  }
+
   /** THIS RUN: per-scenario, per-step pass/fail timeline for the single latest run. */
   async getLatestRunTimeline(artifactId: string): Promise<any> {
     const { data } = await this.client.get(`/v1/test-factory/${artifactId}/runs/latest`);

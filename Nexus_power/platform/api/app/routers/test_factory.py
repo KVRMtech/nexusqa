@@ -75,7 +75,21 @@ from ..services.test_runs import (
     build_run_timeline_by_id,
     find_run_by_ci_run_id,
     recent_runs,
+    VERDICT_PASSED,
+    VERDICT_REAL_REGRESSION,
+    VERDICT_SELECTOR_DRIFT,
+    VERDICT_VISUAL_CHANGE,
+    VERDICT_FLAKE,
+    VERDICT_NEEDS_REVIEW,
 )
+# Anti-drift: the flywheel ledger's verdict enums are clamped to EXACTLY the set
+# the deterministic reducer emits (sourced from the constants above, not a copy),
+# so a client-supplied verdict can never smuggle raw/PII text into the de-identified
+# federated ledger. Unknown -> the fixed "unknown" sentinel, never the raw string.
+_KNOWN_VERDICTS = frozenset({
+    VERDICT_PASSED, VERDICT_REAL_REGRESSION, VERDICT_SELECTOR_DRIFT,
+    VERDICT_VISUAL_CHANGE, VERDICT_FLAKE, VERDICT_NEEDS_REVIEW,
+})
 from ..services.test_factory import runner_jobs
 from ..services.test_factory import auth_profiles
 from ..services.test_factory.assistant import answer as assistant_answer
@@ -2225,6 +2239,87 @@ async def scenario_semantic_check(
             scenario_id=scenario_id, step_number=step_number,
         )
     return await judge_semantic_match(expected, baseline, actual, llm_router)
+
+
+class TriageFeedbackRequest(BaseModel):
+    # Constrained to the canonical verdict vocabulary as defense-in-depth; the
+    # handler ALSO clamps server-side (so a non-validating client can't leak).
+    verdict: str = Field("", max_length=24)        # the engine verdict being judged
+    agrees: bool = True
+    corrected_verdict: str = Field("", max_length=24)
+
+
+@router.post("/api/v1/test-factory/{artifact_id}/triage/{scenario_id}/feedback")
+async def triage_feedback(
+    body: TriageFeedbackRequest,
+    artifact_id: str = PathParam(..., min_length=1, max_length=64),
+    scenario_id: str = PathParam(..., min_length=1, max_length=64),
+    user: dict = Depends(get_current_user),
+):
+    """Human CONFIRMS or OVERRIDES the engine's grounded verdict — a direct oracle
+    correction, the highest-value flywheel label (engine said X; human agreed / said
+    Y). Records ONLY de-identified verdict ENUMS clamped to the canonical set, never
+    raw text. Flywheel capture is gated default-OFF; additive + tenant-scoped, and
+    best-effort so a pre-migration table / DB error can never break the user's
+    feedback (authz 404 still propagates)."""
+    tenant_id = user["tenant_id"]
+    if not flywheel_ledger.capture_enabled():
+        return {"recorded": False}
+    # Clamp client-supplied verdict strings to the EXACT set the reducer emits —
+    # unknown collapses to a fixed sentinel, so no raw/PII text reaches the ledger.
+    ev = body.verdict if body.verdict in _KNOWN_VERDICTS else "unknown"
+    cv = body.corrected_verdict if body.corrected_verdict in _KNOWN_VERDICTS else "unknown"
+    try:
+        async with tenant_scoped_session(tenant_id) as session:
+            await _require_artifact(session, artifact_id, tenant_id)
+            await flywheel_ledger.record_label(
+                session, tenant_id=tenant_id, decision_point="triage_feedback",
+                artifact_id=artifact_id, scenario_id=scenario_id,
+                engine_verdict_enum=ev,
+                human_decision_enum=("agreed" if body.agrees else f"overridden_to:{cv}"),
+                git_commit=os.getenv("NEXUS_GIT_COMMIT", ""),
+            )
+    except HTTPException:
+        raise  # authz / 404 stays a real error
+    except Exception:
+        return {"recorded": False}  # capture is best-effort — never 500 the user
+    return {"recorded": True}
+
+
+class ValueConflictResolveRequest(BaseModel):
+    test_id: str = Field(..., min_length=1, max_length=64)
+    choice: str = Field("", max_length=16)         # typed | committed | other
+
+
+@router.post("/api/v1/test-factory/{artifact_id}/value-conflict/resolve")
+async def resolve_value_conflict(
+    body: ValueConflictResolveRequest,
+    artifact_id: str = PathParam(..., min_length=1, max_length=64),
+    user: dict = Depends(get_current_user),
+):
+    """Human resolves a value-conflict (typed vs committed vs other) — a labeled
+    data correction. Records ONLY the de-identified CHOICE enum, never the value.
+    Flywheel capture gated default-OFF; best-effort so a pre-migration table / DB
+    error can never break the user's action (authz 404 still propagates)."""
+    tenant_id = user["tenant_id"]
+    if not flywheel_ledger.capture_enabled():
+        return {"recorded": False}
+    choice = (body.choice or "").strip().lower()
+    choice = choice if choice in ("typed", "committed", "other") else "other"
+    try:
+        async with tenant_scoped_session(tenant_id) as session:
+            await _require_artifact(session, artifact_id, tenant_id)
+            await flywheel_ledger.record_label(
+                session, tenant_id=tenant_id, decision_point="value_conflict",
+                artifact_id=artifact_id, test_case_id=body.test_id, scenario_id=body.test_id,
+                human_decision_enum=f"chose_{choice}"[:32],
+                git_commit=os.getenv("NEXUS_GIT_COMMIT", ""),
+            )
+    except HTTPException:
+        raise  # authz / 404 stays a real error
+    except Exception:
+        return {"recorded": False}  # capture is best-effort — never 500 the user
+    return {"recorded": True}
 
 
 @router.post("/api/v1/test-factory/{artifact_id}/push/{tool}")
