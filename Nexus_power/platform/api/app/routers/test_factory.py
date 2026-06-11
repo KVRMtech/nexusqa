@@ -60,6 +60,10 @@ from ..services.script_factory import versions as script_versions
 from ..services.script_factory.triage import assemble_triage
 from ..services.oracle_scorecard import compute_artifact_scorecard
 from ..services.test_factory.provenance import build_rtm
+from ..services.test_factory.perceptual_diff import diff_screenshots
+from ..services.test_factory.semantic_oracle import judge_semantic_match
+from ..services.test_factory.run_screenshots import fetch_latest_screenshot
+from ..services.storyboard.form_snapshot_extractor import _fetch_frame_bytes
 from ..services.diff_and_heal import self_heal
 from ..services.diff_and_heal import heal_capture_store
 from ..services.flywheel import ledger as flywheel_ledger
@@ -2110,6 +2114,95 @@ async def get_rtm(
         )
         field_meta = build_field_meta(visits)
     return {"artifact_id": artifact_id, "tests": [build_rtm(tc, field_meta) for tc in cases]}
+
+
+async def _scenario_visual_inputs(
+    request: Request, session, *, artifact_id: str, tenant_id: str,
+    scenario_id: str, step_number: int,
+):
+    """(baseline_bytes|None, actual_bytes|None, expected_text) for a scenario's
+    failing step — baseline = the RECORDED frame (eyes-engine), actual = the stored
+    run screenshot. Best-effort: Nones when a source is unavailable so advisory
+    consumers degrade gracefully. Never raises."""
+    token = _bearer(request)
+    baseline_path, expected = "", ""
+    try:
+        cases = await factory_service.load_active_production_cases(
+            session, artifact_id=artifact_id,
+        )
+        tc = next((c for c in cases if (getattr(c, "test_id", "") or "") == scenario_id), None)
+        bstep = self_heal._baseline_step(tc, step_number) if tc is not None else None
+        if bstep is not None:
+            baseline_path = getattr(bstep, "screenshot", "") or ""
+            expected = (getattr(bstep, "expected_result", "")
+                        or getattr(bstep, "expected", "") or "")
+    except Exception:
+        pass
+    actual_bytes = await fetch_latest_screenshot(
+        session, tenant_id=tenant_id, artifact_id=artifact_id,
+        scenario_id=scenario_id, step_number=step_number,
+    )
+    baseline_bytes = None
+    if baseline_path:
+        try:
+            async with httpx.AsyncClient(timeout=20.0) as client:
+                baseline_bytes = await _fetch_frame_bytes(client, baseline_path, auth_token=token)
+        except Exception:
+            baseline_bytes = None
+    return baseline_bytes, actual_bytes, expected
+
+
+@router.get("/api/v1/test-factory/{artifact_id}/scenarios/{scenario_id}/visual-diff")
+async def scenario_visual_diff(
+    request: Request,
+    artifact_id: str = PathParam(..., min_length=1, max_length=64),
+    scenario_id: str = PathParam(..., min_length=1, max_length=64),
+    step_number: int = Query(default=0, ge=0, le=10000),
+    user: dict = Depends(get_current_user),
+):
+    """ADVISORY perceptual diff (Phase 2): how much the failure-state screenshot
+    differs from the recorded baseline frame — deterministic ($0, Pillow), an
+    'X% changed' BADGE only. It NEVER feeds or flips a pass/fail verdict. Returns
+    {available, changed_ratio, changed_bbox, identical}; available=false (with the
+    missing source named) when the baseline frame or actual screenshot isn't there."""
+    tenant_id = user["tenant_id"]
+    async with tenant_scoped_session(tenant_id) as session:
+        await _require_artifact(session, artifact_id, tenant_id)
+        baseline, actual, _ = await _scenario_visual_inputs(
+            request, session, artifact_id=artifact_id, tenant_id=tenant_id,
+            scenario_id=scenario_id, step_number=step_number,
+        )
+    if not baseline or not actual:
+        missing = [s for s, b in (("baseline frame", baseline),
+                                  ("actual screenshot", actual)) if not b]
+        return {"available": False, "reason": "missing " + ", ".join(missing)}
+    return {"available": True, **diff_screenshots(baseline, actual)}
+
+
+@router.post("/api/v1/test-factory/{artifact_id}/scenarios/{scenario_id}/semantic-check")
+async def scenario_semantic_check(
+    request: Request,
+    artifact_id: str = PathParam(..., min_length=1, max_length=64),
+    scenario_id: str = PathParam(..., min_length=1, max_length=64),
+    step_number: int = Query(default=0, ge=0, le=10000),
+    user: dict = Depends(get_current_user),
+):
+    """ADVISORY VLM semantic check (Phase 2): does the failure-state screen still
+    SATISFY the RECORDED expected outcome? Gated — needs the vision router; meant
+    for ONE call per human-escalated triage card (never a batch). Returns a
+    semantic_match SIGNAL ONLY ('match'|'deviation'|'uncertain') — it NEVER calls
+    the verdict reducer and NEVER changes a pass/fail label. router unavailable or
+    missing images -> 'uncertain' (no-op)."""
+    tenant_id = user["tenant_id"]
+    composer = getattr(request.app.state, "storyboard_composer", None)
+    llm_router = getattr(composer, "_llm_router", None) if composer else None
+    async with tenant_scoped_session(tenant_id) as session:
+        await _require_artifact(session, artifact_id, tenant_id)
+        baseline, actual, expected = await _scenario_visual_inputs(
+            request, session, artifact_id=artifact_id, tenant_id=tenant_id,
+            scenario_id=scenario_id, step_number=step_number,
+        )
+    return await judge_semantic_match(expected, baseline, actual, llm_router)
 
 
 @router.post("/api/v1/test-factory/{artifact_id}/push/{tool}")

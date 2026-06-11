@@ -21,7 +21,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, Integer, LargeBinary, String, select
+from sqlalchemy import DateTime, Integer, LargeBinary, String, desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -123,10 +123,36 @@ async def fetch_screenshot(
     return (row.content_type or "image/png", bytes(row.image))
 
 
+async def fetch_latest_screenshot(
+    session: AsyncSession, *, tenant_id: str, artifact_id: str, scenario_id: str,
+    step_number: int | None = None,
+) -> bytes | None:
+    """The most-recent ACTUAL screenshot bytes for a scenario (optionally a step),
+    tenant-scoped. Used by the advisory perceptual-diff / semantic-oracle. None if
+    none stored (caller degrades gracefully — never raises here)."""
+    if not (tenant_id and artifact_id and scenario_id):
+        return None
+    try:
+        q = select(E2ERunScreenshotRow).where(
+            E2ERunScreenshotRow.tenant_id == tenant_id,
+            E2ERunScreenshotRow.artifact_id == artifact_id,
+            E2ERunScreenshotRow.scenario_id == scenario_id,
+        )
+        if step_number is not None:
+            q = q.where(E2ERunScreenshotRow.step_number == int(step_number))
+        row = (await session.execute(
+            q.order_by(desc(E2ERunScreenshotRow.created_at)).limit(1)
+        )).scalar_one_or_none()
+    except Exception:
+        return None
+    return bytes(row.image) if row is not None else None
+
+
 __all__ = [
     "E2ERunScreenshotRow",
     "store_screenshot",
     "fetch_screenshot",
+    "fetch_latest_screenshot",
     "normalize_content_type",
     "MAX_SCREENSHOT_BYTES",
 ]

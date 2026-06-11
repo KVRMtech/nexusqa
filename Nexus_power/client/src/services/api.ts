@@ -1441,6 +1441,22 @@ class ApiClient {
     return data;
   }
 
+  /** ADVISORY perceptual diff (baseline-vs-actual screenshot) — a badge, never a verdict. */
+  async getVisualDiff(artifactId: string, scenarioId: string, stepNumber = 0): Promise<any> {
+    const { data } = await this.client.get(
+      `/v1/test-factory/${artifactId}/scenarios/${encodeURIComponent(scenarioId)}/visual-diff`,
+      { params: { step_number: stepNumber } });
+    return data;
+  }
+
+  /** ADVISORY VLM semantic check — does the screen still satisfy the recorded outcome? Signal only. */
+  async semanticCheck(artifactId: string, scenarioId: string, stepNumber = 0): Promise<any> {
+    const { data } = await this.client.post(
+      `/v1/test-factory/${artifactId}/scenarios/${encodeURIComponent(scenarioId)}/semantic-check`,
+      {}, { params: { step_number: stepNumber } });
+    return data;
+  }
+
   /** THIS RUN: per-scenario, per-step pass/fail timeline for the single latest run. */
   async getLatestRunTimeline(artifactId: string): Promise<any> {
     const { data } = await this.client.get(`/v1/test-factory/${artifactId}/runs/latest`);
