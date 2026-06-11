@@ -20,6 +20,7 @@ RLS migration ``scripts/apply_flywheel_labels.sql`` (mirrors script_versions).
 from __future__ import annotations
 
 import logging
+import os
 import uuid
 from datetime import datetime, timezone
 
@@ -36,6 +37,14 @@ DECISION_POINTS = frozenset({
     "script_edit", "heal_approve", "triage_feedback", "heal_outcome",
     "value_conflict", "control_kind_fix", "reanchor", "scenario_lifecycle",
 })
+
+
+def capture_enabled() -> bool:
+    """Master capture gate — DEFAULT OFF. Until ``NEXUS_FLYWHEEL_CAPTURE`` is
+    explicitly truthy, ``record_label`` is a no-op, so zero-config behaviour is
+    byte-identical to today. (Export has its own separate per-row ``consented``
+    gate — capturing a label never means it may leave the building.)"""
+    return os.getenv("NEXUS_FLYWHEEL_CAPTURE", "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _new_id() -> str:
@@ -137,7 +146,7 @@ async def record_label(
     user's action. The caller must already hold ``session`` from
     ``tenant_scoped_session(tenant_id)`` so RLS stamps + isolates the row. Caller
     commits. No raw text/value/selector/name is accepted — only coarse features."""
-    if not tenant_id or decision_point not in DECISION_POINTS:
+    if not capture_enabled() or not tenant_id or decision_point not in DECISION_POINTS:
         return
     try:
         session.add(FlywheelLabelRow(
@@ -165,4 +174,4 @@ async def record_label(
         logger.debug("flywheel.record_label_skipped dp=%s err=%s", decision_point, exc)
 
 
-__all__ = ["FlywheelLabelRow", "record_label", "DECISION_POINTS"]
+__all__ = ["FlywheelLabelRow", "record_label", "DECISION_POINTS", "capture_enabled"]

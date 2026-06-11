@@ -61,6 +61,7 @@ from ..services.script_factory.triage import assemble_triage
 from ..services.oracle_scorecard import compute_artifact_scorecard
 from ..services.diff_and_heal import self_heal
 from ..services.diff_and_heal import heal_capture_store
+from ..services.flywheel import ledger as flywheel_ledger
 from ..services.test_factory import fidelity as tf_fidelity
 from ..services.test_runs import (
     last_run_summary_by_scenario,
@@ -755,6 +756,17 @@ async def _poll_heal(run_id: str, ctx: dict) -> None:
                     or "Auto-healed: control-kind fix (.fill -> .selectOption), verified green",
                     proposed=True,  # human-gated: not active until a human approves it
                 )
+                # Flywheel (default-OFF) — a fix PROVEN green on a headed re-run is a
+                # strong, env-grounded positive label. De-identified; self-gated.
+                await flywheel_ledger.record_label(
+                    session, tenant_id=tenant_id,
+                    decision_point=ctx.get("fix_kind", "control_kind_fix"),
+                    artifact_id=artifact_id, scenario_id=ctx["scenario_id"],
+                    emitted_method_enum=("" if ctx.get("fix_kind") == "reanchor" else "selectOption"),
+                    verified_green=True, human_decision_enum="left_pending",
+                    engine_verdict_enum=(ev.get("verdict") or ""),
+                    git_commit=os.getenv("NEXUS_GIT_COMMIT", ""),
+                )
                 await session.commit()
             job.update(
                 healed=True, heal_version=row.version_no, pending_approval=True,
@@ -858,7 +870,7 @@ async def heal_step(
     ctx = {
         "tenant_id": tenant_id, "artifact_id": artifact_id, "scenario_id": scenario_id,
         "step_number": step_number, "spec_path": spec_path, "candidate": candidate,
-        "heal_note": _heal_note,
+        "heal_note": _heal_note, "fix_kind": ("reanchor" if _reanchor else "control_kind_fix"),
     }
     task = asyncio.create_task(_poll_heal(run_id, ctx))
     _RUNNER_TASKS.add(task)
@@ -1623,6 +1635,18 @@ async def approve_script_version(
         )
         if row is None:
             raise HTTPException(status_code=404, detail="version not found")
+        # Flywheel (default-OFF) — a human APPROVING a machine fix (already verified
+        # green) is the strongest positive label. De-identified; self-gated.
+        _note = (row.note or "").lower()
+        await flywheel_ledger.record_label(
+            session, tenant_id=tenant_id,
+            decision_point=("reanchor" if "re-anchor" in _note or "renamed" in _note else (
+                "control_kind_fix" if "control-kind" in _note else "heal_approve")),
+            artifact_id=artifact_id, test_case_id=test_id, scenario_id=test_id,
+            human_decision_enum="approved", verified_green=True,
+            engine_verdict_enum="heal_proposed",
+            git_commit=os.getenv("NEXUS_GIT_COMMIT", ""),
+        )
         await session.commit()
     return {
         "artifact_id": artifact_id, "test_id": test_id, "version_no": version_no,
