@@ -14,7 +14,8 @@ from sqlalchemy import select, desc
 from nexus_sdk.db.models import AuditLogRow, UserRow
 
 from ..auth import get_current_user
-from ..database import require_db, utc_now
+from ..database import require_db, utc_now, tenant_scoped_session
+from ..services.flywheel import export as flywheel_export
 
 router = APIRouter(tags=["Admin"])
 
@@ -288,3 +289,30 @@ async def get_admin_users(
                 "lastActive": last_active, "status": "active" if r.is_active else "inactive",
             })
         return users
+
+
+# ─── Flywheel consented-export channel (Phase 2) ──────────────
+
+@router.get("/api/v1/admin/flywheel/export-preview")
+async def flywheel_export_preview(
+    vertical: str = Query("", max_length=40),
+    user: dict = Depends(get_current_user),
+):
+    """Admin read surface for the consented-export channel — THIS tenant's
+    de-identified, k-anonymized, (stub-)DP aggregate (counts only, NEVER raw rows;
+    the invariant ``raw_rows_exported == 0``). It surfaces *exactly what would leave
+    the building* so an admin can audit it before any federation. OFF (returns
+    ``enabled: false``) unless ``NEXUS_FLYWHEEL_EXPORT`` is set — capturing a label
+    never means it may be exported. Tenant-scoped via RLS; the cross-tenant
+    federation loop + real DP/secure-aggregation remain deferred to the privacy
+    build (see export.add_dp_noise stub)."""
+    tenant_id = user["tenant_id"]
+    if not flywheel_export.export_enabled():
+        return {
+            "enabled": False, "groups": [], "group_count": 0, "raw_rows_exported": 0,
+            "note": "Consented export is OFF. Set NEXUS_FLYWHEEL_EXPORT=1 to enable.",
+        }
+    async with tenant_scoped_session(tenant_id) as session:
+        return await flywheel_export.build_tenant_export(
+            session, tenant_id=tenant_id, vertical=vertical or "",
+        )

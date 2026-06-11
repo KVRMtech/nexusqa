@@ -285,6 +285,40 @@ async def _heal_integrity(
     }
 
 
+# Below this denominator the proxy is too noisy to PUBLISH as a rate — we surface
+# it as insufficient_data rather than a misleading small-sample percentage.
+_MIN_N_FOR_PUBLISH = 5
+
+
+def _false_heal_rate(heal: dict) -> dict:
+    """Phase-1 'publish a false-heal rate' SCAFFOLD — the one honest top-line number,
+    built from the existing heal-integrity proxy. Surfaces rate + denominator + an
+    explicit publishable/insufficient status, and never invents a number on thin
+    data. It is a PROXY (approved-then-contradicted), NOT the calibrated rate — that
+    needs many human-confirmed heal outcomes (the flywheel's labeled corrections),
+    deferred until that data exists. Per-artifact here; cross-artifact aggregation is
+    a later step."""
+    n = int(heal.get("approved_with_later_run", 0) or 0)
+    contradicted = int(heal.get("approved_then_contradicted", 0) or 0)
+    publishable = n >= _MIN_N_FOR_PUBLISH
+    return {
+        "rate_pct": (round(100.0 * contradicted / n, 1) if n else None),
+        "numerator_contradicted": contradicted,
+        "denominator_evaluated": n,
+        "min_n_to_publish": _MIN_N_FOR_PUBLISH,
+        "status": "measured_proxy" if publishable else "insufficient_data",
+        "is_proxy": True,
+        "definition": (
+            "false-heal proxy = machine-approved fixes a LATER run contradicted "
+            "(failed toHaveURL) ÷ machine-approved fixes with any later run."
+        ),
+        "to_calibrate": (
+            "A publishable calibrated rate needs many human-confirmed heal outcomes "
+            "(the flywheel's labeled corrections) — deferred until that data exists."
+        ),
+    }
+
+
 async def compute_artifact_scorecard(
     db: AsyncSession, *, artifact_id: str, tenant_id: str,
 ) -> dict:
@@ -305,6 +339,7 @@ async def compute_artifact_scorecard(
             "board": tally_verdicts(verdicts),
         },
         "heal": heal,
+        "false_heal_rate": _false_heal_rate(heal),
     }
 
 

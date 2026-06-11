@@ -163,6 +163,94 @@ function FidelityCard({ rep }: { rep: any }) {
 // VERIFIED (positive proof) vs ASSUMED (inference), a design-confidence rollup,
 // and heal integrity (the engine never green-washes an unproven fix). Read-only;
 // self-fetches and refreshes with the run key. Honesty-first throughout.
+// Requirements Traceability Matrix (Phase 2 provenance) — recorded requirement →
+// step → the assertion the compiler ACTUALLY emits. Lazy (fetches on first expand);
+// 'unproven' = the compiler skips the step (inferred / needs-review) or nothing
+// grounded backs it, so coverage is never overclaimed. Read-only, $0, reuses the
+// same compiler lines as the downloaded script (anti-drift).
+function RtmCard({ artifactId }: { artifactId: string }) {
+  const [open, setOpen] = useState(false);
+  const [rtm, setRtm] = useState<any>(null);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true); setErr(null);
+    try { setRtm(await api.getRtm(artifactId)); }
+    catch (e: any) { setErr(e?.response?.data?.detail || e?.message || 'failed to load'); }
+    finally { setLoading(false); }
+  }, [artifactId]);
+
+  const toggle = () => {
+    const next = !open; setOpen(next);
+    if (next && !rtm && !loading) void load();
+  };
+
+  const tests: any[] = rtm?.tests || [];
+  const totals = tests.reduce((acc, t) => {
+    for (const r of (t.rows || [])) { acc.total++; if (r.unproven) acc.unproven++; else acc.proven++; }
+    return acc;
+  }, { total: 0, proven: 0, unproven: 0 });
+
+  return (
+    <div className="mt-3 rounded-xl border border-slate-200 bg-white/70 overflow-hidden">
+      <button onClick={toggle} className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-slate-50/70">
+        <CheckSquare className="h-4 w-4 text-indigo-500" />
+        <span className="text-[12px] font-bold text-slate-700">Requirements Traceability (RTM)</span>
+        <span className="text-[10px] text-slate-400">recorded requirement → step → emitted assertion; proven vs unproven</span>
+        {open ? <ChevronDown className="h-4 w-4 text-slate-400 ml-auto" /> : <ChevronRight className="h-4 w-4 text-slate-400 ml-auto" />}
+      </button>
+      {open && (
+        <div className="px-3 pb-3 pt-1">
+          {loading && <div className="flex items-center gap-2 text-[11px] text-indigo-700 py-2"><Loader2 className="h-3.5 w-3.5 animate-spin" /> Building the matrix…</div>}
+          {err && <div className="rounded-lg border border-amber-200 bg-amber-50/60 px-3 py-2 text-[10px] text-amber-700">{err}</div>}
+          {rtm && !loading && (
+            tests.length === 0 ? (
+              <p className="text-[11px] text-slate-500 py-2">No generated tests yet — generate test cases and the matrix fills in.</p>
+            ) : (
+              <>
+                <div className="flex items-center gap-2 flex-wrap mb-2 text-[10px] font-bold">
+                  <span className="rounded-full px-2 py-0.5" style={{ background: 'rgba(16,185,129,0.14)', color: '#047857' }}>{totals.proven} proven</span>
+                  <span className="rounded-full px-2 py-0.5" style={{ background: 'rgba(245,158,11,0.16)', color: '#b45309' }}>{totals.unproven} unproven</span>
+                  <span className="text-slate-400 font-semibold">· {tests.length} test{tests.length === 1 ? '' : 's'}, {totals.total} steps</span>
+                </div>
+                <p className="text-[9px] text-slate-400 leading-snug mb-2">Proven = the step has a GROUNDED assertion the compiler actually emits. Unproven = the compiler skips it (inferred / needs-review) or nothing grounded backs it — never claimed as covered.</p>
+                <div className="space-y-2">
+                  {tests.map((t) => (
+                    <div key={t.test_id} className="rounded-lg border border-slate-100 bg-white">
+                      <div className="px-2.5 py-1.5 border-b border-slate-100">
+                        <span className="text-[11px] font-bold text-slate-800">{t.name}</span>
+                        {t.expected_outcome && <span className="block text-[9px] text-slate-500 leading-snug mt-0.5">Expected: {t.expected_outcome}</span>}
+                      </div>
+                      <table className="w-full text-[10px]">
+                        <tbody>
+                          {(t.rows || []).map((r: any, i: number) => (
+                            <tr key={i} className="border-t border-slate-50 align-top">
+                              <td className="px-2 py-1 text-slate-400 font-mono w-6">{r.step_number ?? i + 1}</td>
+                              <td className="px-1 py-1 text-slate-700">{r.action || '—'}{r.observed_label ? <span className="text-slate-400"> · {r.observed_label}</span> : ''}</td>
+                              <td className="px-1 py-1 w-20">
+                                {r.unproven
+                                  ? <span className="rounded px-1.5 py-0.5 text-[9px] font-bold" style={{ background: 'rgba(245,158,11,0.16)', color: '#b45309' }}>unproven</span>
+                                  : <span className="rounded px-1.5 py-0.5 text-[9px] font-bold" style={{ background: 'rgba(16,185,129,0.14)', color: '#047857' }}>proven</span>}
+                              </td>
+                              <td className="px-1 py-1 text-slate-400 w-16 text-right">{(r.emitted_assertions || []).length} assert{(r.emitted_assertions || []).length === 1 ? '' : 's'}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+
 function OracleScorecardCard({ artifactId, refreshKey }: { artifactId: string; refreshKey: number }) {
   const [sc, setSc] = useState<any>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -276,6 +364,15 @@ function OracleScorecardCard({ artifactId, refreshKey }: { artifactId: string; r
                 : <span>{heal.approved_then_contradicted}/{heal.approved_with_later_run} approved heals later contradicted{heal.approved_then_contradicted_pct != null ? ` (${heal.approved_then_contradicted_pct}%)` : ''}</span>}
             </p>
             <p className="text-[9px] text-slate-400 leading-snug mt-0.5">Best-effort proxy, not a true rate — only catches regressions that fail a <code>toHaveURL</code>, and can’t prove the heal (vs an unrelated change) caused it. {heal.population}.</p>
+            {sc.false_heal_rate && (
+              <p className="text-[10px] text-slate-600 leading-snug mt-1">
+                <span className="font-bold">Published false-heal rate: </span>
+                {sc.false_heal_rate.status === 'insufficient_data'
+                  ? <span className="text-slate-500">insufficient data — n={sc.false_heal_rate.denominator_evaluated}, need ≥{sc.false_heal_rate.min_n_to_publish} to publish</span>
+                  : <span className="font-black text-indigo-700">{sc.false_heal_rate.rate_pct}%<span className="font-semibold text-slate-400"> on n={sc.false_heal_rate.denominator_evaluated}</span></span>}
+                <span className="text-slate-400"> · proxy until calibrated</span>
+              </p>
+            )}
           </div>
         </div>
       )}
@@ -1071,6 +1168,7 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
             {historyOpen && (
               <div className="px-3 pb-3 pt-1">
                 <OracleScorecardCard artifactId={artifactId} refreshKey={triageKey} />
+                <RtmCard artifactId={artifactId} />
                 {runs?.board?.last_run_at ? (
                   <div className="flex items-center gap-2 flex-wrap mb-2 px-1 text-[11px] font-bold">
                     <span className="rounded-full px-2.5 py-1" style={{ background: 'rgba(34,197,94,0.16)', color: '#15803d' }}>{runs.board.passed} passed</span>

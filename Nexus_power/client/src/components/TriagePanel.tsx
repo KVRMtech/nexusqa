@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Camera, Check, Copy, Download, Flag, Loader2, RefreshCw, ShieldAlert } from 'lucide-react';
+import { Camera, Check, Copy, Download, Eye, Flag, Layers, Loader2, RefreshCw, ShieldAlert } from 'lucide-react';
 import { api } from '../services/api';
 
 // Verdict styling + which stack a failure belongs to. Mirrors the backend
@@ -174,9 +174,67 @@ function TriageCard({ s, artifactId }: { s: Scenario; artifactId: string }) {
           <Download className="h-3 w-3" /> Download .md
         </button>
       </div>
-      <div className="mt-2 pt-2 border-t border-slate-100">
+      <div className="mt-2 pt-2 border-t border-slate-100 space-y-2">
+        <AdvisoryChecks artifactId={artifactId} s={s} />
         <VerdictFeedback artifactId={artifactId} s={s} />
       </div>
+    </div>
+  );
+}
+
+// ADVISORY oracle signals (Phase 2) — a deterministic pixel diff ($0, Pillow) and
+// an optional VLM semantic check. Both are ON-DEMAND (never auto-batched — avoids a
+// vision-cost burst) and NEVER change the verdict; they only add context beside the
+// baseline/this-run frames. Endpoints degrade to available:false / 'uncertain'.
+function AdvisoryChecks({ artifactId, s }: { artifactId: string; s: Scenario }) {
+  const step = s.step_number ?? 0;
+  const [pix, setPix] = useState<any>(null);
+  const [pixBusy, setPixBusy] = useState(false);
+  const [sem, setSem] = useState<any>(null);
+  const [semBusy, setSemBusy] = useState(false);
+
+  const runPix = async () => {
+    setPixBusy(true);
+    try { setPix(await api.getVisualDiff(artifactId, s.scenario_id, step)); }
+    catch { setPix({ available: false, reason: 'check failed' }); }
+    finally { setPixBusy(false); }
+  };
+  const runSem = async () => {
+    setSemBusy(true);
+    try { setSem(await api.semanticCheck(artifactId, s.scenario_id, step)); }
+    catch { setSem({ semantic_match: 'uncertain', reason: 'check failed' }); }
+    finally { setSemBusy(false); }
+  };
+
+  const pixLabel = () => {
+    if (!pix) return null;
+    if (!pix.available) return <span className="text-[9px] text-slate-400">{pix.reason || 'no images'}</span>;
+    if (pix.identical) return <span className="text-[9px] font-bold text-emerald-600">pixel-identical</span>;
+    const pct = Math.round((pix.changed_ratio || 0) * 1000) / 10;
+    return <span className="text-[9px] font-bold text-violet-700">{pct}% changed · advisory</span>;
+  };
+  const semLabel = () => {
+    if (!sem) return null;
+    const m = sem.semantic_match || 'uncertain';
+    const col = m === 'match' ? '#15803d' : m === 'deviation' ? '#b45309' : '#64748b';
+    return <span className="text-[9px] font-bold" style={{ color: col }} title={sem.reason || ''}>semantic: {m} · advisory</span>;
+  };
+
+  return (
+    <div className="flex items-center gap-2 flex-wrap">
+      <span className="text-[9px] uppercase font-bold text-slate-400">Advisory</span>
+      <button disabled={pixBusy} onClick={runPix}
+        title="Deterministic pixel diff of recorded baseline vs this run — a badge, never a verdict"
+        className="flex items-center gap-1 rounded-md px-2 py-1 text-[10px] font-semibold bg-violet-50 text-violet-700 hover:bg-violet-100 disabled:opacity-50">
+        {pixBusy ? <Loader2 className="h-3 w-3 animate-spin" /> : <Layers className="h-3 w-3" />} Pixel diff
+      </button>
+      {pixLabel()}
+      <button disabled={semBusy} onClick={runSem}
+        title="Optional VLM check: does the screen still satisfy the recorded outcome? Signal only, never a verdict"
+        className="flex items-center gap-1 rounded-md px-2 py-1 text-[10px] font-semibold bg-sky-50 text-sky-700 hover:bg-sky-100 disabled:opacity-50">
+        {semBusy ? <Loader2 className="h-3 w-3 animate-spin" /> : <Eye className="h-3 w-3" />} Semantic check
+      </button>
+      {semLabel()}
     </div>
   );
 }
