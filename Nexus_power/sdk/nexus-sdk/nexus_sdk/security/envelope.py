@@ -320,11 +320,106 @@ class AwsKmsProvider:
         return resp["Plaintext"]
 
 
+# ── GCP KMS provider ────────────────────────────────────────────
+
+
+class GcpKmsProvider:
+    """google-cloud-kms-backed KMS provider.
+
+    Wrap/unwrap of the DEK is delegated to a Cloud KMS symmetric key via
+    ``encrypt`` / ``decrypt``. The ``tenant_id`` is bound into the call as
+    Additional Authenticated Data so a ciphertext can't be replayed under a
+    different tenant. On a GCP VM the client authenticates via Application
+    Default Credentials (the VM's service account through the metadata
+    server) — no static keys on disk; the SA needs
+    ``roles/cloudkms.cryptoKeyEncrypterDecrypter`` on the key.
+
+    Tenant→key mapping is supplied by a callable so the deployment can resolve
+    the CryptoKey resource name from ``tenant_keks`` or a single-key bootstrap.
+    KMS ``decrypt`` auto-detects the key *version* from the ciphertext, so the
+    resolver only needs the CryptoKey resource name
+    (``projects/P/locations/L/keyRings/R/cryptoKeys/K``).
+    """
+
+    provider_id = "gcp_kms"
+
+    def __init__(self, kek_resolver):
+        """
+        Parameters
+        ----------
+        kek_resolver
+            ``Callable[[tenant_id: str], Awaitable[str]]`` returning the
+            CryptoKey resource name for the tenant's KEK.
+        """
+        try:
+            from google.cloud import kms  # noqa: F401  (deferred import)
+        except ImportError as exc:
+            raise ProviderUnavailable(
+                "google-cloud-kms is required for GcpKmsProvider"
+            ) from exc
+        from google.cloud import kms
+
+        self._client = kms.KeyManagementServiceClient()
+        self._resolver = kek_resolver
+
+    async def kek_id(self, tenant_id: str) -> str:
+        name = await self._resolver(tenant_id)
+        if not name:
+            raise KekProviderError(
+                f"no KEK key registered for tenant {tenant_id}"
+            )
+        return name
+
+    async def wrap(self, tenant_id: str, dek: bytes) -> tuple[str, bytes]:
+        import asyncio
+
+        name = await self.kek_id(tenant_id)
+        loop = asyncio.get_running_loop()
+
+        def _call():
+            return self._client.encrypt(
+                request={
+                    "name": name,
+                    "plaintext": dek,
+                    "additional_authenticated_data": tenant_id.encode("utf-8"),
+                }
+            )
+
+        try:
+            resp = await loop.run_in_executor(None, _call)
+        except Exception as exc:
+            raise KekProviderError(f"GCP KMS encrypt failed: {exc}") from exc
+        return name, resp.ciphertext
+
+    async def unwrap(
+        self, tenant_id: str, kek_id: str, wrapped_dek: bytes
+    ) -> bytes:
+        import asyncio
+
+        loop = asyncio.get_running_loop()
+
+        def _call():
+            return self._client.decrypt(
+                request={
+                    "name": kek_id,
+                    "ciphertext": wrapped_dek,
+                    "additional_authenticated_data": tenant_id.encode("utf-8"),
+                }
+            )
+
+        try:
+            resp = await loop.run_in_executor(None, _call)
+        except Exception as exc:
+            raise KekProviderError(f"GCP KMS decrypt failed: {exc}") from exc
+        return resp.plaintext
+
+
 # ── Provider registry ───────────────────────────────────────────
 
 
 PROVIDER_FACTORIES: dict[str, str] = {
     "aws_kms": "AwsKmsProvider",
+    "gcp_kms": "GcpKmsProvider",
     "local": "LocalKekProvider",
 }
 

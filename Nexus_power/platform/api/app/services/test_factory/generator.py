@@ -411,6 +411,57 @@ def _observed(
     return {"observed": obs, "provenance": provenance}
 
 
+# ─── Action-vs-snapshot value-conflict detection ──────────────────────────────
+# A field's value can be read two ways: the KEYSTROKE value (action stream) and
+# the COMMITTED value (form snapshot, which the step uses). When they genuinely
+# disagree — e.g. the snapshot OCR'd a placeholder ("abc123xyz") instead of the
+# typed value ("abcde323223") — we must NOT silently assert one. We flag the step
+# for human confirmation (non-destructive — it still runs). Deterministic, $0.
+
+_VALUE_ALNUM_RX = re.compile(r"[a-z0-9]+")
+
+
+def _value_key(v: str) -> str:
+    """Lowercase, alphanumeric-only — so '$30,000' == '30000' and pure formatting
+    or punctuation differences never read as a conflict."""
+    return "".join(_VALUE_ALNUM_RX.findall((v or "").lower()))
+
+
+def _values_conflict(typed: str, committed: str) -> bool:
+    """True when the TYPED value (action stream) genuinely disagrees with the
+    COMMITTED value (form snapshot) — beyond formatting/autocomplete. Conservative:
+    formatting-only diffs, prefixes/substrings (truncation), and autocomplete
+    expansions (every typed token contained in the committed value) are NOT
+    conflicts — only a real divergence (different digits, a placeholder) is."""
+    t = _value_key(typed)
+    c = _value_key(committed)
+    if not t or not c or t == c:
+        return False
+    if t in c or c in t:  # prefix / truncation / autocomplete-extend
+        return False
+    toks = [tok for tok in _VALUE_ALNUM_RX.findall((typed or "").lower()) if len(tok) >= 2]
+    if toks and all(tok in c for tok in toks):  # autocomplete: typed tokens ⊆ committed
+        return False
+    return True
+
+
+def _typed_values(group: _PageGroup) -> dict[str, str]:
+    """Normalized label -> the value the user TYPED (action stream), for fields the
+    user actually entered. Cross-checked against the form-snapshot value the step
+    uses, to surface a genuine disagreement (placeholder leak, OCR drift)."""
+    out: dict[str, str] = {}
+    for a in group.actions:
+        verb = (a.verb or "").strip().lower()
+        if verb not in ("type", "fill", "input", "select"):
+            continue
+        label = (a.target_label or "").strip()
+        val = "" if a.value is None else str(a.value).strip()
+        if not label or not val:
+            continue
+        out[_norm(label)] = val  # last typed wins
+    return out
+
+
 def _build_steps(groups: Sequence[_PageGroup]) -> tuple[list[ProductionTestStep], int]:
     """Build ordered, logically-reconstructed test steps from page groups."""
     steps: list[ProductionTestStep] = []
@@ -448,12 +499,13 @@ def _build_steps(groups: Sequence[_PageGroup]) -> tuple[list[ProductionTestStep]
             ))
 
         text_fields, toggles, required_present = _resolve_fields(group)
+        typed_by_label = _typed_values(group)  # keystroke values, to cross-check
 
         # 2) Fill demonstrated text/select fields.
         for label, value in text_fields:
             fields_used += 1
             n += 1
-            steps.append(ProductionTestStep(
+            step = ProductionTestStep(
                 step_number=n,
                 action=f"Enter '{value}' in the '{label}' field",
                 expected=f"'{label}' shows '{value}'",
@@ -461,7 +513,14 @@ def _build_steps(groups: Sequence[_PageGroup]) -> tuple[list[ProductionTestStep]
                 selector=_locator(label, "field"),
                 data_ref=value,
                 **_observed(verb="type", label=label, kind="field", value=value),
-            ))
+            )
+            # Surface a genuine action-vs-snapshot disagreement (e.g. the snapshot
+            # OCR'd a placeholder) so a human confirms the value — never assert one
+            # reading as certain. Non-destructive: the step still runs.
+            typed = typed_by_label.get(_norm(label))
+            if typed is not None and _values_conflict(typed, value):
+                step.observed["value_conflict"] = {"typed": typed, "committed": value}
+            steps.append(step)
 
         # 3) Toggles the user turned on.
         for label in toggles:
@@ -517,13 +576,51 @@ def _build_steps(groups: Sequence[_PageGroup]) -> tuple[list[ProductionTestStep]
     return steps, fields_used
 
 
+# Signals that a click landed inside a confirmation dialog / modal / overlay.
+_DIALOG_RX = re.compile(
+    r"\b(dialog|modal|confirm(?:ation)?|pop[\s-]?up|overlay|are you sure)\b",
+    re.IGNORECASE,
+)
+
+
+def _submit_sequence(clicks: list) -> list:
+    """The trailing click(s) that COMMIT the page. Normally just the final click;
+    but when the final click is a CONFIRMATION inside a dialog/modal, also include
+    the click that OPENED it (both were recorded) so replay doesn't try to confirm a
+    dialog that was never opened. Grounded + conservative: fires ONLY when the final
+    click signals a dialog AND the preceding click plausibly opened it — it visibly
+    opened a dialog, or the dialog just repeats the same action label
+    ('Submit claim' → 'Submit claim (confirmation dialog)')."""
+    if not clicks:
+        return []
+    last = clicks[-1]
+    last_sig = " ".join([
+        last.target_label or "", last.after_detail or "", last.after_outcome or "",
+    ])
+    if len(clicks) >= 2 and _DIALOG_RX.search(last_sig):
+        opener = clicks[-2]
+        opener_after = " ".join([opener.after_detail or "", opener.after_outcome or ""])
+        last_core = _norm(re.sub(r"\(.*?\)", "", last.target_label or ""))
+        opener_core = _norm(opener.target_label or "")
+        opened_a_dialog = bool(_DIALOG_RX.search(opener_after))
+        same_action = bool(
+            opener_core and last_core
+            and (opener_core == last_core or last_core.startswith(opener_core)
+                 or opener_core in last_core)
+        )
+        if opened_a_dialog or same_action:
+            return [opener, last]
+    return [last]
+
+
 def _interaction_steps(group: _PageGroup, next_url: str) -> list[ProductionTestStep]:
-    """The SUBMIT action for the page — the final click/press in the group.
+    """The SUBMIT action(s) for the page — normally the final click/press, plus the
+    modal-OPEN click when the final click confirms a dialog (see _submit_sequence).
 
     Hovers, scrolls, and earlier exploratory clicks (menu tabs, abandoned
-    side-trips) are dropped: only the last click before the page advances is
-    part of the demonstrated forward flow.  ``group.actions`` is already in
-    chronological (visit → subaction) order.
+    side-trips) are dropped: only the trailing commit click(s) before the page
+    advances are part of the demonstrated forward flow.  ``group.actions`` is
+    already in chronological (visit → subaction) order.
     """
     clicks = [
         a for a in group.actions
@@ -532,39 +629,84 @@ def _interaction_steps(group: _PageGroup, next_url: str) -> list[ProductionTestS
     ]
     if not clicks:
         return []
-    a = clicks[-1]
-    label = a.target_label.strip()
-    anchor = (a.anchor or "").strip()
-    after = (a.after_detail or "").strip()
-    # Fold the anchor into the step so a repeated control is unambiguous:
-    # "Click 'Select' in the '10:30 AM' row".
-    where = f" in the '{anchor}' {a.anchor_kind or 'section'}" if anchor else ""
-    # The Expected Result reflects the OBSERVED outcome (wait + assertion):
-    # navigation, a results panel appearing, a validation error, etc.
-    if next_url:
-        expected = f"The application proceeds to {next_url}"
-        if after:
-            expected = f"{expected}; {after}"
-    elif after:
-        expected = after
-    else:
-        expected = f"'{label}'{where} is activated"
-    obs = _observed(verb=(a.verb or "click").strip().lower(), label=label, kind=a.target_kind or "button")
-    if anchor:
-        obs["observed"]["anchor"] = anchor
-    if a.after_outcome:
-        obs["observed"]["after"] = after or a.after_outcome
-    return [ProductionTestStep(
-        step_number=0,
-        action=f"Click '{label}'{where}",
-        expected=expected,
-        expected_result=expected,
-        selector=_locator(label, a.target_kind),
-        **obs,
-    )]
+    seq = _submit_sequence(clicks)
+    out: list[ProductionTestStep] = []
+    for i, a in enumerate(seq):
+        is_final = i == len(seq) - 1
+        # Only the FINAL click in the commit sequence advances the page; an earlier
+        # click (e.g. the one that opens a confirmation dialog) does not navigate.
+        step_next = next_url if is_final else ""
+        label = a.target_label.strip()
+        anchor = (a.anchor or "").strip()
+        after = (a.after_detail or "").strip()
+        # Fold the anchor into the step so a repeated control is unambiguous:
+        # "Click 'Select' in the '10:30 AM' row".
+        where = f" in the '{anchor}' {a.anchor_kind or 'section'}" if anchor else ""
+        # The Expected Result reflects the OBSERVED outcome (wait + assertion):
+        # navigation, a results panel appearing, a validation error, etc.
+        if step_next:
+            expected = f"The application proceeds to {step_next}"
+            if after:
+                expected = f"{expected}; {after}"
+        elif after:
+            expected = after
+        elif not is_final:
+            expected = f"a confirmation step opens after '{label}'{where}"
+        else:
+            expected = f"'{label}'{where} is activated"
+        obs = _observed(verb=(a.verb or "click").strip().lower(), label=label, kind=a.target_kind or "button")
+        if anchor:
+            obs["observed"]["anchor"] = anchor
+            # Carry the anchor's container kind so the compiler scopes the locator to
+            # the right ARIA role (row / listitem / card / region…), not just a table
+            # row — disambiguates repeated controls in card/list/grid layouts.
+            if (a.anchor_kind or "").strip():
+                obs["observed"]["anchor_kind"] = a.anchor_kind.strip()
+        if a.after_outcome:
+            obs["observed"]["after"] = after or a.after_outcome
+        # Carry the RECORDED next-page URL so the compiler can assert the SUBMIT
+        # actually navigated there (a click step has no URL of its own). Grounded:
+        # this is the observed next page, not an inferred target. Only on the FINAL
+        # click — the modal-open click doesn't navigate.
+        if step_next:
+            obs["observed"]["next_url"] = step_next
+        out.append(ProductionTestStep(
+            step_number=0,
+            action=f"Click '{label}'{where}",
+            expected=expected,
+            expected_result=expected,
+            selector=_locator(label, a.target_kind),
+            **obs,
+        ))
+    return out
 
 
 # ─── Public entry point ──────────────────────────────────────────────────────
+
+
+# Unambiguous credential-entry signals (email alone is too weak — many forms have
+# it; require a password/PIN/OTP/sign-in/username signal).
+_CREDENTIAL_RX = re.compile(
+    r"\b(password|passcode|pin|otp|one[\s-]?time|sign[\s-]?in|log[\s-]?in|username|user[\s-]?name)\b",
+    re.IGNORECASE,
+)
+
+
+def _login_observed_before_app(visits: Iterable[PageVisitInput]) -> bool:
+    """True when the recording shows credential entry (a login) BEFORE the first
+    URL-keyed app page — meaning the URL-anchored test starts already authenticated
+    and does NOT replay the login (the login screens are screen-name-keyed, not
+    URL-keyed, so they're dropped from the URL-anchored flow). Grounded: scans only
+    what was observed; never assumes auth where none was seen."""
+    ordered = sorted(visits, key=lambda v: getattr(v, "sequence_index", 0) or 0)
+    for v in ordered:
+        if (getattr(v, "url_host", "") or "").strip():
+            break  # first URL-keyed page → the app flow has begun
+        labels = " ".join((getattr(v, "form_snapshot", None) or {}).keys())
+        loc = getattr(v, "location", "") or ""
+        if _CREDENTIAL_RX.search(labels) or _CREDENTIAL_RX.search(loc):
+            return True
+    return False
 
 
 def generate_demonstrated_test_cases(
@@ -619,15 +761,40 @@ def generate_demonstrated_test_cases(
     signature = "|".join(f"{g.url_host}{g.url_path}" for g in groups)
     test_id = str(uuid.uuid5(_TEST_ID_NAMESPACE, f"{artifact_id}:demonstrated:{signature}"))
 
+    # Case-level Expected Result — grounded in the LAST recorded page (the flow's
+    # outcome). Observable + verifiable, never invented.
+    outcome_path = groups[-1].url_path or _canonical_url(groups[-1])
+    expected_outcome = (
+        f"The flow completes successfully — the application reaches the '{outcome}' page"
+        + (f" ({outcome_path})" if outcome_path else "") + "."
+    )
+
+    preconditions = [Precondition(
+        description="A supported web browser is open and the target site is reachable.",
+        setup_action=f"Open {_full_url(groups[0])}",
+    )]
+    # Honest auth precondition: if a login was observed BEFORE the app flow, this
+    # URL-anchored test does NOT replay it — say so, so a cold run doesn't fail
+    # silently at step 1. Grounded (we observed credential entry); never fabricated.
+    if _login_observed_before_app(visits):
+        preconditions.insert(0, Precondition(
+            description=(
+                "An authenticated session is required. The recording showed a login "
+                "(credential entry) before the app flow, but this URL-anchored test does "
+                "NOT replay the login. Apply an Authentication profile (a captured "
+                "logged-in session) so the run starts authenticated — otherwise a cold "
+                "run will land on the login screen and fail at step 1."
+            ),
+            setup_action="Apply an authentication profile (captured logged-in session) before running.",
+        ))
+
     test_case = ProductionTestCase(
         test_id=test_id,
         name=name,
         description=description,
         steps=steps,
-        preconditions=[Precondition(
-            description="A supported web browser is open and the target site is reachable.",
-            setup_action=f"Open {_full_url(groups[0])}",
-        )],
+        expected_outcome=expected_outcome,
+        preconditions=preconditions,
         priority="P0_critical",
         type="functional",
         tags=["demonstrated", "functional", "e2e", "pages_and_forms"],

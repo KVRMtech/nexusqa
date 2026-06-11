@@ -23,3 +23,8 @@ Pillow>=10.0,<12.0
 # storage init silently degrades and uploads fail with
 # ModuleNotFoundError at write time.
 gcloud-aio-storage>=9.0,<10.0
+# google-cloud-kms backs nexus_sdk.security.envelope.GcpKmsProvider (the real
+# KEK provider for on-GCP deploys). Imported lazily — only loaded when
+# NEXUS_KEK_PROVIDER=gcp_kms — so it's inert unless envelope encryption is on.
+# Auth is Application Default Credentials (the VM service account); no keys on disk.
+google-cloud-kms>=2.21,<4

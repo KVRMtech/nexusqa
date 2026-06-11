@@ -900,6 +900,30 @@ function PageVisitsPanel({ graph }: { graph: VisualEvidenceGraph }) {
   );
 }
 
+/* Placeholder shown when a surface is toggled OFF (cost saving) — with a
+   one-click enable that derives it on demand. */
+function SurfaceOff({ label, busy, onEnable }: { label: string; busy: boolean; onEnable: () => void }) {
+  return (
+    <div className="flex flex-col items-center justify-center text-center py-16 px-6">
+      <div className="w-12 h-12 rounded-2xl mb-3 flex items-center justify-center" style={{ background: 'rgba(100,116,139,0.1)' }}>
+        <Sparkles className="h-6 w-6 text-slate-400" />
+      </div>
+      <p className="text-sm font-bold text-slate-700">{label} is off</p>
+      <p className="text-[12px] text-slate-400 mt-1 max-w-md">
+        Turned off to save AI cost &amp; time — its extraction was skipped. Turn it on to generate it now.
+      </p>
+      <button
+        onClick={onEnable}
+        disabled={busy}
+        className="mt-4 flex items-center gap-1.5 px-4 py-2 text-xs font-bold rounded-lg text-white disabled:opacity-50"
+        style={{ background: 'linear-gradient(135deg,#059669,#10b981)' }}
+      >
+        <Sparkles className="h-3.5 w-3.5" /> {busy ? 'Generating…' : `Generate ${label}`}
+      </button>
+    </div>
+  );
+}
+
 /* ═══════════════════════════════════════════════════════════
    MAIN PAGE
    ═══════════════════════════════════════════════════════════ */
@@ -929,6 +953,34 @@ export default function VisualFlowDiagramPage() {
   const [storyboard, setStoryboard] = useState<StoryboardPayload | null>(null);
   const [storyboardLoading, setStoryboardLoading] = useState(true);
   const [storyboardError, setStoryboardError] = useState<string | null>(null);
+
+  // ── Surface toggles (cost control). Default all-on so behavior is unchanged
+  // until a customer opts out. Turning a surface OFF means its vision-LLM
+  // extractors never run ($0); turning one ON derives it on demand. ──
+  type Surfaces = { storyboard: boolean; pages_forms: boolean; three_d_journey: boolean };
+  const [surfaces, setSurfaces] = useState<Surfaces>({ storyboard: true, pages_forms: true, three_d_journey: true });
+  const [surfacesBusy, setSurfacesBusy] = useState(false);
+  useEffect(() => {
+    if (!artifactId) return;
+    api.getArtifactSurfaces(artifactId).then((r) => setSurfaces(r.surfaces)).catch(() => {});
+  }, [artifactId]);
+  const toggleSurface = useCallback(async (key: keyof Surfaces) => {
+    if (!artifactId || surfacesBusy) return;
+    const next = { ...surfaces, [key]: !surfaces[key] };
+    setSurfaces(next);            // optimistic
+    setSurfacesBusy(true);
+    try {
+      const res = await api.setArtifactSurfaces(artifactId, next);
+      if (res.deriving) {
+        // A surface flipped on → backend is deriving it. Re-poll storyboard+graph.
+        setStoryboardLoading(true);
+        api.getStoryboard(artifactId).then(setStoryboard).catch(() => {}).finally(() => setStoryboardLoading(false));
+        api.getVisualEvidenceGraph(artifactId, { includeStoryboardOverlays: true }).then(setGraph).catch(() => {});
+      }
+    } catch {
+      setSurfaces(surfaces);      // revert on failure
+    } finally { setSurfacesBusy(false); }
+  }, [artifactId, surfaces, surfacesBusy]);
 
   /** Phase D.1 — triangulated steps + cursor events for the artifact.
    *  Loaded once per artifact load.  When the endpoints return empty (legacy
@@ -981,24 +1033,48 @@ export default function VisualFlowDiagramPage() {
   useEffect(() => {
     if (!artifactId) return;
     let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let attempts = 0;
     setStoryboardLoading(true);
     setStoryboardError(null);
-    api.getStoryboard(artifactId)
-      .then((payload) => {
-        if (cancelled) return;
-        setStoryboard(payload);
-        setStoryboardLoading(false);
-      })
-      .catch((e) => {
-        if (cancelled) return;
-        const message =
-          (e?.response?.data?.detail as string | undefined) ||
-          (e?.message as string | undefined) ||
-          'Failed to load storyboard';
-        setStoryboardError(message);
-        setStoryboardLoading(false);
-      });
-    return () => { cancelled = true; };
+    // The backend derives in the BACKGROUND now (no 30s blocking call). It
+    // returns immediately with summary.deriving=true while the vision
+    // extractors run; we poll until it clears, refreshing the graph each tick
+    // (page_visits / Pages & Forms live in the graph) so panels + pages appear
+    // live — no hard refresh, no 30s timeout.
+    const refreshGraph = () => {
+      api.getVisualEvidenceGraph(artifactId, { includeStoryboardOverlays: true })
+        .then((g) => { if (!cancelled) setGraph(g); })
+        .catch(() => { /* best-effort */ });
+    };
+    const poll = () => {
+      api.getStoryboard(artifactId)
+        .then((payload) => {
+          if (cancelled) return;
+          setStoryboard(payload);
+          attempts += 1;
+          const deriving = Boolean((payload as any)?.summary?.deriving);
+          if (deriving && attempts < 90) {        // ~6 min ceiling (90 × 4s)
+            setStoryboardLoading(true);
+            refreshGraph();                        // surface partial progress live
+            timer = setTimeout(poll, 4000);
+          } else {
+            if (attempts > 1) refreshGraph();      // final refresh once derivation finished
+            setStoryboardLoading(false);
+          }
+        })
+        .catch((e) => {
+          if (cancelled) return;
+          const message =
+            (e?.response?.data?.detail as string | undefined) ||
+            (e?.message as string | undefined) ||
+            'Failed to load storyboard';
+          setStoryboardError(message);
+          setStoryboardLoading(false);
+        });
+    };
+    poll();
+    return () => { cancelled = true; if (timer) clearTimeout(timer); };
   }, [artifactId]);
 
   // Load triangulated steps + cursor events + per-frame thumbnails
@@ -2267,8 +2343,34 @@ export default function VisualFlowDiagramPage() {
           </button>
         )}
         <div className="flex-1" />
+        {/* Surface toggles — only pay the vision-LLM cost for what you want. */}
+        <div className="flex items-center gap-1.5" title="Turn surfaces off to skip their AI extraction (saves cost + time). Pages & Forms feeds Test Cases.">
+          <span className="text-[10px] font-bold uppercase tracking-wide text-slate-400">Generate:</span>
+          {([
+            ['storyboard', 'Storyboard'],
+            ['three_d_journey', '3D Journey'],
+            ['pages_forms', 'Pages & Forms'],
+          ] as [keyof Surfaces, string][]).map(([key, label]) => (
+            <button
+              key={key}
+              onClick={() => toggleSurface(key)}
+              disabled={surfacesBusy}
+              aria-pressed={surfaces[key]}
+              className={clsx(
+                'flex items-center gap-1 px-2 py-1 text-[10px] font-bold rounded-full transition-all disabled:opacity-50',
+                surfaces[key] ? 'text-white' : 'text-slate-400',
+              )}
+              style={surfaces[key]
+                ? { background: 'linear-gradient(135deg,#059669,#10b981)' }
+                : { background: 'rgba(100,116,139,0.12)' }}
+            >
+              <span className={clsx('inline-block w-1.5 h-1.5 rounded-full', surfaces[key] ? 'bg-white' : 'bg-slate-400')} />
+              {label}
+            </button>
+          ))}
+        </div>
         {storyboard && viewMode === 'storyboard' ? (
-          <span className="text-[10px] text-slate-500">
+          <span className="text-[10px] text-slate-500 ml-2">
             {storyboard.summary?.non_noise_panel_count ?? storyboard.panels.length}{' '}
             panels &middot; {storyboard.summary?.app_count ?? storyboard.apps.length} apps
           </span>
@@ -2278,20 +2380,24 @@ export default function VisualFlowDiagramPage() {
       {viewMode === 'storyboard' && (
         <div className="flex-1 overflow-auto relative z-10">
           <div className="max-w-5xl mx-auto px-6 py-6">
-            <StoryboardView
-              payload={storyboard}
-              loading={storyboardLoading}
-              error={storyboardError}
-              artifactId={artifactId ?? ''}
-              layout="vertical"
-              onPanelClick={(panel) => {
-                // Switch to journey mode and focus the underlying scene
-                if (panel.representative_frame_id) {
-                  setSelectedSceneId(null);
-                }
-                setViewMode('journey');
-              }}
-            />
+            {surfaces.storyboard ? (
+              <StoryboardView
+                payload={storyboard}
+                loading={storyboardLoading}
+                error={storyboardError}
+                artifactId={artifactId ?? ''}
+                layout="vertical"
+                onPanelClick={(panel) => {
+                  // Switch to journey mode and focus the underlying scene
+                  if (panel.representative_frame_id) {
+                    setSelectedSceneId(null);
+                  }
+                  setViewMode('journey');
+                }}
+              />
+            ) : (
+              <SurfaceOff label="Storyboard" busy={surfacesBusy} onEnable={() => toggleSurface('storyboard')} />
+            )}
           </div>
         </div>
       )}
@@ -2308,7 +2414,14 @@ export default function VisualFlowDiagramPage() {
         </div>
       )}
 
-      {viewMode === 'journey' && (
+      {viewMode === 'journey' && !surfaces.three_d_journey && (
+        <div className="flex-1 overflow-auto relative z-10">
+          <div className="max-w-5xl mx-auto px-6 py-6">
+            <SurfaceOff label="3D Journey" busy={surfacesBusy} onEnable={() => toggleSurface('three_d_journey')} />
+          </div>
+        </div>
+      )}
+      {viewMode === 'journey' && surfaces.three_d_journey && (
         <>
       {/* ─────────── SESSION AT A GLANCE (Phase 1.7 Day 4) ─────────
           Hero + apps + quality breakdown at the top of the journey

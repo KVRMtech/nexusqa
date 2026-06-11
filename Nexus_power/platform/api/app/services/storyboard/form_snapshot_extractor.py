@@ -570,10 +570,28 @@ async def _extract_one_visit(
                     data = json.loads(inner)
                 else:
                     raise
+            # Weak/local models (ollama llava) ignore the tool schema: they
+            # return a tool-name-keyed wrapper, a flat {label: value} dict, or
+            # a bare list of label strings. Salvage all three so the snapshot
+            # isn't silently emptied (which leaves test steps value-less).
+            if isinstance(data, dict) and "fields" not in data:
+                _lists = [v for v in data.values() if isinstance(v, list)]
+                if len(_lists) == 1:
+                    data = _lists[0]                       # {"record_form_snapshot": [...]}
+                elif data and all(not isinstance(v, (list, dict)) for v in data.values()):
+                    data = [{"label": str(k), "value": "" if v is None else str(v)}
+                            for k, v in data.items()]      # flat {label: value} — keeps VALUES
             if isinstance(data, list):
-                parsed = FormSnapshotLLMResponse(
-                    fields=[FormField.model_validate(f) for f in data],
-                )
+                _fields: list[FormField] = []
+                for f in data:
+                    item = {"label": f.strip(), "value": ""} if isinstance(f, str) else f
+                    if not isinstance(item, dict):
+                        continue
+                    try:
+                        _fields.append(FormField.model_validate(item))
+                    except ValueError:
+                        continue
+                parsed = FormSnapshotLLMResponse(fields=_fields)
             elif isinstance(data, dict):
                 parsed = FormSnapshotLLMResponse.model_validate(data)
         except (json.JSONDecodeError, ValueError) as exc:

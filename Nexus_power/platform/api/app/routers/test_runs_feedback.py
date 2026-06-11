@@ -28,7 +28,10 @@ import time
 
 import httpx
 import jwt as pyjwt
-from fastapi import APIRouter, Body, Depends, HTTPException, Path
+from fastapi import (
+    APIRouter, Body, Depends, File, Form, HTTPException, Path, Request, UploadFile,
+)
+from fastapi.responses import Response
 from pydantic import BaseModel, Field
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -43,13 +46,20 @@ from nexus_sdk.db.models import (
 
 from ..auth import get_current_user
 from ..config import PlatformAPIConfig
-from ..database import require_db
+from ..database import require_db, tenant_scoped_session
 from ..services.test_runs import (
     detect_drift,
     ingest_run,
     last_run_summary_by_scenario,
     root_cause_hints,
 )
+from ..services.test_factory.run_screenshots import (
+    MAX_SCREENSHOT_BYTES,
+    fetch_screenshot,
+    store_screenshot,
+)
+from ..services.diff_and_heal import heal_capture_store
+from ..services.diff_and_heal.action_resolver import flatten_aria
 
 router = APIRouter(tags=["E2E Test Runs"])
 
@@ -183,6 +193,110 @@ async def ingest_test_run(
             tenant_id=tenant_id,
             payload=payload,
         )
+
+
+@router.post("/api/v1/test-runs/screenshot")
+async def upload_run_screenshot(
+    file: UploadFile = File(...),
+    run_id: str = Form(""),
+    artifact_id: str = Form(...),
+    scenario_id: str = Form(""),
+    step_number: int = Form(0),
+    user: dict = Depends(get_current_user),
+):
+    """Upload one ACTUAL run screenshot (the failure-state frame) from the bundled
+    reporter. Stores the bytes tenant-scoped and returns a serve URL to drop into
+    the step's screenshot_url. Auth: standard JWT (the reporter sends NEXUS_TOKEN
+    as Bearer). Degrades safely pre-migration (503 → reporter logs, skips)."""
+    tenant_id = user["tenant_id"]
+    data = await file.read(MAX_SCREENSHOT_BYTES + 1)
+    if not data:
+        raise HTTPException(422, "empty screenshot")
+    if len(data) > MAX_SCREENSHOT_BYTES:
+        raise HTTPException(413, "screenshot too large")
+    async with tenant_scoped_session(tenant_id) as session:
+        await _verify_artifact_in_tenant(
+            session, artifact_id=artifact_id, tenant_id=tenant_id,
+        )
+        try:
+            sid = await store_screenshot(
+                session,
+                tenant_id=tenant_id,
+                artifact_id=artifact_id,
+                run_id=run_id,
+                scenario_id=scenario_id,
+                step_number=step_number,
+                content_type=file.content_type or "image/png",
+                image=data,
+            )
+        except ValueError as exc:
+            raise HTTPException(422, str(exc))
+        except Exception as exc:  # table missing (pre-migration) / DB error
+            _logger.warning("test_runs.screenshot_store_unavailable: %s", exc)
+            raise HTTPException(503, "screenshot store unavailable")
+    return {"screenshot_id": sid, "url": f"/api/v1/test-runs/screenshot/{sid}"}
+
+
+class HealCaptureRequest(BaseModel):
+    artifact_id: str = Field(..., min_length=1)
+    run_id: str = Field("", max_length=200)
+    scenario_id: str = Field("", max_length=64)
+    status: str = Field("", max_length=20)
+    aria: dict | None = None
+
+
+@router.post("/api/v1/test-runs/heal-capture")
+async def ingest_heal_capture(
+    req: HealCaptureRequest,
+    user: dict = Depends(get_current_user),
+):
+    """Receive a failure-state accessibility snapshot from the gated afterEach
+    capture fixture (only sent on a NEXUS_HEAL_CAPTURE=1 re-run that failed). The
+    flattened node list is held transiently for the TrueFix re-anchor resolver.
+    Auth: standard JWT (the fixture sends NEXUS_TOKEN as Bearer). Best-effort —
+    stores nothing harmful and never blocks the heal flow."""
+    tenant_id = user["tenant_id"]
+    async with tenant_scoped_session(tenant_id) as session:
+        await _verify_artifact_in_tenant(
+            session, artifact_id=req.artifact_id, tenant_id=tenant_id,
+        )
+    nodes = flatten_aria(req.aria) if req.aria else []
+    heal_capture_store.put(
+        tenant_id=tenant_id, artifact_id=req.artifact_id,
+        scenario_id=req.scenario_id, nodes=nodes, status=req.status,
+    )
+    return {"stored": len(nodes)}
+
+
+@router.get("/api/v1/test-runs/screenshot/{screenshot_id}")
+async def get_run_screenshot(
+    request: Request,
+    screenshot_id: str = Path(..., min_length=1, max_length=64),
+):
+    """Serve a stored run screenshot for the baseline-vs-actual <img>. Auth is the
+    JWT from the Bearer header OR a ``?token=`` query param (resolved by the auth
+    middleware), so a plain <img src> loads. Tenant-scoped — a screenshot only
+    resolves within its owning tenant."""
+    user = getattr(request.state, "user", None) or {}
+    tenant_id = user.get("tenant_id")
+    if not tenant_id:
+        raise HTTPException(401, "unauthenticated")
+    try:
+        async with tenant_scoped_session(tenant_id) as session:
+            found = await fetch_screenshot(
+                session, tenant_id=tenant_id, screenshot_id=screenshot_id,
+            )
+    except Exception as exc:  # table missing (pre-migration) / DB error
+        _logger.warning("test_runs.screenshot_fetch_unavailable: %s", exc)
+        raise HTTPException(404, "screenshot not found")
+    if found is None:
+        raise HTTPException(404, "screenshot not found")
+    content_type, image = found
+    return Response(
+        content=image,
+        media_type=content_type,
+        headers={"Cache-Control": "private, max-age=86400"},
+    )
 
 
 @router.get("/api/v1/e2e-architect/{artifact_id}/test-runs")

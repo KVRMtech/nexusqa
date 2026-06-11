@@ -27,6 +27,10 @@ from .generator import PageActionInput, _norm
 
 HIGH = "high"
 REVIEW = "review"
+# CONFIRM: a value-level disagreement (action stream vs form snapshot). Distinct
+# from REVIEW because it must NOT skip the test — the step still runs with the
+# snapshot value; we just flag it amber so a human confirms which reading is right.
+CONFIRM = "confirm"
 
 
 def compute_ambiguous_labels(actions: Iterable[PageActionInput]) -> set[str]:
@@ -75,6 +79,16 @@ def score_step(step, ambiguous: set[str]) -> tuple[str, str]:
         )
     if not label and not url:
         return REVIEW, "No clear element handle was captured — confirm the target."
+    # Value-level disagreement: the keystroke (action stream) and the committed
+    # (form snapshot) values differ — surface BOTH and ask for confirmation rather
+    # than asserting one. Step still runs (CONFIRM, not REVIEW → never skipped).
+    vc = obs.get("value_conflict")
+    if isinstance(vc, dict) and vc.get("typed") is not None:
+        return CONFIRM, (
+            f"Two readings of this value disagree — the recording shows the user typed "
+            f"'{vc.get('typed')}', but the form snapshot captured '{vc.get('committed')}'. "
+            "Using the snapshot value; confirm which one is correct."
+        )
     if url and not label:
         return HIGH, "Verified by the page URL."
     return HIGH, "Directly observed with a clear, named element."

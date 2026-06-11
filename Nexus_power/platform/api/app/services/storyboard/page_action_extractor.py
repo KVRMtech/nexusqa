@@ -616,9 +616,85 @@ def _normalize_action_dict(raw: object) -> dict:
     if not isinstance(raw, dict):
         return raw  # let Pydantic raise a clear error downstream
     d = dict(raw)
-    if not d.get("target_label") and d.get("target"):
-        d["target_label"] = d["target"]
+    if not d.get("target_label"):
+        for alt in ("target", "label", "element", "field"):
+            if d.get(alt):
+                d["target_label"] = d[alt]
+                break
     return d
+
+
+# Verb-phrase → (verb, target_kind).  Weak / local models (e.g. ollama
+# llava) frequently ignore the structured tool schema and return a bare
+# list of ACTION LABEL STRINGS like "Enter Departure City" / "Choose
+# Travel Class".  The label's leading word IS the verb, so we recover a
+# valid PageAction deterministically instead of dropping the whole visit
+# to a verb=none placeholder.  Order matters (most specific first).
+_VERB_PHRASE_HINTS: tuple[tuple[tuple[str, ...], SceneActionVerb, SceneActionTargetKind], ...] = (
+    (("enter", "type", "fill", "input", "write", "provide"), SceneActionVerb.TYPE, SceneActionTargetKind.TEXT_FIELD),
+    (("select", "choose", "pick", "set"), SceneActionVerb.SELECT, SceneActionTargetKind.DROPDOWN),
+    (("check", "tick", "mark"), SceneActionVerb.SELECT, SceneActionTargetKind.CHECKBOX),
+    (("toggle",), SceneActionVerb.SELECT, SceneActionTargetKind.RADIO),
+    (("submit", "confirm", "search", "continue", "find", "proceed", "save", "apply", "send"), SceneActionVerb.SUBMIT, SceneActionTargetKind.BUTTON),
+    (("click", "press", "tap", "go", "open", "sign", "log", "next", "add", "view"), SceneActionVerb.CLICK, SceneActionTargetKind.BUTTON),
+    (("navigate", "visit", "browse"), SceneActionVerb.NAVIGATE, SceneActionTargetKind.OTHER),
+)
+
+
+def _label_to_action_dict(label: str) -> dict:
+    """Recover a PageAction-shaped dict from a single action LABEL STRING by
+    inferring the verb from the phrase's leading word (e.g. 'Enter Departure
+    City' → verb=type, target_label='Departure City')."""
+    text = (label or "").strip()
+    low = text.lower()
+    verb, kind, target = SceneActionVerb.NONE, SceneActionTargetKind.OTHER, text
+    for words, v, k in _VERB_PHRASE_HINTS:
+        hit = next((w for w in words if low == w or low.startswith(w + " ")), None)
+        if hit:
+            verb, kind = v, k
+            target = text[len(hit):].strip().lstrip(":–-").strip() or text
+            break
+    return {
+        "verb": verb.value,
+        "target_label": target[:500],
+        "target_kind": kind.value,
+        "value": None,
+        "confidence": 0.55,
+        "automation_ready": False,
+        "reasoning": "Recovered from a label-only model response; verb inferred from the action phrase.",
+    }
+
+
+def _coerce_actions_payload(data: object) -> list | None:
+    """Normalise a loosely-shaped JSON payload into a list of action dicts.
+
+    Handles every shape weak/local models have produced live:
+      * a bare list of action dicts            → as-is (normalised)
+      * a bare list of action LABEL STRINGS    → verb inferred per label
+      * ``{"actions": [...]}``                 → unwrapped
+      * a TOOL-NAME-keyed wrapper, e.g.
+        ``{"record_page_actions": [...]}``     → unwrapped (llava:7b live)
+      * a single action dict                   → wrapped to a 1-list
+    Returns None when nothing list-shaped can be recovered.
+    """
+    if isinstance(data, dict):
+        if isinstance(data.get("actions"), list):
+            data = data["actions"]
+        else:
+            list_vals = [v for v in data.values() if isinstance(v, list)]
+            if len(list_vals) == 1:
+                data = list_vals[0]
+    if isinstance(data, list):
+        out: list = []
+        for item in data:
+            if isinstance(item, str):
+                out.append(_label_to_action_dict(item))
+            elif isinstance(item, dict):
+                out.append(_normalize_action_dict(item))
+        return out
+    if isinstance(data, dict):
+        return [_normalize_action_dict(data)]
+    return None
 
 
 def _empty_visit_result(visit_id: str) -> _ExtractionResult:
@@ -810,19 +886,17 @@ async def _extract_one_visit(
                     data = json.loads(inner)
                 else:
                     raise
-            if isinstance(data, list):
-                action_list = PageActionList(actions=[
-                    PageAction.model_validate(_normalize_action_dict(a)) for a in data
-                ])
-            elif isinstance(data, dict) and "actions" in data:
-                data["actions"] = [
-                    _normalize_action_dict(a) for a in data.get("actions", [])
-                ]
-                action_list = PageActionList.model_validate(data)
-            else:
-                action_list = PageActionList(actions=[
-                    PageAction.model_validate(_normalize_action_dict(data)),
-                ])
+            coerced = _coerce_actions_payload(data)
+            valid: list[PageAction] = []
+            for a in (coerced or []):
+                # Validate per-item so one malformed entry can't sink the
+                # whole visit (weak models mix good + bad items).
+                try:
+                    valid.append(PageAction.model_validate(a))
+                except ValueError:
+                    continue
+            if valid:
+                action_list = PageActionList(actions=valid)
         except (json.JSONDecodeError, ValueError) as exc:
             logger.warning(
                 f"storyboard.page_action_extractor.invalid_text_output "

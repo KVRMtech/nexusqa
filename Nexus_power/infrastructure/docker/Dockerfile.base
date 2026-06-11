@@ -1,7 +1,13 @@
 # Nexus QA — Base Dockerfile for all Python engines
 # Multi-stage build for smaller production images
 
-FROM python:3.11-slim AS base
+# Pinned upstream base for reproducible builds. The digest makes a clean rebuild
+# deterministic regardless of when `python:3.11-slim` is re-tagged on Docker Hub.
+# To refresh: docker manifest inspect python:3.11-slim → update the @sha256 below.
+# NOTE: the base image currently deployed on the VM (nexus-base:dev,
+# sha256:95bb54a8…, built 2026-05-31) predates this pin — it was built from
+# whatever 3.11-slim was current then. This pin governs FUTURE rebuilds only.
+FROM python:3.11-slim@sha256:a3ab0b966bc4e91546a033e22093cb840908979487a9fc0e6e38295747e49ac0 AS base
 
 LABEL maintainer="Nexus QA Platform"
 LABEL description="Base image for Nexus engine services"

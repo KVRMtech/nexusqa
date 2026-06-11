@@ -1,0 +1,9 @@
+{
+  "name": "nexus-runner",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Nexus server-side Playwright runner — executes a configured bundle and reports results back for grounded triage.",
+  "dependencies": {
+    "@playwright/test": "1.48.0"
+  }
+}

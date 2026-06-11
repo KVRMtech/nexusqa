@@ -9,8 +9,8 @@
  */
 import { useCallback, useEffect, useState } from 'react';
 import {
-  AlertTriangle, Bot, Camera, CheckCircle2, Download, FileCode2, FileSpreadsheet, FlaskConical,
-  Loader2, Send, ShieldAlert, Sparkles, Upload,
+  AlertTriangle, ArrowRight, Bot, Camera, CheckCircle2, Download, FileCode2, FileSpreadsheet, FlaskConical,
+  Loader2, Rocket, Send, ShieldAlert, Sparkles, Upload,
 } from 'lucide-react';
 import { api } from '../services/api';
 import { useAuth } from '../contexts/AuthContext';
@@ -54,6 +54,8 @@ const PROV: Record<string, { label: string; bg: string; fg: string }> = {
 interface ProductionTestCase {
   name?: string; description?: string; steps?: Step[];
   priority?: string; type?: string; tags?: string[];
+  expected_outcome?: string;
+  preconditions?: Array<{ description?: string; setup_action?: string } | string>;
 }
 interface CaseRow {
   test_case_id: string; name: string; description: string; priority: string;
@@ -71,7 +73,9 @@ const SECTIONS: { type: string; label: string; accent: string; badge: string }[]
   { type: 'error_state', label: 'Error-state', accent: '#dc2626', badge: 'rgba(220,38,38,0.13)' },
 ];
 
-export default function TestCasesPanel({ artifactId }: { artifactId: string }) {
+export default function TestCasesPanel(
+  { artifactId, onOpenPlaywright }: { artifactId: string; onOpenPlaywright?: () => void },
+) {
   const { user } = useAuth();
   const [summary, setSummary] = useState<any>(null);
   const [bySection, setBySection] = useState<Record<string, CaseRow[]>>({});
@@ -207,6 +211,22 @@ export default function TestCasesPanel({ artifactId }: { artifactId: string }) {
       {notice && <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-[11px] text-emerald-800">{notice}</div>}
       {error && <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-[11px] text-amber-800 flex items-center gap-2"><AlertTriangle className="h-3.5 w-3.5" />{error}</div>}
 
+      {/* Honest extraction health — never present degraded data as trustworthy. */}
+      {summary?.extraction_health?.degraded && (
+        <div className="rounded-lg border border-red-300 bg-red-50 px-3 py-2.5 text-[11px] text-red-800 flex items-start gap-2">
+          <ShieldAlert className="h-4 w-4 flex-shrink-0 mt-0.5 text-red-600" />
+          <div>
+            <div className="font-black">Extraction degraded — review before trusting these cases</div>
+            <div className="mt-0.5 text-red-700">{summary.extraction_health.reason}</div>
+            {summary.extraction_health.by_model && (
+              <div className="mt-1 text-[10px] text-red-500 font-mono">
+                models: {Object.entries(summary.extraction_health.by_model).map(([m, c]) => `${m}×${c}`).join(' · ')}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       {loading ? (
         <div className="flex items-center gap-2 text-slate-400 text-sm px-2 py-8 justify-center">
           <Loader2 className="h-4 w-4 animate-spin" /> Loading test cases…
@@ -214,7 +234,11 @@ export default function TestCasesPanel({ artifactId }: { artifactId: string }) {
       ) : total === 0 ? (
         <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 px-4 py-8 text-center">
           <p className="text-sm font-semibold text-slate-600">No test cases yet</p>
-          <p className="text-[11px] text-slate-400 mt-1">Click <b>Generate</b> to build the demonstrated functional E2E, then <b>Negative</b> / <b>Boundary</b> for more coverage.</p>
+          {summary?.no_cases_reason ? (
+            <p className="text-[11px] text-slate-500 mt-1.5 max-w-xl mx-auto leading-relaxed">{summary.no_cases_reason}</p>
+          ) : (
+            <p className="text-[11px] text-slate-400 mt-1">Click <b>Generate</b> to build the demonstrated functional E2E, then <b>Negative</b> / <b>Boundary</b> for more coverage.</p>
+          )}
         </div>
       ) : (
         SECTIONS.map((s) => {
@@ -257,7 +281,32 @@ export default function TestCasesPanel({ artifactId }: { artifactId: string }) {
         })
       )}
 
-      {showDetails && total > 0 && <TriagePanel artifactId={artifactId} />}
+      {total > 0 && (
+        onOpenPlaywright ? (
+          <button
+            onClick={onOpenPlaywright}
+            className="w-full flex items-center gap-3 rounded-xl px-4 py-3 mt-1 text-left transition-colors hover:brightness-[0.98]"
+            style={{ background: 'linear-gradient(135deg, rgba(99,102,241,0.08), rgba(56,189,248,0.06))', border: '1px solid rgba(99,102,241,0.25)' }}
+          >
+            <Rocket className="h-5 w-5 shrink-0" style={{ color: '#4f46e5' }} />
+            <span className="min-w-0">
+              <span className="block text-[12px] font-black text-slate-900">Playwright Execution &rarr;</span>
+              <span className="block text-[10px] text-slate-500 font-medium">
+                View &amp; run the generated scripts by category, then triage failures against their recorded baseline.
+              </span>
+            </span>
+            <ArrowRight className="h-4 w-4 text-indigo-500 ml-auto shrink-0" />
+          </button>
+        ) : (
+          <div className="pt-3 mt-1 border-t-2 border-dashed border-indigo-200">
+            <div className="flex items-center gap-2 px-1 pb-2">
+              <span className="text-[11px] font-black uppercase tracking-wide" style={{ color: '#4f46e5' }}>Playwright Execution</span>
+              <span className="text-[10px] text-slate-400 font-semibold">run the suite → grounded failure triage</span>
+            </div>
+            <TriagePanel artifactId={artifactId} />
+          </div>
+        )
+      )}
     </section>
   );
 }
@@ -294,6 +343,19 @@ function TestCaseCard({ row, accent, showDetails, busy, onPlaywright }: { row: C
       {open && (
         <div className="px-3 pb-3 overflow-x-auto">
           {row.description && <p className="text-[11px] text-slate-500 mb-2 leading-snug">{row.description}</p>}
+          {Array.isArray(row.test_case?.preconditions) && row.test_case.preconditions.length > 0 && (
+            <div className="mb-2 rounded-md border px-2.5 py-1.5 text-[11px] leading-snug"
+              style={{ background: 'rgba(245,158,11,0.08)', borderColor: 'rgba(245,158,11,0.30)' }}>
+              <span className="font-bold text-amber-700">Preconditions</span>
+              <ul className="mt-0.5 space-y-0.5">
+                {row.test_case.preconditions.map((p: any, i: number) => {
+                  const text = typeof p === 'string' ? p : (p?.description || p?.setup_action || '');
+                  if (!text) return null;
+                  return <li key={i} className="text-slate-700">• {text}</li>;
+                })}
+              </ul>
+            </div>
+          )}
           <table className="w-full text-[11px] border-collapse">
             <thead><tr className="text-slate-400 text-left">
               <th className="font-semibold py-1 pr-2 w-8">S.No</th>
@@ -324,6 +386,12 @@ function TestCaseCard({ row, accent, showDetails, busy, onPlaywright }: { row: C
                       ) : (
                         prov ? <span className="self-start rounded px-1.5 py-0.5 text-[9px] font-bold uppercase" style={{ background: prov.bg, color: prov.fg }}>{prov.label}</span> : !s.screenshot && <span className="text-slate-300">—</span>
                       )}
+                      {(s.observed as any)?.value_conflict && (
+                        <span className="self-start rounded px-1.5 py-0.5 text-[9px] font-semibold leading-tight" style={{ background: 'rgba(234,179,8,0.16)', color: '#a16207' }}
+                          title="The keystroke reading and the form-snapshot reading disagree — confirm the intended value.">
+                          ⚠ typed '{(s.observed as any).value_conflict.typed}' vs snapshot '{(s.observed as any).value_conflict.committed}'
+                        </span>
+                      )}
                       {s.screenshot && (
                         <a href={api.getFrameImageUrl(s.screenshot)} target="_blank" rel="noopener noreferrer"
                           className="self-start inline-flex items-center gap-1 text-[10px] font-semibold text-sky-600 hover:text-sky-700">
@@ -339,6 +407,8 @@ function TestCaseCard({ row, accent, showDetails, busy, onPlaywright }: { row: C
                       <span className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[9px] font-bold" style={{ background: 'rgba(34,197,94,0.14)', color: '#15803d' }}><CheckCircle2 className="h-3 w-3" /> Solid</span>
                     ) : s.confidence === 'review' ? (
                       <span className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[9px] font-bold cursor-help" style={{ background: 'rgba(245,158,11,0.16)', color: '#b45309' }}><AlertTriangle className="h-3 w-3" /> Review</span>
+                    ) : s.confidence === 'confirm' ? (
+                      <span className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[9px] font-bold cursor-help" style={{ background: 'rgba(234,179,8,0.20)', color: '#a16207' }}><AlertTriangle className="h-3 w-3" /> Confirm value</span>
                     ) : <span className="text-slate-300">—</span>}
                   </td>
                   )}
@@ -346,6 +416,13 @@ function TestCaseCard({ row, accent, showDetails, busy, onPlaywright }: { row: C
               );})}
             </tbody>
           </table>
+          {row.test_case?.expected_outcome && (
+            <div className="mt-2 rounded-md border px-2.5 py-1.5 text-[11px] leading-snug"
+              style={{ background: 'rgba(34,197,94,0.08)', borderColor: 'rgba(34,197,94,0.30)' }}>
+              <span className="font-bold text-emerald-700">Expected outcome: </span>
+              <span className="text-slate-700">{row.test_case.expected_outcome}</span>
+            </div>
+          )}
         </div>
       )}
     </div>

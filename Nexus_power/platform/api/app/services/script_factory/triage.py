@@ -26,6 +26,7 @@ from ..test_factory import service as factory_service
 from ..test_runs import (
     classify_failure,
     last_run_summary_by_scenario,
+    outcome_contradicted_from_error,
     tally_verdicts,
 )
 
@@ -87,13 +88,14 @@ async def assemble_triage(
         fail_step = fail_step_by_scenario.get(sid)
         step_no = fail_step.step_number if fail_step is not None else None
 
+        _err = s.get("last_error_message", "") or ""
         verdict = classify_failure(
             failed=failed,
             is_flaky=bool(s.get("is_flaky")),
             selector_drifted=bool(s.get("selector_drift_observed")),
             bbox_drifted=False,
-            outcome_contradicted=False,
-            error_message=s.get("last_error_message", "") or "",
+            outcome_contradicted=outcome_contradicted_from_error(_err),
+            error_message=_err,
         )
         verdicts.append(verdict)
 

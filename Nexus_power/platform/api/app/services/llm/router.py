@@ -46,7 +46,12 @@ class NoLLMConfiguredError(LLMRouterError):
 
 # Maximum backoff between retries to avoid hammering a struggling provider.
 _BACKOFF_BASE_S = 0.25
-_BACKOFF_CAP_S = 4.0
+# Widened from 4s: with max_retries=6 a 4s cap spends all retries inside ~12s,
+# so they hit the SAME rate-limit window and fail together. A larger cap lets
+# the retries span long enough to outlast a transient per-window rate limit on
+# the cloud vision endpoint (the cause of overflow cascading to the weak local
+# model). Failed calls cost more wall-clock, but recover on the reliable model.
+_BACKOFF_CAP_S = 16.0
 
 
 def _is_transient(detail: str) -> bool:

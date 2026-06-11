@@ -1106,6 +1106,23 @@ class ApiClient {
     return `${base}/v1/eyes/frames/${normalised}${token ? `?token=${encodeURIComponent(token)}` : ''}`;
   }
 
+  /**
+   * Resolve a run step's `screenshot_url` (the 'This run' actual) into a value
+   * safe for an <img src>. The reporter stores a same-origin relative path
+   * (/api/v1/test-runs/screenshot/{id}); we append the auth token as a query
+   * param (the server's auth middleware accepts ?token=) so the <img> loads
+   * without a custom fetch. An absolute http(s) URL (external CI-hosted shot)
+   * is returned unchanged.
+   */
+  getRunScreenshotUrl(urlOrPath: string): string {
+    if (!urlOrPath) return '';
+    if (/^https?:\/\//i.test(urlOrPath)) return urlOrPath;
+    const token = sessionStorage.getItem('nexus_token') ?? '';
+    if (!token) return urlOrPath;
+    const sep = urlOrPath.includes('?') ? '&' : '?';
+    return `${urlOrPath}${sep}token=${encodeURIComponent(token)}`;
+  }
+
   // ── Visual Evidence — Phase 3 (Scenes) ─────────────────
 
   /** Fetch all visual scenes for an artifact, optionally filtered by app instance. */
@@ -1180,6 +1197,35 @@ class ApiClient {
     const { data } = await this.client.post(
       `/v1/artifacts/${artifactId}/storyboard/regenerate`,
     );
+    return data;
+  }
+
+  // ── Surface toggles (cost control: only derive surfaces you want to see) ──
+  async getArtifactSurfaces(artifactId: string): Promise<{
+    surfaces: { storyboard: boolean; pages_forms: boolean; three_d_journey: boolean };
+    source: string; tenant_default: any; has_artifact_override: boolean;
+  }> {
+    const { data } = await this.client.get(`/v1/artifacts/${artifactId}/surfaces`);
+    return data;
+  }
+
+  async setArtifactSurfaces(
+    artifactId: string,
+    surfaces: { storyboard: boolean; pages_forms: boolean; three_d_journey: boolean },
+  ): Promise<{ surfaces: any; deriving: boolean; newly_enabled: string[] }> {
+    const { data } = await this.client.put(`/v1/artifacts/${artifactId}/surfaces`, surfaces);
+    return data;
+  }
+
+  async getTenantSurfaces(): Promise<{ surfaces: any; is_set: boolean }> {
+    const { data } = await this.client.get(`/v1/tenant/surfaces`);
+    return data;
+  }
+
+  async setTenantSurfaces(
+    surfaces: { storyboard: boolean; pages_forms: boolean; three_d_journey: boolean },
+  ): Promise<{ surfaces: any }> {
+    const { data } = await this.client.put(`/v1/tenant/surfaces`, surfaces);
     return data;
   }
 
@@ -1380,6 +1426,260 @@ class ApiClient {
   /** Grounded triage board: per-failure verdict + baseline, + need-you tally. */
   async getTriage(artifactId: string): Promise<any> {
     const { data } = await this.client.get(`/v1/test-factory/${artifactId}/triage`);
+    return data;
+  }
+
+  /** Grounded Oracle scorecard: verified-vs-assumed grounding, confidence rollup, heal integrity. */
+  async getOracleScorecard(artifactId: string): Promise<any> {
+    const { data } = await this.client.get(`/v1/test-factory/${artifactId}/oracle-scorecard`);
+    return data;
+  }
+
+  /** THIS RUN: per-scenario, per-step pass/fail timeline for the single latest run. */
+  async getLatestRunTimeline(artifactId: string): Promise<any> {
+    const { data } = await this.client.get(`/v1/test-factory/${artifactId}/runs/latest`);
+    return data;
+  }
+
+  /** Auth profile status for an artifact (is a session stored + is a capture running). */
+  async getAuthStatus(artifactId: string): Promise<any> {
+    const { data } = await this.client.get(`/v1/test-factory/${artifactId}/playwright/auth`);
+    return data;
+  }
+
+  /** Start an interactive login capture; returns { live_url } to embed for the operator to log in. */
+  async startAuthCapture(artifactId: string, baseUrl = ''): Promise<any> {
+    const { data } = await this.client.post(
+      `/v1/test-factory/${artifactId}/playwright/auth/capture`, { base_url: baseUrl },
+    );
+    return data;
+  }
+
+  /** Save the captured session (encrypted server-side). */
+  async saveAuthCapture(artifactId: string): Promise<any> {
+    const { data } = await this.client.post(`/v1/test-factory/${artifactId}/playwright/auth/save`, {});
+    return data;
+  }
+
+  /** Cancel an in-progress capture. */
+  async cancelAuthCapture(artifactId: string): Promise<any> {
+    const { data } = await this.client.post(`/v1/test-factory/${artifactId}/playwright/auth/cancel`, {});
+    return data;
+  }
+
+  /** Delete the stored auth profile (runs revert to unauthenticated). */
+  async clearAuthProfile(artifactId: string): Promise<any> {
+    const { data } = await this.client.delete(`/v1/test-factory/${artifactId}/playwright/auth`);
+    return data;
+  }
+
+  /** Recent run headers (newest first) for the historical run picker. */
+  async listRuns(artifactId: string, limit = 25): Promise<{ artifact_id: string; runs: any[] }> {
+    const { data } = await this.client.get(`/v1/test-factory/${artifactId}/runs`, { params: { limit } });
+    return data;
+  }
+
+  /** Per-scenario, per-step timeline for ONE historical run (same shape as runs/latest). */
+  async getRunTimeline(artifactId: string, runId: string): Promise<any> {
+    const { data } = await this.client.get(`/v1/test-factory/${artifactId}/runs/${encodeURIComponent(runId)}`);
+    return data;
+  }
+
+  /** Fidelity scorecard for ONE script (deep=1 adds the gpt-4o semantic review). */
+  async getScriptFidelity(artifactId: string, testId: string, deep = false): Promise<any> {
+    const { data } = await this.client.get(
+      `/v1/test-factory/${artifactId}/scripts/${encodeURIComponent(testId)}/fidelity`,
+      { params: deep ? { deep: 1 } : {} },
+    );
+    return data;
+  }
+
+  /** Suite-level fidelity rollup (deterministic, all scripts). */
+  async getSuiteFidelity(artifactId: string): Promise<any> {
+    const { data } = await this.client.get(`/v1/test-factory/${artifactId}/fidelity`);
+    return data;
+  }
+
+  /** Regenerate ONE script from its current test case → new immutable version. */
+  async regenerateScript(artifactId: string, testId: string): Promise<any> {
+    const { data } = await this.client.post(
+      `/v1/test-factory/${artifactId}/scripts/${encodeURIComponent(testId)}/regenerate`, {});
+    return data;
+  }
+
+  /** Regenerate a group of scripts (test_ids/categories, or all) to new versions. */
+  async regenerateAll(artifactId: string, body: { test_ids?: string[]; categories?: string[] }): Promise<any> {
+    const { data } = await this.client.post(
+      `/v1/test-factory/${artifactId}/scripts/regenerate-all`, body);
+    return data;
+  }
+
+  /** Approve a PROPOSED (auto-healed / TrueFix) version → it becomes the active
+   *  source for runs. The human gate on machine-written fixes. */
+  async approveScriptVersion(artifactId: string, testId: string, versionNo: number): Promise<any> {
+    const { data } = await this.client.post(
+      `/v1/test-factory/${artifactId}/scripts/${encodeURIComponent(testId)}/versions/${versionNo}/approve`, {},
+    );
+    return data;
+  }
+
+  /** Nexus TrueFix — grounded root-cause diagnosis of one failed step. */
+  async analyzeStep(artifactId: string, scenarioId: string, stepNumber: number): Promise<any> {
+    const { data } = await this.client.get(
+      `/v1/test-factory/${artifactId}/steps/${encodeURIComponent(scenarioId)}/${stepNumber}/analyze`,
+    );
+    return data;
+  }
+
+  /** TrueFix — apply the control-kind fix to one step + re-run it HEADED to prove
+   *  it. Persists a new version only on a verified green. Returns { run_id, live_url };
+   *  poll getNexusRunStatus for { healed, heal_version, heal_reason }. */
+  async healStep(
+    artifactId: string, scenarioId: string, stepNumber: number,
+    body: { base_url?: string; data?: Record<string, string> },
+  ): Promise<any> {
+    const { data } = await this.client.post(
+      `/v1/test-factory/${artifactId}/steps/${encodeURIComponent(scenarioId)}/${stepNumber}/heal`,
+      body,
+    );
+    return data;
+  }
+
+  /** Phase B — re-run the failing test with a11y capture ON so TrueFix can find a
+   *  renamed control. Returns { captured, nodes, reanchored, reanchor }. */
+  async captureFailureState(
+    artifactId: string, scenarioId: string, stepNumber: number,
+    body: { base_url?: string; data?: Record<string, string> } = {},
+  ): Promise<any> {
+    const { data } = await this.client.post(
+      `/v1/test-factory/${artifactId}/steps/${encodeURIComponent(scenarioId)}/${stepNumber}/capture-failure-state`,
+      body,
+    );
+    return data;
+  }
+
+  /** Phase D — per-script run-history sparkline + flake + board Run Summary. */
+  async getRunsSummary(artifactId: string, window = 10): Promise<any> {
+    const { data } = await this.client.get(
+      `/v1/test-factory/${artifactId}/runs/summary`, { params: { window } },
+    );
+    return data;
+  }
+
+  /** Structured listing of the compiled Playwright suite (each script's source +
+   *  spec path + category + per-step stats, project files, run commands) for the
+   *  Execution view. Same compilation as the zip, returned as JSON. */
+  async getPlaywrightManifest(artifactId: string): Promise<any> {
+    const { data } = await this.client.get(
+      `/v1/test-factory/${artifactId}/playwright/manifest`,
+    );
+    return data;
+  }
+
+  /** Compile a CONFIGURED, env+data-driven Playwright run bundle (zip) for a
+   *  local run — selected scripts + chosen base URL + data overrides baked in. */
+  async getRunBundle(
+    artifactId: string,
+    body: { categories?: string[]; test_ids?: string[]; base_url?: string; data?: Record<string, string>; data_by_test?: Record<string, Record<string, string>>; browsers?: string[]; headed?: boolean; workers?: number; retries?: number },
+  ): Promise<Blob> {
+    const resp = await this.client.post(
+      `/v1/test-factory/${artifactId}/playwright/run-config`,
+      body,
+      { responseType: 'blob' },
+    );
+    return resp.data as Blob;
+  }
+
+  /** CI/CD bundle: the configured run bundle PLUS GitHub Actions / GitLab CI /
+   *  Jenkins pipelines that run the suite and report to the triage board. */
+  async getCiBundle(
+    artifactId: string,
+    body: { categories?: string[]; test_ids?: string[]; base_url?: string; data?: Record<string, string>; data_by_test?: Record<string, Record<string, string>>; browsers?: string[]; headed?: boolean; workers?: number; retries?: number },
+  ): Promise<Blob> {
+    const resp = await this.client.post(
+      `/v1/test-factory/${artifactId}/playwright/ci-bundle`,
+      body,
+      { responseType: 'blob' },
+    );
+    return resp.data as Blob;
+  }
+
+  /** Start a server-side run on the Nexus runner. Returns { run_id, status }. */
+  async startNexusRun(
+    artifactId: string,
+    body: { categories?: string[]; test_ids?: string[]; base_url?: string; data?: Record<string, string>; data_by_test?: Record<string, Record<string, string>>; browsers?: string[]; headed?: boolean; workers?: number; retries?: number },
+  ): Promise<any> {
+    const { data } = await this.client.post(
+      `/v1/test-factory/${artifactId}/playwright/run`, body,
+    );
+    return data;
+  }
+
+  /** Start a HEADED, VNC-streamed run on the Nexus runner. Returns { run_id, live_url }. */
+  async startNexusLiveRun(
+    artifactId: string,
+    body: { categories?: string[]; test_ids?: string[]; base_url?: string; data?: Record<string, string>; data_by_test?: Record<string, Record<string, string>>; browsers?: string[]; retries?: number },
+  ): Promise<any> {
+    const { data } = await this.client.post(
+      `/v1/test-factory/${artifactId}/playwright/run-live`, body,
+    );
+    return data;
+  }
+
+  /** Auto-Heal Run — run headed and auto diagnose+fix+re-run+continue until the
+   *  whole suite is green, then save a "Clean Run - V1". Returns { run_id, live_url };
+   *  poll getNexusRunStatus for { heal_trace, terminal_state, clean_run_version }. */
+  async autoHealRun(
+    artifactId: string,
+    body: { categories?: string[]; test_ids?: string[]; base_url?: string; data?: Record<string, string> },
+  ): Promise<any> {
+    const { data } = await this.client.post(
+      `/v1/test-factory/${artifactId}/auto-heal/run-config`, body,
+    );
+    return data;
+  }
+
+  /** Poll a Nexus runner job's live status (running -> passed/failed/...). */
+  async getNexusRunStatus(artifactId: string, runId: string): Promise<any> {
+    const { data } = await this.client.get(
+      `/v1/test-factory/${artifactId}/playwright/run/${runId}`,
+    );
+    return data;
+  }
+
+  /** Phase C — per-test script version history (newest first). */
+  async listScriptVersions(artifactId: string, testId: string): Promise<any> {
+    const { data } = await this.client.get(
+      `/v1/test-factory/${artifactId}/scripts/${testId}/versions`,
+    );
+    return data;
+  }
+
+  /** Editor seed: the edited (active or a specific) source, else the
+   *  deterministic parametrized compiled source. `edited` says which. */
+  async getScriptSource(artifactId: string, testId: string, versionNo?: number): Promise<any> {
+    const { data } = await this.client.get(
+      `/v1/test-factory/${artifactId}/scripts/${testId}/source`,
+      { params: versionNo ? { version_no: versionNo } : {} },
+    );
+    return data;
+  }
+
+  /** Save edits as a new immutable version (vN+1). */
+  async saveScriptVersion(
+    artifactId: string,
+    body: { test_id: string; script_source: string; data?: Record<string, string>; note?: string },
+  ): Promise<any> {
+    const { data } = await this.client.post(`/v1/test-factory/${artifactId}/scripts/save`, body);
+    return data;
+  }
+
+  /** Restore version N by appending it as a new highest version. */
+  async restoreScriptVersion(
+    artifactId: string,
+    body: { test_id: string; version_no: number },
+  ): Promise<any> {
+    const { data } = await this.client.post(`/v1/test-factory/${artifactId}/scripts/restore`, body);
     return data;
   }
 

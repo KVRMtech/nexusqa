@@ -65,8 +65,16 @@ from .frame_annotator import FrameAnnotator, precompute_panel_frames
 from .page_action_extractor import extract_page_actions_for_artifact
 from .page_visit_extractor import extract_page_visits_for_artifact
 from .scene_grouper import regroup_artifact
+from . import surface_prefs as _surface_prefs
 
 logger = logging.getLogger(__name__)
+
+# Artifacts with a background derivation currently in flight. Module-level
+# because the composer is a process singleton (one per app). Lets the lazy
+# GET /storyboard return instantly (no 30s block on the slow vision
+# extractors) while one — and only one — background derivation runs per
+# artifact; the frontend polls until it clears.
+_DERIVING_ARTIFACTS: set[str] = set()
 
 
 # ── Output view types ────────────────────────────────────────────────────────
@@ -465,6 +473,7 @@ class StoryboardComposer:
         tenant_id: str,
         force_regenerate: bool = False,
         auth_token: str = "",
+        block: bool = True,
     ) -> StoryboardResponse | None:
         """Return the storyboard for one artifact, deriving on miss/stale.
 
@@ -476,6 +485,13 @@ class StoryboardComposer:
         ``auth_token`` is the caller's JWT.  It is forwarded to the
         frame annotator so eyes-engine accepts service-to-service
         fetches under the same tenant isolation as the user request.
+
+        ``block=False`` (the lazy GET path): never run derivation inline.
+        If panels aren't present yet, kick off ONE background derivation
+        for this artifact (own session) and return immediately with a
+        ``summary['deriving']=True`` flag so the client polls instead of
+        hanging on the slow vision extractors and tripping its 30s timeout.
+        ``block=True`` (force/regenerate) keeps the synchronous behaviour.
         """
         started = time.monotonic()
 
@@ -483,15 +499,45 @@ class StoryboardComposer:
         if artifact is None:
             return None
 
-        derivation_started = time.monotonic()
-        ran = await self._maybe_derive(
-            session,
-            artifact_id=artifact_id,
-            tenant_id=tenant_id,
-            force=force_regenerate,
-            auth_token=auth_token,
+        ran = {
+            "scene_grouper": False, "app_deduper": False, "caption_rewriter": False,
+            "frame_annotator": False, "action_extractor": False,
+            "page_visit_extractor": False, "page_action_extractor": False,
+            "form_snapshot_extractor": False,
+        }
+        derivation_elapsed_ms = 0
+        deriving = False
+
+        surfaces = await self._resolve_surfaces(
+            session, artifact_id=artifact_id, tenant_id=tenant_id,
         )
-        derivation_elapsed_ms = int((time.monotonic() - derivation_started) * 1000)
+
+        if block or force_regenerate:
+            derivation_started = time.monotonic()
+            ran = await self._maybe_derive(
+                session,
+                artifact_id=artifact_id,
+                tenant_id=tenant_id,
+                force=force_regenerate,
+                auth_token=auth_token,
+                surfaces=surfaces,
+            )
+            derivation_elapsed_ms = int((time.monotonic() - derivation_started) * 1000)
+        else:
+            # Lazy GET — never block the response on derivation. Derive in the
+            # background (one per artifact) when panels aren't ready yet.
+            existing, _ = await _read_storyboard(
+                session, artifact_id=artifact_id, tenant_id=tenant_id, config=self._config,
+            )
+            if not existing and artifact_id not in _DERIVING_ARTIFACTS:
+                _DERIVING_ARTIFACTS.add(artifact_id)
+                task = asyncio.create_task(
+                    self._derive_in_background(artifact_id, tenant_id, auth_token, surfaces)
+                )
+                task.add_done_callback(
+                    lambda _t, a=artifact_id: _DERIVING_ARTIFACTS.discard(a)
+                )
+            deriving = artifact_id in _DERIVING_ARTIFACTS
 
         panels, apps = await _read_storyboard(
             session,
@@ -500,7 +546,10 @@ class StoryboardComposer:
             config=self._config,
         )
 
-        summary = self._summary(panels, apps, artifact=artifact)
+        summary = dict(self._summary(panels, apps, artifact=artifact))
+        # Tell the client a background derivation is still running so it polls
+        # instead of treating empty panels as "done".
+        summary["deriving"] = bool(deriving)
         total_ms = int((time.monotonic() - started) * 1000)
 
         return StoryboardResponse(
@@ -541,6 +590,57 @@ class StoryboardComposer:
 
     # ─── Helpers ─────────────────────────────────────────────
 
+    async def _derive_in_background(
+        self, artifact_id: str, tenant_id: str, auth_token: str,
+        surfaces: dict[str, bool] | None = None,
+    ) -> None:
+        """Run the full derivation on its OWN session, off the request path.
+
+        The request that spawned this has already returned, so we cannot reuse
+        its session. Open a fresh tenant-scoped session and run `_maybe_derive`
+        (which checkpoints each completed step, so partial progress survives a
+        slow/failed later step). This is what keeps GET /storyboard from blocking
+        on the slow vision extractors (the 30s-timeout fix)."""
+        from ...database import tenant_scoped_session  # local import: avoid cycle
+        try:
+            async with tenant_scoped_session(tenant_id) as bg_session:
+                if surfaces is None:
+                    surfaces = await self._resolve_surfaces(
+                        bg_session, artifact_id=artifact_id, tenant_id=tenant_id,
+                    )
+                await self._maybe_derive(
+                    bg_session,
+                    artifact_id=artifact_id,
+                    tenant_id=tenant_id,
+                    force=False,
+                    auth_token=auth_token,
+                    surfaces=surfaces,
+                )
+        except Exception as exc:  # never let a background failure escape
+            logger.warning(
+                "storyboard.composer.background_derivation_failed",
+                extra={"artifact_id": artifact_id, "error": str(exc)[:300]},
+            )
+
+    async def _resolve_surfaces(
+        self, session: AsyncSession, *, artifact_id: str, tenant_id: str,
+    ) -> dict[str, bool]:
+        """Which surfaces are enabled for this artifact (cost control).
+
+        Fails OPEN: any error (e.g. the ``surface_prefs`` table not migrated yet)
+        returns the all-on default so derivation behaves exactly as before.
+        """
+        try:
+            return await _surface_prefs.resolve_surfaces(
+                session, tenant_id=tenant_id, artifact_id=artifact_id,
+            )
+        except Exception as exc:  # pragma: no cover - defensive (pre-migration)
+            logger.warning(
+                "storyboard.composer.surface_resolve_failed",
+                extra={"artifact_id": artifact_id, "error": str(exc)[:200]},
+            )
+            return {s: True for s in _surface_prefs.SURFACES}
+
     async def _load_artifact(
         self,
         session: AsyncSession,
@@ -555,6 +655,67 @@ class StoryboardComposer:
         )
         return q.scalar_one_or_none()
 
+    async def _storyboard_branch(
+        self, *, artifact_id: str, tenant_id: str, force: bool,
+        scene_grouper_due: bool, storyboard_on: bool, auth_token: str,
+    ) -> dict[str, bool]:
+        """Run the Storyboard ``action_extractor`` on its OWN session so it
+        overlaps the Pages & Forms chain (which keeps the request session).
+
+        Independent table (scene_actions) → no write conflict with the P&F
+        chain; reads the already-committed scene/panel base. Fails CLOSED:
+        any error returns ``action_extractor=False`` so the caller is
+        unaffected (identical to the inline TimeoutError → _recover path).
+        """
+        ran = {"action_extractor": False}
+        if not storyboard_on:
+            return ran
+        from ...database import tenant_scoped_session  # local import: avoid cycle
+        try:
+            async with tenant_scoped_session(tenant_id) as s:
+                async def _arm() -> None:
+                    await s.execute(
+                        text("SELECT set_config('nexus.current_tenant_id', :tid, true)"),
+                        {"tid": str(tenant_id)},
+                    )
+
+                due = force or await _needs_action_extractor(
+                    s, artifact_id=artifact_id, tenant_id=tenant_id,
+                    target_version=self._config.action_extractor.version,
+                )
+                if due or scene_grouper_due:
+                    try:
+                        await asyncio.wait_for(
+                            extract_actions_for_artifact(
+                                s,
+                                artifact_id=artifact_id,
+                                tenant_id=tenant_id,
+                                config=self._config.action_extractor,
+                                router=self._llm_router,
+                                auth_token=auth_token,
+                            ),
+                            timeout=self._config.action_extractor.total_timeout_s,
+                        )
+                        ran["action_extractor"] = True
+                        await s.commit()
+                        await _arm()
+                    except asyncio.TimeoutError:
+                        logger.warning(
+                            "storyboard.composer.action_extractor_timeout",
+                            extra={
+                                "artifact_id": artifact_id,
+                                "timeout_s": self._config.action_extractor.total_timeout_s,
+                            },
+                        )
+                        await s.rollback()
+                        await _arm()
+        except Exception as exc:  # never let the branch escape into gather
+            logger.warning(
+                "storyboard.composer.storyboard_branch_failed",
+                extra={"artifact_id": artifact_id, "error": str(exc)[:200]},
+            )
+        return ran
+
     async def _maybe_derive(
         self,
         session: AsyncSession,
@@ -563,6 +724,7 @@ class StoryboardComposer:
         tenant_id: str,
         force: bool,
         auth_token: str = "",
+        surfaces: dict[str, bool] | None = None,
     ) -> dict[str, bool]:
         """Run any missing-or-stale derivation step.
 
@@ -571,7 +733,18 @@ class StoryboardComposer:
         timeout budget is enforced per-step by the underlying services
         (caption_rewriter has total_timeout_s; frame_annotator has
         render_timeout_s per frame).
+
+        ``surfaces`` (cost control) gates the EXPENSIVE vision (gpt-4o)
+        extractors only — ``storyboard`` gates ``action_extractor``;
+        ``pages_forms`` gates the three page/form extractors. The cheap
+        deterministic/local steps (scene_grouper, app_deduper, captions,
+        frame_annotator) always run so 3D Journey + the panel display never
+        break. ``None`` → all surfaces on (unchanged behavior).
         """
+        # Default all-on preserves the frozen behavior exactly.
+        sf = surfaces if surfaces is not None else {s: True for s in _surface_prefs.SURFACES}
+        storyboard_on = sf.get("storyboard", True)
+        pages_forms_on = sf.get("pages_forms", True)
         ran = {
             "scene_grouper": False,
             "app_deduper": False,
@@ -683,38 +856,22 @@ class StoryboardComposer:
             ran["caption_rewriter"] = True
             await _checkpoint()
 
-        action_extractor_due = force or await _needs_action_extractor(
-            session,
-            artifact_id=artifact_id,
-            tenant_id=tenant_id,
-            target_version=self._config.action_extractor.version,
+        # ── SPEED: the Storyboard action_extractor runs CONCURRENTLY with the
+        # Pages & Forms chain below. It writes a different table (scene_actions)
+        # on its OWN session, so the two expensive vision passes overlap instead
+        # of running serially (wall-clock ≈ the slower one, not the sum). The
+        # task is joined just before frame_annotator (which may overlay actions).
+        # Cost gate (storyboard_on) is enforced inside the branch.
+        action_task = asyncio.create_task(
+            self._storyboard_branch(
+                artifact_id=artifact_id,
+                tenant_id=tenant_id,
+                force=force,
+                scene_grouper_due=scene_grouper_due,
+                storyboard_on=storyboard_on,
+                auth_token=auth_token,
+            )
         )
-        # Action extractor also re-runs when scene groupings changed,
-        # since new scenes need new actions extracted.
-        if action_extractor_due or scene_grouper_due:
-            try:
-                await asyncio.wait_for(
-                    extract_actions_for_artifact(
-                        session,
-                        artifact_id=artifact_id,
-                        tenant_id=tenant_id,
-                        config=self._config.action_extractor,
-                        router=self._llm_router,
-                        auth_token=auth_token,
-                    ),
-                    timeout=self._config.action_extractor.total_timeout_s,
-                )
-                ran["action_extractor"] = True
-                await _checkpoint()
-            except asyncio.TimeoutError:
-                logger.warning(
-                    "storyboard.composer.action_extractor_timeout",
-                    extra={
-                        "artifact_id": artifact_id,
-                        "timeout_s": self._config.action_extractor.total_timeout_s,
-                    },
-                )
-                await _recover()
 
         # ── Phase 2.0 — page_visits.  URL-keyed log independent of
         # scene boundaries.  Always re-runs when a new artifact_version
@@ -726,7 +883,7 @@ class StoryboardComposer:
             tenant_id=tenant_id,
             target_version=self._config.page_visit_extractor.version,
         )
-        if page_visit_due or scene_grouper_due:
+        if pages_forms_on and (page_visit_due or scene_grouper_due):
             _pv_cfg = self._config.page_visit_extractor
             try:
                 # Bounded like its siblings: the vision page-identity pass
@@ -784,7 +941,7 @@ class StoryboardComposer:
             tenant_id=tenant_id,
             target_version=self._config.page_action_extractor.version,
         )
-        if page_action_due or page_visit_due or scene_grouper_due:
+        if pages_forms_on and (page_action_due or page_visit_due or scene_grouper_due):
             try:
                 await asyncio.wait_for(
                     extract_page_actions_for_artifact(
@@ -830,7 +987,7 @@ class StoryboardComposer:
             tenant_id=tenant_id,
             target_version=self._config.form_snapshot_extractor.version,
         )
-        if form_snapshot_due or page_visit_due or scene_grouper_due:
+        if pages_forms_on and (form_snapshot_due or page_visit_due or scene_grouper_due):
             try:
                 await asyncio.wait_for(
                     extract_form_snapshots_for_artifact(
@@ -865,6 +1022,16 @@ class StoryboardComposer:
                     },
                 )
                 await _recover()
+
+        # Join the concurrent Storyboard action branch before annotating frames
+        # (so any action overlays are committed first). The branch never raises.
+        try:
+            ran.update(await action_task)
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning(
+                "storyboard.composer.action_branch_join_failed",
+                extra={"artifact_id": artifact_id, "error": str(exc)[:200]},
+            )
 
         if self._frame_annotator and self._frame_annotator.pil_available:
             annotator_due = force or await _needs_frame_annotator(

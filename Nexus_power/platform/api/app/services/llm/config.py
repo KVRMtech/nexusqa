@@ -78,7 +78,7 @@ from __future__ import annotations
 import json
 import os
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace as _dc_replace
 from typing import Mapping
 
 
@@ -332,8 +332,77 @@ def load_config() -> LLMConfig:
 
     task_routing = _load_task_routing(set(tiers.keys()))
 
-    return LLMConfig(
-        tiers=tiers,
-        task_routing=task_routing,
-        default_tier=default_tier,
+    return _harden_for_resilience(
+        LLMConfig(
+            tiers=tiers,
+            task_routing=task_routing,
+            default_tier=default_tier,
+        )
     )
+
+
+# Cloud models known to be retired/non-functional as of 2026-06 (Google
+# deprecated gemini-2.0-flash → HTTP 404 "no longer available"; every current
+# Gemini variant also fails the OpenAI-compat vision+tool call). Listed here so
+# a transient gpt-4o blip can't cascade THROUGH a dead tier to the weak local
+# model and silently emit garbage. Code-level (env-independent) so it ships via
+# docker cp without a container recreate.
+_DEAD_MODELS = frozenset({"gemini-2.0-flash", "gemini-2.0-flash-001"})
+_CLOUD_MIN_RETRIES = 6
+
+
+def _harden_for_resilience(cfg: "LLMConfig") -> "LLMConfig":
+    """Post-load hardening (additive; no-op when nothing matches):
+
+    1. Splice known-dead tiers OUT of every fallback chain (point past them),
+       so a fallback never wastes a round-trip on a 404 model.
+    2. Give the working cloud workhorse tiers more retries, so transient
+       rate-limits/timeouts recover on the RELIABLE model instead of cascading
+       to the weak local fallback (the cause of the llava-garbage Pages & Forms).
+    """
+    if not cfg.tiers:
+        return cfg
+    tiers = dict(cfg.tiers)
+    dead = {name for name, t in tiers.items() if t.model in _DEAD_MODELS}
+
+    # Resilient fallback chain: route through EVERY working CLOUD tier before
+    # the weak local model. A transient rate limit on the primary (e.g. OpenAI
+    # gpt-4o TPM) then recovers on the OTHER cloud model (e.g. claude) instead of
+    # cascading to the schema-garbling local model (llava). Roles are discovered
+    # by task routing + provider — no hardcoded tier names or per-artifact data.
+    primary = (
+        cfg.task_routing.get("page_action_extraction")
+        or cfg.task_routing.get("form_snapshot_extraction")
+        or cfg.task_routing.get("page_visit_identity")
+    )
+    cloud = [
+        n for n, t in tiers.items()
+        if t.provider in ("openai_compat", "anthropic") and n not in dead
+    ]
+    local = (
+        next((n for n, t in tiers.items() if t.provider == "ollama" and "vision" in n), None)
+        or next((n for n, t in tiers.items() if t.provider == "ollama"), None)
+    )
+    if primary in cloud:
+        ordered = [primary] + [n for n in cloud if n != primary]
+        chain = ordered + ([local] if local else [])
+        for i in range(len(chain) - 1):
+            tiers[chain[i]] = _dc_replace(tiers[chain[i]], fallback_tier=chain[i + 1])
+
+    # Splice any remaining dead tiers out of fallback chains not covered above.
+    for name, t in list(tiers.items()):
+        fb = t.fallback_tier
+        guard = 0
+        while fb in dead and fb in tiers and guard <= len(tiers):
+            fb = tiers[fb].fallback_tier
+            guard += 1
+        if fb != t.fallback_tier:
+            tiers[name] = _dc_replace(tiers[name], fallback_tier=fb)
+    for name, t in list(tiers.items()):
+        if (
+            t.provider in ("openai_compat", "anthropic")
+            and name not in dead
+            and t.max_retries < _CLOUD_MIN_RETRIES
+        ):
+            tiers[name] = _dc_replace(tiers[name], max_retries=_CLOUD_MIN_RETRIES)
+    return _dc_replace(cfg, tiers=tiers)

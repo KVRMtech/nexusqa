@@ -1,0 +1,35 @@
+# ── Nexus QA — server-side Playwright runner ────────────────
+# Executes a configured bundle (headless via /run) and, for /run-live, runs a
+# HEADED browser under a virtual display streamed to the portal via VNC+noVNC.
+# Browsers come pre-installed in the Playwright image.
+FROM mcr.microsoft.com/playwright:v1.48.0-jammy
+
+# Live-view stack: virtual display + VNC server + WS bridge + noVNC web client.
+# Installed as root at build time; the daemons run fine as pwuser at runtime.
+USER root
+# DEBIAN_FRONTEND=noninteractive + TZ avoid the tzdata debconf prompt that a
+# transitive dep otherwise hangs the build on (no TTY in a build).
+ENV TZ=Etc/UTC
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        xvfb x11vnc websockify novnc \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /opt/runner
+COPY infrastructure/runner/package.json ./
+RUN npm install --omit=dev \
+    && mkdir -p /opt/runner/work \
+    && chown -R pwuser:pwuser /opt/runner
+COPY --chown=pwuser:pwuser infrastructure/runner/server.js ./
+
+# --no-sandbox is required for Chromium inside an unprivileged container; the
+# parametrized playwright.config reads NEXUS_LAUNCH_ARGS. The NEXUS_* display
+# vars drive /run-live (headless /run ignores them).
+ENV PORT=4555 \
+    NEXUS_LAUNCH_ARGS="--no-sandbox --disable-dev-shm-usage" \
+    NEXUS_DISPLAY=":99" \
+    NEXUS_VNC_GEOMETRY="1280x800x24" \
+    NEXUS_NOVNC_DIR="/usr/share/novnc"
+EXPOSE 4555 6080
+USER pwuser
+HEALTHCHECK --interval=30s --timeout=4s CMD node -e "require('http').get('http://127.0.0.1:4555/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"
+CMD ["node", "server.js"]

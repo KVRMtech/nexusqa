@@ -1820,6 +1820,18 @@ services:
         condition: service_healthy
     networks:
     - nexus
+  nexus-runner:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/Dockerfile.runner
+    image: nexus_power-nexus-runner
+    container_name: nexus-runner
+    restart: unless-stopped
+    environment:
+      RUNNER_TOKEN: ${RUNNER_TOKEN:-}
+    networks:
+    - nexus
+    mem_limit: 2g
   base-image:
     build:
       context: .

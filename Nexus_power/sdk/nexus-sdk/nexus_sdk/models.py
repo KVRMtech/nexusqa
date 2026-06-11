@@ -142,6 +142,10 @@ class ProductionTestCase(BaseModel):
     priority: Optional[str] = None
     type: Optional[str] = None
     tags: List[str] = []
+    # Case-level Expected Result — the observable outcome the whole flow should
+    # reach (grounded in the last recorded page). Surfaced in Test Studio and
+    # carried into the compiled spec for traceability.
+    expected_outcome: Optional[str] = None
 
 
 # ─── Test execution results ───────────────────────────────────

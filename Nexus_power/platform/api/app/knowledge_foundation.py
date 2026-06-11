@@ -44,6 +44,7 @@ from nexus_sdk.integrations import (
 from nexus_sdk.security.envelope import (
     AwsKmsProvider,
     EnvelopeService,
+    GcpKmsProvider,
     KekProvider,
     LocalKekProvider,
     ProviderUnavailable,
@@ -87,6 +88,24 @@ def _kek_provider() -> KekProvider:
             "AWS_DEFAULT_REGION"
         )
         return AwsKmsProvider(kek_resolver=_resolver, region=region)
+
+    if provider == "gcp_kms":
+        # Single-key bootstrap via env (the CryptoKey resource name); real
+        # per-tenant resolution lands with the dedicated KEK resolver service.
+        # Auth is Application Default Credentials — the VM's service account.
+        key_name = os.environ.get("NEXUS_KEK_GCP_KEY")
+        if not key_name:
+            raise ProviderUnavailable(
+                "NEXUS_KEK_PROVIDER=gcp_kms requires NEXUS_KEK_GCP_KEY (the "
+                "CryptoKey resource name "
+                "projects/P/locations/L/keyRings/R/cryptoKeys/K) until the "
+                "per-tenant resolver service is wired in Phase 1."
+            )
+
+        async def _gcp_resolver(_tenant_id: str) -> str:
+            return key_name
+
+        return GcpKmsProvider(kek_resolver=_gcp_resolver)
 
     if provider == "local":
         master_key_path = os.environ.get(

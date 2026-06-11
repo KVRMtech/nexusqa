@@ -61,9 +61,18 @@ async def jwt_auth_middleware(request: Request, call_next):
     if not path.startswith("/api/"):
         return await call_next(request)
 
+    # Token from the standard Bearer header, OR — for resources loaded by the
+    # browser without a custom fetch (e.g. <img src> of a run screenshot) — from
+    # a ``?token=`` query param. The query fallback is still a full JWT validated
+    # below, so this stays fail-closed; it only changes WHERE the token is read.
     auth_header = request.headers.get("authorization", "")
+    token = ""
     if auth_header.startswith("Bearer "):
         token = auth_header[7:]
+    else:
+        token = request.query_params.get("token", "") or ""
+
+    if token:
         try:
             import jwt as pyjwt
 

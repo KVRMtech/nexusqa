@@ -9,6 +9,7 @@ rows that the new run no longer produces.
 
 from __future__ import annotations
 
+import re
 import uuid
 from typing import Any
 
@@ -34,6 +35,7 @@ from .generator import (
     PageVisitInput,
     generate_demonstrated_test_cases,
 )
+from .validator import validate_and_repair_case
 
 GENERATOR_VERSION = "v1"
 _RESERVE_NAMESPACE = "test-factory-reserve"
@@ -200,6 +202,41 @@ async def _upsert_case(session: AsyncSession, values: dict[str, Any]) -> None:
     ))
 
 
+# Models we consider DEGRADED for vision extraction — the weak local fallbacks
+# the cloud tiers drop to when billing/quota is dead. A trust-first product must
+# SURFACE when it ran on these, never silently ship their output.
+_WEAK_MODEL_RX = re.compile(r"llava|llama3|ollama/", re.IGNORECASE)
+
+
+async def _extraction_health(
+    session: AsyncSession, *, artifact_id: str,
+) -> dict[str, Any]:
+    """Did the vision extraction silently fall back to a weak local model?
+
+    Reads the model that produced each page_action (RLS scopes to the tenant). If
+    any were extracted by a degraded local model (e.g. ollama/llava — used only
+    when the cloud tiers are unavailable), report it loudly so the UI can warn
+    instead of presenting unreliable output as trustworthy."""
+    rows = (await session.execute(
+        select(PageActionRow.extractor_model, func.count())
+        .where(PageActionRow.artifact_id == artifact_id)
+        .group_by(PageActionRow.extractor_model)
+    )).all()
+    by_model = {(m or "?"): int(c) for m, c in rows}
+    total = sum(by_model.values())
+    weak = sum(c for m, c in by_model.items() if _WEAK_MODEL_RX.search(m))
+    degraded = total > 0 and weak > 0
+    reason = ""
+    if degraded:
+        reason = (
+            f"{weak} of {total} extracted actions came from a DEGRADED local model "
+            "(cloud AI was unavailable — check model access/billing). The data may be "
+            "unreliable; restore cloud AI and click Enrich to re-extract."
+        )
+    return {"degraded": degraded, "reason": reason, "by_model": by_model,
+            "weak_actions": weak, "total_actions": total}
+
+
 def _dominant_host(visits: list[PageVisitInput]) -> str:
     for v in visits:
         if v.canonical_host:
@@ -212,6 +249,7 @@ def _dominant_host(visits: list[PageVisitInput]) -> str:
 
 async def generate_and_store(
     session: AsyncSession, *, artifact_id: str, tenant_id: str, session_id: str = "",
+    validate: bool = False, router=None,
 ) -> dict[str, Any]:
     """Generate demonstrated + combination test cases and persist them.
 
@@ -239,10 +277,17 @@ async def generate_and_store(
     new_ids: list[str] = []
     for tc in result.test_cases:
         annotate_confidence(tc, ambiguous)
+        case_meta = dict(demonstrated_meta)
+        if validate and router is not None:
+            # LLM double-check (opt-in, membership-gated). Mutates tc in place;
+            # never raises — the deterministic case stands on any failure.
+            case_meta["validation"] = await validate_and_repair_case(
+                tc, visits=visits, actions=actions, router=router,
+            )
         values = _row_values(
             tc, artifact_id=artifact_id, tenant_id=tenant_id,
             session_id=session_id, confidence="demonstrated",
-            source_evidence=demonstrated_meta,
+            source_evidence=case_meta,
         )
         new_ids.append(values["test_case_id"])
         await _upsert_case(session, values)
@@ -303,6 +348,22 @@ async def generate_and_store(
         } | {"updated_at": func.now()},
     ))
 
+    # Make silent failure impossible: surface degraded extraction + a concrete
+    # reason when no case could be generated (computed before commit re-arms RLS).
+    health = await _extraction_health(session, artifact_id=artifact_id)
+    no_cases_reason = ""
+    if not result.test_cases:
+        pg = result.page_groups
+        parts = [f"No functional E2E generated — only {pg} distinct page milestone(s) "
+                 "detected (a flow needs at least 2)."]
+        if pg < 2:
+            parts.append("This looks like a single-page app (no URL change between pages): "
+                         "record a flow that navigates between distinct pages/URLs, or click "
+                         "Enrich to re-extract the page data.")
+        if health["degraded"]:
+            parts.append(health["reason"])
+        no_cases_reason = " ".join(parts)
+
     await session.commit()
 
     return {
@@ -312,6 +373,8 @@ async def generate_and_store(
         "combinations_full_space": combo.full_count,
         "option_domains": len(combo.option_domains),
         "generated": len(new_ids),
+        "extraction_health": health,
+        "no_cases_reason": no_cases_reason,
         **demonstrated_meta,
         "generator_version": GENERATOR_VERSION,
     }
@@ -416,15 +479,29 @@ async def summarize(
         )
     ).all()
 
+    active_count = sum(c for _s, c in by_status_rows if _s == "active")
+    health = await _extraction_health(session, artifact_id=artifact_id)
+    no_cases_reason = ""
+    if active_count == 0 and health["total_actions"] > 0:
+        # Pages were extracted but no case exists — surface why (degraded data /
+        # single-page app) instead of a silent empty state.
+        no_cases_reason = (
+            "Pages & Forms were extracted, but no test case is generated yet. "
+            + (health["reason"] + " " if health["degraded"] else "")
+            + "If the recording is a single-page app (no URL changes between pages), "
+            "record a flow that navigates between distinct pages, or click Enrich, then Generate."
+        )
     return {
         "artifact_id": artifact_id,
         "total": int(total),
-        "active": sum(c for _s, c in by_status_rows if _s == "active"),
+        "active": active_count,
         "reserve": sum(c for _s, c in by_status_rows if _s == "reserve"),
         "by_priority": {p: int(c) for p, c in by_priority_rows},
         "by_status": {s: int(c) for s, c in by_status_rows},
         "by_type": {t: int(c) for t, c in by_type_rows},
         "by_confidence": {c0: int(c) for c0, c in by_conf_rows},
+        "extraction_health": health,
+        "no_cases_reason": no_cases_reason,
     }
 
 

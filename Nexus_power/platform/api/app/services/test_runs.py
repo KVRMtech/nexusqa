@@ -628,6 +628,23 @@ _LOCATOR_MISSING_RE = re.compile(
     re.IGNORECASE,
 )
 
+# A FAILED navigation-outcome assertion = the recorded next page was NOT reached.
+# The compiler emits `toHaveURL(/recorded-path/)` from the OBSERVED next_url, so a
+# failure naming `toHaveURL` means the action ran but the app produced a different
+# result than the recording — the strongest, highest-precision real-regression
+# signal. A locator-not-found / action timeout NEVER contains 'toHaveURL', so this
+# stays conservative (it cannot fire on a drift/rename). Grounded, deterministic.
+_OUTCOME_ASSERT_RE = re.compile(r"toHaveURL", re.IGNORECASE)
+
+
+def outcome_contradicted_from_error(error_message: str) -> bool:
+    """True when the failure is a FAILED recorded-outcome assertion (the navigated
+    next page). Conservative by construction — matches only the compiler's grounded
+    navigation oracle, never a locator/action error — so it labels real_regression
+    on POSITIVE evidence only and otherwise leaves the reducer to fail toward
+    needs_review."""
+    return bool(_OUTCOME_ASSERT_RE.search(error_message or ""))
+
 
 @dataclass
 class Verdict:
@@ -722,3 +739,231 @@ def tally_verdicts(verdicts: list[Verdict]) -> dict:
         "dont_need_you": dont_need_you,
         "by_label": by_label,
     }
+
+
+# ─── Single-run per-step timeline (THIS RUN) ─────────────────────────────
+#
+# Powers the "This run — where it broke" view: for the SINGLE most-recent run,
+# every scenario's every executed step with a pass/fail glyph, a human label
+# (from the recorded ProductionTestCase action), and the failing step joined to
+# its known-good baseline screenshot.  Because the header counts come straight
+# off the run row and the scenario rows are that same run's steps, the header
+# and the step rollup can never disagree — this is what fixes the "1 vs 6"
+# contradiction (cross-run accumulation lives in the separate History view).
+# Deterministic, $0 LLM, read-only, no migration.
+
+_FAIL_STEP_STATUSES = frozenset({
+    E2E_STEP_STATUS_FAILED, E2E_STEP_STATUS_BROKEN, E2E_STEP_STATUS_TIMED_OUT,
+})
+
+
+def _case_step(tc: Any, step_number: int | None) -> Any:
+    """The recorded baseline step with this step_number — for its action label
+    and known-good screenshot.  Returns None when there's no matching case step
+    (e.g. an unproven step the runner skipped, or no baseline case at all)."""
+    if tc is None or step_number is None:
+        return None
+    for st in (getattr(tc, "steps", None) or []):
+        if getattr(st, "step_number", None) == step_number:
+            return st
+    return None
+
+
+async def find_run_by_ci_run_id(
+    db: AsyncSession, *, artifact_id: str, tenant_id: str, ci_run_id: str,
+) -> str | None:
+    """Resolve the ingested run for a specific reporter run id (the reporter sets
+    ci_run_id = NEXUS_RUN_ID). Returns the run's PK (run_id) or None. Lets the heal
+    verifier correlate to THE run it kicked off — never 'whatever ran last', which
+    a racing ingest could otherwise make wrong."""
+    if not ci_run_id:
+        return None
+    row = (await db.execute(
+        select(E2ETestRunRow.run_id)
+        .where(
+            E2ETestRunRow.artifact_id == artifact_id,
+            E2ETestRunRow.tenant_id == tenant_id,
+            E2ETestRunRow.ci_run_id == ci_run_id,
+        )
+        .order_by(desc(E2ETestRunRow.started_at))
+        .limit(1)
+    )).scalar_one_or_none()
+    return row
+
+
+async def recent_runs(
+    db: AsyncSession, *, artifact_id: str, tenant_id: str, limit: int = 25,
+) -> list[dict]:
+    """Recent run headers for an artifact, newest first — drives the run picker
+    so any historical run can be re-inspected step-by-step. Read-only, $0 LLM."""
+    limit = max(1, min(int(limit or 25), 200))
+    rows = (await db.execute(
+        select(E2ETestRunRow)
+        .where(
+            E2ETestRunRow.artifact_id == artifact_id,
+            E2ETestRunRow.tenant_id == tenant_id,
+        )
+        .order_by(desc(E2ETestRunRow.started_at))
+        .limit(limit)
+    )).scalars().all()
+    return [_row_to_dict(r) for r in rows]
+
+
+async def build_latest_run_timeline(
+    db: AsyncSession,
+    *,
+    artifact_id: str,
+    tenant_id: str,
+) -> dict:
+    """Per-scenario, per-step pass/fail timeline for the single most-recent run.
+
+    Returns::
+
+        {
+          "run_header": {... the E2ETestRunRow as a dict — passed_steps,
+                         failed_steps, skipped_steps, total_steps, duration_ms,
+                         started_at, status ...} | None,
+          "scenarios": [{
+            "scenario_id", "name", "type", "verdict", "confidence",
+            "justification", "status", "baseline_available",
+            "failed_step_number",
+            "steps": [{"step_number", "label", "status", "duration_ms",
+                       "error_message", "screenshot_url",
+                       "baseline_screenshot", "expected"}],
+          }],
+        }
+
+    Empty (run_header=None, scenarios=[]) when no runs exist.
+    """
+    # (a) the newest run for this artifact
+    run = (await db.execute(
+        select(E2ETestRunRow)
+        .where(
+            E2ETestRunRow.artifact_id == artifact_id,
+            E2ETestRunRow.tenant_id == tenant_id,
+        )
+        .order_by(desc(E2ETestRunRow.started_at))
+        .limit(1)
+    )).scalars().first()
+    if run is None:
+        return {"run_header": None, "scenarios": []}
+    return await _timeline_for_run(db, run, artifact_id=artifact_id, tenant_id=tenant_id)
+
+
+async def build_run_timeline_by_id(
+    db: AsyncSession,
+    *,
+    artifact_id: str,
+    tenant_id: str,
+    run_id: str,
+) -> dict:
+    """Per-step timeline for a SPECIFIC run (durable history re-inspection).
+
+    Same shape as ``build_latest_run_timeline`` but for an arbitrary historical
+    run, scoped to artifact+tenant. Empty (run_header=None) when the run_id is
+    not found for this artifact. Deterministic, $0 LLM, read-only, no migration.
+    """
+    run = (await db.execute(
+        select(E2ETestRunRow)
+        .where(
+            E2ETestRunRow.run_id == run_id,
+            E2ETestRunRow.artifact_id == artifact_id,
+            E2ETestRunRow.tenant_id == tenant_id,
+        )
+        .limit(1)
+    )).scalars().first()
+    if run is None:
+        return {"run_header": None, "scenarios": []}
+    return await _timeline_for_run(db, run, artifact_id=artifact_id, tenant_id=tenant_id)
+
+
+async def _timeline_for_run(
+    db: AsyncSession, run: E2ETestRunRow, *, artifact_id: str, tenant_id: str,
+) -> dict:
+    """Build the per-scenario, per-step timeline for an already-resolved run row.
+    Shared by ``build_latest_run_timeline`` and ``build_run_timeline_by_id``."""
+    # (b) every step of THAT run, grouped by scenario, ordered by step_number
+    step_rows = (await db.execute(
+        select(E2ETestRunStepRow)
+        .where(
+            E2ETestRunStepRow.run_id == run.run_id,
+            E2ETestRunStepRow.tenant_id == tenant_id,
+        )
+        .order_by(E2ETestRunStepRow.scenario_id, E2ETestRunStepRow.step_number)
+    )).scalars().all()
+
+    # (c) recorded baseline cases — for human step labels + known-good shots.
+    #     Imported locally to avoid a module-level import cycle (triage.py and
+    #     test_factory.service both import from this module).
+    from .test_factory import service as factory_service
+    cases = await factory_service.load_active_production_cases(
+        db, artifact_id=artifact_id,
+    )
+    cases_by_id = {getattr(c, "test_id", "") or "": c for c in cases}
+
+    by_scenario: dict[str, list[E2ETestRunStepRow]] = {}
+    for s in step_rows:
+        by_scenario.setdefault(s.scenario_id or "", []).append(s)
+
+    scenarios: list[dict] = []
+    for sid, srows in by_scenario.items():
+        tc = cases_by_id.get(sid)
+        worst = E2E_STEP_STATUS_PASSED
+        failing_error = ""
+        failed_step_number: int | None = None
+        out_steps: list[dict] = []
+        for st in srows:
+            if _status_severity(st.status) > _status_severity(worst):
+                worst = st.status
+            if st.status in _FAIL_STEP_STATUSES and failed_step_number is None:
+                failed_step_number = st.step_number
+            if st.status == E2E_STEP_STATUS_FAILED and not failing_error:
+                failing_error = st.error_message or ""
+            bs = _case_step(tc, st.step_number)
+            label = (getattr(bs, "action", "") if bs is not None else "") or f"Step {st.step_number}"
+            expected = ""
+            if bs is not None:
+                expected = (getattr(bs, "expected_result", "")
+                            or getattr(bs, "expected", "") or "")
+            out_steps.append({
+                "step_number": st.step_number,
+                "label": label,
+                "status": st.status,
+                "duration_ms": st.duration_ms,
+                "error_message": st.error_message or "",
+                "screenshot_url": st.screenshot_url or "",
+                "baseline_screenshot": (getattr(bs, "screenshot", "") if bs is not None else "") or "",
+                "expected": expected,
+            })
+
+        failed = worst in _FAIL_STEP_STATUSES
+        selector_drifted = any(
+            r.expected_selector and r.resolved_selector
+            and r.expected_selector != r.resolved_selector
+            for r in srows
+        )
+        # Per-run verdict (flake is a History concern, not a this-run concern).
+        verdict = classify_failure(
+            failed=failed,
+            is_flaky=False,
+            selector_drifted=selector_drifted,
+            bbox_drifted=False,
+            outcome_contradicted=outcome_contradicted_from_error(failing_error),
+            error_message=failing_error,
+        )
+        scenarios.append({
+            "scenario_id": sid,
+            "name": (getattr(tc, "name", "") if tc is not None else "") or sid or "unnamed",
+            "type": (getattr(tc, "type", "") if tc is not None else ""),
+            "verdict": verdict.label,
+            "confidence": verdict.confidence,
+            "justification": verdict.justification,
+            "status": worst,
+            "baseline_available": tc is not None,
+            "failed_step_number": failed_step_number,
+            "steps": out_steps,
+        })
+
+    # Failures first, then alphabetical for a stable order.
+    scenarios.sort(key=lambda c: (0 if c["status"] in _FAIL_STEP_STATUSES else 1, c["name"]))
+    return {"run_header": _row_to_dict(run), "scenarios": scenarios}

@@ -943,9 +943,14 @@ def load_config() -> StoryboardConfig:
             vision_identity_max_frames=_env_int(
                 "STORYBOARD_PAGE_VISIT_VISION_MAX_FRAMES", 120, min_value=1,
             ),
-            vision_identity_concurrency=_env_int(
+            # Clamped to <=2 in code: the URL-identity pass can fire up to
+            # vision_identity_max_frames (120) gpt-4o vision calls; high
+            # concurrency (env had 6) saturates the gpt-4o endpoint's sustained
+            # rate limit during a derivation, so overflow cascades to the weak
+            # local model and emits garbage URLs. Cap regardless of env.
+            vision_identity_concurrency=min(2, _env_int(
                 "STORYBOARD_PAGE_VISIT_VISION_CONCURRENCY", 2, min_value=1,
-            ),
+            )),
             vision_identity_min_confidence=_env_float(
                 "STORYBOARD_PAGE_VISIT_VISION_MIN_CONFIDENCE",
                 0.5,
@@ -1022,20 +1027,26 @@ def load_config() -> StoryboardConfig:
                 min_value=0.0,
                 max_value=1.0,
             ),
-            frames_per_visit_default=_env_int(
-                "STORYBOARD_PAGE_ACTION_EXTRACTOR_FRAMES_DEFAULT",
-                4,
-                min_value=1,
+            # Token-budget CEILING on frames-per-call (env-overridable — NOT a
+            # silent hardcoded floor). Each frame is ~1-1.5K tokens; under a
+            # modest OpenAI TPM tier (Tier-1 = 30K) too many frames/call → 429
+            # overflow → cascade to the weak local model. Default cap = 4 (safe
+            # for Tier-1, ≈ prior behavior). AFTER raising the OpenAI tier, lift
+            # long-form coverage by either setting STORYBOARD_PAGE_ACTION_FRAME_CAP=12
+            # (needs a container recreate on this docker-cp deploy) OR bumping the
+            # `4` default below and docker-cp'ing the file (no recreate). The
+            # per-bucket base counts (4/6/8) are preserved underneath the cap.
+            frames_per_visit_default=min(
+                _env_int("STORYBOARD_PAGE_ACTION_FRAME_CAP", 4, min_value=1),
+                _env_int("STORYBOARD_PAGE_ACTION_EXTRACTOR_FRAMES_DEFAULT", 4, min_value=1),
             ),
-            frames_per_visit_long=_env_int(
-                "STORYBOARD_PAGE_ACTION_EXTRACTOR_FRAMES_LONG",
-                6,
-                min_value=1,
+            frames_per_visit_long=min(
+                _env_int("STORYBOARD_PAGE_ACTION_FRAME_CAP", 4, min_value=1),
+                _env_int("STORYBOARD_PAGE_ACTION_EXTRACTOR_FRAMES_LONG", 6, min_value=1),
             ),
-            frames_per_visit_very_long=_env_int(
-                "STORYBOARD_PAGE_ACTION_EXTRACTOR_FRAMES_VERY_LONG",
-                8,
-                min_value=1,
+            frames_per_visit_very_long=min(
+                _env_int("STORYBOARD_PAGE_ACTION_FRAME_CAP", 4, min_value=1),
+                _env_int("STORYBOARD_PAGE_ACTION_EXTRACTOR_FRAMES_VERY_LONG", 8, min_value=1),
             ),
             long_visit_threshold_s=_env_float(
                 "STORYBOARD_PAGE_ACTION_EXTRACTOR_LONG_THRESHOLD_S",

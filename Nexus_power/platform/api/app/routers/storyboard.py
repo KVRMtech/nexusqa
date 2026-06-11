@@ -29,8 +29,11 @@ from fastapi import APIRouter, Depends, HTTPException, Path, Request
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
+import asyncio
+
 from ..auth import get_current_user
 from ..database import tenant_scoped_session
+from ..services.storyboard import surface_prefs as _surface_prefs
 
 router = APIRouter(tags=["Storyboard"])
 _logger = logging.getLogger(__name__)
@@ -212,6 +215,8 @@ async def get_storyboard(
             tenant_id=tenant_id,
             force_regenerate=False,
             auth_token=token,
+            block=False,  # never block the GET on the slow vision derivation —
+                          # derive in the background; client polls `summary.deriving`
         )
     if response is None:
         raise HTTPException(status_code=404, detail="artifact not found")
@@ -308,6 +313,94 @@ async def regenerate_storyboard(
             storyboard_total_ms=response.derivation.storyboard_total_ms,
         ),
     )
+
+
+# ── Surface preferences (cost control) ───────────────────────────────────────
+# Toggle Storyboard / 3D Journey / Pages & Forms on/off so a customer only pays
+# the vision-LLM cost for what they want to see. Default (no row) = all on.
+
+class SurfacesBody(BaseModel):
+    storyboard: bool = Field(True)
+    pages_forms: bool = Field(True)
+    three_d_journey: bool = Field(True)
+
+
+@router.get(
+    "/api/v1/artifacts/{artifact_id}/surfaces",
+    summary="Effective surface toggles for an artifact (override → tenant default → all-on)",
+)
+async def get_artifact_surfaces(
+    artifact_id: str = Path(..., min_length=1, max_length=64),
+    user: dict = Depends(get_current_user),
+) -> dict[str, Any]:
+    tenant_id = user["tenant_id"]
+    async with tenant_scoped_session(tenant_id) as session:
+        return await _surface_prefs.get_effective(
+            session, tenant_id=tenant_id, artifact_id=artifact_id,
+        )
+
+
+@router.put(
+    "/api/v1/artifacts/{artifact_id}/surfaces",
+    summary="Set the per-artifact surface override; derives newly-enabled surfaces in the background",
+)
+async def set_artifact_surfaces(
+    request: Request,
+    body: SurfacesBody,
+    artifact_id: str = Path(..., min_length=1, max_length=64),
+    user: dict = Depends(get_current_user),
+) -> dict[str, Any]:
+    tenant_id = user["tenant_id"]
+    token = _bearer_token(request)
+    composer = _composer_from_request(request)
+    desired = body.model_dump()
+    async with tenant_scoped_session(tenant_id) as session:
+        before = await _surface_prefs.resolve_surfaces(
+            session, tenant_id=tenant_id, artifact_id=artifact_id,
+        )
+        saved = await _surface_prefs.set_artifact_override(
+            session, tenant_id=tenant_id, artifact_id=artifact_id, surfaces=desired,
+        )
+    # "Turn on → then it calls": if a surface flipped OFF→ON, derive it now
+    # (background, off the request path — the client polls summary.deriving).
+    newly_on = [s for s in _surface_prefs.SURFACES if saved.get(s) and not before.get(s)]
+    if newly_on:
+        asyncio.create_task(
+            composer._derive_in_background(artifact_id, tenant_id, token, saved)
+        )
+    return {"surfaces": saved, "deriving": bool(newly_on), "newly_enabled": newly_on}
+
+
+@router.get(
+    "/api/v1/tenant/surfaces",
+    summary="The org-wide default surface toggles",
+)
+async def get_tenant_surfaces(
+    user: dict = Depends(get_current_user),
+) -> dict[str, Any]:
+    tenant_id = user["tenant_id"]
+    async with tenant_scoped_session(tenant_id) as session:
+        eff = await _surface_prefs.get_effective(
+            session, tenant_id=tenant_id, artifact_id=_surface_prefs._TENANT_DEFAULT_KEY,
+        )
+    return {"surfaces": eff["tenant_default"] or {s: True for s in _surface_prefs.SURFACES},
+            "is_set": eff["tenant_default"] is not None}
+
+
+@router.put(
+    "/api/v1/tenant/surfaces",
+    summary="Set the org-wide default surface toggles (applies to artifacts without an override)",
+)
+async def set_tenant_surfaces(
+    body: SurfacesBody,
+    user: dict = Depends(get_current_user),
+) -> dict[str, Any]:
+    tenant_id = user["tenant_id"]
+    async with tenant_scoped_session(tenant_id) as session:
+        saved = await _surface_prefs.set_tenant_default(
+            session, tenant_id=tenant_id, surfaces=body.model_dump(),
+        )
+    return {"surfaces": saved}
 
 
 @router.get(
