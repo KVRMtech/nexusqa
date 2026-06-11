@@ -12,6 +12,8 @@ Deterministic, $0 LLM. Returns an empty board honestly when no runs exist.
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -29,6 +31,9 @@ from ..test_runs import (
     outcome_contradicted_from_error,
     tally_verdicts,
 )
+# Flywheel priors RETURN path (Phase 3) — DEFAULT-OFF; identity when disabled.
+from ..flywheel import featurize as flywheel_featurize
+from ..flywheel import priors as flywheel_priors
 
 _FAIL_STATUSES = frozenset({
     E2E_STEP_STATUS_FAILED, E2E_STEP_STATUS_BROKEN, E2E_STEP_STATUS_TIMED_OUT,
@@ -97,6 +102,21 @@ async def assemble_triage(
             outcome_contradicted=outcome_contradicted_from_error(_err),
             error_message=_err,
         )
+        # Flywheel priors (Phase 3) — DEFAULT-OFF, rail-guarded RETURN path. A
+        # federated prior may only ESCALATE a dismissable verdict toward needs_review
+        # (never downgrade a real_regression, never lower confidence). When priors are
+        # off/absent, escalate_verdict is the identity, so the board is BYTE-IDENTICAL
+        # to today. The deterministic classify_failure above is unchanged + authoritative.
+        _esc_label, _esc_conf, _esc_note = flywheel_priors.escalate_verdict(
+            verdict.label, verdict.confidence,
+            prior=flywheel_priors.prior_for(
+                "verdict_escalation", flywheel_featurize.error_pattern_class(_err)),
+        )
+        if _esc_label != verdict.label:
+            verdict = replace(
+                verdict, label=_esc_label, confidence=_esc_conf,
+                justification=verdict.justification + (f" · {_esc_note}" if _esc_note else ""),
+            )
         verdicts.append(verdict)
 
         baseline_screenshot = ""

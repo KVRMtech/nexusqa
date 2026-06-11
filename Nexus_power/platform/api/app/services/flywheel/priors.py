@@ -30,6 +30,8 @@ diagnose, _refine_kind, resolve_reanchor) each call through it under the same ra
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 import os
 
@@ -69,10 +71,26 @@ def _load_raw() -> dict:
             blob = json.load(fh)
     except Exception:
         return {}
-    if not isinstance(blob, dict) or not blob.get("signature"):
-        return {}  # unsigned / malformed → rejected (fail-closed)
+    if not isinstance(blob, dict) or not _signature_ok(blob):
+        return {}  # unsigned / tampered / wrong-key → rejected (fail-closed)
     priors = blob.get("priors")
     return priors if isinstance(priors, dict) else {}
+
+
+def _signature_ok(blob: dict) -> bool:
+    """Verify the priors signature. When ``NEXUS_FLYWHEEL_PRIORS_KEY`` is set,
+    recompute the HMAC-SHA256 over the canonical priors and constant-time compare —
+    a tampered, unsigned, or wrong-key blob is REJECTED (fail-closed). With no key
+    configured, fall back to requiring a non-empty ``signature`` field (full integrity
+    deferred to the keyed path). Mirrors ``aggregator.sign_priors`` exactly."""
+    if not blob.get("signature"):
+        return False
+    key = os.getenv("NEXUS_FLYWHEEL_PRIORS_KEY", "").strip()
+    if not key:
+        return True  # presence-only check (integrity deferred to the keyed path)
+    body = json.dumps(blob.get("priors", {}), sort_keys=True, separators=(",", ":")).encode("utf-8")
+    expected = hmac.new(key.encode("utf-8"), body, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(expected, str(blob.get("signature", "")))
 
 
 def prior_for(decision_point: str, feature_key: str) -> dict | None:
@@ -106,8 +124,11 @@ def escalate_verdict(
     # (real_regression, needs_review, passed, …) are returned untouched.
     if label not in _DISMISSABLE:
         return label, confidence, None
-    support = int(prior.get("support", 0) or 0)
-    p_real = float(prior.get("p_real_regression", 0.0) or 0.0)
+    try:
+        support = int(prior.get("support", 0) or 0)
+        p_real = float(prior.get("p_real_regression", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        return label, confidence, None  # malformed prior → fail-closed (no escalation)
     if bool(prior.get("escalate")) and support >= _MIN_SUPPORT and p_real >= _MIN_P_ESCALATE:
         note = (
             f"prior: this pattern was a real regression in {round(p_real * 100)}% of "
