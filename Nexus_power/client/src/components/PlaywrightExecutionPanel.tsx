@@ -693,11 +693,27 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
     finally { setRunBusy(false); }
   };
 
+  // Hard confirm before a server run that would start UNAUTHENTICATED. The
+  // recording began with a login that is NOT replayed (it's captured as a
+  // precondition, never scripted), so a cold run can fail at the login screen.
+  // Only blocks the no-saved-session case — with a captured session it's silent.
+  const confirmColdRun = (): boolean => {
+    if (authStatus?.profile?.present) return true;  // saved session → starts logged in
+    return window.confirm(
+      'No saved login session.\n\n'
+      + 'This recording starts with a login that is NOT replayed, so the run will start '
+      + 'unauthenticated and may fail at the login screen.\n\n'
+      + 'Tip: click "Capture login session" above first (one-time, encrypted).\n\n'
+      + 'Run unauthenticated anyway?',
+    );
+  };
+
   // One-click: execute server-side on the Nexus runner, then refresh the triage
   // board. With no scope it runs the selected categories; { test_ids:[id] } runs
   // a single script.
   const runOnNexus = async (scope?: { test_ids?: string[] }) => {
     setRunErr(null);
+    if (!confirmColdRun()) return;
     const single = scope?.test_ids?.length === 1 ? scope.test_ids[0] : null;
     setRunningTestId(single);
     try {
@@ -730,6 +746,7 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
   // Live: headed run on the runner, streamed into the portal via noVNC.
   const runLive = async (scope?: { test_ids?: string[] }) => {
     setRunErr(null); setLiveUrl(null);
+    if (!confirmColdRun()) return;
     const single = scope?.test_ids?.length === 1 ? scope.test_ids[0] : null;
     setRunningTestId(single);
     try {
@@ -890,6 +907,9 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
                   recorded on <span className="font-mono">{data.recorded_base_url}</span> — change it to run the same scripts against any environment
                 </p>
               )}
+              <p className="text-[10px] text-slate-400 mt-0.5">
+                Only the <span className="font-semibold text-slate-500">host</span> is swapped — recorded paths and the login step are replayed exactly as captured (re-point ≠ log in).
+              </p>
             </div>
 
             {/* authentication — capture-once session so cold runs start logged in */}
@@ -946,6 +966,9 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
                 <p className="text-[10px] font-bold uppercase text-slate-400 mb-1.5 flex items-center gap-1.5">
                   <Database className="h-3 w-3" /> 3 · Test data · global defaults
                   <span className="normal-case font-medium text-slate-300">applied to every test unless overridden per-test (✎ Data on a script)</span>
+                </p>
+                <p className="text-[9px] text-slate-400 mb-1.5 -mt-0.5">
+                  Only text, dates &amp; dropdowns are editable here — radio / checkbox / toggle choices always replay the recorded value.
                 </p>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                   {mergedFields.map((f) => (
@@ -1052,7 +1075,7 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
                     {autoHealing ? 'Auto-healing…' : '⚡ Auto-Heal Run'}
                   </button>
                   <span className="text-[10px] text-slate-400">
-                    executes against {baseUrl.trim() || 'the recorded site'} — results flow to the board below
+                    runs the highest-approved version of each selected script against {baseUrl.trim() || 'the recorded site'} — results flow to the board below
                   </span>
                 </div>
                 {(autoHealing || autoHealJob) && (
@@ -1349,11 +1372,23 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
                     <Download className="h-3 w-3" /> .spec
                   </button>
                 </div>
+                <div className="px-3 pb-2 -mt-1">
+                  <span className="text-[9px] text-slate-400 leading-snug">
+                    Run/Live use the <span className="font-semibold text-slate-500">Run Console</span> settings above —
+                    env <span className="font-mono">{baseUrl.trim() || data?.recorded_base_url || 'recorded'}</span>
+                    {' · '}{authStatus?.profile?.present ? 'saved login session' : <span className="text-amber-600">no login session</span>}
+                    {' · '}{perTestData[s.test_id] && Object.values(perTestData[s.test_id]).some((v) => v) ? 'per-test data' : 'global data'}
+                    {' · runs '}{editedTests[s.test_id] ? `your edited v${editedTests[s.test_id]}` : 'the generated version'}
+                  </span>
+                </div>
                 {fidelity[s.test_id] && <FidelityCard rep={fidelity[s.test_id]} />}
                 {openData[id] && (s.data_fields?.length || 0) > 0 && (
                   <div className="border-t border-amber-200 bg-amber-50/40 px-3 py-2.5">
                     <p className="text-[10px] text-slate-500 mb-1.5">
                       <span className="font-bold text-amber-700">This test's data</span> — blank inherits the global default / observed value (never invented).
+                    </p>
+                    <p className="text-[9px] text-slate-400 mb-1.5">
+                      Text, dates &amp; dropdowns are overridable. Radio / checkbox / toggle choices replay the recording and can't be overridden here (re-record to change them).
                     </p>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                       {s.data_fields.map((f) => (
@@ -1428,6 +1463,10 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
                     <pre className="overflow-x-auto bg-slate-950 px-3 py-3 text-[11px] leading-relaxed font-mono text-slate-200" style={{ maxHeight: '24rem' }}>
                       <code>{s.code}</code>
                     </pre>
+                    <p className="px-3 py-1.5 text-[9px] text-slate-400 bg-slate-900/90 border-t border-slate-800 leading-snug">
+                      URLs are shown as recorded. At run time the host is replaced by your Environment setting
+                      (<span className="font-mono">{baseUrl.trim() || data?.recorded_base_url || 'recorded host'}</span>); login is never scripted — runs reuse a captured session.
+                    </p>
                   </div>
                 )}
               </div>
