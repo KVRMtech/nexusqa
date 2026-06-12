@@ -281,11 +281,24 @@ def _segment(
     current: _PageGroup | None = None
 
     for visit in sorted(visits, key=lambda v: v.sequence_index):
-        has_url = bool(visit.url_host.strip())
-        if has_url:
+        host = visit.url_host.strip()
+        path = visit.url_path.strip()
+        # Open a new page group on a real URL HOST (the normal path — unchanged).
+        # When the host was never captured (an insecure IP-served app whose address
+        # bar dropped the scheme, so OCR only recovered the PATH), fall back to
+        # anchoring on a NEW non-empty PATH: the compiled test uses relative goto()
+        # resolved against the Environment base-URL, so a host-less flow is still
+        # runnable. The path-change guard stops repeated OCR of one page from
+        # fragmenting into many groups.
+        open_on_host = bool(host)
+        open_on_path = (
+            not host and bool(path)
+            and not (current is not None and not current.url_host and current.url_path == path)
+        )
+        if open_on_host or open_on_path:
             current = _PageGroup(
-                url_host=visit.url_host.strip(),
-                url_path=visit.url_path.strip(),
+                url_host=host,
+                url_path=path,
                 url_query=visit.url_query.strip(),
                 canonical_host=visit.canonical_host.strip(),
                 location=visit.location.strip(),
@@ -749,7 +762,10 @@ def generate_demonstrated_test_cases(
 
     entry = _page_name(groups[0].url_path, groups[0].location)
     outcome = _page_name(groups[-1].url_path, groups[-1].location)
-    host = groups[0].canonical_host or groups[0].url_host
+    # Host-less captures (IP app, scheme dropped by OCR) leave url_host empty; the
+    # flow still runs against the Environment base-URL, so fall back to a neutral
+    # label rather than an empty "()".
+    host = groups[0].canonical_host or groups[0].url_host or "the recorded app"
     name = f"Functional E2E: {entry} → {outcome} ({host})"
     description = (
         f"Replays the demonstrated flow on {host}: starting at '{entry}', "
