@@ -1813,6 +1813,20 @@ async def get_visual_evidence_graph(
         )
         action_confirmed_count = action_confirmed_q.scalar_one()
 
+        # Automation-ready controls — the E2E-generate gate signal. The Phase-2
+        # page-visits pipeline emits these as PageActionRow.automation_ready; legacy
+        # artifacts carry them as EvidenceControlRow.automation_ready (now empty). Count
+        # BOTH sources so neither generation path is left un-gateable — the gate only
+        # needs the total > 0. (Fix 2026-06-11: the gate previously counted ONLY the
+        # legacy evidence_controls table, which the current pipeline no longer
+        # populates, wrongly disabling Generate-E2E on valid page-visits artifacts.)
+        page_action_ready_q = await db.execute(
+            select(func.count()).select_from(PageActionRow).where(
+                PageActionRow.artifact_id == artifact_id,
+                PageActionRow.tenant_id == tenant_id,
+                PageActionRow.automation_ready.is_(True),
+            )
+        )
         automation_ready_q = await db.execute(
             select(func.count()).select_from(EvidenceControlRow).where(
                 EvidenceControlRow.artifact_id == artifact_id,
@@ -1820,7 +1834,9 @@ async def get_visual_evidence_graph(
                 EvidenceControlRow.automation_ready.is_(True),
             )
         )
-        automation_ready_count = automation_ready_q.scalar_one()
+        automation_ready_count = (
+            (page_action_ready_q.scalar_one() or 0) + (automation_ready_q.scalar_one() or 0)
+        )
 
         avg_completeness_q = await db.execute(
             select(func.coalesce(func.avg(VisualSceneRow.completeness_confidence), 0.0))
