@@ -29,11 +29,10 @@ let busy = false;
 // writing outside the work dir.
 function allowedPath(p) {
   if (typeof p !== 'string' || !p || p.includes('..') || p.startsWith('/') || p.includes('\\')) return false;
-  if (/^tests\/[A-Za-z0-9._/-]+\.spec\.ts$/.test(p)) return true;
-  return [
-    'playwright.config.ts', 'nexus-reporter.ts', 'nexus.config.json',
-    'nexus.data.json', 'nexus.auth.json', 'package.json', 'tsconfig.json', '.env', '.env.example', 'README.md',
-  ].includes(p);
+  if (p === 'node_modules' || p.startsWith('node_modules/')) return false;  // never write into the shared symlinked install
+  if (!p.includes('/')) return true;        // any root-level config/support/dotfile (WORK is wiped each run)
+  if (/^tests\//.test(p)) return true;      // any file under tests/
+  return false;
 }
 
 function rmrf(dir) { try { fs.rmSync(dir, { recursive: true, force: true }); } catch (e) { /* noop */ } }
@@ -49,7 +48,7 @@ function writeBundle(files) {
   // Resolve @playwright/test (and the browsers) from the pre-installed root.
   try { fs.symlinkSync(path.join(ROOT, 'node_modules'), path.join(WORK, 'node_modules')); } catch (e) { /* noop */ }
   for (const [rel, content] of Object.entries(files || {})) {
-    if (!allowedPath(rel)) throw new Error('rejected path: ' + rel);
+    if (!allowedPath(rel)) { console.error('[nexus-runner] writeBundle rejected: ' + rel); throw new Error('rejected path: ' + rel); }
     const dest = path.join(WORK, rel);
     fs.mkdirSync(path.dirname(dest), { recursive: true });
     fs.writeFileSync(dest, String(content));
@@ -99,14 +98,18 @@ function alive(p) { return p && p.exitCode === null && !p.killed; }
 function ensureDisplay() {
   if (display.up && alive(display.xvfb) && alive(display.x11vnc) && alive(display.websockify)) return;
   if (!alive(display.xvfb)) {
+    const _dn = String(DISPLAY).replace(':', '');
+    try { fs.rmSync('/tmp/.X' + _dn + '-lock', { force: true }); } catch (e) { /* stale lock */ }
+    try { fs.rmSync('/tmp/.X11-unix/X' + _dn, { force: true }); } catch (e) { /* stale socket */ }
     display.xvfb = spawn('Xvfb', [DISPLAY, '-screen', '0', VNC_GEOMETRY, '-nolisten', 'tcp', '-ac'],
       { stdio: 'ignore', detached: true });
     display.xvfb.unref();
   }
   if (!alive(display.x11vnc)) {
-    display.x11vnc = spawn('x11vnc',
-      ['-display', DISPLAY, '-rfbport', '5900', '-forever', '-shared', '-nopw',
-       '-viewonly', '-localhost', '-quiet', '-noxdamage'],
+    const _xs = '/tmp/.X11-unix/X' + String(DISPLAY).replace(':', '');
+    display.x11vnc = spawn('sh', ['-c',
+      'i=0; while [ ! -S "' + _xs + '" ] && [ $i -lt 50 ]; do i=$((i+1)); sleep 0.1; done; ' +
+      'exec x11vnc -display ' + DISPLAY + ' -rfbport 5900 -forever -shared -nopw -viewonly -localhost -quiet -noxdamage'],
       { stdio: 'ignore', detached: true });
     display.x11vnc.unref();
   }
@@ -123,7 +126,12 @@ function ensureDisplay() {
 function runPlaywrightLive(env, timeoutMs) {
   ensureDisplay();
   const bin = path.join(ROOT, 'node_modules', '.bin', 'playwright');
-  const child = spawn(bin, ['test', '--headed'],
+  const _xsock = '/tmp/.X11-unix/X' + String(DISPLAY).replace(':', '');
+  // Wait for the Xvfb X-socket before launching the HEADED browser (else Chrome races the
+  // X server and dies with "Missing X server or $DISPLAY"). Bounded ~5s; exec keeps the PID.
+  const child = spawn('sh', ['-c',
+    'i=0; while [ ! -S "' + _xsock + '" ] && [ $i -lt 50 ]; do i=$((i+1)); sleep 0.1; done; ' +
+    'exec "' + bin + '" test --headed'],
     { cwd: WORK, env: { ...process.env, ...env, CI: '1', DISPLAY } });
   liveRun = { run_id: env.NEXUS_RUN_ID || '', status: 'running', exit_code: null, output: '' };
   const cap = (d) => { liveRun.output += d.toString(); if (liveRun.output.length > 400000) liveRun.output = liveRun.output.slice(-400000); };
@@ -165,6 +173,9 @@ const CAPTURE_VNCPASS_FILE = path.join(ROOT, '.nexus-capture.vncpass');
 function ensureCaptureDisplay(authFile) {
   if (capDisp.up && alive(capDisp.xvfb) && alive(capDisp.x11vnc) && alive(capDisp.websockify)) return;
   if (!alive(capDisp.xvfb)) {
+    const _cdn = String(CAPTURE_DISPLAY).replace(':', '');
+    try { fs.rmSync('/tmp/.X' + _cdn + '-lock', { force: true }); } catch (e) { /* stale lock */ }
+    try { fs.rmSync('/tmp/.X11-unix/X' + _cdn, { force: true }); } catch (e) { /* stale socket */ }
     capDisp.xvfb = spawn('Xvfb', [CAPTURE_DISPLAY, '-screen', '0', VNC_GEOMETRY, '-nolisten', 'tcp', '-ac'],
       { stdio: 'ignore', detached: true }); capDisp.xvfb.unref();
   }
@@ -175,9 +186,7 @@ function ensureCaptureDisplay(authFile) {
     // only one viewer at a time. Closes the unauthenticated-control exposure.
     const _xsock = '/tmp/.X11-unix/X' + String(CAPTURE_DISPLAY).replace(':', '');
     // Wait for the Xvfb X-socket before starting x11vnc (else x11vnc races Xvfb
-    // at startup, fails to open the display, and dies -> dead VNC backend and the
-    // portal's noVNC shows "Failed to connect"). exec keeps the same PID so the
-    // alive(capDisp.x11vnc) liveness check still tracks the real x11vnc process.
+    // at startup, fails to open the display, and dies -> dead VNC backend).
     capDisp.x11vnc = spawn('sh', ['-c',
       'i=0; while [ ! -S "' + _xsock + '" ] && [ $i -lt 50 ]; do i=$((i+1)); sleep 0.1; done; ' +
       'exec env DISPLAY=' + CAPTURE_DISPLAY + ' x11vnc -display ' + CAPTURE_DISPLAY +
