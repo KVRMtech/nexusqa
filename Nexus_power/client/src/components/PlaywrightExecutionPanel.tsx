@@ -107,7 +107,7 @@ function AutoHealPanel({ job, live, healing, err }: { job: any; live: string | n
         <div className="mt-1 flex items-center gap-2 rounded-md border border-emerald-200 bg-emerald-50 px-2.5 py-1.5">
           <CheckCircle2 className="h-4 w-4 text-emerald-600 shrink-0" />
           <span className="text-[11px] font-bold text-emerald-800">
-            Clean Run - V1 ✓{job?.clean_run_version ? ` (v${job.clean_run_version})` : ''} — healed {job?.healed_count ?? 0} script(s), verified green. Anyone can run V1 next.
+            Clean Run - V1 ✓{job?.clean_run_version ? ` (v${job.clean_run_version})` : ''} — healed {job?.healed_count ?? 0} script(s), verified green and saved as PROPOSED. Approve it to make V1 the active version a run uses — nothing auto-promotes.
           </span>
         </div>
       )}
@@ -155,6 +155,95 @@ function FidelityCard({ rep }: { rep: any }) {
           {(llm.gaps || []).slice(0, 6).map((x: string, i: number) => <p key={i} className="text-[10px] text-slate-600 leading-snug">• {x}</p>)}
         </div>
       )}
+    </div>
+  );
+}
+
+// Live Preflight — deterministic Playwright probe (no LLM) vs the live app:
+// per-step locator resolution (1 good / 0 broken-or-renamed / >1 ambiguous) +
+// select-option presence. The "proof it will run" before a full run.
+// Status-driven render: groups rep.steps by the engine's honest status so EVERY bucket
+// (and any future one) surfaces with its own remediation. Order = most-actionable first.
+const PF_META: Record<string, { glyph: string; color: string; label: string }> = {
+  absent: { glyph: '✗', color: '#b91c1c', label: 'not found — renamed or removed (re-anchor / re-capture)' },
+  kind_mismatch: { glyph: '⟳', color: '#7c3aed', label: 'wrong control kind — a control with this name exists but as a different kind (heal / Add-select)' },
+  strict_ambiguous: { glyph: '≣', color: '#be123c', label: 'ambiguous in strict mode — matches more than one element, so the run errors (tighten locator)' },
+  value_mismatch: { glyph: '≠', color: '#be123c', label: 'value/option gone — the recorded selection no longer exists (re-capture the value)' },
+  disabled: { glyph: '⊘', color: '#64748b', label: 'present but not actionable — disabled / read-only (a precondition may be unmet)' },
+  hidden: { glyph: '◫', color: '#0369a1', label: 'present but hidden — behind a collapsed/conditional section (the test needs a reveal step)' },
+  blocked: { glyph: '⤼', color: '#475569', label: 'not reached — the step’s page never loaded (fix an earlier step first; not a locator failure)' },
+  ambiguous: { glyph: '⚠', color: '#b45309', label: 'ambiguous — matches more than one element (tighten locator)' },
+};
+const PF_ORDER = ['absent', 'kind_mismatch', 'strict_ambiguous', 'value_mismatch', 'disabled', 'hidden', 'blocked', 'ambiguous'];
+
+function PreflightCard({ rep }: { rep: any }) {
+  if (rep?.error) return (
+    <div className="rounded-md border border-rose-200 bg-rose-50/50 px-3 py-2 text-[10px] text-rose-700">
+      Live preflight error: {String(rep.error)}
+    </div>
+  );
+  const probed = rep?.probed ?? 0;
+  const resolved = rep?.resolved ?? 0;
+  const pct = rep?.resolve_pct ?? 0;
+  const authed = rep?.authenticated;
+  const norm = (st: string) => (st || '').replace(/-/g, '_');
+  // Primary path: group the per-step objects (each carries a `status`). Legacy fallback:
+  // use the bucket arrays if `steps` is absent. Never count 'resolved' as a problem.
+  const groups: Record<string, any[]> = {};
+  const steps: any[] = Array.isArray(rep?.steps)
+    ? rep.steps.filter((s: any) => s && s.kind !== 'nav' && (s.status || s.count !== undefined)) : [];
+  if (steps.length) {
+    for (const s of steps) {
+      const st = norm(s.status || (s.count === 1 ? 'resolved' : (s.count > 1 ? 'ambiguous' : 'absent')));
+      if (st === 'resolved') continue;
+      (groups[st] = groups[st] || []).push(s);
+    }
+  } else {
+    for (const k of PF_ORDER) { const arr = rep?.[k]; if (arr && arr.length) groups[k] = arr; }
+    if (rep?.broken && !groups.absent && !groups.kind_mismatch) groups.absent = rep.broken;
+  }
+  const blockedN = (groups.blocked || []).length;
+  const ok = probed > 0 && PF_ORDER.every((k) => !(groups[k] && groups[k].length));
+  return (
+    <div className="border-t border-emerald-100 bg-emerald-50/40 px-3 py-2.5">
+      <div className="flex items-center gap-2 flex-wrap mb-1">
+        <Globe className="h-3.5 w-3.5 text-emerald-600" />
+        <span className="text-[11px] font-black text-emerald-900">Live preflight</span>
+        <span className="rounded px-2 py-0.5 text-[10px] font-black"
+          style={ok ? { background: 'rgba(16,185,129,0.16)', color: '#047857' } : { background: 'rgba(244,63,94,0.14)', color: '#be123c' }}>
+          {resolved}/{probed} resolve · {pct}%
+        </span>
+        {blockedN > 0 && (
+          <span className="text-[9px] text-slate-500" title="Resolution among the steps actually reached (excludes blocked).">
+            {rep?.resolve_pct_reachable ?? pct}% of reached
+          </span>
+        )}
+        {authed !== undefined && (
+          <span className="text-[9px] font-bold" style={{ color: authed ? '#047857' : '#b45309' }}>
+            {authed ? '🔓 authenticated' : '🔒 no saved session'}
+          </span>
+        )}
+        {rep?.runner_status && <span className="text-[9px] text-slate-400">runner: {rep.runner_status}</span>}
+      </div>
+      {rep?.note && <p className="text-[10px] text-amber-700 mb-1">{rep.note}</p>}
+
+      {PF_ORDER.map((k) => {
+        const arr = groups[k]; if (!arr || !arr.length) return null;
+        const m = PF_META[k];
+        return (
+          <div key={k} className="mb-1">
+            <p className="text-[10px] font-bold mb-0.5" style={{ color: m.color }}>{m.glyph} {arr.length} {m.label}:</p>
+            {arr.map((s: any, i: number) => (
+              <div key={i} className="text-[10px] text-slate-600 pl-2">
+                step {s.step}: <b>{s.label}</b> <span className="text-slate-400">({s.kind})</span>
+                {s.foundRole ? <span className="text-violet-500"> — found as <code>{s.foundRole}</code></span> : null}
+                {typeof s.count === 'number' && s.count > 1 ? <span className="text-slate-400"> — {s.count} matches</span> : null}
+              </div>
+            ))}
+          </div>
+        );
+      })}
+      {ok && <p className="text-[10px] text-emerald-700">✓ Every probed locator resolves to exactly one visible, actionable element — this test is runnable.</p>}
     </div>
   );
 }
@@ -392,6 +481,8 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
   // ── Run console state ──────────────────────────────────
   const [target, setTarget] = useState<'local' | 'sauce' | 'ci'>('local');
   const [selectedCats, setSelectedCats] = useState<Set<string>>(new Set());
+  const [selectedScriptIds, setSelectedScriptIds] = useState<Set<string>>(new Set());
+  const [expandedRow, setExpandedRow] = useState<string>('');   // A.1 row inline-actions drawer (keyed by test_id|path)
   const [baseUrl, setBaseUrl] = useState('');
   const [dataOverrides, setDataOverrides] = useState<Record<string, string>>({});
   const [runBusy, setRunBusy] = useState(false);
@@ -402,6 +493,9 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
   const [runs, setRuns] = useState<any>(null);
   const [timeline, setTimeline] = useState<any>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
+  // Console vs Run view — clicking "view results" after a run flips to a dedicated
+  // results/triage page; "Back to Run Console" returns. Additive (no routing yet).
+  const [view, setView] = useState<'console' | 'run'>('console');
   const [autoHealing, setAutoHealing] = useState(false);
   const [autoHealJob, setAutoHealJob] = useState<any>(null);
   const [autoHealLive, setAutoHealLive] = useState<string | null>(null);
@@ -409,6 +503,8 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
   const [fidelity, setFidelity] = useState<Record<string, any>>({});   // test_id -> scorecard
   const [suiteFid, setSuiteFid] = useState<any>(null);
   const [fidBusy, setFidBusy] = useState<string>('');                  // test_id | 'suite' | 'all'
+  const [preflight, setPreflight] = useState<Record<string, any>>({}); // test_id -> live resolution report
+  const [pfBusy, setPfBusy] = useState<string>('');                    // test_id being preflighted
 
   // ── Authentication (capture-once session) state ──────────
   const [authStatus, setAuthStatus] = useState<any>(null);   // { profile, capturing, encryption_available }
@@ -425,6 +521,18 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
     } catch (e: any) {
       setFidelity((m) => ({ ...m, [testId]: { error: e?.response?.data?.detail || String(e) } }));
     } finally { setFidBusy(''); }
+  };
+  // Live Preflight — deterministic Playwright probe vs the live app (no LLM).
+  const runPreflight = async (testId: string) => {
+    if (!testId) return;
+    const bu = (baseUrl || '').trim() || (data?.recorded_base_url || '');
+    setPfBusy(testId);
+    try {
+      const rep = await api.runScriptPreflight(artifactId, testId, bu);
+      setPreflight((m) => ({ ...m, [testId]: rep }));
+    } catch (e: any) {
+      setPreflight((m) => ({ ...m, [testId]: { error: e?.response?.data?.detail || String(e) } }));
+    } finally { setPfBusy(''); }
   };
   const regenScript = async (testId: string) => {
     if (!testId) return;
@@ -540,6 +648,28 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
   }, [artifactId]);
   useEffect(() => { void refresh(); }, [refresh]);
 
+  // One-click Enrich from the cockpit — captures real control types (dropdowns/
+  // radios) so the generated scripts run correctly; then reloads the manifest.
+  const runEnrich = async () => {
+    setBusy('enrich'); setError(null);
+    try { await api.enrichTestFactory(artifactId); await refresh(); }
+    catch (e: any) { setError(e?.response?.data?.detail || String(e)); }
+    finally { setBusy(''); }
+  };
+
+  // A.4 — load the active version per script on mount so the version badge is
+  // correct immediately (not only after opening an editor). Bounded + best-effort.
+  useEffect(() => {
+    const scripts = data?.scripts || [];
+    if (!scripts.length || scripts.length > 30) return;
+    scripts.forEach(async (s: Script) => {
+      try {
+        const src = await api.getScriptSource(artifactId, s.test_id);
+        if (src?.edited) setEditedTests((m) => ({ ...m, [s.test_id]: src.version_no }));
+      } catch { /* ignore */ }
+    });
+  }, [data, artifactId]);
+
   // Phase D — run history + flake (refetched after each run via triageKey).
   const refreshRuns = useCallback(async () => {
     try { setRuns(await api.getRunsSummary(artifactId)); } catch { /* ignore */ }
@@ -591,6 +721,7 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
   // heal trace until it freezes a Clean Run - V1 or stops toward a human.
   const runAutoHeal = async () => {
     setAutoHealing(true); setAutoHealErr(null); setAutoHealJob(null); setAutoHealLive(null);
+    setView('run');   // jump to the dedicated results/live view
     try {
       const body: any = { base_url: baseUrl.trim(), data: buildData() };
       if (selectedScripts.length) body.test_ids = selectedScripts.map((s: Script) => s.test_id).filter(Boolean);
@@ -627,20 +758,28 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
   useEffect(() => {
     if (!data) return;
     setSelectedCats(new Set((data.scripts || []).map((s: Script) => s.category)));
+    setSelectedScriptIds(new Set((data.scripts || []).map((s: Script) => s.test_id)));
+    void auditSuite();
     setBaseUrl(data.recorded_base_url || '');
     setDataOverrides({});
     setPerTestData({});
   }, [data]);
 
-  const toggleCat = (cat: string) => setSelectedCats((prev) => {
+  const toggleScript = (tid: string) => setSelectedScriptIds((prev) => {
     const next = new Set(prev);
-    if (next.has(cat)) next.delete(cat); else next.add(cat);
+    if (next.has(tid)) next.delete(tid); else next.add(tid);
+    return next;
+  });
+  const toggleCatItems = (items: Script[]) => setSelectedScriptIds((prev) => {
+    const next = new Set(prev);
+    const allOn = items.every((s) => next.has(s.test_id));
+    items.forEach((s) => { if (allOn) next.delete(s.test_id); else next.add(s.test_id); });
     return next;
   });
 
   const selectedScripts = useMemo(
-    () => (data?.scripts || []).filter((s: Script) => selectedCats.has(s.category)),
-    [data, selectedCats],
+    () => (data?.scripts || []).filter((s: Script) => selectedScriptIds.has(s.test_id)),
+    [data, selectedScriptIds],
   );
 
   // Merge the overridable data fields across the selected scripts (first default wins).
@@ -714,6 +853,7 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
   const runOnNexus = async (scope?: { test_ids?: string[] }) => {
     setRunErr(null);
     if (!confirmColdRun()) return;
+    setView('run');   // jump to the dedicated results/live view
     const single = scope?.test_ids?.length === 1 ? scope.test_ids[0] : null;
     setRunningTestId(single);
     try {
@@ -747,6 +887,7 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
   const runLive = async (scope?: { test_ids?: string[] }) => {
     setRunErr(null); setLiveUrl(null);
     if (!confirmColdRun()) return;
+    setView('run');   // jump to the dedicated results/live view
     const single = scope?.test_ids?.length === 1 ? scope.test_ids[0] : null;
     setRunningTestId(single);
     try {
@@ -806,6 +947,21 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
       .filter((g) => g.items.length > 0);
   }, [data]);
 
+  const fidByTest = useMemo(() => {
+    const m: Record<string, any> = {};
+    for (const sc of (suiteFid?.scripts || [])) if (sc && sc.test_id) m[sc.test_id] = sc;
+    return m;
+  }, [suiteFid]);
+  const lastByTest = useMemo(() => {
+    const sc: any = runs?.scripts;
+    if (Array.isArray(sc)) {
+      const m: Record<string, any> = {};
+      for (const x of sc) if (x && x.test_id) m[x.test_id] = x;
+      return m;
+    }
+    return (sc && typeof sc === 'object') ? sc : {};
+  }, [runs]);
+
   const totals = data?.totals || { scripts: 0, solid_steps: 0, review_steps: 0 };
 
   return (
@@ -844,7 +1000,7 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
       {error && <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-[11px] text-amber-800">{error}</div>}
 
       {/* ── Run console ─────────────────────────────────────── */}
-      {data && totals.scripts > 0 && (
+      {view === 'console' && data && totals.scripts > 0 && (
         <div className="rounded-xl border border-indigo-200 bg-white/70 overflow-hidden">
           <div className="px-4 py-2.5 flex items-center gap-2 bg-indigo-50/70 border-b border-indigo-100">
             <SlidersHorizontal className="h-4 w-4 text-indigo-600" />
@@ -852,6 +1008,36 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
             <span className="text-[10px] text-slate-400">configure once → run anywhere, no code edits</span>
           </div>
           <div className="p-4 space-y-4">
+            {/* B.1 — Runnability preflight: surface what a cold run needs BEFORE it fails */}
+            {(() => {
+              const hasAuth = !!authStatus?.profile?.present;
+              return (
+                <div className="rounded-lg border px-3 py-2" style={hasAuth ? { borderColor: 'rgba(16,185,129,0.30)', background: 'rgba(16,185,129,0.05)' } : { borderColor: 'rgba(245,158,11,0.45)', background: 'rgba(245,158,11,0.07)' }}>
+                  <div className="flex items-center gap-2 flex-wrap text-[11px]">
+                    <span className="font-black text-slate-700">Before you run</span>
+                    {hasAuth ? (
+                      <span className="font-semibold text-emerald-700">✓ Login session ready — runs start authenticated</span>
+                    ) : (
+                      <>
+                        <span className="font-semibold text-amber-800">⚠ No saved login — a cold run starts logged out and may stop at the login screen (fails at step 1).</span>
+                        <button onClick={startCapture} disabled={!!authBusy || !authStatus?.encryption_available}
+                          className="rounded-md px-2 py-0.5 text-[10px] font-bold bg-amber-600 text-white hover:bg-amber-500 disabled:opacity-50">
+                          {authBusy === 'capture' ? 'Opening…' : 'Capture login session'}
+                        </button>
+                      </>
+                    )}
+                    <span className="ml-auto flex items-center gap-1.5 text-[10px] text-slate-400">
+                      Accuracy: capture real control types (dropdowns / radios), not text.
+                      <button onClick={runEnrich} disabled={busy === 'enrich'}
+                        title="Vision pass that captures each control\u2019s real type + options so dropdowns/radios run correctly"
+                        className="rounded-md px-2 py-0.5 text-[10px] font-bold bg-indigo-100 text-indigo-700 hover:bg-indigo-200 disabled:opacity-50">
+                        {busy === 'enrich' ? 'Enriching\u2026' : 'Enrich now'}
+                      </button>
+                    </span>
+                  </div>
+                </div>
+              );
+            })()}
             {/* target */}
             <div className="flex items-center gap-2 flex-wrap">
               <span className="text-[10px] font-bold uppercase text-slate-400 w-14 shrink-0">Run on</span>
@@ -877,19 +1063,219 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
             {/* 1 · scripts */}
             <div>
               <p className="text-[10px] font-bold uppercase text-slate-400 mb-1.5">1 · Scripts to run</p>
-              <div className="flex flex-wrap gap-1.5">
+              <div className="space-y-1.5">
                 {grouped.map((g) => {
-                  const on = selectedCats.has(g.type);
+                  const allOn = g.items.every((s) => selectedScriptIds.has(s.test_id));
                   return (
-                    <button key={g.type} onClick={() => toggleCat(g.type)}
-                      className={`flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[11px] font-semibold border transition-colors ${
-                        on ? 'text-white' : 'bg-white text-slate-500 border-slate-200 hover:bg-slate-50'}`}
-                      style={on ? { background: g.accent, borderColor: g.accent } : undefined}>
-                      {on ? <CheckSquare className="h-3.5 w-3.5" /> : <Square className="h-3.5 w-3.5" />}
-                      {g.label} <span className="opacity-80">{g.items.length}</span>
-                    </button>
+                    <div key={g.type} className="rounded-lg border border-slate-200 overflow-hidden">
+                      <div className="flex items-center bg-slate-50/70">
+                        <button onClick={() => toggleCatItems(g.items)}
+                          className="flex-1 flex items-center gap-2 px-2.5 py-1.5 text-left hover:bg-slate-100/70">
+                          {allOn ? <CheckSquare className="h-3.5 w-3.5" style={{ color: g.accent }} /> : <Square className="h-3.5 w-3.5 text-slate-400" />}
+                          <span className="text-[11px] font-black" style={{ color: g.accent }}>{g.label}</span>
+                          <span className="text-[10px] text-slate-400 font-semibold">{g.items.length}</span>
+                          <span className="ml-auto text-[9px] uppercase font-bold text-slate-400">{allOn ? 'all selected' : 'select all'}</span>
+                        </button>
+                        <button onClick={() => downloadZip(g.type)} disabled={!!busy}
+                          title="Download this category as a runnable zip"
+                          className="shrink-0 flex items-center px-2 py-1.5 text-slate-500 hover:bg-slate-100/70 disabled:opacity-50">
+                          {busy === `zip:${g.type}` ? <Loader2 className="h-3 w-3 animate-spin" /> : <Download className="h-3 w-3" />}
+                        </button>
+                      </div>
+                      <div className="divide-y divide-slate-100">
+                        {g.items.map((s) => {
+                          const on = selectedScriptIds.has(s.test_id);
+                          const fid = fidByTest[s.test_id];
+                          const ver = editedTests[s.test_id];
+                          const last = lastByTest[s.test_id] || {};
+                          const lastSt = last.status || last.latest_status || last.verdict || (Array.isArray(last.runs) ? (last.runs[0] && last.runs[0].status) : '') || '';
+                          const rid = s.test_id || s.path;
+                          const xOpen = expandedRow === rid;
+                          return (
+                            <div key={s.test_id} className="hover:bg-indigo-50/40">
+                              <div className="flex items-center gap-2 px-2.5 py-1.5">
+                                <input type="checkbox" checked={on} onChange={() => toggleScript(s.test_id)} className="h-3.5 w-3.5 accent-indigo-600 shrink-0 cursor-pointer" />
+                                <span onClick={() => toggleScript(s.test_id)} className="text-[11px] text-slate-700 font-medium truncate flex-1 min-w-0 cursor-pointer">{s.name}</span>
+                                <span className="shrink-0 text-[9px] text-slate-400 flex items-center gap-1.5">
+                                  <span>{s.stats?.total ?? s.lines} steps</span>
+                                  {s.stats?.solid != null && <span style={{ color: '#059669' }}>{s.stats.solid} solid</span>}
+                                  {(s.stats?.review || 0) > 0 && <span style={{ color: '#b45309' }}>{s.stats.review} review</span>}
+                                  {(s.stats?.skipped || 0) > 0 && <span style={{ color: '#64748b' }}>{s.stats.skipped} skipped</span>}
+                                </span>
+                                {fid && (
+                                  <span className="shrink-0 rounded px-1.5 py-0.5 text-[9px] font-bold"
+                                    style={fid.grade === 'strong' ? { background: 'rgba(16,185,129,0.15)', color: '#047857' }
+                                      : fid.grade === 'weak' ? { background: 'rgba(244,63,94,0.12)', color: '#be123c' }
+                                      : { background: 'rgba(245,158,11,0.15)', color: '#b45309' }}
+                                    title="Script fidelity — how faithfully the Playwright matches the test case (NOT whether the app passed; that is the Run/verdict).">
+                                    fidelity {fid.score}%
+                                  </span>
+                                )}
+                                <span className="shrink-0 rounded px-1.5 py-0.5 text-[9px] font-semibold"
+                                  style={ver ? { background: 'rgba(99,102,241,0.12)', color: '#4338ca' } : { background: 'rgba(100,116,139,0.10)', color: '#64748b' }}
+                                  title={ver ? 'an edited / healed version runs (not the auto-generated one)' : 'runs the auto-generated version'}>
+                                  {ver ? `edited · v${ver}` : 'generated'}
+                                </span>
+                                {lastSt && (
+                                  <span className="shrink-0 text-[10px]" title={`last run: ${lastSt}`}>
+                                    {lastSt === 'passed' ? '🟢' : lastSt === 'failed' ? '🔴' : '⚪'}
+                                  </span>
+                                )}
+                                <button onClick={() => setExpandedRow((cur) => (cur === rid ? '' : rid))}
+                                  title="View code · Edit · Audit · Regenerate · Run just this"
+                                  className="shrink-0 flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[9px] font-bold bg-slate-100 text-slate-600 hover:bg-slate-200">
+                                  {xOpen ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />} actions
+                                </button>
+                              </div>
+                              {xOpen && (
+                                <div className="border-t border-indigo-100 bg-slate-50/70 px-2.5 py-2 space-y-2">
+                                  <div className="flex items-center gap-1.5 flex-wrap">
+                                    <button onClick={() => runOnNexus({ test_ids: [s.test_id] })} disabled={running || !s.test_id}
+                                      title="Run just this script on the Nexus runner (headless)"
+                                      className="flex items-center gap-1 rounded-md px-2 py-1 text-[10px] font-bold text-white disabled:opacity-50" style={{ background: '#059669' }}>
+                                      {runningTestId === s.test_id ? <Loader2 className="h-3 w-3 animate-spin" /> : <Play className="h-3 w-3" />} Run this
+                                    </button>
+                                    <button onClick={() => runLive({ test_ids: [s.test_id] })} disabled={running || !s.test_id}
+                                      title="Run this script HEADED and watch it live (streamed into the portal)"
+                                      className="flex items-center gap-1 rounded-md px-2 py-1 text-[10px] font-bold text-white disabled:opacity-50" style={{ background: '#7c3aed' }}>
+                                      {runningTestId === s.test_id && liveUrl ? <Loader2 className="h-3 w-3 animate-spin" /> : <Play className="h-3 w-3" />} Live
+                                    </button>
+                                    <button onClick={() => setOpenCode((m) => ({ ...m, [rid]: !m[rid] }))}
+                                      className="flex items-center gap-1 rounded-md px-2 py-1 text-[10px] font-semibold bg-slate-100 text-slate-700 hover:bg-slate-200">
+                                      {openCode[rid] ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />} {openCode[rid] ? 'Hide' : 'View'} code
+                                    </button>
+                                    {s.test_id && (
+                                      <button onClick={() => openEditor(s)}
+                                        title="Edit this test's script, save a new version, runs use it"
+                                        className="flex items-center gap-1 rounded-md px-2 py-1 text-[10px] font-semibold bg-violet-50 text-violet-700 hover:bg-violet-100">
+                                        <Pencil className="h-3 w-3" /> Edit{editedTests[s.test_id] ? ` · v${editedTests[s.test_id]}` : ''}
+                                      </button>
+                                    )}
+                                    {s.test_id && (
+                                      <button onClick={() => auditScript(s.test_id)} disabled={fidBusy === s.test_id}
+                                        title="Audit: does this script faithfully implement the test case + verify its Expected Results? (coverage + assertions + AI review)"
+                                        className="flex items-center gap-1 rounded-md px-2 py-1 text-[10px] font-semibold bg-sky-50 text-sky-700 hover:bg-sky-100 disabled:opacity-50">
+                                        {fidBusy === s.test_id ? <Loader2 className="h-3 w-3 animate-spin" /> : <ShieldAlert className="h-3 w-3" />} Audit
+                                      </button>
+                                    )}
+                                    {s.test_id && (
+                                      <button onClick={() => regenScript(s.test_id)} disabled={fidBusy === `${s.test_id}:regen`}
+                                        title="Regenerate this script from the current test case as a new immutable version (v+1)"
+                                        className="flex items-center gap-1 rounded-md px-2 py-1 text-[10px] font-semibold bg-teal-50 text-teal-700 hover:bg-teal-100 disabled:opacity-50">
+                                        {fidBusy === `${s.test_id}:regen` ? <Loader2 className="h-3 w-3 animate-spin" /> : <RotateCcw className="h-3 w-3" />} Regenerate
+                                      </button>
+                                    )}
+                                    {s.test_id && (
+                                      <button onClick={() => runPreflight(s.test_id)} disabled={pfBusy === s.test_id}
+                                        title="Live preflight: open the live app and check every locator resolves (0 = broken/renamed, >1 = ambiguous). Proof it will run. Uses the Environment URL above."
+                                        className="flex items-center gap-1 rounded-md px-2 py-1 text-[10px] font-semibold bg-emerald-50 text-emerald-700 hover:bg-emerald-100 disabled:opacity-50">
+                                        {pfBusy === s.test_id ? <Loader2 className="h-3 w-3 animate-spin" /> : <Globe className="h-3 w-3" />} Live preflight
+                                      </button>
+                                    )}
+                                    {(s.data_fields?.length || 0) > 0 && (
+                                      <button onClick={() => setOpenData((m) => ({ ...m, [rid]: !m[rid] }))}
+                                        title="Set this test's own data (overrides the global defaults)"
+                                        className="flex items-center gap-1 rounded-md px-2 py-1 text-[10px] font-semibold bg-amber-50 text-amber-700 hover:bg-amber-100">
+                                        <Database className="h-3 w-3" /> Data ({s.data_fields.length}){perTestData[s.test_id] && Object.values(perTestData[s.test_id]).some((v) => v) ? ' ✎' : ''}
+                                      </button>
+                                    )}
+                                    <button onClick={() => copy(`cmd:${rid}`, `npx playwright test ${s.path}`)}
+                                      className="flex items-center gap-1 rounded-md px-2 py-1 text-[10px] font-semibold bg-indigo-50 text-indigo-700 hover:bg-indigo-100">
+                                      {copied === `cmd:${rid}` ? <Check className="h-3 w-3 text-emerald-500" /> : <Copy className="h-3 w-3" />} Copy command
+                                    </button>
+                                    <button onClick={() => downloadText((s.path.split('/').pop() || 'test.spec.ts'), s.code, 'text/typescript')}
+                                      className="flex items-center gap-1 rounded-md px-2 py-1 text-[10px] font-semibold bg-slate-100 text-slate-700 hover:bg-slate-200">
+                                      <Download className="h-3 w-3" /> .spec
+                                    </button>
+                                  </div>
+                                  {fidelity[s.test_id] && <FidelityCard rep={fidelity[s.test_id]} />}
+                                  {preflight[s.test_id] && <PreflightCard rep={preflight[s.test_id]} />}
+                                  {openData[rid] && (s.data_fields?.length || 0) > 0 && (
+                                    <div className="rounded-md border border-amber-200 bg-amber-50/40 px-2.5 py-2">
+                                      <p className="text-[10px] text-slate-500 mb-1.5"><span className="font-bold text-amber-700">This test's data</span> — blank inherits the global default / observed value (never invented). Text, dates &amp; dropdowns are overridable; radio/checkbox/toggle replay the recording.</p>
+                                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                                        {s.data_fields.map((f) => (
+                                          <label key={f.key} className="flex items-center gap-2">
+                                            <span className="text-[11px] text-slate-500 w-28 shrink-0 truncate" title={f.label}>{f.label || f.key}</span>
+                                            <input value={perTestData[s.test_id]?.[f.key] ?? ''} placeholder={f.default || '(observed)'}
+                                              onChange={(e) => setPerTestData((d) => ({ ...d, [s.test_id]: { ...(d[s.test_id] || {}), [f.key]: e.target.value } }))}
+                                              className="flex-1 min-w-0 rounded-md border border-amber-200 px-2 py-1 text-[11px] font-mono text-slate-700 focus:outline-none focus:border-amber-400" />
+                                          </label>
+                                        ))}
+                                      </div>
+                                    </div>
+                                  )}
+                                  {openEdit[rid] && s.test_id && (
+                                    <div className="rounded-md border border-violet-200 bg-violet-50/40 px-2.5 py-2">
+                                      <div className="flex items-center gap-2 mb-1.5 flex-wrap">
+                                        <Pencil className="h-3 w-3 text-violet-600" />
+                                        <span className="text-[10px] font-bold text-violet-700">Edit script</span>
+                                        <span className="text-[10px] text-slate-400">you own this code — Save creates a new version; runs use the latest</span>
+                                        <button onClick={() => saveVersion(s.test_id)} disabled={!editDirty[s.test_id] || editBusy === `save:${s.test_id}`}
+                                          className="ml-auto flex items-center gap-1 rounded-md px-2.5 py-1 text-[10px] font-bold text-white disabled:opacity-50" style={{ background: '#7c3aed' }}>
+                                          {editBusy === `save:${s.test_id}` ? <Loader2 className="h-3 w-3 animate-spin" /> : <Save className="h-3 w-3" />}
+                                          Save &rarr; v{(editedTests[s.test_id] || 0) + 1}
+                                        </button>
+                                      </div>
+                                      {editBusy === rid ? (
+                                        <div className="flex items-center gap-2 text-[11px] text-slate-400 py-6 justify-center">
+                                          <Loader2 className="h-3.5 w-3.5 animate-spin" /> loading source…
+                                        </div>
+                                      ) : (
+                                        <textarea
+                                          value={editSource[s.test_id] ?? ''}
+                                          onChange={(e) => { setEditSource((m) => ({ ...m, [s.test_id]: e.target.value })); setEditDirty((m) => ({ ...m, [s.test_id]: true })); }}
+                                          spellCheck={false}
+                                          className="w-full rounded-md bg-slate-950 text-slate-200 font-mono text-[11px] leading-relaxed px-3 py-2 focus:outline-none border border-slate-800"
+                                          style={{ minHeight: '16rem' }} />
+                                      )}
+                                      {(versions[s.test_id]?.length || 0) > 0 && (
+                                        <div className="mt-2">
+                                          <p className="text-[10px] font-bold text-slate-500 mb-1 flex items-center gap-1"><History className="h-3 w-3" /> Versions</p>
+                                          <div className="space-y-1">
+                                            {versions[s.test_id].map((v: any, i: number) => (
+                                              <div key={v.script_version_id} className="flex items-center gap-2 text-[10px] text-slate-500 rounded bg-white/70 border border-slate-200 px-2 py-1">
+                                                <span className="font-bold text-slate-700">v{v.version_no}</span>
+                                                {i === 0 && <span className="rounded bg-emerald-100 text-emerald-700 px-1 font-bold">active</span>}
+                                                <span className="truncate">{v.author || 'unknown'}{v.note ? ` · ${v.note}` : ''}</span>
+                                                <span className="ml-auto shrink-0 text-slate-400">{v.created_at ? new Date(v.created_at).toLocaleString() : ''}</span>
+                                                {i !== 0 && (
+                                                  <button onClick={() => restoreVersion(s.test_id, v.version_no)} disabled={editBusy === `restore:${s.test_id}`}
+                                                    className="shrink-0 flex items-center gap-1 rounded px-1.5 py-0.5 font-semibold bg-slate-100 text-slate-600 hover:bg-slate-200 disabled:opacity-50">
+                                                    <RotateCcw className="h-2.5 w-2.5" /> Restore
+                                                  </button>
+                                                )}
+                                              </div>
+                                            ))}
+                                          </div>
+                                        </div>
+                                      )}
+                                    </div>
+                                  )}
+                                  {openCode[rid] && (
+                                    <div className="rounded-md overflow-hidden border border-slate-200">
+                                      <div className="flex items-center justify-between px-3 py-1.5 bg-slate-900">
+                                        <span className="text-[10px] font-mono text-slate-400">{s.path} · {s.lines} lines</span>
+                                        <button onClick={() => copy(`code:${rid}`, s.code)}
+                                          className="flex items-center gap-1 text-[10px] font-semibold text-slate-300 hover:text-white">
+                                          {copied === `code:${rid}` ? <Check className="h-3 w-3 text-emerald-400" /> : <Copy className="h-3 w-3" />} Copy
+                                        </button>
+                                      </div>
+                                      <pre className="overflow-x-auto bg-slate-950 px-3 py-3 text-[11px] leading-relaxed font-mono text-slate-200" style={{ maxHeight: '24rem' }}>
+                                        <code>{s.code}</code>
+                                      </pre>
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
                   );
                 })}
+                <p className="text-[10px] text-slate-500 font-semibold mt-1">→ {selectedScripts.length} of {totals.scripts} script{totals.scripts === 1 ? '' : 's'} selected · ready to run</p>
               </div>
             </div>
 
@@ -960,26 +1346,57 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
               {authErr && <p className="text-[10px] text-rose-600 mt-1">{authErr}</p>}
             </div>
 
-            {/* 3 · data */}
-            {mergedFields.length > 0 && (
+            {/* 3 · data — comparison table: Global + one column per selected script, diffs highlighted */}
+            {mergedFields.length > 0 && selectedScripts.length > 0 && (
               <div>
                 <p className="text-[10px] font-bold uppercase text-slate-400 mb-1.5 flex items-center gap-1.5">
-                  <Database className="h-3 w-3" /> 3 · Test data · global defaults
-                  <span className="normal-case font-medium text-slate-300">applied to every test unless overridden per-test (✎ Data on a script)</span>
+                  <Database className="h-3 w-3" /> 3 · Test data · per scenario
+                  <span className="normal-case font-medium text-slate-300">Global applies to all; a scenario cell overrides just that script. Differences are highlighted.</span>
                 </p>
                 <p className="text-[9px] text-slate-400 mb-1.5 -mt-0.5">
-                  Only text, dates &amp; dropdowns are editable here — radio / checkbox / toggle choices always replay the recorded value.
+                  Only text / dates / dropdowns are editable — radio / checkbox / toggle replay the recorded value (not shown here).
                 </p>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                  {mergedFields.map((f) => (
-                    <label key={f.key} className="flex items-center gap-2">
-                      <span className="text-[11px] text-slate-500 w-28 shrink-0 truncate" title={f.label}>{f.label || f.key}</span>
-                      <input value={dataOverrides[f.key] ?? f.default}
-                        onChange={(e) => setDataOverrides((d) => ({ ...d, [f.key]: e.target.value }))}
-                        className="flex-1 min-w-0 rounded-md border border-slate-200 px-2 py-1 text-[11px] font-mono text-slate-700 focus:outline-none focus:border-indigo-300" />
-                    </label>
-                  ))}
+                <div className="overflow-x-auto rounded-lg border border-slate-200">
+                  <table className="w-full text-[11px] border-collapse">
+                    <thead>
+                      <tr className="bg-slate-50/80 text-slate-500">
+                        <th className="text-left font-bold px-2 py-1.5 sticky left-0 bg-slate-50/80">Field</th>
+                        <th className="text-left font-bold px-2 py-1.5">Global</th>
+                        {selectedScripts.map((s) => (
+                          <th key={s.test_id} className="text-left font-bold px-2 py-1.5 max-w-[140px] truncate" title={s.name}>{s.name}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {mergedFields.map((f) => (
+                        <tr key={f.key} className="border-t border-slate-100">
+                          <td className="px-2 py-1 text-slate-600 font-medium sticky left-0 bg-white max-w-[160px] truncate" title={f.label || f.key}>{f.label || f.key}</td>
+                          <td className="px-2 py-1">
+                            <input value={dataOverrides[f.key] ?? f.default}
+                              onChange={(e) => setDataOverrides((d) => ({ ...d, [f.key]: e.target.value }))}
+                              className="w-full min-w-[90px] rounded border border-slate-200 px-1.5 py-0.5 text-[11px] font-mono text-slate-700 focus:outline-none focus:border-indigo-300" />
+                          </td>
+                          {selectedScripts.map((s) => {
+                            const recorded = ((s.data_fields || []).find((x) => x.key === f.key) || {}).default || '';
+                            const override = perTestData[s.test_id]?.[f.key] ?? '';
+                            const inheritedEff = (dataOverrides[f.key] ?? recorded) || '';
+                            const differs = recorded !== '' && recorded !== f.default;
+                            return (
+                              <td key={s.test_id} className={'px-2 py-1 ' + (differs ? 'bg-amber-50/60' : '')}>
+                                <input value={override}
+                                  placeholder={inheritedEff || '(observed)'}
+                                  onChange={(e) => setPerTestData((d) => ({ ...d, [s.test_id]: { ...(d[s.test_id] || {}), [f.key]: e.target.value } }))}
+                                  title={override ? 'overridden for this scenario' : (differs ? ('recorded for this scenario: ' + recorded + ' (differs from Global)') : 'inherits Global / recorded value')}
+                                  className={'w-full min-w-[90px] rounded border px-1.5 py-0.5 text-[11px] font-mono focus:outline-none focus:border-indigo-300 ' + (differs ? 'border-amber-300 text-amber-800 placeholder-amber-600/70' : 'border-slate-200 text-slate-500')} />
+                              </td>
+                            );
+                          })}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
                 </div>
+                <p className="text-[9px] text-slate-400 mt-1">A blank scenario cell shows its effective value as faint placeholder (inherits Global, then the recorded value). Amber = this scenario recorded a value different from Global.</p>
               </div>
             )}
 
@@ -1078,9 +1495,6 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
                     runs the highest-approved version of each selected script against {baseUrl.trim() || 'the recorded site'} — results flow to the board below
                   </span>
                 </div>
-                {(autoHealing || autoHealJob) && (
-                  <AutoHealPanel job={autoHealJob} live={autoHealLive} healing={autoHealing} err={autoHealErr} />
-                )}
                 {runStatus && (
                   <div className="mt-2 flex items-center gap-2 text-[11px] flex-wrap">
                     {running ? (
@@ -1092,19 +1506,10 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
                       <>
                         <span className="rounded px-2 py-0.5 font-black uppercase text-[9px]" style={runStatusStyle(runStatus.status)}>{runStatus.status}</span>
                         {runStatus.status !== 'unknown' && (
-                          <button onClick={scrollToResults} className="text-indigo-600 text-[10px] font-bold underline hover:text-indigo-800">→ view results &amp; triage</button>
+                          <button onClick={() => setView('run')} className="text-indigo-600 text-[10px] font-bold underline hover:text-indigo-800">→ view results &amp; triage</button>
                         )}
                       </>
                     )}
-                  </div>
-                )}
-                {liveUrl && running && (
-                  <div ref={liveRef} className="mt-3 rounded-lg overflow-hidden border-2 border-violet-300 bg-black">
-                    <div className="px-2 py-1 bg-violet-600 text-white text-[10px] font-bold flex items-center gap-1.5">
-                      <span className="inline-block h-2 w-2 rounded-full bg-red-400 animate-pulse" />
-                      LIVE — headed Chromium on the Nexus runner (view-only stream)
-                    </div>
-                    <iframe title="Nexus live run" src={liveUrl} className="w-full" style={{ height: 520, border: 0 }} />
                   </div>
                 )}
                 {runErr && <p className="mt-2 text-[10px] text-amber-700">{runErr}</p>}
@@ -1132,8 +1537,62 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
         </div>
       )}
 
+      {/* A.3 - GROUNDED VERDICT, front-and-center (the differentiator) */}
+      {data && totals.scripts > 0 && (
+        <div className="rounded-xl border-2 p-3" style={{ borderColor: 'rgba(16,185,129,0.30)', background: 'linear-gradient(135deg, rgba(16,185,129,0.06), rgba(99,102,241,0.04))' }}>
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-[13px]">🛡️</span>
+            <span className="text-[12px] font-black text-slate-900">Grounded verdict</span>
+            <span className="text-[10px] text-slate-500 font-medium max-w-[560px]">
+              🟢 = the app reached the same outcome the recorded human did · 🔴 = a real deviation (not a layout change). Every verdict links to the recorded evidence.
+            </span>
+            {runs?.board?.last_run_at ? (
+              <span className="ml-auto flex items-center gap-1.5 text-[11px] font-bold flex-wrap">
+                <span className="rounded-full px-2 py-0.5" style={{ background: 'rgba(34,197,94,0.16)', color: '#15803d' }}>{runs.board.passed ?? 0} passed</span>
+                {(runs.board.failed ?? 0) > 0 && <span className="rounded-full px-2 py-0.5" style={{ background: 'rgba(244,63,94,0.14)', color: '#be123c' }}>{runs.board.failed} failed</span>}
+                {(runs.board.flaky ?? 0) > 0 && <span className="rounded-full px-2 py-0.5" style={{ background: 'rgba(245,158,11,0.16)', color: '#b45309' }}>{runs.board.flaky} flaky</span>}
+                <button onClick={() => setView('run')} className="text-indigo-600 underline text-[10px] font-bold hover:text-indigo-800">see proof →</button>
+              </span>
+            ) : (
+              <span className="ml-auto text-[10px] text-slate-400 italic">Run a script to get a grounded verdict - green means the app is actually right, with proof.</span>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Run / Results view — return to the Run Console */}
+      {view === 'run' && (
+        <button onClick={() => setView('console')}
+          className="flex items-center gap-1 text-[12px] font-bold text-indigo-700 hover:text-indigo-900">
+          ‹ Back to Run Console
+        </button>
+      )}
+      {/* Live execution — auto-heal trace + headed run stream (results view only;
+          mounts here so the noVNC websocket is torn down when you go Back) */}
+      {view === 'run' && ((autoHealing || autoHealJob) || (liveUrl && running)) && (
+        <div className="space-y-3">
+          {(autoHealing || autoHealJob) && (
+            <AutoHealPanel job={autoHealJob} live={autoHealLive} healing={autoHealing} err={autoHealErr} />
+          )}
+          {liveUrl && running && (
+            <div ref={liveRef} className="rounded-lg overflow-hidden border-2 border-violet-300 bg-black">
+              <div className="px-2 py-1 bg-violet-600 text-white text-[10px] font-bold flex items-center gap-1.5">
+                <span className="inline-block h-2 w-2 rounded-full bg-red-400 animate-pulse" />
+                LIVE — headed Chromium on the Nexus runner (view-only stream)
+              </div>
+              <iframe title="Nexus live run" src={liveUrl} className="w-full" style={{ height: 520, border: 0 }} />
+            </div>
+          )}
+          {runStatus && running && (
+            <div className="flex items-center gap-1.5 text-[11px] text-emerald-700 font-semibold">
+              <Loader2 className="h-3 w-3 animate-spin" /> running {runStatus.scripts ?? ''} script(s) → {runStatus.target || 'recorded site'}
+              {runStatus.total_tests ? <span className="text-slate-500 font-medium">· {runStatus.steps_completed ?? 0}/{runStatus.total_tests} done</span> : null}
+            </div>
+          )}
+        </div>
+      )}
       {/* ── This run (per-step timeline) + History (right under the run console) ─ */}
-      {data && totals.scripts > 0 && (() => {
+      {view === 'run' && data && totals.scripts > 0 && (() => {
         const th = timeline?.run_header;
         return (
         <div ref={resultsRef} className="rounded-xl border-2 border-indigo-200 bg-indigo-50/30 p-3">
@@ -1209,7 +1668,7 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
       })()}
 
       {/* ── How to run ──────────────────────────────────────── */}
-      {data && (
+      {view === 'console' && data && (
         <div className="rounded-xl border border-slate-200 bg-slate-50/60 overflow-hidden">
           <button onClick={() => setHowToRun((v) => !v)}
             className="w-full flex items-center gap-2 px-4 py-2.5 text-left hover:bg-slate-100/60">
@@ -1272,208 +1731,6 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
         </div>
       )}
 
-      {grouped.map((g) => (
-        <div key={g.type} className="space-y-2">
-          <div className="flex items-center gap-2 px-1">
-            <span className="h-2.5 w-2.5 rounded-full" style={{ background: g.accent }} />
-            <span className="text-[12px] font-black uppercase tracking-wide" style={{ color: g.accent }}>{g.label}</span>
-            <span className="text-[11px] font-semibold text-slate-400">{g.items.length}</span>
-            <button onClick={() => downloadZip(g.type)} disabled={!!busy}
-              className="ml-auto flex items-center gap-1 rounded-md px-2 py-1 text-[10px] font-semibold bg-slate-100 text-slate-600 hover:bg-slate-200 disabled:opacity-50">
-              {busy === `zip:${g.type}` ? <Loader2 className="h-3 w-3 animate-spin" /> : <Download className="h-3 w-3" />} Download category
-            </button>
-          </div>
-
-          {g.items.map((s) => {
-            const id = s.test_id || s.path;
-            const isOpen = !!openCode[id];
-            const runCmd = `npx playwright test ${s.path}`;
-            return (
-              <div key={id} className="rounded-xl overflow-hidden" style={{ background: 'rgba(255,255,255,0.8)', border: `1px solid ${g.accent}33` }}>
-                <div className="flex items-center gap-2 px-3 py-2.5 flex-wrap">
-                  <FileCode2 className="h-4 w-4 shrink-0" style={{ color: g.accent }} />
-                  <span className="text-[12px] font-bold text-slate-900 break-words">{s.name}</span>
-                  <span className="rounded px-1.5 py-0.5 text-[9px] font-bold uppercase" style={{ background: g.badge, color: g.accent }}>{s.category_label}</span>
-                  {editedTests[s.test_id] ? (
-                    <span className="rounded px-1.5 py-0.5 text-[9px] font-bold bg-emerald-100 text-emerald-700" title="A run will use your edited version">edited · v{editedTests[s.test_id]}</span>
-                  ) : null}
-                  <span className="text-[10px] text-slate-400 font-mono truncate">{s.path}</span>
-                  {runs?.scripts?.[s.test_id]?.runs?.length ? (
-                    <span className="flex items-center gap-0.5" title="recent runs (newest right)">
-                      {runs.scripts[s.test_id].runs.slice(0, 10).reverse().map((r: any, i: number) => (
-                        <span key={i} title={`${r.status} · ${(r.duration_ms / 1000).toFixed(1)}s`}
-                          className="inline-block h-2.5 w-2.5 rounded-sm"
-                          style={{ background: r.status === 'passed' ? '#22c55e' : ['failed', 'broken', 'timed_out'].includes(r.status) ? '#ef4444' : '#cbd5e1' }} />
-                      ))}
-                      {runs.scripts[s.test_id].is_flaky ? (
-                        <span className="ml-1 rounded px-1 py-0.5 text-[9px] font-bold bg-slate-200 text-slate-600">flaky {Math.round(runs.scripts[s.test_id].flake_rate_pct)}%</span>
-                      ) : null}
-                    </span>
-                  ) : null}
-                  <span className="ml-auto shrink-0 text-[10px] text-slate-500 font-semibold flex items-center gap-2">
-                    <span>{s.stats.total} steps</span>
-                    <span style={{ color: '#059669' }}>{s.stats.solid} solid</span>
-                    {s.stats.review > 0 && <span style={{ color: '#b45309' }}>{s.stats.review} review</span>}
-                    {s.stats.skipped > 0 && <span style={{ color: '#64748b' }}>{s.stats.skipped} skipped</span>}
-                  </span>
-                </div>
-                <div className="flex items-center gap-1.5 px-3 pb-2.5 flex-wrap">
-                  <button onClick={() => runOnNexus({ test_ids: [s.test_id] })} disabled={running || !s.test_id}
-                    title="Run just this script on the Nexus runner (headless)"
-                    className="flex items-center gap-1 rounded-md px-2 py-1 text-[10px] font-bold text-white disabled:opacity-50"
-                    style={{ background: '#059669' }}>
-                    {runningTestId === s.test_id ? <Loader2 className="h-3 w-3 animate-spin" /> : <Play className="h-3 w-3" />} Run
-                  </button>
-                  <button onClick={() => runLive({ test_ids: [s.test_id] })} disabled={running || !s.test_id}
-                    title="Run just this script HEADED and watch it live in the portal"
-                    className="flex items-center gap-1 rounded-md px-2 py-1 text-[10px] font-bold text-white disabled:opacity-50"
-                    style={{ background: '#7c3aed' }}>
-                    {runningTestId === s.test_id && liveUrl ? <Loader2 className="h-3 w-3 animate-spin" /> : <Play className="h-3 w-3" />} Live
-                  </button>
-                  {(s.data_fields?.length || 0) > 0 && (
-                    <button onClick={() => setOpenData((m) => ({ ...m, [id]: !m[id] }))}
-                      title="Set this test's own data (overrides the global defaults)"
-                      className="flex items-center gap-1 rounded-md px-2 py-1 text-[10px] font-semibold bg-amber-50 text-amber-700 hover:bg-amber-100">
-                      <Database className="h-3 w-3" /> Data ({s.data_fields.length})
-                      {perTestData[s.test_id] && Object.values(perTestData[s.test_id]).some((v) => v) ? ' ✎' : ''}
-                    </button>
-                  )}
-                  <button onClick={() => setOpenCode((m) => ({ ...m, [id]: !m[id] }))}
-                    className="flex items-center gap-1 rounded-md px-2 py-1 text-[10px] font-semibold bg-slate-100 text-slate-700 hover:bg-slate-200">
-                    {isOpen ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />} {isOpen ? 'Hide' : 'View'} code
-                  </button>
-                  {s.test_id && (
-                    <button onClick={() => openEditor(s)}
-                      title="Edit this test's script, save a new version, runs use it"
-                      className="flex items-center gap-1 rounded-md px-2 py-1 text-[10px] font-semibold bg-violet-50 text-violet-700 hover:bg-violet-100">
-                      <Pencil className="h-3 w-3" /> Edit{editedTests[s.test_id] ? ` · v${editedTests[s.test_id]}` : ''}
-                    </button>
-                  )}
-                  {s.test_id && (
-                    <button onClick={() => auditScript(s.test_id)} disabled={fidBusy === s.test_id}
-                      title="Audit: does this script faithfully implement the test case + verify its Expected Results? (coverage + assertions + AI review)"
-                      className="flex items-center gap-1 rounded-md px-2 py-1 text-[10px] font-semibold bg-sky-50 text-sky-700 hover:bg-sky-100 disabled:opacity-50">
-                      {fidBusy === s.test_id ? <Loader2 className="h-3 w-3 animate-spin" /> : <ShieldAlert className="h-3 w-3" />} Audit
-                    </button>
-                  )}
-                  {s.test_id && (
-                    <button onClick={() => regenScript(s.test_id)} disabled={fidBusy === `${s.test_id}:regen`}
-                      title="Regenerate this script from the current test case as a new immutable version (v+1)"
-                      className="flex items-center gap-1 rounded-md px-2 py-1 text-[10px] font-semibold bg-teal-50 text-teal-700 hover:bg-teal-100 disabled:opacity-50">
-                      {fidBusy === `${s.test_id}:regen` ? <Loader2 className="h-3 w-3 animate-spin" /> : <RotateCcw className="h-3 w-3" />} Regenerate
-                    </button>
-                  )}
-                  <button onClick={() => copy(`cmd:${id}`, runCmd)}
-                    className="flex items-center gap-1 rounded-md px-2 py-1 text-[10px] font-semibold bg-indigo-50 text-indigo-700 hover:bg-indigo-100">
-                    {copied === `cmd:${id}` ? <Check className="h-3 w-3 text-emerald-500" /> : <Play className="h-3 w-3" />} Copy run command
-                  </button>
-                  <button onClick={() => downloadText((s.path.split('/').pop() || 'test.spec.ts'), s.code, 'text/typescript')}
-                    className="flex items-center gap-1 rounded-md px-2 py-1 text-[10px] font-semibold bg-slate-100 text-slate-700 hover:bg-slate-200">
-                    <Download className="h-3 w-3" /> .spec
-                  </button>
-                </div>
-                <div className="px-3 pb-2 -mt-1">
-                  <span className="text-[9px] text-slate-400 leading-snug">
-                    Run/Live use the <span className="font-semibold text-slate-500">Run Console</span> settings above —
-                    env <span className="font-mono">{baseUrl.trim() || data?.recorded_base_url || 'recorded'}</span>
-                    {' · '}{authStatus?.profile?.present ? 'saved login session' : <span className="text-amber-600">no login session</span>}
-                    {' · '}{perTestData[s.test_id] && Object.values(perTestData[s.test_id]).some((v) => v) ? 'per-test data' : 'global data'}
-                    {' · runs '}{editedTests[s.test_id] ? `your edited v${editedTests[s.test_id]}` : 'the generated version'}
-                  </span>
-                </div>
-                {fidelity[s.test_id] && <FidelityCard rep={fidelity[s.test_id]} />}
-                {openData[id] && (s.data_fields?.length || 0) > 0 && (
-                  <div className="border-t border-amber-200 bg-amber-50/40 px-3 py-2.5">
-                    <p className="text-[10px] text-slate-500 mb-1.5">
-                      <span className="font-bold text-amber-700">This test's data</span> — blank inherits the global default / observed value (never invented).
-                    </p>
-                    <p className="text-[9px] text-slate-400 mb-1.5">
-                      Text, dates &amp; dropdowns are overridable. Radio / checkbox / toggle choices replay the recording and can't be overridden here (re-record to change them).
-                    </p>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                      {s.data_fields.map((f) => (
-                        <label key={f.key} className="flex items-center gap-2">
-                          <span className="text-[11px] text-slate-500 w-28 shrink-0 truncate" title={f.label}>{f.label || f.key}</span>
-                          <input
-                            value={perTestData[s.test_id]?.[f.key] ?? ''}
-                            placeholder={f.default || '(observed)'}
-                            onChange={(e) => setPerTestData((d) => ({ ...d, [s.test_id]: { ...(d[s.test_id] || {}), [f.key]: e.target.value } }))}
-                            className="flex-1 min-w-0 rounded-md border border-amber-200 px-2 py-1 text-[11px] font-mono text-slate-700 focus:outline-none focus:border-amber-400" />
-                        </label>
-                      ))}
-                    </div>
-                  </div>
-                )}
-                {openEdit[id] && s.test_id && (
-                  <div className="border-t border-violet-200 bg-violet-50/30 px-3 py-2.5">
-                    <div className="flex items-center gap-2 mb-1.5 flex-wrap">
-                      <Pencil className="h-3 w-3 text-violet-600" />
-                      <span className="text-[10px] font-bold text-violet-700">Edit script</span>
-                      <span className="text-[10px] text-slate-400">you own this code — Save creates a new version; runs use the latest</span>
-                      <button onClick={() => saveVersion(s.test_id)} disabled={!editDirty[s.test_id] || editBusy === `save:${s.test_id}`}
-                        className="ml-auto flex items-center gap-1 rounded-md px-2.5 py-1 text-[10px] font-bold text-white disabled:opacity-50" style={{ background: '#7c3aed' }}>
-                        {editBusy === `save:${s.test_id}` ? <Loader2 className="h-3 w-3 animate-spin" /> : <Save className="h-3 w-3" />}
-                        Save &rarr; v{(editedTests[s.test_id] || 0) + 1}
-                      </button>
-                    </div>
-                    {editBusy === id ? (
-                      <div className="flex items-center gap-2 text-[11px] text-slate-400 py-6 justify-center">
-                        <Loader2 className="h-3.5 w-3.5 animate-spin" /> loading source…
-                      </div>
-                    ) : (
-                      <textarea
-                        value={editSource[s.test_id] ?? ''}
-                        onChange={(e) => { setEditSource((m) => ({ ...m, [s.test_id]: e.target.value })); setEditDirty((m) => ({ ...m, [s.test_id]: true })); }}
-                        spellCheck={false}
-                        className="w-full rounded-md bg-slate-950 text-slate-200 font-mono text-[11px] leading-relaxed px-3 py-2 focus:outline-none border border-slate-800"
-                        style={{ minHeight: '18rem' }} />
-                    )}
-                    {(versions[s.test_id]?.length || 0) > 0 && (
-                      <div className="mt-2">
-                        <p className="text-[10px] font-bold text-slate-500 mb-1 flex items-center gap-1"><History className="h-3 w-3" /> Versions</p>
-                        <div className="space-y-1">
-                          {versions[s.test_id].map((v: any, i: number) => (
-                            <div key={v.script_version_id} className="flex items-center gap-2 text-[10px] text-slate-500 rounded bg-white/70 border border-slate-200 px-2 py-1">
-                              <span className="font-bold text-slate-700">v{v.version_no}</span>
-                              {i === 0 && <span className="rounded bg-emerald-100 text-emerald-700 px-1 font-bold">active</span>}
-                              <span className="truncate">{v.author || 'unknown'}{v.note ? ` · ${v.note}` : ''}</span>
-                              <span className="ml-auto shrink-0 text-slate-400">{v.created_at ? new Date(v.created_at).toLocaleString() : ''}</span>
-                              {i !== 0 && (
-                                <button onClick={() => restoreVersion(s.test_id, v.version_no)} disabled={editBusy === `restore:${s.test_id}`}
-                                  className="shrink-0 flex items-center gap-1 rounded px-1.5 py-0.5 font-semibold bg-slate-100 text-slate-600 hover:bg-slate-200 disabled:opacity-50">
-                                  <RotateCcw className="h-2.5 w-2.5" /> Restore
-                                </button>
-                              )}
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                )}
-                {isOpen && (
-                  <div className="border-t border-slate-200">
-                    <div className="flex items-center justify-between px-3 py-1.5 bg-slate-900">
-                      <span className="text-[10px] font-mono text-slate-400">{s.path} · {s.lines} lines</span>
-                      <button onClick={() => copy(`code:${id}`, s.code)}
-                        className="flex items-center gap-1 text-[10px] font-semibold text-slate-300 hover:text-white">
-                        {copied === `code:${id}` ? <Check className="h-3 w-3 text-emerald-400" /> : <Copy className="h-3 w-3" />} Copy
-                      </button>
-                    </div>
-                    <pre className="overflow-x-auto bg-slate-950 px-3 py-3 text-[11px] leading-relaxed font-mono text-slate-200" style={{ maxHeight: '24rem' }}>
-                      <code>{s.code}</code>
-                    </pre>
-                    <p className="px-3 py-1.5 text-[9px] text-slate-400 bg-slate-900/90 border-t border-slate-800 leading-snug">
-                      URLs are shown as recorded. At run time the host is replaced by your Environment setting
-                      (<span className="font-mono">{baseUrl.trim() || data?.recorded_base_url || 'recorded host'}</span>); login is never scripted — runs reuse a captured session.
-                    </p>
-                  </div>
-                )}
-              </div>
-            );
-          })}
-        </div>
-      ))}
     </section>
   );
 }

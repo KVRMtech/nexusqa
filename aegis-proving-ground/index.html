@@ -1,0 +1,709 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Aegis — Member Portal · Nexus Proving Ground (Advanced)</title>
+<style>
+  :root{--ink:#0b1220;--sub:#475569;--line:#e2e8f0;--bg:#f1f5f9;--brand:#1e3a8a;--brand2:#0ea5e9;--ok:#059669;--warn:#b45309;--bad:#dc2626;--card:#fff;}
+  *{box-sizing:border-box;}
+  body{margin:0;font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;color:var(--ink);background:linear-gradient(180deg,#eef2ff,#f8fafc 260px);}
+  header{background:linear-gradient(135deg,var(--brand),var(--brand2));color:#fff;padding:14px 26px;display:flex;align-items:center;gap:14px;}
+  header .logo{font-weight:800;font-size:18px;letter-spacing:.3px;display:flex;align-items:center;gap:9px;}
+  header .logo .mark{width:26px;height:26px;border-radius:7px;background:#fff;color:var(--brand);display:grid;place-items:center;font-weight:900;}
+  header .url{margin-left:auto;font:600 12px/1 ui-monospace,Menlo,monospace;background:rgba(255,255,255,.16);padding:7px 11px;border-radius:8px;}
+  header nav{display:flex;gap:4px;margin-left:18px;}
+  header nav a{color:#dbeafe;text-decoration:none;font-size:13px;font-weight:600;padding:5px 10px;border-radius:7px;}
+  header nav a.active,header nav a:hover{background:rgba(255,255,255,.18);color:#fff;}
+  main{max-width:920px;margin:26px auto;padding:0 20px 60px;}
+  .breakbar{max-width:920px;margin:10px auto 0;padding:0 20px;display:flex;gap:6px;flex-wrap:wrap;align-items:center;}
+  .breakbar b{font-size:11px;color:var(--sub);text-transform:uppercase;letter-spacing:.5px;margin-right:4px;}
+  .breakbar a{font-size:11px;font-weight:700;padding:3px 9px;border-radius:999px;text-decoration:none;color:var(--sub);background:#e2e8f0;}
+  .breakbar a.on{background:var(--brand);color:#fff;}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:26px;box-shadow:0 1px 2px rgba(15,23,42,.04);}
+  .card+.card{margin-top:18px;}
+  h1{font-size:22px;margin:0 0 4px;}
+  h2{font-size:15px;margin:22px 0 10px;color:var(--brand);}
+  .muted{color:var(--sub);font-size:13px;margin:0 0 16px;}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:14px 18px;}
+  .field{display:flex;flex-direction:column;gap:5px;}
+  .field.full{grid-column:1/-1;}
+  label{font-size:12.5px;font-weight:600;color:#334155;}
+  input[type=text],input[type=password],input[type=email],input[type=tel],input[type=date],input[type=number],select,textarea{
+    font:inherit;font-size:14px;padding:9px 11px;border:1px solid #cbd5e1;border-radius:9px;background:#fff;color:var(--ink);width:100%;}
+  input:focus,select:focus,textarea:focus{outline:2px solid var(--brand2);outline-offset:0;border-color:var(--brand2);}
+  .row{display:flex;align-items:center;gap:8px;}
+  .radios,.checks{display:flex;gap:16px;flex-wrap:wrap;}
+  .radios label,.checks label{font-weight:500;display:flex;align-items:center;gap:6px;}
+  .btn{font:inherit;font-weight:700;font-size:14px;padding:10px 18px;border-radius:10px;border:0;cursor:pointer;}
+  .btn.primary{background:var(--brand);color:#fff;}
+  .btn.primary:hover{filter:brightness(1.08);}
+  .btn.ghost{background:#eef2f7;color:#334155;}
+  .actions{display:flex;justify-content:space-between;margin-top:24px;gap:12px;}
+  .stepper{display:flex;gap:6px;margin-bottom:20px;flex-wrap:wrap;}
+  .stepper .s{font-size:12px;font-weight:700;padding:6px 12px;border-radius:999px;background:#e2e8f0;color:#64748b;}
+  .stepper .s.active{background:var(--brand);color:#fff;}
+  .stepper .s.done{background:#bbf7d0;color:#166534;}
+  /* custom combobox */
+  .combo{position:relative;}
+  .combo .disp{border:1px solid #cbd5e1;border-radius:9px;padding:9px 11px;background:#fff;cursor:pointer;display:flex;justify-content:space-between;align-items:center;}
+  .combo .list{position:absolute;top:calc(100% + 4px);left:0;right:0;background:#fff;border:1px solid #cbd5e1;border-radius:9px;box-shadow:0 10px 24px rgba(15,23,42,.14);z-index:20;overflow:hidden;}
+  .combo .opt{padding:9px 11px;cursor:pointer;}
+  .combo .opt:hover{background:#eff6ff;}
+  /* toggle */
+  .toggle{width:46px;height:26px;border-radius:999px;background:#cbd5e1;position:relative;cursor:pointer;transition:.15s;}
+  .toggle.on{background:var(--ok);}
+  .toggle .knob{position:absolute;top:3px;left:3px;width:20px;height:20px;border-radius:50%;background:#fff;transition:.15s;}
+  .toggle.on .knob{left:23px;}
+  input[type=range]{width:100%;}
+  /* accordion */
+  .acc{border:1px solid var(--line);border-radius:10px;overflow:hidden;}
+  .acc .hd{padding:11px 14px;background:#f8fafc;cursor:pointer;font-weight:600;font-size:13.5px;display:flex;justify-content:space-between;}
+  .acc .bd{padding:14px;border-top:1px solid var(--line);font-size:13px;color:var(--sub);}
+  /* tabs + table */
+  .tabs{display:flex;gap:4px;border-bottom:2px solid var(--line);margin-bottom:16px;}
+  .tabs .t{padding:9px 14px;font-weight:600;font-size:13.5px;color:#64748b;cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-2px;}
+  .tabs .t.active{color:var(--brand);border-bottom-color:var(--brand);}
+  table{width:100%;border-collapse:collapse;font-size:13px;}
+  th,td{text-align:left;padding:9px 10px;border-bottom:1px solid var(--line);}
+  th{font-size:11.5px;text-transform:uppercase;letter-spacing:.4px;color:#64748b;cursor:pointer;user-select:none;}
+  .pill{display:inline-block;padding:2px 9px;border-radius:999px;font-size:11px;font-weight:700;}
+  .pill.green{background:#dcfce7;color:#166534;}.pill.amber{background:#fef3c7;color:#92400e;}.pill.gray{background:#e2e8f0;color:#475569;}
+  /* modal */
+  .overlay{position:fixed;inset:0;background:rgba(2,6,23,.5);display:grid;place-items:center;z-index:50;}
+  .modal{background:#fff;border-radius:16px;padding:26px;max-width:460px;width:90%;box-shadow:0 24px 60px rgba(2,6,23,.4);}
+  .banner{border-radius:10px;padding:12px 14px;font-size:13px;margin-bottom:16px;}
+  .banner.info{background:#eff6ff;color:#1e40af;border:1px solid #bfdbfe;}
+  .banner.ok{background:#ecfdf5;color:#065f46;border:1px solid #a7f3d0;}
+  .banner.bad{background:#fef2f2;color:#991b1b;border:1px solid #fecaca;}
+  .ref{font:800 22px ui-monospace,Menlo,monospace;color:var(--brand);letter-spacing:1px;}
+  .gallery{display:grid;grid-template-columns:1fr 1fr;gap:16px;}
+  .gcell{border:1px solid var(--line);border-radius:12px;padding:16px;}
+  .gcell h3{margin:0 0 10px;font-size:13px;color:var(--brand);}
+  .tag{display:inline-flex;align-items:center;gap:5px;background:#e0e7ff;color:#3730a3;border-radius:999px;padding:3px 9px;font-size:12px;font-weight:600;margin:2px;}
+  .otp{display:flex;gap:8px;}.otp input{width:44px;text-align:center;font-size:18px;}
+  small.hint{color:#94a3b8;font-size:11px;}
+  /* ── complicated-UI widgets (Claims wizard) ── */
+  .cards{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;}
+  .typecard{border:2px solid var(--line);border-radius:14px;padding:18px;cursor:pointer;text-align:center;transition:.12s;}
+  .typecard:hover{border-color:var(--brand2);}
+  .typecard.sel{border-color:var(--brand);background:#eff6ff;box-shadow:0 0 0 3px rgba(30,58,138,.08);}
+  .typecard .ic{font-size:30px;}
+  .typecard .t{font-weight:800;margin-top:6px;}
+  .typecard .d{font-size:11.5px;color:var(--sub);margin-top:3px;}
+  .err{border-color:var(--bad)!important;outline-color:var(--bad)!important;}
+  .errmsg{color:var(--bad);font-size:11.5px;margin-top:3px;display:flex;align-items:center;gap:4px;}
+  /* custom calendar */
+  .cal{position:absolute;z-index:30;background:#fff;border:1px solid #cbd5e1;border-radius:12px;box-shadow:0 12px 30px rgba(2,6,23,.18);padding:12px;width:248px;}
+  .cal .nav{display:flex;justify-content:space-between;align-items:center;font-weight:700;margin-bottom:8px;}
+  .cal .nav button{border:0;background:#eef2f7;border-radius:6px;width:26px;height:26px;cursor:pointer;}
+  .cal .grid7{display:grid;grid-template-columns:repeat(7,1fr);gap:2px;}
+  .cal .dow{font-size:10px;color:#94a3b8;text-align:center;padding:2px 0;}
+  .cal .day{text-align:center;padding:6px 0;border-radius:6px;cursor:pointer;font-size:12.5px;}
+  .cal .day:hover{background:#eff6ff;} .cal .day.sel{background:var(--brand);color:#fff;} .cal .day.off{color:#cbd5e1;cursor:default;}
+  /* typeahead */
+  .ta{position:relative;} .ta-list{position:absolute;left:0;right:0;top:calc(100% + 4px);background:#fff;border:1px solid #cbd5e1;border-radius:9px;box-shadow:0 10px 24px rgba(15,23,42,.14);z-index:25;max-height:200px;overflow:auto;}
+  .ta-list .opt{padding:8px 11px;cursor:pointer;font-size:13px;} .ta-list .opt:hover,.ta-list .opt.active{background:#eff6ff;}
+  .ta-list .loading{padding:10px;color:#94a3b8;font-size:12px;}
+  /* repeatable line items */
+  .items{border:1px solid var(--line);border-radius:10px;overflow:hidden;}
+  .items .ih,.items .ir{display:grid;grid-template-columns:24px 2fr 1fr 1fr 32px;gap:8px;align-items:center;padding:8px 10px;}
+  .items .ih{background:#f8fafc;font-size:11px;text-transform:uppercase;letter-spacing:.4px;color:#64748b;}
+  .items .ir{border-top:1px solid var(--line);} .items .ir.drag{opacity:.4;}
+  .items .ir .grip{cursor:grab;color:#94a3b8;text-align:center;}
+  .items .ir input,.items .ir select{padding:6px 8px;font-size:13px;}
+  .items .rm{border:0;background:#fee2e2;color:#b91c1c;border-radius:6px;width:26px;height:26px;cursor:pointer;}
+  .items .total{padding:10px;text-align:right;font-weight:800;border-top:2px solid var(--line);}
+  /* dropzone */
+  .dz{border:2px dashed #cbd5e1;border-radius:12px;padding:28px;text-align:center;color:var(--sub);cursor:pointer;transition:.12s;}
+  .dz.over{border-color:var(--brand);background:#eff6ff;}
+  .doc{display:flex;align-items:center;gap:8px;padding:8px 10px;border:1px solid var(--line);border-radius:8px;margin-top:8px;font-size:13px;}
+  .doc .rm{margin-left:auto;border:0;background:#fee2e2;color:#b91c1c;border-radius:6px;width:24px;height:24px;cursor:pointer;}
+</style>
+</head>
+<body>
+<header>
+  <div class="logo"><span class="mark">A</span> Aegis <span style="font-weight:500;opacity:.8;font-size:13px">Member Portal</span></div>
+  <nav id="nav"></nav>
+  <div class="url" id="urlchip">/</div>
+</header>
+<div class="breakbar" id="breakbar"></div>
+<main id="app"></main>
+
+<script>
+// ─────────────────────────────────────────────────────────────────────────────
+// Aegis — Nexus Proving Ground (Advanced).  A deliberately adversarial enterprise
+// app: distinct URL paths per page (host+path = the page-group key the pipeline
+// derives), every hard control kind, hidden/late-rendering UI, and ?break= modes
+// that each target a specific self-heal class so we can prove diagnose → heal →
+// green AND refuse-to-heal-a-real-regression on ONE recording.
+// Vanilla JS, no build. Path routing via history.pushState so the address bar
+// shows real URLs (the pipeline OCRs them).
+// ─────────────────────────────────────────────────────────────────────────────
+const BREAK = new URLSearchParams(location.search).get('break') || 'none';
+const BREAKS = ['none','custom-combo','rename','hashed','regression','slow','late','shadow','iframe',
+                'validation','datepicker','dnd','modal-stack','async-slow'];
+const COUNTRIES = ['United States','Canada','United Kingdom','Germany','India','Australia','Japan'];
+const STATES = {'United States':['California','New York','Texas','Florida','Illinois'],'Canada':['Ontario','Quebec','British Columbia'],'India':['Karnataka','Maharashtra','Delhi']};
+const PLANS = ['Bronze — Essential','Silver — Balanced','Gold — Comprehensive','Platinum — Concierge'];
+const CLAIM_TYPES = [
+  {id:'auto', label:'Auto', icon:'🚗', desc:'Vehicle collision, theft or damage'},
+  {id:'home', label:'Home', icon:'🏠', desc:'Property, contents or liability'},
+  {id:'health', label:'Health', icon:'🩺', desc:'Medical, dental or vision'},
+];
+const ITEM_CATEGORIES = ['Parts','Labor','Medical','Property','Other'];
+const PROVIDERS = ['Mercy General Hospital','St. Luke\'s Medical Center','AutoCare Collision','Premier Body Shop','Sunrise Dental Group','Vista Eye Associates','Apex Plumbing & Restoration','Hometown Roofing Co.'];
+
+const state = {
+  auth:false,
+  profile:{first:'',last:'',country:'United States',region:'',dob:'',phone:'',ssn:'',employment:'employed',usPerson:true},
+  coverage:{plan:'',amount:250000,autoRenew:true,addons:[],addBeneficiary:false,beneficiary:'',riskAck:false},
+  review:{consentTerms:false,consentData:false,signature:''},
+  // ── "File a Claim" wizard — the complicated-UI stress flow ──
+  claim:{type:'', incidentDate:'', provider:'', policyRef:'', estimate:0,
+         items:[{desc:'Front bumper replacement', cat:'Parts', amt:1240}],
+         docs:[], attestTruth:false, signature:''},
+  claimRef:null,
+  ref:null,
+};
+
+const $ = (s,r=document)=>r.querySelector(s);
+const $$ = (s,r=document)=>Array.from(r.querySelectorAll(s));
+const q = ()=> location.search || '';
+function go(path){ history.pushState({},'',path+q()); render(); }
+// Unstable id helper — under ?break=hashed, ids/classes get a volatile suffix so
+// brittle selectors break (proving grounded/role-based locators win).
+const H = BREAK==='hashed';
+function rid(base){ return H ? base+'-'+Math.random().toString(36).slice(2,7) : base; }
+function hcls(c){ return H ? c+' '+('css-'+Math.random().toString(36).slice(2,8)) : c; }
+// Renamed primary actions under ?break=rename (selector-drift class).
+function nextLabel(){ return BREAK==='rename' ? 'Proceed →' : 'Next →'; }
+function submitLabel(){ return BREAK==='rename' ? 'Finalize' : 'Submit application'; }
+
+// ── Pages ────────────────────────────────────────────────────────────────────
+function loginPage(){
+  return `<div class="card" style="max-width:440px;margin:20px auto;">
+    <h1>Sign in</h1>
+    <p class="muted">Access your Aegis member account.</p>
+    <form id="login">
+      <div class="field"><label for="email">Email</label><input id="email" name="email" type="email" placeholder="you@example.com" autocomplete="username"></div>
+      <div class="field" style="margin-top:12px"><label for="password">Password</label><input id="password" name="password" type="password" placeholder="••••••••" autocomplete="current-password"></div>
+      <label class="row" style="margin-top:14px;font-weight:500;font-size:13px"><input type="checkbox" id="remember" name="remember"> Keep me signed in</label>
+      <div class="actions"><span></span><button class="btn primary" type="submit" id="${rid('signin')}">Sign in</button></div>
+    </form>
+  </div>`;
+}
+function dashboardPage(){
+  const rows = [
+    ['AX-4821','Auto · Comprehensive','Active','green','$1,240'],
+    ['AX-4733','Home · Standard','Pending','amber','$880'],
+    ['AX-4610','Life · Term 20','Active','green','$2,150'],
+    ['AX-4502','Travel · Annual','Lapsed','gray','$210'],
+  ];
+  return `<div class="card">
+    <div class="row" style="justify-content:space-between"><h1>Welcome back</h1>
+      <span class="row" style="gap:8px"><button class="btn ghost" id="file-claim">File a claim</button>
+      <button class="btn primary" id="new-app">+ New application</button></span></div>
+    <div class="tabs" id="tabs">
+      <div class="t active" data-tab="policies">Policies</div>
+      <div class="t" data-tab="claims">Claims</div>
+      <div class="t" data-tab="docs">Documents</div>
+    </div>
+    <div id="tabpanel">
+      <table id="policies-table"><thead><tr>
+        <th data-k="0">Policy #</th><th data-k="1">Product</th><th data-k="2">Status</th><th data-k="4">Premium</th>
+      </tr></thead><tbody>
+      ${rows.map(r=>`<tr><td>${r[0]}</td><td>${r[1]}</td><td><span class="pill ${r[3]}">${r[2]}</span></td><td>${r[4]}</td></tr>`).join('')}
+      </tbody></table>
+      <small class="hint">Click a column header to sort. Switch tabs to load claims / documents (lazy).</small>
+    </div>
+  </div>`;
+}
+function profilePage(){
+  // ?break=custom-combo turns the native Country <select> into a custom ARIA
+  // combobox → .selectOption can't drive it → Auto-Heal must STOP needs-human.
+  const countryControl = (BREAK==='custom-combo')
+    ? `<div class="combo" id="country-combo" data-control="custom-combobox">
+         <div class="disp" role="combobox" aria-expanded="false" aria-controls="country-list" tabindex="0" id="country-disp">${state.profile.country} <span>▾</span></div>
+         <div class="list" role="listbox" id="country-list" hidden>${COUNTRIES.map(c=>`<div class="opt" role="option" data-v="${c}">${c}</div>`).join('')}</div>
+       </div>`
+    : `<select id="country" name="country">${COUNTRIES.map(c=>`<option ${c===state.profile.country?'selected':''}>${c}</option>`).join('')}</select>`;
+  return `<div class="card">
+    ${stepper(1)}
+    <h1>Applicant profile</h1>
+    <p class="muted">Step 1 of 3 — tell us about the primary applicant.</p>
+    <form id="profile">
+      <div class="grid">
+        <div class="field"><label for="first">First name</label><input id="first" name="first" type="text" value="${state.profile.first}"></div>
+        <div class="field"><label for="last">Last name</label><input id="last" name="last" type="text" value="${state.profile.last}"></div>
+        <div class="field"><label for="country">Country <small class="hint">(native &lt;select&gt; — control-kind heal target)</small></label>${countryControl}</div>
+        <div class="field"><label for="region">State / Province <small class="hint">(depends on country)</small></label>
+          <select id="region" name="region"></select></div>
+        <div class="field"><label for="dob">Date of birth</label><input id="dob" name="dob" type="date" value="${state.profile.dob}"></div>
+        <div class="field"><label for="phone">Phone <small class="hint">(masked)</small></label><input id="phone" name="phone" type="tel" inputmode="numeric" placeholder="(555) 123-4567" value="${state.profile.phone}"></div>
+        <div class="field"><label for="ssn">Tax ID / SSN <small class="hint">(masked)</small></label><input id="ssn" name="ssn" type="text" inputmode="numeric" placeholder="•••-••-••••" value="${state.profile.ssn}"></div>
+        <div class="field"><label>Employment</label><div class="radios">
+          <label><input type="radio" name="employment" value="employed" ${state.profile.employment==='employed'?'checked':''}> Employed</label>
+          <label><input type="radio" name="employment" value="self" ${state.profile.employment==='self'?'checked':''}> Self-employed</label>
+          <label><input type="radio" name="employment" value="retired" ${state.profile.employment==='retired'?'checked':''}> Retired</label>
+        </div></div>
+        <div class="field full"><label class="row" style="font-weight:500"><input type="checkbox" id="usperson" ${state.profile.usPerson?'checked':''}> I certify I am a U.S. person for tax purposes</label></div>
+      </div>
+      <div class="actions"><button class="btn ghost" type="button" id="back-dash">← Cancel</button>
+        <button class="btn primary" type="submit" id="${rid('to-coverage')}">${nextLabel()}</button></div>
+    </form>
+    <div id="late-slot"></div>
+  </div>`;
+}
+function coveragePage(){
+  return `<div class="card">
+    ${stepper(2)}
+    <h1>Coverage configuration</h1>
+    <p class="muted">Step 2 of 3 — configure the product. (Custom combobox, conditional fields, slider, toggle, accordion.)</p>
+    <form id="coverage">
+      <h2>Plan</h2>
+      <div class="field"><label>Plan tier <small class="hint">(custom ARIA combobox — needs-human if mis-driven)</small></label>
+        <div class="combo" id="plan-combo" data-control="custom-combobox">
+          <div class="disp" role="combobox" aria-expanded="false" aria-controls="plan-list" tabindex="0" id="plan-disp">${state.coverage.plan||'Select a plan…'} <span>▾</span></div>
+          <div class="list" role="listbox" id="plan-list" hidden>${PLANS.map(p=>`<div class="opt" role="option" data-v="${p}">${p}</div>`).join('')}</div>
+        </div></div>
+      <h2>Coverage amount</h2>
+      <div class="field"><label for="amount">Amount: <b id="amount-val">$${state.coverage.amount.toLocaleString()}</b></label>
+        <input id="amount" name="amount" type="range" min="50000" max="1000000" step="50000" value="${state.coverage.amount}"></div>
+      <h2>Options</h2>
+      <div class="row" style="justify-content:space-between;max-width:320px">
+        <label style="font-weight:500;font-size:13.5px">Auto-renew annually</label>
+        <div class="toggle ${state.coverage.autoRenew?'on':''}" id="autorenew" role="switch" aria-checked="${state.coverage.autoRenew}"><div class="knob"></div></div>
+      </div>
+      <div class="checks" style="margin-top:14px">
+        <label><input type="checkbox" class="addon" value="dental"> Dental rider</label>
+        <label><input type="checkbox" class="addon" value="vision"> Vision rider</label>
+        <label><input type="checkbox" class="addon" value="accident"> Accident rider</label>
+      </div>
+      <h2>Beneficiary</h2>
+      <label class="row" style="font-weight:500;font-size:13.5px"><input type="checkbox" id="add-beneficiary"> Add a beneficiary</label>
+      <div id="beneficiary-slot"></div>
+      <h2>Risk disclosure</h2>
+      <div class="acc" id="risk-acc">
+        <div class="hd" id="risk-hd">Tobacco &amp; hazardous activity disclosure <span>▾</span></div>
+        <div class="bd" id="risk-bd" hidden>
+          <label class="row" style="font-weight:500"><input type="checkbox" id="risk-ack"> I confirm the disclosures above are accurate.</label>
+        </div>
+      </div>
+      <div class="actions"><button class="btn ghost" type="button" id="back-profile">← Back</button>
+        <button class="btn primary" type="submit" id="${rid('to-review')}">${nextLabel()}</button></div>
+    </form>
+  </div>`;
+}
+function reviewPage(){
+  const p=state.profile,c=state.coverage;
+  return `<div class="card">
+    ${stepper(3)}
+    <h1>Review &amp; submit</h1>
+    <p class="muted">Step 3 of 3 — confirm and sign. (Modal confirmation on submit.)</p>
+    <div class="banner info">Applicant: <b>${p.first||'—'} ${p.last||''}</b> · ${p.country}${p.region?' / '+p.region:''} · Plan: <b>${c.plan||'—'}</b> · Coverage: <b>$${(c.amount||0).toLocaleString()}</b>${c.addons.length?' · Riders: '+c.addons.join(', '):''}</div>
+    <form id="review">
+      <label class="row" style="font-weight:500;font-size:13.5px"><input type="checkbox" id="consent-terms"> I agree to the Terms of Service and policy contract.</label>
+      <label class="row" style="font-weight:500;font-size:13.5px;margin-top:8px"><input type="checkbox" id="consent-data"> I consent to data processing for underwriting.</label>
+      <div class="field" style="margin-top:14px;max-width:360px"><label for="signature">E-signature — type your full legal name</label>
+        <input id="signature" name="signature" type="text" placeholder="${(p.first+' '+p.last).trim()||'Your full name'}"></div>
+      <div class="actions"><button class="btn ghost" type="button" id="back-coverage">← Back</button>
+        <button class="btn primary" type="submit" id="${rid('submit-app')}">${submitLabel()}</button></div>
+    </form>
+  </div>`;
+}
+function donePage(){
+  // ?break=regression OMITS the confirmation reference (a REAL outcome regression).
+  // The grounded oracle (recorded "Application AX-…") is absent ⇒ Nexus must
+  // REFUSE to heal and file a defect — the competitor-false-green slide.
+  if(BREAK==='regression'){
+    return `<div class="card"><div class="banner bad">We hit a problem completing your application. No confirmation is available.</div>
+      <p class="muted">Please try again later.</p>
+      <a class="btn ghost" href="/dashboard" onclick="event.preventDefault();go('/dashboard')">Back to dashboard</a></div>`;
+  }
+  const ref = state.ref || ('AX-'+(5000+Math.floor((Date.now()/1000)%4000)));
+  state.ref = ref;
+  return `<div class="card" style="text-align:center">
+    <div style="font-size:46px">✅</div>
+    <h1>Application submitted</h1>
+    <p class="muted">Thank you. Your application has been received and is under review.</p>
+    <div class="banner ok">Confirmation reference: <span class="ref" id="confirmation-ref">${ref}</span></div>
+    <p class="muted" id="done-summary">${state.profile.first||'Applicant'} ${state.profile.last||''} · ${state.coverage.plan||'Plan'} · $${(state.coverage.amount||0).toLocaleString()}</p>
+    <a class="btn primary" href="/dashboard" onclick="event.preventDefault();go('/dashboard')">Return to dashboard</a>
+  </div>`;
+}
+function componentsPage(){
+  return `<div class="card"><h1>Component torture gallery</h1>
+    <p class="muted">The hardest locator cases — shadow DOM, iframe, autocomplete, OTP, file upload, tag input, date popover.</p>
+    <div class="gallery">
+      <div class="gcell"><h3>Shadow DOM input</h3><div id="shadow-host"></div><small class="hint">field lives inside a shadow root</small></div>
+      <div class="gcell"><h3>Iframe form</h3><iframe id="frame" style="width:100%;height:90px;border:1px solid var(--line);border-radius:8px" srcdoc='<input placeholder=&quot;inside iframe&quot; style=&quot;width:90%;padding:8px&quot;>'></iframe></div>
+      <div class="gcell"><h3>Autocomplete</h3><input id="ac" placeholder="Type a city…" list="ac-list"><datalist id="ac-list"><option>Austin</option><option>Boston</option><option>Chicago</option></datalist></div>
+      <div class="gcell"><h3>OTP</h3><div class="otp" id="otp">${[0,1,2,3].map(i=>`<input maxlength="1" data-i="${i}">`).join('')}</div></div>
+      <div class="gcell"><h3>File upload</h3><input type="file" id="file"></div>
+      <div class="gcell"><h3>Tag input</h3><div id="tags"><span class="tag">underwriting ✕</span><span class="tag">priority ✕</span></div><input id="tag-input" placeholder="add tag + Enter" style="margin-top:8px"></div>
+    </div></div>`;
+}
+
+function stepper(n){
+  const labels=['Profile','Coverage','Review'];
+  return `<div class="stepper">${labels.map((l,i)=>`<span class="s ${i+1===n?'active':i+1<n?'done':''}">${i+1}. ${l}</span>`).join('')}</div>`;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  "FILE A CLAIM" WIZARD — the complicated-UI stress flow (distinct URLs/step)
+// ═══════════════════════════════════════════════════════════════════════════
+function claimStepper(n){
+  const labels=['Type','Details','Line items','Documents','Review'];
+  return `<div class="stepper">${labels.map((l,i)=>`<span class="s ${i+1===n?'active':i+1<n?'done':''}">${i+1}. ${l}</span>`).join('')}</div>`;
+}
+// Step 1 — radio CARDS that BRANCH the rest of the flow.
+function claimTypePage(){
+  return `<div class="card">${claimStepper(1)}
+    <h1>File a claim</h1><p class="muted">Step 1 of 5 — what kind of claim is this? (Your choice changes the fields ahead.)</p>
+    <div class="cards" id="type-cards" role="radiogroup" aria-label="Claim type">
+      ${CLAIM_TYPES.map(t=>`<div class="typecard ${state.claim.type===t.id?'sel':''}" role="radio" aria-checked="${state.claim.type===t.id}" tabindex="0" data-type="${t.id}" id="type-${t.id}">
+        <div class="ic">${t.icon}</div><div class="t">${t.label}</div><div class="d">${t.desc}</div></div>`).join('')}
+    </div>
+    <div class="actions"><button class="btn ghost" type="button" id="claim-cancel">← Cancel</button>
+      <button class="btn primary" id="${rid('type-next')}">${nextLabel()}</button></div></div>`;
+}
+// Step 2 — custom CALENDAR date-picker (control-kind heal target #2) + async
+// debounced TYPEAHEAD + currency input + INLINE VALIDATION. Fields branch by type.
+function claimDetailsPage(){
+  const t=state.claim.type||'auto';
+  const dateLabel = t==='health'?'Service date':'Incident date';
+  const provLabel = t==='health'?'Provider / facility':t==='home'?'Contractor':'Repair shop';
+  const extra = t==='auto'
+    ? `<div class="field"><label for="vin">Vehicle VIN</label><input id="vin" placeholder="1HGBH41JXMN109186" value="${state.claim.policyRef}"></div>`
+    : t==='home'
+    ? `<div class="field"><label for="vin">Property address</label><input id="vin" placeholder="123 Main St" value="${state.claim.policyRef}"></div>`
+    : `<div class="field"><label for="vin">Member ID</label><input id="vin" placeholder="MBR-000000" value="${state.claim.policyRef}"></div>`;
+  return `<div class="card">${claimStepper(2)}
+    <h1>${CLAIM_TYPES.find(x=>x.id===t)?.label||''} claim details</h1>
+    <p class="muted">Step 2 of 5 — custom date picker, async provider search, currency + live validation.</p>
+    <form id="claim-details"><div class="grid">
+      <div class="field"><label for="incident-date">${dateLabel} <small class="hint">(custom calendar — not a native date input)</small></label>
+        <input id="incident-date" readonly placeholder="Select a date…" value="${state.claim.incidentDate}" autocomplete="off"><div id="cal-slot"></div></div>
+      <div class="field ta"><label for="provider">${provLabel} <small class="hint">(type to search)</small></label>
+        <input id="provider" placeholder="Start typing…" autocomplete="off" value="${state.claim.provider}"><div id="prov-list"></div></div>
+      <div class="field"><label for="estimate">Estimated amount <small class="hint">(currency)</small></label>
+        <input id="estimate" inputmode="numeric" placeholder="$0" value="${state.claim.estimate?'$'+state.claim.estimate.toLocaleString():''}"></div>
+      ${extra}
+    </div>
+    <div class="actions"><button class="btn ghost" type="button" id="back-type">← Back</button>
+      <button class="btn primary" id="${rid('details-next')}">${nextLabel()}</button></div></form></div>`;
+}
+// Step 3 — REPEATABLE line items (add/remove rows) + DRAG-DROP reorder + total.
+function claimItemsPage(){
+  return `<div class="card">${claimStepper(3)}
+    <h1>Line items</h1><p class="muted">Step 3 of 5 — add/remove rows, drag to reorder. Each row is a dynamic indexed field group.</p>
+    <div class="items" id="items"><div class="ih"><span></span><span>Description</span><span>Category</span><span>Amount</span><span></span></div>
+      <div id="item-rows"></div><div class="total" id="items-total"></div></div>
+    <button class="btn ghost" id="add-item" style="margin-top:12px">+ Add line item</button>
+    <div class="actions"><button class="btn ghost" type="button" id="back-details">← Back</button>
+      <button class="btn primary" id="${rid('items-next')}">${nextLabel()}</button></div></div>`;
+}
+// Step 4 — DRAG-DROP file upload with preview + remove.
+function claimDocsPage(){
+  return `<div class="card">${claimStepper(4)}
+    <h1>Supporting documents</h1><p class="muted">Step 4 of 5 — drag &amp; drop files (or click). Photos, receipts, reports.</p>
+    <div class="dz" id="dropzone" tabindex="0">⬆ Drag files here, or click to browse
+      <input type="file" id="file-input" multiple style="display:none"></div>
+    <div id="doc-list"></div>
+    <div class="actions"><button class="btn ghost" type="button" id="back-items">← Back</button>
+      <button class="btn primary" id="${rid('docs-next')}">${nextLabel()}</button></div></div>`;
+}
+// Step 5 — review + STACKED/nested confirmation modals + attestation.
+function claimReviewPage(){
+  const c=state.claim, total=c.items.reduce((s,i)=>s+(+i.amt||0),0);
+  return `<div class="card">${claimStepper(5)}
+    <h1>Review &amp; submit claim</h1>
+    <div class="banner info">${CLAIM_TYPES.find(x=>x.id===c.type)?.label||'—'} · ${c.incidentDate||'no date'} · ${c.provider||'no provider'} · ${c.items.length} item(s) · <b>$${total.toLocaleString()}</b></div>
+    <form id="claim-review">
+      <label class="row" style="font-weight:500;font-size:13.5px"><input type="checkbox" id="attest"> I attest the information in this claim is true and complete.</label>
+      <div class="field" style="margin-top:14px;max-width:360px"><label for="claim-sig">E-signature</label><input id="claim-sig" placeholder="Your full name" value="${c.signature}"></div>
+      <div class="actions"><button class="btn ghost" type="button" id="back-docs">← Back</button>
+        <button class="btn primary" id="${rid('submit-claim')}">${BREAK==='rename'?'Finalize claim':'Submit claim'}</button></div></form></div>`;
+}
+function claimDonePage(){
+  if(BREAK==='regression'){
+    return `<div class="card"><div class="banner bad">We hit a problem submitting your claim. No confirmation number was generated.</div>
+      <a class="btn ghost" href="/dashboard" onclick="event.preventDefault();go('/dashboard')">Back to dashboard</a></div>`;
+  }
+  const ref=state.claimRef||('CLM-'+(70000+Math.floor((Date.now()/1000)%9000)));state.claimRef=ref;
+  const total=state.claim.items.reduce((s,i)=>s+(+i.amt||0),0);
+  return `<div class="card" style="text-align:center"><div style="font-size:46px">✅</div>
+    <h1>Claim submitted</h1><p class="muted">Your claim is now in review.</p>
+    <div class="banner ok">Claim reference: <span class="ref" id="claim-ref">${ref}</span></div>
+    <p class="muted" id="claim-summary">${CLAIM_TYPES.find(x=>x.id===state.claim.type)?.label||'Claim'} · $${total.toLocaleString()} · ${state.claim.items.length} item(s)</p>
+    <a class="btn primary" href="/dashboard" onclick="event.preventDefault();go('/dashboard')">Return to dashboard</a></div>`;
+}
+
+// ── Complicated-UI widget helpers ────────────────────────────────────────────
+// Custom calendar popup bound to a readonly input (control-kind heal target:
+// looks like a date field but .fill() can't set it — only a day-click can).
+function wireCalendar(){
+  const inp=$('#incident-date'); if(!inp) return;
+  let view=new Date(2026,5,1);
+  const open=()=>{
+    const slot=$('#cal-slot'); const first=new Date(view.getFullYear(),view.getMonth(),1);
+    const start=first.getDay(), days=new Date(view.getFullYear(),view.getMonth()+1,0).getDate();
+    const mon=view.toLocaleString('en',{month:'long',year:'numeric'});
+    let cells=''; for(let i=0;i<start;i++) cells+='<div class="day off"></div>';
+    for(let d=1;d<=days;d++){const iso=`${view.getFullYear()}-${String(view.getMonth()+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+      cells+=`<div class="day ${state.claim.incidentDate===iso?'sel':''}" data-iso="${iso}">${d}</div>`;}
+    slot.innerHTML=`<div class="cal" id="cal"><div class="nav"><button type="button" id="cal-prev">‹</button><span>${mon}</span><button type="button" id="cal-next">›</button></div>
+      <div class="grid7">${['S','M','T','W','T','F','S'].map(x=>`<div class="dow">${x}</div>`).join('')}${cells}</div></div>`;
+    $('#cal-prev').onclick=()=>{view.setMonth(view.getMonth()-1);open();};
+    $('#cal-next').onclick=()=>{view.setMonth(view.getMonth()+1);open();};
+    $$('#cal .day[data-iso]').forEach(d=>d.onclick=()=>{state.claim.incidentDate=d.dataset.iso;inp.value=d.dataset.iso;slot.innerHTML='';});
+  };
+  inp.addEventListener('click',open); inp.addEventListener('focus',open);
+}
+// Async debounced typeahead (3s under ?break=async-slow).
+function wireTypeahead(){
+  const inp=$('#provider'),list=$('#prov-list'); if(!inp) return;
+  let timer;
+  inp.addEventListener('input',()=>{
+    state.claim.provider=inp.value; clearTimeout(timer);
+    const q=inp.value.trim().toLowerCase(); if(!q){list.innerHTML='';return;}
+    list.innerHTML='<div class="ta-list"><div class="loading">Searching…</div></div>';
+    timer=setTimeout(()=>{
+      const hits=PROVIDERS.filter(p=>p.toLowerCase().includes(q));
+      list.innerHTML=`<div class="ta-list">${hits.length?hits.map(p=>`<div class="opt" data-v="${p}">${p}</div>`).join(''):'<div class="loading">No matches</div>'}</div>`;
+      $$('#prov-list .opt').forEach(o=>o.onclick=()=>{inp.value=o.dataset.v;state.claim.provider=o.dataset.v;list.innerHTML='';});
+    }, BREAK==='async-slow'?3000:350);
+  });
+}
+function currencyMask(inp){ if(!inp)return; inp.addEventListener('input',()=>{
+  const n=+inp.value.replace(/[^\d]/g,'')||0; state.claim.estimate=n; inp.value=n?'$'+n.toLocaleString():'';});}
+// Repeatable line items + drag-drop reorder + live total.
+function renderItems(){
+  const wrap=$('#item-rows'); if(!wrap)return;
+  wrap.innerHTML=state.claim.items.map((it,i)=>`<div class="ir" draggable="true" data-i="${i}">
+    <span class="grip">⠿</span>
+    <input class="it-desc" data-i="${i}" value="${it.desc||''}" placeholder="Description">
+    <select class="it-cat" data-i="${i}">${ITEM_CATEGORIES.map(c=>`<option ${c===it.cat?'selected':''}>${c}</option>`).join('')}</select>
+    <input class="it-amt" data-i="${i}" inputmode="numeric" value="${it.amt||''}" placeholder="0">
+    <button type="button" class="rm" data-i="${i}" aria-label="Remove">✕</button></div>`).join('');
+  const total=state.claim.items.reduce((s,it)=>s+(+it.amt||0),0);
+  $('#items-total').textContent='Total: $'+total.toLocaleString();
+  $$('#item-rows .it-desc').forEach(el=>el.oninput=()=>state.claim.items[+el.dataset.i].desc=el.value);
+  $$('#item-rows .it-cat').forEach(el=>el.onchange=()=>state.claim.items[+el.dataset.i].cat=el.value);
+  $$('#item-rows .it-amt').forEach(el=>el.oninput=()=>{state.claim.items[+el.dataset.i].amt=+el.value.replace(/[^\d]/g,'')||0;
+    $('#items-total').textContent='Total: $'+state.claim.items.reduce((s,it)=>s+(+it.amt||0),0).toLocaleString();});
+  $$('#item-rows .rm').forEach(el=>el.onclick=()=>{state.claim.items.splice(+el.dataset.i,1);renderItems();});
+  // drag-drop reorder
+  let dragI=null;
+  $$('#item-rows .ir').forEach(row=>{
+    row.addEventListener('dragstart',()=>{dragI=+row.dataset.i;row.classList.add('drag');});
+    row.addEventListener('dragend',()=>row.classList.remove('drag'));
+    row.addEventListener('dragover',e=>e.preventDefault());
+    row.addEventListener('drop',e=>{e.preventDefault();const to=+row.dataset.i;if(dragI===null||dragI===to)return;
+      const m=state.claim.items.splice(dragI,1)[0];state.claim.items.splice(to,0,m);renderItems();});
+  });
+}
+// Stacked / nested confirmation modals (+ a 3rd under ?break=modal-stack).
+function openClaimConfirm(){
+  const mk=(title,body,okId,okLabel)=>{const o=document.createElement('div');o.className='overlay';
+    o.innerHTML=`<div class="modal"><h1 style="font-size:18px">${title}</h1><p class="muted">${body}</p>
+      <div class="actions"><button class="btn ghost" data-cancel>Cancel</button><button class="btn primary" id="${okId}">${okLabel}</button></div></div>`;
+    document.body.appendChild(o); o.querySelector('[data-cancel]').onclick=()=>o.remove(); return o;};
+  const m1=mk('Confirm submission','Submitting locks this claim for adjudication. Continue?','m1-ok','Continue');
+  $('#m1-ok').onclick=()=>{m1.remove();
+    const m2=mk('Final attestation','By submitting you certify the claim is accurate under penalty of fraud.','m2-ok','Submit claim');
+    $('#m2-ok').onclick=()=>{m2.remove();
+      const finish=()=>go('/claims/done');
+      if(BREAK==='modal-stack'){const m3=mk('One more thing','Confirm you authorize Aegis to contact the provider.','m3-ok','I authorize');$('#m3-ok').onclick=()=>{m3.remove();finish();};}
+      else if(BREAK==='slow'){const a=$('#app');a.innerHTML='<div class="card" style="text-align:center"><h1>Submitting…</h1></div>';setTimeout(finish,3000);}
+      else finish();
+    };
+  };
+}
+
+// ── Wiring per page ──────────────────────────────────────────────────────────
+function wire(path){
+  if(path==='/'){
+    $('#login').addEventListener('submit',e=>{e.preventDefault();state.auth=true;try{localStorage.setItem('nx_auth','1');}catch(_e){}go('/dashboard');});
+  }
+  else if(path==='/dashboard'){
+    $('#new-app').addEventListener('click',()=>go('/apply/profile'));
+    $('#file-claim').addEventListener('click',()=>go('/claims/type'));
+    $$('#tabs .t').forEach(t=>t.addEventListener('click',()=>{
+      $$('#tabs .t').forEach(x=>x.classList.remove('active'));t.classList.add('active');
+      const k=t.dataset.tab;const panel=$('#tabpanel');
+      if(k==='policies'){render();return;}
+      panel.innerHTML=`<div class="banner info">Loading ${k}…</div>`;
+      setTimeout(()=>{panel.innerHTML = k==='claims'
+        ? `<table><thead><tr><th>Claim</th><th>Status</th></tr></thead><tbody><tr><td>CLM-99</td><td><span class="pill amber">In review</span></td></tr></tbody></table>`
+        : `<ul style="font-size:13px;color:var(--sub)"><li>Policy_AX-4821.pdf</li><li>Receipt_2026.pdf</li></ul>`;},700);
+    }));
+    $$('#policies-table th').forEach(th=>th.addEventListener('click',()=>{
+      const tb=$('#policies-table tbody');const k=+th.dataset.k;
+      const rows=$$('#policies-table tbody tr').sort((a,b)=>a.children[k>2?3:k].textContent.localeCompare(b.children[k>2?3:k].textContent));
+      rows.forEach(r=>tb.appendChild(r));
+    }));
+  }
+  else if(path==='/apply/profile'){
+    const fillRegions=()=>{const c=(BREAK==='custom-combo')?state.profile.country:($('#country')?.value||state.profile.country);
+      const sel=$('#region');if(!sel)return;const opts=STATES[c]||['—'];
+      sel.innerHTML=opts.map(o=>`<option ${o===state.profile.region?'selected':''}>${o}</option>`).join('');};
+    if(BREAK==='custom-combo'){
+      const disp=$('#country-disp'),list=$('#country-list');
+      disp.addEventListener('click',()=>{const o=list.hidden;list.hidden=!o;disp.setAttribute('aria-expanded',String(o));});
+      $$('#country-list .opt').forEach(op=>op.addEventListener('click',()=>{state.profile.country=op.dataset.v;disp.firstChild.textContent=op.dataset.v+' ';list.hidden=true;fillRegions();}));
+    } else {
+      $('#country').addEventListener('change',e=>{state.profile.country=e.target.value;fillRegions();});
+    }
+    fillRegions();
+    mask($('#phone'),'phone');mask($('#ssn'),'ssn');
+    // ?break=late: a required field appears 1.5s after load (timing class)
+    if(BREAK==='late'){setTimeout(()=>{const s=$('#late-slot');if(s)s.innerHTML=`<div class="banner info" style="margin-top:16px">Additional verification (loaded late): <input id="verify-code" placeholder="ID last 4" style="max-width:160px"></div>`;},1500);}
+    $('#back-dash').addEventListener('click',()=>go('/dashboard'));
+    $('#profile').addEventListener('submit',e=>{e.preventDefault();
+      state.profile.first=$('#first').value;state.profile.last=$('#last').value;
+      state.profile.dob=$('#dob').value;state.profile.phone=$('#phone').value;state.profile.ssn=$('#ssn').value;
+      state.profile.employment=($$('input[name=employment]').find(r=>r.checked)||{}).value||'employed';
+      state.profile.usPerson=$('#usperson').checked;if($('#region'))state.profile.region=$('#region').value;
+      go('/apply/coverage');});
+  }
+  else if(path==='/apply/coverage'){
+    const disp=$('#plan-disp'),list=$('#plan-list');
+    disp.addEventListener('click',()=>{const o=list.hidden;list.hidden=!o;disp.setAttribute('aria-expanded',String(o));});
+    $$('#plan-list .opt').forEach(op=>op.addEventListener('click',()=>{state.coverage.plan=op.dataset.v;disp.firstChild.textContent=op.dataset.v+' ';list.hidden=true;disp.setAttribute('aria-expanded','false');}));
+    $('#amount').addEventListener('input',e=>{state.coverage.amount=+e.target.value;$('#amount-val').textContent='$'+(+e.target.value).toLocaleString();});
+    $('#autorenew').addEventListener('click',()=>{state.coverage.autoRenew=!state.coverage.autoRenew;$('#autorenew').classList.toggle('on');$('#autorenew').setAttribute('aria-checked',String(state.coverage.autoRenew));});
+    $$('.addon').forEach(a=>a.addEventListener('change',()=>{state.coverage.addons=$$('.addon').filter(x=>x.checked).map(x=>x.value);}));
+    $('#add-beneficiary').addEventListener('change',e=>{
+      $('#beneficiary-slot').innerHTML = e.target.checked
+        ? `<div class="field" style="margin-top:10px;max-width:380px"><label for="beneficiary">Beneficiary full name</label><input id="beneficiary" type="text" value="${state.coverage.beneficiary}"></div>` : '';
+      state.coverage.addBeneficiary=e.target.checked;});
+    $('#risk-hd').addEventListener('click',()=>{const b=$('#risk-bd');b.hidden=!b.hidden;});
+    $('#back-profile').addEventListener('click',()=>go('/apply/profile'));
+    $('#coverage').addEventListener('submit',e=>{e.preventDefault();
+      if($('#beneficiary'))state.coverage.beneficiary=$('#beneficiary').value;
+      if($('#risk-ack'))state.coverage.riskAck=$('#risk-ack').checked;
+      go('/apply/review');});
+  }
+  else if(path==='/apply/review'){
+    $('#back-coverage').addEventListener('click',()=>go('/apply/coverage'));
+    $('#review').addEventListener('submit',e=>{e.preventDefault();
+      state.review.consentTerms=$('#consent-terms').checked;state.review.consentData=$('#consent-data').checked;
+      state.review.signature=$('#signature').value;
+      openConfirmModal();});
+  }
+  else if(path==='/components'){
+    const host=$('#shadow-host');const sh=host.attachShadow({mode:'open'});
+    sh.innerHTML=`<style>input{padding:8px;border:1px solid #cbd5e1;border-radius:8px;width:90%}</style><input id="shadow-field" placeholder="inside shadow DOM">`;
+    $('#tag-input').addEventListener('keydown',e=>{if(e.key==='Enter'&&e.target.value.trim()){e.preventDefault();const s=document.createElement('span');s.className='tag';s.textContent=e.target.value+' ✕';$('#tags').appendChild(s);e.target.value='';}});
+    $$('#otp input').forEach((inp,i,arr)=>inp.addEventListener('input',()=>{if(inp.value&&arr[i+1])arr[i+1].focus();}));
+  }
+  else if(path==='/claims/type'){
+    $('#claim-cancel').addEventListener('click',()=>go('/dashboard'));
+    const sel=el=>{state.claim.type=el.dataset.type;$$('#type-cards .typecard').forEach(c=>{const on=c===el;c.classList.toggle('sel',on);c.setAttribute('aria-checked',String(on));});};
+    $$('#type-cards .typecard').forEach(c=>{c.addEventListener('click',()=>sel(c));
+      c.addEventListener('keydown',e=>{if(e.key===' '||e.key==='Enter'){e.preventDefault();sel(c);}});});
+    $('#type-next').addEventListener('click',()=>{if(!state.claim.type){alert('Pick a claim type');return;}go('/claims/details');});
+  }
+  else if(path==='/claims/details'){
+    wireCalendar();wireTypeahead();currencyMask($('#estimate'));
+    $('#back-type').addEventListener('click',()=>go('/claims/type'));
+    $('#claim-details').addEventListener('submit',e=>e.preventDefault());
+    $('#details-next').addEventListener('click',()=>{
+      const errs=[]; const mark=(id,ok,msg)=>{const f=$('#'+id);if(!f)return;f.classList.toggle('err',!ok);
+        let m=f.parentNode.querySelector('.errmsg');
+        if(!ok){if(!m){m=document.createElement('div');m.className='errmsg';f.parentNode.appendChild(m);}m.textContent='⚠ '+msg;errs.push(id);}else if(m)m.remove();};
+      mark('incident-date', !!state.claim.incidentDate && state.claim.incidentDate<='2026-06-09', !state.claim.incidentDate?'Date is required':'Date can’t be in the future');
+      mark('provider', !!state.claim.provider.trim(), 'Provider is required');
+      mark('estimate', state.claim.estimate>0, 'Enter an amount greater than $0');
+      if($('#vin')) state.claim.policyRef=$('#vin').value;
+      if(errs.length){$('#'+errs[0]).focus();return;}
+      go('/claims/items');
+    });
+  }
+  else if(path==='/claims/items'){
+    renderItems();
+    $('#add-item').addEventListener('click',()=>{state.claim.items.push({desc:'',cat:'Parts',amt:0});renderItems();});
+    $('#back-details').addEventListener('click',()=>go('/claims/details'));
+    $('#items-next').addEventListener('click',()=>{if(!state.claim.items.length){alert('Add at least one line item');return;}go('/claims/docs');});
+  }
+  else if(path==='/claims/docs'){
+    const dz=$('#dropzone'),fi=$('#file-input');
+    const renderDocs=()=>{$('#doc-list').innerHTML=state.claim.docs.map((d,i)=>`<div class="doc">📎 ${d.name}<button class="rm" data-i="${i}" aria-label="Remove">✕</button></div>`).join('');
+      $$('#doc-list .rm').forEach(b=>b.onclick=()=>{state.claim.docs.splice(+b.dataset.i,1);renderDocs();});};
+    const addFiles=files=>{[...files].forEach(f=>state.claim.docs.push({name:f.name,size:f.size}));renderDocs();};
+    dz.addEventListener('click',()=>fi.click());
+    dz.addEventListener('dragover',e=>{e.preventDefault();dz.classList.add('over');});
+    dz.addEventListener('dragleave',()=>dz.classList.remove('over'));
+    dz.addEventListener('drop',e=>{e.preventDefault();dz.classList.remove('over');addFiles(e.dataTransfer.files);});
+    fi.addEventListener('change',()=>addFiles(fi.files));
+    renderDocs();
+    $('#back-items').addEventListener('click',()=>go('/claims/items'));
+    $('#docs-next').addEventListener('click',()=>go('/claims/review'));
+  }
+  else if(path==='/claims/review'){
+    $('#back-docs').addEventListener('click',()=>go('/claims/docs'));
+    $('#claim-sig').addEventListener('input',e=>state.claim.signature=e.target.value);
+    $('#attest').addEventListener('change',e=>state.claim.attestTruth=e.target.checked);
+    $('#submit-claim').addEventListener('click',e=>{e.preventDefault();
+      if(BREAK==='validation' && !$('#attest').checked){$('#attest').parentNode.classList.add('err');alert('You must attest before submitting');return;}
+      openClaimConfirm();});
+  }
+}
+
+function openConfirmModal(){
+  const o=document.createElement('div');o.className='overlay';o.id='confirm-overlay';
+  o.innerHTML=`<div class="modal"><h1 style="font-size:18px">Confirm submission</h1>
+    <p class="muted">Submitting will lock your application for underwriting. Continue?</p>
+    <div class="actions"><button class="btn ghost" id="modal-cancel">Cancel</button>
+      <button class="btn primary" id="modal-confirm">Yes, submit</button></div></div>`;
+  document.body.appendChild(o);
+  $('#modal-cancel').addEventListener('click',()=>o.remove());
+  $('#modal-confirm').addEventListener('click',()=>{o.remove();
+    const finish=()=>go('/apply/done');
+    if(BREAK==='slow'){const m=$('#app');m.innerHTML=`<div class="card" style="text-align:center"><h1>Submitting…</h1><p class="muted">Contacting underwriting…</p></div>`;setTimeout(finish,3000);}else finish();
+  });
+}
+
+// ── Input masks ──────────────────────────────────────────────────────────────
+function mask(inp,kind){ if(!inp)return; inp.addEventListener('input',()=>{
+  let d=inp.value.replace(/\D/g,'');
+  if(kind==='phone'){d=d.slice(0,10);inp.value=d.length>6?`(${d.slice(0,3)}) ${d.slice(3,6)}-${d.slice(6)}`:d.length>3?`(${d.slice(0,3)}) ${d.slice(3)}`:d;}
+  else{d=d.slice(0,9);inp.value=d.length>5?`${d.slice(0,3)}-${d.slice(3,5)}-${d.slice(5)}`:d.length>3?`${d.slice(0,3)}-${d.slice(3)}`:d;}
+});}
+
+// ── Chrome (nav + breakbar + url chip) ───────────────────────────────────────
+function renderNav(){
+  const items=[['/dashboard','Dashboard'],['/apply/profile','Apply'],['/claims/type','File a claim'],['/components','Components']];
+  $('#nav').innerHTML = state.auth ? items.map(([p,l])=>`<a href="${p}" data-p="${p}" class="${location.pathname.startsWith(p)?'active':''}">${l}</a>`).join('') : '';
+  $$('#nav a').forEach(a=>a.addEventListener('click',e=>{e.preventDefault();go(a.dataset.p);}));
+}
+function renderBreakbar(){
+  $('#breakbar').innerHTML='<b>Break mode</b>'+BREAKS.map(b=>`<a href="?break=${b}" class="${b===BREAK?'on':''}">${b}</a>`).join('');
+}
+function renderUrlChip(){ $('#urlchip').textContent = location.pathname + (BREAK!=='none'?`?break=${BREAK}`:''); }
+
+// ── Router ───────────────────────────────────────────────────────────────────
+const ROUTES={'/':loginPage,'/dashboard':dashboardPage,'/apply/profile':profilePage,'/apply/coverage':coveragePage,'/apply/review':reviewPage,'/apply/done':donePage,'/components':componentsPage,
+  '/claims/type':claimTypePage,'/claims/details':claimDetailsPage,'/claims/items':claimItemsPage,'/claims/docs':claimDocsPage,'/claims/review':claimReviewPage,'/claims/done':claimDonePage};
+function pathKey(){ const p=location.pathname.replace(/\/+$/,'')||'/'; return ROUTES[p]?p:'/'; }
+function render(){
+  renderBreakbar();renderUrlChip();
+  const p=pathKey();
+  // Gate the app behind sign-in (proves an auth boundary), except the login page.
+  if(!state.auth && p!=='/'){ history.replaceState({},'','/'+q()); }
+  const key=pathKey();
+  $('#app').innerHTML = ROUTES[key]();
+  renderNav();
+  wire(key);
+}
+window.addEventListener('popstate',render);
+// Restore sign-in across reloads so a captured/replayed storageState (which carries
+// localStorage) re-authenticates the SPA on boot — the whole point of "save login
+// session" reuse. Flag only; no credentials are ever stored.
+try { if (localStorage.getItem('nx_auth') === '1') state.auth = true; } catch (e) {}
+render();
+</script>
+</body>
+</html>
