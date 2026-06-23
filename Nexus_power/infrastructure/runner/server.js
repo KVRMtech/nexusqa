@@ -173,9 +173,15 @@ function ensureCaptureDisplay(authFile) {
     // (-rfbauth, a per-capture one-time secret) and SINGLE-viewer (NO -shared) and
     // -localhost: only the operator who holds the one-time password can attach, and
     // only one viewer at a time. Closes the unauthenticated-control exposure.
-    capDisp.x11vnc = spawn('x11vnc',
-      ['-display', CAPTURE_DISPLAY, '-rfbport', '5901', '-forever', '-rfbauth', authFile,
-       '-localhost', '-quiet', '-noxdamage'],
+    const _xsock = '/tmp/.X11-unix/X' + String(CAPTURE_DISPLAY).replace(':', '');
+    // Wait for the Xvfb X-socket before starting x11vnc (else x11vnc races Xvfb
+    // at startup, fails to open the display, and dies -> dead VNC backend and the
+    // portal's noVNC shows "Failed to connect"). exec keeps the same PID so the
+    // alive(capDisp.x11vnc) liveness check still tracks the real x11vnc process.
+    capDisp.x11vnc = spawn('sh', ['-c',
+      'i=0; while [ ! -S "' + _xsock + '" ] && [ $i -lt 50 ]; do i=$((i+1)); sleep 0.1; done; ' +
+      'exec env DISPLAY=' + CAPTURE_DISPLAY + ' x11vnc -display ' + CAPTURE_DISPLAY +
+      ' -rfbport 5901 -forever -rfbauth "' + authFile + '" -localhost -quiet -noxdamage'],
       { stdio: 'ignore', detached: true }); capDisp.x11vnc.unref();
   }
   if (!alive(capDisp.websockify)) {
