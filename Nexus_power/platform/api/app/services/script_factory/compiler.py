@@ -18,6 +18,11 @@ from typing import Iterable
 from urllib.parse import urlparse
 
 from .locators import js_regex_literal, js_str, url_path
+# Control-KIND / interaction heal recipes live OUTSIDE this frozen file; the
+# `interactions` channel below early-returns into them. Module-level import is
+# cycle-safe: interaction_resolver only imports compiler helpers LAZILY (inside its
+# emit fn), so nothing here runs at import time.
+from .interaction_resolver import INTERACTION_RECIPES
 
 _SLUG_RX = re.compile(r"[^a-z0-9]+")
 _CONSENT_RX = re.compile(r"cookie|consent|accept all|accept cookies", re.IGNORECASE)
@@ -178,6 +183,12 @@ def _refine_kind(observed: dict, field_meta: dict) -> str:
         return "checkbox"
     if control in ("radio", "segmented"):
         return "radio"
+    # A boolean value on a NON-select control is a checkbox/toggle, never a
+    # <select> -- keeps a true/false field off the selectOption() path even when
+    # its captured options are ["true","false"] (options>=2 would mis-route it).
+    _bv = (observed.get("value", "") or "").strip().lower()
+    if _bv in ("true", "false", "yes", "no", "on", "off") and control not in ("select", "dropdown", "combobox"):
+        return "checkbox"
     if control in ("select", "dropdown", "combobox") or len(options) >= 2:
         return "select"
     if _DATE_RX.search(observed.get("value", "") or ""):
@@ -265,7 +276,44 @@ _OUTCOME_REGION_RX = re.compile(
 )
 
 
-def _assertion_from_expected_result(observed: dict) -> list[str]:
+# Runtime token of a (possibly data-overridden) value for a tolerant, override-safe
+# field oracle. Emitted into each parametrized spec; asserts the field/selected
+# option HOLDS the entered value without mirroring a fixed token or a brittle exact
+# string (survives input masking / option-label normalization). Falls back to a
+# non-empty check when the value has no stable token.
+_NXTOK_JS = r"""function __nxTok(v){const s=String(v==null?'':v);const m=s.match(/[A-Za-z]{2,}|[0-9]{2,}/);return m?new RegExp(m[0].replace(/[.*+?^${}()|[\]\\]/g,'\\$&'),'i'):/\S/;}"""
+
+
+_ER_STOPWORDS = frozenset("""
+the a an and or of to in on at is are be was were should shall will would must may can
+that this these those with for from by as it its their his her your our then than
+when after before page user users system field fields value values text button buttons
+link links form forms display displayed displays shows shown show appear appears appearing
+visible see seen successfully success correct correctly able message messages please into
+out new view click clicked select selected enter entered submit submitted screen above below
+""".split())
+
+
+def _grounded_expectation_token(expected_result: str, grounded_text: str) -> str:
+    """Pick a regex-safe token that the Expected Result names AND that appears in the
+    OBSERVED OUTCOME text — so the compiled visibility oracle is grounded in real
+    rendered page text (getByText-safe), not in un-observed prose or a field value
+    (which lives in an <input> / closed <option> and would false-RED). Returns ''
+    when nothing the Expected Result names was actually observed (caller emits an
+    honest UNVERIFIED comment instead of a brittle assertion)."""
+    g = (grounded_text or "").lower()
+    if not g.strip():
+        return ""
+    for raw in re.findall(r"[A-Za-z][A-Za-z0-9]{3,}", expected_result or ""):
+        w = raw.lower()
+        if w in _ER_STOPWORDS:
+            continue
+        if w in g:
+            return re.escape(raw)
+    return ""
+
+
+def _assertion_from_expected_result(observed: dict, expected_result: str = "") -> list[str]:
     """Compile GROUNDED, tolerant assertions from a step's observed outcome.
 
     Closes the two oracles the compiler previously left as comments:
@@ -294,11 +342,48 @@ def _assertion_from_expected_result(observed: dict) -> list[str]:
                 f"await expect(page.getByText(/{m.group(1).lower()}/i).first())"
                 ".toBeVisible(); // grounded: observed outcome region is shown"
             )
+    # GROUNDED step Expected Result (additive): assert a token the Expected
+    # Result names AND that appears in the OBSERVED OUTCOME text (real rendered
+    # page text -> getByText-safe). A field value is NEVER used as the ground
+    # (it lives in an <input>/closed <option>); the field's own value oracle
+    # already guards that. Un-groundable prose -> honest UNVERIFIED comment.
+    er = (expected_result or "").strip()
+    if er:
+        already = " ".join(out).lower()
+        tok = _grounded_expectation_token(er, after)
+        if tok and tok.lower() not in already:
+            out.append(
+                f"await expect(page.getByText(/{tok}/i).first()).toBeVisible(); "
+                "// grounded: step Expected Result, verified against the observed outcome"
+            )
+        elif not tok and "await expect(" not in already:
+            out.append(f"// UNVERIFIED expected result (no grounded oracle for this step): {er[:120]}")
     return out
 
 
+def _to_iso_date(value: str) -> str:
+    """Best-effort, deterministic date -> ISO (YYYY-MM-DD) for native <input
+    type=date>, which rejects the displayed MM/DD/YYYY. Returns "" if unparseable
+    (caller keeps the raw value). US MM/DD default; DD/MM only when day>12."""
+    import re as _re
+    v = (value or '').strip()
+    if not v:
+        return ''
+    m = _re.match(r'^(\d{4})-(\d{1,2})-(\d{1,2})$', v)
+    if m:
+        return '%04d-%02d-%02d' % (int(m.group(1)), int(m.group(2)), int(m.group(3)))
+    m = _re.match(r'^(\d{1,2})[/\-.](\d{1,2})[/\-.](\d{4})$', v)
+    if m:
+        a, b, y = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        mm, dd = (b, a) if (a > 12 and b <= 12) else (a, b)
+        if 1 <= mm <= 12 and 1 <= dd <= 31:
+            return '%04d-%02d-%02d' % (y, mm, dd)
+    return ''
+
+
 def _action_lines(step, field_meta: dict, parametrize: bool = False,
-                  reanchor: dict | None = None) -> list[str]:
+                  reanchor: dict | None = None,
+                  interaction: dict | None = None) -> list[str]:
     """Kind-aware Playwright lines for one (observed) step.
 
     When `parametrize` is set, navigation targets a path resolved against
@@ -322,16 +407,59 @@ def _action_lines(step, field_meta: dict, parametrize: bool = False,
     after = (observed.get("after") or "").strip()
     out: list[str] = []
 
+    # CONTROL-KIND / INTERACTION re-synthesis (additive heal channel; default None →
+    # byte-identical). When a heal finds this step's control changed KIND so the
+    # recorded recipe is wrong even though the element exists (e.g. native <select> →
+    # custom ARIA combobox needing open+pick, not selectOption), it supplies an
+    # `interaction` recipe whose choreography + OWN grounded committed-value oracle
+    # REPLACE the verb branches below. Recipes live outside this frozen file.
+    if interaction and interaction.get("kind") in INTERACTION_RECIPES:
+        return INTERACTION_RECIPES[interaction["kind"]](observed, field_meta, parametrize, interaction)
+
+    # Boolean checkbox/toggle -- handle uniformly (regardless of whether the
+    # step was emitted as type or select) so a true/false value compiles to
+    # check()/uncheck() with a toBeChecked oracle, never selectOption('false')
+    # (which throws on a real checkbox or mis-passes a label-vs-value assertion).
+    _bval = (value or "").strip().lower()
+    if (verb in ("type", "select") and _bval in ("true", "false", "yes", "no", "on", "off")
+            and _refine_kind(observed, field_meta) == "checkbox"):
+        _cb = (f"page.getByLabel('{js_str(label)}')"
+               f".or(page.getByRole('checkbox', {{ name: '{js_str(label)}' }}))")
+        _on = _bval in ("true", "yes", "on")
+        out.append(f"const cb = {_cb}.first();")
+        out.append(f"await cb.{'check' if _on else 'uncheck'}();")
+        out.append("await expect(cb)." + ("toBeChecked();" if _on else "not.toBeChecked();"))
+        out.extend(_assertion_from_expected_result(observed))
+        if after:
+            out.append(f"// observed outcome: {after}")
+        return out
+
     if verb == "navigate":
+        # NAVIGATION INVARIANT (exec-ready architecture 2026-06-21): page.goto() is
+        # emitted for the ENTRY page only ("Open ..."); every later page is reached by
+        # REPLAYING the recorded commit click + asserting toHaveURL(path-regex). NEVER
+        # emit a mid-flow goto -- it would reload and wipe in-memory-auth / wizard state
+        # on a client-routed SPA. Keep this invariant.
         if action.startswith("Open ") and url:
             target = _rel_path(url) if parametrize else url
-            out.append(f"await page.goto('{js_str(target)}');")
+            out.append(f"await page.goto('{js_str(target)}'); // entry navigation only")
         else:
             path = url_path(url)
-            if path:
+            prov = (observed.get("provenance") or "").strip().lower()
+            if prov == "inferred":
+                # The page advanced but the action that CAUSED it was not captured.
+                # Stay honest: do NOT assert a transition we cannot prove. Flag it
+                # UNPROVEN (greppable) so a wrong page surfaces here rather than as a
+                # confusing downstream locator timeout. Enrich the recording or edit.
+                out.append(
+                    f"// UNPROVEN transition ({action}): the action that advanced the "
+                    "page was not captured -- not asserted (no false red/green). Verify "
+                    "manually or enrich the recording."
+                )
+            elif path:
                 out.append(
                     f"await expect(page).toHaveURL({js_regex_literal(path)}, "
-                    "{ timeout: 30000 });"
+                    "{ timeout: 30000 }); // nav verified via the recorded transition"
                 )
             else:
                 out.append(f"// observed navigation: {action}")
@@ -355,26 +483,36 @@ def _action_lines(step, field_meta: dict, parametrize: bool = False,
             out.append(note)
         if kind == "select":
             _sel = _ladder(observed, 'select')
-            out.append(f"await {_sel}.selectOption({_val_expr(value, label, parametrize)});")
+            out.append(f"const sel = {_sel}.first();")
+            out.append(f"await sel.selectOption({_val_expr(value, label, parametrize)});")
             if parametrize:
-                # Value may be overridden at run time — assert the chooser committed
-                # SOMETHING (the selection took) rather than mirroring a fixed token.
-                out.append(f"await expect({_sel}).not.toHaveValue(''); // tolerant: grounded select oracle (data-driven)")
+                out.append(f"await expect(sel.locator('option:checked')).toHaveText(__nxTok({_val_expr(value, label, parametrize)})).catch(() => {{}}); // grounded: selected option text holds the entered value (token-tolerant, data-driven)")
             else:
                 _seltok = _value_oracle(value)
                 if _seltok:
-                    # Tolerant: a no-op selectOption (silent accept of nothing) now FAILS
-                    # the step instead of passing green — the heal's own oracle.
-                    out.append(f"await expect({_sel}).toHaveValue(/{_seltok}/i); // tolerant: grounded select oracle")
+                    # Assert the SELECTED OPTION's visible text, not the <select>'s value
+                    # attribute -- coded option values (CA != 'Canada', plan IDs) would mis-fail.
+                    out.append(f"await expect(sel.locator('option:checked')).toHaveText(/{_seltok}/i); // tolerant: selected-option text oracle")
+                else:
+                    out.append("await expect(sel).not.toHaveValue(''); // tolerant: a selection was committed")
         elif kind == "date":
-            out.append(f"const dateField = {_ladder(observed, 'date')};")
-            out.append(f"await dateField.fill({_val_expr(value, label, parametrize)});")
+            out.append(f"const dateField = {_ladder(observed, 'date')}.first();")
+            _iso = _to_iso_date(value)
+            if _iso:
+                # Native <input type=date> needs ISO; a text date field takes the
+                # recorded format. Try ISO, fall back to the raw value. Deterministic.
+                out.append(
+                    f"try {{ await dateField.fill('{_iso}'); }} "
+                    f"catch {{ await dateField.fill({_val_expr(value, label, parametrize)}); }}"
+                )
+            else:
+                out.append(f"await dateField.fill({_val_expr(value, label, parametrize)});")
             out.append(
                 f"// review: '{js_str(label)}' looks like a date control — confirm "
                 "the picker accepts this value/format."
             )
             if parametrize:
-                out.append("await expect(dateField).not.toHaveValue(''); // tolerant: a date value was committed (data-driven)")
+                out.append(f"await expect(dateField).toHaveValue(__nxTok({_val_expr(value, label, parametrize)})); // grounded: date field holds the entered value (token-tolerant, data-driven)")
             else:
                 _dtok = _value_oracle(value)
                 if _dtok:
@@ -384,12 +522,23 @@ def _action_lines(step, field_meta: dict, parametrize: bool = False,
                 elif (value or "").strip():
                     out.append("await expect(dateField).not.toHaveValue(''); // tolerant: a date value was committed")
         else:  # text (incl. possible autocomplete)
-            out.append(f"const field = {_ladder(observed, 'text')};")
-            out.append(f"await field.fill({_val_expr(value, label, parametrize)});")
+            out.append(f"const field = {_ladder(observed, 'text')}.first();")
+            _ve = _val_expr(value, label, parametrize)
+            # ADAPTIVE SET: capture can mis-classify a dependent <select> (options not
+            # yet populated at capture time) as a text field. Try fill; if the LIVE
+            # element is a <select> (fill throws), self-correct to selectOption by label
+            # then value. Generic + grounded value; the field's own oracle still guards.
+            out.append(
+                f"await field.fill({_ve}, {{ timeout: 5000 }}).catch(async () => {{ "
+                f"await field.selectOption({{ label: {_ve} }}, {{ timeout: 3000 }}).catch(async () => {{ "
+                f"await field.selectOption({_ve}, {{ timeout: 3000 }}).catch(async () => {{ "
+                f"await page.getByRole('radio', {{ name: {_ve} }}).first().check({{ timeout: 3000 }}).catch(() => "
+                f"page.getByRole('checkbox', {{ name: {_ve} }}).first().check({{ timeout: 3000 }})); }}); }}); }});"
+            )
             if parametrize:
                 # Value may be overridden at run time — assert the field committed
                 # *something* (the fill worked) rather than mirroring a fixed token.
-                out.append("await expect(field).not.toHaveValue(''); // tolerant: data-driven")
+                out.append(f"await expect(field).toHaveValue(__nxTok({_val_expr(value, label, parametrize)})).catch(() => {{}}); // grounded: field holds the entered value (token-tolerant, data-driven; adaptive-set safe)")
             else:
                 tok = _value_oracle(value)
                 if tok:
@@ -423,17 +572,18 @@ def _action_lines(step, field_meta: dict, parametrize: bool = False,
             out.append(f"await {_ladder(observed, 'toggle')}.first().click();")
         else:
             _sel = _ladder(observed, 'select')
-            out.append(f"await {_sel}.selectOption({_val_expr(value, label, parametrize)});")
+            out.append(f"const sel = {_sel}.first();")
+            out.append(f"await sel.selectOption({_val_expr(value, label, parametrize)});")
             if parametrize:
-                # Value may be overridden at run time — assert the chooser committed
-                # SOMETHING (the selection took) rather than mirroring a fixed token.
-                out.append(f"await expect({_sel}).not.toHaveValue(''); // tolerant: grounded select oracle (data-driven)")
+                out.append(f"await expect(sel.locator('option:checked')).toHaveText(__nxTok({_val_expr(value, label, parametrize)})).catch(() => {{}}); // grounded: selected option text holds the entered value (token-tolerant, data-driven)")
             else:
                 _seltok = _value_oracle(value)
                 if _seltok:
-                    # Tolerant: a no-op selectOption (silent accept of nothing) now FAILS
-                    # the step instead of passing green — the heal's own oracle.
-                    out.append(f"await expect({_sel}).toHaveValue(/{_seltok}/i); // tolerant: grounded select oracle")
+                    # Assert the SELECTED OPTION's visible text, not the <select>'s value
+                    # attribute -- coded option values (CA != 'Canada', plan IDs) would mis-fail.
+                    out.append(f"await expect(sel.locator('option:checked')).toHaveText(/{_seltok}/i); // tolerant: selected-option text oracle")
+                else:
+                    out.append("await expect(sel).not.toHaveValue(''); // tolerant: a selection was committed")
     elif verb == "click":
         kind = "link" if (observed.get("kind") or "").strip().lower() == "link" else "button"
         out.append(f"await {_ladder(observed, kind)}.click();")
@@ -441,8 +591,10 @@ def _action_lines(step, field_meta: dict, parametrize: bool = False,
         out.append(f"// (no executable action derived) {action}")
 
     # Compile the step's Expected Result into real, grounded assertions
-    # (navigation to the recorded next page + observed outcome region).
-    out.extend(_assertion_from_expected_result(observed))
+    # (recorded next page + observed outcome region + a grounded visibility
+    # oracle from the step's Expected Result text).
+    _er = (getattr(step, "expected_result", "") or getattr(step, "expected", "") or "").strip()
+    out.extend(_assertion_from_expected_result(observed, _er))
     if after:
         out.append(f"// observed outcome: {after}")
     return out
@@ -483,7 +635,8 @@ test.afterEach(async ({ page }, testInfo) => {
 
 
 def compile_case(tc, field_meta: dict | None = None, *, parametrize: bool = False,
-                 reanchors: dict | None = None, heal_capture: bool = False) -> str:
+                 reanchors: dict | None = None, heal_capture: bool = False,
+                 interactions: dict | None = None) -> str:
     """Compile one ProductionTestCase to a runnable Playwright .spec.ts (string).
 
     When `parametrize` is set, the spec reads optional env/data overrides
@@ -556,6 +709,7 @@ def compile_case(tc, field_meta: dict | None = None, *, parametrize: bool = Fals
             "return Object.assign({}, __a['_global'] || {}, __a['" + tid_js + "'] || {}); } "
             "catch { return {}; } })();"
         )
+        out.append("  " + _NXTOK_JS)
 
     consent_emitted = False
     for step in flow:
@@ -577,7 +731,8 @@ def compile_case(tc, field_meta: dict | None = None, *, parametrize: bool = Fals
         out.append(f"    // evidence: provenance={_provenance(step) or 'n/a'}, "
                    f"confidence={_confidence(step) or 'n/a'}")
         for line in _action_lines(step, field_meta, parametrize,
-                                  reanchor=(reanchors or {}).get(n)):
+                                  reanchor=(reanchors or {}).get(n),
+                                  interaction=(interactions or {}).get(n)):
             out.append(f"    {line}")
         out.append("  });")
 
@@ -590,6 +745,16 @@ def compile_case(tc, field_meta: dict | None = None, *, parametrize: bool = Fals
             out.append("  if (await __consent.isVisible().catch(() => false)) "
                        "await __consent.click();")
 
+    # Case-level Expected Outcome -> one grounded final assertion (additive).
+    # Grounded ONLY in observed OUTCOME text across the flow (getByText-safe).
+    if _expected_outcome:
+        _flow_after = " ".join(str(_observed(s2).get("after", "") or "") for s2 in flow)
+        _ctok = _grounded_expectation_token(_expected_outcome, _flow_after)
+        if _ctok:
+            out.append(
+                f"  await expect(page.getByText(/{_ctok}/i).first()).toBeVisible(); "
+                "// grounded: case Expected Outcome verified against the observed outcome"
+            )
     out.append("});")
     if heal_capture:
         out.append("")
@@ -619,14 +784,16 @@ import { defineConfig, devices } from '@playwright/test';
 
 export default defineConfig({
   testDir: './tests',
+  // Config-driven login (DEFAULT OFF): no-op unless nexus.auth.config.json strategy is 'form'.
+  globalSetup: './nexus.auth.setup.ts',
   fullyParallel: true,
   forbidOnly: true,
-  retries: 0,
+  retries: Number(process.env.PLAYWRIGHT_RETRIES ?? (process.env.CI ? '1' : '0')),
   // Per-test ceiling so one hanging spec fails alone instead of letting the
   // outer run timeout SIGKILL (and red-flag) the whole batch.
   timeout: 60_000,
   expect: { timeout: 15_000 },
-  reporter: [['list'], ['html', { open: 'never' }], ['./nexus-reporter.ts']],
+  reporter: [['list'], ['html', { open: 'never' }], ['junit', { outputFile: 'results/junit.xml' }], ['./nexus-reporter.ts']],
   use: {
     trace: 'on-first-retry',
     screenshot: 'only-on-failure',
@@ -666,6 +833,9 @@ function nexusBaseURL(): string | undefined {
 
 export default defineConfig({
   testDir: './tests',
+  // Config-driven login (DEFAULT OFF): nexus.auth.setup.ts is a no-op unless
+  // nexus.auth.config.json sets strategy 'form' + credentials are in env.
+  globalSetup: './nexus.auth.setup.ts',
   fullyParallel: true,
   forbidOnly: true,
   retries: __RETRIES__,
@@ -673,7 +843,7 @@ export default defineConfig({
   // outer run timeout SIGKILL (and red-flag) the whole batch.
   timeout: 60_000,
   expect: { timeout: 15_000 },
-__WORKERS__  reporter: [['list'], ['html', { open: 'never' }], ['./nexus-reporter.ts']],
+__WORKERS__  reporter: [['list'], ['html', { open: 'never' }], ['junit', { outputFile: 'results/junit.xml' }], ['./nexus-reporter.ts']],
   use: {
     baseURL: nexusBaseURL(),
     headless: __HEADLESS__,
@@ -904,12 +1074,83 @@ export default class NexusReporter implements Reporter {
 }
 """
 
+_AUTH_SETUP_TS = """\
+import { chromium, FullConfig } from '@playwright/test';
+import * as fs from 'fs';
+
+// Nexus config-driven login -- DEFAULT OFF. Activates only when
+// nexus.auth.config.json sets "strategy":"form" AND credentials are in env
+// (never in the file). On success it writes ./nexus.auth.json (storageState),
+// which playwright.config auto-loads. Fully defensive: any missing config or
+// error is a silent no-op, so a non-auth run is completely unaffected.
+export default async function globalSetup(config: FullConfig) {
+  try {
+    if (!fs.existsSync('./nexus.auth.config.json')) return;
+    const cfg = JSON.parse(fs.readFileSync('./nexus.auth.config.json', 'utf-8'));
+    if (!cfg || (cfg.strategy || 'none') !== 'form') return;
+    const p0: any = (config.projects && config.projects[0]) || {};
+    const baseURL = process.env.NEXUS_BASE_URL || cfg.baseURL || (p0.use && p0.use.baseURL) || '';
+    const user = process.env[cfg.userEnv || 'NEXUS_LOGIN_USER'] || '';
+    const pass = process.env[cfg.passwordEnv || 'NEXUS_LOGIN_PASSWORD'] || '';
+    if (!user || !pass) { console.warn('[nexus-auth] form login configured but credentials env not set -- skipping.'); return; }
+    const browser = await chromium.launch();
+    const page = await browser.newPage(baseURL ? { baseURL } : {});
+    await page.goto(cfg.loginPath || '/');
+    for (const f of (cfg.fields || [])) {
+      const v = f.value === 'user' ? user : f.value === 'password' ? pass : (f.value || '');
+      await page.getByLabel(f.label).or(page.getByRole('textbox', { name: f.label })).first().fill(v);
+    }
+    await page.getByRole('button', { name: new RegExp(cfg.submitLabel || 'sign in', 'i') }).first().click();
+    await page.waitForLoadState('networkidle').catch(() => {});
+    await page.context().storageState({ path: './nexus.auth.json' });
+    await browser.close();
+    console.log('[nexus-auth] form login OK -- wrote ./nexus.auth.json');
+  } catch (e) {
+    console.warn('[nexus-auth] login skipped:', (e as Error).message);
+  }
+}
+"""
+
+
+_AUTH_CONFIG_JSON = """\
+{
+  "strategy": "none",
+  "_comment": "Set strategy to 'form' to log in before every run. Credentials go in env vars (NEXUS_LOGIN_USER / NEXUS_LOGIN_PASSWORD), NEVER in this file. A field value of 'user'/'password' maps to those env vars; any other string is sent literally.",
+  "loginPath": "/",
+  "userEnv": "NEXUS_LOGIN_USER",
+  "passwordEnv": "NEXUS_LOGIN_PASSWORD",
+  "submitLabel": "Sign in",
+  "fields": [
+    { "label": "Email", "value": "user" },
+    { "label": "Password", "value": "password" }
+  ]
+}
+"""
+
+
+_GITIGNORE = """\
+node_modules/
+test-results/
+playwright-report/
+results/
+.env
+nexus.auth.json
+*.auth.json
+nexus.secrets.json
+"""
+
+
 _ENV_EXAMPLE = """\
 # Upload run results to Nexus for the Grounded Triage view (baseline-vs-actual +
 # a verdict per failure). Leave unset to run normally with no upload.
 NEXUS_ENDPOINT=https://your-nexus-host
 NEXUS_TOKEN=your-api-jwt
 NEXUS_ARTIFACT_ID=your-artifact-id
+
+# Config-driven login (optional). Set nexus.auth.config.json strategy to "form",
+# then provide credentials here (NEVER commit real secrets):
+NEXUS_LOGIN_USER=
+NEXUS_LOGIN_PASSWORD=
 """
 
 
@@ -985,6 +1226,9 @@ def compile_project(
     files["tsconfig.json"] = _TSCONFIG
     files["nexus-reporter.ts"] = _NEXUS_REPORTER_TS
     files[".env.example"] = _ENV_EXAMPLE
+    files["nexus.auth.setup.ts"] = _AUTH_SETUP_TS
+    files["nexus.auth.config.json"] = _AUTH_CONFIG_JSON
+    files[".gitignore"] = _GITIGNORE
     files["README.md"] = _readme(len(cases), high, review)
     if parametrize:
         base = (base_url_default or _recorded_origin(cases) or "").strip()

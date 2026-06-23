@@ -47,6 +47,7 @@ from ..script_factory.compiler import (
     _norm,
 )
 from ..test_factory import service as factory_service
+from ..script_factory import interaction_resolver
 from . import heal_capture_store
 from .action_resolver import resolve_reanchor
 
@@ -64,6 +65,70 @@ _NOT_EDITABLE_RE = re.compile(
     re.IGNORECASE,
 )
 _SELECT_SIGNAL = frozenset({"select", "dropdown", "combobox", "listbox"})
+
+# A failure that landed on a login / sign-in / forbidden page (or 401/403): the run
+# lost its authenticated session — a PRECONDITION failure, NOT a control-kind/selector
+# issue. We REFUSE to heal it (healing would re-bind into the login page and green-wash
+# a broken precondition; later step failures are cascades of this one).
+_AUTH_REDIRECT_RE = re.compile(
+    r"/login\b|/sign-?in\b|/auth(?:/|\b)|\b401\b|\b403\b|unauthor|forbidden|"
+    r"session\s+expired|not\s+logged\s+in|please\s+(?:log|sign)\s*in",
+    re.IGNORECASE,
+)
+
+# Grounded OUTCOME assertions a heal must never DROP or tolerant-downgrade. The tolerant
+# "a value was committed" check (not.toHaveValue('')) is explicitly NOT grounded — it
+# passes for any non-empty value, so a heal can't lean on it to go green.
+_GROUNDED_ASSERT_RE = re.compile(
+    r"expect\(.*?\)\.(?:not\.)?(?:toHaveURL|toHaveValue|toHaveText|toBeChecked|"
+    r"toBeVisible|toHaveAttribute)\b"
+)
+_TOLERANT_ASSERT_RE = re.compile(r"\.not\.toHaveValue\(\s*''\s*\)")
+
+
+def _count_grounded_assertions(spec: str) -> int:
+    """Number of GROUNDED outcome assertions in a compiled spec (excludes the tolerant
+    not.toHaveValue('') 'something committed' check)."""
+    n = 0
+    for line in (spec or "").splitlines():
+        if "expect(" not in line or _TOLERANT_ASSERT_RE.search(line):
+            continue
+        if _GROUNDED_ASSERT_RE.search(line):
+            n += 1
+    return n
+
+
+def assert_assertions_unchanged(baseline_spec: str, candidate_spec: str) -> tuple[bool, str]:
+    """ASSERTION-IMMUTABILITY GUARD: a heal may rewrite locators / re-synthesise an
+    interaction, but it must NEVER reduce the grounded OUTCOME assertions. If the
+    candidate carries fewer grounded assertions than the baseline, the heal weakened the
+    oracle — REJECT it (nothing is proved or saved). This makes 'weaken-an-assertion-to-
+    go-green' structurally impossible, independent of which resolver produced the
+    candidate."""
+    b = _count_grounded_assertions(baseline_spec)
+    c = _count_grounded_assertions(candidate_spec)
+    if c < b:
+        return False, (f"heal would WEAKEN the oracle (grounded assertions {b} -> {c}); "
+                       "refusing — a heal may add or re-bind assertions, never drop one.")
+    return True, f"oracle preserved (grounded assertions {b} -> {c})"
+
+
+def step_outcome_grounded(spec: str, step_number: int) -> bool:
+    """Does the compiled spec carry a GROUNDED outcome oracle for this step (vs only a
+    tolerant check / an '// UNVERIFIED' marker)? Used to label a heal honestly: 'proven'
+    (a grounded outcome held) vs 'outcome_not_grounded' (re-ran green but the recorded
+    outcome was not independently asserted). A transparency signal, never a silent
+    'proven'."""
+    marker = f"step {step_number}:"
+    in_step = False
+    for line in (spec or "").splitlines():
+        if "await test.step(" in line:
+            in_step = marker in line
+            continue
+        if in_step and "expect(" in line and not _TOLERANT_ASSERT_RE.search(line) \
+                and _GROUNDED_ASSERT_RE.search(line):
+            return True
+    return False
 
 
 def _baseline_step(tc: Any, n: int | None) -> Any:
@@ -182,6 +247,30 @@ def diagnose(
             "Do NOT heal — file a defect. Healing a real regression would hide a "
             "genuine bug. Confirm the expected outcome against the recorded baseline "
             "below, then route it to engineering.")
+        suggested_fix = None
+
+    # 0b) AUTH / PRECONDITION NOT MET — the step landed on a login / sign-in / forbidden
+    #     page (or a 401/403), so the run lost its authenticated session. This is a
+    #     PRECONDITION failure, NOT a control-kind or selector issue, and the rest of the
+    #     run are cascades of it. We REFUSE to heal — healing would re-bind into the login
+    #     page and green-wash a broken precondition. (Refuse before any heal branch.)
+    elif _AUTH_REDIRECT_RE.search(err):
+        cause = "AUTH_PRECONDITION"
+        cause_label = "Auth / precondition not met"
+        confidence = 0.7
+        auto_fixable = False
+        evidence = [
+            "The step landed on a login / sign-in / forbidden page (or returned "
+            "401/403) — the run lost its authenticated session.",
+            "This is a PRECONDITION failure, not a control-kind or locator issue; any "
+            "later step failures are cascades of this one.",
+            "Healing here would re-bind into the login page and green-wash a broken "
+            "precondition — so we refuse and escalate.",
+        ]
+        recommended_action = (
+            "Restore the login session (re-capture the auth profile / fix the "
+            "Environment URL + credentials) and re-run. Do NOT heal individual steps — "
+            "fix the session, not the controls.")
         suggested_fix = None
 
     # 1) WRONG CONTROL KIND — typed/filled a control that is not a text input.
@@ -334,6 +423,48 @@ def diagnose(
             "needs": "Ready to apply + verify.",
         }
 
+    # ── Control-KIND interaction upgrade — the recorded RECIPE is wrong because the
+    # control changed KIND (e.g. native <select> → custom ARIA combobox needing
+    # open + pick, not selectOption). Eligible on a selector/kind/timeout-class break
+    # (REAL_REGRESSION already returned above) when a GROUNDED interaction recipe
+    # exists. The recipe carries its OWN committed-value oracle and nothing persists
+    # unless the headed re-run proves green — so this can never green-wash. Marked
+    # WRONG_CONTROL_KIND so the Auto-Heal loop treats it as an auto-fixable control-
+    # kind issue; `interaction` carries the recipe the override path threads to the
+    # compiler's additive `interactions` channel.
+    interaction = None
+    if cause != "SELECTOR_REANCHOR" and cause in (
+            "WRONG_CONTROL_KIND", "SELECTOR_DRIFT", "LOCATOR_NOT_FOUND", "NEEDS_REVIEW"):
+        _intr = interaction_resolver.detect_interaction(observed, field_meta, err)
+        if _intr:
+            interaction = _intr
+            cause = "WRONG_CONTROL_KIND"
+            cause_label = "Wrong control kind — interaction re-synthesis (" + _intr["kind"] + ")"
+            auto_fixable = True
+            evidence = [
+                f"The recorded recipe for '{label}' no longer drives the live control.",
+                "Grounded: the control is an option-chooser whose KIND changed (e.g. a "
+                "native <select> became a custom ARIA combobox), so the recipe must be "
+                "open + pick the option, not selectOption.",
+                "The re-synthesised step carries its OWN committed-value oracle (the "
+                "recorded value must actually commit) — nothing is saved unless the "
+                "headed re-run proves it green, so a wrong guess fails RED, never green.",
+            ]
+            recommended_action = (
+                f"Re-synthesise '{label}' as an open+pick interaction and re-run headed "
+                "to prove the recorded value commits. If it isn't green, nothing is saved.")
+            _bl = _action_lines(baseline_step, field_meta) if baseline_step is not None else []
+            _al = (_action_lines(baseline_step, field_meta, interaction=_intr)
+                   if baseline_step is not None else [])
+            suggested_fix = {
+                "summary": f"Drive '{label}' as a custom combobox (open + pick), not selectOption.",
+                "before": "\n".join(_bl),
+                "after": "\n".join(_al),
+                "grounded": True,
+                "interaction": _intr,
+                "needs": "Apply & re-run to prove the recorded value commits.",
+            }
+
     return {
         "label": label,
         "verb": verb,
@@ -347,6 +478,7 @@ def diagnose(
         "evidence": evidence,
         "recommended_action": recommended_action,
         "suggested_fix": suggested_fix,
+        "interaction": interaction,
     }
 
 
@@ -470,6 +602,25 @@ def build_reanchor_candidate(
     return spec, {"label": o.get("label") or "", "reanchor": reanchor["name"]}
 
 
+def build_interaction_candidate(
+    tc: Any, field_meta: dict, step_number: int, error_message: str = "",
+) -> tuple[str, dict] | None:
+    """Recompile ONE case re-synthesising the failing control's INTERACTION for a
+    changed control KIND (e.g. native <select> → custom ARIA combobox: open + pick,
+    not selectOption). Returns (candidate_spec, meta) or None when there is no grounded
+    interaction signal (the heal then never guesses here). Parametrized to match the
+    run bundle; the recipe carries its OWN committed-value oracle so the prove is real."""
+    bs = _baseline_step(tc, step_number)
+    o = _observed(bs) if bs is not None else {}
+    intr = interaction_resolver.detect_interaction(o, field_meta, error_message)
+    if not intr:
+        return None
+    spec = compile_case(tc, field_meta, parametrize=True,
+                        interactions={step_number: intr})
+    return spec, {"label": o.get("label") or "", "interaction": intr["kind"],
+                  "value": intr.get("value", "")}
+
+
 def resolve_reanchor_for_step(
     *, tenant_id: str, artifact_id: str, scenario_id: str,
     baseline_step: Any, field_meta: dict,
@@ -539,9 +690,13 @@ def select_override_for_step(tc: Any, field_meta: dict, step_number: int):
 
 def compile_case_with_overrides(tc: Any, field_meta: dict, overrides: dict) -> str:
     """Recompile one case with accumulated control-kind corrections applied — the
-    kind-aware compiler emits .selectOption() for every corrected label. Parametrized
-    to match the run bundle."""
-    return compile_case(tc, {**field_meta, **(overrides or {})}, parametrize=True)
+    kind-aware compiler emits .selectOption() for every corrected label, AND threads
+    any accumulated INTERACTION re-synthesis (under the reserved `__interactions__`
+    key — e.g. a custom-combobox open+pick recipe) to the compiler's additive
+    `interactions` channel. Parametrized to match the run bundle."""
+    ov = dict(overrides or {})
+    interactions = ov.pop("__interactions__", None) or None
+    return compile_case(tc, {**field_meta, **ov}, parametrize=True, interactions=interactions)
 
 
 def evaluate_heal(timeline: dict, scenario_id: str, step_number: int) -> dict:
