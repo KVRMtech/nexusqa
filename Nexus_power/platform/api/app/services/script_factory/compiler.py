@@ -23,6 +23,11 @@ from .locators import js_regex_literal, js_str, url_path
 # cycle-safe: interaction_resolver only imports compiler helpers LAZILY (inside its
 # emit fn), so nothing here runs at import time.
 from .interaction_resolver import INTERACTION_RECIPES
+# Timing/materialize/portal/frame WAIT+SCOPE heal recipes also live OUTSIDE this
+# frozen file; the `waits` channel below emits their PREAMBLE before the verb
+# branch. Default-off (absent => byte-identical), never green-wash. Cycle-safe:
+# wait_scope_resolver only imports compiler helpers LAZILY inside its emitter.
+from .wait_scope_resolver import emit_wait_scope_lines
 
 _SLUG_RX = re.compile(r"[^a-z0-9]+")
 _CONSENT_RX = re.compile(r"cookie|consent|accept all|accept cookies", re.IGNORECASE)
@@ -383,7 +388,8 @@ def _to_iso_date(value: str) -> str:
 
 def _action_lines(step, field_meta: dict, parametrize: bool = False,
                   reanchor: dict | None = None,
-                  interaction: dict | None = None) -> list[str]:
+                  interaction: dict | None = None,
+                  wait_scope: dict | None = None) -> list[str]:
     """Kind-aware Playwright lines for one (observed) step.
 
     When `parametrize` is set, navigation targets a path resolved against
@@ -393,7 +399,14 @@ def _action_lines(step, field_meta: dict, parametrize: bool = False,
     `reanchor` (TrueFix selector re-anchor) is an optional
     `{name, kind?}` override: when present, this step is re-bound to the renamed
     control's new accessible `name` (the resilient ladder + the step's own
-    visibility oracle then key off the new name). Default None → byte-identical."""
+    visibility oracle then key off the new name). Default None → byte-identical.
+
+    `wait_scope` (TrueFix timing/materialize/portal/frame heal) is an optional
+    recipe (`{kind, ...}`) that emits a WAIT/SCOPE PREAMBLE before the action — a
+    virtualized-list scroll-until-materialize, a portal retry-un-scoped-at-root, a
+    frameLocator(url-pattern), or a baseline-relative wait + perf-regression flag.
+    It only waits/scopes/flags; it never replaces the action or weakens the oracle,
+    and a never-materializing control THROWS (RED). Default None → byte-identical."""
     observed = _observed(step)
     if reanchor and reanchor.get("name"):
         observed = {**observed, "label": reanchor["name"]}
@@ -407,6 +420,17 @@ def _action_lines(step, field_meta: dict, parametrize: bool = False,
     after = (observed.get("after") or "").strip()
     out: list[str] = []
 
+    # TIMING/MATERIALIZE/PORTAL/FRAME WAIT+SCOPE re-synthesis (additive heal channel;
+    # default None → byte-identical). When a heal finds the control is PRESENT but the
+    # test couldn't reach it (virtualized list not yet rendered, portal outside the
+    # subtree, iframe-by-URL, slow-but-correct), it supplies a `wait_scope` recipe
+    # whose PREAMBLE waits/scopes/flags BEFORE the action below. It never emits the
+    # action nor weakens the oracle (those still run), and a never-materializing
+    # control THROWS RED — so this channel can never green-wash. It is emitted FIRST
+    # so it composes with the interaction/verb branches that follow.
+    if wait_scope and wait_scope.get("kind"):
+        out.extend(emit_wait_scope_lines(observed, wait_scope))
+
     # CONTROL-KIND / INTERACTION re-synthesis (additive heal channel; default None →
     # byte-identical). When a heal finds this step's control changed KIND so the
     # recorded recipe is wrong even though the element exists (e.g. native <select> →
@@ -414,7 +438,8 @@ def _action_lines(step, field_meta: dict, parametrize: bool = False,
     # `interaction` recipe whose choreography + OWN grounded committed-value oracle
     # REPLACE the verb branches below. Recipes live outside this frozen file.
     if interaction and interaction.get("kind") in INTERACTION_RECIPES:
-        return INTERACTION_RECIPES[interaction["kind"]](observed, field_meta, parametrize, interaction)
+        out.extend(INTERACTION_RECIPES[interaction["kind"]](observed, field_meta, parametrize, interaction))
+        return out
 
     # Boolean checkbox/toggle -- handle uniformly (regardless of whether the
     # step was emitted as type or select) so a true/false value compiles to
@@ -636,7 +661,7 @@ test.afterEach(async ({ page }, testInfo) => {
 
 def compile_case(tc, field_meta: dict | None = None, *, parametrize: bool = False,
                  reanchors: dict | None = None, heal_capture: bool = False,
-                 interactions: dict | None = None) -> str:
+                 interactions: dict | None = None, waits: dict | None = None) -> str:
     """Compile one ProductionTestCase to a runnable Playwright .spec.ts (string).
 
     When `parametrize` is set, the spec reads optional env/data overrides
@@ -649,7 +674,14 @@ def compile_case(tc, field_meta: dict | None = None, *, parametrize: bool = Fals
 
     `heal_capture` appends a gated afterEach that snapshots the failure-state a11y
     tree for the re-anchor resolver (only on a NEXUS_HEAL_CAPTURE=1 re-run that
-    fails). Default False → byte-identical (the user's owned spec is untouched)."""
+    fails). Default False → byte-identical (the user's owned spec is untouched).
+
+    `waits` (TrueFix timing/materialize/portal/frame heal) is an optional
+    `{step_number: {kind, ...}}` map; a step with an entry gets a WAIT/SCOPE
+    PREAMBLE (scroll-until-materialize / retry-un-scoped-at-root / frameLocator-by-
+    url / baseline-relative wait + perf flag) emitted before its action. It only
+    waits/scopes/flags — never weakens the oracle, a never-materializing control
+    THROWS. Default None → byte-identical."""
     field_meta = field_meta or {}
     name = (getattr(tc, "name", None) or "Generated test").strip()
     description = (getattr(tc, "description", None) or "").strip()
@@ -732,7 +764,8 @@ def compile_case(tc, field_meta: dict | None = None, *, parametrize: bool = Fals
                    f"confidence={_confidence(step) or 'n/a'}")
         for line in _action_lines(step, field_meta, parametrize,
                                   reanchor=(reanchors or {}).get(n),
-                                  interaction=(interactions or {}).get(n)):
+                                  interaction=(interactions or {}).get(n),
+                                  wait_scope=(waits or {}).get(n)):
             out.append(f"    {line}")
         out.append("  });")
 

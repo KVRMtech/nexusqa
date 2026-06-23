@@ -50,7 +50,7 @@ from ..script_factory.compiler import (
 from ..test_factory import service as factory_service
 from ..script_factory import interaction_resolver
 from . import heal_capture_store
-from .action_resolver import resolve_reanchor
+from .action_resolver import recorded_state_intent, resolve_reanchor
 
 logger = logging.getLogger(__name__)
 
@@ -600,6 +600,16 @@ def diagnose(
             "Grounded in the accessibility tree captured at the failure: the fix "
             "re-binds the resilient locator to the renamed control's new name.",
         ]
+        # L4: surface the matched node's captured ARIA state as an extra grounded
+        # signal (a same-named control was disambiguated by state, or the live
+        # control's state confirms it is the recorded one). Additive evidence only.
+        _ra_state = reanchor.get("state") or {}
+        if _ra_state:
+            _state_str = ", ".join(f"{k}={_ra_state[k]}" for k in sorted(_ra_state))
+            evidence.append(
+                f"Live accessibility state of the re-anchored control: {_state_str} "
+                "(captured from the failure-state a11y snapshot, used to disambiguate "
+                "same-named controls — an extra grounded signal, not a heal trigger).")
         recommended_action = (
             f"Re-anchor '{label}' → '{new_name}' and re-run headed to prove it green. "
             "If the re-run isn't green (or the outcome is contradicted), nothing is saved."
@@ -614,7 +624,8 @@ def diagnose(
             "before": "\n".join(before_lines),
             "after": "\n".join(after_lines),
             "grounded": True,
-            "reanchor": {"name": new_name, "role": reanchor.get("role", "")},
+            "reanchor": {"name": new_name, "role": reanchor.get("role", ""),
+                         "state": _ra_state},  # L4: matched node's live ARIA state ({} when none)
             "needs": "Ready to apply + verify.",
         }
 
@@ -870,11 +881,19 @@ def resolve_reanchor_for_step(
         recorded_label=label,
         recorded_kind=_refine_kind(o, field_meta),
         live_nodes=cap["nodes"],
+        # L4: feed the recorded STATE intent (e.g. a toggle left checked, a
+        # disclosure expanded) so two same-named live controls are disambiguated by
+        # state. Bounded + floor-checked against raw name similarity in the resolver,
+        # so this only ever makes the match MORE precise — never green-washes.
+        recorded_state=recorded_state_intent(o),
     )
     if ra is None:
         return None
     return {"name": ra.name, "role": ra.role,
-            "confidence": ra.confidence, "rationale": ra.rationale}
+            "confidence": ra.confidence, "rationale": ra.rationale,
+            # L4: the matched live node's captured ARIA state — an extra grounded
+            # signal surfaced through diagnose's reanchor evidence. {} when none.
+            "state": ra.state or {}}
 
 
 def first_failures(timeline: dict, scenario_ids: list[str]) -> list[dict]:
@@ -921,10 +940,16 @@ def compile_case_with_overrides(tc: Any, field_meta: dict, overrides: dict) -> s
     kind-aware compiler emits .selectOption() for every corrected label, AND threads
     any accumulated INTERACTION re-synthesis (under the reserved `__interactions__`
     key — e.g. a custom-combobox open+pick recipe) to the compiler's additive
-    `interactions` channel. Parametrized to match the run bundle."""
+    `interactions` channel, AND any accumulated TIMING/MATERIALIZE/PORTAL/FRAME
+    WAIT+SCOPE recipes (under the reserved `__waits__` key — scroll-until-
+    materialize / retry-un-scoped-at-root / frameLocator-by-url / baseline-relative
+    wait + perf flag) to the compiler's additive `waits` channel. Both reserved keys
+    default to None (absent => byte-identical). Parametrized to match the run bundle."""
     ov = dict(overrides or {})
     interactions = ov.pop("__interactions__", None) or None
-    return compile_case(tc, {**field_meta, **ov}, parametrize=True, interactions=interactions)
+    waits = ov.pop("__waits__", None) or None
+    return compile_case(tc, {**field_meta, **ov}, parametrize=True,
+                        interactions=interactions, waits=waits)
 
 
 def evaluate_heal(timeline: dict, scenario_id: str, step_number: int) -> dict:
