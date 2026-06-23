@@ -261,7 +261,11 @@ async def ingest_heal_capture(
             session, artifact_id=req.artifact_id, tenant_id=tenant_id,
         )
     nodes = flatten_aria(req.aria) if req.aria else []
-    heal_capture_store.put(
+    # SHARED store (T1.4): write to the process-shared backend so a capture
+    # produced by one worker's headed capture-run is visible to whichever worker
+    # later runs the resolve — fixes the silent over-escalation under parallel
+    # workers. aput falls back to in-memory when the DB is down.
+    await heal_capture_store.aput(
         tenant_id=tenant_id, artifact_id=req.artifact_id,
         scenario_id=req.scenario_id, nodes=nodes, status=req.status,
     )

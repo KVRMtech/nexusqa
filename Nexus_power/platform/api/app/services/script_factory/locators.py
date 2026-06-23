@@ -47,6 +47,24 @@ def js_regex_literal(path: str) -> str:
     return f"/{escaped}(?:\\/|\\?|#|$)/"
 
 
+def js_regex_literal_anchored(path: str, origin: str = "") -> str:
+    """START+END anchored URL regex for an OPT-IN heal tightening (T1.1).
+
+    ``js_regex_literal`` above is already END-segment anchored (so ``/account`` does
+    NOT match ``/account/closed``); the only residual looseness is the START — a bare
+    path regex still matches ``/x/account``. This sibling adds the ``^`` start anchor
+    (and, when ``origin`` is given, anchors the recorded scheme://host too), so it
+    rejects sibling (``/account/closed``), child, AND prefix-substring (``/x/account``).
+    Default callers keep using ``js_regex_literal`` (byte-identical); a heal opts into
+    this only on a step where it ALSO proves a content/outcome oracle, so URL tightening
+    never green-washes on its own."""
+    esc_path = _RE_META.sub(r"\\\1", path or "")
+    if origin:
+        esc_origin = _RE_META.sub(r"\\\1", origin)
+        return f"/^{esc_origin}{esc_path}(?:\\/|\\?|#|$)/"
+    return f"/^{esc_path}(?:\\/|\\?|#|$)/"
+
+
 def element_locator(observed: dict) -> str:
     """User-facing locator for one element, anchor-scoped when an anchor exists.
 

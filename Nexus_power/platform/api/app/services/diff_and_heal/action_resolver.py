@@ -43,15 +43,35 @@ def _tokens(s: str) -> set[str]:
 
 def _similarity(a: str, b: str) -> float:
     """Cheap, dependency-free accessible-name similarity in [0,1]: token Jaccard,
-    lifted when one name contains the other (a common rename shape, e.g.
-    'Travel Class' → 'Trip Travel Class')."""
+    lifted ONLY for a genuine rename-by-qualifier (TOKEN containment, never a bare
+    character substring).
+
+    The lift recognises the common rename shape 'Travel Class' → 'Trip Travel Class'
+    (the recorded label's TOKENS are wholly contained in the live name + extra
+    qualifiers). It deliberately does NOT fire when the recorded label is a single
+    generic token that merely appears inside a longer, semantically-different name —
+    the old bare-substring test wrongly matched 'Class' → 'First Class Cabin Upgrade
+    Class' (sim ≥0.85), steering a re-anchor onto the wrong control. We require:
+      * full TOKEN containment of the smaller name in the larger (subset, not chars);
+      * the smaller name is ≥ 2 tokens (one shared word like 'Class' can't lift); and
+      * the overlap covers ≥ 50% of the LARGER name (so the recorded label is the
+        bulk of the live name, not an incidental fragment of a long one).
+    Otherwise plain token Jaccard carries the decision (still gated downstream by
+    min_confidence + the ambiguity margin), so this only ever makes the matcher
+    STRICTER — it can never re-bind to a control bare-substring would have refused."""
     ta, tb = _tokens(a), _tokens(b)
     if not ta or not tb:
         return 0.0
-    jac = len(ta & tb) / len(ta | tb)
-    na, nb = _norm(a), _norm(b)
-    substring = na in nb or nb in na
-    return max(jac, 0.85 + 0.15 * jac) if substring else jac
+    inter = ta & tb
+    jac = len(inter) / len(ta | tb)
+    if not inter:
+        return jac  # 0.0 — no shared token, nothing to lift
+    smaller, larger = (ta, tb) if len(ta) <= len(tb) else (tb, ta)
+    contained = smaller <= larger                      # token subset, not char-substring
+    cov_larger = len(inter) / len(larger)              # how much of the longer name is shared
+    if contained and len(smaller) >= 2 and cov_larger >= 0.5:
+        return max(jac, 0.85 + 0.15 * jac)
+    return jac
 
 
 @dataclass
