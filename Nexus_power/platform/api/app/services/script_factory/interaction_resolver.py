@@ -70,6 +70,13 @@ _PLAIN_TEXT_LABEL_RE = re.compile(
     r"\b(first name|last name|full name|middle|name|ssn|tax id|e-?mail|email|phone|"
     r"date of birth|dob|signature|e-?signature|address|street|city|zip|postal)\b", re.I)
 
+# A live error that the target is ABSENT / not-yet-rendered (vs a wrong KIND). On a
+# plain-text field this is the signature of a CONDITIONAL field captured before its
+# reveal toggle (out-of-order recording) — route to conditional_text (reveal then fill).
+_LOCATOR_ABSENT_RE = re.compile(
+    r"waiting for|not found|0 elements|resolved to 0|not visible|is hidden|not attached",
+    re.I)
+
 
 def _norm(s: str) -> str:
     return " ".join((s or "").split()).strip().lower()
@@ -113,6 +120,24 @@ def _hint_for(value: str, kind: str) -> str:
     if _looks_like_header(value):
         return "accordion"
     return "custom_combobox"
+
+
+# Route a value-shape HINT to the PROVEN per-kind recipe. The specific recipes carry
+# the per-control locator fallbacks (the combobox role/xpath drill, the input[type=
+# range] fallback, the switch role xpath) that reliably resolve the live control; the
+# genericized universal handle-ladder lost those and lands on wrapper <div>s, so we
+# route to the specific recipe whose locator is known to work. (universal_control stays
+# registered as a catch-all but is no longer the default route.)
+_HINT_TO_RECIPE = {
+    "range_slider": "range_slider",
+    "custom_combobox": "custom_combobox",
+    "switch": "toggle_switch",
+    "accordion": "accordion",
+}
+
+
+def _recipe_for_hint(hint: str) -> str:
+    return _HINT_TO_RECIPE.get(hint, "custom_combobox")
 
 
 def is_plain_text_field(observed: dict) -> bool:
@@ -163,7 +188,7 @@ def universal_interaction_for(observed: dict) -> dict | None:
     label = observed.get("label", "") or ""
     kind = (observed.get("kind") or "").strip().lower()
     return {
-        "kind": "universal_control",
+        "kind": _recipe_for_hint(_hint_for(value, kind)),
         "value": value,
         "label": label,
         "hint": _hint_for(value, kind),
@@ -210,6 +235,19 @@ def detect_interaction(observed: dict, field_meta: dict | None,
         or "selectoption" in err.lower()
     )
 
+    # CONDITIONAL TEXT FIELD: a plain-text field that is ABSENT on the live page is most
+    # likely hidden until a reveal toggle (a recording captured out of order, e.g. fill
+    # "Beneficiary full name" BEFORE checking "Add a beneficiary"). Route to conditional_text
+    # (reveal the toggle, then fill); the recipe is safe for a slow-but-present field too
+    # (it fills directly when already editable) and THROWS/escalates if no reveal toggle is
+    # found — never a green-wash. This wins over the chooser fallback, whose selectOption-
+    # fallback error would otherwise mis-route a text field to a combobox.
+    if is_plain_text_field(observed) and _LOCATOR_ABSENT_RE.search(err):
+        return {"kind": "conditional_text",
+                "value": observed.get("value", "") or "",
+                "label": observed.get("label", "") or "",
+                "reveal_label": ""}
+
     intr = universal_interaction_for(observed)
     if intr is not None:
         return intr
@@ -218,7 +256,7 @@ def detect_interaction(observed: dict, field_meta: dict | None,
     if chooser_signal:
         value = observed.get("value", "") or ""
         return {
-            "kind": "universal_control",
+            "kind": _recipe_for_hint(_hint_for(value, kind)),
             "value": value,
             "label": observed.get("label", "") or "",
             "hint": _hint_for(value, kind),
@@ -278,6 +316,16 @@ def emit_universal_control_lines(observed: dict, field_meta: dict, parametrize: 
         "//label[contains(normalize-space(.),'" + xlab + "')]"
         "/ancestor::*[self::label or .//input or .//*[@role] or .//*[@data-control]][1]"
     )
+    # ACCORDION-header rung (conditional on hint=accordion ONLY): an accordion's
+    # clickable header carries the recorded VALUE as its TEXT (not the label), so a
+    # label-keyed ladder misses it. Adding getByText(value) unconditionally would let
+    # a control's displayed value (e.g. a slider's "$950,000" readout) win the
+    # .first() DOM-order race ahead of the real input, so we gate it to the accordion
+    # hint where the role/label rungs are known to miss.
+    _text_rung = ""
+    if hint == "accordion" and value:
+        _vjs = js_str(value)
+        _text_rung = f".or({scope}.getByText('{_vjs}', {{ exact: false }}))"
     handle = (
         f"{scope}.getByLabel('{lab}')"
         f".or({scope}.getByRole('combobox', {{ name: '{lab}' }}))"
@@ -285,6 +333,7 @@ def emit_universal_control_lines(observed: dict, field_meta: dict, parametrize: 
         f".or({scope}.getByRole('slider', {{ name: '{lab}' }}))"
         f".or({scope}.getByRole('checkbox', {{ name: '{lab}' }}))"
         f".or({scope}.locator(\"xpath={xpath}\"))"
+        + _text_rung +
         f".or(page.frameLocator('iframe').getByLabel('{lab}'))"
         ".first()"
     )
@@ -742,14 +791,49 @@ def emit_conditional_text_lines(observed: dict, field_meta: dict, parametrize: b
     return out
 
 
+def emit_accordion_lines(observed: dict, field_meta: dict, parametrize: bool,
+                         interaction: dict) -> list[str]:
+    """Disclosure / accordion choreography. The recorded VALUE is the clickable HEADER
+    TEXT (not the label), so we resolve the header by its text + click it to EXPAND.
+    Grounded oracle: the revealed body becomes visible — a no-op (header not clickable
+    / nothing expands) fails RED, never green-washes. Bounded (~6s)."""
+    from .compiler import _anchor_scope  # lazy: avoid import cycle
+    from .locators import js_str
+
+    value = (interaction or {}).get("value", "") or observed.get("value", "") or ""
+    scope = _anchor_scope(observed)
+    vjs = js_str(value)
+    xval = (value or "").replace("'", " ").replace('"', " ").strip()
+    header = (
+        f"{scope}.getByText('{vjs}', {{ exact: false }})"
+        f".or({scope}.locator(\"xpath=//*[contains(@class,'hd') or @role='button' or self::summary]"
+        f"[contains(normalize-space(.),'{xval}')]\")).first()"
+    )
+    out: list[str] = []
+    out.append("// CONTROL-KIND heal: disclosure/accordion — the recorded value is the header")
+    out.append("// TEXT; click it to EXPAND. Grounded oracle: the revealed body becomes visible.")
+    out.append(f"const acc = {header};")
+    out.append("await acc.waitFor({ state: 'visible', timeout: 6000 });")
+    out.append("await acc.scrollIntoViewIfNeeded().catch(() => {});")
+    out.append("await acc.click({ timeout: 6000 }); // expand the disclosure")
+    out.append("await expect(acc.locator(\"xpath=following-sibling::*[1]\")"
+               ".or(acc.locator(\"xpath=ancestor::*[contains(@class,'acc') or "
+               "contains(@class,'accordion')][1]//*[contains(@class,'bd') or "
+               "contains(@class,'body') or contains(@class,'content')]\"))"
+               ".first()).toBeVisible({ timeout: 6000 }); "
+               "// grounded: the disclosure expanded (a no-op fails RED)")
+    return out
+
+
 # kind -> emitter. The frozen compiler imports this mapping and, when a step carries
-# an interaction recipe, calls the emitter in place of its verb branch. The new
-# routing goes through ``universal_control``; the kind-specific emitters stay
-# registered for back-compat with any persisted override that names them directly.
+# an interaction recipe, calls the emitter in place of its verb branch. detect_interaction
+# routes a value-shape HINT to the PROVEN kind-specific emitter (combobox/slider/switch/
+# accordion/conditional); ``universal_control`` stays registered as a catch-all.
 INTERACTION_RECIPES = {
     "universal_control": emit_universal_control_lines,
     "custom_combobox": emit_combobox_lines,
     "range_slider": emit_range_slider_lines,
     "toggle_switch": emit_toggle_switch_lines,
     "conditional_text": emit_conditional_text_lines,
+    "accordion": emit_accordion_lines,
 }
