@@ -948,8 +948,17 @@ def compile_case_with_overrides(tc: Any, field_meta: dict, overrides: dict) -> s
     ov = dict(overrides or {})
     interactions = ov.pop("__interactions__", None) or None
     waits = ov.pop("__waits__", None) or None
+    # ANY-UI closed-shadow opt-in (TIER 3): a heal/operator sets the reserved
+    # `__force_open_shadow__` flag when a control is known to sit in a CLOSED shadow
+    # root; the compiler then prepends the attachShadow->open shim before the entry
+    # goto. Absent => False => byte-identical. (Auto-detection is deliberately NOT
+    # wired: Playwright surfaces a closed-root control as a generic 'not found', with
+    # no distinct signal, so an auto-trigger would be a guess — this stays an explicit
+    # opt-in until the capture can prove a closed root.)
+    force_open_shadow = bool(ov.pop("__force_open_shadow__", False))
     return compile_case(tc, {**field_meta, **ov}, parametrize=True,
-                        interactions=interactions, waits=waits)
+                        interactions=interactions, waits=waits,
+                        force_open_shadow=force_open_shadow)
 
 
 def evaluate_heal(timeline: dict, scenario_id: str, step_number: int) -> dict:

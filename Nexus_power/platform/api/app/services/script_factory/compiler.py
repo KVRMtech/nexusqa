@@ -661,7 +661,8 @@ test.afterEach(async ({ page }, testInfo) => {
 
 def compile_case(tc, field_meta: dict | None = None, *, parametrize: bool = False,
                  reanchors: dict | None = None, heal_capture: bool = False,
-                 interactions: dict | None = None, waits: dict | None = None) -> str:
+                 interactions: dict | None = None, waits: dict | None = None,
+                 force_open_shadow: bool = False) -> str:
     """Compile one ProductionTestCase to a runnable Playwright .spec.ts (string).
 
     When `parametrize` is set, the spec reads optional env/data overrides
@@ -742,6 +743,15 @@ def compile_case(tc, field_meta: dict | None = None, *, parametrize: bool = Fals
             "catch { return {}; } })();"
         )
         out.append("  " + _NXTOK_JS)
+
+    # ANY-UI heal (closed shadow DOM -> open): when a heal determined a control sits in
+    # a CLOSED shadow root, force every root to 'open' BEFORE the app boots (addInitScript
+    # runs before the entry goto, and persists across the SPA/page navigations), so the
+    # normal open-shadow locator path can reach it. Default-off -> byte-identical.
+    if force_open_shadow:
+        from .any_ui_resolver import emit_open_shadow_preamble  # lazy: avoid import cycle
+        for _osln in emit_open_shadow_preamble():
+            out.append("  " + _osln)
 
     consent_emitted = False
     for step in flow:
@@ -830,6 +840,9 @@ export default defineConfig({
   use: {
     trace: 'on-first-retry',
     screenshot: 'only-on-failure',
+    // Opt-in VIDEO of the run (e.g. to capture the proven healed Clean-Run baseline):
+    // default 'off' => byte-identical; NEXUS_RECORD_VIDEO=1 records the full run.
+    video: process.env.NEXUS_RECORD_VIDEO === '1' ? 'on' : 'off',
     // Reuse a captured authenticated session when Nexus injects one (auth profile
     // → nexus.auth.json in the run dir). Self-detecting, so a downloaded bundle
     // (no auth file) is unaffected; a normal unauthenticated run is unchanged.
@@ -882,6 +895,9 @@ __WORKERS__  reporter: [['list'], ['html', { open: 'never' }], ['junit', { outpu
     headless: __HEADLESS__,
     trace: 'on-first-retry',
     screenshot: 'only-on-failure',
+    // Opt-in VIDEO of the run (e.g. to capture the proven healed Clean-Run baseline):
+    // default 'off' => byte-identical; NEXUS_RECORD_VIDEO=1 records the full run.
+    video: process.env.NEXUS_RECORD_VIDEO === '1' ? 'on' : 'off',
     // Reuse a captured authenticated session when Nexus injects one (auth profile
     // → nexus.auth.json in the run dir). Self-detecting, so a downloaded bundle
     // (no auth file) is unaffected; a normal unauthenticated run is unchanged.

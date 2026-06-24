@@ -227,6 +227,19 @@ def detect_interaction(observed: dict, field_meta: dict | None,
     noptions = len(meta.get("options") or [])
     err = error_message or ""
 
+    # HARD-UI (TIER 3 / L6/L7): the failure signal says this control sits on a NON-DOM
+    # surface (canvas / WebGL / Flutter-without-semantics) with no DOM/AX grounding ->
+    # route to the visual propose-from-candidates tier. With no self-hosted VLM configured
+    # it ESCALATES honestly (a RED throw, never a blind coordinate click), so this can
+    # never green-wash. Gated on the specific no-DOM signal -> never mis-fires on a normal
+    # DOM failure (-> byte-identical for the working DOM engine).
+    from . import any_ui_resolver as _any_ui
+    _au = _any_ui.detect_any_ui(observed, err)
+    if _au is not None and _au.get("kind") == "visual_propose":
+        return {"kind": "visual_propose",
+                "value": observed.get("value", "") or "",
+                "label": observed.get("label", "") or ""}
+
     chooser_signal = (
         kind in ("combobox", "listbox", "toggle")
         or mcontrol in ("combobox", "listbox", "custom-combobox", "switch", "slider")
@@ -825,10 +838,26 @@ def emit_accordion_lines(observed: dict, field_meta: dict, parametrize: bool,
     return out
 
 
+def emit_visual_propose_lines(observed: dict, field_meta: dict, parametrize: bool,
+                              interaction: dict) -> list[str]:
+    """Adapter (TIER 3 / L6/L7): route a ``visual_propose`` interaction (canvas / WebGL /
+    Flutter-without-semantics — no DOM/AX grounding) to the any-UI resolver's propose-from-
+    candidates emitter. With no self-hosted VLM configured it emits a REFUSE/escalate THROW
+    — never a blind coordinate click, never a green-wash. Per-step (replaces the verb branch),
+    so the step still carries an oracle (or throws); it can never silently no-op a step."""
+    from . import any_ui_resolver  # lazy: avoid import cycle
+    return any_ui_resolver.emit_any_ui_lines(
+        observed,
+        {"kind": "visual_propose",
+         "label": (interaction or {}).get("label", "") or observed.get("label", "") or "",
+         "value": (interaction or {}).get("value", "") or observed.get("value", "") or ""})
+
+
 # kind -> emitter. The frozen compiler imports this mapping and, when a step carries
 # an interaction recipe, calls the emitter in place of its verb branch. detect_interaction
 # routes a value-shape HINT to the PROVEN kind-specific emitter (combobox/slider/switch/
-# accordion/conditional); ``universal_control`` stays registered as a catch-all.
+# accordion/conditional), or a no-DOM signal to ``visual_propose`` (the hard-UI tier);
+# ``universal_control`` stays registered as a catch-all.
 INTERACTION_RECIPES = {
     "universal_control": emit_universal_control_lines,
     "custom_combobox": emit_combobox_lines,
@@ -836,4 +865,5 @@ INTERACTION_RECIPES = {
     "toggle_switch": emit_toggle_switch_lines,
     "conditional_text": emit_conditional_text_lines,
     "accordion": emit_accordion_lines,
+    "visual_propose": emit_visual_propose_lines,
 }
