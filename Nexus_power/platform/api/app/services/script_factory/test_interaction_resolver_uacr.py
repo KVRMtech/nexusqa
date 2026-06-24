@@ -57,12 +57,16 @@ _PLAIN = [
 ]
 
 
-def test_routing_controls_go_to_universal():
+def test_routing_controls_go_to_specific_recipe():
+    # Routing now goes to the PROVEN kind-specific recipe (combobox/slider/switch/
+    # accordion), not the genericized universal_control (whose handle-ladder lost the
+    # per-kind locators and regressed live). The value-shape HINT still classifies it.
     for name, o, exp_hint in _ROUTING:
         intr = ir.detect_interaction(o, {}, "locator.fill: Timeout 6000ms exceeded")
         assert intr is not None, f"{name} routed to None"
-        assert intr["kind"] == "universal_control", f"{name}: {intr['kind']}"
         assert intr["hint"] == exp_hint, f"{name}: hint {intr['hint']} != {exp_hint}"
+        assert intr["kind"] == ir._recipe_for_hint(exp_hint), f"{name}: {intr['kind']}"
+        assert intr["kind"] in ir.INTERACTION_RECIPES, f"{name}: {intr['kind']} unregistered"
 
 
 def test_routing_plain_text_is_none():
@@ -75,7 +79,7 @@ def test_field_meta_chooser_signal_upgrades_plain_label():
     o = _step("type", "field", "Country", "United States")
     fm = {"country": {"control": "select", "options": ["United States", "Canada"]}}
     intr = ir.detect_interaction(o, fm, "")
-    assert intr is not None and intr["kind"] == "universal_control"
+    assert intr is not None and intr["kind"] in ir.INTERACTION_RECIPES
 
 
 def test_prepass_signature_matches_routing():
