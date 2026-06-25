@@ -360,9 +360,9 @@ export default function SessionReplayPage() {
         <div className="flex items-center gap-4">
           <button
             onClick={() => setPlaying(!playing)}
-            className="flex h-10 w-10 items-center justify-center rounded-full bg-nexus-500 hover:bg-nexus-400 transition-colors shrink-0"
+            className="flex h-10 w-10 items-center justify-center rounded-full bg-gradient-to-br from-[#0c2c4d] to-[#2670a3] hover:from-[#0f3250] hover:to-[#2e85c2] ring-1 ring-gold-400/30 shadow-md transition-all shrink-0"
           >
-            {playing ? <Pause className="h-5 w-5 text-[#0a2540]" /> : <Play className="h-5 w-5 text-[#0a2540] ml-0.5" />}
+            {playing ? <Pause className="h-5 w-5 text-white" /> : <Play className="h-5 w-5 text-white ml-0.5" />}
           </button>
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 text-xs text-slate-8000 mb-1.5">
@@ -430,8 +430,9 @@ export default function SessionReplayPage() {
         {/* Intelligence Timeline (3/5) */}
         <div className="lg:col-span-3 space-y-3">
           <div className="flex items-center justify-between">
-            <h2 className="text-sm font-semibold text-slate-600 flex items-center gap-2">
-              <Sparkles className="h-4 w-4 text-nexus-400" />
+            <h2 className="text-sm font-bold text-[#0a2540] flex items-center gap-2">
+              <span className="h-4 w-1 rounded-full bg-gradient-to-b from-gold-400 to-gold-600" />
+              <Sparkles className="h-4 w-4 text-gold-500" />
               Intelligence Timeline
             </h2>
             <div className="flex gap-1">
@@ -466,7 +467,7 @@ export default function SessionReplayPage() {
               <div
                 key={idx}
                 className={clsx(
-                  'card p-4 cursor-pointer transition-all hover:ring-white/10',
+                  'card p-4 cursor-pointer transition-all hover:-translate-y-px hover:ring-white/10',
                   selectedEvent === evt && 'ring-nexus-500/40 bg-nexus-500/5',
                   evt.event_type === 'contradiction' && 'ring-red-500/20',
                 )}
@@ -992,7 +993,7 @@ export default function SessionReplayPage() {
                   {artifact && artifact.visual_e2e_ready !== false && (
                     <Link
                       to={`/sessions/${sessionId}/visual-flow?artifact_id=${artifact.artifact_id}`}
-                      className="btn-ghost w-full text-center text-[11px] py-2 flex items-center justify-center gap-1.5"
+                      className="btn-primary btn-gold w-full text-center text-xs py-2.5 flex items-center justify-center gap-1.5 shadow-md ring-1 ring-gold-300/40"
                     >
                       <ArrowRight className="h-3.5 w-3.5" />
                       Open Visual Flow Diagram &amp; Generate Tests

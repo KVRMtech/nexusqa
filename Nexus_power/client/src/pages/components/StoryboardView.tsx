@@ -117,7 +117,7 @@ function Panel({
         'group relative w-full text-left overflow-hidden rounded-2xl',
         'transition-all duration-300 border bg-white',
         'hover:shadow-2xl hover:-translate-y-1 active:translate-y-0',
-        'focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400',
+        'focus:outline-none focus-visible:ring-2 focus-visible:ring-nexus-400',
         isHero ? 'border-slate-200' : 'border-slate-200/80',
       )}
       style={{ minHeight: isHero ? 240 : 360 }}

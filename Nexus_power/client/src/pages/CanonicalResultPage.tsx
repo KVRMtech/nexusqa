@@ -266,7 +266,7 @@ function LaunchCard({ action, navigate }: { action: CanonicalLaunchAction; navig
         'text-left rounded-xl border p-4 transition-all group',
         isDisabled
           ? 'border-gray-100 bg-white/80 opacity-50 cursor-not-allowed'
-          : 'border-gray-200 bg-gray-50 hover:border-nexus-500/40 hover:bg-white cursor-pointer',
+          : 'relative overflow-hidden border-gray-200 bg-gray-50 hover:border-nexus-500/40 hover:bg-white hover:-translate-y-px cursor-pointer before:absolute before:left-0 before:top-0 before:bottom-0 before:w-[3px] before:bg-gradient-to-b before:from-gold-300 before:to-gold-600 before:opacity-0 hover:before:opacity-100 before:transition-opacity',
       )}
     >
       <div className="flex items-start gap-3">
@@ -514,7 +514,7 @@ export default function CanonicalResultPage() {
                 <IdChip
                   label="Workflow"
                   value={vm.workflow_id}
-                  colorClass="text-purple-400"
+                  colorClass="text-nexus-500"
                   tooltip="The orchestrator workflow that produced this artifact."
                 />
               </p>
@@ -603,7 +603,7 @@ export default function CanonicalResultPage() {
         <div className="card p-6 space-y-4">
           <div className="flex items-end justify-between gap-4">
             <div>
-              <h2 className="text-sm font-semibold text-slate-600">Visual Story</h2>
+              <h2 className="flex items-center gap-2 text-sm font-bold text-[#0a2540]"><span className="h-4 w-1 rounded-full bg-gradient-to-b from-gold-400 to-gold-600" />Visual Story</h2>
               <p className="text-[11px] text-slate-400 mt-0.5">
                 {storyboard
                   ? `${storyboard.summary?.non_noise_panel_count ?? storyboard.panels.length} panels — picked across the timeline so you see the arc at a glance.`
@@ -612,7 +612,7 @@ export default function CanonicalResultPage() {
             </div>
             <Link
               to={`/sessions/${sessionId}/visual-flow?artifact_id=${vm.artifact_id}`}
-              className="text-[11px] font-bold text-indigo-600 hover:text-indigo-800 inline-flex items-center gap-1"
+              className="btn-primary btn-gold text-[11px] font-bold inline-flex items-center gap-1 shadow-md ring-1 ring-gold-300/40"
             >
               Open full storyboard <ChevronRight className="h-3 w-3" />
             </Link>
@@ -638,7 +638,7 @@ export default function CanonicalResultPage() {
       {/* Section 2: Evidence Story                               */}
       {/* ═══════════════════════════════════════════════════════ */}
       <div className="card p-6 space-y-5">
-        <h2 className="text-sm font-semibold text-slate-600">Extracted Evidence</h2>
+        <h2 className="flex items-center gap-2 text-sm font-bold text-[#0a2540]"><span className="h-4 w-1 rounded-full bg-gradient-to-b from-gold-400 to-gold-600" />Extracted Evidence</h2>
 
         {/* Transcript */}
         <div className="space-y-3">
@@ -669,7 +669,7 @@ export default function CanonicalResultPage() {
               </p>
               <Link
                 to={`/sessions/${vm.session_id}/replay`}
-                className="inline-flex items-center gap-1 text-[11px] text-nexus-400 hover:text-nexus-300 mt-3 transition-colors"
+                className="inline-flex items-center gap-1 text-[11px] font-semibold text-nexus-700 hover:text-nexus-800 mt-3 transition-colors"
               >
                 View Full Transcript <ChevronRight className="h-3 w-3" />
               </Link>
@@ -725,7 +725,7 @@ export default function CanonicalResultPage() {
       {/* Section 3: Trust Panel                                  */}
       {/* ═══════════════════════════════════════════════════════ */}
       <div className="card p-6 space-y-5">
-        <h2 className="text-sm font-semibold text-slate-600">Trust &amp; Quality Gate</h2>
+        <h2 className="flex items-center gap-2 text-sm font-bold text-[#0a2540]"><span className="h-4 w-1 rounded-full bg-gradient-to-b from-gold-400 to-gold-600" />Trust &amp; Quality Gate</h2>
 
         {/* Quality Gate Outcome */}
         <div className="flex items-center gap-3">
@@ -841,7 +841,7 @@ export default function CanonicalResultPage() {
       {/* ═══════════════════════════════════════════════════════ */}
       <div className="card p-6 space-y-5">
         <div className="flex items-center justify-between">
-          <h2 className="text-sm font-semibold text-slate-600">Processing Timeline</h2>
+          <h2 className="flex items-center gap-2 text-sm font-bold text-[#0a2540]"><span className="h-4 w-1 rounded-full bg-gradient-to-b from-gold-400 to-gold-600" />Processing Timeline</h2>
           <div className="flex items-center gap-4 text-xs text-slate-400">
             <span>Start: {formatTimestamp(timelineStarted)}</span>
             <span>End: {formatTimestamp(timelineEnded)}</span>
@@ -901,7 +901,7 @@ export default function CanonicalResultPage() {
         {/* Parallel path indicator */}
         <div className="flex items-center gap-2 text-[10px] text-slate-8000 border-t border-gray-100 pt-3">
           <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-blue-500/40 inline-block" /> audio path</span>
-          <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-purple-500/40 inline-block" /> visual path</span>
+          <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-nexus-500/50 inline-block" /> visual path</span>
           <span className="ml-auto text-slate-400">Audio transcription and visual extraction execute in parallel</span>
         </div>
       </div>
@@ -911,14 +911,16 @@ export default function CanonicalResultPage() {
       {/* ═══════════════════════════════════════════════════════ */}
       <div className="card p-6 space-y-5">
         <div>
-          <h2 className="text-sm font-semibold text-slate-600">What you can build from this asset</h2>
+          <h2 className="flex items-center gap-2 text-sm font-bold text-[#0a2540]"><span className="h-4 w-1 rounded-full bg-gradient-to-b from-gold-400 to-gold-600" />What you can build from this asset</h2>
           <p className="text-xs text-slate-400 mt-0.5">Capture once, operationalize everywhere</p>
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          {vm.launch_actions.map((action) => (
-            <LaunchCard key={action.id} action={action} navigate={navigate} />
-          ))}
+          {vm.launch_actions
+            .filter((action) => action.id === 'visual-flow-e2e')
+            .map((action) => (
+              <LaunchCard key={action.id} action={action} navigate={navigate} />
+            ))}
         </div>
       </div>
     </div>

@@ -161,9 +161,9 @@ function StepCard({
       onClick={() => onSelect?.(step)}
       className={clsx(
         'w-full text-left flex gap-3 p-3 rounded-lg border transition-all',
-        'hover:border-indigo-300 hover:bg-indigo-50/40',
+        'hover:border-nexus-300 hover:bg-nexus-50/40',
         isSelected
-          ? 'border-indigo-500 bg-indigo-50 ring-1 ring-indigo-300'
+          ? 'border-nexus-500 bg-nexus-50 ring-1 ring-nexus-300'
           : 'border-slate-200 bg-white',
       )}
     >
@@ -185,7 +185,7 @@ function StepCard({
       {/* Body */}
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2 mb-1">
-          <Icon className="w-3.5 h-3.5 text-indigo-600" />
+          <Icon className="w-3.5 h-3.5 text-nexus-600" />
           <span className="text-xs font-bold text-slate-800 uppercase tracking-wider">
             {verb}
           </span>
@@ -330,7 +330,7 @@ export function EvidenceStepsPanel({
         <button
           type="button"
           onClick={() => setShowLowConfidence(true)}
-          className="text-[10px] text-slate-500 hover:text-indigo-600 underline self-start mt-1"
+          className="text-[10px] text-slate-500 hover:text-nexus-600 underline self-start mt-1"
         >
           Show {lowConfidenceCount} weaker step{lowConfidenceCount === 1 ? '' : 's'} (low confidence)
         </button>
@@ -339,7 +339,7 @@ export function EvidenceStepsPanel({
         <button
           type="button"
           onClick={() => setShowLowConfidence(false)}
-          className="text-[10px] text-slate-500 hover:text-indigo-600 underline self-start mt-1"
+          className="text-[10px] text-slate-500 hover:text-nexus-600 underline self-start mt-1"
         >
           Hide weaker steps
         </button>

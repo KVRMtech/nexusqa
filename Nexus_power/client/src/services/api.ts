@@ -839,6 +839,45 @@ class ApiClient {
     return data;
   }
 
+  /** Inline-edit a stored test-case scenario's data fields (action /
+   *  input value / expected result). Grounding is immutable server-side. */
+  async editScenario(
+    artifactId: string,
+    scenarioId: string,
+    patch: {
+      title?: string;
+      steps?: Array<{ step_index: number; action?: string; input_data?: string; expected_output?: string }>;
+    },
+  ): Promise<{ success: boolean; scenario_id: string; step_count: number; human_edited: boolean; regenerate_playwright: boolean }> {
+    const { data } = await this.client.patch(
+      `/v1/e2e-architect/${artifactId}/scenarios/${scenarioId}`,
+      patch,
+    );
+    return data;
+  }
+
+  /** Inline-edit a Test Factory (Pages & Forms) case's step data. Stored as
+   *  an override that survives regeneration; Playwright recompiles from it. */
+  async editTestCase(
+    artifactId: string,
+    caseId: string,
+    patch: { title?: string; steps?: Array<{ step_number: number; action?: string; expected_result?: string; verification?: string; control?: { label: string; kind?: string; anchor?: string; anchor_kind?: string } }> },
+  ): Promise<{ success: boolean; test_case_id: string; overridden_steps: number; repointed_steps?: number; survives_regenerate: boolean }> {
+    const { data } = await this.client.patch(
+      `/v1/test-factory/${artifactId}/test-cases/${caseId}`,
+      patch,
+    );
+    return data;
+  }
+
+  /** The grounded menu of controls captured in this recording — the ONLY controls
+   *  a step may be re-pointed to (the backend rejects anything not captured). */
+  async getStepControls(artifactId: string, caseId: string): Promise<{ controls: Array<{ label: string; kind: string; page?: string }> }> {
+    const { data } = await this.client.get(
+      `/v1/test-factory/${artifactId}/test-cases/${caseId}/controls`);
+    return data;
+  }
+
   // ── QI Portal: Missions ─────────────────────────────────
   async listMissions(params?: {
     status?: string;
@@ -1396,6 +1435,39 @@ class ApiClient {
     return data;
   }
 
+  /** Draft a NEW grounded test case from a plain-English request (no write). */
+  async proposeTestCase(
+    artifactId: string, message: string, history: { role: string; content: string }[] = [],
+  ): Promise<any> {
+    const { data } = await this.client.post(
+      `/v1/test-factory/${artifactId}/propose-case`, { message, history },
+      { timeout: 120_000 },
+    );
+    return data;
+  }
+
+  /** Persist a reviewed proposed case (re-validated + grounded server-side). */
+  async addTestCase(
+    artifactId: string, payload: { name: string; message: string; steps: any[] },
+  ): Promise<any> {
+    const { data } = await this.client.post(
+      `/v1/test-factory/${artifactId}/add-case`, payload,
+      { timeout: 120_000 },
+    );
+    return data;
+  }
+
+  /** Transition a case through its sign-off lifecycle (draft -> in_review -> approved). */
+  async reviewTestCase(
+    artifactId: string, caseId: string,
+    payload: { action: string; signature?: string; note?: string },
+  ): Promise<any> {
+    const { data } = await this.client.post(
+      `/v1/test-factory/${artifactId}/test-cases/${caseId}/review`, payload,
+    );
+    return data;
+  }
+
   /** On-demand generate a non-demonstrated category (negative|boundary|error_state). */
   async generateTestFactoryCategory(artifactId: string, category: string): Promise<any> {
     const { data } = await this.client.post(
@@ -1537,6 +1609,17 @@ class ApiClient {
     return data;
   }
 
+  /** Live Preflight — deterministic Playwright probe (no LLM): opens the live app
+   *  and reports per-step locator resolution (1 good / 0 broken / >1 ambiguous). */
+  async runScriptPreflight(artifactId: string, testId: string, baseUrl = ''): Promise<any> {
+    const { data } = await this.client.post(
+      `/v1/test-factory/${artifactId}/scripts/${encodeURIComponent(testId)}/preflight`,
+      { base_url: baseUrl },
+      { timeout: 180_000 },   // launches a real browser via the runner — well past the 30s default
+    );
+    return data;
+  }
+
   /** Suite-level fidelity rollup (deterministic, all scripts). */
   async getSuiteFidelity(artifactId: string): Promise<any> {
     const { data } = await this.client.get(`/v1/test-factory/${artifactId}/fidelity`);
@@ -1547,6 +1630,15 @@ class ApiClient {
   async regenerateScript(artifactId: string, testId: string): Promise<any> {
     const { data } = await this.client.post(
       `/v1/test-factory/${artifactId}/scripts/${encodeURIComponent(testId)}/regenerate`, {});
+    return data;
+  }
+
+  /** Make AI Review actionable: apply ONLY deterministic, grounded fixes
+   *  (regenerate to resolve drift/stale oracles). Returns { fixed, escalations,
+   *  version_no } — what was fixed vs. honestly left for a human. Never LLM code. */
+  async fixScriptGaps(artifactId: string, testId: string): Promise<any> {
+    const { data } = await this.client.post(
+      `/v1/test-factory/${artifactId}/scripts/${encodeURIComponent(testId)}/fix-gaps`, {});
     return data;
   }
 
@@ -1674,7 +1766,7 @@ class ApiClient {
    *  poll getNexusRunStatus for { heal_trace, terminal_state, clean_run_version }. */
   async autoHealRun(
     artifactId: string,
-    body: { categories?: string[]; test_ids?: string[]; base_url?: string; data?: Record<string, string> },
+    body: { categories?: string[]; test_ids?: string[]; base_url?: string; data?: Record<string, string>; enable_agentic_heal?: boolean; agentic_min_confidence?: number },
   ): Promise<any> {
     const { data } = await this.client.post(
       `/v1/test-factory/${artifactId}/auto-heal/run-config`, body,
@@ -1694,6 +1786,32 @@ class ApiClient {
   async listScriptVersions(artifactId: string, testId: string): Promise<any> {
     const { data } = await this.client.get(
       `/v1/test-factory/${artifactId}/scripts/${testId}/versions`,
+    );
+    return data;
+  }
+
+  /** Per-script GROUNDED VERDICT HISTORY across recent runs: proven-green vs
+   *  regression/drift/flake, duration, the final-frame success screenshot, and any
+   *  heal event that landed on that run. Read-only, $0 LLM. */
+  async getVerdictHistory(artifactId: string, scenarioId: string, limit = 20): Promise<any> {
+    const { data } = await this.client.get(
+      `/v1/test-factory/${artifactId}/scenarios/${encodeURIComponent(scenarioId)}/verdict-history`,
+      { params: { limit } },
+    );
+    return data;
+  }
+
+  /** Phase 5 — Proven Control Ledger KB: controls whose heals are oracle-PROVEN green
+   *  and reused across scenarios + recordings, with provenance (label/page/fix/confidence/
+   *  app scope) + lifecycle (quarantined). scope = recording | app | tenant. Read-only. */
+  async getProvenControls(
+    artifactId: string,
+    scope: 'recording' | 'app' | 'tenant' = 'recording',
+    limit = 200,
+  ): Promise<any> {
+    const { data } = await this.client.get(
+      `/v1/test-factory/${artifactId}/proven-controls`,
+      { params: { scope, limit } },
     );
     return data;
   }
@@ -1762,10 +1880,10 @@ class ApiClient {
   }
 
   /** Download the suite as Excel / CSV / JSON (blob). */
-  async exportTestFactory(artifactId: string, format = 'excel', details = false): Promise<Blob> {
+  async exportTestFactory(artifactId: string, format = 'excel', details = false, redact = false): Promise<Blob> {
     const resp = await this.client.get(
       `/v1/test-factory/${artifactId}/export`,
-      { params: { format, details }, responseType: 'blob' },
+      { params: { format, details, redact }, responseType: 'blob' },
     );
     return resp.data as Blob;
   }

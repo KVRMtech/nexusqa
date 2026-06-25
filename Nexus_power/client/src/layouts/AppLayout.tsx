@@ -124,13 +124,13 @@ export default function AppLayout() {
   const SidebarContent = () => (
     <div className="flex h-full flex-col">
       {/* Logo */}
-      <div className="flex h-16 items-center gap-3 px-5 border-b border-white/[0.06]">
-        <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-nexus-500 to-purple-600 shadow-lg shadow-nexus-500/25">
-          <Hexagon className="h-5 w-5 text-white" />
+      <div className="flex h-16 items-center gap-3 px-5 border-b border-white/[0.08]">
+        <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-gold-300 to-gold-500 shadow-lg shadow-gold-500/30 ring-1 ring-gold-300/40">
+          <Hexagon className="h-5 w-5 text-[#0a2540]" />
         </div>
         <div>
           <h1 className="text-[15px] font-bold text-white tracking-tight">NEXUS</h1>
-          <p className="text-[9px] font-semibold text-nexus-400 uppercase tracking-[0.2em]">{isCanonicalOnly ? 'Canonical Processing' : 'AI Engine Factory'}</p>
+          <p className="text-[9px] font-semibold text-gold-400 uppercase tracking-[0.2em]">{isCanonicalOnly ? 'Canonical Processing' : 'AI Engine Factory'}</p>
         </div>
       </div>
 
@@ -139,7 +139,7 @@ export default function AppLayout() {
         {navGroups.map((group) => (
           <div key={group.zone}>
             {group.label && (
-              <p className="mt-4 mb-1.5 px-3 text-[10px] font-bold text-gray-500 uppercase tracking-widest">
+              <p className="mt-4 mb-1.5 px-3 text-[10px] font-bold text-white/40 uppercase tracking-widest">
                 {group.label}
               </p>
             )}
@@ -151,10 +151,10 @@ export default function AppLayout() {
                 onClick={() => setSidebarOpen(false)}
                 className={({ isActive }) =>
                   clsx(
-                    'group flex items-center gap-3 rounded-lg px-3 py-2 text-[13px] font-medium transition-all duration-150',
+                    'group relative flex items-center gap-3 rounded-lg px-3 py-2 text-[13px] font-medium transition-all duration-150',
                     isActive
-                      ? 'bg-nexus-500/15 text-nexus-400 shadow-sm shadow-nexus-500/5'
-                      : 'text-gray-400 hover:bg-white/[0.04] hover:text-gray-200',
+                      ? 'bg-white/[0.08] text-white [&>svg]:text-gold-400 before:content-[""] before:absolute before:left-0 before:top-1.5 before:bottom-1.5 before:w-[3px] before:rounded-full before:bg-gold-400'
+                      : 'text-white/55 hover:bg-white/[0.05] hover:text-white',
                   )
                 }
               >
@@ -198,7 +198,7 @@ export default function AppLayout() {
             onClick={() => setUserMenuOpen(!userMenuOpen)}
             className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm hover:bg-white/[0.04] transition-colors"
           >
-            <div className="flex h-8 w-8 items-center justify-center rounded-full bg-gradient-to-br from-nexus-500 to-purple-600 text-xs font-bold text-white">
+            <div className="flex h-8 w-8 items-center justify-center rounded-full bg-gradient-to-br from-nexus-400 to-nexus-600 text-xs font-bold text-white ring-1 ring-gold-400/30">
               {user?.name?.charAt(0).toUpperCase() || 'U'}
             </div>
             <div className="flex-1 text-left min-w-0">
@@ -238,7 +238,7 @@ export default function AppLayout() {
       {/* Sidebar — mobile */}
       <div
         className={clsx(
-          'fixed inset-y-0 left-0 z-50 w-64 bg-gray-900/95 backdrop-blur transition-transform duration-300 lg:hidden',
+          'fixed inset-y-0 left-0 z-50 w-64 bg-gradient-to-b from-[#0c2c4d] to-[#06182c] backdrop-blur transition-transform duration-300 lg:hidden',
           sidebarOpen ? 'translate-x-0' : '-translate-x-full',
         )}
       >
@@ -253,7 +253,7 @@ export default function AppLayout() {
 
       {/* Sidebar — desktop */}
       <div className="hidden lg:fixed lg:inset-y-0 lg:flex lg:w-64 lg:flex-col">
-        <div className="flex flex-1 flex-col bg-gray-900 border-r border-white/[0.06]">
+        <div className="flex flex-1 flex-col bg-gradient-to-b from-[#0c2c4d] via-[#0a2540] to-[#06182c] border-r border-gold-500/20">
           <SidebarContent />
         </div>
       </div>

@@ -365,21 +365,21 @@ function StatCard3D({ icon: Icon, label, value, accent, delay }: {
   icon: React.ElementType; label: string; value: string | number; accent: string; delay: number;
 }) {
   return (
-    <div className="v5-card-enter" style={{ animationDelay: `${delay}ms` }}>
+    <div className="v5-card-enter shrink-0" style={{ animationDelay: `${delay}ms` }}>
       <div
-        className="flex items-center gap-2 rounded-xl px-3 py-1.5 border backdrop-blur-xl transition-all duration-500 hover:scale-105 group"
+        className="flex items-center gap-2.5 rounded-xl px-3.5 py-2 border transition-all duration-300 group"
         style={{
-          background: `linear-gradient(135deg, ${accent}18, ${accent}08, rgba(255,255,255,0.03))`,
-          borderColor: `${accent}30`,
-          boxShadow: `0 2px 12px ${accent}15, 0 0 0 1px ${accent}10`,
+          background: `linear-gradient(135deg, ${accent}12, #ffffff 72%)`,
+          borderColor: `${accent}33`,
+          boxShadow: `0 2px 10px rgba(15,50,80,0.06), 0 1px 2px rgba(15,50,80,0.04)`,
         }}
       >
-        <div className="p-1 rounded-lg transition-transform duration-300 group-hover:scale-110" style={{ background: `${accent}20` }}>
-          <Icon className="h-3 w-3" style={{ color: accent }} />
+        <div className="flex h-8 w-8 items-center justify-center rounded-lg shrink-0 transition-transform duration-300 group-hover:scale-110" style={{ background: `${accent}1f`, boxShadow: `inset 0 0 0 1px ${accent}29` }}>
+          <Icon className="h-4 w-4" style={{ color: accent }} />
         </div>
-        <div>
-          <div className="text-sm font-black text-slate-900 leading-none">{value}</div>
-          <div className="text-[8px] uppercase tracking-[0.15em] font-bold mt-0.5" style={{ color: `${accent}90` }}>{label}</div>
+        <div className="leading-tight">
+          <div className="text-lg font-black text-[#0a2540] leading-none tabular-nums">{value}</div>
+          <div className="text-[10px] uppercase tracking-[0.12em] font-bold text-slate-500 mt-1">{label}</div>
         </div>
       </div>
     </div>
@@ -2130,11 +2130,11 @@ export default function VisualFlowDiagramPage() {
       <div className="flex h-screen items-center justify-center" style={{ background: 'linear-gradient(180deg, #f5f7fa 0%, #eef2f7 100%)' }}>
         <div className="flex flex-col items-center gap-6 relative z-10">
           <div className="relative w-20 h-20" >
-            <div className="absolute inset-0 rounded-full border-2 border-indigo-500/30 v5-spin-3d" />
-            <div className="absolute inset-2 rounded-full border-2 border-purple-400/40 v5-spin-3d-reverse" />
-            <div className="absolute inset-4 rounded-full border-2 border-blue-400/30 v5-spin-3d" style={{ animationDuration: '2s' }} />
+            <div className="absolute inset-0 rounded-full border-2 border-nexus-500/40 v5-spin-3d" />
+            <div className="absolute inset-2 rounded-full border-2 border-gold-400/50 v5-spin-3d-reverse" />
+            <div className="absolute inset-4 rounded-full border-2 border-nexus-400/30 v5-spin-3d" style={{ animationDuration: '2s' }} />
             <div className="absolute inset-0 flex items-center justify-center">
-              <Sparkles className="h-6 w-6 text-slate-600 v5-pulse-glow" />
+              <Sparkles className="h-6 w-6 text-gold-500 v5-pulse-glow" />
             </div>
           </div>
           <div className="text-center space-y-2">
@@ -2154,7 +2154,7 @@ export default function VisualFlowDiagramPage() {
             <AlertTriangle className="h-8 w-8 text-red-400" />
           </div>
           <p className="text-sm font-medium text-slate-700">{error ?? 'Failed to load visual flow graph'}</p>
-          <Link to={`/sessions/${sessionId}`} className="inline-flex items-center gap-2 text-xs text-slate-600 hover:text-indigo-300 transition-colors bg-indigo-500/10 px-4 py-2 rounded-xl border border-indigo-500/20">
+          <Link to={`/sessions/${sessionId}`} className="inline-flex items-center gap-2 text-xs text-slate-600 hover:text-nexus-600 transition-colors bg-nexus-500/10 px-4 py-2 rounded-xl border border-nexus-500/20">
             <ArrowLeft className="h-3.5 w-3.5" /> Back to Session
           </Link>
         </div>
@@ -2240,11 +2240,11 @@ export default function VisualFlowDiagramPage() {
             onClick={handleGenerate}
             className={clsx(
               'flex items-center gap-2 rounded-lg px-4 py-2 text-xs font-black transition-all duration-300',
-              gateResult.can_generate ? 'text-white hover:scale-105 active:scale-95' : 'text-slate-500 cursor-not-allowed',
+              gateResult.can_generate ? 'text-[#0a2540] hover:scale-105 active:scale-95' : 'text-slate-500 cursor-not-allowed',
             )}
             style={gateResult.can_generate ? {
-              background: 'linear-gradient(135deg, #0a2540, #2670a3)',
-              boxShadow: '0 8px 32px rgba(38,112,163,0.3), 0 0 0 1px rgba(38,112,163,0.25), inset 0 1px 0 rgba(255,255,255,0.1)',
+              background: 'linear-gradient(135deg, #D9A23A, #e0ac2c)',
+              boxShadow: '0 8px 32px rgba(217,162,58,0.35), 0 0 0 1px rgba(217,162,58,0.3), inset 0 1px 0 rgba(255,255,255,0.25)',
             } : {
               background: 'rgba(10,37,64,0.04)',
               border: '1px solid rgba(10,37,64,0.08)',
@@ -2258,12 +2258,12 @@ export default function VisualFlowDiagramPage() {
         {/* Stats row */}
         <div className="px-4 pb-2 space-y-2">
           <div className="flex items-center gap-2 overflow-x-auto pb-0.5">
-            <StatCard3D icon={MonitorPlay} label="Screens" value={graph.summary.total_scenes} accent="#818cf8" delay={0} />
-            <StatCard3D icon={Activity} label="Transitions" value={graph.summary.total_edges} accent="#38bdf8" delay={80} />
-            <StatCard3D icon={CheckCircle} label="Confirmed" value={gateResult.action_confirmed_count} accent="#34d399" delay={160} />
-            <StatCard3D icon={Zap} label="Selectors" value={gateResult.automation_ready_count} accent="#fbbf24" delay={240} />
-            <StatCard3D icon={Target} label="Quality" value={`${avgConfidence}%`} accent="#f472b6" delay={320} />
-            <StatCard3D icon={Box} label="Apps" value={graph.app_instances.length} accent="#22d3ee" delay={400} />
+            <StatCard3D icon={MonitorPlay} label="Screens" value={graph.summary.total_scenes} accent="#2670a3" delay={0} />
+            <StatCard3D icon={Activity} label="Transitions" value={graph.summary.total_edges} accent="#1d5784" delay={80} />
+            <StatCard3D icon={CheckCircle} label="Confirmed" value={gateResult.action_confirmed_count} accent="#059669" delay={160} />
+            <StatCard3D icon={Zap} label="Selectors" value={gateResult.automation_ready_count} accent="#2670a3" delay={240} />
+            <StatCard3D icon={Target} label="Quality" value={`${avgConfidence}%`} accent="#D9A23A" delay={320} />
+            <StatCard3D icon={Box} label="Apps" value={graph.app_instances.length} accent="#1d5784" delay={400} />
           </div>
 
           {journeyNarrative && (
@@ -2920,7 +2920,7 @@ export default function VisualFlowDiagramPage() {
                         ? grouping.display_label
                         : appNameMap.get(selectedScene.app_instance_id ?? '') ?? '';
                       return appLabel ? (
-                        <span className="flex items-center gap-1.5 text-indigo-600 font-bold">
+                        <span className="flex items-center gap-1.5 text-nexus-600 font-bold">
                           <Box className="h-3.5 w-3.5" />
                           {appLabel}
                         </span>
@@ -3529,7 +3529,7 @@ export default function VisualFlowDiagramPage() {
                     }}
                   >
                     <div className="flex items-center gap-2">
-                      <p className="text-[10px] font-black uppercase tracking-widest text-indigo-700">
+                      <p className="text-[10px] font-black uppercase tracking-widest text-nexus-700">
                         URL transitions in this scene
                       </p>
                       <span className="text-[10px] text-slate-500">
@@ -3549,7 +3549,7 @@ export default function VisualFlowDiagramPage() {
                           <div className="text-slate-700 break-words">
                             <span className="text-slate-400">from</span> {u.from_url.slice(0, 80)}{u.from_url.length > 80 ? '…' : ''}
                           </div>
-                          <div className="text-indigo-700 break-words font-bold">
+                          <div className="text-nexus-700 break-words font-bold">
                             <span className="text-slate-400 font-normal">to</span> {u.to_url.slice(0, 80)}{u.to_url.length > 80 ? '…' : ''}
                           </div>
                         </li>
@@ -3604,7 +3604,7 @@ export default function VisualFlowDiagramPage() {
                               </span>
                             )}
                             {f.url && (
-                              <span className="font-mono text-indigo-600 truncate" title={f.url}>
+                              <span className="font-mono text-nexus-600 truncate" title={f.url}>
                                 {f.url.slice(0, 60)}{f.url.length > 60 ? '…' : ''}
                               </span>
                             )}
@@ -3666,7 +3666,7 @@ export default function VisualFlowDiagramPage() {
                         }}
                       >
                         <span className="text-[9px] font-black uppercase tracking-widest text-slate-500 mr-1.5">Entry:</span>
-                        <span className="font-bold text-indigo-700">
+                        <span className="font-bold text-nexus-700">
                           {sceneActions.incomingEdgeLabel}
                         </span>
                         {sceneActions.incomingEdgeValue && (

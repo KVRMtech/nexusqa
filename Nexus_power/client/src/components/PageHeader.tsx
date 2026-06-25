@@ -47,7 +47,8 @@ export function PageHeader({ zone, title, subtitle, isLive, actions, children }:
         </div>
       )}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-        <div>
+        <div className="relative sm:pl-4">
+          <span className="hidden sm:block absolute left-0 top-0.5 bottom-0.5 w-[3px] rounded-full bg-gradient-to-b from-gold-300 to-gold-600" />
           {zone && <p className="zone-header mb-1">{zone}</p>}
           <div className="flex items-center gap-3">
             <h1 className="page-title">{title}</h1>

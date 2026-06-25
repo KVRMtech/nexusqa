@@ -49,11 +49,11 @@ export function StatCard({
     >
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
-          <p className="text-xs font-medium text-slate-400 uppercase tracking-wider truncate">
+          <p className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider truncate">
             {label}
           </p>
-          <div className="mt-1.5 flex items-baseline gap-1.5">
-            <span className="text-2xl font-bold text-[#0a2540] tabular-nums">{value}</span>
+          <div className="mt-2 flex items-baseline gap-1.5">
+            <span className="text-3xl font-bold text-[#0a2540] tabular-nums tracking-tight">{value}</span>
             {suffix && <span className="text-sm text-slate-500">{suffix}</span>}
           </div>
           {change && (
@@ -72,7 +72,7 @@ export function StatCard({
           )}
         </div>
         {icon && (
-          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-white/[0.04] text-slate-500 group-hover:text-nexus-400 transition-colors">
+          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-nexus-50 to-nexus-100 text-nexus-700 ring-1 ring-nexus-200/60 group-hover:ring-gold-400/40 transition-all duration-200">
             {icon}
           </div>
         )}

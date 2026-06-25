@@ -1044,8 +1044,8 @@ export default function SessionCommandPage() {
         className={clsx(
           'card p-6 border-2 border-dashed transition-all duration-300 cursor-pointer',
           dragOver
-            ? 'border-nexus-500 bg-nexus-500/5 shadow-lg shadow-nexus-500/10'
-            : 'border-gray-200 hover:border-white/20',
+            ? 'border-gold-500 bg-gold-500/5 shadow-lg shadow-gold-500/10'
+            : 'border-slate-300 hover:border-nexus-400',
         )}
         onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
         onDragLeave={() => setDragOver(false)}
@@ -1060,11 +1060,11 @@ export default function SessionCommandPage() {
         }}
       >
         <div className="flex flex-col items-center text-center sm:flex-row sm:text-left sm:gap-6">
-          <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br from-nexus-500/20 to-purple-500/20 mb-3 sm:mb-0 shrink-0">
+          <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br from-[#0c2c4d] to-[#0a2540] ring-1 ring-gold-400/30 shadow-sm mb-3 sm:mb-0 shrink-0">
             {uploading ? (
-              <Loader2 className="h-7 w-7 text-nexus-400 animate-spin" />
+              <Loader2 className="h-7 w-7 text-gold-400 animate-spin" />
             ) : (
-              <Upload className="h-7 w-7 text-nexus-400" />
+              <Upload className="h-7 w-7 text-gold-400" />
             )}
           </div>
           <div className="flex-1">
@@ -1086,7 +1086,7 @@ export default function SessionCommandPage() {
                 accessibility and screen readers. */}
             <button
               type="button"
-              className="btn-primary text-sm py-2.5 px-5 font-semibold shadow-md shadow-nexus-500/30 ring-1 ring-white/10"
+              className="btn-primary btn-gold text-sm py-2.5 px-5 font-semibold shadow-md ring-1 ring-gold-300/40"
             >
               <FileAudio className="h-4 w-4" /> Browse files
             </button>
@@ -1166,7 +1166,10 @@ export default function SessionCommandPage() {
       {trackedJobs.length > 0 && (
         <div className="space-y-3">
           <div className="flex items-center justify-between">
-            <h2 className="text-sm font-semibold text-slate-600">Processing</h2>
+            <h2 className="flex items-center gap-2 text-sm font-bold text-[#0a2540]">
+              <span className="h-4 w-1 rounded-full bg-gradient-to-b from-gold-400 to-gold-600" />
+              Processing
+            </h2>
             <button
               className="text-xs text-slate-400 hover:text-red-400 transition-colors"
               onClick={() => setTrackedJobs([])}
@@ -1463,7 +1466,10 @@ export default function SessionCommandPage() {
 
       {/* ── Job Lookup ────────────────────────────────────── */}
       <div className="card px-5 py-4">
-        <h2 className="text-sm font-semibold text-slate-600 mb-3">Track Job by ID</h2>
+        <h2 className="flex items-center gap-2 text-sm font-bold text-[#0a2540] mb-3">
+          <span className="h-4 w-1 rounded-full bg-gradient-to-b from-gold-400 to-gold-600" />
+          Track Job by ID
+        </h2>
         <div className="flex gap-2">
           <div className="relative flex-1">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
@@ -1615,7 +1621,10 @@ export default function SessionCommandPage() {
         />
       ) : (
       <div>
-        <h2 className="text-sm font-semibold text-slate-600 mb-3">Recent Sessions</h2>
+        <h2 className="flex items-center gap-2 text-sm font-bold text-[#0a2540] mb-3">
+          <span className="h-4 w-1 rounded-full bg-gradient-to-b from-gold-400 to-gold-600" />
+          Recent Sessions
+        </h2>
         <div className="space-y-2">
           {sessions
             .filter((s) => s.status !== 'live')
@@ -1628,7 +1637,7 @@ export default function SessionCommandPage() {
               return (
                 <div
                   key={session.session_id}
-                  className="card px-5 py-4 flex items-center gap-4 cursor-pointer hover:ring-white/10 transition-all group"
+                  className="card relative overflow-hidden px-5 py-4 flex items-center gap-4 cursor-pointer transition-all group hover:-translate-y-px before:absolute before:left-0 before:top-0 before:bottom-0 before:w-[3px] before:bg-gradient-to-b before:from-gold-300 before:to-gold-600 before:opacity-0 hover:before:opacity-100 before:transition-opacity"
                   onClick={() => navigate(`/sessions/${session.session_id}/replay`)}
                 >
                   <StatusIcon status={session.status} />

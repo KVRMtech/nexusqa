@@ -37,6 +37,11 @@ export default {
         sans: ['Inter', 'system-ui', '-apple-system', 'sans-serif'],
         mono: ['JetBrains Mono', 'Fira Code', 'monospace'],
       },
+      // Calm Premium SaaS elevation tokens — soft, navy-tinted, propagate via @apply.
+      boxShadow: {
+        card: '0 1px 2px rgba(15, 50, 80, 0.04), 0 12px 28px -16px rgba(15, 50, 80, 0.18)',
+        'card-hover': '0 2px 6px rgba(15, 50, 80, 0.06), 0 20px 44px -20px rgba(15, 50, 80, 0.30)',
+      },
     },
   },
   plugins: [],

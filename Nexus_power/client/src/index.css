@@ -40,8 +40,8 @@
   .btn-secondary {
     @apply inline-flex items-center justify-center gap-2 rounded-lg
            bg-white px-4 py-2.5
-           text-sm font-semibold text-[#0a2540] shadow-sm ring-1 ring-inset ring-gray-200
-           hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed
+           text-sm font-semibold text-[#0a2540] shadow-sm ring-1 ring-inset ring-slate-300
+           hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed
            transition-all duration-200;
   }
   .btn-danger {
@@ -59,15 +59,15 @@
            transition-all duration-200;
   }
   .card {
-    @apply rounded-xl bg-white shadow-sm ring-1 ring-gray-200;
+    @apply rounded-xl bg-white shadow-card ring-1 ring-slate-200/70;
   }
   .card-glow {
-    @apply card shadow-nexus-500/5;
+    @apply rounded-xl bg-white shadow-card-hover ring-1 ring-slate-200/70;
   }
   .input-field {
     @apply block w-full rounded-lg border-0 py-2.5 px-3.5
            bg-white text-[#0f3250] shadow-sm
-           ring-1 ring-inset ring-gray-200
+           ring-1 ring-inset ring-slate-300
            placeholder:text-slate-400
            focus:ring-2 focus:ring-inset focus:ring-[#2670a3]
            sm:text-sm sm:leading-6
@@ -77,48 +77,91 @@
     @apply inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold;
   }
   .badge-green {
-    @apply badge bg-green-500/15 text-green-400 ring-1 ring-inset ring-green-500/25;
+    @apply badge bg-emerald-50 text-emerald-700 ring-1 ring-inset ring-emerald-600/20;
   }
   .badge-yellow {
-    @apply badge bg-yellow-500/15 text-yellow-400 ring-1 ring-inset ring-yellow-500/25;
+    @apply badge bg-amber-50 text-amber-700 ring-1 ring-inset ring-amber-600/20;
   }
   .badge-red {
-    @apply badge bg-red-500/15 text-red-400 ring-1 ring-inset ring-red-500/25;
+    @apply badge bg-red-50 text-red-700 ring-1 ring-inset ring-red-600/20;
   }
   .badge-blue {
-    @apply badge bg-blue-500/15 text-blue-400 ring-1 ring-inset ring-blue-500/25;
+    @apply badge bg-blue-50 text-blue-700 ring-1 ring-inset ring-blue-600/20;
   }
   .badge-purple {
-    @apply badge bg-purple-500/15 text-purple-400 ring-1 ring-inset ring-purple-500/25;
+    @apply badge bg-purple-50 text-purple-700 ring-1 ring-inset ring-purple-600/20;
   }
   .badge-orange {
-    @apply badge bg-orange-500/15 text-orange-400 ring-1 ring-inset ring-orange-500/25;
+    @apply badge bg-orange-50 text-orange-700 ring-1 ring-inset ring-orange-600/20;
   }
   .badge-gray {
-    @apply badge bg-gray-100 text-slate-500 ring-1 ring-inset ring-gray-200;
+    @apply badge bg-slate-100 text-slate-600 ring-1 ring-inset ring-slate-300/70;
   }
   .badge-nexus {
-    @apply badge bg-nexus-500/15 text-nexus-400 ring-1 ring-inset ring-nexus-500/25;
+    @apply badge bg-nexus-50 text-nexus-700 ring-1 ring-inset ring-nexus-600/20;
   }
   .stat-card {
     @apply card p-5 relative overflow-hidden;
   }
   .stat-card::before {
     content: '';
-    @apply absolute top-0 left-0 right-0 h-[2px] bg-gradient-to-r from-transparent via-nexus-500 to-transparent opacity-50;
+    @apply absolute top-0 left-0 right-0 h-[3px] bg-gradient-to-r from-gold-400 via-gold-500 to-gold-300 opacity-80 transition-opacity duration-200;
+  }
+  .stat-card:hover::before {
+    @apply opacity-100;
   }
   .zone-header {
-    @apply text-[11px] font-bold uppercase tracking-widest text-gray-500;
+    @apply text-xs font-bold uppercase tracking-widest text-gold-700;
   }
   .page-title {
     @apply text-2xl font-bold text-[#0a2540] tracking-tight;
   }
   .page-subtitle {
-    @apply mt-1 text-sm text-slate-500;
+    @apply mt-1 text-sm text-slate-600;
   }
   .table-header {
-    @apply text-[11px] font-bold uppercase tracking-wider text-gray-500;
+    @apply text-xs font-bold uppercase tracking-wider text-slate-500;
   }
+}
+
+/* ════════════════════ UI REFRESH — Calm Premium SaaS (pure presentation) ════════════════════
+   Global polish that cascades to every page. Adjusts ONLY font-size + color of existing
+   utility classes — no layout, no logic, no functionality touched. Fully revertible. */
+
+/* (a) Readable type FLOOR — the #1 "glimpse / can't read" fix. Lift micro-text to a real
+   12px floor so information reads instead of squinting (order preserved). */
+.text-\[9px\]  { font-size: 12px !important; }
+.text-\[10px\] { font-size: 12px !important; }
+.text-\[11px\] { font-size: 12.5px !important; }
+.text-\[8px\]  { font-size: 11.5px !important; }
+
+/* (b) CONTRAST — darken the washed-out muted text on the light page. slate-400/500 are the
+   worst offenders (the overlay never remaps them). Scoped to content so the dark sidebar is
+   untouched. Raises perceived clarity without changing a single layout. */
+main.flex-1 .text-slate-400 { color: #64748b !important; }   /* slate-400 → slate-500 */
+main.flex-1 .text-slate-500 { color: #475569 !important; }   /* slate-500 → slate-600 */
+main.flex-1 .text-slate-600 { color: #334155 !important; }   /* slate-600 → slate-700 */
+
+/* (c) DEPTH — the app is mostly INLINE-styled (ad-hoc bg-white rounded panels, NOT .card),
+   so elevate the common white-rounded-panel patterns directly. This is what makes cards
+   stop looking like flat outlines on every page. */
+main.flex-1 .bg-white.rounded-2xl,
+main.flex-1 .bg-white.rounded-xl,
+main.flex-1 .rounded-2xl.bg-white,
+main.flex-1 .rounded-xl.bg-white {
+  box-shadow: 0 1px 2px rgba(15, 50, 80, 0.05), 0 18px 42px -20px rgba(15, 50, 80, 0.30) !important;
+}
+
+/* (d) PREMIUM PAGE BACKGROUND — a real, perceptible tonal canvas (cooler blue-grey base +
+   visible navy glow top-right + brand-gold whisper bottom-left). Calm, but clearly NOT the
+   old flat near-white. Targets the page-fill utility the layout's main area uses + the body. */
+body { background-color: #eef2f8 !important; }
+.bg-\[\#f5f7fa\] {
+  background-color: #eef2f8 !important;
+  background-image:
+    radial-gradient(1100px 560px at 100% -8%, rgba(12, 44, 77, 0.10), transparent 58%),
+    radial-gradient(720px 420px at -6% 108%, rgba(217, 162, 58, 0.06), transparent 54%) !important;
+  background-attachment: fixed !important;
 }
 
 /* Scrollbar */

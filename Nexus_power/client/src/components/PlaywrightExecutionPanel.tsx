@@ -13,7 +13,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle, Check, CheckCircle2, CheckSquare, ChevronDown, ChevronRight, Copy, Database, Download,
-  FileCode2, Gauge, Globe, History, Loader2, Lock, Pencil, Play, RefreshCw, RotateCcw, Rocket,
+  FileCode2, Gauge, Globe, History, Loader2, Lock, MoreVertical, Pencil, Play, RefreshCw, RotateCcw, Rocket,
   Save, Server, ShieldAlert, ShieldCheck, SlidersHorizontal, Square, Terminal, Wand2,
 } from 'lucide-react';
 import { api } from '../services/api';
@@ -125,7 +125,9 @@ function AutoHealPanel({ job, live, healing, err }: { job: any; live: string | n
 
 // Per-script fidelity scorecard — does the compiled Playwright faithfully
 // implement the test case + verify its Expected Results?
-function FidelityCard({ rep }: { rep: any }) {
+function FidelityCard({ rep, artifactId, testId, onFixed }: { rep: any; artifactId?: string; testId?: string; onFixed?: () => void }) {
+  const [fixing, setFixing] = useState(false);
+  const [fixRes, setFixRes] = useState<any | null>(null);
   if (rep?.error) return <div className="border-t border-slate-200 px-3 py-2 text-[10px] text-amber-700">Audit error: {rep.error}</div>;
   const g = rep.grade === 'strong'
     ? { bg: 'rgba(34,197,94,0.14)', fg: '#15803d' }
@@ -133,6 +135,14 @@ function FidelityCard({ rep }: { rep: any }) {
       ? { bg: 'rgba(245,158,11,0.16)', fg: '#b45309' }
       : { bg: 'rgba(239,68,68,0.14)', fg: '#b91c1c' };
   const llm = rep.llm_review;
+  const hasGaps = (rep.gaps || []).length > 0 || (llm?.gaps || []).length > 0;
+  const runFix = async () => {
+    if (!artifactId || !testId) return;
+    setFixing(true); setFixRes(null);
+    try { const r = await api.fixScriptGaps(artifactId, testId); setFixRes(r); onFixed?.(); }
+    catch (e: any) { setFixRes({ error: e?.response?.data?.detail ?? e?.message ?? 'Fix failed' }); }
+    finally { setFixing(false); }
+  };
   return (
     <div className="border-t border-sky-100 bg-sky-50/40 px-3 py-2.5">
       <div className="flex items-center gap-2 flex-wrap mb-1.5">
@@ -155,6 +165,36 @@ function FidelityCard({ rep }: { rep: any }) {
           {(llm.gaps || []).slice(0, 6).map((x: string, i: number) => <p key={i} className="text-[10px] text-slate-600 leading-snug">• {x}</p>)}
         </div>
       )}
+      {hasGaps && artifactId && testId && (
+        <div className="mt-1.5 flex items-center gap-2 flex-wrap">
+          <button onClick={runFix} disabled={fixing}
+            title="Apply ONLY deterministic, grounded fixes (regenerate). Never invents assertions, never green-washes — anything it can't prove is listed for you to handle."
+            className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[10px] font-bold text-white disabled:opacity-50" style={{ background: '#7c3aed' }}>
+            {fixing ? <Loader2 className="h-3 w-3 animate-spin" /> : <span>⚡</span>} {fixing ? 'Fixing…' : 'Fix gaps'}
+          </button>
+          <span className="text-[9px] text-slate-400">grounded only · never green-washes</span>
+        </div>
+      )}
+      {fixRes && !fixRes.error && (
+        <div className="mt-1 rounded-md border border-violet-200 bg-white/70 px-2 py-1.5">
+          {(fixRes.fixed || []).length > 0 && (
+            <>
+              <p className="text-[10px] font-bold text-emerald-700">Applied{fixRes.version_no ? ` (v${fixRes.version_no})` : ''}:</p>
+              {fixRes.fixed.map((x: string, i: number) => <p key={i} className="text-[10px] text-slate-600">✓ {x}</p>)}
+            </>
+          )}
+          {(fixRes.escalations || []).length > 0 && (
+            <>
+              <p className="text-[10px] font-bold text-amber-700 mt-0.5">Needs you (can't be grounded — not auto-fixed):</p>
+              {fixRes.escalations.map((e: any, i: number) => <p key={i} className="text-[10px] text-slate-600 leading-snug">• {e.gap} — <span className="text-slate-400">{e.reason}</span></p>)}
+            </>
+          )}
+          {(fixRes.fixed || []).length === 0 && (fixRes.escalations || []).length === 0 && (
+            <p className="text-[10px] text-slate-500">No deterministic fixes available for this script.</p>
+          )}
+        </div>
+      )}
+      {fixRes?.error && <p className="text-[10px] text-red-500 mt-1">{fixRes.error}</p>}
     </div>
   );
 }
@@ -340,6 +380,104 @@ function RtmCard({ artifactId }: { artifactId: string }) {
 }
 
 
+// Phase 5 — PROVEN CONTROL LEDGER knowledge base. Surfaces the controls whose heals
+// are oracle-PROVEN green and reused across scenarios AND recordings (the moat), with
+// provenance + lifecycle. Read-only, $0. "This recording" vs "Whole app" scope.
+function ProvenControlsCard({ artifactId }: { artifactId: string }) {
+  const [open, setOpen] = useState(false);
+  const [scope, setScope] = useState<'recording' | 'app'>('recording');
+  const [kb, setKb] = useState<any>(null);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const load = useCallback(async (sc: 'recording' | 'app') => {
+    setLoading(true); setErr(null);
+    try { setKb(await api.getProvenControls(artifactId, sc)); }
+    catch (e: any) { setErr(e?.response?.data?.detail || e?.message || 'failed to load'); }
+    finally { setLoading(false); }
+  }, [artifactId]);
+
+  const toggle = () => {
+    const next = !open; setOpen(next);
+    if (next && !kb && !loading) void load(scope);
+  };
+  const pickScope = (sc: 'recording' | 'app') => { if (sc === scope) return; setScope(sc); void load(sc); };
+
+  const entries: any[] = kb?.entries || [];
+  const sum: any = kb?.summary || {};
+
+  return (
+    <div className="mt-3 rounded-xl border border-slate-200 bg-white/70 overflow-hidden">
+      <button onClick={toggle} className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-slate-50/70">
+        <Database className="h-4 w-4 text-emerald-500" />
+        <span className="text-[12px] font-bold text-slate-700">Proven Controls</span>
+        <span className="text-[10px] text-slate-400">oracle-proven heals reused across scenarios + recordings (the moat ledger)</span>
+        {open ? <ChevronDown className="h-4 w-4 text-slate-400 ml-auto" /> : <ChevronRight className="h-4 w-4 text-slate-400 ml-auto" />}
+      </button>
+      {open && (
+        <div className="px-3 pb-3 pt-1">
+          <div className="flex items-center gap-1.5 mb-2">
+            {(['recording', 'app'] as const).map((sc) => (
+              <button key={sc} onClick={() => pickScope(sc)}
+                className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${scope === sc ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'}`}>
+                {sc === 'recording' ? 'This recording' : 'Whole app'}
+              </button>
+            ))}
+          </div>
+          {loading && <div className="flex items-center gap-2 text-[11px] text-emerald-700 py-2"><Loader2 className="h-3.5 w-3.5 animate-spin" /> Loading proven controls…</div>}
+          {err && <div className="rounded-lg border border-amber-200 bg-amber-50/60 px-3 py-2 text-[10px] text-amber-700">{err}</div>}
+          {kb && !loading && (
+            entries.length === 0 ? (
+              <p className="text-[11px] text-slate-500 py-2">No proven controls yet — when a heal goes GREEN, the proven fix is memoized here and reused across scenarios + recordings of this app.</p>
+            ) : (
+              <>
+                <div className="flex items-center gap-2 flex-wrap mb-2 text-[10px] font-bold">
+                  <span className="rounded-full px-2 py-0.5" style={{ background: 'rgba(16,185,129,0.14)', color: '#047857' }}>{sum.active ?? 0} active</span>
+                  <span className="rounded-full px-2 py-0.5" style={{ background: 'rgba(245,158,11,0.16)', color: '#b45309' }}>{sum.quarantined ?? 0} quarantined</span>
+                  <span className="rounded-full px-2 py-0.5" style={{ background: 'rgba(99,102,241,0.14)', color: '#4338ca' }}>{sum.reused ?? 0} reused ≥2×</span>
+                  <span className="text-slate-400 font-semibold">· {sum.total ?? entries.length} total</span>
+                </div>
+                <p className="text-[9px] text-slate-400 leading-snug mb-2">A heal proven GREEN once becomes a fact about the control — reused across every scenario + recording of the app, re-gated by the step's own oracle (a stale memo fails RED → re-heals; never green-washes).</p>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-[10px]">
+                    <thead>
+                      <tr className="text-slate-400 text-left border-b border-slate-100">
+                        <th className="px-1.5 py-1 font-semibold">Control</th>
+                        <th className="px-1.5 py-1 font-semibold">Page</th>
+                        <th className="px-1.5 py-1 font-semibold">Fix</th>
+                        <th className="px-1.5 py-1 font-semibold text-right">Proven</th>
+                        <th className="px-1.5 py-1 font-semibold">Status</th>
+                        <th className="px-1.5 py-1 font-semibold">App</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {entries.map((e: any) => (
+                        <tr key={e.ledger_id} className="border-t border-slate-50 align-top">
+                          <td className="px-1.5 py-1 text-slate-800 font-medium">{e.label || '—'}</td>
+                          <td className="px-1.5 py-1 text-slate-500 font-mono">{e.page_path || '—'}</td>
+                          <td className="px-1.5 py-1 text-slate-600">{e.fix_kind}</td>
+                          <td className="px-1.5 py-1 text-slate-500 text-right">{e.confirmed_count}×</td>
+                          <td className="px-1.5 py-1">
+                            {e.invalidated_at
+                              ? <span className="rounded px-1.5 py-0.5 text-[9px] font-bold" style={{ background: 'rgba(245,158,11,0.16)', color: '#b45309' }}>quarantined</span>
+                              : <span className="rounded px-1.5 py-0.5 text-[9px] font-bold" style={{ background: 'rgba(16,185,129,0.14)', color: '#047857' }}>active</span>}
+                          </td>
+                          <td className="px-1.5 py-1 text-slate-400 font-mono">{e.app_fingerprint || '—'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </>
+            )
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+
 function OracleScorecardCard({ artifactId, refreshKey }: { artifactId: string; refreshKey: number }) {
   const [sc, setSc] = useState<any>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -483,6 +621,10 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
   const [selectedCats, setSelectedCats] = useState<Set<string>>(new Set());
   const [selectedScriptIds, setSelectedScriptIds] = useState<Set<string>>(new Set());
   const [expandedRow, setExpandedRow] = useState<string>('');   // A.1 row inline-actions drawer (keyed by test_id|path)
+  const [rowMenu, setRowMenu] = useState<string>('');           // per-row "⋮ More" actions dropdown (keyed by rid)
+  const [histOpen, setHistOpen] = useState<string>('');         // per-row grounded verdict-history panel (keyed by rid)
+  const [histData, setHistData] = useState<Record<string, any[]>>({});
+  const [histBusy, setHistBusy] = useState<string>('');
   const [baseUrl, setBaseUrl] = useState('');
   const [dataOverrides, setDataOverrides] = useState<Record<string, string>>({});
   const [runBusy, setRunBusy] = useState(false);
@@ -500,6 +642,12 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
   const [autoHealJob, setAutoHealJob] = useState<any>(null);
   const [autoHealLive, setAutoHealLive] = useState<string | null>(null);
   const [autoHealErr, setAutoHealErr] = useState<string | null>(null);
+  // Agentic Auto-Heal: when on, a groundable failure the deterministic recipes can't
+  // resolve gets ONE LLM-agent pass (reason over the LIVE page, propose a grounded
+  // rebind/wait) before escalating to a human. It can't invent a selector or touch the
+  // refuse-families, and the step's own oracle + 2x confirm still gate — never green-wash.
+  const [agenticByTest, setAgenticByTest] = useState<Record<string, boolean>>({});   // per-script 🤖 Agentic toggle
+  const [recordVideoByTest, setRecordVideoByTest] = useState<Record<string, boolean>>({}); // per-script 🎥 video toggle
   const [fidelity, setFidelity] = useState<Record<string, any>>({});   // test_id -> scorecard
   const [suiteFid, setSuiteFid] = useState<any>(null);
   const [fidBusy, setFidBusy] = useState<string>('');                  // test_id | 'suite' | 'all'
@@ -537,7 +685,7 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
   const regenScript = async (testId: string) => {
     if (!testId) return;
     setFidBusy(testId + ':regen');
-    try { await api.regenerateScript(artifactId, testId); await auditScript(testId); }
+    try { await api.regenerateScript(artifactId, testId); await refresh(); await auditScript(testId); }
     catch { /* ignore */ }
     finally { setFidBusy(''); }
   };
@@ -623,6 +771,32 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
     finally { setEditBusy(''); }
   };
 
+  // Approve a PROPOSED (auto-healed) version → it becomes the active source runs use.
+  // The human gate for a machine-written fix; recorded into the Part-11 evidence chain.
+  const approveVersion = async (tid: string, versionNo: number) => {
+    setEditBusy(`approve:${tid}`); setError(null);
+    try {
+      await api.approveScriptVersion(artifactId, tid, versionNo);
+      const src = await api.getScriptSource(artifactId, tid);
+      if (src.edited) setEditedTests((m) => ({ ...m, [tid]: src.version_no }));
+      await refreshVersions(tid);
+    } catch (e: any) { setError(e?.response?.data?.detail || String(e)); }
+    finally { setEditBusy(''); }
+  };
+
+  // Grounded verdict history for one script — open + fetch the per-run verdicts.
+  const loadHistory = async (rid: string, tid: string) => {
+    const opening = histOpen !== rid;
+    setHistOpen(opening ? rid : '');
+    if (!opening) return;
+    setHistBusy(tid);
+    try {
+      const r = await api.getVerdictHistory(artifactId, tid, 20);
+      setHistData((m) => ({ ...m, [tid]: r.history || [] }));
+    } catch (e: any) { setError(e?.response?.data?.detail || String(e)); }
+    finally { setHistBusy(''); }
+  };
+
   // Per-test overrides with any value set (blank cells inherit global/observed).
   const buildDataByTest = () => {
     const out: Record<string, Record<string, string>> = {};
@@ -666,6 +840,9 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
       try {
         const src = await api.getScriptSource(artifactId, s.test_id);
         if (src?.edited) setEditedTests((m) => ({ ...m, [s.test_id]: src.version_no }));
+        // also load version history so the auto-heal banner + badge render on the
+        // collapsed row (not only after the editor is opened).
+        await refreshVersions(s.test_id);
       } catch { /* ignore */ }
     });
   }, [data, artifactId]);
@@ -719,12 +896,19 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
 
   // Auto-Heal Run — fire the orchestrator, stream the live re-runs, and poll the
   // heal trace until it freezes a Clean Run - V1 or stops toward a human.
-  const runAutoHeal = async () => {
+  const runAutoHeal = async (scope?: { test_ids?: string[] }) => {
     setAutoHealing(true); setAutoHealErr(null); setAutoHealJob(null); setAutoHealLive(null);
     setView('run');   // jump to the dedicated results/live view
+    setRunningTestId(scope?.test_ids?.length === 1 ? scope.test_ids[0] : null);
     try {
+      const tids = (scope?.test_ids && scope.test_ids.length)
+        ? scope.test_ids
+        : selectedScripts.map((s: Script) => s.test_id).filter(Boolean);
+      const one = tids.length === 1 ? tids[0] : '';
       const body: any = { base_url: baseUrl.trim(), data: buildData() };
-      if (selectedScripts.length) body.test_ids = selectedScripts.map((s: Script) => s.test_id).filter(Boolean);
+      if (one && agenticByTest[one]) body.enable_agentic_heal = true;   // per-script 🤖 Agentic
+      if (one && recordVideoByTest[one]) body.enable_video = true;       // per-script 🎥 video
+      if (tids.length) body.test_ids = tids;
       else body.categories = Array.from(selectedCats);
       const r = await api.autoHealRun(artifactId, body);
       setAutoHealLive(r.live_url || null);
@@ -738,7 +922,7 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
     } catch (e: any) {
       setAutoHealErr(e?.response?.data?.detail || String(e));
     } finally {
-      setAutoHealing(false); setAutoHealLive(null); setTriageKey((k) => k + 1);
+      setAutoHealing(false); setAutoHealLive(null); setRunningTestId(null); setTriageKey((k) => k + 1);
     }
   };
 
@@ -861,6 +1045,7 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
         base_url: baseUrl.trim(), data: buildData(),
         data_by_test: buildDataByTest(),
         browsers: Array.from(browsers), headed, workers, retries,
+        enable_video: single ? !!recordVideoByTest[single] : false,   // per-script 🎥 video
       };
       if (scope?.test_ids) body.test_ids = scope.test_ids;
       else body.categories = Array.from(selectedCats);
@@ -1087,6 +1272,12 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
                           const on = selectedScriptIds.has(s.test_id);
                           const fid = fidByTest[s.test_id];
                           const ver = editedTests[s.test_id];
+                          // Auto-heal version state (for the banner + badge below).
+                          const vlist = versions[s.test_id] || [];
+                          const isHealedV = (v: any) => !!v && (v.author === 'nexus-autoheal' || /clean run|auto-?heal/i.test(v.note || ''));
+                          const activeV = vlist.find((v: any) => !v.pending_approval) || null;       // first APPROVED = what runs use
+                          const healedActive = isHealedV(activeV);
+                          const pendingHeal = vlist.find((v: any) => v.pending_approval && isHealedV(v)) || null;  // saved, awaiting approval
                           const last = lastByTest[s.test_id] || {};
                           const lastSt = last.status || last.latest_status || last.verdict || (Array.isArray(last.runs) ? (last.runs[0] && last.runs[0].status) : '') || '';
                           const rid = s.test_id || s.path;
@@ -1112,9 +1303,12 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
                                   </span>
                                 )}
                                 <span className="shrink-0 rounded px-1.5 py-0.5 text-[9px] font-semibold"
-                                  style={ver ? { background: 'rgba(99,102,241,0.12)', color: '#4338ca' } : { background: 'rgba(100,116,139,0.10)', color: '#64748b' }}
-                                  title={ver ? 'an edited / healed version runs (not the auto-generated one)' : 'runs the auto-generated version'}>
-                                  {ver ? `edited · v${ver}` : 'generated'}
+                                  style={healedActive ? { background: 'rgba(16,185,129,0.15)', color: '#047857' }
+                                    : ver ? { background: 'rgba(99,102,241,0.12)', color: '#4338ca' }
+                                    : { background: 'rgba(100,116,139,0.10)', color: '#64748b' }}
+                                  title={healedActive ? `Auto-healed Clean Run V1 (v${activeV?.version_no}) — verified green and ACTIVE; runs use this version`
+                                    : ver ? 'an edited / healed version runs (not the auto-generated one)' : 'runs the auto-generated version'}>
+                                  {healedActive ? `✓ auto-healed · v${activeV?.version_no}` : ver ? `edited · v${ver}` : 'generated'}
                                 </span>
                                 {lastSt && (
                                   <span className="shrink-0 text-[10px]" title={`last run: ${lastSt}`}>
@@ -1127,33 +1321,90 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
                                   {xOpen ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />} actions
                                 </button>
                               </div>
+                              {/* Auto-heal status banner — makes it unmistakable that this test now runs an
+                                  auto-healed, verified-green version (and prompts approval when one is pending). */}
+                              {(healedActive || pendingHeal) && (
+                                <div className="mx-2.5 mb-1.5">
+                                  {healedActive ? (
+                                    <div className="flex items-center gap-2 rounded-md border border-emerald-200 bg-emerald-50 px-2.5 py-1.5">
+                                      <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600 shrink-0" />
+                                      <span className="text-[10px] text-emerald-800 leading-snug">
+                                        <b>Auto-healed · Clean Run V1 (v{activeV?.version_no})</b> — the suite re-ran green and was verified end-to-end. This is the <b>active</b> version your runs use.
+                                        {activeV?.note ? <span className="text-emerald-700"> · {activeV.note}</span> : null}
+                                      </span>
+                                    </div>
+                                  ) : pendingHeal ? (
+                                    <div className="flex items-center gap-2 rounded-md border border-amber-200 bg-amber-50 px-2.5 py-1.5">
+                                      <ShieldAlert className="h-3.5 w-3.5 text-amber-600 shrink-0" />
+                                      <span className="flex-1 text-[10px] text-amber-800 leading-snug">
+                                        <b>Auto-healed v{pendingHeal.version_no} — verified green, awaiting approval.</b> Runs keep using the previous version until you approve this one.
+                                      </span>
+                                      <button onClick={() => approveVersion(s.test_id, pendingHeal.version_no)} disabled={editBusy === `approve:${s.test_id}`}
+                                        title="Approve this auto-healed version → it becomes the active source runs use"
+                                        className="shrink-0 flex items-center gap-1 rounded px-2 py-0.5 text-[10px] font-bold bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-50">
+                                        {editBusy === `approve:${s.test_id}` ? <Loader2 className="h-3 w-3 animate-spin" /> : <CheckCircle2 className="h-3 w-3" />} Approve
+                                      </button>
+                                    </div>
+                                  ) : null}
+                                </div>
+                              )}
                               {xOpen && (
                                 <div className="border-t border-indigo-100 bg-slate-50/70 px-2.5 py-2 space-y-2">
+                                  {/* RUN row — per-script run controls + per-script Agentic/Video toggles (inline, no clipping) */}
                                   <div className="flex items-center gap-1.5 flex-wrap">
-                                    <button onClick={() => runOnNexus({ test_ids: [s.test_id] })} disabled={running || !s.test_id}
-                                      title="Run just this script on the Nexus runner (headless)"
-                                      className="flex items-center gap-1 rounded-md px-2 py-1 text-[10px] font-bold text-white disabled:opacity-50" style={{ background: '#059669' }}>
-                                      {runningTestId === s.test_id ? <Loader2 className="h-3 w-3 animate-spin" /> : <Play className="h-3 w-3" />} Run this
+                                    <button onClick={() => runOnNexus({ test_ids: [s.test_id] })} disabled={running || autoHealing || !s.test_id}
+                                      title="Run THIS script on the Nexus runner (headless, server-side) — uses the active approved version"
+                                      className="flex items-center gap-1 rounded-md px-2.5 py-1 text-[10px] font-bold text-white disabled:opacity-50" style={{ background: '#059669' }}>
+                                      {runningTestId === s.test_id && !autoHealing && !liveUrl ? <Loader2 className="h-3 w-3 animate-spin" /> : <Play className="h-3 w-3" />} Run on Nexus
                                     </button>
-                                    <button onClick={() => runLive({ test_ids: [s.test_id] })} disabled={running || !s.test_id}
-                                      title="Run this script HEADED and watch it live (streamed into the portal)"
-                                      className="flex items-center gap-1 rounded-md px-2 py-1 text-[10px] font-bold text-white disabled:opacity-50" style={{ background: '#7c3aed' }}>
-                                      {runningTestId === s.test_id && liveUrl ? <Loader2 className="h-3 w-3 animate-spin" /> : <Play className="h-3 w-3" />} Live
+                                    <button onClick={() => runLive({ test_ids: [s.test_id] })} disabled={running || autoHealing || !s.test_id}
+                                      title="Run THIS script HEADED and watch it live in the portal (view-only stream)"
+                                      className="flex items-center gap-1 rounded-md px-2.5 py-1 text-[10px] font-bold text-white disabled:opacity-50" style={{ background: '#7c3aed' }}>
+                                      {runningTestId === s.test_id && liveUrl ? <Loader2 className="h-3 w-3 animate-spin" /> : <Play className="h-3 w-3" />} Run live ▸ watch
                                     </button>
-                                    <button onClick={() => setOpenCode((m) => ({ ...m, [rid]: !m[rid] }))}
+                                    <button onClick={() => runAutoHeal({ test_ids: [s.test_id] })} disabled={autoHealing || running || !s.test_id}
+                                      title="Run THIS script and AUTO-HEAL on failure — diagnose, fix, re-run, continue, and freeze a Clean Run V1 when green (never green-washes)"
+                                      className="flex items-center gap-1 rounded-md px-2.5 py-1 text-[10px] font-bold text-white disabled:opacity-50" style={{ background: 'linear-gradient(135deg,#7c3aed,#4f46e5)' }}>
+                                      {autoHealing && runningTestId === s.test_id ? <Loader2 className="h-3 w-3 animate-spin" /> : <Wand2 className="h-3 w-3" />} ⚡ Auto-Heal
+                                    </button>
+                                    <label title="Agentic heal: when the deterministic recipes can't fix a failure, let an AI agent reason about the LIVE page and propose a GROUNDED fix before escalating — it can't invent a selector and can't green-wash."
+                                      className="flex items-center gap-1 text-[10px] font-semibold text-indigo-700 cursor-pointer select-none">
+                                      <input type="checkbox" checked={!!agenticByTest[s.test_id]} disabled={autoHealing}
+                                        onChange={(e) => setAgenticByTest((m) => ({ ...m, [s.test_id]: e.target.checked }))}
+                                        className="h-3 w-3 accent-indigo-600 cursor-pointer" />
+                                      🤖 Agentic
+                                    </label>
+                                    <label title="Record a full VIDEO of this run (opt-in, ~1–10 MB). Screenshots are always captured; turn this on for a clean-run clip you can play back."
+                                      className="flex items-center gap-1 text-[10px] font-semibold text-emerald-700 cursor-pointer select-none">
+                                      <input type="checkbox" checked={!!recordVideoByTest[s.test_id]}
+                                        onChange={(e) => setRecordVideoByTest((m) => ({ ...m, [s.test_id]: e.target.checked }))}
+                                        className="h-3 w-3 accent-emerald-600 cursor-pointer" />
+                                      🎥 Video
+                                    </label>
+                                  </div>
+                                  {/* TOOLS row — inspect / edit / audit / history (all visible, no dropdown) */}
+                                  <div className="flex items-center gap-1.5 flex-wrap">
+                                    <button onClick={() => setOpenCode((m) => { const nx = !m[rid]; if (nx) void refresh(); return { ...m, [rid]: nx }; })}
                                       className="flex items-center gap-1 rounded-md px-2 py-1 text-[10px] font-semibold bg-slate-100 text-slate-700 hover:bg-slate-200">
                                       {openCode[rid] ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />} {openCode[rid] ? 'Hide' : 'View'} code
                                     </button>
                                     {s.test_id && (
+                                      <button onClick={() => loadHistory(rid, s.test_id)}
+                                        title="Grounded verdict history — this script's proven-green vs regression/drift/flake across recent runs (with screenshots + heal events)"
+                                        className="flex items-center gap-1 rounded-md px-2 py-1 text-[10px] font-semibold bg-indigo-50 text-indigo-700 hover:bg-indigo-100">
+                                        <History className="h-3 w-3" /> Verdict history
+                                      </button>
+                                    )}
+                                    {s.test_id && (
                                       <button onClick={() => openEditor(s)}
-                                        title="Edit this test's script, save a new version, runs use it"
+                                        title="Edit this test's script and save a new version"
                                         className="flex items-center gap-1 rounded-md px-2 py-1 text-[10px] font-semibold bg-violet-50 text-violet-700 hover:bg-violet-100">
                                         <Pencil className="h-3 w-3" /> Edit{editedTests[s.test_id] ? ` · v${editedTests[s.test_id]}` : ''}
                                       </button>
                                     )}
                                     {s.test_id && (
                                       <button onClick={() => auditScript(s.test_id)} disabled={fidBusy === s.test_id}
-                                        title="Audit: does this script faithfully implement the test case + verify its Expected Results? (coverage + assertions + AI review)"
+                                        title="Audit: does this script faithfully implement the test case + verify its Expected Results?"
                                         className="flex items-center gap-1 rounded-md px-2 py-1 text-[10px] font-semibold bg-sky-50 text-sky-700 hover:bg-sky-100 disabled:opacity-50">
                                         {fidBusy === s.test_id ? <Loader2 className="h-3 w-3 animate-spin" /> : <ShieldAlert className="h-3 w-3" />} Audit
                                       </button>
@@ -1167,7 +1418,7 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
                                     )}
                                     {s.test_id && (
                                       <button onClick={() => runPreflight(s.test_id)} disabled={pfBusy === s.test_id}
-                                        title="Live preflight: open the live app and check every locator resolves (0 = broken/renamed, >1 = ambiguous). Proof it will run. Uses the Environment URL above."
+                                        title="Live preflight: open the live app and check every locator resolves before running."
                                         className="flex items-center gap-1 rounded-md px-2 py-1 text-[10px] font-semibold bg-emerald-50 text-emerald-700 hover:bg-emerald-100 disabled:opacity-50">
                                         {pfBusy === s.test_id ? <Loader2 className="h-3 w-3 animate-spin" /> : <Globe className="h-3 w-3" />} Live preflight
                                       </button>
@@ -1180,15 +1431,42 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
                                       </button>
                                     )}
                                     <button onClick={() => copy(`cmd:${rid}`, `npx playwright test ${s.path}`)}
-                                      className="flex items-center gap-1 rounded-md px-2 py-1 text-[10px] font-semibold bg-indigo-50 text-indigo-700 hover:bg-indigo-100">
-                                      {copied === `cmd:${rid}` ? <Check className="h-3 w-3 text-emerald-500" /> : <Copy className="h-3 w-3" />} Copy command
+                                      className="flex items-center gap-1 rounded-md px-2 py-1 text-[10px] font-semibold bg-slate-100 text-slate-600 hover:bg-slate-200">
+                                      {copied === `cmd:${rid}` ? <Check className="h-3 w-3 text-emerald-500" /> : <Copy className="h-3 w-3" />} Copy
                                     </button>
                                     <button onClick={() => downloadText((s.path.split('/').pop() || 'test.spec.ts'), s.code, 'text/typescript')}
-                                      className="flex items-center gap-1 rounded-md px-2 py-1 text-[10px] font-semibold bg-slate-100 text-slate-700 hover:bg-slate-200">
+                                      className="flex items-center gap-1 rounded-md px-2 py-1 text-[10px] font-semibold bg-slate-100 text-slate-600 hover:bg-slate-200">
                                       <Download className="h-3 w-3" /> .spec
                                     </button>
                                   </div>
-                                  {fidelity[s.test_id] && <FidelityCard rep={fidelity[s.test_id]} />}
+                                  {histOpen === rid && (
+                                    <div className="mt-2 rounded-md border border-slate-200 bg-white/70 p-2">
+                                      <p className="text-[10px] font-bold text-slate-500 mb-1 flex items-center gap-1"><History className="h-3 w-3" /> Grounded verdict history <span className="font-medium text-slate-400">— this script across recent runs</span></p>
+                                      {histBusy === s.test_id ? (
+                                        <p className="text-[10px] text-slate-400 flex items-center gap-1"><Loader2 className="h-3 w-3 animate-spin" /> loading…</p>
+                                      ) : ((histData[s.test_id]?.length || 0) > 0 ? (
+                                        <div className="space-y-1">
+                                          {histData[s.test_id].map((h: any, i: number) => {
+                                            const ok = h.status === 'passed';
+                                            const vlabel = ok ? 'proven green' : (h.verdict || h.status || 'failed').replace(/_/g, ' ');
+                                            const soft = h.verdict === 'selector_drift' || h.verdict === 'flake' || h.verdict === 'visual_change';
+                                            const vstyle = ok ? 'bg-emerald-100 text-emerald-700' : soft ? 'bg-amber-100 text-amber-700' : 'bg-rose-100 text-rose-700';
+                                            return (
+                                              <div key={h.run_id || i} className="flex items-center gap-2 text-[10px] text-slate-500 rounded bg-white border border-slate-100 px-2 py-1">
+                                                <span className="font-black" style={{ color: ok ? '#15803d' : '#b91c1c' }}>{ok ? '✓' : '✗'}</span>
+                                                <span className={`rounded px-1 font-bold ${vstyle}`}>{vlabel}</span>
+                                                {h.failed_step_number ? <span className="text-rose-600 font-semibold">@ step {h.failed_step_number}</span> : null}
+                                                {h.heal_event ? <span className="rounded bg-indigo-100 text-indigo-700 px-1 font-bold">{String(h.heal_event).replace(/_/g, ' ')}</span> : null}
+                                                {h.screenshot_url ? <a href={api.getRunScreenshotUrl(h.screenshot_url)} target="_blank" rel="noreferrer" title="view the success/failure screenshot" className="text-emerald-600 font-bold no-underline">📷</a> : null}
+                                                <span className="ml-auto shrink-0 text-slate-400">{h.duration_ms ? `${(h.duration_ms / 1000).toFixed(1)}s · ` : ''}{h.started_at ? new Date(h.started_at).toLocaleString() : ''}</span>
+                                              </div>
+                                            );
+                                          })}
+                                        </div>
+                                      ) : <p className="text-[10px] text-slate-400">No runs recorded yet for this script.</p>)}
+                                    </div>
+                                  )}
+                                  {fidelity[s.test_id] && <FidelityCard rep={fidelity[s.test_id]} artifactId={artifactId} testId={s.test_id} onFixed={() => { void auditScript(s.test_id); void refresh(); }} />}
                                   {preflight[s.test_id] && <PreflightCard rep={preflight[s.test_id]} />}
                                   {openData[rid] && (s.data_fields?.length || 0) > 0 && (
                                     <div className="rounded-md border border-amber-200 bg-amber-50/40 px-2.5 py-2">
@@ -1233,20 +1511,32 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
                                         <div className="mt-2">
                                           <p className="text-[10px] font-bold text-slate-500 mb-1 flex items-center gap-1"><History className="h-3 w-3" /> Versions</p>
                                           <div className="space-y-1">
-                                            {versions[s.test_id].map((v: any, i: number) => (
+                                            {versions[s.test_id].map((v: any) => {
+                                              const isActive = !v.pending_approval && v.version_no === activeV?.version_no;
+                                              return (
                                               <div key={v.script_version_id} className="flex items-center gap-2 text-[10px] text-slate-500 rounded bg-white/70 border border-slate-200 px-2 py-1">
                                                 <span className="font-bold text-slate-700">v{v.version_no}</span>
-                                                {i === 0 && <span className="rounded bg-emerald-100 text-emerald-700 px-1 font-bold">active</span>}
+                                                {isActive && <span className="rounded bg-emerald-100 text-emerald-700 px-1 font-bold">active</span>}
+                                                {v.pending_approval && <span className="rounded bg-amber-100 text-amber-700 px-1 font-bold">proposed</span>}
+                                                {isHealedV(v) && <span className="rounded bg-indigo-100 text-indigo-700 px-1 font-bold">auto-healed</span>}
                                                 <span className="truncate">{v.author || 'unknown'}{v.note ? ` · ${v.note}` : ''}</span>
                                                 <span className="ml-auto shrink-0 text-slate-400">{v.created_at ? new Date(v.created_at).toLocaleString() : ''}</span>
-                                                {i !== 0 && (
+                                                {v.pending_approval && (
+                                                  <button onClick={() => approveVersion(s.test_id, v.version_no)} disabled={editBusy === `approve:${s.test_id}`}
+                                                    title="Approve → this auto-healed version becomes the active source runs use"
+                                                    className="shrink-0 flex items-center gap-1 rounded px-1.5 py-0.5 font-semibold bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-50">
+                                                    {editBusy === `approve:${s.test_id}` ? <Loader2 className="h-2.5 w-2.5 animate-spin" /> : <CheckCircle2 className="h-2.5 w-2.5" />} Approve
+                                                  </button>
+                                                )}
+                                                {!isActive && (
                                                   <button onClick={() => restoreVersion(s.test_id, v.version_no)} disabled={editBusy === `restore:${s.test_id}`}
                                                     className="shrink-0 flex items-center gap-1 rounded px-1.5 py-0.5 font-semibold bg-slate-100 text-slate-600 hover:bg-slate-200 disabled:opacity-50">
                                                     <RotateCcw className="h-2.5 w-2.5" /> Restore
                                                   </button>
                                                 )}
                                               </div>
-                                            ))}
+                                              );
+                                            })}
                                           </div>
                                         </div>
                                       )}
@@ -1436,65 +1726,12 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
 
             {/* 4 · run */}
             <div className="rounded-lg border border-indigo-100 bg-indigo-50/50 p-3 space-y-3">
-              {/* 0 · audit + version */}
+              {/* Run + Auto-Heal + Audit + the Agentic/Video toggles now live PER SCRIPT (in each
+                  test's row above). This strip just surfaces the active run + the local-download option. */}
               <div>
-                <p className="text-[10px] font-bold uppercase text-sky-700 mb-2">Audit &amp; version
-                  <span className="text-slate-400 normal-case font-medium"> — do the scripts faithfully implement the test cases?</span>
+                <p className="text-[10px] font-bold uppercase text-emerald-700 mb-1">Run status
+                  <span className="text-slate-400 normal-case font-medium"> — use ▶ Run on Nexus · Run live · ⚡ Auto-Heal on each script above (Agentic / Video toggles are per-script)</span>
                 </p>
-                <div className="flex items-center gap-2 flex-wrap">
-                  <button onClick={auditSuite} disabled={fidBusy === 'suite'}
-                    className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[11px] font-bold text-white disabled:opacity-50"
-                    style={{ background: '#0284c7' }}>
-                    {fidBusy === 'suite' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ShieldAlert className="h-3.5 w-3.5" />} Audit suite
-                  </button>
-                  <button onClick={regenAll} disabled={fidBusy === 'all'}
-                    title="Regenerate the selected scripts (or all) from their current test cases to new versions (v+1)"
-                    className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[11px] font-bold text-white disabled:opacity-50"
-                    style={{ background: '#0d9488' }}>
-                    {fidBusy === 'all' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RotateCcw className="h-3.5 w-3.5" />} Regenerate {selectedScripts.length ? `(${selectedScripts.length})` : 'all'} → v+1
-                  </button>
-                  {suiteFid?.rollup && (
-                    <span className="text-[10px] font-semibold text-slate-600">
-                      {suiteFid.rollup.scripts} scripts · avg {suiteFid.rollup.avg_score}% ·
-                      <span className="text-emerald-700"> {suiteFid.rollup.strong} strong</span> ·
-                      <span className="text-amber-700"> {suiteFid.rollup.partial} partial</span> ·
-                      <span className="text-rose-700"> {suiteFid.rollup.weak} weak</span>
-                      {suiteFid.rollup.drifted ? <span className="text-amber-700"> · {suiteFid.rollup.drifted} stale</span> : null}
-                    </span>
-                  )}
-                  {suiteFid?.error && <span className="text-[10px] text-amber-700">{suiteFid.error}</span>}
-                </div>
-              </div>
-              {/* one-click, server-side */}
-              <div>
-                <p className="text-[10px] font-bold uppercase text-emerald-700 mb-2">
-                  4 · Run on Nexus <span className="text-slate-400 normal-case font-medium">— one click, server-side</span>
-                </p>
-                <div className="flex items-center gap-2 flex-wrap">
-                  <button onClick={() => runOnNexus()} disabled={running || selectedScripts.length === 0}
-                    className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[11px] font-bold text-white disabled:opacity-50"
-                    style={{ background: '#059669' }}>
-                    {running ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />}
-                    {running ? 'Running on Nexus…' : `Run on Nexus runner (${selectedScripts.length})`}
-                  </button>
-                  <button onClick={() => runLive()} disabled={running || selectedScripts.length === 0}
-                    title="Run headed on the Nexus runner and WATCH it live in the portal (view-only stream)"
-                    className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[11px] font-bold text-white disabled:opacity-50"
-                    style={{ background: '#7c3aed' }}>
-                    {running && liveUrl ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />}
-                    {running && liveUrl ? 'Live…' : 'Run live ▸ watch'}
-                  </button>
-                  <button onClick={runAutoHeal} disabled={autoHealing || running || selectedScripts.length === 0}
-                    title="Run headed and AUTO-HEAL on failure — diagnose, fix, re-run, continue, and freeze a Clean Run - V1 when green"
-                    className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[11px] font-bold text-white disabled:opacity-50"
-                    style={{ background: 'linear-gradient(135deg,#7c3aed,#4f46e5)' }}>
-                    {autoHealing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Wand2 className="h-3.5 w-3.5" />}
-                    {autoHealing ? 'Auto-healing…' : '⚡ Auto-Heal Run'}
-                  </button>
-                  <span className="text-[10px] text-slate-400">
-                    runs the highest-approved version of each selected script against {baseUrl.trim() || 'the recorded site'} — results flow to the board below
-                  </span>
-                </div>
                 {runStatus && (
                   <div className="mt-2 flex items-center gap-2 text-[11px] flex-wrap">
                     {running ? (
@@ -1651,6 +1888,7 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
               <div className="px-3 pb-3 pt-1">
                 <OracleScorecardCard artifactId={artifactId} refreshKey={triageKey} />
                 <RtmCard artifactId={artifactId} />
+                <ProvenControlsCard artifactId={artifactId} />
                 {runs?.board?.last_run_at ? (
                   <div className="flex items-center gap-2 flex-wrap mb-2 px-1 text-[11px] font-bold">
                     <span className="rounded-full px-2.5 py-1" style={{ background: 'rgba(34,197,94,0.16)', color: '#15803d' }}>{runs.board.passed} passed</span>
