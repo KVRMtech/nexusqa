@@ -130,10 +130,13 @@
 
 /* (a) Readable type FLOOR — the #1 "glimpse / can't read" fix. Lift micro-text to a real
    12px floor so information reads instead of squinting (order preserved). */
-.text-\[9px\]  { font-size: 12px !important; }
-.text-\[10px\] { font-size: 12px !important; }
-.text-\[11px\] { font-size: 12.5px !important; }
-.text-\[8px\]  { font-size: 11.5px !important; }
+.text-\[8px\]  { font-size: 12px !important; }
+.text-\[9px\]  { font-size: 12.5px !important; }
+.text-\[10px\] { font-size: 13px !important; }
+.text-\[11px\] { font-size: 13px !important; }
+.text-\[12px\] { font-size: 13.5px !important; }
+/* Lift the very common Tailwind micro size too — dense tables / labels / chips read */
+main.flex-1 .text-xs { font-size: 13px !important; line-height: 1.45 !important; }
 
 /* (b) CONTRAST — darken the washed-out muted text on the light page. slate-400/500 are the
    worst offenders (the overlay never remaps them). Scoped to content so the dark sidebar is
@@ -769,4 +772,21 @@ main.flex-1 select:focus {
 .bg-gray-900.text-gray-100 {
   background-color: #0a2540 !important;
   color: #f8fafc !important;
+}
+
+/* ── Keep white text legible on intentional dark/navy surfaces ──
+   The light-theme ".text-white → navy" overlay above would otherwise render
+   white button / hero text as navy-on-navy (invisible). Re-assert #fff on and
+   inside the navy/green surfaces — class-based gradients AND inline ones. Comes
+   last so it wins on source order; gold icons keep their own (svg) color. */
+main.flex-1 .from-\[\#0c2c4d\],
+main.flex-1 .from-\[\#0c2c4d\] .text-white,
+main.flex-1 .from-\[\#0a2540\] .text-white,
+main.flex-1 [style*="0c2c4d"] .text-white,
+main.flex-1 [style*="0c2c4d"].text-white,
+main.flex-1 [style*="0a2540"] .text-white,
+main.flex-1 [style*="0a2540"].text-white,
+main.flex-1 [style*="#059669"].text-white,
+main.flex-1 [style*="#2670a3"].text-white {
+  color: #ffffff !important;
 }
