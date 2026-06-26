@@ -485,56 +485,42 @@ export default function CanonicalResultPage() {
         )}
 
         {/* Quality Score + Grade */}
-        <div className="flex items-start justify-between gap-4">
-          <div>
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+          <div className="min-w-0">
             <div className="flex items-center gap-3">
-              <div className={clsx('text-4xl font-black tabular-nums', grade.color)}>
+              <div className={clsx('text-5xl font-black tabular-nums', grade.color)}>
                 {vm.quality_score != null ? `${(vm.quality_score * 100).toFixed(0)}%` : '—'}
               </div>
               <div>
                 <StatusBadge label={grade.label} variant={grade.variant} tooltip={grade.tooltip} />
-                <p className="text-xs text-slate-400 mt-1 flex items-center gap-1">
+                <p className="text-xs text-slate-500 mt-1 flex items-center gap-1">
                   Canonical Quality Score
                   <Info className="h-3 w-3 text-slate-400" />
                 </p>
               </div>
             </div>
+            {/* Plain-English reveal headline */}
+            <p className="mt-3 text-[15px] font-semibold text-nexus-900 leading-snug max-w-xl">
+              We turned your {formatDuration(vm.duration_seconds)} recording into {vm.scene_count} screen{vm.scene_count === 1 ? '' : 's'}
+              {vm.application_types_seen.length > 0 ? ` across ${vm.application_types_seen.length} app type${vm.application_types_seen.length === 1 ? '' : 's'}` : ''} of grounded, test-ready evidence.
+            </p>
           </div>
-          <div className="text-right text-xs space-y-0.5 shrink-0">
-            <p>
-              <IdChip
-                label="Session"
-                value={vm.session_id}
-                colorClass="text-nexus-400"
-                tooltip="Click the id to expand. Use the copy icon to grab the full id for support tickets."
-              />
-            </p>
-            {vm.workflow_id && (
-              <p>
-                <IdChip
-                  label="Workflow"
-                  value={vm.workflow_id}
-                  colorClass="text-nexus-500"
-                  tooltip="The orchestrator workflow that produced this artifact."
-                />
-              </p>
-            )}
-            <p>
-              <IdChip
-                label="Artifact"
-                value={vm.artifact_id}
-                colorClass="text-blue-400"
-                tooltip="The canonical artifact id — same as the 'Canonical' id shown elsewhere. Use this when referencing the asset in API calls or support tickets."
-              />
-            </p>
-            <p>
-              <IdChip
-                label="Canonical"
-                value={vm.artifact_id}
-                colorClass="text-blue-400"
-                tooltip="The canonical asset's stable id. Identical to the Artifact id above — kept here so it's easy to copy for downstream references."
-              />
-            </p>
+          {/* The ONE forward action — closes the dead-end */}
+          <div className="flex flex-col items-stretch sm:items-end gap-2 shrink-0">
+            <button
+              onClick={() => navigate(`/sessions/${sessionId}/visual-flow?artifact_id=${vm.artifact_id}`)}
+              className="btn-primary btn-gold text-sm px-4 py-2.5 font-semibold shadow-md ring-1 ring-gold-300/40 justify-center whitespace-nowrap"
+            >
+              Build tests from this asset <ChevronRight className="h-4 w-4" />
+            </button>
+            <details className="sm:text-right">
+              <summary className="text-[11px] text-slate-400 cursor-pointer hover:text-nexus-600 list-none [&::-webkit-details-marker]:hidden select-none">Asset details ▾</summary>
+              <div className="mt-1.5 text-xs space-y-0.5">
+                <p><IdChip label="Session" value={vm.session_id} colorClass="text-nexus-500" tooltip="Session id — for support tickets." /></p>
+                {vm.workflow_id && <p><IdChip label="Workflow" value={vm.workflow_id} colorClass="text-nexus-500" tooltip="The orchestrator workflow that produced this artifact." /></p>}
+                <p><IdChip label="Artifact" value={vm.artifact_id} colorClass="text-nexus-500" tooltip="The canonical artifact id — use it in API calls / support tickets." /></p>
+              </div>
+            </details>
           </div>
         </div>
 
@@ -612,7 +598,7 @@ export default function CanonicalResultPage() {
             </div>
             <Link
               to={`/sessions/${sessionId}/visual-flow?artifact_id=${vm.artifact_id}`}
-              className="btn-primary btn-gold text-[11px] font-bold inline-flex items-center gap-1 shadow-md ring-1 ring-gold-300/40"
+              className="text-[11px] font-semibold text-nexus-600 hover:text-nexus-800 inline-flex items-center gap-1 shrink-0"
             >
               Open full storyboard <ChevronRight className="h-3 w-3" />
             </Link>
@@ -634,9 +620,16 @@ export default function CanonicalResultPage() {
         </div>
       ) : null}
 
-      {/* ═══════════════════════════════════════════════════════ */}
-      {/* Section 2: Evidence Story                               */}
-      {/* ═══════════════════════════════════════════════════════ */}
+      {/* ═══ Diagnostics & provenance — collapsed; the verdict + visual + CTA above ARE the reveal ═══ */}
+      <details open={vm.quality_outcome === 'needs_review'} className="group rounded-2xl border border-nexus-200 bg-nexus-50/30 overflow-hidden">
+        <summary className="flex items-center gap-2 cursor-pointer select-none px-5 py-3.5 list-none [&::-webkit-details-marker]:hidden hover:bg-nexus-50">
+          <span className="h-4 w-1 rounded-full bg-gradient-to-b from-gold-400 to-gold-600" />
+          <span className="text-sm font-bold text-[#0a2540]">Diagnostics &amp; provenance</span>
+          <span className="text-[11px] text-slate-500 font-medium hidden sm:inline">evidence · trust gate · model provenance · processing timeline</span>
+          <ChevronRight className="ml-auto h-4 w-4 text-slate-400 transition-transform group-open:rotate-90" />
+        </summary>
+        <div className="p-3 space-y-6">
+      {/* Section 2: Evidence Story */}
       <div className="card p-6 space-y-5">
         <h2 className="flex items-center gap-2 text-sm font-bold text-[#0a2540]"><span className="h-4 w-1 rounded-full bg-gradient-to-b from-gold-400 to-gold-600" />Extracted Evidence</h2>
 
@@ -905,24 +898,8 @@ export default function CanonicalResultPage() {
           <span className="ml-auto text-slate-400">Audio transcription and visual extraction execute in parallel</span>
         </div>
       </div>
-
-      {/* ═══════════════════════════════════════════════════════ */}
-      {/* Section 5: Launchpad                                    */}
-      {/* ═══════════════════════════════════════════════════════ */}
-      <div className="card p-6 space-y-5">
-        <div>
-          <h2 className="flex items-center gap-2 text-sm font-bold text-[#0a2540]"><span className="h-4 w-1 rounded-full bg-gradient-to-b from-gold-400 to-gold-600" />What you can build from this asset</h2>
-          <p className="text-xs text-slate-400 mt-0.5">Capture once, operationalize everywhere</p>
         </div>
-
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          {vm.launch_actions
-            .filter((action) => action.id === 'visual-flow-e2e')
-            .map((action) => (
-              <LaunchCard key={action.id} action={action} navigate={navigate} />
-            ))}
-        </div>
-      </div>
+      </details>
     </div>
   );
 }
