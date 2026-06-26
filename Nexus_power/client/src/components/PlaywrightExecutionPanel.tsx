@@ -1053,15 +1053,19 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
   // recording began with a login that is NOT replayed (it's captured as a
   // precondition, never scripted), so a cold run can fail at the login screen.
   // Only blocks the no-saved-session case — with a captured session it's silent.
+  const coldRunAckRef = useRef(false);
   const confirmColdRun = (): boolean => {
     if (authStatus?.profile?.present) return true;  // saved session → starts logged in
-    return window.confirm(
+    if (coldRunAckRef.current) return true;          // acknowledged once this session — don't re-prompt every run
+    const ok = window.confirm(
       'No saved login session.\n\n'
       + 'This recording starts with a login that is NOT replayed, so the run will start '
       + 'unauthenticated and may fail at the login screen.\n\n'
       + 'Tip: click "Capture login session" above first (one-time, encrypted).\n\n'
       + 'Run unauthenticated anyway?',
     );
+    if (ok) coldRunAckRef.current = true;
+    return ok;
   };
 
   // One-click: execute server-side on the Nexus runner, then refresh the triage
@@ -1216,6 +1220,33 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
           </button>
         </div>
       </div>
+
+      {/* ── GROUNDED VERDICT — the hero, now at the TOP (the differentiator leads) ── */}
+      {data && totals.scripts > 0 && (
+        <div className="rounded-2xl border border-nexus-200 shadow-card overflow-hidden">
+          <div className="flex items-center gap-3 px-4 py-3.5 flex-wrap" style={{ background: 'linear-gradient(135deg, #0c2c4d, #0a2540)' }}>
+            <span className="flex h-11 w-11 items-center justify-center rounded-xl bg-white/10 ring-1 ring-gold-400/40 shrink-0">
+              <ShieldCheck className="h-6 w-6 text-gold-400" />
+            </span>
+            <div className="min-w-0">
+              <p className="text-[15px] font-bold text-[#fff] leading-tight">Grounded Verdict</p>
+              <p className="text-[11px] text-white/60 leading-snug max-w-[560px]">
+                🟢 the app reached the same outcome the recorded human did · 🔴 a real deviation (not a layout change). Every verdict links to recorded evidence.
+              </p>
+            </div>
+            {runs?.board?.last_run_at ? (
+              <div className="ml-auto flex items-center gap-2 flex-wrap shrink-0">
+                <span className="rounded-full px-2.5 py-1 text-[12px] font-bold" style={{ background: 'rgba(16,185,129,0.22)', color: '#6ee7b7' }}>{runs.board.passed ?? 0} passed</span>
+                {(runs.board.failed ?? 0) > 0 && <span className="rounded-full px-2.5 py-1 text-[12px] font-bold" style={{ background: 'rgba(244,63,94,0.22)', color: '#fda4af' }}>{runs.board.failed} failed</span>}
+                {(runs.board.flaky ?? 0) > 0 && <span className="rounded-full px-2.5 py-1 text-[12px] font-bold" style={{ background: 'rgba(245,158,11,0.22)', color: '#fcd34d' }}>{runs.board.flaky} flaky</span>}
+                <button onClick={() => setView('run')} className="btn-primary btn-gold text-[11px] px-3 py-1.5 font-semibold ring-1 ring-gold-300/40">see proof →</button>
+              </div>
+            ) : (
+              <span className="ml-auto text-[11px] text-white/55 italic max-w-[300px] shrink-0">Run a script below to get a grounded verdict — green means the app is actually right, with proof.</span>
+            )}
+          </div>
+        </div>
+      )}
 
       {error && <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-[11px] text-amber-800">{error}</div>}
 
@@ -1769,32 +1800,7 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
         </div>
       )}
 
-      {/* A.3 - GROUNDED VERDICT, the hero (the differentiator) */}
-      {data && totals.scripts > 0 && (
-        <div className="rounded-2xl border border-nexus-200 shadow-card overflow-hidden">
-          <div className="flex items-center gap-3 px-4 py-3 flex-wrap" style={{ background: 'linear-gradient(135deg, #0c2c4d, #0a2540)' }}>
-            <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-white/10 ring-1 ring-gold-400/40 shrink-0">
-              <ShieldCheck className="h-5 w-5 text-gold-400" />
-            </span>
-            <div className="min-w-0">
-              <p className="text-[14px] font-bold text-[#fff] leading-tight">Grounded Verdict</p>
-              <p className="text-[11px] text-white/60 leading-snug max-w-[560px]">
-                🟢 the app reached the same outcome the recorded human did · 🔴 a real deviation (not a layout change). Every verdict links to recorded evidence.
-              </p>
-            </div>
-            {runs?.board?.last_run_at ? (
-              <div className="ml-auto flex items-center gap-2 flex-wrap shrink-0">
-                <span className="rounded-full px-2.5 py-1 text-[12px] font-bold" style={{ background: 'rgba(16,185,129,0.22)', color: '#6ee7b7' }}>{runs.board.passed ?? 0} passed</span>
-                {(runs.board.failed ?? 0) > 0 && <span className="rounded-full px-2.5 py-1 text-[12px] font-bold" style={{ background: 'rgba(244,63,94,0.22)', color: '#fda4af' }}>{runs.board.failed} failed</span>}
-                {(runs.board.flaky ?? 0) > 0 && <span className="rounded-full px-2.5 py-1 text-[12px] font-bold" style={{ background: 'rgba(245,158,11,0.22)', color: '#fcd34d' }}>{runs.board.flaky} flaky</span>}
-                <button onClick={() => setView('run')} className="btn-primary btn-gold text-[11px] px-3 py-1.5 font-semibold ring-1 ring-gold-300/40">see proof →</button>
-              </div>
-            ) : (
-              <span className="ml-auto text-[11px] text-white/55 italic max-w-[280px] shrink-0">Run a script to get a grounded verdict — green means the app is actually right, with proof.</span>
-            )}
-          </div>
-        </div>
-      )}
+      {/* Grounded Verdict hero now renders at the TOP (moved above the console). */}
 
       {/* Run / Results view — return to the Run Console */}
       {view === 'run' && (
