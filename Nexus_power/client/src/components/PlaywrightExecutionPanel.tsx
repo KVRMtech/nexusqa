@@ -58,11 +58,11 @@ const RUN_CMD = 'npm install && npx playwright install --with-deps && npx playwr
 // Category order + styling — mirrors TestCasesPanel SECTIONS so the two tabs
 // group and colour identically.
 const CATEGORY_ORDER: { type: string; label: string; accent: string; badge: string }[] = [
-  { type: 'functional', label: 'Demonstrated', accent: '#059669', badge: 'rgba(16,185,129,0.15)' },
-  { type: 'combination', label: 'Suggested combinations', accent: '#d97706', badge: 'rgba(245,158,11,0.15)' },
-  { type: 'negative', label: 'Negative', accent: '#e11d48', badge: 'rgba(225,29,72,0.13)' },
-  { type: 'boundary', label: 'Boundary', accent: '#2670a3', badge: 'rgba(38,112,163,0.13)' },
-  { type: 'error_state', label: 'Error-state', accent: '#dc2626', badge: 'rgba(220,38,38,0.13)' },
+  { type: 'functional', label: 'Demonstrated', accent: '#1d5784', badge: 'rgba(38,112,163,0.12)' },
+  { type: 'combination', label: 'Suggested combinations', accent: '#1d5784', badge: 'rgba(38,112,163,0.12)' },
+  { type: 'negative', label: 'Negative', accent: '#1d5784', badge: 'rgba(38,112,163,0.12)' },
+  { type: 'boundary', label: 'Boundary', accent: '#1d5784', badge: 'rgba(38,112,163,0.12)' },
+  { type: 'error_state', label: 'Error-state', accent: '#1d5784', badge: 'rgba(38,112,163,0.12)' },
 ];
 
 interface ScriptStats { total: number; solid: number; review: number; skipped: number; }
@@ -1221,11 +1221,12 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
 
       {/* ── Run console ─────────────────────────────────────── */}
       {view === 'console' && data && totals.scripts > 0 && (
-        <div className="rounded-xl border border-nexus-200 bg-white/70 overflow-hidden">
-          <div className="px-4 py-2.5 flex items-center gap-2 bg-nexus-50/70 border-b border-nexus-100">
+        <div className="rounded-2xl border border-nexus-200 bg-white shadow-card overflow-hidden">
+          <div className="px-4 py-3 flex items-center gap-2 bg-nexus-50/60 border-b border-nexus-100">
+            <span className="h-4 w-1 rounded-full bg-gradient-to-b from-gold-400 to-gold-600" />
             <SlidersHorizontal className="h-4 w-4 text-nexus-600" />
-            <span className="text-[12px] font-black text-slate-800">Run console</span>
-            <span className="text-[10px] text-slate-400">configure once → run anywhere, no code edits</span>
+            <span className="text-[13px] font-bold text-nexus-900">Run console</span>
+            <span className="text-[11px] text-nexus-400">configure once → run anywhere, no code edits</span>
           </div>
           <div className="p-4 space-y-4">
             {/* B.1 — Runnability preflight: surface what a cold run needs BEFORE it fails */}
@@ -1287,14 +1288,15 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
                 {grouped.map((g) => {
                   const allOn = g.items.every((s) => selectedScriptIds.has(s.test_id));
                   return (
-                    <div key={g.type} className="rounded-lg border border-slate-200 overflow-hidden">
-                      <div className="flex items-center bg-slate-50/70">
+                    <div key={g.type} className="rounded-xl border border-nexus-100 bg-white shadow-sm overflow-hidden">
+                      <div className="flex items-center bg-nexus-50/60 border-b border-nexus-100">
                         <button onClick={() => toggleCatItems(g.items)}
-                          className="flex-1 flex items-center gap-2 px-2.5 py-1.5 text-left hover:bg-slate-100/70">
-                          {allOn ? <CheckSquare className="h-3.5 w-3.5" style={{ color: g.accent }} /> : <Square className="h-3.5 w-3.5 text-slate-400" />}
-                          <span className="text-[11px] font-black" style={{ color: g.accent }}>{g.label}</span>
-                          <span className="text-[10px] text-slate-400 font-semibold">{g.items.length}</span>
-                          <span className="ml-auto text-[9px] uppercase font-bold text-slate-400">{allOn ? 'all selected' : 'select all'}</span>
+                          className="flex-1 flex items-center gap-2 px-3 py-2 text-left hover:bg-nexus-50">
+                          {allOn ? <CheckSquare className="h-4 w-4 text-nexus-600" /> : <Square className="h-4 w-4 text-nexus-300" />}
+                          <span className="h-3 w-1 rounded-full bg-gradient-to-b from-gold-400 to-gold-600" />
+                          <span className="text-[12px] font-bold text-nexus-900">{g.label}</span>
+                          <span className="rounded-full bg-nexus-100 px-1.5 py-0.5 text-[10px] font-bold text-nexus-600">{g.items.length}</span>
+                          <span className="ml-auto text-[10px] uppercase font-bold text-nexus-400 tracking-wide">{allOn ? 'all selected' : 'select all'}</span>
                         </button>
                         <button onClick={() => downloadZip(g.type)} disabled={!!busy}
                           title="Download this category as a runnable zip"
@@ -1305,7 +1307,6 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
                       <div className="divide-y divide-slate-100">
                         {g.items.map((s) => {
                           const on = selectedScriptIds.has(s.test_id);
-                          const fid = fidByTest[s.test_id];
                           const ver = editedTests[s.test_id];
                           // Auto-heal version state (for the banner + badge below).
                           const vlist = versions[s.test_id] || [];
@@ -1318,25 +1319,11 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
                           const rid = s.test_id || s.path;
                           const xOpen = expandedRow === rid;
                           return (
-                            <div key={s.test_id} className="hover:bg-nexus-50/40">
-                              <div className="flex items-center gap-2 px-2.5 py-1.5">
-                                <input type="checkbox" checked={on} onChange={() => toggleScript(s.test_id)} className="h-3.5 w-3.5 accent-nexus-600 shrink-0 cursor-pointer" />
-                                <span onClick={() => toggleScript(s.test_id)} className="text-[11px] text-slate-700 font-medium truncate flex-1 min-w-0 cursor-pointer">{s.name}</span>
-                                <span className="shrink-0 text-[9px] text-slate-400 flex items-center gap-1.5">
-                                  <span>{s.stats?.total ?? s.lines} steps</span>
-                                  {s.stats?.solid != null && <span style={{ color: '#059669' }}>{s.stats.solid} solid</span>}
-                                  {(s.stats?.review || 0) > 0 && <span style={{ color: '#b45309' }}>{s.stats.review} review</span>}
-                                  {(s.stats?.skipped || 0) > 0 && <span style={{ color: '#64748b' }}>{s.stats.skipped} skipped</span>}
-                                </span>
-                                {fid && (
-                                  <span className="shrink-0 rounded px-1.5 py-0.5 text-[9px] font-bold"
-                                    style={fid.grade === 'strong' ? { background: 'rgba(16,185,129,0.15)', color: '#047857' }
-                                      : fid.grade === 'weak' ? { background: 'rgba(244,63,94,0.12)', color: '#be123c' }
-                                      : { background: 'rgba(245,158,11,0.15)', color: '#b45309' }}
-                                    title="Script fidelity — how faithfully the Playwright matches the test case (NOT whether the app passed; that is the Run/verdict).">
-                                    fidelity {fid.score}%
-                                  </span>
-                                )}
+                            <div key={s.test_id} className={`relative transition-colors ${on ? 'bg-nexus-50/60 before:absolute before:left-0 before:top-1.5 before:bottom-1.5 before:w-[3px] before:rounded-full before:bg-gold-500' : 'hover:bg-nexus-50/40'}`}>
+                              <div className="flex items-center gap-2.5 px-3 py-2.5">
+                                <input type="checkbox" checked={on} onChange={() => toggleScript(s.test_id)} className="h-4 w-4 accent-nexus-600 shrink-0 cursor-pointer" />
+                                <span onClick={() => toggleScript(s.test_id)} className="text-[13px] text-nexus-900 font-semibold truncate flex-1 min-w-0 cursor-pointer">{s.name}</span>
+                                <span className="shrink-0 text-[11px] text-nexus-400 font-medium">{s.stats?.total ?? s.lines} steps</span>
                                 <span className="shrink-0 rounded px-1.5 py-0.5 text-[9px] font-semibold"
                                   style={healedActive ? { background: 'rgba(16,185,129,0.15)', color: '#047857' }
                                     : ver ? { background: 'rgba(38,112,163,0.12)', color: '#164465' }
