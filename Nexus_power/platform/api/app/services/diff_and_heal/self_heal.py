@@ -935,7 +935,8 @@ def select_override_for_step(tc: Any, field_meta: dict, step_number: int):
                           "required": False}
 
 
-def compile_case_with_overrides(tc: Any, field_meta: dict, overrides: dict) -> str:
+def compile_case_with_overrides(tc: Any, field_meta: dict, overrides: dict,
+                                *, heal_capture: bool = False) -> str:
     """Recompile one case with accumulated control-kind corrections applied — the
     kind-aware compiler emits .selectOption() for every corrected label, AND threads
     any accumulated INTERACTION re-synthesis (under the reserved `__interactions__`
@@ -956,9 +957,23 @@ def compile_case_with_overrides(tc: Any, field_meta: dict, overrides: dict) -> s
     # no distinct signal, so an auto-trigger would be a guess — this stays an explicit
     # opt-in until the capture can prove a closed root.)
     force_open_shadow = bool(ov.pop("__force_open_shadow__", False))
+    # RE-ANCHOR channel: a renamed/mislabeled control matched against the LIVE page
+    # (Similo-style similarity in resolve_reanchor) is threaded under the reserved
+    # `__reanchors__` key ({step_number: {"name": ...}}) to the compiler's additive
+    # `reanchors` channel. Absent => None => byte-identical. The step's own visibility/
+    # value oracle keys off the new name, so a wrong re-anchor fails RED (never green-wash).
+    reanchors = ov.pop("__reanchors__", None) or None
+    # HEAL-CAPTURE on the OVERRIDDEN spec (additive, default-off → byte-identical):
+    # when the live-capture sub-run needs to reach a DEEP failing step, it must run
+    # the spec WITH the fixes already proven for the earlier steps — otherwise it dies
+    # at the first un-healed step and posts the wrong page. Threading heal_capture here
+    # lets _reanchor_capture / _capture_live_cap compile-with-overrides AND emit the
+    # gated failure-state afterEach, so the capture lands on the actual failing page.
     return compile_case(tc, {**field_meta, **ov}, parametrize=True,
                         interactions=interactions, waits=waits,
-                        force_open_shadow=force_open_shadow)
+                        reanchors=reanchors,
+                        force_open_shadow=force_open_shadow,
+                        heal_capture=heal_capture)
 
 
 def evaluate_heal(timeline: dict, scenario_id: str, step_number: int) -> dict:

@@ -441,3 +441,99 @@ async def commit_proposed_scenarios(
         "committed": committed,
         "dropped": dropped,
     }
+
+
+# ─── Inline test-case edit (ADDITIVE 2026-06-21; test-gen stage, outside the
+# frozen visual-evidence boundary) ───────────────────────────────────────────
+# Edit the human-editable fields of a stored scenario. The grounding each step
+# cites (evidence_scene_id / evidence_control_id) is IMMUTABLE here, so a data
+# edit can never fabricate evidence or un-ground a step. Persists to the same
+# critical_combinations the Co-Architect writes; signals the caller to
+# regenerate the Playwright (v+1).
+class EditStepPatch(BaseModel):
+    step_index: int = Field(..., ge=0)
+    action: Optional[str] = Field(None, max_length=600)
+    input_data: Optional[str] = Field(None, max_length=600)
+    expected_output: Optional[str] = Field(None, max_length=2000)
+
+
+class EditScenarioRequest(BaseModel):
+    title: Optional[str] = Field(None, max_length=400)
+    steps: list[EditStepPatch] = Field(default_factory=list, max_length=40)
+
+
+@router.patch("/api/v1/e2e-architect/{artifact_id}/scenarios/{scenario_id}")
+async def edit_scenario(
+    artifact_id: str = Path(..., min_length=1, max_length=64),
+    scenario_id: str = Path(..., min_length=1, max_length=128),
+    req: EditScenarioRequest = Body(...),
+    user: dict = Depends(get_current_user),
+) -> dict:
+    """Inline-edit a test-case scenario's data fields (human edit).
+
+    Only action text / input value / expected result are editable; the
+    grounding each step targets stays locked.  Returns the updated scenario
+    summary and ``regenerate_playwright=True`` so the caller refreshes the
+    runnable script.
+    """
+    tenant_id = user["tenant_id"]
+    factory = require_db()
+    async with factory() as db:
+        row = await _load_artifact_for_tenant(
+            db, artifact_id=artifact_id, tenant_id=tenant_id,
+        )
+        existing_json = dict(row.full_artifact_json or {})
+        cache = dict(existing_json.get("e2e_architect_cache") or {})
+        architect = dict(cache.get("e2e_architect") or {})
+        scenarios = list(architect.get("critical_combinations") or [])
+
+        idx = next(
+            (i for i, s in enumerate(scenarios)
+             if str(s.get("scenario_id")) == scenario_id),
+            None,
+        )
+        if idx is None:
+            raise HTTPException(
+                404, f"Scenario {scenario_id} not found in this artifact",
+            )
+        scenario = dict(scenarios[idx])
+
+        if req.title is not None:
+            new_title = req.title.strip()
+            if new_title:
+                scenario["title"] = new_title
+
+        steps = [dict(s) for s in (scenario.get("steps") or [])]
+        for patch in req.steps:
+            if patch.step_index >= len(steps):
+                raise HTTPException(
+                    422,
+                    f"step_index {patch.step_index} out of range "
+                    f"(0..{max(len(steps) - 1, 0)})",
+                )
+            step = steps[patch.step_index]
+            if patch.action is not None:
+                step["action"] = patch.action[:600]
+            if patch.input_data is not None:
+                step["input_data"] = patch.input_data[:600]
+            if patch.expected_output is not None:
+                step["expected_output"] = patch.expected_output[:2000]
+            # evidence_scene_id / evidence_control_id intentionally NOT touched.
+        scenario["steps"] = steps
+        scenario["human_edited"] = True
+
+        scenarios[idx] = scenario
+        architect["critical_combinations"] = scenarios
+        cache["e2e_architect"] = architect
+        existing_json["e2e_architect_cache"] = cache
+        row.full_artifact_json = existing_json
+        await db.commit()
+
+    return {
+        "success": True,
+        "scenario_id": scenario_id,
+        "title": scenario.get("title", ""),
+        "step_count": len(scenario.get("steps") or []),
+        "human_edited": True,
+        "regenerate_playwright": True,
+    }

@@ -14,6 +14,7 @@ from ..database import tenant_scoped_session
 from ..services.test_factory import service as factory_service
 from ..services.test_factory import auth_profiles
 from ..services.script_factory import build_field_meta, runner_client, preflight
+from ..services.diff_and_heal import heal_evidence
 
 router = APIRouter()
 
@@ -69,7 +70,17 @@ async def script_preflight(
                           "so locators cannot resolve; set the Environment URL and retry.")
     return report
 
-# NOTE: the deployed build of this router ALSO exposes a GET .../heal-events read
-# endpoint (Part-11 heal evidence chain). It is intentionally omitted here because it
-# depends on the heal-evidence subsystem (heal_evidence.py + SDK HealEventRow + migration
-# 038) which has not yet landed in this repo. It re-lands together with that batch.
+
+@router.get("/api/v1/test-factory/{artifact_id}/heal-events")
+async def heal_events(
+    artifact_id: str = PathParam(..., min_length=1, max_length=64),
+    user: dict = Depends(get_current_user),
+):
+    """Part-11 reconstruction read: the full, ordered, tamper-evident heal evidence
+    chain for this artifact — actor -> before/after locator -> verdict -> verified_green
+    -> version -> run_id, with a per-row chain check (chain_intact=False ⇒ tamper/gap).
+    Append-only + hash-chained; the app DB role has no UPDATE/DELETE on the table."""
+    tenant_id = user["tenant_id"]
+    async with tenant_scoped_session(tenant_id) as session:
+        return await heal_evidence.list_heal_events(
+            session, tenant_id=tenant_id, artifact_id=artifact_id)

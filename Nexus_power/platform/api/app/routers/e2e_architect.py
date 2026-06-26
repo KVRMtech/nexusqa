@@ -482,6 +482,7 @@ async def generate_e2e_architect(
                 "strategy_version": None,
                 "multimodal_frames_used": 0,
                 "model_used": "heart-visual-strict",
+                "evidence_mode": "visual_strict",
                 "workflow_steps_analysed": coverage.get("total_edges", 0),
                 "risks_considered": len(all_risk_areas),
                 "generation_time_ms": round(elapsed_ms, 2),
@@ -496,6 +497,27 @@ async def generate_e2e_architect(
             },
             "cached": False,
         }
+        # Persist so the Test Cases tab + inline edits survive reloads.
+        # Cache read (above) keys on provenance.evidence_mode == request mode.
+        try:
+            async with factory() as _db:
+                _res = await _db.execute(
+                    select(CanonicalArtifactRow).where(
+                        CanonicalArtifactRow.artifact_id == req.artifact_id,
+                        CanonicalArtifactRow.tenant_id == tenant_id,
+                    )
+                )
+                _row = _res.scalar_one_or_none()
+                if _row is not None:
+                    _j = dict(_row.full_artifact_json or {})
+                    _j["e2e_architect_cache"] = visual_strict_response
+                    _row.full_artifact_json = _j
+                    await _db.commit()
+        except Exception:
+            _logger.warning(
+                "Failed to cache visual_strict E2E for artifact=%s (non-fatal)",
+                req.artifact_id, exc_info=True,
+            )
         return await _merge_state_into_response(
             visual_strict_response,
             artifact_id=req.artifact_id,

@@ -932,6 +932,7 @@ async def _timeline_for_run(
                 "duration_ms": st.duration_ms,
                 "error_message": st.error_message or "",
                 "screenshot_url": st.screenshot_url or "",
+                "video_url": (getattr(st, "metadata_json", None) or {}).get("video_url", ""),
                 "baseline_screenshot": (getattr(bs, "screenshot", "") if bs is not None else "") or "",
                 "expected": expected,
             })
@@ -967,3 +968,93 @@ async def _timeline_for_run(
     # Failures first, then alphabetical for a stable order.
     scenarios.sort(key=lambda c: (0 if c["status"] in _FAIL_STEP_STATUSES else 1, c["name"]))
     return {"run_header": _row_to_dict(run), "scenarios": scenarios}
+
+
+async def scenario_verdict_history(
+    db: AsyncSession, *, artifact_id: str, scenario_id: str, tenant_id: str,
+    limit: int = 20,
+) -> list[dict]:
+    """GROUNDED VERDICT HISTORY for ONE scenario across recent runs (newest first).
+
+    Per run: the worst-step status + the SAME deterministic ``classify_failure``
+    verdict the live timeline uses (reused, never reimplemented — proven-green vs
+    real-regression / selector-drift / flake), the duration, the final-frame success
+    screenshot (last step with one), and any heal event that landed on that run. One
+    runs query + one steps query (grouped in-process) + one heal-events read. No
+    migration, read-only, $0 LLM."""
+    limit = max(1, min(int(limit or 20), 100))
+    runs = (await db.execute(
+        select(E2ETestRunRow)
+        .where(E2ETestRunRow.artifact_id == artifact_id,
+               E2ETestRunRow.tenant_id == tenant_id)
+        .order_by(desc(E2ETestRunRow.started_at)).limit(limit)
+    )).scalars().all()
+    if not runs:
+        return []
+    run_ids = [r.run_id for r in runs]
+    step_rows = (await db.execute(
+        select(E2ETestRunStepRow)
+        .where(E2ETestRunStepRow.tenant_id == tenant_id,
+               E2ETestRunStepRow.run_id.in_(run_ids),
+               E2ETestRunStepRow.scenario_id == scenario_id)
+        .order_by(E2ETestRunStepRow.run_id, E2ETestRunStepRow.step_number)
+    )).scalars().all()
+    by_run: dict[str, list] = {}
+    for s in step_rows:
+        by_run.setdefault(s.run_id, []).append(s)
+
+    # Heal events keyed by run (best-effort; the strongest "proven green" provenance).
+    heal_by_run: dict[str, str] = {}
+    try:
+        from . import heal_evidence as _he
+        for e in (await _he.list_heal_events(db, tenant_id=tenant_id, artifact_id=artifact_id) or []):
+            rid = (e.get("run_id") if isinstance(e, dict) else getattr(e, "run_id", "")) or ""
+            et = (e.get("event_type") if isinstance(e, dict) else getattr(e, "event_type", "")) or ""
+            if rid and et and rid not in heal_by_run:
+                heal_by_run[rid] = et
+    except Exception:
+        pass
+
+    out: list[dict] = []
+    for run in runs:
+        srows = by_run.get(run.run_id, [])
+        worst = E2E_STEP_STATUS_PASSED
+        failed_step: int | None = None
+        failing_error = ""
+        shot = ""
+        for st in srows:
+            if _status_severity(st.status) > _status_severity(worst):
+                worst = st.status
+            if st.status in _FAIL_STEP_STATUSES and failed_step is None:
+                failed_step = st.step_number
+            if st.status == E2E_STEP_STATUS_FAILED and not failing_error:
+                failing_error = st.error_message or ""
+            if getattr(st, "screenshot_url", ""):
+                shot = st.screenshot_url
+        ran = len(srows) > 0
+        failed = worst in _FAIL_STEP_STATUSES
+        selector_drifted = any(
+            r.expected_selector and r.resolved_selector
+            and r.expected_selector != r.resolved_selector
+            for r in srows
+        )
+        verdict = classify_failure(
+            failed=failed, is_flaky=False, selector_drifted=selector_drifted,
+            bbox_drifted=False,
+            outcome_contradicted=outcome_contradicted_from_error(failing_error),
+            error_message=failing_error,
+        )
+        out.append({
+            "run_id": run.run_id,
+            "started_at": run.started_at.isoformat() if run.started_at else None,
+            "duration_ms": int(getattr(run, "duration_ms", 0) or 0),
+            "ran": ran,
+            "status": worst if ran else "not_run",
+            "verdict": verdict.label if ran else "",
+            "confidence": verdict.confidence if ran else 0.0,
+            "failed_step_number": failed_step,
+            "error_snippet": (failing_error or "")[:300],
+            "screenshot_url": shot,
+            "heal_event": heal_by_run.get(run.run_id, ""),
+        })
+    return out

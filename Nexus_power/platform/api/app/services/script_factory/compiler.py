@@ -560,7 +560,23 @@ def _action_lines(step, field_meta: dict, parametrize: bool = False,
                 f"await page.getByRole('radio', {{ name: {_ve} }}).first().check({{ timeout: 3000 }}).catch(() => "
                 f"page.getByRole('checkbox', {{ name: {_ve} }}).first().check({{ timeout: 3000 }})); }}); }}); }});"
             )
-            if parametrize:
+            if parametrize and reanchor and reanchor.get("strict_oracle"):
+                # P4 FUZZY-SEEDED reanchor (additive; only when strict_oracle is set, which
+                # ONLY the flag-gated fuzzy seed path does). The normal parametrize oracle
+                # below is SWALLOWED by .catch, so on a text field the sole non-swallowed
+                # gate is "a control of this name exists" — which a high-similarity fuzzy
+                # MIS-MATCH satisfies by construction, i.e. it would green-wash. Emit a
+                # NON-swallowed committed-value oracle instead: a fill into the WRONG
+                # control that does not hold the recorded value fails RED on first prove.
+                # GATE 0 (router) guarantees a non-blank value, so a hard form always fires.
+                _stok = _value_oracle(value)
+                if _stok:
+                    out.append(f"await expect(field).toHaveValue(/{_stok}/i); // strict: fuzzy-seeded committed-value oracle (non-swallowed)")
+                elif (value or "").strip():
+                    out.append("await expect(field).not.toHaveValue(''); // strict: fuzzy-seeded non-empty oracle (non-swallowed)")
+                else:
+                    out.append(f"await expect(field).toHaveValue(__nxTok({_val_expr(value, label, parametrize)})).catch(() => {{}}); // grounded: field holds the entered value (token-tolerant, data-driven; adaptive-set safe)")
+            elif parametrize:
                 # Value may be overridden at run time — assert the field committed
                 # *something* (the fill worked) rather than mirroring a fixed token.
                 out.append(f"await expect(field).toHaveValue(__nxTok({_val_expr(value, label, parametrize)})).catch(() => {{}}); // grounded: field holds the entered value (token-tolerant, data-driven; adaptive-set safe)")
@@ -839,7 +855,9 @@ export default defineConfig({
   reporter: [['list'], ['html', { open: 'never' }], ['junit', { outputFile: 'results/junit.xml' }], ['./nexus-reporter.ts']],
   use: {
     trace: 'on-first-retry',
-    screenshot: 'only-on-failure',
+    // EVIDENCE on green (additive): default 'only-on-failure' => byte-identical;
+    // NEXUS_RECORD_EVIDENCE=1 captures a final-frame screenshot on PASS too (proof green landed).
+    screenshot: process.env.NEXUS_RECORD_EVIDENCE === '1' ? 'on' : 'only-on-failure',
     // Opt-in VIDEO of the run (e.g. to capture the proven healed Clean-Run baseline):
     // default 'off' => byte-identical; NEXUS_RECORD_VIDEO=1 records the full run.
     video: process.env.NEXUS_RECORD_VIDEO === '1' ? 'on' : 'off',
@@ -894,7 +912,9 @@ __WORKERS__  reporter: [['list'], ['html', { open: 'never' }], ['junit', { outpu
     baseURL: nexusBaseURL(),
     headless: __HEADLESS__,
     trace: 'on-first-retry',
-    screenshot: 'only-on-failure',
+    // EVIDENCE on green (additive): default 'only-on-failure' => byte-identical;
+    // NEXUS_RECORD_EVIDENCE=1 captures a final-frame screenshot on PASS too (proof green landed).
+    screenshot: process.env.NEXUS_RECORD_EVIDENCE === '1' ? 'on' : 'only-on-failure',
     // Opt-in VIDEO of the run (e.g. to capture the proven healed Clean-Run baseline):
     // default 'off' => byte-identical; NEXUS_RECORD_VIDEO=1 records the full run.
     video: process.env.NEXUS_RECORD_VIDEO === '1' ? 'on' : 'off',
@@ -966,6 +986,7 @@ type StepRecord = {
   duration_ms: number;
   error_message: string;
   screenshot_url?: string;
+  metadata?: Record<string, unknown>;
 };
 
 type PendingShot = {
@@ -974,6 +995,14 @@ type PendingShot = {
   stepNumber: number;
   path?: string;
   body?: Buffer;
+  contentType: string;
+};
+
+type PendingVideo = {
+  idx: number;
+  scenarioId: string;
+  stepNumber: number;
+  path: string;
   contentType: string;
 };
 
@@ -988,6 +1017,7 @@ function mapRunStatus(s: string): string {
 export default class NexusReporter implements Reporter {
   private steps: StepRecord[] = [];
   private pendingShots: PendingShot[] = [];
+  private pendingVideos: PendingVideo[] = [];
   private startedAt = new Date(0).toISOString();
   private done = 0;
   private total = 0;
@@ -1050,6 +1080,40 @@ export default class NexusReporter implements Reporter {
         }
       }
     }
+    // EVIDENCE on green (additive): when NEXUS_RECORD_EVIDENCE=1, attach the final-frame
+    // screenshot (Playwright screenshot:'on') to the LAST step so a PASSED run carries
+    // visible proof it landed green. Best-effort; never affects the run result.
+    if (process.env.NEXUS_RECORD_EVIDENCE === '1' && result.status === 'passed' && this.steps.length > startIdx) {
+      const gshot = result.attachments.find(
+        (a) => (a.name === 'screenshot' || (a.contentType || '').startsWith('image/')) && (a.path || a.body),
+      );
+      if (gshot) {
+        const gidx = this.steps.length - 1;
+        this.pendingShots.push({
+          idx: gidx,
+          scenarioId,
+          stepNumber: this.steps[gidx].step_number,
+          path: gshot.path,
+          body: gshot.body as Buffer | undefined,
+          contentType: gshot.contentType || 'image/png',
+        });
+      }
+    }
+    // VIDEO evidence (opt-in — NEXUS_RECORD_VIDEO=1 records the run): attach the run
+    // video to the LAST step; uploaded at onEnd. Best-effort; never affects the result.
+    if (process.env.NEXUS_RECORD_VIDEO === '1' && this.steps.length > startIdx) {
+      const vid = result.attachments.find((a) => a.name === 'video' && a.path);
+      if (vid && vid.path) {
+        const vidx = this.steps.length - 1;
+        this.pendingVideos.push({
+          idx: vidx,
+          scenarioId,
+          stepNumber: this.steps[vidx].step_number,
+          path: vid.path,
+          contentType: vid.contentType || 'video/webm',
+        });
+      }
+    }
     this.done += 1;
     this.postProgress(mapRunStatus(result.status));
   }
@@ -1096,6 +1160,32 @@ export default class NexusReporter implements Reporter {
           if (j && j.url && this.steps[ps.idx]) this.steps[ps.idx].screenshot_url = j.url;
         }
       } catch { /* best-effort screenshot upload */ }
+    }
+
+    // Upload each opt-in run VIDEO and attach its serve URL to the step's metadata
+    // (video_url) — zero-migration. Best-effort: a failed upload never blocks the run.
+    for (const pv of this.pendingVideos) {
+      try {
+        const buf: Buffer | undefined = pv.path ? fs.readFileSync(pv.path) : undefined;
+        if (!buf || !buf.length) continue;
+        const fd = new FormData();
+        fd.append('run_id', runId);
+        fd.append('artifact_id', ARTIFACT_ID);
+        fd.append('scenario_id', pv.scenarioId);
+        fd.append('step_number', String(pv.stepNumber));
+        fd.append('file', new Blob([buf], { type: pv.contentType }), 'run.webm');
+        const vr = await fetch(`${base}/api/v1/test-runs/video`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${TOKEN}` },
+          body: fd as any,
+        });
+        if (vr.ok) {
+          const j: any = await vr.json().catch(() => null);
+          if (j && j.url && this.steps[pv.idx]) {
+            this.steps[pv.idx].metadata = { ...(this.steps[pv.idx].metadata || {}), video_url: j.url };
+          }
+        }
+      } catch { /* best-effort video upload */ }
     }
 
     const body = {
