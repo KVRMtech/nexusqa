@@ -309,14 +309,14 @@ function InterruptionGap({ missedCount }: { missedCount: number }) {
   );
 }
 
-/* ── Color system — vivid, saturated ── */
+/* ── Color system — calm USAA navy family (app instances vary by SHADE, not hue) ── */
 const FLOW_COLORS = [
-  { from: '#6366f1', to: '#a78bfa', bg: 'rgba(99,102,241,0.08)',  ring: 'rgba(99,102,241,0.25)', text: '#4f46e5', glow: '99,102,241' },
-  { from: '#10b981', to: '#34d399', bg: 'rgba(16,185,129,0.08)',  ring: 'rgba(16,185,129,0.25)', text: '#059669', glow: '16,185,129' },
-  { from: '#8b5cf6', to: '#c084fc', bg: 'rgba(139,92,246,0.08)',  ring: 'rgba(139,92,246,0.25)', text: '#7c3aed', glow: '139,92,246' },
-  { from: '#ec4899', to: '#f472b6', bg: 'rgba(236,72,153,0.08)',  ring: 'rgba(236,72,153,0.25)', text: '#db2777', glow: '236,72,153' },
-  { from: '#f59e0b', to: '#fbbf24', bg: 'rgba(245,158,11,0.08)',  ring: 'rgba(245,158,11,0.25)', text: '#d97706', glow: '245,158,11' },
-  { from: '#06b6d4', to: '#22d3ee', bg: 'rgba(6,182,212,0.08)',   ring: 'rgba(6,182,212,0.25)',  text: '#0891b2', glow: '6,182,212' },
+  { from: '#0f3250', to: '#2670a3', bg: 'rgba(15,50,80,0.05)',   ring: 'rgba(38,112,163,0.22)', text: '#0f3250', glow: '38,112,163' },
+  { from: '#164465', to: '#4f8ac3', bg: 'rgba(22,68,101,0.05)',  ring: 'rgba(38,112,163,0.20)', text: '#164465', glow: '38,112,163' },
+  { from: '#1d5784', to: '#76a5d1', bg: 'rgba(29,87,132,0.05)',  ring: 'rgba(38,112,163,0.18)', text: '#1d5784', glow: '38,112,163' },
+  { from: '#2670a3', to: '#9ec0e0', bg: 'rgba(38,112,163,0.05)', ring: 'rgba(38,112,163,0.18)', text: '#2670a3', glow: '38,112,163' },
+  { from: '#0a2540', to: '#1d5784', bg: 'rgba(10,37,64,0.05)',   ring: 'rgba(10,37,64,0.20)',   text: '#0a2540', glow: '38,112,163' },
+  { from: '#4f8ac3', to: '#c5d9ee', bg: 'rgba(79,138,195,0.05)', ring: 'rgba(38,112,163,0.16)', text: '#1d5784', glow: '38,112,163' },
 ];
 
 /* ── Animated Background Particles ── */

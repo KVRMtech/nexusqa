@@ -311,10 +311,19 @@ export default function SessionReplayPage() {
             {testsGenerated > 0 && <StatusBadge label={`${testsGenerated} Tests Generated`} variant="nexus" />}
             {artifact && (
               <button
-                onClick={() => navigate(`/sessions/${sessionId}/canonical`)}
-                className="flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-medium text-nexus-400 hover:bg-nexus-500/10 border border-nexus-500/30 transition-colors"
+                onClick={() => navigate(`/sessions/${sessionId}/e2e-architect?artifact_id=${artifact.artifact_id}`)}
+                className="btn-primary btn-gold flex items-center gap-1 px-3 py-1.5 rounded-md text-xs font-semibold ring-1 ring-gold-300/40"
+                title="Generate tests from this session"
               >
-                <Award className="h-3 w-3" /> View Canonical Asset <ArrowRight className="h-3 w-3" />
+                Generate Tests <ArrowRight className="h-3 w-3" />
+              </button>
+            )}
+            {artifact && (
+              <button
+                onClick={() => navigate(`/sessions/${sessionId}/canonical`)}
+                className="flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-medium text-nexus-600 hover:bg-nexus-500/10 transition-colors"
+              >
+                <Award className="h-3 w-3" /> Canonical asset
               </button>
             )}
           </div>

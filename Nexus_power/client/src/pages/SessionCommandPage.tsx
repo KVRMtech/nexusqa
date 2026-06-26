@@ -1714,8 +1714,17 @@ export default function SessionCommandPage() {
                   <div className="flex items-center gap-1 shrink-0" onClick={(e) => e.stopPropagation()}>
                     {hasArtifact && (
                       <button
+                        onClick={(e) => { e.stopPropagation(); navigate(`/sessions/${session.session_id}/e2e-architect?artifact_id=${artifact.artifact_id}`); }}
+                        className="btn-primary btn-gold flex items-center gap-1 px-2.5 py-1.5 rounded-md text-xs font-semibold ring-1 ring-gold-300/40"
+                        title="Generate tests from this session"
+                      >
+                        Generate tests <ArrowRight className="h-3 w-3" />
+                      </button>
+                    )}
+                    {hasArtifact && (
+                      <button
                         onClick={(e) => { e.stopPropagation(); navigate(`/sessions/${session.session_id}/canonical`); }}
-                        className="flex items-center gap-1 px-2.5 py-1.5 rounded-md text-xs font-medium text-nexus-400 hover:bg-nexus-500/10 transition-colors"
+                        className="flex items-center gap-1 px-2.5 py-1.5 rounded-md text-xs font-medium text-nexus-600 hover:bg-nexus-500/10 transition-colors"
                         title="View Canonical Asset"
                       >
                         View Asset <ArrowRight className="h-3 w-3" />
