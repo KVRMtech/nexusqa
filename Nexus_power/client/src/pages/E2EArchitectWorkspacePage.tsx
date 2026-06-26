@@ -343,7 +343,10 @@ export default function E2EArchitectWorkspacePage() {
   const [playwrightGateErrors, setPlaywrightGateErrors] = useState<string[]>([]);
 
   // ── Phase A state ───────────────────────────────────────
-  const [viewMode, setViewMode] = useState<ViewMode>('engineer');
+  // Land on the deliverable (Test Cases), not the Architect workspace — the
+  // Engineer/Reviewer visual modes are disabled product-wide (SHOW_VISUAL_EXPORTS),
+  // so defaulting to 'engineer' showed an untabbed, often-empty (0 pairwise) view.
+  const [viewMode, setViewMode] = useState<ViewMode>('test-cases');
   const [selectedStep, setSelectedStep] = useState<StepSelection | null>(null);
   const [selectedSceneId, setSelectedSceneId] = useState<string | null>(null);
   // Phase 3 — user-clicked control via the SceneFrameWithOverlays bbox.
@@ -905,13 +908,15 @@ export default function E2EArchitectWorkspacePage() {
             <ArrowLeft className="h-4 w-4" /> Back
           </button>
           <div className="h-5 w-px bg-gray-200" />
-          <Shuffle className="h-5 w-5 text-nexus-400" />
+          <Shuffle className="h-5 w-5 text-gold-500" />
           <div className="flex-1 min-w-0">
-            <h1 className="text-sm font-semibold text-slate-700">
+            <h1 className="text-[15px] font-bold tracking-tight text-nexus-900">
               Test Studio
             </h1>
-            <p className="text-[11px] text-slate-400">
-              {cov.total_scenarios} scenarios • {cov.variables_tested} variables • {cov.pairwise_combinations_generated} pairwise
+            <p className="text-[11px] text-nexus-500">
+              {cov.total_scenarios} scenario{cov.total_scenarios === 1 ? '' : 's'}
+              {cov.variables_tested > 0 && ` • ${cov.variables_tested} variables`}
+              {cov.pairwise_combinations_generated > 0 && ` • ${cov.pairwise_combinations_generated} pairwise`}
               {scenes.length > 0 && ` • ${scenes.length} scenes`}
               {result.cached && ' • ⚡ cached'}
             </p>
@@ -976,7 +981,7 @@ export default function E2EArchitectWorkspacePage() {
               className={clsx(
                 'flex items-center gap-1.5 rounded-md px-2.5 py-1 transition-colors',
                 viewMode === 'playwright'
-                  ? 'bg-white text-indigo-700 shadow-sm font-medium'
+                  ? 'bg-white text-nexus-700 shadow-sm font-medium'
                   : 'text-slate-500 hover:text-slate-700',
               )}
               title="Playwright Execution — list, view & run the generated scripts; grounded failure triage"
@@ -1001,7 +1006,9 @@ export default function E2EArchitectWorkspacePage() {
           </button>
           )}
 
-          {/* P7: Demo Diff toggle */}
+          {/* P7: Demo Diff toggle — visual-graph comparison tool, hidden with the
+              other visual/Architect exports so the page leads with Test Cases + Playwright */}
+          {SHOW_VISUAL_EXPORTS && (
           <button
             onClick={() => setDemoDiffOpen(o => !o)}
             className={clsx(
@@ -1014,6 +1021,7 @@ export default function E2EArchitectWorkspacePage() {
           >
             <GitCompare className="h-3.5 w-3.5" /> Demo Diff
           </button>
+          )}
 
           <button
             onClick={() => loadArchitect(true)}
@@ -2097,6 +2105,41 @@ function ScenarioCard({
     };
   }, [scenario.steps]);
 
+  // ── Inline edit (additive 2026-06-21; grounding stays locked) ──
+  const [editing, setEditing] = useState(false);
+  const [savingEdit, setSavingEdit] = useState(false);
+  const [editErr, setEditErr] = useState<string | null>(null);
+  const [draftSteps, setDraftSteps] = useState<Array<{ action: string; input_data: string; expected_output: string }>>([]);
+  const beginEdit = () => {
+    setEditErr(null);
+    setDraftSteps(scenario.steps.map((s) => ({
+      action: ((s as any).action ?? '') as string,
+      input_data: ((s as any).input_data ?? '') as string,
+      expected_output: ((s as any).expected_output ?? '') as string,
+    })));
+    setEditing(true);
+  };
+  const saveEdit = async () => {
+    setSavingEdit(true);
+    setEditErr(null);
+    try {
+      await api.editScenario(artifactId, scenario.scenario_id, {
+        steps: draftSteps.map((d, i) => ({
+          step_index: i,
+          action: d.action,
+          input_data: d.input_data,
+          expected_output: d.expected_output,
+        })),
+      });
+      setEditing(false);
+      onHealingApplied();
+    } catch (e: any) {
+      setEditErr(e?.response?.data?.detail ?? e?.message ?? 'Save failed');
+    } finally {
+      setSavingEdit(false);
+    }
+  };
+
   return (
     <div className="rounded-xl border border-gray-200 bg-white overflow-hidden shadow-sm">
       {/* Header */}
@@ -2214,25 +2257,52 @@ function ScenarioCard({
           {/* Test Steps */}
           {scenario.steps.length > 0 && (
             <div>
-              <span className="text-[10px] text-slate-400 uppercase">Test Steps</span>
-              <div className="mt-1 space-y-1">
-                {scenario.steps.map(step => (
-                  <StepProofRow
-                    key={step.step_number}
-                    step={step}
-                    scenario={scenario}
-                    isSelected={
-                      selectedStep?.scenarioId === scenario.scenario_id &&
-                      selectedStep?.stepNumber === step.step_number
-                    }
-                    onSelect={() => onSelectStep(scenario.scenario_id, step.step_number)}
-                    viewMode={viewMode}
-                    scenes={scenes}
-                    controlsByScene={controlsByScene}
-                    edges={edges}
-                  />
-                ))}
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] text-slate-400 uppercase">Test Steps</span>
+                {!editing ? (
+                  <button onClick={beginEdit} className="text-[10px] rounded border border-gray-200 px-1.5 py-0.5 text-slate-500 hover:bg-gray-50" title="Edit step values (grounding stays locked)">Edit</button>
+                ) : (
+                  <div className="flex items-center gap-1">
+                    <button onClick={saveEdit} disabled={savingEdit} className="text-[10px] rounded border border-emerald-300 bg-emerald-50 px-1.5 py-0.5 text-emerald-700 hover:bg-emerald-100 disabled:opacity-50">{savingEdit ? 'Saving…' : 'Save + regenerate'}</button>
+                    <button onClick={() => { setEditing(false); setEditErr(null); }} disabled={savingEdit} className="text-[10px] rounded border border-gray-200 px-1.5 py-0.5 text-slate-500 hover:bg-gray-50">Cancel</button>
+                  </div>
+                )}
               </div>
+              {editErr && <p className="text-[10px] text-red-500 mt-0.5">{editErr}</p>}
+              {!editing ? (
+                <div className="mt-1 space-y-1">
+                  {scenario.steps.map(step => (
+                    <StepProofRow
+                      key={step.step_number}
+                      step={step}
+                      scenario={scenario}
+                      isSelected={
+                        selectedStep?.scenarioId === scenario.scenario_id &&
+                        selectedStep?.stepNumber === step.step_number
+                      }
+                      onSelect={() => onSelectStep(scenario.scenario_id, step.step_number)}
+                      viewMode={viewMode}
+                      scenes={scenes}
+                      controlsByScene={controlsByScene}
+                      edges={edges}
+                    />
+                  ))}
+                </div>
+              ) : (
+                <div className="mt-1 space-y-2">
+                  {draftSteps.map((d, i) => (
+                    <div key={i} className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 space-y-1">
+                      <div className="text-[9px] font-mono text-slate-400">step {i + 1} · grounding locked</div>
+                      <label className="block text-[9px] text-slate-400 uppercase">Action</label>
+                      <input value={d.action} onChange={(e) => setDraftSteps((s) => s.map((x, j) => j === i ? { ...x, action: e.target.value } : x))} className="w-full text-[11px] rounded border border-gray-200 px-2 py-1" />
+                      <label className="block text-[9px] text-slate-400 uppercase">Input value</label>
+                      <input value={d.input_data} onChange={(e) => setDraftSteps((s) => s.map((x, j) => j === i ? { ...x, input_data: e.target.value } : x))} className="w-full text-[11px] rounded border border-gray-200 px-2 py-1" />
+                      <label className="block text-[9px] text-slate-400 uppercase">Expected result</label>
+                      <input value={d.expected_output} onChange={(e) => setDraftSteps((s) => s.map((x, j) => j === i ? { ...x, expected_output: e.target.value } : x))} className="w-full text-[11px] rounded border border-gray-200 px-2 py-1" />
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           )}
 
