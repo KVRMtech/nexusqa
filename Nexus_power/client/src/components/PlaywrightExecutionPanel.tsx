@@ -36,8 +36,8 @@ function RowActionsMenu(
       </button>
       {open && (
         <>
-          <div className="fixed inset-0 z-20" onClick={() => setOpen(false)} />
-          <div className="absolute left-0 z-30 mt-1 min-w-[190px] rounded-lg border border-nexus-200 bg-white py-1 shadow-card">
+          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
+          <div className="absolute left-0 z-50 mt-1 min-w-[190px] rounded-lg border border-nexus-200 bg-white py-1 shadow-card">
             {items.map((it) => (
               <button key={it.key} disabled={it.disabled}
                 onClick={() => { setOpen(false); it.onClick(); }}
@@ -119,7 +119,7 @@ function AutoHealPanel({ job, live, healing, err }: { job: any; live: string | n
       </p>
       {live && healing && (
         <div className="mb-2 rounded-md overflow-hidden border-2 border-nexus-300 bg-black">
-          <div className="px-2 py-0.5 text-[9px] font-bold uppercase text-white bg-nexus-600 flex items-center gap-1.5">
+          <div className="px-2 py-0.5 text-[9px] font-bold uppercase text-[#fff] bg-nexus-600 flex items-center gap-1.5">
             <span className="inline-block h-2 w-2 rounded-full bg-red-400 animate-pulse" /> Live — watching the auto-heal re-runs
           </div>
           <iframe title="Auto-heal live" src={live} className="w-full" style={{ height: 460, border: 0 }} />
@@ -202,8 +202,8 @@ function FidelityCard({ rep, artifactId, testId, onFixed }: { rep: any; artifact
         <div className="mt-1.5 flex items-center gap-2 flex-wrap">
           <button onClick={runFix} disabled={fixing}
             title="Apply ONLY deterministic, grounded fixes (regenerate). Never invents assertions, never green-washes — anything it can't prove is listed for you to handle."
-            className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[10px] font-bold text-white disabled:opacity-50" style={{ background: '#2670a3' }}>
-            {fixing ? <Loader2 className="h-3 w-3 animate-spin" /> : <span>⚡</span>} {fixing ? 'Fixing…' : 'Fix gaps'}
+            className="inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-[10px] font-bold text-[#fff] shadow-sm ring-1 ring-nexus-700/40 transition-all hover:brightness-110 active:translate-y-px disabled:opacity-50" style={{ background: '#2670a3' }}>
+            {fixing ? <Loader2 className="h-3 w-3 animate-spin text-[#fff]" /> : <span className="text-[#fff]">⚡</span>} {fixing ? 'Fixing…' : 'Fix gaps'}
           </button>
           <span className="text-[9px] text-slate-400">grounded only · never green-washes</span>
         </div>
@@ -1210,9 +1210,9 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
             {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />} Refresh
           </button>
           <button onClick={() => downloadZip('')} disabled={!!busy || totals.scripts === 0}
-            className="flex items-center gap-1 rounded-lg px-3 py-1.5 text-[11px] font-semibold text-white disabled:opacity-50"
+            className="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[11px] font-bold text-[#fff] shadow-sm ring-1 ring-gold-400/40 transition-all hover:brightness-110 hover:shadow active:translate-y-px disabled:opacity-50 disabled:cursor-not-allowed disabled:shadow-none"
             style={{ background: 'linear-gradient(135deg, #0c2c4d, #2670a3)' }}>
-            {busy === 'zip:all' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />} Download full bundle
+            {busy === 'zip:all' ? <Loader2 className="h-3.5 w-3.5 animate-spin text-[#fff]" /> : <Download className="h-3.5 w-3.5 text-[#fff]" />} Download full bundle
           </button>
         </div>
       </div>
@@ -1221,8 +1221,8 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
 
       {/* ── Run console ─────────────────────────────────────── */}
       {view === 'console' && data && totals.scripts > 0 && (
-        <div className="rounded-2xl border border-nexus-200 bg-white shadow-card overflow-hidden">
-          <div className="px-4 py-3 flex items-center gap-2 bg-nexus-50/60 border-b border-nexus-100">
+        <div className="rounded-2xl border border-nexus-200 bg-white shadow-card">
+          <div className="px-4 py-3 flex items-center gap-2 rounded-t-2xl bg-nexus-50/60 border-b border-nexus-100">
             <span className="h-4 w-1 rounded-full bg-gradient-to-b from-gold-400 to-gold-600" />
             <SlidersHorizontal className="h-4 w-4 text-nexus-600" />
             <span className="text-[13px] font-bold text-nexus-900">Run console</span>
@@ -1242,7 +1242,7 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
                       <>
                         <span className="font-semibold text-amber-800">⚠ No saved login — a cold run starts logged out and may stop at the login screen (fails at step 1).</span>
                         <button onClick={startCapture} disabled={!!authBusy || !authStatus?.encryption_available}
-                          className="rounded-md px-2 py-0.5 text-[10px] font-bold bg-amber-600 text-white hover:bg-amber-500 disabled:opacity-50">
+                          className="rounded-md px-2 py-0.5 text-[10px] font-bold bg-amber-600 text-[#fff] hover:bg-amber-500 disabled:opacity-50">
                           {authBusy === 'capture' ? 'Opening…' : 'Capture login session'}
                         </button>
                       </>
@@ -1272,7 +1272,7 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
                   onClick={() => { if (t.dl) { void downloadCiBundle(); } else if (t.on) setTarget(t.k as any); }}
                   className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[11px] font-semibold border transition-colors ${
                     !t.on ? 'border-slate-150 text-slate-300 cursor-not-allowed'
-                    : target === t.k ? 'border-nexus-300 bg-nexus-600 text-white'
+                    : target === t.k ? 'border-nexus-300 bg-nexus-600 text-[#fff]'
                     : 'border-slate-200 text-slate-600 hover:bg-slate-50'}`}>
                   {t.dl && runBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : t.icon} {t.label}
                   {t.dl ? <Download className="h-3 w-3 opacity-60" /> : null}
@@ -1288,8 +1288,8 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
                 {grouped.map((g) => {
                   const allOn = g.items.every((s) => selectedScriptIds.has(s.test_id));
                   return (
-                    <div key={g.type} className="rounded-xl border border-nexus-100 bg-white shadow-sm overflow-hidden">
-                      <div className="flex items-center bg-nexus-50/60 border-b border-nexus-100">
+                    <div key={g.type} className="rounded-xl border border-nexus-100 bg-white shadow-sm">
+                      <div className="flex items-center rounded-t-xl bg-nexus-50/60 border-b border-nexus-100">
                         <button onClick={() => toggleCatItems(g.items)}
                           className="flex-1 flex items-center gap-2 px-3 py-2 text-left hover:bg-nexus-50">
                           {allOn ? <CheckSquare className="h-4 w-4 text-nexus-600" /> : <Square className="h-4 w-4 text-nexus-300" />}
@@ -1339,7 +1339,7 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
                                 )}
                                 <button onClick={() => setExpandedRow((cur) => (cur === rid ? '' : rid))}
                                   title="View code · Edit · Audit · Regenerate · Run just this"
-                                  className="shrink-0 flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[9px] font-bold bg-slate-100 text-slate-600 hover:bg-slate-200">
+                                  className={`shrink-0 inline-flex items-center gap-1 rounded-md px-2 py-1 text-[10px] font-bold border transition-colors ${xOpen ? 'bg-nexus-600 text-[#fff] border-nexus-600' : 'bg-white text-nexus-700 border-nexus-200 hover:bg-nexus-50'}`}>
                                   {xOpen ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />} actions
                                 </button>
                               </div>
@@ -1363,7 +1363,7 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
                                       </span>
                                       <button onClick={() => approveVersion(s.test_id, pendingHeal.version_no)} disabled={editBusy === `approve:${s.test_id}`}
                                         title="Approve this auto-healed version → it becomes the active source runs use"
-                                        className="shrink-0 flex items-center gap-1 rounded px-2 py-0.5 text-[10px] font-bold bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-50">
+                                        className="shrink-0 flex items-center gap-1 rounded px-2 py-0.5 text-[10px] font-bold bg-emerald-600 text-[#fff] hover:bg-emerald-700 disabled:opacity-50">
                                         {editBusy === `approve:${s.test_id}` ? <Loader2 className="h-3 w-3 animate-spin" /> : <CheckCircle2 className="h-3 w-3" />} Approve
                                       </button>
                                     </div>
@@ -1373,21 +1373,22 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
                               {xOpen && (
                                 <div className="border-t border-nexus-100 bg-slate-50/70 px-2.5 py-2 space-y-2">
                                   {/* RUN row — per-script run controls + per-script Agentic/Video toggles (inline, no clipping) */}
-                                  <div className="flex items-center gap-1.5 flex-wrap">
+                                  <div className="flex items-center gap-2 flex-wrap rounded-lg border border-nexus-100 bg-white px-2 py-1.5">
+                                    <span className="text-[9px] font-black uppercase tracking-wide text-nexus-400 mr-0.5">Run</span>
                                     <button onClick={() => runOnNexus({ test_ids: [s.test_id] })} disabled={running || autoHealing || !s.test_id}
                                       title="Run THIS script on the Nexus runner (headless, server-side) — uses the active approved version"
-                                      className="flex items-center gap-1 rounded-md px-2.5 py-1 text-[10px] font-bold text-white disabled:opacity-50" style={{ background: '#059669' }}>
-                                      {runningTestId === s.test_id && !autoHealing && !liveUrl ? <Loader2 className="h-3 w-3 animate-spin" /> : <Play className="h-3 w-3" />} Run on Nexus
+                                      className="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[11px] font-bold text-[#fff] shadow-sm ring-1 ring-emerald-700/40 transition-all hover:brightness-110 hover:shadow active:translate-y-px disabled:opacity-50 disabled:cursor-not-allowed disabled:shadow-none" style={{ background: '#059669' }}>
+                                      {runningTestId === s.test_id && !autoHealing && !liveUrl ? <Loader2 className="h-3.5 w-3.5 animate-spin text-[#fff]" /> : <Play className="h-3.5 w-3.5 text-[#fff]" />} Run on Nexus
                                     </button>
                                     <button onClick={() => runLive({ test_ids: [s.test_id] })} disabled={running || autoHealing || !s.test_id}
                                       title="Run THIS script HEADED and watch it live in the portal (view-only stream)"
-                                      className="flex items-center gap-1 rounded-md px-2.5 py-1 text-[10px] font-bold text-white disabled:opacity-50" style={{ background: '#2670a3' }}>
-                                      {runningTestId === s.test_id && liveUrl ? <Loader2 className="h-3 w-3 animate-spin" /> : <Play className="h-3 w-3" />} Run live ▸ watch
+                                      className="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[11px] font-bold text-[#fff] shadow-sm ring-1 ring-nexus-700/40 transition-all hover:brightness-110 hover:shadow active:translate-y-px disabled:opacity-50 disabled:cursor-not-allowed disabled:shadow-none" style={{ background: '#2670a3' }}>
+                                      {runningTestId === s.test_id && liveUrl ? <Loader2 className="h-3.5 w-3.5 animate-spin text-[#fff]" /> : <Play className="h-3.5 w-3.5 text-[#fff]" />} Run live ▸ watch
                                     </button>
                                     <button onClick={() => runAutoHeal({ test_ids: [s.test_id] })} disabled={autoHealing || running || !s.test_id}
                                       title="Run THIS script and AUTO-HEAL on failure — diagnose, fix, re-run, continue, and freeze a Clean Run V1 when green (never green-washes)"
-                                      className="flex items-center gap-1 rounded-md px-2.5 py-1 text-[10px] font-bold text-white disabled:opacity-50" style={{ background: 'linear-gradient(135deg,#2670a3,#2670a3)' }}>
-                                      {autoHealing && runningTestId === s.test_id ? <Loader2 className="h-3 w-3 animate-spin" /> : <Wand2 className="h-3 w-3" />} ⚡ Auto-Heal
+                                      className="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[11px] font-bold text-[#fff] shadow-sm ring-1 ring-gold-400/50 transition-all hover:brightness-110 hover:shadow active:translate-y-px disabled:opacity-50 disabled:cursor-not-allowed disabled:shadow-none" style={{ background: 'linear-gradient(135deg,#0c2c4d,#2670a3)' }}>
+                                      {autoHealing && runningTestId === s.test_id ? <Loader2 className="h-3.5 w-3.5 animate-spin text-[#fff]" /> : <Wand2 className="h-3.5 w-3.5 text-gold-400" />} ⚡ Auto-Heal
                                     </button>
                                     <label title="Agentic heal: when the deterministic recipes can't fix a failure, let an AI agent reason about the LIVE page and propose a GROUNDED fix before escalating — it can't invent a selector and can't green-wash."
                                       className="flex items-center gap-1 text-[10px] font-semibold text-nexus-700 cursor-pointer select-none">
@@ -1473,8 +1474,8 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
                                         <span className="text-[10px] font-bold text-nexus-700">Edit script</span>
                                         <span className="text-[10px] text-slate-400">you own this code — Save creates a new version; runs use the latest</span>
                                         <button onClick={() => saveVersion(s.test_id)} disabled={!editDirty[s.test_id] || editBusy === `save:${s.test_id}`}
-                                          className="ml-auto flex items-center gap-1 rounded-md px-2.5 py-1 text-[10px] font-bold text-white disabled:opacity-50" style={{ background: '#2670a3' }}>
-                                          {editBusy === `save:${s.test_id}` ? <Loader2 className="h-3 w-3 animate-spin" /> : <Save className="h-3 w-3" />}
+                                          className="ml-auto inline-flex items-center gap-1.5 rounded-md px-3 py-1 text-[10px] font-bold text-[#fff] shadow-sm ring-1 ring-nexus-700/40 transition-all hover:brightness-110 active:translate-y-px disabled:opacity-50 disabled:cursor-not-allowed" style={{ background: '#2670a3' }}>
+                                          {editBusy === `save:${s.test_id}` ? <Loader2 className="h-3 w-3 animate-spin text-[#fff]" /> : <Save className="h-3 w-3 text-[#fff]" />}
                                           Save &rarr; v{(editedTests[s.test_id] || 0) + 1}
                                         </button>
                                       </div>
@@ -1507,7 +1508,7 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
                                                 {v.pending_approval && (
                                                   <button onClick={() => approveVersion(s.test_id, v.version_no)} disabled={editBusy === `approve:${s.test_id}`}
                                                     title="Approve → this auto-healed version becomes the active source runs use"
-                                                    className="shrink-0 flex items-center gap-1 rounded px-1.5 py-0.5 font-semibold bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-50">
+                                                    className="shrink-0 flex items-center gap-1 rounded px-1.5 py-0.5 font-semibold bg-emerald-600 text-[#fff] hover:bg-emerald-700 disabled:opacity-50">
                                                     {editBusy === `approve:${s.test_id}` ? <Loader2 className="h-2.5 w-2.5 animate-spin" /> : <CheckCircle2 className="h-2.5 w-2.5" />} Approve
                                                   </button>
                                                 )}
@@ -1589,13 +1590,13 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
               {captureLive ? (
                 <div className="rounded-md border-2 border-nexus-300 overflow-hidden bg-black">
                   <div className="px-2 py-1 flex items-center gap-2 bg-nexus-600">
-                    <span className="text-[10px] font-bold uppercase text-white">Log in below, then save the session</span>
+                    <span className="text-[10px] font-bold uppercase text-[#fff]">Log in below, then save the session</span>
                     <button onClick={saveCapture} disabled={authBusy === 'save'}
-                      className="ml-auto flex items-center gap-1 rounded px-2 py-0.5 text-[10px] font-bold bg-emerald-500 text-white disabled:opacity-50">
-                      {authBusy === 'save' ? <Loader2 className="h-3 w-3 animate-spin" /> : <Check className="h-3 w-3" />} I've logged in — Save session
+                      className="ml-auto inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-[10px] font-bold bg-emerald-500 text-[#fff] shadow-sm ring-1 ring-emerald-700/40 transition-all hover:brightness-110 active:translate-y-px disabled:opacity-50">
+                      {authBusy === 'save' ? <Loader2 className="h-3 w-3 animate-spin text-[#fff]" /> : <Check className="h-3 w-3 text-[#fff]" />} I've logged in — Save session
                     </button>
                     <button onClick={cancelCapture} disabled={authBusy === 'cancel'}
-                      className="rounded px-2 py-0.5 text-[10px] font-semibold bg-white/20 text-white">Cancel</button>
+                      className="rounded px-2 py-0.5 text-[10px] font-semibold bg-white/20 text-[#fff]">Cancel</button>
                   </div>
                   <iframe title="Log in to capture a session" src={captureLive} className="w-full" style={{ height: 360, border: 0 }} />
                 </div>
@@ -1617,7 +1618,7 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
                   </span>
                   <button onClick={() => void startCapture()} disabled={!!authBusy || authStatus?.encryption_available === false}
                     title={authStatus?.encryption_available === false ? 'Encryption unavailable on this deployment — a session cannot be stored securely' : 'Open a browser, log in once; we save the session (encrypted) for every run'}
-                    className="flex items-center gap-1.5 rounded-md px-2.5 py-1 text-[11px] font-semibold bg-nexus-600 text-white hover:bg-nexus-500 disabled:opacity-50">
+                    className="flex items-center gap-1.5 rounded-md px-2.5 py-1 text-[11px] font-semibold bg-nexus-600 text-[#fff] hover:bg-nexus-500 disabled:opacity-50">
                     {authBusy === 'capture' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Lock className="h-3.5 w-3.5" />} Capture login session
                   </button>
                   {authStatus?.encryption_available === false && (
@@ -1691,7 +1692,7 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
                   return (
                     <button key={b} onClick={() => toggleBrowser(b)}
                       className={`flex items-center gap-1 rounded-md px-2 py-1 font-semibold border capitalize ${
-                        on ? 'bg-slate-800 text-white border-slate-800' : 'bg-white text-slate-500 border-slate-200 hover:bg-slate-50'}`}>
+                        on ? 'bg-slate-800 text-[#fff] border-slate-800' : 'bg-white text-slate-500 border-slate-200 hover:bg-slate-50'}`}>
                       {on ? <CheckSquare className="h-3 w-3" /> : <Square className="h-3 w-3" />}{b}
                     </button>
                   );
@@ -1751,9 +1752,9 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
                 <p className="text-[10px] font-bold uppercase text-slate-400 mb-2">or download &amp; run locally</p>
                 <div className="flex items-center gap-2 flex-wrap">
                   <button onClick={downloadConfigured} disabled={runBusy || selectedScripts.length === 0}
-                    className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[11px] font-bold text-white disabled:opacity-50"
+                    className="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[11px] font-bold text-[#fff] shadow-sm ring-1 ring-nexus-700/40 transition-all hover:brightness-110 hover:shadow active:translate-y-px disabled:opacity-50 disabled:cursor-not-allowed disabled:shadow-none"
                     style={{ background: '#2670a3' }}>
-                    {runBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
+                    {runBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin text-[#fff]" /> : <Download className="h-3.5 w-3.5 text-[#fff]" />}
                     Download configured bundle ({selectedScripts.length})
                   </button>
                   <code className="flex-1 min-w-0 truncate rounded-md bg-slate-900 px-2.5 py-1.5 text-[11px] font-mono text-emerald-300">{RUN_CMD}</code>
@@ -1776,7 +1777,7 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
               <ShieldCheck className="h-5 w-5 text-gold-400" />
             </span>
             <div className="min-w-0">
-              <p className="text-[14px] font-bold text-white leading-tight">Grounded Verdict</p>
+              <p className="text-[14px] font-bold text-[#fff] leading-tight">Grounded Verdict</p>
               <p className="text-[11px] text-white/60 leading-snug max-w-[560px]">
                 🟢 the app reached the same outcome the recorded human did · 🔴 a real deviation (not a layout change). Every verdict links to recorded evidence.
               </p>
@@ -1811,7 +1812,7 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
           )}
           {liveUrl && running && (
             <div ref={liveRef} className="rounded-lg overflow-hidden border-2 border-nexus-300 bg-black">
-              <div className="px-2 py-1 bg-nexus-600 text-white text-[10px] font-bold flex items-center gap-1.5">
+              <div className="px-2 py-1 bg-nexus-600 text-[#fff] text-[10px] font-bold flex items-center gap-1.5">
                 <span className="inline-block h-2 w-2 rounded-full bg-red-400 animate-pulse" />
                 LIVE — headed Chromium on the Nexus runner (view-only stream)
               </div>
