@@ -1249,7 +1249,7 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
 
             {/* 1 · scripts */}
             <div>
-              <p className="text-[10px] font-bold uppercase text-slate-400 mb-1.5">1 · Scripts to run</p>
+              <p className="flex items-center gap-1.5 text-[11px] font-bold text-nexus-900 mb-1.5"><span className="h-3 w-1 rounded-full bg-gradient-to-b from-gold-400 to-gold-600" />Scripts to run</p>
               <div className="space-y-1.5">
                 {grouped.map((g) => {
                   const allOn = g.items.every((s) => selectedScriptIds.has(s.test_id));
@@ -1571,9 +1571,18 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
               </div>
             </div>
 
-            {/* 2 · environment */}
+            {/* Advanced configuration — collapsed by default so the flow reads Select → Run → Verdict */}
+            <details className="group rounded-lg border border-nexus-100 bg-white">
+              <summary className="flex items-center gap-2 cursor-pointer select-none px-3 py-2 text-[11px] font-bold text-nexus-700 list-none [&::-webkit-details-marker]:hidden">
+                <SlidersHorizontal className="h-3.5 w-3.5 text-nexus-500" />
+                Advanced configuration
+                <span className="font-medium text-nexus-400 normal-case">— environment · authentication · test data · browsers</span>
+                <ChevronDown className="ml-auto h-4 w-4 text-nexus-400 transition-transform group-open:rotate-180" />
+              </summary>
+              <div className="px-3 pb-3 pt-1 space-y-4 border-t border-nexus-100">
+            {/* environment */}
             <div>
-              <p className="text-[10px] font-bold uppercase text-slate-400 mb-1.5">2 · Environment</p>
+              <p className="text-[10px] font-bold uppercase text-nexus-500 mb-1.5">Environment</p>
               <div className="flex items-center gap-2">
                 <Globe className="h-4 w-4 text-slate-400 shrink-0" />
                 <input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)}
@@ -1725,14 +1734,16 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
                 </label>
               </div>
             </div>
+              </div>
+            </details>
 
-            {/* 4 · run */}
+            {/* run status */}
             <div className="rounded-lg border border-nexus-100 bg-nexus-50/50 p-3 space-y-3">
               {/* Run + Auto-Heal + Audit + the Agentic/Video toggles now live PER SCRIPT (in each
                   test's row above). This strip just surfaces the active run + the local-download option. */}
               <div>
-                <p className="text-[10px] font-bold uppercase text-emerald-700 mb-1">Run status
-                  <span className="text-slate-400 normal-case font-medium"> — use ▶ Run on Nexus · Run live · ⚡ Auto-Heal on each script above (Agentic / Video toggles are per-script)</span>
+                <p className="flex items-center gap-1.5 text-[11px] font-bold text-nexus-900 mb-1"><span className="h-3 w-1 rounded-full bg-gradient-to-b from-gold-400 to-gold-600" />Run status
+                  <span className="text-nexus-400 normal-case font-medium"> — use ▶ Run on Nexus · Run live · ⚡ Auto-Heal on each script above</span>
                 </p>
                 {runStatus && (
                   <div className="mt-2 flex items-center gap-2 text-[11px] flex-wrap">
@@ -1776,24 +1787,28 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
         </div>
       )}
 
-      {/* A.3 - GROUNDED VERDICT, front-and-center (the differentiator) */}
+      {/* A.3 - GROUNDED VERDICT, the hero (the differentiator) */}
       {data && totals.scripts > 0 && (
-        <div className="rounded-xl border-2 p-3" style={{ borderColor: 'rgba(16,185,129,0.30)', background: 'linear-gradient(135deg, rgba(16,185,129,0.06), rgba(38,112,163,0.04))' }}>
-          <div className="flex items-center gap-2 flex-wrap">
-            <span className="text-[13px]">🛡️</span>
-            <span className="text-[12px] font-black text-slate-900">Grounded verdict</span>
-            <span className="text-[10px] text-slate-500 font-medium max-w-[560px]">
-              🟢 = the app reached the same outcome the recorded human did · 🔴 = a real deviation (not a layout change). Every verdict links to the recorded evidence.
+        <div className="rounded-2xl border border-nexus-200 shadow-card overflow-hidden">
+          <div className="flex items-center gap-3 px-4 py-3 flex-wrap" style={{ background: 'linear-gradient(135deg, #0c2c4d, #0a2540)' }}>
+            <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-white/10 ring-1 ring-gold-400/40 shrink-0">
+              <ShieldCheck className="h-5 w-5 text-gold-400" />
             </span>
+            <div className="min-w-0">
+              <p className="text-[14px] font-bold text-white leading-tight">Grounded Verdict</p>
+              <p className="text-[11px] text-white/60 leading-snug max-w-[560px]">
+                🟢 the app reached the same outcome the recorded human did · 🔴 a real deviation (not a layout change). Every verdict links to recorded evidence.
+              </p>
+            </div>
             {runs?.board?.last_run_at ? (
-              <span className="ml-auto flex items-center gap-1.5 text-[11px] font-bold flex-wrap">
-                <span className="rounded-full px-2 py-0.5" style={{ background: 'rgba(34,197,94,0.16)', color: '#15803d' }}>{runs.board.passed ?? 0} passed</span>
-                {(runs.board.failed ?? 0) > 0 && <span className="rounded-full px-2 py-0.5" style={{ background: 'rgba(244,63,94,0.14)', color: '#be123c' }}>{runs.board.failed} failed</span>}
-                {(runs.board.flaky ?? 0) > 0 && <span className="rounded-full px-2 py-0.5" style={{ background: 'rgba(245,158,11,0.16)', color: '#b45309' }}>{runs.board.flaky} flaky</span>}
-                <button onClick={() => setView('run')} className="text-nexus-600 underline text-[10px] font-bold hover:text-nexus-800">see proof →</button>
-              </span>
+              <div className="ml-auto flex items-center gap-2 flex-wrap shrink-0">
+                <span className="rounded-full px-2.5 py-1 text-[12px] font-bold" style={{ background: 'rgba(16,185,129,0.22)', color: '#6ee7b7' }}>{runs.board.passed ?? 0} passed</span>
+                {(runs.board.failed ?? 0) > 0 && <span className="rounded-full px-2.5 py-1 text-[12px] font-bold" style={{ background: 'rgba(244,63,94,0.22)', color: '#fda4af' }}>{runs.board.failed} failed</span>}
+                {(runs.board.flaky ?? 0) > 0 && <span className="rounded-full px-2.5 py-1 text-[12px] font-bold" style={{ background: 'rgba(245,158,11,0.22)', color: '#fcd34d' }}>{runs.board.flaky} flaky</span>}
+                <button onClick={() => setView('run')} className="btn-primary btn-gold text-[11px] px-3 py-1.5 font-semibold ring-1 ring-gold-300/40">see proof →</button>
+              </div>
             ) : (
-              <span className="ml-auto text-[10px] text-slate-400 italic">Run a script to get a grounded verdict - green means the app is actually right, with proof.</span>
+              <span className="ml-auto text-[11px] text-white/55 italic max-w-[280px] shrink-0">Run a script to get a grounded verdict — green means the app is actually right, with proof.</span>
             )}
           </div>
         </div>
