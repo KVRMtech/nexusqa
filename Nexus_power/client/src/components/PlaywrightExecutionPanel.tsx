@@ -18,6 +18,39 @@ import {
 } from 'lucide-react';
 import { api } from '../services/api';
 import TriagePanel from './TriagePanel';
+
+// Per-script overflow menu — groups the secondary script tools (verdict history,
+// edit, audit, regenerate, preflight, data, copy, .spec) behind a ⋮ so the run
+// controls lead. Same handlers, just relocated; `busy` keeps progress visible.
+function RowActionsMenu(
+  { items, busy }:
+  { items: { key: string; label: string; icon: React.ReactNode; onClick: () => void; disabled?: boolean }[]; busy?: boolean },
+) {
+  const [open, setOpen] = useState(false);
+  if (items.length === 0) return null;
+  return (
+    <div className="relative">
+      <button onClick={() => setOpen((o) => !o)}
+        className="flex items-center gap-1 rounded-md px-2 py-1 text-[10px] font-semibold bg-nexus-50 text-nexus-700 hover:bg-nexus-100">
+        {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : <MoreVertical className="h-3 w-3" />} More
+      </button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-20" onClick={() => setOpen(false)} />
+          <div className="absolute left-0 z-30 mt-1 min-w-[190px] rounded-lg border border-nexus-200 bg-white py-1 shadow-card">
+            {items.map((it) => (
+              <button key={it.key} disabled={it.disabled}
+                onClick={() => { setOpen(false); it.onClick(); }}
+                className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[11px] font-medium text-nexus-700 hover:bg-nexus-50 disabled:opacity-50">
+                {it.icon}{it.label}
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
 import StepTimeline from './StepTimeline';
 
 const RUN_CMD = 'npm install && npx playwright install --with-deps && npx playwright test';
@@ -1390,56 +1423,17 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
                                       className="flex items-center gap-1 rounded-md px-2 py-1 text-[10px] font-semibold bg-slate-100 text-slate-700 hover:bg-slate-200">
                                       {openCode[rid] ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />} {openCode[rid] ? 'Hide' : 'View'} code
                                     </button>
-                                    {s.test_id && (
-                                      <button onClick={() => loadHistory(rid, s.test_id)}
-                                        title="Grounded verdict history — this script's proven-green vs regression/drift/flake across recent runs (with screenshots + heal events)"
-                                        className="flex items-center gap-1 rounded-md px-2 py-1 text-[10px] font-semibold bg-nexus-50 text-nexus-700 hover:bg-nexus-100">
-                                        <History className="h-3 w-3" /> Verdict history
-                                      </button>
-                                    )}
-                                    {s.test_id && (
-                                      <button onClick={() => openEditor(s)}
-                                        title="Edit this test's script and save a new version"
-                                        className="flex items-center gap-1 rounded-md px-2 py-1 text-[10px] font-semibold bg-nexus-50 text-nexus-700 hover:bg-nexus-100">
-                                        <Pencil className="h-3 w-3" /> Edit{editedTests[s.test_id] ? ` · v${editedTests[s.test_id]}` : ''}
-                                      </button>
-                                    )}
-                                    {s.test_id && (
-                                      <button onClick={() => auditScript(s.test_id)} disabled={fidBusy === s.test_id}
-                                        title="Audit: does this script faithfully implement the test case + verify its Expected Results?"
-                                        className="flex items-center gap-1 rounded-md px-2 py-1 text-[10px] font-semibold bg-nexus-50 text-nexus-700 hover:bg-nexus-100 disabled:opacity-50">
-                                        {fidBusy === s.test_id ? <Loader2 className="h-3 w-3 animate-spin" /> : <ShieldAlert className="h-3 w-3" />} Audit
-                                      </button>
-                                    )}
-                                    {s.test_id && (
-                                      <button onClick={() => regenScript(s.test_id)} disabled={fidBusy === `${s.test_id}:regen`}
-                                        title="Regenerate this script from the current test case as a new immutable version (v+1)"
-                                        className="flex items-center gap-1 rounded-md px-2 py-1 text-[10px] font-semibold bg-nexus-50 text-nexus-700 hover:bg-nexus-100 disabled:opacity-50">
-                                        {fidBusy === `${s.test_id}:regen` ? <Loader2 className="h-3 w-3 animate-spin" /> : <RotateCcw className="h-3 w-3" />} Regenerate
-                                      </button>
-                                    )}
-                                    {s.test_id && (
-                                      <button onClick={() => runPreflight(s.test_id)} disabled={pfBusy === s.test_id}
-                                        title="Live preflight: open the live app and check every locator resolves before running."
-                                        className="flex items-center gap-1 rounded-md px-2 py-1 text-[10px] font-semibold bg-emerald-50 text-emerald-700 hover:bg-emerald-100 disabled:opacity-50">
-                                        {pfBusy === s.test_id ? <Loader2 className="h-3 w-3 animate-spin" /> : <Globe className="h-3 w-3" />} Live preflight
-                                      </button>
-                                    )}
-                                    {(s.data_fields?.length || 0) > 0 && (
-                                      <button onClick={() => setOpenData((m) => ({ ...m, [rid]: !m[rid] }))}
-                                        title="Set this test's own data (overrides the global defaults)"
-                                        className="flex items-center gap-1 rounded-md px-2 py-1 text-[10px] font-semibold bg-amber-50 text-amber-700 hover:bg-amber-100">
-                                        <Database className="h-3 w-3" /> Data ({s.data_fields.length}){perTestData[s.test_id] && Object.values(perTestData[s.test_id]).some((v) => v) ? ' ✎' : ''}
-                                      </button>
-                                    )}
-                                    <button onClick={() => copy(`cmd:${rid}`, `npx playwright test ${s.path}`)}
-                                      className="flex items-center gap-1 rounded-md px-2 py-1 text-[10px] font-semibold bg-slate-100 text-slate-600 hover:bg-slate-200">
-                                      {copied === `cmd:${rid}` ? <Check className="h-3 w-3 text-emerald-500" /> : <Copy className="h-3 w-3" />} Copy
-                                    </button>
-                                    <button onClick={() => downloadText((s.path.split('/').pop() || 'test.spec.ts'), s.code, 'text/typescript')}
-                                      className="flex items-center gap-1 rounded-md px-2 py-1 text-[10px] font-semibold bg-slate-100 text-slate-600 hover:bg-slate-200">
-                                      <Download className="h-3 w-3" /> .spec
-                                    </button>
+                                    <RowActionsMenu busy={fidBusy === s.test_id || fidBusy === `${s.test_id}:regen` || pfBusy === s.test_id}
+                                      items={[
+                                        ...(s.test_id ? [{ key: 'hist', label: 'Verdict history', icon: <History className="h-3 w-3" />, onClick: () => loadHistory(rid, s.test_id!) }] : []),
+                                        ...(s.test_id ? [{ key: 'edit', label: `Edit${editedTests[s.test_id] ? ` · v${editedTests[s.test_id]}` : ''}`, icon: <Pencil className="h-3 w-3" />, onClick: () => openEditor(s) }] : []),
+                                        ...(s.test_id ? [{ key: 'audit', label: 'Audit fidelity', icon: <ShieldAlert className="h-3 w-3" />, onClick: () => auditScript(s.test_id!), disabled: fidBusy === s.test_id }] : []),
+                                        ...(s.test_id ? [{ key: 'regen', label: 'Regenerate (v+1)', icon: <RotateCcw className="h-3 w-3" />, onClick: () => regenScript(s.test_id!), disabled: fidBusy === `${s.test_id}:regen` }] : []),
+                                        ...(s.test_id ? [{ key: 'pf', label: 'Live preflight', icon: <Globe className="h-3 w-3" />, onClick: () => runPreflight(s.test_id!), disabled: pfBusy === s.test_id }] : []),
+                                        ...((s.data_fields?.length || 0) > 0 ? [{ key: 'data', label: `Test data (${s.data_fields?.length ?? 0})`, icon: <Database className="h-3 w-3" />, onClick: () => setOpenData((m) => ({ ...m, [rid]: !m[rid] })) }] : []),
+                                        { key: 'copy', label: 'Copy run command', icon: <Copy className="h-3 w-3" />, onClick: () => copy(`cmd:${rid}`, `npx playwright test ${s.path}`) },
+                                        { key: 'spec', label: 'Download .spec', icon: <Download className="h-3 w-3" />, onClick: () => downloadText((s.path.split('/').pop() || 'test.spec.ts'), s.code, 'text/typescript') },
+                                      ]} />
                                   </div>
                                   {histOpen === rid && (
                                     <div className="mt-2 rounded-md border border-slate-200 bg-white/70 p-2">
