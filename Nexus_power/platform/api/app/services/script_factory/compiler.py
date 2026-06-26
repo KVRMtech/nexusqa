@@ -511,7 +511,8 @@ def _action_lines(step, field_meta: dict, parametrize: bool = False,
             out.append(f"const sel = {_sel}.first();")
             out.append(f"await sel.selectOption({_val_expr(value, label, parametrize)});")
             if parametrize:
-                out.append(f"await expect(sel.locator('option:checked')).toHaveText(__nxTok({_val_expr(value, label, parametrize)})).catch(() => {{}}); // grounded: selected option text holds the entered value (token-tolerant, data-driven)")
+                out.append("await expect(sel).not.toHaveValue(''); // grounded: a selection WAS committed (no-op fails red; runtime-value safe)")
+                out.append(f"await expect(sel.locator('option:checked')).toHaveText(__nxTok({_val_expr(value, label, parametrize)})).catch(() => {{}}); // tolerant: selected-option text token (swallowed for data-driven override)")
             else:
                 _seltok = _value_oracle(value)
                 if _seltok:
@@ -578,8 +579,10 @@ def _action_lines(step, field_meta: dict, parametrize: bool = False,
                     out.append(f"await expect(field).toHaveValue(__nxTok({_val_expr(value, label, parametrize)})).catch(() => {{}}); // grounded: field holds the entered value (token-tolerant, data-driven; adaptive-set safe)")
             elif parametrize:
                 # Value may be overridden at run time — assert the field committed
-                # *something* (the fill worked) rather than mirroring a fixed token.
-                out.append(f"await expect(field).toHaveValue(__nxTok({_val_expr(value, label, parametrize)})).catch(() => {{}}); // grounded: field holds the entered value (token-tolerant, data-driven; adaptive-set safe)")
+                # *something* (a no-op fill fails RED) rather than mirroring a fixed
+                # token (the recorded token may not match a data-driven override).
+                out.append("await expect(field).not.toHaveValue(''); // grounded: a value WAS committed (no-op fill fails red; runtime-value safe)")
+                out.append(f"await expect(field).toHaveValue(__nxTok({_val_expr(value, label, parametrize)})).catch(() => {{}}); // tolerant: committed-value token (swallowed for data-driven override)")
             else:
                 tok = _value_oracle(value)
                 if tok:
@@ -616,7 +619,8 @@ def _action_lines(step, field_meta: dict, parametrize: bool = False,
             out.append(f"const sel = {_sel}.first();")
             out.append(f"await sel.selectOption({_val_expr(value, label, parametrize)});")
             if parametrize:
-                out.append(f"await expect(sel.locator('option:checked')).toHaveText(__nxTok({_val_expr(value, label, parametrize)})).catch(() => {{}}); // grounded: selected option text holds the entered value (token-tolerant, data-driven)")
+                out.append("await expect(sel).not.toHaveValue(''); // grounded: a selection WAS committed (no-op fails red; runtime-value safe)")
+                out.append(f"await expect(sel.locator('option:checked')).toHaveText(__nxTok({_val_expr(value, label, parametrize)})).catch(() => {{}}); // tolerant: selected-option text token (swallowed for data-driven override)")
             else:
                 _seltok = _value_oracle(value)
                 if _seltok:
