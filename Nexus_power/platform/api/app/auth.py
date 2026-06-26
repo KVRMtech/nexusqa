@@ -23,15 +23,26 @@ async def get_current_user(
     """Validate JWT and return decoded user context.
 
     Attaches user info to ``request.state`` for use by route handlers.
+
+    Reads the token from the standard Bearer header, OR — for resources
+    loaded by the browser without a custom fetch (e.g. ``<img src=...?token=>``
+    of an annotated frame or run screenshot) that cannot send an
+    Authorization header — from the ``?token=`` query param.  Mirrors the
+    query fallback already in ``jwt_auth_middleware``; the token is still
+    fully validated below, so this stays fail-closed.
     """
-    if credentials is None:
+    if credentials is not None:
+        token = credentials.credentials
+    else:
+        token = request.query_params.get("token", "") or ""
+    if not token:
         raise HTTPException(status_code=401, detail="Authorization header required")
     try:
         import jwt as pyjwt
 
         config: PlatformAPIConfig = request.app.state.config
         payload = pyjwt.decode(
-            credentials.credentials,
+            token,
             config.jwt_secret,
             algorithms=[config.jwt_algorithm],
         )

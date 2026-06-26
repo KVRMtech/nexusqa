@@ -94,6 +94,36 @@ def score_step(step, ambiguous: set[str]) -> tuple[str, str]:
     return HIGH, "Directly observed with a clear, named element."
 
 
+def _strip_trailing_punct(s: str) -> str:
+    """Drop trailing punctuation/space so 'I confirm …' and 'I confirm ….' match —
+    a trailing period is the classic difference between a double-captured label."""
+    return (s or "").strip().rstrip(".:;,!?-– ").strip()
+
+
+def is_consecutive_duplicate(cur, prev) -> bool:
+    """True when ``cur`` re-interacts the SAME control as the immediately preceding
+    step — the double-capture signature: one control captured once as a select/
+    toggle/fill and AGAIN as the trailing commit click, which then gets the page's
+    navigation outcome wrongly pinned to it (so a wrong control asserts a nav it
+    cannot cause — exactly the mis-recorded step-20 case).
+
+    Conservative, to avoid false positives: requires near-identical labels (modulo
+    trailing punctuation) AND that ``cur`` is a click/commit interaction.
+    """
+    if cur is None or prev is None:
+        return False
+    cobs = getattr(cur, "observed", None) or {}
+    pobs = getattr(prev, "observed", None) or {}
+    cl = _norm(_strip_trailing_punct(cobs.get("label") or ""))
+    pl = _norm(_strip_trailing_punct(pobs.get("label") or ""))
+    if not cl or not pl or cl != pl:
+        return False
+    cverb = (cobs.get("verb") or "").strip().lower()
+    pverb = (pobs.get("verb") or "").strip().lower()
+    return cverb in ("click", "press", "tap") and pverb in (
+        "select", "click", "press", "tap", "type", "fill", "input")
+
+
 def annotate(test_case, ambiguous: set[str]) -> tuple[int, int]:
     """Annotate each step in-place with confidence + reason.
 
@@ -101,12 +131,38 @@ def annotate(test_case, ambiguous: set[str]) -> tuple[int, int]:
     """
     high = 0
     review = 0
+    prev = None
     for step in (test_case.steps or []):
         level, reason = score_step(step, ambiguous)
+        # ── Duplicate-step guard ─────────────────────────────────────────────
+        # A control re-interacted immediately (double-capture) is flagged CONFIRM
+        # — never REVIEW — so the step STILL RUNS (review/inferred steps get a
+        # test.skip(); skipping a mis-recorded "click X again → navigates" would
+        # GREEN-WASH the very failure we want surfaced). CONFIRM shows amber, counts
+        # in the review tally, and keeps the run honest (fails RED if the pinned
+        # navigation never happens). Non-destructive + frozen-compiler-safe; only
+        # upgrades a step that otherwise scored HIGH (never masks a stronger flag).
+        if level == HIGH and is_consecutive_duplicate(step, prev):
+            _pn = getattr(prev, "step_number", None)
+            _plabel = ((getattr(prev, "observed", None) or {}).get("label") or "")
+            _obs = getattr(step, "observed", None)
+            _nav = bool((_obs or {}).get("url")) or \
+                "proceeds to" in (getattr(step, "expected", "") or "").lower()
+            level = CONFIRM
+            reason = (
+                f"Possible duplicate of step {_pn}: the same control "
+                f"('{_plabel}') was captured twice in a row"
+                + ("; this step also asserts a page navigation the duplicate may not "
+                   "cause — point it at the real Submit/Next control, or remove it."
+                   if _nav else " — confirm it isn't a double-capture.")
+            )
+            if isinstance(_obs, dict):
+                _obs["possible_duplicate"] = {"of_step": _pn, "navigation_pinned": _nav}
         step.confidence = level
         step.confidence_reason = reason
         if level == HIGH:
             high += 1
         else:
             review += 1
+        prev = step
     return high, review

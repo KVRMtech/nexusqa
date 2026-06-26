@@ -116,16 +116,23 @@ def _composer_from_request(request: Request):
 
 
 def _bearer_token(request: Request) -> str:
-    """Extract the raw JWT from the Authorization header.
+    """Extract the raw JWT from the Authorization header, OR — for
+    browser ``<img src=...?token=>`` requests that cannot send an
+    Authorization header — from the ``?token=`` query param.
 
     Forwarded to eyes-engine on service-to-service frame fetches so
     that eyes can enforce the same tenant isolation the user request
-    already passed.  Returns ``""`` when no token is present.
+    already passed.  Mirrors the query fallback in ``get_current_user``
+    / ``jwt_auth_middleware`` so annotated-frame ``<img>`` loads forward
+    a valid JWT to eyes (without it eyes rejects the fetch → 404).
+    Returns ``""`` when no token is present.
     """
     raw = request.headers.get("authorization") or ""
     if raw.lower().startswith("bearer "):
         return raw[len("bearer "):].strip()
-    return raw.strip()
+    if raw.strip():
+        return raw.strip()
+    return (request.query_params.get("token", "") or "").strip()
 
 
 def _frame_annotator_from_request(request: Request):

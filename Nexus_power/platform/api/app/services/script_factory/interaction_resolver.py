@@ -709,21 +709,43 @@ def emit_toggle_switch_lines(observed: dict, field_meta: dict, parametrize: bool
         "//label[contains(normalize-space(.),'" + xlab + "')]"
         "/ancestor::*[.//*[@role='switch']][1]//*[@role='switch']"
     )
-    sw = (
+    # UNION locator: a role=switch by name OR the label-proximity switch xpath OR a
+    # plain checkbox by accessible name OR getByLabel. The recording models EVERY
+    # boolean consent/agree/toggle as "toggle", but real apps (and Aegis) ship BOTH a
+    # <div role='switch' aria-checked> AND a plain <input type='checkbox'>. Resolving
+    # by NAME / label ONLY (no bare catch-all) keeps a nameless control failing RED.
+    # A role=switch is matched FIRST so existing switch behavior is byte-identical.
+    tg = (
         f"{scope}.getByRole('switch', {{ name: '{lab}' }})"
-        f".or({scope}.locator(\"xpath={xpath}\")).first()"
+        f".or({scope}.locator(\"xpath={xpath}\"))"
+        f".or({scope}.getByRole('checkbox', {{ name: '{lab}' }}))"
+        f".or({scope}.getByLabel('{lab}')).first()"
     )
     out: list[str] = []
-    out.append("// CONTROL-KIND heal: recorded toggle -> role=switch (click iff state differs).")
-    out.append(f"const sw = {sw};")
-    out.append("await sw.waitFor({ state: 'attached', timeout: 6000 }); // absent -> fast RED")
-    out.append("await sw.scrollIntoViewIfNeeded().catch(() => {});")
+    out.append("// CONTROL-KIND heal: recorded toggle -> role=switch OR plain checkbox (commit iff state differs).")
+    out.append(f"const tg = {tg};")
+    out.append("await tg.waitFor({ state: 'attached', timeout: 6000 }); // absent -> fast RED")
+    out.append("await tg.scrollIntoViewIfNeeded().catch(() => {});")
     out.append(f"const _wv = String({val_expr}).trim().toLowerCase();")
     out.append("const _desiredOn = !(_wv === 'false' || _wv === 'off' || _wv === 'no' || _wv === 'unchecked');")
-    out.append("const _cur = (await sw.getAttribute('aria-checked', { timeout: 6000 }).catch(() => null)) === 'true';")
-    out.append("if (_cur !== _desiredOn) { await sw.click({ timeout: 6000 }); } // idempotent")
-    out.append("await expect(sw).toHaveAttribute('aria-checked', _desiredOn ? 'true' : 'false', "
+    # Decide switch- vs checkbox-semantics from the RESOLVED live control. A plain
+    # <input type=checkbox> has no `role` attribute (implicit role) -> detect via tag+type.
+    out.append("const _tgRole = (await tg.getAttribute('role', { timeout: 4000 }).catch(() => null)) || '';")
+    out.append("const _tgTag = ((await tg.evaluate(el => el.tagName || '').catch(() => '')) || '').toLowerCase();")
+    out.append("const _tgType = ((await tg.getAttribute('type', { timeout: 4000 }).catch(() => null)) || '').toLowerCase();")
+    out.append("const _isCheckboxCtl = _tgRole !== 'switch' && (_tgRole === 'checkbox' || (_tgTag === 'input' && _tgType === 'checkbox'));")
+    out.append("if (_isCheckboxCtl) {")
+    out.append("  // plain checkbox: native check()/uncheck() are idempotent; toBeChecked is the grounded commit oracle.")
+    out.append("  if (_desiredOn) { await tg.check({ timeout: 6000 }); } else { await tg.uncheck({ timeout: 6000 }); }")
+    out.append("  if (_desiredOn) { await expect(tg).toBeChecked({ timeout: 6000 }); }")
+    out.append("  else { await expect(tg).not.toBeChecked({ timeout: 6000 }); } // grounded: checkbox committed the recorded state")
+    out.append("} else {")
+    out.append("  // role=switch: click iff aria-checked differs (the 2nd confirmation green never toggles it back).")
+    out.append("  const _cur = (await tg.getAttribute('aria-checked', { timeout: 6000 }).catch(() => null)) === 'true';")
+    out.append("  if (_cur !== _desiredOn) { await tg.click({ timeout: 6000 }); } // idempotent")
+    out.append("  await expect(tg).toHaveAttribute('aria-checked', _desiredOn ? 'true' : 'false', "
                "{ timeout: 6000 }); // grounded: the switch committed the recorded state")
+    out.append("}")
     return out
 
 

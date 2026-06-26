@@ -55,8 +55,10 @@ from ..services.test_runs import (
 )
 from ..services.test_factory.run_screenshots import (
     MAX_SCREENSHOT_BYTES,
+    MAX_VIDEO_BYTES,
     fetch_screenshot,
     store_screenshot,
+    store_video,
 )
 from ..services.diff_and_heal import heal_capture_store
 from ..services.diff_and_heal.action_resolver import flatten_aria
@@ -298,6 +300,78 @@ async def get_run_screenshot(
     content_type, image = found
     return Response(
         content=image,
+        media_type=content_type,
+        headers={"Cache-Control": "private, max-age=86400"},
+    )
+
+
+@router.post("/api/v1/test-runs/video")
+async def upload_run_video(
+    file: UploadFile = File(...),
+    run_id: str = Form(""),
+    artifact_id: str = Form(...),
+    scenario_id: str = Form(""),
+    step_number: int = Form(0),
+    user: dict = Depends(get_current_user),
+):
+    """Upload one run VIDEO (opt-in — recorded only when NEXUS_RECORD_VIDEO=1) from the
+    bundled reporter, typically the proving/clean-run clip. Stored tenant-scoped in the
+    shared blob table; returns a serve URL to drop into the step's video_url. Degrades
+    safely pre-migration (503 → reporter logs, skips)."""
+    tenant_id = user["tenant_id"]
+    data = await file.read(MAX_VIDEO_BYTES + 1)
+    if not data:
+        raise HTTPException(422, "empty video")
+    if len(data) > MAX_VIDEO_BYTES:
+        raise HTTPException(413, "video too large")
+    async with tenant_scoped_session(tenant_id) as session:
+        await _verify_artifact_in_tenant(
+            session, artifact_id=artifact_id, tenant_id=tenant_id,
+        )
+        try:
+            vid = await store_video(
+                session,
+                tenant_id=tenant_id,
+                artifact_id=artifact_id,
+                run_id=run_id,
+                scenario_id=scenario_id,
+                step_number=step_number,
+                content_type=file.content_type or "video/webm",
+                video=data,
+            )
+        except ValueError as exc:
+            raise HTTPException(422, str(exc))
+        except Exception as exc:  # table missing (pre-migration) / DB error
+            _logger.warning("test_runs.video_store_unavailable: %s", exc)
+            raise HTTPException(503, "video store unavailable")
+    return {"video_id": vid, "url": f"/api/v1/test-runs/video/{vid}"}
+
+
+@router.get("/api/v1/test-runs/video/{video_id}")
+async def get_run_video(
+    request: Request,
+    video_id: str = Path(..., min_length=1, max_length=64),
+):
+    """Serve a stored run video for the <video> player. Auth is the JWT Bearer OR a
+    ``?token=`` query param (resolved by the auth middleware), so a plain <video src>
+    loads. Tenant-scoped — reuses the shared blob fetch (content_type sets the MIME)."""
+    user = getattr(request.state, "user", None) or {}
+    tenant_id = user.get("tenant_id")
+    if not tenant_id:
+        raise HTTPException(401, "unauthenticated")
+    try:
+        async with tenant_scoped_session(tenant_id) as session:
+            found = await fetch_screenshot(
+                session, tenant_id=tenant_id, screenshot_id=video_id,
+            )
+    except Exception as exc:  # table missing (pre-migration) / DB error
+        _logger.warning("test_runs.video_fetch_unavailable: %s", exc)
+        raise HTTPException(404, "video not found")
+    if found is None:
+        raise HTTPException(404, "video not found")
+    content_type, blob = found
+    return Response(
+        content=blob,
         media_type=content_type,
         headers={"Cache-Control": "private, max-age=86400"},
     )
