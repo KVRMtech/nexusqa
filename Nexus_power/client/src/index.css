@@ -130,6 +130,8 @@
 
 /* (a) Readable type FLOOR — the #1 "glimpse / can't read" fix. Lift micro-text to a real
    12px floor so information reads instead of squinting (order preserved). */
+.text-\[6px\]  { font-size: 11.5px !important; }
+.text-\[7px\]  { font-size: 12px !important; }
 .text-\[8px\]  { font-size: 12px !important; }
 .text-\[9px\]  { font-size: 12.5px !important; }
 .text-\[10px\] { font-size: 13px !important; }

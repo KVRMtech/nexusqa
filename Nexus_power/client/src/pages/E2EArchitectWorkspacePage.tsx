@@ -869,7 +869,7 @@ export default function E2EArchitectWorkspacePage() {
         <div className="flex flex-col items-center gap-4 text-center max-w-md">
           <AlertTriangle className="h-10 w-10 text-red-400" />
           <h2 className="text-lg font-semibold text-slate-700">Test Studio Error</h2>
-          <p className="text-sm text-slate-8000">{error || 'Failed to load E2E Architect analysis.'}</p>
+          <p className="text-sm text-slate-600">{error || 'Failed to load E2E Architect analysis.'}</p>
           <div className="flex gap-3">
             <button
               onClick={() => navigate(-1)}

@@ -115,7 +115,7 @@ function IdChip({
 function qualityGrade(score: number | null): { label: string; color: string; variant: 'green' | 'blue' | 'yellow' | 'orange' | 'red' | 'gray'; tooltip: string } {
   if (score == null) return {
     label: 'N/A',
-    color: 'text-slate-8000',
+    color: 'text-slate-600',
     variant: 'gray',
     tooltip: 'No quality score available — the brain quality gate did not produce a score for this artifact.',
   };
@@ -232,7 +232,7 @@ function ScoreBar({ label, value }: { label: string; value: number | null }) {
   return (
     <div>
       <div className="flex justify-between text-xs mb-1">
-        <span className="text-slate-8000">{label}</span>
+        <span className="text-slate-600">{label}</span>
         <span className="text-slate-600 font-mono">{value != null ? `${pct}%` : '—'}</span>
       </div>
       <div className="w-full bg-gray-100 rounded-full h-2">
@@ -270,7 +270,7 @@ function LaunchCard({ action, navigate }: { action: CanonicalLaunchAction; navig
       )}
     >
       <div className="flex items-start gap-3">
-        <div className={clsx('shrink-0 mt-0.5', isDisabled ? 'text-slate-8000' : 'text-nexus-400 group-hover:text-nexus-300')}>
+        <div className={clsx('shrink-0 mt-0.5', isDisabled ? 'text-slate-600' : 'text-nexus-400 group-hover:text-nexus-300')}>
           {isDisabled ? <Lock className="h-5 w-5" /> : icon}
         </div>
         <div className="flex-1 min-w-0">
@@ -282,10 +282,10 @@ function LaunchCard({ action, navigate }: { action: CanonicalLaunchAction; navig
           </div>
           <p className="text-xs text-slate-400 leading-relaxed">{action.description}</p>
           {action.reason && action.state !== 'ready' && (
-            <p className="text-[10px] text-slate-8000 mt-1 italic">{action.reason}</p>
+            <p className="text-[10px] text-slate-600 mt-1 italic">{action.reason}</p>
           )}
         </div>
-        {!isDisabled && <ChevronRight className="h-4 w-4 text-slate-8000 group-hover:text-nexus-400 shrink-0 mt-1" />}
+        {!isDisabled && <ChevronRight className="h-4 w-4 text-slate-600 group-hover:text-nexus-400 shrink-0 mt-1" />}
       </div>
     </button>
   );
@@ -376,7 +376,7 @@ export default function CanonicalResultPage() {
       <div className="flex items-center justify-center min-h-[60vh]">
         <div className="flex flex-col items-center gap-4">
           <Loader2 className="h-8 w-8 text-nexus-400 animate-spin" />
-          <p className="text-sm text-slate-8000">Loading canonical asset&hellip;</p>
+          <p className="text-sm text-slate-600">Loading canonical asset&hellip;</p>
         </div>
       </div>
     );
@@ -391,7 +391,7 @@ export default function CanonicalResultPage() {
           <p className="text-sm text-red-400">{error ?? 'Failed to load canonical asset'}</p>
           <button
             onClick={() => navigate(-1)}
-            className="text-xs text-slate-8000 hover:text-[#0a2540] transition-colors flex items-center gap-1"
+            className="text-xs text-slate-600 hover:text-[#0a2540] transition-colors flex items-center gap-1"
           >
             <ArrowLeft className="h-3.5 w-3.5" /> Go back
           </button>
@@ -539,7 +539,7 @@ export default function CanonicalResultPage() {
         </div>
 
         {/* Source Info */}
-        <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-xs text-slate-8000">
+        <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-xs text-slate-600">
           {vm.source_filename && (
             <span className="flex items-center gap-1.5">
               <FileText className="h-3.5 w-3.5" /> {vm.source_filename}
@@ -642,7 +642,7 @@ export default function CanonicalResultPage() {
 
         {/* Transcript */}
         <div className="space-y-3">
-          <h3 className="text-xs font-medium text-slate-8000 uppercase tracking-wider">Transcript Evidence</h3>
+          <h3 className="text-xs font-medium text-slate-600 uppercase tracking-wider">Transcript Evidence</h3>
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
             <div className="bg-gray-50 rounded-lg px-3 py-2">
               <p className="text-lg font-bold text-[#0a2540]">{vm.transcript_word_count.toLocaleString()}</p>
@@ -679,7 +679,7 @@ export default function CanonicalResultPage() {
 
         {/* Visual */}
         <div className="space-y-3 border-t border-gray-100 pt-5">
-          <h3 className="text-xs font-medium text-slate-8000 uppercase tracking-wider">Detected Visual Evidence</h3>
+          <h3 className="text-xs font-medium text-slate-600 uppercase tracking-wider">Detected Visual Evidence</h3>
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
             <div className="bg-gray-50 rounded-lg px-3 py-2">
               <p className="text-lg font-bold text-[#0a2540]">{vm.frame_count}</p>
@@ -761,7 +761,7 @@ export default function CanonicalResultPage() {
         {/* Model Provenance Table */}
         {Object.keys(vm.model_provenance).length > 0 && (
           <div className="border-t border-gray-100 pt-4">
-            <h3 className="text-xs font-medium text-slate-8000 uppercase tracking-wider mb-2">Model Provenance</h3>
+            <h3 className="text-xs font-medium text-slate-600 uppercase tracking-wider mb-2">Model Provenance</h3>
             <div className="overflow-x-auto">
               <table className="w-full text-xs">
                 <thead>
@@ -773,7 +773,7 @@ export default function CanonicalResultPage() {
                 <tbody>
                   {Object.entries(vm.model_provenance).map(([dimension, model]) => (
                     <tr key={dimension} className="border-b border-gray-100 last:border-0">
-                      <td className="py-1.5 pr-6 text-slate-8000">{dimension}</td>
+                      <td className="py-1.5 pr-6 text-slate-600">{dimension}</td>
                       <td className="py-1.5 text-slate-600 font-mono">{model}</td>
                     </tr>
                   ))}
@@ -786,7 +786,7 @@ export default function CanonicalResultPage() {
         {/* Review Reasons */}
         {vm.review_reasons.length > 0 && (
           <div className="border-t border-gray-100 pt-4">
-            <h3 className="text-xs font-medium text-slate-8000 uppercase tracking-wider mb-2">Review Reasons</h3>
+            <h3 className="text-xs font-medium text-slate-600 uppercase tracking-wider mb-2">Review Reasons</h3>
             <ul className="space-y-1">
               {vm.review_reasons.map((reason, i) => (
                 <li key={i} className="text-xs text-orange-400/90 flex items-start gap-1.5">
@@ -800,13 +800,13 @@ export default function CanonicalResultPage() {
 
         {/* Operator Truth */}
         <div className="border-t border-gray-100 pt-4">
-          <h3 className="text-xs font-medium text-slate-8000 uppercase tracking-wider mb-2">Operator Truth</h3>
+          <h3 className="text-xs font-medium text-slate-600 uppercase tracking-wider mb-2">Operator Truth</h3>
           <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-xs">
             <span className="flex items-center gap-1.5">
               <Activity className="h-3.5 w-3.5 text-slate-400" />
               Workflow Sync: <StatusBadge label={syncStateLabel(vm.workflow_sync_state).label} variant={syncStateLabel(vm.workflow_sync_state).variant} />
             </span>
-            <span className="flex items-center gap-1.5 text-slate-8000">
+            <span className="flex items-center gap-1.5 text-slate-600">
               <RefreshCw className="h-3.5 w-3.5" />
               Retries: <span className="text-slate-600 font-mono">{vm.retry_count}</span>
             </span>
@@ -879,7 +879,7 @@ export default function CanonicalResultPage() {
                 <div className="w-36 shrink-0">
                   <span className="text-xs text-slate-600">{stageDef.label}</span>
                   {stageDef.parallel && (
-                    <span className="text-[9px] text-slate-8000 ml-1.5">({stageDef.parallel})</span>
+                    <span className="text-[9px] text-slate-600 ml-1.5">({stageDef.parallel})</span>
                   )}
                 </div>
                 <div className="flex-1 bg-white shadow-sm rounded-full h-3 overflow-hidden">
@@ -899,7 +899,7 @@ export default function CanonicalResultPage() {
         </div>
 
         {/* Parallel path indicator */}
-        <div className="flex items-center gap-2 text-[10px] text-slate-8000 border-t border-gray-100 pt-3">
+        <div className="flex items-center gap-2 text-[10px] text-slate-600 border-t border-gray-100 pt-3">
           <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-blue-500/40 inline-block" /> audio path</span>
           <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-nexus-500/50 inline-block" /> visual path</span>
           <span className="ml-auto text-slate-400">Audio transcription and visual extraction execute in parallel</span>

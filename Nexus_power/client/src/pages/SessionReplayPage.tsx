@@ -272,7 +272,7 @@ export default function SessionReplayPage() {
   return (
     <div className="space-y-4 animate-fade-in">
       {/* Breadcrumb */}
-      <Link to="/sessions" className="inline-flex items-center gap-2 text-sm text-slate-8000 hover:text-nexus-400 transition-colors">
+      <Link to="/sessions" className="inline-flex items-center gap-2 text-sm text-slate-600 hover:text-nexus-400 transition-colors">
         <ArrowLeft className="h-4 w-4" />
         Back to Sessions
       </Link>
@@ -289,7 +289,7 @@ export default function SessionReplayPage() {
             ) : (
               <>
                 <h1 className="page-title">{sessionTitle}</h1>
-                <div className="mt-2 flex flex-wrap items-center gap-4 text-sm text-slate-8000">
+                <div className="mt-2 flex flex-wrap items-center gap-4 text-sm text-slate-600">
                   {sessionDate && (
                     <span className="flex items-center gap-1.5"><Clock className="h-3.5 w-3.5" /> {sessionDate}{totalDuration > 0 ? ` — ${formatDuration(totalDuration)}` : ''}</span>
                   )}
@@ -329,7 +329,7 @@ export default function SessionReplayPage() {
             {artifact.has_real_transcript && <StatusBadge label="REAL TRANSCRIPT" variant="green" icon={<Mic className="h-2.5 w-2.5" />} />}
             {artifact.has_visual_semantics && <StatusBadge label="REAL VISUAL" variant="blue" icon={<Eye className="h-2.5 w-2.5" />} />}
             {artifact.brain_quality_score != null && (
-              <span className="text-slate-8000">Quality: <span className="text-slate-600 font-mono">{(artifact.brain_quality_score * 100).toFixed(0)}%</span></span>
+              <span className="text-slate-600">Quality: <span className="text-slate-600 font-mono">{(artifact.brain_quality_score * 100).toFixed(0)}%</span></span>
             )}
             {artifact.processing_time_seconds > 0 && (
               <span className="flex items-center gap-1"><Timer className="h-3 w-3" /> Processed in {formatDuration(artifact.processing_time_seconds)}</span>
@@ -342,7 +342,7 @@ export default function SessionReplayPage() {
           <div className="mt-4 flex gap-4">
             {participants.map((p) => (
               <div key={p.speaker_id} className="flex items-center gap-2">
-                <div className="flex h-7 w-7 items-center justify-center rounded-full bg-gradient-to-br from-nexus-500 to-purple-600 text-[10px] font-bold text-[#0a2540]">
+                <div className="flex h-7 w-7 items-center justify-center rounded-full bg-gradient-to-br from-nexus-500 to-nexus-700 text-[10px] font-bold text-white">
                   {p.name.charAt(0)}
                 </div>
                 <div>
@@ -365,7 +365,7 @@ export default function SessionReplayPage() {
             {playing ? <Pause className="h-5 w-5 text-white" /> : <Play className="h-5 w-5 text-white ml-0.5" />}
           </button>
           <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-2 text-xs text-slate-8000 mb-1.5">
+            <div className="flex items-center gap-2 text-xs text-slate-600 mb-1.5">
               <span className="font-mono">{formatTime(currentTime)}</span>
               <span>/</span>
               <span className="font-mono">{formatTime(totalDuration)}</span>
@@ -388,7 +388,7 @@ export default function SessionReplayPage() {
                       'flex-1 rounded-t-sm transition-all duration-150',
                       totalDuration > 0 && i <= Math.floor(currentTime / (totalDuration / 40))
                         ? 'bg-nexus-500/40'
-                        : 'bg-white/[0.06] group-hover:bg-white/[0.1]',
+                        : 'bg-nexus-500/15 group-hover:bg-nexus-500/25',
                     )}
                     style={{ height: `${Math.max(v * 100, 8)}%` }}
                   />
@@ -420,7 +420,7 @@ export default function SessionReplayPage() {
                 </div>
               ))}
             </div>
-            <p className="text-[10px] text-slate-8000 mt-1">Knowledge Density — taller bars = more intelligence extracted</p>
+            <p className="text-[10px] text-slate-600 mt-1">Knowledge Density — taller bars = more intelligence extracted</p>
           </div>
         </div>
       </div>
@@ -479,7 +479,7 @@ export default function SessionReplayPage() {
                     onClick={(e) => { e.stopPropagation(); jumpToTime(evt.timestamp_seconds); }}
                     title={`Jump to ${formatTime(evt.timestamp_seconds)}`}
                   >
-                    <Play className="h-3.5 w-3.5 text-slate-8000" />
+                    <Play className="h-3.5 w-3.5 text-slate-600" />
                   </button>
 
                   <div className="flex-1 min-w-0">
@@ -494,12 +494,12 @@ export default function SessionReplayPage() {
                     </div>
 
                     <h4 className="text-sm font-medium text-[#0a2540] mt-1">{evt.title}</h4>
-                    <p className="text-xs text-slate-8000 mt-1 leading-relaxed">{evt.description}</p>
+                    <p className="text-xs text-slate-600 mt-1 leading-relaxed">{evt.description}</p>
 
                     <div className="mt-2 flex items-center gap-3">
                       {evt.speaker && (
                         <span className="flex items-center gap-1 text-[11px] text-slate-400">
-                          <div className="h-4 w-4 rounded-full bg-gradient-to-br from-nexus-500 to-purple-600 flex items-center justify-center text-[8px] text-[#0a2540] font-bold">
+                          <div className="h-4 w-4 rounded-full bg-gradient-to-br from-nexus-500 to-nexus-700 flex items-center justify-center text-[8px] text-white font-bold">
                             {evt.speaker.charAt(0)}
                           </div>
                           {evt.speaker}
@@ -590,16 +590,16 @@ export default function SessionReplayPage() {
                     onClick={() => jumpToTime(seg.start)}
                   >
                     <div className="flex items-center gap-2 mb-1">
-                      <div className="h-5 w-5 rounded-full bg-gradient-to-br from-nexus-500 to-purple-600 flex items-center justify-center text-[9px] text-[#0a2540] font-bold shrink-0">
+                      <div className="h-5 w-5 rounded-full bg-gradient-to-br from-nexus-500 to-nexus-700 flex items-center justify-center text-[9px] text-white font-bold shrink-0">
                         {seg.speaker.charAt(0)}
                       </div>
                       <span className="text-xs font-medium text-slate-600">{seg.speaker}</span>
-                      <span className="font-mono text-[10px] text-slate-8000">{formatTime(seg.start)}</span>
+                      <span className="font-mono text-[10px] text-slate-600">{formatTime(seg.start)}</span>
                       {seg.confidence != null && seg.confidence < 0.7 && (
                         <span className="text-[9px] text-yellow-500">Low confidence</span>
                       )}
                     </div>
-                    <p className={clsx('text-sm leading-relaxed ml-7', isActive ? 'text-slate-700' : 'text-slate-8000')}>
+                    <p className={clsx('text-sm leading-relaxed ml-7', isActive ? 'text-slate-700' : 'text-slate-600')}>
                       {seg.text}
                     </p>
                   </div>
@@ -624,7 +624,7 @@ export default function SessionReplayPage() {
                       <span
                         className={clsx(
                           'font-semibold',
-                          avgConf >= 0.8 ? 'text-green-400' : avgConf >= 0.5 ? 'text-yellow-400' : 'text-slate-8000',
+                          avgConf >= 0.8 ? 'text-green-400' : avgConf >= 0.5 ? 'text-yellow-400' : 'text-slate-600',
                         )}
                       >
                         {Math.round(avgConf * 100)}%
@@ -641,9 +641,9 @@ export default function SessionReplayPage() {
                 </div>
               ) : visualScenes.length === 0 ? (
                 <div className="card p-8 text-center space-y-2">
-                  <MonitorPlay className="h-10 w-10 text-slate-8000 mx-auto" />
-                  <p className="text-sm font-medium text-slate-8000">Visual evidence processing in progress</p>
-                  <p className="text-xs text-slate-8000">
+                  <MonitorPlay className="h-10 w-10 text-slate-600 mx-auto" />
+                  <p className="text-sm font-medium text-slate-600">Visual evidence processing in progress</p>
+                  <p className="text-xs text-slate-600">
                     Scenes will appear here once the canonical pipeline has completed frame extraction.
                   </p>
                 </div>
@@ -682,7 +682,7 @@ export default function SessionReplayPage() {
                               ) : (
                                 <span className="text-[9px] text-green-400/70">{confPct}%</span>
                               )}
-                              <span className="text-[9px] text-slate-8000 ml-auto">{laneScenes.length} scene{laneScenes.length !== 1 ? 's' : ''}</span>
+                              <span className="text-[9px] text-slate-600 ml-auto">{laneScenes.length} scene{laneScenes.length !== 1 ? 's' : ''}</span>
                             </div>
                             {/* Lane filmstrip */}
                             <div className="overflow-x-auto pb-1">
@@ -727,7 +727,7 @@ export default function SessionReplayPage() {
                                         </div>
                                       ) : (
                                         <div className="h-28 bg-white shadow-sm flex items-center justify-center">
-                                          <MonitorPlay className="h-7 w-7 text-slate-8000" />
+                                          <MonitorPlay className="h-7 w-7 text-slate-600" />
                                         </div>
                                       )}
                                       <div className="bg-white p-2 space-y-0.5">
@@ -758,7 +758,7 @@ export default function SessionReplayPage() {
                                   );
                                 })}
                                 {laneScenes.length === 0 && (
-                                  <p className="text-[11px] text-slate-8000 italic py-8 px-2">No scenes in this instance yet.</p>
+                                  <p className="text-[11px] text-slate-600 italic py-8 px-2">No scenes in this instance yet.</p>
                                 )}
                               </div>
                             </div>
@@ -801,7 +801,7 @@ export default function SessionReplayPage() {
                                       </div>
                                     ) : (
                                       <div className="h-28 bg-white shadow-sm flex items-center justify-center">
-                                        <MonitorPlay className="h-7 w-7 text-slate-8000" />
+                                        <MonitorPlay className="h-7 w-7 text-slate-600" />
                                       </div>
                                     )}
                                     <div className="bg-white p-2">
@@ -862,7 +862,7 @@ export default function SessionReplayPage() {
                                 </div>
                               ) : (
                                 <div className="h-28 bg-white shadow-sm flex items-center justify-center">
-                                  <MonitorPlay className="h-7 w-7 text-slate-8000" />
+                                  <MonitorPlay className="h-7 w-7 text-slate-600" />
                                 </div>
                               )}
                               <div className="bg-white p-2 space-y-0.5">
@@ -945,7 +945,7 @@ export default function SessionReplayPage() {
                                 <span className="text-slate-400">Confidence</span>
                                 <span className={clsx(
                                   'font-semibold',
-                                  confPct >= 80 ? 'text-green-400' : confPct >= 50 ? 'text-yellow-400' : 'text-slate-8000',
+                                  confPct >= 80 ? 'text-green-400' : confPct >= 50 ? 'text-yellow-400' : 'text-slate-600',
                                 )}>
                                   {confPct}%
                                 </span>
@@ -980,7 +980,7 @@ export default function SessionReplayPage() {
                                   {selectedScene.ocr_text}
                                 </p>
                               ) : (
-                                <p className="text-[10px] text-slate-8000 italic">No OCR text extracted</p>
+                                <p className="text-[10px] text-slate-600 italic">No OCR text extracted</p>
                               )}
                             </div>
                           </div>

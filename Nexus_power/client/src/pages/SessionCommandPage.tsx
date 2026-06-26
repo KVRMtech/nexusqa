@@ -1154,7 +1154,7 @@ export default function SessionCommandPage() {
             <p className="text-xs text-red-400/80 mt-0.5">{uploadError}</p>
           </div>
           <button
-            className="text-xs text-slate-8000 hover:text-[#0a2540]"
+            className="text-xs text-slate-600 hover:text-[#0a2540]"
             onClick={(e) => { e.stopPropagation(); setUploadError(null); }}
           >
             Dismiss
@@ -1330,7 +1330,7 @@ export default function SessionCommandPage() {
                       return (
                         <div key={key}>
                           <div className="flex justify-between text-[10px] mb-1">
-                            <span className="text-slate-8000">{label}</span>
+                            <span className="text-slate-600">{label}</span>
                             <span className="text-slate-400">{val}%</span>
                           </div>
                           <div className="w-full bg-gray-100 rounded-full h-1.5 overflow-hidden">
@@ -1553,7 +1553,7 @@ export default function SessionCommandPage() {
                 <span className="badge-red">LIVE NOW</span>
                 <h3 className="text-lg font-semibold text-[#0a2540]">{session.title}</h3>
               </div>
-              <div className="flex items-center gap-2 text-xs text-slate-8000">
+              <div className="flex items-center gap-2 text-xs text-slate-600">
                 <Clock className="h-3.5 w-3.5" />
                 {formatDuration(session.duration_seconds ?? 0)}
               </div>
@@ -1561,7 +1561,7 @@ export default function SessionCommandPage() {
 
             <div className="mt-4 flex flex-wrap items-center gap-6">
               <div className="flex items-center gap-2">
-                <Users className="h-4 w-4 text-slate-8000" />
+                <Users className="h-4 w-4 text-slate-600" />
                 <span className="text-sm text-slate-600">{session.participants.length} participants</span>
                 <div className="flex -space-x-2 ml-1">
                   {session.participants.slice(0, 5).map((p: SessionParticipant) => (
@@ -1600,7 +1600,7 @@ export default function SessionCommandPage() {
           <div className="px-6 py-3 bg-white/90 flex items-center justify-between text-xs">
             <div className="flex gap-3">
               {session.participants.slice(0, 3).map((p: SessionParticipant) => (
-                <span key={p.speaker_id} className="text-slate-8000">
+                <span key={p.speaker_id} className="text-slate-600">
                   <span className="text-slate-700 font-medium">{p.name.split(' ')[0]}</span> — {p.rules_contributed || 0} insights
                 </span>
               ))}
@@ -1658,7 +1658,7 @@ export default function SessionCommandPage() {
                     <div className="mt-1 flex items-center gap-4 text-xs text-slate-400">
                       <span>{formatDate(session.created_at)}</span>
                       {hasArtifact && artifact.source_filename ? (
-                        <span className="flex items-center gap-1 text-slate-8000">
+                        <span className="flex items-center gap-1 text-slate-600">
                           <FileAudio className="h-3 w-3" />
                           {artifact.source_filename}
                         </span>
@@ -1739,7 +1739,7 @@ export default function SessionCommandPage() {
                     </button>
                   </div>
 
-                  <ChevronRight className="h-4 w-4 text-slate-8000 group-hover:text-nexus-400 transition-colors shrink-0" />
+                  <ChevronRight className="h-4 w-4 text-slate-600 group-hover:text-nexus-400 transition-colors shrink-0" />
                 </div>
               );
             })}
