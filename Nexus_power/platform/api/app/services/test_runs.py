@@ -636,14 +636,53 @@ _LOCATOR_MISSING_RE = re.compile(
 # stays conservative (it cannot fire on a drift/rename). Grounded, deterministic.
 _OUTCOME_ASSERT_RE = re.compile(r"toHaveURL", re.IGNORECASE)
 
+# On-page OUTCOME oracles beyond navigation. The compiler also emits grounded
+# value/text assertions (toHaveValue / toHaveText / toContainText) from the
+# recorded committed value and the recorded outcome-region text. A FAILED
+# value/text assertion means the control RESOLVED but the application produced a
+# DIFFERENT value/text than the recording — a real outcome contradiction (a wrong
+# computed amount, a changed disclosure, a no-op fill), not a locator drift. This
+# widens "proven" past navigation-only, so the verdict is grounded in BEHAVIOUR —
+# not just the URL. (Was: toHaveURL only — the single-signal gap flagged in the
+# Test-Evidence-SoR strategy.)
+_OUTCOME_VALUE_ASSERT_RE = re.compile(
+    r"toHaveValue|toHaveText|toContainText", re.IGNORECASE
+)
+
+# POSITIVE evidence that the control RESOLVED and the value/text actually DIFFERED
+# (i.e. a real outcome contradiction, not a locator-not-found). Playwright prints
+# the actual observed value only after the element resolved: "unexpected value
+# \"…\"" (toHaveValue) or "Received string/array: …" (toHaveText/toContainText).
+# A not-found timeout never reaches the comparison, so it carries NONE of these —
+# which keeps a renamed/missing control as heal-able selector drift. NB: the raw
+# call log of EVERY assertion contains "waiting for locator", so _LOCATOR_MISSING_RE
+# cannot be used as the gate here (it would neuter a genuine value mismatch); the
+# positive-evidence marker below is what disambiguates.
+_VALUE_MISMATCH_EVIDENCE_RE = re.compile(
+    r"unexpected value|Received string|Received array|Received:", re.IGNORECASE
+)
+
 
 def outcome_contradicted_from_error(error_message: str) -> bool:
-    """True when the failure is a FAILED recorded-outcome assertion (the navigated
-    next page). Conservative by construction — matches only the compiler's grounded
-    navigation oracle, never a locator/action error — so it labels real_regression
-    on POSITIVE evidence only and otherwise leaves the reducer to fail toward
-    needs_review."""
-    return bool(_OUTCOME_ASSERT_RE.search(error_message or ""))
+    """True when the failure is a FAILED recorded-outcome assertion. Conservative
+    by construction:
+
+      * a failed navigation oracle (``toHaveURL``) is ALWAYS dispositive — it can
+        never be a locator error; and
+      * a failed on-page value/text oracle counts ONLY with POSITIVE evidence the
+        element resolved and the value differed (an "unexpected value" / "Received"
+        marker). A value/text assertion that failed because the control was
+        renamed / not found carries no such marker, so it stays heal-able selector
+        drift and is NEVER mis-escalated to a real regression.
+
+    Labels real_regression on POSITIVE evidence only; otherwise leaves the reducer
+    to fail toward needs_review."""
+    msg = error_message or ""
+    if _OUTCOME_ASSERT_RE.search(msg):
+        return True
+    if _OUTCOME_VALUE_ASSERT_RE.search(msg) and _VALUE_MISMATCH_EVIDENCE_RE.search(msg):
+        return True
+    return False
 
 
 @dataclass

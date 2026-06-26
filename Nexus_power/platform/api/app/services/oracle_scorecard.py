@@ -105,7 +105,7 @@ def _grounding_split(verdicts: list) -> dict:
     for v in verdicts:
         by[v.label] = by.get(v.label, 0) + 1
     green = by.get(VERDICT_PASSED, 0)
-    proven = by.get(VERDICT_REAL_REGRESSION, 0)  # FAILED toHaveURL = positive proof
+    proven = by.get(VERDICT_REAL_REGRESSION, 0)  # FAILED outcome oracle (URL or on-page value/text) = positive proof
     inferred = (by.get(VERDICT_SELECTOR_DRIFT, 0)
                 + by.get(VERDICT_FLAKE, 0)
                 + by.get(VERDICT_NEEDS_REVIEW, 0))
@@ -119,8 +119,10 @@ def _grounding_split(verdicts: list) -> dict:
         "not_measured": not_measured,
         "proven_pct": (round(100.0 * proven / failures, 1) if failures else None),
         "notes": [
-            "Proven = a real regression caught by a FAILED toHaveURL outcome "
-            "assertion — direct evidence the recorded outcome was not reached.",
+            "Proven = a real regression caught by a FAILED outcome assertion — a "
+            "navigation oracle (toHaveURL) OR an on-page value/text oracle "
+            "(toHaveValue/toHaveText) that resolved but held a different value than "
+            "the recording — direct evidence the recorded outcome was not reached.",
             "Inferred = selector-drift, flake, or needs-review — the failure cause "
             "is inferred, not positively proven.",
             "Green = the scenario ran without error; its outcome oracle is NOT "
