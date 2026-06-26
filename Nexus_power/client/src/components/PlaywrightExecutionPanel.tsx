@@ -1257,7 +1257,13 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
             <span className="h-4 w-1 rounded-full bg-gradient-to-b from-gold-400 to-gold-600" />
             <SlidersHorizontal className="h-4 w-4 text-nexus-600" />
             <span className="text-[13px] font-bold text-nexus-900">Run console</span>
-            <span className="text-[11px] text-nexus-400">configure once → run anywhere, no code edits</span>
+            <span className="text-[11px] text-nexus-400 hidden md:inline">configure once → run anywhere</span>
+            <button onClick={() => runOnNexus()} disabled={running || autoHealing || selectedScripts.length === 0}
+              className="ml-auto inline-flex items-center gap-1.5 rounded-lg px-3.5 py-1.5 text-[12px] font-bold text-[#fff] shadow-sm ring-1 ring-gold-400/40 transition-all hover:brightness-110 active:translate-y-px disabled:opacity-50 disabled:cursor-not-allowed"
+              style={{ background: 'linear-gradient(135deg, #0c2c4d, #2670a3)' }}
+              title="Run the selected scripts on the Nexus runner and get a grounded verdict">
+              {running ? <Loader2 className="h-4 w-4 animate-spin text-[#fff]" /> : <Play className="h-4 w-4 text-gold-400" />} Run {selectedScripts.length} ▸ verdict
+            </button>
           </div>
           <div className="p-4 space-y-4">
             {/* B.1 — Runnability preflight: surface what a cold run needs BEFORE it fails */}

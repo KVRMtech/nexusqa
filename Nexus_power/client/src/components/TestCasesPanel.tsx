@@ -184,6 +184,25 @@ export default function TestCasesPanel(
     finally { setBusy(''); }
   };
 
+  // One-click orchestration: demonstrated E2E → negative → boundary → error-state
+  // in a single pass with a staged status line. The granular 'Add coverage' menu
+  // stays for power users; 'Demonstrated only' lives there too.
+  const generateFullSuite = async () => {
+    setBusy('fullsuite'); setError(null); setNotice(null);
+    try {
+      setNotice('Generating demonstrated E2E…');
+      await api.generateTestFactory(artifactId);
+      const steps: Array<[string, string]> = [['Negative', 'negative'], ['Boundary', 'boundary'], ['Error-state', 'error_state']];
+      for (const [lbl, type] of steps) {
+        setNotice(`Adding ${lbl} coverage…`);
+        try { await api.generateTestFactoryCategory(artifactId, type); } catch { /* one category failing shouldn't abort the pass */ }
+      }
+      setNotice('Full suite generated — demonstrated + negative + boundary + error-state.');
+      await refresh();
+    } catch (e: any) { setError(e?.response?.data?.detail || String(e)); }
+    finally { setBusy(''); }
+  };
+
   const download = async (format: string) => {
     setBusy(`export:${format}`); setError(null);
     try {
@@ -229,11 +248,13 @@ export default function TestCasesPanel(
           </div>
         </div>
         <div className="ml-auto flex items-center gap-2 flex-wrap justify-end">
-          <button onClick={() => run('generate', () => api.generateTestFactory(artifactId))} disabled={!!busy}
+          <button onClick={generateFullSuite} disabled={!!busy}
+            title="Generate the full suite in one pass: demonstrated E2E → negative → boundary → error-state"
             className="btn-primary btn-gold text-xs px-3.5 py-1.5 font-semibold shadow-sm ring-1 ring-gold-300/40 disabled:opacity-50">
-            {busy === 'generate' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />} Generate
+            {busy === 'fullsuite' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />} Generate full suite
           </button>
           <Menu label="Add coverage" icon={<ShieldAlert className="h-3.5 w-3.5" />} disabled={!!busy} items={[
+            { label: 'Demonstrated E2E only', icon: <Sparkles className="h-3.5 w-3.5 text-nexus-500" />, onClick: () => run('generate', () => api.generateTestFactory(artifactId)) },
             { label: 'Negative tests', icon: <ShieldAlert className="h-3.5 w-3.5 text-nexus-500" />, onClick: () => run('negative', () => api.generateTestFactoryCategory(artifactId, 'negative')) },
             { label: 'Boundary tests', icon: <ShieldAlert className="h-3.5 w-3.5 text-nexus-500" />, onClick: () => run('boundary', () => api.generateTestFactoryCategory(artifactId, 'boundary')) },
             { label: 'Error-state tests', icon: <ShieldAlert className="h-3.5 w-3.5 text-nexus-500" />, onClick: () => run('error_state', () => api.generateTestFactoryCategory(artifactId, 'error_state')) },
