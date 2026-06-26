@@ -900,20 +900,20 @@ export default function E2EArchitectWorkspacePage() {
 
       {/* ── Top Bar ──────────────────────────────────────── */}
       <div className="shrink-0 border-b border-gray-200 bg-white px-6 py-3">
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-3 gap-y-2 flex-wrap">
           <button
             onClick={() => navigate(-1)}
-            className="flex items-center gap-1.5 text-sm text-slate-8000 hover:text-slate-700 transition-colors"
+            className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[13px] font-semibold text-nexus-700 hover:bg-nexus-50 transition-colors"
           >
-            <ArrowLeft className="h-4 w-4" /> Back
+            <ArrowLeft className="h-4 w-4 text-gold-500" /> Back
           </button>
           <div className="h-5 w-px bg-gray-200" />
-          <Shuffle className="h-5 w-5 text-gold-500" />
+          <Shuffle className="h-5 w-5 text-gold-500 shrink-0" />
           <div className="flex-1 min-w-0">
-            <h1 className="text-[15px] font-bold tracking-tight text-nexus-900">
+            <h1 className="text-[17px] font-bold tracking-tight text-nexus-900 leading-tight">
               Test Studio
             </h1>
-            <p className="text-[11px] text-nexus-500">
+            <p className="text-[13px] text-nexus-500 font-medium">
               {cov.total_scenarios} scenario{cov.total_scenarios === 1 ? '' : 's'}
               {cov.variables_tested > 0 && ` • ${cov.variables_tested} variables`}
               {cov.pairwise_combinations_generated > 0 && ` • ${cov.pairwise_combinations_generated} pairwise`}
@@ -924,7 +924,7 @@ export default function E2EArchitectWorkspacePage() {
 
           {/* ── Mode toggle ─────────────────────────────── */}
           <div
-            className="flex items-center rounded-lg border border-gray-200 bg-gray-50 p-0.5 text-xs"
+            className="flex items-center rounded-xl border border-nexus-200 bg-white p-1 text-[13px]"
             role="tablist"
             aria-label="View mode"
           >
@@ -965,28 +965,28 @@ export default function E2EArchitectWorkspacePage() {
               aria-selected={viewMode === 'test-cases'}
               onClick={() => setViewMode('test-cases')}
               className={clsx(
-                'flex items-center gap-1.5 rounded-md px-2.5 py-1 transition-colors',
+                'flex items-center gap-1.5 rounded-lg px-3.5 py-1.5 font-semibold transition-all',
                 viewMode === 'test-cases'
-                  ? 'bg-white text-emerald-700 shadow-sm font-medium'
-                  : 'text-slate-500 hover:text-slate-700',
+                  ? 'bg-gradient-to-br from-[#0c2c4d] to-[#2670a3] text-white shadow-sm [&>svg]:text-gold-400'
+                  : 'text-nexus-600 hover:bg-nexus-50 [&>svg]:text-gold-500',
               )}
               title="Test Cases — grounded from Pages & Forms (demonstrated + combinations)"
             >
-              <Sparkles className="h-3.5 w-3.5" /> Test Cases
+              <Sparkles className="h-4 w-4" /> Test Cases
             </button>
             <button
               role="tab"
               aria-selected={viewMode === 'playwright'}
               onClick={() => setViewMode('playwright')}
               className={clsx(
-                'flex items-center gap-1.5 rounded-md px-2.5 py-1 transition-colors',
+                'flex items-center gap-1.5 rounded-lg px-3.5 py-1.5 font-semibold transition-all',
                 viewMode === 'playwright'
-                  ? 'bg-white text-nexus-700 shadow-sm font-medium'
-                  : 'text-slate-500 hover:text-slate-700',
+                  ? 'bg-gradient-to-br from-[#0c2c4d] to-[#2670a3] text-white shadow-sm [&>svg]:text-gold-400'
+                  : 'text-nexus-600 hover:bg-nexus-50 [&>svg]:text-gold-500',
               )}
               title="Playwright Execution — list, view & run the generated scripts; grounded failure triage"
             >
-              <Rocket className="h-3.5 w-3.5" /> Playwright
+              <Rocket className="h-4 w-4" /> Playwright
             </button>
           </div>
 
@@ -1025,9 +1025,9 @@ export default function E2EArchitectWorkspacePage() {
 
           <button
             onClick={() => loadArchitect(true)}
-            className="rounded-lg bg-nexus-600/80 px-3 py-1.5 text-xs font-medium text-white hover:bg-nexus-500 transition-colors flex items-center gap-1.5"
+            className="flex items-center gap-1.5 rounded-lg bg-gradient-to-br from-[#0c2c4d] to-[#2670a3] px-3.5 py-2 text-[13px] font-semibold text-white shadow-sm ring-1 ring-gold-400/25 hover:from-[#0f3250] hover:to-[#2e85c2] transition-all"
           >
-            <Sparkles className="h-3.5 w-3.5" /> Regenerate
+            <Sparkles className="h-4 w-4 text-gold-400" /> Regenerate
           </button>
 
           {isEngineer && SHOW_VISUAL_EXPORTS && (
@@ -1050,18 +1050,18 @@ export default function E2EArchitectWorkspacePage() {
           {!isEngineer && (
             <button
               disabled
-              className="rounded-lg bg-emerald-100 px-3 py-1.5 text-xs font-medium text-emerald-700 transition-colors flex items-center gap-1.5 cursor-not-allowed opacity-70"
+              className="flex items-center gap-1.5 rounded-lg border border-nexus-200 bg-white px-3.5 py-2 text-[13px] font-semibold text-nexus-400 cursor-not-allowed transition-colors"
               title="Sign-off flow ships in Phase B"
             >
-              <ThumbsUp className="h-3.5 w-3.5" /> Approve plan
+              <ThumbsUp className="h-4 w-4 text-gold-400/70" /> Approve plan
             </button>
           )}
 
           <button
             onClick={() => navigate(`/sessions/${sessionId}/test-strategy?artifact_id=${artifactId}`)}
-            className="rounded-lg bg-gray-100 px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-gray-200 transition-colors flex items-center gap-1.5"
+            className="flex items-center gap-1.5 rounded-lg bg-gradient-to-br from-[#0c2c4d] to-[#2670a3] px-3.5 py-2 text-[13px] font-semibold text-white shadow-sm ring-1 ring-gold-400/25 hover:from-[#0f3250] hover:to-[#2e85c2] transition-all"
           >
-            <ArrowRight className="h-3.5 w-3.5" /> Strategy
+            <ArrowRight className="h-4 w-4 text-gold-400" /> Strategy
           </button>
         </div>
       </div>
