@@ -1,0 +1,106 @@
+# =============================================================================
+# Nexus QA — .gitignore
+# All real product source lives under Nexus_power/. The repository ROOT is a
+# scratch area accumulated from live iteration on the VM (deploy/debug/patch/
+# verify scripts + docker-cp'd VM snapshots) and must NOT be committed.
+# =============================================================================
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ---- Node / client build ----
+node_modules/
+dist/
+.vite/
+
+# ---- Local tooling / agent + editor state ----
+.claude/
+.vscode/
+.idea/
+
+# ---- Archives, images, logs, patches (scratch artifacts) ----
+*.tgz
+*.tar.gz
+*.log
+*.patch
+/*.png
+
+# =============================================================================
+# Root-level scratch scripts & docker-cp'd VM snapshots (anchored to repo root
+# with a leading slash so nothing under Nexus_power/ is ever matched).
+# =============================================================================
+/_*
+/dep_*
+/debug_*
+/diff_*
+/probe*
+/patch_*
+/deploy_*
+/verify_*
+/check_*
+/diag_*
+/find_*
+/read_*
+/scout_*
+/probe_*
+/repro_*
+/validate_*
+/trigger_*
+/inspect_*
+/measure_*
+/recreate_*
+/reapply_*
+/refreeze*
+/discover.sh
+/dump_*
+/edit_*.py
+/gap*.py
+/gen_preflight.py
+/heal_evidence.py
+/preflight*.py
+/proposer.py
+/redaction.py
+/real_frame_probe.py
+/run_*.py
+/run_*.sh
+/show_*.py
+/fetch_graph.py
+/tf_override_block.py
+/unfreeze_and_patch.sh
+/watch_logs.sh
+/iso_*
+/kms_*
+/peek_*
+/prove_*
+/e2e_*.sh
+/anthropic_probe.py
+/append_*.py
+/apply_and_test.sh
+/backup_db.sh
+/call_heart_direct.py
+/commit_*
+/confirm_fix.sh
+/fix_bearer_token.py
+/explore_runner.sh
+/freeze_*.txt
+/q_*.sql
+/mig_*.py
+/test_*.py
+/test_*.sh
+/combobox_validate.spec.ts
+/validate_combobox.js
+/repro_runlive*.js
+/runner_deployed.js
+/failshot*.png
+
+# ---- Root-level scratch directories ----
+/_nxdeploy/
+/_pf_stub/
+/_vm_inspect/
+/proving-ground/
+/pwbundle/
