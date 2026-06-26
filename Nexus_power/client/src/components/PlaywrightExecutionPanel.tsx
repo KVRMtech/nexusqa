@@ -28,7 +28,7 @@ const CATEGORY_ORDER: { type: string; label: string; accent: string; badge: stri
   { type: 'functional', label: 'Demonstrated', accent: '#059669', badge: 'rgba(16,185,129,0.15)' },
   { type: 'combination', label: 'Suggested combinations', accent: '#d97706', badge: 'rgba(245,158,11,0.15)' },
   { type: 'negative', label: 'Negative', accent: '#e11d48', badge: 'rgba(225,29,72,0.13)' },
-  { type: 'boundary', label: 'Boundary', accent: '#7c3aed', badge: 'rgba(124,58,237,0.13)' },
+  { type: 'boundary', label: 'Boundary', accent: '#2670a3', badge: 'rgba(38,112,163,0.13)' },
   { type: 'error_state', label: 'Error-state', accent: '#dc2626', badge: 'rgba(220,38,38,0.13)' },
 ];
 
@@ -79,14 +79,14 @@ function AutoHealPanel({ job, live, healing, err }: { job: any; live: string | n
     return e.event;
   };
   return (
-    <div className="mt-3 rounded-lg border-2 border-violet-200 bg-violet-50/40 p-3">
-      <p className="flex items-center gap-1.5 text-[12px] font-black text-violet-900 mb-2">
+    <div className="mt-3 rounded-lg border-2 border-nexus-200 bg-nexus-50/40 p-3">
+      <p className="flex items-center gap-1.5 text-[12px] font-black text-nexus-900 mb-2">
         <Wand2 className="h-4 w-4" /> Auto-Heal {healing && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
         <span className="text-[10px] font-semibold text-slate-500 normal-case">diagnose → fix → re-run → continue → Clean Run V1</span>
       </p>
       {live && healing && (
-        <div className="mb-2 rounded-md overflow-hidden border-2 border-violet-300 bg-black">
-          <div className="px-2 py-0.5 text-[9px] font-bold uppercase text-white bg-violet-600 flex items-center gap-1.5">
+        <div className="mb-2 rounded-md overflow-hidden border-2 border-nexus-300 bg-black">
+          <div className="px-2 py-0.5 text-[9px] font-bold uppercase text-white bg-nexus-600 flex items-center gap-1.5">
             <span className="inline-block h-2 w-2 rounded-full bg-red-400 animate-pulse" /> Live — watching the auto-heal re-runs
           </div>
           <iframe title="Auto-heal live" src={live} className="w-full" style={{ height: 460, border: 0 }} />
@@ -96,7 +96,7 @@ function AutoHealPanel({ job, live, healing, err }: { job: any; live: string | n
         <ol className="space-y-1 mb-1">
           {trace.map((e, i) => (
             <li key={i} className="flex items-start gap-1.5 text-[10.5px] text-slate-700">
-              <span className="mt-0.5 text-violet-400">{e.event === 'clean_run_v1' ? '✓' : e.event.startsWith('stop') ? '■' : '•'}</span>
+              <span className="mt-0.5 text-nexus-400">{e.event === 'clean_run_v1' ? '✓' : e.event.startsWith('stop') ? '■' : '•'}</span>
               <span>{label(e)}</span>
             </li>
           ))}
@@ -144,10 +144,10 @@ function FidelityCard({ rep, artifactId, testId, onFixed }: { rep: any; artifact
     finally { setFixing(false); }
   };
   return (
-    <div className="border-t border-sky-100 bg-sky-50/40 px-3 py-2.5">
+    <div className="border-t border-nexus-100 bg-nexus-50/40 px-3 py-2.5">
       <div className="flex items-center gap-2 flex-wrap mb-1.5">
-        <ShieldAlert className="h-3.5 w-3.5 text-sky-600" />
-        <span className="text-[11px] font-black text-sky-900">Fidelity</span>
+        <ShieldAlert className="h-3.5 w-3.5 text-nexus-600" />
+        <span className="text-[11px] font-black text-nexus-900">Fidelity</span>
         <span className="rounded px-2 py-0.5 text-[10px] font-black uppercase" style={{ background: g.bg, color: g.fg }}>{rep.grade} · {rep.score}%</span>
         <span className="text-[10px] text-slate-500 font-semibold">{rep.covered}/{rep.steps} steps covered · {rep.assertions} assertions / {rep.expected_results} expected</span>
         {rep.drift && <span className="rounded px-1.5 py-0.5 text-[9px] font-bold bg-amber-100 text-amber-700">stale — regenerate</span>}
@@ -158,8 +158,8 @@ function FidelityCard({ rep, artifactId, testId, onFixed }: { rep: any; artifact
         </ul>
       )}
       {llm && llm.reviewed && (
-        <div className="mt-1 rounded-md border border-violet-200 bg-white/70 px-2 py-1.5">
-          <p className="text-[10px] font-bold text-violet-800 mb-0.5">
+        <div className="mt-1 rounded-md border border-nexus-200 bg-white/70 px-2 py-1.5">
+          <p className="text-[10px] font-bold text-nexus-800 mb-0.5">
             AI review: {llm.faithful ? 'faithful ✓' : 'gaps found'}{typeof llm.confidence === 'number' ? ` · ${Math.round(llm.confidence * 100)}%` : ''}
           </p>
           {(llm.gaps || []).slice(0, 6).map((x: string, i: number) => <p key={i} className="text-[10px] text-slate-600 leading-snug">• {x}</p>)}
@@ -169,14 +169,14 @@ function FidelityCard({ rep, artifactId, testId, onFixed }: { rep: any; artifact
         <div className="mt-1.5 flex items-center gap-2 flex-wrap">
           <button onClick={runFix} disabled={fixing}
             title="Apply ONLY deterministic, grounded fixes (regenerate). Never invents assertions, never green-washes — anything it can't prove is listed for you to handle."
-            className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[10px] font-bold text-white disabled:opacity-50" style={{ background: '#7c3aed' }}>
+            className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[10px] font-bold text-white disabled:opacity-50" style={{ background: '#2670a3' }}>
             {fixing ? <Loader2 className="h-3 w-3 animate-spin" /> : <span>⚡</span>} {fixing ? 'Fixing…' : 'Fix gaps'}
           </button>
           <span className="text-[9px] text-slate-400">grounded only · never green-washes</span>
         </div>
       )}
       {fixRes && !fixRes.error && (
-        <div className="mt-1 rounded-md border border-violet-200 bg-white/70 px-2 py-1.5">
+        <div className="mt-1 rounded-md border border-nexus-200 bg-white/70 px-2 py-1.5">
           {(fixRes.fixed || []).length > 0 && (
             <>
               <p className="text-[10px] font-bold text-emerald-700">Applied{fixRes.version_no ? ` (v${fixRes.version_no})` : ''}:</p>
@@ -206,7 +206,7 @@ function FidelityCard({ rep, artifactId, testId, onFixed }: { rep: any; artifact
 // (and any future one) surfaces with its own remediation. Order = most-actionable first.
 const PF_META: Record<string, { glyph: string; color: string; label: string }> = {
   absent: { glyph: '✗', color: '#b91c1c', label: 'not found — renamed or removed (re-anchor / re-capture)' },
-  kind_mismatch: { glyph: '⟳', color: '#7c3aed', label: 'wrong control kind — a control with this name exists but as a different kind (heal / Add-select)' },
+  kind_mismatch: { glyph: '⟳', color: '#2670a3', label: 'wrong control kind — a control with this name exists but as a different kind (heal / Add-select)' },
   strict_ambiguous: { glyph: '≣', color: '#be123c', label: 'ambiguous in strict mode — matches more than one element, so the run errors (tighten locator)' },
   value_mismatch: { glyph: '≠', color: '#be123c', label: 'value/option gone — the recorded selection no longer exists (re-capture the value)' },
   disabled: { glyph: '⊘', color: '#64748b', label: 'present but not actionable — disabled / read-only (a precondition may be unmet)' },
@@ -276,7 +276,7 @@ function PreflightCard({ rep }: { rep: any }) {
             {arr.map((s: any, i: number) => (
               <div key={i} className="text-[10px] text-slate-600 pl-2">
                 step {s.step}: <b>{s.label}</b> <span className="text-slate-400">({s.kind})</span>
-                {s.foundRole ? <span className="text-violet-500"> — found as <code>{s.foundRole}</code></span> : null}
+                {s.foundRole ? <span className="text-nexus-500"> — found as <code>{s.foundRole}</code></span> : null}
                 {typeof s.count === 'number' && s.count > 1 ? <span className="text-slate-400"> — {s.count} matches</span> : null}
               </div>
             ))}
@@ -324,14 +324,14 @@ function RtmCard({ artifactId }: { artifactId: string }) {
   return (
     <div className="mt-3 rounded-xl border border-slate-200 bg-white/70 overflow-hidden">
       <button onClick={toggle} className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-slate-50/70">
-        <CheckSquare className="h-4 w-4 text-indigo-500" />
+        <CheckSquare className="h-4 w-4 text-nexus-500" />
         <span className="text-[12px] font-bold text-slate-700">Requirements Traceability (RTM)</span>
         <span className="text-[10px] text-slate-400">recorded requirement → step → emitted assertion; proven vs unproven</span>
         {open ? <ChevronDown className="h-4 w-4 text-slate-400 ml-auto" /> : <ChevronRight className="h-4 w-4 text-slate-400 ml-auto" />}
       </button>
       {open && (
         <div className="px-3 pb-3 pt-1">
-          {loading && <div className="flex items-center gap-2 text-[11px] text-indigo-700 py-2"><Loader2 className="h-3.5 w-3.5 animate-spin" /> Building the matrix…</div>}
+          {loading && <div className="flex items-center gap-2 text-[11px] text-nexus-700 py-2"><Loader2 className="h-3.5 w-3.5 animate-spin" /> Building the matrix…</div>}
           {err && <div className="rounded-lg border border-amber-200 bg-amber-50/60 px-3 py-2 text-[10px] text-amber-700">{err}</div>}
           {rtm && !loading && (
             tests.length === 0 ? (
@@ -434,7 +434,7 @@ function ProvenControlsCard({ artifactId }: { artifactId: string }) {
                 <div className="flex items-center gap-2 flex-wrap mb-2 text-[10px] font-bold">
                   <span className="rounded-full px-2 py-0.5" style={{ background: 'rgba(16,185,129,0.14)', color: '#047857' }}>{sum.active ?? 0} active</span>
                   <span className="rounded-full px-2 py-0.5" style={{ background: 'rgba(245,158,11,0.16)', color: '#b45309' }}>{sum.quarantined ?? 0} quarantined</span>
-                  <span className="rounded-full px-2 py-0.5" style={{ background: 'rgba(99,102,241,0.14)', color: '#4338ca' }}>{sum.reused ?? 0} reused ≥2×</span>
+                  <span className="rounded-full px-2 py-0.5" style={{ background: 'rgba(38,112,163,0.14)', color: '#164465' }}>{sum.reused ?? 0} reused ≥2×</span>
                   <span className="text-slate-400 font-semibold">· {sum.total ?? entries.length} total</span>
                 </div>
                 <p className="text-[9px] text-slate-400 leading-snug mb-2">A heal proven GREEN once becomes a fact about the control — reused across every scenario + recording of the app, re-gated by the step's own oracle (a stale memo fails RED → re-heals; never green-washes).</p>
@@ -498,7 +498,7 @@ function OracleScorecardCard({ artifactId, refreshKey }: { artifactId: string; r
     <div className="mb-3 rounded-xl border border-amber-200 bg-amber-50/60 px-3 py-2 text-[10px] text-amber-700">Oracle scorecard: {err}</div>
   );
   if (!sc) return loading ? (
-    <div className="mb-3 flex items-center gap-2 rounded-xl border border-indigo-100 bg-indigo-50/40 px-3 py-2 text-[11px] text-indigo-700">
+    <div className="mb-3 flex items-center gap-2 rounded-xl border border-nexus-100 bg-nexus-50/40 px-3 py-2 text-[11px] text-nexus-700">
       <Loader2 className="h-3.5 w-3.5 animate-spin" /> Measuring the oracle…
     </div>
   ) : null;
@@ -511,10 +511,10 @@ function OracleScorecardCard({ artifactId, refreshKey }: { artifactId: string; r
   const pctOf = (n: number) => (failures > 0 ? (n / failures) * 100 : 0);
 
   return (
-    <div className="mb-3 rounded-2xl border border-indigo-200 bg-gradient-to-br from-indigo-50/80 to-white px-3.5 py-3">
+    <div className="mb-3 rounded-2xl border border-nexus-200 bg-gradient-to-br from-nexus-50/80 to-white px-3.5 py-3">
       <div className="flex items-center gap-2 mb-2.5">
-        <ShieldCheck className="h-4 w-4 text-indigo-600" />
-        <span className="text-[12px] font-black text-indigo-900">Grounded Oracle</span>
+        <ShieldCheck className="h-4 w-4 text-nexus-600" />
+        <span className="text-[12px] font-black text-nexus-900">Grounded Oracle</span>
         <span className="text-[10px] font-semibold text-slate-400">how grounded these verdicts are — measured, not claimed</span>
       </div>
 
@@ -556,11 +556,11 @@ function OracleScorecardCard({ artifactId, refreshKey }: { artifactId: string; r
           </div>
 
           {/* 2. ORACLE CONFIDENCE */}
-          <div className="border-t border-indigo-100 pt-2.5">
+          <div className="border-t border-nexus-100 pt-2.5">
             <div className="flex items-center gap-2 mb-1">
-              <Gauge className="h-3.5 w-3.5 text-indigo-500" />
+              <Gauge className="h-3.5 w-3.5 text-nexus-500" />
               <span className="text-[11px] font-bold text-slate-700">Oracle confidence</span>
-              <span className="text-[13px] font-black text-indigo-700">{typeof oc.avg_confidence_failures_only === 'number' ? `${Math.round(oc.avg_confidence_failures_only * 100)}%` : '—'}</span>
+              <span className="text-[13px] font-black text-nexus-700">{typeof oc.avg_confidence_failures_only === 'number' ? `${Math.round(oc.avg_confidence_failures_only * 100)}%` : '—'}</span>
               <span className="text-[10px] text-slate-400 font-semibold">{typeof oc.avg_confidence_failures_only === 'number' ? `on ${oc.failures_scored} failure${oc.failures_scored === 1 ? '' : 's'}` : 'no failures to score'}</span>
             </div>
             <div className="flex items-center gap-2 flex-wrap text-[10px] font-semibold">
@@ -572,14 +572,14 @@ function OracleScorecardCard({ artifactId, refreshKey }: { artifactId: string; r
           </div>
 
           {/* 3. HEAL INTEGRITY */}
-          <div className="border-t border-indigo-100 pt-2.5">
+          <div className="border-t border-nexus-100 pt-2.5">
             <div className="flex items-center gap-2 mb-1">
-              <ShieldAlert className="h-3.5 w-3.5 text-indigo-500" />
+              <ShieldAlert className="h-3.5 w-3.5 text-nexus-500" />
               <span className="text-[11px] font-bold text-slate-700">Heal integrity</span>
               <span className="text-[10px] text-slate-400 font-semibold">never green-washes</span>
             </div>
             <div className="flex items-center gap-2 flex-wrap text-[10px] font-semibold mb-1">
-              <span className="rounded-full px-2 py-0.5" style={{ background: 'rgba(99,102,241,0.12)', color: '#4338ca' }}>{att.applied_proposed ?? 0} verified-green → proposed (human-gated)</span>
+              <span className="rounded-full px-2 py-0.5" style={{ background: 'rgba(38,112,163,0.12)', color: '#164465' }}>{att.applied_proposed ?? 0} verified-green → proposed (human-gated)</span>
               {(att.not_promoted ?? 0) > 0 && <span className="rounded-full px-2 py-0.5" style={{ background: 'rgba(148,163,184,0.16)', color: '#64748b' }}>{att.not_promoted} not promoted</span>}
               {(att.in_progress ?? 0) > 0 && <span className="rounded-full px-2 py-0.5" style={{ background: 'rgba(245,158,11,0.16)', color: '#b45309' }}>{att.in_progress} in progress</span>}
               {(att.attempted ?? 0) === 0 && <span className="text-slate-400">no heal attempts yet</span>}
@@ -596,7 +596,7 @@ function OracleScorecardCard({ artifactId, refreshKey }: { artifactId: string; r
                 <span className="font-bold">Published false-heal rate: </span>
                 {sc.false_heal_rate.status === 'insufficient_data'
                   ? <span className="text-slate-500">insufficient data — n={sc.false_heal_rate.denominator_evaluated}, need ≥{sc.false_heal_rate.min_n_to_publish} to publish</span>
-                  : <span className="font-black text-indigo-700">{sc.false_heal_rate.rate_pct}%<span className="font-semibold text-slate-400"> on n={sc.false_heal_rate.denominator_evaluated}</span></span>}
+                  : <span className="font-black text-nexus-700">{sc.false_heal_rate.rate_pct}%<span className="font-semibold text-slate-400"> on n={sc.false_heal_rate.denominator_evaluated}</span></span>}
                 <span className="text-slate-400"> · proxy until calibrated</span>
               </p>
             )}
@@ -1152,31 +1152,33 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
   return (
     <section className="space-y-4">
       {/* ── Header ──────────────────────────────────────────── */}
-      <div className="rounded-2xl px-4 py-3 flex items-center gap-3 flex-wrap"
-        style={{ background: 'linear-gradient(135deg, rgba(99,102,241,0.07), rgba(56,189,248,0.05))', border: '1px solid rgba(99,102,241,0.22)' }}>
-        <Rocket className="h-5 w-5" style={{ color: '#4f46e5' }} />
+      <div className="flex items-center gap-3 flex-wrap">
+        <span className="h-9 w-1 rounded-full bg-gradient-to-b from-gold-400 to-gold-600 shrink-0" />
+        <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-[#0c2c4d] to-[#0a2540] ring-1 ring-gold-400/30 shadow-sm shrink-0">
+          <Rocket className="h-4 w-4 text-gold-400" />
+        </span>
         <div className="min-w-0">
-          <h2 className="text-sm font-black text-slate-900">Playwright Execution</h2>
-          <p className="text-[11px] text-slate-500 font-medium">
+          <h2 className="text-[15px] font-bold tracking-tight text-nexus-900 leading-tight">Playwright Execution</h2>
+          <p className="text-[11px] text-nexus-500 font-medium">
             Deterministic, ownable scripts — generated from your recording. Run locally or in CI; failures land in the triage board below.
           </p>
         </div>
         <div className="ml-auto flex items-center gap-2 flex-wrap">
-          <span className="text-[11px] font-bold text-slate-600">
+          <span className="text-[11px] font-bold text-nexus-700">
             {totals.scripts} script{totals.scripts === 1 ? '' : 's'}
           </span>
-          <span className="text-[10px] text-slate-400">·</span>
+          <span className="text-[10px] text-nexus-300">·</span>
           <span className="text-[11px] font-semibold" style={{ color: '#059669' }}>{totals.solid_steps} solid steps</span>
           {totals.review_steps > 0 && (
             <span className="text-[11px] font-semibold" style={{ color: '#b45309' }}>{totals.review_steps} need review</span>
           )}
           <button onClick={refresh} disabled={loading}
-            className="flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-[11px] font-semibold bg-white text-slate-600 border border-slate-200 hover:bg-slate-50 disabled:opacity-50">
+            className="flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-[11px] font-semibold bg-white text-nexus-600 border border-nexus-200 hover:bg-nexus-50 disabled:opacity-50">
             {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />} Refresh
           </button>
           <button onClick={() => downloadZip('')} disabled={!!busy || totals.scripts === 0}
             className="flex items-center gap-1 rounded-lg px-3 py-1.5 text-[11px] font-semibold text-white disabled:opacity-50"
-            style={{ background: '#4f46e5' }}>
+            style={{ background: 'linear-gradient(135deg, #0c2c4d, #2670a3)' }}>
             {busy === 'zip:all' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />} Download full bundle
           </button>
         </div>
@@ -1186,9 +1188,9 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
 
       {/* ── Run console ─────────────────────────────────────── */}
       {view === 'console' && data && totals.scripts > 0 && (
-        <div className="rounded-xl border border-indigo-200 bg-white/70 overflow-hidden">
-          <div className="px-4 py-2.5 flex items-center gap-2 bg-indigo-50/70 border-b border-indigo-100">
-            <SlidersHorizontal className="h-4 w-4 text-indigo-600" />
+        <div className="rounded-xl border border-nexus-200 bg-white/70 overflow-hidden">
+          <div className="px-4 py-2.5 flex items-center gap-2 bg-nexus-50/70 border-b border-nexus-100">
+            <SlidersHorizontal className="h-4 w-4 text-nexus-600" />
             <span className="text-[12px] font-black text-slate-800">Run console</span>
             <span className="text-[10px] text-slate-400">configure once → run anywhere, no code edits</span>
           </div>
@@ -1215,7 +1217,7 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
                       Accuracy: capture real control types (dropdowns / radios), not text.
                       <button onClick={runEnrich} disabled={busy === 'enrich'}
                         title="Vision pass that captures each control\u2019s real type + options so dropdowns/radios run correctly"
-                        className="rounded-md px-2 py-0.5 text-[10px] font-bold bg-indigo-100 text-indigo-700 hover:bg-indigo-200 disabled:opacity-50">
+                        className="rounded-md px-2 py-0.5 text-[10px] font-bold bg-nexus-100 text-nexus-700 hover:bg-nexus-200 disabled:opacity-50">
                         {busy === 'enrich' ? 'Enriching\u2026' : 'Enrich now'}
                       </button>
                     </span>
@@ -1236,7 +1238,7 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
                   onClick={() => { if (t.dl) { void downloadCiBundle(); } else if (t.on) setTarget(t.k as any); }}
                   className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[11px] font-semibold border transition-colors ${
                     !t.on ? 'border-slate-150 text-slate-300 cursor-not-allowed'
-                    : target === t.k ? 'border-indigo-300 bg-indigo-600 text-white'
+                    : target === t.k ? 'border-nexus-300 bg-nexus-600 text-white'
                     : 'border-slate-200 text-slate-600 hover:bg-slate-50'}`}>
                   {t.dl && runBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : t.icon} {t.label}
                   {t.dl ? <Download className="h-3 w-3 opacity-60" /> : null}
@@ -1283,9 +1285,9 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
                           const rid = s.test_id || s.path;
                           const xOpen = expandedRow === rid;
                           return (
-                            <div key={s.test_id} className="hover:bg-indigo-50/40">
+                            <div key={s.test_id} className="hover:bg-nexus-50/40">
                               <div className="flex items-center gap-2 px-2.5 py-1.5">
-                                <input type="checkbox" checked={on} onChange={() => toggleScript(s.test_id)} className="h-3.5 w-3.5 accent-indigo-600 shrink-0 cursor-pointer" />
+                                <input type="checkbox" checked={on} onChange={() => toggleScript(s.test_id)} className="h-3.5 w-3.5 accent-nexus-600 shrink-0 cursor-pointer" />
                                 <span onClick={() => toggleScript(s.test_id)} className="text-[11px] text-slate-700 font-medium truncate flex-1 min-w-0 cursor-pointer">{s.name}</span>
                                 <span className="shrink-0 text-[9px] text-slate-400 flex items-center gap-1.5">
                                   <span>{s.stats?.total ?? s.lines} steps</span>
@@ -1304,7 +1306,7 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
                                 )}
                                 <span className="shrink-0 rounded px-1.5 py-0.5 text-[9px] font-semibold"
                                   style={healedActive ? { background: 'rgba(16,185,129,0.15)', color: '#047857' }
-                                    : ver ? { background: 'rgba(99,102,241,0.12)', color: '#4338ca' }
+                                    : ver ? { background: 'rgba(38,112,163,0.12)', color: '#164465' }
                                     : { background: 'rgba(100,116,139,0.10)', color: '#64748b' }}
                                   title={healedActive ? `Auto-healed Clean Run V1 (v${activeV?.version_no}) — verified green and ACTIVE; runs use this version`
                                     : ver ? 'an edited / healed version runs (not the auto-generated one)' : 'runs the auto-generated version'}>
@@ -1349,7 +1351,7 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
                                 </div>
                               )}
                               {xOpen && (
-                                <div className="border-t border-indigo-100 bg-slate-50/70 px-2.5 py-2 space-y-2">
+                                <div className="border-t border-nexus-100 bg-slate-50/70 px-2.5 py-2 space-y-2">
                                   {/* RUN row — per-script run controls + per-script Agentic/Video toggles (inline, no clipping) */}
                                   <div className="flex items-center gap-1.5 flex-wrap">
                                     <button onClick={() => runOnNexus({ test_ids: [s.test_id] })} disabled={running || autoHealing || !s.test_id}
@@ -1359,19 +1361,19 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
                                     </button>
                                     <button onClick={() => runLive({ test_ids: [s.test_id] })} disabled={running || autoHealing || !s.test_id}
                                       title="Run THIS script HEADED and watch it live in the portal (view-only stream)"
-                                      className="flex items-center gap-1 rounded-md px-2.5 py-1 text-[10px] font-bold text-white disabled:opacity-50" style={{ background: '#7c3aed' }}>
+                                      className="flex items-center gap-1 rounded-md px-2.5 py-1 text-[10px] font-bold text-white disabled:opacity-50" style={{ background: '#2670a3' }}>
                                       {runningTestId === s.test_id && liveUrl ? <Loader2 className="h-3 w-3 animate-spin" /> : <Play className="h-3 w-3" />} Run live ▸ watch
                                     </button>
                                     <button onClick={() => runAutoHeal({ test_ids: [s.test_id] })} disabled={autoHealing || running || !s.test_id}
                                       title="Run THIS script and AUTO-HEAL on failure — diagnose, fix, re-run, continue, and freeze a Clean Run V1 when green (never green-washes)"
-                                      className="flex items-center gap-1 rounded-md px-2.5 py-1 text-[10px] font-bold text-white disabled:opacity-50" style={{ background: 'linear-gradient(135deg,#7c3aed,#4f46e5)' }}>
+                                      className="flex items-center gap-1 rounded-md px-2.5 py-1 text-[10px] font-bold text-white disabled:opacity-50" style={{ background: 'linear-gradient(135deg,#2670a3,#2670a3)' }}>
                                       {autoHealing && runningTestId === s.test_id ? <Loader2 className="h-3 w-3 animate-spin" /> : <Wand2 className="h-3 w-3" />} ⚡ Auto-Heal
                                     </button>
                                     <label title="Agentic heal: when the deterministic recipes can't fix a failure, let an AI agent reason about the LIVE page and propose a GROUNDED fix before escalating — it can't invent a selector and can't green-wash."
-                                      className="flex items-center gap-1 text-[10px] font-semibold text-indigo-700 cursor-pointer select-none">
+                                      className="flex items-center gap-1 text-[10px] font-semibold text-nexus-700 cursor-pointer select-none">
                                       <input type="checkbox" checked={!!agenticByTest[s.test_id]} disabled={autoHealing}
                                         onChange={(e) => setAgenticByTest((m) => ({ ...m, [s.test_id]: e.target.checked }))}
-                                        className="h-3 w-3 accent-indigo-600 cursor-pointer" />
+                                        className="h-3 w-3 accent-nexus-600 cursor-pointer" />
                                       🤖 Agentic
                                     </label>
                                     <label title="Record a full VIDEO of this run (opt-in, ~1–10 MB). Screenshots are always captured; turn this on for a clean-run clip you can play back."
@@ -1391,28 +1393,28 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
                                     {s.test_id && (
                                       <button onClick={() => loadHistory(rid, s.test_id)}
                                         title="Grounded verdict history — this script's proven-green vs regression/drift/flake across recent runs (with screenshots + heal events)"
-                                        className="flex items-center gap-1 rounded-md px-2 py-1 text-[10px] font-semibold bg-indigo-50 text-indigo-700 hover:bg-indigo-100">
+                                        className="flex items-center gap-1 rounded-md px-2 py-1 text-[10px] font-semibold bg-nexus-50 text-nexus-700 hover:bg-nexus-100">
                                         <History className="h-3 w-3" /> Verdict history
                                       </button>
                                     )}
                                     {s.test_id && (
                                       <button onClick={() => openEditor(s)}
                                         title="Edit this test's script and save a new version"
-                                        className="flex items-center gap-1 rounded-md px-2 py-1 text-[10px] font-semibold bg-violet-50 text-violet-700 hover:bg-violet-100">
+                                        className="flex items-center gap-1 rounded-md px-2 py-1 text-[10px] font-semibold bg-nexus-50 text-nexus-700 hover:bg-nexus-100">
                                         <Pencil className="h-3 w-3" /> Edit{editedTests[s.test_id] ? ` · v${editedTests[s.test_id]}` : ''}
                                       </button>
                                     )}
                                     {s.test_id && (
                                       <button onClick={() => auditScript(s.test_id)} disabled={fidBusy === s.test_id}
                                         title="Audit: does this script faithfully implement the test case + verify its Expected Results?"
-                                        className="flex items-center gap-1 rounded-md px-2 py-1 text-[10px] font-semibold bg-sky-50 text-sky-700 hover:bg-sky-100 disabled:opacity-50">
+                                        className="flex items-center gap-1 rounded-md px-2 py-1 text-[10px] font-semibold bg-nexus-50 text-nexus-700 hover:bg-nexus-100 disabled:opacity-50">
                                         {fidBusy === s.test_id ? <Loader2 className="h-3 w-3 animate-spin" /> : <ShieldAlert className="h-3 w-3" />} Audit
                                       </button>
                                     )}
                                     {s.test_id && (
                                       <button onClick={() => regenScript(s.test_id)} disabled={fidBusy === `${s.test_id}:regen`}
                                         title="Regenerate this script from the current test case as a new immutable version (v+1)"
-                                        className="flex items-center gap-1 rounded-md px-2 py-1 text-[10px] font-semibold bg-teal-50 text-teal-700 hover:bg-teal-100 disabled:opacity-50">
+                                        className="flex items-center gap-1 rounded-md px-2 py-1 text-[10px] font-semibold bg-nexus-50 text-nexus-700 hover:bg-nexus-100 disabled:opacity-50">
                                         {fidBusy === `${s.test_id}:regen` ? <Loader2 className="h-3 w-3 animate-spin" /> : <RotateCcw className="h-3 w-3" />} Regenerate
                                       </button>
                                     )}
@@ -1456,7 +1458,7 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
                                                 <span className="font-black" style={{ color: ok ? '#15803d' : '#b91c1c' }}>{ok ? '✓' : '✗'}</span>
                                                 <span className={`rounded px-1 font-bold ${vstyle}`}>{vlabel}</span>
                                                 {h.failed_step_number ? <span className="text-rose-600 font-semibold">@ step {h.failed_step_number}</span> : null}
-                                                {h.heal_event ? <span className="rounded bg-indigo-100 text-indigo-700 px-1 font-bold">{String(h.heal_event).replace(/_/g, ' ')}</span> : null}
+                                                {h.heal_event ? <span className="rounded bg-nexus-100 text-nexus-700 px-1 font-bold">{String(h.heal_event).replace(/_/g, ' ')}</span> : null}
                                                 {h.screenshot_url ? <a href={api.getRunScreenshotUrl(h.screenshot_url)} target="_blank" rel="noreferrer" title="view the success/failure screenshot" className="text-emerald-600 font-bold no-underline">📷</a> : null}
                                                 <span className="ml-auto shrink-0 text-slate-400">{h.duration_ms ? `${(h.duration_ms / 1000).toFixed(1)}s · ` : ''}{h.started_at ? new Date(h.started_at).toLocaleString() : ''}</span>
                                               </div>
@@ -1484,13 +1486,13 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
                                     </div>
                                   )}
                                   {openEdit[rid] && s.test_id && (
-                                    <div className="rounded-md border border-violet-200 bg-violet-50/40 px-2.5 py-2">
+                                    <div className="rounded-md border border-nexus-200 bg-nexus-50/40 px-2.5 py-2">
                                       <div className="flex items-center gap-2 mb-1.5 flex-wrap">
-                                        <Pencil className="h-3 w-3 text-violet-600" />
-                                        <span className="text-[10px] font-bold text-violet-700">Edit script</span>
+                                        <Pencil className="h-3 w-3 text-nexus-600" />
+                                        <span className="text-[10px] font-bold text-nexus-700">Edit script</span>
                                         <span className="text-[10px] text-slate-400">you own this code — Save creates a new version; runs use the latest</span>
                                         <button onClick={() => saveVersion(s.test_id)} disabled={!editDirty[s.test_id] || editBusy === `save:${s.test_id}`}
-                                          className="ml-auto flex items-center gap-1 rounded-md px-2.5 py-1 text-[10px] font-bold text-white disabled:opacity-50" style={{ background: '#7c3aed' }}>
+                                          className="ml-auto flex items-center gap-1 rounded-md px-2.5 py-1 text-[10px] font-bold text-white disabled:opacity-50" style={{ background: '#2670a3' }}>
                                           {editBusy === `save:${s.test_id}` ? <Loader2 className="h-3 w-3 animate-spin" /> : <Save className="h-3 w-3" />}
                                           Save &rarr; v{(editedTests[s.test_id] || 0) + 1}
                                         </button>
@@ -1518,7 +1520,7 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
                                                 <span className="font-bold text-slate-700">v{v.version_no}</span>
                                                 {isActive && <span className="rounded bg-emerald-100 text-emerald-700 px-1 font-bold">active</span>}
                                                 {v.pending_approval && <span className="rounded bg-amber-100 text-amber-700 px-1 font-bold">proposed</span>}
-                                                {isHealedV(v) && <span className="rounded bg-indigo-100 text-indigo-700 px-1 font-bold">auto-healed</span>}
+                                                {isHealedV(v) && <span className="rounded bg-nexus-100 text-nexus-700 px-1 font-bold">auto-healed</span>}
                                                 <span className="truncate">{v.author || 'unknown'}{v.note ? ` · ${v.note}` : ''}</span>
                                                 <span className="ml-auto shrink-0 text-slate-400">{v.created_at ? new Date(v.created_at).toLocaleString() : ''}</span>
                                                 {v.pending_approval && (
@@ -1576,7 +1578,7 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
                 <Globe className="h-4 w-4 text-slate-400 shrink-0" />
                 <input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)}
                   placeholder="https://staging.your-app.com"
-                  className="flex-1 min-w-0 rounded-md border border-slate-200 px-2.5 py-1.5 text-[12px] font-mono text-slate-700 focus:outline-none focus:border-indigo-300" />
+                  className="flex-1 min-w-0 rounded-md border border-slate-200 px-2.5 py-1.5 text-[12px] font-mono text-slate-700 focus:outline-none focus:border-nexus-300" />
               </div>
               {data.recorded_base_url && (
                 <p className="text-[10px] text-slate-400 mt-1">
@@ -1595,8 +1597,8 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
                 <span className="normal-case font-medium text-slate-300">log in once; we save the session (encrypted) and reuse it for every run</span>
               </p>
               {captureLive ? (
-                <div className="rounded-md border-2 border-indigo-300 overflow-hidden bg-black">
-                  <div className="px-2 py-1 flex items-center gap-2 bg-indigo-600">
+                <div className="rounded-md border-2 border-nexus-300 overflow-hidden bg-black">
+                  <div className="px-2 py-1 flex items-center gap-2 bg-nexus-600">
                     <span className="text-[10px] font-bold uppercase text-white">Log in below, then save the session</span>
                     <button onClick={saveCapture} disabled={authBusy === 'save'}
                       className="ml-auto flex items-center gap-1 rounded px-2 py-0.5 text-[10px] font-bold bg-emerald-500 text-white disabled:opacity-50">
@@ -1625,7 +1627,7 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
                   </span>
                   <button onClick={() => void startCapture()} disabled={!!authBusy || authStatus?.encryption_available === false}
                     title={authStatus?.encryption_available === false ? 'Encryption unavailable on this deployment — a session cannot be stored securely' : 'Open a browser, log in once; we save the session (encrypted) for every run'}
-                    className="flex items-center gap-1.5 rounded-md px-2.5 py-1 text-[11px] font-semibold bg-indigo-600 text-white hover:bg-indigo-500 disabled:opacity-50">
+                    className="flex items-center gap-1.5 rounded-md px-2.5 py-1 text-[11px] font-semibold bg-nexus-600 text-white hover:bg-nexus-500 disabled:opacity-50">
                     {authBusy === 'capture' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Lock className="h-3.5 w-3.5" />} Capture login session
                   </button>
                   {authStatus?.encryption_available === false && (
@@ -1664,7 +1666,7 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
                           <td className="px-2 py-1">
                             <input value={dataOverrides[f.key] ?? f.default}
                               onChange={(e) => setDataOverrides((d) => ({ ...d, [f.key]: e.target.value }))}
-                              className="w-full min-w-[90px] rounded border border-slate-200 px-1.5 py-0.5 text-[11px] font-mono text-slate-700 focus:outline-none focus:border-indigo-300" />
+                              className="w-full min-w-[90px] rounded border border-slate-200 px-1.5 py-0.5 text-[11px] font-mono text-slate-700 focus:outline-none focus:border-nexus-300" />
                           </td>
                           {selectedScripts.map((s) => {
                             const recorded = ((s.data_fields || []).find((x) => x.key === f.key) || {}).default || '';
@@ -1677,7 +1679,7 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
                                   placeholder={inheritedEff || '(observed)'}
                                   onChange={(e) => setPerTestData((d) => ({ ...d, [s.test_id]: { ...(d[s.test_id] || {}), [f.key]: e.target.value } }))}
                                   title={override ? 'overridden for this scenario' : (differs ? ('recorded for this scenario: ' + recorded + ' (differs from Global)') : 'inherits Global / recorded value')}
-                                  className={'w-full min-w-[90px] rounded border px-1.5 py-0.5 text-[11px] font-mono focus:outline-none focus:border-indigo-300 ' + (differs ? 'border-amber-300 text-amber-800 placeholder-amber-600/70' : 'border-slate-200 text-slate-500')} />
+                                  className={'w-full min-w-[90px] rounded border px-1.5 py-0.5 text-[11px] font-mono focus:outline-none focus:border-nexus-300 ' + (differs ? 'border-amber-300 text-amber-800 placeholder-amber-600/70' : 'border-slate-200 text-slate-500')} />
                               </td>
                             );
                           })}
@@ -1725,7 +1727,7 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
             </div>
 
             {/* 4 · run */}
-            <div className="rounded-lg border border-indigo-100 bg-indigo-50/50 p-3 space-y-3">
+            <div className="rounded-lg border border-nexus-100 bg-nexus-50/50 p-3 space-y-3">
               {/* Run + Auto-Heal + Audit + the Agentic/Video toggles now live PER SCRIPT (in each
                   test's row above). This strip just surfaces the active run + the local-download option. */}
               <div>
@@ -1743,7 +1745,7 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
                       <>
                         <span className="rounded px-2 py-0.5 font-black uppercase text-[9px]" style={runStatusStyle(runStatus.status)}>{runStatus.status}</span>
                         {runStatus.status !== 'unknown' && (
-                          <button onClick={() => setView('run')} className="text-indigo-600 text-[10px] font-bold underline hover:text-indigo-800">→ view results &amp; triage</button>
+                          <button onClick={() => setView('run')} className="text-nexus-600 text-[10px] font-bold underline hover:text-nexus-800">→ view results &amp; triage</button>
                         )}
                       </>
                     )}
@@ -1753,12 +1755,12 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
               </div>
 
               {/* or download + run locally */}
-              <div className="border-t border-indigo-100 pt-2.5">
+              <div className="border-t border-nexus-100 pt-2.5">
                 <p className="text-[10px] font-bold uppercase text-slate-400 mb-2">or download &amp; run locally</p>
                 <div className="flex items-center gap-2 flex-wrap">
                   <button onClick={downloadConfigured} disabled={runBusy || selectedScripts.length === 0}
                     className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[11px] font-bold text-white disabled:opacity-50"
-                    style={{ background: '#4f46e5' }}>
+                    style={{ background: '#2670a3' }}>
                     {runBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
                     Download configured bundle ({selectedScripts.length})
                   </button>
@@ -1776,7 +1778,7 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
 
       {/* A.3 - GROUNDED VERDICT, front-and-center (the differentiator) */}
       {data && totals.scripts > 0 && (
-        <div className="rounded-xl border-2 p-3" style={{ borderColor: 'rgba(16,185,129,0.30)', background: 'linear-gradient(135deg, rgba(16,185,129,0.06), rgba(99,102,241,0.04))' }}>
+        <div className="rounded-xl border-2 p-3" style={{ borderColor: 'rgba(16,185,129,0.30)', background: 'linear-gradient(135deg, rgba(16,185,129,0.06), rgba(38,112,163,0.04))' }}>
           <div className="flex items-center gap-2 flex-wrap">
             <span className="text-[13px]">🛡️</span>
             <span className="text-[12px] font-black text-slate-900">Grounded verdict</span>
@@ -1788,7 +1790,7 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
                 <span className="rounded-full px-2 py-0.5" style={{ background: 'rgba(34,197,94,0.16)', color: '#15803d' }}>{runs.board.passed ?? 0} passed</span>
                 {(runs.board.failed ?? 0) > 0 && <span className="rounded-full px-2 py-0.5" style={{ background: 'rgba(244,63,94,0.14)', color: '#be123c' }}>{runs.board.failed} failed</span>}
                 {(runs.board.flaky ?? 0) > 0 && <span className="rounded-full px-2 py-0.5" style={{ background: 'rgba(245,158,11,0.16)', color: '#b45309' }}>{runs.board.flaky} flaky</span>}
-                <button onClick={() => setView('run')} className="text-indigo-600 underline text-[10px] font-bold hover:text-indigo-800">see proof →</button>
+                <button onClick={() => setView('run')} className="text-nexus-600 underline text-[10px] font-bold hover:text-nexus-800">see proof →</button>
               </span>
             ) : (
               <span className="ml-auto text-[10px] text-slate-400 italic">Run a script to get a grounded verdict - green means the app is actually right, with proof.</span>
@@ -1800,7 +1802,7 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
       {/* Run / Results view — return to the Run Console */}
       {view === 'run' && (
         <button onClick={() => setView('console')}
-          className="flex items-center gap-1 text-[12px] font-bold text-indigo-700 hover:text-indigo-900">
+          className="flex items-center gap-1 text-[12px] font-bold text-nexus-700 hover:text-nexus-900">
           ‹ Back to Run Console
         </button>
       )}
@@ -1812,8 +1814,8 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
             <AutoHealPanel job={autoHealJob} live={autoHealLive} healing={autoHealing} err={autoHealErr} />
           )}
           {liveUrl && running && (
-            <div ref={liveRef} className="rounded-lg overflow-hidden border-2 border-violet-300 bg-black">
-              <div className="px-2 py-1 bg-violet-600 text-white text-[10px] font-bold flex items-center gap-1.5">
+            <div ref={liveRef} className="rounded-lg overflow-hidden border-2 border-nexus-300 bg-black">
+              <div className="px-2 py-1 bg-nexus-600 text-white text-[10px] font-bold flex items-center gap-1.5">
                 <span className="inline-block h-2 w-2 rounded-full bg-red-400 animate-pulse" />
                 LIVE — headed Chromium on the Nexus runner (view-only stream)
               </div>
@@ -1832,7 +1834,7 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
       {view === 'run' && data && totals.scripts > 0 && (() => {
         const th = timeline?.run_header;
         return (
-        <div ref={resultsRef} className="rounded-xl border-2 border-indigo-200 bg-indigo-50/30 p-3">
+        <div ref={resultsRef} className="rounded-xl border-2 border-nexus-200 bg-nexus-50/30 p-3">
           {/* This run — header counts come off ONE run row, so they always agree
               with the per-step timeline below (no 1-vs-6 mismatch). */}
           <div className="flex items-center gap-2 px-1 pb-2 flex-wrap">
@@ -1848,7 +1850,7 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
               </>
             ) : (
               <>
-                <span className="text-[11px] font-black uppercase tracking-wide" style={{ color: '#4f46e5' }}>Run results</span>
+                <span className="text-[11px] font-black uppercase tracking-wide" style={{ color: '#2670a3' }}>Run results</span>
                 <span className="text-[10px] text-slate-400 font-semibold">your latest run appears here, step by step</span>
               </>
             )}
@@ -1932,8 +1934,8 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
                   </button>
                 </div>
               ))}
-              <div className="mt-2 rounded-lg border border-indigo-100 bg-indigo-50/60 px-3 py-2">
-                <p className="text-[10px] font-bold text-indigo-700 mb-1">Feed the Grounded Triage board (optional)</p>
+              <div className="mt-2 rounded-lg border border-nexus-100 bg-nexus-50/60 px-3 py-2">
+                <p className="text-[10px] font-bold text-nexus-700 mb-1">Feed the Grounded Triage board (optional)</p>
                 <p className="text-[10px] text-slate-500 leading-relaxed mb-1.5">
                   Set these env vars before running and the bundled <span className="font-mono">nexus-reporter</span> uploads each run — every failure then appears below, classified and shown beside its known-good baseline.
                 </p>
