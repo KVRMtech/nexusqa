@@ -1801,6 +1801,19 @@ class ApiClient {
     return data;
   }
 
+  /** Agentic-QE per-agent ON/OFF config + catalog (for the toggles panel). $0 agents
+   *  default ON; LLM agents default OFF. */
+  async getAgenticConfig(): Promise<{ agents: Record<string, boolean>; defaults: Record<string, boolean>; catalog: string[] }> {
+    const { data } = await this.client.get(`/v1/agentic/config`);
+    return data;
+  }
+
+  /** Turn each agent on/off for this tenant (a toggle only gates whether an agent runs). */
+  async setAgenticConfig(agents: Record<string, boolean>): Promise<{ agents: Record<string, boolean> }> {
+    const { data } = await this.client.put(`/v1/agentic/config`, { agents });
+    return data;
+  }
+
   /** Phase 5 — Proven Control Ledger KB: controls whose heals are oracle-PROVEN green
    *  and reused across scenarios + recordings, with provenance (label/page/fix/confidence/
    *  app scope) + lifecycle (quarantined). scope = recording | app | tenant. Read-only. */

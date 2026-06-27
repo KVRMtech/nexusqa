@@ -18,6 +18,7 @@ import {
 } from 'lucide-react';
 import { api } from '../services/api';
 import TriagePanel from './TriagePanel';
+import AgenticSettings from './AgenticSettings';
 
 // Per-script overflow menu — groups the secondary script tools (verdict history,
 // edit, audit, regenerate, preflight, data, copy, .spec) behind a ⋮ so the run
@@ -1226,6 +1227,7 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
           </p>
         </div>
         <div className="ml-auto flex items-center gap-2 flex-wrap">
+          <AgenticSettings />
           <span className="text-[11px] font-bold text-nexus-700">
             {totals.scripts} script{totals.scripts === 1 ? '' : 's'}
           </span>
