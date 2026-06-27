@@ -1479,6 +1479,7 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
                                                 {h.failed_step_number ? <span className="text-rose-600 font-semibold">@ step {h.failed_step_number}</span> : null}
                                                 {h.heal_event ? <span className="rounded bg-nexus-100 text-nexus-700 px-1 font-bold">{String(h.heal_event).replace(/_/g, ' ')}</span> : null}
                                                 {h.screenshot_url ? <a href={api.getRunScreenshotUrl(h.screenshot_url)} target="_blank" rel="noreferrer" title="view the success/failure screenshot" className="text-emerald-600 font-bold no-underline">📷</a> : null}
+                                                {h.video_url ? <a href={api.getRunScreenshotUrl(h.video_url)} target="_blank" rel="noreferrer" title="play the recorded run video" className="text-violet-600 font-bold no-underline">🎥</a> : null}
                                                 <span className="ml-auto shrink-0 text-slate-400">{h.duration_ms ? `${(h.duration_ms / 1000).toFixed(1)}s · ` : ''}{h.started_at ? new Date(h.started_at).toLocaleString() : ''}</span>
                                               </div>
                                             );

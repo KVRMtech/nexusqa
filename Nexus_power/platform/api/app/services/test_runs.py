@@ -1061,6 +1061,7 @@ async def scenario_verdict_history(
         failed_step: int | None = None
         failing_error = ""
         shot = ""
+        vid = ""
         for st in srows:
             if _status_severity(st.status) > _status_severity(worst):
                 worst = st.status
@@ -1070,6 +1071,9 @@ async def scenario_verdict_history(
                 failing_error = st.error_message or ""
             if getattr(st, "screenshot_url", ""):
                 shot = st.screenshot_url
+            _md = getattr(st, "metadata_json", None) or {}
+            if _md.get("video_url"):
+                vid = _md["video_url"]
         ran = len(srows) > 0
         failed = worst in _FAIL_STEP_STATUSES
         selector_drifted = any(
@@ -1094,6 +1098,7 @@ async def scenario_verdict_history(
             "failed_step_number": failed_step,
             "error_snippet": (failing_error or "")[:300],
             "screenshot_url": shot,
+            "video_url": vid,
             "heal_event": heal_by_run.get(run.run_id, ""),
         })
     return out
