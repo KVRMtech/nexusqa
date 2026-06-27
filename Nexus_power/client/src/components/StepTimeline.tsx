@@ -34,6 +34,7 @@ export interface TimelineStep {
   duration_ms: number;
   error_message: string;
   screenshot_url: string;
+  video_url?: string;
   baseline_screenshot: string;
   expected: string;
 }
@@ -139,6 +140,7 @@ function ScenarioCard({ sc, artifactId, baseUrl }: { sc: TimelineScenario; artif
 
 function StepRow({ st, sc, artifactId, baseUrl }: { st: TimelineStep; sc: TimelineScenario; artifactId: string; baseUrl?: string }) {
   const isFail = FAIL.has(st.status);
+  const hasGreenShot = !isFail && !!st.screenshot_url; // final-frame success proof (last passed step on an evidence run)
   const [open, setOpen] = useState(isFail); // the failing step opens by default
   const ic = STEP_ICON[st.status] || STEP_ICON.passed;
   const s = asScenario(sc, st);
@@ -156,14 +158,15 @@ function StepRow({ st, sc, artifactId, baseUrl }: { st: TimelineStep; sc: Timeli
   return (
     <div className="relative">
       <button
-        onClick={() => isFail && setOpen((o) => !o)}
-        className={`w-full flex items-center gap-2 py-1 text-left ${isFail ? 'hover:bg-rose-50/60 rounded-md cursor-pointer' : 'cursor-default'}`}
+        onClick={() => (isFail || hasGreenShot) && setOpen((o) => !o)}
+        className={`w-full flex items-center gap-2 py-1 text-left ${isFail ? 'hover:bg-rose-50/60 rounded-md cursor-pointer' : hasGreenShot ? 'hover:bg-emerald-50/60 rounded-md cursor-pointer' : 'cursor-default'}`}
       >
         <span className="relative z-10 -ml-4 grid place-items-center h-3.5 w-3.5 rounded-full text-[9px] font-black leading-none"
           style={{ background: ic.bg, color: ic.color }}>{ic.glyph}</span>
         <span className="text-[10px] font-bold text-slate-400 w-5 shrink-0 text-right">{st.step_number}</span>
         <span className={`text-[11px] break-words ${isFail ? 'font-bold text-rose-700' : 'text-slate-700'}`}>{st.label}</span>
         {isFail && <span className="shrink-0 text-[9px] font-black uppercase text-rose-500">◀ broke here</span>}
+        {hasGreenShot && <span className="shrink-0 inline-flex items-center gap-0.5 text-[9px] font-bold text-emerald-600" title="Final-frame screenshot proof of the green run — click to view">📷 proof</span>}
         <span className="ml-auto shrink-0 text-[10px] font-mono" style={{ color: st.duration_ms >= 500 ? '#b45309' : '#94a3b8' }}>{fmtDur(st.duration_ms)}</span>
       </button>
       {isFail && open && (
@@ -195,6 +198,19 @@ function StepRow({ st, sc, artifactId, baseUrl }: { st: TimelineStep; sc: Timeli
           </div>
           {diagErr && <p className="mt-2 text-[10px] text-amber-700">{diagErr}</p>}
           {diag && diag.found && <Diagnosis diag={diag} artifactId={artifactId} baseUrl={baseUrl} onReanalyze={analyze} />}
+        </div>
+      )}
+      {hasGreenShot && open && (
+        <div className="ml-1 mb-2 mt-1 rounded-lg border border-emerald-200 bg-emerald-50/50 p-2">
+          <p className="text-[10px] font-semibold text-emerald-700 mb-1">✓ Final-frame proof — this run landed on the expected state.</p>
+          <Frame label="This run (success)" src={api.getRunScreenshotUrl(st.screenshot_url || '')} />
+          {st.video_url ? (
+            <div className="mt-2">
+              <p className="text-[10px] font-semibold text-emerald-700 mb-1">🎥 Run video</p>
+              <video src={api.getRunScreenshotUrl(st.video_url)} controls preload="metadata"
+                className="w-full max-w-md rounded border border-emerald-200" />
+            </div>
+          ) : null}
         </div>
       )}
     </div>
