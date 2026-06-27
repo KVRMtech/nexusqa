@@ -3452,6 +3452,9 @@ async def _attach_agentic_diagnosis(session, *, artifact_id, tenant_id, timeline
     LLM). Strictly fail-open — it can never break or slow-fail the timeline."""
     try:
         from ..services.agentic import auto_diagnosis as _sentinel
+        if prefs is None:
+            from ..services.agentic import agentic_prefs as _ap
+            prefs = await _ap.resolve(session, tenant_id=tenant_id)
         dx = await _sentinel.diagnose_failures(
             session, artifact_id=artifact_id, tenant_id=tenant_id,
             scenario_ids=None, timeline=timeline, prefs=prefs)
@@ -3459,6 +3462,32 @@ async def _attach_agentic_diagnosis(session, *, artifact_id, tenant_id, timeline
     except Exception:  # never let the diagnosis enrichment break the run view
         pass
     return timeline
+
+
+class _AgenticPrefsBody(BaseModel):
+    agents: dict = Field(default_factory=dict)
+
+
+@router.get("/api/v1/agentic/config")
+async def get_agentic_config(user: dict = Depends(get_current_user)):
+    """The agentic-QE agent catalog + this tenant's on/off prefs (for the toggles UI).
+    $0 deterministic agents (sentinel/triage/verdict) default ON; LLM agents
+    (context/intent) default OFF. Read-only, fail-open."""
+    tenant_id = user["tenant_id"]
+    async with tenant_scoped_session(tenant_id) as session:
+        from ..services.agentic import agentic_prefs as _ap
+        return await _ap.get_effective(session, tenant_id=tenant_id)
+
+
+@router.put("/api/v1/agentic/config")
+async def set_agentic_config(body: _AgenticPrefsBody, user: dict = Depends(get_current_user)):
+    """Turn each agent ON/OFF for this tenant. Only known agents are kept; a toggle only
+    gates WHETHER an agent runs — it can never make a step green. Fail-open (persists when
+    the agentic_prefs migration is applied; otherwise returns the merged map)."""
+    tenant_id = user["tenant_id"]
+    async with tenant_scoped_session(tenant_id) as session:
+        from ..services.agentic import agentic_prefs as _ap
+        return {"agents": await _ap.set_prefs(session, tenant_id=tenant_id, agents=body.agents)}
 
 
 @router.get("/api/v1/test-factory/{artifact_id}/runs/latest")
