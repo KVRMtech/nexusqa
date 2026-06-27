@@ -1121,6 +1121,10 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
       const body: any = {
         base_url: baseUrl.trim(), data: buildData(), data_by_test: buildDataByTest(),
         browsers: Array.from(browsers), retries,
+        // 🎥 record video on the headed/live path too (single OR multi: any toggled script)
+        enable_video: (scope?.test_ids?.length
+          ? scope.test_ids.some((id) => !!recordVideoByTest[id])
+          : Object.values(recordVideoByTest).some(Boolean)),
       };
       if (scope?.test_ids) body.test_ids = scope.test_ids;
       else body.categories = Array.from(selectedCats);

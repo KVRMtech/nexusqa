@@ -2748,6 +2748,8 @@ async def playwright_run_live(
         "NEXUS_ENDPOINT": _INGEST_BASE, "NEXUS_TOKEN": token or "",
         "NEXUS_ARTIFACT_ID": artifact_id, "NEXUS_RUN_ID": run_id,
         "NEXUS_BASE_URL": base_url, "NEXUS_ENV": "nexus-runner",
+        # 🎥 opt-in video on the HEADED/live path too (was only on /playwright/run).
+        **({"NEXUS_RECORD_VIDEO": "1"} if body.enable_video else {}),
     }
     try:
         await runner_client.run_live(files, env)         # 202; raises on 409
