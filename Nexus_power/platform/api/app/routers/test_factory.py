@@ -3445,6 +3445,22 @@ async def regenerate_all(
     return {"artifact_id": artifact_id, "regenerated": len(results), "versions": results}
 
 
+async def _attach_agentic_diagnosis(session, *, artifact_id, tenant_id, timeline, prefs=None):
+    """Sentinel (Always-On Diagnosis): additively attach a grounded, never-green-wash
+    diagnosis (deterministic cause + Triage source/route, opt-in Context) to each failed
+    step. Gated by the Governor (sentinel default-ON $0 deterministic; context default-OFF
+    LLM). Strictly fail-open — it can never break or slow-fail the timeline."""
+    try:
+        from ..services.agentic import auto_diagnosis as _sentinel
+        dx = await _sentinel.diagnose_failures(
+            session, artifact_id=artifact_id, tenant_id=tenant_id,
+            scenario_ids=None, timeline=timeline, prefs=prefs)
+        _sentinel.attach_to_timeline(timeline, dx)
+    except Exception:  # never let the diagnosis enrichment break the run view
+        pass
+    return timeline
+
+
 @router.get("/api/v1/test-factory/{artifact_id}/runs/latest")
 async def latest_run_timeline(
     artifact_id: str = PathParam(..., min_length=1, max_length=64),
@@ -3457,9 +3473,11 @@ async def latest_run_timeline(
     tenant_id = user["tenant_id"]
     async with tenant_scoped_session(tenant_id) as session:
         await _require_artifact(session, artifact_id, tenant_id)
-        return await build_latest_run_timeline(
+        _tl = await build_latest_run_timeline(
             session, artifact_id=artifact_id, tenant_id=tenant_id,
         )
+        return await _attach_agentic_diagnosis(
+            session, artifact_id=artifact_id, tenant_id=tenant_id, timeline=_tl)
 
 
 @router.get("/api/v1/test-factory/{artifact_id}/runs")
@@ -3495,9 +3513,11 @@ async def run_timeline_by_id(
     tenant_id = user["tenant_id"]
     async with tenant_scoped_session(tenant_id) as session:
         await _require_artifact(session, artifact_id, tenant_id)
-        return await build_run_timeline_by_id(
+        _tl = await build_run_timeline_by_id(
             session, artifact_id=artifact_id, tenant_id=tenant_id, run_id=run_id,
         )
+        return await _attach_agentic_diagnosis(
+            session, artifact_id=artifact_id, tenant_id=tenant_id, timeline=_tl)
 
 
 @router.get("/api/v1/test-factory/{artifact_id}/steps/{scenario_id}/{step_number}/analyze")
