@@ -681,6 +681,7 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
   // refuse-families, and the step's own oracle + 2x confirm still gate — never green-wash.
   const [agenticByTest, setAgenticByTest] = useState<Record<string, boolean>>({});   // per-script 🤖 Agentic toggle
   const [recordVideoByTest, setRecordVideoByTest] = useState<Record<string, boolean>>({}); // per-script 🎥 video toggle
+  const [videoModal, setVideoModal] = useState<string | null>(null);    // inline 🎥 run-video popup player
   const [fidelity, setFidelity] = useState<Record<string, any>>({});   // test_id -> scorecard
   const [suiteFid, setSuiteFid] = useState<any>(null);
   const [fidBusy, setFidBusy] = useState<string>('');                  // test_id | 'suite' | 'all'
@@ -1197,6 +1198,21 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
 
   return (
     <section className="space-y-4">
+      {/* 🎥 inline run-video player (popup) — backdrop click or ✕ closes it */}
+      {videoModal && (
+        <div onClick={() => setVideoModal(null)}
+          className="fixed inset-0 z-[120] flex items-center justify-center bg-black/75 p-4">
+          <div onClick={(e) => e.stopPropagation()}
+            className="relative w-full max-w-3xl rounded-xl overflow-hidden bg-black shadow-2xl ring-1 ring-nexus-600/50">
+            <div className="flex items-center justify-between px-3 py-2 bg-[#0a2540] text-[#fff]">
+              <span className="text-[12px] font-bold flex items-center gap-1.5"><Play className="h-3.5 w-3.5 text-gold-400" /> Run video</span>
+              <button onClick={() => setVideoModal(null)} aria-label="Close"
+                className="text-[#fff] opacity-80 hover:opacity-100 text-lg leading-none px-2">✕</button>
+            </div>
+            <video src={videoModal} controls autoPlay playsInline className="block w-full max-h-[72vh] bg-black" />
+          </div>
+        </div>
+      )}
       {/* ── Header ──────────────────────────────────────────── */}
       <div className="flex items-center gap-3 flex-wrap">
         <span className="h-9 w-1 rounded-full bg-gradient-to-b from-gold-400 to-gold-600 shrink-0" />
@@ -1488,7 +1504,7 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
                                                 {h.failed_step_number ? <span className="text-rose-600 font-semibold">@ step {h.failed_step_number}</span> : null}
                                                 {h.heal_event ? <span className="rounded bg-nexus-100 text-nexus-700 px-1 font-bold">{String(h.heal_event).replace(/_/g, ' ')}</span> : null}
                                                 {h.screenshot_url ? <a href={api.getRunScreenshotUrl(h.screenshot_url)} target="_blank" rel="noreferrer" title="view the success/failure screenshot" className="text-emerald-600 font-bold no-underline">📷</a> : null}
-                                                {h.video_url ? <a href={api.getRunScreenshotUrl(h.video_url)} target="_blank" rel="noreferrer" title="play the recorded run video" className="text-violet-600 font-bold no-underline">🎥</a> : null}
+                                                {h.video_url ? <span role="button" tabIndex={0} onClick={() => setVideoModal(api.getRunScreenshotUrl(h.video_url))} title="play the recorded run video — inline" className="cursor-pointer select-none text-violet-600 font-bold leading-none">🎥</span> : null}
                                                 <span className="ml-auto shrink-0 text-slate-400">{h.duration_ms ? `${(h.duration_ms / 1000).toFixed(1)}s · ` : ''}{h.started_at ? new Date(h.started_at).toLocaleString() : ''}</span>
                                               </div>
                                             );
