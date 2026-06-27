@@ -79,6 +79,10 @@ class PageVisitInput:
     duration_ms: int = 0
     # Representative frame asset path (the page's screenshot) — per-step proof.
     frame_ref: str = ""
+    # 0..1 confidence the page's URL/identity is correct. PROVEN (instrumented /
+    # url_regex) ≈ 1.0; pixel-inferred (vision / title) is lower. Gates whether a
+    # navigation onto this page may be asserted as fact vs. emitted UNPROVEN.
+    extraction_confidence: float = 1.0
 
 
 @dataclass(frozen=True)
@@ -99,6 +103,10 @@ class PageActionInput:
     # after-extractor): drives the step's wait condition + assertion.
     after_outcome: str = ""
     after_detail: str = ""
+    # Grounded navigation signal: True when the recording PROVES this action
+    # advanced the page (after_outcome=='navigation' or a captured URL change).
+    # Gates navigation assertions — page-group adjacency alone is NOT proof.
+    navigated: bool = False
 
 
 @dataclass
@@ -123,6 +131,11 @@ class _PageGroup:
     canonical_host: str
     location: str
     frame_ref: str = ""
+    # Provenance of this page's URL/identity (weakest across its visits): an
+    # instrumented (ground_truth) or directly-OCR'd (url_regex) URL is PROVEN; a
+    # vision/title-inferred URL is not, and its navigation is emitted UNPROVEN.
+    source: str = ""
+    extraction_confidence: float = 1.0
     visit_ids: list[str] = field(default_factory=list)
     # ordered (label, value) candidates collected across the group's frames
     field_candidates: list[tuple[str, str]] = field(default_factory=list)
@@ -303,6 +316,8 @@ def _segment(
                 canonical_host=visit.canonical_host.strip(),
                 location=visit.location.strip(),
                 frame_ref=visit.frame_ref or "",
+                source=(visit.source or ""),
+                extraction_confidence=float(getattr(visit, "extraction_confidence", 1.0) or 1.0),
             )
             groups.append(current)
         if current is None:
@@ -310,6 +325,11 @@ def _segment(
             continue
         if not current.frame_ref and visit.frame_ref:
             current.frame_ref = visit.frame_ref
+        # The group is only as trustworthy as its WEAKEST URL evidence.
+        _vc = float(getattr(visit, "extraction_confidence", 1.0) or 1.0)
+        if _vc < current.extraction_confidence:
+            current.extraction_confidence = _vc
+            current.source = visit.source or current.source
         current.visit_ids.append(visit.page_visit_id)
         for label, value in (visit.form_snapshot or {}).items():
             clean, required = _strip_required(label)
@@ -475,11 +495,62 @@ def _typed_values(group: _PageGroup) -> dict[str, str]:
     return out
 
 
+def _action_navigated(a: PageActionInput) -> bool:
+    """True when the recording PROVES this action advanced the page — its captured
+    outcome was a navigation, or a URL change was recorded. Page-group adjacency is
+    NOT proof; only this grounded signal credits a click with navigating onward."""
+    return bool(getattr(a, "navigated", False)) or (a.after_outcome or "").strip().lower() == "navigation"
+
+
+# Sources whose URL is GROUND TRUTH (instrumented) or a directly-OCR'd address
+# bar — trustworthy enough to ASSERT a navigation onto. Everything else (vision /
+# title / scene-URL / missing-page) is pixel-inferred and emitted UNPROVEN.
+_PROVEN_SOURCES = frozenset({"ground_truth", "url_regex"})
+
+
+def _page_proven(group: _PageGroup) -> bool:
+    """True when a page's URL/identity is PROVEN (instrumented or directly OCR'd at
+    high confidence). A pixel-inferred page is NOT asserted as fact so test-gen
+    never green-washes a guessed URL. Generic — keys off the recorded source."""
+    return (group.source or "").strip().lower() in _PROVEN_SOURCES \
+        and float(getattr(group, "extraction_confidence", 1.0) or 1.0) >= 0.9
+
+
+def _typed_field_pairs(group: _PageGroup) -> list[tuple[str, str]]:
+    """Ordered (clean_label, value) for fields the user actually TYPED (action
+    stream, verb=type/fill/input). These are grounded fills that live in
+    page_actions even when the form_snapshot came back empty — without them the
+    typed values are dropped and the data file goes unused. Real values only,
+    booleans routed out, last-typed-wins per label."""
+    order: list[str] = []
+    last: dict[str, str] = {}
+    labels: dict[str, str] = {}
+    for a in group.actions:
+        if (a.verb or "").strip().lower() not in ("type", "fill", "input"):
+            continue
+        raw = (a.target_label or "").strip()
+        val = "" if a.value is None else str(a.value).strip()
+        if not raw or not val:
+            continue
+        clean = _strip_required(raw)[0]
+        if _is_boolean(val) or not _is_real_value(clean, val):
+            continue
+        key = _norm(clean)
+        if not key:
+            continue
+        if key not in last:
+            order.append(key)
+            labels[key] = clean
+        last[key] = val  # last-typed wins
+    return [(labels[k], last[k]) for k in order]
+
+
 def _build_steps(groups: Sequence[_PageGroup]) -> tuple[list[ProductionTestStep], int]:
     """Build ordered, logically-reconstructed test steps from page groups."""
     steps: list[ProductionTestStep] = []
     n = 0
     fields_used = 0
+    prev_navigated = True  # the entry page has no prior boundary to prove
 
     for gi, group in enumerate(groups):
         url = _full_url(group)
@@ -488,6 +559,9 @@ def _build_steps(groups: Sequence[_PageGroup]) -> tuple[list[ProductionTestStep]
         next_canon = _canonical_url(groups[gi + 1]) if gi + 1 < len(groups) else ""
         next_path = groups[gi + 1].url_path if gi + 1 < len(groups) else ""
         group_start = len(steps)  # tag this group's steps with its screenshot
+        # Did THIS group grounded-navigate onward? Gates whether the NEXT group's
+        # "verify navigated here" step may hard-assert the URL (vs. honest UNPROVEN).
+        group_navigated = any(_action_navigated(a) for a in group.actions)
 
         # 1) Navigation onto the page.  The entry step navigates to the full URL;
         #    every later assertion checks the PATH only (see _canonical_url).
@@ -502,17 +576,34 @@ def _build_steps(groups: Sequence[_PageGroup]) -> tuple[list[ProductionTestStep]
                 **_observed(verb="navigate", url=url),
             ))
         else:
+            # The boundary INTO this page is asserted as a real navigation ONLY when
+            # the PREVIOUS group grounded-navigated here; otherwise the transition was
+            # never captured (e.g. the inventory→cart→checkout gap) — demote to
+            # 'inferred' so the compiler emits an honest UNPROVEN comment, never a
+            # toHaveURL that can only ever fail RED.
             steps.append(ProductionTestStep(
                 step_number=n,
                 action=f"Verify the application navigated to {canon}",
                 expected=f"URL path is {group.url_path or canon} and the {page_name} page is displayed",
                 expected_result=f"URL path is {group.url_path or canon} and the {page_name} page is displayed",
                 selector=f"url={canon}",
-                **_observed(verb="navigate", url=group.url_path or canon),
+                **_observed(verb="navigate", url=group.url_path or canon,
+                            provenance=("demonstrated" if (prev_navigated and _page_proven(group)) else "inferred")),
             ))
 
         text_fields, toggles, required_present = _resolve_fields(group)
         typed_by_label = _typed_values(group)  # keystroke values, to cross-check
+        # Fold in grounded fills that live ONLY in the action stream (verb=type) —
+        # the form_snapshot extraction can come back empty even when the user clearly
+        # typed values (those land in page_actions, not the snapshot). form_snapshot
+        # stays AUTHORITATIVE: a field already resolved from the snapshot is not
+        # overwritten, so the existing value_conflict human-confirm path still fires.
+        _snapshot_labels = {_norm(lbl) for lbl, _ in text_fields}
+        for _tlbl, _tval in _typed_field_pairs(group):
+            if _norm(_tlbl) in _snapshot_labels:
+                continue
+            text_fields.append((_tlbl, _tval))
+            _snapshot_labels.add(_norm(_tlbl))
 
         # 2) Fill demonstrated text/select fields.
         for label, value in text_fields:
@@ -586,12 +677,24 @@ def _build_steps(groups: Sequence[_PageGroup]) -> tuple[list[ProductionTestStep]
             for st in steps[group_start:]:
                 st.screenshot = group.frame_ref
 
+        prev_navigated = group_navigated
+
     return steps, fields_used
 
 
 # Signals that a click landed inside a confirmation dialog / modal / overlay.
 _DIALOG_RX = re.compile(
     r"\b(dialog|modal|confirm(?:ation)?|pop[\s-]?up|overlay|are you sure)\b",
+    re.IGNORECASE,
+)
+
+# GENERIC forward-commit verbs — a control whose label commits the flow onward.
+# Used ONLY as a fallback to credit a navigation when the recording captured NO
+# outcome signal at all (un-enriched). Strictly generic semantics, NEVER app or
+# page names — keeps the gate working on ANY UI (zero saucedemo/app strings).
+_COMMIT_RX = re.compile(
+    r"\b(continue|next|submit|checkout|proceed|place\s*order|pay|confirm|finish|"
+    r"complete|review\s*order|sign[\s-]?in|log[\s-]?in)\b",
     re.IGNORECASE,
 )
 
@@ -646,10 +749,19 @@ def _interaction_steps(group: _PageGroup, next_url: str) -> list[ProductionTestS
     out: list[ProductionTestStep] = []
     for i, a in enumerate(seq):
         is_final = i == len(seq) - 1
-        # Only the FINAL click in the commit sequence advances the page; an earlier
-        # click (e.g. the one that opens a confirmation dialog) does not navigate.
-        step_next = next_url if is_final else ""
         label = a.target_label.strip()
+        after_outcome = (a.after_outcome or "").strip().lower()
+        # GROUNDED navigation gate. Only the FINAL commit click can advance the page,
+        # and even then we credit it with reaching the next group's URL ONLY when the
+        # recording PROVES it: the action's own outcome was a navigation (or a URL
+        # change was captured), OR — for un-enriched recordings with NO captured
+        # outcome at all — the click bears a GENERIC forward-commit label. A recorded
+        # 'stayed' outcome is authoritative and always wins (no commit-label override).
+        # Page-group adjacency alone is NOT proof — that is what wrongly pinned
+        # /checkout-step-one onto the non-navigating 'Add to cart' click.
+        navigated = _action_navigated(a)
+        commit_fallback = (not after_outcome) and bool(_COMMIT_RX.search(label))
+        step_next = next_url if (is_final and next_url and (navigated or commit_fallback)) else ""
         anchor = (a.anchor or "").strip()
         after = (a.after_detail or "").strip()
         # Fold the anchor into the step so a repeated control is unambiguous:
@@ -679,10 +791,11 @@ def _interaction_steps(group: _PageGroup, next_url: str) -> list[ProductionTestS
             obs["observed"]["after"] = after or a.after_outcome
         # Carry the RECORDED next-page URL so the compiler can assert the SUBMIT
         # actually navigated there (a click step has no URL of its own). Grounded:
-        # this is the observed next page, not an inferred target. Only on the FINAL
-        # click — the modal-open click doesn't navigate.
+        # set ONLY when the gate above proved this click caused the navigation, so
+        # navigation_grounded marks it solid for the confidence scorer.
         if step_next:
             obs["observed"]["next_url"] = step_next
+            obs["observed"]["navigation_grounded"] = True
         out.append(ProductionTestStep(
             step_number=0,
             action=f"Click '{label}'{where}",

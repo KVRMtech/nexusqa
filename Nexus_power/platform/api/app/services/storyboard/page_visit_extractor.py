@@ -196,7 +196,10 @@ def _build_url_pattern(pattern: str) -> re.Pattern:
 # 2-segment minimum avoids matching things like trailing "/ok" in
 # button labels or "/Yes" in unrelated UI text.
 _PATH_ONLY_PATTERN = re.compile(
-    r"/[a-z][a-z0-9\-]{2,}(?:/[a-z][a-z0-9\-]{2,}){1,}",
+    # ``.`` is admitted inside a segment so file extensions (``.html``,
+    # ``.aspx``, ``.jsp``) survive the path-only OCR-recovery fallback
+    # (e.g. ``/checkout/step-one.html``). Generic — any extension, any app.
+    r"/[a-z][a-z0-9\-.]{2,}(?:/[a-z][a-z0-9\-.]{2,}){1,}",
     re.IGNORECASE,
 )
 
@@ -249,6 +252,34 @@ def _parse_url_parts(url: str) -> tuple[str, str, str]:
         return host, path, query
     except Exception:  # pragma: no cover - defensive
         return "", "", ""
+
+
+def _is_recording_chrome(
+    frame: VisualFrameRow, chrome_pattern: "re.Pattern | None",
+) -> bool:
+    """True when a frame is recording-tool / conferencing OVERLAY chrome (e.g. a
+    screen-share 'Main View' / meeting toolbar), NOT the captured application.
+
+    Generic + signal-based: the frame's OCR/title matches the configured
+    recording-overlay phrase set AND the frame carries no address-bar URL of its
+    own. A brand-new conferencing tool is covered by one added phrase in
+    ``recording_chrome_pattern`` — never an app denylist, so it generalises across
+    every customer and app. Quarantined frames return an empty location so they
+    can never be promoted to a page (the 'Video Conferencing / Main View' page-0
+    failure)."""
+    if chrome_pattern is None:
+        return False
+    text = " ".join([
+        (getattr(frame, "extracted_text", "") or ""),
+        (getattr(frame, "page_title", "") or ""),
+    ])
+    if not text.strip() or not chrome_pattern.search(text):
+        return False
+    # Co-signal: if the frame legibly shows an app URL it is the real app shown
+    # over a share, not pure overlay chrome — do NOT quarantine.
+    if (getattr(frame, "url_or_path", "") or "").strip():
+        return False
+    return True
 
 
 # ── Per-artifact data assembly ───────────────────────────────────────────────
@@ -465,6 +496,7 @@ def _resolve_frame_location(
     url_pattern: re.Pattern,
     config: PageVisitExtractorConfig,
     dominant_host: str = "",
+    chrome_pattern: "re.Pattern | None" = None,
 ) -> _FrameLocation:
     """Apply the 4 deterministic tiers (LLM tier handled separately).
 
@@ -492,6 +524,11 @@ def _resolve_frame_location(
         raw_location="",
         source=PageVisitSource.URL_REGEX,
     )
+
+    # Tier 0 (quarantine) — recording-tool / conferencing overlay chrome is NOT a
+    # page. Return an empty location so it stays homeless and is never promoted.
+    if _is_recording_chrome(frame, chrome_pattern):
+        return base
 
     # Tier 1 — regex over OCR text, page_title, then url_or_path.
     for candidate_text in (
@@ -1015,6 +1052,26 @@ def _canonicalise_host(host: str, dominant_host: str, single_app: bool) -> str:
     return h
 
 
+def _display_host(url_host: str, canonical_host: str) -> str:
+    """The host to DISPLAY (preserves the observed ``www`` / subdomain) vs the
+    ``canonical_host`` used for GROUPING.
+
+    A ``www`` / subdomain variant of the canonical host is kept verbatim so the
+    shown URL matches what the user saw (``www.saucedemo.com`` not
+    ``saucedemo.com``); a ghost host that canonicalisation rewrote to a DIFFERENT
+    domain (``Msdd.com`` → ``usaa.com``) yields the canonical. Generic — no host
+    lists, works on any app."""
+    uh = (url_host or "").strip().lower()
+    ch = (canonical_host or "").strip().lower()
+    if not ch:
+        return uh
+    if not uh or uh == ch:
+        return ch
+    if uh == f"www.{ch}" or uh.endswith("." + ch):
+        return uh  # www / subdomain variant of the canonical host — preserve
+    return ch       # canonicalisation rewrote a foreign/ghost host — trust it
+
+
 # ── SPA path-prefix defragmentation ───────────────────────────────────────────
 
 
@@ -1181,11 +1238,13 @@ def _nth_url_entry(result: list, n: int):
 def _confidence_for_source(source: PageVisitSource) -> float:
     """Default confidence by extraction tier.  Stored on every row."""
     return {
+        PageVisitSource.GROUND_TRUTH: 1.0,    # instrumented recorder — PROVEN
         PageVisitSource.URL_REGEX: 1.0,
         PageVisitSource.URL_SCENE: 0.85,
+        PageVisitSource.LLM_INFERRED: 0.85,
         PageVisitSource.WINDOW_TITLE: 0.6,
         PageVisitSource.SCREEN_NAME_OCR: 0.6,
-        PageVisitSource.LLM_INFERRED: 0.85,
+        PageVisitSource.MISSING_PAGE: 0.2,    # honest gap placeholder — never asserted
     }.get(source, 0.5)
 
 
@@ -1208,13 +1267,18 @@ def _build_page_visit(
     url_host: str,
 ) -> PageVisit:
     """Construct one PageVisit Pydantic model ready for persistence."""
-    location = raw_location
-    if canonical_host and path:
-        # Compose a clean canonical URL for storage when the source was
-        # URL-shaped — keeps downstream test exporters from re-parsing.
-        scheme = "https"
+    raw = (raw_location or "").strip()
+    display_host = _display_host(url_host, canonical_host)
+    if "://" in raw:
+        # Full URL as observed — scheme / www / .html / query preserved verbatim.
+        location = raw
+    elif display_host and path:
+        # Compose from the OBSERVED host (preserves www) so downstream exporters
+        # get a clean URL; canonical_host stays the separate grouping key.
         q = f"?{query}" if query else ""
-        location = f"{scheme}://{canonical_host}{path}{q}"
+        location = f"https://{display_host}{path}{q}"
+    else:
+        location = raw
 
     visit_id = _page_visit_id(artifact_id, sequence_index, extractor_version)
     duration = max(0, last_seen_ms - first_seen_ms)
@@ -1352,6 +1416,120 @@ async def _delete_stale_visits(
 # ── Public entry point ──────────────────────────────────────────────────────
 
 
+# ── Tier-0: instrumented GROUND-TRUTH overlay (Road B) ───────────────────────
+
+
+@dataclass
+class GroundTruthEvent:
+    """One instrumented capture event (in-memory). ``url_*`` are the REAL
+    navigation target; ``target_label``/``value`` are a captured form field
+    (PII-redacted AT SOURCE before persistence). Generic across capture modalities
+    — web CDP, Windows UIA, mainframe HLLAPI, Appium all post this shape."""
+
+    timestamp_ms: int
+    kind: str
+    url: str = ""
+    url_host: str = ""
+    url_path: str = ""
+    url_query: str = ""
+    target_label: str = ""
+    value: str = ""
+    target_kind: str = ""
+
+
+_GT_JOIN_WINDOW_MS = 2500  # a frame within ±2.5s of a nav event is the same page
+
+
+def _apply_ground_truth_overlay(
+    frame_locations: list[_FrameLocation],
+    events: "list[GroundTruthEvent]",
+    *,
+    join_window_ms: int = _GT_JOIN_WINDOW_MS,
+) -> tuple[list[_FrameLocation], int]:
+    """Make instrumented navigation events AUTHORITATIVE over the pixel tiers.
+
+    Each navigation event with a real URL either OVERRIDES the nearest frame
+    (within ``join_window_ms``) with ``source=GROUND_TRUTH``, or — when no frame
+    was sampled during a fast transition — INJECTS a synthetic event-only location
+    so the page can never be merged or filtered out of existence (the structural
+    fix for the missing cart.html). Pure + deterministic; absent events the input
+    is returned unchanged (the video path is byte-identical). Returns
+    ``(frame_locations_sorted, applied_count)``."""
+    navs = [
+        e for e in (events or [])
+        if (e.kind or "").strip().lower() in ("navigate", "navigation")
+        and (e.url_path or e.url)
+    ]
+    if not navs:
+        return frame_locations, 0
+    applied = 0
+    used: set[int] = set()
+    extra: list[_FrameLocation] = []
+    for e in sorted(navs, key=lambda x: x.timestamp_ms):
+        host = e.url_host or _parse_url_parts(e.url)[0]
+        path = e.url_path or _parse_url_parts(e.url)[1]
+        query = e.url_query or _parse_url_parts(e.url)[2]
+        if e.url and "://" in e.url:
+            raw = e.url
+        elif host:
+            raw = f"https://{host}{path}" + (f"?{query}" if query else "")
+        else:
+            raw = path
+        best_i, best_dist = -1, None
+        for i, loc in enumerate(frame_locations):
+            if i in used:
+                continue
+            d = abs(loc.timestamp_ms - e.timestamp_ms)
+            if d <= join_window_ms and (best_dist is None or d < best_dist):
+                best_dist, best_i = d, i
+        if best_i >= 0:
+            loc = frame_locations[best_i]
+            loc.raw_location, loc.url_host, loc.url_path, loc.url_query = raw, host, path, query
+            loc.source = PageVisitSource.GROUND_TRUTH
+            used.add(best_i)
+        else:
+            extra.append(_FrameLocation(
+                frame_id="", frame_index=-1, timestamp_ms=int(e.timestamp_ms),
+                frame_asset_path="", scene_id="",
+                raw_location=raw, source=PageVisitSource.GROUND_TRUTH,
+                url_host=host, url_path=path, url_query=query,
+            ))
+        applied += 1
+    merged = list(frame_locations) + extra
+    merged.sort(key=lambda loc: loc.timestamp_ms)
+    return merged, applied
+
+
+async def _load_ground_truth_events(
+    session: AsyncSession, *, artifact_id: str, tenant_id: str,
+) -> "list[GroundTruthEvent]":
+    """Load instrumented capture events for an artifact (fail-open). A not-yet-
+    migrated table or any error yields [] → the video path is unchanged."""
+    try:
+        from nexus_sdk.db.models import GroundTruthEventRow
+        rows = (await session.execute(
+            select(GroundTruthEventRow)
+            .where(
+                GroundTruthEventRow.artifact_id == artifact_id,
+                GroundTruthEventRow.tenant_id == tenant_id,
+            )
+            .order_by(GroundTruthEventRow.sequence_index.asc())
+        )).scalars().all()
+    except Exception:  # table absent / driver error → no overlay, video path stands
+        return []
+    return [
+        GroundTruthEvent(
+            timestamp_ms=int(r.timestamp_ms or 0),
+            kind=r.kind or "navigate",
+            url=r.url or "", url_host=r.url_host or "",
+            url_path=r.url_path or "", url_query=r.url_query or "",
+            target_label=r.target_label or "", value=r.value or "",
+            target_kind=r.target_kind or "",
+        )
+        for r in rows
+    ]
+
+
 @dataclass(frozen=True)
 class PageVisitExtractorResult:
     """Summary returned to the composer for observability."""
@@ -1409,6 +1587,14 @@ async def extract_page_visits_for_artifact(
         )
 
     url_pattern = _build_url_pattern(config.url_regex_pattern)
+    chrome_pattern: "re.Pattern | None" = None
+    if getattr(config, "enable_recording_chrome_quarantine", False) and getattr(
+        config, "recording_chrome_pattern", "",
+    ):
+        try:
+            chrome_pattern = re.compile(config.recording_chrome_pattern, re.IGNORECASE)
+        except re.error:
+            chrome_pattern = None  # bad override → quarantine off (fail-open)
 
     # ── Per-frame location resolution (tiers 1-4) ──────────────────
     frame_locations: list[_FrameLocation] = []
@@ -1426,6 +1612,7 @@ async def extract_page_visits_for_artifact(
             url_pattern=url_pattern,
             config=config,
             dominant_host=signals.dominant_canonical_host,
+            chrome_pattern=chrome_pattern,
         )
         frame_locations.append(loc)
 
@@ -1465,6 +1652,24 @@ async def extract_page_visits_for_artifact(
                 except Exception:  # pragma: no cover
                     pass
 
+    # ── Tier-0 — instrumented GROUND-TRUTH overlay (Road B) ────────
+    # Real navigation events from an instrumented recorder supersede the pixel
+    # tiers (source=GROUND_TRUTH, confidence 1.0) and inject pages that fell
+    # between sampled frames. Absent a sidecar this is a no-op and the video path
+    # is byte-identical (fail-open) — the frozen pipeline is preserved.
+    gt_events = await _load_ground_truth_events(
+        session, artifact_id=artifact_id, tenant_id=tenant_id,
+    )
+    if gt_events:
+        frame_locations, gt_applied = _apply_ground_truth_overlay(
+            frame_locations, gt_events,
+        )
+        if gt_applied:
+            logger.info(
+                f"storyboard.page_visit_extractor.ground_truth_overlay "
+                f"artifact={artifact_id} events={len(gt_events)} applied={gt_applied}"
+            )
+
     # ── Group contiguous frames with the same canonical key ────────
     @dataclass
     class _VisitDraft:
@@ -1485,30 +1690,46 @@ async def extract_page_visits_for_artifact(
     current_key: tuple[str, str, str] | None = None
     dominant = signals.dominant_canonical_host
     single_app = signals.dominant_single_app
+    # Location-less ("homeless") frames are HELD, not immediately folded, so we
+    # can tell a brief loading blur (fold into the page that resumes) apart from a
+    # substantial gap between two DIFFERENT pages (which likely hid a page whose
+    # URL we could not read → emit an honest MISSING_PAGE placeholder, never drop).
+    pending_homeless: list[_FrameLocation] = []
+    missing_gap_min = max(0, getattr(config, "min_homeless_frames_for_missing_page", 0))
 
     for loc in frame_locations:
-        # Frames with no detectable location get folded into the
-        # PREVIOUS visit when one exists (homeless frames sit between
-        # two visits to the same page during a load) and dropped when
-        # nothing precedes them.  This is what produces a clean
-        # chronological log: brief loading frames don't create
-        # spurious empty-location visits.
         key = _canonical_key(loc, dominant, single_app)
         if key == ("", "", ""):
-            if current is not None:
-                current.last_seen_ms = max(
-                    current.last_seen_ms, loc.timestamp_ms,
-                )
-                current.frame_count += 1
-            # else: drop the leading homeless frame entirely.
+            pending_homeless.append(loc)
             continue
 
+        same_as_current = current is not None and key == current_key
+        if (not same_as_current and current is not None and pending_homeless
+                and missing_gap_min and len(pending_homeless) >= missing_gap_min):
+            # Substantial homeless run between two DIFFERENT pages → a page was
+            # likely visited but its URL was never legible. Surface it honestly as
+            # a low-confidence placeholder (NEVER asserted as a real page) instead
+            # of silently folding it away. Phase 5's instrumented overlay replaces
+            # this guess with the real navigation when a recorder is present.
+            hg_first, hg_last = pending_homeless[0], pending_homeless[-1]
+            drafts.append(_VisitDraft(
+                canonical_host="", url_host="", path="", query="",
+                raw_location="(page visited — URL not captured)",
+                source=PageVisitSource.MISSING_PAGE,
+                first_seen_ms=hg_first.timestamp_ms,
+                last_seen_ms=hg_last.timestamp_ms,
+                frame_count=len(pending_homeless),
+                first_frame_asset_path=hg_first.frame_asset_path,
+                primary_scene_id=hg_first.scene_id or None,
+            ))
+        elif current is not None and pending_homeless:
+            # Short gap or same page resuming → fold the loading frames into it.
+            for h in pending_homeless:
+                current.last_seen_ms = max(current.last_seen_ms, h.timestamp_ms)
+                current.frame_count += 1
+        pending_homeless = []
+
         if current is None or key != current_key:
-            # Start a new visit.  If config requested merge_adjacent_same_url
-            # and the previous visit had the same canonical key (with
-            # only a homeless-frame gap), absorb instead.  We've already
-            # advanced `current` past the gap above so `current_key`
-            # reflects the previous canonical value.
             if (
                 config.merge_adjacent_same_url
                 and current is not None
@@ -1535,6 +1756,12 @@ async def extract_page_visits_for_artifact(
             drafts.append(current)
         else:
             current.last_seen_ms = max(current.last_seen_ms, loc.timestamp_ms)
+            current.frame_count += 1
+
+    # Trailing homeless frames at the end of the recording fold into the last page.
+    if current is not None and pending_homeless:
+        for h in pending_homeless:
+            current.last_seen_ms = max(current.last_seen_ms, h.timestamp_ms)
             current.frame_count += 1
 
     # ── Filter visits that fall below the per-visit minimum frame count

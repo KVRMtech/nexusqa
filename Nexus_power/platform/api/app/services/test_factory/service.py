@@ -128,8 +128,13 @@ async def _load_current_pages_and_actions(
             first_seen_ms=v.first_seen_ms or 0,
             duration_ms=v.duration_ms or 0,
             frame_ref=frame_ref_by_visit.get(v.page_visit_id, ""),
+            extraction_confidence=float(getattr(v, "extraction_confidence", 1.0) or 1.0),
         )
+        # MISSING_PAGE rows are honest UI gap-markers ("URL not captured"), never a
+        # generatable page — exclude them from the generator input so no step is
+        # ever authored from a placeholder. They remain visible in Pages & Forms.
         for v in visit_rows
+        if (getattr(v, "source", "") or "") != "missing_page"
     ]
 
     visit_ids = [v.page_visit_id for v in visit_rows]
@@ -160,6 +165,14 @@ async def _load_current_pages_and_actions(
                 anchor_kind=str(anchor_sig.get("kind") or ""),
                 after_outcome=str(after_sig.get("outcome") or ""),
                 after_detail=str(after_sig.get("detail") or ""),
+                # Grounded navigation signal: the action's captured outcome was a
+                # navigation, OR a URL change was recorded. Fail-CLOSED on honesty —
+                # absent on un-enriched/old artifacts → False (no assumed navigation).
+                navigated=(
+                    str(after_sig.get("outcome") or "").strip().lower() == "navigation"
+                    or bool(sig.get("url_changed"))
+                    or bool(after_sig.get("navigated"))
+                ),
             ))
 
     return visits, actions

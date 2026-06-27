@@ -233,6 +233,139 @@ function FidelityCard({ rep, artifactId, testId, onFixed }: { rep: any; artifact
   );
 }
 
+// ── Agentic Playwright Auditor — physical-possibility + grounding scorecard ──
+const _DIM_LABEL: Record<string, string> = {
+  playwright_apis: 'Playwright APIs',
+  locator_quality: 'Locator quality',
+  grounded_replay: 'Grounded replay',
+  navigation_correctness: 'Navigation correctness',
+  assertion_correctness: 'Assertion correctness',
+};
+const _VERDICT_META: Record<string, { label: string; tint: string; pass: boolean }> = {
+  grounded_ok: { label: 'Grounded', tint: 'text-emerald-700 bg-emerald-50', pass: true },
+  impossible_transition: { label: 'Impossible transition', tint: 'text-rose-700 bg-rose-50', pass: false },
+  ungrounded_assertion: { label: 'Ungrounded assertion', tint: 'text-rose-700 bg-rose-50', pass: false },
+  missing_prerequisite: { label: 'Transition not captured (UNPROVEN)', tint: 'text-amber-700 bg-amber-50', pass: false },
+  data_not_replayed: { label: 'Recorded value not replayed', tint: 'text-amber-700 bg-amber-50', pass: false },
+  dead_or_unused: { label: 'Dead / unused code', tint: 'text-slate-600 bg-slate-100', pass: false },
+};
+function _dimColor(n: number): string {
+  return n >= 8 ? '#15803d' : n >= 5 ? '#b45309' : '#b91c1c';
+}
+function AuditScorecard({ scores }: { scores: Record<string, number> }) {
+  return (
+    <div className="grid grid-cols-1 sm:grid-cols-5 gap-1.5 mt-1.5">
+      {Object.keys(_DIM_LABEL).map((k) => {
+        const n = scores?.[k] ?? 0;
+        return (
+          <div key={k} className="rounded-md border border-slate-200 bg-white/70 px-2 py-1">
+            <div className="flex items-center justify-between gap-1">
+              <span className="text-[8.5px] font-semibold text-slate-500 leading-tight">{_DIM_LABEL[k]}</span>
+              <span className="text-[10px] font-black" style={{ color: _dimColor(n) }}>{n}/10</span>
+            </div>
+            <div className="mt-1 h-1 rounded bg-slate-100 overflow-hidden">
+              <div className="h-full rounded" style={{ width: `${n * 10}%`, background: _dimColor(n) }} />
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+function _miniDiff(before: string, after: string): { removed: string[]; added: string[] } {
+  const b = new Set((before || '').split('\n').map((l) => l.trim()).filter(Boolean));
+  const a = new Set((after || '').split('\n').map((l) => l.trim()).filter(Boolean));
+  return {
+    removed: [...b].filter((l) => !a.has(l)).slice(0, 8),
+    added: [...a].filter((l) => !b.has(l)).slice(0, 8),
+  };
+}
+function AuditCard({ rep, artifactId, testId, onRepaired }: { rep: any; artifactId?: string; testId?: string; onRepaired?: () => void }) {
+  const [repairing, setRepairing] = useState(false);
+  const [repair, setRepair] = useState<any | null>(null);
+  if (rep?.error) return <div className="border-t border-slate-200 px-3 py-2 text-[10px] text-amber-700">AI audit error: {rep.error}</div>;
+  const decision = rep?.decision || 'repair';
+  const certified = decision === 'certified';
+  const runRepair = async () => {
+    if (!artifactId || !testId) return;
+    setRepairing(true); setRepair(null);
+    try { const r = await api.repairScriptFromAudit(artifactId, testId); setRepair(r); onRepaired?.(); }
+    catch (e: any) { setRepair({ error: e?.response?.data?.detail ?? String(e) }); }
+    finally { setRepairing(false); }
+  };
+  // Honest-display contract (enforced in the render, not trusting one field): the
+  // pill may be green ONLY when certified AND no per-step verdict failed.
+  const anyFail = (rep?.per_step || []).some((p: any) => !(_VERDICT_META[p.verdict]?.pass ?? false));
+  const greenOk = certified && !anyFail;
+  const pill = greenOk
+    ? { bg: 'rgba(34,197,94,0.14)', fg: '#15803d', label: 'CERTIFIED' }
+    : decision === 'defect'
+      ? { bg: 'rgba(239,68,68,0.14)', fg: '#b91c1c', label: 'DEFECT' }
+      : { bg: 'rgba(245,158,11,0.16)', fg: '#b45309', label: 'NEEDS REPAIR' };
+  const llm = rep?.llm;
+  return (
+    <div className="border-t border-indigo-100 bg-indigo-50/30 px-3 py-2.5">
+      <div className="flex items-center gap-2 flex-wrap mb-1">
+        <Wand2 className="h-3.5 w-3.5 text-indigo-600" />
+        <span className="text-[11px] font-black text-indigo-900">AI Audit</span>
+        <span className="rounded px-2 py-0.5 text-[10px] font-black uppercase" style={{ background: pill.bg, color: pill.fg }}>{pill.label} · {rep.overall_score}/10</span>
+        {rep.gaps > 0 && <span className="rounded px-1.5 py-0.5 text-[9px] font-bold bg-amber-100 text-amber-700">{rep.gaps} uncaptured transition{rep.gaps === 1 ? '' : 's'} — honest UNPROVEN</span>}
+        {llm && llm.ok === false && <span className="text-[9px] text-slate-400">AI reasoning unavailable — deterministic verdict shown</span>}
+      </div>
+      <AuditScorecard scores={rep.dimension_scores || {}} />
+      {(rep.per_step || []).length > 0 && (
+        <div className="mt-2 space-y-1">
+          {rep.per_step.map((p: any, i: number) => {
+            const m = _VERDICT_META[p.verdict] || { label: p.verdict, tint: 'text-slate-600 bg-slate-100', pass: false };
+            return (
+              <div key={i} className="flex items-start gap-1.5">
+                <span className={`mt-0.5 text-[10px] font-black ${m.pass ? 'text-emerald-600' : 'text-rose-500'}`}>{m.pass ? '✓' : '✕'}</span>
+                <div className="min-w-0">
+                  <span className={`rounded px-1 text-[8.5px] font-bold ${m.tint}`}>{m.label}</span>
+                  {p.step_number != null && <span className="ml-1 text-[9px] text-slate-400">step {p.step_number}</span>}
+                  <p className="text-[10px] text-slate-600 leading-snug">{p.detail}</p>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+      {(rep.findings || []).length > 0 && (
+        <ul className="list-disc pl-4 space-y-0.5 mt-1.5">
+          {rep.findings.slice(0, 8).map((x: string, i: number) => <li key={i} className="text-[10px] text-slate-600 leading-snug">{x}</li>)}
+        </ul>
+      )}
+      {!certified && artifactId && testId && (
+        <div className="mt-1.5 flex items-center gap-2 flex-wrap">
+          <button onClick={runRepair} disabled={repairing}
+            title="Re-derive this script from the recording with the grounded generator (drops ungrounded assertions, restores fills, marks uncaptured gaps UNPROVEN). Saved as a new version — reversible via history. Never green-washes."
+            className="inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-[10px] font-bold text-[#fff] shadow-sm disabled:opacity-50"
+            style={{ background: 'linear-gradient(135deg,#4f46e5,#7c3aed)' }}>
+            {repairing ? <Loader2 className="h-3 w-3 animate-spin" /> : <Wand2 className="h-3 w-3" />} {repairing ? 'Repairing…' : 'Apply repair'}
+          </button>
+          <span className="text-[9px] text-slate-400">grounded re-derive · saved as v+1 · never green-washes</span>
+        </div>
+      )}
+      {repair && !repair.error && (
+        <div className="mt-1.5 rounded-md border border-indigo-200 bg-white/70 px-2 py-1.5">
+          <p className="text-[10px] font-bold text-indigo-800">
+            Repaired{repair.version_no ? ` (v${repair.version_no})` : ''} · new score {repair.audit?.overall_score}/10 · {repair.audit?.decision}
+            {!repair.changed && <span className="ml-1 font-medium text-slate-400">— already honest, no change</span>}
+          </p>
+          {repair.changed && (() => { const d = _miniDiff(repair.before, repair.after); return (
+            <div className="mt-1 font-mono text-[9.5px] leading-tight">
+              {d.removed.map((l, i) => <div key={`r${i}`} className="text-rose-600 truncate">- {l}</div>)}
+              {d.added.map((l, i) => <div key={`a${i}`} className="text-emerald-700 truncate">+ {l}</div>)}
+            </div>
+          ); })()}
+        </div>
+      )}
+      {repair?.error && <p className="text-[10px] text-red-500 mt-1">{repair.error}</p>}
+      <p className="mt-1.5 text-[8.5px] text-slate-400 italic">Grounded-or-flag · the auditor never turns a step green it can't prove from the recording.</p>
+    </div>
+  );
+}
+
 // Live Preflight — deterministic Playwright probe (no LLM) vs the live app:
 // per-step locator resolution (1 good / 0 broken-or-renamed / >1 ambiguous) +
 // select-option presence. The "proof it will run" before a full run.
@@ -686,6 +819,16 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
   const [fidelity, setFidelity] = useState<Record<string, any>>({});   // test_id -> scorecard
   const [suiteFid, setSuiteFid] = useState<any>(null);
   const [fidBusy, setFidBusy] = useState<string>('');                  // test_id | 'suite' | 'all'
+  const [audit, setAudit] = useState<Record<string, any>>({});         // test_id -> agentic audit report
+  const [auditBusy, setAuditBusy] = useState<string>('');              // test_id being AI-audited
+  const [autoAudit, setAutoAudit] = useState<boolean>(() => {          // background auto-audit (LLM cost, off by default)
+    try { return localStorage.getItem('nexus_pw_auto_audit') === 'on'; } catch { return false; }
+  });
+  const toggleAutoAudit = () => setAutoAudit((v) => {
+    const nv = !v;
+    try { localStorage.setItem('nexus_pw_auto_audit', nv ? 'on' : 'off'); } catch { /* ignore */ }
+    return nv;
+  });
   const [preflight, setPreflight] = useState<Record<string, any>>({}); // test_id -> live resolution report
   const [pfBusy, setPfBusy] = useState<string>('');                    // test_id being preflighted
 
@@ -705,6 +848,28 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
       setFidelity((m) => ({ ...m, [testId]: { error: e?.response?.data?.detail || String(e) } }));
     } finally { setFidBusy(''); }
   };
+  // Agentic Playwright audit — per-step physical-possibility + grounding + the
+  // 5-dimension scorecard. User-initiated (the LLM pass runs on this click).
+  const auditScriptAgentic = async (testId: string) => {
+    if (!testId) return;
+    setAuditBusy(testId);
+    try {
+      const rep = await api.auditScriptAgentic(artifactId, testId, true);
+      setAudit((m) => ({ ...m, [testId]: rep }));
+    } catch (e: any) {
+      setAudit((m) => ({ ...m, [testId]: { error: e?.response?.data?.detail || String(e) } }));
+    } finally { setAuditBusy(''); }
+  };
+  // Background auto-audit: when the toggle is on, audit each script once, SEQUENTIALLY
+  // (one at a time) so a suite doesn't fan out into N concurrent LLM calls. Off by
+  // default; the user opts into the cost. As each finishes the effect re-runs and
+  // picks up the next un-audited script.
+  useEffect(() => {
+    if (!autoAudit || auditBusy) return;
+    const next = (data?.scripts || []).find((s: any) => s?.test_id && !audit[s.test_id]);
+    if (next?.test_id) void auditScriptAgentic(next.test_id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoAudit, data, audit, auditBusy]);
   // Live Preflight — deterministic Playwright probe vs the live app (no LLM).
   const runPreflight = async (testId: string) => {
     if (!testId) return;
@@ -1228,6 +1393,11 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
         </div>
         <div className="ml-auto flex items-center gap-2 flex-wrap">
           <AgenticSettings />
+          <label className="flex items-center gap-1 text-[10px] font-bold text-indigo-700 cursor-pointer select-none"
+            title="Auto-audit every script with AI as the list loads (sequential; LLM cost). Off by default — the manual 'Verify with AI' button is always free of this auto-run.">
+            <input type="checkbox" checked={autoAudit} onChange={toggleAutoAudit} className="h-3 w-3 accent-indigo-600" />
+            <Wand2 className="h-3 w-3" /> Auto-audit
+          </label>
           <span className="text-[11px] font-bold text-nexus-700">
             {totals.scripts} script{totals.scripts === 1 ? '' : 's'}
           </span>
@@ -1475,6 +1645,14 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
                                       className="flex items-center gap-1 rounded-md px-2 py-1 text-[10px] font-semibold bg-slate-100 text-slate-700 hover:bg-slate-200">
                                       {openCode[rid] ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />} {openCode[rid] ? 'Hide' : 'View'} code
                                     </button>
+                                    {s.test_id && (
+                                      <button onClick={() => auditScriptAgentic(s.test_id!)} disabled={auditBusy === s.test_id}
+                                        title="Verify with AI — audit each step for physical possibility + grounding, scored on the 5 auditor dimensions. Never green-washes."
+                                        className="flex items-center gap-1 rounded-md px-2 py-1 text-[10px] font-bold text-[#fff] shadow-sm disabled:opacity-50"
+                                        style={{ background: 'linear-gradient(135deg,#4f46e5,#7c3aed)' }}>
+                                        {auditBusy === s.test_id ? <Loader2 className="h-3 w-3 animate-spin" /> : <Wand2 className="h-3 w-3" />} {auditBusy === s.test_id ? 'Auditing each step…' : 'Verify with AI'}
+                                      </button>
+                                    )}
                                     <RowActionsMenu busy={fidBusy === s.test_id || fidBusy === `${s.test_id}:regen` || pfBusy === s.test_id}
                                       items={[
                                         ...(s.test_id ? [{ key: 'hist', label: 'Verdict history', icon: <History className="h-3 w-3" />, onClick: () => loadHistory(rid, s.test_id!) }] : []),
@@ -1516,6 +1694,7 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
                                     </div>
                                   )}
                                   {fidelity[s.test_id] && <FidelityCard rep={fidelity[s.test_id]} artifactId={artifactId} testId={s.test_id} onFixed={() => { void auditScript(s.test_id); void refresh(); }} />}
+                                  {audit[s.test_id] && <AuditCard rep={audit[s.test_id]} artifactId={artifactId} testId={s.test_id} onRepaired={() => { void auditScriptAgentic(s.test_id); void refresh(); }} />}
                                   {preflight[s.test_id] && <PreflightCard rep={preflight[s.test_id]} />}
                                   {openData[rid] && (s.data_fields?.length || 0) > 0 && (
                                     <div className="rounded-md border border-amber-200 bg-amber-50/40 px-2.5 py-2">

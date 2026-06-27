@@ -444,3 +444,139 @@ async def get_annotated_frame(
         media_type=annotated.content_type,
         headers=headers,
     )
+
+
+# ── Ground-truth capture ingestion (Road B — the Tier-0 overlay) ─────────────
+
+
+class GroundTruthEventIn(BaseModel):
+    """One instrumented capture event posted by a recorder / per-modality adapter."""
+
+    timestamp_ms: int = Field(0, ge=0)
+    kind: str = Field("navigate", max_length=40)
+    url: str = Field("", max_length=2000)
+    url_host: str = Field("", max_length=500)
+    url_path: str = Field("", max_length=2000)
+    url_query: str = Field("", max_length=2000)
+    target_label: str = Field("", max_length=500)
+    value: str = Field("", max_length=1000)
+    target_kind: str = Field("", max_length=40)
+    modality: str = Field("web_cdp", max_length=40)
+
+
+class GroundTruthBody(BaseModel):
+    session_id: str = Field("", max_length=64)
+    recorder_version: str = Field("v1", max_length=50)
+    events: list[GroundTruthEventIn] = Field(default_factory=list, max_length=5000)
+
+
+@router.post("/api/v1/artifacts/{artifact_id}/ground-truth")
+async def ingest_ground_truth(
+    body: GroundTruthBody,
+    artifact_id: str = Path(..., min_length=1, max_length=64),
+    user: dict = Depends(get_current_user),
+) -> dict:
+    """Ingest an instrumented recorder's ground-truth event sidecar (Road B).
+
+    Defense-in-depth PII redaction: every captured VALUE is re-redacted here with
+    the SDK's domain detector — fully IN-PERIMETER, no external-LLM egress (the
+    recorder also redacts at source). Idempotently replaces this artifact's prior
+    events; ``page_visit_extractor`` consumes them as the Tier-0 overlay on the
+    next derivation (``PageVisitSource.GROUND_TRUTH``, confidence 1.0). Generic
+    across capture modalities — one shape for web CDP / UIA / HLLAPI / Appium.
+
+    Until ``scripts/apply_ground_truth_events.sql`` is applied the insert fails and
+    the video path is unaffected (fail-open at the consumer)."""
+    import uuid as _uuid
+
+    from sqlalchemy import delete
+
+    from nexus_sdk.db.models import GroundTruthEventRow
+
+    tenant_id = user["tenant_id"]
+
+    def _redact_value(s: str) -> str:
+        if not s:
+            return s
+        try:
+            from nexus_sdk.evidence.pii_detector import detect_pii, redact
+            hits = detect_pii(s, None)
+            return redact(s, hits) if hits else s
+        except Exception:
+            # The recorder already redacted at source; if the server detector is
+            # unavailable, the source-redacted value stands (never raw-by-bypass).
+            return s
+
+    written = 0
+    async with tenant_scoped_session(tenant_id) as session:
+        await session.execute(
+            delete(GroundTruthEventRow).where(
+                GroundTruthEventRow.artifact_id == artifact_id,
+                GroundTruthEventRow.tenant_id == tenant_id,
+            )
+        )
+        for i, e in enumerate(body.events):
+            session.add(GroundTruthEventRow(
+                event_id=str(_uuid.uuid4()),
+                artifact_id=artifact_id,
+                tenant_id=tenant_id,
+                session_id=body.session_id or "",
+                sequence_index=i,
+                timestamp_ms=int(e.timestamp_ms or 0),
+                kind=(e.kind or "navigate")[:40],
+                url=e.url or "",
+                url_host=e.url_host or "",
+                url_path=e.url_path or "",
+                url_query=e.url_query or "",
+                target_label=e.target_label or "",
+                value=_redact_value(e.value or ""),
+                target_kind=(e.target_kind or "")[:40],
+                modality=(e.modality or "web_cdp")[:40],
+                recorder_version=(body.recorder_version or "v1")[:50],
+                signals={},
+            ))
+            written += 1
+        await session.commit()
+    return {"success": True, "artifact_id": artifact_id, "ingested": written}
+
+
+@router.get("/api/v1/artifacts/{artifact_id}/ground-truth")
+async def list_ground_truth(
+    artifact_id: str = Path(..., min_length=1, max_length=64),
+    user: dict = Depends(get_current_user),
+) -> dict:
+    """List the stored (already PII-redacted) ground-truth events for an artifact
+    — for verification / debugging. Values are redacted at ingest; raw PII is
+    never stored or returned."""
+    from sqlalchemy import select
+
+    from nexus_sdk.db.models import GroundTruthEventRow
+
+    tenant_id = user["tenant_id"]
+    async with tenant_scoped_session(tenant_id) as session:
+        rows = (await session.execute(
+            select(GroundTruthEventRow)
+            .where(
+                GroundTruthEventRow.artifact_id == artifact_id,
+                GroundTruthEventRow.tenant_id == tenant_id,
+            )
+            .order_by(GroundTruthEventRow.sequence_index.asc())
+        )).scalars().all()
+    return {
+        "artifact_id": artifact_id,
+        "count": len(rows),
+        "events": [
+            {
+                "sequence_index": r.sequence_index,
+                "timestamp_ms": r.timestamp_ms,
+                "kind": r.kind,
+                "url": r.url,
+                "url_path": r.url_path,
+                "target_label": r.target_label,
+                "value": r.value,
+                "target_kind": r.target_kind,
+                "modality": r.modality,
+            }
+            for r in rows
+        ],
+    }

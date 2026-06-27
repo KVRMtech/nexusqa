@@ -429,7 +429,9 @@ class PageVisitExtractorConfig:
     # Stamped on every page_visits row.  Bumping this in env
     # (STORYBOARD_PAGE_VISIT_EXTRACTOR_VERSION) forces re-extraction
     # of every artifact in the database without dropping rows.
-    version: str = "v1"
+    # v2: Road-A accuracy fixes — path regex admits '.', www/scheme preserved,
+    # recording-chrome quarantine, homeless-gap → MISSING_PAGE placeholder.
+    version: str = "v2"
 
     # URL detection regex.  Configurable so operators can tighten it
     # for tenants whose OCR is noisy (false-positive URLs).  Default
@@ -561,6 +563,28 @@ class PageVisitExtractorConfig:
     # local model) can never blow the request budget — matches the
     # bound the action/page_action/form_snapshot extractors already have.
     total_timeout_s: float = 240.0
+
+    # ── Recording-tool / conferencing chrome quarantine (generic) ──────
+    # When True, a frame whose OCR/title matches a generic recording-overlay
+    # SIGNAL (and that carries no app-content URL) is treated as capture noise
+    # and NEVER promoted to a page. Signal-based + env-extensible — NOT an app
+    # denylist, so a brand-new conferencing tool is covered by one added phrase
+    # and a brand-new app needs zero change. Generic across all customers/apps.
+    enable_recording_chrome_quarantine: bool = True
+    recording_chrome_pattern: str = (
+        r"\b(?:screen[\s-]?shar(?:e|ing)|you are (?:now )?sharing|stop sharing|"
+        r"main view|presenter view|meeting controls|share screen|"
+        r"is sharing (?:their|your) screen|recording (?:in progress|started)|"
+        r"leave meeting|gallery view|speaker view|raise hand|unmute|"
+        r"start(?:ed)? (?:a )?video|webinar)\b"
+    )
+
+    # ── Possible-missing-page detection (homeless-frame gap) ───────────
+    # When a run of >= this many location-less ("homeless") frames sits BETWEEN
+    # two DIFFERENT located pages, that gap likely hid a page whose URL we could
+    # not read; emit a low-confidence "possible_missing_page" visit instead of
+    # silently folding it into the previous page. Generic; 0 disables.
+    min_homeless_frames_for_missing_page: int = 3
 
 
 @dataclass(frozen=True)
@@ -905,7 +929,7 @@ def load_config() -> StoryboardConfig:
             ),
         ),
         page_visit_extractor=PageVisitExtractorConfig(
-            version=_env_str("STORYBOARD_PAGE_VISIT_EXTRACTOR_VERSION", "v1"),
+            version=_env_str("STORYBOARD_PAGE_VISIT_EXTRACTOR_VERSION", "v2"),
             url_regex_pattern=_env_str(
                 "STORYBOARD_PAGE_VISIT_URL_REGEX",
                 PageVisitExtractorConfig.url_regex_pattern,
@@ -936,6 +960,16 @@ def load_config() -> StoryboardConfig:
             ),
             enable_llm_inference=_env_bool(
                 "STORYBOARD_PAGE_VISIT_LLM_INFERENCE", False,
+            ),
+            enable_recording_chrome_quarantine=_env_bool(
+                "STORYBOARD_PAGE_VISIT_CHROME_QUARANTINE", True,
+            ),
+            recording_chrome_pattern=_env_str(
+                "STORYBOARD_PAGE_VISIT_CHROME_PATTERN",
+                PageVisitExtractorConfig.recording_chrome_pattern,
+            ),
+            min_homeless_frames_for_missing_page=_env_int(
+                "STORYBOARD_PAGE_VISIT_MIN_HOMELESS_FOR_MISSING_PAGE", 3, min_value=0,
             ),
             enable_vision_page_identity=_env_bool(
                 "STORYBOARD_PAGE_VISIT_VISION_IDENTITY", False,

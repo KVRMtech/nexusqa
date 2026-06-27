@@ -92,6 +92,16 @@ class PageVisitSource(str, Enum):
                          location string the LLM could read off the
                          pixels.  Confidence ~0.85 (the LLM read it but
                          we lack independent corroboration).
+      ground_truth     — an INSTRUMENTED recorder (CDP/DOM/a11y) emitted
+                         the REAL URL + navigation event for this frame.
+                         Not pixel-derived — confidence 1.0, PROVEN.  This
+                         is the Tier-0 overlay; absent it, behaviour is
+                         identical to the pixel tiers above.
+      missing_page     — a run of location-less ("homeless") frames sat
+                         between two DIFFERENT pages, likely hiding a page
+                         whose URL could not be read.  Surfaced as a
+                         low-confidence honest placeholder (NEVER asserted
+                         as a real page) so a gap is visible, not silent.
     """
 
     URL_REGEX = "url_regex"
@@ -99,6 +109,8 @@ class PageVisitSource(str, Enum):
     WINDOW_TITLE = "window_title"
     SCREEN_NAME_OCR = "screen_name_ocr"
     LLM_INFERRED = "llm_inferred"
+    GROUND_TRUTH = "ground_truth"
+    MISSING_PAGE = "missing_page"
 
 
 # ── Page visit ───────────────────────────────────────────────────────────────

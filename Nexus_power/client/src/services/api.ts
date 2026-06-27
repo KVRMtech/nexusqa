@@ -1609,6 +1609,26 @@ class ApiClient {
     return data;
   }
 
+  /** Agentic Playwright audit of ONE script: physical-possibility + grounding,
+   *  5-dimension scorecard + per-step verdict. deep=1 adds the LLM reasoning;
+   *  never green-wash (ungrounded "fix" → UNPROVEN). */
+  async auditScriptAgentic(artifactId: string, testId: string, deep = true): Promise<any> {
+    const { data } = await this.client.post(
+      `/v1/test-factory/${artifactId}/scripts/${encodeURIComponent(testId)}/audit`,
+      null, { params: deep ? { deep: 1 } : { deep: 0 } },
+    );
+    return data;
+  }
+
+  /** Apply the audit repair: re-derive from the recording with the grounded
+   *  generator, recompile, save v+1. Returns before/after + the re-scored audit. */
+  async repairScriptFromAudit(artifactId: string, testId: string): Promise<any> {
+    const { data } = await this.client.post(
+      `/v1/test-factory/${artifactId}/scripts/${encodeURIComponent(testId)}/audit/repair`,
+    );
+    return data;
+  }
+
   /** Live Preflight — deterministic Playwright probe (no LLM): opens the live app
    *  and reports per-step locator resolution (1 good / 0 broken / >1 ambiguous). */
   async runScriptPreflight(artifactId: string, testId: string, baseUrl = ''): Promise<any> {

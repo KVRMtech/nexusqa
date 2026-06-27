@@ -14,6 +14,7 @@ const fs = require('fs');
 const path = require('path');
 const { spawn, execFileSync } = require('child_process');
 const crypto = require('crypto');
+const { attachGroundTruthRecorder } = require('./ground_truth_recorder');
 
 const PORT = parseInt(process.env.PORT || '4555', 10);
 const RUNNER_TOKEN = process.env.RUNNER_TOKEN || '';      // optional shared secret
@@ -218,7 +219,7 @@ async function stopCapture() {
   try { fs.rmSync(CAPTURE_VNCPASS_FILE, { force: true }); } catch (e) { /* noop */ }
 }
 
-async function startCapture(url, launchArgs) {
+async function startCapture(url, launchArgs, recorderOpts) {
   // Mint a per-capture one-time VNC password and gate the interactive display on it.
   const pw = crypto.randomBytes(8).toString('hex').slice(0, 8);  // 8 chars (RFB DES cap)
   try { execFileSync('x11vnc', ['-storepasswd', pw, CAPTURE_VNCPASS_FILE]); }
@@ -237,6 +238,13 @@ async function startCapture(url, launchArgs) {
   }
   const context = await browser.newContext({ viewport: null });
   const page = await context.newPage();
+  // Guided ground-truth capture: instrument the page BEFORE the first navigation
+  // so the very first page is recorded (real URL + SPA routes + redacted fields).
+  let recorder = null;
+  if (recorderOpts && recorderOpts.artifactId && recorderOpts.apiBase) {
+    recorder = attachGroundTruthRecorder(page, recorderOpts);
+    try { await recorder.ready; } catch (e) { /* best-effort instrumentation */ }
+  }
   if (url) {
     try { await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 }); }
     catch (e) { /* keep the session open even if the first nav is slow */ }
@@ -244,7 +252,7 @@ async function startCapture(url, launchArgs) {
   const timer = setTimeout(() => {
     stopCapture().catch(() => {}).finally(() => { busy = false; });
   }, CAPTURE_MAX_MS);
-  capture = { browser, context, page, timer, password: pw };
+  capture = { browser, context, page, timer, password: pw, recorder };
 }
 
 async function saveCapture() {
@@ -366,6 +374,69 @@ const server = http.createServer((req, res) => {
 
   if (req.method === 'GET' && req.url === '/auth-capture/status') {
     return send(200, { active: !!capture });
+  }
+
+  // ── GROUND-TRUTH CAPTURE — guided web capture → instrumented sidecar ────────
+  // The user drives THEIR app inside our controlled browser; we record the REAL
+  // URL + SPA routes + PII-redacted form values and POST them to the platform's
+  // ingest endpoint. Nothing is installed on the customer endpoint.
+  if (req.method === 'POST' && req.url === '/ground-truth-capture/start') {
+    if (RUNNER_TOKEN && req.headers['x-runner-token'] !== RUNNER_TOKEN) return send(401, { error: 'unauthorized' });
+    if (busy || capture) return send(409, { error: 'runner busy — finish the current run/capture first' });
+    let body = '';
+    req.on('data', (c) => { body += c; if (body.length > 1048576) req.destroy(); });
+    req.on('end', async () => {
+      let parsed;
+      try { parsed = JSON.parse(body || '{}'); } catch (e) { return send(400, { error: 'bad json' }); }
+      const url = String(parsed.url || '');
+      const apiBase = String(parsed.api_base || '');
+      if (url.includes(META_IP) || apiBase.includes(META_IP)) return send(400, { error: 'target not allowed' });
+      if (!parsed.artifact_id || !apiBase) return send(400, { error: 'artifact_id and api_base required' });
+      if (busy || capture) return send(409, { error: 'runner busy' });
+      busy = true;
+      try {
+        await startCapture(url, parsed.launch_args, {
+          artifactId: String(parsed.artifact_id),
+          apiBase: apiBase,
+          token: String(parsed.token || ''),
+          sessionId: String(parsed.session_id || ''),
+          recorderVersion: String(parsed.recorder_version || 'v1'),
+        });
+        send(202, { status: 'capturing', vnc_password: capture ? capture.password : '' });
+      } catch (e) {
+        try { await stopCapture(); } catch (e2) { /* noop */ }
+        busy = false;
+        send(500, { status: 'error', error: String((e && e.message) || e) });
+      }
+    });
+    return;
+  }
+
+  if (req.method === 'POST' && req.url === '/ground-truth-capture/save') {
+    if (RUNNER_TOKEN && req.headers['x-runner-token'] !== RUNNER_TOKEN) return send(401, { error: 'unauthorized' });
+    (async () => {
+      try {
+        if (!capture || !capture.recorder) throw new Error('no active ground-truth capture');
+        const result = await capture.recorder.flush();
+        await stopCapture();
+        send(200, { status: 'saved', ingest: result });
+      } catch (e) {
+        try { await stopCapture(); } catch (e2) { /* noop */ }
+        send(500, { status: 'error', error: String((e && e.message) || e) });
+      } finally {
+        busy = false;
+      }
+    })();
+    return;
+  }
+
+  if (req.method === 'POST' && req.url === '/ground-truth-capture/cancel') {
+    if (RUNNER_TOKEN && req.headers['x-runner-token'] !== RUNNER_TOKEN) return send(401, { error: 'unauthorized' });
+    (async () => {
+      try { await stopCapture(); } catch (e) { /* noop */ }
+      finally { busy = false; send(200, { status: 'cancelled' }); }
+    })();
+    return;
   }
 
   send(404, { error: 'not found' });

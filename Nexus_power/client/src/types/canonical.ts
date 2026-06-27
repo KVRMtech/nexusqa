@@ -1290,8 +1290,9 @@ export interface PageVisit {
   last_seen_ms: number;
   duration_ms: number;
   frame_count: number;
-  /** How the location was discovered. */
-  source: 'url_regex' | 'url_scene' | 'window_title' | 'screen_name_ocr' | 'llm_inferred';
+  /** How the location was discovered. ground_truth = instrumented recorder
+   *  (PROVEN); missing_page = an honest gap placeholder (URL not captured). */
+  source: 'ground_truth' | 'url_regex' | 'url_scene' | 'window_title' | 'screen_name_ocr' | 'llm_inferred' | 'missing_page';
   /** 0.0–1.0 confidence in the extraction. */
   extraction_confidence: number;
   /** Best-effort link to the canonical scene this visit fell within. */

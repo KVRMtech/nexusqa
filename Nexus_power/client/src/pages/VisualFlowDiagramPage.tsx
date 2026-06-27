@@ -736,6 +736,16 @@ const PAGE_VERB_STYLES: Record<string, { bg: string; fg: string }> = {
   none:     { bg: 'rgba(148,163,184,0.10)',fg: '#94a3b8' },
 };
 
+// PROVEN (instrumented ground truth / directly-OCR'd address bar) vs INFERRED
+// (pixel-guessed vision/title) vs a missing-page gap — the never-green-wash
+// provenance, shown per page so a guessed URL never reads as fact. Generic.
+function _provenanceMeta(source: string): { label: string; long: string; bg: string; fg: string } {
+  if (source === 'ground_truth') return { label: 'PROVEN', long: 'Instrumented ground truth (real URL/DOM event)', bg: 'rgba(5,150,105,0.16)', fg: '#047857' };
+  if (source === 'url_regex') return { label: 'PROVEN', long: 'URL read directly from the address bar', bg: 'rgba(5,150,105,0.14)', fg: '#047857' };
+  if (source === 'missing_page') return { label: 'URL NOT CAPTURED', long: 'A page was likely visited but its URL was not legible — an honest gap, never asserted as a real page', bg: 'rgba(239,68,68,0.14)', fg: '#b91c1c' };
+  return { label: 'INFERRED', long: 'Pixel-inferred (vision / title) — best-effort, not asserted as fact', bg: 'rgba(217,162,58,0.18)', fg: '#92661d' };
+}
+
 function PageVisitsPanel({ graph }: { graph: VisualEvidenceGraph }) {
   const visits: PageVisit[] = graph.page_visits ?? [];
   const pageActions = graph.page_actions ?? {};
@@ -746,9 +756,15 @@ function PageVisitsPanel({ graph }: { graph: VisualEvidenceGraph }) {
   // panel stays hidden so the page looks unchanged for them.
   if (visits.length === 0) return null;
 
-  const visitsWithForm = visits.filter(
-    (v) => v.form_snapshot && Object.keys(v.form_snapshot).length > 0,
-  ).length;
+  // "with form data" = a form-field snapshot OR any typed value captured in the
+  // page's actions (First Name = …, etc.). The typed values live in page_actions
+  // even when the separate form_snapshot extraction came back empty, so counting
+  // only form_snapshot understated real form pages as "0 with form data".
+  const visitsWithForm = visits.filter((v) => {
+    if (v.form_snapshot && Object.keys(v.form_snapshot).length > 0) return true;
+    const acts = pageActions[v.page_visit_id] ?? [];
+    return acts.some((a) => a?.value != null && String(a.value).trim() !== '');
+  }).length;
   const totalActions = Object.values(pageActions).reduce(
     (n, list) => n + (list?.length ?? 0), 0,
   );
@@ -828,13 +844,18 @@ function PageVisitsPanel({ graph }: { graph: VisualEvidenceGraph }) {
                       <Clock className="h-2.5 w-2.5" />
                       {fmtDuration(v.first_seen_ms, v.last_seen_ms)}
                     </span>
-                    <span
-                      className="inline-flex items-center px-1.5 py-0.5 rounded-md text-[8px] font-bold uppercase tracking-wide"
-                      style={{ background: 'rgba(148,163,184,0.15)', color: '#64748b' }}
-                      title={`source: ${v.source} · confidence ${Math.round((v.extraction_confidence ?? 0) * 100)}%`}
-                    >
-                      {v.source.replace(/_/g, ' ')}
-                    </span>
+                    {(() => {
+                      const p = _provenanceMeta(v.source);
+                      return (
+                        <span
+                          className="inline-flex items-center px-1.5 py-0.5 rounded-md text-[8px] font-bold uppercase tracking-wide"
+                          style={{ background: p.bg, color: p.fg }}
+                          title={`${p.long} · source: ${v.source.replace(/_/g, ' ')} · confidence ${Math.round((v.extraction_confidence ?? 0) * 100)}%`}
+                        >
+                          {p.label}
+                        </span>
+                      );
+                    })()}
                   </div>
 
                   {/* Actions */}

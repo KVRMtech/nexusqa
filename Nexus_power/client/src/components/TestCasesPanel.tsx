@@ -12,7 +12,8 @@
  * per-step action→expect→PROOF, sign-off, grounded edit/re-point). All data,
  * handlers and governance features are preserved; this is presentation only.
  */
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import clsx from 'clsx';
 import {
   AlertTriangle, ArrowRight, Bot, Camera, CheckCircle2, ChevronDown, Download, FileCode2, FileSpreadsheet,
   FlaskConical, Loader2, MousePointerClick, Rocket, Send, ShieldAlert, Sparkles, Upload,
@@ -112,6 +113,104 @@ function Menu(
   );
 }
 
+// ── Test-readiness flow widget ─────────────────────────────────────────────
+// The generator consumes Pages & Forms data that is derived LAZILY (only on
+// first storyboard / Pages & Forms access). Landing on Test Cases directly —
+// e.g. straight from "Generate Test" right after processing — means it may not
+// exist yet. This widget shows the honest pipeline (processed → preparing data
+// → generating) so the user sees progress instead of a premature empty state.
+function FlowNode(
+  { state, icon, title, subtitle }:
+  { state: 'done' | 'active' | 'ready' | 'pending'; icon: React.ReactNode; title: string; subtitle: string },
+) {
+  const ring = {
+    done:    'bg-emerald-50 text-emerald-600 ring-emerald-200',
+    active:  'bg-nexus-50 text-nexus-600 ring-nexus-200',
+    ready:   'bg-gold-50 text-gold-600 ring-gold-300',
+    pending: 'bg-slate-50 text-slate-300 ring-slate-200',
+  }[state];
+  return (
+    <div className="flex w-[30%] flex-col items-center text-center">
+      <div className={clsx('flex h-11 w-11 items-center justify-center rounded-2xl ring-1', ring)}>{icon}</div>
+      <p className={clsx('mt-2 text-[12px] font-bold', state === 'pending' ? 'text-slate-400' : 'text-nexus-800')}>{title}</p>
+      <p className="mt-0.5 text-[10.5px] leading-snug text-nexus-400">{subtitle}</p>
+    </div>
+  );
+}
+
+function FlowConnector({ active }: { active: boolean }) {
+  return <div className={clsx('mt-5 h-0.5 flex-1 rounded transition-colors', active ? 'bg-emerald-300' : 'bg-slate-200')} />;
+}
+
+function ReadinessFlow(
+  { phase, counts, generating, onGenerate, reason, onRederive, rederiving }:
+  {
+    phase: 'deriving' | 'ready';
+    counts: { pages: number; actions: number; forms: number };
+    generating: boolean;
+    onGenerate: () => void;
+    reason?: string;
+    onRederive?: () => void;
+    rederiving?: boolean;
+  },
+) {
+  const derived = phase === 'ready';
+  const pagesText =
+    counts.pages > 0
+      ? `${counts.pages} page${counts.pages === 1 ? '' : 's'} · ${counts.actions} action${counts.actions === 1 ? '' : 's'} · ${counts.forms} with form data`
+      : derived ? 'No page data detected' : 'Extracting pages, actions & form values…';
+  return (
+    <div className="rounded-2xl border border-nexus-200 bg-white px-5 py-8">
+      <div className="mx-auto flex max-w-2xl items-start justify-between gap-2">
+        <FlowNode state="done" icon={<CheckCircle2 className="h-5 w-5" />}
+          title="Recording processed" subtitle="Canonical evidence ready" />
+        <FlowConnector active={derived} />
+        <FlowNode
+          state={derived ? 'done' : 'active'}
+          icon={derived ? <CheckCircle2 className="h-5 w-5" /> : <Loader2 className="h-5 w-5 animate-spin" />}
+          title="Preparing Pages & Forms"
+          subtitle={pagesText}
+        />
+        <FlowConnector active={derived && (generating || counts.pages > 0)} />
+        <FlowNode
+          state={generating ? 'active' : derived ? 'ready' : 'pending'}
+          icon={generating ? <Loader2 className="h-5 w-5 animate-spin" /> : <Sparkles className="h-5 w-5" />}
+          title="Generate test cases"
+          subtitle={generating ? 'Building demonstrated E2E…' : derived ? 'Ready' : 'Waiting for data'}
+        />
+      </div>
+
+      {derived && !generating ? (
+        <div className="mt-7 text-center">
+          {reason ? (
+            <p className="mx-auto mb-3 max-w-xl text-[12px] leading-relaxed text-nexus-500">{reason}</p>
+          ) : counts.pages < 1 ? (
+            <p className="mx-auto mb-3 max-w-xl text-[12px] leading-relaxed text-nexus-500">
+              No Pages &amp; Forms data was derived for this recording yet. Re-derive it below, or open the <b className="text-nexus-700">Pages &amp; Forms</b> view.
+            </p>
+          ) : null}
+          <div className="flex items-center justify-center gap-2">
+            {counts.pages < 1 && onRederive && (
+              <button onClick={onRederive} disabled={!!rederiving}
+                className="rounded-lg border border-nexus-200 bg-white px-4 py-2 text-xs font-semibold text-nexus-700 hover:bg-nexus-50 inline-flex items-center gap-1.5 disabled:opacity-50">
+                {rederiving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ArrowRight className="h-3.5 w-3.5" />} Re-derive Pages &amp; Forms
+              </button>
+            )}
+            <button onClick={onGenerate}
+              className="btn-primary btn-gold text-xs px-4 py-2 font-semibold inline-flex ring-1 ring-gold-300/40">
+              <Sparkles className="h-3.5 w-3.5" /> Generate test cases
+            </button>
+          </div>
+        </div>
+      ) : (
+        <p className="mt-7 text-center text-[11px] text-nexus-400">
+          Your Pages &amp; Forms data is being prepared — test cases will generate automatically when it's ready.
+        </p>
+      )}
+    </div>
+  );
+}
+
 export default function TestCasesPanel(
   { artifactId, onOpenPlaywright }: { artifactId: string; onOpenPlaywright?: () => void },
 ) {
@@ -124,6 +223,25 @@ export default function TestCasesPanel(
   const [notice, setNotice] = useState<string | null>(null);
   const [redactPII, setRedactPII] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+
+  // ── Pages & Forms readiness. The generator reads page_visits / page_actions
+  // that are derived LAZILY (only on first storyboard / Pages & Forms access).
+  // We trigger + poll that derivation here so arriving directly (e.g. from
+  // "Generate Test") shows a progress flow and auto-generates when ready —
+  // instead of a premature "No test cases yet". Fail-open. ──
+  const [deriving, setDeriving] = useState<boolean | null>(null); // null = not yet checked
+  const [derivCounts, setDerivCounts] = useState<{ pages: number; actions: number; forms: number }>(
+    { pages: 0, actions: 0, forms: 0 },
+  );
+  const [genReason, setGenReason] = useState<string>('');
+  const autoGenRef = useRef(false);
+  const pollCancelRef = useRef<(() => void) | null>(null);
+  const derivKickedRef = useRef<string>('');
+  const summaryForRef = useRef<string>(''); // which artifact the loaded summary belongs to
+  // Latest artifactId, tracked synchronously so a slow in-flight fetch for a
+  // previous artifact can detect it's stale and not clobber current state.
+  const artifactIdRef = useRef(artifactId);
+  artifactIdRef.current = artifactId;
 
   // Role-aware display of the technical evidence columns. An explicit user
   // choice (persisted per user) overrides the role default; the underlying
@@ -144,25 +262,146 @@ export default function TestCasesPanel(
   };
 
   const refresh = useCallback(async () => {
-    if (!artifactId) return;
+    const fetchId = artifactId;            // pin the target so a late resolve can detect staleness
+    if (!fetchId) return;
     setLoading(true); setError(null);
     try {
-      const sum = await api.getTestFactorySummary(artifactId).catch(() => null);
+      const sum = await api.getTestFactorySummary(fetchId).catch(() => null);
+      if (artifactIdRef.current !== fetchId) return;   // artifact switched mid-flight → drop stale write
+      summaryForRef.current = fetchId;     // tag the summary with its artifact (last-write-wins)
       setSummary(sum);
       const counts: Record<string, number> = (sum && sum.by_type) || {};
       const sections: Record<string, CaseRow[]> = {};
       await Promise.all(SECTIONS.map(async (s) => {
         if (!counts[s.type]) { sections[s.type] = []; return; }
-        const list = await api.listTestFactoryCases(artifactId, 1, CAP, 'active', s.type);
+        const list = await api.listTestFactoryCases(fetchId, 1, CAP, 'active', s.type);
         sections[s.type] = list.items || [];
       }));
+      if (artifactIdRef.current !== fetchId) return;   // switched during section fetch → drop
       setBySection(sections);
     } catch (e: any) {
-      setError(e?.response?.data?.detail || String(e));
-    } finally { setLoading(false); }
+      if (artifactIdRef.current === fetchId) setError(e?.response?.data?.detail || String(e));
+    } finally { if (artifactIdRef.current === fetchId) setLoading(false); }
   }, [artifactId]);
 
   useEffect(() => { void refresh(); }, [refresh]);
+
+  // Generate the demonstrated suite, capturing the honest no-cases reason from
+  // the response (so a genuinely ungeneratable recording explains itself).
+  const doGenerate = useCallback(async () => {
+    setBusy('generate'); setError(null); setNotice(null);
+    try {
+      const resp: any = await api.generateTestFactory(artifactId);
+      setGenReason(resp?.no_cases_reason || '');
+      if (resp?.demonstrated > 0 || resp?.generated > 0) {
+        setNotice('Generated demonstrated E2E from your Pages & Forms.');
+      }
+      await refresh();
+    } catch (e: any) {
+      setError(e?.response?.data?.detail || String(e));
+    } finally { setBusy(''); }
+  }, [artifactId, refresh]);
+
+  // Trigger + poll the lazy Pages & Forms derivation, refreshing live counts
+  // each tick. Mirrors the Visual Flow page's poll; fail-open. The cancel handle
+  // lives in a ref so unrelated re-renders never restart it; the caller cancels
+  // any prior poll first.
+  const startDerivationPoll = useCallback(() => {
+    if (!artifactId) return;
+    if (pollCancelRef.current) pollCancelRef.current();   // cancel any in-flight poll
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let attempts = 0;
+    setDeriving(true);
+
+    const refreshCounts = async () => {
+      try {
+        const g: any = await api.getVisualEvidenceGraph(artifactId, { includeStoryboardOverlays: true });
+        if (cancelled) return;
+        const visits: any[] = g?.page_visits ?? [];
+        const actionsMap: Record<string, any[]> = g?.page_actions ?? {};
+        const totalActions = Object.values(actionsMap).reduce((n, l) => n + (l?.length ?? 0), 0);
+        const forms = visits.filter((v) =>
+          (v.form_snapshot && Object.keys(v.form_snapshot).length > 0) ||
+          (actionsMap[v.page_visit_id] || []).some((a) => a?.value != null && String(a.value).trim() !== ''),
+        ).length;
+        setDerivCounts({ pages: visits.length, actions: totalActions, forms });
+      } catch { /* best-effort — keep last known counts */ }
+    };
+
+    const poll = () => {
+      api.getStoryboard(artifactId)
+        .then(async (payload: any) => {
+          if (cancelled) return;
+          attempts += 1;
+          await refreshCounts();
+          if (cancelled) return;
+          const isDeriving = Boolean(payload?.summary?.deriving);
+          if (isDeriving && attempts < 90) {        // ~6 min ceiling (90 × 4s)
+            setDeriving(true);
+            timer = setTimeout(poll, 4000);
+          } else {
+            setDeriving(false);
+          }
+        })
+        .catch(() => {
+          // Older deploy / surface off / endpoint error → don't block generation.
+          if (!cancelled) setDeriving(false);
+        });
+    };
+    pollCancelRef.current = () => { cancelled = true; if (timer) clearTimeout(timer); };
+    poll();
+  }, [artifactId]);
+
+  // Reset readiness state on artifact change; tear down any running poll.
+  useEffect(() => {
+    derivKickedRef.current = '';
+    autoGenRef.current = false;
+    setDeriving(null);
+    setDerivCounts({ pages: 0, actions: 0, forms: 0 });
+    setGenReason('');
+    return () => { if (pollCancelRef.current) { pollCancelRef.current(); pollCancelRef.current = null; } };
+  }, [artifactId]);
+
+  // Decide ONCE per artifact — after the first summary load — whether to derive.
+  // Artifacts that already have cases NEVER poll, flash the widget, or re-trigger
+  // derivation (their cases render immediately); only an empty artifact triggers
+  // + waits. This is the steady-state-safe gate.
+  useEffect(() => {
+    if (!artifactId || loading) return;                       // wait for the first summary
+    if (summaryForRef.current !== artifactId) return;         // summary must be for THIS artifact
+    if (derivKickedRef.current === artifactId) return;        // decide once per artifact
+    derivKickedRef.current = artifactId;
+    if ((summary?.total ?? 0) > 0) { setDeriving(false); return; }  // cases exist → done
+    startDerivationPoll();                                     // no cases → trigger + poll
+  }, [artifactId, loading, summary, startDerivationPoll]);
+
+  // Manual self-heal from Test Cases: force a full re-derivation (covers the edge
+  // where storyboard panels exist but page_visits were never derived — Pages &
+  // Forms toggled on later, or a prior extractor timed out — which getStoryboard
+  // alone won't re-derive).
+  const reDerive = useCallback(async () => {
+    setBusy('rederive'); setError(null);
+    try { await api.regenerateStoryboard(artifactId); } catch { /* poll regardless */ }
+    autoGenRef.current = false;
+    startDerivationPoll();
+    setBusy('');
+  }, [artifactId, startDerivationPoll]);
+
+  // One-shot: once the data is ready and there are no cases yet, auto-generate
+  // the demonstrated suite (deterministic, $0) — so arriving straight from
+  // "Generate Test" yields cases without a second click. Fires once per
+  // artifact, and only when real page data was actually derived.
+  useEffect(() => {
+    if (deriving !== false) return;
+    if (autoGenRef.current) return;
+    if (loading || busy) return;
+    if ((summary?.total ?? 0) > 0) return;
+    if (derivCounts.pages < 1) return;       // nothing derived → no no-op generate
+    autoGenRef.current = true;
+    void doGenerate();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [deriving, loading, busy, summary, derivCounts.pages]);
 
   // Flatten loaded cases (capped) and keep a valid selection.
   const allRows = useMemo(() => SECTIONS.flatMap((s) => bySection[s.type] || []), [bySection]);
@@ -232,6 +471,7 @@ export default function TestCasesPanel(
   };
 
   const total = summary?.total ?? 0;
+  const derivingNow = deriving === true;
 
   // ── Header + decluttered toolbar (one gold CTA + grouped navy menus) ──
   const header = (
@@ -248,12 +488,12 @@ export default function TestCasesPanel(
           </div>
         </div>
         <div className="ml-auto flex items-center gap-2 flex-wrap justify-end">
-          <button onClick={generateFullSuite} disabled={!!busy}
-            title="Generate the full suite in one pass: demonstrated E2E → negative → boundary → error-state"
+          <button onClick={generateFullSuite} disabled={!!busy || (derivingNow && total === 0)}
+            title={(derivingNow && total === 0) ? 'Preparing your Pages & Forms data…' : 'Generate the full suite in one pass: demonstrated E2E → negative → boundary → error-state'}
             className="btn-primary btn-gold text-xs px-3.5 py-1.5 font-semibold shadow-sm ring-1 ring-gold-300/40 disabled:opacity-50">
             {busy === 'fullsuite' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />} Generate full suite
           </button>
-          <Menu label="Add coverage" icon={<ShieldAlert className="h-3.5 w-3.5" />} disabled={!!busy} items={[
+          <Menu label="Add coverage" icon={<ShieldAlert className="h-3.5 w-3.5" />} disabled={!!busy || (derivingNow && total === 0)} items={[
             { label: 'Demonstrated E2E only', icon: <Sparkles className="h-3.5 w-3.5 text-nexus-500" />, onClick: () => run('generate', () => api.generateTestFactory(artifactId)) },
             { label: 'Negative tests', icon: <ShieldAlert className="h-3.5 w-3.5 text-nexus-500" />, onClick: () => run('negative', () => api.generateTestFactoryCategory(artifactId, 'negative')) },
             { label: 'Boundary tests', icon: <ShieldAlert className="h-3.5 w-3.5 text-nexus-500" />, onClick: () => run('boundary', () => api.generateTestFactoryCategory(artifactId, 'boundary')) },
@@ -305,25 +545,29 @@ export default function TestCasesPanel(
       )}
 
       {loading ? (
+        // Initial / refresh summary load — neutral spinner, never the readiness
+        // widget (so artifacts that already have cases don't flash it).
         <div className="flex items-center gap-2 text-nexus-400 text-sm px-2 py-10 justify-center">
           <Loader2 className="h-4 w-4 animate-spin" /> Loading test cases…
         </div>
+      ) : deriving !== false && total === 0 ? (
+        // No cases yet AND data still deriving — show the honest progress flow,
+        // never a premature "No test cases yet".
+        <ReadinessFlow phase="deriving" counts={derivCounts} generating={false} onGenerate={() => {}} />
       ) : total === 0 ? (
-        <div className="rounded-2xl border border-dashed border-nexus-200 bg-white px-4 py-12 text-center">
-          <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-2xl bg-nexus-50 ring-1 ring-nexus-100">
-            <FlaskConical className="h-6 w-6 text-nexus-500" />
-          </div>
-          <p className="text-sm font-semibold text-nexus-800">No test cases yet</p>
-          {summary?.no_cases_reason ? (
-            <p className="text-[12px] text-nexus-500 mt-1.5 max-w-xl mx-auto leading-relaxed">{summary.no_cases_reason}</p>
-          ) : (
-            <p className="text-[12px] text-nexus-500 mt-1 max-w-xl mx-auto">Click <b className="text-nexus-700">Generate</b> to build the demonstrated functional E2E, then <b className="text-nexus-700">Add coverage</b> for negative / boundary / error-state.</p>
-          )}
-          <button onClick={() => run('generate', () => api.generateTestFactory(artifactId))} disabled={!!busy}
-            className="btn-primary btn-gold text-xs px-4 py-2 font-semibold mt-4 inline-flex ring-1 ring-gold-300/40 disabled:opacity-50">
-            {busy === 'generate' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />} Generate test cases
-          </button>
-        </div>
+        // Data ready but no cases — the flow's last node becomes the Generate
+        // action (auto-runs once when data lands; manual fallback here), with a
+        // self-heal Re-derive path and the backend's honest reason if generation
+        // genuinely produced nothing.
+        <ReadinessFlow
+          phase="ready"
+          counts={derivCounts}
+          generating={busy === 'generate'}
+          onGenerate={doGenerate}
+          onRederive={reDerive}
+          rederiving={busy === 'rederive'}
+          reason={summary?.no_cases_reason || genReason || undefined}
+        />
       ) : (
         // ── Two-pane studio: calm list (left) + sticky detail/proof (right) ──
         <div className="lg:grid lg:grid-cols-[1fr_1.25fr] lg:gap-6 lg:items-start">

@@ -71,6 +71,18 @@ def score_step(step, ambiguous: set[str]) -> tuple[str, str]:
             "Derived step — not directly observed in the recording. "
             "Confirm before adding to an automated suite."
         )
+    # Assertion-achievability axis: a step that asserts a navigation (this action →
+    # the next page's URL) is "solid" ONLY when the recording proves this action
+    # caused it. A next_url with no grounded navigation signal is an UNPROVEN causal
+    # claim — score it REVIEW so it never counts as a solid step (this is the
+    # impossible-transition green-wash the auditor flagged). Belt-and-suspenders:
+    # the generator no longer sets an ungrounded next_url, but this stays honest if
+    # one ever slips through another path.
+    if obs.get("next_url") and not obs.get("navigation_grounded"):
+        return REVIEW, (
+            "This step asserts a page navigation the recording does not show this "
+            "action caused — re-point to the real submit/next control, or confirm."
+        )
     has_anchor = bool((obs.get("anchor") or "").strip())
     if nlabel and nlabel in ambiguous and not has_anchor:
         return REVIEW, (

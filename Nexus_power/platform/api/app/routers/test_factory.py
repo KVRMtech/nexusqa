@@ -74,6 +74,7 @@ from ..services.diff_and_heal import control_ledger
 from ..services.diff_and_heal import action_resolver
 from ..services.flywheel import ledger as flywheel_ledger
 from ..services.test_factory import fidelity as tf_fidelity
+from ..services.test_factory import playwright_auditor as pw_auditor
 from ..services.test_runs import (
     last_run_summary_by_scenario,
     _status_severity,
@@ -3350,6 +3351,121 @@ async def script_fidelity(
             report["llm_review"] = await tf_fidelity.llm_faithfulness_review(
                 tc, spec, report, router=llm_router)
     return report
+
+
+def _audit_evidence_text(visits, actions) -> str:
+    """A compact, verbatim ground-truth blob the auditor grounds every claim
+    against — page URLs, recorded values, and observed outcomes from the recording."""
+    by_visit: dict = {}
+    for a in (actions or []):
+        by_visit.setdefault(getattr(a, "page_visit_id", "") or "", []).append(a)
+    lines: list[str] = []
+    for v in (visits or []):
+        path = getattr(v, "url_path", "") or getattr(v, "location", "") or "?"
+        lines.append(f"PAGE {path}")
+        for a in by_visit.get(getattr(v, "page_visit_id", "") or "", []):
+            verb = (getattr(a, "verb", "") or "").strip()
+            label = (getattr(a, "target_label", "") or "").strip()
+            val = getattr(a, "value", None)
+            outcome = (getattr(a, "after_outcome", "") or "").strip()
+            detail = (getattr(a, "after_detail", "") or "").strip()
+            line = f"  {verb} '{label}'"
+            if val not in (None, ""):
+                line += f" = '{val}'"
+            if outcome:
+                line += f" -> {outcome}: {detail}"
+            lines.append(line)
+    return "\n".join(lines)
+
+
+@router.post("/api/v1/test-factory/{artifact_id}/scripts/{test_id}/audit")
+async def audit_script_agentic(
+    request: Request,
+    artifact_id: str = PathParam(..., min_length=1, max_length=64),
+    test_id: str = PathParam(..., min_length=1, max_length=64),
+    deep: int = Query(1, ge=0, le=1),
+    user: dict = Depends(get_current_user),
+):
+    """Agentic Playwright audit of ONE script: physical-possibility + grounding,
+    scored on the 5 auditor dimensions with a per-STEP verdict (the impossible-
+    transition gate). Deterministic ($0) always; deep=1 adds the LLM per-step
+    reasoning when a router is available. NEVER green-wash — an ungrounded "fix"
+    is demoted to UNPROVEN, never asserted green; on any LLM fault the $0
+    deterministic verdict stands (never auto-certify)."""
+    tenant_id = user["tenant_id"]
+    async with tenant_scoped_session(tenant_id) as session:
+        await _require_artifact(session, artifact_id, tenant_id)
+        cases, field_meta = await _fidelity_inputs(session, artifact_id)
+        visits, actions = await factory_service._load_current_pages_and_actions(
+            session, artifact_id=artifact_id)
+        active = await script_versions.get_active_version(
+            session, artifact_id=artifact_id, test_case_id=test_id)
+    tc = next((c for c in cases if (getattr(c, "test_id", "") or "") == test_id), None)
+    if tc is None:
+        raise HTTPException(status_code=404, detail="no active test case for this script")
+    spec = (getattr(active, "script_source", None) if active else None) \
+        or compile_case(tc, field_meta, parametrize=True)
+    steps = list(getattr(tc, "steps", []) or [])
+
+    if deep:
+        composer = getattr(request.app.state, "storyboard_composer", None)
+        llm_router = getattr(composer, "_llm_router", None) if composer else None
+        if llm_router is not None:
+            return await pw_auditor.audit(
+                spec_text=spec, evidence_text=_audit_evidence_text(visits, actions),
+                steps=steps, evidence=actions, router=llm_router)
+    # $0 deterministic verdict (LLM disabled / unavailable) — fully functional.
+    return pw_auditor.score_spec(spec, steps, evidence=actions)
+
+
+@router.post("/api/v1/test-factory/{artifact_id}/scripts/{test_id}/audit/repair")
+async def repair_script_from_audit(
+    artifact_id: str = PathParam(..., min_length=1, max_length=64),
+    test_id: str = PathParam(..., min_length=1, max_length=64),
+    user: dict = Depends(get_current_user),
+):
+    """Apply the audit repair: RE-DERIVE the test case from the recording with the
+    grounded generator (ungrounded navigation assertions dropped, typed fills
+    restored, uncaptured boundaries marked UNPROVEN), recompile this script, and
+    save it as a new version (v+1, reversible via history). The repair is always
+    COMPILER-emitted from grounded evidence — never an LLM-authored spec, never a
+    fabricated green. Returns the before/after diff + the re-scored audit."""
+    tenant_id = user["tenant_id"]
+    async with tenant_scoped_session(tenant_id) as session:
+        art = await _require_artifact(session, artifact_id, tenant_id)
+        active = await script_versions.get_active_version(
+            session, artifact_id=artifact_id, test_case_id=test_id)
+        before = (getattr(active, "script_source", "") if active else "") or ""
+        # Re-derive the cases with the fixed generator, then recompile this script.
+        await factory_service.generate_and_store(
+            session, artifact_id=artifact_id, tenant_id=tenant_id,
+            session_id=getattr(art, "session_id", "") or "")
+        # generate_and_store commits — re-arm the transaction-local RLS scope.
+        await session.execute(
+            text("SELECT set_config('nexus.current_tenant_id', :tid, true)"),
+            {"tid": str(tenant_id)})
+        cases, field_meta = await _fidelity_inputs(session, artifact_id)
+        _visits, actions = await factory_service._load_current_pages_and_actions(
+            session, artifact_id=artifact_id)
+        tc = next((c for c in cases if (getattr(c, "test_id", "") or "") == test_id), None)
+        if tc is None:
+            raise HTTPException(status_code=404, detail="no active test case for this script")
+        repaired = compile_case(tc, field_meta, parametrize=True)
+        id_to_path = {s["test_id"]: s["path"]
+                      for s in compile_manifest([tc], field_meta).get("scripts", [])}
+        row = await script_versions.save_new_version(
+            session, artifact_id=artifact_id, tenant_id=tenant_id, session_id="",
+            test_case_id=test_id, spec_path=id_to_path.get(test_id, ""), script_source=repaired,
+            data_json={}, author="nexus-audit-repair",
+            note="Repaired from the agentic audit — re-derived from the recording "
+                 "(ungrounded assertions dropped, fills grounded, gaps marked UNPROVEN).")
+    report = pw_auditor.score_spec(repaired, list(getattr(tc, "steps", []) or []), evidence=actions)
+    return {
+        "before": before, "after": repaired,
+        "version_no": getattr(row, "version_no", None),
+        "changed": before.strip() != repaired.strip(),
+        "audit": report,
+    }
 
 
 @router.get("/api/v1/test-factory/{artifact_id}/fidelity")

@@ -2465,6 +2465,71 @@ class PageVisitRow(Base):
     )
 
 
+class GroundTruthEventRow(Base):
+    """Instrumented ground-truth capture events (Road B — the Tier-0 overlay).
+
+    Emitted by an instrumented recorder (CDP/DOM for web; a per-modality adapter
+    for desktop/mainframe/mobile) as a timestamped sidecar event log: REAL
+    navigation URLs + form field values + actions, captured AT THE SOURCE rather
+    than OCR'd off pixels. ``page_visit_extractor`` joins these to the canonical
+    frames by timestamp as a Tier-0 overlay (``PageVisitSource.GROUND_TRUTH``,
+    confidence 1.0) that supersedes the pixel tiers. Absent these rows, extraction
+    is byte-identical to the video path — the frozen pipeline is preserved.
+
+    GENERIC: any capture adapter (web CDP, Windows UIA, macOS AX, mainframe
+    HLLAPI, Appium) posts the SAME event shape, so a new modality needs no
+    extractor change and a new app needs no config. Form VALUES are PII-redacted
+    AT SOURCE before persistence — never raw PII at rest.
+
+    See ``scripts/apply_ground_truth_events.sql`` for the DDL + tenant RLS.
+    """
+
+    __tablename__ = "ground_truth_events"
+
+    event_id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_new_id)
+    artifact_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("canonical_artifacts.artifact_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    tenant_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    session_id: Mapped[str] = mapped_column(String(64), default="", nullable=False)
+
+    # Chronological order + wall-clock offset (ms from recording start) used to
+    # JOIN the event to the canonical frame nearest in time.
+    sequence_index: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    timestamp_ms: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+    # navigate | type | select | click | submit | ... (parity with the action verbs).
+    kind: Mapped[str] = mapped_column(String(40), default="navigate", nullable=False)
+
+    # The REAL navigation URL (scheme / www / .html / query intact) for navigate events.
+    url: Mapped[str] = mapped_column(String(2000), default="", nullable=False)
+    url_host: Mapped[str] = mapped_column(String(500), default="", nullable=False)
+    url_path: Mapped[str] = mapped_column(String(2000), default="", nullable=False)
+    url_query: Mapped[str] = mapped_column(String(2000), default="", nullable=False)
+
+    # For form/action events: the field/control label + its (PII-REDACTED) value.
+    target_label: Mapped[str] = mapped_column(String(500), default="", nullable=False)
+    value: Mapped[str] = mapped_column(String(1000), default="", nullable=False)
+    target_kind: Mapped[str] = mapped_column(String(40), default="", nullable=False)
+
+    # Capture modality (web_cdp | windows_uia | macos_ax | mainframe_hllapi |
+    # appium) + recorder version — generic across adapters.
+    modality: Mapped[str] = mapped_column(String(40), default="web_cdp", nullable=False)
+    recorder_version: Mapped[str] = mapped_column(String(50), default="v1", nullable=False)
+    signals: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utc_now, nullable=False,
+    )
+
+    __table_args__ = (
+        Index("ix_ground_truth_events_artifact_seq", "artifact_id", "sequence_index"),
+        Index("ix_ground_truth_events_tenant_session", "tenant_id", "session_id"),
+    )
+
+
 class PageActionRow(Base):
     """
     Semantic user actions keyed by page_visit instead of scene.
