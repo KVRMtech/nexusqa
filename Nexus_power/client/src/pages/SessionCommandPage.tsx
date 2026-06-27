@@ -431,11 +431,16 @@ export default function SessionCommandPage() {
     !!tenantId,
   );
 
-  // Auto-refresh sessions every 10 seconds
+  // Auto-refresh sessions. Poll FAST (6s) while anything is still processing so a
+  // completion — and its artifact links/counts — surface within seconds, not up to
+  // 30s; settle back to 30s once every session is terminal. Pairs with the artifact
+  // fetch re-running on each session update.
+  const _anyProcessing = (rawOrchSessions || []).some((s: any) =>
+    !['completed', 'failed', 'needs_review', 'degraded'].includes(s.status || s.pipeline_stage || ''));
   useEffect(() => {
-    const interval = setInterval(refetchSessions, 30_000);
+    const interval = setInterval(refetchSessions, _anyProcessing ? 6_000 : 30_000);
     return () => clearInterval(interval);
-  }, [refetchSessions]);
+  }, [refetchSessions, _anyProcessing]);
 
   // Map Platform API SessionRow → UI KTSession shape
   const sessions: KTSession[] = (rawOrchSessions || []).map((s: any) => {
@@ -621,8 +626,16 @@ export default function SessionCommandPage() {
       if (!cancelled) setSessionArtifacts(prev => ({ ...prev, ...batch }));
     })();
     return () => { cancelled = true; };
+  // Re-run whenever the POLLED session data updates — not just when the COUNT
+  // changes. A video flipping processing -> completed keeps the count the same,
+  // so depending on `sessions.length` never fired and the just-completed session's
+  // artifact was never fetched: its Generate-tests / View-Asset links and counts
+  // stayed hidden until a manual refresh remounted the page. Depending on
+  // `rawOrchSessions` (the raw poll result) re-runs this on every refresh; the
+  // `toFetch` guard (unfetched completed only) keeps it a no-op once all are loaded,
+  // and also retries a completed session whose artifact wasn't persisted yet.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessions.length]);
+  }, [rawOrchSessions]);
 
   // ── Stall detection ─────────────────────────────────────
   const stageEnteredAt = useRef(Date.now());
