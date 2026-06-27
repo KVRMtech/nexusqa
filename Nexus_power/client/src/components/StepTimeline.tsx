@@ -37,6 +37,7 @@ export interface TimelineStep {
   video_url?: string;
   baseline_screenshot: string;
   expected: string;
+  diagnosis?: any;   // Sentinel auto-diagnosis (cause + Triage source/route + opt-in Context)
 }
 
 export interface TimelineScenario {
@@ -88,6 +89,63 @@ function asScenario(sc: TimelineScenario, st: TimelineStep): Scenario {
     is_flaky: false,
     flake_rate_pct: 0,
   };
+}
+
+// Sentinel — the always-on auto-diagnosis card. Renders with NO click: the run timeline
+// already carries the grounded diagnosis (deterministic cause + Triage source/route, and
+// the opt-in Context cross-field explanation). It never claims a fix is applied.
+const _SRC_STYLE: Record<string, { bg: string; fg: string; icon: string }> = {
+  product:     { bg: 'rgba(239,68,68,0.14)',  fg: '#b91c1c', icon: '🐞' },
+  script:      { bg: 'rgba(245,158,11,0.16)', fg: '#b45309', icon: '🧪' },
+  environment: { bg: 'rgba(56,189,248,0.16)', fg: '#0369a1', icon: '🌐' },
+  unknown:     { bg: 'rgba(100,116,139,0.14)', fg: '#475569', icon: '❓' },
+};
+
+function AutoDiagnosis({ dx }: { dx: any }) {
+  if (!dx) return null;
+  const tri = dx.triage || {};
+  const src = _SRC_STYLE[tri.source || 'unknown'] || _SRC_STYLE.unknown;
+  const sem = dx.semantic;
+  const prov = (sem && sem.provenance) || dx.provenance || {};
+  const headline = dx.headline || dx.cause_label || 'Diagnosis';
+  const evidence: string[] = (sem ? [] : (dx.evidence || [])).slice(0, 3);
+  return (
+    <div className="mb-2 rounded-lg border p-2" style={{ borderColor: '#c7d2fe', background: 'rgba(238,242,255,0.6)' }}>
+      <div className="flex items-center gap-1.5 flex-wrap mb-1">
+        <span className="text-[10px] font-black text-indigo-900">🤖 Auto-diagnosis</span>
+        {tri.source && <span className="rounded px-1.5 py-0.5 text-[9px] font-black uppercase" style={{ background: src.bg, color: src.fg }}>{src.icon} {tri.source_label || tri.source}</span>}
+        {tri.route && <span className="rounded px-1.5 py-0.5 text-[9px] font-bold uppercase" style={{ background: 'rgba(15,37,64,0.08)', color: '#0a2540' }}>{tri.route_label || tri.route}</span>}
+        {typeof dx.confidence === 'number' && <span className="text-[9px] font-semibold text-slate-400">{Math.round((dx.confidence || 0) * 100)}%</span>}
+      </div>
+      <p className="text-[11px] text-slate-800 leading-snug">{headline}</p>
+      {sem && sem.is_cross_field_inconsistency && (
+        <div className="mt-1.5 rounded-md border border-indigo-100 bg-white/70 px-2 py-1.5">
+          <p className="text-[10px] text-slate-800 leading-snug">{prov.claim || sem.human_explanation}</p>
+          {(sem.suggested_value || sem.alternative_upstream_fix) && (
+            <p className="text-[10px] text-emerald-700 font-semibold mt-1">
+              Suggested: {sem.suggested_value
+                ? `use the live option '${sem.suggested_value}'`
+                : sem.alternative_upstream_fix}
+            </p>
+          )}
+          <p className="text-[8.5px] text-slate-400 mt-1">
+            {prov.confirmed_against_live ? '✓ confirmed against the live options' : 'inference'} · I did not change your data
+          </p>
+        </div>
+      )}
+      {evidence.length > 0 && (
+        <ul className="list-disc pl-4 mt-1 space-y-0.5">
+          {evidence.map((e, i) => <li key={i} className="text-[9.5px] text-slate-600 leading-snug">{e}</li>)}
+        </ul>
+      )}
+      {dx.recommended_action && !sem && (
+        <p className="text-[9.5px] text-slate-500 mt-1"><span className="font-bold">Next:</span> {dx.recommended_action}</p>
+      )}
+      <p className="text-[8px] text-slate-400 mt-1 italic">
+        Auto-run · {prov.grounding === 'deterministic' ? 'deterministic ($0)' : 'grounded inference'} · the oracle still decides green
+      </p>
+    </div>
+  );
 }
 
 export default function StepTimeline({ scenarios, artifactId, baseUrl }: { scenarios: TimelineScenario[]; artifactId: string; baseUrl?: string }) {
@@ -171,6 +229,7 @@ function StepRow({ st, sc, artifactId, baseUrl }: { st: TimelineStep; sc: Timeli
       </button>
       {isFail && open && (
         <div className="ml-1 mb-2 mt-1 rounded-lg border border-rose-200 bg-rose-50/50 p-2">
+          {st.diagnosis && <AutoDiagnosis dx={st.diagnosis} />}
           {st.error_message && (
             <p className="text-[10px] font-mono text-rose-700 break-words mb-2" style={{ maxHeight: '6em', overflow: 'auto' }}>{st.error_message}</p>
           )}
