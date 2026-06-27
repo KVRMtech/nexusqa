@@ -940,7 +940,7 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
       const one = tids.length === 1 ? tids[0] : '';
       const body: any = { base_url: baseUrl.trim(), data: buildData() };
       if (one && agenticByTest[one]) body.enable_agentic_heal = true;   // per-script 🤖 Agentic
-      if (one && recordVideoByTest[one]) body.enable_video = true;       // per-script 🎥 video
+      if (tids.some((id) => !!recordVideoByTest[id])) body.enable_video = true;   // 🎥 records on single OR multi runs when any script is toggled
       if (tids.length) body.test_ids = tids;
       else body.categories = Array.from(selectedCats);
       const r = await api.autoHealRun(artifactId, body);
@@ -1082,7 +1082,12 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
         base_url: baseUrl.trim(), data: buildData(),
         data_by_test: buildDataByTest(),
         browsers: Array.from(browsers), headed, workers, retries,
-        enable_video: single ? !!recordVideoByTest[single] : false,   // per-script 🎥 video
+        // 🎥 records on a SINGLE or MULTI-script run: enabled whenever any script
+        // in the run scope has its 🎥 toggle ticked (each test's video is uploaded
+        // and attached to that test's own last step). Run-all path: any toggled.
+        enable_video: (scope?.test_ids?.length
+          ? scope.test_ids.some((id) => !!recordVideoByTest[id])
+          : Object.values(recordVideoByTest).some(Boolean)),
       };
       if (scope?.test_ids) body.test_ids = scope.test_ids;
       else body.categories = Array.from(selectedCats);
