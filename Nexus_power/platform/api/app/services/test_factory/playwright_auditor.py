@@ -48,6 +48,11 @@ V_UNGROUNDED = "ungrounded_assertion"
 V_MISSING_PREREQ = "missing_prerequisite"
 V_DEAD = "dead_or_unused"
 V_DATA = "data_not_replayed"
+V_AMBIGUOUS = "ambiguous_locator"
+
+# Interactive verbs whose step compiles to a name-based locator (so a repeated
+# accessible name on the same page makes the locator ambiguous).
+_LOCATOR_VERBS = {"click", "press", "tap", "select", "check", "choose", "toggle"}
 
 DECISION_CERTIFIED = "certified"
 DECISION_REPAIR = "repair"
@@ -89,7 +94,35 @@ def _sv(step: Any) -> dict:
         "navigation_grounded": bool(obs.get("navigation_grounded")),
         "after": obs.get("after") or "",
         "kind": obs.get("kind") or "",
+        "anchor": (obs.get("anchor") or "").strip(),
+        "ambiguous_unresolved": bool(obs.get("ambiguous_unresolved")),
     }
+
+
+def _ambiguous_labels(evidence: Any) -> set:
+    """Normalized accessible names the recording shows on 2+ interactive controls of
+    the SAME page — the visible name alone can't uniquely locate them (the N-identical-
+    controls case, e.g. six 'Add to cart' buttons). Mirrors
+    confidence.compute_ambiguous_labels; grounded purely in the recording's actions.
+    Groups by page_visit_id when present, else treats all evidence as one page."""
+    per_page: dict = {}
+    for a in (evidence or []):
+        verb = (a.get("verb") if isinstance(a, dict) else getattr(a, "verb", "")) or ""
+        if verb.strip().lower() not in _LOCATOR_VERBS:
+            continue
+        label = (a.get("target_label") if isinstance(a, dict) else getattr(a, "target_label", "")) or ""
+        key = _norm(label)
+        if not key:
+            continue
+        page = (a.get("page_visit_id") if isinstance(a, dict) else getattr(a, "page_visit_id", "")) or "_"
+        bucket = per_page.setdefault(page, {})
+        bucket[key] = bucket.get(key, 0) + 1
+    out: set = set()
+    for bucket in per_page.values():
+        for key, count in bucket.items():
+            if count > 1:
+                out.add(key)
+    return out
 
 
 def _evidence_typed_values(evidence: Any) -> list[tuple[str, str]]:
@@ -165,6 +198,26 @@ def score_spec(spec_text: str, steps: list, evidence: Any = None) -> dict:
         if any(val and val in seg for val in fill_values):
             d2 -= 3
             findings.append("A field value is asserted via getByText — use toHaveValue on the field.")
+    # Locator UNIQUENESS (the saucedemo blind spot): a control whose accessible name is
+    # REPEATED on its page, emitted with NO disambiguating anchor, compiles to a strict-
+    # mode-ambiguous locator — it matches N elements (RED), or worse silently binds the
+    # wrong one. Evidence-grounded + conservative: fires only when the RECORDING itself
+    # shows the same name on 2+ controls of one page, and the step has no anchor scope.
+    # WARNING-ONLY (per the warning-first refinement): it surfaces a finding + per-step
+    # verdict + the gate's ambiguous_locators count, but does NOT deduct from the score,
+    # so a benign false positive can't demote a good script until this new check's
+    # false-positive rate is measured. Flip to a deduction once proven.
+    ambiguous = _ambiguous_labels(evidence) if evidence is not None else set()
+    for v in views:
+        if (v["verb"] in _LOCATOR_VERBS and not v["anchor"]
+                and (v["ambiguous_unresolved"] or _norm(v["label"]) in ambiguous)):
+            findings.append(
+                f"Ambiguous locator (warning): '{v['label']}' matches multiple controls on the page "
+                "and has no disambiguating anchor — scope it to its row/card/section or it binds the "
+                "wrong one.")
+            per_step.append({"step_number": v["step_number"], "verdict": V_AMBIGUOUS,
+                             "detail": f"'{v['label']}' is repeated on the page with no anchor — "
+                                       "which control is targeted is unresolved."})
     d2 = _clamp(d2)
 
     # ── D4 — Navigation correctness (the causality axis) ─────────────────────
@@ -251,6 +304,47 @@ def score_spec(spec_text: str, steps: list, evidence: Any = None) -> dict:
         "findings": findings,
         "gaps": gaps,  # honest UNPROVEN transitions (uncaptured recording, not a defect)
         "source": "deterministic",
+    }
+
+
+def gate(report: dict, *, blocking: bool = False) -> dict:
+    """Turn an audit report into a GATE verdict for the generate/compile path.
+
+    ``passed`` ALWAYS tells the truth: it is ``not would_block`` regardless of mode, so
+    an impossible-transition spec reports ``passed=False`` even in warning-only mode (no
+    misleading green). ``enforced`` says whether this gate actually BLOCKS shipping:
+    with ``enforced=False`` (the default, WARNING-ONLY) the caller surfaces the warnings
+    but ships anyway and measures how often a blocking gate WOULD fire; with
+    ``enforced=True`` the caller must refuse a script whose ``passed`` is False.
+
+    The hard never-green-wash block conditions are an impossible navigation assertion or
+    navigation axis = 0. The locator-uniqueness finding is surfaced (``ambiguous_locators``
+    + warnings) but is NOT a block reason yet (new check, warning-first).
+
+    Pure + deterministic; never green-wash — it can only warn or block, never certify a
+    bad script green."""
+    findings = list(report.get("findings", []) or [])
+    per_step = report.get("per_step", []) or []
+    dims = report.get("dimension_scores", {}) or {}
+    overall = report.get("overall_score", report.get("overall", 10))
+
+    impossible = [p for p in per_step if p.get("verdict") == V_IMPOSSIBLE]
+    ambiguous = [p for p in per_step if p.get("verdict") == V_AMBIGUOUS]
+    block_reasons: list = []
+    if impossible:
+        block_reasons.append(f"{len(impossible)} impossible navigation assertion(s)")
+    if dims.get("navigation_correctness", 10) == 0:
+        block_reasons.append("navigation axis = 0 (impossible transition)")
+    would_block = bool(block_reasons)
+    return {
+        "passed": not would_block,        # honest verdict, independent of enforcement
+        "enforced": blocking,             # whether this gate actually blocks shipping
+        "would_block": would_block,
+        "block_reasons": block_reasons,
+        "warnings": findings,
+        "overall_score": overall,
+        "ambiguous_locators": len(ambiguous),
+        "decision": report.get("decision"),
     }
 
 

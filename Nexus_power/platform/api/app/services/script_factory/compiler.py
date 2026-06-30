@@ -785,7 +785,18 @@ def compile_case(tc, field_meta: dict | None = None, *, parametrize: bool = Fals
         # false-reds. (Never a fake green, never a silent jump.)
         if _provenance(step) == "inferred" or _confidence(step) == "review":
             out.append(f"  // step {n} — {action}")
-            reason = f"UNPROVEN: step {n} not directly observed — {action}"
+            # An ambiguous control (a repeated visible name with no disambiguating
+            # anchor) is skipped with a PRECISE reason — we refuse to guess which of
+            # the N identical controls to bind (never silently bind the wrong one).
+            # The autonomous resolver reads the same observed['ambiguous_unresolved']
+            # flag and likewise refuses (rather than .first()-ing a guess).
+            if observed.get("ambiguous_unresolved"):
+                _amb_label = observed.get("label", "") or "this control"
+                reason = (f"UNPROVEN/AMBIGUOUS: step {n} targets '{_amb_label}', which appears "
+                          f"multiple times on the page with no disambiguating anchor — refusing "
+                          f"to guess which one. {action}")
+            else:
+                reason = f"UNPROVEN: step {n} not directly observed — {action}"
             out.append(f"  test.skip(true, {json.dumps(reason)});")
             continue
 

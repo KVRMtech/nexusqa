@@ -2159,6 +2159,45 @@ async def _run_auto_heal(run_id: str, ctx: dict) -> None:
                 _net = None
             _is_real_bug = (diag.get("cause") == "REAL_REGRESSION") or (
                 _netq is not None and _netq.is_real_bug_signal(_net))
+            # ── ENVIRONMENT-OUTAGE guard (never blame the app for an env failure) ──
+            # A connection/DNS failure to the BASE host means the app was unreachable
+            # — an ENVIRONMENT OUTAGE / precondition, NOT an application defect. Filing
+            # a defect here would wrongly blame the customer's app for the test
+            # environment being down. Reclassify to an honest env-precondition
+            # escalation. Never green-wash: the step still fails and still escalates;
+            # we only correct the FAILURE CHANNEL (env vs app).
+            try:
+                _first_step = int(str(step).strip().split(".")[0]) <= 1
+            except (TypeError, ValueError):
+                _first_step = False
+            _env_outage = bool(
+                _netq is not None and _net is not None
+                and _netq.is_base_host_connection_failure(
+                    _net, base_url=base_url, is_first_step=_first_step))
+            if _env_outage:
+                try:
+                    async with tenant_scoped_session(tenant_id) as _s:
+                        await heal_evidence.record_heal_event(
+                            _s, tenant_id=tenant_id, artifact_id=artifact_id,
+                            event_type="env_precondition_outage", actor="nexus-autoheal",
+                            scenario_id=sid, fix_kind="none", verified_green=False,
+                            version_no=0, run_id=run_id,
+                            reason_for_change=("Base host unreachable — ENVIRONMENT OUTAGE, refused to "
+                                               "file an app defect: " + ((_net or {}).get("detail") or ""))[:480])
+                        await _s.commit()
+                except Exception:
+                    pass
+                _env_headline = (_net or {}).get("detail") or "the application host was unreachable"
+                job.update(status="failed", terminal_state="needs_human",
+                           stop_reason=(f"step {step}: ENVIRONMENT OUTAGE — {_env_headline}. The app host "
+                                        "could not be reached (connection/DNS) — this is an environment "
+                                        "precondition, not an application defect. Verify the target URL / "
+                                        "network reachability, then re-run."),
+                           stop_diag={**diag, "network": _net, "env_outage": True})
+                trace(event="stop_env_outage", scenario_id=sid, step=step,
+                      base_url=base_url, detail=(_net or {}).get("detail"))
+                await _persist_job(run_id)
+                return
             if _is_real_bug and _defq is not None:
                 _defect = _defq.build_defect(
                     tc=tc, failing_step_number=step, diag=diag, network=_net,

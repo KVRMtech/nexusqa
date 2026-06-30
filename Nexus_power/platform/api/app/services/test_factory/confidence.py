@@ -66,6 +66,18 @@ def score_step(step, ambiguous: set[str]) -> tuple[str, str]:
     url = (obs.get("url") or "").strip()
     nlabel = _norm(label)
 
+    # Structural ambiguity flag (read by the COMPILER's autonomous path): a control
+    # whose visible name is repeated on the page and has NO disambiguating anchor
+    # cannot be pinpointed. Persist it on observed so the autonomous resolver REFUSES
+    # to guess which of the N identical controls to act on (never-green-wash) rather
+    # than silently binding the wrong one. Computed BEFORE the early returns so it is
+    # set even on an inferred+ambiguous step (which the autonomous path would execute).
+    has_anchor = bool((obs.get("anchor") or "").strip())
+    if nlabel and nlabel in ambiguous and not has_anchor:
+        obs["ambiguous_unresolved"] = True
+    elif "ambiguous_unresolved" in obs:
+        obs.pop("ambiguous_unresolved", None)
+
     if prov == "inferred":
         return REVIEW, (
             "Derived step — not directly observed in the recording. "
@@ -83,7 +95,6 @@ def score_step(step, ambiguous: set[str]) -> tuple[str, str]:
             "This step asserts a page navigation the recording does not show this "
             "action caused — re-point to the real submit/next control, or confirm."
         )
-    has_anchor = bool((obs.get("anchor") or "").strip())
     if nlabel and nlabel in ambiguous and not has_anchor:
         return REVIEW, (
             f"'{label}' appears multiple times on the page — the exact element "
