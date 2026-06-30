@@ -181,7 +181,16 @@ def _print(title: str, sc: dict):
         print(f"      dropped values: {vs['dropped']}")
 
 
+def _one_line(sc: dict) -> str:
+    return (f"fab={sc['faithfulness']['rate']:.2f} F1={sc['completeness']['actions']['f1']:.2f} "
+            f"ECE={sc['calibration']['ece']:.2f} node_F1={sc['page_graph']['node']['f1']:.2f} "
+            f"GED={sc['page_graph']['graph_edit_distance']} "
+            f"val_recall={sc['value_survival']['value_recall']:.2f}")
+
+
 if __name__ == "__main__":
+    from fixes import apply_all  # noqa: E402
+
     print("#" * 64)
     print("#  CANONICAL TRUST BASELINE — FIRST MEASURED RUN (real prod data)")
     print("#" * 64)
@@ -194,3 +203,18 @@ if __name__ == "__main__":
     _print("aegis insurance · EXTRACTION vs ground truth", sc3); cards.append(sc3)
     print("\n========== AGGREGATE (3 scorecards) ==========")
     print(json.dumps(aggregate(cards), indent=2))
+
+    # ── Phase 3: deterministic fixes — MEASURED before/after ──────────────────
+    print("\n" + "#" * 64)
+    print("#  PHASE 3 — DETERMINISTIC FIXES: measured before -> after")
+    print("#" * 64)
+    sf1 = score(apply_all(extraction_doc(SAUCE)), SAUCE_LABEL)
+    sf3 = score(apply_all(extraction_doc(AEGIS)), AEGIS_LABEL)
+    print(f"\nsaucedemo EXTRACTION  BEFORE : {_one_line(sc1)}")
+    print(f"saucedemo EXTRACTION  AFTER  : {_one_line(sf1)}")
+    print(f"\naegis     EXTRACTION  BEFORE : {_one_line(sc3)}")
+    print(f"aegis     EXTRACTION  AFTER  : {_one_line(sf3)}")
+    print("\n========== AGGREGATE AFTER FIXES (extraction) ==========")
+    print(json.dumps(aggregate([sf1, sf3]), indent=2))
+    print("\n(baseline extraction aggregate for comparison:)")
+    print(json.dumps(aggregate([sc1, sc3]), indent=2))
