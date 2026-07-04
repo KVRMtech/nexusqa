@@ -1,7 +1,7 @@
 """Per-step ACTUAL run screenshots — the 'This run' side of the baseline-vs-actual
 two-up, and the input the drift / visual-change verdicts need.
 
-The bundled nexus-reporter (running in the runner or in CI) uploads the
+The bundled vkpower-reporter (running in the runner or in CI) uploads the
 failure-state PNG; we store the bytes in Postgres (BYTEA), RLS-scoped per tenant,
 and serve them back through a tokened URL the browser's <img> can load.
 Self-contained — no object store — which fits the on-prem single-VM posture.
@@ -148,56 +148,6 @@ async def fetch_latest_screenshot(
     return bytes(row.image) if row is not None else None
 
 
-# ─── Video evidence (opt-in) ───────────────────────────────────────────────
-# A run VIDEO is just a larger blob with a video/* content_type, so it reuses the
-# SAME tenant-scoped table and the SAME GET serve endpoint (content_type drives the
-# MIME) — NO new table, NO migration. Recorded only when NEXUS_RECORD_VIDEO=1.
-MAX_VIDEO_BYTES = 30 * 1024 * 1024  # 30 MiB — a short proving/clean-run clip
-_ALLOWED_VIDEO_TYPES = frozenset({"video/webm", "video/mp4"})
-
-
-def normalize_video_content_type(ct: str | None) -> str:
-    ct = (ct or "").split(";")[0].strip().lower()
-    return ct if ct in _ALLOWED_VIDEO_TYPES else "video/webm"
-
-
-async def store_video(
-    session: AsyncSession,
-    *,
-    tenant_id: str,
-    artifact_id: str,
-    run_id: str,
-    scenario_id: str,
-    step_number: int,
-    content_type: str,
-    video: bytes,
-) -> str:
-    """Persist one run VIDEO in the shared blob table; returns its id. Raises
-    ValueError on empty/oversize. Served by the same GET endpoint as screenshots
-    (the stored content_type sets the MIME). Caller commits."""
-    if not video:
-        raise ValueError("empty video")
-    if len(video) > MAX_VIDEO_BYTES:
-        raise ValueError(f"video too large ({len(video)} bytes > {MAX_VIDEO_BYTES})")
-    vid = _new_id()
-    session.add(
-        E2ERunScreenshotRow(
-            screenshot_id=vid,
-            run_id=(run_id or "")[:64],
-            artifact_id=(artifact_id or "")[:64],
-            tenant_id=tenant_id,
-            scenario_id=(scenario_id or "")[:64],
-            step_number=int(step_number or 0),
-            content_type=normalize_video_content_type(content_type),
-            byte_size=len(video),
-            image=video,
-            created_at=_utc_now(),
-        )
-    )
-    await session.flush()
-    return vid
-
-
 __all__ = [
     "E2ERunScreenshotRow",
     "store_screenshot",
@@ -205,7 +155,4 @@ __all__ = [
     "fetch_latest_screenshot",
     "normalize_content_type",
     "MAX_SCREENSHOT_BYTES",
-    "store_video",
-    "normalize_video_content_type",
-    "MAX_VIDEO_BYTES",
 ]

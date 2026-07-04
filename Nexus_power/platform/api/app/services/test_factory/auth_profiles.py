@@ -6,7 +6,7 @@ The session JSON contains auth cookies / tokens, so it is SENSITIVE. It is:
     qTest/TestRail push uses) — stored as ``EnvelopeBlob.to_bytes()`` in a BYTEA
     column, bound to the artifact via AAD so a blob can't be replayed elsewhere;
   * NEVER stored in plaintext, NEVER written into a test, NEVER returned to the
-    client (only injected server-side into a run bundle as ``nexus.auth.json``);
+    client (only injected server-side into a run bundle as ``vkpower.auth.json``);
   * REFUSED (not silently dropped to plaintext) if encryption is unavailable.
 
 The ORM model is defined here in app code (binds the SDK ``Base``); the table is

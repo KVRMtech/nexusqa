@@ -17,6 +17,7 @@ deliberately matching server-error WORDS, never bare digits ("500ms timeout" mus
 from __future__ import annotations
 
 import re
+from urllib.parse import urlparse
 
 # Explicit, unambiguous server/gateway failure phrasing (not bare digits).
 _SERVER_ERR_RE = re.compile(
@@ -102,3 +103,66 @@ def is_real_bug_signal(sig: dict | None) -> bool:
     """server_error / network_error => strong REAL-bug signal. client_error => advisory only
     (4xx may be intended validation) — NOT auto-classified as a bug."""
     return bool(sig and sig.get("kind") in ("server_error", "network_error"))
+
+
+# Connection / DNS-class phrasing that means the HOST itself was unreachable
+# (the app never answered), as opposed to a mid-flow request failing. These map
+# to an ENVIRONMENT OUTAGE / precondition, not an application defect.
+_CONN_DNS_RE = re.compile(
+    r"ERR_NAME_NOT_RESOLVED|ERR_CONNECTION_REFUSED|ERR_CONNECTION_TIMED_OUT|"
+    r"ERR_CONNECTION_RESET|ERR_CONNECTION_CLOSED|ERR_ADDRESS_UNREACHABLE|"
+    r"ERR_INTERNET_DISCONNECTED|ENOTFOUND|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|"
+    r"EHOSTUNREACH|ENETUNREACH|\bdns\b|getaddrinfo|name (?:or service )?not known",
+    re.I,
+)
+
+
+def _host_of(url: str) -> str:
+    try:
+        parsed = urlparse(url if "://" in (url or "") else f"http://{url}")
+        return (parsed.netloc or "").split("@")[-1].split(":")[0].lower().lstrip(".")
+    except Exception:
+        return ""
+
+
+def is_base_host_connection_failure(
+    sig: dict | None,
+    *,
+    base_url: str = "",
+    is_first_step: bool = False,
+) -> bool:
+    """Distinguish a *base-host* connection/DNS failure (the app is unreachable —
+    an ENVIRONMENT OUTAGE / precondition) from a mid-flow request failure.
+
+    The caller (the auto-heal loop) treats ``network_error`` as a REAL_REGRESSION
+    'Product Bug' via :func:`is_real_bug_signal`. That is wrong when the very
+    first navigation to ``base_url`` can't connect or resolve DNS — nothing about
+    the *product* failed; the target host was down/unreachable. This helper lets
+    the caller route that case to a PRECONDITION escalation instead of filing an
+    app defect. It NEVER green-washes: it only reclassifies the FAILURE channel
+    (env vs app); the step still fails and still escalates to a human.
+
+    Fires only for ``network_error`` (never ``server_error`` — a 5xx is a real
+    app bug even on the base host) and only when the evidence points at the base
+    host: either the signal's own ``url`` resolves to the same host as
+    ``base_url``, or — when no per-request URL is available (text-fallback path)
+    — the failure is connection/DNS-class AND this is the first step (so the only
+    thing attempted was the base navigation).
+    """
+    if not sig or sig.get("kind") != "network_error":
+        return False
+
+    sig_url = str(sig.get("url") or "")
+    base_host = _host_of(base_url)
+
+    if sig_url:
+        # Structured path: we know exactly which request failed.
+        sig_host = _host_of(sig_url)
+        return bool(base_host) and sig_host == base_host
+
+    # Text-fallback path: no per-request URL. Treat a connection/DNS-class
+    # failure on the FIRST step (where the only navigation is to base_url) as a
+    # base-host outage. Conservative: a mid-flow network_error (is_first_step
+    # False) stays an app-origin signal for the caller to adjudicate.
+    detail = str(sig.get("detail") or "")
+    return bool(is_first_step and _CONN_DNS_RE.search(detail))

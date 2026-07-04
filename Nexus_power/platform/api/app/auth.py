@@ -33,8 +33,14 @@ async def get_current_user(
     """
     if credentials is not None:
         token = credentials.credentials
-    else:
+    elif request.method == "GET":
+        # Query-param fallback is for browser-loaded resources (<img>/<video>
+        # src) that cannot send an Authorization header — those are GETs only.
+        # Reject ?token= on state-changing methods so a token leaked in a URL
+        # (logs, referrer) cannot be replayed to mutate data.
         token = request.query_params.get("token", "") or ""
+    else:
+        token = ""
     if not token:
         raise HTTPException(status_code=401, detail="Authorization header required")
     try:
@@ -80,7 +86,11 @@ async def jwt_auth_middleware(request: Request, call_next):
     token = ""
     if auth_header.startswith("Bearer "):
         token = auth_header[7:]
-    else:
+    elif request.method == "GET":
+        # ?token= fallback is only for browser-loaded GET resources (<img>/
+        # <video> src). Reject query-param tokens on state-changing methods so
+        # a token leaked into a URL cannot be replayed to mutate data; header
+        # auth still works for those.
         token = request.query_params.get("token", "") or ""
 
     if token:

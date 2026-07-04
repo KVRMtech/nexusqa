@@ -70,7 +70,7 @@ upload a recording to unlock `CERTIFIED-EVIDENCED`.
 `GET /test-factory/{a}/playwright` is gated: `NEXUS_AUDITOR_GATE=block` +
 `NEXUS_AUDITOR_MIN_SCORE=9` — a sub-threshold suite returns **HTTP 409 with the
 findings** instead of a zip; every delivered zip contains
-`nexus-audit-report.json`, the POM (`pages/nexus-pages.ts`), synthetic data
+`vkpower-audit-report.json`, the POM (`pages/vkpower-pages.ts`), synthetic data
 candidates (approval-gated), the advisory a11y lane and the diagnostics schema.
 
 ## Operational notes

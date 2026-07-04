@@ -152,7 +152,7 @@ def score_spec(spec_text: str, steps: list, evidence: Any = None) -> dict:
     d1 -= 2 * sleeps
     if sleeps:
         findings.append(f"{sleeps} raw waitForTimeout() sleep(s) — use a condition-based wait.")
-    # dead data file: `require('...nexus.data.json')` loaded into D but never used.
+    # dead data file: `require('...vkpower.data.json')` loaded into D but never used.
     dead_data = False
     if "require(" in spec_text and re.search(r"\.data\.json", spec_text):
         body_uses = len(re.findall(r"\bD\s*\[", spec_text)) + len(re.findall(r"\bD\.", spec_text))

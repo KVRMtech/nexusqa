@@ -3,7 +3,7 @@
 Submits a configured Playwright bundle for server-side execution and awaits the
 result. Internal network only (no host exposure); auth via an optional shared
 secret. The run itself reports step results back to Nexus via the bundled
-nexus-reporter, so this client only needs the pass/fail summary.
+vkpower-reporter, so this client only needs the pass/fail summary.
 """
 
 from __future__ import annotations
@@ -20,6 +20,8 @@ async def run_suite(files: dict, env: dict, timeout_ms: int = 240000) -> dict:
     """POST the bundle to the runner and await the (long-running) result.
 
     Returns {status, exit_code, output}. Raises on transport/HTTP error."""
+    files = add_legacy_artifact_aliases(dict(files))
+
     headers = {"Content-Type": "application/json"}
     if _RUNNER_TOKEN:
         headers["X-Runner-Token"] = _RUNNER_TOKEN
@@ -100,3 +102,27 @@ async def health() -> dict:
         resp = await client.get(f"{_RUNNER_URL}/health")
         resp.raise_for_status()
         return resp.json()
+
+
+# ── Tier-2 back-compat: legacy artifact-name aliases ─────────────────────────
+_LEGACY_ALIASES = (
+    ("vkpower.data.json", "nexus.data.json"),
+    ("vkpower.auth.json", "nexus.auth.json"),
+    ("vkpower.auth.config.json", "nexus.auth.config.json"),
+)
+
+
+def add_legacy_artifact_aliases(files: dict) -> dict:
+    """Saved script VERSIONS may still reference the pre-rename artifact names
+    inside their stored source. Whenever the new-named artifact exists and any
+    project file still mentions the old name, ship the old-named twin too —
+    so versioned scripts keep running unmodified. The alias self-retires once
+    no source references the old name."""
+    try:
+        blob = "\n".join(v for v in files.values() if isinstance(v, str))
+        for new, old in _LEGACY_ALIASES:
+            if new in files and old not in files and old in blob:
+                files[old] = files[new]
+    except Exception:  # pragma: no cover — aliasing must never break a run
+        pass
+    return files

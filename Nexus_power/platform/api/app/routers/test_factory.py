@@ -633,7 +633,7 @@ async def generate_playwright(
     except ValueError:
         _gate_min = 9
     if _audit_by_test:
-        files["nexus-audit-report.json"] = json.dumps({
+        files["vkpower-audit-report.json"] = json.dumps({
             "rubric": "HONEST-10 deterministic (playwright_auditor.score_spec) + API-policy lint",
             "gate_mode": _gate_mode,
             "min_score_threshold": _gate_min,
@@ -679,6 +679,8 @@ async def generate_playwright(
                          "NEXUS_AUDITOR_GATE=annotate to inspect the full "
                          "report inside the zip"),
             })
+    from ..services.script_factory.runner_client import add_legacy_artifact_aliases
+    files = add_legacy_artifact_aliases(files)
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
         for path, content in sorted(files.items()):
@@ -689,7 +691,7 @@ async def generate_playwright(
             zf.writestr(info, content)
 
     suffix = f"-{tcid[:8]}" if tcid else (f"-{cat}" if cat else "")
-    filename = f"nexus-playwright-{artifact_id[:8]}{suffix}.zip"
+    filename = f"vkpower-playwright-{artifact_id[:8]}{suffix}.zip"
     return StreamingResponse(
         io.BytesIO(buf.getvalue()),
         media_type="application/zip",
@@ -780,7 +782,7 @@ def _run_config_readme(case_count: int, nexus_config_json: str, has_data: bool) 
         "Pre-configured to run the selected scripts against your chosen environment "
         "and data — no code edits needed.\n\n"
         f"- Base URL: {base}  (nexus.config.json; override any time with NEXUS_BASE_URL)\n"
-        f"- Data overrides: {'nexus.data.json' if has_data else 'none — using the observed values'}\n"
+        f"- Data overrides: {'vkpower.data.json' if has_data else 'none — using the observed values'}\n"
         f"- Scripts: {case_count}\n\n"
         "## Run\n\n"
         "```bash\nnpm install\nnpx playwright install --with-deps\nnpx playwright test\n```\n\n"
@@ -808,10 +810,10 @@ def _configured_files(cases, field_meta, base_url: str, data: dict,
                       workers=None, retries=None,
                       edited: dict | None = None,
                       storage_state: str | None = None) -> dict:
-    """Parametrized bundle + nexus.config.json (chosen base URL) + nexus.data.json
+    """Parametrized bundle + nexus.config.json (chosen base URL) + vkpower.data.json
     + run README. Shared by the download and the server-side runner so both run
     exactly the same thing. Browser projects / headed / workers / retries are
-    baked into playwright.config.ts. nexus.data.json is two-tier:
+    baked into playwright.config.ts. vkpower.data.json is two-tier:
     {"_global": {...defaults}, "<test_id>": {...per-test overrides}} — defaults
     stay the OBSERVED values, so an empty data file runs identically.
 
@@ -843,15 +845,15 @@ def _configured_files(cases, field_meta, base_url: str, data: dict,
         if row:
             nexus_data[str(tid)] = row
     has_data = bool(nexus_data["_global"]) or len(nexus_data) > 1
-    files["nexus.data.json"] = json.dumps(nexus_data, indent=2, sort_keys=True) + "\n"
+    files["vkpower.data.json"] = json.dumps(nexus_data, indent=2, sort_keys=True) + "\n"
     files["README.md"] = _run_config_readme(
         len(cases), files.get("nexus.config.json", ""), has_data,
     )
     # Inject a captured authenticated session for SERVER runs ONLY (the caller
     # passes storage_state from the artifact's auth profile). The generated config
-    # self-detects nexus.auth.json; downloaded bundles never receive one.
+    # self-detects vkpower.auth.json; downloaded bundles never receive one.
     if storage_state and storage_state.strip():
-        files["nexus.auth.json"] = storage_state
+        files["vkpower.auth.json"] = storage_state
     return files
 
 
@@ -2701,7 +2703,7 @@ async def playwright_run_config(
 ):
     """Compile a CONFIGURED, env+data-driven Playwright bundle for a local run:
     the selected scripts (parametrized), nexus.config.json (chosen base URL),
-    nexus.data.json (data overrides — defaults stay the observed values), and a
+    vkpower.data.json (data overrides — defaults stay the observed values), and a
     one-command README. Read-only, ZERO LLM; same compiler as the plain zip.
     """
     tenant_id = user["tenant_id"]
@@ -2740,7 +2742,7 @@ async def playwright_run_config(
             info.compress_type = zipfile.ZIP_DEFLATED
             info.external_attr = 0o644 << 16
             zf.writestr(info, content)
-    filename = f"nexus-playwright-run-{artifact_id[:8]}.zip"
+    filename = f"vkpower-playwright-run-{artifact_id[:8]}.zip"
     return StreamingResponse(
         io.BytesIO(buf.getvalue()),
         media_type="application/zip",
@@ -2976,7 +2978,7 @@ async def runner_progress(body: _ProgressBody, user: dict = Depends(get_current_
 # Lets a generated test run from a COLD session: the operator logs in ONCE via an
 # interactive headed capture (MFA included), we save the Playwright storageState,
 # encrypt it at rest (EnvelopeService), and inject it into server runs as
-# nexus.auth.json. The session is NEVER returned to the client or stored plaintext.
+# vkpower.auth.json. The session is NEVER returned to the client or stored plaintext.
 
 
 class _AuthCaptureBody(BaseModel):
@@ -4411,13 +4413,13 @@ def _engine_extra_files(visits, actions, cases) -> dict:
 
     # ── P4: POM-lite from the video ──────────────────────────────────────
     lines = [
-        "// nexus-pages.ts — page objects SYNTHESIZED FROM THE RECORDING.",
+        "// vkpower-pages.ts — page objects SYNTHESIZED FROM THE RECORDING.",
         "// One entry per trusted-tier page visit; controls are the ones the user",
         "// actually touched, with accessibility-first locators. Import and use,",
         "// or treat as living documentation — the specs do not depend on it.",
         "import { Page } from '@playwright/test';",
         "",
-        "export const NexusPages = {",
+        "export const VKPowerPages = {",
     ]
     used_keys: set = set()
     for v in trusted:
@@ -4449,7 +4451,7 @@ def _engine_extra_files(visits, actions, cases) -> dict:
         lines.append("  },")
     lines.append("};")
     lines.append("")
-    out["pages/nexus-pages.ts"] = "\n".join(lines)
+    out["pages/vkpower-pages.ts"] = "\n".join(lines)
 
     # ── P7: T2 synthetic data tiers (UNPROVEN, approval-gated, NOT wired) ─
     fields: dict = {}
@@ -4476,7 +4478,7 @@ def _engine_extra_files(visits, actions, cases) -> dict:
             "requires_approval": True,
             "variants": variants,
         }
-    out["data/nexus.synthetic.json"] = _json.dumps({
+    out["data/vkpower.synthetic.json"] = _json.dumps({
         "note": ("Synthetic boundary/invalid candidates DERIVED from observed value "
                  "formats. UNPROVEN by definition — the recording never demonstrated "
                  "them. Governance: requires_approval=true; they are NOT wired into "
@@ -4507,7 +4509,7 @@ def _engine_extra_files(visits, actions, cases) -> dict:
     out["tests/a11y/advisory-a11y.spec.ts"] = "\n".join(a11y)
 
     # ── P8: diagnostics bundle schema v1 ─────────────────────────────────
-    out["nexus-diagnostics.schema.json"] = _json.dumps({
+    out["vkpower-diagnostics.schema.json"] = _json.dumps({
         "$schema": "http://json-schema.org/draft-07/schema#",
         "title": "Nexus run diagnostics bundle",
         "version": "v1",

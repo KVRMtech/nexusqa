@@ -1042,7 +1042,7 @@ def compile_case(tc, field_meta: dict | None = None, *, parametrize: bool = Fals
     """Compile one ProductionTestCase to a runnable Playwright .spec.ts (string).
 
     When `parametrize` is set, the spec reads optional env/data overrides
-    (use.baseURL + nexus.data.json) with the observed values as defaults — so it
+    (use.baseURL + vkpower.data.json) with the observed values as defaults — so it
     runs against any environment with any data, identically by default.
 
     `reanchors` (TrueFix selector re-anchor) is an optional
@@ -1111,7 +1111,7 @@ def compile_case(tc, field_meta: dict | None = None, *, parametrize: bool = Fals
         # Base URL comes from use.baseURL (playwright.config).
         tid_js = js_str(getattr(tc, "test_id", "") or "")
         out.append(
-            "  const D = (() => { try { const __a = require('../../nexus.data.json'); "
+            "  const D = (() => { try { const __a = require('../../vkpower.data.json'); "
             "return Object.assign({}, __a['_global'] || {}, __a['" + tid_js + "'] || {}); } "
             "catch { return {}; } })();"
         )
@@ -1254,8 +1254,8 @@ import { defineConfig, devices } from '@playwright/test';
 
 export default defineConfig({
   testDir: './tests',
-  // Config-driven login (DEFAULT OFF): no-op unless nexus.auth.config.json strategy is 'form'.
-  globalSetup: './nexus.auth.setup.ts',
+  // Config-driven login (DEFAULT OFF): no-op unless vkpower.auth.config.json strategy is 'form'.
+  globalSetup: './vkpower.auth.setup.ts',
   fullyParallel: true,
   forbidOnly: true,
   retries: Number(process.env.PLAYWRIGHT_RETRIES ?? (process.env.CI ? '1' : '0')),
@@ -1263,14 +1263,14 @@ export default defineConfig({
   // outer run timeout SIGKILL (and red-flag) the whole batch.
   timeout: 60_000,
   expect: { timeout: 15_000 },
-  reporter: [['list'], ['html', { open: 'never' }], ['junit', { outputFile: 'results/junit.xml' }], ['./nexus-reporter.ts']],
+  reporter: [['list'], ['html', { open: 'never' }], ['junit', { outputFile: 'results/junit.xml' }], ['./vkpower-reporter.ts']],
   use: {
     trace: 'on-first-retry',
     screenshot: 'only-on-failure',
     // Reuse a captured authenticated session when VKPower injects one (auth profile
-    // → nexus.auth.json in the run dir). Self-detecting, so a downloaded bundle
+    // → vkpower.auth.json in the run dir). Self-detecting, so a downloaded bundle
     // (no auth file) is unaffected; a normal unauthenticated run is unchanged.
-    ...((() => { try { return require('fs').existsSync('./nexus.auth.json') ? { storageState: './nexus.auth.json' } : {}; } catch { return {}; } })()),
+    ...((() => { try { return require('fs').existsSync('./vkpower.auth.json') ? { storageState: './vkpower.auth.json' } : {}; } catch { return {}; } })()),
   },
   projects: [
     { name: 'chromium', use: { ...devices['Desktop Chrome'] } },
@@ -1303,9 +1303,9 @@ function nexusBaseURL(): string | undefined {
 
 export default defineConfig({
   testDir: './tests',
-  // Config-driven login (DEFAULT OFF): nexus.auth.setup.ts is a no-op unless
-  // nexus.auth.config.json sets strategy 'form' + credentials are in env.
-  globalSetup: './nexus.auth.setup.ts',
+  // Config-driven login (DEFAULT OFF): vkpower.auth.setup.ts is a no-op unless
+  // vkpower.auth.config.json sets strategy 'form' + credentials are in env.
+  globalSetup: './vkpower.auth.setup.ts',
   fullyParallel: true,
   forbidOnly: true,
   retries: __RETRIES__,
@@ -1313,16 +1313,16 @@ export default defineConfig({
   // outer run timeout SIGKILL (and red-flag) the whole batch.
   timeout: 60_000,
   expect: { timeout: 15_000 },
-__WORKERS__  reporter: [['list'], ['html', { open: 'never' }], ['junit', { outputFile: 'results/junit.xml' }], ['./nexus-reporter.ts']],
+__WORKERS__  reporter: [['list'], ['html', { open: 'never' }], ['junit', { outputFile: 'results/junit.xml' }], ['./vkpower-reporter.ts']],
   use: {
     baseURL: nexusBaseURL(),
     headless: __HEADLESS__,
     trace: 'on-first-retry',
     screenshot: 'only-on-failure',
     // Reuse a captured authenticated session when VKPower injects one (auth profile
-    // → nexus.auth.json in the run dir). Self-detecting, so a downloaded bundle
+    // → vkpower.auth.json in the run dir). Self-detecting, so a downloaded bundle
     // (no auth file) is unaffected; a normal unauthenticated run is unchanged.
-    ...(fs.existsSync('./nexus.auth.json') ? { storageState: './nexus.auth.json' } : {}),
+    ...(fs.existsSync('./vkpower.auth.json') ? { storageState: './vkpower.auth.json' } : {}),
     // Container runners set NEXUS_LAUNCH_ARGS (e.g. --no-sandbox); empty locally.
     launchOptions: { args: (process.env.NEXUS_LAUNCH_ARGS || '').split(' ').filter(Boolean) },
   },
@@ -1406,7 +1406,7 @@ function mapRunStatus(s: string): string {
   return 'failed';
 }
 
-export default class NexusReporter implements Reporter {
+export default class VKPowerReporter implements Reporter {
   private steps: StepRecord[] = [];
   private pendingShots: PendingShot[] = [];
   private startedAt = new Date(0).toISOString();
@@ -1487,7 +1487,7 @@ export default class NexusReporter implements Reporter {
 
   async onEnd(result: FullResult): Promise<void> {
     if (!ENDPOINT || !TOKEN || !ARTIFACT_ID) {
-      console.warn('[nexus-reporter] NEXUS_ENDPOINT/TOKEN/ARTIFACT_ID not set — results not uploaded.');
+      console.warn('[vkpower-reporter] NEXUS_ENDPOINT/TOKEN/ARTIFACT_ID not set — results not uploaded.');
       return;
     }
     const base = ENDPOINT.replace(/\\/$/, '');
@@ -1536,9 +1536,9 @@ export default class NexusReporter implements Reporter {
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${TOKEN}` },
         body: JSON.stringify(body),
       });
-      console.log(`[nexus-reporter] uploaded ${this.steps.length} step result(s) -> HTTP ${resp.status}`);
+      console.log(`[vkpower-reporter] uploaded ${this.steps.length} step result(s) -> HTTP ${resp.status}`);
     } catch (e) {
-      console.warn('[nexus-reporter] upload failed:', (e as Error).message);
+      console.warn('[vkpower-reporter] upload failed:', (e as Error).message);
     }
   }
 }
@@ -1549,14 +1549,14 @@ import { chromium, FullConfig } from '@playwright/test';
 import * as fs from 'fs';
 
 // VKPower config-driven login -- DEFAULT OFF. Activates only when
-// nexus.auth.config.json sets "strategy":"form" AND credentials are in env
-// (never in the file). On success it writes ./nexus.auth.json (storageState),
+// vkpower.auth.config.json sets "strategy":"form" AND credentials are in env
+// (never in the file). On success it writes ./vkpower.auth.json (storageState),
 // which playwright.config auto-loads. Fully defensive: any missing config or
 // error is a silent no-op, so a non-auth run is completely unaffected.
 export default async function globalSetup(config: FullConfig) {
   try {
-    if (!fs.existsSync('./nexus.auth.config.json')) return;
-    const cfg = JSON.parse(fs.readFileSync('./nexus.auth.config.json', 'utf-8'));
+    if (!fs.existsSync('./vkpower.auth.config.json')) return;
+    const cfg = JSON.parse(fs.readFileSync('./vkpower.auth.config.json', 'utf-8'));
     if (!cfg || (cfg.strategy || 'none') !== 'form') return;
     const p0: any = (config.projects && config.projects[0]) || {};
     const baseURL = process.env.NEXUS_BASE_URL || cfg.baseURL || (p0.use && p0.use.baseURL) || '';
@@ -1572,9 +1572,9 @@ export default async function globalSetup(config: FullConfig) {
     }
     await page.getByRole('button', { name: new RegExp(cfg.submitLabel || 'sign in', 'i') }).first().click();
     await page.waitForLoadState('networkidle').catch(() => {});
-    await page.context().storageState({ path: './nexus.auth.json' });
+    await page.context().storageState({ path: './vkpower.auth.json' });
     await browser.close();
-    console.log('[nexus-auth] form login OK -- wrote ./nexus.auth.json');
+    console.log('[nexus-auth] form login OK -- wrote ./vkpower.auth.json');
   } catch (e) {
     console.warn('[nexus-auth] login skipped:', (e as Error).message);
   }
@@ -1604,7 +1604,7 @@ test-results/
 playwright-report/
 results/
 .env
-nexus.auth.json
+vkpower.auth.json
 *.auth.json
 nexus.secrets.json
 """
@@ -1617,7 +1617,7 @@ NEXUS_ENDPOINT=https://your-nexus-host
 NEXUS_TOKEN=your-api-jwt
 NEXUS_ARTIFACT_ID=your-artifact-id
 
-# Config-driven login (optional). Set nexus.auth.config.json strategy to "form",
+# Config-driven login (optional). Set vkpower.auth.config.json strategy to "form",
 # then provide credentials here (NEVER commit real secrets):
 NEXUS_LOGIN_USER=
 NEXUS_LOGIN_PASSWORD=
@@ -1665,7 +1665,7 @@ def compile_project(
     """Compile active cases into a runnable Playwright project (path -> content).
 
     parametrize=True emits an env/data-driven project: navigation resolves
-    against use.baseURL and data values read nexus.data.json (observed defaults).
+    against use.baseURL and data values read vkpower.data.json (observed defaults).
     A default nexus.config.json (baseURL = base_url_default or the recorded
     origin) is included so the parametrized bundle runs standalone."""
     cases = list(cases)
@@ -1694,10 +1694,10 @@ def compile_project(
         if parametrize else _PLAYWRIGHT_CONFIG
     )
     files["tsconfig.json"] = _TSCONFIG
-    files["nexus-reporter.ts"] = _NEXUS_REPORTER_TS
+    files["vkpower-reporter.ts"] = _NEXUS_REPORTER_TS
     files[".env.example"] = _ENV_EXAMPLE
-    files["nexus.auth.setup.ts"] = _AUTH_SETUP_TS
-    files["nexus.auth.config.json"] = _AUTH_CONFIG_JSON
+    files["vkpower.auth.setup.ts"] = _AUTH_SETUP_TS
+    files["vkpower.auth.config.json"] = _AUTH_CONFIG_JSON
     files[".gitignore"] = _GITIGNORE
     files["README.md"] = _readme(len(cases), high, review)
     if parametrize:
@@ -1957,7 +1957,7 @@ def compile_manifest(cases: Iterable, field_meta: dict | None = None) -> dict:
         {"path": "playwright.config.ts", "code": _PLAYWRIGHT_CONFIG},
         {"path": "package.json", "code": _PACKAGE_JSON},
         {"path": "tsconfig.json", "code": _TSCONFIG},
-        {"path": "nexus-reporter.ts", "code": _NEXUS_REPORTER_TS},
+        {"path": "vkpower-reporter.ts", "code": _NEXUS_REPORTER_TS},
         {"path": ".env.example", "code": _ENV_EXAMPLE},
         {"path": "README.md", "code": _readme(len(cases), high, review)},
     ]

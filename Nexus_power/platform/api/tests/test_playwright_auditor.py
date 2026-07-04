@@ -43,7 +43,7 @@ OLD_STEPS = [
      "provenance": "demonstrated", "observed": {"verb": "navigate", "url": "/checkout-step-one"}},
 ]
 OLD_SPEC = """import { test, expect } from '@playwright/test';
-const D = (() => { try { const __a = require('../../nexus.data.json'); return __a; } catch { return {}; } })();
+const D = (() => { try { const __a = require('../../vkpower.data.json'); return __a; } catch { return {}; } })();
 function __nxTok(v){ return /x/; }
 test('e2e', async ({ page }) => {
   await page.goto('/inventory');
@@ -66,7 +66,7 @@ NEW_STEPS = [
      "observed": {"verb": "type", "label": "Last Name", "value": "karnam"}},
 ]
 NEW_SPEC = """import { test, expect } from '@playwright/test';
-const D = (() => { try { const __a = require('../../nexus.data.json'); return __a; } catch { return {}; } })();
+const D = (() => { try { const __a = require('../../vkpower.data.json'); return __a; } catch { return {}; } })();
 function __nxTok(v){ const m=String(v).match(/[A-Za-z]{2,}/); return m?new RegExp(m[0],'i'):/\\S/; }
 test('e2e', async ({ page }) => {
   await page.goto('/inventory');

@@ -109,6 +109,19 @@ class IngestRequest(BaseModel):
 # ─── Helpers ───────────────────────────────────────────────────────────
 
 
+_WRITE_ROLES = frozenset({"admin", "manager"})
+
+
+def _require_write_role(user: dict) -> None:
+    """Gate evidence-mutating POSTs (screenshot / video / heal-capture) to
+    privileged roles. Reads stay open to any authenticated tenant member; only
+    writes that store uploaded blobs require admin|manager. Service tokens used
+    by CI carry role='admin' (see ``_make_service_token``) so the reporter
+    upload path is unaffected."""
+    if (user.get("role") or "viewer") not in _WRITE_ROLES:
+        raise HTTPException(403, "admin or manager role required")
+
+
 def _make_service_token(tenant_id: str) -> str:
     now = int(time.time())
     return pyjwt.encode(
@@ -210,6 +223,7 @@ async def upload_run_screenshot(
     reporter. Stores the bytes tenant-scoped and returns a serve URL to drop into
     the step's screenshot_url. Auth: standard JWT (the reporter sends NEXUS_TOKEN
     as Bearer). Degrades safely pre-migration (503 → reporter logs, skips)."""
+    _require_write_role(user)
     tenant_id = user["tenant_id"]
     data = await file.read(MAX_SCREENSHOT_BYTES + 1)
     if not data:
@@ -257,6 +271,7 @@ async def ingest_heal_capture(
     flattened node list is held transiently for the TrueFix re-anchor resolver.
     Auth: standard JWT (the fixture sends NEXUS_TOKEN as Bearer). Best-effort —
     stores nothing harmful and never blocks the heal flow."""
+    _require_write_role(user)
     tenant_id = user["tenant_id"]
     async with tenant_scoped_session(tenant_id) as session:
         await _verify_artifact_in_tenant(
@@ -318,6 +333,7 @@ async def upload_run_video(
     bundled reporter, typically the proving/clean-run clip. Stored tenant-scoped in the
     shared blob table; returns a serve URL to drop into the step's video_url. Degrades
     safely pre-migration (503 → reporter logs, skips)."""
+    _require_write_role(user)
     tenant_id = user["tenant_id"]
     data = await file.read(MAX_VIDEO_BYTES + 1)
     if not data:

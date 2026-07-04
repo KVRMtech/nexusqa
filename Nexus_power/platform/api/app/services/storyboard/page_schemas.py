@@ -77,7 +77,15 @@ class PageVisitSource(str, Enum):
       url_regex        — extracted via the regex sweep over
                          ``visual_frames.extracted_text``.  Highest
                          confidence path (~1.0); the URL was literally
-                         OCR'd off the address bar of a frame.
+                         OCR'd off the address bar of a frame — a FULL
+                         URL with a real scheme/host was read.
+      url_ocr_path_only — the OCR sweep matched only a bare ``/path``
+                         (no scheme/host).  The host is GUESSED from the
+                         artifact's dominant host (or absent), so this is
+                         NOT a fully proven URL read.  Sub-1.0 (~0.7) and
+                         deliberately a SEPARATE source from ``url_regex``
+                         so a guessed host is never green-washed onto the
+                         PROVEN/1.0 tier.
       url_scene        — copied from ``visual_scenes.detected_url``
                          when no frame OCR contained a URL.  The
                          canonical pipeline already attached a URL to
@@ -105,6 +113,7 @@ class PageVisitSource(str, Enum):
     """
 
     URL_REGEX = "url_regex"
+    URL_OCR_PATH_ONLY = "url_ocr_path_only"
     URL_SCENE = "url_scene"
     WINDOW_TITLE = "window_title"
     SCREEN_NAME_OCR = "screen_name_ocr"

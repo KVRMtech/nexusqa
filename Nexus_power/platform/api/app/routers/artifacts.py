@@ -1479,12 +1479,20 @@ async def _load_storyboard_overlay(
     # filter we return every version interleaved — e.g. v1 (11 rows) +
     # v2 (14 rows) = 25 rows with duplicate sequence_index values, which
     # the UI renders as duplicate/interleaved pages.
+    # "current" = the MOST RECENTLY WRITTEN version, not the lexical max.
+    # extractor_version is a ``vN`` *string* column, so ``func.max`` orders
+    # lexically and returns the wrong row once the version reaches ``v10``
+    # (``'v9' > 'v10'``).  Order on ``created_at`` (same pattern as
+    # test_factory.service._latest_version) so visit/action/form stay bound to
+    # the same version.
     current_page_visit_version = (
-        select(func.max(PageVisitRow.extractor_version))
+        select(PageVisitRow.extractor_version)
         .where(
             PageVisitRow.artifact_id == artifact_id,
             PageVisitRow.tenant_id == tenant_id,
         )
+        .order_by(PageVisitRow.created_at.desc())
+        .limit(1)
         .scalar_subquery()
     )
     page_visits_q = await db.execute(
@@ -1577,12 +1585,17 @@ async def _load_storyboard_overlay(
     # action version's rows are keyed to the current visit version's
     # page_visit_ids (the extractor filters visits to max version), so
     # the two filters stay consistent.
+    # "current" = the MOST RECENTLY WRITTEN version (see the note on
+    # current_page_visit_version above): ``func.max`` on the ``vN`` *string*
+    # column orders lexically and breaks at ``v10`` (``'v9' > 'v10'``).
     current_page_action_version = (
-        select(func.max(PageActionRow.extractor_version))
+        select(PageActionRow.extractor_version)
         .where(
             PageActionRow.artifact_id == artifact_id,
             PageActionRow.tenant_id == tenant_id,
         )
+        .order_by(PageActionRow.created_at.desc())
+        .limit(1)
         .scalar_subquery()
     )
     page_actions_q = await db.execute(
