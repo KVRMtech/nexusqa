@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
 from dataclasses import dataclass
 from typing import Mapping
@@ -167,20 +168,31 @@ async def _max_version(
     tenant_id: str,
     version_column: object,
 ) -> str | None:
-    """Return the highest-ordered (lexically largest) version for an artifact.
+    """Return the NUMERICALLY-highest version for an artifact (NULL when none).
 
-    NULL when no rows exist.  We do not assume a particular version
-    naming scheme; lexical max is sufficient because operators bump
-    versions monotonically (``v1`` → ``v2`` → ``v3``).
+    Versions are bumped monotonically (``v1`` → ``v2`` → … → ``v10`` → ``v11``). A SQL
+    lexical ``MAX`` is WRONG across the 9→10 boundary — ``'v9' > 'v10'`` lexically — which
+    silently mis-computes freshness once a component's version reaches double digits (it
+    would treat a stale ``v9`` as the max while ``v10`` exists, so a fresh derivation looks
+    stale or a stale one looks fresh). We therefore fetch the distinct versions and pick the
+    one with the greatest trailing NUMERIC suffix (lexical string as a stable tie-break).
     """
     artifact_column = getattr(table, "artifact_id")
     tenant_column = getattr(table, "tenant_id")
     stmt = (
-        select(func.max(version_column))
+        select(version_column).distinct()
         .where(artifact_column == artifact_id, tenant_column == tenant_id)
     )
-    result = await session.execute(stmt)
-    return result.scalar()
+    rows = (await session.execute(stmt)).scalars().all()
+    versions = [v for v in rows if v is not None]
+    if not versions:
+        return None
+
+    def _vkey(v: object) -> tuple:
+        nums = re.findall(r"\d+", str(v))
+        return (int(nums[-1]) if nums else -1, str(v))
+
+    return max(versions, key=_vkey)
 
 
 async def _needs_scene_grouper(
@@ -546,19 +558,32 @@ class StoryboardComposer:
             config=self._config,
         )
 
+        # Force-load brain_quality_score in the ASYNC context before the SYNC
+        # _summary reads it: a fresh-artifact derivation expires the ORM scalar,
+        # and a lazy reload from sync code raises MissingGreenlet -> 500 on the
+        # whole response (data is already derived; only the summary crashes).
+        if artifact is not None:
+            try:
+                await session.refresh(artifact)  # reload ALL columns (row fully expired post-derivation)
+            except Exception:
+                pass
         summary = dict(self._summary(panels, apps, artifact=artifact))
         # Tell the client a background derivation is still running so it polls
         # instead of treating empty panels as "done".
         summary["deriving"] = bool(deriving)
         total_ms = int((time.monotonic() - started) * 1000)
+        # backstop: quality_gate_outcome is a property over (possibly still
+        # expired) backing columns; degrade to None rather than 500.
+        try:
+            _vgo = artifact.quality_gate_outcome if artifact else None
+        except Exception:
+            _vgo = None
 
         return StoryboardResponse(
             artifact_id=artifact_id,
             panels=panels,
             apps=apps,
-            visual_e2e_status=(
-                artifact.quality_gate_outcome if artifact else None
-            ),
+            visual_e2e_status=_vgo,
             summary=summary,
             derivation=DerivationStatus(
                 scene_grouper_version=self._config.scene_grouper.version,
@@ -1096,6 +1121,24 @@ class StoryboardComposer:
         degraded = sum(1 for p in non_noise if p.panel_quality == "degraded")
         weak = sum(1 for p in non_noise if p.panel_quality == "weak")
 
+        # source_filename is ALSO a mapped-but-expired ORM attribute after a
+        # fresh-artifact derivation; getattr's default only catches AttributeError,
+        # not MissingGreenlet, so it would propagate and 500 the response. Guard it.
+        try:
+            _sf = getattr(artifact, "source_filename", "") if artifact else ""
+        except Exception:
+            _sf = ""
+        # brain_quality_score may be an EXPIRED ORM attribute here (fresh-artifact
+        # derivation). This sync method cannot await a lazy reload, so guard it:
+        # degrade to None rather than raise MissingGreenlet and 500 the response.
+        try:
+            _bq = (
+                float(artifact.brain_quality_score)
+                if artifact and artifact.brain_quality_score is not None
+                else None
+            )
+        except Exception:
+            _bq = None
         return {
             "panel_count": len(panels),
             "non_noise_panel_count": len(non_noise),
@@ -1106,12 +1149,8 @@ class StoryboardComposer:
             "strong_panels": strong,
             "degraded_panels": degraded,
             "weak_panels": weak,
-            "source_filename": getattr(artifact, "source_filename", "") if artifact else "",
-            "brain_quality_score": (
-                float(artifact.brain_quality_score)
-                if artifact and artifact.brain_quality_score is not None
-                else None
-            ),
+            "source_filename": _sf,
+            "brain_quality_score": _bq,
         }
 
 

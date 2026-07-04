@@ -1,0 +1,13 @@
+{
+  "verified": {
+    "count": 0
+  },
+  "draft": {
+    "count": 5,
+    "page_identity": 1.0,
+    "value_capture": 1.0,
+    "form_coverage": 0.977,
+    "host_purity": 0.9,
+    "overall": 0.969
+  }
+}

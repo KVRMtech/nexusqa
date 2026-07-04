@@ -254,6 +254,28 @@ def _parse_url_parts(url: str) -> tuple[str, str, str]:
         return "", "", ""
 
 
+_CAPTION_PREFIX_RX = re.compile(
+    r"^(?:the\s+)?screen\s+(?:now\s+)?(?:shows|displays|is\s+showing)\s+"
+    r"(?:a\s+|an\s+|the\s+)?",
+    re.IGNORECASE,
+)
+
+
+def _screen_name_to_title(candidate: str) -> str:
+    """Collapse a caption-style screen name ("The screen shows a Google
+    Chrome browser in dark mode with ...") into a short page-title-like
+    label. Pages are titled, not narrated: strip the caption preamble,
+    keep the first sentence, cap the length. Pure string hygiene -- no
+    app knowledge, fully generic."""
+    t = _CAPTION_PREFIX_RX.sub("", (candidate or "").strip())
+    t = re.split(r"(?<=[a-z0-9])\.\s", t, maxsplit=1)[0].strip().rstrip(".")
+    if len(t) > 80:
+        t = t[:80].rsplit(" ", 1)[0].rstrip(",;:") + "..."
+    if not t:
+        return (candidate or "").strip()[:80]
+    return t[:1].upper() + t[1:]
+
+
 def _is_recording_chrome(
     frame: VisualFrameRow, chrome_pattern: "re.Pattern | None",
 ) -> bool:
@@ -453,7 +475,14 @@ async def _resolve_dominant_canonical_host(
         d = (domain or "").strip()
         if not _is_clean(d):
             continue
-        if _name_is_ghost((name or "").strip()):
+        nm = (name or "").strip()
+        if _name_is_ghost(nm) and d.lower() == nm.lower():
+            # A ghost NAME only disqualifies when the domain is merely its
+            # own lowercase (a true uncorrected OCR ghost). When the domain
+            # DIFFERS, the deduper's fuzzy evidence actively CORRECTED it
+            # (name "Msaa.com" merged into canonical_domain "usaa.com") --
+            # that grouping IS the real app; skipping it crowned a 1-scene
+            # content-URL app dominant and mis-hosted every path-only visit.
             continue
         candidates.append((d.lower(), int(count or 0)))
 
@@ -486,6 +515,57 @@ async def _resolve_dominant_canonical_host(
 
 
 # ── Frame-level location resolution ──────────────────────────────────────────
+
+
+_HTML_SUFFIX_RX = re.compile(r"\.html?(?:$|[/?#])", re.IGNORECASE)
+_MERGED_HTML_RX = re.compile(r"(?<=[A-Za-z0-9])(html?)$", re.IGNORECASE)
+
+
+def _repair_html_extension(path: str, ocr_text: str) -> str:
+    """Recover a ``.html``/``.htm`` extension the address-bar OCR mangled.
+
+    EasyOCR routinely misreads the tiny dot before ``html``: ``inventory.html``
+    is read as ``inventory html`` (the scene-URL regex then drops the trailing
+    `` html`` and the extension vanishes), and ``checkout-step-two.html`` is read
+    as ``checkout-step-twohtml`` (the dot is dropped and ``html`` merges onto the
+    segment).  Two repair cases:
+
+    * Case 1 (MERGED, e.g. ``…twohtml``): a trailing ``html``/``htm`` glued to an
+      alphanumeric segment is virtually always a dot-dropped extension — insert
+      the dot.  DETERMINISTIC, so every frame repairs identically (no grouping
+      fragmentation).
+    * Case 2 (DROPPED, e.g. ``…/inventory``): only repaired when the frame OCR
+      actually shows the segment immediately followed by ``html`` — recovering a
+      REAL, observed extension, never fabricating one (never green-wash).
+
+    Returns the path unchanged when it already has the extension or there is no
+    evidence of one.
+    """
+    if not path or path == "/" or _HTML_SUFFIX_RX.search(path):
+        return path
+    base = path.rstrip("/")
+    seg = base.rsplit("/", 1)[-1]
+    if not seg:
+        return path
+    ocr_l = (ocr_text or "").lower()
+    # Case 1 — 'html' merged onto the segment ('…twohtml').  Only repair when
+    # the frame OCR actually shows the stem separated from 'html' by a gap (the
+    # dropped dot read as a space/dot) — recovering a REAL, observed extension,
+    # never fabricating one (never green-wash).  Without this gate a genuinely
+    # extensionless route that merely ENDS in 'html' (e.g. '/sitemaphtml') would
+    # be rewritten and could become a PROVEN url.
+    m = _MERGED_HTML_RX.search(seg)
+    if m and m.start() > 0:
+        stem = seg[: m.start()]
+        # Require a SEPARATOR (>=1 space/dot) between stem and html in the OCR,
+        # so a run-together '/sitemaphtml' (no gap) is left untouched.
+        if re.search(re.escape(stem.lower()) + r"[\s.]{1,3}html?\b", ocr_l):
+            return base[: len(base) - len(seg)] + stem + "." + m.group(1).lower()
+    # Case 2 — extension dropped entirely; require OCR evidence of '<seg> html'.
+    seg_l = seg.lower()
+    if re.search(re.escape(seg_l) + r"[\s.]{0,3}html?\b", ocr_l):
+        return base + ".html"
+    return path
 
 
 def _resolve_frame_location(
@@ -530,22 +610,29 @@ def _resolve_frame_location(
     if _is_recording_chrome(frame, chrome_pattern):
         return base
 
-    # Tier 1 — regex over OCR text, page_title, then url_or_path.
-    for candidate_text in (
-        frame.extracted_text or "",
-        frame.page_title or "",
-        frame.url_or_path or "",
+    # Tier 1 — ADDRESS-BAR-FIRST: the annotator's dedicated url_or_path field
+    # is the real address bar; full-frame OCR text is page CONTENT (autocomplete
+    # dropdowns, history suggestions, links) and routinely contains OTHER pages'
+    # URLs, so it is consulted LAST and can never mint a PROVEN read on its own
+    # (see the source assignment below). This is how a search-suggestion
+    # okta.com/... stops hijacking a usaa.com page's identity.
+    for candidate_text, _bar_zone in (
+        (frame.url_or_path or "", True),
+        (frame.page_title or "", True),
+        (frame.extracted_text or "", False),
     ):
         url = _first_url_match(candidate_text, url_pattern)
         if url:
             host, path, query = _parse_url_parts(url)
+            path = _repair_html_extension(path, frame.extracted_text or "")
             # Path-only match (Tier 1.5): _first_url_match's fallback
             # returned a bare /path/... string with no scheme.  Synthesize
             # the host from the artifact's dominant canonical_host so
             # downstream grouping + URL canonicalisation work uniformly.
             # Two visits with different paths still distinguish; visits
             # to the same path under the dominant host still merge.
-            if not host and url.startswith("/") and dominant_host:
+            path_only = url.startswith("/")
+            if path_only and dominant_host:
                 host = dominant_host
                 # The raw_location stays as the canonical full URL so
                 # the API surface shows a clean https://host/path.
@@ -553,9 +640,34 @@ def _resolve_frame_location(
                 if query:
                     synthesized += f"?{query}"
                 base.raw_location = synthesized
+            elif host:
+                # Rebuild from the (repaired) parts so the display URL carries
+                # the recovered .html instead of the mangled OCR string.
+                base.raw_location = f"https://{host}{path}" + (f"?{query}" if query else "")
             else:
                 base.raw_location = url
-            base.source = PageVisitSource.URL_REGEX
+            # Honesty gate (never green-wash): a FULL URL OCR'd off the
+            # address bar is PROVEN (url_regex, conf 1.0).  A bare /path
+            # match — where the host was GUESSED from the dominant host or
+            # is absent — is NOT a proven URL read, so it gets a SEPARATE
+            # sub-1.0 source and must never reach the url_regex/1.0 tier.
+            if path_only:
+                base.source = PageVisitSource.URL_OCR_PATH_ONLY
+            elif _bar_zone:
+                base.source = PageVisitSource.URL_REGEX
+            else:
+                # Full URL mined from page CONTENT (not the address bar).
+                # PROVEN (url_regex/1.0) only when the scene's detected_url
+                # independently agrees on the host; otherwise an honest
+                # sub-1.0 read -- content URLs (dropdown suggestions, links)
+                # must never outrank the page's own identity.
+                _scene_url = (getattr(scene, "detected_url", "") or "") if scene is not None else ""
+                _s_host, _sp, _sq = _parse_url_parts(_scene_url)
+                base.source = (
+                    PageVisitSource.URL_REGEX
+                    if (host and _s_host and _s_host == host)
+                    else PageVisitSource.URL_OCR_PATH_ONLY
+                )
             base.url_host = host
             base.url_path = path
             base.url_query = query
@@ -566,7 +678,10 @@ def _resolve_frame_location(
         scene_url = (scene.detected_url or "").strip()
         if scene_url:
             host, path, query = _parse_url_parts(scene_url)
-            base.raw_location = scene_url
+            path = _repair_html_extension(path, frame.extracted_text or "")
+            base.raw_location = (
+                f"https://{host}{path}" + (f"?{query}" if query else "")
+            ) if host else scene_url
             base.source = PageVisitSource.URL_SCENE
             base.url_host = host
             base.url_path = path
@@ -579,7 +694,7 @@ def _resolve_frame_location(
         screen_name = (scene.screen_name or "").strip() if scene else ""
         candidate = page_title or screen_name
         if candidate:
-            base.raw_location = candidate[:2000]
+            base.raw_location = _screen_name_to_title(candidate)[:2000]
             base.source = PageVisitSource.SCREEN_NAME_OCR
             return base
 
@@ -690,6 +805,36 @@ def _maybe_downsize(data: bytes, max_dimension_px: int) -> tuple[bytes, str]:
             extra={"error": str(exc)[:200]},
         )
         return data, "image/png"
+
+
+def _crop_address_bar(data: bytes, top_fraction: float) -> bytes:
+    """Return the top strip of a frame (where the browser address bar lives).
+
+    Feeding the vision identity pass a high-res crop of just the top band
+    makes the URL fill the model's view instead of being a ~6px sliver in a
+    downscaled full frame.  Fail-open: returns the ORIGINAL bytes unchanged
+    on any error, when PIL is unavailable, or for a non-positive fraction —
+    so a bad crop can never lose a frame (callers detect "no crop" via
+    identity: ``cropped is data``).
+    """
+    if not data or not _PIL_AVAILABLE or top_fraction <= 0.0:
+        return data
+    try:
+        with _PILImage.open(io.BytesIO(data)) as img:
+            if img.mode != "RGB":
+                img = img.convert("RGB")
+            w, h = img.size
+            strip_h = max(1, int(h * min(1.0, top_fraction)))
+            crop = img.crop((0, 0, w, strip_h))
+            buf = io.BytesIO()
+            crop.save(buf, format="PNG", optimize=True)
+            return buf.getvalue()
+    except Exception as exc:  # pragma: no cover - defensive, fail-open
+        logger.warning(
+            "storyboard.page_visit_extractor.address_bar_crop_failed",
+            extra={"error": str(exc)[:200]},
+        )
+        return data
 
 
 _LLM_INFERENCE_SYSTEM = """You read a single screenshot from a screen recording and return the LOCATION of the page being shown.
@@ -804,20 +949,46 @@ async def _vision_page_identity(
     )
     if not raw:
         return None
-    raw, media_type = _maybe_downsize(raw, config.image_max_dimension_px)
-    image = ImageContent(data=raw, media_type=media_type)
-    tool = _page_identity_tool()
+    full_bytes, full_media = _maybe_downsize(raw, config.image_max_dimension_px)
+    images: list[ImageContent] = []
+    # Item 2: when enabled, prepend a HIGH-RES crop of the address-bar strip
+    # so the URL fills the model's view.  Fail-open: _crop_address_bar
+    # returns the SAME object on any failure, so `cropped is not raw` is the
+    # "crop succeeded" signal; on failure we simply send the full frame only.
+    if getattr(config, "enable_address_bar_crop", False):
+        cropped = _crop_address_bar(
+            raw, getattr(config, "address_bar_top_fraction", 0.08),
+        )
+        if cropped is not raw:
+            crop_bytes, crop_media = _maybe_downsize(
+                cropped,
+                getattr(config, "address_bar_crop_max_dimension_px", 1568),
+            )
+            images.append(ImageContent(data=crop_bytes, media_type=crop_media))
+    images.append(ImageContent(data=full_bytes, media_type=full_media))
 
-    request = CompletionRequest(
-        system=_VISION_IDENTITY_SYSTEM,
-        prompt=(
+    if len(images) > 1:
+        prompt = (
+            "The FIRST image is a high-resolution crop of the very top of "
+            "the page — read the FULL browser address-bar URL from it if any "
+            "part is legible. The SECOND image is the full page — read a "
+            "short heading label from it. Do NOT invent a URL. Respond only "
+            "via record_page_identity."
+        )
+    else:
+        prompt = (
             "Identify this page. Read the address-bar URL if legible and "
             "a short heading label. Respond only via record_page_identity."
-        ),
+        )
+
+    tool = _page_identity_tool()
+    request = CompletionRequest(
+        system=_VISION_IDENTITY_SYSTEM,
+        prompt=prompt,
         max_tokens=256,
         temperature=0.0,
         correlation_id=correlation_id,
-        images=(image,),
+        images=tuple(images),
         tools=(tool,),
         tool_choice=tool.name,
         enable_prompt_cache=True,
@@ -859,6 +1030,86 @@ async def _vision_page_identity(
     return None
 
 
+def _run_key(loc: "_FrameLocation") -> tuple[str, str, str]:
+    """Lightweight grouping key for dwell-runs (pre-canonicalisation).
+
+    Two adjacent frames with the same key belong to the same dwell-run.
+    Mirrors ``_canonical_key``'s shape without host canonicalisation (which
+    needs dominant_host/single_app) — fine here because we only need to
+    detect WHEN the location changes, not its canonical form.
+    """
+    if loc.url_host:
+        return (loc.url_host.lower(), loc.url_path, loc.url_query)
+    return ("", "", (loc.raw_location or "").lower())
+
+
+def _dwell_weighted_frame_indices(
+    frame_locations: list["_FrameLocation"], cap: int,
+) -> list[int]:
+    """Pick up to ``cap`` frame indices, one per dwell-run at its midpoint.
+
+    A KT presenter dwells on each page for seconds, so many contiguous
+    frames share a location.  Even-sampling spends the budget uniformly and
+    can under-sample a long-dwell page while over-sampling short
+    transitions.  This selector instead groups contiguous same-location
+    runs, picks the single frame nearest each run's temporal MIDPOINT (the
+    most-settled frame), prioritising the longest-dwell runs, then spends
+    any leftover budget on additional frames inside the longest runs.
+    Deterministic (no randomness) so re-derivation is stable.
+    """
+    n = len(frame_locations)
+    if n == 0:
+        return []
+    cap = max(1, cap)
+
+    # Build contiguous same-location runs.
+    runs: list[tuple[int, int]] = []
+    start = 0
+    for i in range(1, n):
+        if _run_key(frame_locations[i]) != _run_key(frame_locations[start]):
+            runs.append((start, i - 1))
+            start = i
+    runs.append((start, n - 1))
+
+    def _ts(i: int) -> float:
+        return float(getattr(frame_locations[i], "timestamp_ms", 0) or 0)
+
+    def _midpoint_idx(a: int, b: int) -> int:
+        mid = (_ts(a) + _ts(b)) / 2.0
+        best, best_d = a, None
+        for j in range(a, b + 1):
+            d = abs(_ts(j) - mid)
+            if best_d is None or d < best_d:
+                best, best_d = j, d
+        return best
+
+    def _run_dwell(run: tuple[int, int]) -> float:
+        a, b = run
+        span = _ts(b) - _ts(a)
+        return span if span > 0 else float(b - a)  # fall back to frame span
+
+    # Longest-dwell runs first so, if runs already exceed the cap, the pages
+    # the presenter lingered on win the budget over brief transitions.
+    ranked = sorted(runs, key=_run_dwell, reverse=True)
+    selected: set[int] = set()
+    for run in ranked:
+        if len(selected) >= cap:
+            break
+        selected.add(_midpoint_idx(*run))  # floor: >=1 frame per run
+
+    # Spend any leftover budget on more frames inside the longest runs.
+    if len(selected) < cap:
+        for a, b in ranked:
+            for j in range(a, b + 1):
+                if len(selected) >= cap:
+                    break
+                selected.add(j)
+            if len(selected) >= cap:
+                break
+
+    return sorted(selected)
+
+
 async def _apply_vision_page_identity(
     frame_locations: list[_FrameLocation],
     *,
@@ -897,16 +1148,42 @@ async def _apply_vision_page_identity(
     if not frame_locations:
         return 0
 
-    # Sample frames evenly when over the cap.
+    # Choose which frames to vision-read when over the cap.  Item 1:
+    # dwell-weighted selection lands the budget on the pages the presenter
+    # paused on; falls back to even-sampling when disabled.
     cap = max(1, config.vision_identity_max_frames)
     if len(frame_locations) > cap:
-        step = (len(frame_locations) - 1) / max(1, cap - 1)
-        idxs = sorted({
-            min(len(frame_locations) - 1, int(round(i * step)))
-            for i in range(cap)
-        })
+        if getattr(config, "vision_identity_dwell_weighted", True):
+            idxs = _dwell_weighted_frame_indices(frame_locations, cap)
+        else:
+            step = (len(frame_locations) - 1) / max(1, cap - 1)
+            idxs = sorted({
+                min(len(frame_locations) - 1, int(round(i * step)))
+                for i in range(cap)
+            })
     else:
         idxs = list(range(len(frame_locations)))
+
+    # PHASE-E economics: frames whose location is already a PROVEN bar-zone
+    # URL with a deep path were answered by deterministic Tier-0 (the eyes
+    # address-bar read) -- a vision call there buys nothing. Skipping them
+    # never loses coverage: shallow shell URLs (< 2 path segments, the SPA
+    # sub-page case) are still vision-read for depth recovery.
+    if getattr(config, "vision_skip_proven_frames", True):
+        def _proven_deep(fl: "_FrameLocation") -> bool:
+            return (
+                fl.source is PageVisitSource.URL_REGEX
+                and len([s for s in (fl.url_path or "").split("/") if s]) >= 2
+            )
+        skipped_proven = [i for i in idxs if _proven_deep(frame_locations[i])]
+        if skipped_proven:
+            idxs = [i for i in idxs if not _proven_deep(frame_locations[i])]
+            logger.info(
+                "storyboard.page_visit_extractor.vision_skip_proven",
+                extra={"skipped": len(skipped_proven), "remaining": len(idxs)},
+            )
+        if not idxs:
+            return 0
 
     semaphore = asyncio.Semaphore(max(1, config.vision_identity_concurrency))
     min_conf = config.vision_identity_min_confidence
@@ -1161,7 +1438,12 @@ def _same_page_tail(tail_a: str, tail_b: str, min_substring: int) -> bool:
     if tail_a == tail_b:
         return True
     short, long_ = sorted([tail_a, tail_b], key=len)
-    return len(short) >= min_substring and short in long_
+    if len(short) < min_substring or not long_.endswith(short):
+        return False
+    # Anchored: the char just before the suffix must be a glued letter/
+    # digit (OCR run-on), never a hyphen/underscore word boundary.
+    glue = long_[len(long_) - len(short) - 1]
+    return glue not in "-_"
 
 
 def _merge_same_page_tail(drafts: list, min_substring: int) -> list:
@@ -1184,20 +1466,42 @@ def _merge_same_page_tail(drafts: list, min_substring: int) -> list:
         return drafts
     result: list = []
     # Each entry: (canonical_host, tail, index_in_result)
-    index: list[tuple[str, str]] = []
+    index: list[tuple[str, str, str]] = []
+    # Defect #32 — host-less ("no-URL-ever") fallback.  When NO frame ever
+    # yielded a host, one logical screen still fragments into multiple
+    # non-adjacent drafts that carry IDENTICAL free-text raw_location
+    # (window_title / screen_name).  Collapse only on EXACT normalised
+    # raw_location equality — never a fuzzy/substring match — so genuinely
+    # distinct title screens ("Step 1" vs "Step 2") are preserved.  Maps a
+    # normalised raw_location → the draft already in ``result``.
+    homeless_index: dict[str, object] = {}
     for d in drafts:
         host = getattr(d, "canonical_host", "")
         if not host or not getattr(d, "path", ""):
+            raw_norm = (getattr(d, "raw_location", "") or "").strip().lower()
+            tgt = homeless_index.get(raw_norm) if raw_norm else None
+            if tgt is not None:
+                tgt.first_seen_ms = min(tgt.first_seen_ms, d.first_seen_ms)
+                tgt.last_seen_ms = max(tgt.last_seen_ms, d.last_seen_ms)
+                tgt.frame_count += d.frame_count
+                continue
+            if raw_norm:
+                homeless_index[raw_norm] = d
             result.append(d)
             continue
         tail = _last_segment(d.path)
+        query = getattr(d, "query", "") or ""
         matched = -1
-        for ri, (rhost, rtail) in enumerate(index):
-            if rhost == host and _same_page_tail(tail, rtail, min_substring):
+        for ri, (rhost, rtail, rquery) in enumerate(index):
+            if (
+                rhost == host
+                and rquery == query
+                and _same_page_tail(tail, rtail, min_substring)
+            ):
                 matched = ri
                 break
         if matched < 0:
-            index.append((host, tail))
+            index.append((host, tail, query))
             result.append(d)
         else:
             # result index for this logical page: the i-th URL entry maps
@@ -1239,7 +1543,8 @@ def _confidence_for_source(source: PageVisitSource) -> float:
     """Default confidence by extraction tier.  Stored on every row."""
     return {
         PageVisitSource.GROUND_TRUTH: 1.0,    # instrumented recorder — PROVEN
-        PageVisitSource.URL_REGEX: 1.0,
+        PageVisitSource.URL_REGEX: 1.0,       # full URL OCR'd off the bar — PROVEN
+        PageVisitSource.URL_OCR_PATH_ONLY: 0.7,  # real path, GUESSED host — not proven
         PageVisitSource.URL_SCENE: 0.85,
         PageVisitSource.LLM_INFERRED: 0.85,
         PageVisitSource.WINDOW_TITLE: 0.6,
@@ -1507,14 +1812,19 @@ async def _load_ground_truth_events(
     migrated table or any error yields [] → the video path is unchanged."""
     try:
         from nexus_sdk.db.models import GroundTruthEventRow
-        rows = (await session.execute(
-            select(GroundTruthEventRow)
-            .where(
-                GroundTruthEventRow.artifact_id == artifact_id,
-                GroundTruthEventRow.tenant_id == tenant_id,
-            )
-            .order_by(GroundTruthEventRow.sequence_index.asc())
-        )).scalars().all()
+        # SAVEPOINT the overlay read: a missing/broken ground_truth_events
+        # table must not abort the OUTER transaction (which then kills the
+        # page_visits write). begin_nested() rolls back ONLY this query on
+        # error, so the video path's writes survive — this fail-open is REAL.
+        async with session.begin_nested():
+            rows = (await session.execute(
+                select(GroundTruthEventRow)
+                .where(
+                    GroundTruthEventRow.artifact_id == artifact_id,
+                    GroundTruthEventRow.tenant_id == tenant_id,
+                )
+                .order_by(GroundTruthEventRow.sequence_index.asc())
+            )).scalars().all()
     except Exception:  # table absent / driver error → no overlay, video path stands
         return []
     return [
@@ -1813,18 +2123,38 @@ async def extract_page_visits_for_artifact(
                 ),
                 follow_redirects=True,
             )
+        # Defect #33 — give Tier-5 its OWN wall-clock deadline (mirrors the
+        # vision-identity pass) so an LLM overrun can NEVER consume the whole
+        # request budget and roll back the deterministic visits already
+        # grouped above.  Reserve a slice of the total budget for the UPSERT;
+        # drafts not reached keep their (empty) deterministic location and are
+        # still persisted — partial enrichment, never a lost derivation.
+        t5_budget_s = max(10.0, float(getattr(config, "total_timeout_s", 0) or 0) - 30.0)
+        t5_deadline = time.monotonic() + t5_budget_s
+        t5_skipped = 0
         try:
             for d in drafts:
                 if d.raw_location:
                     continue
-                inferred = await _llm_infer_location(
-                    router=router,
-                    config=config,
-                    http_client=http_client,
-                    auth_token=auth_token,
-                    frame_asset_path=d.first_frame_asset_path,
-                    correlation_id=f"{artifact_id}:{d.first_seen_ms}",
-                )
+                remaining = t5_deadline - time.monotonic()
+                if remaining <= 0:
+                    t5_skipped += 1
+                    continue
+                try:
+                    inferred = await asyncio.wait_for(
+                        _llm_infer_location(
+                            router=router,
+                            config=config,
+                            http_client=http_client,
+                            auth_token=auth_token,
+                            frame_asset_path=d.first_frame_asset_path,
+                            correlation_id=f"{artifact_id}:{d.first_seen_ms}",
+                        ),
+                        timeout=remaining,
+                    )
+                except asyncio.TimeoutError:
+                    t5_skipped += 1
+                    continue
                 if not inferred:
                     continue
                 # If the LLM returned a URL, parse it.

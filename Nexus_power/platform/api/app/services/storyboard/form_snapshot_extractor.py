@@ -102,6 +102,20 @@ _EYES_BASE_URL = os.environ.get(
 ).rstrip("/")
 
 
+def _pii_egress_blocked() -> bool:
+    """True when this deployment is configured as a PII vertical and must NOT
+    send raw form-snapshot frames (which carry typed SSN/DOB) to a cloud LLM.
+
+    Conservative + env-gated: defaults OFF, so existing tenants are unchanged.
+    Set ``NEXUS_PII_VERTICAL`` (any non-empty value other than 0/false/no) to
+    refuse cloud vision for form snapshots. This is a hard egress guard, not a
+    redaction — the snapshot is returned EMPTY and visibly tagged so nothing is
+    green-washed as 'extracted' when extraction was deliberately skipped.
+    """
+    val = (os.environ.get("NEXUS_PII_VERTICAL", "") or "").strip().lower()
+    return val not in ("", "0", "false", "no", "off")
+
+
 logger = logging.getLogger(__name__)
 
 
@@ -156,12 +170,21 @@ async def _collect_snapshot_inputs(
     # for stale rows and exhaust the per-artifact timeout before the
     # current form pages are reached — see the matching note in
     # page_action_extractor._collect_visit_inputs.
+    #
+    # "current" = the MOST RECENTLY WRITTEN version, not the lexical max.
+    # extractor_version is a ``vN`` *string* column, so ``func.max`` orders
+    # lexically and returns the wrong row once the version reaches ``v10``
+    # (``'v9' > 'v10'``).  Order on ``created_at`` (same pattern as
+    # ``test_factory.service._latest_version``) so form snapshots bind to the
+    # same visit version that page_action_extractor + the artifacts router use.
     max_version_q = await session.execute(
-        select(func.max(PageVisitRow.extractor_version))
+        select(PageVisitRow.extractor_version)
         .where(
             PageVisitRow.artifact_id == artifact_id,
             PageVisitRow.tenant_id == tenant_id,
         )
+        .order_by(PageVisitRow.created_at.desc())
+        .limit(1)
     )
     current_visit_version = max_version_q.scalar()
     if current_visit_version is None:
@@ -283,6 +306,7 @@ RULES:
   * Return an EMPTY ``fields`` list when no form is visible on the page (read-only / pure navigation page).
   * Do NOT include buttons / links the user did not interact with — only ACTUAL FORM FIELDS that the page collects data into.
   * Include checkboxes and radios with their CURRENT STATE (checked = 'true', unchecked = 'false').
+  * SEGMENTED CONTROLS / BUTTON-GROUP single-choice questions (e.g. a gender or plan picker rendered as side-by-side buttons where exactly one can be active): return ONE field per group -- label = the group's question text, kind = 'radio', value = the SELECTED option's visible text. If no option is visibly selected, value = '' (empty -- do NOT guess).
   * Work generically across any UI domain — insurance, banking, healthcare, internal tools."""
 
 
@@ -478,6 +502,23 @@ async def _extract_one_visit(
     auth_token: str,
 ) -> _ExtractionResult:
     """Run one multimodal LLM call → FormSnapshot."""
+    # PII egress guard: in a configured PII vertical, raw form-snapshot frames
+    # carry typed SSN/DOB. Refuse to ship them to the cloud LLM entirely and
+    # return an EMPTY, visibly-tagged snapshot (never green-washed as extracted).
+    if _pii_egress_blocked():
+        logger.info(
+            "storyboard.form_snapshot_extractor.pii_egress_skipped "
+            f"visit={inputs.page_visit_id}"
+        )
+        return _ExtractionResult(
+            page_visit_id=inputs.page_visit_id,
+            snapshot=_empty_snapshot(config.version, model="(pii_egress_blocked)"),
+            model="(pii_egress_blocked)",
+            latency_ms=0,
+            prompt_tokens=0,
+            completion_tokens=0,
+        )
+
     images: list[ImageContent] = []
     for path in inputs.frame_paths:
         raw = await _fetch_frame_bytes(
@@ -700,7 +741,92 @@ async def _persist_snapshots(
         )
         result = await session.execute(stmt)
         written += int(result.rowcount or 0)
+    try:
+        async with session.begin_nested():
+            await _reconcile_action_corroboration(
+                session,
+                artifact_id=artifact_id,
+                tenant_id=tenant_id,
+                results=results,
+            )
+    except Exception:  # savepoint rolled back -- snapshots themselves are safe
+        logger.warning(
+            "storyboard.form_snapshot_extractor.action_reconcile_failed",
+            extra={"artifact_id": artifact_id},
+        )
     return written
+
+
+def _norm_snapshot_text(v: object) -> str:
+    return " ".join(str(v or "").split()).strip().strip(".").casefold()
+
+
+async def _reconcile_action_corroboration(
+    session: AsyncSession,
+    *,
+    artifact_id: str,
+    tenant_id: str,
+    results: Sequence[_ExtractionResult],
+) -> int:
+    """Cross-extractor consensus: promote a DEMOTED page_action when the form
+    snapshot -- an INDEPENDENT vision read of the visit's final frame --
+    re-observes the same value. The action-level self-verification oracle
+    demotes uncorroborated values, but it runs before snapshots exist; this
+    closes the loop with real evidence. Raise-only-WITH-evidence: >=0.85 +
+    automation_ready + explicit provenance note. Values the snapshot does not
+    confirm keep their demotion untouched. Generic -- no field/app knowledge."""
+    from nexus_sdk.db.models import PageActionRow
+
+    promoted = 0
+    truthy_tokens = {"true", "yes", "checked", "selected", "on"}
+    for r in results:
+        fields = dict(getattr(r.snapshot, "fields", None) or {})
+        if not fields:
+            continue
+        nf = {_norm_snapshot_text(k): _norm_snapshot_text(v) for k, v in fields.items()}
+        values = {v for v in nf.values() if len(v) >= 2}
+        truthy_keys = {k for k, v in nf.items() if v in truthy_tokens}
+        acts = (await session.execute(
+            select(PageActionRow).where(
+                PageActionRow.page_visit_id == r.page_visit_id,
+                PageActionRow.artifact_id == artifact_id,
+                PageActionRow.tenant_id == tenant_id,
+            )
+        )).scalars().all()
+        for act in acts:
+            if bool(getattr(act, "automation_ready", False)):
+                continue
+            if "[duplicate:" in str(getattr(act, "reasoning", "") or ""):
+                # A demoted DUPLICATE stays demoted: the value matching the
+                # snapshot is exactly what makes it a duplicate — corroboration
+                # must never resurrect a re-observation as a second action.
+                continue
+            verb = str(getattr(act, "verb", "") or "").casefold()
+            if verb not in ("type", "select", "check", "click"):
+                continue
+            v = _norm_snapshot_text(getattr(act, "value", ""))
+            lbl = _norm_snapshot_text(getattr(act, "target_label", ""))
+            corroborated = bool(
+                (len(v) >= 2 and v in values)
+                or (len(v) >= 2 and v in truthy_keys)
+                or (verb in ("select", "check") and lbl and lbl in truthy_keys)
+                or (v and lbl and lbl in nf and nf[lbl] == v)
+            )
+            if not corroborated:
+                continue
+            act.confidence = max(float(getattr(act, "confidence", 0.0) or 0.0), 0.85)
+            act.automation_ready = True
+            act.reasoning = (str(getattr(act, "reasoning", "") or "") +
+                " [cross-verified: the form snapshot -- an independent vision read of "
+                "this page's final frame -- re-observed this exact value; two "
+                "independent extractions agree.]")
+            promoted += 1
+    if promoted:
+        logger.info(
+            "storyboard.form_snapshot_extractor.action_reconcile",
+            extra={"artifact_id": artifact_id, "promoted": promoted},
+        )
+    return promoted
 
 
 # ── Public entry point ──────────────────────────────────────────────────────

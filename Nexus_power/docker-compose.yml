@@ -457,6 +457,11 @@ services:
     ports:
     - 8091:8091
     environment:
+      NEXUS_AUDITOR_GATE: "block"
+      NEXUS_AUDITOR_MIN_SCORE: "9"
+      STORYBOARD_PAGE_VISIT_VISION_IDENTITY: "true"
+      STORYBOARD_PAGE_VISIT_ADDRESS_BAR_CROP: "true"
+      STORYBOARD_PAGE_VISIT_LLM_INFERENCE: "true"
       NEXUS_ENV: development
       NEXUS_PRODUCT_MODE: ${NEXUS_PRODUCT_MODE:-canonical}
       NEXUS_STORAGE_PATH: ${NEXUS_STORAGE_PATH:-/app/service/data}
@@ -1829,6 +1834,7 @@ services:
     restart: unless-stopped
     environment:
       RUNNER_TOKEN: ${RUNNER_TOKEN:-}
+      NEXUS_RECORD_EVIDENCE: "1"
     networks:
     - nexus
     mem_limit: 2g

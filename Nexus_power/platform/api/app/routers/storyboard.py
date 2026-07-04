@@ -487,6 +487,16 @@ async def ingest_ground_truth(
 
     Until ``scripts/apply_ground_truth_events.sql`` is applied the insert fails and
     the video path is unaffected (fail-open at the consumer)."""
+    import os
+    # #1 fix (never-green-wash + RBAC): this is a CLIENT-WRITABLE source that
+    # compiles to PROVEN / confidence-1.0 page-visits and a hard toHaveURL, so it
+    # MUST NOT be reachable by a low-privilege user — and instrumented Road-B
+    # capture is NOT the product path (video-only), so it stays OFF by default.
+    # Enable per-deployment AND only for an admin/manager.
+    if os.getenv("NEXUS_GROUND_TRUTH_INGEST_ENABLED", "").strip().lower() not in ("1", "true", "yes", "on"):
+        raise HTTPException(status_code=403, detail="Ground-truth ingest is disabled (instrumented capture is not enabled for this deployment).")
+    if (user.get("role") or "viewer").lower() not in ("admin", "manager"):
+        raise HTTPException(status_code=403, detail="Ground-truth ingest requires an admin or manager role.")
     import uuid as _uuid
 
     from sqlalchemy import delete
@@ -548,6 +558,8 @@ async def list_ground_truth(
     """List the stored (already PII-redacted) ground-truth events for an artifact
     — for verification / debugging. Values are redacted at ingest; raw PII is
     never stored or returned."""
+    if (user.get("role") or "viewer").lower() not in ("admin", "manager"):
+        raise HTTPException(status_code=403, detail="Ground-truth read requires an admin or manager role.")
     from sqlalchemy import select
 
     from nexus_sdk.db.models import GroundTruthEventRow
@@ -575,6 +587,280 @@ async def list_ground_truth(
                 "target_label": r.target_label,
                 "value": r.value,
                 "target_kind": r.target_kind,
+                "modality": r.modality,
+            }
+            for r in rows
+        ],
+    }
+
+
+# ── Phase C: Pages & Forms honest quality scorecard ─────────────────────────
+
+_TRUSTED_VISIT_SOURCES = {"ground_truth", "url_regex", "url_scene", "llm_inferred"}
+
+
+@router.get("/api/v1/artifacts/{artifact_id}/pages-forms/scorecard")
+async def pages_forms_scorecard(
+    artifact_id: str = Path(..., min_length=1, max_length=64),
+    user: dict = Depends(get_current_user),
+) -> dict:
+    """Per-artifact Pages & Forms quality self-report, computed ONLY from
+    persisted extraction rows (no model calls). Honest by construction: the
+    same provenance tiers the pipeline records are what get graded, and every
+    deduction names its reason. A weak extraction gets a weak grade -- the
+    product never green-washes its own output."""
+    from sqlalchemy import select as _sel
+    from nexus_sdk.db.models import PageActionRow, PageVisitRow
+
+    tenant_id = user["tenant_id"]
+    async with tenant_scoped_session(tenant_id) as session:
+        visits = (await session.execute(
+            _sel(PageVisitRow).where(
+                PageVisitRow.artifact_id == artifact_id,
+                PageVisitRow.tenant_id == tenant_id,
+            ).order_by(PageVisitRow.sequence_index.asc())
+        )).scalars().all()
+        actions = (await session.execute(
+            _sel(PageActionRow).where(
+                PageActionRow.artifact_id == artifact_id,
+                PageActionRow.tenant_id == tenant_id,
+            )
+        )).scalars().all()
+
+    if not visits:
+        return {
+            "artifact_id": artifact_id,
+            "scorecard_version": "v1",
+            "visits": 0,
+            "grade": "N/A",
+            "reasons": ["no page visits derived for this artifact"],
+        }
+
+    src_mix: dict = {}
+    hosts: set = set()
+    trusted = 0
+    forms_nonempty = 0
+    conf_sum = 0.0
+    for v in visits:
+        src = str(v.source or "").strip().lower()
+        src_mix[src] = src_mix.get(src, 0) + 1
+        if v.canonical_host:
+            hosts.add(str(v.canonical_host).strip().lower())
+        if src in _TRUSTED_VISIT_SOURCES:
+            trusted += 1
+        try:
+            if v.form_snapshot and len(dict(v.form_snapshot)) > 0:
+                forms_nonempty += 1
+        except (TypeError, ValueError):
+            pass
+        conf_sum += float(v.extraction_confidence or 0.0)
+
+    total = len(visits)
+    acts_total = len(actions)
+    ready = sum(1 for a in actions if bool(a.automation_ready))
+    xver = sum(1 for a in actions if "cross-verified" in str(a.reasoning or ""))
+    dups = sum(1 for a in actions if "[duplicate:" in str(a.reasoning or ""))
+    trusted_pct = round(trusted / total, 3)
+    ready_pct = round(ready / acts_total, 3) if acts_total else 0.0
+    avg_conf = round(conf_sum / total, 3)
+    host_consistent = len(hosts) <= 1
+
+    reasons: list = []
+    score = 0
+    if host_consistent:
+        score += 1
+    else:
+        reasons.append(
+            f"page hosts are inconsistent ({sorted(hosts)}) -- OCR host noise "
+            "or a genuine multi-app recording; review the visual flow")
+    if trusted_pct >= 0.7:
+        score += 1
+    else:
+        reasons.append(
+            f"only {int(trusted_pct * 100)}% of pages have a trusted-tier URL "
+            "(instrumented / bar-read / vision-read) -- consider re-recording at "
+            "higher resolution or enabling the ground-truth recorder")
+    if acts_total and ready_pct >= 0.6:
+        score += 1
+    elif acts_total:
+        reasons.append(
+            f"only {int(ready_pct * 100)}% of extracted actions are "
+            "automation-ready -- values were not independently corroborated")
+    else:
+        reasons.append("no user actions were extracted")
+    if avg_conf >= 0.75:
+        score += 1
+    else:
+        reasons.append(f"average page-identity confidence is {avg_conf}")
+
+    grade = {4: "A", 3: "B", 2: "C", 1: "D"}.get(score, "F")
+    return {
+        "artifact_id": artifact_id,
+        "scorecard_version": "v1",
+        "grade": grade,
+        "reasons": reasons or ["all quality gates passed"],
+        "visits": total,
+        "trusted_visits": trusted,
+        "trusted_pct": trusted_pct,
+        "host_consistent": host_consistent,
+        "hosts": sorted(hosts),
+        "source_mix": src_mix,
+        "avg_visit_confidence": avg_conf,
+        "forms_nonempty": forms_nonempty,
+        "actions_total": acts_total,
+        "actions_ready": ready,
+        "actions_ready_pct": ready_pct,
+        "actions_cross_verified": xver,
+        "actions_duplicates_demoted": dups,
+        "provenance_note": (
+            "trusted tiers = ground_truth (instrumented), url_regex (address-bar "
+            "OCR), url_scene, llm_inferred (vision address-bar read). Everything "
+            "else is pixel-inferred and honestly sub-trusted."),
+    }
+
+
+# ── Phase D: ground-truth Tier-0 event ingest (platform half) ────────────────
+
+_GT_ALLOWED_KINDS = {
+    "navigate", "navigation", "click", "type", "select", "check",
+    "submit", "open", "close", "scroll",
+}
+_GT_MAX_BATCH = 1000
+
+
+class GroundTruthEventIn(BaseModel):
+    sequence_index: int = Field(..., ge=0, le=1_000_000)
+    timestamp_ms: int = Field(..., ge=0)
+    kind: str = Field(..., min_length=1, max_length=40)
+    url: str = Field("", max_length=2000)
+    target_label: str = Field("", max_length=500)
+    value: str = Field("", max_length=1000)
+    target_kind: str = Field("", max_length=40)
+    modality: str = Field("dom", max_length=40)
+    recorder_version: str = Field("", max_length=50)
+    signals: dict = Field(default_factory=dict)
+
+
+class GroundTruthBatchIn(BaseModel):
+    events: list[GroundTruthEventIn] = Field(..., min_length=1, max_length=_GT_MAX_BATCH)
+
+
+@router.post("/api/v1/artifacts/{artifact_id}/ground-truth/events")
+async def ingest_ground_truth_events(
+    body: GroundTruthBatchIn,
+    artifact_id: str = Path(..., min_length=1, max_length=64),
+    user: dict = Depends(get_current_user),
+) -> dict:
+    """Ingest instrumented recorder events for an artifact (Tier-0 ground
+    truth). Idempotent: event_id is a deterministic UUID5 of
+    (artifact, sequence, kind, timestamp), so replays upsert instead of
+    duplicating. The page-visit extractor's ground-truth overlay makes these
+    AUTHORITATIVE over every pixel tier on the next derivation -- this is the
+    100%-identity path for tenants who install the recorder."""
+    import uuid as _uuid
+    from datetime import datetime, timezone
+    from urllib.parse import urlparse
+    from sqlalchemy import select as _sel
+    from nexus_sdk.db.models import CanonicalArtifactRow, GroundTruthEventRow
+
+    tenant_id = user["tenant_id"]
+    bad = [e.kind for e in body.events
+           if e.kind.strip().lower() not in _GT_ALLOWED_KINDS]
+    if bad:
+        raise HTTPException(
+            status_code=422,
+            detail=f"unsupported event kind(s): {sorted(set(bad))[:5]} -- "
+                   f"allowed: {sorted(_GT_ALLOWED_KINDS)}")
+
+    async with tenant_scoped_session(tenant_id) as session:
+        art = (await session.execute(
+            _sel(CanonicalArtifactRow.artifact_id).where(
+                CanonicalArtifactRow.artifact_id == artifact_id,
+                CanonicalArtifactRow.tenant_id == tenant_id,
+            )
+        )).scalar()
+        if not art:
+            raise HTTPException(status_code=404, detail="artifact not found")
+        session_id = (await session.execute(
+            _sel(CanonicalArtifactRow.session_id).where(
+                CanonicalArtifactRow.artifact_id == artifact_id,
+                CanonicalArtifactRow.tenant_id == tenant_id,
+            )
+        )).scalar() or ""
+
+        ingested = 0
+        for e in body.events:
+            parsed = urlparse(e.url if "://" in e.url else ("https://" + e.url if e.url else ""))
+            row = GroundTruthEventRow(
+                event_id=str(_uuid.uuid5(
+                    _uuid.NAMESPACE_URL,
+                    f"nexus-gt:{artifact_id}:{e.sequence_index}:{e.kind}:{e.timestamp_ms}",
+                )),
+                artifact_id=artifact_id,
+                tenant_id=tenant_id,
+                session_id=str(session_id),
+                sequence_index=e.sequence_index,
+                timestamp_ms=e.timestamp_ms,
+                kind=e.kind.strip().lower(),
+                url=e.url,
+                url_host=(parsed.hostname or "").lower(),
+                url_path=parsed.path or "",
+                url_query=parsed.query or "",
+                target_label=e.target_label,
+                value=e.value,
+                target_kind=e.target_kind,
+                modality=e.modality,
+                recorder_version=e.recorder_version,
+                signals=dict(e.signals or {}),
+                created_at=datetime.now(timezone.utc),
+            )
+            await session.merge(row)
+            ingested += 1
+        await session.commit()
+
+        total = len((await session.execute(
+            _sel(GroundTruthEventRow.event_id).where(
+                GroundTruthEventRow.artifact_id == artifact_id,
+                GroundTruthEventRow.tenant_id == tenant_id,
+            )
+        )).scalars().all())
+
+    return {
+        "artifact_id": artifact_id,
+        "ingested": ingested,
+        "total_events_for_artifact": total,
+        "note": ("events become AUTHORITATIVE page identity on the next "
+                 "storyboard derivation (regenerate)"),
+    }
+
+
+@router.get("/api/v1/artifacts/{artifact_id}/ground-truth/events")
+async def list_ground_truth_events(
+    artifact_id: str = Path(..., min_length=1, max_length=64),
+    user: dict = Depends(get_current_user),
+) -> dict:
+    from sqlalchemy import select as _sel
+    from nexus_sdk.db.models import GroundTruthEventRow
+
+    tenant_id = user["tenant_id"]
+    async with tenant_scoped_session(tenant_id) as session:
+        rows = (await session.execute(
+            _sel(GroundTruthEventRow).where(
+                GroundTruthEventRow.artifact_id == artifact_id,
+                GroundTruthEventRow.tenant_id == tenant_id,
+            ).order_by(GroundTruthEventRow.sequence_index.asc()).limit(200)
+        )).scalars().all()
+    return {
+        "artifact_id": artifact_id,
+        "count": len(rows),
+        "events": [
+            {
+                "sequence_index": r.sequence_index,
+                "timestamp_ms": r.timestamp_ms,
+                "kind": r.kind,
+                "url": r.url,
+                "target_label": r.target_label,
+                "value": r.value,
                 "modality": r.modality,
             }
             for r in rows

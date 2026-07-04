@@ -57,6 +57,12 @@ _INTERACT_VERBS = frozenset({"click", "press", "tap", "check", "toggle"})
 # or too low-signal on their own).
 _SKIP_VERBS = frozenset({"none", "navigate", "load", "wait"})
 
+# Safety cap: a pathological recording (hundreds of page milestones) would yield
+# an unbounded test with no warning. We cap the number of page groups turned into
+# steps and surface a 'truncated' warning so the over-long case is VISIBLE, never
+# silently emitted. Generic — a count threshold, no domain assumptions.
+_MAX_GROUPS = 120
+
 
 # ─── Inputs / outputs ────────────────────────────────────────────────────────
 
@@ -119,6 +125,12 @@ class DemonstratedGenerationResult:
     visits_used: int
     fields_demonstrated: int
     excluded_placeholder_fields: int
+    # True when the recording was so large the generated test was CAPPED (only
+    # the first _MAX_GROUPS page groups were turned into steps). Surfaced so a
+    # 200-page recording yields a visible 'degraded' warning, never a silent
+    # unbounded test. Defaulted so existing constructors/tests stay valid.
+    truncated: bool = False
+    truncation_reason: str = ""
 
 
 @dataclass
@@ -238,6 +250,17 @@ def _page_name(url_path: str, location: str) -> str:
     for seg in reversed(segs):
         if len(seg) > 3 and not seg.isdigit():
             return seg.replace("-", " ").replace("_", " ").strip()
+    # No descriptive segment. Rather than collapse every short/numeric path to
+    # 'home' (which yields confusing 'home → home' case names for e.g. /42 → /99),
+    # fall back to the numeric/short path tail, then to the captured location
+    # label, and only call it 'home' for a truly empty (root) path.
+    if segs:
+        tail = segs[-1].replace("-", " ").replace("_", " ").strip()
+        if tail:
+            return tail
+    loc = (location or "").strip()
+    if loc:
+        return loc
     return "home"
 
 
@@ -369,39 +392,64 @@ def _resolve_fields(group: _PageGroup) -> tuple[list[tuple[str, str]], list[str]
 
     entries = [(label, last[label][0], last[label][1]) for label in order]
 
-    # Cluster labels whose normalized clean form prefixes another
-    # ("date" ⊂ "dates") — one logical field — and keep the LATEST-seen value
-    # (the user's final state), dropping abandoned intermediate values.
+    # Cluster labels that are OCR variants of ONE logical field — keep the
+    # LATEST-seen value (the user's final state), dropping abandoned
+    # intermediate values. Two labels merge ONLY when one normalized clean form
+    # is a WHOLE-SEGMENT prefix of the other ("date" ⊂ "date range", but NOT
+    # "address" ⊂ "address line 2") AND their values are compatible (equal, or
+    # one a prefix of the other). This stops two independent fields that merely
+    # share a label prefix (Address / Address Line 2) from collapsing into one
+    # and silently dropping a demonstrated required field.
+    def _seg_prefix(a: str, b: str) -> bool:
+        # Whole-segment prefix on the cleaned label words: every word of the
+        # shorter label equals the corresponding word of the longer one.
+        wa = _norm(a).split() if False else re.findall(r"[a-z0-9]+", (a or "").lower())
+        wb = re.findall(r"[a-z0-9]+", (b or "").lower())
+        if not wa or not wb:
+            return False
+        short, long = (wa, wb) if len(wa) <= len(wb) else (wb, wa)
+        return long[: len(short)] == short
+
+    def _values_compatible(v1: str, v2: str) -> bool:
+        a, b = _norm(v1), _norm(v2)
+        if not a or not b:
+            return True  # an empty/non-comparable value never blocks a merge
+        return a == b or a.startswith(b) or b.startswith(a)
+
     used = [False] * len(entries)
     chosen: list[tuple[str, str]] = []
     for i in range(len(entries)):
         if used[i]:
             continue
-        ni = _norm(_strip_required(entries[i][0])[0])
+        ci = _strip_required(entries[i][0])[0]
         cluster = [i]
         used[i] = True
         for j in range(i + 1, len(entries)):
             if used[j]:
                 continue
-            nj = _norm(_strip_required(entries[j][0])[0])
-            if ni and nj and (ni.startswith(nj) or nj.startswith(ni)):
+            cj = _strip_required(entries[j][0])[0]
+            if _seg_prefix(ci, cj) and _values_compatible(entries[i][2], entries[j][2]):
                 cluster.append(j)
                 used[j] = True
         best = max(cluster, key=lambda k: entries[k][1])
         chosen.append((_strip_required(entries[best][0])[0], entries[best][2]))
 
-    # Collapse labels that share the same VALUE to one (cleanest) label.
-    by_value: dict[str, list[str]] = {}
+    # Collapse labels that share the same VALUE to one (cleanest) label — but
+    # ONLY when they are the SAME logical field (same normalized clean label).
+    # Two distinct labels that happen to share a value (two ZIP codes, a
+    # confirm-password) are independent demonstrated fills and must each survive.
+    by_value_label: dict[tuple[str, str], list[str]] = {}
     for label, value in chosen:
-        by_value.setdefault(_norm(value), []).append(label)
+        key = (_norm(value), _norm(_strip_required(label)[0]))
+        by_value_label.setdefault(key, []).append(label)
     text_pairs: list[tuple[str, str]] = []
-    seen_value: set[str] = set()
+    seen_value_label: set[tuple[str, str]] = set()
     for label, value in chosen:
-        nv = _norm(value)
-        if nv in seen_value:
+        key = (_norm(value), _norm(_strip_required(label)[0]))
+        if key in seen_value_label:
             continue
-        seen_value.add(nv)
-        text_pairs.append((_best_label(by_value[nv], value), value))
+        seen_value_label.add(key)
+        text_pairs.append((_best_label(by_value_label[key], value), value))
 
     # Emit only toggles whose FINAL captured state is ON — drops a toggle the
     # user turned on then off (e.g. Round-trip → One-way).
@@ -507,6 +555,27 @@ def _action_navigated(a: PageActionInput) -> bool:
 # title / scene-URL / missing-page) is pixel-inferred and emitted UNPROVEN.
 _PROVEN_SOURCES = frozenset({"ground_truth", "url_regex"})
 
+# Sources trustworthy enough to NAVIGATE a test's ENTRY to (weaker bar than
+# _PROVEN_SOURCES, which gates asserting a URL as fact): instrumented events,
+# bar-zone OCR reads, scene-detected URLs and vision address-bar reads. A
+# content-mined path (url_ocr_path_only) or a screen-name/window-title guess
+# must never become page.goto() step 1 of a generated test.
+_ENTRY_TRUSTED_SOURCES = frozenset({
+    # url_scene is EXCLUDED: scene detected_urls come from the same pixel-regex
+    # sweep as content URLs and can carry a dropdown-mined path; only
+    # instrumented, bar-zone-OCR and vision address-bar reads anchor an entry.
+    "ground_truth", "url_regex", "llm_inferred",
+})
+
+
+def _entry_trusted(group: "_PageGroup") -> bool:
+    """True when a page group's URL is safe to use as the flow's ENTRY
+    navigation. Keys off the recorded provenance -- generic, no app logic."""
+    return (
+        (group.source or "").strip().lower() in _ENTRY_TRUSTED_SOURCES
+        and bool(group.canonical_host or group.url_host)
+    )
+
 
 def _page_proven(group: _PageGroup) -> bool:
     """True when a page's URL/identity is PROVEN (instrumented or directly OCR'd at
@@ -545,12 +614,256 @@ def _typed_field_pairs(group: _PageGroup) -> list[tuple[str, str]]:
     return [(labels[k], last[k]) for k in order]
 
 
-def _build_steps(groups: Sequence[_PageGroup]) -> tuple[list[ProductionTestStep], int]:
-    """Build ordered, logically-reconstructed test steps from page groups."""
+# ── Suite generation (P1 variants / P3 branches / P4 negatives / P5 grades) ──
+
+_MAX_VARIANT_CASES = 6
+_MAX_TOTAL_CASES = 12
+
+
+def _demonstrated_alternates(groups: "Sequence[_PageGroup]") -> list[tuple[str, str, str]]:
+    """[(label, final_value, alternate_value)] for fields where the recording
+    demonstrated MORE THAN ONE value (typed then changed). Grounded by
+    construction: every value was shown on video. Order-preserving, deduped."""
+    out: list[tuple[str, str, str]] = []
+    per_label: dict[str, list[str]] = {}
+    label_display: dict[str, str] = {}
+    for grp in groups:
+        for act in grp.actions:
+            verb = str(getattr(act, "verb", "") or "").casefold()
+            if verb not in ("type", "select"):
+                continue
+            lbl = str(getattr(act, "target_label", "") or "").strip()
+            val = str(getattr(act, "value", "") or "").strip()
+            if not lbl or len(val) < 2:
+                continue
+            k = _norm(lbl)
+            label_display.setdefault(k, lbl)
+            seq = per_label.setdefault(k, [])
+            if not seq or _norm(seq[-1]) != _norm(val):
+                seq.append(val)
+    for k, seq in per_label.items():
+        distinct: list[str] = []
+        for v in seq:
+            if all(_norm(v) != _norm(d) for d in distinct):
+                distinct.append(v)
+        if len(distinct) >= 2:
+            final = distinct[-1]
+            for alt in distinct[:-1]:
+                out.append((label_display[k], final, alt))
+    return out
+
+
+def _clone_step(step: "ProductionTestStep", **updates):
+    try:
+        return step.model_copy(update=updates)
+    except AttributeError:  # pydantic v1 fallback
+        return step.copy(update=updates)
+
+
+def _variant_cases(
+    base_steps: "list[ProductionTestStep]",
+    alternates: list[tuple[str, str, str]],
+    *,
+    artifact_id: str,
+    host: str,
+) -> "list[ProductionTestCase]":
+    cases = []
+    for label, final, alt in alternates[:_MAX_VARIANT_CASES]:
+        idx = next(
+            (i for i, s in enumerate(base_steps)
+             if f"' in the '{label}' field" in (s.action or "")
+             and f"'{final}'" in (s.action or "")),
+            None,
+        )
+        if idx is None:
+            continue
+        steps = list(base_steps)
+        steps[idx] = _clone_step(
+            steps[idx],
+            action=f"Enter '{alt}' in the '{label}' field",
+            expected=f"'{label}' shows '{alt}'",
+            expected_result=f"'{label}' shows '{alt}'",
+            data_ref=alt,
+        )
+        tid = str(uuid.uuid5(
+            _TEST_ID_NAMESPACE,
+            f"{artifact_id}:variant:{_norm(label)}={_norm(alt)}"))
+        cases.append(ProductionTestCase(
+            test_id=tid,
+            name=f"Variant — {label}: '{alt}' ({host})",
+            description=(
+                f"Demonstrated-alternate variant: the recording shows the user "
+                f"entering '{alt}' for '{label}' before settling on '{final}'. "
+                f"This case replays the SAME flow with the demonstrated "
+                f"alternate — every value was shown on video, nothing assumed."),
+            steps=steps,
+            expected_outcome=(
+                f"The flow completes with '{label}' = '{alt}' — the application "
+                f"accepts the demonstrated alternate value."),
+            preconditions=[],
+            priority="P1_high",
+            type="functional",
+            tags=["demonstrated", "variant", "demonstrated-alternate",
+                  "pages_and_forms"],
+        ))
+    return cases
+
+
+def _split_revisit_branch(
+    groups: "Sequence[_PageGroup]",
+) -> tuple["list[_PageGroup]", "list[_PageGroup]"]:
+    """(trunk, branch): first clean revisit pair A..A (same canonical URL,
+    >=1 page between, trunk stays >=2) — the middle is a demonstrated
+    side-exploration. No revisit -> (groups, [])."""
+    canon = [f"{(x.canonical_host or x.url_host or '').lower()}{x.url_path or ''}"
+             for x in groups]
+    for i in range(len(groups) - 2):
+        if not canon[i]:
+            continue
+        for j in range(i + 2, len(groups)):
+            if canon[j] == canon[i]:
+                trunk = list(groups[:i + 1]) + list(groups[j + 1:])
+                branch = list(groups[i:j + 1])
+                if len(trunk) >= 2 and len(branch) >= 2:
+                    return trunk, branch
+    return list(groups), []
+
+
+def _negative_case(
+    base_steps: "list[ProductionTestStep]",
+    groups: "Sequence[_PageGroup]",
+    *,
+    artifact_id: str,
+    host: str,
+) -> "ProductionTestCase | None":
+    """One grounded negative: the first REQUIRED field that also has a
+    demonstrated fill step. Truncate the trunk right after that step, replace
+    the fill with leave-empty-and-proceed. Required-ness was DEMONSTRATED; the
+    exact validation message was not -> marked UNPROVEN."""
+    for grp in groups:
+        try:
+            _tf, _tg, required = _resolve_fields(grp)
+        except Exception:
+            continue
+        for label in required or []:
+            idx = next(
+                (i for i, s in enumerate(base_steps)
+                 if f"' in the '{label}' field" in (s.action or "")),
+                None,
+            )
+            if idx is None:
+                continue
+            steps = [
+                _clone_step(s, step_number=k + 1)
+                for k, s in enumerate(base_steps[:idx + 1])
+            ]
+            steps[-1] = _clone_step(
+                steps[-1],
+                action=(f"Leave the '{label}' field EMPTY and attempt to "
+                        f"proceed to the next page"),
+                expected=(f"The application blocks progression and flags "
+                          f"'{label}' as required. [UNPROVEN: the exact "
+                          f"validation message was not demonstrated in the "
+                          f"recording]"),
+                expected_result=(f"Progression is blocked; '{label}' is "
+                                 f"flagged as required. [UNPROVEN message]"),
+                data_ref="",
+            )
+            tid = str(uuid.uuid5(
+                _TEST_ID_NAMESPACE,
+                f"{artifact_id}:negative:{_norm(label)}"))
+            return ProductionTestCase(
+                test_id=tid,
+                name=f"Negative — required field '{label}' left empty ({host})",
+                description=(
+                    f"'{label}' was demonstrated as a REQUIRED field. This case "
+                    f"replays the flow up to it, leaves it empty and attempts to "
+                    f"proceed. The block-on-empty expectation follows from the "
+                    f"demonstrated required-ness; the exact validation message "
+                    f"is UNPROVEN (not demonstrated) and must not be asserted."),
+                steps=steps,
+                expected_outcome=(
+                    f"The application refuses to proceed while '{label}' is "
+                    f"empty. [UNPROVEN: exact message/behavior detail]"),
+                preconditions=[],
+                priority="P2_medium",
+                type="negative",
+                tags=["negative", "unproven-expectation", "pages_and_forms"],
+            )
+    return None
+
+
+def _detect_data_carry(groups: "Sequence[_PageGroup]") -> list:
+    """P6: values entered on an EARLIER page that re-appear among a LATER
+    page's demonstrated field values (the coverage-amount-on-estimate
+    pattern). Evidence-only cross-page dataflow — both sightings were
+    demonstrated; nothing is fabricated."""
+    carry: list = []
+    seen: dict = {}
+    for gi, grp in enumerate(groups):
+        try:
+            fields, _t, _r = _resolve_fields(grp)
+        except Exception:
+            continue
+        page = _page_name(grp.url_path, grp.location)
+        for lbl, val in fields:
+            nv = _norm(str(val))
+            if len(nv) < 3:
+                continue
+            if nv in seen and seen[nv][0] < gi:
+                if not any(x.get("value_norm") == nv for x in carry):
+                    carry.append({"value": str(val), "value_norm": nv,
+                                  "entered_on": seen[nv][1], "reappears_on": page})
+            else:
+                seen.setdefault(nv, (gi, page))
+    for x in carry:
+        x.pop("value_norm", None)
+    return carry
+
+
+def _grade_case(case: "ProductionTestCase") -> None:
+    """P5: per-case evidence grade from the case's OWN steps. A = every step
+    demonstrated; B = <=2 inferred/unproven steps; C = more. Appended as tags
+    so every consumer (UI, export, client) sees WHY to trust the case."""
+    inferred = 0
+    for s in case.steps:
+        prov = str(getattr(s, "provenance", "") or
+                   getattr(s, "observed_provenance", "") or "").casefold()
+        text = f"{s.expected or ''} {s.action or ''}"
+        if prov == "inferred" or "UNPROVEN" in text:
+            inferred += 1
+    grade = "A" if inferred == 0 else ("B" if inferred <= 2 else "C")
+    case.tags = list(case.tags or []) + [
+        f"evidence-grade:{grade}", f"inferred-steps:{inferred}",
+        f"total-steps:{len(case.steps)}"]
+
+
+def _build_steps(groups: Sequence[_PageGroup]) -> tuple[list[ProductionTestStep], int, bool]:
+    """Build ordered, logically-reconstructed test steps from page groups.
+
+    Returns ``(steps, fields_used, truncated)``. ``truncated`` is True when the
+    recording exceeded ``_MAX_GROUPS`` page milestones and only the first
+    ``_MAX_GROUPS`` were turned into steps — so an over-long test is surfaced as
+    degraded rather than emitted unbounded and silent.
+    """
     steps: list[ProductionTestStep] = []
     n = 0
     fields_used = 0
     prev_navigated = True  # the entry page has no prior boundary to prove
+
+    # Bound the work: keep the entry page + first _MAX_GROUPS-1 milestones so the
+    # flow's start (and a coherent prefix) is preserved; the tail is dropped and
+    # flagged. Conservative — normal recordings (< _MAX_GROUPS groups) are unchanged.
+    truncated = len(groups) > _MAX_GROUPS
+    if truncated:
+        groups = groups[:_MAX_GROUPS]
+
+    # FLOW-LEVEL fill dedup: when the vision pass splits one wizard page into
+    # multiple visits, the SAME persisted field state is re-observed and would
+    # be emitted as a repeated step (Texas entered twice). A (field, value)
+    # pair is entered ONCE per flow — first observation wins; a later visit
+    # re-showing it is state persistence, not a second user entry.
+    seen_fills: set = set()
 
     for gi, group in enumerate(groups):
         url = _full_url(group)
@@ -607,6 +920,10 @@ def _build_steps(groups: Sequence[_PageGroup]) -> tuple[list[ProductionTestStep]
 
         # 2) Fill demonstrated text/select fields.
         for label, value in text_fields:
+            _fill_sig = (_norm(label), _norm(str(value)))
+            if _fill_sig in seen_fills:
+                continue  # persisted state re-observed on a split visit
+            seen_fills.add(_fill_sig)
             fields_used += 1
             n += 1
             step = ProductionTestStep(
@@ -639,7 +956,8 @@ def _build_steps(groups: Sequence[_PageGroup]) -> tuple[list[ProductionTestStep]
             ))
 
         # 4) Pure interactions the user performed (clicks/hovers/etc.), in order.
-        interaction_steps = _interaction_steps(group, next_canon)
+        next_group_proven = _page_proven(groups[gi + 1]) if gi + 1 < len(groups) else False
+        interaction_steps = _interaction_steps(group, next_canon, next_group_proven)
         for st in interaction_steps:
             n += 1
             st.step_number = n
@@ -679,7 +997,7 @@ def _build_steps(groups: Sequence[_PageGroup]) -> tuple[list[ProductionTestStep]
 
         prev_navigated = group_navigated
 
-    return steps, fields_used
+    return steps, fields_used, truncated
 
 
 # Signals that a click landed inside a confirmation dialog / modal / overlay.
@@ -729,7 +1047,7 @@ def _submit_sequence(clicks: list) -> list:
     return [last]
 
 
-def _interaction_steps(group: _PageGroup, next_url: str) -> list[ProductionTestStep]:
+def _interaction_steps(group: _PageGroup, next_url: str, next_group_proven: bool = False) -> list[ProductionTestStep]:
     """The SUBMIT action(s) for the page — normally the final click/press, plus the
     modal-OPEN click when the final click confirms a dialog (see _submit_sequence).
 
@@ -791,11 +1109,17 @@ def _interaction_steps(group: _PageGroup, next_url: str) -> list[ProductionTestS
             obs["observed"]["after"] = after or a.after_outcome
         # Carry the RECORDED next-page URL so the compiler can assert the SUBMIT
         # actually navigated there (a click step has no URL of its own). Grounded:
-        # set ONLY when the gate above proved this click caused the navigation, so
-        # navigation_grounded marks it solid for the confidence scorer.
+        # set ONLY when the gate above proved this click caused the navigation.
+        # navigation_grounded (which lets the confidence scorer keep this as a hard
+        # toHaveURL assertion) is set ONLY when the DESTINATION page is itself PROVEN
+        # — mirroring the verify-step gate (_page_proven). When the next page is
+        # pixel-inferred, we still hand the URL to the compiler as a hint but WITHOUT
+        # navigation_grounded, so confidence demotes the step to REVIEW instead of
+        # hard-asserting toHaveURL onto an unproven page (never green-wash).
         if step_next:
             obs["observed"]["next_url"] = step_next
-            obs["observed"]["navigation_grounded"] = True
+            if next_group_proven:
+                obs["observed"]["navigation_grounded"] = True
         out.append(ProductionTestStep(
             step_number=0,
             action=f"Click '{label}'{where}",
@@ -871,7 +1195,29 @@ def generate_demonstrated_test_cases(
             excluded_placeholder_fields=_count_placeholders(visits),
         )
 
-    steps, fields_used = _build_steps(groups)
+    # PHASE-A TRUSTED ENTRY: drop leading groups whose page identity is
+    # content-mined or screen-name-inferred (browser chrome, search dropdowns).
+    # The demonstrated APP flow starts at the first entry-trusted page; a
+    # content-mined path must never become the script's opening goto. Only
+    # applied when a trusted entry exists and >= 2 milestones survive -- the
+    # honest fallback keeps the original journey rather than fabricating one.
+    _first_trusted_idx = next(
+        (i for i, _g in enumerate(groups) if _entry_trusted(_g)), None,
+    )
+    if _first_trusted_idx and len(groups) - _first_trusted_idx >= 2:
+        groups = groups[_first_trusted_idx:]
+
+    # P3: peel one demonstrated side-exploration (revisit A..A) off the trunk
+    # so the E2E stays linear and the branch becomes its own case.
+    groups, _branch_groups = _split_revisit_branch(groups)
+
+    steps, fields_used, truncated = _build_steps(groups)
+    truncation_reason = (
+        f"Large recording: {len(groups)} page milestones detected — the generated "
+        f"test was capped at the first {_MAX_GROUPS} pages. Review/split the "
+        f"recording into smaller flows for full coverage."
+        if truncated else ""
+    )
 
     entry = _page_name(groups[0].url_path, groups[0].location)
     outcome = _page_name(groups[-1].url_path, groups[-1].location)
@@ -929,13 +1275,71 @@ def generate_demonstrated_test_cases(
         tags=["demonstrated", "functional", "e2e", "pages_and_forms"],
     )
 
+    # P6: evidence-only cross-page data-carry (recorded on case + manifest).
+    _carry = _detect_data_carry(groups)
+    if _carry:
+        test_case.description = (test_case.description or "") + (
+            " Data-carry observed: " + "; ".join(
+                f"'{x['value']}' entered on '{x['entered_on']}' re-appears on "
+                f"'{x['reappears_on']}'" for x in _carry[:4]) + ".")
+        try:
+            test_case.data_carry = _carry
+        except (AttributeError, ValueError, TypeError):
+            pass  # model may forbid extra attrs — description still carries it
+
+    cases: list[ProductionTestCase] = [test_case]
+
+    # P1: demonstrated-alternate variants (user showed >1 value for a field).
+    cases.extend(_variant_cases(
+        steps, _demonstrated_alternates(groups),
+        artifact_id=artifact_id, host=host,
+    ))
+
+    # P3: branch case for the demonstrated side-exploration, if one was peeled.
+    if _branch_groups:
+        try:
+            b_steps, _bf, _bt = _build_steps(_branch_groups)
+            b_entry = _page_name(_branch_groups[0].url_path, _branch_groups[0].location)
+            cases.append(ProductionTestCase(
+                test_id=str(uuid.uuid5(
+                    _TEST_ID_NAMESPACE,
+                    f"{artifact_id}:branch:" + "|".join(
+                        f"{x.url_host}{x.url_path}" for x in _branch_groups))),
+                name=f"Branch — exploration from '{b_entry}' and back ({host})",
+                description=(
+                    "The recording left this page, explored, and returned — a "
+                    "demonstrated side-path emitted as its own case so the main "
+                    "E2E stays linear. Every step was shown on video."),
+                steps=b_steps,
+                expected_outcome=(
+                    f"The side-exploration completes and returns to '{b_entry}'."),
+                preconditions=[],
+                priority="P1_high",
+                type="functional",
+                tags=["demonstrated", "branch", "pages_and_forms"],
+            ))
+        except Exception:
+            pass  # a branch that cannot build steps is dropped, never fabricated
+
+    # P4: one grounded negative from demonstrated required-ness.
+    _neg = _negative_case(steps, groups, artifact_id=artifact_id, host=host)
+    if _neg is not None:
+        cases.append(_neg)
+
+    # P5: every case self-reports its evidence grade.
+    cases = cases[:_MAX_TOTAL_CASES]
+    for _c in cases:
+        _grade_case(_c)
+
     return DemonstratedGenerationResult(
-        test_cases=[test_case],
+        test_cases=cases,
         page_groups=len(groups),
         visits_total=len(visits),
         visits_used=sum(len(g.visit_ids) for g in groups),
         fields_demonstrated=fields_used,
         excluded_placeholder_fields=_count_placeholders(visits),
+        truncated=truncated,
+        truncation_reason=truncation_reason,
     )
 
 

@@ -82,6 +82,76 @@ def _analysis_list(value: Any) -> list:
     return []
 
 
+
+_ADDRESS_BAR_URL_RX = re.compile(
+    r"(?:https?://)?(?:www\.)?[a-z0-9][a-z0-9\-]{0,62}(?:\.[a-z]{2,10}){1,3}"
+    r"(?:/[^\s\"'<>|]{0,300})?",
+    re.IGNORECASE,
+)
+
+
+def _address_bar_url(text_regions) -> str:
+    """Deterministic address-bar read: URL-shaped OCR text whose region sits in
+    the TOP strip of the frame (where every browser's address bar lives). Uses
+    the OCR regions' own geometry -- no model call, generic across apps. The
+    TOPMOST match wins (the bar sits above its own autocomplete dropdown), with
+    length as the tie-break. Returns "" when nothing URL-shaped is up there
+    (desktop apps, kiosks) -- NEVER invents; downstream vision tiers cover the
+    rest at their own honest confidence."""
+    try:
+        regions = list(text_regions or [])
+        if not regions:
+            return ""
+
+        def _ys(r):
+            bb = r.get("bbox") if isinstance(r, dict) else None
+            out = []
+            for p in bb or []:
+                if isinstance(p, (list, tuple)) and len(p) >= 2:
+                    try:
+                        out.append(float(p[1]))
+                    except (TypeError, ValueError):
+                        pass
+            return out
+
+        frame_h = 0.0
+        for r in regions:
+            ys = _ys(r)
+            if ys:
+                frame_h = max(frame_h, max(ys))
+        if frame_h <= 0:
+            return ""
+        strip_limit = frame_h * 0.12
+
+        best = ""
+        best_top = None
+        for r in regions:
+            ys = _ys(r)
+            if not ys:
+                continue
+            top = min(ys)
+            if top > strip_limit:
+                continue
+            text = str((r.get("text") if isinstance(r, dict) else "") or "")
+            for m in _ADDRESS_BAR_URL_RX.finditer(text):
+                cand = m.group(0).strip().rstrip(".,;:")
+                low = cand.lower()
+                # Require a dotted host AND either a scheme or a path -- a
+                # dotted phrase in a tab title must not mint a page URL.
+                if "." not in low:
+                    continue
+                if not (low.startswith("http") or "/" in low):
+                    continue
+                if best_top is None or top < best_top or (
+                    top == best_top and len(cand) > len(best)
+                ):
+                    best = cand
+                    best_top = top
+        return best[:1000]
+    except Exception:
+        return ""
+
+
 def _analysis_text(value: Any) -> str:
     """Return a safe string for untrusted analysis text fields."""
     if value is None:
@@ -258,6 +328,10 @@ class EyesConfig(EngineConfig):
         default=True,
         validation_alias="EYES_ADAPTIVE_SAMPLING",
     )
+    settle_frame: bool = Field(
+        default=True,
+        validation_alias="EYES_SETTLE_FRAME",
+    )
 
     # Scene grouping
     # Hamming distance at which two consecutive frames are considered a NEW scene.
@@ -407,6 +481,7 @@ class EyesEngine(NexusEngine, GPUWorkerMixin):
             max_fps_extract=self.cfg.max_fps_extract,
             keyframe_only=self.cfg.keyframe_only,
             adaptive_sampling=self.cfg.adaptive_sampling,
+            settle_frame=self.cfg.settle_frame,
         )
         self.app_classifier = ApplicationClassifier()
         self.ocr = OCREngine(
@@ -930,6 +1005,7 @@ class EyesEngine(NexusEngine, GPUWorkerMixin):
                 timestamp_seconds=0.0,
                 application_type=app_type,
                 page_title=_analysis_text(analysis.get("page_title", "")),
+                url_or_path=_address_bar_url(text_regions),
                 ui_elements=_analysis_list(analysis.get("ui_elements", [])),
                 extracted_text=extracted_text,
                 tables=_analysis_tables(analysis.get("tables", [])),
@@ -2632,46 +2708,53 @@ class EyesEngine(NexusEngine, GPUWorkerMixin):
                 and per_frame_llava_enabled
                 and len(scene["frame_indices"]) > 1
             ):
-                _gpu_prio_pf = (
-                    GPU_PRIORITY_FAST if processing_profile == "fast"
-                    else GPU_PRIORITY_DEEP
+                # Per-frame analyses are INDEPENDENT — each uses the rep
+                # frame's description as the fixed scene anchor (not a chain)
+                # — so they run CONCURRENTLY instead of one-at-a-time.  These
+                # are cloud tier-router calls that use no local GPU, so a
+                # bounded asyncio.Semaphore (NOT the single-slot GPU semaphore)
+                # parallelises the I/O-bound work while staying under provider
+                # rate limits; local-model fallback shares one Ollama instance
+                # so this cannot blow GPU memory.  Set
+                # EYES_VISION_PER_FRAME_CONCURRENCY=1 to restore the previous
+                # serial behaviour without a rebuild.
+                _pf_prev = analysis.get("description", "") or prev_description
+                _pf_candidates = [
+                    gi for gi in scene["frame_indices"]
+                    if gi != rep_idx and frames[gi].get("frame_path")
+                ]
+                _pf_remaining = max(
+                    0, self.cfg.per_frame_llava_limit - per_frame_llava_calls
                 )
-                for global_idx in scene["frame_indices"]:
-                    if global_idx == rep_idx:
-                        continue
-                    if per_frame_llava_calls >= self.cfg.per_frame_llava_limit:
-                        logger.info(
-                            "eyes.per_frame_llava.budget_exhausted",
-                            job_id=job_id,
-                            scene_idx=scene_idx,
-                            limit=self.cfg.per_frame_llava_limit,
-                        )
-                        break
+                _pf_selected = _pf_candidates[:_pf_remaining]
+                if len(_pf_selected) < len(_pf_candidates):
+                    logger.info(
+                        "eyes.per_frame_llava.budget_exhausted",
+                        job_id=job_id,
+                        scene_idx=scene_idx,
+                        limit=self.cfg.per_frame_llava_limit,
+                    )
+                _pf_conc = max(1, int(
+                    os.environ.get("EYES_VISION_PER_FRAME_CONCURRENCY", "6")
+                ))
+                _pf_sem = asyncio.Semaphore(_pf_conc)
 
-                    frame_info = frames[global_idx]
-                    frame_path = frame_info.get("frame_path")
-                    if not frame_path:
-                        continue
+                async def _enrich_frame(global_idx):
                     frame_ocr = ""
                     if global_idx < len(ocr_results) and ocr_results[global_idx]:
                         frame_ocr = ocr_results[global_idx][0] or ""
                     if not frame_ocr:
                         frame_ocr = merged_text  # rep-frame OCR is best fallback
-
                     try:
-                        async with self._gpu_semaphore.acquire(_gpu_prio_pf):
-                            non_rep_analysis = await self.visual_analyzer.analyze_frame(
-                                frame_path,
+                        async with _pf_sem:
+                            res = await self.visual_analyzer.analyze_frame(
+                                frames[global_idx]["frame_path"],
                                 frame_ocr,
                                 app_type,
-                                # Use the rep frame's description as "previous"
-                                # so LLaVA can describe the *change* relative
-                                # to the canonical scene state.
-                                analysis.get("description", "") or prev_description,
+                                _pf_prev,
                                 processing_profile,
                             )
-                        per_frame_analyses[global_idx] = non_rep_analysis
-                        per_frame_llava_calls += 1
+                        return (global_idx, res)
                     except Exception as exc:  # pragma: no cover — defensive
                         logger.warning(
                             "eyes.per_frame_llava.failed",
@@ -2680,6 +2763,16 @@ class EyesEngine(NexusEngine, GPUWorkerMixin):
                             frame_index=global_idx,
                             error=str(exc),
                         )
+                        return (global_idx, None)
+
+                if _pf_selected:
+                    _pf_results = await asyncio.gather(
+                        *(_enrich_frame(gi) for gi in _pf_selected)
+                    )
+                    for _gi, _res in _pf_results:
+                        if _res is not None:
+                            per_frame_analyses[_gi] = _res
+                            per_frame_llava_calls += 1
 
             # Propagate per-frame analysis to FrameAnalysis records.  Frames
             # without their own analysis (rep frame, or budget-exhausted
@@ -2687,7 +2780,7 @@ class EyesEngine(NexusEngine, GPUWorkerMixin):
             # rep analysis — preserving prior behaviour for those code paths.
             for frame_local_idx, global_idx in enumerate(scene["frame_indices"]):
                 frame_info = frames[global_idx]
-                ocr_text, _, ocr_conf = ocr_results[global_idx]
+                ocr_text, ocr_regions, ocr_conf = ocr_results[global_idx]
 
                 is_representative = (global_idx == rep_idx)
 
@@ -2706,6 +2799,7 @@ class EyesEngine(NexusEngine, GPUWorkerMixin):
                     timestamp_seconds=frame_info["timestamp"],
                     application_type=app_type,
                     page_title=f_page_title,
+                    url_or_path=_address_bar_url(ocr_regions),
                     ui_elements=f_ui_elements,
                     extracted_text=ocr_text,
                     tables=f_tables,

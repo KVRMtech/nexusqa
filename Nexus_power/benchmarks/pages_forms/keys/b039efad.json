@@ -1,0 +1,44 @@
+{
+  "artifact_id": "b039efad-df16-44ca-8e90-2bb720f52930",
+  "key_status": "draft",
+  "video_class": "TODO: describe the recording (human)",
+  "pages": [
+    {
+      "host": "saucedemo.com",
+      "path_prefix": "/inventory.html"
+    },
+    {
+      "host": "saucedemo.com",
+      "path_prefix": "/checkout-step-one.html"
+    },
+    {
+      "host": "saucedemo.com",
+      "path_prefix": "/checkout-step-one"
+    }
+  ],
+  "values": [
+    {
+      "label": "First Name",
+      "value": "Venkata"
+    },
+    {
+      "label": "Last Name",
+      "value": "karna"
+    },
+    {
+      "label": "Zip/Postal Code",
+      "value": "78006"
+    },
+    {
+      "label": "First Name",
+      "value": "Venkat"
+    }
+  ],
+  "forms": [
+    {
+      "label": "Sort order",
+      "value": "Name (A to Z)"
+    }
+  ],
+  "notes": "DRAFT seeded from the pipeline's own extraction \u2014 CIRCULAR until a human verifies every entry against the actual video and sets key_status='verified'. Add anything the pipeline MISSED."
+}

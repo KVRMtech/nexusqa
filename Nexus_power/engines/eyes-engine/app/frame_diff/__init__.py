@@ -71,11 +71,21 @@ class FrameExtractor:
                                              # before adaptive slow-down applies
         keyframe_only: bool = False,
         adaptive_sampling: bool = True,
+        settle_frame: bool = True,
     ):
         self.frame_diff_threshold = frame_diff_threshold
         self.max_fps_extract = max_fps_extract
         self.keyframe_only = keyframe_only
         self.adaptive_sampling = adaptive_sampling
+        # On a burst-scale transition, seek back ~0.25s (settle_backoff) and
+        # extract the SETTLED pre-navigation frame: the fully-filled form the
+        # user just completed — the highest-value frame for Pages & Forms
+        # value capture, independent of probe cadence. Env: EYES_SETTLE_FRAME.
+        self.settle_frame = settle_frame
+        # Settle trigger: a KEPT change big enough to be a page transition
+        # (not a keystroke). Decoupled from _BURST_DISTANCE (which tunes probe
+        # densification): 2.5x the keep-threshold, floored at 0.08.
+        self._settle_distance = max(0.08, 2.5 * float(frame_diff_threshold))
         self._event_bus = None
         self._stub_fallback_count: int = 0
         self._cv2_available: Optional[bool] = None
@@ -164,6 +174,43 @@ class FrameExtractor:
                 )
 
                 if is_different or force_keep_by_gap:
+                    # SETTLE FRAME (seek-back): a burst-scale jump means a page
+                    # transition at source frame T. The most information-dense
+                    # frame of the whole recording is the SETTLED state just
+                    # before it — the fully-filled form the user completed,
+                    # including values typed BETWEEN probes that no sampling
+                    # cadence ever saw. Seek back ~settle_backoff seconds,
+                    # extract that frame, restore the read position. One extra
+                    # decode per real page transition.
+                    if (
+                        self.settle_frame
+                        and is_different
+                        and distance >= self._settle_distance
+                        and last_extracted_source_frame_idx is not None
+                    ):
+                        settle_idx = frame_idx - max(1, int(fps * 0.25))
+                        if settle_idx > last_extracted_source_frame_idx:
+                            pos_after = cap.get(cv2.CAP_PROP_POS_FRAMES)
+                            cap.set(cv2.CAP_PROP_POS_FRAMES, settle_idx)
+                            ok_s, settle_img = cap.read()
+                            cap.set(cv2.CAP_PROP_POS_FRAMES, pos_after)
+                            if ok_s:
+                                settle_path = os.path.join(
+                                    output_dir, f"frame_{extracted_idx:05d}.png"
+                                )
+                                cv2.imwrite(settle_path, settle_img)
+                                frames.append({
+                                    "frame_path": settle_path,
+                                    "timestamp": round(settle_idx / fps, 3),
+                                    "index": extracted_idx,
+                                    "source_frame_idx": settle_idx,
+                                    "hash": self._compute_frame_hash(
+                                        settle_img, cv2
+                                    ),
+                                    "settle_before_transition": True,
+                                })
+                                extracted_idx += 1
+
                     timestamp = frame_idx / fps
                     frame_path = os.path.join(
                         output_dir, f"frame_{extracted_idx:05d}.png"

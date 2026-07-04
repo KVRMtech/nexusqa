@@ -98,6 +98,8 @@ from app.services.storyboard import load_config as load_storyboard_config
 # Additive: reads frozen evidence, writes only factory_test_cases.
 from app.routers.test_factory import router as test_factory_router
 from app.routers.preflight import router as preflight_router
+# Lights-Out (Mode C) — schedule CRUD + reports (additive; gated background runner)
+from app.routers.scheduler import router as scheduler_router
 from app.services.storyboard.composer import StoryboardComposer
 from app.services.storyboard.frame_annotator import FrameAnnotator
 from app.services.llm import load_config as load_llm_config, LLMRouter
@@ -208,6 +210,26 @@ async def lifespan(application: FastAPI):
             frame_annotator is not None and frame_annotator.pil_available
         ),
     )
+
+    # Lights-Out (Mode C): start the background scheduler. GATED by NEXUS_SCHEDULER_ENABLED
+    # (default off) and FAIL-OPEN — a pure no-op unless explicitly enabled, so it can never
+    # affect a deployment that does not opt in.
+    try:
+        from app.services.scheduler.scheduler import start_scheduler
+        start_scheduler()
+    except Exception as _sched_exc:  # never block startup
+        logger.warning("scheduler.start_skipped", error=str(_sched_exc)[:160])
+
+    # SENTINEL AUTONOMY (lifespan-hosted; @app.on_event is IGNORED when a
+    # lifespan= handler is set, so the daemon must start here).
+    try:
+        import asyncio as _aio
+        from app.services.test_factory.qe_agents import sentinel_daemon
+        _aio.create_task(sentinel_daemon())
+    except Exception:
+        import logging as _lg
+        _lg.getLogger(__name__).warning("sentinel.daemon_start_failed")
+
     yield
 
     await shutdown_knowledge_foundation(application)
@@ -294,6 +316,20 @@ app.include_router(marketplace_router)
 app.include_router(storyboard_router)
 app.include_router(test_factory_router)
 app.include_router(preflight_router)
+
+
+@app.on_event("startup")
+async def _start_sentinel_daemon() -> None:
+    # SENTINEL AUTONOMY: scheduled watcher (env NEXUS_SENTINEL_INTERVAL_MIN,
+    # default 60; 0 disables). Fully guarded — can never affect requests.
+    try:
+        import asyncio as _aio
+        from app.services.test_factory.qe_agents import sentinel_daemon
+        _aio.create_task(sentinel_daemon())
+    except Exception:  # pragma: no cover
+        import logging as _lg
+        _lg.getLogger(__name__).warning("sentinel.daemon_start_failed")
+app.include_router(scheduler_router)  # Lights-Out (Mode C): schedules + reports + run-now
 
 
 # ─── Health ───────────────────────────────────────────────────

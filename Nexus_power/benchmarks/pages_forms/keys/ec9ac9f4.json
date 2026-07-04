@@ -1,0 +1,43 @@
+{
+  "artifact_id": "ec9ac9f4-50c7-4341-9e61-b926a70f3785",
+  "key_status": "draft",
+  "video_class": "TODO: describe the recording (human)",
+  "pages": [
+    {
+      "host": "34.124.214.109",
+      "path_prefix": "/"
+    },
+    {
+      "host": "34.124.214.109",
+      "path_prefix": "/search/results"
+    },
+    {
+      "host": "34.124.214.109",
+      "path_prefix": "/booking/passenger"
+    }
+  ],
+  "values": [
+    {
+      "label": "Departure Date",
+      "value": "06/22/2026"
+    },
+    {
+      "label": "From",
+      "value": "AUS"
+    },
+    {
+      "label": "Travel Class",
+      "value": "Economy"
+    },
+    {
+      "label": "To",
+      "value": "PIT"
+    },
+    {
+      "label": "Trip type",
+      "value": "Round-trip"
+    }
+  ],
+  "forms": [],
+  "notes": "DRAFT seeded from the pipeline's own extraction \u2014 CIRCULAR until a human verifies every entry against the actual video and sets key_status='verified'. Add anything the pipeline MISSED."
+}

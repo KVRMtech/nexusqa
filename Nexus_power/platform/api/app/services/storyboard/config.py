@@ -533,11 +533,43 @@ class PageVisitExtractorConfig:
     # runs sequentially against the same Anthropic budget as the other
     # extractors.
     vision_identity_concurrency: int = 2
+    # Skip vision-identity calls for frames whose location is ALREADY a PROVEN
+    # bar-zone URL with a deep path (>= 2 segments) -- deterministic Tier-0
+    # (the eyes address-bar read) answered them; spending a vision call there
+    # buys nothing. Big cost lever at fleet scale; disable per-deployment via
+    # STORYBOARD_PAGE_VISIT_VISION_SKIP_PROVEN=false to vision-read everything.
+    vision_skip_proven_frames: bool = True
 
     # Minimum confidence a vision identity must report before it
     # overrides the deterministic location.  Guards against low-quality
     # reads polluting the page log.
     vision_identity_min_confidence: float = 0.5
+
+    # ── Item 1: dwell-weighted frame selection ────────────────────────
+    # A KT presenter dwells on each page for seconds, so many contiguous
+    # frames share a location.  When the frame count exceeds the cap, pick
+    # ONE clean frame per dwell-run at its temporal midpoint (and spend any
+    # leftover budget on the longest-dwell runs) instead of sampling evenly
+    # — so the vision budget lands on the pages the presenter paused on, not
+    # on short transitions.  Falls back to even-sampling when off or when
+    # there is no clear dwell signal.  Additive; default-on but only matters
+    # when the (default-off) vision identity pass is enabled AND over cap.
+    vision_identity_dwell_weighted: bool = True
+
+    # ── Item 2: address-bar crop ──────────────────────────────────────
+    # When True, ALSO send the vision identity model a HIGH-RES crop of the
+    # top strip of the frame (where the browser address bar lives) alongside
+    # the downsized full frame, so the URL fills the model's view instead of
+    # being a ~6px sliver in a 1024px thumbnail.  The model reads the URL
+    # from the crop and the heading from the full frame.  OFF by default
+    # (extra image cost).  The URL it reads stays LLM_INFERRED (0.85) and is
+    # NEVER promoted to the url_regex/1.0 PROVEN tier.
+    enable_address_bar_crop: bool = False
+    # Fraction of frame height treated as the address-bar strip.
+    address_bar_top_fraction: float = 0.08
+    # Max dimension for the (thin) address-bar crop — kept high so URL
+    # glyphs stay legible; a thin strip stays cheap even at 1568px.
+    address_bar_crop_max_dimension_px: int = 1568
 
     # Task name used when calling the LLM router for llm_inferred.
     llm_task_name: str = "page_visit_inference"
@@ -985,11 +1017,29 @@ def load_config() -> StoryboardConfig:
             vision_identity_concurrency=min(2, _env_int(
                 "STORYBOARD_PAGE_VISIT_VISION_CONCURRENCY", 2, min_value=1,
             )),
+            vision_skip_proven_frames=_env_bool(
+                "STORYBOARD_PAGE_VISIT_VISION_SKIP_PROVEN", True,
+            ),
             vision_identity_min_confidence=_env_float(
                 "STORYBOARD_PAGE_VISIT_VISION_MIN_CONFIDENCE",
                 0.5,
                 min_value=0.0,
                 max_value=1.0,
+            ),
+            vision_identity_dwell_weighted=_env_bool(
+                "STORYBOARD_PAGE_VISIT_VISION_DWELL_WEIGHTED", True,
+            ),
+            enable_address_bar_crop=_env_bool(
+                "STORYBOARD_PAGE_VISIT_ADDRESS_BAR_CROP", False,
+            ),
+            address_bar_top_fraction=_env_float(
+                "STORYBOARD_PAGE_VISIT_ADDRESS_BAR_TOP_FRACTION",
+                0.08,
+                min_value=0.01,
+                max_value=1.0,
+            ),
+            address_bar_crop_max_dimension_px=_env_int(
+                "STORYBOARD_PAGE_VISIT_ADDRESS_BAR_MAX_DIM", 1568, min_value=1,
             ),
             llm_task_name=_env_str(
                 "STORYBOARD_PAGE_VISIT_LLM_TASK_NAME", "page_visit_inference",

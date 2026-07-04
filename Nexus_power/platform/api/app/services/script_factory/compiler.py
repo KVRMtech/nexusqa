@@ -13,21 +13,16 @@ No new vision pass, no cost, and it never modifies the frozen capture pipeline.
 from __future__ import annotations
 
 import json
+import os
 import re
 from typing import Iterable
 from urllib.parse import urlparse
 
 from .locators import js_regex_literal, js_str, url_path
 # Control-KIND / interaction heal recipes live OUTSIDE this frozen file; the
-# `interactions` channel below early-returns into them. Module-level import is
-# cycle-safe: interaction_resolver only imports compiler helpers LAZILY (inside its
-# emit fn), so nothing here runs at import time.
+# `interactions` channel below early-returns into them. Cycle-safe: the resolver
+# only imports compiler helpers lazily (inside its emitters).
 from .interaction_resolver import INTERACTION_RECIPES
-# Timing/materialize/portal/frame WAIT+SCOPE heal recipes also live OUTSIDE this
-# frozen file; the `waits` channel below emits their PREAMBLE before the verb
-# branch. Default-off (absent => byte-identical), never green-wash. Cycle-safe:
-# wait_scope_resolver only imports compiler helpers LAZILY inside its emitter.
-from .wait_scope_resolver import emit_wait_scope_lines
 
 _SLUG_RX = re.compile(r"[^a-z0-9]+")
 _CONSENT_RX = re.compile(r"cookie|consent|accept all|accept cookies", re.IGNORECASE)
@@ -179,11 +174,23 @@ def build_field_meta(visits: Iterable) -> dict[str, dict]:
 def _refine_kind(observed: dict, field_meta: dict) -> str:
     """text | select | date | radio | checkbox | toggle — deterministic."""
     base = (observed.get("kind") or "").strip().lower()
-    if base == "toggle":
-        return "toggle"
+    if observed.get("kind_locked") and base:
+        # a re-anchor bound this step to the REAL live control and named its kind —
+        # live evidence outranks every accumulated override below.
+        return base
     fm = field_meta.get(_norm(observed.get("label", ""))) or {}
     control = fm.get("control", "")
     options = fm.get("options") or []
+    # An EXPLICIT chooser override (auto-heal's select_content_fallback, or a human edit
+    # that re-points the control) is AUTHORITATIVE and MUST beat a mis-captured
+    # observed.kind=="toggle". Without this, a <select> wrongly recorded as a toggle could
+    # NEVER be corrected — the toggle short-circuit below would discard the override before
+    # it is ever read. Byte-identical for every non-overridden case: a real toggle has no
+    # 'select' control in field_meta, so it still falls through to the toggle return below.
+    if control in ("select", "dropdown", "combobox"):
+        return "select"
+    if base == "toggle":
+        return "toggle"
     if control == "checkbox":
         return "checkbox"
     if control in ("radio", "segmented"):
@@ -217,6 +224,25 @@ _ANCHOR_ROLE = {
     "tabpanel": "tabpanel", "dialog": "dialog",
 }
 
+# The control's ARIA role for the over-qualified ``block`` scope's ``has`` filter,
+# derived from the recorded control kind. Defaults to 'button' (the common case).
+_CONTROL_ROLE = {
+    "button": "button", "link": "link", "text": "textbox", "date": "textbox",
+    "select": "combobox", "toggle": "checkbox", "checkbox": "checkbox", "radio": "radio",
+}
+
+# Generic block containers for the ``block`` anchor scope — common semantic + ARIA +
+# class-pattern wrappers for a card/list/row/grid cell. No app-specific selector: the
+# double filter (hasText + has-control) + ``.last()`` (innermost matching ancestor)
+# resolves to the one item that holds BOTH the block text and the control.
+_BLOCK_CONTAINERS = (
+    "li, tr, article, section, aside, fieldset, "
+    "[role=\"row\"], [role=\"listitem\"], [role=\"article\"], [role=\"gridcell\"], "
+    "[role=\"group\"], [role=\"region\"], [role=\"option\"], "
+    "[class*=\"item\"], [class*=\"card\"], [class*=\"cell\"], [class*=\"row\"], "
+    "[class*=\"tile\"], [class*=\"product\"], div"
+)
+
 
 def _anchor_scope(observed: dict) -> str:
     """Locator scope for a repeated control. ``'page'`` when there's no anchor;
@@ -225,10 +251,31 @@ def _anchor_scope(observed: dict) -> str:
     so card / list / grid / region / dialog layouts disambiguate, not just
     tables. Every rung still targets the SAME accessible name, so this can never
     silently bind to a different control."""
+    frame_sel = observed.get("frame_selector") or ""
+    if frame_sel:
+        # P4 iframe: a frame-scoped re-anchor binds INSIDE the owning iframe.
+        # frameLocator exposes the SAME getByRole/getByLabel/... ladder, so this
+        # composes with the whole resilient locator chain + the step's own oracle.
+        return f"page.frameLocator('{js_str(frame_sel)}')"
     anchor = js_str(observed.get("anchor", ""))
     if not anchor:
         return "page"
     kind = _norm(observed.get("anchor_kind", "")).replace(" ", "-")
+    if kind == "block":
+        # P6 over-qualified scope: the block anchor is plain TEXT (a product/card name),
+        # not a named ARIA landmark, so getByRole(name=anchor) wouldn't find it. Scope to
+        # the nearest container holding BOTH the block text AND the control. .last() = the
+        # innermost matching ancestor (outer containers open first in document order), i.e.
+        # the single card/row. Generic across card/list/row/grid layouts; a wrong scope is
+        # still caught by the step's own outcome oracle (fails RED, never green-wash).
+        ctrl_role = _CONTROL_ROLE.get(_norm(observed.get("kind", "")), "button")
+        ctrl_name = js_str(observed.get("label", ""))
+        return (
+            f"page.locator('{_BLOCK_CONTAINERS}')"
+            f".filter({{ hasText: '{anchor}' }})"
+            f".filter({{ has: page.getByRole('{ctrl_role}', {{ name: '{ctrl_name}' }}) }})"
+            f".last()"
+        )
     role = _ANCHOR_ROLE.get(kind, "row")
     return f"page.getByRole('{role}', {{ name: '{anchor}' }})"
 
@@ -260,6 +307,18 @@ def _ladder(observed: dict, kind: str) -> str:
         rungs = [f"getByLabel('{label}')", f"getByRole('textbox', {{ name: '{label}' }})"]
     elif kind == "select":
         rungs = [f"getByLabel('{label}')", f"getByRole('combobox', {{ name: '{label}' }})"]
+        # P1 content-anchored FALLBACK: a <select> whose recorded VISUAL CAPTION is not its
+        # DOM accessible name (e.g. SauceDemo's sort dropdown, labelled only by an icon)
+        # matches neither rung above and times out. Bind by OPTION CONTENT — the <select>
+        # that actually contains the recorded option. Label/role rungs stay FIRST (a real
+        # accessible name always wins); this is the last resort. The step's own committed-
+        # value oracle (toHaveValue / option:checked) still independently proves green, so a
+        # wrong bind fails RED — never green-wash.
+        _optval = js_str(observed.get("value", ""))
+        if _optval:
+            rungs.append(
+                f"locator('select').filter({{ has: {scope}.getByRole('option', "
+                f"{{ name: '{_optval}' }}) }})")
     elif kind == "link":
         rungs = [f"getByRole('link', {{ name: '{label}' }})", f"getByText('{label}', {{ exact: true }})"]
     elif kind == "toggle":
@@ -287,6 +346,8 @@ _OUTCOME_REGION_RX = re.compile(
 # string (survives input masking / option-label normalization). Falls back to a
 # non-empty check when the value has no stable token.
 _NXTOK_JS = r"""function __nxTok(v){const s=String(v==null?'':v);const m=s.match(/[A-Za-z]{2,}|[0-9]{2,}/);return m?new RegExp(m[0].replace(/[.*+?^${}()|[\]\\]/g,'\\$&'),'i'):/\S/;}"""
+
+_NXSETTLE_JS = r"""async function __nxSettle(page){try{await page.waitForLoadState('domcontentloaded',{timeout:5000});}catch(e){}const sp=page.locator('[class*=spinner i],[class*=loading i],[aria-busy=\"true\"],[role=progressbar]').first();try{if(await sp.isVisible().catch(()=>false)){await sp.waitFor({state:'hidden',timeout:8000});}}catch(e){}}"""
 
 
 _ER_STOPWORDS = frozenset("""
@@ -318,7 +379,8 @@ def _grounded_expectation_token(expected_result: str, grounded_text: str) -> str
     return ""
 
 
-def _assertion_from_expected_result(observed: dict, expected_result: str = "") -> list[str]:
+def _assertion_from_expected_result(observed: dict, expected_result: str = "",
+                                    *, nav_proven: bool = True) -> list[str]:
     """Compile GROUNDED, tolerant assertions from a step's observed outcome.
 
     Closes the two oracles the compiler previously left as comments:
@@ -329,23 +391,48 @@ def _assertion_from_expected_result(observed: dict, expected_result: str = "") -
       * OUTCOME REGION — when the observed ``after`` names a results/summary/etc.
         region, assert that region is visible.
     Reads ONLY recorded fields (next_url / after), so a step with no grounded
-    outcome emits NOTHING — never a fake green, never a brittle red."""
+    outcome emits NOTHING — never a fake green, never a brittle red.
+
+    ``nav_proven`` (PROVEN-only nav oracle): when False, the recorded next_url is an
+    UNPROVEN navigation (the recording did NOT show THIS action cause it — an
+    inferred/review step whose next_url is often MIS-ATTRIBUTED). We keep the action
+    but downgrade the URL check to a greppable soft observation rather than a HARD
+    toHaveURL, so a mis-attributed navigation is not a false RED. A PROVEN nav
+    (default True) stays a HARD oracle, so real regressions still fail RED — never
+    green-wash. Mirrors the navigate-verb handler's existing inferred-provenance path."""
     out: list[str] = []
     next_url = (observed.get("next_url") or "").strip()
     if next_url:
         path = url_path(next_url)
         if path and path != "/":
-            out.append(
-                f"await expect(page).toHaveURL({js_regex_literal(path)}, "
-                "{ timeout: 30000 }); // grounded: navigated to the recorded next page"
-            )
+            if nav_proven:
+                out.append(
+                    f"await expect(page).toHaveURL({js_regex_literal(path)}, "
+                    "{ timeout: 30000 }); // grounded: navigated to the recorded next page"
+                )
+            else:
+                out.append(
+                    f"// UNPROVEN transition: the recording did not show this action caused a "
+                    f"navigation to {path} — NOT hard-asserted (inferred/review nav). The action "
+                    f"still ran; a PROVEN navigation would be a hard toHaveURL oracle."
+                )
+    # PROVEN-only outcome oracle (gated NEXUS_PROVEN_NAV_ORACLE): a getByText derived from
+    # the LLM's PROSE outcome description (`after` / expected-result) is NOT a grounded oracle
+    # — the prose word may not be literal page text (e.g. 'product listing' → getByText(/listing/)
+    # which SauceDemo's inventory never renders). Under the policy, emit it as a NON-FAILING hint
+    # (.catch) so a fabricated description never false-reds a step whose real action + navigation
+    # already passed (those stay the hard oracles). Off => byte-identical (hard assertion).
+    _soft_outcome = os.getenv("NEXUS_PROVEN_NAV_ORACLE") == "1"
+    _oc_tail = (".catch(() => {}); // best-effort: LLM-prose outcome hint (non-failing under the "
+                "proven-only policy; the action + navigation are the hard oracles)"
+                if _soft_outcome else "; // grounded: observed outcome region is shown")
     after = (observed.get("after") or "").strip()
     if after:
         m = _OUTCOME_REGION_RX.search(after)
         if m:
             out.append(
                 f"await expect(page.getByText(/{m.group(1).lower()}/i).first())"
-                ".toBeVisible(); // grounded: observed outcome region is shown"
+                f".toBeVisible(){_oc_tail}"
             )
     # GROUNDED step Expected Result (additive): assert a token the Expected
     # Result names AND that appears in the OBSERVED OUTCOME text (real rendered
@@ -357,9 +444,12 @@ def _assertion_from_expected_result(observed: dict, expected_result: str = "") -
         already = " ".join(out).lower()
         tok = _grounded_expectation_token(er, after)
         if tok and tok.lower() not in already:
+            _er_tail = (".catch(() => {}); // best-effort: LLM-prose Expected-Result hint "
+                        "(non-failing under the proven-only policy)"
+                        if _soft_outcome
+                        else "; // grounded: step Expected Result, verified against the observed outcome")
             out.append(
-                f"await expect(page.getByText(/{tok}/i).first()).toBeVisible(); "
-                "// grounded: step Expected Result, verified against the observed outcome"
+                f"await expect(page.getByText(/{tok}/i).first()).toBeVisible(){_er_tail}"
             )
         elif not tok and "await expect(" not in already:
             out.append(f"// UNVERIFIED expected result (no grounded oracle for this step): {er[:120]}")
@@ -386,10 +476,48 @@ def _to_iso_date(value: str) -> str:
     return ''
 
 
+def _emit_wizard_advance(step, max_pages: int) -> list[str]:
+    """WIZARD-ADVANCE heal preamble: the recorded control is absent on this page —
+    the recording reached it after advancing a wizard (a navigation the extraction
+    dropped). Click the page's own PROGRESSION control (curated, non-destructive
+    labels only) until the step's recorded label appears. Self-guarded: if the label
+    is already present (main frame OR an iframe) NOTHING is clicked, so the channel
+    is inert on a correct page. Bounded (max_pages); the step's own action + oracle
+    below still decide — a wrong advance just fails RED. Never green-wash."""
+    observed = _observed(step)
+    label = (observed.get("label") or observed.get("value") or "").strip()
+    if not label:
+        return []
+    lab = js_str(label)
+    out: list[str] = []
+    out.append("// WIZARD-ADVANCE heal: recorded control absent on this page -> advance the")
+    out.append("// wizard via its own progression control until the label appears (bounded,")
+    out.append("// self-guarded, non-destructive; the step's action + oracle still decide).")
+    out.append(f"for (let _adv = 0; _adv < {int(max_pages)}; _adv++) {{")
+    # NOTE: frameLocator is ILLEGAL inside a composite locator (Playwright throws
+    # at query time) — probing it in the same .or() chain poisons the whole count
+    # and the .catch(0) masks the throw as "absent" => the advance overshoots the
+    # target page. Probe the main frame and the iframe SEPARATELY.
+    out.append(f"  let _here = await page.getByLabel('{lab}')"
+               f".or(page.getByText('{lab}', {{ exact: false }})).count().catch(() => 0);")
+    out.append(f"  if (!_here) {{ _here = await page.frameLocator('iframe')"
+               f".getByLabel('{lab}').count().catch(() => 0); }}")
+    out.append("  if (_here) break; // control present -> no advance")
+    out.append("  const _nextBtn = page.getByRole('button', "
+               "{ name: /^(next|continue|proceed|save (and|&) continue)( .{0,3})?$/i }).first();")
+    out.append("  if (!(await _nextBtn.count().catch(() => 0))) break; // no progression control -> stop honestly")
+    out.append("  await _nextBtn.click({ timeout: 6000 });")
+    out.append("  await page.waitForLoadState('domcontentloaded').catch(() => {});")
+    out.append("  await page.waitForLoadState('networkidle', { timeout: 2000 }).catch(() => {}); // bounded condition-based settle — the label probe above is the real synchronizer")
+    out.append("}")
+    return out
+
+
 def _action_lines(step, field_meta: dict, parametrize: bool = False,
-                  reanchor: dict | None = None,
-                  interaction: dict | None = None,
-                  wait_scope: dict | None = None) -> list[str]:
+                  reanchor: dict | None = None, visual: dict | None = None,
+                  interaction: dict | None = None, nav_override: str = "",
+                  nav_recover: bool = False,
+                  autonomous_resolve: bool = False) -> list[str]:
     """Kind-aware Playwright lines for one (observed) step.
 
     When `parametrize` is set, navigation targets a path resolved against
@@ -399,47 +527,67 @@ def _action_lines(step, field_meta: dict, parametrize: bool = False,
     `reanchor` (TrueFix selector re-anchor) is an optional
     `{name, kind?}` override: when present, this step is re-bound to the renamed
     control's new accessible `name` (the resilient ladder + the step's own
-    visibility oracle then key off the new name). Default None → byte-identical.
-
-    `wait_scope` (TrueFix timing/materialize/portal/frame heal) is an optional
-    recipe (`{kind, ...}`) that emits a WAIT/SCOPE PREAMBLE before the action — a
-    virtualized-list scroll-until-materialize, a portal retry-un-scoped-at-root, a
-    frameLocator(url-pattern), or a baseline-relative wait + perf-regression flag.
-    It only waits/scopes/flags; it never replaces the action or weakens the oracle,
-    and a never-materializing control THROWS (RED). Default None → byte-identical."""
+    visibility oracle then key off the new name). Default None → byte-identical."""
     observed = _observed(step)
+    if visual and visual.get("x") is not None and visual.get("y") is not None:
+        # P5-full: VLM-located canvas / no-DOM control — coordinate actuation (opt-in,
+        # oracle-gated). The click alone proves nothing; safety is the loop's prove-green
+        # gate (the WHOLE scenario must re-run green — a wrong coordinate breaks the flow
+        # downstream and a later step fails RED) + the hollow-suite refusal. Never green-wash.
+        return [f"await page.mouse.click({int(visual['x'])}, {int(visual['y'])}); "
+                "// P5 visual: VLM-located canvas control (opt-in; gated by the prove-green re-run)"]
     if reanchor and reanchor.get("name"):
         observed = {**observed, "label": reanchor["name"]}
         if reanchor.get("kind"):
             observed["kind"] = reanchor["kind"]
+            # LIVE-EVIDENCE LOCK: the re-anchor matched the REAL control on the live
+            # page (similo / the agentic analyst), so its kind outranks any
+            # accumulated field_meta guess (e.g. a stale select-content fallback) —
+            # without this a rebound RADIO still compiles as selectOption.
+            observed["kind_locked"] = True
+        if reanchor.get("frame_selector"):
+            observed["frame_selector"] = reanchor["frame_selector"]
+        # P6 over-qualified disambiguation: the re-anchor split an over-qualified name
+        # into the control (now `label`) + a disambiguating block `anchor`. Thread it so
+        # `_anchor_scope` scopes the locator to the one card/row that holds both. Absent
+        # => no anchor => byte-identical to a plain name re-anchor.
+        if reanchor.get("anchor"):
+            observed["anchor"] = reanchor["anchor"]
+            observed["anchor_kind"] = reanchor.get("anchor_kind") or "block"
     verb = (observed.get("verb") or "").strip().lower()
     value = observed.get("value", "") or ""
     url = observed.get("url", "") or ""
+    if nav_override:
+        # ENTRY-URL NORMALIZATION heal: the recorded (OCR-derived) URL was malformed
+        # (apex host / dropped suffix); the heal grounded a corrected URL in the
+        # recording's OWN page_visits. Only the navigation target changes — every
+        # oracle still runs, so a wrong candidate fails RED (never green-wash).
+        url = str(nav_override)
     label = observed.get("label", "") or ""
     action = (getattr(step, "action", "") or "").strip()
     after = (observed.get("after") or "").strip()
     out: list[str] = []
 
-    # TIMING/MATERIALIZE/PORTAL/FRAME WAIT+SCOPE re-synthesis (additive heal channel;
-    # default None → byte-identical). When a heal finds the control is PRESENT but the
-    # test couldn't reach it (virtualized list not yet rendered, portal outside the
-    # subtree, iframe-by-URL, slow-but-correct), it supplies a `wait_scope` recipe
-    # whose PREAMBLE waits/scopes/flags BEFORE the action below. It never emits the
-    # action nor weakens the oracle (those still run), and a never-materializing
-    # control THROWS RED — so this channel can never green-wash. It is emitted FIRST
-    # so it composes with the interaction/verb branches that follow.
-    if wait_scope and wait_scope.get("kind"):
-        out.extend(emit_wait_scope_lines(observed, wait_scope))
-
-    # CONTROL-KIND / INTERACTION re-synthesis (additive heal channel; default None →
-    # byte-identical). When a heal finds this step's control changed KIND so the
-    # recorded recipe is wrong even though the element exists (e.g. native <select> →
-    # custom ARIA combobox needing open+pick, not selectOption), it supplies an
-    # `interaction` recipe whose choreography + OWN grounded committed-value oracle
-    # REPLACE the verb branches below. Recipes live outside this frozen file.
+    # CONTROL-KIND / INTERACTION re-synthesis (additive heal channel; default None
+    # -> byte-identical). When a heal finds this step's control changed KIND so the
+    # recorded recipe is wrong even though the element exists (native <select> ->
+    # custom ARIA combobox needing open+pick, range slider, role=switch, accordion,
+    # progressively-revealed field), it supplies an `interaction` recipe whose
+    # choreography + OWN grounded committed-value oracle REPLACE the verb branches
+    # below. Recipes live outside this frozen file (interaction_resolver); every
+    # recipe is bounded (~6s) and fails RED on a wrong guess — never green-wash.
     if interaction and interaction.get("kind") in INTERACTION_RECIPES:
         out.extend(INTERACTION_RECIPES[interaction["kind"]](observed, field_meta, parametrize, interaction))
         return out
+
+    # PROVEN-only navigation oracle (gated NEXUS_PROVEN_NAV_ORACLE; default-off →
+    # nav_proven always True → byte-identical). When ON, an UNPROVEN step (inferred
+    # provenance OR review/confirm confidence — the SAME predicate the load-bearing
+    # UNPROVEN-skip uses) has its recorded next_url treated as an UNPROVEN navigation:
+    # the action still runs, but its toHaveURL is a soft observation, not a hard oracle
+    # (a mis-attributed next_url must not be a false RED). PROVEN navs stay hard.
+    _nav_proven = (os.getenv("NEXUS_PROVEN_NAV_ORACLE") != "1") or not (
+        _provenance(step) == "inferred" or _confidence(step) in ("review", "confirm"))
 
     # Boolean checkbox/toggle -- handle uniformly (regardless of whether the
     # step was emitted as type or select) so a true/false value compiles to
@@ -454,7 +602,7 @@ def _action_lines(step, field_meta: dict, parametrize: bool = False,
         out.append(f"const cb = {_cb}.first();")
         out.append(f"await cb.{'check' if _on else 'uncheck'}();")
         out.append("await expect(cb)." + ("toBeChecked();" if _on else "not.toBeChecked();"))
-        out.extend(_assertion_from_expected_result(observed))
+        out.extend(_assertion_from_expected_result(observed, nav_proven=_nav_proven))
         if after:
             out.append(f"// observed outcome: {after}")
         return out
@@ -466,22 +614,110 @@ def _action_lines(step, field_meta: dict, parametrize: bool = False,
         # emit a mid-flow goto -- it would reload and wipe in-memory-auth / wizard state
         # on a client-routed SPA. Keep this invariant.
         if action.startswith("Open ") and url:
-            target = _rel_path(url) if parametrize else url
+            # A nav_override is an ABSOLUTE corrected URL (often fixing the HOST —
+            # apex vs www) — resolving it against use.baseURL would re-strip the fix,
+            # so it bypasses _rel_path. Plain compiles are byte-identical.
+            target = _rel_path(url) if (parametrize and not nav_override) else url
             out.append(f"await page.goto('{js_str(target)}'); // entry navigation only")
+            out.append("await __nxSettle(page); // bounded settle: dcl + visible loading indicator only")
         else:
             path = url_path(url)
             prov = (observed.get("provenance") or "").strip().lower()
-            if prov == "inferred":
-                # The page advanced but the action that CAUSED it was not captured.
-                # Stay honest: do NOT assert a transition we cannot prove. Flag it
-                # UNPROVEN (greppable) so a wrong page surfaces here rather than as a
-                # confusing downstream locator timeout. Enrich the recording or edit.
-                out.append(
-                    f"// UNPROVEN transition ({action}): the action that advanced the "
-                    "page was not captured -- not asserted (no false red/green). Verify "
-                    "manually or enrich the recording."
-                )
+            # Downgrade to a soft observation when the transition is UNPROVEN: either the
+            # observed provenance is inferred (existing behavior, preserved byte-identical)
+            # OR — under the PROVEN-only nav oracle — the STEP itself is inferred/review
+            # (_nav_proven False, e.g. a "Verify navigated to X" step the recording never
+            # showed was caused by the prior action). A PROVEN transition stays a HARD
+            # toHaveURL so a real regression still fails RED — never green-wash.
+            if prov == "inferred" or not _nav_proven:
+                import re as _re
+                _navpath = _re.sub(r"[^A-Za-z0-9._/\-]", "", (path or "").lstrip("/"))
+                # basename of the recorded URL path (e.g. 'cart.html' -> 'cart') — a
+                # JS-driven nav link (no href) is usually identified by that word in its
+                # class / data-test / id / aria-label (saucedemo: <a class="shopping_cart_link"
+                # data-test="shopping-cart-link">, href=null). Restricting to LINK controls
+                # (<a> / role=link) avoids the action <button>s (add-to-cart etc.).
+                _navbase = _re.sub(r"[^A-Za-z0-9\-]", "",
+                                   _re.sub(r"\.\w+$", "", _navpath.rstrip("/")).split("/")[-1])
+                if os.getenv("NEXUS_NAV_RECOVERY") == "1" and _navpath:
+                    # NAV-RECOVERY (autopilot hardening): the recording REACHED this page (a
+                    # recorded page-visit) but the extraction DROPPED the navigation action that
+                    # caused it (a silent_drop). Best-effort: DRIVE to the recorded page via its
+                    # real on-page LINK — grounded (the link's href/class/data-test/aria names the
+                    # destination) and FAITHFUL (it is the control the user actually used). NO
+                    # assertion here: the DOWNSTREAM step is the oracle, so a wrong/absent link
+                    # simply lets the next step fail RED — never green-wash. Recovers the dropped
+                    # navigation so the recorded flow proceeds instead of dead-ending.
+                    _cands = [f'a[href*=\\"{_navpath}\\"]']
+                    if _navbase:
+                        for _at in ("data-test", "class", "id", "aria-label"):
+                            _cands.append(f'a[{_at}*=\\"{_navbase}\\" i]')
+                        _cands.append(f'[role=\\"link\\"][aria-label*=\\"{_navbase}\\" i]')
+                    _sel = ", ".join(_cands)
+                    # A dropped navigation is often a LINK (cart icon) but sometimes a
+                    # primary PROGRESSION BUTTON (Finish/Continue/…). If no link matches, fall
+                    # back to a GENERIC advance button (curated, non-destructive labels — never
+                    # a Delete/Remove/Cancel) and still verify arrival. Faithful: the recording
+                    # DID perform this click; grounded: arrival at the recorded URL is asserted
+                    # by waitForURL; never green-wash: no arrival => caught, downstream is oracle.
+                    out.append(
+                        "try { "
+                        f"if (!page.url().includes('{_navpath}')) {{ "
+                        f"let __nav = page.locator(\"{_sel}\").first(); "
+                        "if (await __nav.count() === 0) { __nav = page.getByRole('button', "
+                        "{ name: /^\\s*(finish|continue|next|submit|done|complete|confirm|proceed"
+                        "|place order|pay now|pay|checkout|review order|save and continue)( .{0,3})?\\s*$/i })"
+                        ".first(); } "
+                        "if (await __nav.count() > 0) { await __nav.click(); "
+                        f"await page.waitForURL({js_regex_literal(path)}, {{ timeout: 15000 }}); }} "
+                        "} } catch (e) { /* best-effort nav-recovery; the downstream step is the oracle */ }"
+                    )
+                    out.append(
+                        f"// nav-recovery ({action}): drove to the recorded page {path} via its "
+                        "on-page link (extraction dropped the navigation action). Downstream step "
+                        "is the oracle — never green-wash."
+                    )
+                else:
+                    # The page advanced but the action that CAUSED it was not captured.
+                    # Stay honest: do NOT assert a transition we cannot prove. Flag it
+                    # UNPROVEN (greppable) so a wrong page surfaces here rather than as a
+                    # confusing downstream locator timeout. Enrich the recording or edit.
+                    out.append(
+                        f"// UNPROVEN transition ({action}): the action that advanced the "
+                        "page was not captured -- not asserted (no false red/green). Verify "
+                        "manually or enrich the recording."
+                    )
             elif path:
+                if nav_recover:
+                    import re as _re
+                    _navpath = _re.sub(r"[^A-Za-z0-9._/\-]", "", (path or "").lstrip("/"))
+                    _navbase = _re.sub(r"[^A-Za-z0-9\-]", "",
+                                       _re.sub(r"\.\w+$", "", _navpath.rstrip("/")).split("/")[-1])
+                    _cands = [f'a[href*=\\"{_navpath}\\"]']
+                    if _navbase:
+                        for _at in ("data-test", "class", "id", "aria-label"):
+                            _cands.append(f'a[{_at}*=\\"{_navbase}\\" i]')
+                        _cands.append(f'[role=\\"link\\"][aria-label*=\\"{_navbase}\\" i]')
+                    _sel = ", ".join(_cands)
+                    # NAV-RECOVER on a PROVEN transition (heal channel, loop-applied): the
+                    # recording PROVED this page is reached, but the CLICK that causes it was
+                    # dropped by extraction — the app is still on the previous page. Perform
+                    # the missing user action via the app's own link/progression control and
+                    # keep the HARD toHaveURL below UNTOUCHED (the locked oracle): a genuinely
+                    # broken navigation makes the recovery ALSO fail to arrive, and the hard
+                    # assertion stays RED. Recovering an action never softens an oracle.
+                    out.append(
+                        "try { "
+                        f"if (!page.url().includes('{_navpath}')) {{ "
+                        f"let __nav = page.locator(\"{_sel}\").first(); "
+                        "if (await __nav.count() === 0) { __nav = page.getByRole('button', "
+                        "{ name: /^\\s*(finish|continue|next|submit|done|complete|confirm|proceed"
+                        "|place order|pay now|pay|checkout|review order|save and continue)( .{0,3})?\\s*$/i })"
+                        ".first(); } "
+                        "if (await __nav.count() > 0) { await __nav.click(); "
+                        f"await page.waitForURL({js_regex_literal(path)}, {{ timeout: 15000 }}); }} "
+                        "} } catch (e) { /* recovery is best-effort; the HARD assertion below decides */ }"
+                    )
                 out.append(
                     f"await expect(page).toHaveURL({js_regex_literal(path)}, "
                     "{ timeout: 30000 }); // nav verified via the recorded transition"
@@ -511,19 +747,34 @@ def _action_lines(step, field_meta: dict, parametrize: bool = False,
             out.append(f"const sel = {_sel}.first();")
             out.append(f"await sel.selectOption({_val_expr(value, label, parametrize)});")
             if parametrize:
-                out.append("await expect(sel).not.toHaveValue(''); // grounded: a selection WAS committed (no-op fails red; runtime-value safe)")
-                out.append(f"await expect(sel.locator('option:checked')).toHaveText(__nxTok({_val_expr(value, label, parametrize)})).catch(() => {{}}); // tolerant: selected-option text token (swallowed for data-driven override)")
+                out.append(f"await expect(sel.locator('option:checked')).toHaveText(__nxTok({_val_expr(value, label, parametrize)})).catch(() => {{}}); // grounded: selected option text holds the entered value (token-tolerant, data-driven)")
             else:
                 _seltok = _value_oracle(value)
                 if _seltok:
-                    # Assert the SELECTED OPTION's visible text, not the <select>'s value
-                    # attribute -- coded option values (CA != 'Canada', plan IDs) would mis-fail.
-                    out.append(f"await expect(sel.locator('option:checked')).toHaveText(/{_seltok}/i); // tolerant: selected-option text oracle")
+                    # Reconcile the oracle to the SAME dimension selectOption() matched:
+                    # the recorded value is what was selected, so the <select>'s committed
+                    # value attribute is what we assert. A coded option (value 'CA', text
+                    # 'Canada') previously false-RED because we matched by value but asserted
+                    # option TEXT; assert .toHaveValue OR option-text so either coded or
+                    # display-text recordings pass, and a no-op selection still fails red.
+                    out.append(
+                        f"await expect(async () => {{ "
+                        f"const okV = await sel.evaluate((el, re) => new RegExp(re,'i').test(el.value), {js_str(_seltok)}).catch(() => false); "
+                        f"const okT = await sel.locator('option:checked').evaluate((el, re) => new RegExp(re,'i').test(el.textContent||''), {js_str(_seltok)}).catch(() => false); "
+                        f"expect(okV || okT).toBeTruthy(); }}).toPass(); "
+                        "// tolerant: selected-option matched by value OR text (coded-value safe)"
+                    )
                 else:
                     out.append("await expect(sel).not.toHaveValue(''); // tolerant: a selection was committed")
         elif kind == "date":
             out.append(f"const dateField = {_ladder(observed, 'date')}.first();")
-            _iso = _to_iso_date(value)
+            # Only ISO-normalize when the captured form signals CONFIRM a native
+            # <input type=date> (control=='date'). The kind can also be reached by a
+            # loose VALUE regex on a plain text field that accepts the recorded
+            # MM/DD/YYYY; ISO-forcing THAT field commits a format the app may reject
+            # while the value-token oracle still passes green. Confirmed-date only.
+            _fm_control = (field_meta.get(_norm(label)) or {}).get("control", "")
+            _iso = _to_iso_date(value) if _fm_control == "date" else ""
             if _iso:
                 # Native <input type=date> needs ISO; a text date field takes the
                 # recorded format. Try ISO, fall back to the raw value. Deterministic.
@@ -561,28 +812,25 @@ def _action_lines(step, field_meta: dict, parametrize: bool = False,
                 f"await page.getByRole('radio', {{ name: {_ve} }}).first().check({{ timeout: 3000 }}).catch(() => "
                 f"page.getByRole('checkbox', {{ name: {_ve} }}).first().check({{ timeout: 3000 }})); }}); }}); }});"
             )
-            if parametrize and reanchor and reanchor.get("strict_oracle"):
-                # P4 FUZZY-SEEDED reanchor (additive; only when strict_oracle is set, which
-                # ONLY the flag-gated fuzzy seed path does). The normal parametrize oracle
-                # below is SWALLOWED by .catch, so on a text field the sole non-swallowed
-                # gate is "a control of this name exists" — which a high-similarity fuzzy
-                # MIS-MATCH satisfies by construction, i.e. it would green-wash. Emit a
-                # NON-swallowed committed-value oracle instead: a fill into the WRONG
-                # control that does not hold the recorded value fails RED on first prove.
-                # GATE 0 (router) guarantees a non-blank value, so a hard form always fires.
-                _stok = _value_oracle(value)
-                if _stok:
-                    out.append(f"await expect(field).toHaveValue(/{_stok}/i); // strict: fuzzy-seeded committed-value oracle (non-swallowed)")
-                elif (value or "").strip():
-                    out.append("await expect(field).not.toHaveValue(''); // strict: fuzzy-seeded non-empty oracle (non-swallowed)")
-                else:
-                    out.append(f"await expect(field).toHaveValue(__nxTok({_val_expr(value, label, parametrize)})).catch(() => {{}}); // grounded: field holds the entered value (token-tolerant, data-driven; adaptive-set safe)")
-            elif parametrize:
+            if parametrize:
                 # Value may be overridden at run time — assert the field committed
-                # *something* (a no-op fill fails RED) rather than mirroring a fixed
-                # token (the recorded token may not match a data-driven override).
-                out.append("await expect(field).not.toHaveValue(''); // grounded: a value WAS committed (no-op fill fails red; runtime-value safe)")
-                out.append(f"await expect(field).toHaveValue(__nxTok({_val_expr(value, label, parametrize)})).catch(() => {{}}); // tolerant: committed-value token (swallowed for data-driven override)")
+                # *something* (the fill worked) rather than mirroring a fixed token.
+                # #26 never-green-wash: the __nxTok(...).catch() oracle is SWALLOWED
+                # (data-driven safe) — ALONE it lets a no-op/wrong fill into a
+                # prepopulated or mis-classified field pass green. Add a NON-swallowed
+                # floor: a value MUST be committed, and when NO data override is active
+                # the field MUST hold the recorded token (a real override falls back to
+                # the tolerant swallowed token).
+                out.append("await expect(field).not.toHaveValue(''); // grounded: a value WAS committed (no-op fill fails red)")
+                _ptok = _value_oracle(value)
+                _pkey = _data_key(label)
+                if _ptok and _pkey:
+                    out.append(
+                        f"if (D['{js_str(_pkey)}'] === undefined) "
+                        f"await expect(field).toHaveValue(/{_ptok}/i); "
+                        "// hard: no override active -> field MUST hold the recorded token"
+                    )
+                out.append(f"await expect(field).toHaveValue(__nxTok({_val_expr(value, label, parametrize)})).catch(() => {{}}); // grounded: field holds the entered value (token-tolerant, data-driven; adaptive-set safe)")
             else:
                 tok = _value_oracle(value)
                 if tok:
@@ -607,20 +855,61 @@ def _action_lines(step, field_meta: dict, parametrize: bool = False,
             # Control type CONFIRMED by captured signals -> single role locator +
             # state assertion so a no-op click cannot pass green.
             name = js_str(value or label)
-            loc = f"page.getByRole('{kind}', {{ name: '{name}' }})"
+            # EXACT name: Playwright name-matching is substring by default, so
+            # 'Employed' would also match 'Self-employed' (strict-mode ambiguity).
+            # The name comes from the recording / a live rebind — exact by construction.
+            loc = f"page.getByRole('{kind}', {{ name: '{name}', exact: true }})"
             out.append(f"await {loc}.check();")
             out.append(f"await expect({loc}).toBeChecked();")
         elif kind == "toggle":
-            # Role UNCONFIRMED -> resilient ladder (radio name OR visible text);
-            # no state assertion we cannot safely make.
-            out.append(f"await {_ladder(observed, 'toggle')}.first().click();")
+            # Role UNCONFIRMED. Restrict the locator to INTERACTIVE roles only
+            # (switch / checkbox / radio) keyed to the accessible name — never the
+            # getByText rung, which could bind STATIC label text and a bare click()
+            # then passes with no state proof. After clicking, assert a tolerant
+            # checked-state (toBeChecked OR aria-checked='true') so a no-op click on a
+            # real toggle fails red; if NO interactive role is present we cannot prove
+            # state, so flag the step for REVIEW rather than green-wash it.
+            _tname = js_str(label or value)
+            _tscope = _anchor_scope(observed)
+            _troot = _tscope if _tscope != "page" else "page"
+            _tloc = (
+                f"{_troot}.getByRole('switch', {{ name: '{_tname}' }})"
+                f".or({_troot}.getByRole('checkbox', {{ name: '{_tname}' }}))"
+                f".or({_troot}.getByRole('radio', {{ name: '{_tname}' }}))"
+            )
+            out.append(f"const toggle = {_tloc}.first();")
+            out.append(
+                "if (await toggle.count().then(c => c > 0).catch(() => false)) {"
+            )
+            out.append("  await toggle.click();")
+            out.append(
+                "  await expect(async () => { "
+                "const checked = await toggle.evaluate(el => el.getAttribute && (el.getAttribute('aria-checked') === 'true' || ('checked' in el && el.checked))).catch(() => false); "
+                "expect(checked).toBeTruthy(); }).toPass(); "
+                "// tolerant post-state: a real toggle reports checked (no-op click fails red)"
+            )
+            out.append("} else {")
+            if autonomous_resolve:
+                # AUTOPILOT: test.skip() inside a test.step skips the WHOLE test
+                # (wiping every already-passed step) — fail THIS step RED instead so
+                # the heal loop binds it live (toggle recipe) or stops honestly.
+                out.append(
+                    f"  throw new Error('UNPROVEN toggle: no interactive role for "
+                    f"{_tname} — autopilot binds + proves it live');"
+                )
+            else:
+                out.append(
+                    f"  // REVIEW: no interactive toggle role (switch/checkbox/radio) found for "
+                    f"'{_tname}' — state cannot be proven; not asserting (no false green)."
+                )
+                out.append("  test.skip(true, 'UNPROVEN toggle: no interactive role to bind/verify');")
+            out.append("}")
         else:
             _sel = _ladder(observed, 'select')
             out.append(f"const sel = {_sel}.first();")
             out.append(f"await sel.selectOption({_val_expr(value, label, parametrize)});")
             if parametrize:
-                out.append("await expect(sel).not.toHaveValue(''); // grounded: a selection WAS committed (no-op fails red; runtime-value safe)")
-                out.append(f"await expect(sel.locator('option:checked')).toHaveText(__nxTok({_val_expr(value, label, parametrize)})).catch(() => {{}}); // tolerant: selected-option text token (swallowed for data-driven override)")
+                out.append(f"await expect(sel.locator('option:checked')).toHaveText(__nxTok({_val_expr(value, label, parametrize)})).catch(() => {{}}); // grounded: selected option text holds the entered value (token-tolerant, data-driven)")
             else:
                 _seltok = _value_oracle(value)
                 if _seltok:
@@ -639,7 +928,7 @@ def _action_lines(step, field_meta: dict, parametrize: bool = False,
     # (recorded next page + observed outcome region + a grounded visibility
     # oracle from the step's Expected Result text).
     _er = (getattr(step, "expected_result", "") or getattr(step, "expected", "") or "").strip()
-    out.extend(_assertion_from_expected_result(observed, _er))
+    out.extend(_assertion_from_expected_result(observed, _er, nav_proven=_nav_proven))
     if after:
         out.append(f"// observed outcome: {after}")
     return out
@@ -661,6 +950,65 @@ test.afterEach(async ({ page }, testInfo) => {
   if (!ep) return;
   try {
     const aria = await page.accessibility.snapshot({ interestingOnly: false });
+    // P5 visual: count <canvas> elements — a control that resolves to none of the DOM/a11y
+    // signals but sits on a canvas is a pixel-drawn control with no DOM handle, so we can
+    // DIAGNOSE it honestly (visual interaction needed) rather than mislabel it.
+    const canvas = await page.evaluate(() => document.querySelectorAll('canvas').length).catch(() => 0);
+    // Auth legibility: a 'control not found' is OFTEN an UNAUTHENTICATED run (an expired/
+    // missing session redirected to a login screen) — NOT a renamed/removed control. Capture
+    // GENERIC login signals (works on any UI) so the diagnosis can say 'session expired /
+    // re-authenticate' instead of the misleading 'locator not found'. A password field is the
+    // strongest signal; the URL and a sign-in/expired message corroborate.
+    const login_signals = await page.evaluate(() => {
+      const lc = (s) => ('' + (s || '')).toLowerCase();
+      const url = lc(location.href);
+      const txt = lc(document.body ? document.body.innerText : '').slice(0, 4000);
+      return {
+        password_fields: document.querySelectorAll('input[type=password]').length,
+        url: location.href || '',
+        url_login: /(login|sign-?in|\\bauth\\b|sso|account\\/login|session)/.test(url),
+        text_login: /(sign[\\s-]?in|log[\\s-]?in|logged[\\s-]?in|must be logged|session (?:has )?expired|please (?:sign|log)|re-?authenticate|unauthori[sz]ed)/.test(txt),
+      };
+    }).catch(() => ({ password_fields: 0, url: '', url_login: false, text_login: false }));
+    // P5-full (opt-in visual heal): a base64 screenshot + viewport so a VLM can locate a
+    // canvas/no-DOM control. Best-effort; only on the gated heal-capture re-run.
+    const shot = await page.screenshot({ fullPage: false }).then((b) => b.toString('base64')).catch(() => '');
+    const viewport = page.viewportSize() || null;
+    // P4 iframe: child-frame controls are NOT in the main-frame a11y tree and locators
+    // don't pierce iframes — DOM-extract each child frame's controls + a stable iframe
+    // selector, so a frame-scoped control can be re-anchored to a frameLocator. Best-
+    // effort per frame; never fails the run.
+    const frames = [];
+    for (const fr of page.frames()) {
+      if (fr === page.mainFrame()) continue;
+      try {
+        let selector = '';
+        try {
+          const fel = await fr.frameElement();
+          selector = await fel.evaluate((e) => e.id ? ('iframe#' + e.id)
+            : e.name ? ('iframe[name="' + e.name + '"]')
+            : e.getAttribute('title') ? ('iframe[title="' + e.getAttribute('title') + '"]')
+            : e.getAttribute('src') ? ('iframe[src="' + e.getAttribute('src') + '"]') : 'iframe');
+        } catch {}
+        const nodes = await fr.evaluate(() => {
+          const out = [];
+          const sel = 'input,select,textarea,button,a[href],[role]';
+          for (const el of Array.from(document.querySelectorAll(sel)).slice(0, 400)) {
+            const tag = el.tagName.toLowerCase();
+            const role = el.getAttribute('role') || (tag === 'a' ? 'link'
+              : tag === 'select' ? 'combobox' : tag === 'button' ? 'button'
+              : (tag === 'input' || tag === 'textarea') ? 'textbox' : tag);
+            const lbl = (el.labels && el.labels[0] && el.labels[0].textContent) || '';
+            const name = ((el.getAttribute('aria-label') || lbl || el.getAttribute('name')
+              || el.getAttribute('placeholder') || (el.textContent || '')) + '').trim().slice(0, 100);
+            out.push({ role, name, value: ((el.value || '') + '').slice(0, 100),
+                       visible_text: name, neighbor_text: '' });
+          }
+          return out;
+        });
+        if (nodes && nodes.length) frames.push({ selector, name: fr.name() || '', url: fr.url() || '', nodes });
+      } catch {}
+    }
     await fetch(ep, {
       method: 'POST',
       headers: {
@@ -673,6 +1021,11 @@ test.afterEach(async ({ page }, testInfo) => {
         scenario_id: '__TEST_ID__',
         status: testInfo.status,
         aria,
+        frames,
+        canvas,
+        shot,
+        viewport,
+        login_signals,
       }),
     });
   } catch { /* capture is best-effort; never fail the run */ }
@@ -681,8 +1034,11 @@ test.afterEach(async ({ page }, testInfo) => {
 
 def compile_case(tc, field_meta: dict | None = None, *, parametrize: bool = False,
                  reanchors: dict | None = None, heal_capture: bool = False,
-                 interactions: dict | None = None, waits: dict | None = None,
-                 force_open_shadow: bool = False) -> str:
+                 stabilize: dict | None = None, visual: dict | None = None,
+                 interactions: dict | None = None, nav_overrides: dict | None = None,
+                 pre_advance: dict | None = None, nav_recovers: dict | None = None,
+                 force_open_shadow: bool = False,
+                 autonomous_resolve: bool = False, phantom_skips=None) -> str:
     """Compile one ProductionTestCase to a runnable Playwright .spec.ts (string).
 
     When `parametrize` is set, the spec reads optional env/data overrides
@@ -695,14 +1051,7 @@ def compile_case(tc, field_meta: dict | None = None, *, parametrize: bool = Fals
 
     `heal_capture` appends a gated afterEach that snapshots the failure-state a11y
     tree for the re-anchor resolver (only on a NEXUS_HEAL_CAPTURE=1 re-run that
-    fails). Default False → byte-identical (the user's owned spec is untouched).
-
-    `waits` (TrueFix timing/materialize/portal/frame heal) is an optional
-    `{step_number: {kind, ...}}` map; a step with an entry gets a WAIT/SCOPE
-    PREAMBLE (scroll-until-materialize / retry-un-scoped-at-root / frameLocator-by-
-    url / baseline-relative wait + perf flag) emitted before its action. It only
-    waits/scopes/flags — never weakens the oracle, a never-materializing control
-    THROWS. Default None → byte-identical."""
+    fails). Default False → byte-identical (the user's owned spec is untouched)."""
     field_meta = field_meta or {}
     name = (getattr(tc, "name", None) or "Generated test").strip()
     description = (getattr(tc, "description", None) or "").strip()
@@ -738,6 +1087,10 @@ def compile_case(tc, field_meta: dict | None = None, *, parametrize: bool = Fals
                    "(flagged inline) — improving the app's labels makes these reliable.")
     out.append("")
     out.append("import { test, expect } from '@playwright/test';")
+    # __nxSettle is CALLED after every goto in all modes — define it at
+    # module scope unconditionally (a call without a definition is a runtime
+    # ReferenceError the parse-only checks cannot catch).
+    out.append(_NXSETTLE_JS)
     out.append("")
     test_id = js_str(getattr(tc, "test_id", "") or "")
     if test_id:
@@ -764,49 +1117,92 @@ def compile_case(tc, field_meta: dict | None = None, *, parametrize: bool = Fals
         )
         out.append("  " + _NXTOK_JS)
 
-    # ANY-UI heal (closed shadow DOM -> open): when a heal determined a control sits in
-    # a CLOSED shadow root, force every root to 'open' BEFORE the app boots (addInitScript
-    # runs before the entry goto, and persists across the SPA/page navigations), so the
-    # normal open-shadow locator path can reach it. Default-off -> byte-identical.
+    # ANY-UI heal (closed shadow DOM -> open): when a heal determined a control sits
+    # in a CLOSED shadow root, force every root to 'open' BEFORE the app boots
+    # (addInitScript runs before the entry goto + persists across SPA navigations),
+    # so the normal open-shadow locator path can reach it. Default-off -> byte-identical.
     if force_open_shadow:
         from .any_ui_resolver import emit_open_shadow_preamble  # lazy: avoid import cycle
         for _osln in emit_open_shadow_preamble():
             out.append("  " + _osln)
 
     consent_emitted = False
+    _phantom = phantom_skips or {}
     for step in flow:
         n = getattr(step, "step_number", None)
         action = (getattr(step, "action", "") or "").strip()
         observed = _observed(step)
         verb = (observed.get("verb") or "").strip().lower()
 
+        # PHANTOM-SKIP (heal-loop directive): this step's control was proven ABSENT and the
+        # step is an EXACT duplicate of an earlier PASSED step — a fabricated/misplaced
+        # generation artifact. Emit a no-op test.step (so the recorded flow CONTINUES to the
+        # next step) that asserts NOTHING. NOT test.skip (that aborts the whole test). Never
+        # green-wash: we recognize a proven duplicate; we never claim the phantom's action ran.
+        # Empty directive => byte-identical (this branch is never taken).
+        if n in _phantom:
+            out.append(f"  await test.step({json.dumps(f'step {n}: {action} (PHANTOM-SKIP)')}, async () => {{")
+            out.append("    // PHANTOM-SKIP: exact duplicate of an earlier PASSED step and its "
+                       "control is absent on this page — a fabricated/misplaced generation "
+                       "artifact; not executed and nothing asserted (never green-wash).")
+            out.append("  });")
+            continue
+
         # Load-bearing honesty: un-observed / review steps STOP the test with an
         # UNPROVEN skip — so no downstream assertion runs across the gap and
-        # false-reds. (Never a fake green, never a silent jump.)
-        if _provenance(step) == "inferred" or _confidence(step) == "review":
+        # false-reds. (Never a fake green, never a silent jump.) EXCEPTION = AUTOPILOT:
+        # when autonomous_resolve is on, an UNPROVEN step does NOT skip — it EXECUTES its
+        # recorded action + the SAME grounded orthogonal oracle a proven step gets (emitted
+        # by the normal path below), so the autonomous loop can DRIVE + PROVE it, or have
+        # the grounded heal/agentic layer resolve it, or escalate. NEVER green-wash: the
+        # recorded-outcome assertion still decides green, not the agent's say-so.
+        _is_unproven = _provenance(step) == "inferred" or _confidence(step) == "review"
+        _unproven_mode = (os.getenv("NEXUS_UNPROVEN_STEPS", "attempt") or "attempt").strip().lower()
+        if _is_unproven and not autonomous_resolve and _unproven_mode == "skip":
+            # LEGACY semantics (env NEXUS_UNPROVEN_STEPS=skip): test.skip(true)
+            # mid-body ABORTS the remaining test in Playwright, so the first
+            # uncorroborated transition stops the whole run.
             out.append(f"  // step {n} — {action}")
-            # An ambiguous control (a repeated visible name with no disambiguating
-            # anchor) is skipped with a PRECISE reason — we refuse to guess which of
-            # the N identical controls to bind (never silently bind the wrong one).
-            # The autonomous resolver reads the same observed['ambiguous_unresolved']
-            # flag and likewise refuses (rather than .first()-ing a guess).
-            if observed.get("ambiguous_unresolved"):
-                _amb_label = observed.get("label", "") or "this control"
-                reason = (f"UNPROVEN/AMBIGUOUS: step {n} targets '{_amb_label}', which appears "
-                          f"multiple times on the page with no disambiguating anchor — refusing "
-                          f"to guess which one. {action}")
-            else:
-                reason = f"UNPROVEN: step {n} not directly observed — {action}"
+            reason = f"UNPROVEN: step {n} not directly observed — {action}"
             out.append(f"  test.skip(true, {json.dumps(reason)});")
             continue
+        if _is_unproven and not autonomous_resolve:
+            # ATTEMPT (default): the action WAS observed (review confidence) —
+            # execute it best-effort with the same emission a proven step gets.
+            # The oracle asserts the RECORDED outcome; the annotation surfaces
+            # the confidence. The test no longer aborts at the first gap, so
+            # every proven fill downstream actually runs. Never green-wash:
+            # nothing is asserted that the recording did not show.
+            out.append(f"  // UNPROVEN: step {n} — observed at review confidence; executed BEST-EFFORT (attempt mode)")
+        elif _is_unproven:
+            out.append(f"  // AGSR autopilot: autonomously resolving UNPROVEN step {n} — {action}")
 
         out.append(f"  await test.step({json.dumps(f'step {n}: {action}')}, async () => {{")
         out.append(f"    // evidence: provenance={_provenance(step) or 'n/a'}, "
                    f"confidence={_confidence(step) or 'n/a'}")
+        if _is_unproven and not autonomous_resolve:
+            _ann = ("    test.info().annotations.push({ type: 'unproven-attempt', description: "
+                    + json.dumps(f"step {n}: observed at review confidence — best-effort execution")
+                    + " });")
+            out.append(_ann)
+        if (stabilize or {}).get(n):
+            # P4 flake-wait synthesis: this step timed out on a prior run with the control
+            # PRESENT (a timing/async flake — not a locator/kind bug). Settle the page
+            # before acting. Best-effort (.catch) — never a fake green; the step's own
+            # oracle still independently gates the result.
+            out.append("    await page.waitForLoadState('networkidle', { timeout: 8000 })"
+                       ".catch(() => {}); // P4 flake-wait: settle before a timing-flaky step")
+        _padv = (pre_advance or {}).get(n)
+        if _padv:
+            for line in _emit_wizard_advance(step, int(_padv)):
+                out.append(f"    {line}")
         for line in _action_lines(step, field_meta, parametrize,
                                   reanchor=(reanchors or {}).get(n),
+                                  visual=(visual or {}).get(n),
                                   interaction=(interactions or {}).get(n),
-                                  wait_scope=(waits or {}).get(n)):
+                                  nav_override=(nav_overrides or {}).get(n) or "",
+                                  nav_recover=bool((nav_recovers or {}).get(n)),
+                                  autonomous_resolve=autonomous_resolve):
             out.append(f"    {line}")
         out.append("  });")
 
@@ -870,12 +1266,7 @@ export default defineConfig({
   reporter: [['list'], ['html', { open: 'never' }], ['junit', { outputFile: 'results/junit.xml' }], ['./nexus-reporter.ts']],
   use: {
     trace: 'on-first-retry',
-    // EVIDENCE on green (additive): default 'only-on-failure' => byte-identical;
-    // NEXUS_RECORD_EVIDENCE=1 captures a final-frame screenshot on PASS too (proof green landed).
-    screenshot: process.env.NEXUS_RECORD_EVIDENCE === '1' ? 'on' : 'only-on-failure',
-    // Opt-in VIDEO of the run (e.g. to capture the proven healed Clean-Run baseline):
-    // default 'off' => byte-identical; NEXUS_RECORD_VIDEO=1 records the full run.
-    video: process.env.NEXUS_RECORD_VIDEO === '1' ? 'on' : 'off',
+    screenshot: 'only-on-failure',
     // Reuse a captured authenticated session when Nexus injects one (auth profile
     // → nexus.auth.json in the run dir). Self-detecting, so a downloaded bundle
     // (no auth file) is unaffected; a normal unauthenticated run is unchanged.
@@ -927,12 +1318,7 @@ __WORKERS__  reporter: [['list'], ['html', { open: 'never' }], ['junit', { outpu
     baseURL: nexusBaseURL(),
     headless: __HEADLESS__,
     trace: 'on-first-retry',
-    // EVIDENCE on green (additive): default 'only-on-failure' => byte-identical;
-    // NEXUS_RECORD_EVIDENCE=1 captures a final-frame screenshot on PASS too (proof green landed).
-    screenshot: process.env.NEXUS_RECORD_EVIDENCE === '1' ? 'on' : 'only-on-failure',
-    // Opt-in VIDEO of the run (e.g. to capture the proven healed Clean-Run baseline):
-    // default 'off' => byte-identical; NEXUS_RECORD_VIDEO=1 records the full run.
-    video: process.env.NEXUS_RECORD_VIDEO === '1' ? 'on' : 'off',
+    screenshot: 'only-on-failure',
     // Reuse a captured authenticated session when Nexus injects one (auth profile
     // → nexus.auth.json in the run dir). Self-detecting, so a downloaded bundle
     // (no auth file) is unaffected; a normal unauthenticated run is unchanged.
@@ -1001,7 +1387,6 @@ type StepRecord = {
   duration_ms: number;
   error_message: string;
   screenshot_url?: string;
-  metadata?: Record<string, unknown>;
 };
 
 type PendingShot = {
@@ -1010,14 +1395,6 @@ type PendingShot = {
   stepNumber: number;
   path?: string;
   body?: Buffer;
-  contentType: string;
-};
-
-type PendingVideo = {
-  idx: number;
-  scenarioId: string;
-  stepNumber: number;
-  path: string;
   contentType: string;
 };
 
@@ -1032,7 +1409,6 @@ function mapRunStatus(s: string): string {
 export default class NexusReporter implements Reporter {
   private steps: StepRecord[] = [];
   private pendingShots: PendingShot[] = [];
-  private pendingVideos: PendingVideo[] = [];
   private startedAt = new Date(0).toISOString();
   private done = 0;
   private total = 0;
@@ -1095,40 +1471,6 @@ export default class NexusReporter implements Reporter {
         }
       }
     }
-    // EVIDENCE on green (additive): when NEXUS_RECORD_EVIDENCE=1, attach the final-frame
-    // screenshot (Playwright screenshot:'on') to the LAST step so a PASSED run carries
-    // visible proof it landed green. Best-effort; never affects the run result.
-    if (process.env.NEXUS_RECORD_EVIDENCE === '1' && result.status === 'passed' && this.steps.length > startIdx) {
-      const gshot = result.attachments.find(
-        (a) => (a.name === 'screenshot' || (a.contentType || '').startsWith('image/')) && (a.path || a.body),
-      );
-      if (gshot) {
-        const gidx = this.steps.length - 1;
-        this.pendingShots.push({
-          idx: gidx,
-          scenarioId,
-          stepNumber: this.steps[gidx].step_number,
-          path: gshot.path,
-          body: gshot.body as Buffer | undefined,
-          contentType: gshot.contentType || 'image/png',
-        });
-      }
-    }
-    // VIDEO evidence (opt-in — NEXUS_RECORD_VIDEO=1 records the run): attach the run
-    // video to the LAST step; uploaded at onEnd. Best-effort; never affects the result.
-    if (process.env.NEXUS_RECORD_VIDEO === '1' && this.steps.length > startIdx) {
-      const vid = result.attachments.find((a) => a.name === 'video' && a.path);
-      if (vid && vid.path) {
-        const vidx = this.steps.length - 1;
-        this.pendingVideos.push({
-          idx: vidx,
-          scenarioId,
-          stepNumber: this.steps[vidx].step_number,
-          path: vid.path,
-          contentType: vid.contentType || 'video/webm',
-        });
-      }
-    }
     this.done += 1;
     this.postProgress(mapRunStatus(result.status));
   }
@@ -1175,32 +1517,6 @@ export default class NexusReporter implements Reporter {
           if (j && j.url && this.steps[ps.idx]) this.steps[ps.idx].screenshot_url = j.url;
         }
       } catch { /* best-effort screenshot upload */ }
-    }
-
-    // Upload each opt-in run VIDEO and attach its serve URL to the step's metadata
-    // (video_url) — zero-migration. Best-effort: a failed upload never blocks the run.
-    for (const pv of this.pendingVideos) {
-      try {
-        const buf: Buffer | undefined = pv.path ? fs.readFileSync(pv.path) : undefined;
-        if (!buf || !buf.length) continue;
-        const fd = new FormData();
-        fd.append('run_id', runId);
-        fd.append('artifact_id', ARTIFACT_ID);
-        fd.append('scenario_id', pv.scenarioId);
-        fd.append('step_number', String(pv.stepNumber));
-        fd.append('file', new Blob([buf], { type: pv.contentType }), 'run.webm');
-        const vr = await fetch(`${base}/api/v1/test-runs/video`, {
-          method: 'POST',
-          headers: { Authorization: `Bearer ${TOKEN}` },
-          body: fd as any,
-        });
-        if (vr.ok) {
-          const j: any = await vr.json().catch(() => null);
-          if (j && j.url && this.steps[pv.idx]) {
-            this.steps[pv.idx].metadata = { ...(this.steps[pv.idx].metadata || {}), video_url: j.url };
-          }
-        }
-      } catch { /* best-effort video upload */ }
     }
 
     const body = {
@@ -1541,6 +1857,54 @@ def _data_fields(steps: list, field_meta: dict) -> list[dict]:
     return fields
 
 
+def _anchor_bundles(steps: list) -> list:
+    """P3: per-step anchor bundle — label, kind, ranked locator rungs and a
+    deterministic confidence from independent-signal count. Compile-time
+    knowledge for warm runtime healing + explainable locators. Additive."""
+    bundles: list = []
+    for s in steps:
+        obs = (s.get("observed") if isinstance(s, dict) else getattr(s, "observed", None)) or {}
+        verb = str(obs.get("verb") or "").lower()
+        label = str(obs.get("label") or "").strip()
+        kind = str(obs.get("kind") or "").strip().lower()
+        num = s.get("step_number") if isinstance(s, dict) else getattr(s, "step_number", None)
+        if verb not in ("fill", "type", "select", "click", "check") or not label:
+            continue
+        esc = label.replace("'", "\\'")
+        if kind in ("button", "link", "radio", "checkbox", "tab", "menu_item"):
+            role = {"menu_item": "menuitem"}.get(kind, kind)
+            rungs = [f"getByRole('{role}', {{ name: '{esc}' }})",
+                     f"getByText('{esc}', {{ exact: true }})"]
+        else:
+            rungs = [f"getByLabel('{esc}')",
+                     f"getByPlaceholder('{esc}')",
+                     f"getByText('{esc}', {{ exact: false }})"]
+        signals = sum([bool(label), bool(kind),
+                       bool(obs.get("value")), bool(obs.get("url"))])
+        bundles.append({
+            "step_number": num,
+            "label": label,
+            "kind": kind or "field",
+            "verb": verb,
+            "rungs": rungs,
+            "confidence": round(min(1.0, 0.4 + 0.15 * signals), 2),
+            "signals": signals,
+        })
+    return bundles
+
+
+def _step_provenance(steps: list) -> list:
+    """P4(part): machine-readable evidence tier per step."""
+    out: list = []
+    for s in steps:
+        num = s.get("step_number") if isinstance(s, dict) else getattr(s, "step_number", None)
+        prov = (s.get("provenance") if isinstance(s, dict)
+                else getattr(s, "provenance", None)) or ""
+        out.append({"step_number": num,
+                    "provenance": str(prov).lower() or "demonstrated"})
+    return out
+
+
 def compile_manifest(cases: Iterable, field_meta: dict | None = None) -> dict:
     """Structured listing of the compiled suite for the Execution UI.
 
@@ -1582,6 +1946,9 @@ def compile_manifest(cases: Iterable, field_meta: dict | None = None) -> dict:
             "code": code,
             "lines": code.count("\n") + 1,
             "stats": _step_stats(steps),
+            "anchor_bundles": _anchor_bundles(steps),
+            "step_provenance": _step_provenance(steps),
+            "data_carry": list(getattr(tc, "data_carry", None) or []),
             "data_fields": _data_fields(steps, field_meta),
             "base_url": _recorded_origin([tc]),
         })

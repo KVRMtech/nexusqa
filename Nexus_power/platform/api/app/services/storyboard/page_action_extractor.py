@@ -160,14 +160,24 @@ async def _collect_visit_inputs(
     # per-artifact total_timeout — re-deriving actions for stale rows,
     # starving the current visits (observed live: 11 stale v1 rows +
     # 14 current v2 rows meant the form pages near the end never got
-    # processed before the timeout).  Resolve the max version first,
+    # processed before the timeout).  Resolve the current version first,
     # then filter to it.
+    #
+    # NOTE: "current" = the version of the MOST RECENTLY WRITTEN row, not the
+    # lexical max.  extractor_version is a ``vN`` *string* column, so
+    # ``func.max`` orders lexically — once the version reaches ``v10`` the
+    # lexical max wrongly returns ``v9`` (``'v9' > 'v10'``), binding actions to
+    # a stale visit set.  Ordering on ``created_at`` (the same pattern as
+    # ``test_factory.service._latest_version``) is numeric-safe and keeps
+    # visit/action/form bound to the same version.
     max_version_q = await session.execute(
-        select(func.max(PageVisitRow.extractor_version))
+        select(PageVisitRow.extractor_version)
         .where(
             PageVisitRow.artifact_id == artifact_id,
             PageVisitRow.tenant_id == tenant_id,
         )
+        .order_by(PageVisitRow.created_at.desc())
+        .limit(1)
     )
     current_visit_version = max_version_q.scalar()
     if current_visit_version is None:
@@ -377,21 +387,26 @@ def _reconcile(
     adjusted_automation = action.automation_ready
     adjusted_reasoning = action.reasoning
 
-    # verb=none + URL changed → promote to navigate (mirrors scene
-    # reconciliation behaviour).
+    # verb=none + URL changed → record an HONEST INFERRED transition (never green-wash).
+    # The URL changed but NO on-page action was observed (verb=none). We do NOT fabricate
+    # a demonstrated navigate: (1) we never invent a control label from the URL segment
+    # (that manufactured a real-looking target that the recording never showed — the
+    # verb=none→NAVIGATE@0.55 fabrication); (2) we mark it NOT automation-ready; (3) we keep
+    # confidence LOW so downstream provenance is INFERRED (a soft, honestly-UNPROVEN
+    # transition — handled by the proven-nav oracle + nav-recovery), never a demonstrated
+    # action. The transition itself (the URL) is preserved for grounded recovery.
     if action.verb is SceneActionVerb.NONE and evidence.url_changed:
         adjusted_verb = SceneActionVerb.NAVIGATE
         adjusted_kind = SceneActionTargetKind.OTHER
-        if not adjusted_target and inputs.next_visit_location:
-            # Use the next page's last URL segment as a label hint.
-            tail = inputs.next_visit_location.rsplit("/", 1)[-1]
-            adjusted_target = tail.replace("-", " ").title()[:200] if tail else ""
+        adjusted_target = ""            # do NOT fabricate a control label from the URL
+        adjusted_automation = False     # inferred, not observed → never automation-ready
+        adjusted_confidence = min(adjusted_confidence, 0.5)  # low → provenance = inferred
         if not adjusted_reasoning:
             adjusted_reasoning = (
-                "URL changed between this page and the next — navigation "
-                "occurred even though the on-page action wasn't visible."
+                "INFERRED: the URL changed between this page and the next, so a navigation "
+                "occurred, but the on-page action that caused it was NOT observed. Recorded "
+                "as an inferred transition — not a demonstrated action."
             )
-        adjusted_confidence = max(adjusted_confidence, 0.55)
 
     # verb requires a value but no OCR signal corroborates → clamp.
     needs_value = adjusted_verb in {SceneActionVerb.TYPE, SceneActionVerb.SELECT}
@@ -400,6 +415,26 @@ def _reconcile(
     if needs_value and action.value and not evidence.ocr_text_match:
         adjusted_automation = False
         adjusted_confidence = min(adjusted_confidence, 0.5)
+
+    # SELF-VERIFICATION ORACLE (Phase-2 — consensus, DEMOTE-ONLY, never green-wash).
+    # Confidence should mean something: a claim is PROVEN only when INDEPENDENT signals
+    # agree — here the LLM's own confidence + OCR text corroboration + a recorded URL
+    # change. A high-confidence, automation-ready NON-navigation claim that NO independent
+    # signal corroborates (its label/value is not visible in the frame OCR and no URL
+    # change occurred) is unsupported by consensus → demote it to inferred
+    # (automation_ready=False, confidence capped). This can ONLY LOWER confidence, never
+    # raise it, so it cannot manufacture a green — it only makes the extraction more
+    # conservative. Controls whose label IS visible in the frame OCR stay corroborated and
+    # are untouched (evidence.ocr_text_match covers label OR value).
+    corroborations = int(bool(evidence.ocr_text_match)) + int(bool(evidence.url_changed))
+    if (adjusted_verb is not SceneActionVerb.NAVIGATE and adjusted_automation
+            and adjusted_confidence >= 0.8 and corroborations == 0):
+        adjusted_automation = False
+        adjusted_confidence = min(adjusted_confidence, 0.5)
+        if adjusted_reasoning:
+            adjusted_reasoning += (
+                " [self-verification: no independent signal (OCR / URL) corroborated this "
+                "high-confidence claim — demoted to inferred.]")
 
     if (
         adjusted_confidence != action.confidence
@@ -1160,6 +1195,44 @@ async def extract_page_actions_for_artifact(
                 await http_client.aclose()
             except Exception:  # pragma: no cover
                 pass
+
+    # Cross-visit duplicate demotion: when the vision pass splits one wizard
+    # page into adjacent visits, both re-observe the same already-filled state
+    # (same verb+label+VALUE) and the generated script re-fills it. The user
+    # demonstrated the action ONCE: keep the FIRST observation, demote the
+    # immediately-following visit's identical VALUE-carrying claim to an
+    # honestly-labeled duplicate (evidence stays; nothing is deleted).
+    # Value-less clicks (Continue on every wizard page) are exempt — those are
+    # genuinely distinct actions. Demote-only + guarded: any failure leaves
+    # the extraction untouched.
+    try:
+        _prev_sigs: set = set()
+        for r in gathered:
+            _cur_sigs: set = set()
+            for _i, _act in enumerate(list(r.actions)):
+                _val = " ".join(str(getattr(_act, "value", "") or "").split()).casefold()
+                if not _val:
+                    continue
+                _sig = (
+                    str(getattr(_act, "verb", "") or ""),
+                    " ".join(str(getattr(_act, "target_label", "") or "").split()).casefold(),
+                    _val,
+                )
+                if _sig in _prev_sigs and bool(getattr(_act, "automation_ready", False)):
+                    r.actions[_i] = _act.model_copy(update={
+                        "automation_ready": False,
+                        "reasoning": (str(getattr(_act, "reasoning", "") or "") +
+                            " [duplicate: the immediately-preceding visit already "
+                            "demonstrated this exact action — this is a re-observation "
+                            "of persisted form state, not a second user action.]"),
+                    })
+                _cur_sigs.add(_sig)
+            _prev_sigs = _cur_sigs
+    except Exception:  # pragma: no cover — demote-only pass must never break extraction
+        logger.warning(
+            "storyboard.page_action_extractor.dup_demote_failed",
+            extra={"artifact_id": artifact_id},
+        )
 
     # All visits in this artifact share artifact_id (the join key), but
     # we keep the dict shape so the persistence helper stays generic.

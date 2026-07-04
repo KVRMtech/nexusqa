@@ -1,0 +1,100 @@
+{
+  "artifact_id": "eab5f9d7-85e4-46eb-88ac-094ec3b10391",
+  "key_status": "draft",
+  "video_class": "TODO: describe the recording (human)",
+  "pages": [
+    {
+      "host": "usaa.com",
+      "path_prefix": "/app/citrixnetscalergateway_saml"
+    },
+    {
+      "host": "usaa.com",
+      "path_prefix": "/insurance/life"
+    },
+    {
+      "host": "usaa.com",
+      "path_prefix": "/insurance/life-insurance-quote-public"
+    }
+  ],
+  "values": [
+    {
+      "label": "Age",
+      "value": "35"
+    },
+    {
+      "label": "What state do you live in?",
+      "value": "Texas"
+    },
+    {
+      "label": "Address bar",
+      "value": "usaa.com"
+    },
+    {
+      "label": "What state do you live in?",
+      "value": "Texas"
+    },
+    {
+      "label": "Height",
+      "value": "5'0\""
+    },
+    {
+      "label": "Weight (lbs)",
+      "value": "185"
+    },
+    {
+      "label": "When was the last time you used tobacco, nicotine, e-cigarettes or a tobacco substitute?",
+      "value": "I've never used"
+    },
+    {
+      "label": "Coverage amount",
+      "value": "1500"
+    },
+    {
+      "label": "Term length",
+      "value": "20-Year Term"
+    }
+  ],
+  "forms": [
+    {
+      "label": "What state do you live in",
+      "value": "Texas"
+    },
+    {
+      "label": "State",
+      "value": "Texas"
+    },
+    {
+      "label": "Age",
+      "value": "35"
+    },
+    {
+      "label": "Height",
+      "value": "5'0\""
+    },
+    {
+      "label": "Weight (lbs)",
+      "value": "185"
+    },
+    {
+      "label": "Height",
+      "value": "5'0\""
+    },
+    {
+      "label": "Weight (lbs)",
+      "value": "185"
+    },
+    {
+      "label": "What's your current military status",
+      "value": "None"
+    },
+    {
+      "label": "Term length",
+      "value": "20-Year Term"
+    },
+    {
+      "label": "Coverage amount",
+      "value": "$150,000"
+    }
+  ],
+  "notes": "DRAFT seeded from the pipeline's own extraction \u2014 CIRCULAR until a human verifies every entry against the actual video and sets key_status='verified'. Add anything the pipeline MISSED."
+}

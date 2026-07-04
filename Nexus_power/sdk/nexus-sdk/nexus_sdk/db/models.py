@@ -148,6 +148,44 @@ class AuditLogRow(Base):
 
 # ─── Report Storage ───────────────────────────────────────────
 
+
+class HealEventRow(Base):
+    """Append-only, per-heal compliance evidence (Part-11-grade). NEVER updated —
+    an approval/rejection is a NEW event row. A per-tenant hash chain
+    (prev_hash -> row_hash) makes the trail tamper-evident. Written FAIL-CLOSED in
+    the same transaction as the heal it documents, so an unauditable heal cannot
+    be promoted."""
+    __tablename__ = "heal_events"
+
+    heal_event_id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_new_id)
+    tenant_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    artifact_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    scenario_id: Mapped[str] = mapped_column(String(100), default="")
+    step_number: Mapped[int] = mapped_column(Integer, default=0)
+    event_type: Mapped[str] = mapped_column(String(30), nullable=False)  # heal_persisted | approved | rejected
+    actor: Mapped[str] = mapped_column(String(200), default="")
+    fix_kind: Mapped[str] = mapped_column(String(40), default="")
+    before_locator: Mapped[str] = mapped_column(Text, default="")
+    after_locator: Mapped[str] = mapped_column(Text, default="")
+    engine_verdict: Mapped[str] = mapped_column(String(40), default="")
+    verified_green: Mapped[bool] = mapped_column(Boolean, default=False)
+    version_no: Mapped[int] = mapped_column(Integer, default=0)
+    run_id: Mapped[str] = mapped_column(String(64), default="", index=True)
+    reason_for_change: Mapped[str] = mapped_column(Text, default="")
+    details: Mapped[dict] = mapped_column(JSON, default=dict)
+    prev_hash: Mapped[str] = mapped_column(String(64), default="")
+    row_hash: Mapped[str] = mapped_column(String(64), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utc_now)
+
+    __table_args__ = (
+        Index("ix_heal_events_tenant_artifact", "tenant_id", "artifact_id"),
+        Index("ix_heal_events_run", "run_id"),
+        Index("ix_heal_events_created", "created_at"),
+    )
+
+
+# ─── Report Storage ───────────────────────────────────────────
+
 class ReportRow(Base):
     """Stored report metadata + content."""
     __tablename__ = "reports"

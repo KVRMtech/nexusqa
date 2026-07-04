@@ -677,6 +677,18 @@ def _clusters_to_candidates(
             if names
             else (cluster.canonical_domain or cluster.representative_app_name or "Unknown App")
         )
+        # An OCR-ghost label must never front the evidence-corrected domain:
+        # when the cluster HAS a canonical_domain and the chosen label is
+        # itself host-shaped (domain-like, e.g. "Msaa.com"), display the
+        # CLEAN domain. Real app names (with spaces) are preserved verbatim.
+        if (
+            cluster.canonical_domain
+            and display_label
+            and " " not in display_label
+            and "." in display_label
+            and display_label != cluster.canonical_domain
+        ):
+            display_label = cluster.canonical_domain
         canonical_name = display_label
 
         candidates.append(GroupingCandidate(
