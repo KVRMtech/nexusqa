@@ -53,7 +53,7 @@ export default function LoginPage() {
             <Hexagon className="h-8 w-8 text-[#0a2540]" strokeWidth={1.5} />
           </div>
           <h1 className="mt-5 text-2xl font-bold text-[#0a2540] tracking-tight">
-            Nexus <span className="text-transparent bg-clip-text bg-gradient-to-r from-nexus-400 to-purple-400">AI Engine Factory</span>
+            VKPower <span className="text-transparent bg-clip-text bg-gradient-to-r from-nexus-400 to-purple-400">AI Engine Factory</span>
           </h1>
           <p className="mt-2 text-sm text-slate-400">
             Enterprise QA Platform — Sign in to continue
@@ -71,7 +71,7 @@ export default function LoginPage() {
 
           <form onSubmit={handleSubmit} className="space-y-5">
             <div>
-              <label htmlFor="email" className="block text-xs font-medium text-slate-8000 uppercase tracking-wider mb-1.5">
+              <label htmlFor="email" className="block text-xs font-medium text-slate-600 uppercase tracking-wider mb-1.5">
                 Email address
               </label>
               <input
@@ -87,7 +87,7 @@ export default function LoginPage() {
             </div>
 
             <div>
-              <label htmlFor="password" className="block text-xs font-medium text-slate-8000 uppercase tracking-wider mb-1.5">
+              <label htmlFor="password" className="block text-xs font-medium text-slate-600 uppercase tracking-wider mb-1.5">
                 Password
               </label>
               <input
@@ -116,7 +116,7 @@ export default function LoginPage() {
         </div>
 
         {/* Footer */}
-        <p className="text-center text-sm text-slate-8000">
+        <p className="text-center text-sm text-slate-600">
           New organization?{' '}
           <Link to="/register" className="font-medium text-nexus-400 hover:text-nexus-300 transition-colors">
             Register here
@@ -128,7 +128,7 @@ export default function LoginPage() {
           {Array.from({ length: 11 }).map((_, i) => (
             <div key={i} className="h-1.5 w-1.5 rounded-full bg-green-500/40" title="Engine online" />
           ))}
-          <span className="ml-2 text-[10px] text-slate-8000">11 Engines Ready</span>
+          <span className="ml-2 text-[10px] text-slate-600">11 Engines Ready</span>
         </div>
       </div>
     </div>

@@ -1,5 +1,5 @@
 // ═══════════════════════════════════════════════════════════════
-//  NEXUS AI ENGINE FACTORY — Notification Center (Sonner Toast)
+//  VKPOWER AI ENGINE FACTORY — Notification Center (Sonner Toast)
 // ═══════════════════════════════════════════════════════════════
 import { useState } from 'react';
 import { Bell, Check, X, Trash2 } from 'lucide-react';

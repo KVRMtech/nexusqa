@@ -1,5 +1,5 @@
 // ═══════════════════════════════════════════════════════════════
-//  NEXUS AI ENGINE FACTORY — Tabs Component
+//  VKPOWER AI ENGINE FACTORY — Tabs Component
 // ═══════════════════════════════════════════════════════════════
 import type { ReactNode } from 'react';
 import clsx from 'clsx';

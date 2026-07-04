@@ -1,5 +1,5 @@
 // ═══════════════════════════════════════════════════════════════
-//  NEXUS AI ENGINE FACTORY — Server-Sent Events (SSE) Hook
+//  VKPOWER AI ENGINE FACTORY — Server-Sent Events (SSE) Hook
 // ═══════════════════════════════════════════════════════════════
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { useAuthStore } from '../stores/authStore';

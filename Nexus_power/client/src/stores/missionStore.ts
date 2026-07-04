@@ -1,5 +1,5 @@
 // ═══════════════════════════════════════════════════════════════
-//  NEXUS AI ENGINE FACTORY — Mission Store (Zustand)
+//  VKPOWER AI ENGINE FACTORY — Mission Store (Zustand)
 // ═══════════════════════════════════════════════════════════════
 import { create } from 'zustand';
 import type {

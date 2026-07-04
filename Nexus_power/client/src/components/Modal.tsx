@@ -1,5 +1,5 @@
 // ═══════════════════════════════════════════════════════════════
-//  NEXUS AI ENGINE FACTORY — Modal Component
+//  VKPOWER AI ENGINE FACTORY — Modal Component
 // ═══════════════════════════════════════════════════════════════
 import { useEffect, useRef, type ReactNode } from 'react';
 import { X } from 'lucide-react';

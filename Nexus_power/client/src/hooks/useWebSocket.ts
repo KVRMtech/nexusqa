@@ -1,5 +1,5 @@
 // ═══════════════════════════════════════════════════════════════
-//  NEXUS AI ENGINE FACTORY — WebSocket Hook
+//  VKPOWER AI ENGINE FACTORY — WebSocket Hook
 // ═══════════════════════════════════════════════════════════════
 import { useEffect, useRef, useCallback, useState } from 'react';
 import { useAuthStore } from '../stores/authStore';

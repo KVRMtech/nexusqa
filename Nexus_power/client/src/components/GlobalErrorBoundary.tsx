@@ -1,5 +1,5 @@
 // ═══════════════════════════════════════════════════════════════
-//  NEXUS AI ENGINE FACTORY — Global Error Boundary
+//  VKPOWER AI ENGINE FACTORY — Global Error Boundary
 // ═══════════════════════════════════════════════════════════════
 import { Component, type ReactNode, type ErrorInfo } from 'react';
 import { AlertTriangle, RefreshCw, Home } from 'lucide-react';

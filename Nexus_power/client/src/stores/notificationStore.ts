@@ -1,5 +1,5 @@
 // ═══════════════════════════════════════════════════════════════
-//  NEXUS AI ENGINE FACTORY — Notification Store (Zustand)
+//  VKPOWER AI ENGINE FACTORY — Notification Store (Zustand)
 // ═══════════════════════════════════════════════════════════════
 import { create } from 'zustand';
 

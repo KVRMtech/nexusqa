@@ -1,5 +1,5 @@
 // ═══════════════════════════════════════════════════════════════
-//  NEXUS AI ENGINE FACTORY — Hooks Barrel Export
+//  VKPOWER AI ENGINE FACTORY — Hooks Barrel Export
 // ═══════════════════════════════════════════════════════════════
 export { useApiData } from './useApiData';
 export { useWebSocket } from './useWebSocket';

@@ -1,5 +1,5 @@
 // ═══════════════════════════════════════════════════════════════
-//  NEXUS AI ENGINE FACTORY — Loading Skeleton Component
+//  VKPOWER AI ENGINE FACTORY — Loading Skeleton Component
 // ═══════════════════════════════════════════════════════════════
 import clsx from 'clsx';
 

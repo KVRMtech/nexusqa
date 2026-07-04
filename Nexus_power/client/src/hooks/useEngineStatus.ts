@@ -1,5 +1,5 @@
 // ═══════════════════════════════════════════════════════════════
-//  NEXUS AI ENGINE FACTORY — Engine Status Real-Time Hook
+//  VKPOWER AI ENGINE FACTORY — Engine Status Real-Time Hook
 // ═══════════════════════════════════════════════════════════════
 import { useEffect } from 'react';
 import { useEngineStore } from '../stores/engineStore';

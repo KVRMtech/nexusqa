@@ -1,5 +1,5 @@
 // ═══════════════════════════════════════════════════════════════
-//  NEXUS AI ENGINE FACTORY — Auth Store (Zustand)
+//  VKPOWER AI ENGINE FACTORY — Auth Store (Zustand)
 // ═══════════════════════════════════════════════════════════════
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';

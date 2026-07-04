@@ -1,5 +1,5 @@
 // ═══════════════════════════════════════════════════════════════
-//  NEXUS AI ENGINE FACTORY — Status Badge Component
+//  VKPOWER AI ENGINE FACTORY — Status Badge Component
 // ═══════════════════════════════════════════════════════════════
 import clsx from 'clsx';
 

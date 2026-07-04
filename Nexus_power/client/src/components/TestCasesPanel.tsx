@@ -16,7 +16,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import clsx from 'clsx';
 import {
   AlertTriangle, ArrowRight, Bot, Camera, CheckCircle2, ChevronDown, Download, FileCode2, FileSpreadsheet,
-  FlaskConical, Loader2, MousePointerClick, Rocket, Send, ShieldAlert, Sparkles, Upload,
+  FlaskConical, Loader2, MousePointerClick, Rocket, Send, ShieldAlert, Sparkles, Trash2, Upload, X,
 } from 'lucide-react';
 import { api } from '../services/api';
 import { useAuth } from '../contexts/AuthContext';
@@ -597,7 +597,7 @@ export default function TestCasesPanel(
                       showDetails={showDetails} busy={busy} artifactId={artifactId}
                       selected={row.test_case_id === selectedId}
                       onSelect={() => setSelectedId(row.test_case_id)}
-                      onPlaywright={(id) => downloadPlaywright('', id)} />
+                      onPlaywright={(id) => downloadPlaywright('', id)} onSaved={refresh} />
                   ))}
                   {more > 0 && (
                     <div className="rounded-lg border border-dashed border-nexus-200 px-3 py-2 flex items-center gap-2 flex-wrap mt-1.5">
@@ -620,7 +620,7 @@ export default function TestCasesPanel(
             {selectedRow ? (
               <TestCaseCard key={selectedRow.test_case_id} variant="detail" row={selectedRow} accent={NAVY}
                 showDetails={showDetails} busy={busy} artifactId={artifactId}
-                onPlaywright={(id) => downloadPlaywright('', id)} />
+                onPlaywright={(id) => downloadPlaywright('', id)} onSaved={refresh} />
             ) : (
               <div className="rounded-2xl border border-dashed border-nexus-200 bg-white px-4 py-16 text-center">
                 <MousePointerClick className="h-6 w-6 text-nexus-300 mx-auto mb-2" />
@@ -697,9 +697,9 @@ function ValueConflictResolve(
 }
 
 function TestCaseCard(
-  { row, accent, showDetails, busy, artifactId, onPlaywright, variant = 'card', selected = false, onSelect }:
+  { row, accent, showDetails, busy, artifactId, onPlaywright, variant = 'card', selected = false, onSelect, onSaved }:
   { row: CaseRow; accent: string; showDetails: boolean; busy?: string; artifactId: string; onPlaywright?: (id: string) => void;
-    variant?: 'card' | 'row' | 'detail'; selected?: boolean; onSelect?: () => void },
+    variant?: 'card' | 'row' | 'detail'; selected?: boolean; onSelect?: () => void; onSaved?: () => void },
 ) {
   const [open, setOpen] = useState(variant === 'detail');
   const steps = row.test_case?.steps || [];
@@ -709,7 +709,7 @@ function TestCaseCard(
   const [savingEdit, setSavingEdit] = useState(false);
   const [editErr, setEditErr] = useState<string | null>(null);
   const [edited, setEdited] = useState<Record<number, { action?: string; expected_result?: string }>>({});
-  const [draft, setDraft] = useState<Record<number, { action: string; expected_result: string }>>({});
+  const [draft, setDraft] = useState<Record<number, { action: string; expected_result: string; value?: string; deleted?: boolean }>>({});
   // Grounded RE-POINT: the captured controls a step may be re-targeted to, and the
   // per-step choice. Re-pointing edits the binding (not just the description text),
   // so Regenerate actually changes which control the script clicks.
@@ -719,8 +719,8 @@ function TestCaseCard(
   const dispExpected = (s: any, i: number): string => (edited[s.step_number ?? i + 1]?.expected_result ?? s.expected_result ?? s.expected ?? '');
   const beginEdit = async () => {
     setEditErr(null);
-    const d: Record<number, { action: string; expected_result: string }> = {};
-    steps.forEach((s: any, i: number) => { const n = s.step_number ?? i + 1; d[n] = { action: dispAction(s, i), expected_result: dispExpected(s, i) }; });
+    const d: Record<number, { action: string; expected_result: string; value?: string; deleted?: boolean }> = {};
+    steps.forEach((s: any, i: number) => { const n = s.step_number ?? i + 1; d[n] = { action: dispAction(s, i), expected_result: dispExpected(s, i), value: (((s.observed?.value) ?? s.data_ref ?? '') as string) }; });
     setDraft(d); setCtrlDraft({}); setEditing(true);
     try { const r = await api.getStepControls(artifactId, row.test_case_id); setControls(r.controls || []); } catch { setControls([]); }
   };
@@ -729,7 +729,9 @@ function TestCaseCard(
     try {
       const stepsPatch = Object.entries(draft).map(([n, v]) => {
         const sn = Number(n);
+        if (v.deleted) return { step_number: sn, delete: true };   // tombstone this step
         const p: any = { step_number: sn, action: v.action, expected_result: v.expected_result };
+        if (v.value !== undefined) p.value = v.value;              // editable test data
         const c = ctrlDraft[sn];
         if (c && c.label) p.control = { label: c.label, kind: c.kind };
         return p;
@@ -740,6 +742,7 @@ function TestCaseCard(
       // step description/oracle comments; a control re-point changes the actual locator. Cheap + idempotent.
       try { await api.regenerateScript(artifactId, row.test_case_id); } catch { /* surfaced on next audit */ }
       setEditing(false);
+      onSaved?.();   // reload server truth into the panel, not just optimistic local state
     } catch (e: any) {
       setEditErr(e?.response?.data?.detail ?? e?.message ?? 'Save failed');
     } finally { setSavingEdit(false); }
@@ -776,6 +779,74 @@ function TestCaseCard(
 
   return (
     <div className={containerCls} style={variant === 'card' ? { background: 'rgba(255,255,255,0.7)', border: `1px solid ${accent}33` } : undefined}>
+      {/* #6 — full-page edit/delete modal: big fields for Step / Test Data / Expected,
+          grounded control re-point, per-step delete. Save regenerates the Playwright. */}
+      {editing && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => setEditing(false)}>
+          <div className="flex w-full max-w-4xl max-h-[90vh] flex-col rounded-2xl bg-white shadow-2xl" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between border-b border-nexus-100 px-5 py-3">
+              <h3 className="truncate pr-3 text-[13px] font-bold text-[#0a2540]">Edit test case — {row.name}</h3>
+              <button onClick={() => setEditing(false)} title="Close" className="shrink-0 text-nexus-400 hover:text-nexus-700"><X className="h-5 w-5" /></button>
+            </div>
+            {editErr && <div className="mx-5 mt-3 rounded-md bg-red-50 px-3 py-1.5 text-[12px] text-red-600">{editErr}</div>}
+            <div className="flex-1 space-y-3 overflow-y-auto px-5 py-4">
+              {steps.map((s: any, i: number) => {
+                const n = s.step_number ?? i + 1;
+                const del = !!draft[n]?.deleted;
+                const obsLabel = (s.observed as any)?.label as string | undefined;
+                return (
+                  <div key={i} className={`rounded-xl border p-3 ${del ? 'border-red-200 bg-red-50/40' : 'border-nexus-200'}`}>
+                    <div className="mb-2 flex items-center justify-between">
+                      <span className={`text-[11px] font-bold ${del ? 'text-red-400 line-through' : 'text-nexus-500'}`}>Step {n}</span>
+                      <button type="button"
+                        onClick={() => setDraft((d) => { const cur = d[n] ?? { action: '', expected_result: '' }; return { ...d, [n]: { ...cur, deleted: !cur.deleted } }; })}
+                        className={`flex items-center gap-1 rounded px-2 py-0.5 text-[11px] font-semibold ${del ? 'bg-red-100 text-red-600' : 'text-nexus-400 hover:bg-red-50 hover:text-red-500'}`}>
+                        <Trash2 className="h-3.5 w-3.5" /> {del ? 'Undo delete' : 'Delete step'}
+                      </button>
+                    </div>
+                    {!del && (
+                      <div className="grid gap-2">
+                        <label className="block text-[10px] font-semibold uppercase tracking-wide text-nexus-400">Test Step
+                          <textarea rows={2} value={draft[n]?.action ?? ''}
+                            onChange={(e) => setDraft((d) => { const cur = d[n] ?? { action: '', expected_result: '' }; return { ...d, [n]: { ...cur, action: e.target.value } }; })}
+                            className="mt-0.5 w-full rounded border border-nexus-200 px-2 py-1 text-[12px] text-nexus-900" /></label>
+                        <label className="block text-[10px] font-semibold uppercase tracking-wide text-nexus-400">Test Data
+                          <input value={draft[n]?.value ?? ''} placeholder="(no data)"
+                            onChange={(e) => setDraft((d) => { const cur = d[n] ?? { action: '', expected_result: '' }; return { ...d, [n]: { ...cur, value: e.target.value } }; })}
+                            className="mt-0.5 w-full rounded border border-nexus-200 px-2 py-1 font-mono text-[12px]" /></label>
+                        <label className="block text-[10px] font-semibold uppercase tracking-wide text-nexus-400">Expected Result
+                          <textarea rows={2} value={draft[n]?.expected_result ?? ''}
+                            onChange={(e) => setDraft((d) => { const cur = d[n] ?? { action: '', expected_result: '' }; return { ...d, [n]: { ...cur, expected_result: e.target.value } }; })}
+                            className="mt-0.5 w-full rounded border border-nexus-200 px-2 py-1 text-[12px] text-nexus-700" /></label>
+                        {obsLabel && controls.length > 0 && (
+                          <label className="block text-[10px] font-semibold uppercase tracking-wide text-nexus-400">Re-point control (grounded)
+                            <select value={ctrlDraft[n]?.label ?? (obsLabel ?? '')}
+                              onChange={(e) => { const lab = e.target.value; const cur = obsLabel ?? ''; const c = controls.find((cc) => cc.label === lab); setCtrlDraft((d) => ({ ...d, [n]: (c && lab !== cur) ? { label: c.label, kind: c.kind } : null })); }}
+                              className="mt-0.5 w-full rounded border border-nexus-300 bg-nexus-50 px-2 py-1 text-[12px] text-nexus-800">
+                              <option value={obsLabel}>{obsLabel} — current</option>
+                              {controls.filter((c) => c.label !== (obsLabel ?? '')).map((c, ci) => (
+                                <option key={ci} value={c.label}>↳ {c.label} ({c.kind}{c.page ? ` · ${c.page}` : ''})</option>
+                              ))}
+                            </select></label>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+              {steps.length === 0 && <div className="text-[12px] text-nexus-400">No steps.</div>}
+            </div>
+            <div className="flex items-center justify-end gap-2 border-t border-nexus-100 px-5 py-3">
+              <span className="mr-auto text-[10px] text-nexus-400">Edits regenerate the Playwright. Test-data edits are marked user-edited (not oracle-proven).</span>
+              <button onClick={() => setEditing(false)} className="rounded-md px-3 py-1.5 text-[12px] text-nexus-600 hover:bg-nexus-50">Cancel</button>
+              <button onClick={saveEdit} disabled={savingEdit}
+                className="flex items-center gap-1 rounded-md px-3 py-1.5 text-[12px] font-semibold text-white disabled:opacity-50" style={{ background: '#1f6feb' }}>
+                {savingEdit && <Loader2 className="h-3.5 w-3.5 animate-spin" />} Save (updates Playwright)
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       <div className="flex items-center">
       <button onClick={headerOnClick} className={`flex-1 min-w-0 flex items-center gap-2 px-3 ${variant === 'detail' ? 'py-3 cursor-default' : 'py-2.5'} text-left`}>
         {demo ? <CheckCircle2 className="h-4 w-4 shrink-0 text-nexus-500" />
@@ -874,11 +945,24 @@ function TestCaseCard(
                 const prov = PROV[s.provenance || ''] || null;
                 return (
                 <tr key={i} className="border-t border-nexus-100 align-top">
-                  <td className="py-2 pr-2 text-nexus-400 font-mono">{s.step_number ?? i + 1}</td>
+                  <td className="py-2 pr-2 text-nexus-400 font-mono">{editing ? (
+                    <div className="flex items-center gap-1">
+                      <span className={(draft[s.step_number ?? i + 1]?.deleted) ? 'line-through text-red-400' : ''}>{s.step_number ?? i + 1}</span>
+                      <button type="button" title={(draft[s.step_number ?? i + 1]?.deleted) ? 'Undo delete' : 'Delete this step'}
+                        onClick={() => setDraft((d) => { const n = s.step_number ?? i + 1; const cur = d[n] ?? { action: '', expected_result: '' }; return { ...d, [n]: { ...cur, deleted: !cur.deleted } }; })}
+                        className={`rounded p-0.5 ${(draft[s.step_number ?? i + 1]?.deleted) ? 'text-red-500' : 'text-nexus-300 hover:text-red-500'}`}>
+                        <Trash2 className="h-3 w-3" />
+                      </button>
+                    </div>
+                  ) : (s.step_number ?? i + 1)}</td>
                   <td className="py-2 pr-2 text-nexus-900 font-medium">{editing ? (
                     <input value={(draft[s.step_number ?? i + 1]?.action) ?? ''} onChange={(e) => setDraft((d) => ({ ...d, [s.step_number ?? i + 1]: { action: e.target.value, expected_result: d[s.step_number ?? i + 1]?.expected_result ?? '' } }))} className="w-full text-[12px] rounded border border-nexus-200 px-1 py-0.5" />
                   ) : dispAction(s, i)}</td>
-                  <td className="py-2 pr-2">{s.data_ref ? <span className="rounded px-1.5 py-0.5 font-mono font-medium" style={{ background: 'rgba(38,112,163,0.10)', color: '#164465' }}>{s.data_ref}</span> : <span className="text-nexus-300">—</span>}</td>
+                  <td className="py-2 pr-2">{editing ? (
+                    <input value={(draft[s.step_number ?? i + 1]?.value) ?? ''} placeholder="(no data)"
+                      onChange={(e) => setDraft((d) => { const n = s.step_number ?? i + 1; const cur = d[n] ?? { action: '', expected_result: '' }; return { ...d, [n]: { ...cur, value: e.target.value } }; })}
+                      className="w-full text-[12px] rounded border border-nexus-200 px-1 py-0.5 font-mono" />
+                  ) : (s.data_ref ? <span className="rounded px-1.5 py-0.5 font-mono font-medium" style={{ background: 'rgba(38,112,163,0.10)', color: '#164465' }}>{s.data_ref}</span> : <span className="text-nexus-300">—</span>)}</td>
                   <td className="py-2 pr-2 text-nexus-600">{editing ? (
                     <input value={(draft[s.step_number ?? i + 1]?.expected_result) ?? ''} onChange={(e) => setDraft((d) => ({ ...d, [s.step_number ?? i + 1]: { action: d[s.step_number ?? i + 1]?.action ?? '', expected_result: e.target.value } }))} className="w-full text-[12px] rounded border border-nexus-200 px-1 py-0.5" />
                   ) : dispExpected(s, i)}</td>

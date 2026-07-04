@@ -1,5 +1,5 @@
 // ═══════════════════════════════════════════════════════════════
-//  NEXUS AI ENGINE FACTORY — Progress Bar Component
+//  VKPOWER AI ENGINE FACTORY — Progress Bar Component
 // ═══════════════════════════════════════════════════════════════
 import clsx from 'clsx';
 

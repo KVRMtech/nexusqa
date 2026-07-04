@@ -1,5 +1,5 @@
 // ═══════════════════════════════════════════════════════════════
-//  NEXUS AI ENGINE FACTORY — Complete Type System (12 Modules)
+//  VKPOWER AI ENGINE FACTORY — Complete Type System (12 Modules)
 // ═══════════════════════════════════════════════════════════════
 
 // ── User & Auth ─────────────────────────────────────────────

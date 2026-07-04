@@ -1,5 +1,5 @@
 // ═══════════════════════════════════════════════════════════════
-//  NEXUS AI ENGINE FACTORY — Filter Bar Component
+//  VKPOWER AI ENGINE FACTORY — Filter Bar Component
 // ═══════════════════════════════════════════════════════════════
 import clsx from 'clsx';
 

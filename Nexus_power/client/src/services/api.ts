@@ -861,7 +861,7 @@ class ApiClient {
   async editTestCase(
     artifactId: string,
     caseId: string,
-    patch: { title?: string; steps?: Array<{ step_number: number; action?: string; expected_result?: string; verification?: string; control?: { label: string; kind?: string; anchor?: string; anchor_kind?: string } }> },
+    patch: { title?: string; steps?: Array<{ step_number: number; action?: string; expected_result?: string; verification?: string; value?: string; delete?: boolean; control?: { label: string; kind?: string; anchor?: string; anchor_kind?: string } }> },
   ): Promise<{ success: boolean; test_case_id: string; overridden_steps: number; repointed_steps?: number; survives_regenerate: boolean }> {
     const { data } = await this.client.patch(
       `/v1/test-factory/${artifactId}/test-cases/${caseId}`,
@@ -1678,7 +1678,7 @@ class ApiClient {
     return data;
   }
 
-  /** Nexus TrueFix — grounded root-cause diagnosis of one failed step. */
+  /** VKPower TrueFix — grounded root-cause diagnosis of one failed step. */
   async analyzeStep(artifactId: string, scenarioId: string, stepNumber: number): Promise<any> {
     const { data } = await this.client.get(
       `/v1/test-factory/${artifactId}/steps/${encodeURIComponent(scenarioId)}/${stepNumber}/analyze`,
@@ -1759,7 +1759,7 @@ class ApiClient {
     return resp.data as Blob;
   }
 
-  /** Start a server-side run on the Nexus runner. Returns { run_id, status }. */
+  /** Start a server-side run on the VKPower runner. Returns { run_id, status }. */
   async startNexusRun(
     artifactId: string,
     body: { categories?: string[]; test_ids?: string[]; base_url?: string; data?: Record<string, string>; data_by_test?: Record<string, Record<string, string>>; browsers?: string[]; headed?: boolean; workers?: number; retries?: number },
@@ -1770,7 +1770,7 @@ class ApiClient {
     return data;
   }
 
-  /** Start a HEADED, VNC-streamed run on the Nexus runner. Returns { run_id, live_url }. */
+  /** Start a HEADED, VNC-streamed run on the VKPower runner. Returns { run_id, live_url }. */
   async startNexusLiveRun(
     artifactId: string,
     body: { categories?: string[]; test_ids?: string[]; base_url?: string; data?: Record<string, string>; data_by_test?: Record<string, Record<string, string>>; browsers?: string[]; retries?: number },
@@ -1794,7 +1794,7 @@ class ApiClient {
     return data;
   }
 
-  /** Poll a Nexus runner job's live status (running -> passed/failed/...). */
+  /** Poll a VKPower runner job's live status (running -> passed/failed/...). */
   async getNexusRunStatus(artifactId: string, runId: string): Promise<any> {
     const { data } = await this.client.get(
       `/v1/test-factory/${artifactId}/playwright/run/${runId}`,

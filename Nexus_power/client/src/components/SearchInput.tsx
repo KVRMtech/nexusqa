@@ -1,5 +1,5 @@
 // ═══════════════════════════════════════════════════════════════
-//  NEXUS AI ENGINE FACTORY — Search Input Component
+//  VKPOWER AI ENGINE FACTORY — Search Input Component
 // ═══════════════════════════════════════════════════════════════
 import { useRef, useEffect } from 'react';
 import { Search, X } from 'lucide-react';

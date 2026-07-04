@@ -1,5 +1,5 @@
 // ═══════════════════════════════════════════════════════════════
-//  NEXUS AI ENGINE FACTORY — Stat Card Component
+//  VKPOWER AI ENGINE FACTORY — Stat Card Component
 // ═══════════════════════════════════════════════════════════════
 import type { ReactNode } from 'react';
 import clsx from 'clsx';

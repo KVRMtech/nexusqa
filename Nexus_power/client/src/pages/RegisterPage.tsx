@@ -60,7 +60,7 @@ export default function RegisterPage() {
             Create your <span className="text-transparent bg-clip-text bg-gradient-to-r from-nexus-400 to-purple-400">Organization</span>
           </h1>
           <p className="mt-2 text-sm text-slate-400">
-            Set up a new Nexus AI Engine Factory tenant
+            Set up a new VKPower AI Engine Factory tenant
           </p>
         </div>
 
@@ -75,26 +75,26 @@ export default function RegisterPage() {
 
           <form onSubmit={handleSubmit} className="space-y-4">
             <div>
-              <label className="block text-xs font-medium text-slate-8000 uppercase tracking-wider mb-1.5">
+              <label className="block text-xs font-medium text-slate-600 uppercase tracking-wider mb-1.5">
                 <span className="flex items-center gap-1.5"><Building2 className="h-3 w-3" /> Organization name</span>
               </label>
               <input type="text" required value={form.tenantName} onChange={set('tenantName')} className="input-field w-full" placeholder="Acme Corp" />
             </div>
             <div>
-              <label className="block text-xs font-medium text-slate-8000 uppercase tracking-wider mb-1.5">Your name</label>
+              <label className="block text-xs font-medium text-slate-600 uppercase tracking-wider mb-1.5">Your name</label>
               <input type="text" required value={form.name} onChange={set('name')} className="input-field w-full" placeholder="Jane Smith" />
             </div>
             <div>
-              <label className="block text-xs font-medium text-slate-8000 uppercase tracking-wider mb-1.5">Email</label>
+              <label className="block text-xs font-medium text-slate-600 uppercase tracking-wider mb-1.5">Email</label>
               <input type="email" required value={form.email} onChange={set('email')} className="input-field w-full" placeholder="jane@acme.com" />
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="block text-xs font-medium text-slate-8000 uppercase tracking-wider mb-1.5">Password</label>
+                <label className="block text-xs font-medium text-slate-600 uppercase tracking-wider mb-1.5">Password</label>
                 <input type="password" required value={form.password} onChange={set('password')} className="input-field w-full" placeholder="Min 8 chars" />
               </div>
               <div>
-                <label className="block text-xs font-medium text-slate-8000 uppercase tracking-wider mb-1.5">Confirm</label>
+                <label className="block text-xs font-medium text-slate-600 uppercase tracking-wider mb-1.5">Confirm</label>
                 <input type="password" required value={form.confirmPassword} onChange={set('confirmPassword')} className="input-field w-full" placeholder="••••••••" />
               </div>
             </div>
@@ -113,7 +113,7 @@ export default function RegisterPage() {
         </div>
 
         {/* Footer */}
-        <p className="text-center text-sm text-slate-8000">
+        <p className="text-center text-sm text-slate-600">
           Already have an account?{' '}
           <Link to="/login" className="font-medium text-nexus-400 hover:text-nexus-300 transition-colors">
             Sign in

@@ -1,5 +1,5 @@
 // ═══════════════════════════════════════════════════════════════
-//  NEXUS AI ENGINE FACTORY — UI Store (Zustand)
+//  VKPOWER AI ENGINE FACTORY — UI Store (Zustand)
 // ═══════════════════════════════════════════════════════════════
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';

@@ -1,5 +1,5 @@
 // ═══════════════════════════════════════════════════════════════
-//  NEXUS AI ENGINE FACTORY — Session Store (Zustand)
+//  VKPOWER AI ENGINE FACTORY — Session Store (Zustand)
 // ═══════════════════════════════════════════════════════════════
 import { create } from 'zustand';
 import type { KTSession, Workflow } from '../types';

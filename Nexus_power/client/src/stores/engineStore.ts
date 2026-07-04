@@ -1,5 +1,5 @@
 // ═══════════════════════════════════════════════════════════════
-//  NEXUS AI ENGINE FACTORY — Engine Status Store (Zustand)
+//  VKPOWER AI ENGINE FACTORY — Engine Status Store (Zustand)
 // ═══════════════════════════════════════════════════════════════
 import { create } from 'zustand';
 import type { EngineHealth } from '../types';

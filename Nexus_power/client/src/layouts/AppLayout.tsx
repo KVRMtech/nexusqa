@@ -129,7 +129,7 @@ export default function AppLayout() {
           <Hexagon className="h-5 w-5 text-[#0a2540]" />
         </div>
         <div>
-          <h1 className="text-[15px] font-bold text-white tracking-tight">NEXUS</h1>
+          <h1 className="text-[15px] font-bold text-white tracking-tight">VKPOWER</h1>
           <p className="text-[9px] font-semibold text-gold-400 uppercase tracking-[0.2em]">{isCanonicalOnly ? 'Canonical Processing' : 'AI Engine Factory'}</p>
         </div>
       </div>
@@ -269,7 +269,7 @@ export default function AppLayout() {
             </button>
             <div className="flex items-center gap-2 lg:hidden">
               <Hexagon className="h-5 w-5 text-nexus-500" />
-              <h1 className="text-base font-bold text-[#0a2540]">NEXUS</h1>
+              <h1 className="text-base font-bold text-[#0a2540]">VKPOWER</h1>
             </div>
           </div>
           {/* Right: notification center (always visible) */}

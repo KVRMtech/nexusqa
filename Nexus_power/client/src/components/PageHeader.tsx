@@ -1,5 +1,5 @@
 // ═══════════════════════════════════════════════════════════════
-//  NEXUS AI ENGINE FACTORY — Page Header Component
+//  VKPOWER AI ENGINE FACTORY — Page Header Component
 // ═══════════════════════════════════════════════════════════════
 import type { ReactNode } from 'react';
 import { LiveBadge } from './LiveBadge';

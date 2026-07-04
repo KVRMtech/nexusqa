@@ -1,6 +1,6 @@
 # The AI Verification Platform — "Can we trust this automation in production?"
 
-**Status:** Architectural blueprint v1 (2026-07-05) · **Owner:** Nexus QA
+**Status:** Architectural blueprint v1 (2026-07-05) · **Owner:** VKPower QA
 **Thesis:** Trust is a **measurement, not a promise.** Every AI assistant on the comparison list *asserts* its output is good; this platform **measures** it — against recorded evidence, against the live application, against runtime history — and refuses to certify what it cannot prove. The unit of value is not a script; it is a **certified script with a reproducible evidence dossier**.
 
 **Legend:** `[LIVE]` deployed in this product today · `[EXTEND]` exists, needs the named upgrade · `[BUILD]` new.

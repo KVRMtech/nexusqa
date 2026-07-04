@@ -1,5 +1,5 @@
 // ═══════════════════════════════════════════════════════════════
-//  NEXUS AI ENGINE FACTORY — Store Barrel Export
+//  VKPOWER AI ENGINE FACTORY — Store Barrel Export
 // ═══════════════════════════════════════════════════════════════
 export { useAuthStore, selectUser, selectTenantId, selectIsAuthenticated, selectIsLoading, selectAuthError } from './authStore';
 export { useEngineStore, selectEngine, selectAllHealthy, selectHealthSummary } from './engineStore';

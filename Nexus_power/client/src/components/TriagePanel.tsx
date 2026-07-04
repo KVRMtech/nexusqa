@@ -59,7 +59,7 @@ export function defectMarkdown(s: Scenario): string {
     s.error_message || '(no error message)',
     '```',
     ``,
-    `_Grounded by Nexus — paste into Jira / Linear / Xray._`,
+    `_Grounded by VKPower — paste into Jira / Linear / Xray._`,
   ].join('\n');
 }
 
@@ -117,7 +117,7 @@ export default function TriagePanel({ artifactId, scopeIds }: { artifactId: stri
           <p className="text-[11px] text-slate-400 mt-1 max-w-md mx-auto leading-relaxed">
             {board.total > 0
               ? 'Run the selected script(s), or select more categories above, to see their grounded triage here.'
-              : 'Run a script (or wire the bundled Nexus reporter) and each failure appears here — classified and shown beside its known-good baseline.'}
+              : 'Run a script (or wire the bundled VKPower reporter) and each failure appears here — classified and shown beside its known-good baseline.'}
           </p>
         </div>
       ) : (

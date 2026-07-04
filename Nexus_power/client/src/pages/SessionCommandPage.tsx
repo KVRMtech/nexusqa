@@ -608,12 +608,20 @@ export default function SessionCommandPage() {
 
   // ── Session artifacts (Mode 3) ────────────────────────────
   const [sessionArtifacts, setSessionArtifacts] = useState<Record<string, any>>({});
+  // Bumped on a short timer while a just-completed session's artifact still
+  // isn't fetched, so the effect retries even when the orchestrator poll has
+  // gone quiet (see the comment on the effect below).
+  const [artRetryTick, setArtRetryTick] = useState(0);
 
   useEffect(() => {
     const done = sessions.filter(s => s.status === 'completed' || s.status === 'needs_review');
     const toFetch = done.filter(s => !(s.session_id in sessionArtifacts));
-    if (toFetch.length === 0) return;
+    if (toFetch.length === 0) {
+      if (artRetryTick !== 0) setArtRetryTick(0);   // all resolved → reset budget
+      return;
+    }
     let cancelled = false;
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
     (async () => {
       const batch: Record<string, any> = {};
       for (const s of toFetch.slice(0, 20)) {
@@ -623,9 +631,19 @@ export default function SessionCommandPage() {
           if (arts.length > 0) batch[s.session_id] = arts[0];
         } catch { /* skip */ }
       }
-      if (!cancelled) setSessionArtifacts(prev => ({ ...prev, ...batch }));
+      if (cancelled) return;
+      if (Object.keys(batch).length > 0) setSessionArtifacts(prev => ({ ...prev, ...batch }));
+      // A just-completed session's artifact can persist a BEAT AFTER the session
+      // flips to "completed", by which point the orchestrator poll has gone quiet
+      // and this effect (keyed on rawOrchSessions) won't re-run on its own — so the
+      // Generate-tests / View-Asset buttons stayed hidden until a manual refresh.
+      // Retry on a short bounded timer so they appear without one.
+      const stillMissing = toFetch.some(s => !(s.session_id in batch));
+      if (stillMissing && artRetryTick < 12) {
+        retryTimer = setTimeout(() => setArtRetryTick(n => n + 1), 2500);
+      }
     })();
-    return () => { cancelled = true; };
+    return () => { cancelled = true; if (retryTimer) clearTimeout(retryTimer); };
   // Re-run whenever the POLLED session data updates — not just when the COUNT
   // changes. A video flipping processing -> completed keeps the count the same,
   // so depending on `sessions.length` never fired and the just-completed session's
@@ -633,9 +651,10 @@ export default function SessionCommandPage() {
   // stayed hidden until a manual refresh remounted the page. Depending on
   // `rawOrchSessions` (the raw poll result) re-runs this on every refresh; the
   // `toFetch` guard (unfetched completed only) keeps it a no-op once all are loaded,
-  // and also retries a completed session whose artifact wasn't persisted yet.
+  // and a bounded retry timer (artRetryTick) re-fetches a completed session whose
+  // artifact persisted just after completion, even when the poll has gone quiet.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rawOrchSessions]);
+  }, [rawOrchSessions, artRetryTick]);
 
   // ── Stall detection ─────────────────────────────────────
   const stageEnteredAt = useRef(Date.now());

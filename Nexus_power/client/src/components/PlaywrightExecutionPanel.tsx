@@ -934,7 +934,11 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
     const id = s.test_id || s.path;
     const willOpen = !openEdit[id];
     setOpenEdit((m) => ({ ...m, [id]: willOpen }));
-    if (!willOpen || !s.test_id || editSource[s.test_id] !== undefined) return;
+    // Always refetch the latest ACTIVE source on open (Fix #3): a Test Cases edit
+    // or a regenerate writes a new active version, so a cached editSource would
+    // show stale code. getScriptSource returns the active version (now authoritative
+    // via the Plane-C overlay) — don't short-circuit on the cache.
+    if (!willOpen || !s.test_id) return;
     setEditBusy(id);
     try {
       const src = await api.getScriptSource(artifactId, s.test_id);
@@ -1235,7 +1239,7 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
     return ok;
   };
 
-  // One-click: execute server-side on the Nexus runner, then refresh the triage
+  // One-click: execute server-side on the VKPower runner, then refresh the triage
   // board. With no scope it runs the selected categories; { test_ids:[id] } runs
   // a single script.
   const runOnNexus = async (scope?: { test_ids?: string[] }) => {
@@ -1458,7 +1462,7 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
             <button onClick={() => runOnNexus()} disabled={running || autoHealing || selectedScripts.length === 0}
               className="ml-auto inline-flex items-center gap-1.5 rounded-lg px-3.5 py-1.5 text-[12px] font-bold text-[#fff] shadow-sm ring-1 ring-gold-400/40 transition-all hover:brightness-110 active:translate-y-px disabled:opacity-50 disabled:cursor-not-allowed"
               style={{ background: 'linear-gradient(135deg, #0c2c4d, #2670a3)' }}
-              title="Run the selected scripts on the Nexus runner and get a grounded verdict">
+              title="Run the selected scripts on the VKPower runner and get a grounded verdict">
               {running ? <Loader2 className="h-4 w-4 animate-spin text-[#fff]" /> : <Play className="h-4 w-4 text-gold-400" />} Run {selectedScripts.length} ▸ verdict
             </button>
           </div>
@@ -1610,9 +1614,9 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
                                   <div className="flex items-center gap-2 flex-wrap rounded-lg border border-nexus-100 bg-white px-2 py-1.5">
                                     <span className="text-[9px] font-black uppercase tracking-wide text-nexus-400 mr-0.5">Run</span>
                                     <button onClick={() => runOnNexus({ test_ids: [s.test_id] })} disabled={running || autoHealing || !s.test_id}
-                                      title="Run THIS script on the Nexus runner (headless, server-side) — uses the active approved version"
+                                      title="Run THIS script on the VKPower runner (headless, server-side) — uses the active approved version"
                                       className="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[11px] font-bold text-[#fff] shadow-sm ring-1 ring-emerald-700/40 transition-all hover:brightness-110 hover:shadow active:translate-y-px disabled:opacity-50 disabled:cursor-not-allowed disabled:shadow-none" style={{ background: '#059669' }}>
-                                      {runningTestId === s.test_id && !autoHealing && !liveUrl ? <Loader2 className="h-3.5 w-3.5 animate-spin text-[#fff]" /> : <Play className="h-3.5 w-3.5 text-[#fff]" />} Run on Nexus
+                                      {runningTestId === s.test_id && !autoHealing && !liveUrl ? <Loader2 className="h-3.5 w-3.5 animate-spin text-[#fff]" /> : <Play className="h-3.5 w-3.5 text-[#fff]" />} Run on VKPower
                                     </button>
                                     <button onClick={() => runLive({ test_ids: [s.test_id] })} disabled={running || autoHealing || !s.test_id}
                                       title="Run THIS script HEADED and watch it live in the portal (view-only stream)"
@@ -1955,7 +1959,7 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
                   </select>
                 </label>
                 <label className="flex items-center gap-1 text-slate-500"
-                  title="Applies to the downloaded local bundle — the Nexus runner is headless">
+                  title="Applies to the downloaded local bundle — the VKPower runner is headless">
                   <input type="checkbox" checked={headed} onChange={(e) => setHeaded(e.target.checked)} /> headed <span className="text-slate-300">(local)</span>
                 </label>
               </div>
@@ -1969,7 +1973,7 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
                   test's row above). This strip just surfaces the active run + the local-download option. */}
               <div>
                 <p className="flex items-center gap-1.5 text-[11px] font-bold text-nexus-900 mb-1"><span className="h-3 w-1 rounded-full bg-gradient-to-b from-gold-400 to-gold-600" />Run status
-                  <span className="text-nexus-400 normal-case font-medium"> — use ▶ Run on Nexus · Run live · ⚡ Auto-Heal on each script above</span>
+                  <span className="text-nexus-400 normal-case font-medium"> — use ▶ Run on VKPower · Run live · ⚡ Auto-Heal on each script above</span>
                 </p>
                 {runStatus && (
                   <div className="mt-2 flex items-center gap-2 text-[11px] flex-wrap">
@@ -2033,9 +2037,9 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
             <div ref={liveRef} className="rounded-lg overflow-hidden border-2 border-nexus-300 bg-black">
               <div className="px-2 py-1 bg-nexus-600 text-[#fff] text-[10px] font-bold flex items-center gap-1.5">
                 <span className="inline-block h-2 w-2 rounded-full bg-red-400 animate-pulse" />
-                LIVE — headed Chromium on the Nexus runner (view-only stream)
+                LIVE — headed Chromium on the VKPower runner (view-only stream)
               </div>
-              <iframe title="Nexus live run" src={liveUrl} className="w-full" style={{ height: 520, border: 0 }} />
+              <iframe title="VKPower live run" src={liveUrl} className="w-full" style={{ height: 520, border: 0 }} />
             </div>
           )}
           {runStatus && running && (
@@ -2086,7 +2090,7 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
             <div className="rounded-xl border border-dashed border-slate-300 bg-white/60 px-4 py-8 text-center">
               <p className="text-sm font-semibold text-slate-600">No runs yet</p>
               <p className="text-[11px] text-slate-400 mt-1 max-w-md mx-auto leading-relaxed">
-                Run a script above (or wire the bundled Nexus reporter) and this run's step-by-step pass/fail timeline appears here — each failing step shown beside its known-good baseline.
+                Run a script above (or wire the bundled VKPower reporter) and this run's step-by-step pass/fail timeline appears here — each failing step shown beside its known-good baseline.
               </p>
             </div>
           )}
@@ -2130,7 +2134,7 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
             className="w-full flex items-center gap-2 px-4 py-2.5 text-left hover:bg-slate-100/60">
             <Terminal className="h-4 w-4 text-slate-500" />
             <span className="text-[12px] font-bold text-slate-700">How to run</span>
-            <span className="text-[10px] text-slate-400">local · CI · the optional Nexus reporter feeds the triage board</span>
+            <span className="text-[10px] text-slate-400">local · CI · the optional VKPower reporter feeds the triage board</span>
             {howToRun ? <ChevronDown className="h-4 w-4 text-slate-400 ml-auto" /> : <ChevronRight className="h-4 w-4 text-slate-400 ml-auto" />}
           </button>
           {howToRun && (

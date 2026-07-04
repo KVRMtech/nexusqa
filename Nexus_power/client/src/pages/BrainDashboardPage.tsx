@@ -1,5 +1,5 @@
 // ═══════════════════════════════════════════════════════════════
-//  NEXUS AI ENGINE FACTORY — Brain Dashboard (Tier & Intelligence)
+//  VKPOWER AI ENGINE FACTORY — Brain Dashboard (Tier & Intelligence)
 // ═══════════════════════════════════════════════════════════════
 import { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '../contexts/AuthContext';
@@ -89,7 +89,7 @@ const modeBadge = (mode: string) => {
     'full-cloud': 'bg-blue-500/20 text-blue-300 border-blue-500/30',
     'full-on-prem': 'bg-green-500/20 text-green-300 border-green-500/30',
     'hybrid': 'bg-yellow-500/20 text-yellow-300 border-yellow-500/30',
-    'not-configured': 'bg-gray-500/20 text-slate-8000 border-gray-500/30',
+    'not-configured': 'bg-gray-500/20 text-slate-600 border-gray-500/30',
   };
   return colors[mode] || colors['hybrid'];
 };
@@ -102,12 +102,12 @@ const levelColor = (level: string) => {
     needs_review: 'text-orange-400',
     poor: 'text-red-400',
   };
-  return map[level] || 'text-slate-8000';
+  return map[level] || 'text-slate-600';
 };
 
 const scoreBar = (score: number, label: string) => (
   <div className="flex items-center gap-3">
-    <span className="text-xs text-slate-8000 w-32 shrink-0">{label}</span>
+    <span className="text-xs text-slate-600 w-32 shrink-0">{label}</span>
     <div className="flex-1 h-2 rounded-full bg-gray-100 overflow-hidden">
       <div
         className={clsx(
@@ -152,7 +152,7 @@ function EngineTierCard({
             <p className="text-xs text-slate-400">
               Active: <span className="text-nexus-400">{info.provider || 'not configured'}</span>
               {info.active_tier && (
-                <span className="ml-2 text-slate-8000">({info.active_tier})</span>
+                <span className="ml-2 text-slate-600">({info.active_tier})</span>
               )}
             </p>
           </div>
@@ -172,7 +172,7 @@ function EngineTierCard({
           {/* Configured tiers */}
           {info.all_tiers && Object.entries(info.all_tiers).map(([tier, provider]) => (
             <div key={tier} className="flex items-center justify-between text-xs">
-              <span className="text-slate-8000">{tierLabels[tier] || tier}</span>
+              <span className="text-slate-600">{tierLabels[tier] || tier}</span>
               <span className={clsx(
                 'font-mono',
                 tier === info.active_tier ? 'text-nexus-400 font-semibold' : 'text-slate-400',
@@ -190,7 +190,7 @@ function EngineTierCard({
               {Object.entries(recommended).map(([tier, provider]) => (
                 <div key={tier} className="flex items-center justify-between text-xs">
                   <span className="text-slate-400">{tierLabels[tier] || tier}</span>
-                  <span className="text-slate-8000 font-mono">{provider as string}</span>
+                  <span className="text-slate-600 font-mono">{provider as string}</span>
                 </div>
               ))}
             </>
@@ -313,7 +313,7 @@ export default function BrainDashboardPage() {
           </div>
           <div>
             <h1 className="text-xl font-bold text-[#0a2540]">Brain Dashboard</h1>
-            <p className="text-xs text-slate-8000">Intelligent Coordinator — Tiers, Quality Gates & Session Intelligence</p>
+            <p className="text-xs text-slate-600">Intelligent Coordinator — Tiers, Quality Gates & Session Intelligence</p>
           </div>
         </div>
         <button
@@ -354,7 +354,7 @@ export default function BrainDashboardPage() {
               </div>
               <div className="rounded-lg bg-white shadow-sm border border-gray-200 p-4">
                 <div className="flex items-center gap-2 mb-1">
-                  <Activity className="h-5 w-5 text-slate-8000" />
+                  <Activity className="h-5 w-5 text-slate-600" />
                   <span className="text-sm font-medium text-slate-700">Total Engines</span>
                 </div>
                 <p className="text-2xl font-bold text-[#0a2540] mt-1">{tiers.total_engines}</p>
@@ -386,13 +386,13 @@ export default function BrainDashboardPage() {
                   <span className="text-blue-300 font-medium">Tier 1: Cloud Best</span>
                   <span className="text-blue-500/60 text-[10px]">(Claude, GPT-5, Gemini)</span>
                 </div>
-                <span className="text-slate-8000">→ failover →</span>
+                <span className="text-slate-600">→ failover →</span>
                 <div className="flex items-center gap-1.5 rounded-lg bg-yellow-500/10 border border-yellow-500/20 px-3 py-2">
                   <Wifi className="h-3.5 w-3.5 text-yellow-400" />
                   <span className="text-yellow-300 font-medium">Tier 2: Fallback</span>
                   <span className="text-yellow-500/60 text-[10px]">(OpenAI, Azure)</span>
                 </div>
-                <span className="text-slate-8000">→ failover →</span>
+                <span className="text-slate-600">→ failover →</span>
                 <div className="flex items-center gap-1.5 rounded-lg bg-green-500/10 border border-green-500/20 px-3 py-2">
                   <Server className="h-3.5 w-3.5 text-green-400" />
                   <span className="text-green-300 font-medium">Tier 3: Local On-Prem</span>
@@ -420,8 +420,8 @@ export default function BrainDashboardPage() {
           </>
         ) : (
           <div className="rounded-lg bg-gray-50 border border-gray-200 p-8 text-center">
-            <Layers className="h-8 w-8 text-slate-8000 mx-auto mb-2" />
-            <p className="text-sm text-slate-8000">
+            <Layers className="h-8 w-8 text-slate-600 mx-auto mb-2" />
+            <p className="text-sm text-slate-600">
               {loading.tiers ? 'Loading tier status...' : 'Brain Engine not reachable. Start it to view tiers.'}
             </p>
           </div>
@@ -462,7 +462,7 @@ export default function BrainDashboardPage() {
             {sessionAnalysis && (
               <div className="space-y-3">
                 <div className="flex items-center justify-between">
-                  <span className="text-xs text-slate-8000">Completeness</span>
+                  <span className="text-xs text-slate-600">Completeness</span>
                   <span className="text-sm font-bold text-[#0a2540]">
                     {Math.round(sessionAnalysis.completeness * 100)}%
                   </span>
@@ -541,7 +541,7 @@ export default function BrainDashboardPage() {
                     <p className={clsx('text-xl font-bold', levelColor(qualityResult.level))}>
                       {Math.round(qualityResult.overall_score * 100)}%
                     </p>
-                    <p className="text-xs text-slate-8000 capitalize">
+                    <p className="text-xs text-slate-600 capitalize">
                       {qualityResult.level} — {qualityResult.passed ? 'PASSED' : 'FAILED'}
                     </p>
                   </div>
@@ -567,7 +567,7 @@ export default function BrainDashboardPage() {
               </div>
             ) : (
               <div className="text-center py-6">
-                <Shield className="h-8 w-8 text-slate-8000 mx-auto mb-2" />
+                <Shield className="h-8 w-8 text-slate-600 mx-auto mb-2" />
                 <p className="text-xs text-slate-400">
                   Select a session and click "Run Quality Gate" to evaluate quality.
                 </p>
@@ -633,7 +633,7 @@ export default function BrainDashboardPage() {
             <div className="space-y-2">
               <div className="flex h-8 w-8 items-center justify-center rounded-full bg-blue-500/20 text-sm font-bold text-blue-400">1</div>
               <h3 className="text-sm font-semibold text-[#0a2540]">Pipeline Starts</h3>
-              <p className="text-xs text-slate-8000 leading-relaxed">
+              <p className="text-xs text-slate-600 leading-relaxed">
                 Client triggers a pipeline via the Orchestrator (e.g., <code className="text-nexus-400">qa-testing</code> chain).
                 LLM-powered engines (Brain, Heart) use the <strong>TieredLLMRouter</strong> for
                 Tier 1 → Tier 2 → Tier 3 failover. Non-LLM engines use dedicated tooling.
@@ -643,7 +643,7 @@ export default function BrainDashboardPage() {
             <div className="space-y-2">
               <div className="flex h-8 w-8 items-center justify-center rounded-full bg-yellow-500/20 text-sm font-bold text-yellow-400">2</div>
               <h3 className="text-sm font-semibold text-[#0a2540]">Brain Tracks Each Stage</h3>
-              <p className="text-xs text-slate-8000 leading-relaxed">
+              <p className="text-xs text-slate-600 leading-relaxed">
                 After each stage completes, the Orchestrator notifies the Brain with the results.
                 Brain updates session state, tracks which engines completed, and identifies gaps.
               </p>
@@ -652,7 +652,7 @@ export default function BrainDashboardPage() {
             <div className="space-y-2">
               <div className="flex h-8 w-8 items-center justify-center rounded-full bg-green-500/20 text-sm font-bold text-green-400">3</div>
               <h3 className="text-sm font-semibold text-[#0a2540]">Quality Gate at Completion</h3>
-              <p className="text-xs text-slate-8000 leading-relaxed">
+              <p className="text-xs text-slate-600 leading-relaxed">
                 When all stages complete, the Orchestrator requests a <strong>Quality Gate</strong> evaluation.
                 Brain scores 5 dimensions (rules, tests, consistency, confidence, PII safety)
                 and returns pass/fail. When policy enforcement is enabled
@@ -666,14 +666,14 @@ export default function BrainDashboardPage() {
           <div className="mt-6 pt-4 border-t border-gray-200">
             <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">Brain API Endpoints (via Gateway)</p>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-1 text-xs font-mono">
-              <span className="text-slate-8000"><span className="text-green-400">POST</span> /api/v1/brain/decide — Intelligent cross-engine decision</span>
-              <span className="text-slate-8000"><span className="text-green-400">POST</span> /api/v1/brain/quality-gate — Quality evaluation</span>
-              <span className="text-slate-8000"><span className="text-green-400">POST</span> /api/v1/brain/sessions/:id/update — Track engine output</span>
-              <span className="text-slate-8000"><span className="text-blue-400">GET </span> /api/v1/brain/sessions/:id/analyze — Gap analysis</span>
-              <span className="text-slate-8000"><span className="text-blue-400">GET </span> /api/v1/brain/tiers — All engine tier status</span>
-              <span className="text-slate-8000"><span className="text-blue-400">GET </span> /api/v1/brain/tiers/:engine — Per-engine tiers</span>
-              <span className="text-slate-8000"><span className="text-green-400">POST</span> /api/v1/brain/ask — Free-form Q&A</span>
-              <span className="text-slate-8000"><span className="text-blue-400">GET </span> /api/v1/brain/llm-health — LLM provider health</span>
+              <span className="text-slate-600"><span className="text-green-400">POST</span> /api/v1/brain/decide — Intelligent cross-engine decision</span>
+              <span className="text-slate-600"><span className="text-green-400">POST</span> /api/v1/brain/quality-gate — Quality evaluation</span>
+              <span className="text-slate-600"><span className="text-green-400">POST</span> /api/v1/brain/sessions/:id/update — Track engine output</span>
+              <span className="text-slate-600"><span className="text-blue-400">GET </span> /api/v1/brain/sessions/:id/analyze — Gap analysis</span>
+              <span className="text-slate-600"><span className="text-blue-400">GET </span> /api/v1/brain/tiers — All engine tier status</span>
+              <span className="text-slate-600"><span className="text-blue-400">GET </span> /api/v1/brain/tiers/:engine — Per-engine tiers</span>
+              <span className="text-slate-600"><span className="text-green-400">POST</span> /api/v1/brain/ask — Free-form Q&A</span>
+              <span className="text-slate-600"><span className="text-blue-400">GET </span> /api/v1/brain/llm-health — LLM provider health</span>
             </div>
           </div>
         </div>

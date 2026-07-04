@@ -1,6 +1,6 @@
 # The Playwright Generation Engine — Enterprise 10/10 Architecture
 
-**Status:** Architectural blueprint (v1, 2026-07-04) · **Owner:** Nexus QA
+**Status:** Architectural blueprint (v1, 2026-07-04) · **Owner:** VKPower QA
 **Prime rule:** the engine is a **COMPILER with a runtime feedback loop**, not a chatbot. Same input ⇒ same script, every emission evidence-bound, LLM usage measured in *cents per thousand scripts*, honesty gates that refuse to fabricate. That combination is the moat: every competitor on the comparison list is a text predictor with no evidence, no runtime, and no memory.
 
 **Legend used throughout:** `[LIVE]` exists and is deployed in this product today · `[BUILT-NOT-DEPLOYED]` exists in the repo, needs wiring/deploy · `[EXTEND]` exists, needs the specified upgrade · `[BUILD]` new.

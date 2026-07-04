@@ -1,5 +1,5 @@
 // ═══════════════════════════════════════════════════════════════
-//  NEXUS AI ENGINE FACTORY — Confirm Dialog Component
+//  VKPOWER AI ENGINE FACTORY — Confirm Dialog Component
 // ═══════════════════════════════════════════════════════════════
 import { AlertTriangle, CheckCircle, Info, XCircle } from 'lucide-react';
 import { Modal } from './Modal';

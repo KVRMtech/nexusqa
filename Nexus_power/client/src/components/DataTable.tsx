@@ -1,5 +1,5 @@
 // ═══════════════════════════════════════════════════════════════
-//  NEXUS AI ENGINE FACTORY — Data Table Component
+//  VKPOWER AI ENGINE FACTORY — Data Table Component
 // ═══════════════════════════════════════════════════════════════
 import { useState, useMemo, type ReactNode } from 'react';
 import { ChevronUp, ChevronDown, ChevronsUpDown, ChevronLeft, ChevronRight } from 'lucide-react';

@@ -1,5 +1,5 @@
 // ═══════════════════════════════════════════════════════════════
-//  NEXUS AI ENGINE FACTORY — Components Barrel Export
+//  VKPOWER AI ENGINE FACTORY — Components Barrel Export
 // ═══════════════════════════════════════════════════════════════
 
 // Error Boundaries

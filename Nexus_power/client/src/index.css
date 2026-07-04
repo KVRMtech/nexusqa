@@ -623,7 +623,7 @@ main.flex-1 [data-page-header]::after {
   border-radius: 2px;
 }
 
-/* Nexus-branded hover states & gradient buttons → USAA navy */
+/* VKPower-branded hover states & gradient buttons → USAA navy */
 main.flex-1 .from-nexus-500,
 main.flex-1 .from-nexus-600 { --tw-gradient-from: #0a2540 var(--tw-gradient-from-position) !important; }
 main.flex-1 .to-nexus-600,

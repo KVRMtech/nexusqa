@@ -1,5 +1,5 @@
 // ═══════════════════════════════════════════════════════════════
-//  NEXUS AI ENGINE FACTORY — Route-Level Error Boundary
+//  VKPOWER AI ENGINE FACTORY — Route-Level Error Boundary
 // ═══════════════════════════════════════════════════════════════
 import { Component, type ReactNode, type ErrorInfo } from 'react';
 import { AlertOctagon, RefreshCw, ArrowLeft } from 'lucide-react';

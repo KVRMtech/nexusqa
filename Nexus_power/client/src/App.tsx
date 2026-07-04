@@ -18,6 +18,7 @@ const CanonicalResultPage = lazy(() => import('./pages/CanonicalResultPage'));
 const PersonaWorkspacePage = lazy(() => import('./pages/PersonaWorkspacePage'));
 const TestStrategyWorkspacePage = lazy(() => import('./pages/TestStrategyWorkspacePage'));
 const E2EArchitectWorkspacePage = lazy(() => import('./pages/E2EArchitectWorkspacePage'));
+const BatchLightsOutPage = lazy(() => import('./pages/BatchLightsOutPage'));
 const VisualFlowDiagramPage = lazy(() => import('./pages/VisualFlowDiagramPage'));
 const VisualE2ETestsPage = lazy(() => import('./pages/VisualE2ETestsPage'));
 
@@ -56,7 +57,7 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
       <div className="flex h-screen items-center justify-center bg-[#f5f7fa]">
         <div className="flex flex-col items-center gap-4">
           <div className="h-10 w-10 animate-spin rounded-full border-4 border-nexus-500 border-t-transparent" />
-          <p className="text-sm text-slate-500 animate-pulse">Initializing Nexus Engine Factory...</p>
+          <p className="text-sm text-slate-500 animate-pulse">Initializing VKPower Engine Factory...</p>
         </div>
       </div>
     );
@@ -91,6 +92,7 @@ export default function App() {
         <Route path="sessions/:sessionId/persona-workspace" element={<LazyPage name="Persona Workspace"><PersonaWorkspacePage /></LazyPage>} />
         <Route path="sessions/:sessionId/test-strategy" element={<LazyPage name="Test Strategy"><TestStrategyWorkspacePage /></LazyPage>} />
         <Route path="sessions/:sessionId/e2e-architect" element={<LazyPage name="E2E Architect"><E2EArchitectWorkspacePage /></LazyPage>} />
+        <Route path="sessions/:sessionId/batch-lights-out" element={<LazyPage name="Batch Lights-Out"><BatchLightsOutPage /></LazyPage>} />
         <Route path="sessions/:sessionId/visual-flow" element={<LazyPage name="Visual Flow Diagram"><VisualFlowDiagramPage /></LazyPage>} />
         <Route path="visual-e2e-tests" element={<LazyPage name="Visual E2E Tests"><VisualE2ETestsPage /></LazyPage>} />
 

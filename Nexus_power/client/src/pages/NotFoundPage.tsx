@@ -1,5 +1,5 @@
 // ═══════════════════════════════════════════════════════════════
-//  NEXUS AI ENGINE FACTORY — 404 Not Found Page
+//  VKPOWER AI ENGINE FACTORY — 404 Not Found Page
 // ═══════════════════════════════════════════════════════════════
 import { useNavigate } from 'react-router-dom';
 import { Home, ArrowLeft, Search } from 'lucide-react';
@@ -25,7 +25,7 @@ export default function NotFoundPage() {
         {/* Text */}
         <div>
           <h1 className="text-2xl font-bold text-[#0a2540]">Page not found</h1>
-          <p className="mt-2 text-sm text-slate-8000">
+          <p className="mt-2 text-sm text-slate-600">
             The page you're looking for doesn't exist or has been moved.
           </p>
         </div>

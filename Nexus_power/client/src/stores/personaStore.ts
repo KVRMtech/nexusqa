@@ -1,5 +1,5 @@
 // ═══════════════════════════════════════════════════════════════
-//  NEXUS AI ENGINE FACTORY — Persona Store (Zustand)
+//  VKPOWER AI ENGINE FACTORY — Persona Store (Zustand)
 // ═══════════════════════════════════════════════════════════════
 import { create } from 'zustand';
 import type { Persona, CreatePersonaRequest, UpdatePersonaRequest } from '../types';
