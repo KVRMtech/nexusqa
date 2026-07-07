@@ -1259,6 +1259,14 @@ async def reap_stale_jobs(
             _sel(_RJ).where(_RJ.tenant_id == tenant_id))).scalars().all()
         for r in rows:
             j = dict(getattr(r, "job_json", None) or {})
+            # A LIVE in-memory job that already reached a terminal state must
+            # never be reaped (the durable mirror can lag) — sync it instead.
+            _mem_live = _RUNNER_JOBS.get(getattr(r, "run_id", ""))
+            if _mem_live and (_mem_live.get("terminal_state")
+                              or _mem_live.get("status") not in (None, "running")):
+                if j.get("status") == "running" and not j.get("terminal_state"):
+                    r.job_json = dict(_mem_live)
+                continue
             if j.get("status") == "running" and not j.get("terminal_state") \
                     and getattr(r, "updated_at", None) and r.updated_at < cutoff:
                 j.update(status="failed", terminal_state="stale_timeout",

@@ -369,7 +369,7 @@ def risk(*, steps: list, det: dict, lint: list, preflight: dict | None) -> dict:
         1 for p in (det.get("per_step") or []) if p.get("verdict") == "grounded_ok")
     detectability = max(0.2, min(1.0, hard_asserts / n_steps))
 
-    score = round(likelihood * blast / detectability, 3)
+    score = round(min(1.0, likelihood * blast / detectability), 3)
     level = "LOW" if score < 0.15 else ("MEDIUM" if score < 0.4 else "HIGH")
     return {
         "model_version": "risk-v1",

@@ -1125,6 +1125,16 @@ def compile_case(tc, field_meta: dict | None = None, *, parametrize: bool = Fals
     else:
         out.append(f"test('{js_str(name)}', async ({{ page }}) => {{")
 
+    # Data plumbing is emitted ONLY when the case actually has data-driven
+    # fields (a type/select step with a value). A browse-only flow carrying an
+    # unused D loader + __nxTok is dead scaffolding — the auditor rightly
+    # deducts for it (the parabank 4/10 vs gate-10 inconsistency).
+    _has_data_fields = any(
+        (str(( (s.get("observed") if isinstance(s, dict) else getattr(s, "observed", None)) or {}).get("verb") or "").lower() in ("type", "select", "fill"))
+        and str(((s.get("observed") if isinstance(s, dict) else getattr(s, "observed", None)) or {}).get("value") or "").strip()
+        for s in list(getattr(tc, "steps", []) or [])
+    )
+    parametrize = parametrize and _has_data_fields
     if parametrize:
         # Optional run-time data overrides; defaults are the observed values, so a
         # plain run is unchanged. Each spec reads ITS OWN test's data slot merged
