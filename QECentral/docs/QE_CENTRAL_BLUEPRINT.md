@@ -1,5 +1,7 @@
 # QE-Central — Centralized Agentic Regression QE Platform
 
+> ⚠️ **CORRECTED BY `STARTING_POINT.md` (2026-07-07).** A 12-agent adversarial design pass verified against source that the "emit ground-truth events → page_visits materialize at conf 1.0 → everything reused unchanged" seam **does not hold for a frameless crawl** (`page_visit_extractor.py:364/1884` early-returns `visits_written=0` with no video frames; the overlay at :1974 is never reached). The true ingestion seam is the **substrate tables** (`page_visits`/`page_actions`), written not event-fed; the first build is a **substrate-writer + REFUSE harness**, not an events-crawler. **Read `STARTING_POINT.md` first** — it supersedes §0/§6 below. The product framing (§1–§5, §7–§8) still stands.
+
 **Status:** Founding blueprint v1 (2026-07-07) · **Relationship to VKPower:** shared chassis, new vehicle — zero changes to VKPower code; integration via its existing APIs only.
 
 **The product in one sentence:** the customer gives a URL, test data, and a GitLab repo; the platform *reads the code as evidence*, *explores the live app as a recorder*, synthesizes business-critical regression scenarios with provable provenance, and runs them continuously with autonomous healing, environment/defect triage, and honest reporting — human involvement measured and minimized, never hidden.
