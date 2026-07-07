@@ -349,6 +349,26 @@ _NXTOK_JS = r"""function __nxTok(v){const s=String(v==null?'':v);const m=s.match
 
 _NXSETTLE_JS = r"""async function __nxSettle(page){try{await page.waitForLoadState('domcontentloaded',{timeout:5000});}catch(e){}const sp=page.locator('[class*=spinner i],[class*=loading i],[aria-busy=\"true\"],[role=progressbar]').first();try{if(await sp.isVisible().catch(()=>false)){await sp.waitFor({state:'hidden',timeout:8000});}}catch(e){}}"""
 
+_NXCLICK_JS = r"""async function __nxClick(loc){
+  let n; try { n = await loc.count(); } catch (e) { return await loc.click(); }
+  if (n <= 1) return await loc.click();
+  const sigs = [];
+  for (let i = 0; i < n; i++) {
+    try {
+      sigs.push(await loc.nth(i).evaluate(el => {
+        const a = (el.closest && el.closest('a')) || el;
+        return ((a.getAttribute && a.getAttribute('href')) || '') + '||' +
+               ((el.getAttribute && el.getAttribute('onclick')) || '');
+      }));
+    } catch (e) { sigs.push('\u0000' + i); }
+  }
+  const disc = (sigs[0] || '').replace(/\|\|$/, '');
+  if (disc.length > 0 && sigs.every(s => s === sigs[0]))
+    return await loc.first().click(); // duplicate control (e.g. header+footer nav share one href) -> first is provably equivalent
+  return await loc.click(); // genuinely ambiguous -> Playwright's honest strict-mode error stands (heal/human)
+}"""
+
+
 
 _ER_STOPWORDS = frozenset("""
 the a an and or of to in on at is are be was were should shall will would must may can
@@ -920,7 +940,7 @@ def _action_lines(step, field_meta: dict, parametrize: bool = False,
                     out.append("await expect(sel).not.toHaveValue(''); // tolerant: a selection was committed")
     elif verb == "click":
         kind = "link" if (observed.get("kind") or "").strip().lower() == "link" else "button"
-        out.append(f"await {_ladder(observed, kind)}.click();")
+        out.append(f"await __nxClick({_ladder(observed, kind)});")
     else:
         out.append(f"// (no executable action derived) {action}")
 
@@ -1091,6 +1111,7 @@ def compile_case(tc, field_meta: dict | None = None, *, parametrize: bool = Fals
     # module scope unconditionally (a call without a definition is a runtime
     # ReferenceError the parse-only checks cannot catch).
     out.append(_NXSETTLE_JS)
+    out.append(_NXCLICK_JS)
     out.append("")
     test_id = js_str(getattr(tc, "test_id", "") or "")
     if test_id:
