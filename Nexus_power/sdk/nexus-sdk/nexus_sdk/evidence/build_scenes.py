@@ -687,9 +687,30 @@ def _merge_by_state_key(scenes: list[dict], artifact_id: str) -> list[dict]:
         return scenes
 
     _RELIABLE_QUALITY = {"strong", "degraded"}
+    # Content-token Jaccard floor for the URL-only merge path (Layer 3).
+    # Mirrors ``_merge_phase2``'s ``struct_sim`` form-fill guard: two scenes
+    # on the same URL whose chrome-stripped content tokens diverge below this
+    # are a *distinct* same-URL step (add-to-cart count change, SPA form-fill,
+    # typed value) and must NOT be collapsed.
+    _STATE_KEY_STRUCT_SIM = 0.90
 
     merged: list[dict] = [dict(scenes[0])]
     visit_counts: dict[int, int] = {}
+
+    def _structurally_diverged(prev: dict, curr: dict) -> bool:
+        """True when both scenes carry a structural fingerprint AND their
+        content-token Jaccard is below the floor — positive evidence that the
+        same-URL page content changed (cart count, typed value, SPA step).
+
+        Fail-open: when either side lacks a fingerprint we cannot prove
+        divergence, so we return False and preserve the prior behaviour on the
+        clean URL-match path (never green-wash by *asserting* sameness — we
+        only BLOCK a merge when there is positive evidence of difference)."""
+        prev_struct = frozenset(prev.get("visible_text_fingerprint") or [])
+        curr_struct = frozenset(curr.get("visible_text_fingerprint") or [])
+        if not prev_struct or not curr_struct:
+            return False
+        return _text_similarity(prev_struct, curr_struct) < _STATE_KEY_STRUCT_SIM
 
     def _can_extend_group(prev: dict, curr: dict) -> bool:
         prev_summary = prev.get("scene_state_summary") or {}
@@ -708,8 +729,16 @@ def _merge_by_state_key(scenes: list[dict], artifact_id: str) -> list[dict]:
         if prev_reliable and curr_reliable and _state_keys_compatible(prev_key, curr_key):
             return True
 
-        # Layer 3: normalized URL path matches and at least one side reliable
-        if prev_url and prev_url == curr_url and (prev_reliable or curr_reliable):
+        # Layer 3: normalized URL path matches and at least one side reliable.
+        # Gated behind a structural-fingerprint floor: a same-URL pair whose
+        # chrome-stripped content tokens diverged is a distinct same-URL step
+        # (add-to-cart, SPA form-fill) — refuse the merge so it stays visible.
+        if (
+            prev_url
+            and prev_url == curr_url
+            and (prev_reliable or curr_reliable)
+            and not _structurally_diverged(prev, curr)
+        ):
             return True
 
         # Layer 4: sandwich rule — curr is a weak transient with no usable
