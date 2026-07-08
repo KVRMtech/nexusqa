@@ -1,0 +1,227 @@
+# =============================================================================
+# QE-Central Contained Explorer — REFUSE PACK (versioned safety DATA)
+# =============================================================================
+# Design ref: QECentral/docs/IMPLEMENTATION_DESIGN.md §3.2 (refuse_pack.yaml)
+# and §7 item 5 (explorer safety suite).
+#
+# This file is PURE DATA. It encodes the boundary that makes app mutation
+# physically impossible outside an attested, per-flow-approved submit phase.
+# It is consumed ONLY by the pure functions in app/guard.py; the Playwright
+# route handler is a thin wrapper over those functions so this behaviour is
+# fully unit-testable without a browser.
+#
+# CONTRACT (enforced by app.guard.RefusePack on load — a malformed pack
+# refuses to load, so the explorer FAILS CLOSED and never starts):
+#   * `version`                     : stamped into crawl_meta + every guard_event.
+#   * `irreversible_verbs`          : point-of-no-return actions. A control whose
+#                                     accessible name / url matches one is marked a
+#                                     NEVER-CLICK leaf by the inventory, and any
+#                                     mutating request that carries one is REFUSED
+#                                     even under a valid, approved SUBMIT phase.
+#   * `mutation_signal_get_rules`   : GETs that mutate (logout links, action=delete
+#                                     query params, method-override, destructive
+#                                     REST paths). Aborted in EVERY phase.
+#   * `allow_overrides`             : the ONLY escape hatch — a reviewed, versioned
+#                                     carve-out that flips an irreversible match back
+#                                     to allowed. Ships EMPTY by design; adding a row
+#                                     is an auditable, human-reviewed decision.
+#
+# Each rule:
+#   id          — stable, unique; surfaced in guard_event.rule_id.
+#   match       — a regex (compiled case-insensitive) tested against the fields in
+#                 `applies_to`. Matching is fail-CLOSED: over-blocking is safe,
+#                 under-blocking is catastrophic. Word forms are ENUMERATED (not
+#                 stemmed) so behaviour is auditable, never surprising.
+#   applies_to  — subset of {button_name, url_path, url_query}.
+#   severity    — critical | high | medium (advisory ranking for the inventory's
+#                 never-click threshold and for operator triage).
+#   description — human rationale (regulated-industry blast radius).
+#
+# NOTE ON REGEX QUOTING: every `match` is SINGLE-quoted so YAML treats
+# backslashes literally (double-quoted YAML would interpret \b, \s, ...).
+# =============================================================================
+
+version: "refuse-pack-v1"
+
+# -----------------------------------------------------------------------------
+# IRREVERSIBLE VERBS — the point of no return.
+# Beachhead is US financial / life-insurance, so the destructive lexicon
+# explicitly includes the insurance vocabulary a generic English danger list
+# misses (bind, surrender, lapse, escheat, rescind, disburse, underwrite,
+# submit-to-underwriting) alongside the universal ones (delete, pay, transfer,
+# sign, approve, logout).
+# -----------------------------------------------------------------------------
+irreversible_verbs:
+
+  # ── Universal destructive ──────────────────────────────────────────────
+  - id: "rp.verb.delete"
+    match: '\b(delete[sd]?|deleting|destroy(s|ing|ed)?|eras(e|es|ing|ed)|wipe[sd]?)\b'
+    applies_to: ["button_name", "url_path", "url_query"]
+    severity: "critical"
+    description: "Permanent data deletion / destruction."
+
+  - id: "rp.verb.purge"
+    match: '\b(purge[sd]?|purging)\b'
+    applies_to: ["button_name", "url_path", "url_query"]
+    severity: "critical"
+    description: "Permanent bulk purge."
+
+  - id: "rp.verb.remove"
+    match: '\b(remov(e|es|ing|ed))\b'
+    applies_to: ["button_name", "url_path", "url_query"]
+    severity: "high"
+    description: "Removal of a record or relationship (often irreversible)."
+
+  # ── Money movement ─────────────────────────────────────────────────────
+  - id: "rp.verb.pay"
+    match: '\b(pay|pays|paying|paid|payment|payments|payout|payouts|repay|prepay|autopay|remit|remits|remittance)\b'
+    applies_to: ["button_name", "url_path", "url_query"]
+    severity: "critical"
+    description: "Payment / disbursement of funds."
+
+  - id: "rp.verb.charge"
+    match: '\b(charge|charges|charging|charged)\b'
+    applies_to: ["button_name", "url_path", "url_query"]
+    severity: "critical"
+    description: "Charge a card / account."
+
+  - id: "rp.verb.transfer"
+    match: '\b(transfer|transfers|transferring|transferred|wire|wires)\b'
+    applies_to: ["button_name", "url_path", "url_query"]
+    severity: "critical"
+    description: "Funds transfer / wire."
+
+  - id: "rp.verb.withdraw"
+    match: '\b(withdraw|withdraws|withdrawing|withdrawal|withdrawals|withdrew)\b'
+    applies_to: ["button_name", "url_path", "url_query"]
+    severity: "critical"
+    description: "Cash / policy value withdrawal."
+
+  - id: "rp.verb.disburse"
+    match: '\b(disburse|disburses|disbursing|disbursed|disbursement|disbursements)\b'
+    applies_to: ["button_name", "url_path", "url_query"]
+    severity: "critical"
+    description: "Disburse claim / benefit funds."
+
+  # ── Authorization / contract execution ─────────────────────────────────
+  # `sign` deliberately EXCLUDES sign-in / sign-up / sign-out / sign-on / sign-off
+  # (the negative lookahead) so the AUTH login submit is never mis-classified.
+  - id: "rp.verb.sign"
+    match: '\b(sign(s|ing|ed|ature|atures)?|e-?sign|countersign)\b(?!\s*-?\s*(in|on|up|out|off)\b)'
+    applies_to: ["button_name", "url_path", "url_query"]
+    severity: "critical"
+    description: "Execute an e-signature / sign a legal document."
+
+  - id: "rp.verb.approve"
+    match: '\b(approve|approves|approving|approved|approval|approvals)\b'
+    applies_to: ["button_name", "url_path", "url_query"]
+    severity: "critical"
+    description: "Approve / authorize a request (state-changing authority)."
+
+  - id: "rp.verb.authorize"
+    match: '\b(authori[sz]e|authori[sz]es|authori[sz]ing|authori[sz]ed|authori[sz]ation)\b'
+    applies_to: ["button_name", "url_path", "url_query"]
+    severity: "high"
+    description: "Authorize an action / payment."
+
+  # ── Life & annuity policy lifecycle (beachhead) ────────────────────────
+  - id: "rp.verb.bind"
+    match: '\b(bind|binds|binding|bound|binder)\b'
+    applies_to: ["button_name", "url_path", "url_query"]
+    severity: "critical"
+    description: "Bind coverage — creates a binding contract."
+
+  - id: "rp.verb.rescind"
+    match: '\b(rescind|rescinds|rescinding|rescinded|rescission)\b'
+    applies_to: ["button_name", "url_path", "url_query"]
+    severity: "critical"
+    description: "Rescind a policy."
+
+  - id: "rp.verb.surrender"
+    match: '\b(surrender|surrenders|surrendering|surrendered)\b'
+    applies_to: ["button_name", "url_path", "url_query"]
+    severity: "critical"
+    description: "Surrender a life / annuity policy for cash value."
+
+  - id: "rp.verb.lapse"
+    match: '\b(lapse|lapses|lapsing|lapsed)\b'
+    applies_to: ["button_name", "url_path", "url_query"]
+    severity: "critical"
+    description: "Lapse a policy (loss of coverage)."
+
+  - id: "rp.verb.escheat"
+    match: '\b(escheat|escheats|escheating|escheated|escheatment)\b'
+    applies_to: ["button_name", "url_path", "url_query"]
+    severity: "critical"
+    description: "Escheat unclaimed funds to the state."
+
+  - id: "rp.verb.underwrite"
+    match: '\b(underwrite|underwrites|underwriting|underwritten)\b|submit[\s\-_]*(to[\s\-_]*)?underwriting'
+    applies_to: ["button_name", "url_path", "url_query"]
+    severity: "critical"
+    description: "Underwrite / submit-to-underwriting — commits the application."
+
+  # ── Credit inquiry (soft/hard pull mutates the credit file) ────────────
+  - id: "rp.verb.credit_pull"
+    match: '\b((soft|hard)[\s\-]*pull|pull[\s\-]*credit|credit[\s\-]*(pull|inquir(y|ies)|check|report)|run[\s\-]*credit)\b'
+    applies_to: ["button_name", "url_path", "url_query"]
+    severity: "critical"
+    description: "Pull a credit report / trigger a credit inquiry."
+
+  # ── Session teardown (kills the crawl session; logout is a mutation) ───
+  - id: "rp.verb.logout"
+    match: '\b(log\s*-?\s*out|logout|logoff|log\s*-?\s*off|sign\s*-?\s*out|signout|signoff)\b'
+    applies_to: ["button_name", "url_path", "url_query"]
+    severity: "high"
+    description: "Log out / sign out — ends the authenticated session."
+
+  # ── Privilege escalation surface ("never open admin") ─────────────────
+  # button-name only: navigating to an /admin PATH is a fence concern, but a
+  # control literally labelled "Admin"/"Superuser" is a never-click leaf.
+  - id: "rp.verb.admin"
+    match: '\b(admin|administrator|superuser|super-user|sudo|root\s+access|impersonate)\b'
+    applies_to: ["button_name"]
+    severity: "high"
+    description: "Administrative / privilege-escalation control."
+
+# -----------------------------------------------------------------------------
+# MUTATION-SIGNAL GETs — GETs that mutate state. Aborted in EVERY phase.
+# Kept URL-precise (query/path shaped) so ordinary read navigation is never
+# starved: a GET is only refused when its URL itself declares a mutation.
+# -----------------------------------------------------------------------------
+mutation_signal_get_rules:
+
+  # NOTE: `url_query` is already stripped of its leading `?` (urlsplit), so the
+  # FIRST parameter has no delimiter before it — the leading `(^|[?&])` anchors
+  # match both the first param and any subsequent `&`-separated param.
+  - id: "rp.get.method_override"
+    match: '(^|[?&])(_method|_httpmethod|_http_method|x-http-method-override)=\s*(delete|put|patch|post)\b'
+    applies_to: ["url_query"]
+    severity: "critical"
+    description: "REST method-override smuggling a mutation through a GET."
+
+  - id: "rp.get.action_mutation"
+    match: '(^|[?&])(action|act|cmd|command|op|operation|do|mode|task|func|method)=(delete|remove|destroy|purge|drop|logout|signout|log-?out|sign-?out|cancel|disable|deactivate|revoke|reset|update|edit|save|store|submit|create|add|insert|pay|charge|transfer|withdraw|disburse|approve|reject|sign|bind|surrender|lapse|rescind|escheat|activate|confirm|apply|process)\b'
+    applies_to: ["url_query"]
+    severity: "high"
+    description: "Explicit mutating verb carried in a query parameter of a GET."
+
+  - id: "rp.get.logout_path"
+    match: '(^|/)(logout|log-out|signout|sign-out|logoff|log-off|sessions?/(destroy|end|delete)|auth/(logout|signout))(/|$)'
+    applies_to: ["url_path"]
+    severity: "high"
+    description: "Logout / session-teardown endpoint reached via GET."
+
+  - id: "rp.get.destructive_path"
+    match: '(^|/)(delete|remove|destroy|purge|erase|drop)(/|$)'
+    applies_to: ["url_path"]
+    severity: "critical"
+    description: "Destructive REST path segment reached via GET."
+
+# -----------------------------------------------------------------------------
+# ALLOW OVERRIDES — reviewed, versioned carve-outs that flip an irreversible
+# match back to allowed. Ships EMPTY: the safe default is that nothing overrides
+# the refuse pack. Adding a row is an auditable human decision, stamped with the
+# pack version.
+# -----------------------------------------------------------------------------
+allow_overrides: []

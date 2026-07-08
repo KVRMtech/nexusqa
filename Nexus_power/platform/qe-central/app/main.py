@@ -45,6 +45,7 @@ from app.db import (
 from app.routers.apps import router as apps_router
 from app.routers.explorations import router as explorations_router
 from app.routers.harness import router as harness_router
+from app.routers.internal import router as internal_router
 
 # ─── Structured logging ────────────────────────────────────────
 logging.basicConfig(
@@ -176,6 +177,10 @@ app.middleware("http")(jwt_auth_middleware)
 app.include_router(apps_router)
 app.include_router(explorations_router)
 app.include_router(harness_router)
+# Phase-1: the HMAC-authenticated explorer completion callback. Lives OUTSIDE
+# the /api/* prefix (the explorer holds no JWT — only the HMAC token), so the
+# fail-closed JWT middleware skips it; internal.py verifies the HMAC itself.
+app.include_router(internal_router)
 
 
 # ─── Health ────────────────────────────────────────────────────

@@ -1,0 +1,15 @@
+# QE-Central Contained Explorer (S2) — service dependencies.
+#
+# Base image mcr.microsoft.com/playwright/python:v1.48.0-jammy already ships
+# CPython 3.10 (jammy) + Playwright 1.48.0 + the browser binaries under
+# /ms-playwright, so `playwright` is deliberately NOT pinned here (it is baked
+# into the image at the version the Dockerfile FROM line locks). Only the
+# service-specific web stack is installed. All pins are exact for reproducible,
+# auditable builds (this container touches client apps).
+fastapi==0.115.6
+uvicorn[standard]==0.32.1
+httpx==0.27.2
+pydantic==2.10.3
+pydantic-settings==2.6.1
+PyYAML==6.0.2
+structlog==24.4.0

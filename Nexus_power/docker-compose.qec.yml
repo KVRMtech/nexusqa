@@ -1,7 +1,6 @@
-# Standalone deploy for QE-Central Phase 0 (design R-10: the main
-# docker-compose.yml gets ZERO edits — the no-break guarantee extends to
-# deploy config). Joins the EXISTING stack network as external — brings up
-# only qe-central without touching the running stack, exactly like
+# Standalone deploy for QE-Central (design R-10: the main docker-compose.yml
+# gets ZERO edits — the no-break guarantee extends to deploy config). Brings up
+# the QE-Central plane without touching the running stack, exactly like
 # docker-compose.runner.yml. Tear down with:
 #   docker compose -f docker-compose.qec.yml down
 #
@@ -11,7 +10,17 @@
 #   docker compose -f docker-compose.qec.yml run --rm qe-central \
 #        alembic -c alembic_qec/alembic.ini upgrade head
 #
-# Phase-1 adds qe-explorer, qec-egress-proxy and repo-intel to THIS file.
+# ── NETWORK ISOLATION INVARIANTS (design §1.1) ───────────────────────────────
+# The contained explorer (qe-explorer) is QUARANTINED:
+#   * it sits ONLY on qec-internal + qec-egress (BOTH internal: true) — so it
+#     has NO route to the internet except through the squid egress proxy, and
+#     NO route to the nexus stack (postgres, platform-api, VKPower engines);
+#   * it is NEVER on the `nexus` network and publishes NO host port;
+#   * it holds NO DB creds and NO KMS — only the per-fleet HMAC token.
+# qe-central bridges qec-internal↔nexus (it needs both: nexus for postgres +
+# platform-api, qec-internal to dispatch/receive the explorer). squid alone is
+# internet-capable (qec-egress-public) and egresses ONLY to the allowlisted
+# target domain(s) — deny-all by default (engines/qe-explorer/squid.conf).
 services:
   qe-central:
     build:
@@ -52,21 +61,121 @@ services:
       NEXUS_KEK_GCP_KEY: ${NEXUS_KEK_GCP_KEY:-}
       NEXUS_KEK_AWS_ARN: ${NEXUS_KEK_AWS_ARN:-}
       AWS_REGION: ${AWS_REGION:-}
+      # ── Phase-1 explorer dispatch (design §3.2) ────────────────────────
+      # OFF by default: the Phase-0 inline-bundle path stays the only write
+      # path until an operator enables live crawling.
+      QEC_EXPLORER_DISPATCH_ENABLED: ${QEC_EXPLORER_DISPATCH_ENABLED:-false}
+      QEC_EXPLORER_URL: ${QEC_EXPLORER_URL:-http://qe-explorer:8210}
+      # Per-fleet HMAC shared secret (RUNNER_TOKEN pattern) — MUST equal the
+      # qe-explorer value below; empty ⇒ fail-closed (dispatch + callback refuse).
+      QEC_EXPLORER_TOKEN: ${QEC_EXPLORER_TOKEN:-dev-explorer-token-change-me}
+      # qe-central-side mount of the shared crawl volume (manifests + PNGs).
+      QEC_CRAWL_STORAGE_ROOT: /work
+      # Squid allowlist file qe-central populates before each dispatch.
+      QEC_EGRESS_ALLOWLIST_PATH: /qec/egress-allowlist/allowed_domains.txt
     volumes:
     # Shared frame volume from the main stack (eyes-engine serves from it) —
     # visual_frames assets land where eyes can read them (R-5).
     - frame-storage:/app/service/data/frames
     # Dev-only local KEK persistence (inert when NEXUS_KEK_PROVIDER != local).
     - qec-kek:/app/service/data/kek
+    # Shared crawl storage — qe-central READS the manifest + staged PNGs the
+    # explorer writes here (same /work path as the explorer for path parity).
+    - qec-crawl-storage:/work
+    # Shared squid allowlist — qe-central WRITES the per-crawl target domain(s).
+    - qec-egress-allowlist:/qec/egress-allowlist
     mem_limit: 1g
     networks:
     - nexus
+    - qec-internal
+
+  # ── The contained explorer (S2) — quarantined browser container ──────────
+  qe-explorer:
+    build:
+      context: ./engines/qe-explorer
+      dockerfile: Dockerfile
+    image: nexus_power-qe-explorer
+    container_name: nexus-qe-explorer
+    restart: unless-stopped
+    # NO `ports:` — isolation invariant. qe-central reaches it over the
+    # internal qec-internal network at qe-explorer:8210 (Dockerfile EXPOSE).
+    environment:
+      NEXUS_ENV: ${NEXUS_ENV:-development}
+      QEC_EXPLORER_PORT: '8210'
+      QEC_EXPLORER_LOG_LEVEL: ${QEC_EXPLORER_LOG_LEVEL:-INFO}
+      # HMAC-signed completion callback target (qe-central on qec-internal).
+      QEC_CALLBACK_URL: ${QEC_CALLBACK_URL:-http://qe-central:8093}
+      # Per-fleet HMAC shared secret — MUST equal qe-central's QEC_EXPLORER_TOKEN.
+      QEC_EXPLORER_TOKEN: ${QEC_EXPLORER_TOKEN:-dev-explorer-token-change-me}
+      # The ONLY route to the internet: the squid egress proxy. The browser is
+      # launched with --proxy-server=<this>; squid enforces the host allowlist.
+      EGRESS_PROXY: ${EGRESS_PROXY:-http://qec-egress-proxy:3128}
+      WORK_DIR: /work
+    volumes:
+    # Explorer-side mount of the shared crawl volume (writes manifests + PNGs).
+    - qec-crawl-storage:/work
+    # Chromium needs a larger /dev/shm than Docker's 64 MB default.
+    shm_size: 1gb
+    mem_limit: 2g
+    networks:
+    - qec-internal
+    - qec-egress
+    depends_on:
+    - qec-egress-proxy
+
+  # ── Egress proxy — the single NAT hop, HARD host allowlist ───────────────
+  qec-egress-proxy:
+    image: ${QEC_SQUID_IMAGE:-ubuntu/squid:latest}
+    container_name: nexus-qec-egress-proxy
+    restart: unless-stopped
+    # NO host `ports:` — reachable only by qe-explorer over qec-egress:3128.
+    volumes:
+    - ./engines/qe-explorer/squid.conf:/etc/squid/squid.conf:ro
+    # Shared allowlist volume (qe-central writes allowed_domains.txt here).
+    - qec-egress-allowlist:/etc/squid/allowlist
+    # Seed a FAIL-CLOSED sentinel so squid starts before the first crawl, then
+    # run squid in the foreground. Re-run `squid -k reconfigure` after each
+    # allowlist update (the ACL file is re-read only on (re)configure).
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+    - >
+      mkdir -p /etc/squid/allowlist &&
+      { [ -s /etc/squid/allowlist/allowed_domains.txt ] ||
+        printf '%s\n' '# fail-closed default — no real host until a crawl populates it' '.qec-egress-denied.invalid'
+          > /etc/squid/allowlist/allowed_domains.txt; } &&
+      exec squid -N -f /etc/squid/squid.conf -d1
+    mem_limit: 512m
+    networks:
+    - qec-egress
+    - qec-egress-public
+
 networks:
+  # The running stack's network (external) — qe-central only.
   nexus:
     external: true
     name: nexus_power_nexus
+  # Explorer↔qe-central control plane. internal: true ⇒ NO internet, NO route
+  # to the nexus stack. qe-central bridges this to `nexus`; the explorer is
+  # quarantined here.
+  qec-internal:
+    driver: bridge
+    internal: true
+  # Explorer↔egress-proxy browser path. internal: true ⇒ the explorer can only
+  # reach the proxy here, never the internet directly.
+  qec-egress:
+    driver: bridge
+    internal: true
+  # The ONLY internet-capable network — attached to the egress proxy ALONE, so
+  # squid is the single NAT hop. The explorer is never on it.
+  qec-egress-public:
+    driver: bridge
+
 volumes:
   frame-storage:
     external: true
     name: nexus_power_frame-storage
   qec-kek: null
+  # Shared explorer→qe-central handoff (manifest.jsonl + staged PNGs).
+  qec-crawl-storage: null
+  # Shared qe-central→squid egress allowlist file.
+  qec-egress-allowlist: null

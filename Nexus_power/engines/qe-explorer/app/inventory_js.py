@@ -1,0 +1,403 @@
+"""Browser-side control-inventory walker (injected JS as a Python constant).
+
+This module holds ONE thing: :data:`INVENTORY_JS`, an ES5-safe JavaScript
+expression that :mod:`app.crawler` hands to Playwright ``page.evaluate`` /
+``frame.evaluate``.  It runs INSIDE the crawled page and returns a JSON-
+serialisable ``Array<RawControl>`` — the raw material :func:`app.inventory.
+build_inventory` refines into the compiler's locator vocabulary.
+
+Design references (verified against the local repo 2026-07-08):
+
+  * accessible-name subset & control-kind vocabulary — design §3.2 and the
+    compiler ladder ``platform/api/app/services/script_factory/compiler.py``
+    (``_ladder`` :297-331, ``_ANCHOR_ROLE`` :216-225, ``_refine_kind``
+    :174-208).  Only the USER-FACING accessible name is bindable; ``testid``
+    and ``css_hint`` have NO compiler rung, so they are captured as pure
+    diagnostics.
+  * iframe selector recipe mirrors the heal-capture afterEach in the frozen
+    compiler (compiler.py:1005-1011) so a ``frame_selector`` we emit resolves
+    the SAME way ``page.frameLocator(...)`` resolves it.
+
+Accessible-name ladder (design order — label[for] FIRST, deliberately):
+
+    1. ``<label for=id>``      → name_source "label-for"
+    2. ``aria-labelledby``     → "aria-labelledby"
+    3. ``aria-label``          → "aria-label"
+    4. wrapping ``<label>``    → "wrapping-label"
+    5. name-from-content text  → "content"      (buttons / links / menuitems)
+    6. ``title``               → "title"        (best_effort)
+    7. ``placeholder``         → "placeholder"   (best_effort)
+
+``best_effort`` is set on rungs 6-7 — a placeholder/title is NOT a reliable
+accessible name and the refiner surfaces that as an a11y weakness rather than
+silently trusting it.
+
+RawControl shape (one object per visible interactive element):
+
+    role            implicit-or-explicit ARIA role (lower-case)
+    name            accessible name (may be "" — honest, never invented)
+    name_source     which ladder rung produced ``name``
+    best_effort     true when ``name`` came from title/placeholder
+    kind            NAIVE kind hint (the Python refiner is authoritative)
+    tag             lower-case tagName
+    input_type      ``<input>`` type (lower-case) or ""
+    options         visible option labels for a native ``<select>``
+    required        required || aria-required
+    disabled        disabled || aria-disabled
+    frame_selector  ""  for the main frame, else the owning iframe selector
+    testid          data-testid|data-test|data-cy|data-qa (diagnostic)
+    css_hint        short tag#id.class selector (diagnostic)
+    value_committed committed value ("" for password / non-value controls)
+    landmark        {role, name} of the nearest landmark ancestor (anchor seed)
+
+The walker recurses OPEN shadow roots (same frame, no selector change — the
+compiler's getByRole/getByLabel pierce open shadow DOM automatically) and
+SAME-ORIGIN iframes (cross-origin ``contentDocument`` access throws and is
+skipped honestly).  It is NOT executed locally; it is unit-tested indirectly
+by hand-authored ``RawControl`` fixtures fed to :func:`app.inventory.
+build_inventory`.
+"""
+from __future__ import annotations
+
+#: Stamped into the crawl manifest so a manifest can be traced to the exact
+#: injected-JS generation that produced its controls.
+INVENTORY_JS_VERSION = "inv-js-v1"
+
+INVENTORY_JS = r"""
+(() => {
+  "use strict";
+
+  // Interactive candidates — a superset; the refiner drops what it cannot bind.
+  var SELECTOR = [
+    "a[href]", "button", "input", "select", "textarea", "summary",
+    "[role]", "[contenteditable=\"\"]", "[contenteditable=\"true\"]",
+    "[tabindex]"
+  ].join(",");
+
+  var MAX_NAME = 500;
+  var MAX_OPTION = 200;
+  var MAX_OPTIONS = 60;
+  var MAX_LANDMARK = 80;
+  var MAX_VALUE = 1000;
+
+  // ---- small helpers -------------------------------------------------------
+
+  function norm(s) {
+    return (("" + (s == null ? "" : s)).replace(/\s+/g, " ")).trim();
+  }
+  function lc(s) { return norm(s).toLowerCase(); }
+  function clip(s, n) { s = "" + (s == null ? "" : s); return s.length > n ? s.slice(0, n) : s; }
+
+  function attr(el, name) {
+    try { return el.getAttribute(name) || ""; } catch (e) { return ""; }
+  }
+
+  function isVisible(el) {
+    try {
+      if (!el || el.nodeType !== 1) return false;
+      if (el.hasAttribute("hidden")) return false;
+      if (lc(attr(el, "aria-hidden")) === "true") return false;
+      if (el.tagName === "INPUT" && lc(el.type) === "hidden") return false;
+      var st = (el.ownerDocument.defaultView || window).getComputedStyle(el);
+      if (!st) return true;
+      if (st.display === "none" || st.visibility === "hidden") return false;
+      if (parseFloat(st.opacity || "1") === 0) return false;
+      return true;
+    } catch (e) { return true; }
+  }
+
+  // Implicit ARIA role from tag + type (subset — enough for the compiler).
+  function implicitRole(el) {
+    var explicit = lc(attr(el, "role"));
+    if (explicit) return explicit;
+    var tag = lc(el.tagName);
+    var type = lc(el.type || "");
+    if (tag === "a") return el.hasAttribute("href") ? "link" : "";
+    if (tag === "button") return "button";
+    if (tag === "select") return el.multiple ? "listbox" : "combobox";
+    if (tag === "textarea") return "textbox";
+    if (tag === "summary") return "button";
+    if (tag === "input") {
+      if (type === "checkbox") return "checkbox";
+      if (type === "radio") return "radio";
+      if (type === "range") return "slider";
+      if (type === "button" || type === "submit" || type === "reset" || type === "image") return "button";
+      if (type === "search") return "searchbox";
+      if (type === "number") return "spinbutton";
+      return "textbox";
+    }
+    if (el.isContentEditable) return "textbox";
+    return "";
+  }
+
+  function nameFromContentRole(role, tag) {
+    if (tag === "button" || tag === "a" || tag === "summary") return true;
+    return role === "button" || role === "link" || role === "menuitem" ||
+           role === "tab" || role === "option" || role === "checkbox" ||
+           role === "radio" || role === "switch";
+  }
+
+  function idText(doc, id) {
+    if (!id) return "";
+    try {
+      var t = doc.getElementById(id);
+      return t ? norm(t.textContent) : "";
+    } catch (e) { return ""; }
+  }
+
+  // Accessible name via the design-ordered subset. Returns {name, source}.
+  function accessibleName(el, doc) {
+    var role = implicitRole(el);
+    var tag = lc(el.tagName);
+
+    // 1. <label for=id>
+    if (el.id) {
+      try {
+        var labels = doc.querySelectorAll('label[for="' + CSS.escape(el.id) + '"]');
+        if (labels && labels.length) {
+          var lt = norm(labels[0].textContent);
+          if (lt) return { name: lt, source: "label-for" };
+        }
+      } catch (e) {}
+    }
+    // 2. aria-labelledby
+    var lb = attr(el, "aria-labelledby");
+    if (lb) {
+      var parts = [];
+      var ids = lb.split(/\s+/);
+      for (var i = 0; i < ids.length; i++) {
+        var t = idText(doc, ids[i]);
+        if (t) parts.push(t);
+      }
+      var joined = norm(parts.join(" "));
+      if (joined) return { name: joined, source: "aria-labelledby" };
+    }
+    // 3. aria-label
+    var al = norm(attr(el, "aria-label"));
+    if (al) return { name: al, source: "aria-label" };
+    // 4. wrapping <label>
+    try {
+      var wrap = el.closest ? el.closest("label") : null;
+      if (wrap) {
+        var wt = norm(wrap.textContent);
+        if (wt) return { name: wt, source: "wrapping-label" };
+      }
+    } catch (e) {}
+    // 5. name-from-content (buttons / links / menuitems …)
+    if (nameFromContentRole(role, tag)) {
+      var ct = norm(el.textContent);
+      if (!ct) {
+        var vlabel = norm(el.value);        // input[type=submit] value
+        if (vlabel) ct = vlabel;
+      }
+      if (ct) return { name: ct, source: "content" };
+    }
+    // 6. title (best-effort)
+    var ti = norm(attr(el, "title"));
+    if (ti) return { name: ti, source: "title" };
+    // 7. placeholder (best-effort)
+    var ph = norm(attr(el, "placeholder"));
+    if (ph) return { name: ph, source: "placeholder" };
+    return { name: "", source: "none" };
+  }
+
+  function optionsOf(el) {
+    var out = [];
+    try {
+      if (lc(el.tagName) === "select") {
+        var opts = el.options || [];
+        for (var i = 0; i < opts.length && out.length < MAX_OPTIONS; i++) {
+          var t = norm(opts[i].textContent) || norm(opts[i].value);
+          if (t) out.push(clip(t, MAX_OPTION));
+        }
+      }
+    } catch (e) {}
+    return out;
+  }
+
+  function valueCommitted(el) {
+    try {
+      var tag = lc(el.tagName);
+      var type = lc(el.type || "");
+      if (tag === "input" && type === "password") return "";     // never captured
+      if (tag === "input" && (type === "checkbox" || type === "radio")) {
+        return el.checked ? "true" : "false";
+      }
+      if (tag === "select" || tag === "textarea" || tag === "input") {
+        return clip(el.value == null ? "" : el.value, MAX_VALUE);
+      }
+      if (el.isContentEditable) return clip(norm(el.textContent), MAX_VALUE);
+      return "";
+    } catch (e) { return ""; }
+  }
+
+  function isRequired(el) {
+    try {
+      if (el.required === true) return true;
+      return lc(attr(el, "aria-required")) === "true";
+    } catch (e) { return false; }
+  }
+  function isDisabled(el) {
+    try {
+      if (el.disabled === true) return true;
+      return lc(attr(el, "aria-disabled")) === "true";
+    } catch (e) { return false; }
+  }
+
+  function testId(el) {
+    return attr(el, "data-testid") || attr(el, "data-test") ||
+           attr(el, "data-cy") || attr(el, "data-qa") || "";
+  }
+
+  function cssHint(el) {
+    try {
+      var s = lc(el.tagName);
+      if (el.id) s += "#" + el.id;
+      var cls = norm(el.className && el.className.baseVal !== undefined
+        ? el.className.baseVal : el.className);
+      if (cls) {
+        var parts = cls.split(" ").filter(Boolean).slice(0, 3);
+        if (parts.length) s += "." + parts.join(".");
+      }
+      return clip(s, 200);
+    } catch (e) { return ""; }
+  }
+
+  // Nearest landmark ancestor → {role, name}. Crosses shadow host boundaries.
+  var LANDMARK = {
+    "tr": "row", "li": "listitem", "article": "article", "section": "region",
+    "fieldset": "group", "td": "cell", "th": "cell", "dialog": "dialog",
+    "ul": "list", "ol": "list"
+  };
+  var LANDMARK_ROLE = {
+    "row": "row", "listitem": "listitem", "article": "article",
+    "region": "region", "group": "group", "gridcell": "gridcell",
+    "cell": "cell", "list": "list", "listbox": "listbox", "option": "option",
+    "menuitem": "menuitem", "menu": "menu", "tabpanel": "tabpanel",
+    "dialog": "dialog", "form": "form", "table": "table", "rowgroup": "rowgroup"
+  };
+
+  function landmarkRoleOf(el) {
+    var explicit = lc(attr(el, "role"));
+    if (explicit && LANDMARK_ROLE[explicit]) return LANDMARK_ROLE[explicit];
+    var tag = lc(el.tagName);
+    return LANDMARK[tag] || "";
+  }
+
+  function landmarkName(el, doc) {
+    var an = accessibleName(el, doc);
+    if (an.name) return clip(an.name, MAX_LANDMARK);
+    // heading inside, else first short text line
+    try {
+      var h = el.querySelector("h1,h2,h3,h4,h5,h6,[role=heading]");
+      if (h) { var ht = norm(h.textContent); if (ht) return clip(ht, MAX_LANDMARK); }
+    } catch (e) {}
+    var t = norm(el.textContent);
+    return clip(t, MAX_LANDMARK);
+  }
+
+  function parentAcross(el) {
+    if (el.parentElement) return el.parentElement;
+    try {
+      var root = el.getRootNode ? el.getRootNode() : null;
+      if (root && root.host) return root.host;      // step out of a shadow root
+    } catch (e) {}
+    return null;
+  }
+
+  function nearestLandmark(el, doc) {
+    var cur = parentAcross(el);
+    var hops = 0;
+    while (cur && cur.nodeType === 1 && hops < 40) {
+      var role = landmarkRoleOf(cur);
+      if (role) {
+        return { role: role, name: landmarkName(cur, cur.ownerDocument || doc) };
+      }
+      cur = parentAcross(cur);
+      hops++;
+    }
+    return { role: "", name: "" };
+  }
+
+  // ---- iframe selector (mirrors compiler.py:1005-1011) ---------------------
+
+  function frameSelectorFor(iframeEl, index) {
+    try {
+      if (iframeEl.id) return 'iframe#' + iframeEl.id;
+      var nm = attr(iframeEl, "name");
+      if (nm) return 'iframe[name="' + nm + '"]';
+      var title = attr(iframeEl, "title");
+      if (title) return 'iframe[title="' + title + '"]';
+      var src = attr(iframeEl, "src");
+      if (src) return 'iframe[src="' + src + '"]';
+    } catch (e) {}
+    return "iframe >> nth=" + index;
+  }
+
+  // ---- collection ----------------------------------------------------------
+
+  function describe(el, doc, frameSelector) {
+    var role = implicitRole(el);
+    var an = accessibleName(el, doc);
+    var tag = lc(el.tagName);
+    var type = lc(el.type || "");
+    var best = an.source === "title" || an.source === "placeholder";
+    return {
+      role: role,
+      name: clip(an.name, MAX_NAME),
+      name_source: an.source,
+      best_effort: best,
+      kind: role || tag,               // naive; app.inventory refines
+      tag: tag,
+      input_type: type,
+      options: optionsOf(el),
+      required: isRequired(el),
+      disabled: isDisabled(el),
+      frame_selector: frameSelector || "",
+      testid: testId(el),
+      css_hint: cssHint(el),
+      value_committed: valueCommitted(el),
+      landmark: nearestLandmark(el, doc)
+    };
+  }
+
+  // Walk a document/shadow-root subtree; recurse open shadow roots + iframes.
+  function walk(root, doc, frameSelector, sink, seenDocs) {
+    var nodes;
+    try { nodes = root.querySelectorAll(SELECTOR); } catch (e) { return; }
+    for (var i = 0; i < nodes.length; i++) {
+      var el = nodes[i];
+      if (!isVisible(el)) continue;
+      try { sink.push(describe(el, doc, frameSelector)); } catch (e) {}
+    }
+    // open shadow roots (same frame → no selector change)
+    var all;
+    try { all = root.querySelectorAll("*"); } catch (e) { all = []; }
+    for (var j = 0; j < all.length; j++) {
+      var host = all[j];
+      if (host.shadowRoot) {
+        walk(host.shadowRoot, doc, frameSelector, sink, seenDocs);
+      }
+    }
+    // same-origin iframes (cross-origin access throws → skip honestly)
+    var frames;
+    try { frames = root.querySelectorAll("iframe"); } catch (e) { frames = []; }
+    for (var k = 0; k < frames.length; k++) {
+      var ifr = frames[k];
+      var cdoc = null;
+      try { cdoc = ifr.contentDocument; } catch (e) { cdoc = null; }
+      if (cdoc && seenDocs.indexOf(cdoc) === -1) {
+        seenDocs.push(cdoc);
+        var childSel = frameSelectorFor(ifr, k);
+        var sel = frameSelector ? (frameSelector + " >>> " + childSel) : childSel;
+        try { walk(cdoc, cdoc, sel, sink, seenDocs); } catch (e) {}
+      }
+    }
+  }
+
+  var out = [];
+  var seen = [document];
+  walk(document, document, "", out, seen);
+  return out;
+})()
+"""
