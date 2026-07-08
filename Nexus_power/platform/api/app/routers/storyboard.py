@@ -449,6 +449,29 @@ async def get_annotated_frame(
 # ── Ground-truth capture ingestion (Road B — the Tier-0 overlay) ─────────────
 
 
+def _redact_value(s: str) -> str:
+    """Defense-in-depth PII redaction for one client-supplied ground-truth VALUE.
+
+    Runs the SDK's in-perimeter detector over the captured value and replaces
+    every hit with its redaction placeholder — no external-LLM egress. Fails
+    OPEN: the recorder already redacts at source, so if the server-side
+    detector is unavailable the source-redacted value stands (never
+    raw-by-bypass, never a 500 on the ingest path). Shared by BOTH ground-truth
+    ingest routes so the stored-value guarantee is identical regardless of
+    which route a recorder posts to (QE-Central extension E1 hoisted this from
+    the /ground-truth route's closure — behavior unchanged)."""
+    if not s:
+        return s
+    try:
+        from nexus_sdk.evidence.pii_detector import detect_pii, redact
+        hits = detect_pii(s, None)
+        return redact(s, hits) if hits else s
+    except Exception:
+        # The recorder already redacted at source; if the server detector is
+        # unavailable, the source-redacted value stands (never raw-by-bypass).
+        return s
+
+
 class GroundTruthEventIn(BaseModel):
     """One instrumented capture event posted by a recorder / per-modality adapter."""
 
@@ -504,18 +527,6 @@ async def ingest_ground_truth(
     from nexus_sdk.db.models import GroundTruthEventRow
 
     tenant_id = user["tenant_id"]
-
-    def _redact_value(s: str) -> str:
-        if not s:
-            return s
-        try:
-            from nexus_sdk.evidence.pii_detector import detect_pii, redact
-            hits = detect_pii(s, None)
-            return redact(s, hits) if hits else s
-        except Exception:
-            # The recorder already redacted at source; if the server detector is
-            # unavailable, the source-redacted value stands (never raw-by-bypass).
-            return s
 
     written = 0
     async with tenant_scoped_session(tenant_id) as session:
@@ -757,6 +768,18 @@ async def ingest_ground_truth_events(
     duplicating. The page-visit extractor's ground-truth overlay makes these
     AUTHORITATIVE over every pixel tier on the next derivation -- this is the
     100%-identity path for tenants who install the recorder."""
+    import os
+
+    # QE-Central extension E1 (privilege + PII parity with the sibling
+    # /ground-truth route): this too is a CLIENT-WRITABLE source that becomes
+    # AUTHORITATIVE page identity (confidence-1.0 overlay), so it carries the
+    # SAME deployment env gate + admin/manager role gate the sibling has.
+    # Default (flag unset) => 403 => byte-identical behavior for every
+    # existing deployment — the video product path never calls this route.
+    if os.getenv("NEXUS_GROUND_TRUTH_INGEST_ENABLED", "").strip().lower() not in ("1", "true", "yes", "on"):
+        raise HTTPException(status_code=403, detail="Ground-truth ingest is disabled (instrumented capture is not enabled for this deployment).")
+    if (user.get("role") or "viewer").lower() not in ("admin", "manager"):
+        raise HTTPException(status_code=403, detail="Ground-truth ingest requires an admin or manager role.")
     import uuid as _uuid
     from datetime import datetime, timezone
     from urllib.parse import urlparse
@@ -807,7 +830,7 @@ async def ingest_ground_truth_events(
                 url_path=parsed.path or "",
                 url_query=parsed.query or "",
                 target_label=e.target_label,
-                value=e.value,
+                value=_redact_value(e.value or ""),
                 target_kind=e.target_kind,
                 modality=e.modality,
                 recorder_version=e.recorder_version,

@@ -3070,6 +3070,59 @@ async def save_auth_capture(
     return {"status": "saved"}
 
 
+class _AuthImportBody(BaseModel):
+    """Crawler-relayed Playwright ``storageState`` (cookies + origins) to store
+    as this artifact's encrypted auth profile. The label is a non-secret note."""
+
+    storage_state: dict = Field(..., description="Playwright storageState JSON")
+    label: str | None = Field(None, max_length=200)
+
+
+@router.post("/api/v1/test-factory/{artifact_id}/playwright/auth/import")
+async def import_auth_profile(
+    body: _AuthImportBody,
+    request: Request,
+    artifact_id: str = PathParam(..., min_length=1, max_length=64),
+    user: dict = Depends(get_current_user),
+):
+    """Import an externally captured storageState as this artifact's auth
+    profile (QE-Central extension E3).
+
+    Same guarantees as /auth/save — the session is ENCRYPTED at rest via the
+    EnvelopeService (AAD=artifact_id), never stored plaintext, never returned —
+    but the state arrives in the request body (relayed in-memory from the
+    contained explorer) instead of being pulled from the interactive runner
+    capture. OFF by default: 403 unless NEXUS_QEC_AUTH_IMPORT_ENABLED is
+    truthy, so every existing deployment is byte-identical. Requires an
+    admin|manager role (router RBAC gate + explicit check). Refuses (503) if
+    encryption is unavailable; 422 on an empty/oversize session."""
+    if os.getenv("NEXUS_QEC_AUTH_IMPORT_ENABLED", "").strip().lower() not in ("1", "true", "yes", "on"):
+        raise HTTPException(status_code=403, detail="Auth import is disabled (QE-Central session handoff is not enabled for this deployment).")
+    if (user.get("role") or "viewer").lower() not in ("admin", "manager"):
+        raise HTTPException(status_code=403, detail="Auth import requires an admin or manager role.")
+    tenant_id = user["tenant_id"]
+    envelope = getattr(request.app.state, "envelope_service", None)
+    if envelope is None:
+        raise HTTPException(status_code=503, detail="encryption unavailable — cannot store a session securely")
+    state = body.storage_state
+    if not state:
+        raise HTTPException(status_code=422, detail="empty session")
+    state_json = json.dumps(state)
+    cookie_n = len(state.get("cookies", []) if isinstance(state, dict) else [])
+    async with tenant_scoped_session(tenant_id) as session:
+        await _require_artifact(session, artifact_id, tenant_id)
+        try:
+            await auth_profiles.save_profile(
+                session, envelope=envelope, tenant_id=tenant_id, artifact_id=artifact_id,
+                storage_state_json=state_json,
+                label=(body.label or f"imported session ({cookie_n} cookie(s))"),
+            )
+        except (ValueError, RuntimeError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
+        await session.commit()
+    return {"status": "saved"}
+
+
 @router.post("/api/v1/test-factory/{artifact_id}/playwright/auth/cancel")
 async def cancel_auth_capture(
     artifact_id: str = PathParam(..., min_length=1, max_length=64),

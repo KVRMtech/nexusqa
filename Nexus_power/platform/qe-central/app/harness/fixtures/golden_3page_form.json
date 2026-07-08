@@ -1,0 +1,198 @@
+{
+  "crawl_id": "golden3pf-fixture",
+  "target_url": "https://portal.golden-fixture.test/login",
+  "explorer_version": "qec-fixture-v1",
+  "config_fingerprint": "sha256:6f1d2c9a4b8e0f3d5a7c1e9b2d4f6a8c0e2b4d6f8a0c2e4b6d8f0a2c4e6b8d0f",
+  "frame_count": 3,
+  "pages": [
+    {
+      "sequence_index": 1,
+      "location": "https://portal.golden-fixture.test/login",
+      "title": "Sign in — Golden Portal",
+      "url_host": "portal.golden-fixture.test",
+      "url_path": "/login",
+      "url_query": "",
+      "canonical_host": "golden-fixture.test",
+      "first_seen_ms": 1000,
+      "last_seen_ms": 12000,
+      "form_snapshot": {
+        "Username": "casey.tester",
+        "Password": ""
+      },
+      "form_snapshot_signals": {
+        "Username": {"type": "text", "required": true},
+        "Password": {"type": "password", "required": true}
+      },
+      "actions": [
+        {
+          "subaction_index": 0,
+          "verb": "type",
+          "target_label": "Username",
+          "target_kind": "text_field",
+          "value": "casey.tester",
+          "timestamp_ms": 2000,
+          "anchor": {"label": "Sign in to Golden Portal", "kind": "region"},
+          "after": {"outcome": "value_committed", "detail": "Username committed", "navigated": false},
+          "url_changed": false,
+          "qec": {"role": "textbox", "input_type": "text", "phase": "auth"}
+        },
+        {
+          "subaction_index": 1,
+          "verb": "type",
+          "target_label": "Password",
+          "target_kind": "text_field",
+          "value": "",
+          "timestamp_ms": 4000,
+          "anchor": {"label": "Sign in to Golden Portal", "kind": "region"},
+          "after": {"outcome": "value_committed", "detail": "Password committed (never captured raw — value_committed is empty for password fields at source)", "navigated": false},
+          "url_changed": false,
+          "qec": {"role": "textbox", "input_type": "password", "phase": "auth"}
+        },
+        {
+          "subaction_index": 2,
+          "verb": "click",
+          "target_label": "Sign in",
+          "target_kind": "button",
+          "timestamp_ms": 6000,
+          "anchor": {"label": "Sign in to Golden Portal", "kind": "region"},
+          "after": {"outcome": "navigation", "detail": "navigated to /apply", "navigated": true},
+          "url_changed": true,
+          "qec": {"role": "button", "phase": "auth"}
+        }
+      ],
+      "screenshots": [
+        {
+          "frame_index": 0,
+          "timestamp_ms": 11000,
+          "png_base64": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+        }
+      ]
+    },
+    {
+      "sequence_index": 2,
+      "location": "https://portal.golden-fixture.test/apply",
+      "title": "Coverage application — Golden Portal",
+      "url_host": "portal.golden-fixture.test",
+      "url_path": "/apply",
+      "url_query": "",
+      "canonical_host": "golden-fixture.test",
+      "first_seen_ms": 12500,
+      "last_seen_ms": 30000,
+      "form_snapshot": {
+        "Full name": "Casey Tester",
+        "Coverage type": "Term 20",
+        "Coverage amount": "250000"
+      },
+      "form_snapshot_signals": {
+        "Full name": {"type": "text", "required": true},
+        "Coverage type": {"type": "select", "required": true, "options": ["Term 10", "Term 20", "Whole life"]},
+        "Coverage amount": {"type": "text", "required": true}
+      },
+      "actions": [
+        {
+          "subaction_index": 0,
+          "verb": "type",
+          "target_label": "Full name",
+          "target_kind": "text_field",
+          "value": "Casey Tester",
+          "timestamp_ms": 14000,
+          "anchor": {"label": "Coverage application", "kind": "region"},
+          "after": {"outcome": "value_committed", "detail": "Full name committed", "navigated": false},
+          "url_changed": false,
+          "qec": {"role": "textbox", "input_type": "text", "phase": "explore"}
+        },
+        {
+          "subaction_index": 1,
+          "verb": "select",
+          "target_label": "Coverage type",
+          "target_kind": "dropdown",
+          "value": "Term 20",
+          "timestamp_ms": 17000,
+          "anchor": {"label": "Coverage application", "kind": "region"},
+          "after": {"outcome": "value_committed", "detail": "Coverage type = Term 20", "navigated": false},
+          "url_changed": false,
+          "qec": {"role": "combobox", "options": ["Term 10", "Term 20", "Whole life"], "phase": "explore"}
+        },
+        {
+          "subaction_index": 2,
+          "verb": "type",
+          "target_label": "Coverage amount",
+          "target_kind": "text_field",
+          "value": "250000",
+          "timestamp_ms": 20000,
+          "anchor": {"label": "Coverage application", "kind": "region"},
+          "after": {"outcome": "value_committed", "detail": "Coverage amount committed", "navigated": false},
+          "url_changed": false,
+          "qec": {"role": "textbox", "input_type": "text", "phase": "explore"}
+        },
+        {
+          "subaction_index": 3,
+          "verb": "click",
+          "target_label": "Continue",
+          "target_kind": "button",
+          "timestamp_ms": 24000,
+          "anchor": {"label": "Coverage application", "kind": "region"},
+          "after": {"outcome": "navigation", "detail": "navigated to /confirm", "navigated": true},
+          "url_changed": true,
+          "qec": {"role": "button", "phase": "explore"}
+        }
+      ],
+      "screenshots": [
+        {
+          "frame_index": 1,
+          "timestamp_ms": 29000,
+          "png_base64": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+        }
+      ]
+    },
+    {
+      "sequence_index": 3,
+      "location": "https://portal.golden-fixture.test/confirm",
+      "title": "Review and confirm — Golden Portal",
+      "url_host": "portal.golden-fixture.test",
+      "url_path": "/confirm",
+      "url_query": "",
+      "canonical_host": "golden-fixture.test",
+      "first_seen_ms": 30500,
+      "last_seen_ms": 42000,
+      "form_snapshot": {
+        "I agree to the terms": "on"
+      },
+      "form_snapshot_signals": {
+        "I agree to the terms": {"type": "checkbox", "required": true}
+      },
+      "actions": [
+        {
+          "subaction_index": 0,
+          "verb": "click",
+          "target_label": "I agree to the terms",
+          "target_kind": "checkbox",
+          "value": "on",
+          "timestamp_ms": 32000,
+          "anchor": {"label": "Review and confirm", "kind": "region"},
+          "after": {"outcome": "value_committed", "detail": "consent toggled on", "navigated": false},
+          "url_changed": false,
+          "qec": {"role": "checkbox", "phase": "explore"}
+        },
+        {
+          "subaction_index": 1,
+          "verb": "click",
+          "target_label": "Submit application",
+          "target_kind": "button",
+          "timestamp_ms": 36000,
+          "anchor": {"label": "Review and confirm", "kind": "region"},
+          "after": {"outcome": "navigation", "detail": "navigated to /confirm?submitted=1", "navigated": true},
+          "url_changed": true,
+          "qec": {"role": "button", "phase": "explore"}
+        }
+      ],
+      "screenshots": [
+        {
+          "frame_index": 2,
+          "timestamp_ms": 41000,
+          "png_base64": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+        }
+      ]
+    }
+  ]
+}

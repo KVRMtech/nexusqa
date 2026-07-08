@@ -1,0 +1,6 @@
+# QE-Central — substrate writer + Phase-0 REFUSE harness.
+# The nexus-base image preinstalls the SDK (fastapi, uvicorn, pydantic v2,
+# pydantic-settings, SQLAlchemy 2 async, asyncpg, alembic, PyJWT, httpx,
+# cryptography) — only service-specific extras belong here.
+-e ../../sdk/nexus-sdk
+structlog>=24.1,<25.0

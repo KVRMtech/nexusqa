@@ -314,6 +314,52 @@ async def _needs_form_snapshot_extractor(
     return current is None or current != target_version
 
 
+async def _live_crawl_vision_guard(
+    session: AsyncSession,
+    *,
+    artifact_id: str,
+    tenant_id: str,
+    storyboard_on: bool,
+    pages_forms_on: bool,
+) -> tuple[bool, bool]:
+    """Anti-clobber guard for crawler-written substrate (QE-Central extension E2).
+
+    Artifacts with ``canonical_artifacts.source_type == 'live_crawl'`` carry
+    table-substrate evidence written directly by QE-Central (extractor_version
+    ``qec_live_v1@…``). If a user flips the vision surfaces back ON for such an
+    artifact, the version-inequality freshness checks would see the qec version
+    as stale and the pixel extractors would delete+rewrite those rows. Keyed on
+    the ``'live_crawl'`` literal ONLY: for those artifacts both expensive
+    vision surfaces are forced OFF (the cheap deterministic steps still run so
+    the panel UI stays alive).
+
+    Fail-OPEN: ANY exception reading ``source_type`` leaves the flags
+    untouched, so video/upload artifacts — which never carry ``'live_crawl'``
+    — keep byte-identical behavior.
+    """
+    try:
+        source_type = (
+            await session.execute(
+                select(CanonicalArtifactRow.source_type).where(
+                    CanonicalArtifactRow.artifact_id == artifact_id,
+                    CanonicalArtifactRow.tenant_id == tenant_id,
+                )
+            )
+        ).scalar()
+        if source_type == "live_crawl":
+            logger.info(
+                "composer.live_crawl_vision_skipped",
+                extra={"artifact_id": artifact_id, "source_type": source_type},
+            )
+            return False, False
+    except Exception as exc:  # fail-open: flags untouched, video path identical
+        logger.debug(
+            "composer.live_crawl_guard_unreadable",
+            extra={"artifact_id": artifact_id, "error": str(exc)[:200]},
+        )
+    return storyboard_on, pages_forms_on
+
+
 async def _needs_frame_annotator(
     session: AsyncSession,
     *,
@@ -770,6 +816,18 @@ class StoryboardComposer:
         sf = surfaces if surfaces is not None else {s: True for s in _surface_prefs.SURFACES}
         storyboard_on = sf.get("storyboard", True)
         pages_forms_on = sf.get("pages_forms", True)
+        # QE-Central extension E2 (anti-clobber Belt-2): crawler-written
+        # 'live_crawl' artifacts force both vision surfaces OFF so a surface
+        # toggle can never make the pixel extractors delete+rewrite the qec
+        # substrate rows. Fail-open — any read error leaves the resolved
+        # surface flags untouched (video behavior byte-identical).
+        storyboard_on, pages_forms_on = await _live_crawl_vision_guard(
+            session,
+            artifact_id=artifact_id,
+            tenant_id=tenant_id,
+            storyboard_on=storyboard_on,
+            pages_forms_on=pages_forms_on,
+        )
         ran = {
             "scene_grouper": False,
             "app_deduper": False,

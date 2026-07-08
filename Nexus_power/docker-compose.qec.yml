@@ -1,0 +1,72 @@
+# Standalone deploy for QE-Central Phase 0 (design R-10: the main
+# docker-compose.yml gets ZERO edits — the no-break guarantee extends to
+# deploy config). Joins the EXISTING stack network as external — brings up
+# only qe-central without touching the running stack, exactly like
+# docker-compose.runner.yml. Tear down with:
+#   docker compose -f docker-compose.qec.yml down
+#
+# Prerequisites (one-time, against the running nexus-postgres):
+#   psql -v qec_password=... -v qec_substrate_password=... \
+#        -f scripts/qec_db_bootstrap.sql
+#   docker compose -f docker-compose.qec.yml run --rm qe-central \
+#        alembic -c alembic_qec/alembic.ini upgrade head
+#
+# Phase-1 adds qe-explorer, qec-egress-proxy and repo-intel to THIS file.
+services:
+  qe-central:
+    build:
+      context: ./platform/qe-central
+      dockerfile: Dockerfile
+      args:
+        BASE_IMAGE: nexus-base:dev
+    image: nexus_power-qe-central
+    container_name: nexus-qe-central
+    restart: unless-stopped
+    ports:
+    - "8093:8093"
+    environment:
+      NEXUS_ENV: ${NEXUS_ENV:-development}
+      PORT: '8093'
+      QEC_SERVICE_NAME: qe-central
+      QEC_LOG_LEVEL: ${QEC_LOG_LEVEL:-INFO}
+      # ── Two DSNs (R-7): qecentral DB (role qec) + nexus DB (role
+      #    qec_substrate, least-privilege substrate writes only) ──────────
+      QEC_DATABASE_URL: postgresql+asyncpg://qec:${QEC_DB_PASSWORD:-qec-dev}@postgres:5432/qecentral
+      NEXUS_DATABASE_URL_SUBSTRATE: postgresql+asyncpg://qec_substrate:${QEC_SUBSTRATE_DB_PASSWORD:-qec-substrate-dev}@postgres:5432/nexus
+      # Shared HS256 secret — MUST match platform-api's (docker-compose.yml).
+      NEXUS_JWT_SECRET: ${NEXUS_JWT_SECRET:-test-secret-do-not-use-in-production}
+      PLATFORM_API_URL: ${PLATFORM_API_URL:-http://platform-api:8091}
+      # MUST match platform-api's storage backend so frame assets are
+      # co-readable (design §3.1 / R-5).
+      NEXUS_STORAGE_BACKEND: ${NEXUS_STORAGE_BACKEND:-local}
+      NEXUS_FRAME_STORAGE_PATH: ${NEXUS_FRAME_STORAGE_PATH:-/app/service/data/frames}
+      GCS_BUCKET: ${GCS_BUCKET:-}
+      # Phase-0 REFUSE harness — explicit opt-in (creates real artifacts).
+      QE_HARNESS_ENABLED: ${QE_HARNESS_ENABLED:-false}
+      QEC_SERVICE_TOKEN_TTL_SECONDS: ${QEC_SERVICE_TOKEN_TTL_SECONDS:-3600}
+      # ── Envelope encryption (client_apps.creds_blob) ───────────────────
+      # local is dev-only (SDK refuses it outside NEXUS_ENV=development|test);
+      # production uses gcp_kms/aws_kms exactly like platform-api.
+      NEXUS_KEK_PROVIDER: ${NEXUS_KEK_PROVIDER:-local}
+      NEXUS_LOCAL_KEK_PATH: ${NEXUS_LOCAL_KEK_PATH:-/app/service/data/kek/master.key}
+      NEXUS_KEK_GCP_KEY: ${NEXUS_KEK_GCP_KEY:-}
+      NEXUS_KEK_AWS_ARN: ${NEXUS_KEK_AWS_ARN:-}
+      AWS_REGION: ${AWS_REGION:-}
+    volumes:
+    # Shared frame volume from the main stack (eyes-engine serves from it) —
+    # visual_frames assets land where eyes can read them (R-5).
+    - frame-storage:/app/service/data/frames
+    # Dev-only local KEK persistence (inert when NEXUS_KEK_PROVIDER != local).
+    - qec-kek:/app/service/data/kek
+    mem_limit: 1g
+    networks:
+    - nexus
+networks:
+  nexus:
+    external: true
+    name: nexus_power_nexus
+volumes:
+  frame-storage:
+    external: true
+    name: nexus_power_frame-storage
+  qec-kek: null
