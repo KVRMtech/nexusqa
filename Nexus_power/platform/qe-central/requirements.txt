@@ -7,3 +7,12 @@ structlog>=24.1,<25.0
 # S5 control plane — cron schedule parsing for the cycle driver (design §3.5).
 # Import-guarded at the driver so a local checkout without it still loads.
 croniter>=2.0,<3.0
+# Phase-5.5 distributed scale-out — the shared, atomic, fail-closed admission
+# limiter backend (QEC_ADMISSION_BACKEND=redis). Import-guarded at
+# app/controlplane/scheduling/distributed.py, so its absence NEVER breaks the
+# default in-memory (memory) mode. redis.asyncio ships in redis-py 5+.
+redis>=5,<6
+# Phase-5.5 observability — Prometheus exposition for the /metrics endpoint.
+# Import-guarded in app.observability.metrics so a local checkout without it
+# still loads (every record_* helper then no-ops).
+prometheus-client>=0.20,<1.0

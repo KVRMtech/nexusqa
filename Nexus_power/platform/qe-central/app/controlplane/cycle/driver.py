@@ -80,10 +80,16 @@ from ...db.controlplane_models import (
 from ...db.models import ClientAppRow
 from ..cost import meter
 from ..scheduling.admission import (
-    ADMISSION,
     FAIL_CLOSED_REASONS,
-    AdmissionController,
     AdmissionLease,
+)
+from ..scheduling.distributed import AdmissionBackend, get_admission_backend
+from ...observability import (
+    dec_admission_in_flight,
+    inc_admission_in_flight,
+    record_admission_decision,
+    record_cycle_completed,
+    record_cycle_started,
 )
 from . import fingerprints as fp
 from .change_detector import (
@@ -170,6 +176,19 @@ class CycleClient(Protocol):
     async def get_run(self, *, tenant_id: str, artifact_id: str, run_id: str) -> Optional[dict]: ...
 
 
+class _TransientFactory(Exception):
+    """Internal marker for a TRANSIENT factory failure (transport error /
+    502 / 503 / 504) an IDEMPOTENT call MAY retry.  It never escapes
+    :class:`HttpCycleClient` — ``_request`` converts an exhausted (or
+    non-idempotent) transient to the honest ``None`` the cycle loop tolerates."""
+
+
+#: Upstream statuses HttpCycleClient's idempotent-GET retry treats as transient
+#: (parity with :data:`app.clients.resilience.TRANSIENT_HTTP_STATUSES`; 429 and
+#: all other 4xx are deliberately EXCLUDED — a deterministic error is not retried).
+_TRANSIENT_FACTORY_STATUSES = frozenset({502, 503, 504})
+
+
 class HttpCycleClient:
     """The real :class:`CycleClient` — typed httpx over platform-api (service JWT).
 
@@ -206,23 +225,42 @@ class HttpCycleClient:
         from ...clients import factory
         return await factory.generate(tenant_id=tenant_id, artifact_id=artifact_id)
 
-    async def _post(self, *, tenant_id: str, path: str, body: dict, timeout_s: float) -> Optional[dict]:
+    async def _post(
+        self, *, tenant_id: str, path: str, body: dict, timeout_s: float, endpoint: str,
+    ) -> Optional[dict]:
+        # A POST is a state-changing trigger — NON-idempotent, executed once.
         return await self._request(
-            method="POST", tenant_id=tenant_id, path=path, json_body=body, timeout_s=timeout_s,
+            method="POST", tenant_id=tenant_id, path=path, json_body=body,
+            timeout_s=timeout_s, endpoint=endpoint, idempotent=False,
         )
 
-    async def _get(self, *, tenant_id: str, path: str, timeout_s: float) -> Optional[dict]:
+    async def _get(
+        self, *, tenant_id: str, path: str, timeout_s: float, endpoint: str,
+    ) -> Optional[dict]:
+        # A GET is a safe read — idempotent, so a transient blip is retried.
         return await self._request(
-            method="GET", tenant_id=tenant_id, path=path, json_body=None, timeout_s=timeout_s,
+            method="GET", tenant_id=tenant_id, path=path, json_body=None,
+            timeout_s=timeout_s, endpoint=endpoint, idempotent=True,
         )
 
     async def _request(
         self, *, method: str, tenant_id: str, path: str,
-        json_body: Optional[dict], timeout_s: float,
+        json_body: Optional[dict], timeout_s: float, endpoint: str, idempotent: bool,
     ) -> Optional[dict]:
+        """Issue one authenticated factory call (honest ``None`` on any failure).
+
+        Phase-5.5 wiring: PROPAGATES the correlation id to VKPower (one id spans
+        QE-Central and the factory), RECORDS the factory-latency metric on every
+        attempt (logical ``endpoint`` label, never the artifact-scoped path), and
+        — for an IDEMPOTENT call ONLY — retries a TRANSIENT failure (transport
+        error / 502 / 503 / 504) with bounded backoff before degrading to
+        ``None``.  A non-idempotent call (the run/heal/verify POSTs) is executed
+        EXACTLY ONCE and NEVER auto-retried (no double-submit)."""
         import httpx
 
+        from ...clients.resilience import call_with_retries
         from ...config import settings
+        from ...observability import outbound_request_id_headers, record_factory_call
         from ...service_token import mint_service_jwt
 
         try:
@@ -230,29 +268,55 @@ class HttpCycleClient:
         except ValueError as exc:
             logger.warning("qec.driver.mint_failed", extra={"error": str(exc)[:200]})
             return None
-        try:
-            async with httpx.AsyncClient(base_url=settings.platform_api_url, timeout=timeout_s) as client:
-                resp = await client.request(
-                    method, path, json=json_body,
-                    headers={"Authorization": f"Bearer {token}"},
+        headers = outbound_request_id_headers({"Authorization": f"Bearer {token}"})
+
+        async def _attempt() -> Optional[dict]:
+            started = time.monotonic()
+            status: object = "transport_error"
+            try:
+                async with httpx.AsyncClient(
+                    base_url=settings.platform_api_url, timeout=timeout_s,
+                ) as client:
+                    resp = await client.request(method, path, json=json_body, headers=headers)
+            except Exception as exc:  # transport failure — retryable for an idempotent op
+                logger.warning(
+                    "qec.driver.transport_error",
+                    extra={"tenant_id": tenant_id, "path": path, "error": str(exc)[:300]},
                 )
-        except Exception as exc:  # transport failure — honest None, never crash the loop
-            logger.warning(
-                "qec.driver.transport_error",
-                extra={"tenant_id": tenant_id, "path": path, "error": str(exc)[:300]},
+                record_factory_call(
+                    endpoint=endpoint, method=method, status=status,
+                    duration_seconds=time.monotonic() - started,
+                )
+                raise _TransientFactory(str(exc)[:200]) from exc
+            status = resp.status_code
+            record_factory_call(
+                endpoint=endpoint, method=method, status=status,
+                duration_seconds=time.monotonic() - started,
             )
-            return None
-        if resp.status_code != 200:
-            logger.warning(
-                "qec.driver.non_200",
-                extra={"tenant_id": tenant_id, "path": path, "status_code": resp.status_code},
-            )
-            return None
+            if resp.status_code != 200:
+                logger.warning(
+                    "qec.driver.non_200",
+                    extra={"tenant_id": tenant_id, "path": path,
+                           "status_code": resp.status_code},
+                )
+                if resp.status_code in _TRANSIENT_FACTORY_STATUSES:
+                    raise _TransientFactory(f"upstream {resp.status_code}")
+                return None  # a DETERMINISTIC non-200 — honest None, never retried
+            try:
+                body = resp.json()
+            except Exception:
+                return None
+            return body if isinstance(body, dict) else {"result": body}
+
         try:
-            body = resp.json()
-        except Exception:
+            return await call_with_retries(
+                _attempt, idempotent=idempotent, op=endpoint,
+                is_retryable=lambda exc: isinstance(exc, _TransientFactory),
+            )
+        except _TransientFactory:
+            # Retries exhausted (idempotent) or a single transient (non-idempotent):
+            # degrade to the honest None the cycle loop already tolerates.
             return None
-        return body if isinstance(body, dict) else {"result": body}
 
     async def run_playwright(
         self, *, tenant_id: str, artifact_id: str, test_ids: Sequence[str], base_url: str,
@@ -261,7 +325,7 @@ class HttpCycleClient:
         out = await self._post(
             tenant_id=tenant_id,
             path=f"/api/v1/test-factory/{artifact_id}/playwright/run",
-            body=body, timeout_s=self._timeout_s,
+            body=body, timeout_s=self._timeout_s, endpoint="run",
         )
         return out or {}
 
@@ -269,7 +333,7 @@ class HttpCycleClient:
         out = await self._get(
             tenant_id=tenant_id,
             path=f"/api/v1/test-factory/{artifact_id}/playwright/run/{run_id}",
-            timeout_s=30.0,
+            timeout_s=30.0, endpoint="poll",
         )
         return out or {"run_id": run_id, "status": "unknown"}
 
@@ -280,7 +344,7 @@ class HttpCycleClient:
         out = await self._post(
             tenant_id=tenant_id,
             path=f"/api/v1/test-factory/{artifact_id}/auto-heal/run-config",
-            body=body, timeout_s=self._timeout_s,
+            body=body, timeout_s=self._timeout_s, endpoint="heal",
         )
         return out or {}
 
@@ -291,7 +355,7 @@ class HttpCycleClient:
         out = await self._post(
             tenant_id=tenant_id,
             path=f"/api/v1/test-factory/{artifact_id}/scripts/{test_id}/verify",
-            body=body, timeout_s=self._timeout_s,
+            body=body, timeout_s=self._timeout_s, endpoint="verify",
         )
         return out or {}
 
@@ -299,7 +363,7 @@ class HttpCycleClient:
         out = await self._get(
             tenant_id=tenant_id,
             path=f"/api/v1/test-factory/{artifact_id}/triage",
-            timeout_s=self._timeout_s,
+            timeout_s=self._timeout_s, endpoint="triage",
         )
         return out or {}
 
@@ -307,7 +371,7 @@ class HttpCycleClient:
         return await self._get(
             tenant_id=tenant_id,
             path=f"/api/v1/test-factory/{artifact_id}/runs/{run_id}",
-            timeout_s=30.0,
+            timeout_s=30.0, endpoint="get_run",
         )
 
 
@@ -1198,7 +1262,7 @@ async def run_cycle(
     mode: str,
     trigger: str,
     client: CycleClient | None = None,
-    controller: AdmissionController = ADMISSION,
+    controller: AdmissionBackend | None = None,
     criticality: Mapping[str, str] | None = None,
     repo_shas: tuple[str | None, str | None] = (None, None),
 ) -> CycleOutcome:
@@ -1210,6 +1274,14 @@ async def run_cycle(
     ``cost_ledger``.  Releases the lease in a ``finally``.  A cycle already in a
     terminal state is a no-op (idempotent re-entry)."""
     client = client or HttpCycleClient()
+    if controller is None:
+        # Phase-5.5 distributed scale-out seam: resolve the admission backend from
+        # config.  ``QEC_ADMISSION_BACKEND=memory`` (the default) returns the
+        # process-local ADMISSION singleton — today's behavior, byte for byte;
+        # ``redis`` returns the shared, atomic, fail-closed limiter so N replicas
+        # enforce ONE customer-facing rate.  An explicitly-passed controller (the
+        # test seam) always wins.
+        controller = get_admission_backend()
 
     row = await _load_cycle_row(tenant_id, cycle_id)
     if row is None:
@@ -1233,18 +1305,30 @@ async def run_cycle(
         # Admission deferred (retryable) or fail-closed (already persisted).  A
         # retryable defer leaves the row where it is for the next tick/trigger.
         return CycleOutcome(cycle_id=cycle_id, state=row.state)
+    # Phase-5.5 observability: count the START, track live concurrency (in-flight
+    # gauge), and time the run to its terminal state.  Every helper is a hard
+    # NO-OP when metrics are disabled/absent and NEVER raises into the loop.
+    inc_admission_in_flight()
+    record_cycle_started(trigger=trigger, mode=mode)
+    _started_at = time.monotonic()
     try:
-        return await execute_cycle(
+        outcome = await execute_cycle(
             cycle_id=cycle_id, mode=mode, trigger=trigger, app=app, client=client,
             hooks=hooks, criticality=criticality, prior_verdicts=prior_verdicts,
             repo_shas=repo_shas,
         )
+        record_cycle_completed(
+            terminal_state=outcome.state,
+            duration_seconds=time.monotonic() - _started_at,
+        )
+        return outcome
     finally:
         await controller.release(lease)
+        dec_admission_in_flight()
 
 
 async def _acquire_admission(
-    controller: AdmissionController, app: AppConfig, *, cycle_id: str, tenant_id: str,
+    controller: AdmissionBackend, app: AppConfig, *, cycle_id: str, tenant_id: str,
 ) -> AdmissionLease | None:
     """Acquire an admission lease with a bounded wait.
 
@@ -1257,6 +1341,7 @@ async def _acquire_admission(
         decision = await controller.try_admit(
             tenant_id=tenant_id, canonical_host=app.canonical_host, max_rps=app.max_rps,
         )
+        record_admission_decision(admitted=decision.admitted, reason=decision.reason)
         if decision.admitted:
             return decision.lease
         if decision.reason in FAIL_CLOSED_REASONS:

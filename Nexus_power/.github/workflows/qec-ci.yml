@@ -1,0 +1,188 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# QE-Central CI (Phase 5.5) — the workflow that makes the DB-gated integration
+# tests ACTUALLY EXECUTE.
+#
+# Phases 0-5 shipped 656 unit tests, but every DB / RLS / factory-round-trip
+# test was skipif-gated on a Postgres that CI never provided, so NONE of them
+# had ever run.  This workflow stands up a real Postgres + Redis, builds BOTH
+# databases at alembic head (VKPower `nexus` substrate + carved-out `qecentral`)
+# through the SAME production bootstrap the operator uses, exports the test DSNs,
+# and then:
+#
+#   * runs all THREE unit suites (qe-central, qe-explorer, repo-intel) with the
+#     DB gates OPEN, so the substrate/governance/control-plane/RLS DB tests run;
+#   * proves tenant isolation BEHAVIOURALLY (test_rls_isolation.py) through the
+#     least-privilege roles — the security-critical gap Phase 5.5 closes;
+#   * runs the cost budget gate against the real ledger schema;
+#   * runs the VKPower pin suite so the no-break guarantee is enforced in CI.
+#
+# It is deliberately scoped by path filters to QE-Central changes so it never
+# runs on unrelated VKPower commits.  Any failure fails the build.
+# ═══════════════════════════════════════════════════════════════════════════
+name: QE-Central CI
+
+on:
+  push:
+    branches: [main, develop, "feat/**"]
+    paths:
+      - ".github/workflows/qec-ci.yml"
+      - "platform/qe-central/**"
+      - "engines/qe-explorer/**"
+      - "engines/repo-intel/**"
+      - "scripts/qec_*"
+      - "sdk/nexus-sdk/**"
+      - "alembic/**"
+      - "platform/api/tests/test_qec_contract_*.py"
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - ".github/workflows/qec-ci.yml"
+      - "platform/qe-central/**"
+      - "engines/qe-explorer/**"
+      - "engines/repo-intel/**"
+      - "scripts/qec_*"
+      - "sdk/nexus-sdk/**"
+      - "alembic/**"
+      - "platform/api/tests/test_qec_contract_*.py"
+
+concurrency:
+  group: qec-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  qec:
+    runs-on: ubuntu-latest
+
+    # ── Backing services (same aliases the deployed stack uses) ────────────
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 5
+
+    # ── Env: DB connection + the three test DSNs the gated suites read ──────
+    # Passwords are CI-only, non-secret, and MUST match between the role-create
+    # step (QEC_*_ROLE_PASSWORD) and the DSNs below.
+    env:
+      PYTHON_VERSION: "3.10"
+      # postgres service superuser (libpq reads these directly)
+      PGHOST: localhost
+      PGPORT: "5432"
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      # least-privilege application-role passwords
+      QEC_ROLE_PASSWORD: qec_ci_pw
+      QEC_SUBSTRATE_ROLE_PASSWORD: qec_sub_ci_pw
+      # ── Test DSNs (async / asyncpg form) ──────────────────────────────────
+      # nexus (superuser): substrate round-trip + the create_all-based DB tests
+      QEC_TEST_DATABASE_URL: "postgresql+asyncpg://postgres:postgres@localhost:5432/nexus"
+      # qecentral (least-priv `qec` role): governance/control-plane + the RLS
+      # isolation proof — a superuser here would BYPASS RLS and prove nothing
+      QEC_TEST_QEC_DATABASE_URL: "postgresql+asyncpg://qec:qec_ci_pw@localhost:5432/qecentral"
+      # nexus (least-priv `qec_substrate` role): the page_visits RLS proof
+      QEC_TEST_SUBSTRATE_DATABASE_URL: "postgresql+asyncpg://qec_substrate:qec_sub_ci_pw@localhost:5432/nexus"
+      # App-engine defaults point at the real CI DBs (lazy — only used if a test
+      # opens a session without repointing).
+      QEC_DATABASE_URL: "postgresql+asyncpg://qec:qec_ci_pw@localhost:5432/qecentral"
+      NEXUS_DATABASE_URL_SUBSTRATE: "postgresql+asyncpg://qec_substrate:qec_sub_ci_pw@localhost:5432/nexus"
+      # Shared HS256 secret + redis (parity with the deployed stack)
+      NEXUS_JWT_SECRET: qec-ci-jwt-secret-not-for-prod
+      NEXUS_REDIS_URL: redis://localhost:6379
+      QEC_LOG_LEVEL: WARNING
+
+    steps:
+      # (a) checkout + Python 3.10 (the QE-Central runtime; qe-explorer's base
+      #     image is CPython 3.10)
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      # psql / pg_isready for the deterministic DB bootstrap
+      - name: Install PostgreSQL client
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends postgresql-client
+
+      # (d) install EACH component's requirements.  The editable `-e ../../sdk`
+      #     lines are CWD-relative, so each install runs from its own directory.
+      - name: Install Python dependencies
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          # SDK first (every component depends on it)
+          pip install -e sdk/nexus-sdk
+          # platform-api — needed by the substrate round-trip subprocess AND the
+          # VKPower pin suite (both import the real factory / router modules)
+          ( cd platform/api      && pip install -r requirements.txt )
+          # QE-Central service + the two engines
+          ( cd platform/qe-central && pip install -r requirements.txt )
+          ( cd engines/qe-explorer && pip install -r requirements.txt )
+          # repo-intel: the native tree-sitter grammars are IMPORT-GUARDED and
+          # may lack wheels; prefer the full install, fall back to the hard deps
+          # so Stage-1 (which imports neither grammar) still runs.
+          ( cd engines/repo-intel && pip install -r requirements.txt ) || {
+            echo "::warning::repo-intel native grammars unavailable — installing import-guarded fallback deps"
+            pip install -e sdk/nexus-sdk 'pyyaml>=6.0,<7.0'
+          }
+          # test tooling (asyncio_mode=auto lives in the repo pytest.ini)
+          pip install pytest pytest-asyncio pytest-cov httpx faker jinja2 asyncpg alembic croniter
+
+      # (b)+(c) build BOTH databases at head via the SAME production bootstrap
+      #         SQL (roles + grants + RLS), then the two alembic chains.
+      - name: Bootstrap CI databases (nexus substrate + qecentral @ head)
+        run: bash scripts/qec_ci_db_setup.sh
+
+      # (e)+(f) QE-Central suite WITH the DB gates open — the substrate contract,
+      #         governance, control-plane, synthesis, RLS isolation and
+      #         migration tests all EXECUTE here (this is the whole point).
+      - name: QE-Central unit + DB suite
+        run: python -m pytest platform/qe-central/tests -v --tb=short
+
+      # (e) qe-explorer unit suite (pure crawler logic)
+      - name: qe-explorer unit suite
+        run: python -m pytest engines/qe-explorer/tests -v --tb=short
+
+      # (e) repo-intel unit suite (pure extractor / pipeline logic)
+      - name: repo-intel unit suite
+        run: python -m pytest engines/repo-intel/tests -v --tb=short
+
+      # (g) cost budget gate — exercises the real cost_ledger read path against
+      #     an empty ledger under a generous budget (must exit 0 = within budget)
+      - name: Cost budget gate
+        env:
+          QEC_BUDGET_TENANT: qec-ci-budget-probe
+          QEC_BUDGET_BROWSER_SECONDS: "1000000"
+        run: python scripts/qec_budget_gate.py
+
+      # (h) VKPower pin suite — proves the no-break guarantee: the frozen video
+      #     path (T1-T4) + the three extension contracts (E1/E2/E3) stay green.
+      - name: VKPower no-break pin suite
+        working-directory: platform/api
+        run: |
+          python -m pytest \
+            tests/test_qec_contract_video_frozen.py \
+            tests/test_qec_contract_gt_ingest.py \
+            tests/test_qec_contract_auth_import.py \
+            tests/test_qec_contract_e2_composer.py \
+            -v --tb=short

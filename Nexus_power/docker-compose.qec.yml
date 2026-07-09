@@ -53,6 +53,25 @@ services:
       # Phase-0 REFUSE harness — explicit opt-in (creates real artifacts).
       QE_HARNESS_ENABLED: ${QE_HARNESS_ENABLED:-false}
       QEC_SERVICE_TOKEN_TTL_SECONDS: ${QEC_SERVICE_TOKEN_TTL_SECONDS:-3600}
+      # ── Phase-5.5 production hardening (OPT-IN; these DEFAULTS preserve the
+      #    single-instance behavior byte-for-byte). A MULTI-REPLICA production
+      #    deploy sets QEC_ADMISSION_BACKEND=redis AND QEC_DAEMON_LEADER_ELECTION=
+      #    advisory_lock so N replicas enforce ONE customer-facing rate and only
+      #    ONE daemon scans the fleet. ────────────────────────────────────────
+      # Admission limiter backend: 'memory' (process-local, default) or 'redis'
+      # (one shared, atomic, POLITENESS-FIRST fail-closed limiter).
+      QEC_ADMISSION_BACKEND: ${QEC_ADMISSION_BACKEND:-memory}
+      # DSN pre-wired to the stack's redis (db 3) so a multi-replica prod only
+      # flips QEC_ADMISSION_BACKEND=redis; INERT while backend=memory (default).
+      QEC_REDIS_URL: ${QEC_REDIS_URL:-redis://redis:6379/3}
+      # Cycle-daemon leader election: 'none' (always leader, default) or
+      # 'advisory_lock' (Postgres pg_advisory_lock — exactly ONE replica scans).
+      QEC_DAEMON_LEADER_ELECTION: ${QEC_DAEMON_LEADER_ELECTION:-none}
+      # API self-protection rate limit (req/sec/principal); 0 ⇒ OFF (default).
+      QEC_API_RATE_LIMIT: ${QEC_API_RATE_LIMIT:-0}
+      # Retry budget for IDEMPOTENT factory GETs (transport / 502-503-504 only);
+      # 0 ⇒ single attempt. The non-idempotent generate/run triggers never retry.
+      QEC_HTTP_MAX_RETRIES: ${QEC_HTTP_MAX_RETRIES:-2}
       # ── Envelope encryption (client_apps.creds_blob) ───────────────────
       # local is dev-only (SDK refuses it outside NEXUS_ENV=development|test);
       # production uses gcp_kms/aws_kms exactly like platform-api.

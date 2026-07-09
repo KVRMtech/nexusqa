@@ -51,6 +51,15 @@ from app.routers.cycles import router as cycles_router
 from app.routers.cost import router as cost_router
 from app.routers.webhooks import router as webhooks_router
 
+# ── Phase-5.5 additive wiring (all OPT-IN; the default of every knob preserves
+#    today's single-instance behavior — see app/config.py + the module docs) ──
+from app.api_protect import (
+    API_RATE_LIMITER,
+    principal_rate_limit_middleware,
+    unhandled_exception_handler,
+)
+from app.observability import CorrelationIdMiddleware, metrics_router
+
 # ─── Structured logging ────────────────────────────────────────
 logging.basicConfig(
     level=getattr(logging, settings.qec_log_level.upper(), logging.INFO),
@@ -139,9 +148,23 @@ async def lifespan(application: FastAPI):
     import asyncio
 
     from app.controlplane.cycle.driver import cycle_driver_daemon
+    from app.controlplane.leader import build_leader_election
 
-    driver_task = asyncio.create_task(cycle_driver_daemon(), name="qec-cycle-driver")
+    # Phase-5.5 leader election wraps the daemon loop.  DEFAULT mode ``none`` ⇒
+    # this instance is ALWAYS leader ⇒ byte-identical to today's single
+    # ``create_task(cycle_driver_daemon())``.  In ``advisory_lock`` mode exactly
+    # ONE replica across the fleet holds the Postgres advisory lock and runs the
+    # loop; a follower idles (waking on ``driver_stop``) and takes over when the
+    # leader dies (the session lock auto-releases on connection close).
+    election = build_leader_election()
+    driver_stop = asyncio.Event()
+    driver_task = asyncio.create_task(
+        election.run_as_leader(cycle_driver_daemon, stop_event=driver_stop),
+        name="qec-cycle-driver",
+    )
     application.state.cycle_driver_task = driver_task
+    application.state.cycle_driver_stop = driver_stop
+    application.state.leader_election = election
     logger.info(
         "qe_central.started",
         port=settings.port,
@@ -151,8 +174,15 @@ async def lifespan(application: FastAPI):
         harness_enabled=settings.qe_harness_enabled,
         envelope=(application.state.envelope_service is not None),
         cycle_driver="launched",
+        admission_backend=settings.qec_admission_backend,
+        leader_election=election.mode,
     )
     yield
+    # Clean shutdown: signal the loop to stop (wakes an idle follower promptly),
+    # then cancel the task — the daemon returns on CancelledError and
+    # ``run_as_leader``'s finally releases leadership (freeing the advisory lock
+    # for another replica).
+    driver_stop.set()
     driver_task.cancel()
     try:
         await driver_task
@@ -190,11 +220,30 @@ async def security_headers_middleware(request: Request, call_next):
     return response
 
 
-# Registration order matters: middlewares run in reverse registration order,
-# so the JWT gate (registered last) executes FIRST and rejected requests
-# still get security headers attached on the way out.
-app.middleware("http")(security_headers_middleware)
+# ── Middleware registration (Phase-5.5) ─────────────────────────────────────
+# Starlette runs http middleware in REVERSE registration order (the LAST
+# registered is OUTERMOST / executes FIRST), so we register innermost-first.
+# Desired EXECUTION order (outer → inner):
+#     CorrelationId → security_headers → jwt_auth → [rate_limit] → route
+#   * CorrelationId is OUTERMOST so EVERY response — including a JWT 401 or a
+#     rate-limit 429 — carries X-Request-ID and every log line (incl. the JWT
+#     gate's) is tagged with the correlation id.
+#   * security_headers is OUTER to the JWT gate + rate limiter so a REJECTED
+#     request STILL gets the security headers attached on the way out.
+#   * the API rate limiter runs INNERMOST (after jwt_auth) so it reads the
+#     authenticated principal from request.state.user; it is mounted ONLY when
+#     QEC_API_RATE_LIMIT > 0 (OFF by default ⇒ no added middleware, no behavior
+#     change).
+if API_RATE_LIMITER.enabled:
+    app.middleware("http")(principal_rate_limit_middleware)
 app.middleware("http")(jwt_auth_middleware)
+app.middleware("http")(security_headers_middleware)
+app.add_middleware(CorrelationIdMiddleware)
+
+# Phase-5.5 global exception handler: any UNHANDLED exception → a clean 500 with
+# the correlation id, never leaking internal detail/stack.  HTTPException keeps
+# its own status (Starlette's dedicated handler), so intentional 4xx are intact.
+app.add_exception_handler(Exception, unhandled_exception_handler)
 
 app.include_router(apps_router)
 app.include_router(explorations_router)
@@ -211,6 +260,11 @@ app.include_router(webhooks_router)
 # the /api/* prefix (the explorer holds no JWT — only the HMAC token), so the
 # fail-closed JWT middleware skips it; internal.py verifies the HMAC itself.
 app.include_router(internal_router)
+# Phase-5.5 metrics exposition — mounted OUTSIDE the /api/* prefix (default path
+# /metrics; QEC_METRICS_PATH) so the fail-closed JWT gate skips it, the same
+# public posture as /health.  The payload is a single empty-scrape comment when
+# prometheus_client is absent or QEC_METRICS_ENABLED=0.
+app.include_router(metrics_router)
 
 
 # ─── Health ────────────────────────────────────────────────────
