@@ -46,6 +46,7 @@ from app.routers.apps import router as apps_router
 from app.routers.explorations import router as explorations_router
 from app.routers.harness import router as harness_router
 from app.routers.internal import router as internal_router
+from app.routers.scenario_gov import router as scenario_gov_router
 
 # ─── Structured logging ────────────────────────────────────────
 logging.basicConfig(
@@ -177,6 +178,9 @@ app.middleware("http")(jwt_auth_middleware)
 app.include_router(apps_router)
 app.include_router(explorations_router)
 app.include_router(harness_router)
+# S4 (Phase-3) scenario governance — criticality / synthesis / coverage /
+# approval / tier-label / touch-meter (design §3.4). Additive; VKPower untouched.
+app.include_router(scenario_gov_router)
 # Phase-1: the HMAC-authenticated explorer completion callback. Lives OUTSIDE
 # the /api/* prefix (the explorer holds no JWT — only the HMAC token), so the
 # fail-closed JWT middleware skips it; internal.py verifies the HMAC itself.
