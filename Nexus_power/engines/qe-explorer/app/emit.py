@@ -435,12 +435,18 @@ def build_action_record(
     screenshot_after: str = "",
     timestamp_ms: int = 0,
     is_secret: bool = False,
+    after_outcome: Any = None,
 ) -> ActionRecord:
     """Build one grounded :class:`ActionRecord` from a control + observation.
 
     Centralises the mapping so auth / forms / crawler stay consistent:
       * ``after`` / ``url_changed`` come from :func:`app.browser.classify_after`
-        over the measured :class:`app.browser.RawObservation` (never invented);
+        over the measured :class:`app.browser.RawObservation` (never invented) —
+        or from an INJECTED ``after_outcome`` (an :class:`app.browser.AfterOutcome`)
+        when the caller has already classified the effect with a phase-specific
+        rule (e.g. the Phase-B submit path's
+        :func:`app.browser.classify_submit_after`); the injected value is used
+        verbatim, never re-classified, so the outcome stays grounded;
       * ``target_kind`` comes from :func:`app.inventory.target_kind_for`;
       * ``value`` is PII-scrubbed at source (:func:`scrub_value`); a button/link
         click passes ``value=None`` and records no value; a password fill passes
@@ -450,7 +456,7 @@ def build_action_record(
     from .browser import classify_after  # local import: keep emit import-light
     from .inventory import target_kind_for
 
-    outcome = classify_after(observation)
+    outcome = after_outcome if after_outcome is not None else classify_after(observation)
     if value is None:
         recorded_value: str | None = None
     else:

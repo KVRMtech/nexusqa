@@ -773,6 +773,26 @@ async def get_autonomy(
     )
 
 
+@router.get("/apps/{app_id}/autonomy/trend")
+async def get_autonomy_trend(
+    app_id: str,
+    cycles: int = Query(default=10, ge=1, le=touch_meter.MAX_TREND_CYCLES),
+    user: dict = Depends(_MUTATE),
+) -> dict:
+    """The fleet-autonomy TREND — per criticality band across the last ``cycles``
+    cycles (deliberately NEVER a single averaged number).
+
+    Each band carries a per-cycle series of (governed scenarios, human touches,
+    autonomy %); a band with no governed scenarios in a cycle is reported as
+    ``null`` (never 100%), so a P0 that needed a human can never be averaged away
+    by autonomous P3s — nor by an empty band.  Gated to admin|manager: the fleet
+    autonomy trend is a management report."""
+    tenant_id = user["tenant_id"]
+    return await touch_meter.autonomy_trend(
+        tenant_id=tenant_id, app_id=app_id, cycles=cycles,
+    )
+
+
 @router.post("/touches", status_code=201)
 async def create_touch(payload: TouchCreate, user: dict = Depends(_MUTATE)) -> dict:
     """Record ONE typed human touch (direct governance action)."""

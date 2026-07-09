@@ -32,7 +32,7 @@ and the KPI math are unit-tested with no database.
 from __future__ import annotations
 
 import logging
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import datetime
 
 from sqlalchemy import select
@@ -403,6 +403,170 @@ async def autonomy_by_band(
     }
 
 
+# ── The per-band autonomy TREND across cycles (NEVER a single number) ─────
+
+#: Hard ceiling on the trend window (a report, not an unbounded scan).
+MAX_TREND_CYCLES = 200
+
+
+async def _recent_cycles(
+    tenant_id: str, app_id: str, cycles: int,
+) -> list[dict]:
+    """The last ``cycles`` ``app_cycles`` for an app, OLDEST→NEWEST (chronological).
+
+    The authoritative cycle window comes from ``app_cycles`` — NOT from the touch
+    rows — so a fully-autonomous cycle (zero touches, the 99% path) is still
+    present in the trend instead of being silently dropped.
+    """
+    from ..db.controlplane_models import AppCycleRow  # S5 table, read-only
+
+    n = max(1, min(MAX_TREND_CYCLES, int(cycles)))
+    async with tenant_scoped_qec_session(tenant_id) as session:
+        rows = (await session.execute(
+            select(
+                AppCycleRow.cycle_id, AppCycleRow.state,
+                AppCycleRow.trigger, AppCycleRow.created_at,
+            ).where(
+                AppCycleRow.tenant_id == tenant_id,
+                AppCycleRow.app_id == app_id,
+            ).order_by(AppCycleRow.created_at.desc()).limit(n)
+        )).all()
+    out = [
+        {
+            "cycle_id": cid,
+            "state": state,
+            "trigger": trigger,
+            "created_at": created_at.isoformat() if created_at else None,
+        }
+        for (cid, state, trigger, created_at) in rows
+    ]
+    out.reverse()  # chronological (oldest first) for a readable trend
+    return out
+
+
+async def _touches_by_cycle_band(
+    tenant_id: str, app_id: str, cycle_ids: Sequence[str],
+) -> dict[str, dict[str, int]]:
+    """``{cycle_id: {band_or_unattributed: count}}`` for the given cycles.
+
+    Ingested audit touches (no band) land under :data:`BAND_UNATTRIBUTED`, never
+    folded into a real band.
+    """
+    if not cycle_ids:
+        return {}
+    async with tenant_scoped_qec_session(tenant_id) as session:
+        rows = (await session.execute(
+            select(TouchEventRow.cycle_id, TouchEventRow.band).where(
+                TouchEventRow.tenant_id == tenant_id,
+                TouchEventRow.app_id == app_id,
+                TouchEventRow.cycle_id.in_(list(cycle_ids)),
+            )
+        )).all()
+    out: dict[str, dict[str, int]] = {}
+    for cycle_id, band in rows:
+        b = _norm_band(band) or BAND_UNATTRIBUTED
+        bucket = out.setdefault(cycle_id, {})
+        bucket[b] = bucket.get(b, 0) + 1
+    return out
+
+
+def _assemble_trend(
+    *,
+    app_id: str,
+    cycles_meta: Sequence[dict],
+    governed_by_band: Mapping[str, int],
+    touches_by_cycle_band: Mapping[str, Mapping[str, int]],
+) -> dict:
+    """Assemble the per-band autonomy series across an ORDERED cycle window (pure).
+
+    DELIBERATELY refuses to emit a single averaged number: the result is keyed
+    ``per_band``, each a LIST of one entry per cycle (oldest→newest) carrying its
+    own governed denominator, human-touch numerator, and autonomy %.
+
+    Honesty rules:
+      * ``autonomy_pct`` is ``None`` (null) for any cycle where the band has NO
+        governed denominator — a band with no cases is null, NEVER 100%.
+      * a band with ``governed > 0`` and ZERO touches in a cycle reads a genuine
+        100% (fully autonomous that cycle) — distinct from the null above.
+      * ``unattributed`` (ingested audit touches with no band) is reported in its
+        OWN per-cycle series — never folded into a real band's numerator.
+      * a band that is neither governed nor touched anywhere in the window is
+        omitted (noise), never emitted as an all-null row.
+    """
+    cycle_ids = [c["cycle_id"] for c in cycles_meta]
+    touched_bands: set[str] = set()
+    for cid in cycle_ids:
+        touched_bands.update(touches_by_cycle_band.get(cid, {}).keys())
+
+    per_band: dict[str, list[dict]] = {}
+    for band in BANDS:
+        governed = int(governed_by_band.get(band, 0) or 0)
+        if governed <= 0 and band not in touched_bands:
+            continue  # nothing governed and nothing touched in this band — omit
+        series: list[dict] = []
+        for cid in cycle_ids:
+            human = int(touches_by_cycle_band.get(cid, {}).get(band, 0) or 0)
+            series.append({
+                "cycle_id": cid,
+                "governed_scenarios": governed,
+                "human_touches": human,
+                "autonomy_pct": _autonomy_pct(governed, human),  # None when governed==0
+            })
+        per_band[band] = series
+
+    unattributed: list[dict] = []
+    if any(BAND_UNATTRIBUTED in touches_by_cycle_band.get(c, {}) for c in cycle_ids):
+        unattributed = [
+            {
+                "cycle_id": cid,
+                "human_touches": int(
+                    touches_by_cycle_band.get(cid, {}).get(BAND_UNATTRIBUTED, 0) or 0
+                ),
+            }
+            for cid in cycle_ids
+        ]
+
+    return {
+        "model_version": MODEL_VERSION,
+        "app_id": app_id,
+        "window": len(cycle_ids),
+        "cycles": list(cycles_meta),
+        "per_band": per_band,
+        "unattributed": unattributed,
+        # The contract of this KPI: no single averaged autonomy number exists.
+        "note": (
+            "autonomy is reported PER band PER cycle — there is deliberately no "
+            "single averaged autonomy figure; a band with no governed scenarios "
+            "in a cycle is null, NEVER 100% (a P0 that needed a human must never "
+            "be averaged away by autonomous P3s or by an empty band)"
+        ),
+    }
+
+
+async def autonomy_trend(
+    *, tenant_id: str, app_id: str, cycles: int = 10,
+) -> dict:
+    """The autonomy TREND — per criticality band across the last ``cycles`` cycles.
+
+    Reads the authoritative cycle window from ``app_cycles`` (so zero-touch,
+    fully-autonomous cycles are present, not dropped), the CURRENT governed-
+    scenario denominator per band (:func:`_scenarios_by_band`), and the touches
+    recorded against each cycle_id, then assembles a per-band per-cycle series via
+    :func:`_assemble_trend`.  NEVER emits a single averaged number.
+
+    Returns ``{model_version, app_id, window, cycles, per_band, unattributed,
+    note}``.
+    """
+    cycles_meta = await _recent_cycles(tenant_id, app_id, cycles)
+    governed = await _scenarios_by_band(tenant_id, app_id)
+    cycle_ids = [c["cycle_id"] for c in cycles_meta]
+    touches = await _touches_by_cycle_band(tenant_id, app_id, cycle_ids)
+    return _assemble_trend(
+        app_id=app_id, cycles_meta=cycles_meta,
+        governed_by_band=governed, touches_by_cycle_band=touches,
+    )
+
+
 async def list_touches(
     *, tenant_id: str, app_id: str = "", limit: int = 500,
 ) -> list[dict]:
@@ -436,10 +600,12 @@ __all__ = [
     "TOUCH_TYPES",
     "SOURCE_QEC_DIRECT", "SOURCE_VKPOWER_AUDIT",
     "BANDS", "BAND_UNATTRIBUTED", "SERVICE_ACTORS",
+    "MAX_TREND_CYCLES",
     "InvalidTouchTypeError",
     "classify_audit_action",
     "record_touch",
     "ingest_audit_log",
     "autonomy_by_band",
+    "autonomy_trend",
     "list_touches",
 ]

@@ -29,18 +29,21 @@ from typing import Any, Mapping, Protocol, Sequence, runtime_checkable
 # ─── after.outcome vocabulary (design §3.2; schema.py AfterBundle) ──────────
 #: The honest, observed outcome of one action.  ``navigation`` is the only value
 #: that earns the downstream PROVEN navigation credit; the rest degrade with no
-#: credit.  Free String(40) at rest — spelling here is for legibility, not a
-#: hard enum, so an unforeseen outcome is never fabricated into ``navigation``.
+#: credit.  ``confirmation`` is the Phase-B (submit-tier) same-page terminal
+#: success — it earns a baseline visual_frame but NO navigation credit.  Free
+#: String(40) at rest — spelling here is for legibility, not a hard enum, so an
+#: unforeseen outcome is never fabricated into ``navigation``/``confirmation``.
 OUTCOME_NAVIGATION = "navigation"
 OUTCOME_VALUE_COMMITTED = "value_committed"
 OUTCOME_DIALOG = "dialog"
 OUTCOME_ERROR = "error"
 OUTCOME_DOM_CHANGED = "dom_changed"
 OUTCOME_NONE = "none"
+OUTCOME_CONFIRMATION = "confirmation"
 
 AFTER_OUTCOMES = frozenset({
     OUTCOME_NAVIGATION, OUTCOME_VALUE_COMMITTED, OUTCOME_DIALOG,
-    OUTCOME_ERROR, OUTCOME_DOM_CHANGED, OUTCOME_NONE,
+    OUTCOME_ERROR, OUTCOME_DOM_CHANGED, OUTCOME_NONE, OUTCOME_CONFIRMATION,
 })
 
 _MAX_DETAIL = 500
@@ -93,6 +96,12 @@ class RawObservation:
     dialog_detail: str = ""
     error_detail: str = ""
     dom_changed: bool = False
+    #: A grounded, positive success/confirmation live-region text captured after
+    #: a Phase-B submit (role=status / aria-live=polite success banner), kept
+    #: SEPARATE from ``error_detail`` (role=alert).  Its presence is the honest
+    #: signal that distinguishes a same-page ``confirmation`` from a bare
+    #: ``dom_changed`` — :func:`classify_submit_after` never invents one.
+    confirmation_detail: str = ""
 
 
 @dataclass(frozen=True)
@@ -143,6 +152,49 @@ def classify_after(obs: RawObservation) -> AfterOutcome:
     if obs.dom_changed:
         return AfterOutcome(OUTCOME_DOM_CHANGED, "", False, False)
     return AfterOutcome(OUTCOME_NONE, "", False, False)
+
+
+def classify_submit_after(obs: RawObservation) -> AfterOutcome:
+    """Classify the TERMINAL outcome of a Phase-B submit click (design §3.2).
+
+    A submit is the one place the platform mutates a customer app, so its
+    outcome is judged conservatively and ONLY from grounded, observed signals —
+    a positive ``confirmation`` is never fabricated from a bare DOM change:
+
+      1. the URL changed              → ``navigation`` (navigated=True,
+         url_changed=True): the strongest, most machine-checkable terminal
+         proof; earns the downstream PROVEN ``toHaveURL`` credit;
+      2. a visible error live-region  → ``error``: the submit was REJECTED — an
+         honest failure, NEVER a confirmation;
+      3. an explicit success/confirmation live-region
+         (:attr:`RawObservation.confirmation_detail`) → ``confirmation``: a
+         same-page terminal success (earns a baseline visual_frame, no
+         navigation credit);
+      4. a non-error dialog/modal      → ``confirmation`` (a confirmation/receipt
+         modal), its detail carried through;
+      5. otherwise                     → the generic :func:`classify_after`
+         outcome (``value_committed`` / ``dom_changed`` / ``none``) — honestly
+         NOT a confirmation.
+
+    Navigation is checked before error so a submit that flashes a transient
+    banner AND navigates is credited as the stronger navigation proof; error is
+    checked before confirmation so a rejected submit is never green-washed.
+    """
+    url_changed = bool(obs.url_before and obs.url_after
+                       and _norm_url(obs.url_before) != _norm_url(obs.url_after))
+    if url_changed:
+        return AfterOutcome(OUTCOME_NAVIGATION, _norm_url(obs.url_after)[:_MAX_DETAIL],
+                            True, True)
+    if (obs.error_detail or "").strip():
+        return AfterOutcome(OUTCOME_ERROR, obs.error_detail.strip()[:_MAX_DETAIL],
+                            False, False)
+    detail = (obs.confirmation_detail or "").strip()
+    if detail:
+        return AfterOutcome(OUTCOME_CONFIRMATION, detail[:_MAX_DETAIL], False, False)
+    if obs.dialog_opened:
+        return AfterOutcome(OUTCOME_CONFIRMATION,
+                            (obs.dialog_detail or "").strip()[:_MAX_DETAIL], False, False)
+    return classify_after(obs)
 
 
 # ─── The port ───────────────────────────────────────────────────────────────

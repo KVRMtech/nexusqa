@@ -7,13 +7,21 @@ Phase A (this phase — fully implemented):
   * STOP BEFORE SUBMIT — the terminal/submit controls are recorded as
     flow-candidates (with their fail-closed guard danger flag) and never clicked.
 
-Phase B (submit — Phase-5 scope):
+Phase B (submit — Phase-5 scope, ACTIVE):
   * a clearly-marked, guarded entry point (:func:`gate_submit` /
     :func:`execute_submit_phase_b`) that makes a REAL
     ``guard.classify_request(phase=SUBMIT)`` decision and REFUSES unless a valid
     disposable-env attestation AND per-flow approval are present AND the control
-    is not an irreversible refuse-pack verb.  It is not a stub: with no
-    attestation it refuses via the same guard the whole system trusts.
+    is not an irreversible refuse-pack verb — the three refusal grounds are each
+    proven by the unit tests and can never be bypassed;
+  * on authorisation it RE-DRIVES the approved flow on the attested disposable
+    env (navigate → optional re-fill → click submit), OBSERVES the grounded
+    terminal outcome (``navigation`` when the URL changes, else a same-page
+    ``confirmation``), and records it as ONE terminal ``page_state`` carrying the
+    submit action + a baseline confirmation screenshot — the demonstrated
+    outcome the qe-central writer maps to a page_visit + baseline visual_frame
+    (the BEHAVES evidence).  A rejected/no-effect submit is recorded HONESTLY
+    (``confirmed=False``); a confirmation is never fabricated on nothing.
 
 Fill-anywhere is SAFE because containment is the method (the network guard), not
 a hope about which control submits: no Phase-A fill can escape a mutating
@@ -21,14 +29,21 @@ request — the guard aborts every mutation outside AUTH/SUBMIT (§3.2 doctrine)
 """
 from __future__ import annotations
 
+import hashlib
 import logging
 import re
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from typing import Any, Mapping, Optional, Sequence
+from urllib.parse import urlsplit
 
 from . import emit
-from .browser import BrowserPort
-from .guard import GuardDecision, Phase, classify_request
+from .browser import (
+    OUTCOME_CONFIRMATION,
+    OUTCOME_NAVIGATION,
+    BrowserPort,
+    classify_submit_after,
+)
+from .guard import GuardDecision, Phase, classify_request, registrable_domain
 from .inventory import target_kind_for
 
 logger = logging.getLogger(__name__)
@@ -218,13 +233,38 @@ async def _fill_one(
 # ─── Phase B — the guarded submit entry point (Phase-5 scope) ────────────────
 
 
+#: Terminal outcomes that constitute a positive, BEHAVES-worthy confirmation
+#: (design §3.4 tier labeler: navigation OR a demonstrated same-page success).
+CONFIRMED_OUTCOMES = frozenset({OUTCOME_NAVIGATION, OUTCOME_CONFIRMATION})
+
+#: Honest non-submit reasons stamped on ``SubmitResult.reason`` (submitted=False).
+REASON_REFUSED = "guard_refused"
+REASON_FORM_UNREACHABLE = "form_unreachable"
+
+
 @dataclass
 class SubmitResult:
-    """Outcome of a Phase-B submit attempt — honest whether or not it ran."""
+    """Outcome of a Phase-B submit attempt — honest whether or not it ran.
+
+    ``submitted`` records whether the guarded submit control was actually
+    clicked; ``decision`` is the always-present guard verdict.  ``confirmed`` is
+    True ONLY when a positive terminal outcome (``navigation`` or
+    ``confirmation``) was OBSERVED — it is the single flag a caller reads to
+    decide BEHAVES-certification, and it is never set on a refusal, an
+    unreachable form, or an ``error``/``none`` outcome.  ``action`` is the
+    grounded terminal submit action; ``page_state`` is the emitted terminal
+    confirmation state; ``baseline`` is its captured confirmation screenshot ref
+    (the demonstrated-outcome evidence, ``None`` when capture failed honestly).
+    """
 
     submitted: bool
     decision: GuardDecision
+    confirmed: bool = False
+    outcome: str = ""
+    reason: str = ""
     action: Optional[emit.ActionRecord] = None
+    page_state: Optional[emit.PageStateRecord] = None
+    baseline: Optional[emit.ScreenshotRecord] = None
 
 
 def gate_submit(
@@ -265,15 +305,36 @@ async def execute_submit_phase_b(
     submit_flow_approved: bool = False,
     now_ms: Optional[int] = None,
     state_id: str = "",
+    sequence_index: int = 0,
+    answer_key: Optional[AnswerKey] = None,
+    fill_controls: Sequence[Mapping[str, Any]] = (),
 ) -> SubmitResult:
-    """Phase-5 submit entry point: REFUSE unless attestation + approval permit.
+    """Phase-5 submit entry point: REFUSE unless attestation + approval permit,
+    else re-drive the approved flow, submit, and capture the confirmation.
 
     The guard is consulted for real (:func:`gate_submit`).  On refusal the
     attempt is recorded as a ``guard_event`` and NO click happens — the app is
-    never mutated.  On authorisation (a genuinely attested, approved,
-    non-irreversible flow) the submit is driven and recorded with its grounded
-    outcome.  In Phase 1 no attestation is ever supplied, so this always
-    refuses; the behaviour is proven by the unit tests, not assumed.
+    never mutated (the three refusal grounds — no attestation, no per-flow
+    approval, and an irreversible verb even when attested+approved — are each
+    proven by the unit tests and can never be bypassed).
+
+    On authorisation (a genuinely attested, approved, non-irreversible flow) the
+    approved flow is RE-DRIVEN on the attested disposable env: navigate to the
+    form ``url``, optionally re-fill it from ``answer_key`` + ``fill_controls``
+    (so the submit acts on a populated form), click ``control``, and OBSERVE the
+    effect.  The grounded terminal outcome — ``navigation`` (the URL changed) or
+    ``confirmation`` (a same-page success region/dialog) — plus a confirmation
+    screenshot is recorded as ONE terminal ``page_state`` carrying the submit
+    action + a baseline visual_frame, which the qe-central writer maps to a
+    page_visit + baseline (the BEHAVES evidence).  ``confirmed`` is set ONLY on a
+    positive terminal outcome; an ``error``/``none`` outcome is recorded
+    HONESTLY with ``confirmed=False`` — a failed submit is never green-washed
+    into a confirmation.
+
+    ``sequence_index`` is the monotonic page-visit index the caller assigns to
+    the terminal state (the caller owns the crawl-wide counter).
+    :class:`BrowserPort` stays injectable so the whole path is unit-testable
+    with a fake browser.
     """
     now = clock.now_ms() if now_ms is None else now_ms
     decision = gate_submit(
@@ -287,12 +348,164 @@ async def execute_submit_phase_b(
             reason=decision.reason, phase=Phase.SUBMIT.value,
         )
         logger.info("qec.forms.submit_refused rule_id=%s", decision.rule_id)
-        return SubmitResult(submitted=False, decision=decision)
+        return SubmitResult(submitted=False, decision=decision, reason=REASON_REFUSED)
 
+    # ── Authorised: re-drive the approved flow on the attested disposable env ─
+    first_seen = clock.now_ms()
+    nav = await port.goto(url)
+    if not getattr(nav, "ok", True):
+        logger.warning("qec.forms.submit_form_unreachable url=%s", (url or "")[:200])
+        return SubmitResult(submitted=False, decision=decision,
+                            reason=REASON_FORM_UNREACHABLE)
+
+    if answer_key is not None and fill_controls:
+        # Re-establish the approved form state.  Fills are client-side until the
+        # submit POST, which the guard has already authorised for this flow.
+        await fill_form_phase_a(
+            port, fill_controls, answer_key, clock,
+            phase=Phase.SUBMIT.value, state_id=state_id,
+        )
+
+    # ── Submit + observe the grounded terminal outcome ───────────────────────
     observation = await port.click(control)
-    action = emit.build_action_record(
+    outcome = classify_submit_after(observation)
+    submit_action = emit.build_action_record(
         dict(control), verb="submit", value=None, observation=observation,
         phase=Phase.SUBMIT.value, state_id=state_id, timestamp_ms=clock.now_ms(),
+        after_outcome=outcome,
     )
-    logger.info("qec.forms.submit_executed rule_id=%s", decision.rule_id)
-    return SubmitResult(submitted=True, decision=decision, action=action)
+
+    # ── Capture the confirmation baseline + emit the terminal page_state ─────
+    confirmation_url = _confirmation_url(observation, url)
+    baseline = await _capture_baseline(port, emitter, clock, first_seen)
+    if baseline is not None:
+        submit_action.screenshot_after = baseline.path
+    submit_action.to_state = _terminal_fingerprint(confirmation_url)
+
+    last_seen = clock.now_ms()
+    page_state = _build_terminal_state(
+        sequence_index=sequence_index, url=confirmation_url,
+        actions=[submit_action], baseline=baseline,
+        first_seen_ms=first_seen, last_seen_ms=last_seen,
+    )
+    emitter.emit_page_state(page_state)
+
+    confirmed = outcome.outcome in CONFIRMED_OUTCOMES
+    logger.info(
+        "qec.forms.submit_executed rule_id=%s outcome=%s confirmed=%s baseline=%s",
+        decision.rule_id, outcome.outcome, confirmed, baseline is not None,
+    )
+    return SubmitResult(
+        submitted=True, decision=decision, confirmed=confirmed,
+        outcome=outcome.outcome, action=submit_action, page_state=page_state,
+        baseline=baseline,
+    )
+
+
+# ─── Phase-B terminal-state helpers (mirror crawler._record_state shape) ─────
+
+
+def _confirmation_url(observation: Any, form_url: str) -> str:
+    """The URL of the terminal confirmation state.
+
+    A navigation submit lands on a new URL (``url_after``); a same-page
+    confirmation keeps the form URL.  Falls back to the form URL so the terminal
+    ``page_state.location`` is always a valid http(s) URL (schema-required).
+    """
+    after = str(getattr(observation, "url_after", "") or "").strip()
+    before = str(getattr(observation, "url_before", "") or "").strip()
+    if after and after != before:
+        return after
+    return before or form_url
+
+
+async def _capture_baseline(
+    port: BrowserPort,
+    emitter: emit.ManifestEmitter,
+    clock: emit.MonotonicClock,
+    first_seen_ms: int,
+) -> Optional[emit.ScreenshotRecord]:
+    """Capture + stage the confirmation baseline screenshot (best-effort).
+
+    A submit whose confirmation cannot be screenshotted is recorded WITHOUT a
+    baseline (an honest gap the caller sees as ``baseline is None``), never a
+    fabricated frame — the terminal outcome still stands on the action's grounded
+    ``after`` bundle.
+    """
+    try:
+        png = await port.screenshot_png()
+    except Exception as exc:  # a broken capture is an honest gap, not a crash
+        logger.warning("qec.forms.baseline_capture_failed error=%s", str(exc)[:200])
+        return None
+    if not png:
+        logger.info("qec.forms.baseline_empty — terminal state carries no baseline")
+        return None
+    ts = max(int(first_seen_ms), clock.now_ms())
+    try:
+        return emitter.store_screenshot(png, ts)
+    except ValueError:
+        logger.warning("qec.forms.baseline_store_rejected — empty screenshot bytes")
+        return None
+
+
+def _build_terminal_state(
+    *,
+    sequence_index: int,
+    url: str,
+    actions: Sequence[emit.ActionRecord],
+    baseline: Optional[emit.ScreenshotRecord],
+    first_seen_ms: int,
+    last_seen_ms: int,
+) -> emit.PageStateRecord:
+    """Assemble the terminal confirmation ``page_state`` (design §3.2).
+
+    Mirrors :meth:`app.crawler.Crawler._record_state`: url parts split from
+    ``location``, monotonic ``subaction_index`` re-numbering, and the baseline
+    screenshot timestamp clamped inside ``[first_seen_ms, last_seen_ms]`` (the
+    factory's frame-window join requires it — schema
+    ``screenshot_outside_visit_window`` rule).  ``state_id`` / ``ax_fingerprint``
+    are manifest-only routing keys the qe-central mapper ignores.
+    """
+    parts = urlsplit(url or "")
+    host = (parts.hostname or "").lower()
+    first = max(0, int(first_seen_ms))
+    last = max(first, int(last_seen_ms))
+    terminal_fp = _terminal_fingerprint(url)
+
+    ordered_actions: list[dict[str, Any]] = []
+    for index, action in enumerate(actions):
+        action.subaction_index = index
+        action.state_id = terminal_fp
+        ordered_actions.append(asdict(action))
+
+    shot_records: list[dict[str, Any]] = []
+    if baseline is not None:
+        clamped = min(max(int(baseline.timestamp_ms), first), last)
+        shot_records.append({"frame_index": baseline.frame_index,
+                             "timestamp_ms": clamped, "path": baseline.path})
+
+    return emit.PageStateRecord(
+        sequence_index=int(sequence_index),
+        location=(url or "")[:2000],
+        first_seen_ms=first,
+        last_seen_ms=last,
+        url_host=host[:500],
+        url_path=(parts.path or "")[:2000],
+        url_query=(parts.query or "")[:2000],
+        canonical_host=(registrable_domain(host) or host)[:500],
+        actions=ordered_actions,
+        screenshots=shot_records,
+        state_id=terminal_fp,
+        ax_fingerprint=terminal_fp,
+    )
+
+
+def _terminal_fingerprint(url: str) -> str:
+    """A stable manifest-only routing id for the terminal confirmation state.
+
+    The qe-central mapper ignores ``state_id`` / ``ax_fingerprint`` (they route
+    the crawl graph, not the substrate), so a deterministic hash of the
+    confirmation URL is sufficient and keeps re-runs stable.
+    """
+    digest = hashlib.sha256(("submit:" + (url or "")).encode("utf-8")).hexdigest()
+    return "submit_" + digest[:16]
