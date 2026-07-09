@@ -149,6 +149,45 @@ services:
     - qec-egress
     - qec-egress-public
 
+  # ── repo-intel (S3) — OFF the critical path ────────────────────────────
+  # Gated behind the `repo-intel` compose profile: a plain `docker compose -f
+  # docker-compose.qec.yml up` does NOT build or start it (design R-10 +
+  # §3.3: repo-intel must never block first value; the crawler runs blind
+  # without it). Reads the qecentral DB (its 5 tables) + the nexus DB
+  # (READ-ONLY page_visits, role qec_substrate) and clones the client repo
+  # over the internet (via the nexus network's egress). It NEVER writes a
+  # VKPower table and is consumed fail-open (seed-manifest 404 ⇒ crawl blind).
+  repo-intel:
+    profiles: ["repo-intel"]
+    build:
+      context: ./engines/repo-intel
+      dockerfile: Dockerfile
+      args:
+        BASE_IMAGE: nexus-base:dev
+    image: nexus_power-repo-intel
+    container_name: nexus-repo-intel
+    restart: unless-stopped
+    ports:
+    - "8014:8014"
+    environment:
+      NEXUS_ENV: ${NEXUS_ENV:-development}
+      QEC_LOG_LEVEL: ${QEC_LOG_LEVEL:-INFO}
+      QEC_DATABASE_URL: postgresql+asyncpg://qec:${QEC_DB_PASSWORD:-qec-dev}@postgres:5432/qecentral
+      NEXUS_DATABASE_URL_SUBSTRATE: postgresql+asyncpg://qec_substrate:${QEC_SUBSTRATE_DB_PASSWORD:-qec-substrate-dev}@postgres:5432/nexus
+      NEXUS_JWT_SECRET: ${NEXUS_JWT_SECRET:-test-secret-do-not-use-in-production}
+      REPO_INTEL_WORKDIR_ROOT: /app/service/data/repos
+      REPO_INTEL_MAX_REPO_BYTES: ${REPO_INTEL_MAX_REPO_BYTES:-2000000000}
+      # LLM lens OFF by default; envelope KEK provider (local dev / kms prod).
+      REPO_INTEL_LLM_LENS_ENABLED: ${REPO_INTEL_LLM_LENS_ENABLED:-false}
+      NEXUS_KEK_PROVIDER: ${NEXUS_KEK_PROVIDER:-local}
+      NEXUS_LOCAL_KEK_PATH: ${NEXUS_LOCAL_KEK_PATH:-/app/service/data/kek/master.key}
+    volumes:
+    - repo-intel-workdir:/app/service/data/repos
+    - qec-kek:/app/service/data/kek
+    mem_limit: 2g
+    networks:
+    - nexus
+
 networks:
   # The running stack's network (external) — qe-central only.
   nexus:
@@ -179,3 +218,5 @@ volumes:
   qec-crawl-storage: null
   # Shared qe-central→squid egress allowlist file.
   qec-egress-allowlist: null
+  # repo-intel per-tenant clone workdir (profile: repo-intel).
+  repo-intel-workdir: null
