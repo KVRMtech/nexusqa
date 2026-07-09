@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import datetime, timezone
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -18,7 +19,9 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 
 from ..auth import require_auth, require_role
+from ..controlplane.scheduling.admission import ADMISSION
 from ..db import new_id, row_to_dict, tenant_scoped_qec_session, utc_now
+from ..db.controlplane_models import AppFingerprintRow
 from ..db.models import ClientAppRow
 
 logger = logging.getLogger(__name__)
@@ -29,6 +32,10 @@ _MUTATE = require_role("admin", "manager")
 
 # Statuses an operator may set via PATCH; 'deleted' only via DELETE.
 _SETTABLE_STATUSES = frozenset({"active", "paused"})
+
+# Attestable environment kinds; only 'disposable' may host the mutating submit tier.
+_ENV_KINDS = frozenset({"prod", "staging", "disposable"})
+_SUBMIT_ENV_KIND = "disposable"
 
 
 class AppCreate(BaseModel):

@@ -47,6 +47,9 @@ from app.routers.explorations import router as explorations_router
 from app.routers.harness import router as harness_router
 from app.routers.internal import router as internal_router
 from app.routers.scenario_gov import router as scenario_gov_router
+from app.routers.cycles import router as cycles_router
+from app.routers.cost import router as cost_router
+from app.routers.webhooks import router as webhooks_router
 
 # ─── Structured logging ────────────────────────────────────────
 logging.basicConfig(
@@ -127,6 +130,18 @@ def _init_envelope_service():
 async def lifespan(application: FastAPI):
     await init_db()
     application.state.envelope_service = _init_envelope_service()
+    # S5 (Phase-4) control plane: the cycle-driver daemon (design §3.5). Hosted
+    # via asyncio.create_task in the lifespan (NOT @app.on_event) — the
+    # sentinel_daemon pattern (qe_agents.py:136-156). It SELF-GATES on
+    # QEC_CYCLE_TICK_SECONDS: when unset/<=0 it logs and idles, so a stack that
+    # has not opted into automated cycles pays nothing. try/except inside the
+    # loop means one cycle failure never kills the daemon.
+    import asyncio
+
+    from app.controlplane.cycle.driver import cycle_driver_daemon
+
+    driver_task = asyncio.create_task(cycle_driver_daemon(), name="qec-cycle-driver")
+    application.state.cycle_driver_task = driver_task
     logger.info(
         "qe_central.started",
         port=settings.port,
@@ -135,8 +150,14 @@ async def lifespan(application: FastAPI):
         storage_backend=settings.nexus_storage_backend,
         harness_enabled=settings.qe_harness_enabled,
         envelope=(application.state.envelope_service is not None),
+        cycle_driver="launched",
     )
     yield
+    driver_task.cancel()
+    try:
+        await driver_task
+    except (asyncio.CancelledError, Exception):  # noqa: BLE001 - clean shutdown
+        pass
     application.state.envelope_service = None
     await close_db()
     logger.info("qe_central.stopped")
@@ -181,6 +202,11 @@ app.include_router(harness_router)
 # S4 (Phase-3) scenario governance — criticality / synthesis / coverage /
 # approval / tier-label / touch-meter (design §3.4). Additive; VKPower untouched.
 app.include_router(scenario_gov_router)
+# S5 (Phase-4) control plane — app registry cycles, GitLab webhooks, cost/budget
+# (design §3.5). Additive; drives the UNCHANGED VKPower factory over HTTP.
+app.include_router(cycles_router)
+app.include_router(cost_router)
+app.include_router(webhooks_router)
 # Phase-1: the HMAC-authenticated explorer completion callback. Lives OUTSIDE
 # the /api/* prefix (the explorer holds no JWT — only the HMAC token), so the
 # fail-closed JWT middleware skips it; internal.py verifies the HMAC itself.

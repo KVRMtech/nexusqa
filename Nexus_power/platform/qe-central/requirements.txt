@@ -1,6 +1,9 @@
-# QE-Central — substrate writer + Phase-0 REFUSE harness.
+# QE-Central — substrate writer + Phase-0 REFUSE harness + S5 control plane.
 # The nexus-base image preinstalls the SDK (fastapi, uvicorn, pydantic v2,
 # pydantic-settings, SQLAlchemy 2 async, asyncpg, alembic, PyJWT, httpx,
 # cryptography) — only service-specific extras belong here.
 -e ../../sdk/nexus-sdk
 structlog>=24.1,<25.0
+# S5 control plane — cron schedule parsing for the cycle driver (design §3.5).
+# Import-guarded at the driver so a local checkout without it still loads.
+croniter>=2.0,<3.0
