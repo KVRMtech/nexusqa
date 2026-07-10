@@ -64,6 +64,40 @@ for i in $(seq 1 36); do
 done
 [ "$PAPI_OK" = yes ] || echo "PLATFORM_API_NOT_READY_after_180s (harness may CHAIN_ERROR on generate)"
 
+# --- 4c. clean the harness tenant's prior rows (idempotent re-runs) ---
+# The golden fixture's ground_truth_events use deterministic ids; a re-run
+# against leftover rows hits a duplicate-key. Wipe the dedicated harness tenant
+# first (superuser bypasses RLS) so every run starts clean. FK-safe order.
+echo "---- STEP4c clean harness tenant ----"
+docker exec nexus-postgres psql -U nexus -d nexus -v ON_ERROR_STOP=0 -q -c "
+DELETE FROM page_actions        WHERE tenant_id='qec-harness-tenant';
+DELETE FROM page_visits         WHERE tenant_id='qec-harness-tenant';
+DELETE FROM ground_truth_events WHERE tenant_id='qec-harness-tenant';
+DELETE FROM visual_frames       WHERE tenant_id='qec-harness-tenant';
+DELETE FROM surface_prefs       WHERE tenant_id='qec-harness-tenant';
+DELETE FROM canonical_artifacts WHERE tenant_id='qec-harness-tenant';
+DELETE FROM sessions            WHERE tenant_id='qec-harness-tenant';
+" 2>&1 | tail -3
+docker exec nexus-postgres psql -U nexus -d qecentral -q -c \
+  "DELETE FROM qe_harness_runs; DELETE FROM qe_explorations;" 2>&1 | tail -1
+echo "HARNESS_TENANT_CLEANED"
+
+# --- 4d. DIAGNOSTIC: can the harness's OWN http client reach the factory? ---
+# (curl above proved the network; this proves httpx — the harness's real client
+#  — from the same container, to pinpoint any generate ConnectError.)
+echo "---- STEP4d factory reachability (httpx, harness's client) ----"
+docker exec nexus-qe-central python - <<'PYEOF' 2>&1 | tail -6
+import os, httpx
+u = os.environ.get("PLATFORM_API_URL", "?")
+print("PLATFORM_API_URL =", u)
+for path in ("/health", "/api/v1/test-factory/health"):
+    try:
+        r = httpx.get(u.rstrip("/") + path, timeout=8.0)
+        print(f"httpx GET {path} -> {r.status_code}")
+    except Exception as e:
+        print(f"httpx GET {path} -> ERR {type(e).__name__}: {str(e)[:160]}")
+PYEOF
+
 # --- 5. run the REFUSE matrix R1-R8 in-container ---
 echo "---- STEP5 REFUSE matrix ----"
 docker exec -e QE_HARNESS_ENABLED=true nexus-qe-central python -m app.harness.runner 2>&1 | tail -60

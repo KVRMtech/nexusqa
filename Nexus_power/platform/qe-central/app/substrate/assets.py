@@ -48,7 +48,12 @@ def _store():
         from nexus_sdk.storage.artifact_store import ArtifactStore
         from nexus_sdk.storage.base import StorageConfig
 
-        cfg = StorageConfig(backend=settings.nexus_storage_backend)
+        # local_root passed EXPLICITLY (never rely on the SDK's env default,
+        # which is the unwritable /data/nexus — see settings.nexus_storage_path).
+        cfg = StorageConfig(
+            backend=settings.nexus_storage_backend,
+            local_root=settings.nexus_storage_path,
+        )
         _store_cache = ArtifactStore(create_storage(cfg), cfg)
     return _store_cache
 

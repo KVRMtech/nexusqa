@@ -64,6 +64,14 @@ class Settings(BaseSettings):
     nexus_frame_storage_path: str = Field(
         default="/app/service/data/frames", alias="NEXUS_FRAME_STORAGE_PATH",
     )
+    # ArtifactStore local root. MUST be writable by the container's non-root
+    # user (the Dockerfile chowns /app/service/data to `nexus`). Passed
+    # EXPLICITLY into StorageConfig(local_root=...) so it never silently falls
+    # back to the SDK's hardcoded /data/nexus default (which the container
+    # cannot create — the live-VM REFUSE-matrix [Errno 13] on '/data').
+    nexus_storage_path: str = Field(
+        default="/app/service/data", alias="NEXUS_STORAGE_PATH",
+    )
 
     # ── Phase-0 REFUSE harness (deploy gate; default OFF) ─────
     qe_harness_enabled: bool = Field(default=False, alias="QE_HARNESS_ENABLED")
