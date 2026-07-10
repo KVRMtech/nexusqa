@@ -368,9 +368,23 @@ async def _version_readback(
 # ─── per-rule execution ──────────────────────────────────────────────────
 
 def _fresh_bundle(fixture: dict) -> dict:
-    """Deep-copy the golden fixture with a fresh crawl_id (fresh version)."""
+    """Deep-copy the golden fixture with a fresh crawl_id AND a fresh
+    config_fingerprint, so every REFUSE-matrix rule gets its OWN artifact.
+
+    ``compute_media_fingerprint`` (creator.py) deliberately EXCLUDES crawl_id
+    and dedups on (target_url + config_fingerprint + explorer_version) — the
+    correct production posture (an identical re-crawl maps to one artifact).
+    But every harness rule replays the SAME golden fixture, so without a unique
+    config_fingerprint they all dedup to ONE shared artifact and cross-
+    contaminate (a valid baseline row leaks into a rule whose write should have
+    been empty → false GREEN_WASH; and duplicate ground_truth_events ids →
+    IntegrityError). Seeding config_fingerprint from the fresh crawl_id gives
+    each rule an isolated artifact without weakening the real dedup.
+    """
     bundle = copy.deepcopy(fixture)
-    bundle["crawl_id"] = uuid.uuid4().hex[:24]
+    crawl_id = uuid.uuid4().hex[:24]
+    bundle["crawl_id"] = crawl_id
+    bundle["config_fingerprint"] = f"harness-{crawl_id}"
     return bundle
 
 
