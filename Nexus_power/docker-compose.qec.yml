@@ -44,7 +44,11 @@ services:
       NEXUS_DATABASE_URL_SUBSTRATE: postgresql+asyncpg://qec_substrate:${QEC_SUBSTRATE_DB_PASSWORD:-qec-substrate-dev}@postgres:5432/nexus
       # Shared HS256 secret — MUST match platform-api's (docker-compose.yml).
       NEXUS_JWT_SECRET: ${NEXUS_JWT_SECRET:-test-secret-do-not-use-in-production}
-      PLATFORM_API_URL: ${PLATFORM_API_URL:-http://platform-api:8091}
+      # QEC-NAMESPACED so a shared main-stack .env (passed via --env-file for the
+      # JWT secret) can NOT leak a host-oriented PLATFORM_API_URL into this
+      # container — inside the nexus network the factory is ALWAYS platform-api:
+      # 8091 (override with QEC_PLATFORM_API_URL, never the stack-wide var).
+      PLATFORM_API_URL: ${QEC_PLATFORM_API_URL:-http://platform-api:8091}
       # MUST match platform-api's storage backend so frame assets are
       # co-readable (design §3.1 / R-5).
       NEXUS_STORAGE_BACKEND: ${NEXUS_STORAGE_BACKEND:-local}
@@ -54,7 +58,11 @@ services:
       # default, which the non-root container user cannot write ([Errno 13]).
       # The Dockerfile chowns /app/service/data to the nexus user, so this is
       # writable; frames land co-readable with the eyes/platform-api stack.
-      NEXUS_STORAGE_PATH: ${NEXUS_STORAGE_PATH:-/app/service/data}
+      # QEC-NAMESPACED (same reason as PLATFORM_API_URL): the main .env's
+      # NEXUS_STORAGE_PATH points at /data/nexus, writable in platform-api's
+      # image but NOT in qe-central's (only /app/service/data is chowned). Do
+      # not inherit it; override with QEC_STORAGE_PATH if ever needed.
+      NEXUS_STORAGE_PATH: ${QEC_STORAGE_PATH:-/app/service/data}
       NEXUS_FRAME_STORAGE_PATH: ${NEXUS_FRAME_STORAGE_PATH:-/app/service/data/frames}
       GCS_BUCKET: ${GCS_BUCKET:-}
       # Phase-0 REFUSE harness — explicit opt-in (creates real artifacts).

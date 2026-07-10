@@ -86,7 +86,8 @@ echo "HARNESS_TENANT_CLEANED"
 # (curl above proved the network; this proves httpx — the harness's real client
 #  — from the same container, to pinpoint any generate ConnectError.)
 echo "---- STEP4d factory reachability (httpx, harness's client) ----"
-docker exec nexus-qe-central python - <<'PYEOF' 2>&1 | tail -6
+docker exec nexus-qe-central sh -lc 'echo "container PLATFORM_API_URL=$PLATFORM_API_URL NEXUS_STORAGE_PATH=$NEXUS_STORAGE_PATH HTTP_PROXY=${HTTP_PROXY:-<unset>}"'
+docker exec -i nexus-qe-central python - <<'PYEOF' 2>&1 | tail -6
 import os, httpx
 u = os.environ.get("PLATFORM_API_URL", "?")
 print("PLATFORM_API_URL =", u)
