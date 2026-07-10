@@ -10,6 +10,54 @@ from __future__ import annotations
 from pydantic import Field
 from pydantic_settings import BaseSettings
 
+# ─── Phase-6 safety-spine constants (shared by app.security.boot_validator and
+#     app.auth) ──────────────────────────────────────────────────────────────
+#: The JWT ``aud`` claim stamped on VKPower-Verdict-issued principal tokens and
+#: verified by :func:`app.auth._decode_token`.  Config-overridable via
+#: ``QEC_JWT_AUDIENCE`` (:attr:`Settings.qec_jwt_audience`).
+AUDIENCE = "vkpower-verdict"
+
+#: Deployed environments where the boot gate BITES (refuses to start) and the
+#: JWT missing-aud transition warning fires.  Anything else — ``development``,
+#: ``test``, or an unknown value — is treated as non-deployed (WARN-only), so
+#: local dev and the test suite are never gated.
+DEPLOYED_ENVS = frozenset({"staging", "production"})
+
+#: The development KEK provider (no KMS envelope); fatal in a deployed env.
+DEV_KEK_PROVIDER = "local"
+
+#: ``NEXUS_JWT_SECRET`` values that are empty or a known development default —
+#: the boot validator refuses any of these in a deployed environment.
+DEV_DEFAULT_JWT_SECRETS = frozenset({
+    "",
+    "dev-jwt-secret-change-me",
+    "dev-jwt-secret",
+    "test-secret-do-not-use-in-production",
+    "unit-test-secret-qe-central",
+    "change-me",
+    "changeme",
+})
+
+#: ``QEC_EXPLORER_TOKEN`` values that are empty or the known development default.
+DEV_DEFAULT_EXPLORER_TOKENS = frozenset({
+    "",
+    "dev-explorer-token-change-me",
+})
+
+#: Lower-cased DB passwords (parsed out of a DSN) that betray a development or
+#: otherwise-unsafe default; the boot validator refuses these in a deployed env.
+#: NOTE: only membership is ever surfaced — the parsed password value is NEVER
+#: logged or echoed into a violation message.
+DEV_DEFAULT_DB_PASSWORDS = frozenset({
+    "",
+    "qec-dev",
+    "qec-substrate-dev",
+    "postgres",
+    "password",
+    "change-me",
+    "changeme",
+})
+
 
 class Settings(BaseSettings):
     """QE-Central configuration loaded from environment variables.
@@ -22,6 +70,19 @@ class Settings(BaseSettings):
     """
 
     model_config = {"extra": "ignore"}
+
+    # ── Deployment environment (Phase-6 safety spine) ─────────
+    #: ``development`` | ``test`` | ``staging`` | ``production``.  Read from
+    #: ``NEXUS_ENV`` (the shared platform convention).  Only ``staging`` and
+    #: ``production`` are "deployed": the boot gate + JWT missing-aud rejection
+    #: bite there; ``development``/``test`` (the default) keep today's behavior.
+    nexus_env: str = Field(default="development", alias="NEXUS_ENV")
+
+    # ── Envelope-encryption KEK provider (surfaced for the boot gate + the
+    #    /health KEK canary; the live provider is still built in main._kek_provider
+    #    from the same env var) ──────────────────────────────────────────────
+    #: ``local`` (dev KEK — fatal in a deployed env) | ``gcp_kms`` | ``aws_kms``.
+    nexus_kek_provider: str = Field(default="local", alias="NEXUS_KEK_PROVIDER")
 
     # ── Server ────────────────────────────────────────────────
     host: str = Field(default="0.0.0.0", alias="HOST")
@@ -50,6 +111,24 @@ class Settings(BaseSettings):
     service_token_ttl_seconds: int = Field(
         default=3600, alias="QEC_SERVICE_TOKEN_TTL_SECONDS",
     )
+    # ── JWT audience (Phase-6: no VKPower<->Verdict token bleed) ──
+    #: The ``aud`` claim VKPower-Verdict stamps on its own principal tokens and
+    #: verifies on inbound tokens.  A token whose ``aud`` is PRESENT but does not
+    #: match this value (e.g. a token minted for another service) is rejected;
+    #: a token MISSING ``aud`` is accepted during the transition window unless
+    #: :attr:`qec_require_aud` is set (see ``app.auth._decode_token``).
+    qec_jwt_audience: str = Field(default=AUDIENCE, alias="QEC_JWT_AUDIENCE")
+    #: When truthy, an inbound token that carries NO ``aud`` claim is REJECTED
+    #: (401) instead of accepted-with-warning.  Default ``False`` so today's
+    #: tokens (minted without ``aud``, incl. shared VKPower human sessions) keep
+    #: working; flip to ``True`` once every issuer stamps the audience.
+    qec_require_aud: bool = Field(default=False, alias="QEC_REQUIRE_AUD")
+
+    # ── Explorer HMAC token (surfaced for the boot gate; the live dispatch value
+    #    is still read by app.clients.config.Phase1Settings.explorer_token) ─────
+    #: Empty or the dev default ⇒ fatal in a deployed env (the boot validator
+    #: refuses to crawl a real client app with an unauthenticated explorer seam).
+    qec_explorer_token: str = Field(default="", alias="QEC_EXPLORER_TOKEN")
 
     # ── VKPower factory (consumed over HTTP with a service JWT) ─
     platform_api_url: str = Field(
@@ -120,6 +199,17 @@ class Settings(BaseSettings):
     qec_leader_retry_interval_seconds: float = Field(
         default=15.0, alias="QEC_LEADER_RETRY_INTERVAL_SECONDS",
     )
+
+    # ── Derived helpers (Phase-6) ─────────────────────────────
+    @property
+    def is_deployed_env(self) -> bool:
+        """True when running in a deployed env (``staging``/``production``).
+
+        The boot gate refuses to start and the JWT missing-aud path rejects/
+        warns ONLY when this is True — ``development``/``test`` (and any unknown
+        value) stay INERT.
+        """
+        return (self.nexus_env or "").strip().lower() in DEPLOYED_ENVS
 
 
 # Singleton — import as ``from .config import settings`` (relative) or

@@ -23,6 +23,11 @@ _token2.txt
 _token*.txt
 **/credentials.txt
 **/secrets.*
+# ...but a Python SOURCE module named secrets.py under an app/ tree is CODE
+# (e.g. engines/repo-intel/app/model/secrets.py — the token-envelope helper),
+# not a secret file. Track those; real secret files (secrets.json/yaml/env) stay
+# ignored by the rule above.
+!**/app/**/secrets.py
 
 # Private keys & certificates
 *.pem

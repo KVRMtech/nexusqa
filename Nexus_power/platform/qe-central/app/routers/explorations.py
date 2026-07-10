@@ -44,6 +44,7 @@ from ..clients.config import phase1_settings
 from ..clients.explorer_client import ExploreDispatchRequest, ExplorerDispatchError
 from ..db import new_id, row_to_dict, tenant_scoped_qec_session, utc_now
 from ..db.models import ClientAppRow, QEExplorationRow
+from ..security import prod_guard
 from ..substrate.schema import CRAWL_ID_PATTERN, ExplorationBundle, RefusalError
 from ..substrate.writer import write_exploration
 
@@ -321,6 +322,14 @@ async def _dispatch_explorer(
             raise HTTPException(status_code=404, detail="app not found")
         if row.status != "active":
             raise HTTPException(status_code=409, detail=f"app is not active (status={row.status})")
+        # Phase-6 SAFETY SPINE — fail-closed onboarding gate on the REAL-APP crawl
+        # path (this Phase-1 dispatch only; the Phase-0 inline-bundle harness path
+        # never reaches here).  Even a read-only EXPLORE crawl requires a non-prod
+        # attestation; refuse (409/422) unless the app is onboarding-'live'.
+        try:
+            prod_guard.assert_crawlable(row, phase=prod_guard.PHASE_EXPLORE)
+        except prod_guard.OnboardingRefused as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.as_http_detail())
         base_url = row.base_url
         fences = dict(row.fences or {})
         answer_key = dict(row.answer_key or {})

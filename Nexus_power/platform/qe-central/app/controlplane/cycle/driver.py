@@ -78,6 +78,11 @@ from ...db.controlplane_models import (
     is_terminal_cycle_state,
 )
 from ...db.models import ClientAppRow
+from ...security.prod_guard import (
+    PHASE_EXPLORE,
+    OnboardingRefused,
+    assert_crawlable,
+)
 from ..cost import meter
 from ..scheduling.admission import (
     FAIL_CLOSED_REASONS,
@@ -1478,6 +1483,20 @@ async def create_cycle(
 
     cycle_id = new_id()
     async with tenant_scoped_qec_session(tenant_id) as session:
+        # Phase-6 SAFETY SPINE — fail-closed onboarding gate at the SHARED cycle-
+        # creation choke point, so the autonomous daemon + webhook-driven paths
+        # are gated too (not only the HTTP router).  A real app may be cycled ONLY
+        # when it is onboarding-'live'; :class:`OnboardingRefused` propagates to the
+        # daemon's ``_fire_cycle`` (which skips the app) and the router (409/422).
+        # Skipped only when the app row is absent — the downstream loader then
+        # fails the cycle honestly with 'app not found'.
+        app_row = (await session.execute(
+            select(ClientAppRow).where(
+                ClientAppRow.app_id == app_id, ClientAppRow.tenant_id == tenant_id,
+            )
+        )).scalar_one_or_none()
+        if app_row is not None:
+            assert_crawlable(app_row, phase=PHASE_EXPLORE)
         session.add(AppCycleRow(
             cycle_id=cycle_id, tenant_id=tenant_id, app_id=app_id,
             trigger=trigger, state=CYCLE_STATE_PENDING,
@@ -1794,6 +1813,15 @@ async def _fire_cycle(item: dict, *, client: CycleClient, now: datetime) -> bool
         except IntegrityError:
             logger.info("qec.cycle_daemon.active_exists",
                         extra={"tenant_id": tenant_id, "app_id": app_id})
+            return False
+        except OnboardingRefused as exc:
+            # A real app that has not reached onboarding-'live' is NEVER auto-cycled
+            # by the daemon — skipped cleanly (never a crash, never a silent crawl).
+            logger.info(
+                "qec.cycle_daemon.not_onboarded",
+                extra={"tenant_id": tenant_id, "app_id": app_id,
+                       "phase": exc.phase, "reasons": exc.reasons},
+            )
             return False
 
     task = asyncio.create_task(_run_cycle_guarded(

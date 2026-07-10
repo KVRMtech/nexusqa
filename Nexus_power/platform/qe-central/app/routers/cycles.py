@@ -26,6 +26,7 @@ from sqlalchemy.exc import IntegrityError
 from ..auth import require_auth, require_role
 from ..controlplane.cost import meter
 from ..controlplane.cycle import driver
+from ..security import prod_guard
 from ..db import row_to_dict, tenant_scoped_qec_session
 from ..db.controlplane_models import (
     CYCLE_TRIGGER_MANUAL,
@@ -134,6 +135,15 @@ async def create_cycle(
                 detail="app has no latest_artifact_id to run a cycle against "
                        "(register a crawl/exploration first)",
             )
+        # Phase-6 SAFETY SPINE — fail-closed onboarding gate.  A real app may be
+        # cycled ONLY when it is onboarding-'live' (signed rules-of-engagement +
+        # a non-prod/disposable attestation + a passed preflight).  INERT in
+        # development/test with an explicit per-app bypass flag; fail-closed by
+        # default and always fail-closed in staging/production.
+        try:
+            prod_guard.assert_crawlable(app, phase=prod_guard.PHASE_EXPLORE)
+        except prod_guard.OnboardingRefused as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.as_http_detail())
 
     try:
         cycle_id = await driver.create_cycle(
@@ -145,6 +155,10 @@ async def create_cycle(
             status_code=409,
             detail="an active cycle already exists for this app",
         )
+    except prod_guard.OnboardingRefused as exc:
+        # Defense-in-depth: the driver re-checks the onboarding gate at the shared
+        # creation choke point; map a (racing) refusal to a clean 409/422, never 500.
+        raise HTTPException(status_code=exc.status_code, detail=exc.as_http_detail())
 
     driver.launch_cycle(
         cycle_id=cycle_id, tenant_id=tenant_id, app_id=app_id,

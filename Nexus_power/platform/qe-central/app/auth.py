@@ -28,23 +28,92 @@ _bearer = HTTPBearer(auto_error=False)
 PUBLIC_PATHS = frozenset({"/", "/health", "/docs", "/openapi.json", "/redoc"})
 
 
+def _accept_missing_aud(
+    token: str, secret: str, algorithms: list[str],
+) -> dict:
+    """Handle a validly-signed token that carries NO ``aud`` claim.
+
+    The transition window (Phase-6): today's tokens — including shared VKPower
+    human sessions and ``mint_service_jwt`` service tokens — carry no ``aud``.
+    They are ACCEPTED so nothing breaks while issuers migrate, UNLESS
+    ``QEC_REQUIRE_AUD`` is set (then REJECTED).  In a deployed env the acceptance
+    is logged loudly so operators can see they still have un-audienced issuers
+    before flipping ``QEC_REQUIRE_AUD`` on.
+
+    The signature (and ``exp``) were already verified by the caller's
+    ``pyjwt.decode`` (which raised ``MissingRequiredClaimError`` only AFTER those
+    passed); the re-decode here just returns the payload with ``aud`` unchecked.
+    """
+    if settings.qec_require_aud:
+        logger.warning("qe_central.auth.rejected_missing_audience_required")
+        raise HTTPException(
+            status_code=401, detail="Token missing required audience claim",
+        )
+    import jwt as pyjwt
+
+    try:
+        payload = pyjwt.decode(
+            token, secret, algorithms=algorithms, options={"verify_aud": False},
+        )
+    except Exception:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    if settings.is_deployed_env:
+        logger.warning(
+            "qe_central.auth.accepted_missing_audience_transition "
+            "(token has no `aud`; set QEC_REQUIRE_AUD once every issuer stamps it)"
+        )
+    return payload
+
+
 def _decode_token(token: str) -> dict:
     """Validate an HS256 JWT and return the QE-Central user context.
 
     Returns ``{sub, tenant_id, email, role}`` (shared-conventions keys).
     Raises 401 on ANY validation failure — bad signature, expiry, malformed
     payload, or a missing/empty ``tenant_id`` claim (fail-closed).
+
+    Phase-6 audience gate (no VKPower<->Verdict token bleed): the token's ``aud``
+    is verified against ``QEC_JWT_AUDIENCE`` (default ``vkpower-verdict``).
+      * ``aud`` present and MATCHING           → accepted.
+      * ``aud`` present but WRONG (foreign)     → REJECTED (401), every env.
+      * ``aud`` MISSING                         → transition-accepted (or rejected
+        when ``QEC_REQUIRE_AUD``); see :func:`_accept_missing_aud`.
+    Setting ``QEC_JWT_AUDIENCE=""`` opts the audience gate out entirely.
     """
     if not token:
         raise HTTPException(status_code=401, detail="Authorization header required")
-    try:
-        import jwt as pyjwt
 
-        payload = pyjwt.decode(
-            token,
-            settings.nexus_jwt_secret,
-            algorithms=[settings.jwt_algorithm],
-        )
+    import jwt as pyjwt
+    from jwt import InvalidAudienceError, MissingRequiredClaimError
+
+    secret = settings.nexus_jwt_secret
+    algorithms = [settings.jwt_algorithm]
+    audience = (settings.qec_jwt_audience or "").strip()
+
+    try:
+        if audience:
+            # decode(audience=...) accepts a matching aud, raises
+            # InvalidAudienceError on a wrong aud, and MissingRequiredClaimError
+            # when the token carries no aud at all.
+            payload = pyjwt.decode(
+                token, secret, algorithms=algorithms, audience=audience,
+            )
+        else:
+            # Audience gate opted out (QEC_JWT_AUDIENCE="") — pre-Phase-6 posture.
+            payload = pyjwt.decode(
+                token, secret, algorithms=algorithms,
+                options={"verify_aud": False},
+            )
+    except InvalidAudienceError:
+        # aud present but not ours (e.g. a token minted for a different service).
+        # ALWAYS reject — in every environment, incl. development/test.
+        logger.warning("qe_central.auth.rejected_foreign_audience")
+        raise HTTPException(status_code=401, detail="Invalid token audience")
+    except MissingRequiredClaimError as exc:
+        # Raised only because we asked for `audience` but the token has no `aud`.
+        if (getattr(exc, "claim", "") or "") != "aud":
+            raise HTTPException(status_code=401, detail="Invalid or expired token")
+        payload = _accept_missing_aud(token, secret, algorithms)
     except Exception:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
 

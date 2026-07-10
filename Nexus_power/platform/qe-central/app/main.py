@@ -35,6 +35,11 @@ from fastapi import FastAPI, Request
 
 from app.auth import jwt_auth_middleware
 from app.config import settings
+from app.security.boot_validator import (
+    BootSafetyError,
+    kek_health_status,
+    validate_boot_safety,
+)
 from app.db import (
     close_db,
     guc_self_check,
@@ -137,6 +142,22 @@ def _init_envelope_service():
 
 @asynccontextmanager
 async def lifespan(application: FastAPI):
+    # ── Phase-6 fail-closed BOOT GATE (runs FIRST, before any DB/KMS work) ──
+    # Refuse to start a DEPLOYED process (NEXUS_ENV in {staging,production}) that
+    # is still wearing development defaults: dev KEK, empty/default JWT or
+    # explorer secrets, or a default DB password.  INERT in development/test
+    # (the default NEXUS_ENV) — it only WARNS there, so local dev + the existing
+    # test suite boot unchanged.  A fatal raises BootSafetyError, which we log
+    # loudly and let propagate so the process EXITS rather than boot unsafe.
+    try:
+        validate_boot_safety(settings)
+    except BootSafetyError as exc:
+        logger.critical(
+            "qe_central.boot_refused",
+            nexus_env=settings.nexus_env,
+            violations=exc.violations,
+        )
+        raise
     await init_db()
     application.state.envelope_service = _init_envelope_service()
     # S5 (Phase-4) control plane: the cycle-driver daemon (design §3.5). Hosted
@@ -270,20 +291,35 @@ app.include_router(metrics_router)
 # ─── Health ────────────────────────────────────────────────────
 
 @app.get("/health")
-async def health() -> dict:
-    """Liveness + DB/GUC self-check + storage backend (design §3.1).
+async def health(request: Request) -> dict:
+    """Liveness + DB/GUC self-check + storage backend + KEK canary (design §3.1).
 
     Runs LIVE checks on every call — the GUC round-trip proves the RLS
     session discipline actually works on the qecentral engine, not just
     that TCP connects.  Status is 'healthy' only when everything passed.
+
+    Phase-6 KEK canary: reports the envelope-encryption posture WITHOUT ever
+    leaking a secret (provider name + booleans only).  In a DEPLOYED env a
+    ``local`` (development) KEK, or an envelope service that failed to init,
+    DEGRADES the whole service — credential writes would refuse (503) or run
+    without KMS backing — so ``/health`` says 'degraded' honestly.
     """
     await init_db()  # refresh connectivity flags honestly on every probe
     guc = await guc_self_check()
     db_qec = "connected" if is_qec_connected() else "disconnected"
     db_substrate = "connected" if is_substrate_connected() else "disconnected"
-    healthy = (
+
+    envelope_ready = getattr(request.app.state, "envelope_service", None) is not None
+    kek, kek_degraded = kek_health_status(
+        provider=settings.nexus_kek_provider,
+        envelope_ready=envelope_ready,
+        is_deployed=settings.is_deployed_env,
+    )
+
+    core_ok = (
         db_qec == "connected" and db_substrate == "connected" and bool(guc.get("ok"))
     )
+    healthy = core_ok and not kek_degraded
     return {
         "status": "healthy" if healthy else "degraded",
         "service": settings.qec_service_name,
@@ -291,6 +327,7 @@ async def health() -> dict:
         "db_substrate": db_substrate,
         "storage_backend": settings.nexus_storage_backend,
         "guc": guc,
+        "kek": kek,
         "harness_enabled": settings.qe_harness_enabled,
     }
 
