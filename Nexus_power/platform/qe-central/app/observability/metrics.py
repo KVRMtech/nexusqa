@@ -99,6 +99,7 @@ METRIC_FACTORY_CALL_DURATION = "qec_factory_call_duration_seconds"
 METRIC_SUBSTRATE_ROWS = "qec_substrate_rows_written"
 METRIC_HARNESS_OUTCOMES = "qec_harness_outcomes"
 METRIC_COST_UNITS = "qec_cost_units"
+METRIC_QUOTA_DECISIONS = "qec_quota_decisions"
 
 #: The metric families a healthy ``/metrics`` scrape MUST expose (test contract).
 EXPECTED_METRIC_NAMES = frozenset({
@@ -112,6 +113,7 @@ EXPECTED_METRIC_NAMES = frozenset({
     METRIC_SUBSTRATE_ROWS,
     METRIC_HARNESS_OUTCOMES,
     METRIC_COST_UNITS,
+    METRIC_QUOTA_DECISIONS,
 })
 
 
@@ -200,6 +202,12 @@ def _build_metrics() -> None:
         METRIC_COST_UNITS,
         "Cost units recorded to the cost ledger, by unit (summed quantity).",
         ["unit"],
+        registry=reg,
+    )
+    m[METRIC_QUOTA_DECISIONS] = Counter(
+        METRIC_QUOTA_DECISIONS,
+        "Per-tenant quota decisions, by resource and outcome (allowed|denied).",
+        ["resource", "decision"],
         registry=reg,
     )
 
@@ -363,6 +371,18 @@ def record_cost_units(*, unit: str, quantity) -> None:
         _M[METRIC_COST_UNITS].labels(unit=_lbl(unit)).inc(qty)
 
 
+@_never_raises
+def record_quota_decision(*, resource: str, allowed: bool) -> None:
+    """Count one per-tenant quota decision (labels: resource, decision).
+
+    ``resource`` is a LOW-cardinality logical name (``apps`` / ``concurrent_cycles``
+    / ``monthly_browser_seconds`` / ``monthly_llm_tokens``); ``decision`` is
+    ``allowed`` or ``denied``.  No tenant/app id ever becomes a label.
+    """
+    decision = "allowed" if allowed else "denied"
+    _M[METRIC_QUOTA_DECISIONS].labels(resource=_lbl(resource), decision=decision).inc()
+
+
 # ── The /metrics exposition route (provider — main.py is NOT edited here) ────
 
 def build_metrics_router():
@@ -411,6 +431,7 @@ __all__ = [
     "METRIC_SUBSTRATE_ROWS",
     "METRIC_HARNESS_OUTCOMES",
     "METRIC_COST_UNITS",
+    "METRIC_QUOTA_DECISIONS",
     "EXPECTED_METRIC_NAMES",
     # recording helpers
     "record_cycle_started",
@@ -423,6 +444,7 @@ __all__ = [
     "record_substrate_rows",
     "record_harness_outcome",
     "record_cost_units",
+    "record_quota_decision",
     # env knobs
     "ENV_METRICS_ENABLED",
     "ENV_METRICS_PATH",

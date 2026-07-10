@@ -34,6 +34,9 @@ from ..db.controlplane_models import (
     is_terminal_cycle_state,
 )
 from ..db.models import ClientAppRow
+from ..fleet import quota
+from ..fleet.lifecycle import TenantNotOperational
+from ..fleet.provisioning import assert_tenant_operational_db
 
 logger = logging.getLogger(__name__)
 
@@ -144,6 +147,23 @@ async def create_cycle(
             prod_guard.assert_crawlable(app, phase=prod_guard.PHASE_EXPLORE)
         except prod_guard.OnboardingRefused as exc:
             raise HTTPException(status_code=exc.status_code, detail=exc.as_http_detail())
+        # Phase-7 FLEET lifecycle gate — a SUSPENDED / offboarding tenant may not
+        # start a cycle (fail-closed).  A tenant with no control record is
+        # operational (today's behavior).  Uses the open tenant-scoped session.
+        try:
+            await assert_tenant_operational_db(session, tenant_id, operation="cycle")
+        except TenantNotOperational as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.as_http_detail())
+
+    # Phase-7 fleet quota (fail-closed, OPT-IN): refuse a new cycle when the tenant
+    # is over its plan's concurrency or monthly-spend cap.  The default plan leaves
+    # every cap unlimited, so this resolves the plan and returns immediately (no
+    # query) — today's behaviour is unchanged.  The driver re-checks at the shared
+    # creation choke point (defense-in-depth for the daemon/webhook paths).
+    try:
+        await quota.enforce_cycle_quota(tenant_id)
+    except quota.QuotaExceeded as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.as_http_detail())
 
     try:
         cycle_id = await driver.create_cycle(
@@ -158,6 +178,14 @@ async def create_cycle(
     except prod_guard.OnboardingRefused as exc:
         # Defense-in-depth: the driver re-checks the onboarding gate at the shared
         # creation choke point; map a (racing) refusal to a clean 409/422, never 500.
+        raise HTTPException(status_code=exc.status_code, detail=exc.as_http_detail())
+    except quota.QuotaExceeded as exc:
+        # Defense-in-depth: the driver re-checks the quota at the shared creation
+        # choke point; map a (racing) refusal to a clean 429/409, never 500.
+        raise HTTPException(status_code=exc.status_code, detail=exc.as_http_detail())
+    except TenantNotOperational as exc:
+        # Defense-in-depth: the driver re-checks the lifecycle gate at the shared
+        # creation choke point; map a (racing) suspend refusal to a clean 403.
         raise HTTPException(status_code=exc.status_code, detail=exc.as_http_detail())
 
     driver.launch_cycle(

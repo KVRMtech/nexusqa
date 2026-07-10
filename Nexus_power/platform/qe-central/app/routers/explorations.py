@@ -44,6 +44,8 @@ from ..clients.config import phase1_settings
 from ..clients.explorer_client import ExploreDispatchRequest, ExplorerDispatchError
 from ..db import new_id, row_to_dict, tenant_scoped_qec_session, utc_now
 from ..db.models import ClientAppRow, QEExplorationRow
+from ..fleet.lifecycle import TenantNotOperational
+from ..fleet.provisioning import assert_tenant_operational_db
 from ..security import prod_guard
 from ..substrate.schema import CRAWL_ID_PATTERN, ExplorationBundle, RefusalError
 from ..substrate.writer import write_exploration
@@ -329,6 +331,13 @@ async def _dispatch_explorer(
         try:
             prod_guard.assert_crawlable(row, phase=prod_guard.PHASE_EXPLORE)
         except prod_guard.OnboardingRefused as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.as_http_detail())
+        # Phase-7 FLEET lifecycle gate — a SUSPENDED / offboarding tenant may not
+        # dispatch a crawl (fail-closed).  A tenant with no control record is
+        # operational (today's behavior).  Uses the open tenant-scoped session.
+        try:
+            await assert_tenant_operational_db(session, tenant_id, operation="crawl")
+        except TenantNotOperational as exc:
             raise HTTPException(status_code=exc.status_code, detail=exc.as_http_detail())
         base_url = row.base_url
         fences = dict(row.fences or {})

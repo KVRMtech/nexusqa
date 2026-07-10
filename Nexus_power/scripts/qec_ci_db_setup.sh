@@ -111,19 +111,19 @@ log "Applying QE-Central qecentral schema (alembic upgrade head, as role qec)"
 )
 
 # ── 6. Verify head + table count (fail loudly on a partial build) ───────────
-log "Verifying qecentral is at qec_001 head with 21 tenant tables"
+log "Verifying qecentral is at qec_002 head with 22 tenant tables"
 HEAD="$(psql -d "${QEC_DB}" -tAc "SELECT version_num FROM alembic_version" | tr -d '[:space:]')"
-if [ "${HEAD}" != "qec_001" ]; then
-  echo "FATAL: qecentral alembic head is '${HEAD}', expected 'qec_001'." >&2
+if [ "${HEAD}" != "qec_002" ]; then
+  echo "FATAL: qecentral alembic head is '${HEAD}', expected 'qec_002'." >&2
   exit 1
 fi
 TABLE_COUNT="$(psql -d "${QEC_DB}" -tAc \
   "SELECT count(*) FROM information_schema.tables \
    WHERE table_schema = 'public' AND table_type = 'BASE TABLE' \
      AND table_name <> 'alembic_version'" | tr -d '[:space:]')"
-if [ "${TABLE_COUNT}" != "21" ]; then
-  echo "FATAL: qecentral has ${TABLE_COUNT} tenant tables, expected 21." >&2
+if [ "${TABLE_COUNT}" != "22" ]; then
+  echo "FATAL: qecentral has ${TABLE_COUNT} tenant tables, expected 22." >&2
   exit 1
 fi
 
-log "QE-Central CI databases ready: ${NEXUS_DB} (substrate) + ${QEC_DB} (21 tables @ qec_001)"
+log "QE-Central CI databases ready: ${NEXUS_DB} (substrate) + ${QEC_DB} (22 tables @ qec_002)"

@@ -1,0 +1,528 @@
+# -----------------------------------------------------------------------------
+# VKPower Verdict - fleet alert rules (Phase 7, fleet-scale)
+#
+# Every rule binds to a REAL metric family emitted by
+# platform/qe-central/app/observability/metrics.py. Counters render with a
+# `_total` suffix in the exposition, so PromQL uses e.g. qec_cycles_completed_total.
+#
+# METRIC CONTRACT (family {labels}, and the label VOCABULARY from the code):
+#   qec_cycles_started_total{trigger,mode}
+#       trigger  in  webhook_repo|schedule|probe_drift|manual|full_floor
+#   qec_cycles_completed_total{terminal_state}
+#   qec_cycle_duration_seconds_bucket{terminal_state,le}
+#       terminal_state  in  done|failed|budget_stopped   (db/controlplane_models.py)
+#   qec_admission_decisions_total{decision,reason}
+#       decision  in  admitted|denied
+#       reason    in  ""|global_cap|per_tenant_cap|host_busy|rate_limited|
+#                  rate_unconfigured|host_unconfigured|limiter_unavailable
+#   qec_admission_in_flight                          (gauge)
+#   qec_factory_calls_total{endpoint,method,status}  status = HTTP code | transport_error
+#   qec_factory_call_duration_seconds_bucket{endpoint,method,le}
+#   qec_substrate_rows_written_total{table}
+#   qec_harness_outcomes_total{outcome}
+#       outcome  in  REFUSED_CORRECTLY|GREEN_WASH_DETECTED|CHAIN_ERROR|PASS_BASELINE
+#                 (app/harness/rules.py pinned verdict vocabulary), plus the
+#                 write-path kinds ok|refused|failed (app/harness/runner.py).
+#   qec_cost_units_total{unit}
+#       unit  in  browser_seconds|llm_tokens|substrate_rows|wallclock_seconds|
+#              runner_runs|unmetered_run
+#   qec_quota_decisions_total{resource,decision}   (Phase-7 provisioning stream)
+#       resource in apps|concurrent_cycles|monthly_browser_seconds|monthly_llm_tokens
+#       decision in allowed|denied
+#
+# Backup/restore-drill freshness metrics come from node_exporter's textfile
+# collector, written by scripts/verdict_pg_backup.sh when NODE_EXPORTER_TEXTFILE_DIR
+# is set (see FLEET_OPERATIONS_RUNBOOK.md):
+#   verdict_backup_last_success_timestamp_seconds{db}
+#   verdict_restore_drill_last_success_timestamp_seconds
+#
+# WIRING CAVEATS (honest - an alert on an unemitted metric simply has no series
+# and never fires, so it is safe to ship, but you must wire the source for it to
+# protect you):
+#   * The qec_harness_outcomes_* alerts require record_harness_outcome(...) to be
+#     called from the harness runner (the helper exists; wire it to the verdict).
+#   * VerdictLeaderElectionFlapping requires an OPTIONAL qec_leader_is_leader gauge
+#     OR the log-based rule documented in the runbook; until then rely on
+#     VerdictNoCyclesProgressing as the observable leader-dead symptom.
+#
+# Severity convention (matches infrastructure/observability/alerts/):
+#   page   - wake-someone-up; fleet-wide or trust-breaking.
+#   ticket - actionable within one business day.
+#   info   - operator awareness.
+# -----------------------------------------------------------------------------
+groups:
+  # ===========================================================================
+  - name: verdict.fleet.cycles
+    interval: 30s
+    rules:
+      - alert: VerdictCycleFailureRateFast
+        expr: |
+          (
+            sum(rate(qec_cycles_completed_total{terminal_state="failed"}[10m]))
+            /
+            clamp_min(sum(rate(qec_cycles_completed_total[10m])), 1e-9)
+          ) > 0.20
+        for: 10m
+        labels:
+          severity: page
+          component: control-plane
+        annotations:
+          summary: "Verdict cycle failure rate >20% (10m)"
+          description: |
+            More than 20% of terminating cycles are landing in terminal_state=failed
+            over the last 10 min. This is a fleet-wide regression, not one flaky app.
+            Check: factory health (qec_factory_calls_total status=~"5..|transport_error"),
+            admission fail-closed (qec_admission_decisions_total reason=~"rate_unconfigured|host_unconfigured"),
+            and qe-central logs (correlation id via X-Request-ID).
+            Runbook: QECentral/docs/FLEET_OPERATIONS_RUNBOOK.md#cycle-failure
+
+      - alert: VerdictCycleFailureRateSlow
+        expr: |
+          (
+            sum(rate(qec_cycles_completed_total{terminal_state="failed"}[1h]))
+            /
+            clamp_min(sum(rate(qec_cycles_completed_total[1h])), 1e-9)
+          ) > 0.05
+        for: 30m
+        labels:
+          severity: ticket
+          component: control-plane
+        annotations:
+          summary: "Verdict cycle failure rate >5% (1h)"
+          description: |
+            Cycle failure rate has exceeded 5% over the past hour - a slow burn.
+            Investigate within one business day. Break down by trigger/mode and by
+            factory endpoint before it becomes a fast burn.
+
+      - alert: VerdictBudgetBreachSurge
+        expr: |
+          sum(increase(qec_cycles_completed_total{terminal_state="budget_stopped"}[1h])) > 5
+        for: 15m
+        labels:
+          severity: ticket
+          component: cost
+        annotations:
+          summary: "{{ $value | printf \"%.0f\" }} cycles hit their budget cap in 1h"
+          description: |
+            A budget breach is an HONEST terminal budget_stopped (never a partial
+            done). A surge means per-app/per-tenant budgets are too tight for the
+            current change volume, OR a cost regression (e.g. unmetered_run gap
+            flags). Review budgets (app fences/budgets) and the cost ledger.
+            Runbook: QECentral/docs/FLEET_OPERATIONS_RUNBOOK.md#budget
+
+      - alert: VerdictCycleDurationP95High
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le) (rate(qec_cycle_duration_seconds_bucket{terminal_state="done"}[15m]))
+          ) > 1500
+        for: 15m
+        labels:
+          severity: ticket
+          component: control-plane
+        annotations:
+          summary: "p95 cycle duration >1500s (approaching the 1800s ceiling)"
+          description: |
+            p95 wall-clock for a completed cycle exceeded 1500s for 15 min - close
+            to the default 1800s hard ceiling (cycles past it terminate). Likely
+            capacity pressure or factory latency. Check qec_admission_in_flight vs
+            the global cap and factory p95, then scale replicas / raise the cap
+            (see the capacity model's recommended_max_global_cycles).
+
+      - alert: VerdictNoCyclesProgressing
+        # A dead/flapping cycle-daemon leader, or a stalled (fail-closed) limiter,
+        # shows up as ZERO cycles starting while the process is up. It can ALSO be a
+        # legitimately quiet fleet - the annotation says how to tell them apart.
+        expr: |
+          sum(rate(qec_cycles_started_total[15m])) == 0
+          and on() (max(up{job="qe-central"}) == 1)
+        for: 1h
+        labels:
+          severity: ticket
+          component: control-plane
+        annotations:
+          summary: "No Verdict cycles have started fleet-wide for 1h"
+          description: |
+            qec_cycles_started_total has not advanced in 1h while qe-central is up.
+            Either the fleet is genuinely idle (no change events, empty schedule) OR
+            the leader (QEC_DAEMON_LEADER_ELECTION=advisory_lock) is dead/flapping,
+            OR the distributed limiter is fail-closed (see VerdictAdmissionLimiterUnavailable).
+            Check: leader logs (qec.leader.acquired/follower), redis health,
+            pending app schedules. Runbook: #leader-and-liveness
+
+  # ===========================================================================
+  - name: verdict.fleet.admission
+    interval: 30s
+    rules:
+      - alert: VerdictAdmissionLimiterUnavailable
+        # The Redis-backed limiter is FAIL-CLOSED: an unreachable store DENIES every
+        # admit (limiter_unavailable) rather than burst a customer's app. A steady
+        # stream of these means Redis is down and the fleet is STALLING - Redis must
+        # be HA for exactly this reason.
+        expr: |
+          sum(rate(qec_admission_decisions_total{reason="limiter_unavailable"}[5m])) > 0
+        for: 5m
+        labels:
+          severity: page
+          component: limiter
+        annotations:
+          summary: "Distributed admission limiter unavailable (fleet stalling, fail-closed)"
+          description: |
+            The Redis admission store is unreachable, so admission is denying every
+            cycle (reason=limiter_unavailable) - the SAFE direction (never burst a
+            customer app), but the fleet stalls until Redis recovers. Restore Redis
+            HA immediately (QEC_REDIS_URL). Runbook: #redis-ha
+
+      - alert: VerdictAdmissionFailClosedMisconfig
+        expr: |
+          sum(rate(qec_admission_decisions_total{reason=~"rate_unconfigured|host_unconfigured"}[15m])) > 0
+        for: 15m
+        labels:
+          severity: ticket
+          component: onboarding
+        annotations:
+          summary: "Cycles refused for missing rate/host config (fail-closed onboarding gap)"
+          description: |
+            Admission is refusing cycles because an app has no positive max_rps
+            (rate_unconfigured) or no canonical_host (host_unconfigured) - we never
+            crawl a customer host we cannot rate-key. This will NOT clear without
+            operator action: fix the app's fences (max_rps) / canonical_host in the
+            client_apps config. Runbook: #onboarding-fences
+
+      - alert: VerdictAdmissionDeniedSurge
+        # Denials are NORMAL politeness (per-host token bucket, per-tenant caps). A
+        # SURGE in the retryable capacity reasons means the fleet is contended.
+        expr: |
+          (
+            sum(rate(qec_admission_decisions_total{decision="denied",reason=~"global_cap|per_tenant_cap|host_busy|rate_limited"}[15m]))
+            /
+            clamp_min(sum(rate(qec_admission_decisions_total[15m])), 1e-9)
+          ) > 0.75
+        for: 20m
+        labels:
+          severity: ticket
+          component: capacity
+        annotations:
+          summary: "Admission denying >75% of attempts (fleet contended)"
+          description: |
+            Over 75% of admission attempts are being deferred on capacity reasons
+            (global_cap / per_tenant_cap / host_busy / rate_limited) for 20 min.
+            Cycles are queueing, not failing (the safe direction), but throughput is
+            capped. Scale qe-central replicas and/or raise QEC_MAX_GLOBAL_CYCLES per
+            the capacity model. Break down by reason to see which cap binds.
+
+      - alert: VerdictAdmissionInFlightSaturated
+        # TUNE the threshold to THIS fleet's QEC_MAX_GLOBAL_CYCLES (default 8; use
+        # the capacity model's recommended_max_global_cycles). sum() aggregates the
+        # per-replica in-flight gauges into the fleet-wide concurrency depth; sitting
+        # at the cap means the global concurrency limit is the bottleneck.
+        expr: |
+          sum(qec_admission_in_flight) >= 8
+        for: 15m
+        labels:
+          severity: ticket
+          component: capacity
+        annotations:
+          summary: "Admission in-flight pinned at the global cap for 15m"
+          description: |
+            qec_admission_in_flight has been at/above the global concurrency cap
+            (threshold = QEC_MAX_GLOBAL_CYCLES, default 8) for 15 min - the cap is
+            the throughput bottleneck. Add replicas (QEC_ADMISSION_BACKEND=redis so
+            N replicas share ONE limiter) and/or raise the cap.
+
+  # ===========================================================================
+  - name: verdict.fleet.factory
+    interval: 30s
+    rules:
+      - alert: VerdictFactoryErrorRateHigh
+        # The UNCHANGED VKPower factory, consumed over HTTP. 5xx or transport_error.
+        expr: |
+          (
+            sum(rate(qec_factory_calls_total{status=~"5..|transport_error"}[10m]))
+            /
+            clamp_min(sum(rate(qec_factory_calls_total[10m])), 1e-9)
+          ) > 0.10
+        for: 10m
+        labels:
+          severity: page
+          component: factory
+        annotations:
+          summary: "VKPower factory error rate >10% (10m)"
+          description: |
+            More than 10% of factory HTTP calls are failing (5xx / transport_error)
+            over 10 min. The Verdict plane cannot generate/heal/run without the
+            factory. Check platform-api health and the qec-egress path. Break down
+            by endpoint/method/status. Runbook: #factory
+
+      - alert: VerdictFactoryLatencyP95High
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le, endpoint) (rate(qec_factory_call_duration_seconds_bucket[15m]))
+          ) > 60
+        for: 15m
+        labels:
+          severity: ticket
+          component: factory
+        annotations:
+          summary: "Factory p95 latency >60s for endpoint={{ $labels.endpoint }}"
+          description: |
+            p95 latency for a factory endpoint exceeded 60s for 15 min. A slow
+            synchronous /generate compile drags cycle wall-clock toward the ceiling.
+            Check platform-api CPU / queue depth and downstream model latency.
+
+  # ===========================================================================
+  - name: verdict.fleet.verdicts
+    # REQUIRES record_harness_outcome(...) wired to the harness verdict. Until then
+    # qec_harness_outcomes_total has no series and these rules never fire (safe).
+    interval: 30s
+    rules:
+      - alert: VerdictGreenWashDetected
+        # ZERO-TOLERANCE: the product's core promise is "never green-wash". ANY
+        # GREEN_WASH_DETECTED (a false-heal the harness caught) is trust-breaking.
+        expr: |
+          sum(increase(qec_harness_outcomes_total{outcome="GREEN_WASH_DETECTED"}[15m])) > 0
+        for: 0m
+        labels:
+          severity: page
+          component: honesty
+        annotations:
+          summary: "GREEN_WASH_DETECTED - a false-heal slipped past a gate"
+          description: |
+            The REFUSE harness caught a green-wash (a dishonest pass / false-heal).
+            The product's category promise is proof-of-behavior - this is a
+            trust-breaking event. Freeze promotion of the affected app/ruleset and
+            triage immediately. Runbook: #green-wash
+
+      - alert: VerdictFalseHealRateHigh
+        # The explicit "false-heal >1%" SLO. Ratio of green-wash catches to all
+        # harness outcomes over a 30m window.
+        expr: |
+          (
+            sum(rate(qec_harness_outcomes_total{outcome="GREEN_WASH_DETECTED"}[30m]))
+            /
+            clamp_min(sum(rate(qec_harness_outcomes_total[30m])), 1e-9)
+          ) > 0.01
+        for: 15m
+        labels:
+          severity: page
+          component: honesty
+        annotations:
+          summary: "False-heal (green-wash) rate >1% (30m)"
+          description: |
+            Green-wash detections exceeded 1% of harness outcomes over 30 min. Above
+            the false-heal SLO. This indicates a systematic honesty regression, not a
+            one-off. Runbook: #false-heal-slo
+
+      - alert: VerdictRefuseRateAnomalyHigh
+        expr: |
+          (
+            sum(rate(qec_harness_outcomes_total{outcome="REFUSED_CORRECTLY"}[1h]))
+            /
+            clamp_min(sum(rate(qec_harness_outcomes_total[1h])), 1e-9)
+          ) > 0.60
+        for: 30m
+        labels:
+          severity: ticket
+          component: honesty
+        annotations:
+          summary: "Refuse rate >60% (1h) - Verdict refusing to verify"
+          description: |
+            The harness is refusing (REFUSED_CORRECTLY) on >60% of outcomes for 1h.
+            Refusing is CORRECT when it lacks positive proof, but a spike usually
+            means an upstream break (anchor-less ambiguity, vision tier off, factory
+            degraded) is starving the oracle of evidence. Investigate the upstream,
+            not the refusal. Runbook: #refuse-rate
+
+      - alert: VerdictRefuseRateCollapsed
+        # The OTHER anomaly direction: a refuse rate that suddenly drops to ~0 while
+        # volume is healthy can mean the honesty gate stopped refusing - a green-wash
+        # risk. Guarded by a minimum volume so a quiet fleet does not page.
+        expr: |
+          (
+            sum(rate(qec_harness_outcomes_total{outcome="REFUSED_CORRECTLY"}[1h]))
+            /
+            clamp_min(sum(rate(qec_harness_outcomes_total[1h])), 1e-9)
+          ) < 0.02
+          and
+          sum(rate(qec_harness_outcomes_total[1h])) > 0.01
+        for: 1h
+        labels:
+          severity: ticket
+          component: honesty
+        annotations:
+          summary: "Refuse rate collapsed to <2% at healthy volume (green-wash risk)"
+          description: |
+            The refuse rate fell below 2% while harness volume is healthy. A gate
+            that never refuses may be passing things it cannot prove. Confirm the
+            oracle/evidence path is intact and this is genuine improvement, not a
+            disabled check. Runbook: #refuse-rate
+
+  # ===========================================================================
+  - name: verdict.fleet.evidence
+    interval: 30s
+    rules:
+      - alert: VerdictEvidenceSubstrateStalled
+        # Cycles completing 'done' but NO evidence-substrate rows written is the
+        # silent-extraction-break signature (cf. the Phase-2 fresh-artifact bug:
+        # 0 page rows on HTTP 200). Coverage is going to zero unnoticed.
+        expr: |
+          sum(rate(qec_substrate_rows_written_total[1h])) == 0
+          and
+          sum(rate(qec_cycles_completed_total{terminal_state="done"}[1h])) > 0
+        for: 30m
+        labels:
+          severity: page
+          component: evidence
+        annotations:
+          summary: "Cycles completing but ZERO evidence-substrate rows written (silent break)"
+          description: |
+            Cycles are reaching terminal_state=done while qec_substrate_rows_written_total
+            is flat - evidence coverage has silently collapsed (the Phase-2
+            fresh-artifact failure mode: HTTP 200, 0 rows). The proof-of-behavior SoR
+            is the product; a done cycle with no evidence is a green-wash of coverage.
+            Check the substrate writer / ground_truth_events migration. Runbook: #evidence
+
+  # ===========================================================================
+  - name: verdict.fleet.quota
+    # REQUIRES the Phase-7 provisioning/quota stream's record_quota_decision(...)
+    # to be wired (metric qec_quota_decisions{resource,decision};
+    # resource in apps|concurrent_cycles|monthly_browser_seconds|monthly_llm_tokens,
+    # decision in allowed|denied). Until wired the family has no series and this
+    # never fires (safe). Per-tenant quotas default generous/unlimited, so denials
+    # are opt-in and always mean a real cap was hit.
+    interval: 30s
+    rules:
+      - alert: VerdictQuotaDenialSurge
+        expr: |
+          (
+            sum by (resource) (rate(qec_quota_decisions_total{decision="denied"}[30m]))
+            /
+            clamp_min(sum by (resource) (rate(qec_quota_decisions_total[30m])), 1e-9)
+          ) > 0.25
+        for: 30m
+        labels:
+          severity: ticket
+          component: quota
+        annotations:
+          summary: "Quota denying >25% of {{ $labels.resource }} requests (30m)"
+          description: |
+            More than 25% of quota checks for resource={{ $labels.resource }} are
+            being denied over 30 min - a tenant is sustainedly hitting its plan cap
+            (apps / concurrent_cycles / monthly_browser_seconds / monthly_llm_tokens).
+            This is enforcement working, not a fault: confirm the cap is intended
+            (upsell / raise the tenant's quota) or investigate a runaway. Per-tenant
+            attribution is in the tenant-scoped API/DB (never a Prometheus label).
+            Runbook: #capacity
+
+  # ===========================================================================
+  - name: verdict.fleet.backup
+    interval: 60s
+    rules:
+      - alert: VerdictBackupStale
+        expr: |
+          (time() - max(verdict_backup_last_success_timestamp_seconds)) > 129600
+        for: 10m
+        labels:
+          severity: page
+          component: backup
+        annotations:
+          summary: "Postgres backup stale (>36h since last success)"
+          description: |
+            No successful Verdict Postgres backup in >36h (nightly cadence + grace).
+            The evidence system-of-record is the product; an un-backed-up SoR is the
+            highest live risk. Check the backup cron and verdict_pg_backup.sh logs.
+            Runbook: #backups
+
+      - alert: VerdictRestoreDrillMissed
+        # "Having backups" is not "recovery works". The restore-drill actually
+        # restores into a throwaway DB and compares - recovery PROVEN, not assumed.
+        expr: |
+          (time() - max(verdict_restore_drill_last_success_timestamp_seconds)) > 691200
+        for: 10m
+        labels:
+          severity: page
+          component: backup
+        annotations:
+          summary: "Restore-drill missed (>8 days since recovery was proven)"
+          description: |
+            No successful restore-drill in >8 days (weekly cadence + grace). Backups
+            that have never been restored are not provably recoverable. Run
+            `verdict_pg_backup.sh --restore-drill`. A regulated buyer requires proven
+            recovery before scale. Runbook: #restore-drill
+
+      - alert: VerdictBackupMetricsMissing
+        # Absent metric = NO SIGNAL, which must NOT read as "healthy". Fires when the
+        # freshness metrics are not being exposed at all (node_exporter textfile /
+        # NODE_EXPORTER_TEXTFILE_DIR not wired).
+        expr: |
+          absent(verdict_backup_last_success_timestamp_seconds)
+          or absent(verdict_restore_drill_last_success_timestamp_seconds)
+        for: 30m
+        labels:
+          severity: ticket
+          component: backup
+        annotations:
+          summary: "Backup/restore-drill freshness metrics are absent (no signal)"
+          description: |
+            The backup/restore-drill freshness metrics are not present in Prometheus,
+            so VerdictBackupStale / VerdictRestoreDrillMissed CANNOT protect you. Wire
+            NODE_EXPORTER_TEXTFILE_DIR for verdict_pg_backup.sh and deploy node_exporter
+            with --collector.textfile.directory. Runbook: #backups
+
+  # ===========================================================================
+  - name: verdict.fleet.leader
+    interval: 30s
+    rules:
+      - alert: VerdictLeaderElectionFlapping
+        # PENDING METRIC WIRING. Exactly one replica should hold leadership at a
+        # time, so sum(qec_leader_is_leader) should equal 1. Emitting that gauge is
+        # OPTIONAL and NOT part of the Phase-7 config-only stream; until it exists
+        # this expr has no series and never fires. Use the log-based Loki rule in the
+        # runbook, and rely on VerdictNoCyclesProgressing as the observable symptom.
+        expr: |
+          sum(qec_leader_is_leader) != 1
+        for: 10m
+        labels:
+          severity: ticket
+          component: control-plane
+        annotations:
+          summary: "Cycle-daemon leadership not singular (0 or >1 leaders)"
+          description: |
+            PENDING METRIC WIRING - requires an optional qec_leader_is_leader gauge
+            (1 on the leader, 0 on followers). When wired, a value != 1 means no
+            leader (fleet stalls) or split-brain (double-scan). Until then use the
+            log-based rule in FLEET_OPERATIONS_RUNBOOK.md#leader-and-liveness and
+            VerdictNoCyclesProgressing.
+
+  # ===========================================================================
+  - name: verdict.fleet.scrape
+    interval: 30s
+    rules:
+      - alert: VerdictQECentralDown
+        expr: max(up{job="qe-central"}) == 0
+        for: 3m
+        labels:
+          severity: page
+          component: control-plane
+        annotations:
+          summary: "qe-central is DOWN (no target up)"
+          description: |
+            Prometheus cannot scrape any qe-central target for 3 min. If the safety
+            spine REFUSED an unsafe boot (dev KEK / default secret in a deployed env)
+            this is fail-closed working - check the container logs. Otherwise the
+            control plane is down and no cycles run. Runbook: #liveness
+
+      - alert: VerdictLimiterStoreDown
+        expr: max(up{job="redis"}) == 0
+        for: 3m
+        labels:
+          severity: page
+          component: limiter
+        annotations:
+          summary: "Redis limiter store is DOWN (fleet will fail-closed-stall)"
+          description: |
+            The redis exporter reports the admission limiter store down. With
+            QEC_ADMISSION_BACKEND=redis the limiter is fail-closed, so a Redis outage
+            stalls the whole fleet (see VerdictAdmissionLimiterUnavailable). Redis
+            MUST be HA. Runbook: #redis-ha

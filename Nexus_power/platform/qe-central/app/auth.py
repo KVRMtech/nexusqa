@@ -150,15 +150,27 @@ async def require_auth(
     request: Request,
     credentials: HTTPAuthorizationCredentials = Depends(_bearer),
 ) -> dict:
-    """FastAPI dependency: validate the JWT and return the user context.
+    """FastAPI dependency: authenticate the request and return the user context.
+
+    Routes through the Phase-8 pluggable auth-provider registry
+    (:func:`app.auth_providers.authenticate_request`), so the SAME downstream
+    four-key context (``sub``/``tenant_id``/``email``/``role``) is produced
+    regardless of the configured provider (``QEC_AUTH_PROVIDER``).  For the
+    DEFAULT ``jwt`` provider this is byte-identical to
+    ``_decode_token(_token_from_request(request))`` — today's behavior unchanged.
+
+    The ``credentials`` dependency is retained so OpenAPI still advertises the
+    Bearer scheme (the Authorize button); the provider re-reads the token from
+    the request, so no behavior depends on this parameter.
 
     Attaches the user to ``request.state.user`` for handlers/audit hooks.
     """
-    if credentials is not None:
-        token = credentials.credentials
-    else:
-        token = _token_from_request(request)
-    user = _decode_token(token)
+    # Lazy import: app.auth_providers imports this module, so importing it here
+    # (request time, after this module is fully initialised) avoids an import
+    # cycle while remaining a cheap sys.modules lookup after the first call.
+    from .auth_providers import authenticate_request
+
+    user = authenticate_request(request)
     request.state.user = user
     return user
 
@@ -197,9 +209,13 @@ async def jwt_auth_middleware(request: Request, call_next):
     if not path.startswith("/api/"):
         return await call_next(request)
 
-    token = _token_from_request(request)
+    # Route through the Phase-8 provider registry (default ``jwt`` ⇒ byte-identical
+    # to _decode_token(_token_from_request(request))).  Lazy import breaks the
+    # app.auth <-> app.auth_providers cycle (see require_auth).
+    from .auth_providers import authenticate_request
+
     try:
-        request.state.user = _decode_token(token)
+        request.state.user = authenticate_request(request)
     except HTTPException as exc:
         from fastapi.responses import JSONResponse
 

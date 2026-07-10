@@ -1,0 +1,347 @@
+# =============================================================================
+# VKPower Verdict — default values
+#
+# These defaults describe a SAFE, generic single-tenant install. Two overlays
+# specialise them:
+#   * values-onprem.yaml     — a regulated client's own cluster (KMS/Vault,
+#                              network isolation ON, data stays in-cluster).
+#   * values-airgapped.yaml  — no internet: images from a private registry,
+#                              the SDK-envelope KEK with the client's own key.
+#
+# SECURITY-FIRST DEFAULTS:
+#   * secrets.* default to EMPTY — the Phase-6 fail-closed boot gate
+#     (app.security.boot_validator) REFUSES to start qe-central in a deployed
+#     env (env.nexusEnv in {staging, production}) wearing a dev/empty secret or
+#     the `local` KEK, so a forgotten secret is a loud install failure, never a
+#     silent weak deploy.
+#   * env.nexusEnv defaults to `production` (this chart is a production package);
+#     set it to `development` ONLY for a throwaway kind/minikube smoke test.
+# =============================================================================
+
+nameOverride: ""
+fullnameOverride: ""
+
+global:
+  image:
+    # For a normal pull, images resolve to {registry}/{repository}/{name}:{tag}.
+    # Set registry to "" to pull {repository}/{name}:{tag} directly.
+    registry: ghcr.io
+    repository: nexus-qa
+    tag: latest
+    pullPolicy: IfNotPresent
+  # imagePullSecrets referenced by every pod (e.g. a private-registry pull creds).
+  imagePullSecrets: []
+  # StorageClass for every PVC ("" ⇒ the cluster default).
+  storageClass: ""
+
+# ── Deployment environment + Phase-6 / Phase-5.5 posture ─────────────────────
+# Every knob's default preserves the compose behavior; on-prem hardens them.
+env:
+  # development | test | staging | production. Deployed envs (staging/production)
+  # arm the fail-closed boot gate + JWT audience enforcement.
+  nexusEnv: production
+  logLevel: INFO
+  # QEC_REQUIRE_AUD — reject inbound tokens with no `aud` claim (Phase-6).
+  requireAud: true
+  # QEC_JWT_AUDIENCE — the audience VKPower Verdict stamps + verifies.
+  jwtAudience: vkpower-verdict
+  # QEC_SERVICE_TOKEN_TTL_SECONDS.
+  serviceTokenTtlSeconds: 3600
+  # Storage backend — MUST match the VKPower factory so frame assets are
+  # co-readable (design §3.1 / R-5). local|s3|gcs|azure.
+  storageBackend: local
+  storagePath: /app/service/data
+  frameStoragePath: /app/service/data/frames
+  gcsBucket: ""
+  # Phase-5.5 scale-out (multi-replica). memory (default) | redis.
+  admissionBackend: memory
+  redisUrl: ""
+  admissionRedisNamespace: "qec:adm"
+  admissionLeaseTtlSeconds: 7200
+  # none (default) | advisory_lock (exactly one replica scans the fleet).
+  daemonLeaderElection: none
+  # API self-protection rate limit (req/sec/principal); 0 ⇒ OFF.
+  apiRateLimit: 0
+  # Retry budget for idempotent factory GETs; 0 ⇒ single attempt.
+  httpMaxRetries: 2
+  # Live-crawl dispatch to the contained explorer. OFF ⇒ inline-bundle path only.
+  explorerDispatchEnabled: false
+  # Phase-0 REFUSE harness (creates real artifacts) — explicit opt-in.
+  harnessEnabled: false
+  # Prometheus /metrics exposition.
+  metricsEnabled: true
+  metricsPath: /metrics
+
+# ── Envelope encryption (client_apps.creds_blob) ─────────────────────────────
+# The DEK-wrapping KEK. In a DEPLOYED env (staging/production) the provider MUST
+# be gcp_kms or aws_kms — BOTH the qe-central boot gate and the SDK
+# EnvelopeService REFUSE `local` outside development/test. "The client's own
+# key" = a customer-managed KMS key (a GCP CryptoKey / AWS CMK the client owns
+# and controls); air-gapped clients front their HSM/Vault behind a KMS-API-
+# compatible endpoint (see values-airgapped.yaml + ONPREM_INSTALL.md).
+# `local` is for a dev/pilot smoke test ONLY.
+kek:
+  provider: local          # local (dev/test only) | gcp_kms | aws_kms
+  localKekPath: /app/service/data/kek/master.key
+  gcpKey: ""               # NEXUS_KEK_GCP_KEY (projects/…/cryptoKeys/…)
+  awsArn: ""               # NEXUS_KEK_AWS_ARN
+  awsRegion: ""            # AWS_REGION (required for aws_kms)
+  # KEK-dir volume. Only the `local` (dev) provider reads a key file here; for
+  # gcp_kms/aws_kms this volume is inert. mode:
+  #   secret  — a pre-created K8s Secret holding the dev key (kek.secret.name/.key)
+  #   pvc     — a persistent volume the operator seeds once
+  #   emptyDir — EPHEMERAL (a new random key each restart)
+  persistence:
+    mode: emptyDir
+    size: 64Mi
+    secret:
+      name: ""
+      key: master.key
+
+# ── VKPower factory (bounded, EXTERNAL context — never deployed by this chart) ─
+# qe-central + repo-intel talk to the factory over HTTP (PLATFORM_API_URL) and
+# write the least-privilege substrate rows into the factory's `nexus` DB via the
+# qec_substrate role. Point these at wherever the factory (nexus-qa chart /
+# docker-compose) runs. The factory keeps VKPower untouchable.
+factory:
+  platformApiUrl: "http://nexus-qa-platform-api:8091"
+  # The namespace the factory runs in — used by the NetworkPolicy to allow
+  # qe-central/repo-intel egress to the factory + its substrate DB.
+  namespace: "nexus-qa"
+  substrate:
+    host: "nexus-qa-postgres"
+    port: 5432
+    database: "nexus"
+    user: "qec_substrate"
+    # password ⇒ secrets.substrateDbPassword
+
+# ── qecentral database (chart-managed by default) ────────────────────────────
+postgres:
+  enabled: true
+  image: "postgres:16-alpine"
+  port: 5432
+  database: "qecentral"
+  user: "qec"
+  # superuser is used only by the one-time role bootstrap (see ONPREM_INSTALL).
+  superuser: "postgres"
+  persistence:
+    enabled: true
+    size: 20Gi
+  resources:
+    requests:
+      cpu: "250m"
+      memory: "512Mi"
+    limits:
+      cpu: "1"
+      memory: "2Gi"
+  securityContext:
+    runAsUser: 999
+    runAsGroup: 999
+    fsGroup: 999
+    runAsNonRoot: true
+  # When enabled=false, connect to an external managed Postgres instead.
+  external:
+    host: ""
+    port: 5432
+
+# ── qe-central (substrate writer + control plane + /health + /metrics) ───────
+qeCentral:
+  replicas: 1
+  port: 8093
+  image:
+    name: qe-central
+    tag: ""            # "" ⇒ global.image.tag
+  autoscaling:
+    enabled: false
+    minReplicas: 1
+    maxReplicas: 4
+    targetCPUUtilizationPercentage: 75
+  resources:
+    requests:
+      cpu: "250m"
+      memory: "512Mi"
+    limits:
+      cpu: "1"
+      memory: "1Gi"
+  persistence:
+    # The KEK dir (mode handled by .kek.persistence); the crawl handoff volume.
+    crawl:
+      mode: emptyDir   # emptyDir | pvc
+      size: 5Gi
+    # Shared frame storage (co-read with the factory/eyes). For local backend on
+    # a single node, an RWX PVC or a hostPath is needed to truly share; default
+    # emptyDir keeps qe-central self-contained (frames it writes stay local).
+    frames:
+      mode: emptyDir
+      size: 10Gi
+
+# ── qe-explorer (the QUARANTINED browser container — design §1.1) ────────────
+qeExplorer:
+  enabled: true
+  replicas: 1
+  port: 8210
+  image:
+    name: qe-explorer
+    tag: ""
+  # Callback target for the HMAC-signed completion callback. "" ⇒ the in-cluster
+  # qe-central service.
+  callbackUrl: ""
+  # Chromium needs a larger /dev/shm than the 64Mi default.
+  shmSize: 1Gi
+  resources:
+    requests:
+      cpu: "500m"
+      memory: "1Gi"
+    limits:
+      cpu: "2"
+      memory: "2Gi"
+
+# ── egress-proxy (squid — the SINGLE NAT hop, HARD host allowlist) ───────────
+egressProxy:
+  enabled: true
+  image: "ubuntu/squid:latest"
+  port: 3128
+  # STATIC per-tenant allowlist (registrable domains, one per line). EMPTY ⇒
+  # fail-closed: squid denies ALL real egress until a domain is set. On-prem's
+  # single onboarded target app makes this the recommended, most-auditable
+  # posture (vs. the compose per-crawl dynamic allowlist).
+  allowedDomains: []
+  # Cluster pod/service CIDRs the proxy must NEVER reach (defense-in-depth so an
+  # egress rule can't re-open a path to the DB / other pods). Set to the
+  # cluster's real CIDRs on-prem.
+  excludeCidrs: []
+  # Ports the proxy may reach on the target (HTTP + HTTPS CONNECT).
+  externalPorts:
+    - port: 80
+      protocol: TCP
+    - port: 443
+      protocol: TCP
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "128Mi"
+    limits:
+      cpu: "500m"
+      memory: "512Mi"
+
+# ── repo-intel (OFF the critical path — design §3.3) ─────────────────────────
+repoIntel:
+  enabled: false
+  replicas: 1
+  port: 8014
+  image:
+    name: repo-intel
+    tag: ""
+  llmLensEnabled: false
+  maxRepoBytes: 2000000000
+  # git clone reaches the client's repo host over the internet.
+  egressAllowExternal: true
+  workdir:
+    mode: emptyDir   # emptyDir | pvc
+    size: 20Gi
+  resources:
+    requests:
+      cpu: "250m"
+      memory: "512Mi"
+    limits:
+      cpu: "1"
+      memory: "2Gi"
+
+# ── verdict-portal (the Command Center SPA + nginx) ──────────────────────────
+portal:
+  enabled: true
+  replicas: 1
+  port: 80
+  image:
+    name: verdict-portal
+    tag: ""
+  resources:
+    requests:
+      cpu: "50m"
+      memory: "64Mi"
+    limits:
+      cpu: "200m"
+      memory: "256Mi"
+
+# ── One-time / per-upgrade schema migration (alembic upgrade head) ───────────
+migrations:
+  # Run `alembic -c alembic_qec/alembic.ini upgrade head` as a post-install /
+  # post-upgrade Helm hook using the qe-central image. Disable if you migrate
+  # out-of-band. The qec + qec_substrate ROLE bootstrap is a separate one-time
+  # step (needs superuser + touches the factory DB) — see ONPREM_INSTALL.md.
+  enabled: true
+  backoffLimit: 3
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "256Mi"
+    limits:
+      cpu: "500m"
+      memory: "512Mi"
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+  # Default OFF — the Verdict services do not call the k8s API.
+  automount: false
+
+# Operator overrides merged over the hardened defaults in _helpers.tpl.
+podSecurityContext: {}
+containerSecurityContext: {}
+
+# NetworkPolicies enforce the §1.1 isolation invariants (explorer reaches only
+# the egress proxy + its callback, NEVER the DB). Requires a CNI that honors
+# NetworkPolicy (Calico/Cilium/Weave). Keep ON for any regulated install.
+networkPolicies:
+  enabled: true
+  # Namespace label the ingress controller lives in (for portal ingress).
+  ingressNamespace: "ingress-nginx"
+  # Namespace label Prometheus/scrapers live in (for /metrics ingress).
+  monitoringNamespace: "observability"
+
+monitoring:
+  serviceMonitor:
+    enabled: false
+    namespace: ""       # "" ⇒ the release namespace
+    interval: "15s"
+    scrapeTimeout: "10s"
+    labels: {}
+    metricRelabelings: []
+
+ingress:
+  enabled: false
+  className: "nginx"
+  host: "verdict.example.com"
+  annotations: {}
+  tls:
+    enabled: false
+    secretName: "verdict-tls"
+
+# ── Secrets ──────────────────────────────────────────────────────────────────
+# NEVER commit real values. Supply via `--set`, a private values override, or
+# (preferred for regulated installs) externalSecrets from the client's KMS/Vault.
+# Empty defaults are intentional: the fail-closed boot gate turns a forgotten
+# secret into a refused boot in staging/production.
+secrets:
+  jwtSecret: ""            # NEXUS_JWT_SECRET (must match the factory's)
+  explorerToken: ""        # QEC_EXPLORER_TOKEN (per-fleet HMAC)
+  qecDbPassword: ""        # role `qec` on the qecentral DB
+  substrateDbPassword: ""  # role `qec_substrate` on the factory `nexus` DB
+  postgresPassword: ""     # superuser for the chart-managed Postgres
+
+# External Secrets Operator — sync the above from the client's KMS/Vault so no
+# plaintext secret ever lives in the release. When enabled, secret.yaml is
+# skipped and the ExternalSecret owns the target Secret.
+externalSecrets:
+  enabled: false
+  refreshInterval: "1h"
+  secretStoreRef:
+    name: ""
+    kind: ClusterSecretStore
+  remoteKeyPrefix: "verdict"
+  property: ""
+
+terminationGracePeriodSeconds: 60
+podAnnotations: {}
+priorityClassName: ""

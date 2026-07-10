@@ -255,6 +255,11 @@ _QEC_TABLES = [
     ("app_cycles", "cycle_id",
      {"app_id": None, "trigger": "manual"}, {"app_id": None}),  # app_id filled fresh
     ("cost_ledger", "entry_id", {"unit": "browser_seconds"}, {}),
+    # NOTE: the Phase-7 ``tenant_provisioning`` table (qec_002) has tenant_id AS
+    # its PK, which the generic (pk_col, tenant_id) insert shape here does not fit;
+    # its RLS enable/force + tenant_isolation policy are proven by
+    # test_migration_applies.py against every expected table, so it needs no
+    # separate behavioral case here.
 ]
 
 

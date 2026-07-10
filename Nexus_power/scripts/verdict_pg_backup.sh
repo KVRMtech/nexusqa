@@ -16,6 +16,35 @@ PG="${PG_CONTAINER:-nexus-postgres}"
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
 
+# ── OPT-IN fleet observability (Phase 7): emit a node_exporter textfile metric ──
+# When NODE_EXPORTER_TEXTFILE_DIR is set, record the epoch of the last SUCCESSFUL
+# backup / restore-drill so Prometheus can alert on staleness
+# (VerdictBackupStale / VerdictRestoreDrillMissed in
+# infrastructure/observability/verdict/alerts-verdict.yml). When the env var is
+# UNSET this is a hard no-op — today's behaviour is preserved byte-for-byte.
+# The write is ATOMIC (temp file + rename) so node_exporter never reads a partial
+# file, and a write failure degrades to a log line, never a backup failure.
+emit_textfile_metric() {
+  local dir="${NODE_EXPORTER_TEXTFILE_DIR:-}"
+  [ -n "$dir" ] || return 0
+  if [ ! -d "$dir" ]; then
+    echo "TEXTFILE_DIR_MISSING:$dir (skipping metric emit; create it or unset NODE_EXPORTER_TEXTFILE_DIR)"
+    return 0
+  fi
+  local name="$1" value="$2" help="$3"
+  local tmp="$dir/.${name}.$$.tmp" final="$dir/${name}.prom"
+  if {
+        printf '# HELP %s %s\n' "$name" "$help"
+        printf '# TYPE %s gauge\n' "$name"
+        printf '%s %s\n' "$name" "$value"
+     } > "$tmp" 2>/dev/null && mv -f "$tmp" "$final" 2>/dev/null; then
+    echo "TEXTFILE_METRIC_WRITTEN:${name}=${value} -> ${final}"
+  else
+    rm -f "$tmp" 2>/dev/null || true
+    echo "TEXTFILE_METRIC_SKIPPED:${name} (write failed; check dir perms)"
+  fi
+}
+
 backup() {
   echo "==== BACKUP $STAMP → $GCS_BACKUP_BUCKET ===="
   for db in nexus qecentral; do
@@ -35,6 +64,8 @@ backup() {
     fi
   done
   echo "BACKUP_OK $STAMP"
+  emit_textfile_metric verdict_backup_last_success_timestamp_seconds "$(date -u +%s)" \
+    "Unix time of the last successful Verdict Postgres backup (both nexus+qecentral dumped)."
 }
 
 restore_drill() {
@@ -51,6 +82,8 @@ restore_drill() {
   echo "restored tables: src(qecentral)=$src  drill=$dst"
   if [ -n "$src" ] && [ "$src" = "$dst" ]; then
     echo "RESTORE_DRILL_PASS (recovery proven — 6.3a exit criterion met)"
+    emit_textfile_metric verdict_restore_drill_last_success_timestamp_seconds "$(date -u +%s)" \
+      "Unix time of the last PASSED Verdict restore-drill (recovery PROVEN, not assumed)."
   else
     echo "RESTORE_DRILL_FAIL (backup is NOT provably recoverable — do not go to client #2)"; exit 1
   fi

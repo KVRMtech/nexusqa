@@ -1,0 +1,490 @@
+{{/*
+=================================================================
+NetworkPolicies — deny-by-default micro-segmentation for the Verdict plane.
+
+Principle (design §1.1): the quarantined explorer's isolation is a
+STRUCTURAL invariant, not a check. These policies make it so:
+
+  * DEFAULT DENY ingress + egress for every pod in the release.
+  * qe-explorer egress is limited to the egress-proxy (squid) and the
+    qe-central callback ONLY — it can reach NEITHER the databases, NOR the
+    factory, NOR the internet directly. squid is the single NAT hop and it
+    enforces the host allowlist on top.
+  * The databases accept ingress ONLY from qe-central / repo-intel / the
+    migration job — NEVER from the explorer or the portal.
+
+Requires a CNI that enforces NetworkPolicy (Calico, Cilium, Weave, …).
+=================================================================
+*/}}
+{{- if .Values.networkPolicies.enabled }}
+{{- $fullname := include "verdict.fullname" . }}
+{{- $root := . }}
+{{- $instance := .Release.Name }}
+{{- $instanceSel := dict "matchLabels" (dict "app.kubernetes.io/instance" $instance) }}
+{{- $factoryNs := .Values.factory.namespace }}
+{{- $monitorNs := .Values.networkPolicies.monitoringNamespace }}
+{{- $ingressNs := .Values.networkPolicies.ingressNamespace }}
+
+{{/* ═══ DEFAULT DENY — all release pods, both directions ═══ */}}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $fullname }}-default-deny
+  labels:
+    {{- include "verdict.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    {{- toYaml $instanceSel | nindent 4 }}
+  policyTypes:
+    - Ingress
+    - Egress
+
+{{/* ═══ COMMON EGRESS — DNS for every pod ═══ */}}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $fullname }}-egress-dns
+  labels:
+    {{- include "verdict.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    {{- toYaml $instanceSel | nindent 4 }}
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+
+{{/* ═══ qe-central — egress to the DBs + factory + explorer ═══ */}}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $fullname }}-qe-central-egress
+  labels:
+    {{- include "verdict.componentLabels" (dict "root" $root "component" "qe-central") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ $instance }}
+      app.kubernetes.io/component: qe-central
+  policyTypes:
+    - Egress
+  egress:
+    {{- if .Values.postgres.enabled }}
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/instance: {{ $instance }}
+              app.kubernetes.io/component: postgres
+      ports:
+        - protocol: TCP
+          port: {{ .Values.postgres.port }}
+    {{- end }}
+    {{- if .Values.qeExplorer.enabled }}
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/instance: {{ $instance }}
+              app.kubernetes.io/component: qe-explorer
+      ports:
+        - protocol: TCP
+          port: {{ .Values.qeExplorer.port }}
+    {{- end }}
+    # The factory (platform-api + substrate DB + optional redis) lives in its
+    # own namespace — qe-central reaches it there. Narrow this with an explicit
+    # podSelector/port list on-prem if the factory namespace is shared.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $factoryNs | quote }}
+
+{{/* ═══ qe-central — ingress from the portal / ingress / scrapers / explorer callback ═══ */}}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $fullname }}-qe-central-ingress
+  labels:
+    {{- include "verdict.componentLabels" (dict "root" $root "component" "qe-central") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ $instance }}
+      app.kubernetes.io/component: qe-central
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        {{- if .Values.portal.enabled }}
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/instance: {{ $instance }}
+              app.kubernetes.io/component: verdict-portal
+        {{- end }}
+        {{- if .Values.qeExplorer.enabled }}
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/instance: {{ $instance }}
+              app.kubernetes.io/component: qe-explorer
+        {{- end }}
+        {{- if .Values.ingress.enabled }}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $ingressNs | quote }}
+        {{- end }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.qeCentral.port }}
+    {{- if .Values.monitoring.serviceMonitor.enabled }}
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $monitorNs | quote }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.qeCentral.port }}
+    {{- end }}
+
+{{- if .Values.qeExplorer.enabled }}
+{{/* ═══ qe-explorer — THE ISOLATION INVARIANT (egress: proxy + callback ONLY) ═══ */}}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $fullname }}-qe-explorer-egress
+  labels:
+    {{- include "verdict.componentLabels" (dict "root" $root "component" "qe-explorer") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ $instance }}
+      app.kubernetes.io/component: qe-explorer
+  policyTypes:
+    - Egress
+  egress:
+    # (1) the egress proxy — the ONLY route toward the target app.
+    {{- if .Values.egressProxy.enabled }}
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/instance: {{ $instance }}
+              app.kubernetes.io/component: egress-proxy
+      ports:
+        - protocol: TCP
+          port: {{ .Values.egressProxy.port }}
+    {{- end }}
+    # (2) the qe-central completion callback. Nothing else — no DB, no factory,
+    #     no direct internet.
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/instance: {{ $instance }}
+              app.kubernetes.io/component: qe-central
+      ports:
+        - protocol: TCP
+          port: {{ .Values.qeCentral.port }}
+
+{{/* ═══ qe-explorer — ingress from qe-central dispatch ONLY ═══ */}}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $fullname }}-qe-explorer-ingress
+  labels:
+    {{- include "verdict.componentLabels" (dict "root" $root "component" "qe-explorer") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ $instance }}
+      app.kubernetes.io/component: qe-explorer
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/instance: {{ $instance }}
+              app.kubernetes.io/component: qe-central
+      ports:
+        - protocol: TCP
+          port: {{ .Values.qeExplorer.port }}
+{{- end }}
+
+{{- if .Values.egressProxy.enabled }}
+{{/* ═══ egress-proxy — ingress from explorer ONLY; egress to the internet (excl. cluster CIDRs) ═══ */}}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $fullname }}-egress-proxy-ingress
+  labels:
+    {{- include "verdict.componentLabels" (dict "root" $root "component" "egress-proxy") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ $instance }}
+      app.kubernetes.io/component: egress-proxy
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/instance: {{ $instance }}
+              app.kubernetes.io/component: qe-explorer
+      ports:
+        - protocol: TCP
+          port: {{ .Values.egressProxy.port }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $fullname }}-egress-proxy-egress
+  labels:
+    {{- include "verdict.componentLabels" (dict "root" $root "component" "egress-proxy") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ $instance }}
+      app.kubernetes.io/component: egress-proxy
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            {{- with .Values.egressProxy.excludeCidrs }}
+            except:
+              {{- range . }}
+              - {{ . | quote }}
+              {{- end }}
+            {{- end }}
+      ports:
+        {{- range .Values.egressProxy.externalPorts }}
+        - port: {{ .port }}
+          protocol: {{ .protocol }}
+        {{- end }}
+{{- end }}
+
+{{- if .Values.postgres.enabled }}
+{{/* ═══ postgres — ingress from qe-central / repo-intel / migrate ONLY ═══ */}}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $fullname }}-postgres-ingress
+  labels:
+    {{- include "verdict.componentLabels" (dict "root" $root "component" "postgres") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ $instance }}
+      app.kubernetes.io/component: postgres
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/instance: {{ $instance }}
+              app.kubernetes.io/component: qe-central
+        {{- if .Values.repoIntel.enabled }}
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/instance: {{ $instance }}
+              app.kubernetes.io/component: repo-intel
+        {{- end }}
+        {{- if .Values.migrations.enabled }}
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/instance: {{ $instance }}
+              app.kubernetes.io/component: migrate
+        {{- end }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.postgres.port }}
+{{- end }}
+
+{{- if .Values.migrations.enabled }}
+{{/* ═══ migrate job — egress to the qecentral DB ═══ */}}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $fullname }}-migrate-egress
+  labels:
+    {{- include "verdict.componentLabels" (dict "root" $root "component" "migrate") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ $instance }}
+      app.kubernetes.io/component: migrate
+  policyTypes:
+    - Egress
+  egress:
+    {{- if .Values.postgres.enabled }}
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/instance: {{ $instance }}
+              app.kubernetes.io/component: postgres
+      ports:
+        - protocol: TCP
+          port: {{ .Values.postgres.port }}
+    {{- else }}
+    # External qecentral DB — allow egress to the factory/DB namespace.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $factoryNs | quote }}
+    {{- end }}
+{{- end }}
+
+{{- if .Values.repoIntel.enabled }}
+{{/* ═══ repo-intel — egress to DBs + factory + (optional) external git ═══ */}}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $fullname }}-repo-intel-egress
+  labels:
+    {{- include "verdict.componentLabels" (dict "root" $root "component" "repo-intel") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ $instance }}
+      app.kubernetes.io/component: repo-intel
+  policyTypes:
+    - Egress
+  egress:
+    {{- if .Values.postgres.enabled }}
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/instance: {{ $instance }}
+              app.kubernetes.io/component: postgres
+      ports:
+        - protocol: TCP
+          port: {{ .Values.postgres.port }}
+    {{- end }}
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $factoryNs | quote }}
+    {{- if .Values.repoIntel.egressAllowExternal }}
+    # git clone over the internet (excl. the cluster's own CIDRs).
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            {{- with .Values.egressProxy.excludeCidrs }}
+            except:
+              {{- range . }}
+              - {{ . | quote }}
+              {{- end }}
+            {{- end }}
+      ports:
+        - protocol: TCP
+          port: 443
+        - protocol: TCP
+          port: 22
+    {{- end }}
+
+{{- if .Values.monitoring.serviceMonitor.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $fullname }}-repo-intel-ingress
+  labels:
+    {{- include "verdict.componentLabels" (dict "root" $root "component" "repo-intel") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ $instance }}
+      app.kubernetes.io/component: repo-intel
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $monitorNs | quote }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.repoIntel.port }}
+{{- end }}
+{{- end }}
+
+{{- if .Values.portal.enabled }}
+{{/* ═══ verdict-portal — ingress from the ingress controller; egress to qe-central ═══ */}}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $fullname }}-portal-ingress
+  labels:
+    {{- include "verdict.componentLabels" (dict "root" $root "component" "verdict-portal") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ $instance }}
+      app.kubernetes.io/component: verdict-portal
+  policyTypes:
+    - Ingress
+  ingress:
+    {{- if .Values.ingress.enabled }}
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $ingressNs | quote }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.portal.port }}
+    {{- else }}
+    # No ingress controller — allow same-namespace access (e.g. a port-forward
+    # or a NodePort/LoadBalancer Service the operator adds). Tighten as needed.
+    - from:
+        - podSelector: {}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.portal.port }}
+    {{- end }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $fullname }}-portal-egress
+  labels:
+    {{- include "verdict.componentLabels" (dict "root" $root "component" "verdict-portal") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ $instance }}
+      app.kubernetes.io/component: verdict-portal
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/instance: {{ $instance }}
+              app.kubernetes.io/component: qe-central
+      ports:
+        - protocol: TCP
+          port: {{ .Values.qeCentral.port }}
+{{- end }}
+
+{{- end }}

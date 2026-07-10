@@ -200,6 +200,101 @@ class Settings(BaseSettings):
         default=15.0, alias="QEC_LEADER_RETRY_INTERVAL_SECONDS",
     )
 
+    # ── Phase-7 fleet provisioning (OPT-IN; defaults preserve today's behavior —
+    #    the fleet router is a NEW additive surface, so these tune it without
+    #    touching any existing code path) ──────────────────────────────────────
+    #: The reserved tenant scope stamped on a PLATFORM SUPER-ADMIN (operator) token
+    #: so it satisfies the mandatory-tenant JWT gate while operating cross-tenant.
+    #: It never names a real tenant (provisioning targets come from the request),
+    #: so it can match no tenant's RLS scope.
+    qec_platform_tenant_id: str = Field(
+        default="__platform__", alias="QEC_PLATFORM_TENANT_ID",
+    )
+    #: TTL (seconds) for the tenant's FIRST admin principal token minted at
+    #: onboarding — the client's bootstrap credential.  Default 24h so it survives
+    #: a hand-off; override per deploy.
+    qec_onboarding_token_ttl_seconds: int = Field(
+        default=86400, alias="QEC_ONBOARDING_TOKEN_TTL_SECONDS",
+    )
+    #: Default offboarding data-retention window (days) when a caller does not
+    #: specify one.  Evidence is RETAINED for at least this long — it is never
+    #: hard-deleted by offboarding itself (a retention job is a separate seam).
+    qec_offboard_retention_days: int = Field(
+        default=30, alias="QEC_OFFBOARD_RETENTION_DAYS",
+    )
+
+    # ── Phase-8 pluggable auth provider (SSO/OIDC/SAML seam; OPT-IN) ──────
+    # The seam is DEFAULT-OFF: ``QEC_AUTH_PROVIDER=jwt`` (the default) authenticates
+    # exactly as today (first-party HS256 JWT); ``oidc``/``saml`` are ACTIVE only
+    # when explicitly selected AND configured.  Every knob below defaults empty so
+    # an unset environment is byte-identical to the pre-Phase-8 posture.
+    #: Active provider: ``jwt`` (default) | ``oidc`` | ``saml``.  An unknown value
+    #: is fail-closed (every request is DENIED, never allowed through).
+    qec_auth_provider: str = Field(default="jwt", alias="QEC_AUTH_PROVIDER")
+
+    # ── OIDC (verify an IdP-issued ID token via JWKS) ──
+    #: The IdP issuer (``iss``) the ID token must carry (e.g.
+    #: ``https://your-org.okta.com``).  Required when ``QEC_AUTH_PROVIDER=oidc``.
+    qec_oidc_issuer: str = Field(default="", alias="QEC_OIDC_ISSUER")
+    #: The IdP JWKS URL (public signing keys).  Required for ``oidc`` unless an
+    #: out-of-band signing-key resolver is injected.
+    qec_oidc_jwks_url: str = Field(default="", alias="QEC_OIDC_JWKS_URL")
+    #: The audience (``aud``) the ID token must contain — the Verdict client id
+    #: registered at the IdP.  Required when ``QEC_AUTH_PROVIDER=oidc``.
+    qec_oidc_audience: str = Field(default="", alias="QEC_OIDC_AUDIENCE")
+    #: Comma-separated accepted signing algorithms (asymmetric only).
+    qec_oidc_algorithms: str = Field(default="RS256", alias="QEC_OIDC_ALGORITHMS")
+    #: The ID-token claim that maps to the Verdict RLS tenant.
+    qec_oidc_tenant_claim: str = Field(
+        default="tenant_id", alias="QEC_OIDC_TENANT_CLAIM",
+    )
+    #: The ID-token claim that maps to the Verdict role (falls back to the default
+    #: role when absent).
+    qec_oidc_role_claim: str = Field(default="role", alias="QEC_OIDC_ROLE_CLAIM")
+    #: The ID-token claim used for the principal email.
+    qec_oidc_email_claim: str = Field(default="email", alias="QEC_OIDC_EMAIL_CLAIM")
+    #: Role assigned when the role claim is absent from the ID token.
+    qec_oidc_default_role: str = Field(
+        default="viewer", alias="QEC_OIDC_DEFAULT_ROLE",
+    )
+    #: OPTIONAL MFA defense-in-depth: comma-separated ``acr`` values the ID token
+    #: must assert (empty ⇒ not enforced; MFA is primarily enforced at the IdP).
+    qec_oidc_required_acr: str = Field(default="", alias="QEC_OIDC_REQUIRED_ACR")
+    #: Clock-skew leeway (seconds) allowed on ID-token ``exp``/``iat`` validation.
+    qec_oidc_leeway_seconds: int = Field(
+        default=60, alias="QEC_OIDC_LEEWAY_SECONDS",
+    )
+
+    # ── SAML (assertion → session → internal principal token) ──
+    #: The IdP EntityID.  Required when ``QEC_AUTH_PROVIDER=saml``.
+    qec_saml_idp_entity_id: str = Field(
+        default="", alias="QEC_SAML_IDP_ENTITY_ID",
+    )
+    #: The Verdict Service-Provider EntityID (metadata / audience restriction).
+    qec_saml_sp_entity_id: str = Field(default="", alias="QEC_SAML_SP_ENTITY_ID")
+    #: The Assertion Consumer Service URL the IdP POSTs the signed assertion to.
+    qec_saml_acs_url: str = Field(default="", alias="QEC_SAML_ACS_URL")
+    #: The assertion attribute mapped to the Verdict RLS tenant.
+    qec_saml_tenant_attribute: str = Field(
+        default="tenant_id", alias="QEC_SAML_TENANT_ATTRIBUTE",
+    )
+    #: The assertion attribute mapped to the Verdict role.
+    qec_saml_role_attribute: str = Field(
+        default="role", alias="QEC_SAML_ROLE_ATTRIBUTE",
+    )
+    #: The assertion attribute mapped to the principal email.
+    qec_saml_email_attribute: str = Field(
+        default="email", alias="QEC_SAML_EMAIL_ATTRIBUTE",
+    )
+    #: Role assigned when the role attribute is absent from the assertion.
+    qec_saml_default_role: str = Field(
+        default="viewer", alias="QEC_SAML_DEFAULT_ROLE",
+    )
+    #: Lifetime (seconds) of the internal principal (session) token minted at ACS.
+    qec_saml_session_ttl_seconds: int = Field(
+        default=3600, alias="QEC_SAML_SESSION_TTL_SECONDS",
+    )
+
     # ── Derived helpers (Phase-6) ─────────────────────────────
     @property
     def is_deployed_env(self) -> bool:

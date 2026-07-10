@@ -1,0 +1,39 @@
+apiVersion: v2
+name: verdict
+description: >-
+  VKPower Verdict — autonomous Centralized QE (proof-of-behavior) plane.
+  Packages the Verdict plane (qe-central substrate writer, the quarantined
+  qe-explorer + its egress sandbox, repo-intel, and the Verdict portal) for
+  on-prem / air-gapped install in a REGULATED client's own cluster. All data
+  and evidence stay inside the client's tenant; the VKPower factory
+  (platform-api) is a bounded, external dependency referenced by URL — this
+  chart NEVER re-deploys or modifies it.
+type: application
+# Chart packaging version (bump on chart changes).
+version: 0.1.0
+# The Verdict application version this chart targets (Phase 7/8 fleet + on-prem).
+appVersion: "2.0.0"
+
+keywords:
+  - vkpower
+  - verdict
+  - qe-central
+  - regression
+  - qa
+  - on-prem
+  - air-gapped
+  - compliance
+  - kubernetes
+
+home: https://github.com/Venkatareddy2012/nexus-power-snapshot
+sources:
+  - https://github.com/Venkatareddy2012/nexus-power-snapshot
+
+maintainers:
+  - name: VKPower Verdict Team
+
+annotations:
+  # Data-residency posture, surfaced to catalog tooling. The Verdict plane keeps
+  # all tenant data + evidence inside the installing cluster (see values-onprem).
+  vkpower.io/data-residency: in-cluster
+  vkpower.io/fail-closed-boot: "true"

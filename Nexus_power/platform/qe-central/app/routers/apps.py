@@ -23,6 +23,7 @@ from ..controlplane.scheduling.admission import ADMISSION
 from ..db import new_id, row_to_dict, tenant_scoped_qec_session, utc_now
 from ..db.controlplane_models import AppFingerprintRow
 from ..db.models import ClientAppRow
+from ..fleet import quota
 
 logger = logging.getLogger(__name__)
 
@@ -146,6 +147,18 @@ async def create_app(
     """Register a client app; encrypt creds; store answer_key (design §3.1)."""
     tenant_id = user["tenant_id"]
     base_url = _validated_base_url(payload.base_url)
+
+    # Phase-7 fleet quota (fail-closed, OPT-IN): refuse a new app when the tenant's
+    # plan caps ``max_apps`` and it is already at the cap.  The default plan leaves
+    # ``max_apps`` unlimited, so this resolves the plan and returns immediately
+    # (opening no session, running no query) — today's behaviour is unchanged.
+    # Checked BEFORE credential encryption so a denied request never spends a KMS
+    # envelope call.
+    try:
+        await quota.enforce_app_registration_quota(tenant_id)
+    except quota.QuotaExceeded as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.as_http_detail())
+
     app_id = new_id()
 
     creds_blob: bytes | None = None

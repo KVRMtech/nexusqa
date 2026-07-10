@@ -562,14 +562,36 @@ class AppConfig:
 
     @classmethod
     def from_row(
-        cls, row: ClientAppRow, *, baseline_page_fingerprints: Mapping[str, dict] | None,
+        cls,
+        row: ClientAppRow,
+        *,
+        baseline_page_fingerprints: Mapping[str, dict] | None,
+        max_rps_override: float | None = None,
     ) -> "AppConfig":
+        """Build the config from a ``client_apps`` row.
+
+        ``max_rps_override`` (Phase-7 fleet tiering) supplies the EFFECTIVE
+        per-host politeness rate already resolved against the tenant's plan tier
+        (:func:`app.fleet.quota.effective_max_rps` — the app's own ``fences.max_rps``
+        wins, else the plan's ``max_rps_default``).  When ``None`` (every existing
+        caller, incl. the direct constructor/tests) the app's ``fences.max_rps`` is
+        parsed exactly as before — so a missing rate still resolves to ``0.0`` and
+        the admission gate fail-closes (``rate_unconfigured``), unchanged.
+        """
         fences = dict(row.fences or {})
-        rps = fences.get("max_rps")
-        try:
-            rps = float(rps) if rps is not None else 0.0
-        except (TypeError, ValueError):
-            rps = 0.0
+        if max_rps_override is not None:
+            try:
+                rps = float(max_rps_override)
+            except (TypeError, ValueError):
+                rps = 0.0
+            if rps < 0:
+                rps = 0.0
+        else:
+            rps = fences.get("max_rps")
+            try:
+                rps = float(rps) if rps is not None else 0.0
+            except (TypeError, ValueError):
+                rps = 0.0
         return cls(
             app_id=row.app_id,
             tenant_id=row.tenant_id,
@@ -1444,7 +1466,17 @@ async def _load_app_config(tenant_id: str, app_id: str) -> AppConfig | None:
             )).scalar_one_or_none()
             if fpr is not None:
                 baseline = dict(fpr.page_fingerprints or {})
-    return AppConfig.from_row(app_row, baseline_page_fingerprints=baseline)
+    # Phase-7 fleet tiering: apply the tenant plan's default politeness rate when
+    # the app sets no ``fences.max_rps`` of its own.  The default plan's
+    # ``max_rps_default`` is None, so ``effective_max_rps`` returns the app's own
+    # (possibly-empty) fence value unchanged — today's fail-closed posture holds.
+    from ...fleet import quota
+
+    plan = quota.resolve_plan(tenant_id)
+    effective_rps = quota.effective_max_rps(plan, (app_row.fences or {}).get("max_rps"))
+    return AppConfig.from_row(
+        app_row, baseline_page_fingerprints=baseline, max_rps_override=effective_rps,
+    )
 
 
 async def _load_prior_verdicts(
@@ -1497,6 +1529,24 @@ async def create_cycle(
         )).scalar_one_or_none()
         if app_row is not None:
             assert_crawlable(app_row, phase=PHASE_EXPLORE)
+        # Phase-7 FLEET lifecycle gate — a SUSPENDED / offboarding tenant may not
+        # have a regression cycle fired (fail-closed).  Runs in the SAME tenant-
+        # scoped transaction; a tenant with NO control record is operational
+        # (today's behavior, byte-for-byte).  Raises ``TenantNotOperational`` →
+        # the daemon's ``_fire_cycle`` skips the app (broad except) and the HTTP
+        # router maps it to a clean 403.  Lazy import avoids any import cycle.
+        from ...fleet.provisioning import assert_tenant_operational_db
+
+        await assert_tenant_operational_db(session, tenant_id, operation="cycle")
+        # Phase-7 fleet quota (fail-closed, OPT-IN) at the SHARED creation choke
+        # point, so the autonomous daemon + webhook paths are gated too — not only
+        # the HTTP router.  The default plan leaves every cap unlimited, so this
+        # short-circuits (no extra query) and today's behaviour is unchanged; a
+        # breach raises :class:`QuotaExceeded`, which the daemon's ``_fire_cycle``
+        # catches (skips the app) and the router maps onto a clean 429/409.
+        from ...fleet import quota
+
+        await quota.enforce_cycle_quota(tenant_id, session=session)
         session.add(AppCycleRow(
             cycle_id=cycle_id, tenant_id=tenant_id, app_id=app_id,
             trigger=trigger, state=CYCLE_STATE_PENDING,
@@ -1796,6 +1846,8 @@ async def _fire_cycle(item: dict, *, client: CycleClient, now: datetime) -> bool
     active cycle ⇒ skipped)."""
     from sqlalchemy.exc import IntegrityError
 
+    from ...fleet.quota import QuotaExceeded
+
     tenant_id = item["tenant_id"]
     app_id = item["app_id"]
     mode = item.get("mode") or MODE_AUTO
@@ -1821,6 +1873,16 @@ async def _fire_cycle(item: dict, *, client: CycleClient, now: datetime) -> bool
                 "qec.cycle_daemon.not_onboarded",
                 extra={"tenant_id": tenant_id, "app_id": app_id,
                        "phase": exc.phase, "reasons": exc.reasons},
+            )
+            return False
+        except QuotaExceeded as exc:
+            # A tenant over its plan's concurrency/monthly-spend cap is NEVER
+            # auto-cycled by the daemon — skipped cleanly (fair fleet sharing),
+            # never a crash and never a silent over-spend.
+            logger.info(
+                "qec.cycle_daemon.quota_exceeded",
+                extra={"tenant_id": tenant_id, "app_id": app_id,
+                       "resource": exc.resource, "reason": exc.reason, "plan": exc.plan},
             )
             return False
 

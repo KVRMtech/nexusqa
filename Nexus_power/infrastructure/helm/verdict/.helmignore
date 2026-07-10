@@ -1,0 +1,13 @@
+# Patterns to ignore when packaging the chart (helm package).
+.git/
+.gitignore
+*.tmp
+*.bak
+*.orig
+*.log
+.DS_Store
+# The static linter is a CI tool, not a chart artifact.
+scripts/
+# Editor/OS cruft.
+.vscode/
+.idea/

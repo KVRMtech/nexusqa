@@ -31,6 +31,7 @@ from .metrics import (
     METRIC_FACTORY_CALL_DURATION,
     METRIC_FACTORY_CALLS,
     METRIC_HARNESS_OUTCOMES,
+    METRIC_QUOTA_DECISIONS,
     METRIC_SUBSTRATE_ROWS,
     PROM_AVAILABLE,
     build_metrics_router,
@@ -45,6 +46,7 @@ from .metrics import (
     record_cycle_started,
     record_factory_call,
     record_harness_outcome,
+    record_quota_decision,
     record_substrate_rows,
     render_latest,
     set_admission_in_flight,
@@ -83,6 +85,7 @@ __all__ = [
     "METRIC_SUBSTRATE_ROWS",
     "METRIC_HARNESS_OUTCOMES",
     "METRIC_COST_UNITS",
+    "METRIC_QUOTA_DECISIONS",
     # ── metrics: recording helpers ──
     "record_cycle_started",
     "record_cycle_completed",
@@ -94,6 +97,7 @@ __all__ = [
     "record_substrate_rows",
     "record_harness_outcome",
     "record_cost_units",
+    "record_quota_decision",
     # ── correlation id ──
     "CorrelationIdMiddleware",
     "current_request_id",

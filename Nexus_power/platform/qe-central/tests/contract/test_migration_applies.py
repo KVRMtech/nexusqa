@@ -2,7 +2,8 @@
 
 Complements test_rls_isolation.py (which proves the policies *behave*): this
 test proves the migration *shipped* — against a live ``qecentral`` DB at alembic
-head it asserts the exact 21-table surface, the ``tenant_isolation`` policy +
+head it asserts the exact 22-table surface (qec_001 + the qec_002 Phase-7
+``tenant_provisioning`` table), the ``tenant_isolation`` policy +
 ENABLE/FORCE row security on every one of them, and the invariant-critical
 unique indexes/constraints (the one-active-cycle partial index, the audit-ingest
 dedupe index, the idempotent-universe identity index, the change-event and
@@ -43,9 +44,9 @@ def run(coro):
     return asyncio.run(coro)
 
 
-# The complete, authoritative list of the 21 QE-Central-owned tables (design
-# R-7).  Declared here so a schema change is a deliberate edit in BOTH the
-# migration and this test.
+# The complete, authoritative list of the 22 QE-Central-owned tables (design
+# R-7 + Phase-7 fleet).  Declared here so a schema change is a deliberate edit in
+# BOTH the migration and this test.
 _EXPECTED_TABLES = {
     # S1 — core service
     "client_apps", "qe_explorations", "qe_harness_runs",
@@ -58,6 +59,8 @@ _EXPECTED_TABLES = {
     # S3 — repo-intel
     "repo_connections", "app_model_universes", "app_model_atoms",
     "crawl_seed_manifests", "repo_drift_reports",
+    # Phase-7 — fleet provisioning (qec_002)
+    "tenant_provisioning",
 }
 
 # Invariant-enforcing unique indexes/constraints.  The two PARTIAL indexes carry
@@ -126,15 +129,15 @@ class TestMigrationAppliesCleanly:
     def test_schema_matches_the_design(self):
         head, tables, rls, policies, indexes, constraints = run(_fetch())
 
-        # ── alembic is exactly at the qec_001 head ──────────────────────────
-        assert head == "qec_001", f"qecentral alembic head is {head!r}, expected 'qec_001'"
+        # ── alembic is exactly at the qec_002 head (qec_001 → qec_002) ──────
+        assert head == "qec_002", f"qecentral alembic head is {head!r}, expected 'qec_002'"
 
-        # ── EXACTLY the 21 designed tables (no more, no fewer) ──────────────
+        # ── EXACTLY the 22 designed tables (no more, no fewer) ──────────────
         assert tables == _EXPECTED_TABLES, {
             "missing": sorted(_EXPECTED_TABLES - tables),
             "unexpected": sorted(tables - _EXPECTED_TABLES),
         }
-        assert len(_EXPECTED_TABLES) == 21
+        assert len(_EXPECTED_TABLES) == 22
 
         # ── every table: RLS enabled + FORCEd + a tenant_isolation policy ───
         for table in _EXPECTED_TABLES:

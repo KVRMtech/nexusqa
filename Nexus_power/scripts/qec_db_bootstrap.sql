@@ -105,6 +105,25 @@ GRANT SELECT, INSERT ON tenants TO qec_substrate;
 -- Touch-meter ingest (S4) reads the audit trail — read-only.
 GRANT SELECT ON audit_log TO qec_substrate;
 
+-- Phase-8 (SEAM E) compliance projections read the EXISTING evidence tables —
+-- STRICTLY READ-ONLY (SELECT), never write. These ship out-of-band (created by
+-- the VKPower verify path, not the nexus alembic chain), so the grant is
+-- existence-guarded: on a database where a table is not yet present the loader
+-- simply degrades that one source to "unavailable" and the report says so.
+DO $$
+DECLARE
+    t text;
+BEGIN
+    FOREACH t IN ARRAY ARRAY[
+        'verdict_events', 'decision_dossiers', 'verification_waivers'
+    ]
+    LOOP
+        IF to_regclass('public.' || t) IS NOT NULL THEN
+            EXECUTE format('GRANT SELECT ON %I TO qec_substrate', t);
+        END IF;
+    END LOOP;
+END $$;
+
 -- Explicit negative fences (defense in depth; new tables are NOT granted
 -- by default, this just hard-documents the posture on the crown jewels).
 -- Existence-guarded: e2e_auth_profiles ships via an out-of-band script and

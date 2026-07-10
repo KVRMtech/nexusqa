@@ -55,6 +55,8 @@ from app.routers.scenario_gov import router as scenario_gov_router
 from app.routers.cycles import router as cycles_router
 from app.routers.cost import router as cost_router
 from app.routers.webhooks import router as webhooks_router
+from app.routers.compliance import router as compliance_router
+from app.routers.fleet import router as fleet_router
 
 # ── Phase-5.5 additive wiring (all OPT-IN; the default of every knob preserves
 #    today's single-instance behavior — see app/config.py + the module docs) ──
@@ -277,6 +279,15 @@ app.include_router(scenario_gov_router)
 app.include_router(cycles_router)
 app.include_router(cost_router)
 app.include_router(webhooks_router)
+# Phase-8 (SEAM E) compliance — READ-ONLY framework projections (SOC2 / NAIC
+# MAR / EU AI-Act) over the existing verdict chains / dossiers / waivers /
+# audit_log. Additive; captures nothing new; admin-only, tenant-scoped.
+app.include_router(compliance_router)
+# Phase-7 (fleet) tenant provisioning + lifecycle — onboard/suspend/resume/
+# offboard a CLIENT in one call. Admin-only via a NEW PLATFORM SUPER-ADMIN scope
+# (role admin + platform_admin marker), so a tenant admin can NOT manage other
+# tenants. Additive; a tenant with no control record behaves exactly as today.
+app.include_router(fleet_router)
 # Phase-1: the HMAC-authenticated explorer completion callback. Lives OUTSIDE
 # the /api/* prefix (the explorer holds no JWT — only the HMAC token), so the
 # fail-closed JWT middleware skips it; internal.py verifies the HMAC itself.

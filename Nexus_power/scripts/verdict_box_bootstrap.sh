@@ -81,7 +81,7 @@ docker compose --env-file "$ENV_FILE" -f docker-compose.qec.yml run --rm \
   qe-central alembic -c alembic_qec/alembic.ini upgrade head 2>&1 | tail -8
 TABLES=$(docker exec nexus-postgres psql -U nexus -d qecentral -t -A -c \
   "select count(*) from information_schema.tables where table_schema='public' and table_type='BASE TABLE';" 2>/dev/null)
-echo "QECENTRAL_TABLES=$TABLES (expect 22 incl. alembic_version)"
+echo "QECENTRAL_TABLES=$TABLES (expect 23 incl. alembic_version — 22 tenant tables + qec_002)"
 QEC_PLATFORM_API_URL="http://platform-api:8091" \
   docker compose --env-file "$ENV_FILE" -f docker-compose.qec.yml --profile portal up -d 2>&1 | tail -8
 

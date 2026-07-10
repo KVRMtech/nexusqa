@@ -1,0 +1,64 @@
+{{/*
+=================================================================
+ConfigMap — shared NON-SECRET configuration for the Verdict plane.
+
+DB passwords, the JWT secret and the explorer HMAC token are NEVER here —
+they are injected from the Secret and composed into the DSN env vars at
+runtime via k8s $(VAR) dependency expansion in the qe-central / repo-intel
+Deployments. This keeps every credential out of the ConfigMap.
+=================================================================
+*/}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "verdict.configName" . }}
+  labels:
+    {{- include "verdict.labels" . | nindent 4 }}
+data:
+  # ── Environment + safety posture ──
+  NEXUS_ENV: {{ .Values.env.nexusEnv | quote }}
+  QEC_LOG_LEVEL: {{ .Values.env.logLevel | quote }}
+  QEC_JWT_AUDIENCE: {{ .Values.env.jwtAudience | quote }}
+  QEC_REQUIRE_AUD: {{ .Values.env.requireAud | quote }}
+  QEC_SERVICE_TOKEN_TTL_SECONDS: {{ .Values.env.serviceTokenTtlSeconds | quote }}
+
+  # ── VKPower factory (bounded external context) ──
+  PLATFORM_API_URL: {{ .Values.factory.platformApiUrl | quote }}
+
+  # ── Storage (MUST match the factory backend — design §3.1 / R-5) ──
+  NEXUS_STORAGE_BACKEND: {{ .Values.env.storageBackend | quote }}
+  NEXUS_STORAGE_PATH: {{ .Values.env.storagePath | quote }}
+  NEXUS_FRAME_STORAGE_PATH: {{ .Values.env.frameStoragePath | quote }}
+  GCS_BUCKET: {{ .Values.env.gcsBucket | default "" | quote }}
+
+  # ── Phase-5.5 scale-out (defaults preserve single-instance behavior) ──
+  QEC_ADMISSION_BACKEND: {{ .Values.env.admissionBackend | quote }}
+  QEC_REDIS_URL: {{ .Values.env.redisUrl | default "" | quote }}
+  QEC_ADMISSION_REDIS_NAMESPACE: {{ .Values.env.admissionRedisNamespace | quote }}
+  QEC_ADMISSION_LEASE_TTL_SECONDS: {{ .Values.env.admissionLeaseTtlSeconds | quote }}
+  QEC_DAEMON_LEADER_ELECTION: {{ .Values.env.daemonLeaderElection | quote }}
+  QEC_API_RATE_LIMIT: {{ .Values.env.apiRateLimit | quote }}
+  QEC_HTTP_MAX_RETRIES: {{ .Values.env.httpMaxRetries | quote }}
+
+  # ── Explorer dispatch (design §3.2) ──
+  QEC_EXPLORER_DISPATCH_ENABLED: {{ .Values.env.explorerDispatchEnabled | quote }}
+  QEC_EXPLORER_URL: {{ include "verdict.serviceUrl" (dict "root" . "component" "qe-explorer" "port" .Values.qeExplorer.port) | quote }}
+  QEC_CRAWL_STORAGE_ROOT: "/work"
+  QEC_EGRESS_ALLOWLIST_PATH: "/qec/egress-allowlist/allowed_domains.txt"
+
+  # ── REFUSE harness (default OFF) ──
+  QE_HARNESS_ENABLED: {{ .Values.env.harnessEnabled | quote }}
+
+  # ── Observability ──
+  QEC_METRICS_ENABLED: {{ .Values.env.metricsEnabled | quote }}
+  QEC_METRICS_PATH: {{ .Values.env.metricsPath | quote }}
+
+  # NOTE: the two DSNs (QEC_DATABASE_URL / NEXUS_DATABASE_URL_SUBSTRATE) are
+  # composed in the qe-central + repo-intel + migration Deployments/Jobs, with
+  # the password injected from the Secret via k8s $(VAR) expansion — so no DB
+  # password is ever written into this ConfigMap.
+
+  # ── repo-intel ──
+  REPO_INTEL_WORKDIR_ROOT: "/app/service/data/repos"
+  REPO_INTEL_MAX_REPO_BYTES: {{ .Values.repoIntel.maxRepoBytes | quote }}
+  REPO_INTEL_LLM_LENS_ENABLED: {{ .Values.repoIntel.llmLensEnabled | quote }}

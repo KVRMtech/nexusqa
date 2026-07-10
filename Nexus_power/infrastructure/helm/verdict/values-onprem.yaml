@@ -1,0 +1,130 @@
+# =============================================================================
+# VKPower Verdict — ON-PREM overlay (regulated client, their own cluster).
+#
+#   helm install verdict infrastructure/helm/verdict \
+#     -n verdict --create-namespace \
+#     -f infrastructure/helm/verdict/values.yaml \
+#     -f infrastructure/helm/verdict/values-onprem.yaml \
+#     --set kek.gcpKey=projects/.../cryptoKeys/verdict-kek \
+#     --set externalSecrets.secretStoreRef.name=<client-store>
+#
+# Posture: production + fail-closed boot; a customer-managed KMS key; all
+# credentials sourced from the client's KMS/Vault via External Secrets (no
+# plaintext in the release); the §1.1 network isolation ON. ALL Verdict data +
+# evidence stays inside this cluster — the only outbound path is the egress
+# proxy to the allowlisted target during a crawl.
+#
+# Fields left "" are the operator's to fill (per-client). They do not break the
+# render — the fail-closed boot gate turns a forgotten value into a refused boot.
+# =============================================================================
+
+global:
+  image:
+    # The client's registry the Verdict images were pushed to.
+    registry: "registry.internal"
+    repository: "vkpower"
+    tag: "2.0.0"
+    pullPolicy: IfNotPresent
+  imagePullSecrets:
+    - name: verdict-registry
+
+env:
+  nexusEnv: production
+  requireAud: true
+  # Single-tenant on-prem is typically single-replica; flip to redis + a leader
+  # for a multi-replica HA install (and provide env.redisUrl).
+  admissionBackend: memory
+  daemonLeaderElection: none
+  # Match the factory's object-storage backend so frames are co-readable. For a
+  # self-contained cluster this is usually an in-cluster S3 (MinIO).
+  storageBackend: local
+  metricsEnabled: true
+
+# Customer-managed KMS key (the client owns + controls it). Provide the resource
+# via --set (kek.gcpKey / kek.awsArn). aws_kms alternative shown in comments.
+kek:
+  provider: gcp_kms
+  gcpKey: ""            # projects/<proj>/locations/<loc>/keyRings/<r>/cryptoKeys/<k>
+  # provider: aws_kms
+  # awsArn: "arn:aws:kms:<region>:<acct>:key/<id>"
+  # awsRegion: "<region>"
+
+# The VKPower factory (deployed by the nexus-qa chart / compose) — point at it.
+factory:
+  platformApiUrl: "http://nexus-qa-platform-api.nexus-qa.svc:8091"
+  namespace: "nexus-qa"
+  substrate:
+    host: "nexus-qa-postgres.nexus-qa.svc"
+    port: 5432
+    database: "nexus"
+    user: "qec_substrate"
+
+# Dedicated qecentral Postgres in-cluster (PITR/backups are the client's; see
+# ONPREM_INSTALL.md). Set postgres.enabled=false to use an external managed PG.
+postgres:
+  enabled: true
+  persistence:
+    enabled: true
+    size: 50Gi
+
+qeCentral:
+  replicas: 1
+  # Persist the KEK-adjacent + frame data on durable volumes.
+  persistence:
+    crawl:
+      mode: pvc
+      size: 20Gi
+    frames:
+      mode: pvc
+      size: 50Gi
+
+qeExplorer:
+  enabled: true
+
+egressProxy:
+  enabled: true
+  # The single onboarded target app's registrable domain(s). EMPTY ⇒ fail-closed
+  # (denies all real egress) until set.
+  allowedDomains: []
+  # The cluster's pod + service CIDRs — the proxy must never reach them.
+  excludeCidrs: []
+
+# repo-intel is off the critical path; enable per-tenant if wanted.
+repoIntel:
+  enabled: false
+
+portal:
+  enabled: true
+
+# Source EVERY credential from the client's KMS/Vault — no plaintext in the
+# release. Create the ClusterSecretStore/SecretStore first, then --set its name.
+externalSecrets:
+  enabled: true
+  refreshInterval: "1h"
+  secretStoreRef:
+    name: ""            # the client's ClusterSecretStore
+    kind: ClusterSecretStore
+  remoteKeyPrefix: "verdict"
+
+networkPolicies:
+  enabled: true
+  ingressNamespace: "ingress-nginx"
+  monitoringNamespace: "observability"
+
+monitoring:
+  serviceMonitor:
+    enabled: true
+
+ingress:
+  enabled: true
+  className: "nginx"
+  host: "verdict.client.internal"
+  annotations: {}
+  tls:
+    enabled: true
+    secretName: "verdict-tls"
+
+# Run the schema migration as a post-install/upgrade hook (the qec_substrate
+# ROLE bootstrap on the factory DB is a separate one-time step — see the runbook).
+migrations:
+  enabled: true

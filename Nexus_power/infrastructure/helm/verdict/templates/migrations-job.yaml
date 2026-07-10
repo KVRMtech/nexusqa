@@ -1,0 +1,71 @@
+{{/*
+=================================================================
+Schema migration Job — `alembic upgrade head` on the qecentral DB.
+
+Runs as a post-install / post-upgrade Helm hook using the qe-central
+image and the qec role DSN (password injected from the Secret). Idempotent
+(alembic is a no-op at head). Disable via migrations.enabled=false if you
+migrate out-of-band.
+
+PREREQUISITE (one-time, OUTSIDE this chart — VKPower stays untouchable):
+the qec_substrate role + its least-privilege grants on the factory `nexus`
+DB (scripts/qec_db_bootstrap.sql). See QECentral/docs/ONPREM_INSTALL.md.
+=================================================================
+*/}}
+{{- if .Values.migrations.enabled }}
+{{- $fullname := include "verdict.fullname" . }}
+{{- $root := . }}
+{{- $pgEndpoint := include "verdict.pgEndpoint" . }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $fullname }}-migrate
+  labels:
+    {{- include "verdict.componentLabels" (dict "root" $root "component" "migrate") | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "0"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: {{ .Values.migrations.backoffLimit }}
+  template:
+    metadata:
+      labels:
+        {{- include "verdict.componentSelectorLabels" (dict "root" $root "component" "migrate") | nindent 8 }}
+    spec:
+      restartPolicy: Never
+      serviceAccountName: {{ .Values.serviceAccount.name | default (include "verdict.fullname" .) }}
+      {{- include "verdict.podSpecCommon" $root | nindent 6 }}
+      securityContext:
+        {{- include "verdict.podSecurityContext" . | nindent 8 }}
+      containers:
+        - name: migrate
+          image: {{ include "verdict.image" (dict "root" $root "name" .Values.qeCentral.image.name "tag" .Values.qeCentral.image.tag) }}
+          imagePullPolicy: {{ .Values.global.image.pullPolicy }}
+          command: ["alembic", "-c", "alembic_qec/alembic.ini", "upgrade", "head"]
+          env:
+            - name: NEXUS_ENV
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "verdict.configName" $root }}
+                  key: NEXUS_ENV
+            - name: QEC_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "verdict.secretName" $root }}
+                  key: qec-db-password
+            - name: QEC_DATABASE_URL
+              value: "postgresql+asyncpg://{{ .Values.postgres.user }}:$(QEC_DB_PASSWORD)@{{ $pgEndpoint }}/{{ .Values.postgres.database }}"
+          resources:
+            {{- toYaml .Values.migrations.resources | nindent 12 }}
+          securityContext:
+            {{- include "verdict.containerSecurityContext" . | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi
+{{- end }}

@@ -1,0 +1,74 @@
+{{/*
+=================================================================
+ServiceMonitor — Prometheus Operator scrape config for the Verdict
+control-plane /metrics (qe-central exposes the qec_* fleet metrics on its
+HTTP port, outside /api/* so no JWT is needed — same public posture as
+/health). repo-intel is scraped too when enabled.
+
+Enable with monitoring.serviceMonitor.enabled=true (requires the Prometheus
+Operator CRDs — kube-prometheus-stack).
+=================================================================
+*/}}
+{{- if and .Values.monitoring.serviceMonitor .Values.monitoring.serviceMonitor.enabled }}
+{{- $fullname := include "verdict.fullname" . }}
+{{- $root := . }}
+{{- $interval := .Values.monitoring.serviceMonitor.interval | default "15s" }}
+{{- $scrapeTimeout := .Values.monitoring.serviceMonitor.scrapeTimeout | default "10s" }}
+{{- $namespace := .Values.monitoring.serviceMonitor.namespace | default .Release.Namespace }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ $fullname }}-qe-central
+  namespace: {{ $namespace }}
+  labels:
+    {{- include "verdict.componentLabels" (dict "root" $root "component" "qe-central") | nindent 4 }}
+    {{- with .Values.monitoring.serviceMonitor.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "verdict.componentSelectorLabels" (dict "root" $root "component" "qe-central") | nindent 6 }}
+  namespaceSelector:
+    matchNames:
+      - {{ .Release.Namespace }}
+  endpoints:
+    - port: http
+      path: {{ .Values.env.metricsPath | quote }}
+      interval: {{ $interval }}
+      scrapeTimeout: {{ $scrapeTimeout }}
+      {{- with .Values.monitoring.serviceMonitor.metricRelabelings }}
+      metricRelabelings:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- if .Values.repoIntel.enabled }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ $fullname }}-repo-intel
+  namespace: {{ $namespace }}
+  labels:
+    {{- include "verdict.componentLabels" (dict "root" $root "component" "repo-intel") | nindent 4 }}
+    {{- with .Values.monitoring.serviceMonitor.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "verdict.componentSelectorLabels" (dict "root" $root "component" "repo-intel") | nindent 6 }}
+  namespaceSelector:
+    matchNames:
+      - {{ .Release.Namespace }}
+  endpoints:
+    - port: http
+      path: {{ .Values.env.metricsPath | quote }}
+      interval: {{ $interval }}
+      scrapeTimeout: {{ $scrapeTimeout }}
+      {{- with .Values.monitoring.serviceMonitor.metricRelabelings }}
+      metricRelabelings:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}
+{{- end }}
