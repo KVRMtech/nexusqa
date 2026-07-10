@@ -40,12 +40,29 @@ echo "QECENTRAL_FORCE_RLS_TABLES=$RLS"
 
 # --- 4. start the qe-central container (harness enabled for the matrix) ---
 echo "---- STEP4 up ----"
+# Name qe-central explicitly so the current compose's explorer/squid services
+# are NOT built/started — the REFUSE matrix only needs qe-central + the factory.
 QE_HARNESS_ENABLED=true QEC_DB_PASSWORD=qec-dev QEC_SUBSTRATE_DB_PASSWORD=qec-substrate-dev \
-  docker compose --env-file "$REPO/.env" -f "$REPO/docker-compose.qec.yml" up -d 2>&1 | tail -8
+  docker compose --env-file "$REPO/.env" -f "$REPO/docker-compose.qec.yml" up -d qe-central 2>&1 | tail -8
 sleep 6
 docker ps --filter name=nexus-qe-central --format '{{.Names}} {{.Status}}'
 echo "---- health ----"
 docker exec nexus-qe-central sh -lc 'curl -s -m 10 http://localhost:8093/health || echo HEALTH_CURL_FAIL' 2>&1 | head -5
+
+# --- 4b. WAIT for the VKPower factory (platform-api) to be reachable ---
+# On a cold VM boot the heavy platform-api is not ready for ~30-60s (its own
+# healthcheck has start_period:30s). The harness drives the factory chain, so
+# a ConnectError here is a not-ready race, not a code fault. Poll from INSIDE
+# the qe-central container (same network path the harness uses) up to ~3 min.
+echo "---- STEP4b wait for platform-api factory ----"
+PAPI_OK=no
+for i in $(seq 1 36); do
+  if docker exec nexus-qe-central sh -lc 'curl -sf -m 5 http://platform-api:8091/health >/dev/null 2>&1'; then
+    echo "PLATFORM_API_READY after ~$((i*5))s"; PAPI_OK=yes; break
+  fi
+  sleep 5
+done
+[ "$PAPI_OK" = yes ] || echo "PLATFORM_API_NOT_READY_after_180s (harness may CHAIN_ERROR on generate)"
 
 # --- 5. run the REFUSE matrix R1-R8 in-container ---
 echo "---- STEP5 REFUSE matrix ----"

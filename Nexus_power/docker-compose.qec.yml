@@ -48,6 +48,13 @@ services:
       # MUST match platform-api's storage backend so frame assets are
       # co-readable (design §3.1 / R-5).
       NEXUS_STORAGE_BACKEND: ${NEXUS_STORAGE_BACKEND:-local}
+      # ArtifactStore local root (nexus_sdk.storage.base). MUST match
+      # platform-api's NEXUS_STORAGE_PATH (docker-compose.yml:467 = /app/service/
+      # data) — WITHOUT this the SDK falls back to its hardcoded /data/nexus
+      # default, which the non-root container user cannot write ([Errno 13]).
+      # The Dockerfile chowns /app/service/data to the nexus user, so this is
+      # writable; frames land co-readable with the eyes/platform-api stack.
+      NEXUS_STORAGE_PATH: ${NEXUS_STORAGE_PATH:-/app/service/data}
       NEXUS_FRAME_STORAGE_PATH: ${NEXUS_FRAME_STORAGE_PATH:-/app/service/data/frames}
       GCS_BUCKET: ${GCS_BUCKET:-}
       # Phase-0 REFUSE harness — explicit opt-in (creates real artifacts).
