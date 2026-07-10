@@ -36,6 +36,7 @@ import uuid
 
 from pydantic import BaseModel
 from sqlalchemy import func, insert, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from nexus_sdk.db.models import (
     CanonicalArtifactRow,
@@ -402,7 +403,21 @@ async def write_exploration(
         if action_values:
             await session.execute(insert(PageActionRow), action_values)
         if event_values:
-            await session.execute(insert(GroundTruthEventRow), event_values)
+            # ground_truth_events is an IDEMPOTENT audit journal keyed by a
+            # deterministic uuid5 event_id: the raw event happened once, so a
+            # re-extraction of the SAME artifact under a new extractor_version
+            # re-journals identical events — which must be a no-op, not a
+            # duplicate-key crash. (page_visits/page_actions DO coexist across
+            # versions via their version-scoped unique constraints; the journal
+            # does not.) ON CONFLICT DO NOTHING makes re-extraction safe while
+            # leaving a genuinely poisoned write (e.g. the R7 hijack's duplicate
+            # sequence_index, which fails on the page_visits insert FIRST) to
+            # still die atomically.
+            await session.execute(
+                pg_insert(GroundTruthEventRow)
+                .values(event_values)
+                .on_conflict_do_nothing(index_elements=["event_id"])
+            )
         if frame_values:
             await session.execute(insert(VisualFrameRow), frame_values)
 
