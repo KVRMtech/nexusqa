@@ -222,6 +222,25 @@ services:
     networks:
     - nexus
 
+  # ── Acme Life — life-insurance proving ground (Phase 6.5 crawl target) ──────
+  # Profile-gated ('grounds') so the default up does NOT build it. A synthetic
+  # accessible insurance SPA (login→quote→apply→bind) with the over-60 coverage
+  # invariant + a ?break_over60=1 MUST-REFUSE probe. Reachable by qe-explorer as
+  # http://acme-life:80 for the first beachhead-representative live crawl.
+  acme-life:
+    profiles: ["grounds"]
+    build:
+      context: ./proving-grounds/acme-life
+      dockerfile: Dockerfile
+    image: nexus_power-acme-life
+    container_name: nexus-acme-life
+    restart: unless-stopped
+    ports:
+    - "8097:80"
+    mem_limit: 128m
+    networks:
+    - nexus
+
 networks:
   # The running stack's network (external) — qe-central only.
   nexus:

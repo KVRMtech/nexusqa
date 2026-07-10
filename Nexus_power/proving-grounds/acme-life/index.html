@@ -1,0 +1,229 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Acme Life Insurance</title>
+<!--
+  Acme Life — a synthetic life-insurance proving ground for VKPower Verdict.
+  Self-contained accessible SPA (login -> quote -> apply -> review -> bind).
+  Served by nginx:alpine (see Dockerfile). Any credentials log in.
+
+  THE BUSINESS RULE (the invariant Verdict certifies + a MUST-REFUSE probe breaks):
+    "An applicant over 60 cannot bind coverage above $500,000."
+  Enforced in enforceOver60Rule(). BREAK-MODE: append ?break_over60=1 to the URL
+  (or localStorage acme_break_over60=1) to DISABLE the rule — the app then
+  WRONGLY allows an over-60 $600k bind, so a certified Verdict suite must go RED.
+  This mirrors the Aegis "?break=" convention.
+
+  Accessibility: every input has a <label for>; buttons carry clear text; the
+  Bind action is named "Bind policy" so the crawler's irreversible-verb refuse
+  pack catches it; a modal confirms the bind.  Synthetic data only (SSN 900-xx).
+-->
+<style>
+  :root{--ink:#12233a;--soft:#5a6b82;--line:#d7dfea;--navy:#0e2a53;--gold:#b8892b;--bg:#f4f7fb;--ok:#1f8a5b;--err:#c0392b}
+  *{box-sizing:border-box}
+  body{margin:0;font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;color:var(--ink);background:var(--bg)}
+  header{background:var(--navy);color:#fff;padding:14px 22px;display:flex;align-items:center;gap:12px}
+  header .logo{width:30px;height:30px;border-radius:8px;background:linear-gradient(135deg,#2e6bd6,#0e2a53);display:grid;place-items:center;font-weight:800;color:#fff}
+  header b{font-size:17px;letter-spacing:-.01em}
+  header .tag{margin-left:auto;font-size:12px;opacity:.8}
+  nav{background:#fff;border-bottom:1px solid var(--line);padding:0 22px;display:flex;gap:4px}
+  nav a{padding:12px 14px;color:var(--soft);text-decoration:none;font-size:14px;font-weight:600;border-bottom:2px solid transparent}
+  nav a[aria-current="page"]{color:var(--navy);border-bottom-color:var(--gold)}
+  main{max-width:640px;margin:26px auto;padding:0 20px}
+  .card{background:#fff;border:1px solid var(--line);border-radius:12px;padding:22px 24px;box-shadow:0 1px 2px rgba(18,35,58,.05)}
+  h1{font-size:23px;margin:0 0 4px;letter-spacing:-.01em}
+  .lede{color:var(--soft);margin:0 0 20px;font-size:14px}
+  .field{margin-bottom:16px}
+  label{display:block;font-size:13px;font-weight:600;margin-bottom:6px}
+  input,select{width:100%;padding:10px 12px;border:1px solid var(--line);border-radius:8px;font-size:15px;font-family:inherit;background:#fff}
+  input:focus,select:focus{outline:2px solid #2e6bd6;outline-offset:1px}
+  fieldset{border:1px solid var(--line);border-radius:8px;padding:12px 14px;margin:0 0 16px}
+  legend{font-size:13px;font-weight:600;padding:0 6px}
+  .radio{display:flex;gap:20px}.radio label{display:flex;align-items:center;gap:7px;font-weight:500}
+  .radio input{width:auto}
+  button{background:var(--navy);color:#fff;border:none;border-radius:8px;padding:11px 20px;font-size:15px;font-weight:600;cursor:pointer;font-family:inherit}
+  button.gold{background:var(--gold)} button.ghost{background:#fff;color:var(--navy);border:1px solid var(--line)}
+  .row{display:flex;gap:14px}.row>div{flex:1}
+  .out{margin-top:18px;padding:16px;border-radius:10px;background:#eef4fd;border:1px solid #cfe0f7}
+  .out .prem{font-size:30px;font-weight:800;color:var(--navy)}
+  .err{color:var(--err);background:#fdeceb;border:1px solid #f5c6c2;border-radius:8px;padding:10px 12px;margin-top:12px;font-size:14px}
+  [role="alert"]{font-weight:600}
+  .modal{position:fixed;inset:0;background:rgba(14,42,83,.55);display:none;place-items:center;padding:20px}
+  .modal[data-open="1"]{display:grid}
+  .modal .box{background:#fff;border-radius:14px;padding:24px;max-width:420px;width:100%}
+  .modal h2{margin:0 0 8px;font-size:19px}
+  .actions{display:flex;gap:10px;margin-top:20px}
+  .ok{color:var(--ok)} .muted{color:var(--soft);font-size:13px}
+  .badge{display:inline-block;font-size:11px;font-weight:700;padding:3px 8px;border-radius:5px;background:#e8f5ee;color:var(--ok)}
+</style>
+</head>
+<body>
+<header>
+  <div class="logo" aria-hidden="true">A</div>
+  <b>Acme Life Insurance</b>
+  <span class="tag">Term &amp; Whole Life · TX · FL · CA</span>
+</header>
+<nav aria-label="Primary">
+  <a href="#/login" id="nav-login">Sign in</a>
+  <a href="#/quote" id="nav-quote">Get a quote</a>
+  <a href="#/apply" id="nav-apply">Apply</a>
+  <a href="#/review" id="nav-review">Review &amp; bind</a>
+</nav>
+<main id="view" aria-live="polite"></main>
+
+<div class="modal" id="bindModal" role="dialog" aria-modal="true" aria-labelledby="bindTitle">
+  <div class="box">
+    <h2 id="bindTitle">Confirm — bind this policy?</h2>
+    <p class="muted">Binding issues the policy and charges the first premium. This is a terminal action.</p>
+    <div class="actions">
+      <button class="gold" id="confirmBind">Bind policy</button>
+      <button class="ghost" id="cancelBind">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+  "use strict";
+  var state = { quote:null, applicant:null, bound:false };
+
+  function breakOver60(){
+    var u = new URLSearchParams(location.search);
+    return u.get("break_over60")==="1" || localStorage.getItem("acme_break_over60")==="1";
+  }
+
+  // Base rates per $1k of coverage, per 10yr term band (synthetic).
+  function premium(age, coverage, term, smoker){
+    var base = 0.9 + Math.max(0,(age-25))*0.055 + (term>=20?0.35:0);
+    if(smoker) base *= 1.8;
+    return Math.round((coverage/1000)*base*100)/100 / 12; // monthly
+  }
+
+  // THE INVARIANT. Returns an error string if the bind must be declined.
+  function enforceOver60Rule(age, coverage){
+    if(breakOver60()) return null;                 // break-mode: rule disabled
+    if(age > 60 && coverage > 500000){
+      return "Declined: applicants over 60 cannot bind coverage above $500,000.";
+    }
+    return null;
+  }
+
+  function esc(s){return String(s).replace(/[&<>"]/g,function(c){return{"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]});}
+  function view(){return document.getElementById("view");}
+  function setNav(id){document.querySelectorAll("nav a").forEach(function(a){a.removeAttribute("aria-current");});var n=document.getElementById(id);if(n)n.setAttribute("aria-current","page");}
+
+  function requireAuth(){ if(!sessionStorage.getItem("acme_user")){ location.hash="#/login"; return false;} return true; }
+
+  var routes = {
+    "/login": function(){
+      setNav("nav-login");
+      view().innerHTML =
+        '<div class="card"><h1>Sign in</h1><p class="lede">Access your Acme Life account.</p>'+
+        '<form id="loginForm">'+
+        '<div class="field"><label for="username">Username</label><input id="username" name="username" autocomplete="username" required></div>'+
+        '<div class="field"><label for="password">Password</label><input id="password" name="password" type="password" autocomplete="current-password" required></div>'+
+        '<button type="submit">Sign in</button></form></div>';
+      document.getElementById("loginForm").addEventListener("submit",function(e){
+        e.preventDefault();
+        sessionStorage.setItem("acme_user", document.getElementById("username").value || "member");
+        location.hash="#/quote";
+      });
+    },
+    "/quote": function(){
+      if(!requireAuth())return; setNav("nav-quote");
+      view().innerHTML =
+        '<div class="card"><h1>Get a term life quote</h1><p class="lede">A few details for your monthly premium.</p>'+
+        '<form id="quoteForm">'+
+        '<div class="row"><div class="field"><label for="age">Age</label><input id="age" name="age" type="number" min="18" max="85" required></div>'+
+        '<div class="field"><label for="coverage">Coverage amount ($)</label><input id="coverage" name="coverage" type="number" min="50000" max="2000000" step="50000" required></div></div>'+
+        '<div class="row"><div class="field"><label for="term">Term length</label><select id="term" name="term">'+
+        '<option value="10">10 years</option><option value="20" selected>20 years</option><option value="30">30 years</option></select></div>'+
+        '<div class="field"><label for="state">State</label><select id="state" name="state"><option>TX</option><option>FL</option><option>CA</option></select></div></div>'+
+        '<fieldset><legend>Do you use tobacco?</legend><div class="radio">'+
+        '<label><input type="radio" name="smoker" value="no" checked> No</label>'+
+        '<label><input type="radio" name="smoker" value="yes"> Yes</label></div></fieldset>'+
+        '<button type="submit">Get quote</button>'+
+        '<div id="quoteOut"></div></form></div>';
+      document.getElementById("quoteForm").addEventListener("submit",function(e){
+        e.preventDefault();
+        var age=+document.getElementById("age").value, cov=+document.getElementById("coverage").value,
+            term=+document.getElementById("term").value, smoker=document.querySelector('input[name=smoker]:checked').value==="yes";
+        var m = premium(age,cov,term,smoker);
+        state.quote = {age:age,coverage:cov,term:term,smoker:smoker,monthly:m};
+        document.getElementById("quoteOut").innerHTML =
+          '<div class="out"><div class="muted">Estimated monthly premium</div><div class="prem">$'+m.toFixed(2)+'</div>'+
+          '<p class="muted">'+esc(age)+' yrs · $'+cov.toLocaleString()+' · '+term+'-yr'+(smoker?' · tobacco':'')+'</p>'+
+          '<button class="gold" id="toApply">Continue to application</button></div>';
+        document.getElementById("toApply").addEventListener("click",function(){location.hash="#/apply";});
+      });
+    },
+    "/apply": function(){
+      if(!requireAuth())return; setNav("nav-apply");
+      if(!state.quote){ view().innerHTML='<div class="card"><h1>Apply</h1><p class="lede">Please get a quote first.</p><button onclick="location.hash=\'#/quote\'">Get a quote</button></div>'; return; }
+      view().innerHTML =
+        '<div class="card"><h1>Application</h1><p class="lede">Coverage $'+state.quote.coverage.toLocaleString()+' · $'+state.quote.monthly.toFixed(2)+'/mo</p>'+
+        '<form id="applyForm">'+
+        '<div class="field"><label for="fullName">Full legal name</label><input id="fullName" name="fullName" autocomplete="name" required></div>'+
+        '<div class="row"><div class="field"><label for="dob">Date of birth</label><input id="dob" name="dob" type="date" required></div>'+
+        '<div class="field"><label for="ssn">SSN (synthetic)</label><input id="ssn" name="ssn" placeholder="900-00-0000" pattern="900-\\d{2}-\\d{4}" required></div></div>'+
+        '<div class="field"><label for="beneficiary">Primary beneficiary</label><input id="beneficiary" name="beneficiary" required></div>'+
+        '<fieldset><legend>In the last 5 years, any major diagnosis?</legend><div class="radio">'+
+        '<label><input type="radio" name="health" value="no" checked> No</label>'+
+        '<label><input type="radio" name="health" value="yes"> Yes</label></div></fieldset>'+
+        '<button type="submit">Continue to review</button></form></div>';
+      document.getElementById("applyForm").addEventListener("submit",function(e){
+        e.preventDefault();
+        state.applicant={ fullName:document.getElementById("fullName").value, beneficiary:document.getElementById("beneficiary").value };
+        location.hash="#/review";
+      });
+    },
+    "/review": function(){
+      if(!requireAuth())return; setNav("nav-review");
+      if(!state.quote||!state.applicant){ view().innerHTML='<div class="card"><h1>Review &amp; bind</h1><p class="lede">Complete a quote and application first.</p><button onclick="location.hash=\'#/quote\'">Start</button></div>'; return; }
+      var q=state.quote;
+      view().innerHTML =
+        '<div class="card"><h1>Review &amp; bind</h1><p class="lede">Confirm the details, then bind your policy.</p>'+
+        (state.bound?'<p><span class="badge">POLICY BOUND</span> Confirmation #AL-'+Math.abs(hash(state.applicant.fullName))+'</p>':'')+
+        '<dl>'+
+        '<div class="field"><label>Insured</label><div>'+esc(state.applicant.fullName)+'</div></div>'+
+        '<div class="field"><label>Beneficiary</label><div>'+esc(state.applicant.beneficiary)+'</div></div>'+
+        '<div class="row"><div class="field"><label>Coverage</label><div>$'+q.coverage.toLocaleString()+'</div></div>'+
+        '<div class="field"><label>Monthly premium</label><div>$'+q.monthly.toFixed(2)+'</div></div></div>'+
+        '<div class="field"><label>Applicant age</label><div>'+q.age+'</div></div></dl>'+
+        '<div id="reviewErr"></div>'+
+        (state.bound?'':'<button class="gold" id="openBind">Bind policy</button>')+
+        '</div>';
+      var ob=document.getElementById("openBind");
+      if(ob) ob.addEventListener("click",function(){
+        // Rule check happens BEFORE the terminal action is even offered to confirm.
+        var err = enforceOver60Rule(q.age, q.coverage);
+        if(err){ document.getElementById("reviewErr").innerHTML='<div class="err" role="alert">'+esc(err)+'</div>'; return; }
+        openModal();
+      });
+    }
+  };
+
+  function hash(s){var h=0;for(var i=0;i<String(s).length;i++){h=(h*31+String(s).charCodeAt(i))|0;}return h;}
+  function openModal(){var m=document.getElementById("bindModal");m.setAttribute("data-open","1");document.getElementById("confirmBind").focus();}
+  function closeModal(){document.getElementById("bindModal").removeAttribute("data-open");}
+  document.getElementById("cancelBind").addEventListener("click",closeModal);
+  document.getElementById("confirmBind").addEventListener("click",function(){
+    // Server-equivalent re-check at the terminal step (defense in depth; the
+    // break-mode disables this too, which is exactly what the REFUSE probe tests).
+    var err = enforceOver60Rule(state.quote.age, state.quote.coverage);
+    if(err){ closeModal(); document.getElementById("reviewErr").innerHTML='<div class="err" role="alert">'+esc(err)+'</div>'; return; }
+    state.bound=true; closeModal(); render();
+  });
+
+  function render(){
+    var path = (location.hash.replace(/^#/,"") || "/login");
+    (routes[path]||routes["/login"])();
+  }
+  window.addEventListener("hashchange",render);
+  render();
+})();
+</script>
+</body>
+</html>
