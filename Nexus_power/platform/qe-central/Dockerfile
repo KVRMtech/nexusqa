@@ -28,6 +28,14 @@ RUN mkdir -p /app/service/data/frames /app/service/data/kek \
 # Runtime
 ENV PORT=8093
 EXPOSE 8093
+# Override the base image's healthcheck: it curls ${ENGINE_PORT:-8000}/health, but
+# this service listens on PORT=8093 and does NOT set ENGINE_PORT — so the inherited
+# probe hits port 8000, is refused, and the container is reported 'unhealthy' FOR
+# EVER even while /health returns 200.  A permanent false-unhealthy is worse than
+# none: it masks a REAL outage (nothing changes when the service actually dies) and
+# can trip orchestrator restart/replace loops.  Probe the port this service binds.
+HEALTHCHECK --interval=30s --timeout=10s --retries=3 \
+    CMD curl -f http://localhost:${PORT:-8093}/health || exit 1
 USER nexus
 
 CMD ["python", "-m", "app.main"]
