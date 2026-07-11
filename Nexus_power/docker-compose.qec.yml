@@ -241,6 +241,12 @@ services:
     mem_limit: 128m
     networks:
     - nexus
+    # Also join the egress-proxy's internet network so a crawl can reach this
+    # proving ground through the SAME fenced squid path as a real external app.
+    # Compose auto-aliases the service name here, so squid resolves `acme-life`
+    # (the allowlist host) — without this the proxy 503s on DNS and the crawler
+    # only ever sees squid's error page.
+    - qec-egress-public
 
 networks:
   # The running stack's network (external) — qe-central only.
