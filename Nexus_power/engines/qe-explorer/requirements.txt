@@ -13,3 +13,8 @@ pydantic==2.10.3
 pydantic-settings==2.6.1
 PyYAML==6.0.2
 structlog==24.4.0
+# The playwright browsers are baked into the base image (/ms-playwright), but the
+# playwright PYTHON package is not exposed to the app interpreter in this build —
+# pin it explicitly (matching the base's browser version) so the crawler can
+# ``import playwright``. pip installs only the package; the browsers come from the base.
+playwright==1.48.0

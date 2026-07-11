@@ -44,7 +44,7 @@ from ..clients.manifest_mapper import (
     map_manifest_records_to_bundle,
 )
 from ..db import tenant_scoped_qec_session, utc_now
-from ..db.models import QEExplorationRow
+from ..db.models import ClientAppRow, QEExplorationRow
 from ..substrate.schema import CRAWL_ID_PATTERN, ExplorationBundle, RefusalError
 from ..substrate.writer import (
     EXTRACTOR_VERSION_PREFIX,
@@ -161,6 +161,34 @@ async def _mark(
         for key, value in fields.items():
             setattr(row, key, value)
         row.updated_at = utc_now()
+
+
+async def _promote_latest_artifact(tenant_id: str, app_id: str, artifact_id: str) -> None:
+    """Promote a freshly-recorded crawl artifact onto its registered app so a
+    cycle can run against it (own transaction; best-effort — a promote failure
+    NEVER fails the crawl, which already produced a valid, evidence-passing
+    artifact). Without this the app keeps ``latest_artifact_id=''`` and every
+    cycle 409s with 'register a crawl/exploration first'."""
+    if not (app_id and artifact_id):
+        return
+    try:
+        async with tenant_scoped_qec_session(tenant_id) as session:
+            row = (
+                await session.execute(
+                    select(ClientAppRow).where(
+                        ClientAppRow.app_id == app_id,
+                        ClientAppRow.tenant_id == tenant_id,
+                    )
+                )
+            ).scalar_one_or_none()
+            if row is not None and row.status != "deleted":
+                row.latest_artifact_id = artifact_id
+                row.updated_at = utc_now()
+    except Exception as exc:  # pragma: no cover — promotion is best-effort
+        logger.warning(
+            "qec.internal.promote_failed",
+            extra={"app_id": app_id, "artifact_id": artifact_id, "error": str(exc)[:300]},
+        )
 
 
 @router.post("/crawls/{crawl_id}/complete")
@@ -325,6 +353,8 @@ async def complete_crawl(crawl_id: str, request: Request) -> dict:
         stats=stats_dict,
         finished_at=utc_now(),
     )
+    # Promote the recorded artifact onto the app so a cycle can run against it.
+    await _promote_latest_artifact(tenant_id, app_id, created.artifact_id)
     logger.info(
         "qec.internal.completed",
         extra={"exploration_id": exploration_id, "crawl_id": crawl_id,
