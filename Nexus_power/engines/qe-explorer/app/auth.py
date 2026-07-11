@@ -173,6 +173,31 @@ def match_login_controls(
     return LoginControls(username=dict(username), password=dict(password), submit=dict(submit))
 
 
+#: Accessible names of a clickable affordance that NAVIGATES to a login form
+#: (rather than a login field). When the login form sits behind a "Sign in"
+#: link/button — the near-universal SPA / marketing-front pattern — the crawler
+#: clicks this to REACH the login route before authenticating.
+_LOGIN_AFFORDANCE_HINTS: tuple[str, ...] = (
+    "sign in", "signin", "log in", "login", "log on", "logon", "sign on", "signon",
+)
+
+
+def _match_login_affordance(
+    controls: Sequence[Mapping[str, Any]],
+) -> Optional[Mapping[str, Any]]:
+    """First clickable link/button whose accessible name is a sign-in verb — a
+    NAVIGATION to the login form, not a login field. Never an irreversible /
+    guard-flagged control. ``None`` when no such affordance exists."""
+    for c in controls:
+        if _norm(c.get("kind")) not in ("link", "button"):
+            continue
+        if c.get("disabled") or c.get("danger"):
+            continue
+        if _name_matches_any(str(c.get("name")), _LOGIN_AFFORDANCE_HINTS):
+            return c
+    return None
+
+
 def _index_of(controls: Sequence[Mapping[str, Any]], target: Mapping[str, Any]) -> int:
     for i, c in enumerate(controls):
         if c is target:
@@ -295,6 +320,33 @@ class Authenticator:
             username_hints=self._creds.username_hints,
             submit_hints=self._creds.submit_hints,
         )
+
+        # The login form may sit BEHIND a "Sign in" affordance (a link/button)
+        # rather than on the entry/landing page — the near-universal SPA pattern.
+        # When the login controls are not groundable here, click a login affordance
+        # to load the login route, re-inventory, and re-match. Bounded to two hops.
+        nav_actions: list[emit.ActionRecord] = []
+        hops = 0
+        while matched is None and hops < 2:
+            affordance = _match_login_affordance(controls)
+            if affordance is None:
+                break
+            obs_nav = await self._port.click(dict(affordance))
+            nav_actions.append(emit.build_action_record(
+                dict(affordance), verb="click", value=None, observation=obs_nav,
+                phase=Phase.AUTH.value, timestamp_ms=self._clock.now_ms(),
+            ))
+            observation = await self._observe_current()
+            controls = build_inventory(observation.raw_controls, self._refuse_pack,
+                                       url=observation.url)
+            before_fp = state_fingerprint(observation.url, controls, observation.dialog_flags)
+            matched = match_login_controls(
+                controls,
+                username_hints=self._creds.username_hints,
+                submit_hints=self._creds.submit_hints,
+            )
+            hops += 1
+
         if matched is None:
             logger.info("qec.auth.login_controls_unmatched url_host=%s",
                         _norm(observation.title) and "<redacted>" or "")
@@ -303,7 +355,7 @@ class Authenticator:
                                      "username/password/submit by accessible name",
                               before_fingerprint=before_fp)
 
-        actions: list[emit.ActionRecord] = []
+        actions: list[emit.ActionRecord] = list(nav_actions)
         # 1. username (PII-scrubbed at source — never raw at rest)
         obs_u = await self._port.fill(matched.username, self._creds.username)
         actions.append(emit.build_action_record(

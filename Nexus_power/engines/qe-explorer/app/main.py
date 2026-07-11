@@ -449,6 +449,20 @@ class PlaywrightBrowserPort(BrowserPort):
     async def goto(self, url: str) -> NavResult:
         try:
             resp = await self._page.goto(url, wait_until="domcontentloaded")
+            # SPA hash routers commonly render the current route only on the
+            # 'hashchange' event; a FRESH document load with the hash already set
+            # can render the default/landing route instead of the requested one
+            # (so a direct #/route load — and every hash-route frontier goto —
+            # would silently observe the wrong state). Nudge the router to
+            # evaluate location.hash so the requested route actually mounts.
+            if "#/" in (url or "") or "#!" in (url or ""):
+                try:
+                    await self._page.evaluate(
+                        "window.dispatchEvent(new HashChangeEvent('hashchange', "
+                        "{newURL: location.href, oldURL: location.href}))"
+                    )
+                except Exception:
+                    pass
             await self._settle()
             return NavResult(url=self._page.url, ok=True,
                              status=resp.status if resp else 0)

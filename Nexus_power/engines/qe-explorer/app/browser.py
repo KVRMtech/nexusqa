@@ -50,19 +50,27 @@ _MAX_DETAIL = 500
 
 
 def _norm_url(url: str) -> str:
-    """Trailing-slash / fragment-insensitive URL identity for change detection.
+    """Trailing-slash / scroll-anchor-insensitive URL identity for change detection.
 
     A pure scroll-anchor (``#section``) or a trailing ``/`` is cosmetic and must
-    NOT read as a navigation; a real path/query change does.  Kept intentionally
-    simple and deterministic (no network, no PSL).
+    NOT read as a navigation; a real path/query change — INCLUDING a client-side
+    hash-ROUTE change on a single-page app (``#/...`` or ``#!/...``) — DOES. Without
+    keeping the hash route, every SPA route collapses to one URL and route-to-route
+    navigation is invisible (the crawler then never leaves the entry page). Kept
+    deterministic (no network, no PSL).
     """
     u = (url or "").strip()
     if not u:
         return ""
-    u = u.split("#", 1)[0]
-    if len(u) > 1 and u.endswith("/"):
-        u = u[:-1]
-    return u
+    base, _sep, frag = u.partition("#")
+    if len(base) > 1 and base.endswith("/"):
+        base = base[:-1]
+    # Keep a hash-ROUTE fragment (SPA routing: ``#/path`` or ``#!/path``); drop a
+    # pure scroll-anchor (``#section``) — it is not a navigation.
+    frag = frag.strip()
+    if frag[:1] in ("/", "!"):
+        return base + "#" + frag
+    return base
 
 
 # ─── Raw observations (what the adapter measures; the classifier's input) ────
