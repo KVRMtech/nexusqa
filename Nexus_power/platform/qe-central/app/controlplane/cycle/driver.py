@@ -770,6 +770,31 @@ async def execute_cycle(
         # ── 2) SELECTING → what runs vs what carries forward ──────────────────
         await hooks.save_state(CYCLE_STATE_SELECTING)
         rtm = await client.get_rtm(tenant_id=tenant_id, artifact_id=app.latest_artifact_id)
+
+        # ── FIRST-RUN BOOTSTRAP (crawl → cycle in one click) ──────────────────
+        # A freshly-crawled artifact has substrate but NO compiled suite yet, so
+        # the RTM is empty: there is nothing to SELECT, and the normal generate
+        # (step 3) is gated behind a non-empty selection — so without this the
+        # very first cycle would end an empty DONE and a human would have to fire
+        # /generate by hand.  Generate the suite ONCE up front, re-read the RTM,
+        # and treat this as a FULL first run: every fresh case must run to earn
+        # its first verdict (there is no prior green to carry).  The generate is
+        # metered here, and step 3 is SKIPPED when a bootstrap ran, so the compile
+        # is never done — or counted — twice.
+        bootstrap: dict | None = None
+        if mode != MODE_PROBE_ONLY and not (rtm.get("tests") or []):
+            await hooks.save_state(CYCLE_STATE_GENERATING)
+            bootstrap = await client.generate(
+                tenant_id=tenant_id, artifact_id=app.latest_artifact_id,
+            )
+            gen_rows = _generate_row_count(bootstrap)
+            if gen_rows:
+                await _meter({meter.UNIT_SUBSTRATE_ROWS: Decimal(gen_rows)}, source_ref="generate")
+            await _enforce(CYCLE_STATE_GENERATING)
+            rtm = await client.get_rtm(tenant_id=tenant_id, artifact_id=app.latest_artifact_id)
+            change_set = ChangeSet.full(reason="first-run bootstrap — no prior compiled suite")
+            await hooks.save_state(CYCLE_STATE_SELECTING)
+
         cases, unmappable = _build_case_refs(
             rtm, criticality=criticality, prior_verdicts=prior_verdicts,
         )
@@ -809,21 +834,35 @@ async def execute_cycle(
             return await _finish_done(hooks, outcome, base_result, selection, prior_verdicts)
 
         if not selection.selected_test_ids:
-            # Nothing to run (everything unchanged + carried) — an honest DONE with
-            # zero runs, the coverage verdict + carried ages carried through.
-            base_result["note"] = "no cases selected — all carried forward with age-labelled verdicts"
+            # Nothing to run — an honest DONE with zero runs, the coverage verdict
+            # + carried ages carried through.  When a first-run bootstrap already
+            # generated, an empty selection means the substrate was too thin to
+            # compile ANY grounded case (NOT "all carried forward") — say so.
+            if bootstrap is not None:
+                base_result["generate"] = _compact_generate(bootstrap)
+                base_result["note"] = (
+                    "first-run generate produced no grounded cases — "
+                    "substrate too thin to compile a suite (nothing to run)"
+                )
+            else:
+                base_result["note"] = "no cases selected — all carried forward with age-labelled verdicts"
             await _record_wallclock(budget, _meter)
             base_result["cost"] = {u: str(q) for u, q in metered.items()}
             return await _finish_done(hooks, outcome, base_result, selection, prior_verdicts)
 
         # ── 3) GENERATING → compile grounded cases from the substrate ─────────
-        await hooks.save_state(CYCLE_STATE_GENERATING)
-        generate = await client.generate(tenant_id=tenant_id, artifact_id=app.latest_artifact_id)
+        # A first-run bootstrap already generated (and metered) the suite above —
+        # reuse it rather than regenerate (no double compile, no double meter).
+        if bootstrap is not None:
+            generate = bootstrap
+        else:
+            await hooks.save_state(CYCLE_STATE_GENERATING)
+            generate = await client.generate(tenant_id=tenant_id, artifact_id=app.latest_artifact_id)
+            gen_rows = _generate_row_count(generate)
+            if gen_rows:
+                await _meter({meter.UNIT_SUBSTRATE_ROWS: Decimal(gen_rows)}, source_ref="generate")
+            await _enforce(CYCLE_STATE_GENERATING)
         base_result["generate"] = _compact_generate(generate)
-        gen_rows = _generate_row_count(generate)
-        if gen_rows:
-            await _meter({meter.UNIT_SUBSTRATE_ROWS: Decimal(gen_rows)}, source_ref="generate")
-        await _enforce(CYCLE_STATE_GENERATING)
 
         # ── 4) RUNNING → run only the selected cases ──────────────────────────
         await hooks.save_state(CYCLE_STATE_RUNNING)
