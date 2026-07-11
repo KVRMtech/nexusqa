@@ -177,6 +177,7 @@ services:
       { [ -s /etc/squid/allowlist/allowed_domains.txt ] ||
         printf '%s\n' '# fail-closed default — no real host until a crawl populates it' '.qec-egress-denied.invalid'
           > /etc/squid/allowlist/allowed_domains.txt; } &&
+      { chown proxy:proxy /dev/stdout /dev/stderr 2>/dev/null || true; } &&
       exec squid -N -f /etc/squid/squid.conf -d1
     mem_limit: 512m
     networks:

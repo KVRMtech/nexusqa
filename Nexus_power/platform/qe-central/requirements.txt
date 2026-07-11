@@ -16,3 +16,7 @@ redis>=5,<6
 # Import-guarded in app.observability.metrics so a local checkout without it
 # still loads (every record_* helper then no-ops).
 prometheus-client>=0.20,<1.0
+# Phase-6 safety spine — google-cloud-kms backs nexus_sdk.security.envelope's
+# GcpKmsProvider (the production KEK). Required so the fail-closed boot can prove
+# the envelope with a real GCP KMS key (else envelope_ready=false → degraded).
+google-cloud-kms>=2.21,<4

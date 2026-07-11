@@ -32,6 +32,11 @@ from nexus_sdk.db import Base
 MAX_SCREENSHOT_BYTES = 8 * 1024 * 1024  # 8 MiB
 _ALLOWED_CONTENT_TYPES = frozenset({"image/png", "image/jpeg", "image/webp"})
 
+# Hard ceiling on a stored run video (opt-in proving clip). Larger than a
+# screenshot but still bounded so a single Postgres BYTEA row stays sane.
+MAX_VIDEO_BYTES = 64 * 1024 * 1024  # 64 MiB
+_ALLOWED_VIDEO_CONTENT_TYPES = frozenset({"video/webm", "video/mp4"})
+
 
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
@@ -148,6 +153,50 @@ async def fetch_latest_screenshot(
     return bytes(row.image) if row is not None else None
 
 
+def normalize_video_content_type(ct: str | None) -> str:
+    ct = (ct or "").split(";")[0].strip().lower()
+    return ct if ct in _ALLOWED_VIDEO_CONTENT_TYPES else "video/webm"
+
+
+async def store_video(
+    session: AsyncSession,
+    *,
+    tenant_id: str,
+    artifact_id: str,
+    run_id: str,
+    scenario_id: str,
+    step_number: int,
+    content_type: str,
+    video: bytes,
+) -> str:
+    """Persist one run video into the shared blob table (``E2ERunScreenshotRow``);
+    returns its id. Mirrors ``store_screenshot`` but with the video size cap and a
+    video content-type — served back through ``fetch_screenshot`` (same table, as
+    ``get_run_video`` does). Raises ValueError on an empty or oversize clip; caller
+    commits."""
+    if not video:
+        raise ValueError("empty video")
+    if len(video) > MAX_VIDEO_BYTES:
+        raise ValueError(f"video too large ({len(video)} bytes > {MAX_VIDEO_BYTES})")
+    vid = _new_id()
+    session.add(
+        E2ERunScreenshotRow(
+            screenshot_id=vid,
+            run_id=(run_id or "")[:64],
+            artifact_id=(artifact_id or "")[:64],
+            tenant_id=tenant_id,
+            scenario_id=(scenario_id or "")[:64],
+            step_number=int(step_number or 0),
+            content_type=normalize_video_content_type(content_type),
+            byte_size=len(video),
+            image=video,
+            created_at=_utc_now(),
+        )
+    )
+    await session.flush()
+    return vid
+
+
 __all__ = [
     "E2ERunScreenshotRow",
     "store_screenshot",
@@ -155,4 +204,7 @@ __all__ = [
     "fetch_latest_screenshot",
     "normalize_content_type",
     "MAX_SCREENSHOT_BYTES",
+    "normalize_video_content_type",
+    "store_video",
+    "MAX_VIDEO_BYTES",
 ]

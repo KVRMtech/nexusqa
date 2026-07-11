@@ -98,8 +98,12 @@ from app.services.storyboard import load_config as load_storyboard_config
 # Additive: reads frozen evidence, writes only factory_test_cases.
 from app.routers.test_factory import router as test_factory_router
 from app.routers.preflight import router as preflight_router
-# Lights-Out (Mode C) — schedule CRUD + reports (additive; gated background runner)
-from app.routers.scheduler import router as scheduler_router
+# Lights-Out (Mode C) — schedule CRUD + reports (additive; gated background runner).
+# Optional router: degrade gracefully if the module isn't present in this build.
+try:
+    from app.routers.scheduler import router as scheduler_router
+except ImportError:
+    scheduler_router = None
 from app.services.storyboard.composer import StoryboardComposer
 from app.services.storyboard.frame_annotator import FrameAnnotator
 from app.services.llm import load_config as load_llm_config, LLMRouter
@@ -329,7 +333,8 @@ async def _start_sentinel_daemon() -> None:
     except Exception:  # pragma: no cover
         import logging as _lg
         _lg.getLogger(__name__).warning("sentinel.daemon_start_failed")
-app.include_router(scheduler_router)  # Lights-Out (Mode C): schedules + reports + run-now
+if scheduler_router is not None:  # Lights-Out (Mode C): schedules + reports + run-now
+    app.include_router(scheduler_router)
 
 
 # ─── Health ───────────────────────────────────────────────────
