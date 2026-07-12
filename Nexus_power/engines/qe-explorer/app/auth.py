@@ -607,6 +607,19 @@ class Authenticator:
             live_errors = [e for e in observation.error_texts if _norm(e)]
             has_password = _match_password_control(after_controls) is not None
             has_otp = self._creds.mfa is not None and match_otp_control(after_controls, self._creds.otp_hints) is not None
+            after_submit = _match_submit_control(after_controls, self._creds.submit_hints) is not None
+            after_delivery = bool(
+                self._creds.mfa is not None and self._creds.mfa.delivery
+                and match_delivery_control(after_controls, delivery=self._creds.mfa.delivery,
+                                           delivery_hints=self._creds.delivery_hints) is not None
+            )
+            # An MFA challenge is still PENDING until the code is entered. A screen
+            # with no password/OTP field but a remaining login action (a submit/next
+            # or a delivery choice) is an INTERMEDIATE step — e.g. "how do you want
+            # your code?" — NOT a completed login. Keep going rather than declare
+            # success early (the bug that would green-wash a half-finished MFA login).
+            mfa_pending = self._creds.mfa is not None and not filled_otp
+            intermediate_mfa_step = mfa_pending and (after_submit or after_delivery)
 
             # Honest failure: an error live-region after a secret was submitted.
             if live_errors and (filled_password or filled_otp):
@@ -616,8 +629,9 @@ class Authenticator:
                     actions=actions, before_fingerprint=before_fp, after_fingerprint=after_fp,
                 )
 
-            # Success: password entered, no password/OTP field remains, state moved.
-            if filled_password and not has_password and not has_otp:
+            # Success: password entered, no password/OTP field remains, state moved,
+            # and no MFA challenge is still mid-flight.
+            if filled_password and not has_password and not has_otp and not intermediate_mfa_step:
                 success, reason = verify_login_success(
                     before_fingerprint=before_fp, after_fingerprint=after_fp,
                     after_controls=after_controls, after_errors=observation.error_texts,

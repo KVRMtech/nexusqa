@@ -131,6 +131,51 @@
         location.hash="#/quote";
       });
     },
+    // Multi-step + MFA login variant (VKPower auth-ladder proving ground):
+    //   username+password  →  choose delivery (email/mobile)  →  6-digit code.
+    // The test code is a DETERMINISTIC 123456 (a QA-env convention), so an MFA
+    // login is fully automatable. Steps swap in place under #/login-mfa.
+    "/login-mfa": function(){
+      setNav("nav-login");
+      var mfa = {step:0, user:"member"};
+      function draw(){
+        if(mfa.step===0){
+          view().innerHTML =
+            '<div class="card"><h1>Sign in</h1><p class="lede">Secure login with verification.</p>'+
+            '<form id="mfaCreds">'+
+            '<div class="field"><label for="username">Username</label><input id="username" name="username" autocomplete="username" required></div>'+
+            '<div class="field"><label for="password">Password</label><input id="password" name="password" type="password" autocomplete="current-password" required></div>'+
+            '<button type="submit">Sign in</button></form></div>';
+          document.getElementById("mfaCreds").addEventListener("submit",function(e){
+            e.preventDefault(); mfa.user=document.getElementById("username").value||"member"; mfa.step=1; draw();
+          });
+        } else if(mfa.step===1){
+          view().innerHTML =
+            '<div class="card"><h1>Verify it\'s you</h1><p class="lede">How should we send your one-time code?</p>'+
+            '<form id="mfaDeliver"><fieldset><legend>Delivery method</legend><div class="radio">'+
+            '<label><input type="radio" name="delivery" value="email" checked> Email</label>'+
+            '<label><input type="radio" name="delivery" value="mobile"> Mobile</label></div></fieldset>'+
+            '<button type="submit">Continue</button></form></div>';
+          document.getElementById("mfaDeliver").addEventListener("submit",function(e){
+            e.preventDefault(); mfa.step=2; draw();
+          });
+        } else {
+          view().innerHTML =
+            '<div class="card"><h1>Enter your code</h1><p class="lede">We sent a 6-digit verification code.</p>'+
+            '<form id="mfaOtp">'+
+            '<div class="field"><label for="otp">Verification code</label><input id="otp" name="otp" inputmode="numeric" autocomplete="one-time-code" required></div>'+
+            '<button type="submit">Verify</button>'+
+            '<div id="mfaErr" role="alert" aria-live="assertive" class="err"></div></form></div>';
+          document.getElementById("mfaOtp").addEventListener("submit",function(e){
+            e.preventDefault();
+            var code=(document.getElementById("otp").value||"").trim();
+            if(code==="123456"){ sessionStorage.setItem("acme_user", mfa.user); location.hash="#/quote"; }
+            else { document.getElementById("mfaErr").textContent="That code isn't right. Try again."; }
+          });
+        }
+      }
+      draw();
+    },
     "/quote": function(){
       if(!requireAuth())return; setNav("nav-quote");
       view().innerHTML =

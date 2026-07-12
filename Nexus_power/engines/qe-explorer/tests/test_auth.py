@@ -269,6 +269,27 @@ def test_login_mfa_totp():
     assert res.success, res.reason
 
 
+def test_login_mfa_with_delivery_choice_completes_not_early():
+    # username+password → "how do you want your code?" (email/mobile) → OTP → home.
+    # The delivery screen has no password/OTP field, so an eager success check would
+    # green-wash a half-finished login. Assert it drives all the way THROUGH to home.
+    creds = Credentials.from_payload({"username": "member", "password": "secret",
+                                      "mfa": {"kind": "otp", "otp": "123456", "delivery": "email"}})
+    pages = {
+        "https://app/login": {"controls": [_user(), _pass(), _btn("Sign in")],
+                              "nav": {"Sign in": "https://app/deliver"}},
+        "https://app/deliver": {"controls": [_radio("Email"), _radio("Text message"), _btn("Continue")],
+                                "nav": {"Continue": "https://app/otp"}},
+        "https://app/otp": {"controls": [_otp("Verification code"), _btn("Verify")],
+                            "nav": {"Verify": "https://app/home"}},
+        "https://app/home": {"controls": [_btn("Log out")]},
+    }
+    a, port = _mk_auth(pages, "https://app/login", creds)
+    res = asyncio.run(a.login(_observe(port)))
+    assert res.success, res.reason
+    assert asyncio.run(port.current_url()) == "https://app/home"  # not stopped at /deliver
+
+
 def test_login_behind_signin_affordance():
     pages = {
         "https://app/": {"controls": [_raw("link", "Sign in", tag="a")],
