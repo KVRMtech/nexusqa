@@ -1107,10 +1107,16 @@ def compile_case(tc, field_meta: dict | None = None, *, parametrize: bool = Fals
     # _vo_lines empty and _vo_uses_nxnum False → the spec is byte-identical.
     _vo_lines: list[str] = []
     _vo_uses_nxnum = False
+    _vo_uses_nxcmp = False
     _value_assertions = getattr(tc, "value_assertions", None)
-    if _value_assertions:
-        from ..test_factory.value_oracle import value_assertion_lines
-        _vo_lines, _vo_uses_nxnum = value_assertion_lines(_value_assertions, field_meta=field_meta)
+    _value_rules = getattr(tc, "value_rules", None)
+    if _value_assertions or _value_rules:
+        from ..test_factory.value_oracle import rule_assertion_lines, value_assertion_lines
+        if _value_assertions:
+            _vo_lines, _vo_uses_nxnum = value_assertion_lines(_value_assertions, field_meta=field_meta)
+        if _value_rules:  # P3 invariants
+            _rl, _vo_uses_nxcmp = rule_assertion_lines(_value_rules, field_meta=field_meta)
+            _vo_lines = _vo_lines + _rl
     out.append(f"// Confidence: {high} solid step(s), {review} need review.")
     if weak_a11y:
         out.append(f"// a11y: {weak_a11y} control(s) had no observed accessible name "
@@ -1125,6 +1131,9 @@ def compile_case(tc, field_meta: dict | None = None, *, parametrize: bool = Fals
     if _vo_uses_nxnum:  # ANSWERS P1 — numeric value-oracle comparator (gated)
         from ..test_factory.value_oracle import NXNUM_JS
         out.append(NXNUM_JS)
+    if _vo_uses_nxcmp:  # ANSWERS P3 — invariant bound comparator (gated)
+        from ..test_factory.value_oracle import NXCMP_JS
+        out.append(NXCMP_JS)
     out.append("")
     test_id = js_str(getattr(tc, "test_id", "") or "")
     if test_id:
@@ -1274,7 +1283,7 @@ def compile_case(tc, field_meta: dict | None = None, *, parametrize: bool = Fals
     # hard toContainText / "unexpected value" throw); UNVERIFIED comment when a node
     # cannot be grounded — never a silent pass.
     if _vo_lines:
-        out.append("  // ── business-value oracle (ANSWERS P1) — proves the app's OUTPUT ──")
+        out.append("  // ── business-value oracle (ANSWERS P1/P3) — proves the app's OUTPUT + invariants ──")
         out.extend(_vo_lines)
     out.append("});")
     if heal_capture:

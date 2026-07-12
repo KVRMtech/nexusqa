@@ -181,14 +181,16 @@ async def _load_current_pages_and_actions(
 def _row_values(
     tc: ProductionTestCase, *, artifact_id: str, tenant_id: str, session_id: str,
     confidence: str, source_evidence: dict[str, Any],
-    value_assertions: list | None = None,
+    value_assertions: list | None = None, value_rules: list | None = None,
 ) -> dict[str, Any]:
-    # ANSWERS P1 — inject the case's expected value OUTCOMES into the serialized
-    # case so they round-trip via ``ProductionTestCase(**r.test_case)`` (extra=allow)
-    # to the compiler at build time.  Defaulted → every existing caller unchanged.
+    # ANSWERS P1/P3 — inject the case's expected value OUTCOMES + INVARIANTS into the
+    # serialized case so they round-trip via ``ProductionTestCase(**r.test_case)``
+    # (extra=allow) to the compiler at build time.  Defaulted → callers unchanged.
     tc_dump = tc.model_dump(mode="json")
     if value_assertions:
         tc_dump["value_assertions"] = value_assertions
+    if value_rules:
+        tc_dump["value_rules"] = value_rules
     return {
         "test_case_id": tc.test_id,
         "artifact_id": artifact_id,
@@ -285,6 +287,7 @@ async def generate_and_store(
     value assertions — PROVEN only when the observed value is grounded, else honest.
     """
     value_outcomes = [o for o in ((answer_key or {}).get("outcomes") or []) if isinstance(o, dict)]
+    value_rules = [r for r in ((answer_key or {}).get("rules") or []) if isinstance(r, dict)]
     visits, actions = await _load_current_pages_and_actions(
         session, artifact_id=artifact_id,
     )
@@ -316,10 +319,11 @@ async def generate_and_store(
         # page). A case that does not reach a named node yields an honest UNVERIFIED
         # / not-found (INFERRED) — never a false green. Per-persona targeting is P3.
         case_outcomes = value_outcomes if (_idx == 0 and value_outcomes) else None
+        case_rules = value_rules if (_idx == 0 and value_rules) else None
         values = _row_values(
             tc, artifact_id=artifact_id, tenant_id=tenant_id,
             session_id=session_id, confidence="demonstrated",
-            source_evidence=case_meta, value_assertions=case_outcomes,
+            source_evidence=case_meta, value_assertions=case_outcomes, value_rules=case_rules,
         )
         new_ids.append(values["test_case_id"])
         await _upsert_case(session, values)
@@ -406,6 +410,7 @@ async def generate_and_store(
         "option_domains": len(combo.option_domains),
         "generated": len(new_ids),
         "value_outcomes": len(value_outcomes),
+        "value_rules": len(value_rules),
         "extraction_health": health,
         "no_cases_reason": no_cases_reason,
         **demonstrated_meta,

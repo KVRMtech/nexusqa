@@ -42,6 +42,23 @@ NXNUM_JS = (
     r"""}"""
 )
 
+#: Injected once per spec that uses a numeric INVARIANT (P3 rule oracle). Reads the
+#: grounded node's number and throws "unexpected value" when the bound is violated
+#: — so the frozen reducer classifies a real breach PROVEN. Absent node → not found
+#: → INFERRED. Same honest contract as ``__nxNum``.
+NXCMP_JS = (
+    r"""async function __nxCmp(loc, op, bound){"""
+    r"""const t = await loc.first().innerText();"""
+    r"""const m = String(t).replace(/[,\s$%€£]/g,'').match(/-?\d+(?:\.\d+)?/);"""
+    r"""if(!m) throw new Error('invariant: no number found in \"'+t+'\" (unverifiable)');"""
+    r"""const got = parseFloat(m[0]);"""
+    r"""const ok = op==='<='?got<=bound:op==='>='?got>=bound:op==='<'?got<bound"""
+    r""":op==='>'?got>bound:op==='=='?got===bound:op==='!='?got!==bound:null;"""
+    r"""if(ok===null) throw new Error('invariant: unknown operator '+op);"""
+    r"""if(!ok) throw new Error('invariant violated: unexpected value '+got+' is not '+op+' '+bound);"""
+    r"""}"""
+)
+
 
 def _js_str(value: Any) -> str:
     """Escape a value for embedding inside a single-quoted JS string literal."""
@@ -138,4 +155,78 @@ def value_assertion_lines(
     return lines, uses_nxnum
 
 
-__all__ = ["value_assertion_lines", "NXNUM_JS"]
+#: Operators a bound invariant may use (client aliases → JS operator).
+_OP_ALIASES = {
+    "<=": "<=", "le": "<=", "lte": "<=", "max": "<=", "at_most": "<=",
+    ">=": ">=", "ge": ">=", "gte": ">=", "min": ">=", "at_least": ">=",
+    "<": "<", "lt": "<", "below": "<",
+    ">": ">", "gt": ">", "above": ">",
+    "==": "==", "eq": "==", "equals": "==", "=": "==",
+    "!=": "!=", "ne": "!=", "not": "!=",
+}
+
+
+def rule_assertion_lines(
+    rules: Sequence[Mapping[str, Any]],
+    *, field_meta: Mapping[str, Any] | None = None, indent: str = "  ",
+) -> tuple[list[str], bool]:
+    """Compile business INVARIANTS (P3) → grounded Playwright assertions.
+
+    Supports the SINGLE-RUN, groundable subset — a numeric BOUND on one displayed
+    value (``coverage ≤ $2,000,000``, ``premium > 0``, ``discount ≤ 100``): the
+    kind of guardrail that catches a whole class of regressions from ONE run.
+
+    A rule shape: ``{kind:'bound', field, op, limit, source_hint}`` where ``op`` is
+    ``<=|>=|<|>|==|!=`` (or an alias like ``max``/``min``).  Returns ``(lines,
+    uses_nxcmp)``.  RELATIONAL / cross-persona invariants (``smoker premium ≥ 40%
+    higher``, ``monotonic in coverage``) need a multi-persona run harness and are
+    emitted as an honest ``// UNVERIFIED invariant`` here — never a silent pass.
+    """
+    lines: list[str] = []
+    uses_nxcmp = False
+    for rule in rules or ():
+        if not isinstance(rule, Mapping):
+            continue
+        kind = str(rule.get("kind") or rule.get("type") or "").strip().lower()
+        field = str(rule.get("field") or rule.get("name") or "").strip() or "(invariant)"
+        stmt = str(rule.get("statement") or rule.get("description") or "").strip()
+        desc = stmt or field
+        if kind not in ("bound", "range", "limit", "cap", "floor", ""):
+            lines.append(
+                f"{indent}// UNVERIFIED invariant: {_js_str(desc)} — kind '{_js_str(kind)}' "
+                "needs a multi-persona run harness (relational/cross-run), not yet grounded.")
+            continue
+        op = _OP_ALIASES.get(str(rule.get("op") or rule.get("operator") or "").strip().lower())
+        limit = rule.get("limit")
+        if limit is None:
+            limit = rule.get("max", rule.get("min", rule.get("value", rule.get("bound"))))
+            if op is None and rule.get("max") is not None:
+                op = "<="
+            elif op is None and rule.get("min") is not None:
+                op = ">="
+        try:
+            bound = float(limit)
+        except (TypeError, ValueError):
+            bound = float("nan")
+        if bound != bound:  # NaN (incl. float("NaN")) — a nonsensical bound, never emit
+            lines.append(
+                f"{indent}// UNVERIFIED invariant: {_js_str(desc)} — no numeric bound to compare.")
+            continue
+        if op is None:
+            lines.append(
+                f"{indent}// UNVERIFIED invariant: {_js_str(desc)} — no comparison operator.")
+            continue
+        loc = _locator_expr(rule, field_meta)
+        if loc is None:
+            lines.append(
+                f"{indent}// UNVERIFIED invariant: {_js_str(desc)} — no source_hint / grounded node "
+                f"for '{_js_str(field)}'.")
+            continue
+        uses_nxcmp = True
+        lines.append(
+            f"{indent}await __nxCmp({loc}, '{op}', {bound!r}); "
+            f"// PROVEN invariant: '{_js_str(field)}' {op} {bound}")
+    return lines, uses_nxcmp
+
+
+__all__ = ["value_assertion_lines", "rule_assertion_lines", "NXNUM_JS", "NXCMP_JS"]
