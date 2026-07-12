@@ -17,6 +17,7 @@ import {
   GitBranch,
   Layers,
   PlayCircle,
+  Radar,
   ScrollText,
   ShieldAlert,
 } from 'lucide-react';
@@ -54,6 +55,7 @@ const BAND_TONE: Record<CriticalityBand, 'crit' | 'warn' | 'teal' | 'neutral'> =
 function SituationHeader({ appId }: { appId: string }) {
   const state = useAsync((signal) => api.getApp(appId, { signal }), [appId]);
   const [triggering, setTriggering] = useState(false);
+  const [crawling, setCrawling] = useState(false);
 
   const runCycle = async () => {
     setTriggering(true);
@@ -65,6 +67,45 @@ function SituationHeader({ appId }: { appId: string }) {
       toast.error('Could not start cycle', { description: e.message });
     } finally {
       setTriggering(false);
+    }
+  };
+
+  // Dispatch a live crawl, then poll to the terminal status so the operator sees
+  // an honest result (pages/actions captured, or the refusal reason) and the
+  // header reloads to pick up the freshly-minted latest_artifact_id.
+  const crawl = async () => {
+    setCrawling(true);
+    try {
+      const res = await api.triggerExploration(appId);
+      toast.info('Crawl dispatched — exploring the app…', { description: res.crawl_id });
+      let terminal: Awaited<ReturnType<typeof api.getExploration>> | null = null;
+      for (let i = 0; i < 45; i += 1) {
+        await new Promise((r) => setTimeout(r, 4000));
+        const exp = await api.getExploration(res.exploration_id);
+        if (exp.status === 'completed' || exp.status === 'failed' || exp.status === 'refused') {
+          terminal = exp;
+          break;
+        }
+      }
+      if (!terminal) {
+        toast.warning('Crawl still running', {
+          description: 'Taking longer than expected — check back shortly, then Run cycle.',
+        });
+      } else if (terminal.status === 'completed') {
+        const s = (terminal.stats ?? {}) as { visits?: number; actions?: number };
+        toast.success('Crawl complete', {
+          description: `${s.visits ?? 0} pages · ${s.actions ?? 0} actions captured. You can Run cycle now.`,
+        });
+        state.reload();
+      } else {
+        toast.error(`Crawl ${terminal.status}`, {
+          description: terminal.error || 'Check the app’s onboarding attestation.',
+        });
+      }
+    } catch (err) {
+      toast.error('Could not start crawl', { description: (err as QecApiError).message });
+    } finally {
+      setCrawling(false);
     }
   };
 
@@ -89,9 +130,14 @@ function SituationHeader({ appId }: { appId: string }) {
         </div>
         <p className="text-2xs text-ink-low font-mono mt-1 truncate">{app.base_url}</p>
       </div>
-      <Button variant="primary" loading={triggering} onClick={runCycle} icon={<PlayCircle size={15} />}>
-        Run cycle
-      </Button>
+      <div className="flex items-center gap-2 shrink-0">
+        <Button variant="secondary" loading={crawling} onClick={crawl} icon={<Radar size={15} />}>
+          Crawl
+        </Button>
+        <Button variant="primary" loading={triggering} onClick={runCycle} icon={<PlayCircle size={15} />}>
+          Run cycle
+        </Button>
+      </div>
     </div>
   );
 }

@@ -131,13 +131,25 @@ export type VerdictKind = 'certified' | 'refused' | 'healed';
 
 // ── Registered client application (routers/apps.py:_public_view) ────────────
 
-/** env_attestation JSONB (models.py:ClientAppRow comment). */
+/** env_attestation.rules_of_engagement (security/prod_guard.py:_roe_signed). */
+export interface RulesOfEngagement {
+  signed?: boolean;
+  signed_by?: string;
+  note?: string;
+}
+
+/** env_attestation JSONB (models.py:ClientAppRow comment). The three fields the
+ * crawl gate (security/prod_guard.py) is fail-closed on: a signed
+ * rules_of_engagement, a non-prod attested + unexpired envelope (attested_by +
+ * env_kind + expires_at), and a passed preflight. */
 export interface EnvAttestation {
   attested_by?: string;
   attested_at?: IsoTimestamp;
   env_kind?: EnvKind;
   reset_procedure?: string;
   expires_at?: IsoTimestamp;
+  rules_of_engagement?: RulesOfEngagement;
+  preflight?: { passed?: boolean; note?: string };
   [key: string]: unknown;
 }
 
@@ -676,6 +688,17 @@ export interface Exploration {
   finished_at: IsoTimestamp | null;
   created_at: IsoTimestamp;
   updated_at: IsoTimestamp;
+}
+
+/** POST /explorations (Phase-1 dispatch) response — the crawl was accepted and
+ * is running; poll GET /explorations/{id} for the terminal status + stats. */
+export interface CreateExplorationResponse {
+  exploration_id: string;
+  app_id: string;
+  crawl_id: string;
+  extractor_version: string;
+  status: string;
+  accepted?: boolean;
 }
 
 // ── REFUSE harness (routers/harness.py) ─────────────────────────────────────

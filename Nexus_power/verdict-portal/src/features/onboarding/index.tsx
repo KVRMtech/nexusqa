@@ -39,6 +39,9 @@ interface WizardForm {
   env_kind: EnvKind;
   attested_by: string;
   reset_procedure: string;
+  roe_signed: boolean;
+  attestation_days: string;
+  preflight_passed: boolean;
   allowed_hosts: string;
   allow_submit: boolean;
   cadence: string;
@@ -58,6 +61,9 @@ const EMPTY: WizardForm = {
   env_kind: 'disposable',
   attested_by: '',
   reset_procedure: '',
+  roe_signed: false,
+  attestation_days: '30',
+  preflight_passed: false,
   allowed_hosts: '',
   allow_submit: false,
   cadence: 'on_push',
@@ -132,13 +138,27 @@ export function OnboardingWizard() {
     } catch {
       answers = { _raw: form.answers };
     }
+    // The crawl gate (security/prod_guard.py) is fail-closed on THREE things:
+    // a signed rules-of-engagement, an attested + unexpired non-prod envelope,
+    // and a passed preflight. Build all three here so a completed wizard yields
+    // an app that is actually crawlable ('live'), not a stuck 'draft'.
+    const attDays = Math.max(1, Math.floor(Number(form.attestation_days) || 30));
+    const expiresAt = new Date(Date.now() + attDays * 86_400_000).toISOString();
+    const signer = form.attested_by.trim() || form.name.trim();
     return {
       name: form.name.trim(),
       base_url: form.base_url.trim(),
       credentials: form.username || form.password ? { username: form.username, password: form.password } : null,
       repo_binding: { provider: form.repo_provider, project: form.repo_project, webhook_secret: form.webhook_secret },
       answer_key: { notes: form.seed_notes, answers },
-      env_attestation: { env_kind: form.env_kind, attested_by: form.attested_by, reset_procedure: form.reset_procedure },
+      env_attestation: {
+        env_kind: form.env_kind,
+        attested_by: form.attested_by.trim(),
+        reset_procedure: form.reset_procedure,
+        expires_at: expiresAt,
+        rules_of_engagement: { signed: form.roe_signed, signed_by: form.roe_signed ? signer : '' },
+        preflight: { passed: form.preflight_passed },
+      },
       fences: { allowed_hosts: hosts, allow_submit: form.allow_submit },
       schedule: { cadence: form.cadence },
       budgets: form.usd_per_cycle ? { usd_per_cycle: Number(form.usd_per_cycle) } : {},
@@ -261,22 +281,55 @@ export function OnboardingWizard() {
 
         {step === 4 && (
           <div className="grid sm:grid-cols-2 gap-4">
-            <Field label="Environment kind" hint="Only 'disposable' may host the mutating submit tier.">
+            <Field label="Environment kind" hint="Only 'disposable' may host the mutating submit tier. Never 'prod'.">
               <select className={INPUT_CLS} value={form.env_kind} onChange={(e) => set('env_kind', e.target.value as EnvKind)}>
                 <option value="disposable">disposable</option>
                 <option value="staging">staging</option>
                 <option value="prod">prod</option>
               </select>
             </Field>
-            <Field label="Attested by">
+            <Field label="Attested by" required hint="Who affirms this attestation (your email or name).">
               <input className={INPUT_CLS} value={form.attested_by} onChange={(e) => set('attested_by', e.target.value)} placeholder="you@company.com" />
+            </Field>
+            <Field label="Attestation valid for (days)" hint="After this it expires and the app must be re-attested.">
+              <input type="number" min="1" className={INPUT_CLS} value={form.attestation_days} onChange={(e) => set('attestation_days', e.target.value)} placeholder="30" />
             </Field>
             <Field label="Reset procedure" hint="How the env is restored between runs.">
               <input className={INPUT_CLS} value={form.reset_procedure} onChange={(e) => set('reset_procedure', e.target.value)} placeholder="nightly snapshot restore" />
             </Field>
-            <Field label="Allowed egress hosts" hint="Comma/space separated. The crawl is network-fenced to these.">
+            <Field label="Allowed egress hosts" hint="Comma/space separated; the crawl is network-fenced to these (defaults to the base-URL host).">
               <input className={INPUT_CLS} value={form.allowed_hosts} onChange={(e) => set('allowed_hosts', e.target.value)} placeholder=".acmelife.example" />
             </Field>
+
+            {/* The fail-closed crawl gate (security/prod_guard.py): an app is
+                crawlable ('live') ONLY with a signed RoE + attested non-prod env
+                + a passed preflight. Collect the two that were missing. */}
+            <div className="sm:col-span-2 rounded-lg bg-inset ring-1 ring-line px-3 py-2.5 space-y-2.5">
+              <p className="text-2xs text-ink-low leading-snug">
+                These make the app <span className="text-ink-mid font-semibold">crawlable (live)</span>. Without a signed
+                rules-of-engagement and a passed preflight the app is saved as a{' '}
+                <span className="text-ink-mid font-semibold">draft</span> and cannot crawl.
+              </p>
+              <label className="flex items-start gap-2 text-xs text-ink-mid">
+                <input
+                  type="checkbox"
+                  checked={form.roe_signed}
+                  onChange={(e) => set('roe_signed', e.target.checked)}
+                  className="accent-[rgb(var(--teal))] mt-0.5"
+                />
+                <span>I am authorized to test this target — sign the rules of engagement.</span>
+              </label>
+              <label className="flex items-start gap-2 text-xs text-ink-mid">
+                <input
+                  type="checkbox"
+                  checked={form.preflight_passed}
+                  onChange={(e) => set('preflight_passed', e.target.checked)}
+                  className="accent-[rgb(var(--teal))] mt-0.5"
+                />
+                <span>Safety preflight passed — target is reachable, non-prod, and this crawl is read-only.</span>
+              </label>
+            </div>
+
             <label className="flex items-center gap-2 text-xs text-ink-mid sm:col-span-2 mt-1">
               <input
                 type="checkbox"

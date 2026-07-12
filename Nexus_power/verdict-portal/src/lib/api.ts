@@ -37,6 +37,7 @@ import type {
   CreateCycleResponse,
   CreateInvariantResponse,
   CriticalityRegistry,
+  CreateExplorationResponse,
   CycleDetail,
   CycleListResponse,
   CycleMode,
@@ -464,6 +465,29 @@ export class QecApiClient {
   getExploration(explorationId: string, opts?: RequestOpts): Promise<Exploration> {
     if (this.mock) return this.mocked(() => mock.mockGetExploration(explorationId), opts?.signal);
     return this.get<Exploration>(`${QEC}/explorations/${encodeURIComponent(explorationId)}`, opts);
+  }
+
+  /**
+   * Dispatch a live crawl (Phase-1 exploration) for a registered app — the step
+   * that records the app and mints its artifact/substrate so a cycle has
+   * something to run. The app must be onboarding-`live` (the crawl gate refuses
+   * a draft app). Returns immediately (status `dispatched`); poll
+   * `getExploration(exploration_id)` for the terminal status + stats.
+   */
+  triggerExploration(appId: string, opts?: RequestOpts): Promise<CreateExplorationResponse> {
+    if (this.mock)
+      return this.mocked(
+        () => ({
+          exploration_id: mock.hex64(appId + Date.now()).slice(0, 32),
+          app_id: appId,
+          crawl_id: mock.hex64(appId).slice(0, 32),
+          extractor_version: 'mock',
+          status: 'dispatched',
+          accepted: true,
+        }),
+        opts?.signal,
+      );
+    return this.post<CreateExplorationResponse>(`${QEC}/explorations`, { app_id: appId }, opts);
   }
 
   runHarness(payload: { fixture_name?: string; rules?: string[] } = {}, opts?: RequestOpts): Promise<HarnessRunResult> {
