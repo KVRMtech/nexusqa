@@ -222,6 +222,10 @@ services:
       # LLM lens OFF by default; envelope KEK provider (local dev / kms prod).
       REPO_INTEL_LLM_LENS_ENABLED: ${REPO_INTEL_LLM_LENS_ENABLED:-false}
       NEXUS_KEK_PROVIDER: ${NEXUS_KEK_PROVIDER:-local}
+      # GCP-KMS key for the envelope in prod — repo-intel seals client repo tokens
+      # and REFUSES the dev-grade `local` KEK outside development (secrets.py), so
+      # this must be supplied (same as qe-central / platform-api).
+      NEXUS_KEK_GCP_KEY: ${NEXUS_KEK_GCP_KEY:-}
       NEXUS_LOCAL_KEK_PATH: ${NEXUS_LOCAL_KEK_PATH:-/app/service/data/kek/master.key}
     volumes:
     - repo-intel-workdir:/app/service/data/repos
