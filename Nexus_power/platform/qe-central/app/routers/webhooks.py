@@ -26,6 +26,7 @@ returns nothing ⇒ 401 (fail-closed) — never a wrong-tenant write.
 """
 from __future__ import annotations
 
+import base64
 import hashlib
 import hmac
 import json
@@ -69,9 +70,33 @@ async def _resolve_app(app_id: str) -> dict | None:
     return dict(row) if row is not None else None
 
 
-def _webhook_secret(repo_binding) -> str:
+async def _webhook_secret(request, tenant_id: str, app_id: str, repo_binding) -> str:
+    """The app's webhook secret in cleartext for constant-time comparison.
+
+    Prefers the envelope-encrypted ``webhook_secret_enc`` (AAD=app_id); falls back
+    to a legacy plaintext ``webhook_secret`` for pre-encryption rows.  On any
+    decrypt failure returns ``""`` → the caller fails closed (401)."""
     if not isinstance(repo_binding, dict):
         return ""
+    enc = str(repo_binding.get("webhook_secret_enc") or "").strip()
+    if enc:
+        envelope = getattr(request.app.state, "envelope_service", None)
+        if envelope is None:
+            return ""
+        try:
+            from nexus_sdk.security.envelope import EnvelopeBlob
+
+            blob = EnvelopeBlob.from_bytes(base64.b64decode(enc))
+            plaintext = await envelope.decrypt(
+                tenant_id, blob, expected_aad=app_id.encode("utf-8"),
+            )
+            return plaintext.decode("utf-8").strip()
+        except Exception as exc:
+            logger.warning(
+                "qec.webhook.secret_decrypt_failed",
+                extra={"app_id": app_id, "error": str(exc)[:200]},
+            )
+            return ""
     return str(repo_binding.get(WEBHOOK_SECRET_KEY) or "").strip()
 
 
@@ -102,7 +127,8 @@ async def gitlab_webhook(app_id: str, request: Request) -> dict:
     # FAIL-CLOSED: unknown app OR no configured secret OR token mismatch → 401.
     # Compute the comparison against a placeholder even when the app is unknown so
     # the response is not obviously timing-distinguishable by existence.
-    secret = _webhook_secret(app.get("repo_binding")) if app else ""
+    _tenant_id = str(app["tenant_id"]) if app else ""
+    secret = await _webhook_secret(request, _tenant_id, app_id, app.get("repo_binding")) if app else ""
     valid = bool(secret) and bool(provided) and hmac.compare_digest(secret, provided)
     if app is None or not valid:
         logger.warning(

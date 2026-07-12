@@ -9,6 +9,7 @@ require admin|manager (platform-api RBAC parity).
 """
 from __future__ import annotations
 
+import base64
 import json
 import logging
 from datetime import datetime, timezone
@@ -117,11 +118,50 @@ async def _encrypt_credentials(
     return blob.to_bytes()
 
 
+async def _seal_webhook_secret(
+    request: Request, tenant_id: str, app_id: str, repo_binding: dict | None,
+) -> dict:
+    """Return ``repo_binding`` with any plaintext ``webhook_secret`` envelope-
+    encrypted in place (AAD = app_id) as base64 ``webhook_secret_enc``.
+
+    The webhook shared secret was stored in plaintext JSONB; both GitLab
+    (X-Gitlab-Token) and GitHub (HMAC) need the cleartext at verify time, so we
+    encrypt at rest and decrypt in the handler.  REFUSES (503) when a secret is
+    present but encryption is unavailable — never store it in plaintext.
+    """
+    rb = dict(repo_binding or {})
+    secret = str(rb.pop("webhook_secret", "") or "").strip()
+    if not secret:
+        rb.pop("webhook_secret_enc", None)
+        return rb
+    envelope = getattr(request.app.state, "envelope_service", None)
+    if envelope is None:
+        raise HTTPException(
+            status_code=503,
+            detail="encryption unavailable — refusing to store a webhook secret in plaintext",
+        )
+    try:
+        blob = await envelope.encrypt(tenant_id, secret.encode("utf-8"), aad=app_id.encode("utf-8"))
+    except Exception as exc:
+        logger.error(
+            "qec.apps.webhook_secret_encrypt_failed",
+            extra={"app_id": app_id, "error": str(exc)[:200]},
+        )
+        raise HTTPException(status_code=503, detail="webhook secret encryption failed")
+    rb["webhook_secret_enc"] = base64.b64encode(blob.to_bytes()).decode("ascii")
+    return rb
+
+
 def _public_view(row: ClientAppRow) -> dict:
-    """Serialise a row WITHOUT the ciphertext; expose has_credentials only."""
+    """Serialise a row WITHOUT any secret material; expose has_* flags only."""
     d = row_to_dict(row)
     d.pop("creds_blob", None)
     d["has_credentials"] = bool(row.creds_blob)
+    # Never echo the webhook secret (plaintext or ciphertext) — expose a flag.
+    rb = dict(d.get("repo_binding") or {})
+    has_webhook_secret = bool(rb.pop("webhook_secret", None)) or bool(rb.pop("webhook_secret_enc", None))
+    d["repo_binding"] = rb
+    d["has_webhook_secret"] = has_webhook_secret
     return d
 
 
@@ -166,6 +206,7 @@ async def create_app(
         creds_blob = await _encrypt_credentials(
             request, tenant_id, app_id, payload.credentials,
         )
+    repo_binding = await _seal_webhook_secret(request, tenant_id, app_id, payload.repo_binding)
 
     row = ClientAppRow(
         app_id=app_id,
@@ -177,7 +218,7 @@ async def create_app(
         answer_key=payload.answer_key or {},
         env_attestation=payload.env_attestation or {},
         fences=payload.fences or {},
-        repo_binding=payload.repo_binding or {},
+        repo_binding=repo_binding,
         schedule=payload.schedule or {},
         budgets=payload.budgets or {},
         status="active",
@@ -257,11 +298,16 @@ async def update_app(
             row.name = payload.name.strip()[:200]
         for field in (
             "answer_key", "env_attestation", "fences",
-            "repo_binding", "schedule", "budgets",
+            "schedule", "budgets",
         ):
             value = getattr(payload, field)
             if value is not None:
                 setattr(row, field, value)
+        if payload.repo_binding is not None:
+            # Seal any plaintext webhook secret on rotation (never store plaintext).
+            row.repo_binding = await _seal_webhook_secret(
+                request, tenant_id, app_id, payload.repo_binding,
+            )
         if payload.status is not None:
             row.status = payload.status
         if payload.credentials is not None:
