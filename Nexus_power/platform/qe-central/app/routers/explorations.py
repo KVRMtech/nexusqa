@@ -300,6 +300,50 @@ async def _decrypt_credentials(request: Request, tenant_id: str, row: ClientAppR
         raise HTTPException(status_code=503, detail="credential decryption failed")
 
 
+#: Cap on a resolved session payload (mirrors the run-side auth-profile cap).
+_MAX_SESSION_BYTES = 2 * 1024 * 1024
+
+
+async def _resolve_session(credentials: dict | None) -> dict | None:
+    """Resolve a tier-4 START-authenticated session for a login the crawler can't
+    script (captcha / SSO / hardware token).  Two sources, in order:
+
+      1. a STATIC client-provided ``session`` (a Playwright storageState dict);
+      2. a client ``auth_hook`` URL — GET a FRESH storageState (https-only,
+         bounded, timed-out) so an expiring session can be re-minted per crawl.
+
+    Honest ``None`` on any problem (empty/unusable/unreachable) — the crawl then
+    proceeds COLD rather than failing.  NOTE: the hook is an operator-configured
+    URL; a full SSRF guard (block internal/metadata hosts) is a hardening
+    follow-up — today it is https-only + size/time bounded.
+    """
+    if not isinstance(credentials, dict):
+        return None
+    static = credentials.get("session")
+    if isinstance(static, dict) and (static.get("cookies") or static.get("origins")):
+        return static
+    hook = str(credentials.get("auth_hook") or "").strip()
+    if not hook:
+        return None
+    if not hook.lower().startswith("https://"):
+        logger.warning("qec.explorations.auth_hook_rejected reason=not_https")
+        return None
+    try:
+        import httpx
+
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.get(hook)
+        if resp.status_code == 200 and len(resp.content) <= _MAX_SESSION_BYTES:
+            data = resp.json()
+            if isinstance(data, dict) and (data.get("cookies") or data.get("origins")):
+                logger.info("qec.explorations.auth_hook_session_resolved")
+                return data
+        logger.warning("qec.explorations.auth_hook_unusable status=%s", resp.status_code)
+    except Exception as exc:
+        logger.warning("qec.explorations.auth_hook_failed error=%s", str(exc)[:200])
+    return None
+
+
 async def _dispatch_explorer(
     *, tenant_id: str, app_id: str, request: Request, response: Response,
 ) -> dict:
@@ -346,6 +390,11 @@ async def _dispatch_explorer(
         env_attestation = dict(row.env_attestation or {})
 
     credentials = await _decrypt_credentials(request, tenant_id, row)
+    # Tier-4: resolve a start-authenticated session (static client session or a
+    # fetched auth-hook) for a login the crawler cannot script. NOTE: named
+    # `auth_session` — NOT `session` — to avoid shadowing by the DB
+    # `async with tenant_scoped_qec_session(...) as session` block below.
+    auth_session = await _resolve_session(credentials)
 
     crawl_id = uuid.uuid4().hex  # 32 hex chars — matches CRAWL_ID_PATTERN, fits String(50)
     if not CRAWL_ID_PATTERN.match(crawl_id):  # pragma: no cover — uuid hex is always valid
@@ -381,6 +430,7 @@ async def _dispatch_explorer(
         allowed_hosts=allowed_hosts,
         phase="explore",
         attestation=env_attestation or None,
+        session=auth_session,
     )
     try:
         result = await explorer_client.dispatch_crawl(dispatch_request)

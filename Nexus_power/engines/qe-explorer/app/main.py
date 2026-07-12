@@ -76,6 +76,13 @@ class ExploreRequest(BaseModel):
     phase: str = "explore"
     submit_approvals: list[str] = Field(default_factory=list)
     attestation: Optional[dict[str, Any]] = None
+    #: A pre-captured Playwright ``storageState`` (cookies + origins) to START the
+    #: browser context authenticated — the tier-4 escape hatch for logins the
+    #: crawler cannot script (captcha / SSO / hardware token): a human/client
+    #: session is injected so the crawl begins already logged-in. qe-central
+    #: resolves it (a stored client session, or a fetched auth-hook) and relays it
+    #: here; ``None`` ⇒ a normal cold-session crawl.
+    session: Optional[dict[str, Any]] = None
 
 
 def _config_fingerprint(req: ExploreRequest, refuse_pack_version: str) -> str:
@@ -286,10 +293,15 @@ async def _run_job(
                 proxy={"server": settings.egress_proxy} if settings.egress_proxy else None,
                 args=_LAUNCH_ARGS,
             )
-            context = await browser.new_context(
-                service_workers="block",
-                ignore_https_errors=False,
-            )
+            # Tier-4 session injection: when qe-central relays a pre-captured
+            # storageState, start the context authenticated (cookies + origins) so
+            # a crawl can proceed past a login the crawler cannot script. A bad/
+            # empty session is ignored (a normal cold crawl), never a hard failure.
+            _ctx_kwargs: dict[str, Any] = {"service_workers": "block", "ignore_https_errors": False}
+            if isinstance(req.session, dict) and (req.session.get("cookies") or req.session.get("origins")):
+                _ctx_kwargs["storage_state"] = req.session
+                logger.info("qec.explorer.session_injected crawl_id=%s", req.crawl_id)
+            context = await browser.new_context(**_ctx_kwargs)
             context.set_default_timeout(_ACTION_TIMEOUT_MS)
             page = await context.new_page()
             port = PlaywrightBrowserPort(page, context)

@@ -45,6 +45,10 @@ class ExploreDispatchRequest(BaseModel):
     phase: str = Field(default="explore")
     submit_approvals: list[str] = Field(default_factory=list)
     attestation: dict | None = None
+    #: A pre-captured Playwright storageState to start the crawl authenticated
+    #: (tier-4: logins the crawler cannot script). Resolved by qe-central from a
+    #: stored client session or a fetched auth-hook; sensitive, never logged.
+    session: dict | None = None
 
 
 class DispatchResult(BaseModel):

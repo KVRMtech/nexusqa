@@ -31,7 +31,7 @@ interface WizardForm {
   base_url: string;
   username: string;
   password: string;
-  mfa_method: 'none' | 'totp' | 'otp';
+  mfa_method: 'none' | 'totp' | 'otp' | 'hook';
   mfa_secret: string;
   mfa_delivery: string;
   repo_provider: string;
@@ -161,9 +161,17 @@ export function OnboardingWizard() {
         : form.mfa_method === 'otp' && form.mfa_secret.trim()
           ? { kind: 'otp', otp: form.mfa_secret.trim(), delivery: form.mfa_delivery.trim() }
           : null;
+    // Tier-4 auth-hook (login the crawler can't script): an https URL that
+    // returns a fresh Playwright storageState, fetched per crawl.
+    const authHook = form.mfa_method === 'hook' && form.mfa_secret.trim() ? form.mfa_secret.trim() : null;
     const credentials =
-      form.username || form.password
-        ? { username: form.username, password: form.password, ...(mfa ? { mfa } : {}) }
+      form.username || form.password || authHook
+        ? {
+            username: form.username,
+            password: form.password,
+            ...(mfa ? { mfa } : {}),
+            ...(authHook ? { auth_hook: authHook } : {}),
+          }
         : null;
     return {
       name: form.name.trim(),
@@ -267,27 +275,34 @@ export function OnboardingWizard() {
                 The crawler logs itself in on every crawl AND every cycle, so the
                 factor must be one it can compute: a TOTP seed or a fixed/test OTP. */}
             <Field
-              label="Second factor (MFA)"
-              hint="How the login's one-time code is satisfied. The crawler re-authenticates every run, so it must be a code it can compute."
+              label="Authentication method"
+              hint="How the crawler gets past login. It re-authenticates every crawl and every run, so it must be a method it can complete itself."
             >
               <select
                 className={INPUT_CLS}
                 value={form.mfa_method}
                 onChange={(e) => set('mfa_method', e.target.value as WizardForm['mfa_method'])}
               >
-                <option value="none">None (single-step login)</option>
-                <option value="totp">Authenticator app (TOTP seed)</option>
-                <option value="otp">Fixed / test code (deterministic OTP)</option>
+                <option value="none">Username + password only (single-step)</option>
+                <option value="totp">+ MFA · Authenticator app (TOTP seed)</option>
+                <option value="otp">+ MFA · Fixed / test code (deterministic OTP)</option>
+                <option value="hook">Login hook — URL returns a session (un-scriptable logins)</option>
               </select>
             </Field>
             {form.mfa_method !== 'none' && (
               <Field
-                label={form.mfa_method === 'totp' ? 'TOTP secret (base32)' : 'Fixed one-time code'}
+                label={
+                  form.mfa_method === 'totp' ? 'TOTP secret (base32)'
+                  : form.mfa_method === 'hook' ? 'Auth hook URL'
+                  : 'Fixed one-time code'
+                }
                 required
                 hint={
                   form.mfa_method === 'totp'
                     ? 'The shared authenticator seed; codes are computed per RFC 6238. Encrypted at rest.'
-                    : 'A deterministic test code (e.g. a QA env that always accepts 123456). Encrypted at rest.'
+                    : form.mfa_method === 'hook'
+                      ? 'An https endpoint that returns a fresh Playwright storageState; fetched per crawl for logins the crawler can’t script (captcha/SSO/hardware token).'
+                      : 'A deterministic test code (e.g. a QA env that always accepts 123456). Encrypted at rest.'
                 }
               >
                 <input
@@ -295,11 +310,15 @@ export function OnboardingWizard() {
                   value={form.mfa_secret}
                   onChange={(e) => set('mfa_secret', e.target.value)}
                   autoComplete="off"
-                  placeholder={form.mfa_method === 'totp' ? 'JBSWY3DPEHPK3PXP' : '123456'}
+                  placeholder={
+                    form.mfa_method === 'totp' ? 'JBSWY3DPEHPK3PXP'
+                    : form.mfa_method === 'hook' ? 'https://qa.acme.example/vkpower/session'
+                    : '123456'
+                  }
                 />
               </Field>
             )}
-            {form.mfa_method !== 'none' && (
+            {(form.mfa_method === 'totp' || form.mfa_method === 'otp') && (
               <Field label="Delivery channel (optional)" hint="If the app asks 'email or mobile?', which to pick. Blank = let the app default.">
                 <input
                   className={INPUT_CLS}
