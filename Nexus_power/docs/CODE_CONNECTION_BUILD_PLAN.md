@@ -1,282 +1,300 @@
-# CODE CONNECTION — Production Build Plan (phase-by-phase, no gaps)
+# CODE CONNECTION — Production Build Plan (evidence-based, phase-by-phase)
 
 **Scope:** everything required to take the "Code" path (connect a client's source
-repository → trigger + ground regression) from its current state to a
-production-ready, enterprise-grade, 1000+‑clients/day capability — including the
-security hardening, the scale spine, and the category-defining innovation
-(grounded diff→flow→proof).
+repository → trigger + ground regression) from its *actual* current state to a
+production-ready, enterprise-grade, 1000+‑clients/day capability.
 
-**Status legend:** `[✅ built]` `[⚠️ partial]` `[❌ missing]` `[🔒 security-gate]`
+**This is the RE-VERIFIED plan (2026-07-12).** It supersedes two earlier drafts
+that were wrong in opposite directions — the first understated what exists, the
+second overstated readiness. This version is grounded in a fresh, independent
+code + runtime audit and prices the *real* blockers.
 
-**Grounding — what exists today (RE-VERIFIED against code 2026-07-12; supersedes
-earlier draft):**
-- `engines/repo-intel/app/connectors/git.py` — shallow clone, in-memory token,
-  token-scrubbed logs, `credential.helper=` off, size cap, per-tenant workdir. `[✅]`
-- `engines/repo-intel/app/security/secret_scrub.py` — deterministic secret/PII
-  scrubber run before any quote persists. `[✅]`
-- `engines/repo-intel/app/lens/llm_lens.py` — off by default, verbatim-quote-
-  grounded, atoms-only (never wholesale source). `[✅]`
-- `engines/repo-intel/app/main.py` — **encrypted-token connection store already
-  exists**: `POST /connections` seals the token via KMS (`seal_token`, refuses
-  plaintext outside dev), `ls-remote` healthcheck, `DELETE` revokes + wipes
-  workdir. `analyze` runs a REAL pipeline (clone→detect→extract→persist atoms→
-  seed-manifest). `[✅]`
-- `engines/repo-intel/app/main.py::diff` — the incremental `POST /{app_id}/diff`
-  is an **honest STUB**: returns `stack_supported=false` ("treat all as changed"),
-  so the consumer never sees a false "no change". Real SHA→SHA diff + atom remap
-  NOT implemented. `[❌]`
-- `platform/qe-central/app/controlplane/cycle/change_detector.py` — **consumes**
-  `RepoDiff` and **fails safe to full** when repo-intel is unreachable / stack
-  unsupported. `[✅ consumption]`
-- `platform/qe-central/app/controlplane/cycle/driver.py` — `repo_diff` / `repo_shas`
-  are injected params **defaulting to None** — nothing fetches the SHA-diff from
-  repo-intel, so the diff→flow chain is **not wired end-to-end**. `[❌ wiring]`
-- `platform/qe-central/app/routers/webhooks.py` — constant-time HMAC, fail-closed,
-  opaque 401, **and idempotent dedup already built** (`UNIQUE(app_id,dedupe_key)`
-  coalesces replays). **GitLab-only** — no GitHub `X-Hub-Signature-256` handler. `[✅/⚠️]`
-- `platform/qe-central/app/routers/apps.py` — `repo_binding` JSONB stored
-  **PLAINTEXT** (incl. `webhook_secret`); onboarding collects `webhook_secret` but
-  **no repo clone credential**, and **never creates a repo-intel connection**. The
-  central missing link is qe-central↔repo-intel INTEGRATION, not the pieces. `[⚠️/❌]`
+**Status legend:** `[✅ verified]` `[⚠️ built-but-not-running / partial]` `[❌ missing]` `[🔒 security-gate]`
 
 ---
 
-## PHASE 0 — Security foundation (BLOCKER: before any private repo connects)
+## GROUND TRUTH — what the audit actually found
 
-**Goal:** no client credential is ever stored in plaintext; onboarding can supply a
-real, encrypted repo credential; the clone path is auditable.
+The critical realization: **the pieces exist in code, but the feature is
+NON-FUNCTIONAL end-to-end in production.** "In a file" ≠ "runs."
 
-### 0.1 Encrypt `repo_binding` secrets at rest `[🔒][❌]`
-- Move `webhook_secret` and any repo token OUT of the plaintext `repo_binding`
-  JSONB into an envelope-encrypted blob (reuse `_encrypt_credentials` / the KMS
-  `EnvelopeService`, AAD = `app_id`).
-- New column `repo_creds_blob BYTEA NULL` on `client_apps` (idempotent RLS migration).
-- `_public_view` NEVER returns the secret; expose only `has_repo_credential`,
-  `repo_provider`, `repo_project`.
-- **Files:** `apps.py` (`_encrypt_repo_creds`), `db/models.py`, new `scripts/apply_repo_creds.sql`,
-  `routers/webhooks.py` (`_webhook_secret` decrypts).
-- **Accept:** DB row shows no plaintext secret; webhook still verifies; unit test
-  `test_repo_creds_encrypted` asserts ciphertext at rest + round-trip.
+| Component | Status | Evidence |
+|---|---|---|
+| repo-intel engine **deployed/running** | `[❌ runtime]` | box `docker ps -a` → **NO repo-intel container**; gated behind `repo-intel` compose profile |
+| repo-intel DB schema | `[✅]` | box: `repo_connections, app_model_universes, app_model_atoms, crawl_seed_manifests` all present |
+| Encrypted-token connection store | `[✅ code]` | `engines/repo-intel/app/model/secrets.py::seal_token` (refuses `local` KEK outside dev), `model/store.py::create_connection` (RLS) |
+| Analyze pipeline (clone→atoms→seed) | `[✅ code / ❌ never run]` | `engines/repo-intel/app/main.py::_run_analyze` real; but engine not deployed |
+| **qe-central → repo-intel client** | `[❌ absent]` | grep for any call to `/connections`,`/analyze`,`/diff` from `platform/qe-central` → **zero hits** |
+| **Cycle daemon** (webhook consumer) | `[⚠️ built, DISABLED]` | box logs `qec.cycle_daemon.disabled`; `QEC_DAEMON_LEADER_ELECTION=none` |
+| Webhook → `change_events` | `[✅]` | `webhooks.py` records events, idempotent `UNIQUE(app_id,dedupe_key)`; **GitLab-only** (no GitHub) |
+| SHA extraction → `repo_shas` | `[❌]` | discovery `SELECT event_id,tenant_id,app_id,source,created_at` OMITS `payload` (`driver.py:1767`); `repo_shas` default `(None,None)` |
+| `run_cycle` fetches `repo_diff` | `[❌]` | `run_cycle` passes only `repo_shas=`; `repo_diff` never passed → always `None` |
+| repo-intel `/diff` producer | `[❌ honest stub]` | `main.py::diff` returns `stack_supported=false` |
+| change_detector **consumption** | `[✅]` | `change_detector.py:184-197` consumes `RepoDiff`, **fails safe to full** |
+| `repo_binding`/`webhook_secret` at rest | `[⚠️ PLAINTEXT]` | `apps.py:180 repo_binding=payload.repo_binding` (no encryption); `webhooks.py:75` reads plaintext |
+| Git token hygiene / secret scrub / LLM lens | `[✅]` | `git.py`, `security/secret_scrub.py`, `lens/llm_lens.py` — as claimed |
+| Clone egress fencing | `[❌]` | repo-intel not on the crawler's squid allowlist path |
 
-### 0.2 Repo-credential intake in onboarding + repo-intel integration `[❌ integration]`
-- NOTE: the encrypted-token store ALREADY EXISTS in repo-intel (`POST /connections`
-  seals via KMS). The work is INTEGRATION, not re-building encryption.
-- Onboarding "Code" tab gains a credential field set per provider (token / deploy
-  key / — later — GitHub App install id).
-- On app create/update with a repo credential, qe-central calls repo-intel
-  `POST /connections` (seals the token there) and stores the returned
-  `connection_id` on the app row (`repo_binding.connection_id`); the raw token is
-  relayed once, never persisted in qe-central.
-- **Files:** `verdict-portal/src/features/onboarding/index.tsx`, `apps.py`
-  (`AppCreate`/`AppUpdate` + a repo-intel client call), `types/qec.ts`.
-- **Accept:** create a private-repo app end-to-end → a repo-intel connection exists
-  with a sealed token; token never echoed; `has_repo_credential=true`.
+**Two hard blockers I under-weighted before:** the engine isn't deployed (C1) and
+**nothing in qe-central calls repo-intel** (C5). The daemon that would consume a
+webhook is disabled (C6). So a repo webhook today records an event that **nothing
+reads**, against an analysis engine that **isn't running**, with **no client** to
+bridge them.
 
-### 0.3 Audit + revocation `[⚠️]`
-- Every clone/ls-remote/token-mint writes an `audit_log` row (actor=service,
-  tenant, connection, sha, bytes) — secret-free.
-- `DELETE /apps/{id}` and a new `POST /apps/{id}/repo/revoke` zero `repo_creds_blob`
-  AND call `GitConnector.remove_workdir`.
-- **Accept:** revoke wipes ciphertext + workdir; audit shows the revoke.
+**What this changes:** P0 is NOT "encrypt one field + wire onboarding." P0 is
+"stand up the runtime": deploy the engine, build the missing client, enable the
+daemon, and encrypt the secret. Conversely, the P4 "moat" is *cheaper* than a
+greenfield build because the store, analyze pipeline, and consumer already exist —
+but it is strictly gated behind P0.
 
-**Phase 0 exit gate:** no plaintext repo secret anywhere; private clone works with an
-encrypted credential; revoke is complete + audited.
+---
+
+## PHASE 0 — Runtime foundation (the REAL blockers) 🔒
+
+**Goal:** make the Code path *physically able to execute* — engine running, secret
+safe, services connected, consumer on. Nothing downstream works until this lands.
+
+### 0.1 Deploy repo-intel + provision its KMS envelope `[❌ runtime][🔒]`
+- Bring up the `repo-intel` service (compose profile `repo-intel`) with the
+  **GCP-KMS envelope** (`NEXUS_KEK_PROVIDER=gcp_kms` + `NEXUS_KEK_GCP_KEY`) — it
+  `secrets.py::_kek_provider` **refuses `local` outside development** (fail-closed),
+  identical to the fix platform-api needed.
+- Give it its DB DSN (tenant-scoped role), the shared JWT secret, and health checks.
+- **Files:** `docker-compose.qec.yml` (un-gate/enable repo-intel), `.env.production`,
+  bootstrap script.
+- **Accept:** `repo-intel` container healthy; `GET /health` 200; a manual
+  `POST /connections` seals a token (envelope ready).
+- **Effort:** M (deploy + KMS wiring + smoke test). **Dependency:** KMS key + ADC
+  (already proven for qe-central/platform-api).
+
+### 0.2 qe-central → repo-intel client + connection lifecycle `[❌ absent]`
+- New typed client in `platform/qe-central/app/clients/repo_intel.py` (service JWT,
+  mirrors `explorer_client.py`): `create_connection`, `analyze`, `get_diff`,
+  `revoke_connection`.
+- On app create/update **with a repo credential**: qe-central calls repo-intel
+  `POST /connections` (token sealed there), stores the returned `connection_id` on
+  `client_apps.repo_binding.connection_id`; the raw token is relayed once, **never
+  persisted in qe-central**.
+- On app delete/revoke: call repo-intel `DELETE /connections/{id}` (wipes workdir).
+- **Files:** `clients/repo_intel.py` (new), `apps.py` (create/update/delete hooks),
+  `clients/config.py` (repo-intel URL).
+- **Accept:** creating a repo-bound app produces a repo-intel connection with a
+  sealed token; deleting the app revokes it. Contract test pins the client shape.
+- **Effort:** M–L (new client + lifecycle + tests).
+
+### 0.3 Encrypt the webhook secret / repo credential at rest `[⚠️ PLAINTEXT][🔒]`
+- The `webhook_secret` in `client_apps.repo_binding` is **plaintext today**. Two
+  acceptable fixes (pick one, documented):
+  - (a) envelope-encrypt the `repo_binding` secret sub-fields at rest (reuse the
+    KMS envelope), decrypt in `webhooks.py::_webhook_secret`; OR
+  - (b) keep only a **hash** of the webhook secret and compare a computed HMAC
+    (works because GitHub uses HMAC signatures; for GitLab's plain-token model,
+    (a) is required).
+- The repo *clone* token never lives in qe-central (it's sealed in repo-intel via
+  0.2), so this item is specifically the **webhook secret**.
+- **Files:** `apps.py`, `webhooks.py`, migration if a column is added.
+- **Accept:** DB shows no plaintext webhook secret; webhook still verifies;
+  `test_webhook_secret_encrypted`.
+- **Effort:** S–M.
+
+### 0.4 Enable the cycle daemon + leader election `[⚠️ DISABLED]`
+- The daemon that turns a `change_events` row into a cycle is **off**
+  (`qec.cycle_daemon.disabled`, `LEADER=none`). A webhook is inert without it.
+- Enable it; add **leader election** (advisory-lock or the existing
+  `controlplane/leader.py` seam) so multiple qe-central instances don't double-fire
+  at 1000/day.
+- Add an ops guard: `change_events` accumulating unprocessed → alert.
+- **Files:** `main.py` (lifespan daemon start), `config.py` (flags),
+  `controlplane/leader.py`.
+- **Accept:** a recorded `change_events` row fires exactly one cycle;
+  two instances → one leader fires; unprocessed backlog alarms.
+- **Effort:** M (enable + HA + observability).
+
+**Phase 0 exit gate:** a repo-bound app can be created (sealed token in repo-intel),
+a GitLab webhook fires exactly one cycle via the daemon, no plaintext secret at
+rest, repo-intel healthy. *(The cycle still runs on the live-fingerprint/full
+change signal — code-scoped selection is P4.)*
 
 ---
 
 ## PHASE 1 — Enterprise auth model (GitHub App / GitLab, least-privilege)
 
-**Goal:** replace raw-PAT trust with the integration model enterprises require —
-scoped, short-lived, revocable, single-repo.
+**Goal:** replace raw-PAT trust with the model enterprises require.
 
 ### 1.1 GitHub App `[❌]`
-- Register a GitHub App: **Contents: read-only**, **Metadata: read**, webhook
-  subscription (push, pull_request). No write scopes.
-- Store `app_id` + private key (KMS-encrypted, platform-level secret, not per-tenant).
-- On connect: the client installs the App on their repo; we persist the
-  `installation_id` (per app row).
-- Mint **short-lived installation tokens** (≤1h) on demand for each clone; never
-  persist the token.
-- **Files:** new `engines/repo-intel/app/connectors/github_app.py` (JWT→installation-token),
-  `apps.py` (installation callback), `webhooks.py` (App webhook signature `X-Hub-Signature-256`).
-- **Accept:** clone a private repo using a freshly-minted, auto-expiring token; no
-  long-lived secret at rest for GitHub App connections.
+- Register a GitHub App: **Contents: read**, **Metadata: read**, webhook (push,
+  pull_request). No write scopes. Store `app_id` + private key (KMS, platform-level).
+- Client installs the App → persist `installation_id` per app.
+- Mint **short-lived installation tokens** (≤1h) per clone; never persist.
+- **Files:** `engines/repo-intel/app/connectors/github_app.py` (new, JWT→install-token),
+  `apps.py` (install callback), the repo-intel connection accepts an install-id kind.
+- **Accept:** clone a private repo with a freshly-minted auto-expiring token.
+- **Effort:** L.
 
-### 1.2 Deploy-key fallback + GitLab `[❌]`
-- Read-only **deploy key** path (single repo, SSH) for buyers who won't install an App.
-- GitLab: project access token (read_repository) / deploy token, encrypted.
-- **Accept:** each provider path clones a private repo read-only.
+### 1.2 GitHub webhook handler `[❌ — GitLab-only today]`
+- Add `POST /webhooks/github/{app_id}` verifying `X-Hub-Signature-256` (HMAC-SHA256
+  over the raw body) in constant time; route `push`/`pull_request`.
+- **Files:** `webhooks.py`.
+- **Accept:** a GitHub push is verified + recorded; a forged signature → 401.
+- **Effort:** S–M (mirrors the GitLab handler).
 
-### 1.3 Token lifecycle `[❌]`
-- Rotation endpoint; expiry tracking; a connection whose credential is invalid
-  surfaces `repo_status=needs_reauth` (never a silent failure).
-- **Accept:** expired/invalid credential → honest `needs_reauth`, cycle proceeds
-  crawl-only (fail-open), operator notified.
+### 1.3 Deploy-key + GitLab + token lifecycle `[❌]`
+- Read-only deploy key (single repo, SSH); GitLab project access token / deploy
+  token. Rotation endpoint; invalid credential → honest `repo_status=needs_reauth`
+  (cycle proceeds crawl-only, fail-open).
+- **Effort:** M.
 
-**Phase 1 exit gate:** GitHub App + deploy-key + GitLab all clone read-only with the
-least-privilege, short-lived model; PAT is fallback-only.
+**Phase 1 exit gate:** GitHub App + GitHub webhook + deploy-key + GitLab all work
+read-only with least-privilege, short-lived tokens; PAT is fallback-only.
 
 ---
 
-## PHASE 2 — Egress fencing + ephemeral sandbox (safe clone at scale)
+## PHASE 2 — Egress fencing + ephemeral sandbox (safe clone at scale) 🔒
 
-**Goal:** a malicious or huge repo cannot touch a neighbor, reach internal
-services, or leave source behind.
+**Goal:** a malicious/huge repo can't touch a neighbor, reach internal services,
+or leave source behind.
 
-### 2.1 Host-fenced clone egress `[🔒][❌]`
+### 2.1 Host-fenced clone egress `[❌]`
 - Route repo-intel's git egress through an allowlisted proxy (mirror the crawler's
-  squid pattern): the ONLY reachable hosts are the client's git host(s).
-- SSRF guard on the resolved git host (reuse `_is_safe_public_hook` logic: public
-  IPs only, block metadata/internal).
+  squid pattern): only the client's git host(s) reachable. SSRF guard on the
+  resolved host (reuse `_is_safe_public_hook`: public IPs only, block metadata/internal).
 - **Files:** `docker-compose.qec.yml` (repo-intel networks + egress proxy),
-  `engines/repo-intel/app/config.py` (proxy), allowlist writer.
-- **Accept:** clone reaches only the git host; an attempt to a private IP is refused + logged.
+  `engines/repo-intel/app/config.py`.
+- **Accept:** clone reaches only the git host; a private-IP target is refused + logged.
+- **Effort:** M.
 
 ### 2.2 Per-connection micro-sandbox `[❌]`
-- Run clone + analysis inside an isolated sandbox (gVisor or Firecracker microVM;
-  minimum: a locked-down container with `--network` fenced, read-only rootfs,
-  no docker socket, seccomp, CPU/mem/pids caps).
-- **Disable git hooks** (`core.hooksPath=/dev/null`), reject symlink-escapes,
-  zip-bomb/size caps (extend the existing byte cap with file-count + depth caps).
-- **Accept:** a repo with a malicious `post-checkout` hook / 10⁶ files / a 50GB
-  blob is safely refused; sandbox destroyed after analysis.
+- Run clone + analysis in an isolated sandbox (gVisor/Firecracker; minimum: locked
+  container, fenced network, read-only rootfs, no docker socket, seccomp, CPU/mem/
+  pids caps). **Disable git hooks** (`core.hooksPath=/dev/null`), reject symlink
+  escapes, add file-count + depth caps (extend the existing byte cap).
+- **Accept:** malicious hook / 10⁶ files / 50GB blob safely refused; sandbox
+  destroyed after analysis.
+- **Effort:** L.
 
 ### 2.3 Zero-retention guarantee `[❌]`
-- Clone lives ONLY in the ephemeral sandbox; wiped on completion or after a TTL
-  (default 10 min); NEVER written to a durable volume or backup.
-- Emit only the **scrubbed App Model atoms** (already secret-free) to the DB.
-- Publish a written data-handling statement: *source never persisted, wiped in N
-  minutes, never backed up, optional on-prem.*
-- **Accept:** post-analysis, no source on any disk; only atoms in the DB; a
-  compliance test asserts the workdir is gone.
+- Clone lives ONLY in the ephemeral sandbox; wiped on completion / after a TTL
+  (default 10 min); never on a durable volume or backup. Emit only the scrubbed
+  atoms. Publish a written data-handling statement.
+- **Accept:** post-analysis, no source on any disk; only atoms in DB; a compliance
+  test asserts the workdir is gone.
+- **Effort:** M.
 
-**Phase 2 exit gate:** clone egress is host-allowlisted, runs in a destroyed-after
-sandbox, and source is provably never retained.
+**Phase 2 exit gate:** clone egress host-allowlisted, runs in a destroyed-after
+sandbox, source provably never retained.
+
+---
+
+## PHASE 4 — The differentiator: grounded diff → flow → proof (gated on P0)
+
+**Goal:** turn "we connect to your repo" into "we prove your change is safe, with
+evidence." Cheaper than greenfield — the atom model, analyze pipeline, and the
+change-detector CONSUMPTION + fail-safe are **already built**; wire the producers.
+
+### 4.1 Code→UI atom map (repo-intel) `[❌ — atoms exist, page map does not]`
+- Atoms already carry `kind/value/quote/provenance`. ADD: per atom, the
+  routes/pages/controls it governs (atom → `page_key`/`control_fp`), verbatim-grounded.
+- **Files:** `engines/repo-intel/app/extract/*`, `manifest/seed.py`.
+- **Effort:** L (the genuinely novel modeling work).
+
+### 4.2 Real incremental `/diff` producer `[❌ — currently a stub]`
+- Implement `POST /{app_id}/diff` for real: SHA→SHA git diff → changed files →
+  remap to changed atoms → `page_keys`/`control_fps` (replaces `stack_supported=false`).
+  Needs two analyzed universes (before/after) — depends on 4.1.
+- **Files:** `engines/repo-intel/app/main.py`, a new `extract/diff_mapper.py`.
+- **Effort:** L.
+
+### 4.3 Wire qe-central: SHA + diff into the cycle `[❌]`
+- Daemon discovery: **read `change_events.payload`** (old/new sha) — today it omits
+  it (`driver.py:1767`). Pass `repo_shas` through `_fire_cycle` → `run_cycle` →
+  `execute_cycle`.
+- `run_cycle`: **fetch `repo_diff`** from repo-intel (via the 0.2 client) and pass
+  it to `execute_cycle` — today `repo_diff` is never passed.
+- The EXISTING `change_detector.py` + `selector.py` then scope the run to affected
+  flows (already consume it, already fail-safe).
+- **Files:** `driver.py` (discovery SELECT, `_fire_cycle`, `run_cycle`).
+- **Accept:** a change to one page re-runs only the flows touching it; carry-forward
+  is honest; unreachable repo-intel still fails safe to full (already holds).
+- **Effort:** M (wiring; the consumer is done).
+
+**Phase 4 exit gate:** a real diff drives a scoped, grounded cycle end-to-end on a
+proving-ground repo.
 
 ---
 
 ## PHASE 3 — Scale & reliability (1000+ clients/day)
 
-**Goal:** webhook storms, concurrent clones, and rotation all behave under load.
-
-### 3.1 Webhook robustness `[⚠️ partial — dedup DONE]`
-- ✅ ALREADY BUILT: idempotent dedup via `UNIQUE(app_id, dedupe_key)` (replays
-  coalesce). Do NOT rebuild.
-- ❌ ADD: per-app + per-tenant **rate limits**; a rapid push storm coalesces to one
-  queued cycle (debounce window), never N cycles.
-- ❌ ADD (with P1 GitHub App): a GitHub webhook handler (`X-Hub-Signature-256`) —
-  today only the GitLab handler exists; route `pull_request`/`push`, ignore
-  non-actionable events.
-- **Accept:** 500 pushes in 10s → bounded cycles; duplicate deliveries → one effect
-  (already holds); GitHub pushes accepted + verified.
+### 3.1 Webhook robustness `[⚠️ dedup DONE]`
+- ✅ Idempotent dedup already built (`UNIQUE(app_id,dedupe_key)`). ❌ ADD per-app/
+  per-tenant **rate limits** + push-storm **debounce** (coalesce to one queued cycle).
+- **Effort:** M.
 
 ### 3.2 Clone concurrency + cache `[❌]`
-- Bounded clone workers per tenant + global backpressure queue.
-- **Clone cache keyed by SHA** — an unchanged commit is never re-cloned; ls-remote
-  short-circuits when SHA == last analyzed.
-- **Accept:** re-push of the same SHA does zero clones; concurrent tenants don't
-  starve each other.
+- Bounded clone workers per tenant + global backpressure. **Clone cache by SHA** —
+  `ls-remote` short-circuits when SHA == last analyzed (skip re-clone).
+- **Effort:** M.
 
 ### 3.3 Observability + SLOs `[⚠️]`
-- Metrics: clone latency, bytes, refusal reasons, token-mint count, webhook
-  accept/reject, sandbox lifecycle.
-- Per-connection health surface (`repo_status`, last_sha, last_analyzed_at).
-- **Accept:** dashboards + alerts for clone-failure spikes, egress refusals, token
-  errors.
+- Metrics: clone latency/bytes/refusals, token mints, webhook accept/reject,
+  sandbox lifecycle, daemon backlog. Per-connection `repo_status`/`last_sha`.
+- **Effort:** M.
 
-**Phase 3 exit gate:** load test at 1000+ connections/day with storm + cache +
-concurrency proven; SLOs met.
-
----
-
-## PHASE 4 — The differentiator: grounded diff → flow → proof `[⚠️ partial]`
-
-**Goal:** turn "we connect to your repo" into "we prove your change is safe, with
-evidence." No competitor grounds a code diff to a specific, proven UI behavior.
-NOTE: the atom model, the analyze pipeline, the change-detector CONSUMPTION, and
-the honest fail-safe are ALREADY BUILT — the gap is the incremental diff producer +
-the atom→page map + the end-to-end wiring.
-
-### 4.1 Code→UI atom map (repo-intel) `[❌ — atoms exist, page map does not]`
-- Atoms already carry `kind/value/quote/provenance`. ADD: per atom, the
-  **routes/pages/controls** it governs (atom → `page_key`/`control_fp`),
-  verbatim-grounded.
-- **Files:** `engines/repo-intel/app/extract/*`, `manifest/seed.py`.
-- **Accept:** for a sample repo, a changed handler maps to the exact UI page(s).
-
-### 4.2 Real incremental diff + driver wiring `[❌ — /diff is a stub, driver doesn't fetch]`
-- Implement repo-intel `POST /{app_id}/diff` for real: SHA→SHA git diff → changed
-  files → remap to changed atoms → `page_keys`/`control_fps` (replaces the current
-  `stack_supported=false` stub).
-- Wire the driver: on a `change_events` repo trigger, pass `repo_shas` (from the
-  webhook's old/new sha) and FETCH `repo_diff` from repo-intel, then feed the
-  EXISTING `change_detector.py` + `selector.py` (already consume it, fail-safe).
-- **Accept:** a change to one page re-runs only the flows touching it; carry-
-  forward is honest; unreachable repo-intel still fails safe to full (already holds).
-
-### 4.3 Evidence post-back
-- Result comment/attachment: *"`PremiumCalculator.java:88` → Term Quote flow →
-  VERIFIED green (video + assertion proof); Final Expense unaffected (carried, 2h)."*
-- Tie every claim to the signed verdict ledger (tamper-evident).
-- **Accept:** a PR receives a grounded, evidence-linked verdict.
-
-**Phase 4 exit gate:** a real diff drives a scoped, grounded, evidence-backed cycle
-end-to-end on a proving-ground repo.
+**Phase 3 exit gate:** load test at 1000+ connections/day (storm + cache +
+concurrency) with SLOs met.
 
 ---
 
 ## PHASE 5 — Pre-merge PR gate (shift-left) `[❌]`
+- GitHub Check Run / GitLab MR status: per-flow verdict + links to video/assertions,
+  tied to the signed verdict ledger. Configurable gate policy.
+- **Files:** `github_app.py` (Checks API), `webhooks.py` (pull_request handler).
+- **Effort:** M–L. **Depends on:** P1 (App), P4 (scoped verdict).
 
-**Goal:** block/annotate the PR before merge with grounded evidence.
-
-- GitHub **Check Run** / GitLab **MR status**: `pending → success/failure` with a
-  per-flow breakdown and links to video/assertions.
-- Configurable gate policy (block on P0 regression; warn otherwise).
-- **Files:** `github_app.py` (Checks API), `webhooks.py` (pull_request handler),
-  verdict ledger link.
-- **Accept:** a PR with a regression shows a failing Check naming the flow + step +
-  screenshot; a clean PR passes.
-
-**Phase 5 exit gate:** end-to-end PR gate demoed on a proving-ground repo with both a
-green and a regressed PR.
+## PHASE 6 — Value-add + compliance `[❌]`
+- Surface detected secrets (the scrubber already finds them) as an opt-in report
+  (masked). SOC2 / data-residency doc. On-prem/air-gap packaging (SDK-self-contained).
+- **Effort:** M (mostly packaging + docs).
 
 ---
 
-## PHASE 6 — Value-add + compliance packaging `[❌]`
-
-- **Secret-leak surfacing:** the scrubber already detects secrets — surface
-  *"hardcoded AWS key at `config/prod.rb:14` (masked)"* as a security report
-  (opt-in), never storing the raw secret.
-- **SOC2 / data-residency:** document the code-handling controls (encryption,
-  ephemeral clone, zero-retention, on-prem option); evidence for the audit.
-- **On-prem / air-gap** packaging of repo-intel (already SDK-self-contained).
-- **Accept:** a one-page "how we handle your code" doc a security team signs off;
-  air-gap install runbook.
-
----
-
-## Cross-cutting requirements (every phase)
-- **Tests:** unit (scrub, token hygiene, webhook, SSRF, selector), contract
-  (encrypted-at-rest, RLS isolation), integration (clone→atoms→cycle on a
-  proving-ground repo), load (Phase 3).
-- **Security review gate** at the end of each phase (`🔒` items are blocking).
-- **RLS everywhere:** all new tables tenant-scoped + FORCE RLS.
+## Cross-cutting (every phase)
+- **Tests:** unit (scrub, token hygiene, webhook HMAC, SSRF, selector), contract
+  (encrypted-at-rest, RLS isolation, repo-intel client shape), integration
+  (connection→analyze→atoms→diff→scoped cycle on a proving-ground repo), load (P3).
+- **Security review gate** per phase (`🔒` blocking).
+- **RLS everywhere;** new tables FORCE RLS.
 - **Fail-open on intelligence, fail-closed on security:** repo-intel absence never
-  blocks a crawl; a security check failure always refuses.
-- **Never green-wash:** an unverifiable code claim is demoted, not surfaced.
+  blocks a crawl (already true via `change_detector` fail-safe + seed-manifest 404);
+  a security check failure always refuses.
+- **Never green-wash:** an unverifiable code claim is demoted, not surfaced (already
+  the doctrine in `llm_lens.py`).
 
-## Recommended sequencing (highest ROI first)
-1. **Phase 0 + Phase 1** together — makes "Code" actually usable AND enterprise-safe
-   (the concrete blocker). 
-2. **Phase 2** — the security spine for scale.
-3. **Phase 4** — the moat (grounded diff→flow→proof).
-4. **Phase 3** — hardening for 1000+/day (parallelizable with 4).
-5. **Phase 5 + 6** — shift-left gate + compliance packaging.
+## Dependency chain (cannot be naively parallelized)
+```
+P0.1 deploy repo-intel + KMS
+   └─> P0.2 qe-central↔repo-intel client ──> P0.3 encrypt secret (parallel)
+          └─> P0.4 enable daemon + leader-election
+                 └─> P1 GitHub App/webhook ──> P4.1 atom→page map
+                                                  └─> P4.2 real /diff ──> P4.3 cycle wiring
+   └─> P2 egress fence + sandbox (parallel with P1, before real client repos)
+P3 scale · P5 PR gate (needs P1+P4) · P6 compliance (needs P2)
+```
+
+## Effort reality (corrected)
+- **P0 is the big one** — deploy a new service + KMS, build a new inter-service
+  client + lifecycle, enable/HA a distributed daemon, encrypt a secret. Multi-week,
+  NOT a quick wiring job (the earlier draft's mistake).
+- **P4 is cheaper than it looks** — the store, analyze pipeline, consumer, and
+  fail-safe exist; 4.3 is wiring. But it is **strictly gated behind P0** and behind
+  the genuinely-novel 4.1 (atom→page modeling).
+- **P1/P2** are standard-but-real enterprise integration + isolation work.
 
 ## Definition of done (production-ready, no gaps)
-- A client connects a **private** repo via a **GitHub App** (least-privilege,
-  short-lived), secrets **encrypted at rest**, clone **host-fenced** in an
-  **ephemeral sandbox** with **zero source retention**, at **1000+/day** with
-  storm/cache/concurrency proven, where a **code diff runs only the affected flows**
-  and posts a **grounded, evidence-backed PR verdict** tied to a **signed ledger** —
-  with a **compliance doc** a security team signs off.
+A client connects a **private** repo via a **GitHub App** (least-privilege,
+short-lived), the webhook secret is **encrypted at rest**, the clone is
+**host-fenced** in an **ephemeral zero-retention sandbox**, the **deployed**
+repo-intel engine analyzes it, the **enabled, leader-elected daemon** turns a push
+into exactly one cycle, a **real code diff scopes the run to affected flows** and
+posts a **grounded, evidence-backed PR verdict** tied to a **signed ledger** — at
+**1000+/day** with storm/cache/concurrency proven — with a **compliance doc** a
+security team signs off.
