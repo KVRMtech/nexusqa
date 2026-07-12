@@ -28,8 +28,10 @@ Dependency contract (implemented in ``app.substrate`` / ``app.artifacts`` /
 """
 from __future__ import annotations
 
+import ipaddress
 import json
 import logging
+import socket
 import uuid
 from urllib.parse import urlparse
 
@@ -303,6 +305,56 @@ async def _decrypt_credentials(request: Request, tenant_id: str, row: ClientAppR
 #: Cap on a resolved session payload (mirrors the run-side auth-profile cap).
 _MAX_SESSION_BYTES = 2 * 1024 * 1024
 
+#: Host literals never fetched (SSRF): loopback + the cloud metadata endpoint.
+_BLOCKED_HOOK_HOSTS = frozenset({"localhost", "metadata", "metadata.google.internal"})
+
+
+def _is_safe_public_hook(url: str) -> tuple[bool, str]:
+    """SSRF guard for the auth-hook URL: True only for an ``https`` URL whose host
+    resolves ENTIRELY to public/global IPs.
+
+    Fail-closed at every step. Blocks non-https, ``localhost`` / ``*.internal`` /
+    ``*.local`` / the metadata hostname, and any address that is private, loopback,
+    link-local (incl. 169.254.169.254 metadata), reserved, multicast, or otherwise
+    non-global — for BOTH an IP-literal host and every DNS-resolved address. Pure
+    apart from a DNS lookup, so the cheap scheme/literal checks are unit-testable
+    with no network.  (TOCTOU/DNS-rebinding pinning is a deeper follow-up; the hook
+    is operator-configured, so the resolve-and-check materially reduces the risk.)
+    """
+    try:
+        parsed = urlparse(url)
+    except Exception:
+        return False, "unparseable url"
+    if parsed.scheme != "https":
+        return False, "not https"
+    host = (parsed.hostname or "").strip().lower()
+    if not host:
+        return False, "no host"
+    if host in _BLOCKED_HOOK_HOSTS or host.endswith(".internal") or host.endswith(".local"):
+        return False, f"blocked host {host!r}"
+
+    # Gather candidate IPs: an IP-literal host directly, else every DNS answer.
+    candidates: list = []
+    try:
+        candidates.append(ipaddress.ip_address(host))
+    except ValueError:
+        try:
+            infos = socket.getaddrinfo(host, parsed.port or 443, proto=socket.IPPROTO_TCP)
+        except Exception as exc:
+            return False, f"dns resolution failed ({str(exc)[:60]})"
+        for info in infos:
+            try:
+                candidates.append(ipaddress.ip_address(info[4][0]))
+            except ValueError:
+                return False, "unparseable resolved address"
+    if not candidates:
+        return False, "no addresses"
+    for ip in candidates:
+        if (ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved
+                or ip.is_multicast or ip.is_unspecified or not ip.is_global):
+            return False, f"non-public address {ip}"
+    return True, "ok"
+
 
 async def _resolve_session(credentials: dict | None) -> dict | None:
     """Resolve a tier-4 START-authenticated session for a login the crawler can't
@@ -325,13 +377,16 @@ async def _resolve_session(credentials: dict | None) -> dict | None:
     hook = str(credentials.get("auth_hook") or "").strip()
     if not hook:
         return None
-    if not hook.lower().startswith("https://"):
-        logger.warning("qec.explorations.auth_hook_rejected reason=not_https")
+    safe, reason = _is_safe_public_hook(hook)
+    if not safe:
+        logger.warning("qec.explorations.auth_hook_rejected reason=%s", reason)
         return None
     try:
         import httpx
 
-        async with httpx.AsyncClient(timeout=15.0) as client:
+        # follow_redirects=False: a redirect could bounce to an internal host,
+        # bypassing the SSRF check applied to the original URL.
+        async with httpx.AsyncClient(timeout=15.0, follow_redirects=False) as client:
             resp = await client.get(hook)
         if resp.status_code == 200 and len(resp.content) <= _MAX_SESSION_BYTES:
             data = resp.json()
