@@ -168,8 +168,11 @@ services:
     # Shared allowlist volume (qe-central writes allowed_domains.txt here).
     - qec-egress-allowlist:/etc/squid/allowlist
     # Seed a FAIL-CLOSED sentinel so squid starts before the first crawl, then
-    # run squid in the foreground. Re-run `squid -k reconfigure` after each
-    # allowlist update (the ACL file is re-read only on (re)configure).
+    # run squid in the foreground. A background watcher re-runs `squid -k
+    # reconfigure` whenever qe-central rewrites the allowlist file (the ACL file
+    # is re-read ONLY on (re)configure, and qe-central — a separate container —
+    # cannot signal squid itself). WITHOUT this, a domain added after squid
+    # started is denied TCP_DENIED/403 forever and the crawl reaches nothing.
     entrypoint: ["/bin/sh", "-c"]
     command:
     - >
@@ -178,6 +181,10 @@ services:
         printf '%s\n' '# fail-closed default — no real host until a crawl populates it' '.qec-egress-denied.invalid'
           > /etc/squid/allowlist/allowed_domains.txt; } &&
       { chown proxy:proxy /dev/stdout /dev/stderr 2>/dev/null || true; } &&
+      { A=/etc/squid/allowlist/allowed_domains.txt; L=; while :; do
+          C=$$(stat -c %Y "$$A" 2>/dev/null || echo 0);
+          [ "$$C" != "$$L" ] && { L=$$C; squid -k reconfigure 2>/dev/null || true; };
+          sleep 1; done & } &&
       exec squid -N -f /etc/squid/squid.conf -d1
     mem_limit: 512m
     networks:
