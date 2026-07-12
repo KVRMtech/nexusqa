@@ -1101,6 +1101,16 @@ def compile_case(tc, field_meta: dict | None = None, *, parametrize: bool = Fals
     _expected_outcome = (getattr(tc, "expected_outcome", "") or "").strip()
     if _expected_outcome:
         out.append(f"// Expected outcome: {_expected_outcome}")
+    # ANSWERS P1 — business-value oracle. A case may carry expected OUTCOMES
+    # (attached at generate from the client's answer_key); compile them into
+    # grounded assertions. DEFAULT-OFF: a case with no value_assertions leaves
+    # _vo_lines empty and _vo_uses_nxnum False → the spec is byte-identical.
+    _vo_lines: list[str] = []
+    _vo_uses_nxnum = False
+    _value_assertions = getattr(tc, "value_assertions", None)
+    if _value_assertions:
+        from ..test_factory.value_oracle import value_assertion_lines
+        _vo_lines, _vo_uses_nxnum = value_assertion_lines(_value_assertions, field_meta=field_meta)
     out.append(f"// Confidence: {high} solid step(s), {review} need review.")
     if weak_a11y:
         out.append(f"// a11y: {weak_a11y} control(s) had no observed accessible name "
@@ -1112,6 +1122,9 @@ def compile_case(tc, field_meta: dict | None = None, *, parametrize: bool = Fals
     # ReferenceError the parse-only checks cannot catch).
     out.append(_NXSETTLE_JS)
     out.append(_NXCLICK_JS)
+    if _vo_uses_nxnum:  # ANSWERS P1 — numeric value-oracle comparator (gated)
+        from ..test_factory.value_oracle import NXNUM_JS
+        out.append(NXNUM_JS)
     out.append("")
     test_id = js_str(getattr(tc, "test_id", "") or "")
     if test_id:
@@ -1256,6 +1269,13 @@ def compile_case(tc, field_meta: dict | None = None, *, parametrize: bool = Fals
                 f"  await expect(page.getByText(/{_ctok}/i).first()).toBeVisible(); "
                 "// grounded: case Expected Outcome verified against the observed outcome"
             )
+    # ANSWERS P1 — grounded business-value assertions (client's expected outcomes
+    # vs the live DOM). PROVEN on a real value miss (frozen reducer recognizes the
+    # hard toContainText / "unexpected value" throw); UNVERIFIED comment when a node
+    # cannot be grounded — never a silent pass.
+    if _vo_lines:
+        out.append("  // ── business-value oracle (ANSWERS P1) — proves the app's OUTPUT ──")
+        out.extend(_vo_lines)
     out.append("});")
     if heal_capture:
         out.append("")

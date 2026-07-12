@@ -181,7 +181,14 @@ async def _load_current_pages_and_actions(
 def _row_values(
     tc: ProductionTestCase, *, artifact_id: str, tenant_id: str, session_id: str,
     confidence: str, source_evidence: dict[str, Any],
+    value_assertions: list | None = None,
 ) -> dict[str, Any]:
+    # ANSWERS P1 — inject the case's expected value OUTCOMES into the serialized
+    # case so they round-trip via ``ProductionTestCase(**r.test_case)`` (extra=allow)
+    # to the compiler at build time.  Defaulted → every existing caller unchanged.
+    tc_dump = tc.model_dump(mode="json")
+    if value_assertions:
+        tc_dump["value_assertions"] = value_assertions
     return {
         "test_case_id": tc.test_id,
         "artifact_id": artifact_id,
@@ -195,7 +202,7 @@ def _row_values(
         "status": "active",
         "step_count": len(tc.steps),
         "tags": list(tc.tags or []),
-        "test_case": tc.model_dump(mode="json"),
+        "test_case": tc_dump,
         "source_evidence": source_evidence,
         "generator_version": GENERATOR_VERSION,
     }
@@ -295,7 +302,7 @@ async def generate_and_store(
     }
 
     new_ids: list[str] = []
-    for tc in result.test_cases:
+    for _idx, tc in enumerate(result.test_cases):
         annotate_confidence(tc, ambiguous)
         case_meta = dict(demonstrated_meta)
         if validate and router is not None:
@@ -304,10 +311,15 @@ async def generate_and_store(
             case_meta["validation"] = await validate_and_repair_case(
                 tc, visits=visits, actions=actions, router=router,
             )
+        # ANSWERS P1 — attach the expected value OUTCOMES to the PRIMARY demonstrated
+        # flow (index 0 = the deepest happy path, the case that reaches the output
+        # page). A case that does not reach a named node yields an honest UNVERIFIED
+        # / not-found (INFERRED) — never a false green. Per-persona targeting is P3.
+        case_outcomes = value_outcomes if (_idx == 0 and value_outcomes) else None
         values = _row_values(
             tc, artifact_id=artifact_id, tenant_id=tenant_id,
             session_id=session_id, confidence="demonstrated",
-            source_evidence=case_meta,
+            source_evidence=case_meta, value_assertions=case_outcomes,
         )
         new_ids.append(values["test_case_id"])
         await _upsert_case(session, values)
