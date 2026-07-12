@@ -8,19 +8,36 @@ security hardening, the scale spine, and the category-defining innovation
 
 **Status legend:** `[✅ built]` `[⚠️ partial]` `[❌ missing]` `[🔒 security-gate]`
 
-**Grounding — what exists today (verified in code):**
+**Grounding — what exists today (RE-VERIFIED against code 2026-07-12; supersedes
+earlier draft):**
 - `engines/repo-intel/app/connectors/git.py` — shallow clone, in-memory token,
   token-scrubbed logs, `credential.helper=` off, size cap, per-tenant workdir. `[✅]`
 - `engines/repo-intel/app/security/secret_scrub.py` — deterministic secret/PII
   scrubber run before any quote persists. `[✅]`
 - `engines/repo-intel/app/lens/llm_lens.py` — off by default, verbatim-quote-
   grounded, atoms-only (never wholesale source). `[✅]`
+- `engines/repo-intel/app/main.py` — **encrypted-token connection store already
+  exists**: `POST /connections` seals the token via KMS (`seal_token`, refuses
+  plaintext outside dev), `ls-remote` healthcheck, `DELETE` revokes + wipes
+  workdir. `analyze` runs a REAL pipeline (clone→detect→extract→persist atoms→
+  seed-manifest). `[✅]`
+- `engines/repo-intel/app/main.py::diff` — the incremental `POST /{app_id}/diff`
+  is an **honest STUB**: returns `stack_supported=false` ("treat all as changed"),
+  so the consumer never sees a false "no change". Real SHA→SHA diff + atom remap
+  NOT implemented. `[❌]`
+- `platform/qe-central/app/controlplane/cycle/change_detector.py` — **consumes**
+  `RepoDiff` and **fails safe to full** when repo-intel is unreachable / stack
+  unsupported. `[✅ consumption]`
+- `platform/qe-central/app/controlplane/cycle/driver.py` — `repo_diff` / `repo_shas`
+  are injected params **defaulting to None** — nothing fetches the SHA-diff from
+  repo-intel, so the diff→flow chain is **not wired end-to-end**. `[❌ wiring]`
 - `platform/qe-central/app/routers/webhooks.py` — constant-time HMAC, fail-closed,
-  opaque 401. `[✅]`
-- `platform/qe-central/app/routers/apps.py` — `repo_binding` JSONB stored **plaintext**;
-  onboarding collects `webhook_secret` but **no repo clone credential**. `[⚠️/❌]`
-- repo-intel gated behind the `repo-intel` compose profile; off the critical path,
-  fail-open; clone egress **not** host-fenced. `[⚠️]`
+  opaque 401, **and idempotent dedup already built** (`UNIQUE(app_id,dedupe_key)`
+  coalesces replays). **GitLab-only** — no GitHub `X-Hub-Signature-256` handler. `[✅/⚠️]`
+- `platform/qe-central/app/routers/apps.py` — `repo_binding` JSONB stored
+  **PLAINTEXT** (incl. `webhook_secret`); onboarding collects `webhook_secret` but
+  **no repo clone credential**, and **never creates a repo-intel connection**. The
+  central missing link is qe-central↔repo-intel INTEGRATION, not the pieces. `[⚠️/❌]`
 
 ---
 
@@ -41,15 +58,19 @@ real, encrypted repo credential; the clone path is auditable.
 - **Accept:** DB row shows no plaintext secret; webhook still verifies; unit test
   `test_repo_creds_encrypted` asserts ciphertext at rest + round-trip.
 
-### 0.2 Repo-credential intake in onboarding `[❌]`
-- Onboarding "Code" tab gains a credential field set per provider:
-  GitHub App install / deploy key / scoped PAT (fallback); GitLab project access
-  token / deploy token.
-- Wizard sends `repo_credential: {kind, token|deploy_key|app_installation_id}`;
-  server encrypts into `repo_creds_blob`.
-- **Files:** `verdict-portal/src/features/onboarding/index.tsx`, `apps.py` (`AppCreate`/`AppUpdate`),
-  `types/qec.ts`.
-- **Accept:** create a private-repo app end-to-end; token never echoed; `has_repo_credential=true`.
+### 0.2 Repo-credential intake in onboarding + repo-intel integration `[❌ integration]`
+- NOTE: the encrypted-token store ALREADY EXISTS in repo-intel (`POST /connections`
+  seals via KMS). The work is INTEGRATION, not re-building encryption.
+- Onboarding "Code" tab gains a credential field set per provider (token / deploy
+  key / — later — GitHub App install id).
+- On app create/update with a repo credential, qe-central calls repo-intel
+  `POST /connections` (seals the token there) and stores the returned
+  `connection_id` on the app row (`repo_binding.connection_id`); the raw token is
+  relayed once, never persisted in qe-central.
+- **Files:** `verdict-portal/src/features/onboarding/index.tsx`, `apps.py`
+  (`AppCreate`/`AppUpdate` + a repo-intel client call), `types/qec.ts`.
+- **Accept:** create a private-repo app end-to-end → a repo-intel connection exists
+  with a sealed token; token never echoed; `has_repo_credential=true`.
 
 ### 0.3 Audit + revocation `[⚠️]`
 - Every clone/ls-remote/token-mint writes an `audit_log` row (actor=service,
@@ -138,12 +159,16 @@ sandbox, and source is provably never retained.
 
 **Goal:** webhook storms, concurrent clones, and rotation all behave under load.
 
-### 3.1 Webhook robustness `[⚠️]`
-- Dedup by provider **delivery-id**; idempotency key per (app, delivery).
-- Per-app + per-tenant **rate limits**; a push storm coalesces to one queued cycle
-  (debounce window), never N cycles.
-- Verify `pull_request`/`push` event routing; ignore non-actionable events.
-- **Accept:** 500 pushes in 10s → bounded cycles; duplicate deliveries → one effect.
+### 3.1 Webhook robustness `[⚠️ partial — dedup DONE]`
+- ✅ ALREADY BUILT: idempotent dedup via `UNIQUE(app_id, dedupe_key)` (replays
+  coalesce). Do NOT rebuild.
+- ❌ ADD: per-app + per-tenant **rate limits**; a rapid push storm coalesces to one
+  queued cycle (debounce window), never N cycles.
+- ❌ ADD (with P1 GitHub App): a GitHub webhook handler (`X-Hub-Signature-256`) —
+  today only the GitLab handler exists; route `pull_request`/`push`, ignore
+  non-actionable events.
+- **Accept:** 500 pushes in 10s → bounded cycles; duplicate deliveries → one effect
+  (already holds); GitHub pushes accepted + verified.
 
 ### 3.2 Clone concurrency + cache `[❌]`
 - Bounded clone workers per tenant + global backpressure queue.
@@ -164,24 +189,30 @@ concurrency proven; SLOs met.
 
 ---
 
-## PHASE 4 — The differentiator: grounded diff → flow → proof `[❌]`
+## PHASE 4 — The differentiator: grounded diff → flow → proof `[⚠️ partial]`
 
 **Goal:** turn "we connect to your repo" into "we prove your change is safe, with
 evidence." No competitor grounds a code diff to a specific, proven UI behavior.
+NOTE: the atom model, the analyze pipeline, the change-detector CONSUMPTION, and
+the honest fail-safe are ALREADY BUILT — the gap is the incremental diff producer +
+the atom→page map + the end-to-end wiring.
 
-### 4.1 Code→UI atom map (repo-intel)
-- Extend repo-intel to emit, per changed construct, the **routes/pages/controls**
-  it governs (atom → `page_key`/`control_fp`), verbatim-grounded.
+### 4.1 Code→UI atom map (repo-intel) `[❌ — atoms exist, page map does not]`
+- Atoms already carry `kind/value/quote/provenance`. ADD: per atom, the
+  **routes/pages/controls** it governs (atom → `page_key`/`control_fp`),
+  verbatim-grounded.
 - **Files:** `engines/repo-intel/app/extract/*`, `manifest/seed.py`.
 - **Accept:** for a sample repo, a changed handler maps to the exact UI page(s).
 
-### 4.2 Diff → affected flows resolution (qe-central)
-- On push/PR: compute the diff (old_sha→new_sha), resolve changed atoms → changed
-  `page_keys`/`control_fps`, feed the EXISTING change-detector/selector so ONLY
-  affected flows run; the rest carry forward with age labels.
-- Reuse `controlplane/cycle/change_detector.py` + `selector.py` (already built).
+### 4.2 Real incremental diff + driver wiring `[❌ — /diff is a stub, driver doesn't fetch]`
+- Implement repo-intel `POST /{app_id}/diff` for real: SHA→SHA git diff → changed
+  files → remap to changed atoms → `page_keys`/`control_fps` (replaces the current
+  `stack_supported=false` stub).
+- Wire the driver: on a `change_events` repo trigger, pass `repo_shas` (from the
+  webhook's old/new sha) and FETCH `repo_diff` from repo-intel, then feed the
+  EXISTING `change_detector.py` + `selector.py` (already consume it, fail-safe).
 - **Accept:** a change to one page re-runs only the flows touching it; carry-
-  forward is honest.
+  forward is honest; unreachable repo-intel still fails safe to full (already holds).
 
 ### 4.3 Evidence post-back
 - Result comment/attachment: *"`PremiumCalculator.java:88` → Term Quote flow →
