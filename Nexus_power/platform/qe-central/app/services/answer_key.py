@@ -73,3 +73,118 @@ def explorer_fill_contract(answer_key: Mapping[str, Any] | None) -> dict:
                 semantic.setdefault(key, _s(v))
 
     return {"exact": exact, "semantic": semantic, "regex_rules": regex_rules}
+
+
+# ─────────────────────────── value-oracle contract ──────────────────────────
+# The Answers tab drives a SEPARATE seam from form filling: proving the app's
+# OUTPUT is correct (a computed premium, a decline code) against the client's
+# expectations.  This projector reads ONLY ``outcomes`` / ``rules`` — never the
+# fill data — and normalizes the several shapes the wizard/API may send into a
+# single value-expectation record the factory can compile into a grounded
+# assertion.  Pure + tolerant, exactly like :func:`explorer_fill_contract`.
+
+
+def _as_number(value: Any) -> float | None:
+    """Best-effort numeric parse (tolerant of ``"$28.40"``, ``"1,234"``, ``"18%"``).
+
+    Returns ``None`` when there is no single number to read — the caller then
+    treats the expectation as a string/contains match, never a silent numeric 0.
+    """
+    if isinstance(value, bool):  # bool is an int subclass — never a "number" here
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    import re
+
+    text = _s(value).strip()
+    if not text:
+        return None
+    # Strip currency/label noise, keep sign + digits + one decimal point.
+    cleaned = re.sub(r"[,\s$%€£]", "", text)
+    m = re.search(r"-?\d+(?:\.\d+)?", cleaned)
+    return float(m.group(0)) if m else None
+
+
+def _normalize_outcome(field: str, raw_expected: Any, extra: Mapping | None = None) -> dict | None:
+    """One ``{field, when, expected, tolerance, source_hint, match}`` record.
+
+    ``match`` is ``numeric`` when the expected value reads as a number (so the
+    compiler emits a tolerant numeric compare), else ``exact`` for a scalar or
+    ``contains`` when the author asked for a substring.  Returns ``None`` for an
+    unusable expectation (blank field, or a value we cannot ground — e.g. a list
+    with no scalar) so the oracle stays honest rather than green-washing.
+    """
+    extra = dict(extra or {})
+    field = _s(field).strip()
+    if not field:
+        return None
+    when = extra.get("when")
+    when = dict(when) if isinstance(when, Mapping) else {}
+    tolerance = _as_number(extra.get("tolerance"))
+    source_hint = _s(extra.get("source_hint") or extra.get("selector") or "").strip()
+    requested = _s(extra.get("match")).strip().lower()
+
+    number = _as_number(raw_expected)
+    if requested == "contains" or isinstance(raw_expected, (list, tuple, set)):
+        # A list/"contains" expectation grounds as a substring of the first
+        # scalar member (multi-value invariants are a P3 rule, not a point value).
+        members = raw_expected if isinstance(raw_expected, (list, tuple, set)) else [raw_expected]
+        scalar = next((m for m in members if _s(m).strip()), None)
+        if scalar is None:
+            return None
+        return {"field": field, "when": when, "expected": _s(scalar),
+                "tolerance": None, "source_hint": source_hint, "match": "contains"}
+    if number is not None and requested in ("", "numeric"):
+        return {"field": field, "when": when, "expected": number,
+                "tolerance": tolerance, "source_hint": source_hint, "match": "numeric"}
+    scalar = _s(raw_expected).strip()
+    if not scalar:
+        return None
+    return {"field": field, "when": when, "expected": scalar,
+            "tolerance": None, "source_hint": source_hint, "match": "exact"}
+
+
+def value_oracle_contract(answer_key: Mapping[str, Any] | None) -> dict:
+    """Project a canonical ``answer_key`` onto ``{outcomes: [...], rules: [...]}``.
+
+    Accepts every shape the wizard/API may store for ``outcomes``:
+
+    * a **list** of structured records — ``[{field, equals|expected|value, when,
+      tolerance, source_hint, match}]`` (the authored form); OR
+    * a **flat map** ``{field: expected}`` (what the free-text Answers box compiles
+      to today, e.g. ``{"monthly_premium": 28.40}``).
+
+    The parse-failure sentinel ``{"_raw": "..."}`` is dropped (free text cannot be
+    grounded — that is Phase-2 LLM authoring, not a runtime oracle).  ``rules``
+    (Phase-3 invariants) are passed through normalized-minimally so a later phase
+    can consume them without a schema change here.
+    """
+    ak = dict(answer_key or {})
+    outcomes: list[dict] = []
+
+    src = ak.get("outcomes")
+    if isinstance(src, Mapping):
+        for k, v in src.items():
+            if _s(k).strip() == "_raw":
+                continue  # free-text fallback — ungroundable
+            rec = _normalize_outcome(k, v)
+            if rec is not None:
+                outcomes.append(rec)
+    elif isinstance(src, (list, tuple)):
+        for item in src:
+            if not isinstance(item, Mapping):
+                continue
+            field = item.get("field") or item.get("name") or item.get("label")
+            expected = item.get("equals")
+            if expected is None:
+                expected = item.get("expected", item.get("value"))
+            rec = _normalize_outcome(_s(field), expected, item)
+            if rec is not None:
+                outcomes.append(rec)
+
+    rules: list[dict] = []
+    for rule in ak.get("rules") or ():
+        if isinstance(rule, Mapping) and _s(rule.get("kind") or rule.get("type")).strip():
+            rules.append(dict(rule))
+
+    return {"outcomes": outcomes, "rules": rules}

@@ -152,6 +152,72 @@ def test_factory_call_records_latency_metric(monkeypatch):
     assert after == before + 1.0
 
 
+# ══════════════════════ ANSWERS P1 — answer_key on generate ════════════════
+
+def test_generate_without_answer_key_stays_bodyless(monkeypatch):
+    """No answer_key → the POST carries NO body (byte-for-byte the historical call
+    so every existing caller is unaffected)."""
+    seen = {"body": "unset"}
+
+    def handler(request):
+        seen["body"] = request.content  # bytes
+        return httpx.Response(200, json={"success": True})
+
+    monkeypatch.setattr(factory.httpx, "AsyncClient", _mock_async_client(handler))
+    run(factory.generate(tenant_id="t1", artifact_id="a1"))
+    assert seen["body"] == b""  # body-less
+
+
+def test_generate_with_answer_key_sends_json_body(monkeypatch):
+    """A non-empty answer_key is sent as ``{"answer_key": {...}}`` JSON."""
+    import json as _json
+    seen = {"body": None, "ctype": None}
+
+    def handler(request):
+        seen["body"] = _json.loads(request.content)
+        seen["ctype"] = request.headers.get("content-type")
+        return httpx.Response(200, json={"success": True})
+
+    monkeypatch.setattr(factory.httpx, "AsyncClient", _mock_async_client(handler))
+    contract = {"outcomes": [{"field": "premium", "expected": 28.4, "match": "numeric"}], "rules": []}
+    run(factory.generate(tenant_id="t1", artifact_id="a1", answer_key=contract))
+    assert seen["body"] == {"answer_key": contract}
+    assert "application/json" in (seen["ctype"] or "")
+
+
+def test_httpcycleclient_generate_projects_raw_key_to_contract(monkeypatch):
+    """HttpCycleClient projects the RAW answer_key → clean {outcomes,rules} on the
+    wire (the factory never sees fill/exact/etc.)."""
+    import json as _json
+    seen = {"body": None}
+
+    def handler(request):
+        seen["body"] = _json.loads(request.content) if request.content else None
+        return httpx.Response(200, json={"success": True})
+
+    monkeypatch.setattr(httpx, "AsyncClient", _mock_async_client(handler))
+    raw = {"fill": {"age": 35}, "outcomes": {"monthly_premium": "$28.40"}, "notes": "x"}
+    run(HttpCycleClient().generate(tenant_id="t1", artifact_id="a1", answer_key=raw))
+    # fill/notes dropped; outcomes normalized to a value-expectation record
+    assert seen["body"]["answer_key"]["outcomes"] == [{
+        "field": "monthly_premium", "when": {}, "expected": 28.40,
+        "tolerance": None, "source_hint": "", "match": "numeric"}]
+    assert "fill" not in seen["body"]["answer_key"]
+
+
+def test_httpcycleclient_generate_empty_key_stays_bodyless(monkeypatch):
+    """An answer_key with no outcomes/rules sends NO body (no empty-contract noise)."""
+    seen = {"body": "unset"}
+
+    def handler(request):
+        seen["body"] = request.content
+        return httpx.Response(200, json={"success": True})
+
+    monkeypatch.setattr(httpx, "AsyncClient", _mock_async_client(handler))
+    run(HttpCycleClient().generate(tenant_id="t1", artifact_id="a1", answer_key={"fill": {"age": 35}}))
+    assert seen["body"] == b""
+
+
 # ══════════════════════ driver.HttpCycleClient (poll / run / get_run) ═══════
 
 def test_poll_run_retries_transient_get(monkeypatch):

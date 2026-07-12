@@ -178,12 +178,21 @@ async def _require_artifact(session, artifact_id: str, tenant_id: str) -> Canoni
     return art
 
 
+class GenerateRequest(BaseModel):
+    """Optional generate body (ANSWERS P1).  Every field defaults so the endpoint
+    still validates a BODY-LESS POST — today's qe-central caller sends no body, so
+    this must never become required or those callers would 400."""
+    answer_key: dict | None = None
+
+
 @router.post("/api/v1/test-factory/{artifact_id}/generate")
 async def generate_test_cases(
     artifact_id: str = PathParam(..., min_length=1, max_length=64),
+    body: GenerateRequest | None = Body(None),
     user: dict = Depends(get_current_user),
 ):
     tenant_id = user["tenant_id"]
+    answer_key = body.answer_key if body else None
     async with tenant_scoped_session(tenant_id) as session:
         art = await _require_artifact(session, artifact_id, tenant_id)
         summary = await factory_service.generate_and_store(
@@ -191,6 +200,7 @@ async def generate_test_cases(
             artifact_id=artifact_id,
             tenant_id=tenant_id,
             session_id=getattr(art, "session_id", "") or "",
+            answer_key=answer_key,
         )
     added_cases = await proposer.reapply_added_cases(artifact_id, tenant_id)
     reapplied = await _reapply_tf_overrides(artifact_id, tenant_id)

@@ -262,7 +262,7 @@ def _dominant_host(visits: list[PageVisitInput]) -> str:
 
 async def generate_and_store(
     session: AsyncSession, *, artifact_id: str, tenant_id: str, session_id: str = "",
-    validate: bool = False, router=None,
+    validate: bool = False, router=None, answer_key: dict | None = None,
 ) -> dict[str, Any]:
     """Generate demonstrated + combination test cases and persist them.
 
@@ -270,7 +270,14 @@ async def generate_and_store(
     * Critical combinations (grounded available options) → ``factory_test_cases``
       (confidence=available) + the full spec into ``e2e_combination_reserve``.
     Idempotent: UPSERTs by ``test_case_id`` and prunes stale active rows.
+
+    ``answer_key`` (ANSWERS P1) carries qe-central's clean value-oracle contract
+    ``{outcomes:[{field, when, expected, tolerance, source_hint, match}], rules}``.
+    Defaulted so every existing caller is unaffected.  The expected OUTCOMES are
+    surfaced as ``value_outcomes`` in the summary and (P1.C) compiled into grounded
+    value assertions — PROVEN only when the observed value is grounded, else honest.
     """
+    value_outcomes = [o for o in ((answer_key or {}).get("outcomes") or []) if isinstance(o, dict)]
     visits, actions = await _load_current_pages_and_actions(
         session, artifact_id=artifact_id,
     )
@@ -386,6 +393,7 @@ async def generate_and_store(
         "combinations_full_space": combo.full_count,
         "option_domains": len(combo.option_domains),
         "generated": len(new_ids),
+        "value_outcomes": len(value_outcomes),
         "extraction_health": health,
         "no_cases_reason": no_cases_reason,
         **demonstrated_meta,

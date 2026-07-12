@@ -38,7 +38,7 @@ class _FakeClient:
     async def get_rtm(self, *, tenant_id, artifact_id):
         return {"scripts": []}
 
-    async def generate(self, *, tenant_id, artifact_id):
+    async def generate(self, *, tenant_id, artifact_id, answer_key=None):
         return {"generated": 0}
 
     async def run_playwright(self, *, tenant_id, artifact_id, test_ids, base_url):

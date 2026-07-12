@@ -46,7 +46,7 @@ class _EmptyUntilGeneratedClient:
             }],
         }
 
-    async def generate(self, *, tenant_id, artifact_id):
+    async def generate(self, *, tenant_id, artifact_id, answer_key=None):
         self.generate_calls += 1
         return {"success": True, "generated": 1, "demonstrated": 1}
 
@@ -106,7 +106,7 @@ def test_empty_rtm_that_generates_nothing_is_an_honest_done_not_a_silent_green()
         async def get_rtm(self, *, tenant_id, artifact_id):
             return {"artifact_id": artifact_id, "tests": []}  # always empty
 
-        async def generate(self, *, tenant_id, artifact_id):
+        async def generate(self, *, tenant_id, artifact_id, answer_key=None):
             self.generate_calls += 1
             return {"success": True, "generated": 0, "demonstrated": 0}
 

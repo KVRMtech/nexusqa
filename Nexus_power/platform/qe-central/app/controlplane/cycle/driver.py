@@ -166,7 +166,9 @@ class CycleClient(Protocol):
 
     async def fetch_journey_graph(self, *, tenant_id: str, artifact_id: str) -> Optional[dict]: ...
     async def get_rtm(self, *, tenant_id: str, artifact_id: str) -> dict: ...
-    async def generate(self, *, tenant_id: str, artifact_id: str) -> dict: ...
+    async def generate(
+        self, *, tenant_id: str, artifact_id: str, answer_key: Mapping | None = None,
+    ) -> dict: ...
     async def run_playwright(
         self, *, tenant_id: str, artifact_id: str, test_ids: Sequence[str], base_url: str,
     ) -> dict: ...
@@ -226,9 +228,20 @@ class HttpCycleClient:
             )
             return {"artifact_id": artifact_id, "tests": []}
 
-    async def generate(self, *, tenant_id: str, artifact_id: str) -> dict:
+    async def generate(
+        self, *, tenant_id: str, artifact_id: str, answer_key: Mapping | None = None,
+    ) -> dict:
         from ...clients import factory
-        return await factory.generate(tenant_id=tenant_id, artifact_id=artifact_id)
+        from ...services.answer_key import value_oracle_contract
+
+        # qe-central OWNS the answer_key schema; the factory receives only the
+        # clean, minimal value-oracle contract ({outcomes, rules}) — never the
+        # evolving raw key. Fill values are already baked into the captured
+        # artifact (crawl-time), so generate needs only the expected OUTCOMES.
+        contract = value_oracle_contract(answer_key) if answer_key else None
+        payload = contract if (contract and (contract["outcomes"] or contract["rules"])) else None
+        return await factory.generate(
+            tenant_id=tenant_id, artifact_id=artifact_id, answer_key=payload)
 
     async def _post(
         self, *, tenant_id: str, path: str, body: dict, timeout_s: float, endpoint: str,
@@ -559,6 +572,10 @@ class AppConfig:
     repo_binding: Mapping
     budgets: Mapping
     fences: Mapping
+    # The client's rich answer_key (seed fill + value/rule oracle).  Defaulted so
+    # every direct constructor / test call site is unaffected; the value oracle
+    # (ANSWERS P1) reads ``outcomes``/``rules`` from it at generate time.
+    answer_key: Mapping = field(default_factory=dict)
 
     @classmethod
     def from_row(
@@ -603,6 +620,7 @@ class AppConfig:
             repo_binding=dict(row.repo_binding or {}),
             budgets=dict(row.budgets or {}),
             fences=fences,
+            answer_key=dict(row.answer_key or {}),
         )
 
 
@@ -786,6 +804,7 @@ async def execute_cycle(
             await hooks.save_state(CYCLE_STATE_GENERATING)
             bootstrap = await client.generate(
                 tenant_id=tenant_id, artifact_id=app.latest_artifact_id,
+                answer_key=app.answer_key,
             )
             gen_rows = _generate_row_count(bootstrap)
             if gen_rows:
@@ -857,7 +876,8 @@ async def execute_cycle(
             generate = bootstrap
         else:
             await hooks.save_state(CYCLE_STATE_GENERATING)
-            generate = await client.generate(tenant_id=tenant_id, artifact_id=app.latest_artifact_id)
+            generate = await client.generate(
+                tenant_id=tenant_id, artifact_id=app.latest_artifact_id, answer_key=app.answer_key)
             gen_rows = _generate_row_count(generate)
             if gen_rows:
                 await _meter({meter.UNIT_SUBSTRATE_ROWS: Decimal(gen_rows)}, source_ref="generate")

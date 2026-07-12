@@ -64,6 +64,7 @@ def _generate_path(artifact_id: str) -> str:
 
 async def _call(
     *, method: str, path: str, endpoint: str, tenant_id: str, timeout_s: float,
+    json_body: dict | None = None,
 ) -> dict:
     """Issue one authenticated factory call; raise :class:`FactoryClientError`
     on transport failure or any non-200 response.
@@ -83,7 +84,10 @@ async def _call(
             async with httpx.AsyncClient(
                 base_url=settings.platform_api_url, timeout=timeout_s,
             ) as client:
-                response = await client.request(method, path, headers=headers)
+                response = await client.request(
+                    method, path, headers=headers,
+                    json=json_body if json_body is not None else None,
+                )
         except Exception as exc:  # transport failure — honest, typed
             logger.warning(
                 "qec.factory.transport_error",
@@ -137,7 +141,7 @@ async def get_rtm(*, tenant_id: str, artifact_id: str) -> dict:
     )
 
 
-async def generate(*, tenant_id: str, artifact_id: str) -> dict:
+async def generate(*, tenant_id: str, artifact_id: str, answer_key: dict | None = None) -> dict:
     """Trigger ``POST …/generate`` for an artifact (service JWT).
 
     Returns the factory's generate summary (``{success, generated, demonstrated,
@@ -146,10 +150,17 @@ async def generate(*, tenant_id: str, artifact_id: str) -> dict:
     NON-idempotent (it materialises grounded cases and could double-submit), so
     it is executed EXACTLY ONCE — never auto-retried — while its latency and the
     correlation id are still recorded / propagated by :func:`_call`.
+
+    ``answer_key`` (ANSWERS P1): the client's rich key.  When non-empty it is sent
+    as the JSON body so the factory can seed form fills AND build the value oracle
+    (``outcomes``/``rules``).  When empty/None the POST stays BODY-LESS — byte-for-
+    byte the historical call — so every existing caller is unaffected.
     """
+    body = dict(answer_key) if answer_key else None
     return await _call(
         method="POST", path=_generate_path(artifact_id), endpoint="generate",
         tenant_id=tenant_id, timeout_s=_GENERATE_TIMEOUT_S,
+        json_body={"answer_key": body} if body else None,
     )
 
 

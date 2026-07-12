@@ -117,7 +117,7 @@ class _FakeFactory:
         }
         self.calls: list = []
 
-    async def generate(self, *, tenant_id, artifact_id):
+    async def generate(self, *, tenant_id, artifact_id, answer_key=None):
         self.calls.append(("generate", artifact_id))
         return self.generated
 
