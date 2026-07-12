@@ -379,6 +379,34 @@ async def _latest_version(session, model, artifact_id: str) -> str | None:
     ).scalar_one_or_none()
 
 
+async def known_labels_for_artifact(tenant_id: str, artifact_id: str) -> list[str]:
+    """Distinct form-field LABELS across an artifact's current page_visits — the
+    grounding vocabulary the brief compiler (ANSWERS P2) validates a proposal
+    against.  Labels ONLY (snapshot KEYS), never their values, never a locator —
+    the same value-free discipline as :func:`read_page_nodes`."""
+    if not artifact_id:
+        return []
+    async with tenant_scoped_substrate_session(tenant_id) as session:
+        version = await _latest_version(session, PageVisitRow, artifact_id)
+        if version is None:
+            return []
+        rows = (
+            await session.execute(
+                select(PageVisitRow).where(
+                    PageVisitRow.artifact_id == artifact_id,
+                    PageVisitRow.extractor_version == version,
+                )
+            )
+        ).scalars().all()
+    labels: set[str] = set()
+    for v in rows:
+        if (getattr(v, "source", "") or "") == _MISSING_PAGE_SOURCE:
+            continue
+        labels |= {str(k) for k in (v.form_snapshot_signals or {}).keys()}
+        labels |= {str(k) for k in (v.form_snapshot or {}).keys()}
+    return sorted(l for l in labels if l.strip())
+
+
 async def read_page_nodes(tenant_id: str, artifact_id: str) -> tuple[list[PageNode], str | None]:
     """Read the CURRENT-version page_visits + page_actions as :class:`PageNode`s.
 

@@ -48,6 +48,7 @@ from app.routers.data_forge import router as data_forge_router
 from app.routers.compliance import router as compliance_router
 from app.routers.insights import router as insights_router, init_insights
 from app.routers.admin import router as admin_router, init_admin
+from app.routers.llm import router as llm_router
 
 # QI Engineer Portal (Phase 7)
 from app.routers.personas import router as personas_router
@@ -292,6 +293,7 @@ app.include_router(data_forge_router)
 app.include_router(compliance_router)
 app.include_router(insights_router)
 app.include_router(admin_router)
+app.include_router(llm_router)
 app.include_router(test_cases_router)
 app.include_router(personas_router)
 app.include_router(missions_router)

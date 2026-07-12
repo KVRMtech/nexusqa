@@ -20,12 +20,16 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 
 from ..auth import require_auth, require_role
-from ..clients import repo_intel
+from ..clients import platform_api, repo_intel
 from ..controlplane.scheduling.admission import ADMISSION
 from ..db import new_id, row_to_dict, tenant_scoped_qec_session, utc_now
 from ..db.controlplane_models import AppFingerprintRow
 from ..db.models import ClientAppRow
 from ..fleet import quota
+from ..services.brief_compiler import (
+    BRIEF_SYSTEM_INSTRUCTION, build_prompt, ground_and_assemble, parse_proposal,
+)
+from ..services.synthesis import known_labels_for_artifact
 
 logger = logging.getLogger(__name__)
 
@@ -389,3 +393,45 @@ async def delete_app(app_id: str, user: dict = Depends(require_role("admin"))) -
         extra={"tenant_id": tenant_id, "app_id": app_id, "actor": user.get("sub", "")},
     )
     return {"app_id": app_id, "status": "deleted", "credentials_zeroed": True}
+
+
+class CompileBriefIn(BaseModel):
+    notes: str = Field(default="", max_length=20_000)    # seed-data brief (Data tab)
+    answers: str = Field(default="", max_length=20_000)  # expected outcomes/invariants
+
+
+@router.post("/apps/{app_id}/compile-brief")
+async def compile_brief(
+    app_id: str, body: CompileBriefIn, user: dict = Depends(_MUTATE),
+) -> dict:
+    """ANSWERS P2 — compile a plain-English brief into a GROUNDED answer_key PROPOSAL.
+
+    The LLM only proposes; :func:`ground_and_assemble` re-validates every item against
+    the app's REAL captured field labels, so a hallucinated field can NEVER enter the
+    active contract — it is flagged ``needs_confirmation`` in the review list. On any
+    LLM failure the endpoint degrades honestly (empty proposal + ``llm_error``), never
+    a fabricated contract. This is a pure PROPOSE step: the operator reviews the
+    result and saves the confirmed answer_key via ``PATCH /apps/{app_id}``.
+    """
+    tenant_id = user["tenant_id"]
+    async with tenant_scoped_qec_session(tenant_id) as session:
+        row = await _require_app(session, tenant_id, app_id)
+        artifact_id = row.latest_artifact_id or ""
+
+    known_labels = await known_labels_for_artifact(tenant_id, artifact_id)
+    prompt = build_prompt(
+        notes=body.notes, answers=body.answers, known_labels=known_labels, known_value_nodes=[])
+    llm = await platform_api.complete_llm(
+        tenant_id=tenant_id, prompt=prompt, system=BRIEF_SYSTEM_INSTRUCTION, task="brief_compile")
+    proposal = parse_proposal(llm.text) if llm.ok else {}
+    result = ground_and_assemble(proposal, known_labels=known_labels, known_value_nodes=[])
+    result["llm_ok"] = llm.ok
+    result["llm_error"] = "" if llm.ok else (llm.detail or "LLM unavailable — author the answer_key manually")
+    result["known_label_count"] = len(known_labels)
+    logger.info(
+        "qec.apps.compile_brief",
+        extra={"tenant_id": tenant_id, "app_id": app_id, "llm_ok": llm.ok,
+               "labels": len(known_labels), "grounded": result.get("grounded"),
+               "ungrounded": result.get("ungrounded")},
+    )
+    return result

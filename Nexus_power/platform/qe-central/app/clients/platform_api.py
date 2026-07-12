@@ -34,6 +34,56 @@ class AuthImportResult(BaseModel):
     detail: str = ""
 
 
+#: Result of an LLM completion relay (ANSWERS P2). ``ok=False`` ⇒ no usable text →
+#: the brief compiler degrades to manual authoring, never a fabricated contract.
+class LLMResult(BaseModel):
+    ok: bool
+    text: str = ""
+    status_code: int = 0
+    detail: str = ""
+
+
+async def complete_llm(
+    *, tenant_id: str, prompt: str, system: str = "",
+    max_tokens: int = 2400, temperature: float = 0.2, task: str = "brief_compile",
+) -> LLMResult:
+    """Run ONE LLM completion via platform-api's ``/api/v1/llm/complete`` (authoring
+    time only). Mints a ``role=manager`` service JWT. NEVER raises — a transport
+    error / non-200 returns ``ok=False`` so the caller falls back to manual authoring
+    (the grounding gate then simply has nothing to propose)."""
+    if not prompt.strip():
+        return LLMResult(ok=False, detail="empty prompt")
+    token = mint_service_jwt(tenant_id)
+    body = {"prompt": prompt, "system": system, "max_tokens": max_tokens,
+            "temperature": temperature, "task": task}
+    try:
+        async with httpx.AsyncClient(
+            base_url=settings.platform_api_url, timeout=60.0,
+        ) as client:
+            response = await client.post(
+                "/api/v1/llm/complete", json=body,
+                headers={"Authorization": f"Bearer {token}"},
+            )
+    except Exception as exc:  # transport failure — honest, non-fatal
+        logger.warning("qec.platform_api.llm_transport_error",
+                       extra={"tenant_id": tenant_id, "error": str(exc)[:300]})
+        return LLMResult(ok=False, detail=f"transport error: {exc}"[:300])
+    if response.status_code == 200:
+        try:
+            text = str((response.json() or {}).get("text") or "")
+        except Exception:
+            text = ""
+        return LLMResult(ok=bool(text.strip()), text=text, status_code=200)
+    detail = ""
+    try:
+        detail = str(response.json().get("detail") or "")
+    except Exception:
+        detail = response.text[:300]
+    logger.warning("qec.platform_api.llm_rejected",
+                   extra={"tenant_id": tenant_id, "status_code": response.status_code, "detail": detail[:300]})
+    return LLMResult(ok=False, status_code=response.status_code, detail=detail[:300])
+
+
 def _auth_import_path(artifact_id: str) -> str:
     return f"/api/v1/test-factory/{artifact_id}/playwright/auth/import"
 
