@@ -31,6 +31,9 @@ interface WizardForm {
   base_url: string;
   username: string;
   password: string;
+  mfa_method: 'none' | 'totp' | 'otp';
+  mfa_secret: string;
+  mfa_delivery: string;
   repo_provider: string;
   repo_project: string;
   webhook_secret: string;
@@ -53,6 +56,9 @@ const EMPTY: WizardForm = {
   base_url: '',
   username: '',
   password: '',
+  mfa_method: 'none',
+  mfa_secret: '',
+  mfa_delivery: '',
   repo_provider: 'gitlab',
   repo_project: '',
   webhook_secret: '',
@@ -145,10 +151,24 @@ export function OnboardingWizard() {
     const attDays = Math.max(1, Math.floor(Number(form.attestation_days) || 30));
     const expiresAt = new Date(Date.now() + attDays * 86_400_000).toISOString();
     const signer = form.attested_by.trim() || form.name.trim();
+    // Optional MFA second factor, folded into the (envelope-encrypted)
+    // credentials blob the crawler reads: TOTP computes the code from the shared
+    // seed; 'otp' is a fixed/deterministic test code. `delivery` (optional) names
+    // the channel to pick on a "how do you want your code?" screen.
+    const mfa =
+      form.mfa_method === 'totp' && form.mfa_secret.trim()
+        ? { kind: 'totp', seed: form.mfa_secret.trim(), delivery: form.mfa_delivery.trim() }
+        : form.mfa_method === 'otp' && form.mfa_secret.trim()
+          ? { kind: 'otp', otp: form.mfa_secret.trim(), delivery: form.mfa_delivery.trim() }
+          : null;
+    const credentials =
+      form.username || form.password
+        ? { username: form.username, password: form.password, ...(mfa ? { mfa } : {}) }
+        : null;
     return {
       name: form.name.trim(),
       base_url: form.base_url.trim(),
-      credentials: form.username || form.password ? { username: form.username, password: form.password } : null,
+      credentials,
       repo_binding: { provider: form.repo_provider, project: form.repo_project, webhook_secret: form.webhook_secret },
       answer_key: { notes: form.seed_notes, answers },
       env_attestation: {
@@ -233,15 +253,62 @@ export function OnboardingWizard() {
             <Field label="App name" required>
               <input className={INPUT_CLS} value={form.name} onChange={(e) => set('name', e.target.value)} placeholder="ACME Life · Term Quote" />
             </Field>
-            <Field label="Base URL" required hint="Absolute http(s) URL.">
+            <Field label="Base URL" required hint="Absolute http(s) URL. Point at the SPECIFIC flow's entry, not a hub page.">
               <input className={INPUT_CLS} value={form.base_url} onChange={(e) => set('base_url', e.target.value)} placeholder="https://quote.acmelife.example" />
             </Field>
-            <Field label="Login username" hint="Envelope-encrypted at rest, never echoed.">
+            <Field label="Login username" hint="Envelope-encrypted at rest, never echoed. Leave blank for a public app.">
               <input className={INPUT_CLS} value={form.username} onChange={(e) => set('username', e.target.value)} autoComplete="off" />
             </Field>
             <Field label="Login password">
               <input type="password" className={INPUT_CLS} value={form.password} onChange={(e) => set('password', e.target.value)} autoComplete="off" />
             </Field>
+
+            {/* MFA second factor — folded into the encrypted credentials blob.
+                The crawler logs itself in on every crawl AND every cycle, so the
+                factor must be one it can compute: a TOTP seed or a fixed/test OTP. */}
+            <Field
+              label="Second factor (MFA)"
+              hint="How the login's one-time code is satisfied. The crawler re-authenticates every run, so it must be a code it can compute."
+            >
+              <select
+                className={INPUT_CLS}
+                value={form.mfa_method}
+                onChange={(e) => set('mfa_method', e.target.value as WizardForm['mfa_method'])}
+              >
+                <option value="none">None (single-step login)</option>
+                <option value="totp">Authenticator app (TOTP seed)</option>
+                <option value="otp">Fixed / test code (deterministic OTP)</option>
+              </select>
+            </Field>
+            {form.mfa_method !== 'none' && (
+              <Field
+                label={form.mfa_method === 'totp' ? 'TOTP secret (base32)' : 'Fixed one-time code'}
+                required
+                hint={
+                  form.mfa_method === 'totp'
+                    ? 'The shared authenticator seed; codes are computed per RFC 6238. Encrypted at rest.'
+                    : 'A deterministic test code (e.g. a QA env that always accepts 123456). Encrypted at rest.'
+                }
+              >
+                <input
+                  className={INPUT_CLS}
+                  value={form.mfa_secret}
+                  onChange={(e) => set('mfa_secret', e.target.value)}
+                  autoComplete="off"
+                  placeholder={form.mfa_method === 'totp' ? 'JBSWY3DPEHPK3PXP' : '123456'}
+                />
+              </Field>
+            )}
+            {form.mfa_method !== 'none' && (
+              <Field label="Delivery channel (optional)" hint="If the app asks 'email or mobile?', which to pick. Blank = let the app default.">
+                <input
+                  className={INPUT_CLS}
+                  value={form.mfa_delivery}
+                  onChange={(e) => set('mfa_delivery', e.target.value)}
+                  placeholder="email"
+                />
+              </Field>
+            )}
           </div>
         )}
 
