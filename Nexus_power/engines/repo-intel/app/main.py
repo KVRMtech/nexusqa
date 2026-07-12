@@ -128,7 +128,7 @@ async def create_connection(body: ConnectionIn) -> dict:
     import uuid
     connection_id = uuid.uuid4().hex
     try:
-        blob, kek_id = seal_token(body.token, aad=connection_id)
+        blob, kek_id = await seal_token(body.token, tenant_id=body.tenant_id, aad=connection_id)
     except EnvelopeUnavailable as exc:
         raise HTTPException(503, str(exc))
 

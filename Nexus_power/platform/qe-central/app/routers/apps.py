@@ -20,6 +20,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 
 from ..auth import require_auth, require_role
+from ..clients import repo_intel
 from ..controlplane.scheduling.admission import ADMISSION
 from ..db import new_id, row_to_dict, tenant_scoped_qec_session, utc_now
 from ..db.controlplane_models import AppFingerprintRow
@@ -152,6 +153,44 @@ async def _seal_webhook_secret(
     return rb
 
 
+_PROVIDER_BASE = {"gitlab": "https://gitlab.com", "github": "https://github.com"}
+
+
+async def _prepare_repo_binding(
+    request: Request, tenant_id: str, app_id: str, repo_binding: dict | None,
+) -> dict:
+    """Seal the webhook secret AND provision a repo-intel connection.
+
+    When ``repo_binding`` carries a repo ``token`` (+ project + provider), relay it
+    ONCE to repo-intel which KMS-seals it in its own store; persist only the
+    returned ``connection_id`` and STRIP the raw token from qe-central.  Fail-open
+    on intelligence: if repo-intel is unreachable the app is still created, marked
+    ``repo_status='needs_reauth'`` (never a silent failure), and no token is kept.
+    """
+    rb = await _seal_webhook_secret(request, tenant_id, app_id, repo_binding)
+    token = str(rb.pop("token", "") or "").strip()
+    project = str(rb.get("project_path") or rb.get("project") or "").strip()
+    provider = str(rb.get("provider") or "gitlab").strip().lower()
+    base_url = str(rb.get("base_url") or _PROVIDER_BASE.get(provider, "")).strip()
+    if token and project and base_url and provider in ("gitlab", "github", "generic_git"):
+        try:
+            conn = await repo_intel.create_connection(
+                tenant_id=tenant_id, provider=provider, base_url=base_url,
+                project_path=project, token=token, app_id=app_id,
+                default_branch=str(rb.get("default_branch") or "main"),
+                label=str(rb.get("label") or "")[:200],
+            )
+            rb["connection_id"] = conn.connection_id
+            rb.pop("repo_status", None)
+        except repo_intel.RepoIntelError as exc:
+            logger.warning(
+                "qec.apps.repo_connection_failed",
+                extra={"app_id": app_id, "status": exc.status_code, "detail": exc.detail},
+            )
+            rb["repo_status"] = "needs_reauth"
+    return rb
+
+
 def _public_view(row: ClientAppRow) -> dict:
     """Serialise a row WITHOUT any secret material; expose has_* flags only."""
     d = row_to_dict(row)
@@ -206,7 +245,7 @@ async def create_app(
         creds_blob = await _encrypt_credentials(
             request, tenant_id, app_id, payload.credentials,
         )
-    repo_binding = await _seal_webhook_secret(request, tenant_id, app_id, payload.repo_binding)
+    repo_binding = await _prepare_repo_binding(request, tenant_id, app_id, payload.repo_binding)
 
     row = ClientAppRow(
         app_id=app_id,
@@ -304,8 +343,8 @@ async def update_app(
             if value is not None:
                 setattr(row, field, value)
         if payload.repo_binding is not None:
-            # Seal any plaintext webhook secret on rotation (never store plaintext).
-            row.repo_binding = await _seal_webhook_secret(
+            # Seal the webhook secret + (re)provision the repo-intel connection.
+            row.repo_binding = await _prepare_repo_binding(
                 request, tenant_id, app_id, payload.repo_binding,
             )
         if payload.status is not None:
@@ -335,9 +374,15 @@ async def delete_app(app_id: str, user: dict = Depends(require_role("admin"))) -
     tenant_id = user["tenant_id"]
     async with tenant_scoped_qec_session(tenant_id) as session:
         row = await _require_app(session, tenant_id, app_id)
+        connection_id = str((row.repo_binding or {}).get("connection_id") or "").strip()
         row.creds_blob = None
         row.status = "deleted"
         row.updated_at = utc_now()
+
+    # Revoke the sealed repo-intel connection (wipes its token + workdir). Best
+    # effort — a repo-intel outage never blocks the delete.
+    if connection_id:
+        await repo_intel.revoke_connection(tenant_id=tenant_id, connection_id=connection_id)
 
     logger.info(
         "qec.apps.deleted",

@@ -28,6 +28,7 @@ from typing import AsyncIterator, Dict, List, Optional, Sequence
 
 from sqlalchemy import (
     Column,
+    DateTime,
     Float,
     Integer,
     LargeBinary,
@@ -72,8 +73,8 @@ class RepoConnection(RepoIntelBase):
     status = Column(String(32), nullable=False, default="active")
     last_sync_sha = Column(String(64), nullable=False, default="")
     last_error = Column(Text, nullable=False, default="")
-    created_at = Column(String(40), nullable=False, default=lambda: _now().isoformat())
-    updated_at = Column(String(40), nullable=False, default=lambda: _now().isoformat())
+    created_at = Column(DateTime(timezone=True), nullable=False, default=_now)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=_now)
 
 
 class AppModelUniverse(RepoIntelBase):
@@ -89,8 +90,8 @@ class AppModelUniverse(RepoIntelBase):
     status = Column(String(32), nullable=False, default="building")
     degraded_extractors = Column(JSONB, nullable=False, default=list)
     atom_count = Column(Integer, nullable=False, default=0)
-    created_at = Column(String(40), nullable=False, default=lambda: _now().isoformat())
-    updated_at = Column(String(40), nullable=False, default=lambda: _now().isoformat())
+    created_at = Column(DateTime(timezone=True), nullable=False, default=_now)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=_now)
 
 
 class AppModelAtom(RepoIntelBase):
@@ -107,7 +108,7 @@ class AppModelAtom(RepoIntelBase):
     extractor = Column(String(100), nullable=False, default="")
     confidence = Column(Float, nullable=False, default=0.0)
     source_tier = Column(String(32), nullable=False, default="")
-    created_at = Column(String(40), nullable=False, default=lambda: _now().isoformat())
+    created_at = Column(DateTime(timezone=True), nullable=False, default=_now)
 
 
 class CrawlSeedManifest(RepoIntelBase):
@@ -116,8 +117,8 @@ class CrawlSeedManifest(RepoIntelBase):
     tenant_id = Column(String(64), nullable=False)
     universe_id = Column(String(64), nullable=False)
     manifest = Column(JSONB, nullable=False, default=dict)
-    created_at = Column(String(40), nullable=False, default=lambda: _now().isoformat())
-    updated_at = Column(String(40), nullable=False, default=lambda: _now().isoformat())
+    created_at = Column(DateTime(timezone=True), nullable=False, default=_now)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=_now)
 
 
 class RepoDriftReport(RepoIntelBase):
@@ -128,7 +129,7 @@ class RepoDriftReport(RepoIntelBase):
     artifact_id = Column(String(64), nullable=False, default="")
     summary = Column(JSONB, nullable=False, default=dict)
     items = Column(JSONB, nullable=False, default=list)
-    created_at = Column(String(40), nullable=False, default=lambda: _now().isoformat())
+    created_at = Column(DateTime(timezone=True), nullable=False, default=_now)
 
 
 def universe_identity(connection_id: str, deployed_sha: str, extractor_versions: Dict) -> str:
@@ -207,7 +208,7 @@ class RepoIntelStore:
                 update(RepoConnection)
                 .where(RepoConnection.connection_id == connection_id)
                 .values(encrypted_token=None, status="revoked",
-                        updated_at=_now().isoformat())
+                        updated_at=_now())
             )
 
     async def upsert_universe(
@@ -233,7 +234,7 @@ class RepoIntelStore:
                 existing.ceiling_bands = ceiling_bands
                 existing.degraded_extractors = list(degraded_extractors)
                 existing.atom_count = atom_count
-                existing.updated_at = _now().isoformat()
+                existing.updated_at = _now()
         return universe_id
 
     async def replace_atoms(
@@ -271,7 +272,7 @@ class RepoIntelStore:
             else:
                 manifest_id = existing.manifest_id
                 existing.manifest = manifest
-                existing.updated_at = _now().isoformat()
+                existing.updated_at = _now()
         return manifest_id
 
     async def save_drift_report(

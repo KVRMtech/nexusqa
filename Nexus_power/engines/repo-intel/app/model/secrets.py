@@ -63,13 +63,49 @@ def _refuse_local_kek_in_deployed_env() -> None:
         )
 
 
-def _sdk_service():
-    """Return an SDK envelope service if importable, else None."""
-    try:  # pragma: no cover - exercised on the VM where the SDK is installed
-        from nexus_sdk.crypto.envelope import EnvelopeService  # type: ignore
-        return EnvelopeService.from_env()
-    except Exception:
-        return None
+_ENVELOPE_SINGLETON = None
+_ENVELOPE_TRIED = False
+
+
+def _build_envelope():
+    """Construct the SDK EnvelopeService ONCE (matching qe-central/platform-api:
+    ``EnvelopeService(provider)`` from ``nexus_sdk.security.envelope``), or None
+    when the SDK / KEK provider is unavailable.
+
+    Fixes the historical break where this called a non-existent
+    ``EnvelopeService.from_env()`` on the wrong module (``nexus_sdk.crypto``),
+    so every seal fell through to a 503 in production.
+    """
+    global _ENVELOPE_SINGLETON, _ENVELOPE_TRIED
+    if _ENVELOPE_TRIED:
+        return _ENVELOPE_SINGLETON
+    _ENVELOPE_TRIED = True
+    provider_name = _kek_provider()
+    try:  # pragma: no cover - exercised on the VM where the SDK + KMS are wired
+        from nexus_sdk.security.envelope import (
+            EnvelopeService, GcpKmsProvider, LocalKekProvider,
+        )
+
+        if provider_name == "gcp_kms":
+            key_name = os.environ.get("NEXUS_KEK_GCP_KEY")
+            if not key_name:
+                return None
+
+            async def _resolver(_tenant_id: str) -> str:
+                return key_name
+
+            _ENVELOPE_SINGLETON = EnvelopeService(GcpKmsProvider(kek_resolver=_resolver))
+        elif provider_name == "local":
+            from pathlib import Path
+
+            path = os.environ.get(
+                "NEXUS_LOCAL_KEK_PATH", str(Path.home() / ".nexus" / "kek" / "master.key"),
+            )
+            _ENVELOPE_SINGLETON = EnvelopeService(LocalKekProvider(master_key_path=path))
+    except Exception as exc:
+        logger.warning("repo_intel.envelope_init_failed: %s", str(exc)[:200])
+        _ENVELOPE_SINGLETON = None
+    return _ENVELOPE_SINGLETON
 
 
 def _dev_key() -> bytes:
@@ -83,20 +119,21 @@ def _xor(data: bytes, key: bytes) -> bytes:
     return bytes(b ^ key[i % len(key)] for i, b in enumerate(data))
 
 
-def seal_token(token: str, *, aad: str) -> tuple[bytes, str]:
+async def seal_token(token: str, *, tenant_id: str, aad: str) -> tuple[bytes, str]:
     """Return ``(ciphertext_blob, kek_id)`` for a token. Refuses plaintext.
 
-    ``aad`` (connection_id) binds the ciphertext so it cannot be replayed
-    under another connection.
+    ``aad`` (connection_id) binds the ciphertext so it cannot be replayed under
+    another connection.  Async + ``tenant_id``-scoped to match the SDK envelope
+    API used by qe-central/platform-api (``await encrypt(tenant_id, pt, aad=)``).
     """
     if not token:
         raise ValueError("empty token")
     # Fail-closed: a dev-grade local KEK can never seal a client token in a
     # deployed (staging/production) environment — even if the SDK service loads.
     _refuse_local_kek_in_deployed_env()
-    svc = _sdk_service()
+    svc = _build_envelope()
     if svc is not None:
-        blob = svc.encrypt(token.encode("utf-8"), aad=aad.encode("utf-8"))
+        blob = await svc.encrypt(tenant_id, token.encode("utf-8"), aad=aad.encode("utf-8"))
         return (blob.to_bytes() if hasattr(blob, "to_bytes") else bytes(blob),
                 getattr(svc, "kek_id", "sdk"))
     if not _is_dev():
@@ -110,8 +147,8 @@ def seal_token(token: str, *, aad: str) -> tuple[bytes, str]:
     return (b"DEVSEAL1:" + base64.b64encode(sealed), "local-dev")
 
 
-def open_token(blob: bytes, *, aad: str) -> str:
-    """Reverse :func:`seal_token`."""
+async def open_token(blob: bytes, *, tenant_id: str, aad: str) -> str:
+    """Reverse :func:`seal_token` (async + tenant-scoped)."""
     if blob is None:
         raise ValueError("no ciphertext")
     if bytes(blob).startswith(b"DEVSEAL1:"):
@@ -121,8 +158,12 @@ def open_token(blob: bytes, *, aad: str) -> str:
         aad_key = hashlib.sha256((aad + "|aad").encode()).digest()
         sealed = base64.b64decode(bytes(blob)[len(b"DEVSEAL1:"):])
         return _xor(sealed, _xor(key, aad_key)).decode("utf-8", errors="replace")
-    svc = _sdk_service()
+    svc = _build_envelope()
     if svc is None:
         raise EnvelopeUnavailable("SDK envelope service unavailable to open token")
-    from nexus_sdk.crypto.envelope import EnvelopeBlob  # type: ignore
-    return svc.decrypt(EnvelopeBlob.from_bytes(bytes(blob)), aad=aad.encode("utf-8")).decode("utf-8")
+    from nexus_sdk.security.envelope import EnvelopeBlob
+
+    pt = await svc.decrypt(
+        tenant_id, EnvelopeBlob.from_bytes(bytes(blob)), expected_aad=aad.encode("utf-8"),
+    )
+    return pt.decode("utf-8")

@@ -7,6 +7,12 @@
 # Manifest / OpenAPI spec parsing (openapi_spec extractor, later stage).
 pyyaml>=6.0,<7.0
 
+# GCP-KMS backs nexus_sdk.security.envelope's GcpKmsProvider — repo-intel seals
+# client repo tokens at rest, so this is REQUIRED in a KMS deployment (same pin
+# as qe-central/platform-api). Without it GcpKmsProvider raises and every seal
+# fail-closes 503.
+google-cloud-kms>=2.21,<4
+
 # tree-sitter native parsing for the ts-routes / express-nest / spring
 # extractors (later stages). Pinned but IMPORT-GUARDED: the grammar wheels
 # may not install in every environment, so those extractors gate the native
