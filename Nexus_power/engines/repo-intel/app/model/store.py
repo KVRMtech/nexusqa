@@ -303,6 +303,27 @@ class RepoIntelStore:
                 stmt = stmt.where(AppModelAtom.kind == kind)
             return list((await s.execute(stmt)).scalars().all())
 
+    async def latest_universe_for_connection(
+        self, *, tenant_id: str, connection_id: str,
+    ) -> Optional[AppModelUniverse]:
+        """The most recently built App-Model universe for a connection (CODE P4).
+
+        The ``/diff`` producer maps changed files onto THIS universe's atoms.  Newest
+        by ``created_at`` (ties broken by id) so a re-analysis supersedes the old one.
+        ``None`` ⇒ the app was never analyzed ⇒ the caller fail-safes to a full cycle.
+        """
+        async with self.tenant_session(tenant_id) as s:
+            stmt = (
+                select(AppModelUniverse)
+                .where(
+                    AppModelUniverse.connection_id == connection_id,
+                    AppModelUniverse.tenant_id == tenant_id,
+                )
+                .order_by(AppModelUniverse.created_at.desc(), AppModelUniverse.universe_id.desc())
+                .limit(1)
+            )
+            return (await s.execute(stmt)).scalars().first()
+
     async def get_seed_manifest(self, *, tenant_id: str, universe_id: str) -> Optional[Dict]:
         async with self.tenant_session(tenant_id) as s:
             row = (await s.execute(

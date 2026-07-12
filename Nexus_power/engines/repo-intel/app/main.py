@@ -25,6 +25,7 @@ from pydantic import BaseModel, Field
 
 from app.ab.harness import ab_report
 from app.config import settings
+from app.diff.mapper import map_changed_atoms
 from app.connectors.git import GitConnector, GitConnectorError
 from app.detect.stack import detect
 from app.drift.report import build_drift_report
@@ -244,18 +245,35 @@ async def seed_manifest(universe_id: str, tenant_id: str) -> dict:
 
 @app.post("/api/v1/repo-intel/{app_id}/diff")
 async def diff(app_id: str, body: DiffIn) -> dict:
-    """Changed-atoms between two SHAs, consumed fail-safe-to-full by S5.
+    """Changed atoms between two SHAs → the control plane runs ONLY affected tests.
 
-    Phase-2 surface: returns the shape the control plane pins. When the stack
-    is unsupported or the diff cannot be computed, ``stack_supported=false``
-    signals the consumer to treat EVERYTHING as changed (never a false 'no
-    change').
+    FAIL-SAFE-TO-FULL (never green-wash): ANY inability to compute a precise diff —
+    no analyzed universe, a shallow clone missing ``old_sha``, a git error, or a
+    changed file that maps to no atom — returns ``stack_supported=false`` /
+    ``fail_safe_to_full=true`` so the consumer treats EVERYTHING as changed. A
+    narrowed result is returned ONLY when every changed file was mapped to an atom.
     """
-    # A full SHA-to-SHA git diff + atom remap is a Phase-3 enrichment; the
-    # honest Phase-2 contract returns stack_supported=false so the consumer
-    # runs a full cycle rather than trusting an unavailable incremental.
-    return {"app_id": app_id, "changed_files": [], "mapped_atoms": [],
-            "stack_supported": False, "reason": "incremental diff requires two analyzed universes"}
+    def _full(reason: str) -> dict:
+        return {"app_id": app_id, "changed_files": [], "changed_atoms": [],
+                "affected_routes": [], "stack_supported": False,
+                "fail_safe_to_full": True, "reason": reason}
+
+    universe = await store().latest_universe_for_connection(
+        tenant_id=body.tenant_id, connection_id=body.connection_id)
+    if universe is None:
+        return _full("no analyzed universe for this connection — run full")
+
+    workdir = Path(settings.repo_workdir_root) / body.tenant_id / body.connection_id
+    changed = git().changed_files(
+        workdir=workdir, old_sha=body.old_sha, new_sha=body.new_sha)
+    if changed is None:
+        return _full("diff unavailable (shallow clone / missing sha / git error) — run full")
+
+    atoms = await store().list_atoms(tenant_id=body.tenant_id, universe_id=universe.universe_id)
+    result = map_changed_atoms(changed, atoms)
+    result["app_id"] = app_id
+    result["universe_id"] = universe.universe_id
+    return result
 
 
 @app.get("/api/v1/repo-intel/ab-report")

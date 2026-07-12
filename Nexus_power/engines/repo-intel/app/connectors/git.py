@@ -179,6 +179,32 @@ class GitConnector:
         except subprocess.SubprocessError:
             return ""
 
+    def changed_files(
+        self, *, workdir: Path, old_sha: str, new_sha: str, token: Optional[str] = None,
+    ) -> Optional[List[str]]:
+        """Repo-relative paths changed between two SHAs (``git diff --name-only``).
+
+        Returns ``None`` when the diff cannot be computed — missing SHA, a shallow
+        clone that lacks ``old_sha`` in history, or any git error — so the caller
+        FAIL-SAFES to a full cycle (CODE P4 never claims a false "no change").  The
+        token is only used to scrub error text; ``git diff`` is a local operation.
+        """
+        if not (str(old_sha).strip() and str(new_sha).strip()):
+            return None
+        try:
+            proc = subprocess.run(
+                [self._git, "-C", str(workdir), "diff", "--name-only",
+                 str(old_sha).strip(), str(new_sha).strip()],
+                capture_output=True, text=True, timeout=self._ls_remote_timeout, env=self._env(),
+            )
+        except subprocess.SubprocessError as exc:
+            logger.warning("changed_files failed: %s", _scrub_token(str(exc), token))
+            return None
+        if proc.returncode != 0:
+            logger.warning("changed_files git error: %s", _scrub_token(proc.stderr, token)[:200])
+            return None
+        return [ln.strip() for ln in proc.stdout.splitlines() if ln.strip()]
+
     def remove_workdir(self, *, tenant_id: str, connection_id: str) -> None:
         """Delete a connection's clone (called on revoke/delete)."""
         shutil.rmtree(self._root / tenant_id / connection_id, ignore_errors=True)
