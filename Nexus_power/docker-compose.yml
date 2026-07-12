@@ -465,6 +465,10 @@ services:
       # The session is encrypted at rest by the EnvelopeService — platform-api
       # needs the SAME KEK config qe-central uses (GCP-KMS via the VM's ADC), or
       # /auth/import fail-closes 503 rather than store a session in plaintext.
+      # The EnvelopeService is constructed by the Knowledge-Foundation subsystem,
+      # which is gated by its own flag — enable it so app.state.envelope_service
+      # exists (feature flags remain individually off, resolved from DB/redis).
+      NEXUS_KNOWLEDGE_FOUNDATION_ENABLED: "true"
       NEXUS_KEK_PROVIDER: ${NEXUS_KEK_PROVIDER:-local}
       NEXUS_KEK_GCP_KEY: ${NEXUS_KEK_GCP_KEY:-}
       NEXUS_AUDITOR_GATE: "block"
