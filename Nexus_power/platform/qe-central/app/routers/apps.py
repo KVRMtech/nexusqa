@@ -29,7 +29,7 @@ from ..fleet import quota
 from ..services.brief_compiler import (
     BRIEF_SYSTEM_INSTRUCTION, build_prompt, ground_and_assemble, parse_proposal,
 )
-from ..services.synthesis import known_labels_for_artifact
+from ..services.synthesis import known_labels_for_artifact, known_value_nodes_for_artifact
 
 logger = logging.getLogger(__name__)
 
@@ -419,15 +419,19 @@ async def compile_brief(
         artifact_id = row.latest_artifact_id or ""
 
     known_labels = await known_labels_for_artifact(tenant_id, artifact_id)
+    known_value_nodes = await known_value_nodes_for_artifact(tenant_id, artifact_id)  # P1.B
     prompt = build_prompt(
-        notes=body.notes, answers=body.answers, known_labels=known_labels, known_value_nodes=[])
+        notes=body.notes, answers=body.answers,
+        known_labels=known_labels, known_value_nodes=known_value_nodes)
     llm = await platform_api.complete_llm(
         tenant_id=tenant_id, prompt=prompt, system=BRIEF_SYSTEM_INSTRUCTION, task="brief_compile")
     proposal = parse_proposal(llm.text) if llm.ok else {}
-    result = ground_and_assemble(proposal, known_labels=known_labels, known_value_nodes=[])
+    result = ground_and_assemble(
+        proposal, known_labels=known_labels, known_value_nodes=known_value_nodes)
     result["llm_ok"] = llm.ok
     result["llm_error"] = "" if llm.ok else (llm.detail or "LLM unavailable — author the answer_key manually")
     result["known_label_count"] = len(known_labels)
+    result["known_value_node_count"] = len(known_value_nodes)
     logger.info(
         "qec.apps.compile_brief",
         extra={"tenant_id": tenant_id, "app_id": app_id, "llm_ok": llm.ok,

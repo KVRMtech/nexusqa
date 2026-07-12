@@ -42,7 +42,7 @@ from .fingerprint import interactive_signature
 from .forms import AnswerKey
 from .auth import AuthWindow, Credentials
 from .guard import Attestation, RefusePack, load_refuse_pack
-from .inventory_js import INVENTORY_JS, INVENTORY_JS_VERSION
+from .inventory_js import DISPLAYED_VALUES_JS, INVENTORY_JS, INVENTORY_JS_VERSION
 
 logging.basicConfig(level=getattr(logging, settings.log_level.upper(), logging.INFO))
 logger = logging.getLogger("qe-explorer")
@@ -496,6 +496,18 @@ class PlaywrightBrowserPort(BrowserPort):
             return list(result or [])
         except Exception as exc:
             logger.warning("qec.explorer.inventory_failed error=%s", str(exc)[:200])
+            return []
+
+    async def collect_displayed_values(self) -> list[dict[str, Any]]:
+        """ANSWERS P1.B — rendered value nodes ``[{label, selector, text}]`` (a
+        premium/total/decline shown as text). Best-effort: ``[]`` on any failure so
+        a capture hiccup never breaks the crawl (the value oracle then just needs a
+        client source_hint)."""
+        try:
+            result = await self._page.evaluate(DISPLAYED_VALUES_JS)
+            return list(result or [])
+        except Exception as exc:
+            logger.warning("qec.explorer.displayed_values_failed error=%s", str(exc)[:200])
             return []
 
     async def dialog_flags(self) -> list[str]:

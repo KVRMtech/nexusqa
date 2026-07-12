@@ -257,6 +257,8 @@ class PageState(BaseModel):
     last_seen_ms: int = Field(ge=0)
     form_snapshot: dict[str, str] = Field(default_factory=dict)
     form_snapshot_signals: dict[str, dict] = Field(default_factory=dict)
+    #: ANSWERS P1.B — rendered value nodes ``[{label, selector, text}]``.
+    displayed_values: list[dict[str, str]] = Field(default_factory=list)
     actions: list[ActionRecord] = Field(default_factory=list)
     screenshots: list[ScreenshotRef] = Field(default_factory=list)
 

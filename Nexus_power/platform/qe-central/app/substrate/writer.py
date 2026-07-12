@@ -251,6 +251,8 @@ async def write_exploration(
             "primary_scene_id": None,
             "form_snapshot": snapshot,
             "form_snapshot_signals": dict(page.form_snapshot_signals),
+            # ANSWERS P1.B — rendered value nodes (text already scrubbed at capture).
+            "displayed_values": list(page.displayed_values or []),
             "extractor_version": version,
             "form_snapshot_extractor_version": version,
             "created_at": now,

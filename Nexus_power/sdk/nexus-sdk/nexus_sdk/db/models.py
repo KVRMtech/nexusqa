@@ -2481,6 +2481,9 @@ class PageVisitRow(Base):
     form_snapshot_signals: Mapped[dict] = mapped_column(
         JSON, default=dict, nullable=False,
     )
+    #: ANSWERS P1.B — rendered value nodes ``[{label, selector, text}]`` a value
+    #: oracle can ground against (list stored as JSON; default [] for old rows).
+    displayed_values: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
 
     extractor_version: Mapped[str] = mapped_column(
         String(50), default="v1", nullable=False,

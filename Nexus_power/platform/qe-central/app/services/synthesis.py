@@ -407,6 +407,43 @@ async def known_labels_for_artifact(tenant_id: str, artifact_id: str) -> list[st
     return sorted(l for l in labels if l.strip())
 
 
+async def known_value_nodes_for_artifact(tenant_id: str, artifact_id: str) -> list[dict]:
+    """Displayed value nodes ``[{label, source_hint}]`` captured across an artifact's
+    current page_visits (ANSWERS P1.B) — the grounding TARGETS the brief compiler ties
+    an expected outcome to when the client gives no source_hint of their own.  Selector
+    + label only (the captured text is a runtime observation, not authored expectation)."""
+    if not artifact_id:
+        return []
+    async with tenant_scoped_substrate_session(tenant_id) as session:
+        version = await _latest_version(session, PageVisitRow, artifact_id)
+        if version is None:
+            return []
+        rows = (
+            await session.execute(
+                select(PageVisitRow).where(
+                    PageVisitRow.artifact_id == artifact_id,
+                    PageVisitRow.extractor_version == version,
+                )
+            )
+        ).scalars().all()
+    nodes: list[dict] = []
+    seen: set[str] = set()
+    for v in rows:
+        for dv in (getattr(v, "displayed_values", None) or []):
+            if not isinstance(dv, dict):
+                continue
+            selector = str(dv.get("selector") or "").strip()
+            if not selector:
+                continue
+            label = str(dv.get("label") or "").strip()
+            key = f"{selector}|{label}"
+            if key in seen:
+                continue
+            seen.add(key)
+            nodes.append({"label": label, "source_hint": selector})
+    return nodes
+
+
 async def read_page_nodes(tenant_id: str, artifact_id: str) -> tuple[list[PageNode], str | None]:
     """Read the CURRENT-version page_visits + page_actions as :class:`PageNode`s.
 

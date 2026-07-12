@@ -272,6 +272,8 @@ class PageStateRecord:
     canonical_host: str = ""
     form_snapshot: dict[str, str] = field(default_factory=dict)
     form_snapshot_signals: dict[str, dict] = field(default_factory=dict)
+    #: ANSWERS P1.B — rendered value nodes ``[{label, selector, text}]``.
+    displayed_values: list[dict[str, str]] = field(default_factory=list)
     actions: list[dict[str, Any]] = field(default_factory=list)
     screenshots: list[dict[str, Any]] = field(default_factory=list)
     # manifest-only routing

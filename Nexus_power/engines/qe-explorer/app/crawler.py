@@ -536,11 +536,15 @@ class Crawler:
                                             budget_left=self._budget.max_actions_per_state - len(actions)))
 
         last_seen = self._clock.now_ms()
+        # ANSWERS P1.B — capture rendered value nodes in the page's FINAL state (after
+        # fills + discovery clicks reveal outputs like a computed premium).
+        displayed_values = await self._port.collect_displayed_values()
         self._record_state(
             url=obs.url, title=obs.title, controls=snapshot_controls,
             fingerprint=fingerprint, actions=actions,
             screenshots=[(entry_png, entry_ts)],
             first_seen_ms=first_seen, last_seen_ms=last_seen,
+            displayed_values=displayed_values,
         )
 
     async def _discover(
@@ -602,6 +606,7 @@ class Crawler:
         screenshots: Sequence[tuple[bytes, int]],
         first_seen_ms: Optional[int] = None,
         last_seen_ms: Optional[int] = None,
+        displayed_values: Sequence[dict[str, Any]] = (),
     ) -> None:
         """Assemble + emit ONE ``page_state`` record with monotonic indices."""
         seq = self._next_seq
@@ -646,6 +651,7 @@ class Crawler:
             canonical_host=(registrable_domain(host) or host)[:500],
             form_snapshot=form_snapshot,
             form_snapshot_signals=form_signals,
+            displayed_values=_displayed_values(displayed_values),
             actions=ordered_actions,
             screenshots=shot_records,
             state_id=fingerprint,
@@ -737,6 +743,29 @@ def _form_snapshot(controls: Sequence[dict[str, Any]]) -> tuple[dict[str, str], 
             signal = {**signal, "type": "password"}
         signals[label] = signal
     return snapshot, signals
+
+
+def _displayed_values(raw: Sequence[dict[str, Any]]) -> list[dict[str, str]]:
+    """ANSWERS P1.B — normalize + scrub captured displayed value nodes into
+    ``[{label, selector, text}]`` (deduped). The text is scrubbed like a form value
+    (it may be PII-adjacent, e.g. an amount); label + selector let the value oracle
+    ground an expected outcome to this rendered node without a client source_hint."""
+    out: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for r in raw or ():
+        if not isinstance(r, dict):
+            continue
+        selector = str(r.get("selector") or "").strip()
+        text = emit.scrub_value(str(r.get("text") or "")).value.strip()
+        if not (selector and text):
+            continue
+        key = f"{selector}|{text}"
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append({"label": str(r.get("label") or "").strip()[:200],
+                    "selector": selector[:300], "text": text[:200]})
+    return out
 
 
 def _action_to_dict(action: emit.ActionRecord) -> dict[str, Any]:

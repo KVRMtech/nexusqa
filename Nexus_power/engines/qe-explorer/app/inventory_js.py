@@ -401,3 +401,84 @@ INVENTORY_JS = r"""
   return out;
 })()
 """
+
+
+#: Bumped when either injected snippet changes (traces a manifest to its JS gen).
+DISPLAYED_VALUES_JS_VERSION = "disp-js-v1"
+
+#: ANSWERS P1.B — a SEPARATE injected snippet (the interactive walker above is
+#: untouched) that captures DISPLAYED VALUE nodes: a rendered output like
+#: ``<div class="prem">$75.00</div>`` that no interactive-control walker sees. For
+#: each it returns ``{label, selector, text}`` so the value oracle can ground an
+#: expected outcome WITHOUT a client-authored source_hint. Selective by design (a
+#: currency/amount/percent gate on the element's OWN text) to avoid capturing every
+#: number on the page.
+DISPLAYED_VALUES_JS = r"""
+(() => {
+  "use strict";
+  var MAX = 200, MAX_TEXT = 120, MAX_LABEL = 120;
+  function norm(s){return ((""+(s==null?"":s)).replace(/\s+/g," ")).trim();}
+  function clip(s,n){s=""+(s==null?"":s);return s.length>n?s.slice(0,n):s;}
+  function attr(el,n){try{return el.getAttribute(n)||"";}catch(e){return "";}}
+  function isVisible(el){try{if(!el||el.nodeType!==1)return false;
+    if(el.hasAttribute("hidden"))return false;
+    var st=(el.ownerDocument.defaultView||window).getComputedStyle(el);
+    if(!st)return true;
+    if(st.display==="none"||st.visibility==="hidden")return false;
+    if(parseFloat(st.opacity||"1")===0)return false;return true;}catch(e){return true;}}
+  // A value-looking string: currency, a 2-decimal amount, a thousands-grouped int, or a percent.
+  var VALUE_RX = /[$€£]\s?\d[\d,]*(?:\.\d+)?|\b\d[\d,]*\.\d{2}\b|\b\d{1,3}(?:,\d{3})+\b|\b\d+(?:\.\d+)?\s?%/;
+  // The element's OWN direct text (not descendants) so a whole container never matches.
+  function ownText(el){var t="";var ch=el.childNodes;
+    for(var i=0;i<ch.length;i++){if(ch[i].nodeType===3)t+=ch[i].nodeValue;}return norm(t);}
+  function labelOf(el){
+    var al=norm(attr(el,"aria-label")); if(al) return al;
+    if(el.tagName==="DD"){var p=el.previousElementSibling;
+      while(p&&p.tagName!=="DT")p=p.previousElementSibling;
+      if(p){var dt=norm(p.textContent);if(dt)return dt;}}
+    var lb=attr(el,"aria-labelledby");
+    if(lb){try{var r=el.ownerDocument.getElementById(lb.split(" ")[0]);
+      if(r){var rt=norm(r.textContent);if(rt&&!VALUE_RX.test(rt))return rt;}}catch(e){}}
+    var sib=el.previousElementSibling,hops=0;
+    while(sib&&hops<3){var stt=norm(sib.textContent);
+      if(stt&&stt.length<=MAX_LABEL&&!VALUE_RX.test(stt))return stt;
+      sib=sib.previousElementSibling;hops++;}
+    var par=el.parentElement;
+    if(par){var psib=par.previousElementSibling,h2=0;
+      while(psib&&h2<2){var pt=norm(psib.textContent);
+        if(pt&&pt.length<=MAX_LABEL&&!VALUE_RX.test(pt))return pt;
+        psib=psib.previousElementSibling;h2++;}
+      try{var lbl=par.querySelector("label,.muted,.label,dt,[class*=label]");
+        if(lbl&&lbl!==el){var lt=norm(lbl.textContent);
+          if(lt&&!VALUE_RX.test(lt))return clip(lt,MAX_LABEL);}}catch(e){}}
+    return "";
+  }
+  function selectorFor(el){
+    if(el.id)return "#"+el.id;
+    var tag=el.tagName.toLowerCase();
+    var cls=norm(el.className&&el.className.baseVal!==undefined?el.className.baseVal:el.className);
+    if(cls){var first=cls.split(" ").filter(Boolean)[0];
+      if(first){var sel=tag+"."+first;
+        try{if(el.ownerDocument.querySelectorAll(sel).length===1)return sel;}catch(e){}
+        return sel;}}
+    return tag;
+  }
+  var out=[],seen={};
+  var els;
+  try{els=document.querySelectorAll("span,div,dd,output,td,strong,b,p,h1,h2,h3,h4,li,[data-testid],[class]");}
+  catch(e){els=[];}
+  for(var i=0;i<els.length&&out.length<MAX;i++){
+    var el=els[i];
+    var tg=el.tagName;
+    if(tg==="INPUT"||tg==="SELECT"||tg==="TEXTAREA"||tg==="BUTTON"||tg==="A"||tg==="SCRIPT"||tg==="STYLE")continue;
+    if(!isVisible(el))continue;
+    var ot=ownText(el);
+    if(!ot||ot.length>MAX_TEXT||!VALUE_RX.test(ot))continue;
+    var selector=selectorFor(el);
+    var key=selector+"|"+ot;
+    if(seen[key])continue;seen[key]=1;
+    out.push({label:clip(labelOf(el),MAX_LABEL),selector:clip(selector,200),text:clip(ot,MAX_TEXT)});
+  }
+  return out;
+})()
+"""

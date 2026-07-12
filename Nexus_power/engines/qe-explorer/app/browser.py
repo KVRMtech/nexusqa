@@ -240,6 +240,12 @@ class BrowserPort(Protocol):
         """
         ...
 
+    async def collect_displayed_values(self) -> list[dict[str, Any]]:
+        """ANSWERS P1.B — rendered value nodes ``[{label, selector, text}]`` a value
+        oracle can ground against (``app.inventory_js.DISPLAYED_VALUES_JS`` output).
+        Best-effort: ``[]`` on any failure (never breaks a crawl)."""
+        ...
+
     async def dialog_flags(self) -> list[str]:
         """Open modal/dialog markers for the fingerprint (``[]`` when none)."""
         ...
