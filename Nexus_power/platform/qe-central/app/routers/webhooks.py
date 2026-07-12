@@ -51,20 +51,25 @@ _MAX_BODY_BYTES = 1_048_576  # 1 MiB — a push payload is small; cap defensivel
 
 
 async def _resolve_app(app_id: str) -> dict | None:
-    """Resolve ``app_id`` → ``{tenant_id, repo_binding, status}`` (non-scoped read).
+    """Resolve ``app_id`` → ``{tenant_id, repo_binding, status}``.
 
-    Returns ``None`` when the app is absent (or invisible under forced RLS) —
-    the caller then fails closed.  Never raises into the request path."""
+    A webhook carries no JWT, so there is no tenant GUC to set — yet
+    ``client_apps`` has FORCE ROW LEVEL SECURITY, so a direct read from the
+    service role returns nothing and the handler would fail-closed 401 on EVERY
+    delivery.  We instead call the narrow, read-only ``qec_resolve_webhook_app``
+    SECURITY DEFINER function (owned by a BYPASSRLS role, migration
+    ``apply_webhook_resolver_fn.sql``): it returns only the three fields this
+    handler needs for the one requested ``app_id`` — never the whole table.
+
+    Returns ``None`` when the app is absent — the caller then fails closed.
+    Never raises into the request path."""
     try:
         async with qec_engine.connect() as conn:
             row = (await conn.execute(
-                text(
-                    "SELECT tenant_id, repo_binding, status FROM client_apps "
-                    "WHERE app_id = :aid LIMIT 1"
-                ),
+                text("SELECT tenant_id, repo_binding, status FROM qec_resolve_webhook_app(:aid)"),
                 {"aid": app_id},
             )).mappings().first()
-    except Exception as exc:  # DB unreachable — fail closed, never crash
+    except Exception as exc:  # DB unreachable / function absent — fail closed, never crash
         logger.warning("qec.webhook.resolve_failed", extra={"app_id": app_id, "error": str(exc)[:200]})
         return None
     return dict(row) if row is not None else None
