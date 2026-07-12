@@ -69,6 +69,7 @@ async def _startup() -> None:
         max_repo_bytes=settings.max_repo_bytes,
         clone_timeout=settings.clone_timeout_seconds,
         ls_remote_timeout=settings.ls_remote_timeout_seconds,
+        clone_depth=settings.clone_depth,
     )
     logger.info("repo-intel started on :%s", settings.engine_port)
 

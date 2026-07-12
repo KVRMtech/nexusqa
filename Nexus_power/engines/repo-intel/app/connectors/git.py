@@ -80,13 +80,18 @@ class GitConnector:
     def __init__(
         self, *, workdir_root: str, git_binary: str = "git",
         max_repo_bytes: int = 2_000_000_000, clone_timeout: int = 300,
-        ls_remote_timeout: int = 30,
+        ls_remote_timeout: int = 30, clone_depth: int = 1,
     ) -> None:
         self._root = Path(workdir_root)
         self._git = git_binary
         self._max_bytes = max_repo_bytes
         self._clone_timeout = clone_timeout
         self._ls_remote_timeout = ls_remote_timeout
+        # CODE P4 — clone depth. Default 1 (shallow, transfer-cheap) is byte-identical
+        # to before, but then a SHA diff has no history (old_sha absent) → /diff
+        # fail-safes to full. Setting deeper (QEC_CLONE_DEPTH, e.g. 50) keeps recent
+        # old_shas in history so incremental cycles can actually narrow. <=0 = full.
+        self._clone_depth = clone_depth
 
     def _env(self) -> dict:
         env = dict(os.environ)
@@ -132,8 +137,10 @@ class GitConnector:
         url = _auth_url(base_url, project_path, provider, token)
 
         cmd = [self._git, "-c", "credential.helper=", "clone",
-               "--depth", "1", "--filter=blob:none", "--single-branch",
-               "--branch", branch, url, str(dest)]
+               "--filter=blob:none", "--single-branch", "--branch", branch]
+        if self._clone_depth and self._clone_depth > 0:
+            cmd += ["--depth", str(self._clone_depth)]  # else a full-history clone
+        cmd += [url, str(dest)]
         try:
             proc = subprocess.run(
                 cmd, capture_output=True, text=True,

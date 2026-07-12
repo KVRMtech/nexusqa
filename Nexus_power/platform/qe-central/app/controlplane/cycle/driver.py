@@ -104,6 +104,7 @@ from .change_detector import (
     ChangeSet,
     RepoDiff,
     detect,
+    repo_diff_from_result,
 )
 from .fingerprints import FingerprintSnapshot, derive_control_fp, normalize_page_key, probe_live_fingerprints
 from .selector import BAND_P0, CaseRef, SelectionResult, default_carry_ttl_cycles, select as select_cases
@@ -1386,6 +1387,26 @@ async def run_cycle(
     prior_verdicts = await _load_prior_verdicts(tenant_id, app_id, exclude_cycle_id=cycle_id)
     hooks = _db_hooks(tenant_id=tenant_id, app_id=app_id, cycle_id=cycle_id)
 
+    # CODE P4 — fetch the repo diff so the cycle narrows to AFFECTED tests. FAIL-SAFE
+    # at every gap: no new_sha, no connection, an unreachable repo-intel, or a
+    # partial/unsupported diff → repo_diff stays None / stack_supported=False and the
+    # detector runs the FULL suite (never a false 'no change'). Inert until a new_sha
+    # is supplied (webhook-triggered cycle) and the App Model has been analyzed.
+    repo_diff: RepoDiff | None = None
+    _old_sha, _new_sha = repo_shas
+    _conn_id = str((app.repo_binding or {}).get("connection_id") or "")
+    if _new_sha and _conn_id:
+        try:
+            from ...clients import repo_intel
+            _result = await repo_intel.get_diff(
+                tenant_id=tenant_id, app_id=app_id, connection_id=_conn_id,
+                old_sha=_old_sha or "", new_sha=_new_sha)
+            repo_diff = repo_diff_from_result(_result)
+        except Exception as exc:  # never let diff-fetch break a cycle — run full
+            logger.info("qec.run_cycle.diff_fetch_failed",
+                        extra={"app_id": app_id, "error": str(exc)[:200]})
+            repo_diff = None
+
     lease = await _acquire_admission(controller, app, cycle_id=cycle_id, tenant_id=tenant_id)
     if lease is None:
         # Admission deferred (retryable) or fail-closed (already persisted).  A
@@ -1401,7 +1422,7 @@ async def run_cycle(
         outcome = await execute_cycle(
             cycle_id=cycle_id, mode=mode, trigger=trigger, app=app, client=client,
             hooks=hooks, criticality=criticality, prior_verdicts=prior_verdicts,
-            repo_shas=repo_shas,
+            repo_shas=repo_shas, repo_diff=repo_diff,
         )
         record_cycle_completed(
             terminal_state=outcome.state,
@@ -1686,6 +1707,10 @@ class _DueWork:
     mode: str
     change_event_ids: tuple[str, ...] = ()
     resume_cycle_id: str = ""
+    # CODE P4 — SHAs from the coalesced repo webhook events, fed to the diff so the
+    # cycle narrows to affected tests. Empty ⇒ the detector fail-safes to full.
+    old_sha: str = ""
+    new_sha: str = ""
 
 
 async def _discover_due_work(now: datetime) -> list[dict]:
@@ -1735,13 +1760,20 @@ async def _discover_due_work(now: datetime) -> list[dict]:
         key = (tenant_id, app_id)
         if key in claimed or key in active_apps:
             continue
-        trigger = (
-            CYCLE_TRIGGER_WEBHOOK_REPO
-            if any(e.get("source") == "repo_sha" for e in evs) else CYCLE_TRIGGER_SCHEDULE
-        )
+        repo_evs = [e for e in evs if e.get("source") == "repo_sha"]
+        trigger = CYCLE_TRIGGER_WEBHOOK_REPO if repo_evs else CYCLE_TRIGGER_SCHEDULE
+        # SHAs span the coalesced pushes: old = the 'before' of the EARLIEST
+        # unprocessed push, new = the 'after' of the LATEST (evs are created_at ASC).
+        old_sha = new_sha = ""
+        if repo_evs:
+            _first = repo_evs[0].get("payload") or {}
+            _last = repo_evs[-1].get("payload") or {}
+            old_sha = str(_first.get("old_sha") or "") if isinstance(_first, Mapping) else ""
+            new_sha = str(_last.get("new_sha") or "") if isinstance(_last, Mapping) else ""
         out.append(_DueWork(
             tenant_id=tenant_id, app_id=app_id, trigger=trigger, mode=MODE_AUTO,
             change_event_ids=tuple(e["event_id"] for e in evs),
+            old_sha=old_sha, new_sha=new_sha,
         ).__dict__)
         claimed.add(key)
 
@@ -1784,7 +1816,7 @@ async def _scan_fleet(limit: int) -> tuple[set[tuple[str, str]], list[dict], lis
             if r["state"] == CYCLE_STATE_BLACKOUT_DEFERRED:
                 deferred.append(dict(r))
         change_rows = (await conn.execute(text(
-            "SELECT event_id, tenant_id, app_id, source, created_at FROM change_events "
+            "SELECT event_id, tenant_id, app_id, source, payload, created_at FROM change_events "
             "WHERE processed_cycle_id IS NULL ORDER BY created_at ASC LIMIT :lim"
         ), {"lim": max(1, limit) * 20})).mappings().all()
         changes = [dict(r) for r in change_rows]
@@ -1948,6 +1980,7 @@ async def _fire_cycle(item: dict, *, client: CycleClient, now: datetime) -> bool
     task = asyncio.create_task(_run_cycle_guarded(
         cycle_id=cycle_id, tenant_id=tenant_id, app_id=app_id,
         mode=mode, trigger=trigger, client=client,
+        repo_shas=(item.get("old_sha") or None, item.get("new_sha") or None),
     ))
     _DAEMON_TASKS.add(task)
     task.add_done_callback(_DAEMON_TASKS.discard)

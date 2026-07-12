@@ -77,6 +77,36 @@ class RepoDiff:
     mapped_atoms: tuple[RepoAtom, ...] = ()
 
 
+def repo_diff_from_result(result: object) -> RepoDiff:
+    """Adapt the repo-intel client's ``RepoDiffResult`` → the detector's ``RepoDiff``.
+
+    THE honesty seam (never green-wash): the detector has NO ``fail_safe_to_full``
+    field, so we collapse it here.  A ``None`` result (diff unavailable), an
+    unsupported stack, OR a partial map (``fail_safe_to_full``) ALL become
+    ``stack_supported=False`` → the detector runs the FULL suite.  Only a diff that
+    is both supported AND fully mapped narrows.  Producer atom shape
+    (``{atom_id, kind, value:{path_pattern|path}}``) → ``RepoAtom(key, kind, page_key)``.
+    """
+    if result is None:
+        return RepoDiff(stack_supported=False)
+    supported = bool(getattr(result, "stack_supported", False))
+    fail_safe = bool(getattr(result, "fail_safe_to_full", True))
+    if not supported or fail_safe:
+        return RepoDiff(stack_supported=False)
+    atoms: list[RepoAtom] = []
+    for a in getattr(result, "changed_atoms", None) or ():
+        if not isinstance(a, dict):
+            continue
+        value = a.get("value") if isinstance(a.get("value"), dict) else {}
+        page_key = str(value.get("path_pattern") or value.get("path") or "")
+        kind = str(a.get("kind") or "")
+        key = str(a.get("atom_id") or (f"{kind}:{page_key}" if page_key else kind))
+        if key:
+            atoms.append(RepoAtom(key=key, kind=kind, page_key=page_key))
+    changed_files = tuple(str(f) for f in (getattr(result, "changed_files", None) or ()))
+    return RepoDiff(stack_supported=True, changed_files=changed_files, mapped_atoms=tuple(atoms))
+
+
 # ─── Output ──────────────────────────────────────────────────────────────────
 
 @dataclass(frozen=True)

@@ -44,7 +44,13 @@ class RepoConnection(BaseModel):
 class RepoDiffResult(BaseModel):
     app_id: str = ""
     changed_files: list = []
-    mapped_atoms: list = []
+    #: Atoms the diff touched — MUST match the producer key (``changed_atoms``, not
+    #: ``mapped_atoms``); each is ``{atom_id, kind, value:{path_pattern|path}, ...}``.
+    changed_atoms: list = []
+    affected_routes: list = []
+    #: True ⇒ a changed file mapped to NO atom (or the diff was unavailable) ⇒ the
+    #: consumer MUST run the full suite.  Default True = safe when repo-intel omits it.
+    fail_safe_to_full: bool = True
     stack_supported: bool = False
     reason: str = ""
 

@@ -184,3 +184,52 @@ def test_changeset_full_constructor_and_as_dict():
     assert d["mode"] == MODE_FULL
     assert d["changed_pages"] == [] and d["changed_atoms"] == []
     assert "honest_gaps" in d and "reason" in d
+
+
+# ── repo_diff_from_result adapter (CODE P4 — the honesty seam) ──────────────
+import types as _types
+
+from app.controlplane.cycle.change_detector import repo_diff_from_result
+
+
+def _result(**kw):
+    base = {"stack_supported": True, "fail_safe_to_full": False,
+            "changed_files": [], "changed_atoms": []}
+    base.update(kw)
+    return _types.SimpleNamespace(**base)
+
+
+def test_adapter_none_is_full():
+    assert repo_diff_from_result(None).stack_supported is False
+
+
+def test_adapter_fail_safe_collapses_to_full_even_with_atoms():
+    # THE seam: a partial map (fail_safe_to_full) must NOT narrow, even though it
+    # carries atoms — else a config-file change silently green-washes.
+    rd = repo_diff_from_result(_result(
+        fail_safe_to_full=True,
+        changed_atoms=[{"atom_id": "a1", "kind": "route", "value": {"path_pattern": "/x"}}]))
+    assert rd.stack_supported is False
+
+
+def test_adapter_unsupported_stack_is_full():
+    assert repo_diff_from_result(_result(stack_supported=False)).stack_supported is False
+
+
+def test_adapter_good_diff_maps_atoms_and_pages():
+    rd = repo_diff_from_result(_result(
+        changed_files=["src/quote.py"],
+        changed_atoms=[
+            {"atom_id": "a1", "kind": "route", "value": {"path_pattern": "/quote"}},
+            {"atom_id": "a2", "kind": "api_endpoint", "value": {"path": "/api/bind"}},
+        ]))
+    assert rd.stack_supported is True
+    assert rd.changed_files == ("src/quote.py",)
+    keys = {(a.key, a.page_key) for a in rd.mapped_atoms}
+    assert keys == {("a1", "/quote"), ("a2", "/api/bind")}
+
+
+def test_adapter_atom_without_id_derives_key():
+    rd = repo_diff_from_result(_result(
+        changed_atoms=[{"kind": "route", "value": {"path_pattern": "/home"}}]))
+    assert rd.mapped_atoms[0].key == "route:/home"

@@ -65,6 +65,9 @@ class RepoIntelConfig(EngineConfig):
     ls_remote_timeout_seconds: int = Field(
         default=30, alias="REPO_INTEL_LS_REMOTE_TIMEOUT_SECONDS",
     )
+    #: Clone depth (CODE P4). Default 1 = shallow (transfer-cheap, no diff history);
+    #: set deeper (e.g. 50) to keep recent SHAs so incremental cycles can narrow.
+    clone_depth: int = Field(default=1, alias="QEC_CLONE_DEPTH")
     git_binary: str = Field(default="git", alias="GIT_BINARY")
 
     # ── Service JWT (repo-intel /diff is consumed by S5; minted later) ──
