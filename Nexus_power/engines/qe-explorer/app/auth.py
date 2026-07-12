@@ -22,8 +22,14 @@ is PII-scrubbed like any value; the password value is emptied at source).
 """
 from __future__ import annotations
 
+import base64
+import binascii
+import hashlib
+import hmac
 import logging
 import re
+import struct
+import time
 from dataclasses import dataclass, field
 from typing import Any, Mapping, Optional, Sequence
 
@@ -41,23 +47,128 @@ DEFAULT_USERNAME_HINTS: tuple[str, ...] = (
     "username", "user name", "user id", "userid", "email", "e-mail",
     "login", "account", "member id", "user",
 )
-#: Default accessible-name hints for the SUBMIT control.
+#: Default accessible-name hints for the SUBMIT control.  Includes "continue" /
+#: "next" so a MULTI-STEP login (username page → password page) and an MFA step
+#: (enter code → verify) are advanced by the same matcher.
 DEFAULT_SUBMIT_HINTS: tuple[str, ...] = (
     "sign in", "signin", "log in", "login", "log on", "logon",
-    "continue", "submit", "next", "go", "enter",
+    "continue", "submit", "next", "go", "enter", "verify", "confirm",
+)
+#: Accessible-name hints for a ONE-TIME-CODE / OTP field (MFA second factor).  A
+#: field matching these that is NOT a password is filled with the computed code.
+DEFAULT_OTP_HINTS: tuple[str, ...] = (
+    "one-time", "one time", "onetime", "otp", "passcode", "pass code",
+    "verification code", "verification", "verify code", "security code",
+    "authentication code", "authenticator", "6-digit", "6 digit", "digit code",
+    "2fa", "two-factor", "two factor", "mfa code", "sms code", "email code",
+    "confirmation code", "access code", "token", "pin",
+)
+#: Accessible-name hints for choosing an OTP DELIVERY method (email / mobile /
+#: text).  Acted on ONLY when the auth profile explicitly names a delivery, so
+#: the crawler never guesses which channel to trigger.
+DEFAULT_DELIVERY_HINTS: tuple[str, ...] = (
+    "email", "e-mail", "mobile", "phone", "text", "sms", "call", "authenticator app",
 )
 
 _PASSWORD_INPUT_TYPES = frozenset({"password"})
+#: Inventory ``kind`` values a fillable text-like field may have (OTP fields are
+#: often ``text`` / ``tel`` / ``number``).
+_TEXT_LIKE_KINDS = frozenset({"text", "date", "select", "number", "tel", "search", "email"})
+
+
+def _pad_b32(seed: str) -> str:
+    """Upper-case, strip spaces, and pad a base32 TOTP secret to a multiple of 8."""
+    s = re.sub(r"\s+", "", seed).upper()
+    return s + "=" * ((8 - len(s) % 8) % 8)
+
+
+def totp_code(
+    seed_b32: str, *, digits: int = 6, period: int = 30, at_unix: Optional[float] = None,
+) -> str:
+    """Compute the current RFC-6238 TOTP code for a base32 secret (stdlib only).
+
+    Deterministic for a given ``at_unix`` (tests pin it); uses wall-clock time in
+    production.  Returns ``""`` on an unparseable seed rather than raising — a bad
+    seed becomes an honest login failure downstream, never a crash.  No third-party
+    dependency: the explorer image stays lean and auditable.
+    """
+    try:
+        key = base64.b32decode(_pad_b32(seed_b32), casefold=True)
+    except (binascii.Error, ValueError):
+        return ""
+    if not key:
+        return ""
+    counter = int((time.time() if at_unix is None else at_unix) // max(1, int(period)))
+    digest = hmac.new(key, struct.pack(">Q", counter), hashlib.sha1).digest()
+    offset = digest[-1] & 0x0F
+    binary = struct.unpack(">I", digest[offset:offset + 4])[0] & 0x7FFFFFFF
+    d = max(4, min(10, int(digits)))
+    return str(binary % (10 ** d)).zfill(d)
+
+
+@dataclass(frozen=True)
+class MfaConfig:
+    """The second factor the login must satisfy (all data-driven, never hard-coded).
+
+    ``kind='totp'`` computes the code from the shared ``seed`` (authenticator-app
+    MFA — fully automatable without a phone).  ``kind='otp'`` uses a FIXED ``otp``
+    (a deterministic test code, e.g. USAA's ``123456`` in a test env).  ``delivery``
+    (optional) names the channel to pick on a "how do you want your code?" screen —
+    acted on only when set, so the crawler never triggers the wrong channel.
+    """
+
+    kind: str  # "totp" | "otp"
+    seed: str = ""
+    otp: str = ""
+    delivery: str = ""
+    digits: int = 6
+    period: int = 30
+
+    def current_code(self, *, at_unix: Optional[float] = None) -> str:
+        """The code to type NOW: a live TOTP from the seed, or the fixed OTP."""
+        if self.kind == "totp" and self.seed:
+            return totp_code(self.seed, digits=self.digits, period=self.period, at_unix=at_unix)
+        return (self.otp or "").strip()
+
+    @classmethod
+    def from_payload(cls, payload: Optional[Mapping[str, Any]]) -> "Optional[MfaConfig]":
+        if not isinstance(payload, Mapping):
+            return None
+        kind = str(payload.get("kind") or payload.get("type") or "").strip().lower()
+        seed = str(payload.get("seed") or payload.get("totp_seed") or "").strip()
+        otp = str(payload.get("otp") or payload.get("code") or "").strip()
+        if kind not in ("totp", "otp"):
+            kind = "totp" if seed else ("otp" if otp else "")
+        if not kind or (kind == "totp" and not seed) or (kind == "otp" and not otp):
+            return None
+        try:
+            digits = int(payload.get("digits") or 6)
+            period = int(payload.get("period") or 30)
+        except (TypeError, ValueError):
+            digits, period = 6, 30
+        return cls(
+            kind=kind, seed=seed, otp=otp,
+            delivery=str(payload.get("delivery") or "").strip().lower(),
+            digits=digits, period=period,
+        )
 
 
 @dataclass(frozen=True)
 class Credentials:
-    """Login secret + optional accessible-name hints (all data-driven)."""
+    """Login secret + optional MFA + accessible-name hints (all data-driven).
+
+    Backward compatible: a bare ``{username, password}`` payload logs in exactly
+    as before (single-step, no MFA).  An ``mfa`` block adds a second factor and a
+    multi-step sequence is handled automatically by the authenticator's step loop.
+    """
 
     username: str
     password: str
     username_hints: tuple[str, ...] = DEFAULT_USERNAME_HINTS
     submit_hints: tuple[str, ...] = DEFAULT_SUBMIT_HINTS
+    otp_hints: tuple[str, ...] = DEFAULT_OTP_HINTS
+    delivery_hints: tuple[str, ...] = DEFAULT_DELIVERY_HINTS
+    mfa: Optional[MfaConfig] = None
 
     @classmethod
     def from_payload(cls, payload: Optional[Mapping[str, Any]]) -> "Optional[Credentials]":
@@ -70,11 +181,16 @@ class Credentials:
             return None
         uh = tuple(str(h).strip().lower() for h in (payload.get("username_hints") or ()) if str(h).strip())
         sh = tuple(str(h).strip().lower() for h in (payload.get("submit_hints") or ()) if str(h).strip())
+        oh = tuple(str(h).strip().lower() for h in (payload.get("otp_hints") or ()) if str(h).strip())
+        dh = tuple(str(h).strip().lower() for h in (payload.get("delivery_hints") or ()) if str(h).strip())
         return cls(
             username=username,
             password=password,
             username_hints=uh or DEFAULT_USERNAME_HINTS,
             submit_hints=sh or DEFAULT_SUBMIT_HINTS,
+            otp_hints=oh or DEFAULT_OTP_HINTS,
+            delivery_hints=dh or DEFAULT_DELIVERY_HINTS,
+            mfa=MfaConfig.from_payload(payload.get("mfa")),
         )
 
 
@@ -115,6 +231,62 @@ def _name_matches_any(name: str, hints: Sequence[str]) -> bool:
     return any(h and h in n for h in hints)
 
 
+def _match_password_control(controls: Sequence[Mapping[str, Any]]) -> Optional[Mapping[str, Any]]:
+    """The password field (``input_type=='password'``), preferring a named one."""
+    named = next((c for c in controls if _is_password(c) and _norm(c.get("name"))), None)
+    if named is not None:
+        return named
+    # A nameless password field still anchors the form (for the username
+    # heuristic) but cannot itself be a fill target.
+    return next((c for c in controls if _is_password(c)), None)
+
+
+def _text_fields(controls: Sequence[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
+    return [
+        c for c in controls
+        if _norm(c.get("kind")) in _TEXT_LIKE_KINDS and not _is_password(c) and _norm(c.get("name"))
+    ]
+
+
+def _match_username_control(
+    controls: Sequence[Mapping[str, Any]],
+    username_hints: Sequence[str] = DEFAULT_USERNAME_HINTS,
+    *,
+    password: Optional[Mapping[str, Any]] = None,
+) -> Optional[Mapping[str, Any]]:
+    """Best hint-matched text field, falling back to the field just before the
+    password (the near-universal layout).  A username-first (multi-step) screen
+    has a username field and NO password — still matched here."""
+    text_fields = _text_fields(controls)
+    if not text_fields:
+        return None
+    hit = next((c for c in text_fields if _name_matches_any(str(c.get("name")), username_hints)), None)
+    if hit is not None:
+        return hit
+    if password is not None:
+        try:
+            p_idx = list(controls).index(password)
+        except ValueError:
+            p_idx = len(controls)
+        preceding = [c for c in text_fields if _index_of(controls, c) < p_idx]
+        return preceding[-1] if preceding else text_fields[0]
+    return text_fields[0]
+
+
+def _match_submit_control(
+    controls: Sequence[Mapping[str, Any]], submit_hints: Sequence[str] = DEFAULT_SUBMIT_HINTS,
+) -> Optional[Mapping[str, Any]]:
+    """First non-danger button whose accessible name is a sign-in / advance verb."""
+    for c in controls:
+        if _norm(c.get("kind")) != "button" or not _norm(c.get("name")):
+            continue
+        if c.get("danger"):  # never choose an irreversible-verb button as submit
+            continue
+        if _name_matches_any(str(c.get("name")), submit_hints):
+            return c
+    return None
+
+
 def match_login_controls(
     controls: Sequence[Mapping[str, Any]],
     *,
@@ -123,54 +295,62 @@ def match_login_controls(
 ) -> Optional[LoginControls]:
     """Match {username, password, submit} by accessible name (pure).
 
-    Password is identified structurally (``input_type=='password'``) — the
-    single reliable, locale-independent signal.  The username field is the
-    best hint-matched text field, falling back to the text field immediately
-    preceding the password field (the near-universal login layout).  The submit
-    control is the first button whose name is a sign-in verb; a button whose
-    name matches an irreversible refuse verb is never chosen.  Returns ``None``
-    when any of the three cannot be grounded — the caller then refuses to guess.
+    Password is identified structurally (``input_type=='password'``); the username
+    field is the best hint-matched text field (else the field preceding password);
+    the submit is the first sign-in-verb button (never an irreversible-verb one).
+    Returns ``None`` when any of the three cannot be grounded on THIS screen — the
+    single-screen contract kept for back-compat; the multi-screen sequence is
+    driven by :meth:`Authenticator.login`.
     """
-    password = next((c for c in controls if _is_password(c) and _norm(c.get("name"))), None)
-    if password is None:
-        # A nameless password field still anchors the form; accept it for the
-        # username-precedes-password heuristic but it cannot be a fill target.
-        password = next((c for c in controls if _is_password(c)), None)
+    password = _match_password_control(controls)
     if password is None:
         return None
-
-    text_fields = [
-        c for c in controls
-        if _norm(c.get("kind")) in ("text", "date", "select") and not _is_password(c)
-        and _norm(c.get("name"))
-    ]
-    username = next(
-        (c for c in text_fields if _name_matches_any(str(c.get("name")), username_hints)),
-        None,
-    )
-    if username is None:
-        # Fallback: the last named text field appearing before the password.
-        try:
-            p_idx = list(controls).index(password)
-        except ValueError:
-            p_idx = len(controls)
-        preceding = [c for c in text_fields if _index_of(controls, c) < p_idx]
-        username = preceding[-1] if preceding else (text_fields[0] if text_fields else None)
+    username = _match_username_control(controls, username_hints, password=password)
     if username is None or not _norm(username.get("name")):
         return None
-
-    submit = None
-    for c in controls:
-        if _norm(c.get("kind")) != "button" or not _norm(c.get("name")):
-            continue
-        if c.get("danger"):  # never choose an irreversible-verb button as submit
-            continue
-        if _name_matches_any(str(c.get("name")), submit_hints):
-            submit = c
-            break
+    submit = _match_submit_control(controls, submit_hints)
     if submit is None:
         return None
     return LoginControls(username=dict(username), password=dict(password), submit=dict(submit))
+
+
+def match_otp_control(
+    controls: Sequence[Mapping[str, Any]], otp_hints: Sequence[str] = DEFAULT_OTP_HINTS,
+) -> Optional[Mapping[str, Any]]:
+    """First non-password text-like field whose accessible name is a one-time-code
+    hint (the MFA second-factor input).  ``None`` when no OTP field is present."""
+    for c in controls:
+        if _is_password(c):
+            continue
+        if _norm(c.get("kind")) not in _TEXT_LIKE_KINDS or not _norm(c.get("name")):
+            continue
+        if _name_matches_any(str(c.get("name")), otp_hints):
+            return dict(c)
+    return None
+
+
+def match_delivery_control(
+    controls: Sequence[Mapping[str, Any]],
+    *,
+    delivery: str,
+    delivery_hints: Sequence[str] = DEFAULT_DELIVERY_HINTS,
+) -> Optional[Mapping[str, Any]]:
+    """The radio/button/link that selects the named OTP delivery channel.
+
+    Matched ONLY when ``delivery`` is set (the profile names email/mobile/…) — so
+    the crawler never guesses which channel to trigger.  ``None`` otherwise."""
+    d = _norm(delivery)
+    if not d:
+        return None
+    for c in controls:
+        if _norm(c.get("kind")) not in ("radio", "button", "link", "checkbox"):
+            continue
+        if c.get("disabled") or c.get("danger"):
+            continue
+        name = _norm(c.get("name"))
+        if name and d in name:
+            return dict(c)
+    return None
 
 
 #: Accessible names of a clickable affordance that NAVIGATES to a login form
@@ -308,26 +488,35 @@ class Authenticator:
         self._max_relogins = max(0, int(max_relogins))
         self._relogins = 0
 
-    async def login(self, observation: PageObservation) -> AuthResult:
-        """Attempt one inventory-matched login from ``observation`` (the login
-        page as first seen).  Returns a grounded, credential-free result.
-        """
-        controls = build_inventory(observation.raw_controls, self._refuse_pack,
-                                   url=observation.url)
-        before_fp = state_fingerprint(observation.url, controls, observation.dialog_flags)
-        matched = match_login_controls(
-            controls,
-            username_hints=self._creds.username_hints,
-            submit_hints=self._creds.submit_hints,
-        )
+    #: Hard bound on login SCREENS driven per attempt (landing → username →
+    #: password → delivery → OTP → done is 5; 6 gives headroom without looping).
+    MAX_LOGIN_STEPS = 6
 
-        # The login form may sit BEHIND a "Sign in" affordance (a link/button)
-        # rather than on the entry/landing page — the near-universal SPA pattern.
-        # When the login controls are not groundable here, click a login affordance
-        # to load the login route, re-inventory, and re-match. Bounded to two hops.
+    async def login(self, observation: PageObservation) -> AuthResult:
+        """Drive a login SEQUENCE from ``observation`` and verify it.
+
+        A single machine handles every shape of the login ladder:
+          * single-step  (username + password + submit on one screen);
+          * multi-step   (username → Next → password → Submit);
+          * MFA          (… → choose delivery → enter one-time code → Verify),
+            where the code is a live TOTP (from the seed) or a fixed test OTP.
+        On each screen it fills whatever login fields are present, advances, and
+        re-observes — success is VERIFIED (no password/OTP field remains, state
+        moved, no error region), never assumed.  Credential-free result.
+        """
+        controls = build_inventory(observation.raw_controls, self._refuse_pack, url=observation.url)
+        before_fp = state_fingerprint(observation.url, controls, observation.dialog_flags)
+
+        # (a) Reach the login form. When NEITHER a username nor a password field is
+        # present, the form sits behind a "Sign in" affordance (SPA/marketing
+        # front) — click it to load the login route. Bounded to two hops.
         nav_actions: list[emit.ActionRecord] = []
         hops = 0
-        while matched is None and hops < 2:
+        while (
+            hops < 2
+            and _match_password_control(controls) is None
+            and _match_username_control(controls, self._creds.username_hints) is None
+        ):
             affordance = _match_login_affordance(controls)
             if affordance is None:
                 break
@@ -337,70 +526,131 @@ class Authenticator:
                 phase=Phase.AUTH.value, timestamp_ms=self._clock.now_ms(),
             ))
             observation = await self._observe_current()
-            controls = build_inventory(observation.raw_controls, self._refuse_pack,
-                                       url=observation.url)
+            controls = build_inventory(observation.raw_controls, self._refuse_pack, url=observation.url)
             before_fp = state_fingerprint(observation.url, controls, observation.dialog_flags)
-            matched = match_login_controls(
-                controls,
-                username_hints=self._creds.username_hints,
-                submit_hints=self._creds.submit_hints,
-            )
             hops += 1
 
-        if matched is None:
-            logger.info("qec.auth.login_controls_unmatched url_host=%s",
-                        _norm(observation.title) and "<redacted>" or "")
-            return AuthResult(success=False,
-                              reason="login_unmatched: could not ground "
-                                     "username/password/submit by accessible name",
-                              before_fingerprint=before_fp)
-
+        # (b) Step loop across login screens.
         actions: list[emit.ActionRecord] = list(nav_actions)
-        # 1. username (PII-scrubbed at source — never raw at rest)
-        obs_u = await self._port.fill(matched.username, self._creds.username)
-        actions.append(emit.build_action_record(
-            matched.username, verb="type", value=obs_u.committed_value,
-            observation=obs_u, phase=Phase.AUTH.value, timestamp_ms=self._clock.now_ms(),
-        ))
-        # 2. password (value EMPTIED at source; guard never sees it either)
-        obs_p = await self._port.fill(matched.password, self._creds.password)
-        actions.append(emit.build_action_record(
-            matched.password, verb="type", value="", observation=obs_p,
-            phase=Phase.AUTH.value, timestamp_ms=self._clock.now_ms(), is_secret=True,
-        ))
-        # 3. submit — open the AUTH window at the moment of the login POST
-        self._window.open(self._clock.now_ms())
-        obs_s = await self._port.click(matched.submit)
-        actions.append(emit.build_action_record(
-            matched.submit, verb="submit", value=None, observation=obs_s,
-            phase=Phase.AUTH.value, timestamp_ms=self._clock.now_ms(),
-        ))
+        filled_username = False
+        filled_delivery = False
+        filled_password = False
+        filled_otp = False
 
-        after_obs = await self._observe_current()
-        after_controls = build_inventory(after_obs.raw_controls, self._refuse_pack,
-                                         url=after_obs.url)
-        after_fp = state_fingerprint(after_obs.url, after_controls, after_obs.dialog_flags)
-        success, reason = verify_login_success(
-            before_fingerprint=before_fp,
-            after_fingerprint=after_fp,
-            after_controls=after_controls,
-            after_errors=after_obs.error_texts,
-        )
+        for step in range(self.MAX_LOGIN_STEPS):
+            controls = build_inventory(observation.raw_controls, self._refuse_pack, url=observation.url)
+            screen_fp = state_fingerprint(observation.url, controls, observation.dialog_flags)
 
-        storage_state: Optional[dict[str, Any]] = None
-        if success:
-            try:
-                storage_state = await self._port.storage_state()
-            except Exception as exc:  # capture is best-effort; login still succeeded
-                logger.warning("qec.auth.storage_state_capture_failed error=%s",
-                               str(exc)[:200])
-        self._window.close()
-        logger.info("qec.auth.login_attempt success=%s reason=%s", success, reason)
+            password_ctrl = _match_password_control(controls)
+            username_ctrl = _match_username_control(controls, self._creds.username_hints, password=password_ctrl)
+            otp_ctrl = match_otp_control(controls, self._creds.otp_hints) if self._creds.mfa else None
+            delivery_ctrl = (
+                match_delivery_control(controls, delivery=self._creds.mfa.delivery,
+                                       delivery_hints=self._creds.delivery_hints)
+                if (self._creds.mfa and self._creds.mfa.delivery and not filled_delivery)
+                else None
+            )
+            submit_ctrl = _match_submit_control(controls, self._creds.submit_hints)
+
+            acted = False
+            if username_ctrl is not None and _norm(username_ctrl.get("name")) and not filled_username:
+                obs_u = await self._port.fill(dict(username_ctrl), self._creds.username)
+                actions.append(emit.build_action_record(
+                    dict(username_ctrl), verb="type", value=obs_u.committed_value,
+                    observation=obs_u, phase=Phase.AUTH.value, timestamp_ms=self._clock.now_ms(),
+                ))
+                filled_username = True
+                acted = True
+            if password_ctrl is not None and _norm(password_ctrl.get("name")):
+                obs_p = await self._port.fill(dict(password_ctrl), self._creds.password)
+                actions.append(emit.build_action_record(
+                    dict(password_ctrl), verb="type", value="", observation=obs_p,
+                    phase=Phase.AUTH.value, timestamp_ms=self._clock.now_ms(), is_secret=True,
+                ))
+                filled_password = True
+                acted = True
+            if delivery_ctrl is not None:
+                obs_d = await self._port.click(dict(delivery_ctrl))
+                actions.append(emit.build_action_record(
+                    dict(delivery_ctrl), verb="click", value=None, observation=obs_d,
+                    phase=Phase.AUTH.value, timestamp_ms=self._clock.now_ms(),
+                ))
+                filled_delivery = True
+                acted = True
+            if otp_ctrl is not None and _norm(otp_ctrl.get("name")) and self._creds.mfa is not None:
+                code = self._creds.mfa.current_code()
+                if code:
+                    obs_o = await self._port.fill(dict(otp_ctrl), code)
+                    actions.append(emit.build_action_record(
+                        dict(otp_ctrl), verb="type", value="", observation=obs_o,
+                        phase=Phase.AUTH.value, timestamp_ms=self._clock.now_ms(), is_secret=True,
+                    ))
+                    filled_otp = True
+                    acted = True
+
+            if acted and submit_ctrl is not None:
+                # Open the guard AUTH window at the moment of each login POST.
+                self._window.open(self._clock.now_ms())
+                obs_s = await self._port.click(dict(submit_ctrl))
+                actions.append(emit.build_action_record(
+                    dict(submit_ctrl), verb="submit", value=None, observation=obs_s,
+                    phase=Phase.AUTH.value, timestamp_ms=self._clock.now_ms(),
+                ))
+                self._window.close()
+            elif not acted:
+                # Nothing to fill or submit on this screen — a dead end.
+                break
+
+            observation = await self._observe_current()
+            after_controls = build_inventory(observation.raw_controls, self._refuse_pack, url=observation.url)
+            after_fp = state_fingerprint(observation.url, after_controls, observation.dialog_flags)
+            live_errors = [e for e in observation.error_texts if _norm(e)]
+            has_password = _match_password_control(after_controls) is not None
+            has_otp = self._creds.mfa is not None and match_otp_control(after_controls, self._creds.otp_hints) is not None
+
+            # Honest failure: an error live-region after a secret was submitted.
+            if live_errors and (filled_password or filled_otp):
+                return AuthResult(
+                    success=False,
+                    reason=f"login_failed: error region present ({live_errors[0][:120]!r})",
+                    actions=actions, before_fingerprint=before_fp, after_fingerprint=after_fp,
+                )
+
+            # Success: password entered, no password/OTP field remains, state moved.
+            if filled_password and not has_password and not has_otp:
+                success, reason = verify_login_success(
+                    before_fingerprint=before_fp, after_fingerprint=after_fp,
+                    after_controls=after_controls, after_errors=observation.error_texts,
+                )
+                if success:
+                    storage_state = await self._capture_storage_state()
+                    logger.info("qec.auth.login_attempt success=True reason=%s steps=%d", reason, step + 1)
+                    return AuthResult(
+                        success=True, reason=reason, actions=actions,
+                        storage_state=storage_state, before_fingerprint=before_fp,
+                        after_fingerprint=after_fp,
+                    )
+
+            # Stuck: we submitted but the screen did not advance and no error/next
+            # field appeared → fail fast rather than re-POST the same form.
+            if acted and after_fp and after_fp == screen_fp and not has_otp:
+                break
+
+        logger.info("qec.auth.login_attempt success=False reason=login_unverified")
         return AuthResult(
-            success=success, reason=reason, actions=actions,
-            storage_state=storage_state, before_fingerprint=before_fp,
-            after_fingerprint=after_fp,
+            success=False,
+            reason="login_unverified: could not complete the login sequence "
+                   "(username/password/MFA not groundable, or state did not advance)",
+            actions=actions, before_fingerprint=before_fp,
         )
+
+    async def _capture_storage_state(self) -> Optional[dict[str, Any]]:
+        """Best-effort session capture (never fails a verified login)."""
+        try:
+            return await self._port.storage_state()
+        except Exception as exc:
+            logger.warning("qec.auth.storage_state_capture_failed error=%s", str(exc)[:200])
+            return None
 
     async def relogin(self) -> AuthResult:
         """Re-authenticate on detected session expiry, bounded to the budget."""
