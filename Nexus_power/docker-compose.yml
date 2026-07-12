@@ -457,6 +457,16 @@ services:
     ports:
     - 8091:8091
     environment:
+      # Session hand-off (E3): accept a crawler-relayed Playwright storageState and
+      # store it as this artifact's ENCRYPTED auth profile, so a generated test can
+      # run from a cold, authenticated session. OFF by default (endpoint 403s);
+      # enabled here so an authenticated crawl's session flows crawl → run.
+      NEXUS_QEC_AUTH_IMPORT_ENABLED: "true"
+      # The session is encrypted at rest by the EnvelopeService — platform-api
+      # needs the SAME KEK config qe-central uses (GCP-KMS via the VM's ADC), or
+      # /auth/import fail-closes 503 rather than store a session in plaintext.
+      NEXUS_KEK_PROVIDER: ${NEXUS_KEK_PROVIDER:-local}
+      NEXUS_KEK_GCP_KEY: ${NEXUS_KEK_GCP_KEY:-}
       NEXUS_AUDITOR_GATE: "block"
       NEXUS_AUDITOR_MIN_SCORE: "9"
       STORYBOARD_PAGE_VISIT_VISION_IDENTITY: "true"
