@@ -49,6 +49,7 @@ from ..db.models import ClientAppRow, QEExplorationRow
 from ..fleet.lifecycle import TenantNotOperational
 from ..fleet.provisioning import assert_tenant_operational_db
 from ..security import prod_guard
+from ..services.answer_key import explorer_fill_contract
 from ..substrate.schema import CRAWL_ID_PATTERN, ExplorationBundle, RefusalError
 from ..substrate.writer import write_exploration
 
@@ -440,7 +441,10 @@ async def _dispatch_explorer(
             raise HTTPException(status_code=exc.status_code, detail=exc.as_http_detail())
         base_url = row.base_url
         fences = dict(row.fences or {})
-        answer_key = dict(row.answer_key or {})
+        # Project the canonical answer_key onto the explorer's {exact, semantic,
+        # regex_rules} FILL contract — without this, a wizard-shaped key
+        # ({fill|notes|outcomes}) resolves to empty and the crawler fills nothing.
+        answer_key = explorer_fill_contract(row.answer_key)
         budgets = dict(row.budgets or {})
         env_attestation = dict(row.env_attestation or {})
 

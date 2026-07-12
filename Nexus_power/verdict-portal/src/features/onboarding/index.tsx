@@ -38,6 +38,7 @@ interface WizardForm {
   repo_project: string;
   webhook_secret: string;
   seed_notes: string;
+  seed_fields: string;
   answers: string;
   env_kind: EnvKind;
   attested_by: string;
@@ -63,6 +64,7 @@ const EMPTY: WizardForm = {
   repo_project: '',
   webhook_secret: '',
   seed_notes: '',
+  seed_fields: '',
   answers: '',
   env_kind: 'disposable',
   attested_by: '',
@@ -144,6 +146,14 @@ export function OnboardingWizard() {
     } catch {
       answers = { _raw: form.answers };
     }
+    // Data-tab seed field values (field/keyword → value). Projected server-side
+    // onto the crawler's fill contract so real forms actually get filled.
+    let fill: Record<string, unknown> = {};
+    try {
+      fill = form.seed_fields.trim() ? (JSON.parse(form.seed_fields) as Record<string, unknown>) : {};
+    } catch {
+      fill = {};
+    }
     // The crawl gate (security/prod_guard.py) is fail-closed on THREE things:
     // a signed rules-of-engagement, an attested + unexpired non-prod envelope,
     // and a passed preflight. Build all three here so a completed wizard yields
@@ -178,7 +188,7 @@ export function OnboardingWizard() {
       base_url: form.base_url.trim(),
       credentials,
       repo_binding: { provider: form.repo_provider, project: form.repo_project, webhook_secret: form.webhook_secret },
-      answer_key: { notes: form.seed_notes, answers },
+      answer_key: { fill, notes: form.seed_notes, outcomes: answers },
       env_attestation: {
         env_kind: form.env_kind,
         attested_by: form.attested_by.trim(),
@@ -349,9 +359,22 @@ export function OnboardingWizard() {
         )}
 
         {step === 2 && (
-          <Field label="Seed data notes" hint="How the crawler should seed forms (test personas, sample inputs).">
-            <textarea className={cn(INPUT_CLS, 'min-h-[8rem] resize-y')} value={form.seed_notes} onChange={(e) => set('seed_notes', e.target.value)} />
-          </Field>
+          <div className="space-y-4">
+            <Field
+              label="Seed field values (JSON)"
+              hint="field name or keyword → value. The crawler fills matching form fields with these so it can pass validation and reach the deep flows."
+            >
+              <textarea
+                className={cn(INPUT_CLS, 'min-h-[9rem] resize-y font-mono text-xs')}
+                value={form.seed_fields}
+                onChange={(e) => set('seed_fields', e.target.value)}
+                placeholder={'{\n  "age": 35,\n  "coverage": 500000,\n  "zip": "12345",\n  "tobacco": "no"\n}'}
+              />
+            </Field>
+            <Field label="Seed data notes (optional)" hint="Free-text guidance (test personas, edge cases). Reference only today; compiled to seed values in a later release.">
+              <textarea className={cn(INPUT_CLS, 'min-h-[6rem] resize-y')} value={form.seed_notes} onChange={(e) => set('seed_notes', e.target.value)} />
+            </Field>
+          </div>
         )}
 
         {step === 3 && (
