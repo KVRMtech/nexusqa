@@ -18,11 +18,15 @@ This router lives OUTSIDE the ``/api/*`` prefix so the fail-closed JWT middlewar
 does not apply (parity with the explorer HMAC callback in ``internal.py``); the
 per-app token IS the authentication.
 
-DEPLOYMENT NOTE (open decision #7): the app-resolution read runs WITHOUT a tenant
-GUC.  In the dev/superuser posture this is correct; a restricted-RLS production
-deployment must either front this route through the platform gateway or grant the
-service a narrow discovery role.  Under forced RLS with no such grant the lookup
-returns nothing ⇒ 401 (fail-closed) — never a wrong-tenant write.
+RESOLVED (open decision #7): the app-resolution read carries no tenant GUC (a
+webhook has no JWT), and ``client_apps`` has FORCE RLS — so a direct read from the
+service role (``qec``, ``rolbypassrls=false``, verified) returns NOTHING and the
+handler fail-closed 401 on EVERY delivery.  Fixed by resolving through the narrow,
+read-only ``qec_resolve_webhook_app`` SECURITY DEFINER function (owned by a
+BYPASSRLS role; migration ``scripts/apply_webhook_resolver_fn.sql``), which returns
+only ``{tenant_id, repo_binding, status}`` for the one requested ``app_id`` — never
+the whole table, never a wrong-tenant write.  The change_events INSERT still runs
+under the resolved tenant's RLS scope.
 """
 from __future__ import annotations
 
