@@ -83,6 +83,15 @@ class ExploreRequest(BaseModel):
     #: resolves it (a stored client session, or a fetched auth-hook) and relays it
     #: here; ``None`` ⇒ a normal cold-session crawl.
     session: Optional[dict[str, Any]] = None
+    #: Multi-env crawl bindings — routing cookies [{name,value,domain,path}] and
+    #: extra request headers select a specific environment (Gloo/Istio); basic-auth
+    #: passes a dev gate. Empty ⇒ byte-identical to a cold crawl.
+    cookies: list[dict[str, Any]] = Field(default_factory=list)
+    extra_http_headers: dict[str, str] = Field(default_factory=dict)
+    http_credentials: Optional[dict[str, Any]] = None
+    #: env_assertion {selector,expect_text}|{url_pattern}: proven read-only at crawl
+    #: start; a mismatch STOPS the crawl (never a silently-empty green artifact).
+    env_assertion: Optional[dict[str, Any]] = None
 
 
 def _config_fingerprint(req: ExploreRequest, refuse_pack_version: str) -> str:
@@ -301,8 +310,23 @@ async def _run_job(
             if isinstance(req.session, dict) and (req.session.get("cookies") or req.session.get("origins")):
                 _ctx_kwargs["storage_state"] = req.session
                 logger.info("qec.explorer.session_injected crawl_id=%s", req.crawl_id)
+            # Multi-env crawl bindings (empty ⇒ byte-identical to today).
+            if req.extra_http_headers:
+                _ctx_kwargs["extra_http_headers"] = dict(req.extra_http_headers)
+            if isinstance(req.http_credentials, dict) and req.http_credentials.get("username"):
+                _ctx_kwargs["http_credentials"] = {
+                    "username": req.http_credentials.get("username", ""),
+                    "password": req.http_credentials.get("password", ""),
+                }
             context = await browser.new_context(**_ctx_kwargs)
             context.set_default_timeout(_ACTION_TIMEOUT_MS)
+            if req.cookies:  # routing cookies (Gloo/canary) — cookies are a method call
+                try:
+                    await context.add_cookies(list(req.cookies))
+                    logger.info("qec.explorer.env_cookies_set crawl_id=%s n=%d",
+                                req.crawl_id, len(req.cookies))
+                except Exception as exc:
+                    logger.warning("qec.explorer.env_cookies_failed error=%s", str(exc)[:200])
             page = await context.new_page()
             port = PlaywrightBrowserPort(page, context)
 

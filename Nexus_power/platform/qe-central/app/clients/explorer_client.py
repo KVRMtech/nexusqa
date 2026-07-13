@@ -49,6 +49,12 @@ class ExploreDispatchRequest(BaseModel):
     #: (tier-4: logins the crawler cannot script). Resolved by qe-central from a
     #: stored client session or a fetched auth-hook; sensitive, never logged.
     session: dict | None = None
+    #: Multi-env crawl bindings from the reference Environment Profile — routing
+    #: cookies/headers select the env; http_credentials (secret) passes a dev gate.
+    cookies: list[dict] = Field(default_factory=list)
+    extra_http_headers: dict = Field(default_factory=dict)
+    http_credentials: dict | None = None
+    env_assertion: dict | None = None
 
 
 class DispatchResult(BaseModel):
@@ -81,6 +87,10 @@ def _log_safe(req: ExploreDispatchRequest) -> dict:
         "phase": req.phase,
         "has_credentials": bool(req.credentials),
         "has_answer_key": bool(req.answer_key),
+        # Booleans only — never the raw routing cookies/headers/basic-auth (secret).
+        "has_cookies": bool(req.cookies),
+        "has_headers": bool(req.extra_http_headers),
+        "has_http_credentials": bool(req.http_credentials),
     }
 
 

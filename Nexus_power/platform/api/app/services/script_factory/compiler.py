@@ -533,11 +533,38 @@ def _emit_wizard_advance(step, max_pages: int) -> list[str]:
     return out
 
 
+def _env_assertion_lines(env_assertion) -> list[str]:
+    """Multi-env: a HARD env-pin assertion emitted right after the ENTRY navigation.
+
+    Proves the run landed on the INTENDED environment (e.g. the Gloo routing cookie
+    actually routed us to dev, not prod's default). A mismatch throws — the frozen
+    reducer (``outcome_contradicted_from_error``) classifies it PROVEN
+    ``real_regression``, un-dismissable. NEVER soft/``.catch`` — a soft env-assertion
+    could not fail RED, which would green-wash a mis-pinned run onto the wrong env.
+    ``{selector, expect_text}`` matches a DOM banner (needed when envs share one URL
+    and only a cookie differs); ``{url_pattern}`` matches the address bar.
+    """
+    if not isinstance(env_assertion, dict):
+        return []
+    out: list[str] = []
+    url_pattern = str(env_assertion.get("url_pattern") or "").strip()
+    selector = str(env_assertion.get("selector") or "").strip()
+    expect_text = str(env_assertion.get("expect_text") or "").strip()
+    if url_pattern:
+        out.append(f"await expect(page).toHaveURL(new RegExp('{js_str(url_pattern)}')); "
+                   "// PROVEN env-assertion: on the intended environment")
+    if selector and expect_text:
+        out.append(f"await expect(page.locator('{js_str(selector)}')).toContainText('{js_str(expect_text)}'); "
+                   "// PROVEN env-assertion: on the intended environment")
+    return out
+
+
 def _action_lines(step, field_meta: dict, parametrize: bool = False,
                   reanchor: dict | None = None, visual: dict | None = None,
                   interaction: dict | None = None, nav_override: str = "",
                   nav_recover: bool = False,
-                  autonomous_resolve: bool = False) -> list[str]:
+                  autonomous_resolve: bool = False,
+                  env_assertion: dict | None = None) -> list[str]:
     """Kind-aware Playwright lines for one (observed) step.
 
     When `parametrize` is set, navigation targets a path resolved against
@@ -640,6 +667,9 @@ def _action_lines(step, field_meta: dict, parametrize: bool = False,
             target = _rel_path(url) if (parametrize and not nav_override) else url
             out.append(f"await page.goto('{js_str(target)}'); // entry navigation only")
             out.append("await __nxSettle(page); // bounded settle: dcl + visible loading indicator only")
+            # Multi-env: HARD env-pin assertion right after the entry nav (default-off;
+            # byte-identical when the case has no env_assertion). RED if wrong env.
+            out.extend(_env_assertion_lines(env_assertion))
         else:
             path = url_path(url)
             prov = (observed.get("provenance") or "").strip().lower()
@@ -1101,6 +1131,9 @@ def compile_case(tc, field_meta: dict | None = None, *, parametrize: bool = Fals
     _expected_outcome = (getattr(tc, "expected_outcome", "") or "").strip()
     if _expected_outcome:
         out.append(f"// Expected outcome: {_expected_outcome}")
+    # Multi-env — HARD env-pin assertion emitted right after the entry navigation
+    # (threaded into _action_lines). DEFAULT-OFF: None ⇒ byte-identical.
+    _env_assertion = getattr(tc, "env_assertion", None)
     # ANSWERS P1 — business-value oracle. A case may carry expected OUTCOMES
     # (attached at generate from the client's answer_key); compile them into
     # grounded assertions. DEFAULT-OFF: a case with no value_assertions leaves
@@ -1255,7 +1288,8 @@ def compile_case(tc, field_meta: dict | None = None, *, parametrize: bool = Fals
                                   interaction=(interactions or {}).get(n),
                                   nav_override=(nav_overrides or {}).get(n) or "",
                                   nav_recover=bool((nav_recovers or {}).get(n)),
-                                  autonomous_resolve=autonomous_resolve):
+                                  autonomous_resolve=autonomous_resolve,
+                                  env_assertion=_env_assertion):
             out.append(f"    {line}")
         out.append("  });")
 
