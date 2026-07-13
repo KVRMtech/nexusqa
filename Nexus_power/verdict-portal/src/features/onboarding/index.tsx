@@ -24,7 +24,7 @@ import type { LucideIcon } from 'lucide-react';
 import { api, QecApiError } from '../../lib/api';
 import { cn } from '../../lib/format';
 import { Button, Panel, Seal } from '../../components';
-import type { AppCreatePayload, EnvKind } from '../../types/qec';
+import type { AppCreatePayload, EnvKind, EnvProfileCreatePayload } from '../../types/qec';
 
 interface WizardForm {
   name: string;
@@ -50,6 +50,10 @@ interface WizardForm {
   allow_submit: boolean;
   cadence: string;
   usd_per_cycle: string;
+  /** Multi-env: Environment Profiles as a JSON array (crawl-once/run-many). Each:
+   *  {name, base_url?, cookies?[], headers?{}, env_assertion?{selector,expect_text},
+   *   data_overrides?{}, fences?{allow_submit}, env_attestation?{env_kind}}. */
+  environments: string;
 }
 
 const EMPTY: WizardForm = {
@@ -76,6 +80,7 @@ const EMPTY: WizardForm = {
   allow_submit: false,
   cadence: 'on_push',
   usd_per_cycle: '',
+  environments: '',
 };
 
 interface Bucket {
@@ -212,6 +217,30 @@ export function OnboardingWizard() {
     setSubmitting(true);
     try {
       const app = await api.createApp(payload);
+      // Multi-env: create any Environment Profiles the operator authored (JSON
+      // array) as a SEPARATE additive loop — the app + its one flow/baseline are
+      // created exactly as before; environments are run-time rebinds.
+      const envText = form.environments.trim();
+      if (envText) {
+        let envs: EnvProfileCreatePayload[] = [];
+        try {
+          const parsed = JSON.parse(envText);
+          envs = Array.isArray(parsed) ? parsed : [parsed];
+        } catch {
+          toast.error('Environments JSON is invalid — app created without them');
+        }
+        let created = 0;
+        for (const env of envs) {
+          if (!env || !env.name) continue;
+          try {
+            await api.createEnvironment(app.app_id, env);
+            created++;
+          } catch (e) {
+            toast.error(`Environment '${env.name}' failed`, { description: (e as QecApiError).message });
+          }
+        }
+        if (created) toast.success(`${created} environment profile(s) created`);
+      }
       toast.success('App onboarded', { description: app.name });
       navigate(`/apps/${app.app_id}`);
     } catch (err) {
@@ -409,6 +438,19 @@ export function OnboardingWizard() {
             <Field label="Allowed egress hosts" hint="Comma/space separated; the crawl is network-fenced to these (defaults to the base-URL host).">
               <input className={INPUT_CLS} value={form.allowed_hosts} onChange={(e) => set('allowed_hosts', e.target.value)} placeholder=".acmelife.example" />
             </Field>
+            <div className="sm:col-span-2">
+              <Field
+                label="Environment Profiles (JSON, optional)"
+                hint="Multi-env — the SAME crawled flow, run against dev/test/uat/prod. A JSON array; each: {name, base_url?, cookies?, headers?, env_assertion?{selector,expect_text}, fences?{allow_submit}, env_attestation?{env_kind}}. Prod is forced read-only.">
+                <textarea
+                  className={INPUT_CLS + ' font-mono text-2xs'}
+                  rows={5}
+                  value={form.environments}
+                  onChange={(e) => set('environments', e.target.value)}
+                  placeholder={'[{"name":"uat","cookies":[{"name":"gloo","value":"uat","domain":".acmelife.example","path":"/"}],"env_assertion":{"selector":"#env-banner","expect_text":"Environment: UAT"},"env_attestation":{"env_kind":"staging"}}]'}
+                />
+              </Field>
+            </div>
 
             {/* The fail-closed crawl gate (security/prod_guard.py): an app is
                 crawlable ('live') ONLY with a signed RoE + attested non-prod env

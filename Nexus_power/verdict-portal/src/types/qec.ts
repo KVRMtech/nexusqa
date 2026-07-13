@@ -216,6 +216,62 @@ export interface AppCreatePayload {
   budgets?: Record<string, unknown>;
 }
 
+/**
+ * The HARD proof a run landed on the intended environment — a DOM banner match
+ * (needed when envs share one URL and only a cookie differs) and/or a URL pattern.
+ * A mismatch fails the run CLOSED to RED (never a silent mis-pin).
+ */
+export interface EnvAssertion {
+  selector?: string;
+  expect_text?: string;
+  url_pattern?: string;
+  [key: string]: unknown;
+}
+
+/**
+ * One Environment Profile (dev/test/uat/prod) — a run-time REBIND of the app's one
+ * learned flow. The `_env_public_view` shape: credentials NEVER echoed (only
+ * `has_credentials`); routing cookies/headers are the env selector.
+ */
+export interface EnvProfile {
+  environment_id: string;
+  tenant_id: string;
+  app_id: string;
+  name: string;
+  base_url: string;
+  canonical_host: string;
+  cookies: JsonValue[];
+  headers: JsonObject;
+  data_overrides: JsonObject;
+  fences: Fences;
+  env_attestation: EnvAttestation;
+  env_assertion: EnvAssertion;
+  status: string;
+  has_credentials: boolean;
+  created_at: IsoTimestamp;
+  updated_at: IsoTimestamp;
+}
+
+export interface EnvProfileListResponse {
+  app_id: string;
+  environments: EnvProfile[];
+}
+
+/** POST /apps/{id}/environments request body (routers/apps.py:EnvCreate). */
+export interface EnvProfileCreatePayload {
+  name: string;
+  base_url?: string;
+  /** Routing cookies [{name,value,domain,path}] — the env selector (e.g. a Gloo cookie). */
+  cookies?: JsonValue[];
+  headers?: Record<string, unknown>;
+  /** Login + HTTP basic-auth + SECRET cookies/headers — sealed (AAD=environment_id), never echoed. */
+  credentials?: Record<string, unknown> | null;
+  data_overrides?: Record<string, unknown>;
+  fences?: Fences;
+  env_attestation?: EnvAttestation;
+  env_assertion?: EnvAssertion;
+}
+
 /** PATCH /apps/{id} request body (routers/apps.py:AppUpdate) — every field optional. */
 export interface AppUpdatePayload extends Partial<AppCreatePayload> {
   status?: Extract<AppStatus, 'active' | 'paused'>;

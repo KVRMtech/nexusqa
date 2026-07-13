@@ -27,6 +27,9 @@ import * as mock from './mock';
 import type {
   AppCostResponse,
   AppCreatePayload,
+  EnvProfile,
+  EnvProfileCreatePayload,
+  EnvProfileListResponse,
   AppListResponse,
   AppUpdatePayload,
   AutonomyByBand,
@@ -248,6 +251,37 @@ export class QecApiClient {
     if (this.mock)
       return this.mocked(() => ({ app_id: appId, status: 'deleted' as const, credentials_zeroed: true }), opts?.signal);
     return this.del<DeleteAppResponse>(`${QEC}/apps/${encodeURIComponent(appId)}`, opts);
+  }
+
+  // ═══════════ Environment Profiles (multi-env, crawl-once/run-many) ═══════════
+  listEnvironments(appId: string, opts?: RequestOpts): Promise<EnvProfileListResponse> {
+    if (this.mock) return this.mocked(() => ({ app_id: appId, environments: [] }), opts?.signal);
+    return this.get<EnvProfileListResponse>(`${QEC}/apps/${encodeURIComponent(appId)}/environments`, opts);
+  }
+
+  createEnvironment(appId: string, payload: EnvProfileCreatePayload, opts?: RequestOpts): Promise<EnvProfile> {
+    return this.post<EnvProfile>(`${QEC}/apps/${encodeURIComponent(appId)}/environments`, payload, opts);
+  }
+
+  getEnvironment(appId: string, envId: string, opts?: RequestOpts): Promise<EnvProfile> {
+    return this.get<EnvProfile>(
+      `${QEC}/apps/${encodeURIComponent(appId)}/environments/${encodeURIComponent(envId)}`, opts);
+  }
+
+  updateEnvironment(
+    appId: string, envId: string,
+    payload: Partial<EnvProfileCreatePayload> & { status?: string },
+    opts?: RequestOpts,
+  ): Promise<EnvProfile> {
+    return this.patch<EnvProfile>(
+      `${QEC}/apps/${encodeURIComponent(appId)}/environments/${encodeURIComponent(envId)}`, payload, opts);
+  }
+
+  deleteEnvironment(
+    appId: string, envId: string, opts?: RequestOpts,
+  ): Promise<{ app_id: string; environment_id: string; status: string }> {
+    return this.del(
+      `${QEC}/apps/${encodeURIComponent(appId)}/environments/${encodeURIComponent(envId)}`, opts);
   }
 
   // ══════════════════════ Scenarios (the 1%) ══════════════════════
