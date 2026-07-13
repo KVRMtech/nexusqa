@@ -172,6 +172,7 @@ class CycleClient(Protocol):
     ) -> dict: ...
     async def run_playwright(
         self, *, tenant_id: str, artifact_id: str, test_ids: Sequence[str], base_url: str,
+        env_context: Mapping | None = None,
     ) -> dict: ...
     async def poll_run(self, *, tenant_id: str, artifact_id: str, run_id: str) -> dict: ...
     async def auto_heal(
@@ -339,8 +340,11 @@ class HttpCycleClient:
 
     async def run_playwright(
         self, *, tenant_id: str, artifact_id: str, test_ids: Sequence[str], base_url: str,
+        env_context: Mapping | None = None,
     ) -> dict:
         body = {"test_ids": list(test_ids), "base_url": base_url}
+        if env_context:  # multi-env: the runner rebinds the flow to this env
+            body["env_context"] = dict(env_context)
         out = await self._post(
             tenant_id=tenant_id,
             path=f"/api/v1/test-factory/{artifact_id}/playwright/run",
