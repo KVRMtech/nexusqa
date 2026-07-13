@@ -3698,6 +3698,25 @@ async def get_oracle_scorecard(
         )
 
 
+@router.get("/api/v1/test-factory/{artifact_id}/env-parity")
+async def get_env_parity(
+    artifact_id: str = PathParam(..., min_length=1, max_length=64),
+    user: dict = Depends(get_current_user),
+):
+    """Cross-environment PARITY (multi-env Phase 3) — run the SAME flow against
+    dev/test/uat/prod and report where their GROUNDED outputs diverge ("prod premium
+    $72 vs UAT $75"). Re-derives verdicts through the SAME frozen classify_failure
+    reducer (no new verdict logic); reports a divergence ONLY from PROVEN-grounded
+    values or differing verdict labels — anything unverified is 'incomparable', never
+    a divergence and never a silent 'match'. Read-only, $0 LLM, no migration."""
+    from ..services.env_parity import compute_env_parity
+
+    tenant_id = user["tenant_id"]
+    async with tenant_scoped_session(tenant_id) as session:
+        await _require_artifact(session, artifact_id, tenant_id)
+        return await compute_env_parity(session, artifact_id=artifact_id, tenant_id=tenant_id)
+
+
 @router.get("/api/v1/test-factory/{artifact_id}/rtm")
 async def get_rtm(
     artifact_id: str = PathParam(..., min_length=1, max_length=64),
