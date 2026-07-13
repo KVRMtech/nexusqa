@@ -16,8 +16,12 @@ import {
   Database,
   GitBranch,
   KeyRound,
+  Layers,
+  Plus,
   Settings,
   ShieldCheck,
+  Trash2,
+  X,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
@@ -50,10 +54,9 @@ interface WizardForm {
   allow_submit: boolean;
   cadence: string;
   usd_per_cycle: string;
-  /** Multi-env: Environment Profiles as a JSON array (crawl-once/run-many). Each:
-   *  {name, base_url?, cookies?[], headers?{}, env_assertion?{selector,expect_text},
-   *   data_overrides?{}, fences?{allow_submit}, env_attestation?{env_kind}}. */
-  environments: string;
+  /** Multi-env: Environment Profiles (crawl-once / run-many) — STRUCTURED drafts,
+   *  each compiled to an EnvCreate payload on submit (see `envDraftToPayload`). */
+  environments: EnvDraft[];
 }
 
 const EMPTY: WizardForm = {
@@ -80,7 +83,7 @@ const EMPTY: WizardForm = {
   allow_submit: false,
   cadence: 'on_push',
   usd_per_cycle: '',
-  environments: '',
+  environments: [],
 };
 
 interface Bucket {
@@ -96,6 +99,7 @@ const BUCKETS: Bucket[] = [
   { key: 'data', label: 'Data', icon: Database, hint: 'Seed data the crawler feeds the app.' },
   { key: 'answers', label: 'Answers', icon: ClipboardCheck, hint: 'The ground-truth answer key (oracles).' },
   { key: 'safety', label: 'Safety', icon: ShieldCheck, hint: 'The non-prod attestation + egress fences.' },
+  { key: 'envs', label: 'Environments', icon: Layers, hint: 'The same flow, run against dev/test/uat/prod.' },
   { key: 'ops', label: 'Ops', icon: Settings, hint: 'Cadence and per-cycle budget.' },
 ];
 
@@ -127,6 +131,320 @@ function Field({
 const INPUT_CLS =
   'w-full rounded-lg bg-inset text-ink text-sm ring-1 ring-line focus-visible:ring-teal/60 px-3 py-2 placeholder:text-ink-faint';
 
+// ── Environment Profiles (multi-env: crawl-once / run-many) ───────────────────
+// The SAME learned flow, rebound at RUN time to dev/test/uat/prod. Each profile
+// carries the env SELECTOR (routing cookies + optional base-URL override) and the
+// HARD env-pin that PROVES the run actually landed on that env (mismatch → RED).
+//
+// SCOPE (honest): this tab captures only the fields the runner applies END-TO-END
+// today — routing cookies, a base-URL override, the env-pin, and the fence/kind.
+// Routing by HTTP header or HTTP basic-auth is deliberately NOT offered here yet:
+// the runner does not apply `headers`/`http_credentials` (the #8 wiring), so a
+// field for them would silently do nothing — a green-wash we refuse to ship.
+
+interface CookieDraft {
+  name: string;
+  value: string;
+  domain: string;
+  path: string;
+}
+
+/** Which HARD proof pins a run to this env. An un-pinned run cannot prove it hit
+ *  the right environment — allowed only when the base URL alone is unambiguous. */
+type EnvPinKind = 'banner' | 'url' | 'none';
+
+interface EnvDraft {
+  name: string;
+  env_kind: EnvKind;
+  base_url: string;
+  cookies: CookieDraft[];
+  pin_kind: EnvPinKind;
+  pin_selector: string;
+  pin_expect_text: string;
+  pin_url_pattern: string;
+  allow_submit: boolean;
+}
+
+const BLANK_COOKIE: CookieDraft = { name: '', value: '', domain: '', path: '/' };
+
+const blankEnv = (): EnvDraft => ({
+  name: '',
+  env_kind: 'staging',
+  base_url: '',
+  cookies: [],
+  pin_kind: 'banner',
+  pin_selector: '',
+  pin_expect_text: '',
+  pin_url_pattern: '',
+  allow_submit: false,
+});
+
+/** Absolute http(s) URL? Kept in LOCKSTEP with the server's `_validated_base_url`
+ *  (Python urlparse): require the `//` authority explicitly, because WHATWG
+ *  `new URL()` alone accepts scheme-only strings (e.g. `https:example.com`) that
+ *  urlparse rejects — a mismatch would let a bad override pass here and 422 there,
+ *  orphaning the env after the app is already created. */
+function isHttpUrl(url: string): boolean {
+  const s = url.trim();
+  if (!/^https?:\/\//i.test(s)) return false;
+  try {
+    const u = new URL(s);
+    return (u.protocol === 'http:' || u.protocol === 'https:') && !!u.hostname;
+  } catch {
+    return false;
+  }
+}
+
+/** The app's host — the sensible default `domain` for a new routing cookie. */
+function hostOf(url: string): string {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return '';
+  }
+}
+
+/** Compile a draft to the server `EnvCreate` payload, or null when it has no name
+ *  (blank rows are dropped). Emits a COMPLETE env_assertion only (the server 422s
+ *  a partial one), and scopes `allow_submit` to disposable envs — prod/staging
+ *  never mutate. */
+function envDraftToPayload(e: EnvDraft): EnvProfileCreatePayload | null {
+  const name = e.name.trim();
+  if (!name) return null;
+
+  const cookies = e.cookies
+    .filter((c) => c.name.trim() && c.value.trim())
+    .map((c) => {
+      const cookie: Record<string, string> = {
+        name: c.name.trim(),
+        value: c.value.trim(),
+        path: c.path.trim() || '/',
+      };
+      const domain = c.domain.trim();
+      if (domain) cookie.domain = domain;
+      return cookie;
+    });
+
+  const env_assertion =
+    e.pin_kind === 'banner' && e.pin_selector.trim() && e.pin_expect_text.trim()
+      ? { selector: e.pin_selector.trim(), expect_text: e.pin_expect_text.trim() }
+      : e.pin_kind === 'url' && e.pin_url_pattern.trim()
+        ? { url_pattern: e.pin_url_pattern.trim() }
+        : {};
+
+  return {
+    name,
+    ...(e.base_url.trim() ? { base_url: e.base_url.trim() } : {}),
+    ...(cookies.length ? { cookies } : {}),
+    ...(Object.keys(env_assertion).length ? { env_assertion } : {}),
+    env_attestation: { env_kind: e.env_kind },
+    fences: { allow_submit: e.env_kind === 'disposable' && e.allow_submit },
+  };
+}
+
+/** Has the operator authored ANYTHING on this draft (beyond the name)? Used so a
+ *  fully-blank row is silently dropped, but a content-bearing one with no name is
+ *  flagged — never silently discarded (that would be a green-wash). */
+function envHasContent(e: EnvDraft): boolean {
+  return (
+    !!e.base_url.trim() ||
+    e.cookies.some((c) => c.name.trim() || c.value.trim() || c.domain.trim()) ||
+    !!e.pin_selector.trim() ||
+    !!e.pin_expect_text.trim() ||
+    !!e.pin_url_pattern.trim() ||
+    e.allow_submit
+  );
+}
+
+/** Client-side validation that pre-empts EVERY server rejection (so a profile is
+ *  never dropped, nor an app created with its envs rejected): a name for any
+ *  authored draft, unique + length-bounded names, complete pins, complete routing
+ *  cookies, and a valid base-URL override. First human-readable error, or null. */
+function validateEnvs(envs: EnvDraft[]): string | null {
+  const seen = new Set<string>();
+  for (let i = 0; i < envs.length; i++) {
+    const e = envs[i];
+    const name = e.name.trim();
+    if (!name) {
+      // A content-bearing draft with no name would be silently discarded on
+      // submit (envDraftToPayload returns null) — refuse instead of losing it.
+      if (envHasContent(e)) return `Environment ${i + 1} has settings but no name — add a name (or clear its fields).`;
+      continue; // a fully-blank draft is intentionally dropped
+    }
+    if (name.length > 200) return `Environment “${name.slice(0, 24)}…”: the name must be 200 characters or fewer.`;
+    const key = name.toLowerCase();
+    if (seen.has(key)) return `Duplicate environment name “${name}”.`;
+    seen.add(key);
+    if (e.pin_kind === 'banner' && !(e.pin_selector.trim() && e.pin_expect_text.trim()))
+      return `Environment “${name}”: the DOM-banner pin needs both a selector and expected text.`;
+    if (e.pin_kind === 'url' && !e.pin_url_pattern.trim())
+      return `Environment “${name}”: the URL pin needs a URL pattern.`;
+    if (e.base_url.trim() && !isHttpUrl(e.base_url.trim()))
+      return `Environment “${name}”: the base-URL override must be an absolute http(s) URL.`;
+    // A half-filled routing cookie is the env SELECTOR silently vanishing — with a
+    // 'none' pin that becomes an undetected wrong-env pass. Block it.
+    if (e.cookies.some((c) => !!c.name.trim() !== !!c.value.trim()))
+      return `Environment “${name}”: a routing cookie needs both a name and a value (or clear the row).`;
+  }
+  return null;
+}
+
+/** One Environment Profile card — a structured sub-form (no hand-written JSON). */
+function EnvCard({
+  env,
+  index,
+  appHost,
+  onChange,
+  onRemove,
+}: {
+  env: EnvDraft;
+  index: number;
+  appHost: string;
+  onChange: (patch: Partial<EnvDraft>) => void;
+  onRemove: () => void;
+}) {
+  const submitDisabled = env.env_kind !== 'disposable';
+  const setCookie = (j: number, patch: Partial<CookieDraft>) =>
+    onChange({ cookies: env.cookies.map((c, k) => (k === j ? { ...c, ...patch } : c)) });
+  const addCookie = () => onChange({ cookies: [...env.cookies, { ...BLANK_COOKIE, domain: appHost }] });
+  const removeCookie = (j: number) => onChange({ cookies: env.cookies.filter((_, k) => k !== j) });
+
+  return (
+    <div className="rounded-lg bg-panel-2 ring-1 ring-line-strong px-3 py-3 space-y-3">
+      <div className="flex items-center justify-between">
+        <span className="text-2xs font-semibold text-ink-mid font-mono">environment {index + 1}</span>
+        <button
+          type="button"
+          onClick={onRemove}
+          className="text-2xs text-ink-low hover:text-crit inline-flex items-center gap-1"
+        >
+          <Trash2 size={12} aria-hidden /> Remove
+        </button>
+      </div>
+
+      <div className="grid sm:grid-cols-2 gap-3">
+        <Field label="Name" required hint="dev · test · uat · prod — the profile label.">
+          <input className={INPUT_CLS} value={env.name} maxLength={200} onChange={(e) => onChange({ name: e.target.value })} placeholder="uat" />
+        </Field>
+        <Field label="Environment kind" hint="Prod is always forced read-only; only disposable may submit.">
+          <select
+            className={INPUT_CLS}
+            value={env.env_kind}
+            onChange={(e) =>
+              onChange({
+                env_kind: e.target.value as EnvKind,
+                allow_submit: e.target.value === 'disposable' ? env.allow_submit : false,
+              })
+            }
+          >
+            <option value="disposable">disposable</option>
+            <option value="staging">staging</option>
+            <option value="prod">prod</option>
+          </select>
+        </Field>
+        <div className="sm:col-span-2">
+          <Field
+            label="Base URL override (optional)"
+            hint="Leave blank to reuse the app's base URL. Set only when this env lives on a different host."
+          >
+            <input
+              className={INPUT_CLS}
+              value={env.base_url}
+              onChange={(e) => onChange({ base_url: e.target.value })}
+              placeholder="https://uat.acmelife.example"
+            />
+          </Field>
+        </div>
+      </div>
+
+      {/* Routing cookies — the env selector (e.g. a Gloo routing cookie). */}
+      <div className="space-y-2">
+        <div className="flex items-center justify-between">
+          <span className="text-2xs font-semibold text-ink-mid">
+            Routing cookies
+            <span className="text-ink-faint font-normal ml-1">the env selector (e.g. a Gloo routing cookie)</span>
+          </span>
+          <button
+            type="button"
+            onClick={addCookie}
+            className="text-2xs text-teal hover:text-teal/80 inline-flex items-center gap-1"
+          >
+            <Plus size={12} aria-hidden /> Cookie
+          </button>
+        </div>
+        {env.cookies.length === 0 && (
+          <p className="text-2xs text-ink-faint">No routing cookie — this env is selected by its base URL alone.</p>
+        )}
+        {env.cookies.map((c, j) => (
+          <div key={j} className="grid grid-cols-[1fr_1fr_1.3fr_0.6fr_auto] gap-1.5 items-center">
+            <input className={INPUT_CLS} value={c.name} onChange={(e) => setCookie(j, { name: e.target.value })} placeholder="gloo" aria-label="cookie name" />
+            <input className={INPUT_CLS} value={c.value} onChange={(e) => setCookie(j, { value: e.target.value })} placeholder="uat" aria-label="cookie value" />
+            <input className={INPUT_CLS} value={c.domain} onChange={(e) => setCookie(j, { domain: e.target.value })} placeholder=".acmelife.example" aria-label="cookie domain" />
+            <input className={INPUT_CLS} value={c.path} onChange={(e) => setCookie(j, { path: e.target.value })} placeholder="/" aria-label="cookie path" />
+            <button type="button" onClick={() => removeCookie(j)} className="text-ink-low hover:text-crit p-1" aria-label="remove cookie">
+              <X size={14} aria-hidden />
+            </button>
+          </div>
+        ))}
+      </div>
+
+      {/* Env pin — the HARD proof that the routing actually worked. */}
+      <div className="space-y-2">
+        <span className="block text-2xs font-semibold text-ink-mid">
+          Environment pin
+          <span className="text-ink-faint font-normal ml-1">proves the run landed on this env (mismatch → RED)</span>
+        </span>
+        <div className="flex gap-4 text-2xs text-ink-mid">
+          {(['banner', 'url', 'none'] as EnvPinKind[]).map((k) => (
+            <label key={k} className="inline-flex items-center gap-1.5">
+              <input
+                type="radio"
+                name={`pin-${index}`}
+                checked={env.pin_kind === k}
+                onChange={() => onChange({ pin_kind: k })}
+                className="accent-[rgb(var(--teal))]"
+              />
+              {k === 'banner' ? 'DOM banner' : k === 'url' ? 'URL pattern' : 'None'}
+            </label>
+          ))}
+        </div>
+        {env.pin_kind === 'banner' && (
+          <div className="grid sm:grid-cols-2 gap-3">
+            <Field label="Banner selector" hint="A DOM element that names the env.">
+              <input className={INPUT_CLS} value={env.pin_selector} onChange={(e) => onChange({ pin_selector: e.target.value })} placeholder="#env-banner" />
+            </Field>
+            <Field label="Expected text" hint="Text that element must contain on this env.">
+              <input className={INPUT_CLS} value={env.pin_expect_text} onChange={(e) => onChange({ pin_expect_text: e.target.value })} placeholder="Environment: UAT" />
+            </Field>
+          </div>
+        )}
+        {env.pin_kind === 'url' && (
+          <Field label="URL pattern" hint="A substring the landed URL must contain.">
+            <input className={INPUT_CLS} value={env.pin_url_pattern} onChange={(e) => onChange({ pin_url_pattern: e.target.value })} placeholder="uat.acmelife.example" />
+          </Field>
+        )}
+        {env.pin_kind === 'none' && (
+          <p className="text-2xs text-warn leading-snug">
+            No pin — the run cannot prove it reached this environment. Only safe when the base URL alone is unambiguous
+            (never for cookie-routed envs that share one URL).
+          </p>
+        )}
+      </div>
+
+      <label className={cn('flex items-center gap-2 text-xs', submitDisabled ? 'text-ink-faint' : 'text-ink-mid')}>
+        <input
+          type="checkbox"
+          checked={env.allow_submit && !submitDisabled}
+          onChange={(e) => onChange({ allow_submit: e.target.checked })}
+          disabled={submitDisabled}
+          className="accent-[rgb(var(--teal))]"
+        />
+        Allow the mutating submit tier (disposable env only)
+      </label>
+    </div>
+  );
+}
+
 // ── the wizard ───────────────────────────────────────────────────────────────
 
 export function OnboardingWizard() {
@@ -136,6 +454,13 @@ export function OnboardingWizard() {
   const [submitting, setSubmitting] = useState(false);
 
   const set = <K extends keyof WizardForm>(key: K, value: WizardForm[K]) => setForm((f) => ({ ...f, [key]: value }));
+
+  // Multi-env: structured Environment Profile handlers (add / patch / remove).
+  const addEnv = () => setForm((f) => ({ ...f, environments: [...f.environments, blankEnv()] }));
+  const updateEnv = (i: number, patch: Partial<EnvDraft>) =>
+    setForm((f) => ({ ...f, environments: f.environments.map((e, k) => (k === i ? { ...e, ...patch } : e)) }));
+  const removeEnv = (i: number) =>
+    setForm((f) => ({ ...f, environments: f.environments.filter((_, k) => k !== i) }));
 
   const canProceedAccess = form.name.trim().length > 0 && form.base_url.trim().length > 0;
   const isLast = step === BUCKETS.length - 1;
@@ -202,7 +527,7 @@ export function OnboardingWizard() {
         rules_of_engagement: { signed: form.roe_signed, signed_by: form.roe_signed ? signer : '' },
         preflight: { passed: form.preflight_passed },
       },
-      fences: { allowed_hosts: hosts, allow_submit: form.allow_submit },
+      fences: { allowed_hosts: hosts, allow_submit: form.env_kind === 'disposable' && form.allow_submit },
       schedule: { cadence: form.cadence },
       budgets: form.usd_per_cycle ? { usd_per_cycle: Number(form.usd_per_cycle) } : {},
     };
@@ -214,33 +539,33 @@ export function OnboardingWizard() {
       setStep(0);
       return;
     }
+    // Validate Environment Profiles BEFORE creating the app, so an operator never
+    // ends up with an app created but its profiles rejected server-side.
+    const envError = validateEnvs(form.environments);
+    if (envError) {
+      toast.error(envError);
+      setStep(5);
+      return;
+    }
     setSubmitting(true);
     try {
       const app = await api.createApp(payload);
-      // Multi-env: create any Environment Profiles the operator authored (JSON
-      // array) as a SEPARATE additive loop — the app + its one flow/baseline are
-      // created exactly as before; environments are run-time rebinds.
-      const envText = form.environments.trim();
-      if (envText) {
-        let envs: EnvProfileCreatePayload[] = [];
+      // Multi-env: create the Environment Profiles the operator authored as a
+      // SEPARATE additive loop — the app + its one flow/baseline are created
+      // exactly as before; environments are run-time rebinds of that same flow.
+      const envPayloads = form.environments
+        .map(envDraftToPayload)
+        .filter((p): p is EnvProfileCreatePayload => p !== null);
+      let created = 0;
+      for (const env of envPayloads) {
         try {
-          const parsed = JSON.parse(envText);
-          envs = Array.isArray(parsed) ? parsed : [parsed];
-        } catch {
-          toast.error('Environments JSON is invalid — app created without them');
+          await api.createEnvironment(app.app_id, env);
+          created++;
+        } catch (e) {
+          toast.error(`Environment '${env.name}' failed`, { description: (e as QecApiError).message });
         }
-        let created = 0;
-        for (const env of envs) {
-          if (!env || !env.name) continue;
-          try {
-            await api.createEnvironment(app.app_id, env);
-            created++;
-          } catch (e) {
-            toast.error(`Environment '${env.name}' failed`, { description: (e as QecApiError).message });
-          }
-        }
-        if (created) toast.success(`${created} environment profile(s) created`);
       }
+      if (created) toast.success(`${created} environment profile(s) created`);
       toast.success('App onboarded', { description: app.name });
       navigate(`/apps/${app.app_id}`);
     } catch (err) {
@@ -261,7 +586,7 @@ export function OnboardingWizard() {
       </div>
 
       {/* stepper */}
-      <ol className="grid grid-cols-6 gap-2" aria-label="Onboarding steps">
+      <ol className="grid grid-cols-4 sm:grid-cols-7 gap-2" aria-label="Onboarding steps">
         {BUCKETS.map((b, i) => {
           const Icon = b.icon;
           const active = i === step;
@@ -420,7 +745,20 @@ export function OnboardingWizard() {
         {step === 4 && (
           <div className="grid sm:grid-cols-2 gap-4">
             <Field label="Environment kind" hint="Only 'disposable' may host the mutating submit tier. Never 'prod'.">
-              <select className={INPUT_CLS} value={form.env_kind} onChange={(e) => set('env_kind', e.target.value as EnvKind)}>
+              <select
+                className={INPUT_CLS}
+                value={form.env_kind}
+                onChange={(e) =>
+                  setForm((f) => ({
+                    ...f,
+                    env_kind: e.target.value as EnvKind,
+                    // Mirror the EnvCard: a non-disposable kind can never keep the
+                    // mutating submit tier enabled (else the checkbox stays checked
+                    // while disabled, and the payload persists a contradiction).
+                    allow_submit: e.target.value === 'disposable' ? f.allow_submit : false,
+                  }))
+                }
+              >
                 <option value="disposable">disposable</option>
                 <option value="staging">staging</option>
                 <option value="prod">prod</option>
@@ -438,20 +776,6 @@ export function OnboardingWizard() {
             <Field label="Allowed egress hosts" hint="Comma/space separated; the crawl is network-fenced to these (defaults to the base-URL host).">
               <input className={INPUT_CLS} value={form.allowed_hosts} onChange={(e) => set('allowed_hosts', e.target.value)} placeholder=".acmelife.example" />
             </Field>
-            <div className="sm:col-span-2">
-              <Field
-                label="Environment Profiles (JSON, optional)"
-                hint="Multi-env — the SAME crawled flow, run against dev/test/uat/prod. A JSON array; each: {name, base_url?, cookies?, headers?, env_assertion?{selector,expect_text}, fences?{allow_submit}, env_attestation?{env_kind}}. Prod is forced read-only.">
-                <textarea
-                  className={INPUT_CLS + ' font-mono text-2xs'}
-                  rows={5}
-                  value={form.environments}
-                  onChange={(e) => set('environments', e.target.value)}
-                  placeholder={'[{"name":"uat","cookies":[{"name":"gloo","value":"uat","domain":".acmelife.example","path":"/"}],"env_assertion":{"selector":"#env-banner","expect_text":"Environment: UAT"},"env_attestation":{"env_kind":"staging"}}]'}
-                />
-              </Field>
-            </div>
-
             {/* The fail-closed crawl gate (security/prod_guard.py): an app is
                 crawlable ('live') ONLY with a signed RoE + attested non-prod env
                 + a passed preflight. Collect the two that were missing. */}
@@ -484,7 +808,7 @@ export function OnboardingWizard() {
             <label className="flex items-center gap-2 text-xs text-ink-mid sm:col-span-2 mt-1">
               <input
                 type="checkbox"
-                checked={form.allow_submit}
+                checked={form.allow_submit && form.env_kind === 'disposable'}
                 onChange={(e) => set('allow_submit', e.target.checked)}
                 className="accent-[rgb(var(--teal))]"
                 disabled={form.env_kind !== 'disposable'}
@@ -495,6 +819,44 @@ export function OnboardingWizard() {
         )}
 
         {step === 5 && (
+          <div className="space-y-4">
+            <div className="rounded-lg bg-inset ring-1 ring-line px-3 py-2.5">
+              <p className="text-2xs text-ink-low leading-snug">
+                The <span className="text-ink-mid font-semibold">same crawled flow</span>, run against many
+                environments — crawl once, run many. Each profile rebinds the flow's entry (base URL) and
+                routing (cookies) at run time, and proves it landed on the right env.{' '}
+                <span className="text-ink-mid">Optional</span> — add one profile per target env.{' '}
+                <span className="text-ink-mid">Prod is always forced read-only.</span>
+              </p>
+            </div>
+
+            {form.environments.length === 0 && (
+              <p className="text-2xs text-ink-faint">
+                No environment profiles yet — the app will run against its base URL only. Add one to run the
+                same flow against dev/test/uat.
+              </p>
+            )}
+
+            <div className="space-y-3">
+              {form.environments.map((env, i) => (
+                <EnvCard
+                  key={i}
+                  env={env}
+                  index={i}
+                  appHost={hostOf(form.base_url)}
+                  onChange={(patch) => updateEnv(i, patch)}
+                  onRemove={() => removeEnv(i)}
+                />
+              ))}
+            </div>
+
+            <Button variant="ghost" onClick={addEnv} icon={<Plus size={15} />}>
+              Add environment
+            </Button>
+          </div>
+        )}
+
+        {step === 6 && (
           <div className="grid sm:grid-cols-2 gap-4">
             <Field label="Cadence">
               <select className={INPUT_CLS} value={form.cadence} onChange={(e) => set('cadence', e.target.value)}>
