@@ -1433,6 +1433,10 @@ __WORKERS__  reporter: [['list'], ['html', { open: 'never' }], ['junit', { outpu
     // → vkpower.auth.json in the run dir). Self-detecting, so a downloaded bundle
     // (no auth file) is unaffected; a normal unauthenticated run is unchanged.
     ...(fs.existsSync('./vkpower.auth.json') ? { storageState: './vkpower.auth.json' } : {}),
+    // Multi-env routing (VKPower Environment Profile): apply extra HTTP headers and/or
+    // HTTP basic-auth from an injected sidecar. Self-detecting → an absent file is a
+    // no-op, so a normal run / downloaded bundle (no sidecar) is byte-for-byte unchanged.
+    ...((() => { try { const _e = JSON.parse(fs.readFileSync('./vkpower.env.json', 'utf-8')) || {}; return { ...(_e.extraHTTPHeaders ? { extraHTTPHeaders: _e.extraHTTPHeaders } : {}), ...(_e.httpCredentials ? { httpCredentials: _e.httpCredentials } : {}) }; } catch { return {}; } })()),
     // Container runners set NEXUS_LAUNCH_ARGS (e.g. --no-sandbox); empty locally.
     launchOptions: { args: (process.env.NEXUS_LAUNCH_ARGS || '').split(' ').filter(Boolean) },
   },
@@ -1716,6 +1720,7 @@ results/
 .env
 vkpower.auth.json
 *.auth.json
+vkpower.env.json
 nexus.secrets.json
 """
 

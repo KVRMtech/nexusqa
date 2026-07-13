@@ -133,20 +133,28 @@ const INPUT_CLS =
 
 // ── Environment Profiles (multi-env: crawl-once / run-many) ───────────────────
 // The SAME learned flow, rebound at RUN time to dev/test/uat/prod. Each profile
-// carries the env SELECTOR (routing cookies + optional base-URL override) and the
-// HARD env-pin that PROVES the run actually landed on that env (mismatch → RED).
+// carries the env SELECTOR (routing cookies / headers / basic-auth + optional
+// base-URL override) and the HARD env-pin that PROVES the run actually landed on
+// that env (mismatch → RED).
 //
-// SCOPE (honest): this tab captures only the fields the runner applies END-TO-END
-// today — routing cookies, a base-URL override, the env-pin, and the fence/kind.
-// Routing by HTTP header or HTTP basic-auth is deliberately NOT offered here yet:
-// the runner does not apply `headers`/`http_credentials` (the #8 wiring), so a
-// field for them would silently do nothing — a green-wash we refuse to ship.
+// When a run is BOUND to this profile (the app's run-environment, or a run
+// targeting it directly) the runner applies every field: cookies → storageState,
+// headers → use.extraHTTPHeaders, basic-auth → use.httpCredentials (via the
+// self-detecting vkpower.env.json sidecar), base-URL → NEXUS_BASE_URL, env-pin →
+// a compiled hard assertion (mismatch → RED). A profile that is never bound to a
+// run does nothing — nothing here is silently applied behind the operator's back.
+// Secret material (basic-auth) is sealed server-side (AAD=environment_id), never echoed.
 
 interface CookieDraft {
   name: string;
   value: string;
   domain: string;
   path: string;
+}
+
+interface HeaderDraft {
+  name: string;
+  value: string;
 }
 
 /** Which HARD proof pins a run to this env. An un-pinned run cannot prove it hit
@@ -158,6 +166,10 @@ interface EnvDraft {
   env_kind: EnvKind;
   base_url: string;
   cookies: CookieDraft[];
+  headers: HeaderDraft[];
+  /** HTTP basic-auth (sealed at rest). Both blank ⇒ no basic-auth. */
+  basic_auth_user: string;
+  basic_auth_pass: string;
   pin_kind: EnvPinKind;
   pin_selector: string;
   pin_expect_text: string;
@@ -166,12 +178,16 @@ interface EnvDraft {
 }
 
 const BLANK_COOKIE: CookieDraft = { name: '', value: '', domain: '', path: '/' };
+const BLANK_HEADER: HeaderDraft = { name: '', value: '' };
 
 const blankEnv = (): EnvDraft => ({
   name: '',
   env_kind: 'staging',
   base_url: '',
   cookies: [],
+  headers: [],
+  basic_auth_user: '',
+  basic_auth_pass: '',
   pin_kind: 'banner',
   pin_selector: '',
   pin_expect_text: '',
@@ -225,6 +241,20 @@ function envDraftToPayload(e: EnvDraft): EnvProfileCreatePayload | null {
       return cookie;
     });
 
+  // Routing headers → applied as use.extraHTTPHeaders by the runner. A header row
+  // needs a name (value may legitimately be empty).
+  const headers: Record<string, string> = {};
+  for (const h of e.headers) {
+    const hn = h.name.trim();
+    if (hn) headers[hn] = h.value.trim();
+  }
+
+  // HTTP basic-auth → sealed server-side (creds_blob), applied as use.httpCredentials.
+  const basicUser = e.basic_auth_user.trim();
+  const credentials = basicUser
+    ? { basic_auth: { username: basicUser, password: e.basic_auth_pass } }
+    : null;
+
   const env_assertion =
     e.pin_kind === 'banner' && e.pin_selector.trim() && e.pin_expect_text.trim()
       ? { selector: e.pin_selector.trim(), expect_text: e.pin_expect_text.trim() }
@@ -236,6 +266,8 @@ function envDraftToPayload(e: EnvDraft): EnvProfileCreatePayload | null {
     name,
     ...(e.base_url.trim() ? { base_url: e.base_url.trim() } : {}),
     ...(cookies.length ? { cookies } : {}),
+    ...(Object.keys(headers).length ? { headers } : {}),
+    ...(credentials ? { credentials } : {}),
     ...(Object.keys(env_assertion).length ? { env_assertion } : {}),
     env_attestation: { env_kind: e.env_kind },
     fences: { allow_submit: e.env_kind === 'disposable' && e.allow_submit },
@@ -249,6 +281,9 @@ function envHasContent(e: EnvDraft): boolean {
   return (
     !!e.base_url.trim() ||
     e.cookies.some((c) => c.name.trim() || c.value.trim() || c.domain.trim()) ||
+    e.headers.some((h) => h.name.trim() || h.value.trim()) ||
+    !!e.basic_auth_user.trim() ||
+    !!e.basic_auth_pass.trim() ||
     !!e.pin_selector.trim() ||
     !!e.pin_expect_text.trim() ||
     !!e.pin_url_pattern.trim() ||
@@ -285,6 +320,12 @@ function validateEnvs(envs: EnvDraft[]): string | null {
     // 'none' pin that becomes an undetected wrong-env pass. Block it.
     if (e.cookies.some((c) => !!c.name.trim() !== !!c.value.trim()))
       return `Environment “${name}”: a routing cookie needs both a name and a value (or clear the row).`;
+    // A header with a value but no name is dropped on submit — flag it.
+    if (e.headers.some((h) => !h.name.trim() && !!h.value.trim()))
+      return `Environment “${name}”: a routing header needs a name (or clear the row).`;
+    // Basic-auth needs a username; a lone password would be dropped.
+    if (!e.basic_auth_user.trim() && !!e.basic_auth_pass.trim())
+      return `Environment “${name}”: HTTP basic-auth needs a username (or clear the password).`;
   }
   return null;
 }
@@ -308,6 +349,10 @@ function EnvCard({
     onChange({ cookies: env.cookies.map((c, k) => (k === j ? { ...c, ...patch } : c)) });
   const addCookie = () => onChange({ cookies: [...env.cookies, { ...BLANK_COOKIE, domain: appHost }] });
   const removeCookie = (j: number) => onChange({ cookies: env.cookies.filter((_, k) => k !== j) });
+  const setHeader = (j: number, patch: Partial<HeaderDraft>) =>
+    onChange({ headers: env.headers.map((h, k) => (k === j ? { ...h, ...patch } : h)) });
+  const addHeader = () => onChange({ headers: [...env.headers, { ...BLANK_HEADER }] });
+  const removeHeader = (j: number) => onChange({ headers: env.headers.filter((_, k) => k !== j) });
 
   return (
     <div className="rounded-lg bg-panel-2 ring-1 ring-line-strong px-3 py-3 space-y-3">
@@ -386,6 +431,42 @@ function EnvCard({
             </button>
           </div>
         ))}
+      </div>
+
+      {/* Routing headers — applied as use.extraHTTPHeaders (e.g. gateway env header). */}
+      <div className="space-y-2">
+        <div className="flex items-center justify-between">
+          <span className="text-2xs font-semibold text-ink-mid">
+            Routing headers
+            <span className="text-ink-faint font-normal ml-1">sent on every request (e.g. an API-gateway env header)</span>
+          </span>
+          <button
+            type="button"
+            onClick={addHeader}
+            className="text-2xs text-teal hover:text-teal/80 inline-flex items-center gap-1"
+          >
+            <Plus size={12} aria-hidden /> Header
+          </button>
+        </div>
+        {env.headers.map((h, j) => (
+          <div key={j} className="grid grid-cols-[1fr_1.6fr_auto] gap-1.5 items-center">
+            <input className={INPUT_CLS} value={h.name} onChange={(e) => setHeader(j, { name: e.target.value })} placeholder="X-Env" aria-label="header name" />
+            <input className={INPUT_CLS} value={h.value} onChange={(e) => setHeader(j, { value: e.target.value })} placeholder="uat" aria-label="header value" />
+            <button type="button" onClick={() => removeHeader(j)} className="text-ink-low hover:text-crit p-1" aria-label="remove header">
+              <X size={14} aria-hidden />
+            </button>
+          </div>
+        ))}
+      </div>
+
+      {/* HTTP basic-auth — sealed at rest (AAD=environment_id); use.httpCredentials. */}
+      <div className="grid sm:grid-cols-2 gap-3">
+        <Field label="HTTP basic-auth user (optional)" hint="For envs behind HTTP basic-auth. Sealed at rest, never echoed.">
+          <input className={INPUT_CLS} value={env.basic_auth_user} autoComplete="off" onChange={(e) => onChange({ basic_auth_user: e.target.value })} placeholder="qa" />
+        </Field>
+        <Field label="HTTP basic-auth password">
+          <input type="password" className={INPUT_CLS} value={env.basic_auth_pass} autoComplete="off" onChange={(e) => onChange({ basic_auth_pass: e.target.value })} />
+        </Field>
       </div>
 
       {/* Env pin — the HARD proof that the routing actually worked. */}

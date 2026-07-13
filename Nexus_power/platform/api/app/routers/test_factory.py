@@ -25,6 +25,7 @@ import logging
 import os
 import uuid
 import zipfile
+from urllib.parse import urlsplit
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Path as PathParam, Query, Request, Body
@@ -895,6 +896,7 @@ def _configured_files(cases, field_meta, base_url: str, data: dict,
     data_overrides merged into the run data, the routing cookies folded into the
     run's storageState, and the HARD env-assertion attached to every case (RED if
     the routing landed on the wrong env)."""
+    _env_sidecar: dict = {}
     if env_context:
         if env_context.get("base_url"):
             base_url = str(env_context["base_url"]).strip()
@@ -905,6 +907,33 @@ def _configured_files(cases, field_meta, base_url: str, data: dict,
             cases = [_with_env_assertion(tc, _ea) for tc in cases]
         if env_context.get("cookies"):
             storage_state = _merge_env_cookies(storage_state, env_context["cookies"])
+        # #8: env routing HEADERS + HTTP basic-auth → Playwright use.extraHTTPHeaders /
+        # use.httpCredentials, delivered via the self-detecting vkpower.env.json sidecar
+        # the config auto-loads. httpCredentials is a SECRET (basic-auth password), so
+        # it rides the SAME server-run-only path as vkpower.auth.json (env_context is
+        # never passed on a download/CI-bundle path) and is gitignored in the bundle.
+        _hdrs = env_context.get("headers")
+        if isinstance(_hdrs, dict) and _hdrs:
+            _env_sidecar["extraHTTPHeaders"] = {
+                str(k): str(v) for k, v in _hdrs.items() if str(k).strip()
+            }
+        _creds = env_context.get("http_credentials")
+        if isinstance(_creds, dict) and str(_creds.get("username") or "").strip():
+            _cred_obj = {
+                "username": str(_creds.get("username", "")),
+                "password": str(_creds.get("password", "")),
+            }
+            # SCOPE the basic-auth to the env's ORIGIN. Without `origin` Playwright
+            # replays the password to ANY origin that answers 401 — so a cross-origin
+            # asset (CDN/SSO/iframe) 401ing would leak the sealed env password. Pin it
+            # to the run's effective base_url origin (env base_url wins above).
+            try:
+                _p = urlsplit(base_url or "")
+                if _p.scheme and _p.netloc:
+                    _cred_obj["origin"] = f"{_p.scheme}://{_p.netloc}"
+            except Exception:
+                pass
+            _env_sidecar["httpCredentials"] = _cred_obj
     files = compile_project(
         cases, field_meta, parametrize=True, base_url_default=(base_url or "").strip(),
         projects=browsers, headed=bool(headed), workers=workers,
@@ -938,6 +967,12 @@ def _configured_files(cases, field_meta, base_url: str, data: dict,
     # self-detects vkpower.auth.json; downloaded bundles never receive one.
     if storage_state and storage_state.strip():
         files["vkpower.auth.json"] = storage_state
+    # #8 multi-env sidecar — ONLY when the bound Environment Profile carries routing
+    # headers / basic-auth. Absent ⇒ no file ⇒ the config's self-detection is a no-op
+    # (byte-identical to a single-env run). Written after compile so it never enters
+    # compile_project's frozen file set.
+    if _env_sidecar:
+        files["vkpower.env.json"] = json.dumps(_env_sidecar)
     return files
 
 
