@@ -34,19 +34,29 @@ _UNEXPECTED_VALUE = "unexpected value"
 
 
 def observed_value_from_error(error_message: str) -> str:
-    """The grounded OBSERVED value a value assertion actually read, or '' when the
-    error is not a grounded value contradiction (→ not comparable, never a
-    divergence).  Only ``__nxNum``/``__nxCmp`` throws ("unexpected value … received
-    Y") and ``toHaveValue``/``toContainText`` mismatches ("Received string: Y")
-    carry a real observed value."""
+    """The grounded OBSERVED value a VALUE-ORACLE assertion actually read, or '' when
+    the error is not a value-oracle contradiction (→ not comparable, never a
+    divergence).
+
+    ONLY the value/rule oracle carries a real business value.  The env-pin and the
+    outcome-region oracle ALSO produce Playwright "Received string:" text, so this
+    MUST exclude them (else a wrong-env banner or an outcome-region text is mis-read
+    as the test's business value → a fabricated divergence — a green-wash the
+    adversarial review caught).  Gate:
+      * numeric: requires the value-oracle "unexpected value … received N" phrase;
+      * string:  requires the "Received string" marker AND the value-oracle signature
+        ("value oracle") AND explicitly EXCLUDES the env-pin marker.
+    """
     if not error_message:
         return ""
     low = error_message.lower()
+    if "env-pin:" in low:                       # env-assertion failure — NOT a value
+        return ""
     m = _RECEIVED_NUM_RE.search(error_message)
     if m and _UNEXPECTED_VALUE in low:
         return m.group(1)
     m2 = _RECEIVED_STR_RE.search(error_message)
-    if m2:
+    if m2 and "value oracle" in low:            # a value-oracle toContainText, not env-pin/outcome
         return m2.group(1).strip()
     return ""
 
@@ -81,6 +91,7 @@ def compute_parity(records: Iterable[Mapping[str, Any]], *, tolerance: float = 0
             "environment": env,
             "verdict": str(r.get("verdict") or ""),
             "observed": str(r.get("observed") or "").strip(),
+            "failed": bool(r.get("failed")),
         })
 
     tests: list[dict] = []
@@ -105,6 +116,12 @@ def compute_parity(records: Iterable[Mapping[str, Any]], *, tolerance: float = 0
             if differ:
                 status = "diverged"
                 detail = "; ".join(f"{e}={grounded[e]}" for e in sorted(grounded))
+            elif any(by_env[e].get("failed") for e in grounded):
+                # grounded values are equal but BOTH came from FAILURES (v1 persists a
+                # value only on failure) → two runs broken the SAME way, NOT a clean
+                # match. Never report a green "match" for two failing runs.
+                status = "both_failed"
+                detail = "; ".join(f"{e}={grounded[e]}(failed)" for e in sorted(grounded))
             else:
                 status = "match"
         elif len(set(labels.values())) > 1:
@@ -137,7 +154,11 @@ async def compute_env_parity(db, *, artifact_id: str, tenant_id: str) -> dict:
     """
     from sqlalchemy import select
     from nexus_sdk.db.models import E2ETestRunRow, E2ETestRunStepRow
-    from .test_runs import classify_failure
+    from .test_runs import (
+        _FAIL_STATUSES,  # the run-step fail vocabulary (frozen)
+        classify_failure,
+        outcome_contradicted_from_error,
+    )
 
     rows = (await db.execute(
         select(E2ETestRunStepRow, E2ETestRunRow)
@@ -146,24 +167,34 @@ async def compute_env_parity(db, *, artifact_id: str, tenant_id: str) -> dict:
             E2ETestRunStepRow.artifact_id == artifact_id,
             E2ETestRunStepRow.tenant_id == tenant_id,
         )
+        # deterministic "latest per env wins" — oldest first so the last write is newest.
+        .order_by(E2ETestRunRow.started_at.asc())
     )).all()
 
     records: list[dict] = []
     for step, run in rows:
         err = getattr(step, "error_message", "") or ""
+        status = getattr(step, "status", "") or ""
+        failed = status in _FAIL_STATUSES
+        # Re-derive the verdict through the FROZEN reducer with its REAL contract
+        # (keyword-only: failed / is_flaky / selector_drifted / bbox_drifted /
+        # outcome_contradicted / error_message) — exactly as oracle_scorecard does.
         verdict = classify_failure(
-            status=getattr(step, "status", ""),
-            selector=getattr(step, "selector", "") or "",
+            failed=failed,
+            is_flaky=bool(getattr(step, "is_flaky", False)),
+            selector_drifted=bool(getattr(step, "selector_drift_observed", False)),
+            bbox_drifted=False,
+            outcome_contradicted=outcome_contradicted_from_error(err),
             error_message=err,
         )
         env = (getattr(run, "environment", "") or "").strip()
-        # a stronger per-profile axis when the run was tagged with one
         env_pid = str((getattr(run, "metadata_json", {}) or {}).get("env_profile_id") or "").strip()
         records.append({
             "test_id": getattr(step, "test_case_id", "") or "",
             "scenario_id": getattr(step, "scenario_id", "") or "",
             "environment": env_pid or env,
             "verdict": getattr(verdict, "label", "") or "",
+            "failed": failed,
             "observed": observed_value_from_error(err),
         })
     result = compute_parity(records)

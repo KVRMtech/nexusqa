@@ -551,11 +551,23 @@ def _env_assertion_lines(env_assertion) -> list[str]:
     selector = str(env_assertion.get("selector") or "").strip()
     expect_text = str(env_assertion.get("expect_text") or "").strip()
     if url_pattern:
+        # toHaveURL is ALWAYS dispositive (the reducer never heals it) → real_regression.
         out.append(f"await expect(page).toHaveURL(new RegExp('{js_str(url_pattern)}')); "
-                   "// PROVEN env-assertion: on the intended environment")
+                   "// ENV-PIN: on the intended environment (RED on wrong env)")
     if selector and expect_text:
-        out.append(f"await expect(page.locator('{js_str(selector)}')).toContainText('{js_str(expect_text)}'); "
-                   "// PROVEN env-assertion: on the intended environment")
+        # A plain toContainText fails as heal-able selector_drift when the banner is
+        # ABSENT (wrong env lacks it) → a mis-pinned run could be healed GREEN. So we
+        # read the banner (or '' when absent) and throw a message carrying BOTH markers
+        # the FROZEN reducer keys on (`toContainText` + `Received string:`) so a WRONG
+        # OR ABSENT env is a real_regression, never heal-able. The `env-pin:` marker
+        # keeps env_parity from mis-reading the banner text as a business value.
+        out.append(
+            "await (async () => { const __t = (await page.locator('"
+            + js_str(selector) + "').first().textContent().catch(() => '')) || ''; "
+            + "if (!__t.includes('" + js_str(expect_text) + "')) throw new Error("
+            + "'env-pin: wrong environment — toContainText expected \\\"" + js_str(expect_text)
+            + "\\\" but Received string: \\\"' + (__t || '(banner absent)') + '\\\"'); })(); "
+            "// ENV-PIN: on the intended environment (RED on wrong/absent env)")
     return out
 
 
@@ -563,8 +575,7 @@ def _action_lines(step, field_meta: dict, parametrize: bool = False,
                   reanchor: dict | None = None, visual: dict | None = None,
                   interaction: dict | None = None, nav_override: str = "",
                   nav_recover: bool = False,
-                  autonomous_resolve: bool = False,
-                  env_assertion: dict | None = None) -> list[str]:
+                  autonomous_resolve: bool = False) -> list[str]:
     """Kind-aware Playwright lines for one (observed) step.
 
     When `parametrize` is set, navigation targets a path resolved against
@@ -667,9 +678,6 @@ def _action_lines(step, field_meta: dict, parametrize: bool = False,
             target = _rel_path(url) if (parametrize and not nav_override) else url
             out.append(f"await page.goto('{js_str(target)}'); // entry navigation only")
             out.append("await __nxSettle(page); // bounded settle: dcl + visible loading indicator only")
-            # Multi-env: HARD env-pin assertion right after the entry nav (default-off;
-            # byte-identical when the case has no env_assertion). RED if wrong env.
-            out.extend(_env_assertion_lines(env_assertion))
         else:
             path = url_path(url)
             prov = (observed.get("provenance") or "").strip().lower()
@@ -1131,9 +1139,10 @@ def compile_case(tc, field_meta: dict | None = None, *, parametrize: bool = Fals
     _expected_outcome = (getattr(tc, "expected_outcome", "") or "").strip()
     if _expected_outcome:
         out.append(f"// Expected outcome: {_expected_outcome}")
-    # Multi-env — HARD env-pin assertion emitted right after the entry navigation
-    # (threaded into _action_lines). DEFAULT-OFF: None ⇒ byte-identical.
+    # Multi-env — HARD env-pin assertion emitted ONCE after the first step.
+    # DEFAULT-OFF: None ⇒ byte-identical.
     _env_assertion = getattr(tc, "env_assertion", None)
+    _env_pin_done = False
     # ANSWERS P1 — business-value oracle. A case may carry expected OUTCOMES
     # (attached at generate from the client's answer_key); compile them into
     # grounded assertions. DEFAULT-OFF: a case with no value_assertions leaves
@@ -1288,10 +1297,17 @@ def compile_case(tc, field_meta: dict | None = None, *, parametrize: bool = Fals
                                   interaction=(interactions or {}).get(n),
                                   nav_override=(nav_overrides or {}).get(n) or "",
                                   nav_recover=bool((nav_recovers or {}).get(n)),
-                                  autonomous_resolve=autonomous_resolve,
-                                  env_assertion=_env_assertion):
+                                  autonomous_resolve=autonomous_resolve):
             out.append(f"    {line}")
         out.append("  });")
+        # Multi-env HARD env-pin — emitted ONCE, right after the FIRST step completes,
+        # regardless of the step's action label (fixes the "only on 'Open '" gap). A
+        # wrong/absent env fails RED (real_regression), never heal-able. DEFAULT-OFF:
+        # no env_assertion ⇒ nothing emitted ⇒ byte-identical.
+        if _env_assertion and not _env_pin_done:
+            for _pl in _env_assertion_lines(_env_assertion):
+                out.append(f"  {_pl}")
+            _env_pin_done = True
 
         if (consent_present and not consent_emitted
                 and verb == "navigate" and action.startswith("Open ")):

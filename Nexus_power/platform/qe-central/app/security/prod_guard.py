@@ -82,25 +82,32 @@ def resolve_effective_fences(
 
     Multi-env safety (Phase 2): the SAME learned flow may BIND a disposable policy
     in dev but must be READ-ONLY in prod.  The env profile's fences overlay the
-    app's; irreversible verbs UNION; then PROD is HARD-FORCED fail-closed
-    (``allow_submit=False``) regardless of anything a profile claims — a ``prod``
-    environment can NEVER drive an irreversible/mutating action, even if the
-    profile were mis-attested.  Pure + unit-testable.
+    app's; irreversible verbs UNION; then ``allow_submit`` is FAIL-CLOSED — honoured
+    ONLY when ``env_kind`` is EXPLICITLY a known non-prod kind (disposable/staging).
+    Anything else — 'prod', 'production', an unknown label, or a blank/unattested
+    ``env_kind`` — forces ``allow_submit=False`` (a mislabeled/unattested prod env
+    can never stay mutable — the fail-OPEN the adversarial review caught).
 
-    Unset env profile (``env_fences`` empty/None) resolves to the app fences
-    BYTE-FOR-BYTE — today's single-env behaviour is unchanged.
+    With an EXPLICIT non-prod ``env_kind`` and no env fences, the non-safety keys
+    pass through unchanged; single-env runs never reach this resolver.
     """
     eff = dict(app_fences or {})
     if env_fences:
         for k, v in env_fences.items():
             if v is not None:
                 eff[k] = v
-    verbs = set((app_fences or {}).get("irreversible_verbs_extra") or [])
-    verbs |= set((env_fences or {}).get("irreversible_verbs_extra") or [])
-    if verbs:
-        eff["irreversible_verbs_extra"] = sorted(verbs)
-    if str(env_kind or "").strip().lower() == ENV_KIND_PROD:
-        eff["allow_submit"] = False  # prod is never mutable — the hard safety override
+    app_verbs = (app_fences or {}).get("irreversible_verbs_extra") or []
+    env_verbs = (env_fences or {}).get("irreversible_verbs_extra") or []
+    if env_verbs:  # only rewrite when the env actually contributes verbs (byte-stable)
+        eff["irreversible_verbs_extra"] = sorted(set(app_verbs) | set(env_verbs))
+    # FAIL-CLOSED submit gate: allow_submit is honoured ONLY when the env is
+    # EXPLICITLY a known non-prod kind (disposable/staging). 'prod', 'production',
+    # 'PRD', an unrecognized label, or a BLANK/unset env_kind ALL force allow_submit
+    # off — a mislabeled or unattested prod env can never stay mutable (the fail-OPEN
+    # the adversarial review caught). Single-env runs never reach this resolver, so
+    # their app-level fences are unchanged.
+    if str(env_kind or "").strip().lower() not in NON_PROD_ENV_KINDS:
+        eff["allow_submit"] = False
     return eff
 
 # ── Environment gating (NEXUS_ENV; default development) ─────────────────────

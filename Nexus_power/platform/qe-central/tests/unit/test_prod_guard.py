@@ -345,3 +345,12 @@ def test_prod_override_wins_over_verbs_and_overlay():
     assert eff["allow_submit"] is False        # prod hard override
     assert eff["max_rps"] == 9.0               # non-safety overlays still apply
     assert eff["irreversible_verbs_extra"] == ["bind"]
+
+
+def test_prod_override_fail_closed_on_mislabeled_or_blank_env_kind():
+    # 'production' (not the literal 'prod'), a blank kind, and unknown labels ALL
+    # force allow_submit off — a mislabeled/unattested prod env can never stay mutable.
+    for kind in ["production", "PRD", "", "prod-us", "unknown", "PROD"]:
+        eff = resolve_effective_fences(
+            {"allow_submit": True}, {"allow_submit": True}, env_kind=kind)
+        assert eff["allow_submit"] is False, f"env_kind={kind!r} should fail closed"

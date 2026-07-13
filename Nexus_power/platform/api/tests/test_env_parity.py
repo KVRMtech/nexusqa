@@ -72,3 +72,30 @@ def test_tolerant_on_garbage():
     assert compute_parity([]) == {
         "tests": [], "environments": [], "diverged": 0, "compared": 0, "incomparable": 0}
     assert compute_parity([None, "x", {"no_env": 1}])["tests"] == []
+
+
+# ── regression tests for the adversarial findings (P1, P2) ──────────────────
+
+def test_env_pin_error_is_not_read_as_a_business_value():
+    # P1: an env-pin failure carries "Received string:" but is NOT a value oracle —
+    # mis-reading it fabricates a divergence. Must return '' (the 'env-pin:' marker).
+    err = ('env-pin: wrong environment — toContainText expected "Environment: UAT" '
+           'but Received string: "Environment: PROD"')
+    assert observed_value_from_error(err) == ""
+
+
+def test_only_value_oracle_string_errors_yield_a_value():
+    # a value-oracle toContainText mismatch DOES carry a value (has 'value oracle')
+    assert observed_value_from_error('value oracle: toContainText Received string: "Preferred"') == "Preferred"
+    # an outcome-region toBeVisible failure ("Received: hidden") does NOT
+    assert observed_value_from_error("Expected: visible Received: hidden") == ""
+
+
+def test_two_failing_runs_with_equal_values_are_both_failed_not_match():
+    # P2: two runs that FAILED with the same grounded value are both broken — never
+    # a clean "match" (the green-wash of an unmeasured axis).
+    out = compute_parity([
+        {"test_id": "t", "environment": "dev", "verdict": "real_regression", "observed": "72.0", "failed": True},
+        {"test_id": "t", "environment": "prod", "verdict": "real_regression", "observed": "72.0", "failed": True},
+    ])
+    assert out["tests"][0]["status"] == "both_failed" and out["diverged"] == 0

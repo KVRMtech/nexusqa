@@ -89,8 +89,11 @@ class ExploreRequest(BaseModel):
     cookies: list[dict[str, Any]] = Field(default_factory=list)
     extra_http_headers: dict[str, str] = Field(default_factory=dict)
     http_credentials: Optional[dict[str, Any]] = None
-    #: env_assertion {selector,expect_text}|{url_pattern}: proven read-only at crawl
-    #: start; a mismatch STOPS the crawl (never a silently-empty green artifact).
+    #: env_assertion {selector,expect_text}|{url_pattern} for the reference env. NOTE:
+    #: crawl-time enforcement is not yet wired (the RUN path enforces it via the hard
+    #: compiler env-pin); at crawl the fail-closed routing-cookie set (above) is the
+    #: guard against landing on the wrong env. Carried here for when the crawl-side
+    #: check lands.
     env_assertion: Optional[dict[str, Any]] = None
 
 
@@ -321,12 +324,13 @@ async def _run_job(
             context = await browser.new_context(**_ctx_kwargs)
             context.set_default_timeout(_ACTION_TIMEOUT_MS)
             if req.cookies:  # routing cookies (Gloo/canary) — cookies are a method call
-                try:
-                    await context.add_cookies(list(req.cookies))
-                    logger.info("qec.explorer.env_cookies_set crawl_id=%s n=%d",
-                                req.crawl_id, len(req.cookies))
-                except Exception as exc:
-                    logger.warning("qec.explorer.env_cookies_failed error=%s", str(exc)[:200])
+                # FAIL-CLOSED: if the env routing cookie can't be set, the crawl must
+                # NOT proceed cookieless — that would land on the DEFAULT env (often
+                # prod) and green-wash a wrong-env baseline every later run rebinds.
+                # Abort honestly instead (the _run_job try/finally records a failure).
+                await context.add_cookies(list(req.cookies))
+                logger.info("qec.explorer.env_cookies_set crawl_id=%s n=%d",
+                            req.crawl_id, len(req.cookies))
             page = await context.new_page()
             port = PlaywrightBrowserPort(page, context)
 

@@ -262,6 +262,25 @@ async def _require_app(session, tenant_id: str, app_id: str) -> ClientAppRow:
     return row
 
 
+def _validated_env_assertion(env_assertion: dict | None) -> dict:
+    """Validate an env_assertion at WRITE time. It MUST be able to produce a usable
+    HARD env-pin — a ``url_pattern`` OR both ``selector`` + ``expect_text`` — else the
+    profile would silently run UN-pinned (a green-wash the buyer wouldn't see). Empty
+    ``{}`` is allowed (no pin requested); a partial/mis-keyed one is rejected."""
+    ea = dict(env_assertion or {})
+    if not ea:
+        return ea
+    has_url = bool(str(ea.get("url_pattern") or "").strip())
+    has_dom = bool(str(ea.get("selector") or "").strip()) and bool(str(ea.get("expect_text") or "").strip())
+    if not (has_url or has_dom):
+        raise HTTPException(
+            status_code=422,
+            detail="env_assertion must set url_pattern OR both selector+expect_text "
+                   "(a partial assertion would run un-pinned)",
+        )
+    return ea
+
+
 def _env_public_view(row: ClientAppEnvironmentRow) -> dict:
     """Serialise an Environment Profile WITHOUT secret material (creds_blob popped;
     ``has_credentials`` flag only) — mirrors :func:`_public_view`."""
@@ -524,7 +543,12 @@ async def create_environment(
     if payload.credentials:
         creds_blob = await _encrypt_credentials(
             request, tenant_id, app_id, payload.credentials, aad_id=env_id)
+    # Validate base_url the SAME way create_app does (absolute http(s) — SSRF/scheme
+    # guard) when provided; empty ⇒ inherits the app's base_url at resolve time.
     base_url = (payload.base_url or "").strip()
+    if base_url:
+        base_url = _validated_base_url(base_url)
+    env_assertion = _validated_env_assertion(payload.env_assertion)
     async with tenant_scoped_qec_session(tenant_id) as session:
         await _require_app(session, tenant_id, app_id)   # 404 if app absent/foreign
         row = ClientAppEnvironmentRow(
@@ -539,7 +563,7 @@ async def create_environment(
             data_overrides=dict(payload.data_overrides or {}),
             fences=dict(payload.fences or {}),
             env_attestation=dict(payload.env_attestation or {}),
-            env_assertion=dict(payload.env_assertion or {}),
+            env_assertion=env_assertion,
             creds_blob=creds_blob,
             status="active",
         )
@@ -594,7 +618,8 @@ async def update_environment(
         if payload.name is not None:
             row.name = payload.name.strip()[:200]
         if payload.base_url is not None:
-            row.base_url = payload.base_url.strip()
+            _bu = payload.base_url.strip()
+            row.base_url = _validated_base_url(_bu) if _bu else ""
             row.canonical_host = _derive_canonical_host(row.base_url, "") if row.base_url else ""
         if payload.cookies is not None:
             row.cookies = list(payload.cookies)
@@ -607,7 +632,7 @@ async def update_environment(
         if payload.env_attestation is not None:
             row.env_attestation = dict(payload.env_attestation)
         if payload.env_assertion is not None:
-            row.env_assertion = dict(payload.env_assertion)
+            row.env_assertion = _validated_env_assertion(payload.env_assertion)
         if payload.credentials is not None:
             row.creds_blob = creds_blob
         if payload.status is not None:
