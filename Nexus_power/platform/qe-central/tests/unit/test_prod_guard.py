@@ -299,3 +299,49 @@ def test_cycle_router_and_driver_are_wired_to_the_guard():
     assert "assert_crawlable" in inspect.getsource(drv.create_cycle)
     # The daemon skips a non-onboarded app cleanly (never crashes the tick).
     assert "OnboardingRefused" in inspect.getsource(drv._fire_cycle)
+
+
+# ── resolve_effective_fences (multi-env Phase 2) ───────────────────────────
+from app.security.prod_guard import resolve_effective_fences
+
+
+def test_fences_unset_env_is_byte_identical_to_app():
+    app = {"allow_submit": True, "max_rps": 2.0, "blackout_windows": ["x"]}
+    assert resolve_effective_fences(app, None, env_kind="disposable") == app
+    assert resolve_effective_fences(app, {}, env_kind="disposable") == app
+
+
+def test_prod_forces_read_only_even_if_profile_claims_submit():
+    # a mis-attested prod profile that CLAIMS allow_submit=true is still forced off
+    eff = resolve_effective_fences(
+        {"allow_submit": True}, {"allow_submit": True}, env_kind="prod")
+    assert eff["allow_submit"] is False
+
+
+def test_disposable_env_may_bind_when_allowed():
+    eff = resolve_effective_fences(
+        {"allow_submit": False}, {"allow_submit": True}, env_kind="disposable")
+    assert eff["allow_submit"] is True   # env overlay enables it in a disposable env
+
+
+def test_env_overlay_overrides_app_fences():
+    eff = resolve_effective_fences(
+        {"max_rps": 1.0, "allow_submit": True}, {"max_rps": 5.0}, env_kind="staging")
+    assert eff["max_rps"] == 5.0 and eff["allow_submit"] is True
+
+
+def test_irreversible_verbs_union_across_app_and_env():
+    eff = resolve_effective_fences(
+        {"irreversible_verbs_extra": ["bind"]},
+        {"irreversible_verbs_extra": ["charge", "bind"]}, env_kind="staging")
+    assert eff["irreversible_verbs_extra"] == ["bind", "charge"]
+
+
+def test_prod_override_wins_over_verbs_and_overlay():
+    eff = resolve_effective_fences(
+        {"allow_submit": True, "max_rps": 1.0},
+        {"allow_submit": True, "max_rps": 9.0, "irreversible_verbs_extra": ["bind"]},
+        env_kind="prod")
+    assert eff["allow_submit"] is False        # prod hard override
+    assert eff["max_rps"] == 9.0               # non-safety overlays still apply
+    assert eff["irreversible_verbs_extra"] == ["bind"]

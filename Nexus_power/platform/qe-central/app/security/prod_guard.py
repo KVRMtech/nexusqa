@@ -74,6 +74,35 @@ ENV_KIND_PROD = "prod"
 #: an attested target (a crawl can never touch a production environment).
 NON_PROD_ENV_KINDS = frozenset({ENV_KIND_DISPOSABLE, ENV_KIND_STAGING})
 
+
+def resolve_effective_fences(
+    app_fences: dict | None, env_fences: dict | None, *, env_kind: str,
+) -> dict:
+    """The EFFECTIVE fences for a crawl/run against a specific Environment Profile.
+
+    Multi-env safety (Phase 2): the SAME learned flow may BIND a disposable policy
+    in dev but must be READ-ONLY in prod.  The env profile's fences overlay the
+    app's; irreversible verbs UNION; then PROD is HARD-FORCED fail-closed
+    (``allow_submit=False``) regardless of anything a profile claims — a ``prod``
+    environment can NEVER drive an irreversible/mutating action, even if the
+    profile were mis-attested.  Pure + unit-testable.
+
+    Unset env profile (``env_fences`` empty/None) resolves to the app fences
+    BYTE-FOR-BYTE — today's single-env behaviour is unchanged.
+    """
+    eff = dict(app_fences or {})
+    if env_fences:
+        for k, v in env_fences.items():
+            if v is not None:
+                eff[k] = v
+    verbs = set((app_fences or {}).get("irreversible_verbs_extra") or [])
+    verbs |= set((env_fences or {}).get("irreversible_verbs_extra") or [])
+    if verbs:
+        eff["irreversible_verbs_extra"] = sorted(verbs)
+    if str(env_kind or "").strip().lower() == ENV_KIND_PROD:
+        eff["allow_submit"] = False  # prod is never mutable — the hard safety override
+    return eff
+
 # ── Environment gating (NEXUS_ENV; default development) ─────────────────────
 ENV_VAR = "NEXUS_ENV"
 #: Environments in which an explicit per-app test-bypass flag is honoured.  The
