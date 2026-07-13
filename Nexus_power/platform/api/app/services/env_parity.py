@@ -154,11 +154,8 @@ async def compute_env_parity(db, *, artifact_id: str, tenant_id: str) -> dict:
     """
     from sqlalchemy import select
     from nexus_sdk.db.models import E2ETestRunRow, E2ETestRunStepRow
-    from .test_runs import (
-        _FAIL_STATUSES,  # the run-step fail vocabulary (frozen)
-        classify_failure,
-        outcome_contradicted_from_error,
-    )
+    from .oracle_scorecard import _FAIL_STATUSES  # the run-step fail vocabulary
+    from .test_runs import classify_failure, outcome_contradicted_from_error
 
     rows = (await db.execute(
         select(E2ETestRunStepRow, E2ETestRunRow)

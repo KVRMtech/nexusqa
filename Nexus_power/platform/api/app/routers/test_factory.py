@@ -818,6 +818,17 @@ async def _active_edited_map(session, *, artifact_id: str) -> dict:
     }
 
 
+def _env_run_label(env_context: dict | None) -> str:
+    """The run's ``environment`` label for the cross-env parity axis — the Environment
+    Profile name when a profile is bound, else the default runner label (so today's
+    single-env runs are unchanged)."""
+    if isinstance(env_context, dict):
+        name = str(env_context.get("name") or "").strip()
+        if name:
+            return name[:100]
+    return "nexus-runner"
+
+
 def _with_env_assertion(tc, env_assertion: dict):
     """Return the case with ``env_assertion`` attached (extra field → compile_case
     reads it). One env per run, so the same HARD env-pin rides every case."""
@@ -1188,7 +1199,7 @@ async def heal_step(
     env = {
         "NEXUS_ENDPOINT": _INGEST_BASE, "NEXUS_TOKEN": token or "",
         "NEXUS_ARTIFACT_ID": artifact_id, "NEXUS_RUN_ID": run_id,
-        "NEXUS_BASE_URL": base_url, "NEXUS_ENV": "nexus-runner",
+        "NEXUS_BASE_URL": base_url, "NEXUS_ENV": _env_run_label(body.env_context),
     }
     try:
         await runner_client.run_live(files, env)            # 202; raises on 409
@@ -2935,7 +2946,10 @@ async def playwright_run(
         "NEXUS_ARTIFACT_ID": artifact_id,
         "NEXUS_RUN_ID": run_id,
         "NEXUS_BASE_URL": base_url,
-        "NEXUS_ENV": "nexus-runner",
+        # Multi-env: tag the run with its Environment Profile identity so cross-env
+        # parity can group by it (else every run collapses to one env). Falls back to
+        # the deploy label when no profile is bound.
+        "NEXUS_ENV": _env_run_label(body.env_context),
     }
     await _register_job(run_id, {
         "run_id": run_id, "status": "running", "artifact_id": artifact_id,
@@ -2998,7 +3012,7 @@ async def playwright_run_live(
     env = {
         "NEXUS_ENDPOINT": _INGEST_BASE, "NEXUS_TOKEN": token or "",
         "NEXUS_ARTIFACT_ID": artifact_id, "NEXUS_RUN_ID": run_id,
-        "NEXUS_BASE_URL": base_url, "NEXUS_ENV": "nexus-runner",
+        "NEXUS_BASE_URL": base_url, "NEXUS_ENV": _env_run_label(body.env_context),
     }
     try:
         await runner_client.run_live(files, env)         # 202; raises on 409
