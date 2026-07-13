@@ -768,6 +768,10 @@ class RunConfigRequest(BaseModel):
     workers: int | None = None
     retries: int | None = None
     autonomous: bool = False  # AUTOPILOT (Mode B): drive+prove UNPROVEN steps + auto-apply the grounded agentic analyst, no human
+    # Multi-env: a RESOLVED Environment Profile from qe-central (base_url, cookies,
+    # data_overrides, env_assertion, ...). qe-central owns app_environments + seals
+    # per-env creds; platform-api only APPLIES the resolved context. None ⇒ unchanged.
+    env_context: dict | None = None
 
 
 class SaveVersionRequest(BaseModel):
@@ -814,12 +818,54 @@ async def _active_edited_map(session, *, artifact_id: str) -> dict:
     }
 
 
+def _with_env_assertion(tc, env_assertion: dict):
+    """Return the case with ``env_assertion`` attached (extra field → compile_case
+    reads it). One env per run, so the same HARD env-pin rides every case."""
+    try:
+        return type(tc)(**{**tc.model_dump(), "env_assertion": dict(env_assertion)})
+    except Exception:
+        return tc
+
+
+def _norm_env_cookie(c: dict) -> dict:
+    """Normalize an Environment Profile routing cookie into a valid Playwright
+    storageState cookie (defaults for the optional fields)."""
+    return {
+        "name": str(c.get("name", "")), "value": str(c.get("value", "")),
+        "domain": str(c.get("domain", "")), "path": str(c.get("path") or "/"),
+        "expires": c.get("expires", -1), "httpOnly": bool(c.get("httpOnly", False)),
+        "secure": bool(c.get("secure", False)), "sameSite": c.get("sameSite", "Lax"),
+    }
+
+
+def _merge_env_cookies(storage_state: str | None, cookies: list) -> str:
+    """Merge env routing cookies into the run's storageState JSON (→ vkpower.auth.json,
+    which the config already self-detects). Preserves any captured auth session; the
+    env routing cookies (Gloo/canary) are added so the run lands on the target env."""
+    try:
+        ss = json.loads(storage_state) if storage_state and storage_state.strip() else {}
+    except Exception:
+        ss = {}
+    if not isinstance(ss, dict):
+        ss = {}
+    existing = ss.get("cookies") if isinstance(ss.get("cookies"), list) else []
+    merged: dict = {(c.get("name"), c.get("domain"), c.get("path", "/")): c for c in existing}
+    for c in cookies or ():
+        if isinstance(c, dict) and c.get("name"):
+            nc = _norm_env_cookie(c)
+            merged[(nc["name"], nc["domain"], nc["path"])] = nc
+    ss["cookies"] = list(merged.values())
+    ss.setdefault("origins", ss.get("origins") or [])
+    return json.dumps(ss)
+
+
 def _configured_files(cases, field_meta, base_url: str, data: dict,
                       data_by_test: dict | None = None,
                       browsers=None, headed: bool = False,
                       workers=None, retries=None,
                       edited: dict | None = None,
-                      storage_state: str | None = None) -> dict:
+                      storage_state: str | None = None,
+                      env_context: dict | None = None) -> dict:
     """Parametrized bundle + nexus.config.json (chosen base URL) + vkpower.data.json
     + run README. Shared by the download and the server-side runner so both run
     exactly the same thing. Browser projects / headed / workers / retries are
@@ -830,7 +876,24 @@ def _configured_files(cases, field_meta, base_url: str, data: dict,
     `edited` = {test_id: {"spec_path","script_source"}} overrides the compiled
     spec for any test that has an active edited version (Phase C). Path keying is
     identical to compile_manifest, so the owned source lands where the runner
-    expects it; un-edited tests keep the deterministic compiler output."""
+    expects it; un-edited tests keep the deterministic compiler output.
+
+    `env_context` (multi-env) = a RESOLVED Environment Profile from qe-central
+    ({base_url, cookies, data_overrides, env_assertion, ...}). None ⇒ byte-identical
+    to a single-env run. When present it REBINDS the same flow: env base_url,
+    data_overrides merged into the run data, the routing cookies folded into the
+    run's storageState, and the HARD env-assertion attached to every case (RED if
+    the routing landed on the wrong env)."""
+    if env_context:
+        if env_context.get("base_url"):
+            base_url = str(env_context["base_url"]).strip()
+        if env_context.get("data_overrides"):
+            data = {**(data or {}), **dict(env_context["data_overrides"])}
+        _ea = env_context.get("env_assertion")
+        if isinstance(_ea, dict) and _ea:
+            cases = [_with_env_assertion(tc, _ea) for tc in cases]
+        if env_context.get("cookies"):
+            storage_state = _merge_env_cookies(storage_state, env_context["cookies"])
     files = compile_project(
         cases, field_meta, parametrize=True, base_url_default=(base_url or "").strip(),
         projects=browsers, headed=bool(headed), workers=workers,
@@ -2852,6 +2915,8 @@ async def playwright_run(
         raise HTTPException(status_code=404, detail="no matching active test cases to run")
 
     base_url = (body.base_url or "").strip()
+    if body.env_context and body.env_context.get("base_url"):
+        base_url = str(body.env_context["base_url"]).strip()  # env profile base_url wins (SSRF-guarded)
     storage_state = await _run_storage_state(request, artifact_id, tenant_id)
     # The Nexus runner container is headless (Xvfb-free); honor browsers/workers/
     # retries but force headless regardless of the requested mode.
@@ -2861,6 +2926,7 @@ async def playwright_run(
         browsers=body.browsers, headed=False,
         workers=body.workers, retries=body.retries,
         edited=edited_map, storage_state=storage_state,
+        env_context=body.env_context,
     )
     run_id = uuid.uuid4().hex
     env = {
@@ -2916,6 +2982,8 @@ async def playwright_run_live(
         raise HTTPException(status_code=404, detail="no matching active test cases to run")
 
     base_url = (body.base_url or "").strip()
+    if body.env_context and body.env_context.get("base_url"):
+        base_url = str(body.env_context["base_url"]).strip()  # env profile base_url wins (SSRF-guarded)
     storage_state = await _run_storage_state(request, artifact_id, tenant_id)
     files = _configured_files(
         cases, build_field_meta(visits), base_url, body.data,
@@ -2924,6 +2992,7 @@ async def playwright_run_live(
         headed=True,                                     # the live difference
         workers=1,                                       # serialize onto one screen
         retries=body.retries, edited=edited_map, storage_state=storage_state,
+        env_context=body.env_context,
     )
     run_id = uuid.uuid4().hex
     env = {
