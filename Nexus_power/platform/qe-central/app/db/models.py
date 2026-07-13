@@ -25,6 +25,7 @@ from sqlalchemy import (
     LargeBinary,
     String,
     Text,
+    UniqueConstraint,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -80,6 +81,61 @@ class ClientAppRow(QecBase):
     __table_args__ = (
         Index("ix_client_apps_tenant_host", "tenant_id", "canonical_host"),
         Index("ix_client_apps_tenant_status", "tenant_id", "status"),
+    )
+
+
+class ClientAppEnvironmentRow(QecBase):
+    """One named Environment Profile for a client app (multi-env, crawl-once/run-many).
+
+    An app is crawled ONCE against a reference env → one env-invariant flow + one
+    approved baseline.  Each environment (dev/test/uat/prod) is then a run-time
+    REBIND of that same flow: this row carries the env-specific ``base_url`` +
+    routing ``cookies``/``headers`` + ``data_overrides`` + per-env ``fences``
+    (``allow_submit`` etc.) + an ``env_assertion`` that fails a run CLOSED-to-RED
+    if it landed on the wrong environment.
+
+    ``creds_blob`` is an ``EnvelopeBlob.to_bytes()`` KMS envelope (AAD =
+    ``environment_id``) folding the env's login credentials + HTTP basic-auth +
+    any SECRET cookies/headers — never plaintext at rest, NULL when none.  Non-
+    secret routing cookies/headers live in the ``cookies``/``headers`` columns.
+    Soft-refs ``app_id`` (no hard FK — qec child convention).
+    """
+
+    __tablename__ = "app_environments"
+
+    environment_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    app_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    base_url: Mapped[str] = mapped_column(String(2000), nullable=False, default="")
+    canonical_host: Mapped[str] = mapped_column(String(500), nullable=False, default="")
+    # Non-secret routing cookies [{name,value,domain,path}] + headers {name:value}.
+    cookies: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    headers: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    # {data_key: value} run-time D['key'] overrides (env-specific valid test data).
+    data_overrides: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    # Per-env fence overrides (same shape as client_apps.fences); resolved over the
+    # app's fences + this env's env_kind at crawl/run time (prod ⇒ allow_submit off).
+    fences: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    # {env_kind prod|staging|disposable, attested_by, expires_at, ...} per env.
+    env_attestation: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    # {selector, expect_text} and/or {url_pattern} — the HARD proof a run landed on
+    # THIS env; a mismatch fails CLOSED to a RED real_regression (never green-wash).
+    env_assertion: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    # KMS envelope (AAD=environment_id): login creds + basic_auth + secret cookies/
+    # headers; NULL = none.
+    creds_blob: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="active")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utc_now,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utc_now, onupdate=_utc_now,
+    )
+
+    __table_args__ = (
+        Index("ix_app_environments_tenant_app", "tenant_id", "app_id"),
+        UniqueConstraint("tenant_id", "app_id", "name", name="uq_app_environments_name"),
     )
 
 

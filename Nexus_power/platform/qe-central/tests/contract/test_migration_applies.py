@@ -61,6 +61,8 @@ _EXPECTED_TABLES = {
     "crawl_seed_manifests", "repo_drift_reports",
     # Phase-7 — fleet provisioning (qec_002)
     "tenant_provisioning",
+    # Multi-env — Environment Profiles (qec_003)
+    "app_environments",
 }
 
 # Invariant-enforcing unique indexes/constraints.  The two PARTIAL indexes carry
@@ -76,6 +78,7 @@ _UNIQUE_INDEXES = {
 _UNIQUE_CONSTRAINTS = {
     "uq_change_events_app_dedupe",
     "uq_crawl_seed_manifests_universe",
+    "uq_app_environments_name",
 }
 
 
@@ -129,15 +132,15 @@ class TestMigrationAppliesCleanly:
     def test_schema_matches_the_design(self):
         head, tables, rls, policies, indexes, constraints = run(_fetch())
 
-        # ── alembic is exactly at the qec_002 head (qec_001 → qec_002) ──────
-        assert head == "qec_002", f"qecentral alembic head is {head!r}, expected 'qec_002'"
+        # ── alembic is exactly at the qec_003 head (… → qec_002 → qec_003) ──
+        assert head == "qec_003", f"qecentral alembic head is {head!r}, expected 'qec_003'"
 
-        # ── EXACTLY the 22 designed tables (no more, no fewer) ──────────────
+        # ── EXACTLY the 23 designed tables (no more, no fewer) ──────────────
         assert tables == _EXPECTED_TABLES, {
             "missing": sorted(_EXPECTED_TABLES - tables),
             "unexpected": sorted(tables - _EXPECTED_TABLES),
         }
-        assert len(_EXPECTED_TABLES) == 22
+        assert len(_EXPECTED_TABLES) == 23
 
         # ── every table: RLS enabled + FORCEd + a tenant_isolation policy ───
         for table in _EXPECTED_TABLES:

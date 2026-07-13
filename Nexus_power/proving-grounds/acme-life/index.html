@@ -57,6 +57,13 @@
   .actions{display:flex;gap:10px;margin-top:20px}
   .ok{color:var(--ok)} .muted{color:var(--soft);font-size:13px}
   .badge{display:inline-block;font-size:11px;font-weight:700;padding:3px 8px;border-radius:5px;background:#e8f5ee;color:var(--ok)}
+  /* Multi-env proving ground: the routing cookie ``acme_env`` selects the
+     environment; a MISSING cookie defaults to PROD (so a mis-pinned run lands on
+     prod — exactly the case env-assertion must catch). The banner is what an
+     env-assertion asserts; prod uses a diverged rate so cross-env parity has a
+     real difference to report. */
+  .env-banner{margin-left:12px;font-size:11px;font-weight:800;padding:3px 9px;border-radius:5px;background:#123a63;color:#fff;letter-spacing:.05em}
+  .env-banner[data-env="prod"]{background:#7a1f1f}
 </style>
 </head>
 <body>
@@ -64,6 +71,7 @@
   <div class="logo" aria-hidden="true">A</div>
   <b>Acme Life Insurance</b>
   <span class="tag">Term &amp; Whole Life · TX · FL · CA</span>
+  <span class="env-banner" id="env-banner" aria-label="Environment">Environment: —</span>
 </header>
 <nav aria-label="Primary">
   <a href="#/login" id="nav-login">Sign in</a>
@@ -94,10 +102,34 @@
     return u.get("break_over60")==="1" || localStorage.getItem("acme_break_over60")==="1";
   }
 
+  // Multi-env routing: the `acme_env` cookie selects the environment (dev/test/
+  // uat/prod). ?env= overrides it for manual testing. A MISSING cookie defaults to
+  // PROD — a mis-pinned run then silently lands on prod, which env-assertion catches.
+  function acmeEnv(){
+    var u = new URLSearchParams(location.search);
+    var q = (u.get("env")||"").toLowerCase();
+    if(q) return q;
+    var m = document.cookie.match(/(?:^|;\s*)acme_env=([^;]+)/);
+    var v = m ? decodeURIComponent(m[1]).toLowerCase() : "";
+    return (v==="dev"||v==="test"||v==="uat"||v==="prod") ? v : "prod";
+  }
+  // Rate multiplier per env. PROD carries a diverged (stale) rate table, so the
+  // SAME quote yields a different premium than dev/uat — a real, unintended
+  // difference for cross-env PARITY to surface.
+  function envRate(env){ return env==="prod" ? 0.96 : 1.0; }
+
+  function paintEnvBanner(){
+    var el = document.getElementById("env-banner"); if(!el) return;
+    var env = acmeEnv();
+    el.textContent = "Environment: " + env.toUpperCase();
+    el.setAttribute("data-env", env);
+  }
+
   // Base rates per $1k of coverage, per 10yr term band (synthetic).
   function premium(age, coverage, term, smoker){
     var base = 0.9 + Math.max(0,(age-25))*0.055 + (term>=20?0.35:0);
     if(smoker) base *= 1.8;
+    base *= envRate(acmeEnv());                       // env-diverged rate table
     return Math.round((coverage/1000)*base*100)/100 / 12; // monthly
   }
 
@@ -263,10 +295,12 @@
   });
 
   function render(){
+    paintEnvBanner();                                 // reflect the routed env every view
     var path = (location.hash.replace(/^#/,"") || "/login");
     (routes[path]||routes["/login"])();
   }
   window.addEventListener("hashchange",render);
+  paintEnvBanner();
   render();
 })();
 </script>

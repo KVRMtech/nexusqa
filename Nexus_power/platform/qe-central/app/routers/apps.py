@@ -18,13 +18,14 @@ from urllib.parse import urlparse
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from ..auth import require_auth, require_role
 from ..clients import platform_api, repo_intel
 from ..controlplane.scheduling.admission import ADMISSION
 from ..db import new_id, row_to_dict, tenant_scoped_qec_session, utc_now
 from ..db.controlplane_models import AppFingerprintRow
-from ..db.models import ClientAppRow
+from ..db.models import ClientAppEnvironmentRow, ClientAppRow
 from ..fleet import quota
 from ..services.brief_compiler import (
     BRIEF_SYSTEM_INSTRUCTION, build_prompt, ground_and_assemble, parse_proposal,
@@ -78,6 +79,40 @@ class AppUpdate(BaseModel):
     status: str | None = None
 
 
+class EnvCreate(BaseModel):
+    """One named Environment Profile (dev/test/uat/prod) for an app.
+
+    ``credentials`` folds the env's login + HTTP basic-auth + any SECRET cookies/
+    headers — envelope-encrypted at rest (AAD=environment_id), never echoed.
+    Non-secret routing ``cookies``/``headers`` are stored in the clear (they ARE
+    the env selector, e.g. a Gloo routing cookie)."""
+
+    name: str = Field(min_length=1, max_length=200)
+    base_url: str = Field(default="", max_length=2000)
+    cookies: list = Field(default_factory=list)          # [{name,value,domain,path}]
+    headers: dict = Field(default_factory=dict)           # {name: value}
+    credentials: dict | None = None                       # login + basic_auth + secrets
+    data_overrides: dict = Field(default_factory=dict)
+    fences: dict = Field(default_factory=dict)
+    env_attestation: dict = Field(default_factory=dict)
+    env_assertion: dict = Field(default_factory=dict)     # {selector,expect_text}|{url_pattern}
+
+
+class EnvUpdate(BaseModel):
+    """Partial update of an Environment Profile; every field optional."""
+
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    base_url: str | None = Field(default=None, max_length=2000)
+    cookies: list | None = None
+    headers: dict | None = None
+    credentials: dict | None = None
+    data_overrides: dict | None = None
+    fences: dict | None = None
+    env_attestation: dict | None = None
+    env_assertion: dict | None = None
+    status: str | None = None
+
+
 def _validated_base_url(base_url: str) -> str:
     """Require an absolute http(s) URL; return it normalised (stripped)."""
     url = (base_url or "").strip()
@@ -99,11 +134,14 @@ def _derive_canonical_host(base_url: str, explicit: str) -> str:
 
 async def _encrypt_credentials(
     request: Request, tenant_id: str, app_id: str, credentials: dict,
+    *, aad_id: str | None = None,
 ) -> bytes:
-    """Envelope-encrypt a credentials dict (AAD = app_id).
+    """Envelope-encrypt a credentials dict (AAD = ``aad_id`` or ``app_id``).
 
     REFUSES with 503 when the envelope service is unavailable — we never
-    store credentials in plaintext (auth_profiles.py:71-72 rule).
+    store credentials in plaintext (auth_profiles.py:71-72 rule).  ``aad_id``
+    lets an Environment Profile bind its blob to ``environment_id`` instead of
+    ``app_id`` (defaults to ``app_id`` → every existing caller unchanged).
     """
     envelope = getattr(request.app.state, "envelope_service", None)
     if envelope is None:
@@ -112,8 +150,9 @@ async def _encrypt_credentials(
             detail="encryption unavailable — refusing to store credentials in plaintext",
         )
     plaintext = json.dumps(credentials, sort_keys=True).encode("utf-8")
+    _aad = (aad_id or app_id).encode("utf-8")
     try:
-        blob = await envelope.encrypt(tenant_id, plaintext, aad=app_id.encode("utf-8"))
+        blob = await envelope.encrypt(tenant_id, plaintext, aad=_aad)
     except Exception as exc:
         logger.error(
             "qec.apps.creds_encrypt_failed",
@@ -220,6 +259,33 @@ async def _require_app(session, tenant_id: str, app_id: str) -> ClientAppRow:
     ).scalar_one_or_none()
     if row is None:
         raise HTTPException(status_code=404, detail="app not found")
+    return row
+
+
+def _env_public_view(row: ClientAppEnvironmentRow) -> dict:
+    """Serialise an Environment Profile WITHOUT secret material (creds_blob popped;
+    ``has_credentials`` flag only) — mirrors :func:`_public_view`."""
+    d = row_to_dict(row)
+    d.pop("creds_blob", None)
+    d["has_credentials"] = bool(row.creds_blob)
+    return d
+
+
+async def _require_env(
+    session, tenant_id: str, app_id: str, env_id: str,
+) -> ClientAppEnvironmentRow:
+    """Fetch one tenant-owned Environment Profile row (scoped to its app) or 404."""
+    row = (
+        await session.execute(
+            select(ClientAppEnvironmentRow).where(
+                ClientAppEnvironmentRow.environment_id == env_id,
+                ClientAppEnvironmentRow.app_id == app_id,
+                ClientAppEnvironmentRow.tenant_id == tenant_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        raise HTTPException(status_code=404, detail="environment not found")
     return row
 
 
@@ -439,3 +505,133 @@ async def compile_brief(
                "ungrounded": result.get("ungrounded")},
     )
     return result
+
+
+# ─────────────────────── Environment Profiles (multi-env) ───────────────────
+# An app is crawled ONCE against its reference env → one flow + one baseline.
+# Environment Profiles are named run-time REBINDS of that flow (dev/test/uat/prod):
+# base_url + routing cookies/headers + per-env fences + an env_assertion. Secrets
+# (login/basic-auth/secret cookies/headers) are KMS-sealed (AAD=environment_id).
+
+@router.post("/apps/{app_id}/environments", status_code=201)
+async def create_environment(
+    app_id: str, payload: EnvCreate, request: Request, user: dict = Depends(_MUTATE),
+) -> dict:
+    """Register an Environment Profile for an app (multi-env, crawl-once/run-many)."""
+    tenant_id = user["tenant_id"]
+    env_id = new_id()
+    creds_blob: bytes | None = None
+    if payload.credentials:
+        creds_blob = await _encrypt_credentials(
+            request, tenant_id, app_id, payload.credentials, aad_id=env_id)
+    base_url = (payload.base_url or "").strip()
+    async with tenant_scoped_qec_session(tenant_id) as session:
+        await _require_app(session, tenant_id, app_id)   # 404 if app absent/foreign
+        row = ClientAppEnvironmentRow(
+            environment_id=env_id,
+            tenant_id=tenant_id,
+            app_id=app_id,
+            name=payload.name.strip()[:200],
+            base_url=base_url,
+            canonical_host=_derive_canonical_host(base_url, "") if base_url else "",
+            cookies=list(payload.cookies or []),
+            headers=dict(payload.headers or {}),
+            data_overrides=dict(payload.data_overrides or {}),
+            fences=dict(payload.fences or {}),
+            env_attestation=dict(payload.env_attestation or {}),
+            env_assertion=dict(payload.env_assertion or {}),
+            creds_blob=creds_blob,
+            status="active",
+        )
+        session.add(row)
+        try:
+            await session.flush()
+        except IntegrityError:
+            raise HTTPException(status_code=409, detail="an environment with that name already exists")
+        result = _env_public_view(row)
+    logger.info("qec.apps.env_created",
+                extra={"tenant_id": tenant_id, "app_id": app_id, "environment_id": env_id,
+                       "name": row.name, "has_credentials": bool(creds_blob),
+                       "actor": user.get("sub", "")})
+    return result
+
+
+@router.get("/apps/{app_id}/environments")
+async def list_environments(app_id: str, user: dict = Depends(require_auth)) -> dict:
+    """List an app's Environment Profiles (no secret material)."""
+    tenant_id = user["tenant_id"]
+    async with tenant_scoped_qec_session(tenant_id) as session:
+        await _require_app(session, tenant_id, app_id)
+        rows = (await session.execute(
+            select(ClientAppEnvironmentRow)
+            .where(ClientAppEnvironmentRow.app_id == app_id,
+                   ClientAppEnvironmentRow.tenant_id == tenant_id)
+            .order_by(ClientAppEnvironmentRow.created_at.asc())
+        )).scalars().all()
+        return {"app_id": app_id, "environments": [_env_public_view(r) for r in rows]}
+
+
+@router.get("/apps/{app_id}/environments/{env_id}")
+async def get_environment(app_id: str, env_id: str, user: dict = Depends(require_auth)) -> dict:
+    tenant_id = user["tenant_id"]
+    async with tenant_scoped_qec_session(tenant_id) as session:
+        return _env_public_view(await _require_env(session, tenant_id, app_id, env_id))
+
+
+@router.patch("/apps/{app_id}/environments/{env_id}")
+async def update_environment(
+    app_id: str, env_id: str, payload: EnvUpdate, request: Request,
+    user: dict = Depends(_MUTATE),
+) -> dict:
+    """Partial update; ``credentials`` rotates the sealed blob (AAD=environment_id)."""
+    tenant_id = user["tenant_id"]
+    creds_blob: bytes | None = None
+    if payload.credentials is not None:
+        creds_blob = await _encrypt_credentials(
+            request, tenant_id, app_id, payload.credentials, aad_id=env_id)
+    async with tenant_scoped_qec_session(tenant_id) as session:
+        row = await _require_env(session, tenant_id, app_id, env_id)
+        if payload.name is not None:
+            row.name = payload.name.strip()[:200]
+        if payload.base_url is not None:
+            row.base_url = payload.base_url.strip()
+            row.canonical_host = _derive_canonical_host(row.base_url, "") if row.base_url else ""
+        if payload.cookies is not None:
+            row.cookies = list(payload.cookies)
+        if payload.headers is not None:
+            row.headers = dict(payload.headers)
+        if payload.data_overrides is not None:
+            row.data_overrides = dict(payload.data_overrides)
+        if payload.fences is not None:
+            row.fences = dict(payload.fences)
+        if payload.env_attestation is not None:
+            row.env_attestation = dict(payload.env_attestation)
+        if payload.env_assertion is not None:
+            row.env_assertion = dict(payload.env_assertion)
+        if payload.credentials is not None:
+            row.creds_blob = creds_blob
+        if payload.status is not None:
+            row.status = payload.status.strip()[:32]
+        try:
+            await session.flush()
+        except IntegrityError:
+            raise HTTPException(status_code=409, detail="an environment with that name already exists")
+        result = _env_public_view(row)
+    logger.info("qec.apps.env_updated",
+                extra={"tenant_id": tenant_id, "app_id": app_id, "environment_id": env_id,
+                       "actor": user.get("sub", "")})
+    return result
+
+
+@router.delete("/apps/{app_id}/environments/{env_id}")
+async def delete_environment(
+    app_id: str, env_id: str, user: dict = Depends(_MUTATE),
+) -> dict:
+    tenant_id = user["tenant_id"]
+    async with tenant_scoped_qec_session(tenant_id) as session:
+        row = await _require_env(session, tenant_id, app_id, env_id)
+        await session.delete(row)
+    logger.info("qec.apps.env_deleted",
+                extra={"tenant_id": tenant_id, "app_id": app_id, "environment_id": env_id,
+                       "actor": user.get("sub", "")})
+    return {"app_id": app_id, "environment_id": env_id, "status": "deleted"}
