@@ -1159,6 +1159,83 @@ def _login_observed_before_app(visits: Iterable[PageVisitInput]) -> bool:
     return False
 
 
+def _visit_password_field_count(v: PageVisitInput) -> int:
+    """Count OBSERVED password fields on a visit's form
+    (``form_snapshot_signals[label].type == 'password'``). The COUNT is the
+    structural login distinguisher: a genuine sign-in has EXACTLY ONE password
+    field, while signup / set-new-password / change-password all carry TWO or more
+    (password + confirm), and a non-credential masked field (SSN/PIN/CVV/OTP) is a
+    lone type='password' that fails the sign-in-commit test below."""
+    signals = getattr(v, "form_snapshot_signals", None)
+    if not isinstance(signals, Mapping):  # a malformed non-dict signals blob → not login
+        return 0
+    return sum(
+        1 for sig in signals.values()
+        if isinstance(sig, Mapping) and str(sig.get("type") or "").strip().lower() == "password"
+    )
+
+
+# A SIGN-IN commit — the label that distinguishes a login from every other
+# password-bearing form. `type='password'` alone is only a MASKED-FIELD signal:
+# signup (Password + Confirm), change/reset-password, and non-credential masked
+# inputs (SSN, PIN, CVV, OTP, security answer) all carry type='password' but are
+# NOT sign-in. The commit label is what separates them.
+_SIGNIN_COMMIT_RX = re.compile(r"\b(sign[\s-]?in|log[\s-]?in|log[\s-]?on|login)\b", re.IGNORECASE)
+#: Commit labels that are password-bearing but NOT a sign-in — a login is refused
+#: (not dropped) if its commit matches any of these, so a create-account /
+#: change-password / reset / wizard-continue page is never misclassified as login.
+_NOT_SIGNIN_RX = re.compile(
+    r"\b(sign[\s-]?up|signup|create|regist|enrol|reset|forgot|change|update|save|"
+    r"continue|next|proceed|submit|apply|verify|confirm)\b",
+    re.IGNORECASE,
+)
+
+
+def _is_signin_commit(action: PageActionInput) -> bool:
+    """A click/submit whose label reads as SIGN-IN (and not create-account /
+    change-password / reset / wizard-next). The load-bearing login distinguisher."""
+    if (getattr(action, "verb", "") or "").strip().lower() not in ("click", "submit"):
+        return False
+    label = getattr(action, "target_label", "") or ""
+    return bool(_SIGNIN_COMMIT_RX.search(label)) and not _NOT_SIGNIN_RX.search(label)
+
+
+def _make_auth_precondition() -> Precondition:
+    """A FRESH auth precondition (never a shared instance across cases). Says the
+    URL-anchored test does NOT replay the observed login and needs a captured
+    session, so a cold run doesn't fail silently at step 1."""
+    return Precondition(
+        description=(
+            "An authenticated session is required. The recording showed a login "
+            "(credential entry) before the app flow, but this URL-anchored test does "
+            "NOT replay the login. Apply an Authentication profile (a captured "
+            "logged-in session) so the run starts authenticated — otherwise a cold "
+            "run will land on the login screen and fail at step 1."
+        ),
+        setup_action="Apply an authentication profile (captured logged-in session) before running.",
+    )
+
+
+def _group_is_login(group: "_PageGroup", visits_by_id: Mapping[str, PageVisitInput]) -> bool:
+    """A LOGIN page: EXACTLY ONE password field AND a sign-in commit action.
+
+    Both are required, and the count matters. A password field alone is a masked-field
+    signal, not a login. Requiring a SINGLE password field structurally excludes the
+    two-password forms a sign-in label can still appear on — signup, set-new-password,
+    reset-confirmation, change-password (all password + confirm) — and a lone masked
+    field (SSN/PIN/CVV/OTP) fails the sign-in-commit test. So the only failure mode is
+    a REFUSAL to drop (an unrecognised login replays and fails honestly RED), never a
+    wrong drop (green-wash)."""
+    pw_count = sum(
+        _visit_password_field_count(visits_by_id[vid])
+        for vid in group.visit_ids
+        if vid in visits_by_id
+    )
+    if pw_count != 1:  # 0 = not password-auth; 2+ = signup/set/change-password, never a sign-in
+        return False
+    return any(_is_signin_commit(a) for a in group.actions)
+
+
 def generate_demonstrated_test_cases(
     *,
     artifact_id: str,
@@ -1207,6 +1284,23 @@ def generate_demonstrated_test_cases(
     if _first_trusted_idx and len(groups) - _first_trusted_idx >= 2:
         groups = groups[_first_trusted_idx:]
 
+    # DROP a leading LOGIN page from the URL-anchored flow. The recording shows
+    # credential entry (a form with an OBSERVED password field), but the password is
+    # never persisted (secret hygiene), so replaying it fails on the login screen.
+    # Exactly like the old screen-name-keyed login path (which has no url_host and is
+    # already excluded), a URL-keyed login is peeled off so the flow STARTS at the
+    # first post-login page and the run supplies auth via a captured session (see the
+    # precondition below). PRECISE: keyed on the password input TYPE, so a non-login
+    # form (search-by-email, newsletter, profile-edit) is NEVER dropped. Applied only
+    # when >= 2 milestones survive — a valid E2E — mirroring the trusted-entry rule.
+    _visits_by_id = {v.page_visit_id: v for v in visits}
+    _login_lead = 0
+    while _login_lead < len(groups) and _group_is_login(groups[_login_lead], _visits_by_id):
+        _login_lead += 1
+    _login_group_dropped = bool(_login_lead) and (len(groups) - _login_lead >= 2)
+    if _login_group_dropped:
+        groups = groups[_login_lead:]
+
     # P3: peel one demonstrated side-exploration (revisit A..A) off the trunk
     # so the E2E stays linear and the branch becomes its own case.
     groups, _branch_groups = _split_revisit_branch(groups)
@@ -1251,17 +1345,9 @@ def generate_demonstrated_test_cases(
     # Honest auth precondition: if a login was observed BEFORE the app flow, this
     # URL-anchored test does NOT replay it — say so, so a cold run doesn't fail
     # silently at step 1. Grounded (we observed credential entry); never fabricated.
-    if _login_observed_before_app(visits):
-        preconditions.insert(0, Precondition(
-            description=(
-                "An authenticated session is required. The recording showed a login "
-                "(credential entry) before the app flow, but this URL-anchored test does "
-                "NOT replay the login. Apply an Authentication profile (a captured "
-                "logged-in session) so the run starts authenticated — otherwise a cold "
-                "run will land on the login screen and fail at step 1."
-            ),
-            setup_action="Apply an authentication profile (captured logged-in session) before running.",
-        ))
+    _needs_auth = _login_group_dropped or _login_observed_before_app(visits)
+    if _needs_auth:
+        preconditions.insert(0, _make_auth_precondition())
 
     test_case = ProductionTestCase(
         test_id=test_id,
@@ -1325,6 +1411,17 @@ def generate_demonstrated_test_cases(
     _neg = _negative_case(steps, groups, artifact_id=artifact_id, host=host)
     if _neg is not None:
         cases.append(_neg)
+
+    # Every case from a login-behind artifact starts post-login and needs a captured
+    # session — attach the auth precondition to the SECONDARY cases too (variant /
+    # branch / negative), not just the primary, so none fails silently at step 1
+    # (the primary already carries it). Only prepend when absent.
+    if _needs_auth:
+        for _c in cases[1:]:
+            _pcs = list(getattr(_c, "preconditions", None) or [])
+            if not any("authentication profile" in (getattr(p, "setup_action", "") or "").lower()
+                       for p in _pcs):
+                _c.preconditions = [_make_auth_precondition(), *_pcs]
 
     # P5: every case self-reports its evidence grade.
     cases = cases[:_MAX_TOTAL_CASES]
