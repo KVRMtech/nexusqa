@@ -13,15 +13,16 @@
  */
 import { useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { ArrowLeft, FlaskConical, PlayCircle } from 'lucide-react';
+import { ArrowLeft, FlaskConical, PlayCircle, Sparkles } from 'lucide-react';
 
 import { api } from '../../lib/api';
 import { useAsync } from '../../lib/useAsync';
 import { EmptyState, ErrorState, Loading, Pill } from '../../components';
+import DiscoveredFlows from './DiscoveredFlows';
 import TestCasesPanel from '../../studio/TestCasesPanel';
 import PlaywrightExecutionPanel from '../../studio/PlaywrightExecutionPanel';
 
-type StudioTab = 'cases' | 'playwright';
+type StudioTab = 'flows' | 'cases' | 'playwright';
 
 function TabButton({
   active,
@@ -54,7 +55,7 @@ function TabButton({
 
 export function TestStudio() {
   const { id } = useParams<{ id: string }>();
-  const [tab, setTab] = useState<StudioTab>('cases');
+  const [tab, setTab] = useState<StudioTab>('flows');
 
   const state = useAsync((signal) => api.getApp(id!, { signal }), [id]);
 
@@ -96,6 +97,12 @@ export function TestStudio() {
           {/* tabs */}
           <div className="flex items-center gap-2">
             <TabButton
+              active={tab === 'flows'}
+              onClick={() => setTab('flows')}
+              icon={<Sparkles size={15} />}
+              label="Discovered Flows"
+            />
+            <TabButton
               active={tab === 'cases'}
               onClick={() => setTab('cases')}
               icon={<FlaskConical size={15} />}
@@ -109,17 +116,21 @@ export function TestStudio() {
             />
           </div>
 
-          {/* Panels — keyed to the crawl artifact; the ported components own the
-              rest. They carry their own polished light identity, so they mount on
-              a light workspace surface within the dark shell (their roots are
+          {/* Discovered Flows is native verdict-dark (a governance overlay). The
+              ported panels carry their own polished light identity, so they mount
+              on a light workspace surface within the dark shell (their roots are
               transparent and assume a light ground). */}
-          <div className="rounded-2xl bg-slate-50 text-slate-800 ring-1 ring-nexus-100 shadow-card p-5 overflow-x-auto">
-            {tab === 'cases' ? (
-              <TestCasesPanel artifactId={artifactId} onOpenPlaywright={() => setTab('playwright')} />
-            ) : (
-              <PlaywrightExecutionPanel artifactId={artifactId} />
-            )}
-          </div>
+          {tab === 'flows' ? (
+            <DiscoveredFlows artifactId={artifactId} onOpenPlaywright={() => setTab('playwright')} />
+          ) : (
+            <div className="rounded-2xl bg-slate-50 text-slate-800 ring-1 ring-nexus-100 shadow-card p-5 overflow-x-auto">
+              {tab === 'cases' ? (
+                <TestCasesPanel artifactId={artifactId} onOpenPlaywright={() => setTab('playwright')} />
+              ) : (
+                <PlaywrightExecutionPanel artifactId={artifactId} />
+              )}
+            </div>
+          )}
         </>
       ) : (
         <EmptyState
