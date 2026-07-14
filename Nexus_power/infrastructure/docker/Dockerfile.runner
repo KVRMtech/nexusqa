@@ -19,7 +19,7 @@ COPY infrastructure/runner/package.json ./
 RUN npm install --omit=dev \
     && mkdir -p /opt/runner/work \
     && chown -R pwuser:pwuser /opt/runner
-COPY --chown=pwuser:pwuser infrastructure/runner/server.js ./
+COPY --chown=pwuser:pwuser infrastructure/runner/*.js ./
 
 # --no-sandbox is required for Chromium inside an unprivileged container; the
 # parametrized playwright.config reads NEXUS_LAUNCH_ARGS. The NEXUS_* display
