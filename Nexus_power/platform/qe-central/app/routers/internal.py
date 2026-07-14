@@ -80,6 +80,10 @@ class CompletionCallback(BaseModel):
     stop_reason: str = Field(default="", max_length=200)
     guard_events: int = Field(default=0, ge=0)
     error: str = Field(default="", max_length=2000)
+    #: Crawl coverage (P4): forms_found / fields_inferred / fields_needing_seed /
+    #: submit_candidates. Carried on the exploration ``stats`` so the app UI can
+    #: turn "why so shallow?" into a NAMED, seed-this-field remediation list.
+    coverage: dict | None = None
 
 
 def _extractor_version(crawl_id: str) -> str:
@@ -344,6 +348,8 @@ async def complete_crawl(crawl_id: str, request: Request) -> dict:
     # ── 7) Honest terminal state ──────────────────────────────────────────
     stats_dict = stats.model_dump()
     stats_dict["auth_import"] = auth_import
+    if body.coverage:  # P4: named seed-remediation surface for the app UI
+        stats_dict["coverage"] = body.coverage
     await _mark(
         tenant_id, exploration_id,
         status="completed",
