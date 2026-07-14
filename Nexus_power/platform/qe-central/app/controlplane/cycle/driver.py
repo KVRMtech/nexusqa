@@ -581,6 +581,10 @@ class AppConfig:
     # every direct constructor / test call site is unaffected; the value oracle
     # (ANSWERS P1) reads ``outcomes``/``rules`` from it at generate time.
     answer_key: Mapping = field(default_factory=dict)
+    # Multi-env (crawl-once/run-many): the NAME of the Environment Profile every
+    # cycle for this app runs against (``schedule.run_environment``).  Empty ⇒ the
+    # cycle runs against ``base_url`` exactly as before (single-env, unchanged).
+    run_environment: str = ""
 
     @classmethod
     def from_row(
@@ -626,6 +630,7 @@ class AppConfig:
             budgets=dict(row.budgets or {}),
             fences=fences,
             answer_key=dict(row.answer_key or {}),
+            run_environment=str((row.schedule or {}).get("run_environment") or "").strip(),
         )
 
 
@@ -739,6 +744,7 @@ async def execute_cycle(
     repo_diff: RepoDiff | None = None,
     budget: CycleBudget | None = None,
     now: datetime | None = None,
+    env_context: Mapping | None = None,
 ) -> CycleOutcome:
     """Drive ONE regression cycle to a terminal state (DB-free, injectable).
 
@@ -889,11 +895,12 @@ async def execute_cycle(
             await _enforce(CYCLE_STATE_GENERATING)
         base_result["generate"] = _compact_generate(generate)
 
-        # ── 4) RUNNING → run only the selected cases ──────────────────────────
+        # ── 4) RUNNING → run only the selected cases (rebound to the env) ─────
         await hooks.save_state(CYCLE_STATE_RUNNING)
         run_summary, failed_ids = await _run_and_meter(
             client=client, app=app, test_ids=list(selection.selected_test_ids),
             budget=budget, meter_fn=_meter, phase=CYCLE_STATE_RUNNING,
+            env_context=env_context,
         )
         base_result["run"] = run_summary
         await _enforce(CYCLE_STATE_RUNNING)
@@ -901,13 +908,32 @@ async def execute_cycle(
         # ── 5) HEALING → auto-heal the failures (never green-washes) ──────────
         heal_summary: dict | None = None
         if failed_ids:
-            await hooks.save_state(CYCLE_STATE_HEALING)
-            heal_summary = await _heal_and_meter(
-                client=client, app=app, test_ids=failed_ids,
-                budget=budget, meter_fn=_meter,
-            )
-            base_result["heal"] = heal_summary
-            await _enforce(CYCLE_STATE_HEALING)
+            if env_context:
+                # Multi-env: auto-heal re-EXECUTES against the live app, but the heal
+                # path does not yet rebind env_context. Healing a uat failure against
+                # the DEFAULT env would be a green-wash, so for an env-bound cycle we
+                # SKIP heal and report the failures honestly as-is (RED). Auto-heal is
+                # unchanged for single-env cycles; heal-under-env is a tracked follow-on.
+                heal_summary = {
+                    "skipped": True,
+                    "reason": "auto-heal deferred for env-bound cycles — failures reported "
+                              "as-is (never healed against the default environment)",
+                    "failed_count": len(failed_ids),
+                }
+                base_result["heal"] = heal_summary
+                logger.info(
+                    "qec.cycle.heal_skipped_env_bound",
+                    extra={"tenant_id": tenant_id, "app_id": app_id, "cycle_id": cycle_id,
+                           "failed": len(failed_ids)},
+                )
+            else:
+                await hooks.save_state(CYCLE_STATE_HEALING)
+                heal_summary = await _heal_and_meter(
+                    client=client, app=app, test_ids=failed_ids,
+                    budget=budget, meter_fn=_meter,
+                )
+                base_result["heal"] = heal_summary
+                await _enforce(CYCLE_STATE_HEALING)
 
         # ── 6) VERIFYING → deterministic rubric + readiness per changed script ─
         await hooks.save_state(CYCLE_STATE_VERIFYING)
@@ -1034,16 +1060,20 @@ def _force_select_unmappable(
 async def _run_and_meter(
     *, client: CycleClient, app: AppConfig, test_ids: list[str],
     budget: CycleBudget, meter_fn: Callable[..., Awaitable[None]], phase: str,
+    env_context: Mapping | None = None,
 ) -> tuple[dict, list[str]]:
     """Dispatch ``/playwright/run(test_ids)``, poll to terminal, meter the run.
 
     Returns ``({run_id, status, ...}, failed_test_ids)``.  browser_seconds are
     metered from the durable run record's ``duration_ms``; an uncorrelated run
     becomes an ``unmetered_run`` gap flag (the meter can only under-count).
+
+    ``env_context`` (multi-env) rebinds the SAME flow to the app's designated run
+    environment; ``None`` ⇒ a single-env run against ``app.base_url`` (unchanged).
     """
     started = await client.run_playwright(
         tenant_id=app.tenant_id, artifact_id=app.latest_artifact_id,
-        test_ids=test_ids, base_url=app.base_url,
+        test_ids=test_ids, base_url=app.base_url, env_context=env_context,
     )
     run_id = str(started.get("run_id") or "")
     if not run_id:
@@ -1345,6 +1375,40 @@ def _utc_now() -> datetime:
 
 # ══════════════════════ the DB wrapper (run_cycle) ═════════════════════════
 
+# ── Multi-env: control-plane envelope (for per-env secret decryption) ─────────
+# The daemon runs IN-PROCESS with the FastAPI app; main's lifespan pushes the SAME
+# EnvelopeService here at startup so ``run_cycle`` can decrypt an Environment
+# Profile's sealed creds (HTTP basic-auth).  None ⇒ ``resolve_env_context``
+# degrades honestly to the non-secret routing (cookies/headers/base_url/pin) — a
+# basic-auth-gated env then simply can't authenticate and lands RED, never a
+# silent wrong-env pass.
+_CP_ENVELOPE = None
+
+
+def set_control_plane_envelope(envelope) -> None:
+    """Share the process ``EnvelopeService`` with the daemon (called once from
+    main's lifespan).  Additive: unset ⇒ per-env secret decryption is skipped."""
+    global _CP_ENVELOPE
+    _CP_ENVELOPE = envelope
+
+
+async def _resolve_run_env_context(*, tenant_id: str, app_id: str, env_name: str) -> dict | None:
+    """Resolve the app's bound Environment Profile → ``env_context``, or ``None``
+    when the named profile cannot be resolved (missing / DB error).  Never raises —
+    the caller FAIL-CLOSES a set-but-unresolvable env rather than run the wrong one."""
+    from ...services.env_resolver import resolve_env_context
+    try:
+        async with tenant_scoped_qec_session(tenant_id) as session:
+            return await resolve_env_context(
+                session, tenant_id=tenant_id, app_id=app_id, env=env_name,
+                envelope=_CP_ENVELOPE,
+            )
+    except Exception as exc:
+        logger.warning("qec.run_cycle.env_resolve_error",
+                       extra={"app_id": app_id, "env": env_name, "error": str(exc)[:200]})
+        return None
+
+
 async def run_cycle(
     *,
     cycle_id: str,
@@ -1388,6 +1452,31 @@ async def run_cycle(
                              error="app not found or has no latest artifact", finished_at=utc_now())
         return CycleOutcome(cycle_id=cycle_id, state=CYCLE_STATE_FAILED, error="app not found")
 
+    # ── Multi-env: bind the app's designated run environment (crawl-once/run-many) ──
+    # ``schedule.run_environment`` names ONE Environment Profile every cycle runs
+    # against.  Unset ⇒ env_context stays None ⇒ the run path is byte-identical to a
+    # single-env cycle.  Set-but-unresolvable ⇒ FAIL CLOSED (never silently run the
+    # default env when the operator asked for a specific one — a wrong-env green-wash).
+    env_context: dict | None = None
+    if app.run_environment:
+        from ...services.env_resolver import env_context_log_safe
+        env_context = await _resolve_run_env_context(
+            tenant_id=tenant_id, app_id=app_id, env_name=app.run_environment)
+        if env_context is None:
+            await _persist_state(
+                tenant_id, cycle_id, CYCLE_STATE_FAILED,
+                error=f"run_environment {app.run_environment!r} could not be resolved "
+                      f"(profile missing or undecryptable) — refusing to run the wrong environment",
+                finished_at=utc_now())
+            logger.warning("qec.run_cycle.env_unresolved",
+                           extra={"tenant_id": tenant_id, "app_id": app_id,
+                                  "cycle_id": cycle_id, "env": app.run_environment})
+            return CycleOutcome(cycle_id=cycle_id, state=CYCLE_STATE_FAILED,
+                                error="run_environment unresolved")
+        logger.info("qec.run_cycle.env_bound",
+                    extra={"tenant_id": tenant_id, "app_id": app_id, "cycle_id": cycle_id,
+                           **env_context_log_safe(env_context)})
+
     prior_verdicts = await _load_prior_verdicts(tenant_id, app_id, exclude_cycle_id=cycle_id)
     hooks = _db_hooks(tenant_id=tenant_id, app_id=app_id, cycle_id=cycle_id)
 
@@ -1426,7 +1515,7 @@ async def run_cycle(
         outcome = await execute_cycle(
             cycle_id=cycle_id, mode=mode, trigger=trigger, app=app, client=client,
             hooks=hooks, criticality=criticality, prior_verdicts=prior_verdicts,
-            repo_shas=repo_shas, repo_diff=repo_diff,
+            repo_shas=repo_shas, repo_diff=repo_diff, env_context=env_context,
         )
         record_cycle_completed(
             terminal_state=outcome.state,

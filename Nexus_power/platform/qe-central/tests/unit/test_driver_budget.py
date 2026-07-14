@@ -41,7 +41,7 @@ class _FakeClient:
     async def generate(self, *, tenant_id, artifact_id, answer_key=None):
         return {"generated": 0}
 
-    async def run_playwright(self, *, tenant_id, artifact_id, test_ids, base_url):
+    async def run_playwright(self, *, tenant_id, artifact_id, test_ids, base_url, env_context=None):
         return {"run_id": "r1", "status": "queued"}
 
     async def poll_run(self, *, tenant_id, artifact_id, run_id):

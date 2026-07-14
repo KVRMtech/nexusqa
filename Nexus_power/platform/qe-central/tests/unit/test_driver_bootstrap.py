@@ -50,8 +50,9 @@ class _EmptyUntilGeneratedClient:
         self.generate_calls += 1
         return {"success": True, "generated": 1, "demonstrated": 1}
 
-    async def run_playwright(self, *, tenant_id, artifact_id, test_ids, base_url):
+    async def run_playwright(self, *, tenant_id, artifact_id, test_ids, base_url, env_context=None):
         self.run_calls += 1
+        self.last_env_context = env_context
         return {"run_id": "run-1", "status": "queued", "scripts": list(test_ids)}
 
     async def poll_run(self, *, tenant_id, artifact_id, run_id):

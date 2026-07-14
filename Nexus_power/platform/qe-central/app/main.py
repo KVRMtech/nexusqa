@@ -162,6 +162,14 @@ async def lifespan(application: FastAPI):
         raise
     await init_db()
     application.state.envelope_service = _init_envelope_service()
+    # Multi-env: share the process EnvelopeService with the in-process cycle daemon
+    # so run_cycle can decrypt a bound Environment Profile's sealed creds (basic-auth).
+    # Additive: when None, per-env secret decryption is skipped (honest degradation).
+    try:
+        from app.controlplane.cycle.driver import set_control_plane_envelope
+        set_control_plane_envelope(application.state.envelope_service)
+    except Exception as exc:  # never let this optional wiring break boot
+        logger.warning("qe_central.control_plane_envelope_wire_failed", error=str(exc)[:200])
     # S5 (Phase-4) control plane: the cycle-driver daemon (design §3.5). Hosted
     # via asyncio.create_task in the lifespan (NOT @app.on_event) — the
     # sentinel_daemon pattern (qe_agents.py:136-156). It SELF-GATES on
