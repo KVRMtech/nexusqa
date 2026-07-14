@@ -323,6 +323,36 @@ def _submit_approved(app_row: Any) -> bool:
 
 # ══════════════════════ public API ═════════════════════════════════════════
 
+def submit_approvals(app_row: Any) -> list[str]:
+    """The operator-approved Phase-B submit flow NAMES for this app, or ``[]``.
+
+    Returns the stored approval list ONLY when :func:`_submit_approved` holds
+    (``fences.allow_submit`` AND a non-empty per-flow list in
+    ``fences.submit_approvals`` or ``env_attestation.submit_approvals``); every other
+    app returns ``[]`` so the crawl stays at the Phase-A boundary — fail-closed.
+    The names are the operator's real approvals (chosen from a prior crawl's coverage
+    ``submit_candidates``), never a hardcoded default. The explorer's own
+    ``gate_submit`` re-verifies attestation + per-flow approval + non-irreversible
+    verb, so this is the coarse gate, not the only one."""
+    if not _submit_approved(app_row):
+        return []
+    # AUTHORITATIVE freshness gate (wall-clock): a submit is authorised ONLY on a
+    # DISPOSABLE, unexpired, attributed env. qe-central owns this check because the
+    # explorer's own clock is monotonic (ms-since-crawl-start), so its expiry test
+    # cannot enforce real freshness — mirrors is_submit_capable here at wall-clock.
+    att_ok, _kind, _reason = _attestation_status(
+        app_row, allowed_kinds=(ENV_KIND_DISPOSABLE,), now=_utcnow(),
+    )
+    if not att_ok:
+        return []
+    fences = _jsonb(app_row, "fences")
+    att = _jsonb(app_row, "env_attestation")
+    approvals = fences.get("submit_approvals")
+    if not isinstance(approvals, (list, tuple)) or not approvals:
+        approvals = att.get("submit_approvals")
+    return [str(x).strip() for x in (approvals or []) if str(x).strip()]
+
+
 def onboarding_status(app_row: Any) -> str:
     """Derive the onboarding state (``draft`` | ``attested`` | ``live``).
 

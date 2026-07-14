@@ -400,6 +400,32 @@ async def _resolve_session(credentials: dict | None) -> dict | None:
     return None
 
 
+def _explorer_attestation(att: dict | None) -> dict | None:
+    """Map the STORED ``env_attestation`` JSONB onto the explorer's STRICT
+    :class:`Attestation` shape (``extra='forbid'``): keep ONLY ``attested_by``,
+    ``env_kind``, ``reset_procedure`` and ``expires_at_ms``. The stored dict carries
+    extra keys (``attested_at``, ``rules_of_engagement``, ``preflight``,
+    ``submit_approvals``) and an ISO ``expires_at`` — passing it raw makes the
+    explorer's ``Attestation.model_validate`` RAISE (the 'bad_attestation' rejection
+    that leaves the guard attestation None and blocks every submit). Here we keep the
+    subset the model accepts and convert ``expires_at`` ISO → epoch millis. Returns
+    ``None`` when there is no ``attested_by``. Only the FORMAT is transformed — every
+    value is read verbatim from the row (no hardcoding)."""
+    att = att or {}
+    attested_by = str(att.get("attested_by") or "").strip()
+    if not attested_by:
+        return None
+    out: dict = {
+        "attested_by": attested_by,
+        "env_kind": str(att.get("env_kind") or "").strip(),
+        "reset_procedure": str(att.get("reset_procedure") or "").strip(),
+    }
+    _dt = prod_guard._parse_iso_utc(att.get("expires_at"))
+    if _dt is not None:
+        out["expires_at_ms"] = int(_dt.timestamp() * 1000)
+    return out
+
+
 async def _dispatch_explorer(
     *, tenant_id: str, app_id: str, request: Request, response: Response,
 ) -> dict:
@@ -447,6 +473,11 @@ async def _dispatch_explorer(
         answer_key = explorer_fill_contract(row.answer_key)
         budgets = dict(row.budgets or {})
         env_attestation = dict(row.env_attestation or {})
+        # Phase-B ATTESTED SUBMIT enablement: the operator-approved flow names, from
+        # the app's stored config, gated fail-closed (allow_submit + a DISPOSABLE,
+        # unexpired attestation + a non-empty per-flow list). [] for an explore-only
+        # app → the crawl stays at the Phase-A boundary, exactly as before.
+        submit_approvals = prod_guard.submit_approvals(row)
 
     credentials = await _decrypt_credentials(request, tenant_id, row)
     # Tier-4: resolve a start-authenticated session (static client session or a
@@ -488,7 +519,8 @@ async def _dispatch_explorer(
         budgets=budgets,
         allowed_hosts=allowed_hosts,
         phase="explore",
-        attestation=env_attestation or None,
+        attestation=_explorer_attestation(env_attestation),
+        submit_approvals=submit_approvals,
         session=auth_session,
     )
     try:
