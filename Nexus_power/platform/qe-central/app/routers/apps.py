@@ -241,6 +241,7 @@ async def _prepare_repo_binding(
 
 def _public_view(row: ClientAppRow) -> dict:
     """Serialise a row WITHOUT any secret material; expose has_* flags only."""
+    from ..security import prod_guard
     d = row_to_dict(row)
     d.pop("creds_blob", None)
     d["has_credentials"] = bool(row.creds_blob)
@@ -251,7 +252,36 @@ def _public_view(row: ClientAppRow) -> dict:
     d["has_webhook_secret"] = has_webhook_secret
     # Multi-env: surface the bound run environment (the daemon reads schedule.run_environment).
     d["run_environment"] = str((row.schedule or {}).get("run_environment") or "")
+    # Onboarding legibility (crawl gate): surface the DERIVED status (draft/attested/
+    # live) + the EXACT unmet requirements + attestation expiry, so the app UI can show
+    # WHY an app can't crawl and offer a one-click (re-)attest — instead of a raw PATCH.
+    d["onboarding_status"] = prod_guard.onboarding_status(row)
+    _ready, _reasons = prod_guard.onboarding_ready(row)
+    d["onboarding_ready"] = _ready
+    d["onboarding_reasons"] = _reasons
+    d["attestation_expires_at"] = str((row.env_attestation or {}).get("expires_at") or "")
     return d
+
+
+def _finalize_attestation(att: dict | None, user: dict) -> dict:
+    """Bind the accountable human to the AUTHENTICATED identity: when the operator
+    leaves ``attested_by`` / ``rules_of_engagement.signed_by`` blank, stamp them from
+    the JWT subject (``user['sub']``, the same identity used for audit logging) so the
+    attestation is attributable rather than retyped free text. Never overrides an
+    explicitly-provided value; a no-op when the attestation is empty."""
+    a = dict(att or {})
+    if not a:
+        return a
+    who = str(user.get("sub") or user.get("email") or "").strip()
+    if not who:
+        return a
+    if not str(a.get("attested_by") or "").strip():
+        a["attested_by"] = who
+    roe = dict(a.get("rules_of_engagement") or {})
+    if roe.get("signed") and not str(roe.get("signed_by") or "").strip():
+        roe["signed_by"] = who
+        a["rules_of_engagement"] = roe
+    return a
 
 
 async def _validated_run_environment(session, tenant_id: str, app_id: str, name: str | None) -> str:
@@ -373,7 +403,7 @@ async def create_app(
         canonical_host=_derive_canonical_host(base_url, payload.canonical_host),
         creds_blob=creds_blob,
         answer_key=payload.answer_key or {},
-        env_attestation=payload.env_attestation or {},
+        env_attestation=_finalize_attestation(payload.env_attestation, user),
         fences=payload.fences or {},
         repo_binding=repo_binding,
         schedule=payload.schedule or {},
@@ -453,13 +483,13 @@ async def update_app(
 
         if payload.name is not None:
             row.name = payload.name.strip()[:200]
-        for field in (
-            "answer_key", "env_attestation", "fences",
-            "schedule", "budgets",
-        ):
+        for field in ("answer_key", "fences", "schedule", "budgets"):
             value = getattr(payload, field)
             if value is not None:
                 setattr(row, field, value)
+        if payload.env_attestation is not None:
+            # (Re-)attest binds the accountable human to the authenticated identity.
+            row.env_attestation = _finalize_attestation(payload.env_attestation, user)
         if payload.repo_binding is not None:
             # Seal the webhook secret + (re)provision the repo-intel connection.
             row.repo_binding = await _prepare_repo_binding(
