@@ -28,6 +28,7 @@ class _FailingClient:
         self.run_calls = 0
         self.auto_heal_calls = 0
         self.last_env_context = "UNSET"
+        self.verify_base_urls: list[str] = []
 
     async def fetch_journey_graph(self, *, tenant_id, artifact_id):
         return {"pages": []}
@@ -64,6 +65,7 @@ class _FailingClient:
         return {"run_id": "heal-1", "status": "passed"}
 
     async def verify(self, *, tenant_id, artifact_id, test_id, base_url):
+        self.verify_base_urls.append(base_url)
         return {"decision": "CERTIFIED", "certification_level": "CERTIFIED-EVIDENCED"}
 
     async def triage(self, *, tenant_id, artifact_id):
@@ -108,6 +110,9 @@ def test_env_bound_failure_skips_heal_never_heals_the_default_env():
     assert heal.get("skipped") is True                     # heal deferred, honestly
     assert client.auto_heal_calls == 0                     # never healed the wrong env
     assert "T1" in (outcome.result.get("failed_test_ids") or [])  # reported RED as-is
+    # VERIFY's live readiness probe is suppressed (base_url="") so it never probes
+    # the DEFAULT env for an env-bound cycle — no wrong-env readiness signal.
+    assert client.verify_base_urls and all(b == "" for b in client.verify_base_urls)
 
 
 def test_single_env_cycle_still_auto_heals():
@@ -121,6 +126,8 @@ def test_single_env_cycle_still_auto_heals():
     assert client.last_env_context is None
     assert client.auto_heal_calls == 1                     # heal ran (not skipped)
     assert not (outcome.result.get("heal") or {}).get("skipped")
+    # Single-env: verify DOES probe the app base_url (today's behavior, unchanged).
+    assert client.verify_base_urls and all(b == "https://default.example" for b in client.verify_base_urls)
 
 
 def test_from_row_reads_run_environment_from_schedule():

@@ -939,7 +939,7 @@ async def execute_cycle(
         await hooks.save_state(CYCLE_STATE_VERIFYING)
         verify_targets = failed_ids or list(selection.selected_test_ids)
         base_result["verify"] = await _verify_scripts(
-            client=client, app=app, test_ids=verify_targets,
+            client=client, app=app, test_ids=verify_targets, env_bound=bool(env_context),
         )
         await _enforce(CYCLE_STATE_VERIFYING)
 
@@ -1123,14 +1123,22 @@ async def _heal_and_meter(
 
 
 async def _verify_scripts(
-    *, client: CycleClient, app: AppConfig, test_ids: list[str],
+    *, client: CycleClient, app: AppConfig, test_ids: list[str], env_bound: bool = False,
 ) -> list[dict]:
-    """Run the deterministic ``/verify`` rubric + readiness probe per script."""
+    """Run the deterministic ``/verify`` rubric + readiness probe per script.
+
+    ``env_bound`` (multi-env): the readiness probe NAVIGATES the live app, but the
+    verify endpoint is not yet env-aware — it would probe ``app.base_url`` (the
+    DEFAULT env), reporting a readiness signal about the WRONG environment and
+    touching an env the operator pinned cycles away from. So for an env-bound cycle
+    the probe is SUPPRESSED (base_url=""); the static rubric still runs. Same
+    deferral doctrine as the env-bound heal-skip — never a wrong-env signal."""
+    probe_base = "" if env_bound else app.base_url
     out: list[dict] = []
     for test_id in test_ids:
         verdict = await client.verify(
             tenant_id=app.tenant_id, artifact_id=app.latest_artifact_id,
-            test_id=test_id, base_url=app.base_url,
+            test_id=test_id, base_url=probe_base,
         )
         readiness = verdict.get("readiness") if isinstance(verdict, Mapping) else None
         out.append({
