@@ -839,91 +839,6 @@ def _with_env_assertion(tc, env_assertion: dict):
         return tc
 
 
-# ── P1 run-time login: skip the recorded login REPLAY when a captured session is
-# injected. The password is never persisted (secret hygiene), so replaying the
-# recorded login always fails on the login page; but the injected storageState
-# ALREADY authenticates the context, so the correct behaviour is to start at the
-# first post-login page and drop the login prologue. Applied ONLY when a real auth
-# PROFILE is present (not env-routing cookies) — so downloads/CI and every run
-# without a captured session are byte-identical. ────────────────────────────────
-_LOGIN_FIELD_TOKENS = (
-    "username", "user name", "user id", "userid", "user-id",
-    "email", "e-mail", "password", "passcode", "login",
-)
-
-
-def _is_credential_fill(step_dump: dict) -> bool:
-    """True when a step is a login credential entry (a type/select onto a field whose
-    accessible name / action reads as username/password/email/…)."""
-    ob = step_dump.get("observed") or {}
-    if str(ob.get("verb") or "").strip().lower() not in ("type", "select"):
-        return False
-    hay = f"{ob.get('label') or ''} {step_dump.get('action') or ''}".lower()
-    return any(tok in hay for tok in _LOGIN_FIELD_TOKENS)
-
-
-def _nav_target_url(step_dump: dict) -> str:
-    """The concrete URL a navigate step carries (empty for non-nav / url-less nav)."""
-    ob = step_dump.get("observed") or {}
-    if str(ob.get("verb") or "").strip().lower() != "navigate":
-        return ""
-    return str(ob.get("url") or "").strip()
-
-
-def _strip_login_steps(tc):
-    """Return a COPY of the case with the recorded LOGIN PROLOGUE removed and the
-    entry navigation re-pointed at the first post-login URL — for the case where a
-    captured session (storageState) already authenticates the run.
-
-    CONSERVATIVE + GROUNDED: acts ONLY when the case opens with an ``Open <url>``
-    entry nav, a credential fill (username/password/email/…) appears in the entry
-    prologue, AND a subsequent navigation carries a concrete post-login URL. In any
-    other shape it returns the case UNCHANGED — so a non-login flow, or an SPA login
-    whose URL never changes, is never altered (it fails honestly as before rather
-    than being mis-rewritten). Never mutates the persisted case: it works on a
-    ``model_dump`` copy, exactly like :func:`_with_env_assertion`, and any error
-    falls back to the original case (a login-skip must never break generation)."""
-    try:
-        dump = tc.model_dump()
-        steps = list(dump.get("steps") or [])
-        if len(steps) < 2:
-            return tc
-        entry = steps[0]
-        if str((entry.get("observed") or {}).get("verb") or "").strip().lower() != "navigate":
-            return tc
-        if not str(entry.get("action") or "").strip().startswith("Open "):
-            return tc
-        # Walk the prologue: the login segment ends at the FIRST navigation carrying a
-        # concrete URL, and is only recognised as login when a credential fill precedes
-        # it (so a plain multi-step flow with an early nav is left untouched).
-        login_end = None
-        saw_credential = False
-        for i in range(1, len(steps)):
-            if _is_credential_fill(steps[i]):
-                saw_credential = True
-            if _nav_target_url(steps[i]):
-                login_end = i
-                break
-        if login_end is None or not saw_credential:
-            return tc
-        post_login_url = _nav_target_url(steps[login_end])
-        # Re-point the single entry nav at the authenticated landing (the compiler's
-        # navigation invariant allows exactly ONE goto — the entry), and drop the
-        # prologue steps between it and the post-login page.
-        new_entry = dict(entry)
-        ob = dict(new_entry.get("observed") or {})
-        ob["url"] = post_login_url
-        new_entry["observed"] = ob
-        new_entry["action"] = f"Open {post_login_url}"
-        new_steps = [new_entry] + steps[login_end:]
-        for idx, st in enumerate(new_steps, start=1):
-            st["step_number"] = idx
-        dump["steps"] = new_steps
-        return type(tc)(**dump)
-    except Exception:
-        return tc
-
-
 def _norm_env_cookie(c: dict) -> dict:
     """Normalize an Environment Profile routing cookie into a valid Playwright
     storageState cookie (defaults for the optional fields)."""
@@ -982,10 +897,6 @@ def _configured_files(cases, field_meta, base_url: str, data: dict,
     run's storageState, and the HARD env-assertion attached to every case (RED if
     the routing landed on the wrong env)."""
     _env_sidecar: dict = {}
-    # P1: whether a real captured AUTH SESSION is present — sampled BEFORE the env
-    # block below folds env ROUTING cookies into storage_state (those carry no
-    # session). Only a genuine auth profile authorises skipping the login replay.
-    _has_auth_profile = bool(storage_state and storage_state.strip())
     if env_context:
         if env_context.get("base_url"):
             base_url = str(env_context["base_url"]).strip()
@@ -1023,12 +934,6 @@ def _configured_files(cases, field_meta, base_url: str, data: dict,
             except Exception:
                 pass
             _env_sidecar["httpCredentials"] = _cred_obj
-    # P1: with a captured session injected (vkpower.auth.json), the recorded login
-    # replay is both redundant and doomed (no persisted password) — start at the
-    # first post-login page instead. Inert unless an auth profile is present, so a
-    # run without a captured session compiles byte-identically to today.
-    if _has_auth_profile:
-        cases = [_strip_login_steps(tc) for tc in cases]
     files = compile_project(
         cases, field_meta, parametrize=True, base_url_default=(base_url or "").strip(),
         projects=browsers, headed=bool(headed), workers=workers,
