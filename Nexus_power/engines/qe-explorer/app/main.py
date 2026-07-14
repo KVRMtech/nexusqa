@@ -343,6 +343,7 @@ async def _run_job(
                 config_fingerprint=config_fingerprint, guard_context=guard_ctx,
                 answer_key=answer_key, credentials=credentials,
                 allowed_hosts=req.allowed_hosts, max_relogins=settings.max_relogins,
+                submit_approvals=req.submit_approvals,
             )
             job = _Job(crawler)
             jobs.activate(job)

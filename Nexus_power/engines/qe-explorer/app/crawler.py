@@ -40,7 +40,7 @@ from . import emit
 from .auth import Authenticator, AuthWindow, Credentials
 from .browser import BrowserPort, PageObservation
 from .fingerprint import state_fingerprint
-from .forms import AnswerKey, fill_form_phase_a
+from .forms import AnswerKey, execute_submit_phase_b, fill_form_phase_a
 from .guard import (
     EVENT_BLOCKED_METHOD,
     MUTATING_METHODS,
@@ -296,6 +296,7 @@ class Crawler:
         credentials: Optional[Credentials] = None,
         allowed_hosts: Sequence[str] = (),
         max_relogins: int = 3,
+        submit_approvals: Sequence[str] = (),
         sleep: Any = asyncio.sleep,
     ) -> None:
         self._port = port
@@ -344,6 +345,14 @@ class Crawler:
         self._fields_inferred: list[str] = []      # filled with a synthesized default
         self._fields_unfilled: list[str] = []      # no seed AND no safe default -> needs seed
         self._submit_candidates: list[str] = []    # a submit found but not clicked (Phase-A boundary)
+        # Phase-B attested submit (crawl-once/run-many depth): default-OFF. Fires ONLY
+        # when the operator supplied a per-flow submit-approval list AND a disposable-env
+        # attestation is present — a crawl without both stops at the Phase-A boundary,
+        # byte-identical to before. execute_submit_phase_b re-verifies the guard.
+        self._submit_approvals = {s.strip().lower() for s in submit_approvals if str(s).strip()}
+        self._submit_enabled = bool(self._submit_approvals) and self._guard.attestation is not None
+        self._forms_submitted = 0
+        self._submitted_flows: set[str] = set()    # dedup key = f"{fingerprint}::{name}"
 
     # -- public control / observation -----------------------------------------
 
@@ -376,9 +385,10 @@ class Crawler:
         inferred = _dedup(self._fields_inferred)
         needs_seed = _dedup(self._fields_unfilled)
         submits = _dedup(self._submit_candidates)
+        unexercised = max(0, len(submits) - self._forms_submitted)
         return {
             "forms_found": self._forms_found,
-            "forms_submitted": 0,
+            "forms_submitted": self._forms_submitted,
             "fields_inferred": inferred,
             "fields_needing_seed": needs_seed,
             "submit_candidates": submits,
@@ -386,7 +396,8 @@ class Crawler:
                 f"{self._forms_found} form(s) found; "
                 f"{len(inferred)} field(s) auto-filled with a default; "
                 f"{len(needs_seed)} field(s) need a real seed; "
-                f"{len(submits)} submit(s) not exercised (submit boundary)."
+                f"{self._forms_submitted} submit(s) exercised (Phase-B), "
+                f"{unexercised} at the submit boundary."
             ),
         }
 
@@ -562,6 +573,7 @@ class Crawler:
         is_form = any((c.get("kind") in _FILLABLE_KINDS) and not _is_password(c)
                       for c in controls)
         snapshot_controls = controls
+        fill = None  # hoisted: Phase-B (below) reads fill.flow_candidates
         if is_form:
             # Fill even with NO answer key: the typed default filler synthesizes valid
             # low-confidence values so validation-gated forms advance and deeper flows
@@ -598,6 +610,12 @@ class Crawler:
             first_seen_ms=first_seen, last_seen_ms=last_seen,
             displayed_values=displayed_values,
         )
+
+        # Phase B (attested submit): after the form state is recorded, drive the
+        # FIRST operator-approved non-danger flow and push the post-submit page onto
+        # the frontier so the deeper flow is crawled. Default-OFF (self._submit_enabled).
+        if self._submit_enabled and is_form and fill is not None:
+            await self._maybe_submit_phase_b(item, snapshot_controls, fill, fingerprint)
 
     async def _discover(
         self, item: FrontierItem, controls: Sequence[dict[str, Any]], is_form: bool,
@@ -644,6 +662,80 @@ class Crawler:
                     )
             actions.append(action)
         return actions
+
+    async def _maybe_submit_phase_b(
+        self, item: FrontierItem, controls: Sequence[dict[str, Any]],
+        fill: Any, fingerprint: str,
+    ) -> None:
+        """Phase-5 attested submit: drive the FIRST operator-approved, non-danger flow
+        candidate on this form and push the post-submit page onto the frontier so the
+        deeper flow gets crawled.
+
+        Triple-gated so a real app mutation only ever happens on an attested disposable
+        env for an explicitly approved, non-irreversible flow: (1) this method runs only
+        when ``self._submit_enabled`` (approvals + attestation supplied); (2) the flow
+        name must be in the operator's ``submit_approvals`` and the candidate non-danger;
+        (3) :func:`execute_submit_phase_b` re-runs ``gate_submit`` (attestation + per-flow
+        approval + non-irreversible-verb) and REFUSES — recording a guard_event, clicking
+        nothing — if any check fails. One submit per state (no combinatorial fan-out); a
+        non-navigating or unconfirmed submit is recorded honestly and adds no frontier."""
+        for fc in getattr(fill, "flow_candidates", ()):
+            name = (getattr(fc, "name", "") or "").strip()
+            if not name or getattr(fc, "danger", False) or name.lower() not in self._submit_approvals:
+                continue
+            flow_key = f"{fingerprint}::{name.lower()}"
+            if flow_key in self._submitted_flows:
+                continue
+            # The candidate carries the exact submit control it was recorded from; fall
+            # back to a name match in the snapshot if it is somehow absent.
+            control = getattr(fc, "control", None)
+            if not isinstance(control, dict) or not control:
+                control = next(
+                    (c for c in controls
+                     if str(c.get("name") or "").strip().lower() == name.lower()
+                     and c.get("kind") in ("button", "submit")),
+                    None,
+                )
+            if not control:
+                continue
+            self._submitted_flows.add(flow_key)
+            seq = self._next_seq
+            self._next_seq += 1
+            prev_phase = self._guard.phase
+            prev_approved = self._guard.submit_flow_approved
+            # Flip the shared guard to SUBMIT so the network route handler authorises the
+            # approved submit POST; restore EXPLORE no matter what (fail-closed default).
+            self._guard.phase = Phase.SUBMIT
+            self._guard.submit_flow_approved = True
+            try:
+                result = await execute_submit_phase_b(
+                    self._port, control, item.url, self._emitter, self._clock,
+                    refuse_pack=self._refuse_pack,
+                    is_login_domain=False,
+                    attestation=self._guard.attestation,
+                    submit_flow_approved=True,
+                    now_ms=self._clock.now_ms(),
+                    state_id=fingerprint,
+                    sequence_index=seq,
+                    answer_key=self._answer_key,
+                    fill_controls=controls,
+                )
+            finally:
+                self._guard.phase = prev_phase
+                self._guard.submit_flow_approved = prev_approved
+            if result.submitted:
+                self._forms_submitted += 1
+                self._tracker.note_action()
+            ps = result.page_state
+            dest = (getattr(ps, "location", "") or "").strip() if ps else ""
+            if result.confirmed and result.outcome == "navigation" and dest and self._in_scope(dest):
+                self._frontier.push(
+                    FrontierItem(url=dest, depth=item.depth + 1,
+                                 discovered_via=f"submit:{name}",
+                                 parent_fingerprint=fingerprint),
+                    key=_url_key(dest),
+                )
+            return  # one submit per state — avoid combinatorial explosion
 
     # -- state recording -------------------------------------------------------
 
