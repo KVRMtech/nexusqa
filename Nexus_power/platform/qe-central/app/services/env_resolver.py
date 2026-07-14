@@ -98,11 +98,13 @@ async def resolve_env_context(
 
 
 #: The non-secret subset safe to LOG / echo (never cookies/headers/creds values).
+#: NOTE ``env_name`` (not ``name``): this dict is spread into logging ``extra=`` and
+#: ``name`` is a RESERVED LogRecord attribute — using it raises KeyError at log time.
 def env_context_log_safe(ctx: dict | None) -> dict:
     if not ctx:
         return {}
     return {
-        "environment_id": ctx.get("environment_id"), "name": ctx.get("name"),
+        "environment_id": ctx.get("environment_id"), "env_name": ctx.get("name"),
         "base_url": ctx.get("base_url"), "env_kind": ctx.get("env_kind"),
         "has_cookies": bool(ctx.get("cookies")), "has_headers": bool(ctx.get("headers")),
         "has_http_credentials": bool(ctx.get("http_credentials")),
