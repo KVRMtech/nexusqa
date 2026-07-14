@@ -75,7 +75,10 @@ export default {
         healed: ch('--verdict-healed'),
       },
       fontFamily: {
-        sans: 'var(--font-ui)',
+        // Match Video's split: `font-sans` → Inter (UI/display), body + `font-ui`
+        // → Source Sans 3, `font-mono` → JetBrains Mono.
+        sans: 'var(--font-display)',
+        display: 'var(--font-display)',
         ui: 'var(--font-ui)',
         mono: 'var(--font-mono)',
       },

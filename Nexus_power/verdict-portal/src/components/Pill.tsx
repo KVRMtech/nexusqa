@@ -41,14 +41,15 @@ const SOFT: Record<PillTone, string> = {
 };
 
 const SOLID: Record<PillTone, string> = {
-  certified: 'text-bg bg-certified ring-certified',
-  refused: 'text-bg bg-refused ring-refused',
-  healed: 'text-bg bg-healed ring-healed',
-  good: 'text-bg bg-good ring-good',
-  warn: 'text-bg bg-warn ring-warn',
-  crit: 'text-bg bg-crit ring-crit',
-  teal: 'text-bg bg-teal ring-teal',
-  gold: 'text-bg bg-gold ring-gold',
+  certified: 'text-white bg-certified ring-certified',
+  refused: 'text-white bg-refused ring-refused',
+  // Dark navy ink on the light gold / amber fills (white would fail contrast).
+  healed: 'text-ink bg-healed ring-healed',
+  good: 'text-white bg-good ring-good',
+  warn: 'text-ink bg-warn ring-warn',
+  crit: 'text-white bg-crit ring-crit',
+  teal: 'text-white bg-teal ring-teal',
+  gold: 'text-ink bg-gold ring-gold',
   neutral: 'text-ink bg-panel-2 ring-line-strong',
 };
 

@@ -116,14 +116,14 @@ export function TestStudio() {
             />
           </div>
 
-          {/* Discovered Flows is native verdict-dark (a governance overlay). The
-              ported panels carry their own polished light identity, so they mount
-              on a light workspace surface within the dark shell (their roots are
-              transparent and assume a light ground). */}
+          {/* Discovered Flows is a native governance overlay (token surfaces). The
+              ported panels carry their own light-navy identity and assume a light
+              ground, so they mount on a token panel surface that matches the rest
+              of the (now light) portal. */}
           {tab === 'flows' ? (
             <DiscoveredFlows artifactId={artifactId} onOpenPlaywright={() => setTab('playwright')} />
           ) : (
-            <div className="rounded-2xl bg-slate-50 text-slate-800 ring-1 ring-nexus-100 shadow-card p-5 overflow-x-auto">
+            <div className="rounded-2xl bg-panel text-ink ring-1 ring-line shadow-card p-5 overflow-x-auto">
               {tab === 'cases' ? (
                 <TestCasesPanel artifactId={artifactId} onOpenPlaywright={() => setTab('playwright')} />
               ) : (

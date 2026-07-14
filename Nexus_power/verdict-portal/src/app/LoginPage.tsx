@@ -10,7 +10,7 @@ import { KeyRound, PlayCircle } from 'lucide-react';
 
 import { AuthError, useAuth } from '../lib/auth';
 import { QEC_AUDIENCE, QEC_MOCK } from '../lib/config';
-import { Button, Panel, Seal } from '../components';
+import { Button, Panel, VkMark } from '../components';
 
 export function LoginPage() {
   const { loginWithToken, loginMock } = useAuth();
@@ -37,7 +37,7 @@ export function LoginPage() {
     <div className="min-h-full flex items-center justify-center bg-bg px-4 py-12">
       <div className="w-full max-w-md">
         <div className="flex flex-col items-center text-center mb-6">
-          <Seal size={56} tone="certified" title="VKPower Verdict" />
+          <VkMark size={56} title="VKPower Verdict" />
           <h1 className="text-xl font-semibold text-ink mt-4 tracking-tight">
             VKPower <span className="text-teal">Verdict</span>
           </h1>

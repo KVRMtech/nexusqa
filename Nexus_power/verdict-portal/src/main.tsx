@@ -14,7 +14,7 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
         <App />
         <Toaster
           position="top-right"
-          theme="dark"
+          theme="light"
           richColors
           closeButton
           toastOptions={{ duration: 5000 }}

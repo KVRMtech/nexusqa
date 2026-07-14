@@ -98,9 +98,9 @@ export default function TriagePanel({ artifactId, scopeIds }: { artifactId: stri
 
   return (
     <section className="rounded-2xl p-4"
-      style={{ background: 'linear-gradient(135deg, rgba(99,102,241,0.05), rgba(244,63,94,0.04))', border: '1px solid rgba(99,102,241,0.22)' }}>
+      style={{ background: 'linear-gradient(135deg, rgba(38,112,163,0.05), rgba(217,162,58,0.05))', border: '1px solid rgba(38,112,163,0.22)' }}>
       <div className="flex items-center gap-2 mb-3 flex-wrap">
-        <ShieldAlert className="h-4 w-4" style={{ color: '#4f46e5' }} />
+        <ShieldAlert className="h-4 w-4" style={{ color: '#2670a3' }} />
         <span className="text-[13px] font-black text-slate-900">Grounded Triage</span>
         <span className="text-[10px] text-slate-500 font-semibold">baseline-vs-actual + a verdict per failure</span>
         <button onClick={refresh} disabled={loading}

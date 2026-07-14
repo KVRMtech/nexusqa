@@ -15,13 +15,26 @@
 
   body {
     margin: 0;
+    /* Premium page canvas (matches Video): a cool blue-grey base with a navy
+       glow top-right and a gold whisper bottom-left — calm, clearly not flat. */
     background-color: rgb(var(--bg));
+    background-image:
+      radial-gradient(1100px 560px at 100% -8%, rgb(12 44 77 / 0.10), transparent 58%),
+      radial-gradient(720px 420px at -6% 108%, rgb(217 162 58 / 0.06), transparent 54%);
+    background-attachment: fixed;
     color: rgb(var(--ink));
+    /* Body copy on Source Sans 3 (Video's body face); headings/UI use Inter. */
     font-family: var(--font-ui);
     font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
     text-rendering: optimizeLegibility;
+  }
+
+  /* Inter is the opt-in display face (Video loads it as font-sans); body + headings
+     otherwise stay on Source Sans 3, exactly as the Video portal renders them. */
+  .font-display {
+    font-family: var(--font-display);
   }
 
   /* Tabular, monospace numerals for every data surface (hashes, counts, %). */
@@ -31,7 +44,7 @@
   }
 
   ::selection {
-    background: rgb(var(--teal) / 0.28);
+    background: rgb(var(--teal) / 0.16);
     color: rgb(var(--ink));
   }
 

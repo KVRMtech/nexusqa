@@ -20,15 +20,20 @@ export interface PanelProps {
 }
 
 const TONE: Record<PanelTone, string> = {
-  default: 'bg-panel ring-1 ring-line',
-  elevated: 'bg-panel-2 ring-1 ring-line-strong shadow-panel',
+  // White cards on a soft navy-tinted drop shadow — Video's .card / .card-glow.
+  // Every solid card carries elevation (Video eliminated flat outlines); wells
+  // and ghosts stay shadowless.
+  default: 'bg-panel ring-1 ring-line shadow-card',
+  elevated: 'bg-panel ring-1 ring-line-strong shadow-card-hover',
   inset: 'bg-inset ring-1 ring-line',
   ghost: 'bg-transparent ring-1 ring-line',
 };
 
 const GLOW: Record<'teal' | 'gold' | 'none', string> = {
-  teal: 'shadow-glow-teal',
-  gold: 'shadow-glow-gold',
+  // Soft elevation instead of a colored glow halo (a dark-UI aesthetic); the
+  // gold cue is carried by a hairline ring, matching Video's stat-card accent.
+  teal: 'shadow-card-hover',
+  gold: 'shadow-card-hover ring-1 ring-gold/30',
   none: '',
 };
 

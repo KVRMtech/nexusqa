@@ -31,7 +31,7 @@ import {
 
 /** A react-router Link styled as the primary action button. */
 const PRIMARY_LINK =
-  'inline-flex items-center justify-center gap-2 rounded-lg text-sm px-3.5 py-2 bg-teal text-bg hover:bg-teal/90 ring-1 ring-teal/40 font-semibold transition-colors';
+  'inline-flex items-center justify-center gap-2 rounded-lg text-sm px-3.5 py-2 bg-teal text-white hover:bg-teal-deep ring-1 ring-teal/40 font-semibold transition-colors';
 import type {
   AutonomyTrend,
   ClientApp,
@@ -56,7 +56,9 @@ function StatTile({
   hint?: string;
 }) {
   return (
-    <Panel tone="default" className="min-w-0">
+    <Panel tone="default" className="relative overflow-hidden min-w-0">
+      {/* Video's signature gold top-accent rail on every stat card. */}
+      <div className="absolute inset-x-0 top-0 h-[3px] bg-gradient-to-r from-gold-400 via-gold-500 to-gold-300" />
       <div className="text-2xs uppercase tracking-wide text-ink-low">{label}</div>
       <div
         className="mt-1 text-2xl font-semibold tabular"

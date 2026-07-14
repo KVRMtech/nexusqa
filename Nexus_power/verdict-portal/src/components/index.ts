@@ -2,6 +2,9 @@
 export { Seal } from './Seal';
 export type { SealProps, SealTone } from './Seal';
 
+export { VkMark } from './VkMark';
+export type { VkMarkProps } from './VkMark';
+
 export { Pill } from './Pill';
 export type { PillProps, PillTone, PillVariant, PillSize } from './Pill';
 

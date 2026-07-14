@@ -1,52 +1,58 @@
 /* ══════════════════════════════════════════════════════════════════════════
-   VKPower Verdict — brand design tokens (the instrument-grade dark identity).
+   VKPower Verdict — brand design tokens.
 
-   Colors are stored as SPACE-SEPARATED RGB CHANNEL TRIPLETS so they compose
-   with Tailwind's opacity modifier via `rgb(var(--x) / <alpha-value>)` (see
-   tailwind.config.js) AND with raw CSS via `rgb(var(--x))` / `rgb(var(--x) /
-   0.4)`. One source of truth for every hue, radius, font and elevation the
-   screens consume.
+   MATCHED TO VKPower (Video): the USAA-inspired LIGHT identity — a cool blue-grey
+   canvas, white cards, NAVY primary (nexus), GOLD accent, Source Sans 3 body +
+   Inter display + JetBrains Mono, soft navy-tinted elevation. One source of
+   truth for every hue, radius, font and shadow the screens consume.
+
+   Colors are SPACE-SEPARATED RGB CHANNEL TRIPLETS so they compose with Tailwind's
+   opacity modifier via `rgb(var(--x) / <alpha-value>)` AND with raw CSS via
+   `rgb(var(--x))` / `rgb(var(--x) / 0.4)`.
    ════════════════════════════════════════════════════════════════════════ */
 :root {
-  /* ── Surfaces (near-black, teal-tinted; darkest → lightest) ── */
-  --bg: 7 13 15;            /* #070d0f — app background */
-  --bg-elev: 10 18 21;      /* #0a1215 — elevated background band */
-  --panel: 13 23 26;        /* #0d171a — card / panel */
-  --panel-2: 18 30 34;      /* #121e22 — nested panel / header strip */
-  --inset: 9 16 18;         /* #091012 — inset well (code, hashes) */
-  --line: 27 43 47;         /* #1b2b2f — hairline border */
-  --line-strong: 40 60 65;  /* #283c41 — stronger divider */
+  /* ── Surfaces (light, blue-grey; darkest → lightest content, cards are white) ── */
+  --bg: 238 242 248;        /* #eef2f8 — app canvas (a real tonal page, not flat white) */
+  --bg-elev: 245 247 250;   /* #f5f7fa — elevated band */
+  --panel: 255 255 255;     /* #ffffff — card / panel */
+  --panel-2: 248 250 252;   /* #f8fafc — nested panel / header strip */
+  --inset: 241 245 249;     /* #f1f5f9 — inset well (code, hashes, tracks) */
+  --line: 223 230 240;      /* #dfe6f0 — hairline border (navy-tinted) */
+  --line-strong: 199 212 227; /* #c7d4e3 — stronger divider */
 
-  /* ── Ink (text), high → faint ── */
-  --ink: 231 242 243;       /* #e7f2f3 — primary text */
-  --ink-mid: 155 178 182;   /* #9bb2b6 — secondary text */
-  --ink-low: 106 128 133;   /* #6a8085 — tertiary / labels */
-  --ink-faint: 68 86 90;    /* #44565a — disabled / faint */
+  /* ── Ink (text), high → faint — navy → muted-slate ladder (matches Video).
+        Muted copy stays a desaturated slate so it never reads like the navy
+        accent (nexus-600 is reserved for --teal below). ── */
+  --ink: 10 37 64;          /* #0a2540 — primary text (USAA navy) */
+  --ink-mid: 71 85 105;     /* #475569 — secondary text (slate-600) */
+  --ink-low: 100 116 139;   /* #64748b — tertiary / labels (slate-500) */
+  --ink-faint: 148 163 184; /* #94a3b8 — disabled / faint (slate-400) */
 
-  /* ── Brand accents: verify-teal → seal-gold ── */
-  --teal: 31 199 178;       /* #1fc7b2 — primary accent (verify) */
-  --teal-deep: 16 138 124;  /* #108a7c — pressed / deep teal */
-  --gold: 227 180 92;       /* #e3b45c — seal-gold (certification) */
+  /* ── Brand accents: verify-NAVY → seal-gold ── */
+  --teal: 29 87 132;        /* #1d5784 — primary accent (nexus-600, the "verify" navy) */
+  --teal-deep: 15 50 80;    /* #0f3250 — pressed / deep navy (nexus-800) */
+  --gold: 217 162 58;       /* #d9a23a — seal-gold (certification) */
 
-  /* ── Semantic verdict colors — DELIBERATELY separate from the teal accent.
+  /* ── Semantic verdict colors — DELIBERATELY separate from the navy accent.
         good/warn/crit carry meaning (healthy / degraded / broken), never brand. */
-  --good: 62 207 142;       /* #3ecf8e — healthy, up-trend */
-  --warn: 240 167 76;       /* #f0a74c — drift, degraded, aging verdict */
-  --crit: 240 89 107;       /* #f0596b — broken, breach, failure */
+  --good: 5 150 105;        /* #059669 — emerald, healthy / up-trend */
+  --warn: 217 119 6;        /* #d97706 — amber, drift / degraded / aging */
+  --crit: 220 38 38;        /* #dc2626 — red, broken / breach / failure */
 
   /* ── Verdict kinds (the three states of the ledger) ──
-        certified = proven good (teal) · refused = the honest stop (crit) ·
+        certified = proven good (navy) · refused = the honest stop (red) ·
         healed = an autonomous save (gold). Distinct from good/warn/crit so a
         healed verdict never reads as a warning. */
   --verdict-certified: var(--teal);
   --verdict-refused: var(--crit);
   --verdict-healed: var(--gold);
 
-  /* ── Typography strategy ──
-        Prefer Inter / JetBrains Mono when present on the host, else fall back
-        to the platform UI + monospace stacks. NO external CDN is loaded at
-        runtime (self-hosting the woff2 files is a later enhancement). */
-  --font-ui: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI',
+  /* ── Typography — matched to VKPower (Video): Source Sans 3 body, Inter display,
+        JetBrains Mono for code/hashes. Loaded from Google Fonts in index.html;
+        the platform stacks are the graceful fallback if the CDN is unreachable. */
+  --font-ui: 'Source Sans 3', 'Source Sans Pro', -apple-system, BlinkMacSystemFont,
+    'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --font-display: 'Inter', 'Source Sans 3', system-ui, -apple-system, 'Segoe UI',
     Roboto, Helvetica, Arial, sans-serif;
   --font-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', 'Cascadia Code',
     'Roboto Mono', Menlo, Consolas, 'Liberation Mono', monospace;
@@ -58,16 +64,16 @@
   --r-4: 12px;
   --r-5: 16px;
 
-  /* ── Elevation + glow ── */
-  --shadow-panel: 0 1px 0 rgb(255 255 255 / 0.02) inset,
-    0 10px 30px -18px rgb(0 0 0 / 0.8);
-  --shadow-pop: 0 12px 40px -12px rgb(0 0 0 / 0.75),
-    0 0 0 1px rgb(var(--line-strong) / 0.6);
-  --glow-teal: 0 0 0 1px rgb(var(--teal) / 0.35), 0 0 22px -6px rgb(var(--teal) / 0.5);
-  --glow-gold: 0 0 0 1px rgb(var(--gold) / 0.35), 0 0 22px -6px rgb(var(--gold) / 0.5);
+  /* ── Elevation + glow — soft, navy-tinted (VKPower Video shadow-card) ── */
+  --shadow-panel: 0 1px 2px rgb(15 50 80 / 0.05),
+    0 12px 28px -16px rgb(15 50 80 / 0.18);
+  --shadow-pop: 0 2px 6px rgb(15 50 80 / 0.08),
+    0 20px 44px -20px rgb(15 50 80 / 0.28);
+  --glow-teal: 0 0 0 1px rgb(var(--teal) / 0.30), 0 8px 20px -10px rgb(var(--teal) / 0.30);
+  --glow-gold: 0 0 0 1px rgb(var(--gold) / 0.35), 0 8px 20px -10px rgb(var(--gold) / 0.35);
 
-  /* ── Focus ring (keyboard) ── */
-  --focus-ring: 0 0 0 2px rgb(var(--bg)), 0 0 0 4px rgb(var(--teal) / 0.7);
+  /* ── Focus ring (keyboard) — a navy ring on a white halo ── */
+  --focus-ring: 0 0 0 2px rgb(255 255 255), 0 0 0 4px rgb(var(--teal) / 0.55);
 
-  color-scheme: dark;
+  color-scheme: light;
 }
