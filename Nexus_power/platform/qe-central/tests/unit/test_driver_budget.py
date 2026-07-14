@@ -47,7 +47,7 @@ class _FakeClient:
     async def poll_run(self, *, tenant_id, artifact_id, run_id):
         return {"run_id": run_id, "status": "completed", "failed": []}
 
-    async def auto_heal(self, *, tenant_id, artifact_id, test_ids, base_url):
+    async def auto_heal(self, *, tenant_id, artifact_id, test_ids, base_url, env_context=None):
         return {"healed": []}
 
     async def verify(self, *, tenant_id, artifact_id, test_id, base_url):

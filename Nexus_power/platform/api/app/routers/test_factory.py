@@ -1591,6 +1591,7 @@ async def _await_run_terminal(cycles: int = 200) -> str:
 async def _auto_capture_and_reanchor(
     *, tenant_id: str, artifact_id: str, token: str, scenario_id: str, step_number: int,
     tc, field_meta: dict, base_url: str, data, storage_state, ov, ra, spec_path: str,
+    env_context: dict | None = None,
 ) -> dict | None:
     """P2-full: re-run ONE scenario HEADLESS with a11y capture ON, then resolve a
     MULTI-SIGNAL (similo) re-anchor for the failing step — automatically, so the live
@@ -1614,7 +1615,7 @@ async def _auto_capture_and_reanchor(
         files = _configured_files(
             [tc], field_meta, base_url, data, data_by_test={},
             browsers=["chromium"], headed=False, workers=1, retries=0,
-            edited=edited, storage_state=storage_state,
+            edited=edited, storage_state=storage_state, env_context=env_context,
         )
         env = {
             "NEXUS_ENDPOINT": _INGEST_BASE, "NEXUS_TOKEN": token or "",
@@ -1663,6 +1664,11 @@ async def _run_auto_heal(run_id: str, ctx: dict) -> None:
     data = ctx.get("data") or {}
     max_attempts = int(ctx.get("max_attempts") or 3)
     storage_state = ctx.get("storage_state")  # captured auth session (or None)
+    # Multi-env (#7 heal parity): the resolved Environment Profile. When present the
+    # heal re-runs REBIND to that env (base_url + cookies + headers + basic-auth + pin)
+    # exactly like the graded run — so a fix is proven against the RIGHT env, never the
+    # default. None ⇒ single-env heal, byte-identical to before.
+    env_context = ctx.get("env_context")
     # AUTOPILOT (Mode B): when on, UNPROVEN (review/inferred) steps are EXECUTED + ASSERTED
     # (compiled with autonomous_resolve=True) so the agent DRIVES + PROVES them instead of
     # skipping for a human; the agentic analyst is auto-applied; the orthogonal recorded-
@@ -1839,7 +1845,7 @@ async def _run_auto_heal(run_id: str, ctx: dict) -> None:
                     scenario_id=sid, step_number=step, tc=tc, field_meta=field_meta,
                     base_url=base_url, data=data, storage_state=storage_state,
                     ov=overrides.get(sid), ra=reanchors.get(sid),
-                    spec_path=spec_path_by_sid.get(sid, ""))
+                    spec_path=spec_path_by_sid.get(sid, ""), env_context=env_context)
                 cap = heal_capture_store.get(tenant_id=tenant_id, artifact_id=artifact_id, scenario_id=sid)
                 nodes = (cap or {}).get("nodes") or []
             if not nodes:
@@ -1947,7 +1953,7 @@ async def _run_auto_heal(run_id: str, ctx: dict) -> None:
             files = _configured_files(
                 sel_cases, field_meta, base_url, data, data_by_test={},
                 browsers=["chromium"], headed=True, workers=1, retries=0, edited=edited,
-                storage_state=storage_state,
+                storage_state=storage_state, env_context=env_context,
             )
             sub_run_id = uuid.uuid4().hex
             env = {
@@ -2289,7 +2295,7 @@ async def _run_auto_heal(run_id: str, ctx: dict) -> None:
                         scenario_id=sid, step_number=step, tc=tc, field_meta=field_meta,
                         base_url=base_url, data=data, storage_state=storage_state,
                         ov=overrides.get(sid), ra=reanchors.get(sid),
-                        spec_path=spec_path_by_sid.get(sid, ""),
+                        spec_path=spec_path_by_sid.get(sid, ""), env_context=env_context,
                     )
                     if reanchor and reanchor.get("name"):
                         # P7: a bounded, k-anon-gated learned prior nudges the surfaced
@@ -2804,6 +2810,9 @@ async def auto_heal_run(
         "tenant_id": tenant_id, "artifact_id": artifact_id, "token": token,
         "scenario_ids": selected, "base_url": body.base_url, "data": body.data,
         "max_attempts": 3,
+        # Multi-env (#7 heal parity): the resolved Environment Profile the heal re-runs
+        # rebind to. None (single-env) ⇒ unchanged.
+        "env_context": body.env_context,
         "storage_state": await _run_storage_state(request, artifact_id, tenant_id),
         # AUTOPILOT (Mode B) — fully autonomous: execute+prove UNPROVEN steps + auto-apply
         # the grounded agentic analyst (no human approval). Default off => byte-identical.

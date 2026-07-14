@@ -28,6 +28,7 @@ class _FailingClient:
         self.run_calls = 0
         self.auto_heal_calls = 0
         self.last_env_context = "UNSET"
+        self.heal_env_context = "UNSET"
         self.verify_base_urls: list[str] = []
 
     async def fetch_journey_graph(self, *, tenant_id, artifact_id):
@@ -60,8 +61,9 @@ class _FailingClient:
         # No per-scenario timeline ⇒ _failed_scenarios falls back to run status.
         return {"run_header": {"run_id": run_id, "duration_ms": 1000}}
 
-    async def auto_heal(self, *, tenant_id, artifact_id, test_ids, base_url):
+    async def auto_heal(self, *, tenant_id, artifact_id, test_ids, base_url, env_context=None):
         self.auto_heal_calls += 1
+        self.heal_env_context = env_context
         return {"run_id": "heal-1", "status": "passed"}
 
     async def verify(self, *, tenant_id, artifact_id, test_id, base_url):
@@ -97,7 +99,7 @@ def test_env_context_flows_to_the_run_step():
     assert client.last_env_context == _UAT_CTX
 
 
-def test_env_bound_failure_skips_heal_never_heals_the_default_env():
+def test_env_bound_failure_heals_against_the_bound_env():
     client = _FailingClient()
     outcome = asyncio.run(execute_cycle(
         cycle_id="c2", mode="full", trigger="manual",
@@ -106,12 +108,14 @@ def test_env_bound_failure_skips_heal_never_heals_the_default_env():
         env_context=_UAT_CTX,
     ))
     assert outcome.state == CYCLE_STATE_DONE
-    heal = outcome.result.get("heal") or {}
-    assert heal.get("skipped") is True                     # heal deferred, honestly
-    assert client.auto_heal_calls == 0                     # never healed the wrong env
-    assert "T1" in (outcome.result.get("failed_test_ids") or [])  # reported RED as-is
-    # VERIFY's live readiness probe is suppressed (base_url="") so it never probes
-    # the DEFAULT env for an env-bound cycle — no wrong-env readiness signal.
+    # HEAL now RUNS for an env-bound cycle, rebinding the re-runs to the SAME env the
+    # graded run used — so a fix is proven against uat, never the default env.
+    assert client.auto_heal_calls == 1
+    assert client.heal_env_context == _UAT_CTX
+    assert not (outcome.result.get("heal") or {}).get("skipped")
+    # VERIFY's live readiness probe stays suppressed (base_url="") — making it env-aware
+    # for a cookie-routed env needs a preflight change; an advisory signal against the
+    # DEFAULT env would be a wrong-env signal, so we emit none rather than a wrong one.
     assert client.verify_base_urls and all(b == "" for b in client.verify_base_urls)
 
 

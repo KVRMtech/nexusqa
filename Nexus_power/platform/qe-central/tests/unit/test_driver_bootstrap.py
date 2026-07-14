@@ -64,7 +64,7 @@ class _EmptyUntilGeneratedClient:
             "scenarios": [{"scenario_id": "T1", "status": "passed"}],
         }
 
-    async def auto_heal(self, *, tenant_id, artifact_id, test_ids, base_url):
+    async def auto_heal(self, *, tenant_id, artifact_id, test_ids, base_url, env_context=None):
         return {"run_id": "heal-1", "status": "passed"}
 
     async def verify(self, *, tenant_id, artifact_id, test_id, base_url):

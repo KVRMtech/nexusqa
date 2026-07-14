@@ -177,6 +177,7 @@ class CycleClient(Protocol):
     async def poll_run(self, *, tenant_id: str, artifact_id: str, run_id: str) -> dict: ...
     async def auto_heal(
         self, *, tenant_id: str, artifact_id: str, test_ids: Sequence[str], base_url: str,
+        env_context: Mapping | None = None,
     ) -> dict: ...
     async def verify(
         self, *, tenant_id: str, artifact_id: str, test_id: str, base_url: str,
@@ -362,8 +363,11 @@ class HttpCycleClient:
 
     async def auto_heal(
         self, *, tenant_id: str, artifact_id: str, test_ids: Sequence[str], base_url: str,
+        env_context: Mapping | None = None,
     ) -> dict:
         body = {"test_ids": list(test_ids), "base_url": base_url, "autonomous": True}
+        if env_context:  # multi-env: heal re-runs rebind to the bound env
+            body["env_context"] = dict(env_context)
         out = await self._post(
             tenant_id=tenant_id,
             path=f"/api/v1/test-factory/{artifact_id}/auto-heal/run-config",
@@ -906,34 +910,18 @@ async def execute_cycle(
         await _enforce(CYCLE_STATE_RUNNING)
 
         # ── 5) HEALING → auto-heal the failures (never green-washes) ──────────
+        # Multi-env: the heal re-runs REBIND to env_context (base_url + cookies +
+        # headers + basic-auth + pin), so a fix is proven against the SAME env the
+        # graded run used — never the default. None ⇒ single-env heal, unchanged.
         heal_summary: dict | None = None
         if failed_ids:
-            if env_context:
-                # Multi-env: auto-heal re-EXECUTES against the live app, but the heal
-                # path does not yet rebind env_context. Healing a uat failure against
-                # the DEFAULT env would be a green-wash, so for an env-bound cycle we
-                # SKIP heal and report the failures honestly as-is (RED). Auto-heal is
-                # unchanged for single-env cycles; heal-under-env is a tracked follow-on.
-                heal_summary = {
-                    "skipped": True,
-                    "reason": "auto-heal deferred for env-bound cycles — failures reported "
-                              "as-is (never healed against the default environment)",
-                    "failed_count": len(failed_ids),
-                }
-                base_result["heal"] = heal_summary
-                logger.info(
-                    "qec.cycle.heal_skipped_env_bound",
-                    extra={"tenant_id": tenant_id, "app_id": app_id, "cycle_id": cycle_id,
-                           "failed": len(failed_ids)},
-                )
-            else:
-                await hooks.save_state(CYCLE_STATE_HEALING)
-                heal_summary = await _heal_and_meter(
-                    client=client, app=app, test_ids=failed_ids,
-                    budget=budget, meter_fn=_meter,
-                )
-                base_result["heal"] = heal_summary
-                await _enforce(CYCLE_STATE_HEALING)
+            await hooks.save_state(CYCLE_STATE_HEALING)
+            heal_summary = await _heal_and_meter(
+                client=client, app=app, test_ids=failed_ids,
+                budget=budget, meter_fn=_meter, env_context=env_context,
+            )
+            base_result["heal"] = heal_summary
+            await _enforce(CYCLE_STATE_HEALING)
 
         # ── 6) VERIFYING → deterministic rubric + readiness per changed script ─
         await hooks.save_state(CYCLE_STATE_VERIFYING)
@@ -1098,12 +1086,16 @@ async def _run_and_meter(
 async def _heal_and_meter(
     *, client: CycleClient, app: AppConfig, test_ids: list[str],
     budget: CycleBudget, meter_fn: Callable[..., Awaitable[None]],
+    env_context: Mapping | None = None,
 ) -> dict:
     """Auto-heal the failing cases (honest: an unprovable step ⇒ ``stop_reason``,
-    NO ``clean_run_version`` — never a silent green)."""
+    NO ``clean_run_version`` — never a silent green).
+
+    ``env_context`` (multi-env) rebinds the heal re-runs to the bound env so a fix is
+    proven against the RIGHT env; ``None`` ⇒ single-env heal, unchanged."""
     started = await client.auto_heal(
         tenant_id=app.tenant_id, artifact_id=app.latest_artifact_id,
-        test_ids=test_ids, base_url=app.base_url,
+        test_ids=test_ids, base_url=app.base_url, env_context=env_context,
     )
     run_id = str(started.get("run_id") or "")
     if not run_id:
