@@ -614,7 +614,7 @@ async def create_environment(
         result = _env_public_view(row)
     logger.info("qec.apps.env_created",
                 extra={"tenant_id": tenant_id, "app_id": app_id, "environment_id": env_id,
-                       "name": row.name, "has_credentials": bool(creds_blob),
+                       "env_name": row.name, "has_credentials": bool(creds_blob),
                        "actor": user.get("sub", "")})
     return result
 
