@@ -220,6 +220,11 @@ class GuardContext:
     login_host: str = ""
     phase: Phase = Phase.EXPLORE
     auth_window: AuthWindow = field(default_factory=lambda: AuthWindow(max_requests=10, window_ms=30_000))
+    #: Bounds the mutating-POST burst a single approved Phase-B submit may emit, so
+    #: the SUBMIT window authorises the approved flow's POST(s) — NOT unlimited
+    #: analytics/autosave/co-located POSTs that happen to fire during the window.
+    #: Opened by the crawler at each submit; fail-closed when over budget / past T.
+    submit_window: AuthWindow = field(default_factory=lambda: AuthWindow(max_requests=4, window_ms=15_000))
     attestation: Any = None
     submit_flow_approved: bool = False
 
@@ -237,6 +242,19 @@ class GuardContext:
                     reason="AUTH window closed — login burst exceeded the "
                            "request/time budget",
                     rule_id="guard.auth.window_closed",
+                    event_kind=EVENT_BLOCKED_METHOD, severity="critical",
+                )
+        if self.phase is Phase.SUBMIT:
+            # Same caller-side budget as AUTH: an approved submit authorises a small
+            # mutating-POST burst, not an open door for every POST the page fires
+            # during the goto→refill→click window (analytics/autosave/co-located forms).
+            self.submit_window.note(now_ms)
+            if (method or "").strip().upper() in MUTATING_METHODS and not self.submit_window.is_open(now_ms):
+                return GuardDecision(
+                    allow=False,
+                    reason="SUBMIT window closed — the approved flow exceeded the "
+                           "request/time budget",
+                    rule_id="guard.submit.window_closed",
                     event_kind=EVENT_BLOCKED_METHOD, severity="critical",
                 )
         return classify_request(
@@ -705,8 +723,11 @@ class Crawler:
             prev_approved = self._guard.submit_flow_approved
             # Flip the shared guard to SUBMIT so the network route handler authorises the
             # approved submit POST; restore EXPLORE no matter what (fail-closed default).
+            # Open a FRESH bounded window per submit so the burst budget can't accrue
+            # across flows.
             self._guard.phase = Phase.SUBMIT
             self._guard.submit_flow_approved = True
+            self._guard.submit_window.open(self._clock.now_ms())
             try:
                 result = await execute_submit_phase_b(
                     self._port, control, item.url, self._emitter, self._clock,
@@ -728,7 +749,10 @@ class Crawler:
                 self._tracker.note_action()
             ps = result.page_state
             dest = (getattr(ps, "location", "") or "").strip() if ps else ""
-            if result.confirmed and result.outcome == "navigation" and dest and self._in_scope(dest):
+            # Honour max_depth for submit-derived states too (mirrors _discover's
+            # depth gate) so an attested submit chain cannot crawl past the budget.
+            if (result.confirmed and result.outcome == "navigation" and dest
+                    and item.depth < self._budget.max_depth and self._in_scope(dest)):
                 self._frontier.push(
                     FrontierItem(url=dest, depth=item.depth + 1,
                                  discovered_via=f"submit:{name}",
