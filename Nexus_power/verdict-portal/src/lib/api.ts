@@ -35,6 +35,7 @@ import type {
   AutonomyByBand,
   AutonomyTrend,
   ClientApp,
+  EnvAttestation,
   CoverageGap,
   CoverageScorecard,
   CreateCycleResponse,
@@ -251,6 +252,31 @@ export class QecApiClient {
     if (this.mock)
       return this.mocked(() => ({ app_id: appId, status: 'deleted' as const, credentials_zeroed: true }), opts?.signal);
     return this.del<DeleteAppResponse>(`${QEC}/apps/${encodeURIComponent(appId)}`, opts);
+  }
+
+  /**
+   * Re-attest (or edit) the crawl-gate attestation. PATCH /apps is WHOLE-REPLACE
+   * on env_attestation (routers/apps.py), so we MUST spread the current attestation
+   * and overlay only the changed fields — otherwise re-setting the expiry would wipe
+   * attested_by / rules_of_engagement / preflight and knock the app back to 'draft'.
+   * One-click "extend N days" = reAttest(app, { expires_at }).
+   */
+  reAttest(app: ClientApp, patch: Partial<EnvAttestation>, opts?: RequestOpts): Promise<ClientApp> {
+    const env_attestation: EnvAttestation = { ...(app.env_attestation || {}), ...patch };
+    return this.updateApp(app.app_id, { env_attestation }, opts);
+  }
+
+  /**
+   * Add answer-key seeds (post-crawl seed-confirm). PATCH is WHOLE-REPLACE on
+   * answer_key too, so spread the existing answer_key AND its nested `fill` map
+   * before overlaying the new field→value pairs — otherwise one new seed would
+   * erase every existing fill/note/outcome.
+   */
+  addSeeds(app: ClientApp, newFills: Record<string, unknown>, opts?: RequestOpts): Promise<ClientApp> {
+    const ak = (app.answer_key || {}) as Record<string, unknown>;
+    const fill = { ...((ak.fill as Record<string, unknown> | undefined) || {}), ...newFills };
+    const answer_key = { ...ak, fill };
+    return this.updateApp(app.app_id, { answer_key }, opts);
   }
 
   // ═══════════ Environment Profiles (multi-env, crawl-once/run-many) ═══════════

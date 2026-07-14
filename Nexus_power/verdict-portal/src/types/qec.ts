@@ -170,6 +170,23 @@ export interface Fences {
  * only `has_credentials`). GET /apps, GET /apps/{id}, and the create/update
  * responses all return this.
  */
+/** Crawl-gate lifecycle the app UI reads (routers/apps.py:_public_view →
+ *  security/prod_guard.py:onboarding_status). draft = not yet safe to crawl;
+ *  attested = signed + non-prod but preflight not passed; live = fully gated open. */
+export type OnboardingStatus = 'draft' | 'attested' | 'live';
+
+/** Crawl coverage (engines/qe-explorer _build_coverage), carried on the
+ *  exploration `stats.coverage` and surfaced on GET /explorations/{id}. Turns
+ *  "why did the crawl only reach N flows?" into a NAMED seed-remediation list. */
+export interface ExplorationCoverage {
+  forms_found: number;
+  forms_submitted: number;
+  fields_inferred: string[];
+  fields_needing_seed: string[];
+  submit_candidates: string[];
+  summary?: string;
+}
+
 export interface ClientApp {
   app_id: string;
   tenant_id: string;
@@ -186,6 +203,14 @@ export interface ClientApp {
   baseline_fingerprint_id: string;
   status: AppStatus;
   has_credentials: boolean;
+  /** Crawl-gate status (routers/apps.py:_public_view). draft/attested/live. */
+  onboarding_status?: OnboardingStatus;
+  /** True when the app is fully gated open for a crawl (all reasons cleared). */
+  onboarding_ready?: boolean;
+  /** The unmet crawl-gate reasons when not ready (auditable refusal). */
+  onboarding_reasons?: string[];
+  /** env_attestation.expires_at echoed for a quick expiry read. */
+  attestation_expires_at?: string;
   /** Multi-env: the Environment Profile name every cycle runs against ('' = the
    *  app base URL, single-env). Surfaced from schedule.run_environment. */
   run_environment: string;

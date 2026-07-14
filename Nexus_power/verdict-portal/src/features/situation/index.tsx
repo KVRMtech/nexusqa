@@ -39,7 +39,7 @@ import {
   StatusDot,
   VerdictBadge,
 } from '../../components';
-import type { CriticalityBand, ScenarioView } from '../../types/qec';
+import type { CriticalityBand, ExplorationCoverage, ScenarioView } from '../../types/qec';
 import VerdictLedger from '../ledger';
 import HonestyFeed from '../honesty';
 
@@ -92,10 +92,23 @@ function SituationHeader({ appId }: { appId: string }) {
           description: 'Taking longer than expected — check back shortly, then Run cycle.',
         });
       } else if (terminal.status === 'completed') {
-        const s = (terminal.stats ?? {}) as { visits?: number; actions?: number };
+        const s = (terminal.stats ?? {}) as {
+          visits?: number;
+          actions?: number;
+          coverage?: ExplorationCoverage;
+        };
         toast.success('Crawl complete', {
           description: `${s.visits ?? 0} pages · ${s.actions ?? 0} actions captured. You can Run cycle now.`,
         });
+        // Post-crawl seed-confirm nudge: name the fields that blocked deeper coverage,
+        // so the operator's remediation is a targeted seed request, not blind guessing.
+        const needsSeed = s.coverage?.fields_needing_seed ?? [];
+        if (needsSeed.length > 0) {
+          toast.warning(`${needsSeed.length} field(s) need a seed to crawl deeper`, {
+            description: needsSeed.slice(0, 6).join(', ') + (needsSeed.length > 6 ? '…' : ''),
+            duration: 12000,
+          });
+        }
         state.reload();
       } else {
         toast.error(`Crawl ${terminal.status}`, {
@@ -425,6 +438,100 @@ function CyclesCard({ appId }: { appId: string }) {
   );
 }
 
+// ── onboarding attestation (the fail-closed crawl gate, made legible) ─────────
+
+function AttestationCard({ appId }: { appId: string }) {
+  const state = useAsync((signal) => api.getApp(appId, { signal }), [appId]);
+  const [busy, setBusy] = useState(false);
+  const app = state.data;
+
+  const reAttest = async () => {
+    if (!app) return;
+    setBusy(true);
+    try {
+      // One-click extend: spread-safe (api.reAttest keeps attested_by / RoE / preflight).
+      const expires_at = new Date(Date.now() + 90 * 864e5).toISOString();
+      await api.reAttest(app, { expires_at });
+      toast.success('Re-attested', { description: 'Attestation window extended 90 days.' });
+      state.reload();
+    } catch (err) {
+      toast.error('Could not re-attest', { description: (err as QecApiError).message });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const statusTone = (s?: string): 'good' | 'warn' | 'crit' =>
+    s === 'live' ? 'good' : s === 'attested' ? 'warn' : 'crit';
+  const att = app?.env_attestation ?? {};
+
+  return (
+    <Panel tone="elevated">
+      <SectionHead
+        title="Onboarding attestation"
+        subtitle="the fail-closed crawl gate — signed RoE · non-prod · preflight"
+        icon={<FileCheck2 size={16} className="text-teal" />}
+        right={
+          app && (
+            <Pill tone={statusTone(app.onboarding_status)} size="sm" variant="soft">
+              {app.onboarding_status ?? 'draft'}
+            </Pill>
+          )
+        }
+      />
+      <div className="mt-3">
+        {state.isLoading && <SkeletonRows rows={3} />}
+        {state.isError && <ErrorState error={state.error} onRetry={state.reload} />}
+        {state.isSuccess && app && (
+          <>
+            <dl className="grid grid-cols-2 gap-2 text-2xs">
+              <div>
+                <dt className="text-ink-low">Env kind</dt>
+                <dd className="text-ink font-medium">{String(att.env_kind || '—')}</dd>
+              </div>
+              <div>
+                <dt className="text-ink-low">Attested by</dt>
+                <dd className="text-ink font-medium truncate">{String(att.attested_by || '—')}</dd>
+              </div>
+              <div>
+                <dt className="text-ink-low">RoE signed</dt>
+                <dd className="text-ink font-medium">{att.rules_of_engagement?.signed ? 'yes' : 'no'}</dd>
+              </div>
+              <div>
+                <dt className="text-ink-low">Expires</dt>
+                <dd className="text-ink font-medium">
+                  {app.attestation_expires_at ? timeAgo(app.attestation_expires_at) : '—'}
+                </dd>
+              </div>
+            </dl>
+            {!app.onboarding_ready && (app.onboarding_reasons?.length ?? 0) > 0 && (
+              <ul className="mt-3 space-y-1.5">
+                {app.onboarding_reasons!.map((reason, i) => (
+                  <li
+                    key={i}
+                    className="flex items-start gap-2 rounded-lg px-3 py-2 ring-1 ring-crit/25 bg-crit/[0.06]"
+                  >
+                    <ShieldAlert size={13} className="text-crit mt-0.5 shrink-0" aria-hidden />
+                    <span className="text-2xs text-ink leading-snug">{reason}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+            <div className="mt-3 flex items-center justify-between gap-2">
+              <span className="text-2xs text-ink-low">
+                {app.onboarding_ready ? 'Gate open — crawl allowed.' : 'Gate closed — resolve the reasons.'}
+              </span>
+              <Button variant="secondary" size="sm" loading={busy} disabled={!att.env_kind} onClick={reAttest}>
+                Re-attest +90d
+              </Button>
+            </div>
+          </>
+        )}
+      </div>
+    </Panel>
+  );
+}
+
 // ── the situation ────────────────────────────────────────────────────────────
 
 export function AppSituation() {
@@ -436,6 +543,7 @@ export function AppSituation() {
       <SituationHeader appId={id} />
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 items-start">
         <div className="space-y-4">
+          <AttestationCard appId={id} />
           <ApprovalQueue appId={id} />
           <CoverageCard appId={id} />
           <InvariantsCard appId={id} />
