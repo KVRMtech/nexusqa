@@ -426,6 +426,7 @@ async def _fire_callback(req: ExploreRequest, summary: Optional[CrawlSummary],
             "guard_blocks": summary.guard_blocks if summary else 0,
         },
         "storage_state": summary.storage_state if summary else None,
+        "coverage": summary.coverage if summary else None,
     }
     payload = json.dumps(body, sort_keys=True, separators=(",", ":")).encode("utf-8")
     signature = settings.sign_payload(payload)

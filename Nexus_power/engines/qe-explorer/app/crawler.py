@@ -260,6 +260,9 @@ class CrawlSummary:
     manifest_path: str
     storage_state: Optional[dict[str, Any]] = None
     detail: str = ""
+    #: What the crawl found vs could fill/advance (forms_found, fields_inferred,
+    #: fields_needing_seed, submit_candidates) — the coverage the operator sees.
+    coverage: Optional[dict[str, Any]] = None
 
 
 # ─── The crawler ─────────────────────────────────────────────────────────────
@@ -334,6 +337,13 @@ class Crawler:
         self._done = False
         self._guard_blocks = 0
         self._storage_state: Optional[dict[str, Any]] = None
+        # Coverage accounting (crawl-once/run-many legibility): what the crawl found
+        # vs could actually fill/advance, so the shallow-vs-full gap is visible and the
+        # human's remediation is a NAMED, targeted seed request — never blind guessing.
+        self._forms_found = 0
+        self._fields_inferred: list[str] = []      # filled with a synthesized default
+        self._fields_unfilled: list[str] = []      # no seed AND no safe default -> needs seed
+        self._submit_candidates: list[str] = []    # a submit found but not clicked (Phase-A boundary)
 
     # -- public control / observation -----------------------------------------
 
@@ -346,6 +356,39 @@ class Crawler:
         """The crawl's monotonic clock reading (for the route handler's guard
         decision + guard_event timestamps — one clock across the whole crawl)."""
         return self._clock.now_ms()
+
+    def _build_coverage(self) -> dict[str, Any]:
+        """The crawl's coverage account (deduped, first-appearance order): what was
+        found vs could be filled/advanced. ``forms_submitted`` is 0 in the explore
+        phase (the submit boundary) — ``submit_candidates`` are the flows a Phase-B
+        attested submit would carry deeper. Turns the shallow-vs-full gap into a
+        NAMED, targeted seed request instead of blind guessing."""
+        def _dedup(items: list[str]) -> list[str]:
+            seen: set[str] = set()
+            out: list[str] = []
+            for it in items:
+                k = (it or "").strip()
+                if k and k.lower() not in seen:
+                    seen.add(k.lower())
+                    out.append(k)
+            return out
+
+        inferred = _dedup(self._fields_inferred)
+        needs_seed = _dedup(self._fields_unfilled)
+        submits = _dedup(self._submit_candidates)
+        return {
+            "forms_found": self._forms_found,
+            "forms_submitted": 0,
+            "fields_inferred": inferred,
+            "fields_needing_seed": needs_seed,
+            "submit_candidates": submits,
+            "summary": (
+                f"{self._forms_found} form(s) found; "
+                f"{len(inferred)} field(s) auto-filled with a default; "
+                f"{len(needs_seed)} field(s) need a real seed; "
+                f"{len(submits)} submit(s) not exercised (submit boundary)."
+            ),
+        }
 
     @property
     def emitter(self) -> emit.ManifestEmitter:
@@ -408,6 +451,7 @@ class Crawler:
             manifest_path=str(emit.manifest_path(self.work_dir, self.crawl_id)),
             storage_state=self._storage_state,
             detail=detail,
+            coverage=self._build_coverage(),
         )
         logger.info("qec.crawler.completed crawl_id=%s stop_reason=%s states=%d "
                     "actions=%d screenshots=%d guard_blocks=%d",
@@ -518,13 +562,21 @@ class Crawler:
         is_form = any((c.get("kind") in _FILLABLE_KINDS) and not _is_password(c)
                       for c in controls)
         snapshot_controls = controls
-        if is_form and self._answer_key:
+        if is_form:
+            # Fill even with NO answer key: the typed default filler synthesizes valid
+            # low-confidence values so validation-gated forms advance and deeper flows
+            # become reachable (client seeds still win where present).
+            self._forms_found += 1
             fill = await fill_form_phase_a(
-                self._port, controls, self._answer_key, self._clock,
+                self._port, controls, self._answer_key or AnswerKey(), self._clock,
                 phase=Phase.EXPLORE.value, state_id=fingerprint,
             )
             actions.extend(fill.actions)
             self._tracker.note_action(len(fill.actions))
+            self._fields_inferred.extend(fill.inferred_fields)
+            self._fields_unfilled.extend(fill.unfilled_fields)
+            self._submit_candidates.extend(
+                fc.name for fc in fill.flow_candidates if fc.name and not fc.danger)
             if fill.filled:
                 # re-inventory so form_snapshot carries the committed values.
                 after_fill = await self._observe()
