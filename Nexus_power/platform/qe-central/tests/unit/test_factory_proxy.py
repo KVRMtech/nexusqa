@@ -95,11 +95,12 @@ def test_manager_may_mutate():
     assert _client(MANAGER).post("/api/v1/test-factory/a/scripts/regenerate-all", json={}).status_code == 200
 
 
-def test_only_the_four_studio_roots_are_bridged():
+def test_only_the_studio_roots_are_bridged():
     c = _client(ADMIN)
     assert c.get("/api/v1/artifacts/art1/x").status_code == 200
     assert c.get("/api/v1/test-runs/run1").status_code == 200
     assert c.get("/api/v1/eyes/art1/extract").status_code == 200
+    assert c.get("/api/v1/agentic/config").status_code == 200
     # NOT an open proxy — an unlisted path has no route here at all.
     _FakeClient.captured = {}
     assert c.get("/api/v1/secrets/leak").status_code == 404

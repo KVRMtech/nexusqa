@@ -9,6 +9,7 @@ import LoginPage from './app/LoginPage';
 import FleetCommandCenter from './features/fleet';
 import AppSituation from './features/situation';
 import OnboardingWizard from './features/onboarding';
+import TestStudio from './features/studio';
 
 function FullPageLoading() {
   return (
@@ -44,6 +45,7 @@ export default function App() {
       >
         <Route index element={<FleetCommandCenter />} />
         <Route path="/apps/:id" element={<AppSituation />} />
+        <Route path="/apps/:id/studio" element={<TestStudio />} />
         <Route path="/onboard" element={<OnboardingWizard />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />

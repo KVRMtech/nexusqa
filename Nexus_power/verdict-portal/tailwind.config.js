@@ -33,7 +33,38 @@ export default {
         },
         // ── Brand accents (teal → gold) ──
         teal: ch('--teal'),
-        gold: ch('--gold'),
+        // `gold` DEFAULT stays the verdict token (text-gold / bg-gold in the
+        // native portal); the numeric stops below are ADDITIVE, consumed only by
+        // the ported Test Studio panels (gold-300 / from-gold-400 gradients).
+        gold: {
+          DEFAULT: ch('--gold'),
+          50: '#fdf8ec',
+          100: '#faedca',
+          200: '#f4d98e',
+          300: '#ecc14f',
+          400: '#e0ac2c',
+          500: '#D9A23A',
+          600: '#b88324',
+          700: '#92661d',
+          800: '#6b4b15',
+          900: '#43300d',
+        },
+        // ── Test Studio (ported video-portal panels) — navy `nexus-*` scale.
+        // Additive: nothing in the native verdict UI references it. The panels
+        // render in their own polished light identity, embedded in the shell.
+        nexus: {
+          50: '#e8f0f9',
+          100: '#c5d9ee',
+          200: '#9ec0e0',
+          300: '#76a5d1',
+          400: '#4f8ac3',
+          500: '#2670a3',
+          600: '#1d5784',
+          700: '#164465',
+          800: '#0f3250',
+          900: '#0a2540',
+          950: '#051524',
+        },
         // ── Semantic verdict colors (separate from the teal accent) ──
         good: ch('--good'),
         warn: ch('--warn'),
@@ -61,6 +92,9 @@ export default {
         pop: 'var(--shadow-pop)',
         'glow-teal': 'var(--glow-teal)',
         'glow-gold': 'var(--glow-gold)',
+        // Ported Test Studio elevation tokens (navy-tinted cards).
+        card: '0 1px 2px rgba(15, 50, 80, 0.04), 0 12px 28px -16px rgba(15, 50, 80, 0.18)',
+        'card-hover': '0 2px 6px rgba(15, 50, 80, 0.06), 0 20px 44px -20px rgba(15, 50, 80, 0.30)',
       },
       fontSize: {
         '2xs': ['0.6875rem', { lineHeight: '1rem' }],

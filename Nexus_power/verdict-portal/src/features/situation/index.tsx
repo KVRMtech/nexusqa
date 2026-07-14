@@ -9,11 +9,12 @@
  * `AppSituation`.
  */
 import { useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import { toast } from 'sonner';
 import {
   ArrowLeft,
   FileCheck2,
+  FlaskConical,
   GitBranch,
   Layers,
   PlayCircle,
@@ -54,6 +55,7 @@ const BAND_TONE: Record<CriticalityBand, 'crit' | 'warn' | 'teal' | 'neutral'> =
 
 function SituationHeader({ appId }: { appId: string }) {
   const state = useAsync((signal) => api.getApp(appId, { signal }), [appId]);
+  const navigate = useNavigate();
   const [triggering, setTriggering] = useState(false);
   const [crawling, setCrawling] = useState(false);
 
@@ -144,6 +146,15 @@ function SituationHeader({ appId }: { appId: string }) {
         <p className="text-2xs text-ink-low font-mono mt-1 truncate">{app.base_url}</p>
       </div>
       <div className="flex items-center gap-2 shrink-0">
+        <Button
+          variant="secondary"
+          onClick={() => navigate(`/apps/${appId}/studio`)}
+          disabled={!app.latest_artifact_id}
+          title={app.latest_artifact_id ? 'Browse + run every discovered flow' : 'Crawl first to populate the Studio'}
+          icon={<FlaskConical size={15} />}
+        >
+          Test Studio
+        </Button>
         <Button variant="secondary" loading={crawling} onClick={crawl} icon={<Radar size={15} />}>
           Crawl
         </Button>

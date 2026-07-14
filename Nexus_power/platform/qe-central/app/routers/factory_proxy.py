@@ -15,9 +15,10 @@ SECURITY:
   * RBAC — the service token can mutate (run / generate / heal); so a MUTATING request
     is refused here unless the PORTAL user is admin/manager, mirroring the factory's
     own ``_PRIVILEGED`` gate. A viewer may read (browse cases/scripts) but not run.
-  * Surface — only the four artifact-keyed factory roots the Test Studio needs are
-    bridged (``test-factory`` / ``artifacts`` / ``test-runs`` / ``eyes``). Anything
-    else 404s here; the bridge is not a general-purpose open proxy.
+  * Surface — only the artifact-keyed factory roots the Test Studio needs are
+    bridged (``test-factory`` / ``artifacts`` / ``test-runs`` / ``eyes`` plus the
+    tenant-level ``agentic`` agent-toggle config). Anything else 404s here; the
+    bridge is not a general-purpose open proxy.
 
 ADDITIVE: this is a new router mounted at absolute ``/api/v1/{root}/...`` paths that do
 not collide with the existing ``/api/v1/qec/*`` routes. No factory code, no video code,
@@ -39,8 +40,10 @@ logger = logging.getLogger("qec.factory_proxy")
 
 router = APIRouter(tags=["Factory bridge (Test Studio)"])
 
-#: The artifact-keyed factory path roots the Test Studio uses. Nothing else is bridged.
-_ALLOWED_ROOTS = ("test-factory", "artifacts", "test-runs", "eyes")
+#: The factory path roots the Test Studio uses. Nothing else is bridged.
+#: The first four are artifact-keyed; ``agentic`` is the tenant-level agent-toggle
+#: config the Playwright execution panel reads (degrades gracefully if absent).
+_ALLOWED_ROOTS = ("test-factory", "artifacts", "test-runs", "eyes", "agentic")
 
 #: Read methods are open to any authenticated tenant user; everything else mutates.
 _READ_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
