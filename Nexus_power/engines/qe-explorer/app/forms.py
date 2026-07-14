@@ -33,6 +33,7 @@ import hashlib
 import logging
 import re
 from dataclasses import asdict, dataclass, field
+from datetime import date
 from typing import Any, Mapping, Optional, Sequence
 from urllib.parse import urlsplit
 
@@ -128,6 +129,13 @@ class FormFillResult:
     actions: list[emit.ActionRecord] = field(default_factory=list)
     flow_candidates: list[FlowCandidate] = field(default_factory=list)
     filled: int = 0
+    #: Fields filled from a SYNTHESIZED default (no answer-key hit) — low-confidence,
+    #: so the coverage report can flag them and ask for a real seed.
+    inferred: int = 0
+    inferred_fields: list[str] = field(default_factory=list)
+    #: Fillable fields left EMPTY (no seed AND no safe default) — the exact set the
+    #: coverage report names as "add seed for these to unlock more flows".
+    unfilled_fields: list[str] = field(default_factory=list)
 
 
 def _norm(text: Any) -> str:
@@ -141,6 +149,72 @@ def _is_password(control: Mapping[str, Any]) -> bool:
 
 def _truthy(value: str) -> bool:
     return _norm(value) in _TRUTHY
+
+
+#: Select placeholder options that are not real values (never chosen as a default).
+_PLACEHOLDER_OPTIONS = frozenset({
+    "", "select", "choose", "please select", "select one", "select an option",
+    "--", "---", "-- select --", "none", "choose one", "pick one",
+})
+
+
+def _synthesize_default(control: Mapping[str, Any], kind: str, name: str) -> Optional[str]:
+    """A structurally-VALID, LOW-CONFIDENCE value for a fillable control that the
+    answer key does not cover — so a client-side-validation-gated form can be advanced
+    toward validity WITHOUT a hand-authored seed. Grounded in the control's
+    ``input_type`` / ``options`` / accessible name. Returns ``None`` when no safe
+    default exists (the field is then left empty and named in the coverage report).
+
+    NEVER produces a value for a password field (skipped by the caller) or a danger
+    control (those are buttons, never fillable). A required checkbox is auto-checked
+    only to clear a blocking gate (e.g. 'I agree'); a radio group / optional toggle is
+    left to the human, since which option is a semantic choice."""
+    itype = _norm(control.get("input_type"))
+    n = _norm(name)
+
+    if kind == "select":
+        for opt in (control.get("options") or []):
+            o = str(opt).strip()
+            if o and _norm(o) not in _PLACEHOLDER_OPTIONS:
+                return o
+        return None
+    if kind in _TOGGLE_KINDS:
+        if kind != "radio" and bool(control.get("required")):
+            return "true"
+        return None
+
+    # text / date value fields — input_type first, then accessible-name heuristics.
+    if itype == "email" or "email" in n or "e-mail" in n:
+        return "qa.autotest@example.com"
+    if itype == "date" or kind == "date":
+        return date.today().isoformat()
+    if itype == "tel" or "phone" in n or "mobile" in n or "telephone" in n:
+        return "5551234567"
+    if itype == "number" or n in ("age", "quantity", "qty") or n.endswith(" age"):
+        return "1"
+    if itype == "url" or "website" in n or n.endswith(" url"):
+        return "https://example.com"
+    if "zip" in n or "postal" in n or "postcode" in n or "post code" in n:
+        return "12345"
+    if ("first" in n and "name" in n) or n == "fname":
+        return "Test"
+    if ("last" in n and "name" in n) or n == "lname" or "surname" in n:
+        return "User"
+    if "full name" in n or n == "name" or n.endswith(" name"):
+        return "Test User"
+    if "city" in n:
+        return "Springfield"
+    if n in ("state", "province"):
+        return "California"
+    if "address" in n or "street" in n:
+        return "1 Test Street"
+    if "company" in n or "organization" in n or "organisation" in n or "employer" in n:
+        return "Autotest Inc"
+    if "country" in n:
+        return "United States"
+    if itype in ("", "text", "search") or kind == "text":
+        return "autotest"
+    return None
 
 
 async def fill_form_phase_a(
@@ -180,18 +254,27 @@ async def fill_form_phase_a(
             logger.info("qec.forms.skip_nameless_field kind=%s", kind)
             continue
         value = answer_key.resolve(name)
+        seeded = value is not None
         if value is None:
-            continue
+            # No client seed for this field — synthesize a valid low-confidence value
+            # so the form can reach validity and deeper flows become reachable.
+            value = _synthesize_default(control, kind, name)
+            if value is None:
+                result.unfilled_fields.append(name)
+                continue
 
         action = await _fill_one(port, control, kind, value, clock, phase=phase,
                                  state_id=state_id)
         if action is not None:
             result.actions.append(action)
             result.filled += 1
+            if not seeded:
+                result.inferred += 1
+                result.inferred_fields.append(name)
 
-    logger.info("qec.forms.phase_a filled=%d flow_candidates=%d dangerous=%d",
-                result.filled, len(result.flow_candidates),
-                sum(1 for f in result.flow_candidates if f.danger))
+    logger.info("qec.forms.phase_a filled=%d inferred=%d flow_candidates=%d dangerous=%d unfilled=%d",
+                result.filled, result.inferred, len(result.flow_candidates),
+                sum(1 for f in result.flow_candidates if f.danger), len(result.unfilled_fields))
     return result
 
 
