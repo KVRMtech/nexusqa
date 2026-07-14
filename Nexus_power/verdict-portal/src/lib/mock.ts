@@ -92,6 +92,7 @@ function makeApp(
     baseline_fingerprint_id: `fp_${hex64(id + 'fp').slice(0, 12)}`,
     status,
     has_credentials: true,
+    run_environment: '',
     created_at: iso(60 * 24 * 30),
     updated_at: iso(35),
     tier,

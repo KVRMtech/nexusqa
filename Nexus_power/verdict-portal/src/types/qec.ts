@@ -186,6 +186,9 @@ export interface ClientApp {
   baseline_fingerprint_id: string;
   status: AppStatus;
   has_credentials: boolean;
+  /** Multi-env: the Environment Profile name every cycle runs against ('' = the
+   *  app base URL, single-env). Surfaced from schedule.run_environment. */
+  run_environment: string;
   created_at: IsoTimestamp;
   updated_at: IsoTimestamp;
   /**
@@ -275,6 +278,9 @@ export interface EnvProfileCreatePayload {
 /** PATCH /apps/{id} request body (routers/apps.py:AppUpdate) — every field optional. */
 export interface AppUpdatePayload extends Partial<AppCreatePayload> {
   status?: Extract<AppStatus, 'active' | 'paused'>;
+  /** Multi-env: bind the app's run environment (validated server-side against an
+   *  existing Environment Profile; '' clears it). */
+  run_environment?: string;
 }
 
 export interface DeleteAppResponse {

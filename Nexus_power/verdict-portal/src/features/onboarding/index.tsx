@@ -57,6 +57,10 @@ interface WizardForm {
   /** Multi-env: Environment Profiles (crawl-once / run-many) — STRUCTURED drafts,
    *  each compiled to an EnvCreate payload on submit (see `envDraftToPayload`). */
   environments: EnvDraft[];
+  /** Multi-env: which authored environment (by name) every cycle runs against.
+   *  '' = the app base URL (single-env). Applied via a PATCH after the profiles
+   *  are created, so server-side validation sees the existing profile. */
+  run_environment: string;
 }
 
 const EMPTY: WizardForm = {
@@ -84,6 +88,7 @@ const EMPTY: WizardForm = {
   cadence: 'on_push',
   usd_per_cycle: '',
   environments: [],
+  run_environment: '',
 };
 
 interface Bucket {
@@ -647,6 +652,18 @@ export function OnboardingWizard() {
         }
       }
       if (created) toast.success(`${created} environment profile(s) created`);
+      // Multi-env: designate the app's run environment (the daemon runs EVERY cycle
+      // against it). Applied AFTER the profiles exist so the server can validate the
+      // name against a real Environment Profile.
+      const runEnv = form.run_environment.trim();
+      if (runEnv) {
+        try {
+          await api.updateApp(app.app_id, { run_environment: runEnv });
+          toast.success(`Cycles will run against “${runEnv}”`);
+        } catch (e) {
+          toast.error(`Could not bind run environment “${runEnv}”`, { description: (e as QecApiError).message });
+        }
+      }
       toast.success('App onboarded', { description: app.name });
       navigate(`/apps/${app.app_id}`);
     } catch (err) {
@@ -949,6 +966,25 @@ export function OnboardingWizard() {
             <Field label="Budget (USD / cycle)" hint="A cycle that would exceed this is budget_stopped — never a partial green.">
               <input type="number" min="0" className={INPUT_CLS} value={form.usd_per_cycle} onChange={(e) => set('usd_per_cycle', e.target.value)} placeholder="12" />
             </Field>
+            <div className="sm:col-span-2">
+              <Field
+                label="Run environment"
+                hint="Multi-env: every cycle runs against this Environment Profile (crawl once, run many). Default = the app base URL. Add profiles in the Environments tab first."
+              >
+                <select
+                  className={INPUT_CLS}
+                  value={form.run_environment}
+                  onChange={(e) => set('run_environment', e.target.value)}
+                >
+                  <option value="">Default — the app base URL (single-env)</option>
+                  {Array.from(new Set(form.environments.map((en) => en.name.trim()).filter(Boolean))).map((nm) => (
+                    <option key={nm} value={nm}>
+                      {nm}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+            </div>
           </div>
         )}
 

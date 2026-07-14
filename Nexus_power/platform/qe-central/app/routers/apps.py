@@ -77,6 +77,11 @@ class AppUpdate(BaseModel):
     schedule: dict | None = None
     budgets: dict | None = None
     status: str | None = None
+    # Multi-env: the NAME of the Environment Profile every cycle runs against
+    # (folded into schedule.run_environment). "" clears it (single-env, unchanged);
+    # a non-empty name MUST match an existing profile (validated) or the daemon
+    # would fail-close every cycle.
+    run_environment: str | None = None
 
 
 class EnvCreate(BaseModel):
@@ -244,7 +249,31 @@ def _public_view(row: ClientAppRow) -> dict:
     has_webhook_secret = bool(rb.pop("webhook_secret", None)) or bool(rb.pop("webhook_secret_enc", None))
     d["repo_binding"] = rb
     d["has_webhook_secret"] = has_webhook_secret
+    # Multi-env: surface the bound run environment (the daemon reads schedule.run_environment).
+    d["run_environment"] = str((row.schedule or {}).get("run_environment") or "")
     return d
+
+
+async def _validated_run_environment(session, tenant_id: str, app_id: str, name: str | None) -> str:
+    """Validate the app's bound run environment. ``""`` clears it (cycles run against
+    the app base_url, unchanged); a non-empty name MUST match an existing Environment
+    Profile for this app (else the daemon fail-closes EVERY cycle) → 422 otherwise."""
+    nm = (name or "").strip()
+    if not nm:
+        return ""
+    exists = (await session.execute(
+        select(ClientAppEnvironmentRow.environment_id).where(
+            ClientAppEnvironmentRow.tenant_id == tenant_id,
+            ClientAppEnvironmentRow.app_id == app_id,
+            ClientAppEnvironmentRow.name == nm,
+        ).limit(1)
+    )).scalar_one_or_none()
+    if exists is None:
+        raise HTTPException(
+            status_code=422,
+            detail=f"run_environment {nm!r} does not match any Environment Profile for this app",
+        )
+    return nm
 
 
 async def _require_app(session, tenant_id: str, app_id: str) -> ClientAppRow:
@@ -438,6 +467,16 @@ async def update_app(
             )
         if payload.status is not None:
             row.status = payload.status
+        if payload.run_environment is not None:
+            # Fold the validated selector into schedule.run_environment (the key the
+            # cycle daemon reads); merges onto any schedule set above in this request.
+            name = await _validated_run_environment(session, tenant_id, app_id, payload.run_environment)
+            sched = dict(row.schedule or {})
+            if name:
+                sched["run_environment"] = name
+            else:
+                sched.pop("run_environment", None)
+            row.schedule = sched
         if payload.credentials is not None:
             row.creds_blob = await _encrypt_credentials(
                 request, tenant_id, app_id, payload.credentials,
