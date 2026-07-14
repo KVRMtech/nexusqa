@@ -57,6 +57,7 @@ from app.routers.cost import router as cost_router
 from app.routers.webhooks import router as webhooks_router
 from app.routers.compliance import router as compliance_router
 from app.routers.fleet import router as fleet_router
+from app.routers.factory_proxy import router as factory_proxy_router
 
 # ── Phase-5.5 additive wiring (all OPT-IN; the default of every knob preserves
 #    today's single-instance behavior — see app/config.py + the module docs) ──
@@ -296,6 +297,11 @@ app.include_router(compliance_router)
 # (role admin + platform_admin marker), so a tenant admin can NOT manage other
 # tenants. Additive; a tenant with no control record behaves exactly as today.
 app.include_router(fleet_router)
+# Phase-1 Test Studio bridge — reverse-proxy the artifact-keyed factory (test-factory /
+# artifacts / test-runs / eyes) so the crawl portal's Test Studio reaches it with one
+# login. Mounted AFTER the /api/v1/qec/* routers; its distinct prefixes never shadow
+# them. Additive — no factory/video code touched.
+app.include_router(factory_proxy_router)
 # Phase-1: the HMAC-authenticated explorer completion callback. Lives OUTSIDE
 # the /api/* prefix (the explorer holds no JWT — only the HMAC token), so the
 # fail-closed JWT middleware skips it; internal.py verifies the HMAC itself.
