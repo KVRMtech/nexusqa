@@ -461,6 +461,9 @@ def build_control_record(
             "input_type": input_type,
             "options": options,
             "frame_selector": frame_selector,
+            # Link destination (anchors only) — diagnostics-only; the crawler reads
+            # it to FOLLOW routes directly (href-follow traversal). No compiler rung.
+            "href": _s(raw.get("href")).strip(),
         },
     }
     return record

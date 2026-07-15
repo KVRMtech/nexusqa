@@ -48,6 +48,8 @@ RawControl shape (one object per visible interactive element):
     testid          data-testid|data-test|data-cy|data-qa (diagnostic)
     css_hint        short tag#id.class selector (diagnostic)
     value_committed committed value ("" for password / non-value controls)
+    href            resolved link destination for <a> (diagnostic; drives the
+                    crawler's href-follow traversal), "" for non-anchors
     landmark        {role, name} of the nearest landmark ancestor (anchor seed)
 
 The walker recurses OPEN shadow roots (same frame, no selector change — the
@@ -61,7 +63,7 @@ from __future__ import annotations
 
 #: Stamped into the crawl manifest so a manifest can be traced to the exact
 #: injected-JS generation that produced its controls.
-INVENTORY_JS_VERSION = "inv-js-v1"
+INVENTORY_JS_VERSION = "inv-js-v2"
 
 INVENTORY_JS = r"""
 (() => {
@@ -231,6 +233,18 @@ INVENTORY_JS = r"""
     } catch (e) { return ""; }
   }
 
+  // The link DESTINATION (diagnostic). `el.href` (the IDL property) resolves a
+  // relative/hash/routerLink href to an absolute URL; the raw attribute is the
+  // fallback. Only for anchors — lets the crawler FOLLOW routes directly instead
+  // of relying on a click producing an observable url change (pushState SPAs).
+  function hrefOf(el) {
+    try {
+      if (lc(el.tagName) !== "a") return "";
+      var h = el.href || attr(el, "href") || "";
+      return clip("" + h, MAX_VALUE);
+    } catch (e) { return ""; }
+  }
+
   function isRequired(el) {
     try {
       if (el.required === true) return true;
@@ -357,6 +371,7 @@ INVENTORY_JS = r"""
       testid: testId(el),
       css_hint: cssHint(el),
       value_committed: valueCommitted(el),
+      href: hrefOf(el),
       landmark: nearestLandmark(el, doc)
     };
   }

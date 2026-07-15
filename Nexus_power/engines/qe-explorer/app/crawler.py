@@ -639,10 +639,11 @@ class Crawler:
         self, item: FrontierItem, controls: Sequence[dict[str, Any]], is_form: bool,
         fingerprint: str, *, budget_left: int,
     ) -> list[emit.ActionRecord]:
-        """Click safe actionable controls, record grounded outcomes, enqueue any
-        in-scope navigation destinations.  Never clicks an irreversible control,
-        and never clicks a button on a form state (submit boundary)."""
-        if budget_left <= 0 or item.depth >= self._budget.max_depth:
+        """Traverse + record: enqueue in-scope navigation destinations (from link
+        HREFS, robust to pushState/SPA routing) and click safe actionable controls
+        to record grounded outcomes.  Never clicks an irreversible control, and
+        never clicks a button on a form state (submit boundary)."""
+        if item.depth >= self._budget.max_depth:
             return []
         candidates = [
             c for c in controls
@@ -651,7 +652,20 @@ class Crawler:
             and not c.get("danger")
             and (c.get("kind") == "link" or (not is_form and c.get("kind") == "button"))
         ]
+        # Rank route-changing links ahead of same-page chrome so the per-state click
+        # budget reaches real routes before it is exhausted by nav/footer chrome.
+        candidates = self._rank_candidates(candidates, item.url)
+        # HREF-FOLLOW (SPA traversal): enqueue in-scope, route-shaped link destinations
+        # DIRECTLY from their href — a grounded navigation target — so discovery no
+        # longer depends on a click producing an observable page.url delta (which
+        # history/pushState SPAs often don't within the settle window). Bounded +
+        # convergent: the frontier's url_template key dedups (every /product/{id}
+        # collapses to one milestone) and skips already-enqueued / current states.
+        self._enqueue_link_hrefs(candidates, item, fingerprint)
+
         actions: list[emit.ActionRecord] = []
+        if budget_left <= 0:
+            return actions
         for control in candidates[:budget_left]:
             if self._tracker.stop_reason() or self._cancelled:
                 break
@@ -680,6 +694,84 @@ class Crawler:
                     )
             actions.append(action)
         return actions
+
+    # -- href-follow traversal (SPA-robust link following) ---------------------
+
+    @staticmethod
+    def _href_of(control: dict[str, Any]) -> str:
+        """The link destination the inventory captured (``qec.href``), or ""."""
+        return str((control.get("qec") or {}).get("href") or "").strip()
+
+    def _resolve_href(self, href: str, base_url: str) -> str:
+        """Resolve a raw link href against the page URL into an absolute http(s) URL
+        to enqueue, or "" for a NON-navigational href (mailto/tel/sms/js/data/blob,
+        or a bare cosmetic ``#anchor``).  A route-shaped hash (``#/orders``) is kept
+        — hash routes are real client routes (``url_template`` preserves them)."""
+        h = (href or "").strip()
+        if not h:
+            return ""
+        low = h.lower()
+        if low.startswith(("mailto:", "tel:", "sms:", "javascript:", "data:", "blob:", "about:")):
+            return ""
+        if h.startswith("#"):
+            frag = h[1:]
+            if not (frag.startswith("/") or frag.startswith("!") or "/" in frag):
+                return ""  # bare in-page anchor — cosmetic, not a client route
+        from urllib.parse import urljoin
+        try:
+            absu = urljoin(base_url or "", h)
+        except Exception:
+            return ""
+        if (urlsplit(absu).scheme or "").lower() not in ("http", "https"):
+            return ""
+        return absu
+
+    def _link_destination(self, control: dict[str, Any], base_url: str) -> str:
+        """The in-scope, NEW-milestone URL a link control points at, or "" when it
+        is out-of-scope, non-navigational, or resolves to the current page's state
+        template (no new milestone)."""
+        if control.get("kind") != "link":
+            return ""
+        dest = self._resolve_href(self._href_of(control), base_url)
+        if not dest or not self._in_scope(dest):
+            return ""
+        if _url_key(dest) == _url_key(base_url):
+            return ""
+        return dest
+
+    def _rank_candidates(
+        self, candidates: list[dict[str, Any]], base_url: str,
+    ) -> list[dict[str, Any]]:
+        """Stable-partition so route-changing links (a distinct in-scope destination)
+        come first — otherwise same-page nav/footer chrome, first in the DOM, spends
+        the per-state click budget before any real route is reached."""
+        routey = [c for c in candidates if self._link_destination(c, base_url)]
+        if not routey:
+            return list(candidates)
+        rest = [c for c in candidates if not self._link_destination(c, base_url)]
+        return routey + rest
+
+    def _enqueue_link_hrefs(
+        self, candidates: Sequence[dict[str, Any]], item: FrontierItem, fingerprint: str,
+    ) -> None:
+        """Push every in-scope, route-shaped link destination onto the frontier from
+        its href.  The traversal fix for history/pushState SPAs; bounded + convergent
+        via the frontier's url_template dedup (id-routes collapse; already-enqueued /
+        current states are skipped)."""
+        if item.depth >= self._budget.max_depth:
+            return
+        for control in candidates:
+            dest = self._link_destination(control, item.url)
+            if not dest:
+                continue
+            self._frontier.push(
+                FrontierItem(
+                    url=dest, depth=item.depth + 1,
+                    discovered_via=str(control.get("name") or ""),
+                    parent_fingerprint=fingerprint,
+                ),
+                key=_url_key(dest),
+            )
 
     async def _maybe_submit_phase_b(
         self, item: FrontierItem, controls: Sequence[dict[str, Any]],

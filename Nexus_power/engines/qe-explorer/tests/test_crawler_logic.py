@@ -311,6 +311,44 @@ def test_crawl_budget_max_states_stops_honestly():
         assert summary.states == 1
 
 
+def _href_site():
+    """A pushState/SPA-style site: the nav links' CLICKS do NOT change page.url
+    (empty click_targets), so traversal must come from the links' HREFS."""
+    home = "https://app.example/home"
+    catalog = "https://app.example/catalog"
+    pages = {
+        home: FakePage(home, [
+            _raw("link", "Catalog", href=catalog),                    # in-scope route → follow
+            _raw("link", "Docs", href="https://external.example/x"),  # off-site → skip
+            _raw("link", "Jump", href="#section-2"),                  # cosmetic anchor → skip
+            _raw("link", "Email", href="mailto:hi@app.example"),      # non-navigational → skip
+        ], title="Home", click_targets={}),
+        catalog: FakePage(catalog, [
+            _raw("link", "Home", href=home),                          # already enqueued → deduped
+        ], title="Catalog", click_targets={}),
+    }
+    return pages, home
+
+
+def test_crawl_follows_link_hrefs_without_a_click_navigation():
+    """SPA traversal (Fix A): a link whose CLICK does not change the URL is still
+    traversed via its href; off-site / cosmetic-anchor / mailto hrefs are not."""
+    import tempfile
+    with tempfile.TemporaryDirectory() as work:
+        pages, home = _href_site()
+        crawler = _build_crawler(FakeBrowser(pages, home), work)
+        summary = asyncio.run(crawler.run())
+        assert summary.stop_reason == STOP_COMPLETED
+        states = [r for r in read_records(work, "c1") if r["type"] == REC_PAGE_STATE]
+        locations = {s["location"] for s in states}
+        # href-follow reached the catalog page even though NO click navigated,
+        assert home in locations
+        assert "https://app.example/catalog" in locations
+        assert len(states) == 2
+        # and never wandered off-site / to a cosmetic anchor / mailto.
+        assert not any("external.example" in loc for loc in locations)
+
+
 # ─── Shared manifest ↔ ExplorationBundle field-name contract ────────────────────
 
 
