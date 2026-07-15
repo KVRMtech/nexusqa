@@ -238,13 +238,15 @@ def _allowlist_domains(base_url: str, fences: dict) -> list[str]:
     return [host] if host else []
 
 
-def _write_egress_allowlist(domains: list[str]) -> None:
-    """Populate the squid allowlist file BEFORE dispatch (fail-closed).
+def _write_egress_allowlist(domains: list[str], allowlist_path: str) -> None:
+    """Populate a WORKER's squid allowlist file BEFORE dispatching to that worker
+    (fail-closed).
 
-    Writes one destination domain per line to the shared
-    ``qec-egress-allowlist`` volume; squid re-reads it on reconfigure. A write
-    failure is FATAL to the dispatch (503) — never launch a browser that can
-    only reach a stale/empty allowlist, and never proceed silently.
+    Writes one destination domain per line to ``allowlist_path`` — the file that
+    the chosen worker's squid re-reads. Each worker has its OWN file (per-worker
+    egress isolation); a shared file would be raced by concurrent crawls and break
+    the fence. A write failure is FATAL to the dispatch (503) — never launch a
+    browser that can only reach a stale/empty allowlist, and never proceed silently.
     """
     if not domains:
         raise HTTPException(
@@ -253,7 +255,7 @@ def _write_egress_allowlist(domains: list[str]) -> None:
         )
     from pathlib import Path
 
-    path = Path(phase1_settings.egress_allowlist_path)
+    path = Path(allowlist_path)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         body = "# populated by qe-central at dispatch (fail-closed)\n" + "\n".join(domains) + "\n"
@@ -506,9 +508,7 @@ async def _dispatch_explorer(
             )
         )
 
-    # Fence egress (fail-closed) then dispatch.
     allowed_hosts = _allowlist_domains(base_url, fences)
-    _write_egress_allowlist(allowed_hosts)
     dispatch_request = ExploreDispatchRequest(
         crawl_id=crawl_id,
         tenant_id=tenant_id,
@@ -523,14 +523,39 @@ async def _dispatch_explorer(
         submit_approvals=submit_approvals,
         session=auth_session,
     )
-    try:
-        result = await explorer_client.dispatch_crawl(dispatch_request)
-    except ExplorerDispatchError as exc:
+    # Dispatch to an available WORKER in the pool. For EACH worker we fence egress
+    # into THAT worker's OWN allowlist file (fail-closed) BEFORE dispatching to it —
+    # per-worker isolation, so concurrent crawls never race a shared allowlist. A
+    # busy (409) or unreachable (502) worker → try the next; a deterministic error
+    # (config/reject) stops immediately; all-workers-unavailable is an honest,
+    # retryable failure. With the default single-worker pool this is byte-identical
+    # to the pre-pool path.
+    workers = phase1_settings.workers()
+    result = None
+    last_exc: ExplorerDispatchError | None = None
+    for worker in workers:
+        _write_egress_allowlist(allowed_hosts, worker["allowlist_path"])
+        try:
+            result = await explorer_client.dispatch_crawl(
+                dispatch_request, explorer_url=worker["url"],
+            )
+            last_exc = None
+            break
+        except ExplorerDispatchError as exc:
+            last_exc = exc
+            if exc.status_code in (409, 502):
+                continue  # this worker busy/unreachable → try the next
+            break  # deterministic error (token unset / bad request) — same for all
+    if result is None:
+        detail = str(last_exc)[:500] if last_exc else "no explorer worker available"
         await _mark(
             tenant_id, exploration_id,
-            status="failed", error=str(exc)[:2000], finished_at=utc_now(),
+            status="failed", error=detail[:2000], finished_at=utc_now(),
         )
-        raise HTTPException(status_code=exc.status_code or 502, detail=str(exc)[:500])
+        raise HTTPException(
+            status_code=(last_exc.status_code if last_exc else 503) or 502,
+            detail=detail,
+        )
 
     response.status_code = 202
     logger.info(

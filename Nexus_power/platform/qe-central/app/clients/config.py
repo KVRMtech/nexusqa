@@ -66,6 +66,38 @@ class Phase1Settings(BaseSettings):
         default="/qec/egress-allowlist/allowed_domains.txt",
         alias="QEC_EGRESS_ALLOWLIST_PATH",
     )
+    #: OPTIONAL pool of explorer WORKERS for concurrent crawls. A JSON array of
+    #: ``{"url": ..., "allowlist_path": ...}``. CRITICAL: each worker MUST have its
+    #: OWN squid egress allowlist file (per-worker isolation) — a shared allowlist
+    #: would be raced/clobbered by concurrent crawls and BREAK the egress fence, so
+    #: each entry pins the file qe-central writes before dispatching THAT worker.
+    #: Empty (the default) ⇒ exactly the single worker (``explorer_url`` +
+    #: ``egress_allowlist_path``) above — byte-identical to the pre-pool behavior.
+    explorer_pool: str = Field(default="", alias="QEC_EXPLORER_POOL")
+
+    def workers(self) -> list[dict]:
+        """The explorer worker pool as ``[{"url", "allowlist_path"}, ...]``.
+
+        Parses ``QEC_EXPLORER_POOL`` (JSON); a malformed/empty value falls back to
+        the single ``(explorer_url, egress_allowlist_path)`` worker — so an
+        unconfigured or mis-set pool is byte-identical to today, never fail-open.
+        Every returned worker has a non-empty url AND its own allowlist_path.
+        """
+        raw = (self.explorer_pool or "").strip()
+        if raw:
+            try:
+                import json
+                out: list[dict] = []
+                for item in json.loads(raw):
+                    url = str((item or {}).get("url") or "").strip()
+                    ap = str((item or {}).get("allowlist_path") or "").strip()
+                    if url and ap:
+                        out.append({"url": url, "allowlist_path": ap})
+                if out:
+                    return out
+            except Exception:
+                pass  # malformed pool → fall back to the single worker (never fail-open)
+        return [{"url": self.explorer_url, "allowlist_path": self.egress_allowlist_path}]
     #: httpx dispatch timeout (seconds).
     dispatch_timeout_s: float = Field(
         default=30.0, alias="QEC_EXPLORER_DISPATCH_TIMEOUT_S",

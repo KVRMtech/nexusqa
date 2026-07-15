@@ -94,13 +94,21 @@ def _log_safe(req: ExploreDispatchRequest) -> dict:
     }
 
 
-async def dispatch_crawl(request: ExploreDispatchRequest) -> DispatchResult:
-    """Dispatch a crawl to the explorer; return the 202 acceptance.
+async def dispatch_crawl(
+    request: ExploreDispatchRequest, *, explorer_url: str | None = None,
+) -> DispatchResult:
+    """Dispatch a crawl to an explorer WORKER; return the 202 acceptance.
+
+    ``explorer_url`` targets a specific worker in the pool; ``None`` uses the
+    single configured ``phase1_settings.explorer_url`` (byte-identical to the
+    pre-pool behavior). The caller MUST have written THIS worker's own egress
+    allowlist file before calling (per-worker isolation).
 
     Raises:
         ExplorerDispatchError: the token is unset (fail-closed), the explorer
-            is unreachable, is busy (409), or returned any non-2xx status.
+            is unreachable (502), is busy (409), or returned any non-2xx status.
     """
+    target = (explorer_url or phase1_settings.explorer_url)
     token = phase1_settings.token_value()
     if not token:
         # Fail-closed: never dispatch a crawl the explorer cannot authenticate.
@@ -111,10 +119,10 @@ async def dispatch_crawl(request: ExploreDispatchRequest) -> DispatchResult:
         )
 
     payload = request.model_dump()
-    logger.info("qec.explorer.dispatch", extra=_log_safe(request))
+    logger.info("qec.explorer.dispatch", extra={**_log_safe(request), "worker": target})
     try:
         async with httpx.AsyncClient(
-            base_url=phase1_settings.explorer_url,
+            base_url=target,
             timeout=phase1_settings.dispatch_timeout_s,
         ) as client:
             response = await client.post(
@@ -122,7 +130,7 @@ async def dispatch_crawl(request: ExploreDispatchRequest) -> DispatchResult:
             )
     except Exception as exc:
         raise ExplorerDispatchError(
-            f"explorer unreachable at {phase1_settings.explorer_url}: {exc}",
+            f"explorer unreachable at {target}: {exc}",
             status_code=502,
         ) from exc
 
