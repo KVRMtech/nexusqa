@@ -31,7 +31,9 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
 import re
+import tempfile
 from dataclasses import asdict, dataclass, field
 from datetime import date
 from typing import Any, Mapping, Optional, Sequence
@@ -248,6 +250,22 @@ async def fill_form_phase_a(
                 control=dict(control),
             ))
             continue
+        if _is_file(control) and not control.get("disabled"):
+            # Document-upload field — attach a generic seed file so the flow can
+            # ADVANCE past the upload gate (Phase-A: choose the file, never submit).
+            # A client-provided seed would override this later. Skipping it silently
+            # leaves the deeper claims/application steps unreachable.
+            if not _norm(name):
+                continue
+            action = await _upload_one(port, control, clock, phase=phase, state_id=state_id)
+            if action is not None:
+                result.actions.append(action)
+                result.filled += 1
+                result.inferred += 1
+                result.inferred_fields.append(name)
+            else:
+                result.unfilled_fields.append(name)
+            continue
         if kind not in FILLABLE_KINDS or _is_password(control) or control.get("disabled"):
             continue
         if not _norm(name):
@@ -276,6 +294,54 @@ async def fill_form_phase_a(
                 result.filled, result.inferred, len(result.flow_candidates),
                 sum(1 for f in result.flow_candidates if f.danger), len(result.unfilled_fields))
     return result
+
+
+def _is_file(control: Mapping[str, Any]) -> bool:
+    """True for a file-input control (``<input type=file>``)."""
+    it = _norm(control.get("input_type")) or _norm((control.get("qec") or {}).get("input_type"))
+    return it == "file"
+
+
+_SEED_FILE_CACHE: dict[str, str] = {}
+
+
+def _default_seed_file() -> Optional[str]:
+    """Path to a small generic seed document, created once, for Phase-A uploads so a
+    document-upload step advances instead of being skipped. The content is a
+    placeholder (never a real customer document); a client seed would override it."""
+    path = _SEED_FILE_CACHE.get("doc")
+    if path and os.path.exists(path):
+        return path
+    try:
+        fd, path = tempfile.mkstemp(prefix="qec-seed-", suffix=".pdf")
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(b"%PDF-1.4\n%% QE-Central Phase-A seed document (placeholder)\n")
+        _SEED_FILE_CACHE["doc"] = path
+        return path
+    except Exception as exc:  # a filesystem hiccup must never break a crawl
+        logger.warning("qec.forms.seed_file_failed error=%s", str(exc)[:200])
+        return None
+
+
+async def _upload_one(
+    port: BrowserPort, control: Mapping[str, Any], clock: emit.MonotonicClock,
+    *, phase: str, state_id: str,
+) -> Optional[emit.ActionRecord]:
+    """Attach a seed document to a file input (Phase-A) and record the grounded
+    outcome. Honest: if the port has no upload verb or the seed cannot be created,
+    return ``None`` (the field is reported unfilled, never faked)."""
+    setter = getattr(port, "set_input_files", None)
+    seed = _default_seed_file()
+    if setter is None or not seed:
+        return None
+    control = dict(control)
+    observation = await setter(control, [seed])
+    return emit.build_action_record(
+        control, verb="upload",
+        value=(observation.committed_value or os.path.basename(seed)),
+        observation=observation, phase=phase, state_id=state_id,
+        timestamp_ms=clock.now_ms(),
+    )
 
 
 async def _fill_one(

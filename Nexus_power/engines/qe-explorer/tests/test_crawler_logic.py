@@ -91,6 +91,8 @@ class FakeBrowser(BrowserPort):
     def __init__(self, pages: dict, start_url: str) -> None:
         self._pages = pages
         self._current = start_url
+        self.uploads: list = []
+        self.materialize_calls = 0
 
     def _page(self) -> FakePage:
         return self._pages.get(self._current) or FakePage(self._current, [])
@@ -139,6 +141,18 @@ class FakeBrowser(BrowserPort):
 
     async def storage_state(self):
         return {"cookies": [], "origins": []}
+
+    async def hover(self, control):
+        return RawObservation(url_before=self._current, url_after=self._current)
+
+    async def set_input_files(self, control, paths):
+        self.uploads.append((control.get("name"), list(paths)))
+        fname = (paths[0].rsplit("/", 1)[-1].rsplit("\\", 1)[-1]) if paths else ""
+        return RawObservation(url_before=self._current, url_after=self._current,
+                              committed_value=fname)
+
+    async def materialize(self):
+        self.materialize_calls += 1
 
 
 def _build_crawler(port, work_dir, *, budget=None, target_url="https://app.example/home"):
@@ -341,6 +355,8 @@ def test_crawl_follows_link_hrefs_without_a_click_navigation():
         assert summary.stop_reason == STOP_COMPLETED
         states = [r for r in read_records(work, "c1") if r["type"] == REC_PAGE_STATE]
         locations = {s["location"] for s in states}
+        # materialize (lazy/virtual-scroll harvest) ran before inventorying states.
+        assert crawler._port.materialize_calls >= 1
         # href-follow reached the catalog page even though NO click navigated,
         assert home in locations
         assert "https://app.example/catalog" in locations
@@ -364,6 +380,29 @@ def test_href_links_are_followed_not_clicked():
         # "Catalog" (in-scope href) was FOLLOWED via href, never clicked:
         assert "Catalog" not in clicked
         assert "https://app.example/catalog" in locations
+
+
+def test_file_input_is_uploaded_with_a_seed_document():
+    """A document-upload field is attached a seed file in Phase-A (choose, never
+    submit) so the flow advances instead of the field being skipped."""
+    import tempfile
+    with tempfile.TemporaryDirectory() as work:
+        home = "https://app.example/apply"
+        pages = {home: FakePage(home, [
+            _raw("textbox", "Full name", tag="input", input_type="text"),
+            _raw("textbox", "Upload ID document", tag="input", input_type="file"),
+        ], title="Apply", click_targets={})}
+        browser = FakeBrowser(pages, home)
+        crawler = _build_crawler(browser, work, target_url=home)
+        asyncio.run(crawler.run())
+        # the file input was uploaded exactly once, with one seed path:
+        assert len(browser.uploads) == 1
+        assert browser.uploads[0][0] == "Upload ID document"
+        assert len(browser.uploads[0][1]) == 1
+        # and it was recorded as a grounded 'upload' action (never green-washed):
+        states = [r for r in read_records(work, "c1") if r["type"] == REC_PAGE_STATE]
+        acts = [a for s in states for a in s.get("actions", [])]
+        assert any(a.get("verb") == "upload" for a in acts)
 
 
 # ─── Shared manifest ↔ ExplorationBundle field-name contract ────────────────────

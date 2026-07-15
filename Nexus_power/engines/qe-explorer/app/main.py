@@ -28,7 +28,7 @@ import hashlib
 import json
 import logging
 from contextlib import asynccontextmanager
-from typing import Any, Optional
+from typing import Any, Optional, Sequence
 
 import httpx
 from fastapi import Depends, FastAPI, Header, HTTPException, status
@@ -54,6 +54,28 @@ EXPLORER_VERSION = f"qe-explorer/1.0+{INVENTORY_JS_VERSION}"
 _LAUNCH_ARGS = ["--no-sandbox", "--disable-dev-shm-usage"]
 _SETTLE_MS = 1500          # post-action network-settle budget (best-effort)
 _ACTION_TIMEOUT_MS = 5000  # per-locator action timeout
+# Hydration gate: after networkidle, poll a cheap DOM-quiescence signature until it
+# is stable for N consecutive reads, so a slow-hydrating SPA (controls mounted after
+# networkidle) is never inventoried half-rendered. Bounded + best-effort.
+_STABILIZE_MS = 4000       # max hydration-stabilization budget beyond networkidle
+_STABLE_POLL_MS = 220      # interval between quiescence probes
+_STABLE_READS = 2          # consecutive equal reads that count as settled
+# Viewport materialization (lazy-load / virtual-scroll) — bounded step-scroll.
+_MATERIALIZE_STEPS = 8
+# Adaptive backoff on an explicit server rate-limit (429), then ONE retry.
+_DEFAULT_BACKOFF_MS = 2000
+_MAX_BACKOFF_MS = 15000
+
+#: Cheap page-quiescence signature: visible-interactive count : readyState :
+#: scrollHeight. Stable across two reads ⇒ the DOM has stopped mounting controls.
+_QUIESCENCE_JS = (
+    "(()=>{try{var e=document.querySelectorAll("
+    "'a[href],button,input,select,textarea,[role],[tabindex]');"
+    "var n=0;for(var i=0;i<e.length;i++){var el=e[i];"
+    "if(el.offsetParent!==null||(el.getClientRects&&el.getClientRects().length))n++;}"
+    "return n+':'+document.readyState+':'+Math.round("
+    "document.body?document.body.scrollHeight:0);}catch(x){return 'err';}})()"
+)
 
 
 # ─── Request model (design §3.2 POST /api/v1/explore) ────────────────────────
@@ -469,6 +491,18 @@ def _attestation(payload: Optional[dict[str, Any]]) -> Optional[Attestation]:
         return None
 
 
+def _retry_after_ms(resp: Any) -> int:
+    """Backoff for a 429 — the ``Retry-After`` seconds header when present (clamped),
+    else a default."""
+    try:
+        ra = str((resp.headers or {}).get("retry-after", "")).strip()
+        if ra.isdigit():
+            return int(ra) * 1000
+    except Exception:
+        pass
+    return _DEFAULT_BACKOFF_MS
+
+
 # ─── The Playwright BrowserPort adapter (the only Playwright code) ───────────
 
 
@@ -491,6 +525,14 @@ class PlaywrightBrowserPort(BrowserPort):
     async def goto(self, url: str) -> NavResult:
         try:
             resp = await self._page.goto(url, wait_until="domcontentloaded")
+            # Adaptive backoff on an explicit server rate-limit (429), then ONE retry
+            # — a throttled response would otherwise record a wrong-outcome state.
+            if resp is not None and getattr(resp, "status", 0) == 429:
+                await asyncio.sleep(min(_retry_after_ms(resp), _MAX_BACKOFF_MS) / 1000.0)
+                try:
+                    resp = await self._page.goto(url, wait_until="domcontentloaded")
+                except Exception:
+                    pass
             # SPA hash routers commonly render the current route only on the
             # 'hashchange' event; a FRESH document load with the hash already set
             # can render the default/landing route instead of the requested one
@@ -579,6 +621,37 @@ class PlaywrightBrowserPort(BrowserPort):
     async def click(self, control: dict[str, Any]) -> RawObservation:
         return await self._act(control, "click")
 
+    async def hover(self, control: dict[str, Any]) -> RawObservation:
+        """Hover ``control`` (reveals menus/fly-outs/tooltips) and observe."""
+        return await self._act(control, "hover")
+
+    async def set_input_files(self, control: dict[str, Any],
+                              paths: Sequence[str]) -> RawObservation:
+        """Attach ``paths`` to a file-input ``control`` (Phase-A: choose the file,
+        never submit) and read back the chosen filename."""
+        url_before = self._safe_url()
+        sig_before = await self._interactive_signature()
+        locator = self._locator(control)
+        if locator is None:
+            return RawObservation(url_before=url_before, url_after=url_before,
+                                  error_detail="locator_unresolved")
+        try:
+            await locator.set_input_files(list(paths))
+        except Exception as exc:
+            return RawObservation(url_before=url_before, url_after=self._safe_url(),
+                                  error_detail=f"upload_error: {str(exc)[:200]}")
+        await self._settle()
+        committed = None
+        try:
+            committed = await locator.input_value()  # the chosen file name
+        except Exception:
+            pass
+        sig_after = await self._interactive_signature()
+        return RawObservation(
+            url_before=url_before, url_after=self._safe_url(),
+            committed_value=committed, dom_changed=(sig_before != sig_after),
+        )
+
     async def fill(self, control: dict[str, Any], value: str) -> RawObservation:
         return await self._act(control, "fill", value=value, read_back=True)
 
@@ -604,6 +677,8 @@ class PlaywrightBrowserPort(BrowserPort):
         try:
             if kind == "click":
                 await locator.click()
+            elif kind == "hover":
+                await locator.hover()
             elif kind == "fill":
                 await locator.fill(value)
             elif kind == "select":
@@ -681,10 +756,51 @@ class PlaywrightBrowserPort(BrowserPort):
             return ()
 
     async def _settle(self) -> None:
+        # 1. best-effort network quiesce.
         try:
             await self._page.wait_for_load_state("networkidle", timeout=_SETTLE_MS)
         except Exception:
             pass  # settle is best-effort — a busy SPA never blocks the recorder
+        # 2. HYDRATION gate: poll a cheap DOM-quiescence signature until it is stable
+        #    for _STABLE_READS consecutive reads (controls that mount after networkidle
+        #    would otherwise be inventoried in a half-rendered state → wrong fingerprint
+        #    + missed controls). Bounded by _STABILIZE_MS; never blocks.
+        try:
+            last = None
+            stable = 0
+            for _ in range(max(1, _STABILIZE_MS // _STABLE_POLL_MS)):
+                sig = await self._page.evaluate(_QUIESCENCE_JS)
+                if sig == last:
+                    stable += 1
+                    if stable >= _STABLE_READS:
+                        break
+                else:
+                    stable = 0
+                    last = sig
+                await asyncio.sleep(_STABLE_POLL_MS / 1000.0)
+        except Exception:
+            pass
+
+    async def materialize(self) -> None:
+        """Bounded viewport progression: step-scroll to the bottom to trigger
+        lazy / IntersectionObserver content and materialize additional
+        virtual-scroll rows, re-settling after each step, then return to the top.
+        READ-ONLY (no mutation) and best-effort — a failure never breaks a crawl."""
+        try:
+            prev_h = -1
+            for _ in range(_MATERIALIZE_STEPS):
+                h = await self._page.evaluate(
+                    "(()=>{var h=document.body?document.body.scrollHeight:0;"
+                    "window.scrollTo(0,h);return h;})()"
+                )
+                await self._settle()
+                if h == prev_h:
+                    break  # height stable → nothing more materialized
+                prev_h = h
+            await self._page.evaluate("window.scrollTo(0,0)")
+            await self._settle()
+        except Exception:
+            pass
 
     def _safe_url(self) -> str:
         try:

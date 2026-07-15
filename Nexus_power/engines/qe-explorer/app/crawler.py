@@ -570,6 +570,13 @@ class Crawler:
                         item.depth, nav.error[:120])
             return
 
+        # Materialize lazy / virtual-scroll content before inventorying this state so
+        # windowed data grids + below-the-fold controls are captured, not only the
+        # initial viewport. Read-only + best-effort; a port without it is a no-op.
+        materialize = getattr(self._port, "materialize", None)
+        if materialize is not None:
+            await materialize()
+
         obs = await self._observe()
         controls = build_inventory(obs.raw_controls, self._refuse_pack, url=obs.url)
         fingerprint = state_fingerprint(obs.url, controls, obs.dialog_flags)

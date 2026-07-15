@@ -262,6 +262,22 @@ class BrowserPort(Protocol):
         """Click ``control`` and return the measured raw observation."""
         ...
 
+    async def hover(self, control: Mapping[str, Any]) -> RawObservation:
+        """Hover ``control`` (reveal a menu / fly-out / tooltip) and observe."""
+        ...
+
+    async def set_input_files(self, control: Mapping[str, Any],
+                              paths: Sequence[str]) -> RawObservation:
+        """Attach ``paths`` to a file-input ``control`` (Phase-A: choose the file,
+        never submit) and read back the chosen filename."""
+        ...
+
+    async def materialize(self) -> None:
+        """Bounded viewport progression — step-scroll to trigger lazy /
+        virtual-scroll content before the state is inventoried.  READ-ONLY and
+        best-effort; a no-op is a valid implementation."""
+        ...
+
     async def fill(self, control: Mapping[str, Any], value: str) -> RawObservation:
         """Type ``value`` into ``control`` and read the committed value back."""
         ...
