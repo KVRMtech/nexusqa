@@ -666,14 +666,31 @@ class Crawler:
         actions: list[emit.ActionRecord] = []
         if budget_left <= 0:
             return actions
-        for control in candidates[:budget_left]:
+        # PERF: skip clicking links whose destination was ALREADY enqueued from the
+        # href — that navigation is grounded when the destination is expanded (an
+        # edge is emitted with the link's name), so re-clicking it here only costs a
+        # page reset + navigates away. The click pass targets STATEFUL controls:
+        # buttons (reveal actions/state) and href-less links (JS-nav needs a click to
+        # discover). This turns an O(links) navigate-and-reset loop into O(a few
+        # stateful probes) — the fix for the per-page crawl cost at fleet scale.
+        click_candidates = [
+            c for c in candidates
+            if not (c.get("kind") == "link" and self._link_destination(c, item.url))
+        ]
+        needs_reset = True  # the Phase-A fills may have left the page dirty → start fresh
+        for control in click_candidates[:budget_left]:
             if self._tracker.stop_reason() or self._cancelled:
                 break
             await self._politeness_delay()
-            # reset to this state so each candidate is exercised from the same
-            # starting point (the recorded fingerprint).
-            await self._port.goto(item.url)
-            self._tracker.note_request()
+            # PERF: reset to the recorded state ONLY when the previous probe actually
+            # changed the page. A no-op click (outcome 'none') leaves us on item.url,
+            # so the next probe is still from the recorded state and needs no
+            # navigation — lazy reset preserves per-probe grounding at a fraction of
+            # the page loads.
+            if needs_reset:
+                await self._port.goto(item.url)
+                self._tracker.note_request()
+                needs_reset = False
             observation = await self._port.click(control)
             self._tracker.note_request()
             action = emit.build_action_record(
@@ -682,6 +699,8 @@ class Crawler:
                 timestamp_ms=self._clock.now_ms(),
             )
             self._tracker.note_action()
+            if action.after and str(action.after.get("outcome") or "") != "none":
+                needs_reset = True  # state changed → restore item.url before the next probe
             if action.after and action.after.get("navigated"):
                 dest = observation.url_after
                 action.to_state = _url_key(dest)

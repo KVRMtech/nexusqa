@@ -349,6 +349,23 @@ def test_crawl_follows_link_hrefs_without_a_click_navigation():
         assert not any("external.example" in loc for loc in locations)
 
 
+def test_href_links_are_followed_not_clicked():
+    """PERF: a link whose in-scope destination was enqueued from its href is NOT
+    also clicked (no redundant navigate-and-reset); the page is still traversed."""
+    import tempfile
+    with tempfile.TemporaryDirectory() as work:
+        pages, home = _href_site()
+        crawler = _build_crawler(FakeBrowser(pages, home), work)
+        asyncio.run(crawler.run())
+        actions = [r for r in read_records(work, "c1") if r["type"] == "action"]
+        clicked = {a["target_label"] for a in actions}
+        states = [r for r in read_records(work, "c1") if r["type"] == REC_PAGE_STATE]
+        locations = {s["location"] for s in states}
+        # "Catalog" (in-scope href) was FOLLOWED via href, never clicked:
+        assert "Catalog" not in clicked
+        assert "https://app.example/catalog" in locations
+
+
 # ─── Shared manifest ↔ ExplorationBundle field-name contract ────────────────────
 
 
