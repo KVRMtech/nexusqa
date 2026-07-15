@@ -784,21 +784,23 @@ class PlaywrightBrowserPort(BrowserPort):
     async def materialize(self) -> None:
         """Bounded viewport progression: step-scroll to the bottom to trigger
         lazy / IntersectionObserver content and materialize additional
-        virtual-scroll rows, re-settling after each step, then return to the top.
-        READ-ONLY (no mutation) and best-effort — a failure never breaks a crawl."""
+        virtual-scroll rows, re-settling after each step. READ-ONLY (no mutation)
+        and best-effort. Cheap on static pages: seeded with the current height, it
+        stops after ONE scroll when nothing new mounts (inventory + full-page
+        screenshots are scroll-independent, so there is no scroll-back cost)."""
         try:
-            prev_h = -1
+            prev_h = await self._page.evaluate(
+                "document.body?document.body.scrollHeight:0"
+            )
             for _ in range(_MATERIALIZE_STEPS):
                 h = await self._page.evaluate(
                     "(()=>{var h=document.body?document.body.scrollHeight:0;"
                     "window.scrollTo(0,h);return h;})()"
                 )
                 await self._settle()
-                if h == prev_h:
-                    break  # height stable → nothing more materialized
+                if h <= prev_h:
+                    break  # no new content materialized → stop
                 prev_h = h
-            await self._page.evaluate("window.scrollTo(0,0)")
-            await self._settle()
         except Exception:
             pass
 
