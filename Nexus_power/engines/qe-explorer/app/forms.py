@@ -251,15 +251,15 @@ async def fill_form_phase_a(
             ))
             continue
         if _is_file(control) and not control.get("disabled"):
-            # Document-upload field — attach a generic seed file so the flow can
-            # ADVANCE past the upload gate (Phase-A: choose the file, never submit).
-            # A client-provided seed would override this later. Skipping it silently
-            # leaves the deeper claims/application steps unreachable.
+            # Document-upload field — attach a generic seed file so the field is
+            # POPULATED for a later (Phase-B) attested submit. POPULATE-ONLY: no
+            # manifest action is emitted, because an 'upload' verb is not yet in the
+            # substrate vocabulary (schema.ACTION_VERBS / the verb DB constraint) nor
+            # the compiler — recording one would 422 the ingest / green-wash a step.
+            # Full upload-as-a-recorded+generated step is a scoped cross-layer follow-up.
             if not _norm(name):
                 continue
-            action = await _upload_one(port, control, clock, phase=phase, state_id=state_id)
-            if action is not None:
-                result.actions.append(action)
+            if await _upload_seed(port, control):
                 result.filled += 1
                 result.inferred += 1
                 result.inferred_fields.append(name)
@@ -323,25 +323,17 @@ def _default_seed_file() -> Optional[str]:
         return None
 
 
-async def _upload_one(
-    port: BrowserPort, control: Mapping[str, Any], clock: emit.MonotonicClock,
-    *, phase: str, state_id: str,
-) -> Optional[emit.ActionRecord]:
-    """Attach a seed document to a file input (Phase-A) and record the grounded
-    outcome. Honest: if the port has no upload verb or the seed cannot be created,
-    return ``None`` (the field is reported unfilled, never faked)."""
+async def _upload_seed(port: BrowserPort, control: Mapping[str, Any]) -> bool:
+    """Attach a seed document to a file input so the field is POPULATED for a later
+    Phase-B submit. POPULATE-ONLY — no manifest action (an 'upload' verb is not yet
+    in the substrate vocabulary; see the caller comment). Returns True on a clean
+    populate; honest False if the port has no upload verb or the seed can't be made."""
     setter = getattr(port, "set_input_files", None)
     seed = _default_seed_file()
     if setter is None or not seed:
-        return None
-    control = dict(control)
-    observation = await setter(control, [seed])
-    return emit.build_action_record(
-        control, verb="upload",
-        value=(observation.committed_value or os.path.basename(seed)),
-        observation=observation, phase=phase, state_id=state_id,
-        timestamp_ms=clock.now_ms(),
-    )
+        return False
+    obs = await setter(dict(control), [seed])
+    return not (obs.error_detail or "").strip()
 
 
 async def _fill_one(

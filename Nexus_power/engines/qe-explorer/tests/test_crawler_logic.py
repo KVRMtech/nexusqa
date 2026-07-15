@@ -382,9 +382,10 @@ def test_href_links_are_followed_not_clicked():
         assert "https://app.example/catalog" in locations
 
 
-def test_file_input_is_uploaded_with_a_seed_document():
+def test_file_input_is_populated_with_a_seed_document():
     """A document-upload field is attached a seed file in Phase-A (choose, never
-    submit) so the flow advances instead of the field being skipped."""
+    submit) so it is populated for a later submit — populate-only: NO unsupported
+    'upload' verb leaks into the manifest (that would 422 the substrate ingest)."""
     import tempfile
     with tempfile.TemporaryDirectory() as work:
         home = "https://app.example/apply"
@@ -395,14 +396,14 @@ def test_file_input_is_uploaded_with_a_seed_document():
         browser = FakeBrowser(pages, home)
         crawler = _build_crawler(browser, work, target_url=home)
         asyncio.run(crawler.run())
-        # the file input was uploaded exactly once, with one seed path:
+        # the file input was populated exactly once, with one seed path:
         assert len(browser.uploads) == 1
         assert browser.uploads[0][0] == "Upload ID document"
         assert len(browser.uploads[0][1]) == 1
-        # and it was recorded as a grounded 'upload' action (never green-washed):
+        # populate-only — no manifest action carries an out-of-vocabulary verb.
         states = [r for r in read_records(work, "c1") if r["type"] == REC_PAGE_STATE]
-        acts = [a for s in states for a in s.get("actions", [])]
-        assert any(a.get("verb") == "upload" for a in acts)
+        verbs = {a.get("verb") for s in states for a in s.get("actions", [])}
+        assert "upload" not in verbs
 
 
 # ─── Shared manifest ↔ ExplorationBundle field-name contract ────────────────────
