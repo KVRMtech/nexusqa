@@ -135,6 +135,17 @@ def normalize_label(label: str) -> str:
     return re.sub(r"\s+", " ", s).strip()
 
 
+def _has_word(norm: str, *words: str) -> bool:
+    """Whole-WORD match for short, collision-prone tokens.
+
+    A naive substring test is unsafe here: 'age' occurs inside 'message', 'package',
+    'mileage' and 'manage'; 'sum' inside 'consumer'; 'city' inside 'capacity'; 'state'
+    inside 'estate'. A live crawl caught exactly this — a "Your Message Here" textarea
+    was synthesized as '35' because 'message' contains 'age'. Word boundaries fix it.
+    """
+    return any(re.search(rf"\b{re.escape(w)}\b", norm) for w in words)
+
+
 def _first_grounded_option(options: Iterable[str]) -> str | None:
     for opt in options:
         text = str(opt or "").strip()
@@ -196,17 +207,17 @@ def _synthesize_value(norm: str, ftype: str, *, today: date | None) -> str | Non
         return "Q"
     if "name" in norm:
         return "Test User"
-    if any(k in norm for k in ("amount", "coverage", "sum", "salary", "income")):
+    if any(k in norm for k in ("amount", "coverage", "salary", "income")) or _has_word(norm, "sum"):
         return "250000"
-    if "age" in norm:
+    if _has_word(norm, "age"):
         return "35"
     if any(k in norm for k in ("quantity", "qty")):
         return "1"
     if "zip" in norm or "postal" in norm:
         return "94105"
-    if "state" in norm or "province" in norm:
+    if _has_word(norm, "state", "province"):
         return "CA"
-    if "city" in norm:
+    if _has_word(norm, "city"):
         return "Springfield"
     if "country" in norm:
         return "United States"
@@ -227,13 +238,13 @@ def _synthesize_value(norm: str, ftype: str, *, today: date | None) -> str | Non
 
 
 def _numeric_default(norm: str) -> str:
-    if any(k in norm for k in ("amount", "coverage", "sum", "salary", "income", "balance")):
+    if any(k in norm for k in ("amount", "coverage", "salary", "income", "balance")) or _has_word(norm, "sum"):
         return "250000"
-    if "age" in norm:
+    if _has_word(norm, "age"):
         return "35"
     if "zip" in norm or "postal" in norm:
         return "94105"
-    if "year" in norm:
+    if _has_word(norm, "year"):
         return "2026"
     if any(k in norm for k in ("quantity", "qty", "count", "number of")):
         return "1"

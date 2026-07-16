@@ -99,6 +99,27 @@ def test_first_and_last_name_synthesize():
     assert _one("Last Name").default == "User"
 
 
+def test_message_field_is_not_treated_as_age():
+    # LIVE E2E regression (automationexercise.com): "Your Message Here" was synthesized
+    # as "35" because a naive substring test found 'age' inside 'message'.
+    d = _one("Your Message Here")
+    assert d.disposition == dp.SYNTHESIZE
+    assert d.default == "QA test"
+
+
+def test_age_still_matches_as_a_whole_word():
+    assert _one("Age", ftype="number").default == "35"
+    assert _one("Applicant Age").default == "35"
+
+
+def test_short_token_substring_collisions_do_not_fire():
+    # 'age' in package/mileage/manage; 'sum' in consumer; 'city' in capacity;
+    # 'state' in estate — none of these should take the short-token branch.
+    assert _one("Package Description").default == "QA test"   # description wins, not age
+    assert _one("Real Estate Notes").default == "QA test"     # note wins, not state=CA
+    assert _one("Coverage Amount", ftype="number").default == "250000"  # coverage, not age
+
+
 def test_generic_date_is_not_dob():
     d = _one("Appointment Date", ftype="date", today=date(2026, 6, 15))
     assert d.disposition == dp.SYNTHESIZE and d.default == "2026-06-15"
