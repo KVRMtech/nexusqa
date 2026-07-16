@@ -28,6 +28,7 @@ from ..db.controlplane_models import AppFingerprintRow
 from ..db.models import ClientAppEnvironmentRow, ClientAppRow, QEExplorationRow
 from ..fleet import quota
 from ..services.crawl_diagnosis import diagnose as diagnose_crawl
+from ..services.seed_manifest import build_seed_manifest
 from ..services.brief_compiler import (
     BRIEF_SYSTEM_INSTRUCTION, build_prompt, ground_and_assemble, parse_proposal,
 )
@@ -519,6 +520,33 @@ async def get_app(app_id: str, user: dict = Depends(require_auth)) -> dict:
         # Live crawl status so the UI shows "Crawling…" instead of an empty Studio.
         view["crawl"] = await _latest_crawl(session, app_id)
         return view
+
+
+@router.get("/apps/{app_id}/seed-manifest")
+async def get_seed_manifest(
+    app_id: str,
+    mode: str = "recommended",
+    user: dict = Depends(require_auth),
+) -> dict:
+    """The discovery-first Seed Manifest (Phase 1) for an app's latest crawl.
+
+    Classifies every observed field into one of the six dispositions and returns BOTH
+    views so the portal can toggle without a round-trip: ``recommended`` (only the ASK
+    + APPROVE human-1%) and ``full`` (every field, grounded default, editable). ``mode``
+    selects which list the ``items`` convenience field mirrors (default recommended).
+    """
+    tenant_id = user["tenant_id"]
+    async with tenant_scoped_qec_session(tenant_id) as session:
+        row = await _require_app(session, tenant_id, app_id)
+        answer_key = row.answer_key if isinstance(row.answer_key, dict) else {}
+        artifact_id = row.latest_artifact_id or ""
+    manifest = await build_seed_manifest(
+        tenant_id, artifact_id, answer_key=answer_key, today=datetime.now(timezone.utc).date(),
+    )
+    mode = mode if mode in ("recommended", "full") else "recommended"
+    manifest["mode"] = mode
+    manifest["items"] = manifest["full"] if mode == "full" else manifest["recommended"]
+    return manifest
 
 
 @router.patch("/apps/{app_id}")

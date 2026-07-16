@@ -407,6 +407,50 @@ async def known_labels_for_artifact(tenant_id: str, artifact_id: str) -> list[st
     return sorted(l for l in labels if l.strip())
 
 
+async def field_inventory_for_artifact(tenant_id: str, artifact_id: str) -> list[dict]:
+    """Per-field inventory ``[{label, type, options, required}]`` across an artifact's
+    current page_visits — the grounding vocabulary the Seed Manifest (Phase 1) /
+    Data Agent (Phase 3) classify over. Projects ``form_snapshot_signals`` VALUES
+    (``{type, options, required}`` per label) — never a filled value, never a locator,
+    the same value-free discipline as :func:`known_labels_for_artifact`. Deduped by
+    label; the richest signal (most observed options) wins when a label recurs."""
+    if not artifact_id:
+        return []
+    async with tenant_scoped_substrate_session(tenant_id) as session:
+        version = await _latest_version(session, PageVisitRow, artifact_id)
+        if version is None:
+            return []
+        rows = (
+            await session.execute(
+                select(PageVisitRow).where(
+                    PageVisitRow.artifact_id == artifact_id,
+                    PageVisitRow.extractor_version == version,
+                )
+            )
+        ).scalars().all()
+    best: dict[str, dict] = {}
+    for v in rows:
+        if (getattr(v, "source", "") or "") == _MISSING_PAGE_SOURCE:
+            continue
+        for label, sig in (v.form_snapshot_signals or {}).items():
+            key = str(label).strip()
+            if not key:
+                continue
+            sig = sig if isinstance(sig, dict) else {}
+            options = [str(o) for o in (sig.get("options") or [])]
+            entry = {
+                "label": key,
+                "type": str(sig.get("type") or "text"),
+                "options": options,
+                "required": bool(sig.get("required")),
+            }
+            prev = best.get(key)
+            # Keep the richest signal for a recurring label (more observed options).
+            if prev is None or len(options) > len(prev.get("options") or []):
+                best[key] = entry
+    return [best[k] for k in sorted(best)]
+
+
 async def known_routes_for_artifact(tenant_id: str, artifact_id: str) -> list[str]:
     """Distinct URL routes (``url_path`` + any hash route in ``url_query``/location)
     the crawl already reached — the GROUNDING vocabulary the exploration planner
