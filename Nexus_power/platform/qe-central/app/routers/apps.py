@@ -476,7 +476,12 @@ async def _latest_crawl(session, app_id: str) -> dict:
         .limit(1)
     )).scalar_one_or_none()
     if exp is None:
-        return {"status": "none", "active": False}
+        # A never-crawled app still gets a typed diagnosis, so the panel says
+        # "No crawl yet — start a crawl" rather than rendering nothing at all.
+        return {
+            "status": "none", "active": False,
+            "diagnosis": diagnose_crawl(status="none", error="", stats={}),
+        }
     stats = exp.stats if isinstance(exp.stats, dict) else {}
     status = (exp.status or "unknown").strip().lower()
     active = status in _ACTIVE_CRAWL_STATUSES
