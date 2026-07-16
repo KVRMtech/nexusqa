@@ -255,6 +255,11 @@ _QEC_TABLES = [
     ("app_cycles", "cycle_id",
      {"app_id": None, "trigger": "manual"}, {"app_id": None}),  # app_id filled fresh
     ("cost_ledger", "entry_id", {"unit": "browser_seconds"}, {}),
+    # app_environments (qec_003) holds the KMS-sealed env credentials (creds_blob) —
+    # the most sensitive newer table. Prove tenant B cannot read tenant A's sealed
+    # env row by PK, nor INSERT a row tagged as tenant A (WITH CHECK rejection).
+    ("app_environments", "environment_id",
+     {"app_id": None, "name": "RLS Probe Env"}, {"app_id": None}),
     # NOTE: the Phase-7 ``tenant_provisioning`` table (qec_002) has tenant_id AS
     # its PK, which the generic (pk_col, tenant_id) insert shape here does not fit;
     # its RLS enable/force + tenant_isolation policy are proven by

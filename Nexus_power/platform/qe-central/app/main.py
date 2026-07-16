@@ -181,6 +181,7 @@ async def lifespan(application: FastAPI):
 
     from app.controlplane.cycle.driver import cycle_driver_daemon
     from app.controlplane.leader import build_leader_election
+    from app.controlplane.reaper import stale_crawl_reaper_daemon
 
     # Phase-5.5 leader election wraps the daemon loop.  DEFAULT mode ``none`` ⇒
     # this instance is ALWAYS leader ⇒ byte-identical to today's single
@@ -197,6 +198,21 @@ async def lifespan(application: FastAPI):
     application.state.cycle_driver_task = driver_task
     application.state.cycle_driver_stop = driver_stop
     application.state.leader_election = election
+
+    # Phase-0 WS-B: the stale-crawl reaper runs under the SAME leader election so
+    # exactly one replica terminalizes orphaned crawls fleet-wide. Self-gates on
+    # QEC_REAPER_TICK_SECONDS (unset ⇒ inert, byte-identical to today). A separate
+    # election instance gives it its own advisory-lock key so it never contends
+    # with the cycle daemon's leadership.
+    reaper_election = build_leader_election(lock_key_str="qec-stale-crawl-reaper-leader")
+    reaper_stop = asyncio.Event()
+    reaper_task = asyncio.create_task(
+        reaper_election.run_as_leader(stale_crawl_reaper_daemon, stop_event=reaper_stop),
+        name="qec-stale-crawl-reaper",
+    )
+    application.state.reaper_task = reaper_task
+    application.state.reaper_stop = reaper_stop
+
     logger.info(
         "qe_central.started",
         port=settings.port,
@@ -216,10 +232,13 @@ async def lifespan(application: FastAPI):
     # for another replica).
     driver_stop.set()
     driver_task.cancel()
-    try:
-        await driver_task
-    except (asyncio.CancelledError, Exception):  # noqa: BLE001 - clean shutdown
-        pass
+    reaper_stop.set()
+    reaper_task.cancel()
+    for _task in (driver_task, reaper_task):
+        try:
+            await _task
+        except (asyncio.CancelledError, Exception):  # noqa: BLE001 - clean shutdown
+            pass
     application.state.envelope_service = None
     await close_db()
     logger.info("qe_central.stopped")

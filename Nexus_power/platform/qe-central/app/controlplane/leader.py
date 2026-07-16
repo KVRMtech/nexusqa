@@ -226,20 +226,25 @@ class LeaderElection:
             await asyncio.sleep(self._retry_interval)
 
 
-def build_leader_election(*, settings_obj=None) -> LeaderElection:
+def build_leader_election(*, settings_obj=None, lock_key_str: str | None = None) -> LeaderElection:
     """Construct a :class:`LeaderElection` from config (the wiring seam).
 
     ``main.lifespan`` can wrap the daemon with
     ``build_leader_election().run_as_leader(cycle_driver_daemon)`` — in the
     default ``none`` mode this is exactly today's ``asyncio.create_task`` of the
     daemon.
+
+    Pass ``lock_key_str`` to give a SECOND leader-elected loop (e.g. the stale-crawl
+    reaper) its own advisory-lock key, so in ``advisory_lock`` mode it does not
+    contend with the cycle daemon's leadership. In ``none`` mode the key is inert.
     """
     if settings_obj is None:
         from ..config import settings as settings_obj  # lazy: import-safe
 
+    key = lock_key_str or getattr(settings_obj, "qec_leader_lock_key", "qec-cycle-driver-leader")
     return LeaderElection(
         mode=getattr(settings_obj, "qec_daemon_leader_election", LEADER_MODE_NONE),
-        lock_key_str=getattr(settings_obj, "qec_leader_lock_key", "qec-cycle-driver-leader"),
+        lock_key_str=key,
         retry_interval_seconds=float(
             getattr(settings_obj, "qec_leader_retry_interval_seconds", 15.0) or 15.0
         ),
