@@ -12,10 +12,14 @@ import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { toast } from 'sonner';
 import {
+  AlertTriangle,
   ArrowLeft,
+  CheckCircle2,
   FileCheck2,
   FlaskConical,
   GitBranch,
+  Info,
+  KeyRound,
   Layers,
   PlayCircle,
   Radar,
@@ -40,7 +44,7 @@ import {
   StatusDot,
   VerdictBadge,
 } from '../../components';
-import type { CriticalityBand, ExplorationCoverage, ScenarioView } from '../../types/qec';
+import type { AppCrawlStatus, CriticalityBand, CrawlDiagnosis, ExplorationCoverage, ScenarioView } from '../../types/qec';
 import VerdictLedger from '../ledger';
 import HonestyFeed from '../honesty';
 
@@ -52,6 +56,55 @@ const BAND_TONE: Record<CriticalityBand, 'crit' | 'warn' | 'teal' | 'neutral'> =
 };
 
 // ── header ───────────────────────────────────────────────────────────────────
+
+/**
+ * Persistent, typed crawl-diagnosis card (Phase 0 — legible failure). Renders the
+ * durable "what happened + what to do" the server computed, so a reloaded failed/
+ * empty/seed-blocked crawl always states its reason instead of a blank Studio. Shown
+ * only for terminal states that warrant attention — a clean `COMPLETED_OK`, an
+ * in-progress crawl, or a never-crawled app render nothing here.
+ */
+function CrawlDiagnosisCard({ crawl }: { crawl?: AppCrawlStatus }) {
+  const d: CrawlDiagnosis | undefined = crawl?.diagnosis;
+  if (!d) return null;
+  // Only surface terminal states the client should act on / notice.
+  const HIDE = new Set(['COMPLETED_OK', 'RUNNING', 'QUEUED', 'NONE']);
+  if (HIDE.has(d.code)) return null;
+
+  const tone =
+    d.severity === 'action'
+      ? { box: 'border-amber-500/40 bg-amber-500/10', icon: 'text-amber-500' }
+      : d.severity === 'ok'
+        ? { box: 'border-teal-500/30 bg-teal-500/10', icon: 'text-teal-500' }
+        : { box: 'border-rose-500/40 bg-rose-500/10', icon: 'text-rose-500' };
+  const Icon =
+    d.code === 'LOGIN_FAILED' ? KeyRound
+      : d.severity === 'ok' ? CheckCircle2
+        : d.severity === 'action' ? Info
+          : AlertTriangle;
+
+  return (
+    <div className={cn('flex items-start gap-2.5 rounded-lg border px-3.5 py-2.5', tone.box)}>
+      <Icon size={15} className={cn('mt-0.5 shrink-0', tone.icon)} aria-hidden />
+      <div className="min-w-0">
+        <p className="text-xs font-semibold text-ink">{d.title}</p>
+        <p className="text-2xs text-ink-low mt-0.5">{d.human}</p>
+        {d.remediation && (
+          <p className="text-2xs text-ink mt-1 font-medium">{d.remediation}</p>
+        )}
+        {d.fields.length > 0 && (
+          <div className="mt-1.5 flex flex-wrap gap-1">
+            {d.fields.map((f) => (
+              <span key={f} className="rounded bg-ink/5 px-1.5 py-0.5 text-2xs font-mono text-ink-low">
+                {f}
+              </span>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
 
 function SituationHeader({ appId }: { appId: string }) {
   const state = useAsync((signal) => api.getApp(appId, { signal }), [appId]);
@@ -159,6 +212,7 @@ function SituationHeader({ appId }: { appId: string }) {
           </div>
         </div>
       )}
+      {!isCrawling && <CrawlDiagnosisCard crawl={app.crawl} />}
     <div className="flex items-start justify-between gap-4">
       <div className="min-w-0">
         <Link to="/" className="inline-flex items-center gap-1.5 text-2xs text-ink-low hover:text-ink mb-2 transition-colors">

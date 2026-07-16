@@ -232,7 +232,7 @@ export interface ClientApp {
 
 /** Live status of an app's most recent crawl (GET /apps/{id}.crawl). */
 export interface AppCrawlStatus {
-  status: 'none' | 'pending' | 'writing' | 'running' | 'dispatched' | 'completed' | 'failed' | 'refused' | 'unknown';
+  status: 'none' | 'pending' | 'writing' | 'running' | 'dispatched' | 'queued' | 'claimed' | 'stalled' | 'completed' | 'failed' | 'refused' | 'unknown';
   /** True while the crawl is not yet terminal (still exploring). */
   active: boolean;
   exploration_id?: string;
@@ -241,6 +241,28 @@ export interface AppCrawlStatus {
   artifact_id?: string;
   /** Pages captured (populated on completion; 0 while a fresh crawl is mid-flight). */
   pages?: number;
+  /**
+   * Typed, durable diagnosis (Phase 0 — legible failure). Always present on a
+   * crawl status; the UI keys a persistent "what happened + what to do" card on
+   * `code`/`severity` so a reloaded failed/empty crawl is never a blank Studio.
+   */
+  diagnosis?: CrawlDiagnosis;
+}
+
+/** Machine-readable crawl outcome — see qe-central `crawl_diagnosis.py`. */
+export interface CrawlDiagnosis {
+  code:
+    | 'COMPLETED_OK' | 'SEEDS_NEEDED' | 'NO_CASES' | 'EMPTY_SUBSTRATE'
+    | 'LOGIN_FAILED' | 'STALLED' | 'REFUSED' | 'FAILED'
+    | 'RUNNING' | 'QUEUED' | 'NONE' | 'UNCLASSIFIED';
+  /** 'ok' | 'info' (in-progress) | 'action' (a human must act) | 'warn' (a problem). */
+  severity: 'ok' | 'info' | 'action' | 'warn';
+  title: string;
+  human: string;
+  remediation: string;
+  /** Named fields blocking deeper coverage (SEEDS_NEEDED). */
+  fields: string[];
+  evidence: Record<string, unknown>;
 }
 
 export interface AppListResponse {

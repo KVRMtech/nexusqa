@@ -27,6 +27,7 @@ from ..db import new_id, row_to_dict, tenant_scoped_qec_session, utc_now
 from ..db.controlplane_models import AppFingerprintRow
 from ..db.models import ClientAppEnvironmentRow, ClientAppRow, QEExplorationRow
 from ..fleet import quota
+from ..services.crawl_diagnosis import diagnose as diagnose_crawl
 from ..services.brief_compiler import (
     BRIEF_SYSTEM_INSTRUCTION, build_prompt, ground_and_assemble, parse_proposal,
 )
@@ -488,9 +489,10 @@ async def _latest_crawl(session, app_id: str) -> dict:
                 stalled = True
         except (TypeError, ValueError, AttributeError):
             pass  # never let a timestamp edge-case break get_app; keep active as-is
+    effective_status = "stalled" if stalled else status
     return {
         "exploration_id": exp.exploration_id,
-        "status": "stalled" if stalled else status,
+        "status": effective_status,
         "active": active,
         "started_at": str(exp.started_at or ""),
         "finished_at": str(exp.finished_at or ""),
@@ -498,6 +500,12 @@ async def _latest_crawl(session, app_id: str) -> dict:
         # Pages captured (populated on completion today; a live heartbeat can fill it
         # during the crawl later). Best-effort — 0 while a fresh crawl is mid-flight.
         "pages": int(stats.get("visits") or 0),
+        # Typed, durable diagnosis so the app panel always states WHY a crawl ended
+        # and WHAT to do next — never a blank Test Studio. Survives reload (read-time,
+        # not client session state). Uses the stall-valve-adjusted status.
+        "diagnosis": diagnose_crawl(
+            status=effective_status, error=exp.error or "", stats=stats,
+        ),
     }
 
 

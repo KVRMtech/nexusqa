@@ -50,6 +50,7 @@ from ..fleet.lifecycle import TenantNotOperational
 from ..fleet.provisioning import assert_tenant_operational_db
 from ..security import prod_guard
 from ..services.answer_key import explorer_fill_contract
+from ..services.crawl_diagnosis import diagnose as diagnose_crawl
 from ..services.exploration_planner import build_exploration_plan
 from ..substrate.schema import CRAWL_ID_PATTERN, ExplorationBundle, RefusalError
 from ..substrate.writer import write_exploration
@@ -688,4 +689,10 @@ async def get_exploration(
         ).scalar_one_or_none()
         if row is None:
             raise HTTPException(status_code=404, detail="exploration not found")
-        return row_to_dict(row)
+        payload = row_to_dict(row)
+        # Typed diagnosis alongside the raw row so a deep-link / poll shows the same
+        # honest "what happened + what to do" the app panel does (never green-wash).
+        payload["diagnosis"] = diagnose_crawl(
+            status=row.status, error=row.error or "", stats=row.stats,
+        )
+        return payload
