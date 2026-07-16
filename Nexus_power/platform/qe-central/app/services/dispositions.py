@@ -151,6 +151,12 @@ def _is_sensitive(norm: str) -> bool:
     return any(term in norm for term in _LOGIN_TERMS)
 
 
+def is_sensitive_label(label: str) -> bool:
+    """PUBLIC: True when a field label is identifier/credential-shaped and must NEVER
+    receive a fabricated value (the Phase-3 hard-line ASK guard reuses this)."""
+    return _is_sensitive(normalize_label(label))
+
+
 def _synthesize_value(norm: str, ftype: str, *, today: date | None) -> str | None:
     """A domain-VALID default for an affirmatively-safe field, or None if the field
     is not affirmatively safe (→ the caller fails closed to ASK). Deterministic; the

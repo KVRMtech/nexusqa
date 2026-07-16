@@ -28,12 +28,21 @@ from ..db.controlplane_models import AppFingerprintRow
 from ..db.models import ClientAppEnvironmentRow, ClientAppRow, QEExplorationRow
 from ..fleet import quota
 from ..services.crawl_diagnosis import diagnose as diagnose_crawl
-from ..services.seed_manifest import build_seed_manifest
+from ..services.data_agent import (
+    LLM_SYSTEM as DATA_AGENT_SYSTEM,
+    build_llm_prompt,
+    fill_from_items as data_agent_fill,
+    parse_llm_proposal,
+    propose_dispositions,
+)
+from ..services.pii_egress_guard import guard_inventory as pii_guard_inventory
+from ..services.seed_manifest import build_seed_manifest, library_keys_from_answer_key
 from ..services.brief_compiler import (
     BRIEF_SYSTEM_INSTRUCTION, build_prompt, ground_and_assemble, parse_proposal,
 )
 from ..services.answer_key import _normalize_outcome
 from ..services.synthesis import (
+    field_inventory_for_artifact,
     known_labels_for_artifact,
     known_value_nodes_for_artifact,
     value_candidates_for_artifact,
@@ -520,6 +529,62 @@ async def get_app(app_id: str, user: dict = Depends(require_auth)) -> dict:
         # Live crawl status so the UI shows "Crawling…" instead of an empty Studio.
         view["crawl"] = await _latest_crawl(session, app_id)
         return view
+
+
+@router.post("/apps/{app_id}/data-agent/propose")
+async def data_agent_propose(app_id: str, user: dict = Depends(_MUTATE)) -> dict:
+    """Data Agent (Phase 3): classify every observed field and shrink the human ask.
+
+    Floor-first + fail-closed: the deterministic six-disposition floor always runs; the
+    LLM refines it ONLY when the PII egress guard clears the value-free payload AND a
+    provider is configured. The grounding gate + hard-line re-validate every proposal,
+    so a fabricated SSN/policy value can never enter the fill. The response reports the
+    LLM's measured delta and its honest availability (no silent 'full manual').
+    """
+    tenant_id = user["tenant_id"]
+    async with tenant_scoped_qec_session(tenant_id) as session:
+        row = await _require_app(session, tenant_id, app_id)
+        answer_key = row.answer_key if isinstance(row.answer_key, dict) else {}
+        artifact_id = row.latest_artifact_id or ""
+    if not artifact_id:
+        return {"status": "no_crawl", "items": [], "recommended": [], "prefill": {},
+                "llm_used": False, "llm_ok": False, "egress_safe": True,
+                "llm_error": "crawl the app first"}
+
+    inventory = await field_inventory_for_artifact(tenant_id, artifact_id)
+    candidates = await value_candidates_for_artifact(tenant_id, artifact_id)
+    library_keys = library_keys_from_answer_key(answer_key)
+    observe_labels = [str(c.get("label") or "") for c in candidates if c.get("label")]
+
+    guard = pii_guard_inventory(inventory)
+    llm_proposal = None
+    llm_ok = False
+    llm_error = ""
+    if not guard["safe"]:
+        llm_error = "PII egress guard blocked the LLM: " + guard["reason"]
+    else:
+        res = await platform_api.complete_llm(
+            tenant_id=tenant_id, prompt=build_llm_prompt(inventory),
+            system=DATA_AGENT_SYSTEM, task="field_disposition",
+        )
+        llm_ok = bool(res.ok)
+        if res.ok:
+            llm_proposal = parse_llm_proposal(res.text)
+        else:
+            llm_error = res.detail or "no LLM provider configured on-prem"
+
+    out = propose_dispositions(
+        inventory, llm_proposal=llm_proposal, library_keys=library_keys,
+        observe_labels=observe_labels, today=datetime.now(timezone.utc).date(),
+    )
+    items = out["items"]
+    out["recommended"] = [i for i in items if i["disposition"] in ("ASK", "APPROVE")]
+    out["prefill"] = data_agent_fill(items)
+    out["egress_safe"] = guard["safe"]
+    out["llm_ok"] = llm_ok
+    out["llm_error"] = llm_error
+    out["status"] = "ready"
+    return out
 
 
 @router.get("/apps/{app_id}/seed-manifest")
