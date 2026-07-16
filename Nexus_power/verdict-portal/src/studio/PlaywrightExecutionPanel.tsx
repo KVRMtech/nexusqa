@@ -1806,7 +1806,12 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
               <summary className="flex items-center gap-2 cursor-pointer select-none px-3 py-2 text-[11px] font-bold text-nexus-700 list-none [&::-webkit-details-marker]:hidden">
                 <SlidersHorizontal className="h-3.5 w-3.5 text-nexus-500" />
                 Advanced configuration
-                <span className="font-medium text-nexus-400 normal-case">— environment · authentication · test data · browsers</span>
+                <span className="font-medium text-nexus-400 normal-case">— environment · authentication · test data</span>
+                {/* Surface the current browser choice even when collapsed, so
+                    "run in a specific browser" is discoverable (expand to change). */}
+                <span className="font-medium text-nexus-500 normal-case">
+                  · browser: {Array.from(browsers).join(', ') || 'chromium'}
+                </span>
                 <ChevronDown className="ml-auto h-4 w-4 text-nexus-400 transition-transform group-open:rotate-180" />
               </summary>
               <div className="px-3 pb-3 pt-1 space-y-4 border-t border-nexus-100">

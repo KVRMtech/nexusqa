@@ -274,6 +274,10 @@ class PageStateRecord:
     form_snapshot_signals: dict[str, dict] = field(default_factory=dict)
     #: ANSWERS P1.B — rendered value nodes ``[{label, selector, text}]``.
     displayed_values: list[dict[str, str]] = field(default_factory=list)
+    #: API/network mining — XHR/fetch calls observed during the visit (method,
+    #: url [query-dropped + PII-scrubbed], status, resource_type, mimes, size,
+    #: timestamp_ms).  DIAGNOSTICS-ONLY (mirrors ``schema.PageState``).
+    network_calls: list[dict[str, str]] = field(default_factory=list)
     actions: list[dict[str, Any]] = field(default_factory=list)
     screenshots: list[dict[str, Any]] = field(default_factory=list)
     # manifest-only routing

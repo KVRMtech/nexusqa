@@ -253,6 +253,9 @@ async def write_exploration(
             "form_snapshot_signals": dict(page.form_snapshot_signals),
             # ANSWERS P1.B — rendered value nodes (text already scrubbed at capture).
             "displayed_values": list(page.displayed_values or []),
+            # API/network mining — XHR/fetch evidence (query-dropped + scrubbed at
+            # source); diagnostics-only, the factory chain does not read it.
+            "network_calls": list(page.network_calls or []),
             "extractor_version": version,
             "form_snapshot_extractor_version": version,
             "created_at": now,

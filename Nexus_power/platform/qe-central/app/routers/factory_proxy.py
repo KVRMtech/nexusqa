@@ -41,9 +41,14 @@ logger = logging.getLogger("qec.factory_proxy")
 router = APIRouter(tags=["Factory bridge (Test Studio)"])
 
 #: The factory path roots the Test Studio uses. Nothing else is bridged.
-#: The first four are artifact-keyed; ``agentic`` is the tenant-level agent-toggle
-#: config the Playwright execution panel reads (degrades gracefully if absent).
-_ALLOWED_ROOTS = ("test-factory", "artifacts", "test-runs", "eyes", "agentic")
+#: The artifact-keyed roots carry the studio's read/run surface; ``agentic`` is the
+#: tenant-level agent-toggle config the Playwright execution panel reads (degrades
+#: gracefully if absent). ``e2e-architect`` serves the PER-STEP execution evidence
+#: (``…/scenarios/{id}/last-run``) the Discovered-Flows drill-down reads — WITHOUT it
+#: bridged, a flow shows "Passed" (from the ``test-factory`` runs summary) yet its
+#: per-step drill-down errors with "No execution evidence recorded", even though the
+#: run + steps exist.
+_ALLOWED_ROOTS = ("test-factory", "artifacts", "test-runs", "eyes", "agentic", "e2e-architect")
 
 #: Read methods are open to any authenticated tenant user; everything else mutates.
 _READ_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})

@@ -407,6 +407,42 @@ async def known_labels_for_artifact(tenant_id: str, artifact_id: str) -> list[st
     return sorted(l for l in labels if l.strip())
 
 
+async def known_routes_for_artifact(tenant_id: str, artifact_id: str) -> list[str]:
+    """Distinct URL routes (``url_path`` + any hash route in ``url_query``/location)
+    the crawl already reached — the GROUNDING vocabulary the exploration planner
+    validates an LLM-proposed priority pattern against (a pattern that matches no
+    real route is rejected, so the planner can never chase a hallucinated section).
+    Path shape only, never values."""
+    if not artifact_id:
+        return []
+    async with tenant_scoped_substrate_session(tenant_id) as session:
+        version = await _latest_version(session, PageVisitRow, artifact_id)
+        if version is None:
+            return []
+        rows = (
+            await session.execute(
+                select(PageVisitRow).where(
+                    PageVisitRow.artifact_id == artifact_id,
+                    PageVisitRow.extractor_version == version,
+                )
+            )
+        ).scalars().all()
+    routes: set[str] = set()
+    for v in rows:
+        if (getattr(v, "source", "") or "") == _MISSING_PAGE_SOURCE:
+            continue
+        path = str(getattr(v, "url_path", "") or "").strip()
+        if path:
+            routes.add(path)
+        # hash-route SPAs record the route in the location, not url_path.
+        loc = str(getattr(v, "location", "") or "")
+        if "#" in loc:
+            frag = loc.split("#", 1)[1]
+            if frag:
+                routes.add("#" + frag)
+    return sorted(r for r in routes if r.strip())
+
+
 async def known_value_nodes_for_artifact(tenant_id: str, artifact_id: str) -> list[dict]:
     """Displayed value nodes ``[{label, source_hint}]`` captured across an artifact's
     current page_visits (ANSWERS P1.B) — the grounding TARGETS the brief compiler ties
@@ -442,6 +478,61 @@ async def known_value_nodes_for_artifact(tenant_id: str, artifact_id: str) -> li
             seen.add(key)
             nodes.append({"label": label, "source_hint": selector})
     return nodes
+
+
+async def value_candidates_for_artifact(tenant_id: str, artifact_id: str) -> list[dict]:
+    """#2 value-oracle PROVING wiring — the crawl-side CANDIDATE expected values.
+
+    Reads the current-version ``displayed_values`` nodes the crawler classified as
+    candidate outcomes (``value_candidate == "true"``: a rendered premium / total /
+    decision) and returns them for CONFIRMATION:
+    ``[{label, source_hint, text, value_type, confidence, reason}]``.
+
+    Doctrine: the captured ``text`` is a RUNTIME OBSERVATION surfaced only as a
+    review pre-fill — the confirm endpoint requires a human-AUTHORED expected
+    value; nothing here becomes an assertion without that confirmation.  Additive:
+    the existing ``known_value_nodes_for_artifact`` projection (and the brief
+    prompt it feeds) is untouched."""
+    if not artifact_id:
+        return []
+    async with tenant_scoped_substrate_session(tenant_id) as session:
+        version = await _latest_version(session, PageVisitRow, artifact_id)
+        if version is None:
+            return []
+        rows = (
+            await session.execute(
+                select(PageVisitRow).where(
+                    PageVisitRow.artifact_id == artifact_id,
+                    PageVisitRow.extractor_version == version,
+                )
+            )
+        ).scalars().all()
+    out: list[dict] = []
+    seen: set[str] = set()
+    for v in rows:
+        for dv in (getattr(v, "displayed_values", None) or []):
+            if not isinstance(dv, dict):
+                continue
+            if str(dv.get("value_candidate") or "").strip().lower() != "true":
+                continue
+            selector = str(dv.get("selector") or "").strip()
+            if not selector or selector in seen:
+                continue
+            seen.add(selector)
+            try:
+                confidence = float(dv.get("value_confidence") or 0.0)
+            except (TypeError, ValueError):
+                confidence = 0.0
+            out.append({
+                "label": str(dv.get("label") or "").strip(),
+                "source_hint": selector,
+                "text": str(dv.get("text") or "").strip(),
+                "value_type": str(dv.get("value_type") or "").strip(),
+                "confidence": confidence,
+                "reason": str(dv.get("value_reason") or "").strip(),
+            })
+    out.sort(key=lambda c: -c["confidence"])
+    return out
 
 
 async def read_page_nodes(tenant_id: str, artifact_id: str) -> tuple[list[PageNode], str | None]:

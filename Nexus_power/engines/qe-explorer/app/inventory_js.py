@@ -50,6 +50,11 @@ RawControl shape (one object per visible interactive element):
     value_committed committed value ("" for password / non-value controls)
     href            resolved link destination for <a> (diagnostic; drives the
                     crawler's href-follow traversal), "" for non-anchors
+    haspopup        aria-haspopup value (menu/listbox/true/…) — marks a hover/menu
+                    trigger the crawler hovers to reveal a fly-out, "" otherwise
+    expanded        aria-expanded value (true/false) — marks a CLICK-to-open
+                    dropdown/disclosure toggle (a Bootstrap ``dropdown-toggle`` etc.
+                    whose menu items are hidden until it is clicked), "" otherwise
     landmark        {role, name} of the nearest landmark ancestor (anchor seed)
 
 The walker recurses OPEN shadow roots (same frame, no selector change — the
@@ -63,7 +68,7 @@ from __future__ import annotations
 
 #: Stamped into the crawl manifest so a manifest can be traced to the exact
 #: injected-JS generation that produced its controls.
-INVENTORY_JS_VERSION = "inv-js-v2"
+INVENTORY_JS_VERSION = "inv-js-v4"
 
 INVENTORY_JS = r"""
 (() => {
@@ -372,6 +377,8 @@ INVENTORY_JS = r"""
       css_hint: cssHint(el),
       value_committed: valueCommitted(el),
       href: hrefOf(el),
+      haspopup: lc(attr(el, "aria-haspopup")),
+      expanded: lc(attr(el, "aria-expanded")),
       landmark: nearestLandmark(el, doc)
     };
   }

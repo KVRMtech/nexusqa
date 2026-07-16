@@ -62,7 +62,7 @@ CRAWL_META_FIELDS = ("crawl_id", "target_url", "explorer_version", "config_finge
 PAGE_STATE_SCHEMA_FIELDS = (
     "sequence_index", "location", "title", "url_host", "url_path", "url_query",
     "canonical_host", "first_seen_ms", "last_seen_ms", "form_snapshot",
-    "form_snapshot_signals", "displayed_values",
+    "form_snapshot_signals", "displayed_values", "network_calls",
 )
 
 #: action fields copied into a bundle ``ActionRecord`` (schema field names).
@@ -233,6 +233,7 @@ def map_manifest_records_to_bundle(
             "form_snapshot": dict(rec.get("form_snapshot") or {}),
             "form_snapshot_signals": dict(rec.get("form_snapshot_signals") or {}),
             "displayed_values": list(rec.get("displayed_values") or []),
+            "network_calls": list(rec.get("network_calls") or []),
             "actions": cleaned_actions,
             "screenshots": cleaned_shots,
         })

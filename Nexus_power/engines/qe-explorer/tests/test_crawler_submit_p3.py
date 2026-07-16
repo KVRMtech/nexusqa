@@ -6,15 +6,21 @@ gate re-verifies). A confirmed navigation pushes the post-submit page onto the f
 from __future__ import annotations
 
 import asyncio
+import base64
+import tempfile
 import types
 
 from app import crawler as crawler_mod
+from app import emit
+from app.browser import RawObservation
 from app.config import Settings
 from app.crawler import Budget, Crawler, FrontierItem, GuardContext, Phase
-from app.forms import FlowCandidate, FormFillResult, SubmitResult
+from app.forms import FlowCandidate, FormFillResult, SubmitResult, execute_submit_phase_b
 from app.guard import load_refuse_pack
 
 _REFUSE_PACK = load_refuse_pack(Settings().refuse_pack_path)
+_PNG = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGNgAAIAAAUAAen63NgAAAAASUVORK5CYII=")
 
 
 class _DummyPort:
@@ -132,6 +138,58 @@ def test_unconfirmed_submit_adds_no_frontier(tmp_path, monkeypatch):
                                         _fill("Continue"), "fp"))
     assert c._forms_submitted == 1
     assert c._frontier.pop() is None   # nothing enqueued
+
+
+class _SubmitPort:
+    """A minimal BrowserPort for the REAL execute_submit_phase_b: the submit click
+    lands on a post-submit page that renders a computed PREMIUM (the outcome the
+    value oracle must ground)."""
+
+    def __init__(self, premium="$189.42"):
+        self._premium = premium
+
+    async def goto(self, url):
+        return types.SimpleNamespace(ok=True, url=url, error="")
+
+    async def collect_controls(self):
+        return []
+
+    async def click(self, control):
+        # same-URL confirmation (a computed quote renders in place).
+        return RawObservation(url_before="http://acme/#/quote",
+                              url_after="http://acme/#/quote", dom_changed=True)
+
+    async def collect_displayed_values(self):
+        # the post-submit premium node the crawler must capture.
+        return [{"label": "Monthly Premium", "selector": "div.prem", "text": self._premium}]
+
+    async def screenshot_png(self):
+        return _PNG
+
+
+def test_phase_b_captures_post_submit_displayed_values_for_the_value_oracle():
+    """SUBMIT-DEPTH → VALUE-ORACLE: the post-submit page is where a premium/decline
+    renders. execute_submit_phase_b must capture its displayed_values (normalized +
+    #2-classified) so a confirmed expected outcome can ground to a real node —
+    without this the crawl reaches the page but the value is invisible."""
+    with tempfile.TemporaryDirectory() as work:
+        clock = emit.MonotonicClock()
+        emitter = emit.ManifestEmitter(work, "c1", clock)
+        attestation = types.SimpleNamespace(is_submit_capable=lambda now_ms=None: True)
+        result = asyncio.run(execute_submit_phase_b(
+            _SubmitPort(), {"name": "Get quote", "kind": "button"},
+            "http://acme/#/quote", emitter, clock,
+            refuse_pack=_REFUSE_PACK, attestation=attestation,
+            submit_flow_approved=True, now_ms=1, sequence_index=0,
+        ))
+        assert result.submitted is True
+        dvs = result.page_state.displayed_values
+        prem = next((d for d in dvs if d["selector"] == "div.prem"), None)
+        assert prem is not None, "post-submit premium node was not captured"
+        # #2 inference ran on the terminal state's value: currency, candidate.
+        assert prem["value_type"] == "currency"
+        assert prem["value_candidate"] == "true"
+        assert prem["text"] == "$189.42"
 
 
 # ── hardening from adversarial review (#6 submit window, #7 max_depth) ───────────

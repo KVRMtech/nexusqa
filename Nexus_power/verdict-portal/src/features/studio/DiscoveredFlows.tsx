@@ -21,7 +21,9 @@
  */
 import { useMemo, useState } from 'react';
 import { toast } from 'sonner';
-import { CheckCircle2, CircleDashed, PlayCircle, ShieldAlert, Sparkles } from 'lucide-react';
+import {
+  CheckCircle2, ChevronDown, ChevronRight, CircleDashed, PlayCircle, ShieldAlert, Sparkles,
+} from 'lucide-react';
 
 import { useAuth } from '../../lib/auth';
 import { useAsync } from '../../lib/useAsync';
@@ -89,6 +91,108 @@ export function classify(script: ScriptRun | undefined): { status: FlowStatus; r
   return { status: 'attention', reason: `Ran but not clean — ${bits.join(', ')}${when}.` };
 }
 
+// ── Per-step execution evidence (the client's "which step ran / failed / why /
+//    where" question). Data already exists on the backend — a flow's LAST run,
+//    step by step. Nothing is fabricated: a step with no run record shows nothing.
+const STEP_FAIL = new Set(['failed', 'broken', 'timed_out', 'error']);
+const STEP_GLYPH: Record<string, { g: string; cls: string }> = {
+  passed: { g: '✓', cls: 'text-good' },
+  failed: { g: '✗', cls: 'text-crit' },
+  broken: { g: '✗', cls: 'text-crit' },
+  timed_out: { g: '⏱', cls: 'text-warn' },
+  error: { g: '✗', cls: 'text-crit' },
+  skipped: { g: '–', cls: 'text-ink-low' },
+};
+
+interface RunStep {
+  step_number?: number;
+  status?: string;
+  label?: string;
+  action?: string;
+  error_message?: string;
+  resolved_selector?: string;
+  expected_selector?: string;
+  screenshot_url?: string;
+  duration_ms?: number;
+}
+
+/** Expandable per-step evidence for ONE flow's last run. Answers, in place:
+ *  which steps ran, which failed, WHY (error), and WHERE (selector) — plus the
+ *  failure screenshot. No new backend: reads the flow's stored last-run steps. */
+function FlowSteps({ artifactId, scenarioId }: { artifactId: string; scenarioId: string }) {
+  const state = useAsync<any>(
+    () => studioApi.getScenarioLastRun(artifactId, scenarioId),
+    [artifactId, scenarioId],
+  );
+
+  if (state.isLoading) return <div className="pl-8 py-2"><SkeletonRows rows={2} /></div>;
+  if (state.isError) {
+    return (
+      <p className="pl-8 py-2 text-2xs text-ink-low">
+        No execution evidence recorded for this flow yet — run it to capture per-step results.
+      </p>
+    );
+  }
+  const data = state.data || {};
+  const steps: RunStep[] = Array.isArray(data.steps) ? data.steps : [];
+  if (steps.length === 0) {
+    return (
+      <p className="pl-8 py-2 text-2xs text-ink-low">
+        No steps recorded for the last run{data.status ? ` (${humanize(String(data.status))})` : ''}.
+      </p>
+    );
+  }
+  const verdict = data.verdict || data.scenario_verdict;
+  const justification = data.justification || data.root_cause_hints;
+  return (
+    <div className="pl-8 pr-2 pb-3 pt-1 space-y-1.5 min-w-0">
+      {(verdict || justification) && (
+        <div className="text-2xs text-ink-low mb-1">
+          {verdict && <Pill tone="crit" size="sm" variant="soft">{humanize(String(verdict))}</Pill>}
+          {justification && <span className="ml-2">{String(justification)}</span>}
+        </div>
+      )}
+      {steps.map((st, i) => {
+        const status = String(st.status || '').toLowerCase();
+        const failed = STEP_FAIL.has(status);
+        const glyph = STEP_GLYPH[status] || STEP_GLYPH.skipped;
+        const where = st.resolved_selector || st.expected_selector || '';
+        const shot = st.screenshot_url ? studioApi.getRunScreenshotUrl(st.screenshot_url) : '';
+        return (
+          <div key={st.step_number ?? i} className="flex items-start gap-2 min-w-0">
+            <span className={cn('shrink-0 font-mono text-xs w-4 text-center', glyph.cls)} title={status}>
+              {glyph.g}
+            </span>
+            <span className="shrink-0 text-2xs text-ink-low tabular-nums w-5 text-right">
+              {st.step_number ?? i + 1}
+            </span>
+            <div className="min-w-0 flex-1">
+              <p className={cn('text-xs truncate', failed ? 'text-crit' : 'text-ink')}>
+                {st.label || st.action || `Step ${st.step_number ?? i + 1}`}
+              </p>
+              {failed && st.error_message && (
+                <p className="text-2xs text-crit/90 mt-0.5 break-words font-mono">
+                  {String(st.error_message).split('\n')[0].slice(0, 200)}
+                </p>
+              )}
+              {failed && where && (
+                <p className="text-2xs text-ink-low mt-0.5 break-all font-mono">where: {where}</p>
+              )}
+              {shot && (
+                <a href={shot} target="_blank" rel="noopener noreferrer"
+                   className="text-2xs text-teal hover:underline">view screenshot</a>
+              )}
+            </div>
+            {typeof st.duration_ms === 'number' && (
+              <span className="shrink-0 text-2xs text-ink-low tabular-nums">{Math.round(st.duration_ms)}ms</span>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 export function DiscoveredFlows({
   artifactId,
   onOpenPlaywright,
@@ -99,6 +203,7 @@ export function DiscoveredFlows({
   const { session } = useAuth();
   const canRun = ['admin', 'manager'].includes(String(session?.role ?? '').toLowerCase());
   const [running, setRunning] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState<string | null>(null);
 
   const state = useAsync<FlowsData>(async () => {
     // All discovered flows + the run/verdict summary, composed client-side.
@@ -179,41 +284,64 @@ export function DiscoveredFlows({
               <ul className="divide-y divide-line">
                 {flows.map((f) => {
                   const meta = STATUS_META[f.status];
+                  const isOpen = expanded === f.test_case_id;
+                  // A flow with run evidence (proven/attention) can be expanded to
+                  // its per-step results; a never-run candidate has nothing to show.
+                  const hasEvidence = f.status !== 'candidate';
                   return (
-                    <li key={f.test_case_id} className="py-2.5 flex items-center gap-3">
-                      <span
-                        className={cn(
-                          'inline-flex items-center gap-1 shrink-0 rounded-md px-1.5 py-0.5 text-2xs font-semibold',
-                          meta.tone === 'good' && 'text-good',
-                          meta.tone === 'crit' && 'text-crit',
-                          meta.tone === 'neutral' && 'text-ink-low',
-                        )}
-                        title={meta.label}
-                      >
-                        {meta.icon}
-                      </span>
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-center gap-2">
-                          <p className="text-sm text-ink truncate">{f.name}</p>
-                          <Pill tone={meta.tone} size="sm" variant="soft">{meta.label}</Pill>
-                          {f.type && <Pill tone="neutral" size="sm">{humanize(f.type)}</Pill>}
-                        </div>
-                        <p className="text-2xs text-ink-low mt-0.5">
-                          {f.reason}
-                          {typeof f.step_count === 'number' && f.step_count > 0 && ` · ${f.step_count} steps`}
-                        </p>
+                    <li key={f.test_case_id} className="py-1">
+                      <div className="py-1.5 flex items-center gap-3">
+                        <button
+                          type="button"
+                          className={cn('shrink-0 text-ink-low', !hasEvidence && 'invisible')}
+                          title={isOpen ? 'Hide steps' : 'Show which steps ran / failed and why'}
+                          onClick={() => setExpanded(isOpen ? null : f.test_case_id)}
+                        >
+                          {isOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                        </button>
+                        <span
+                          className={cn(
+                            'inline-flex items-center gap-1 shrink-0 rounded-md px-1.5 py-0.5 text-2xs font-semibold',
+                            meta.tone === 'good' && 'text-good',
+                            meta.tone === 'crit' && 'text-crit',
+                            meta.tone === 'neutral' && 'text-ink-low',
+                          )}
+                          title={meta.label}
+                        >
+                          {meta.icon}
+                        </span>
+                        <button
+                          type="button"
+                          className="min-w-0 flex-1 text-left"
+                          disabled={!hasEvidence}
+                          onClick={() => hasEvidence && setExpanded(isOpen ? null : f.test_case_id)}
+                        >
+                          <div className="flex items-center gap-2">
+                            <p className="text-sm text-ink truncate">{f.name}</p>
+                            <Pill tone={meta.tone} size="sm" variant="soft">{meta.label}</Pill>
+                            {f.type && <Pill tone="neutral" size="sm">{humanize(f.type)}</Pill>}
+                          </div>
+                          <p className="text-2xs text-ink-low mt-0.5">
+                            {f.reason}
+                            {typeof f.step_count === 'number' && f.step_count > 0 && ` · ${f.step_count} steps`}
+                            {hasEvidence && !isOpen && <span className="text-teal"> · view steps</span>}
+                          </p>
+                        </button>
+                        <Button
+                          size="sm"
+                          variant={f.status === 'proven' ? 'ghost' : 'secondary'}
+                          loading={running === f.test_case_id}
+                          disabled={!canRun}
+                          title={canRun ? 'Run this flow headed (live)' : 'Running requires an admin or manager role'}
+                          icon={<PlayCircle size={14} />}
+                          onClick={() => promote(f)}
+                        >
+                          {f.status === 'proven' ? 'Re-run' : 'Run'}
+                        </Button>
                       </div>
-                      <Button
-                        size="sm"
-                        variant={f.status === 'proven' ? 'ghost' : 'secondary'}
-                        loading={running === f.test_case_id}
-                        disabled={!canRun}
-                        title={canRun ? 'Run this flow headed (live)' : 'Running requires an admin or manager role'}
-                        icon={<PlayCircle size={14} />}
-                        onClick={() => promote(f)}
-                      >
-                        {f.status === 'proven' ? 'Re-run' : 'Run'}
-                      </Button>
+                      {isOpen && hasEvidence && (
+                        <FlowSteps artifactId={artifactId} scenarioId={f.test_case_id} />
+                      )}
                     </li>
                   );
                 })}

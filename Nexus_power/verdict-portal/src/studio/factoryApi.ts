@@ -313,6 +313,16 @@ class FactoryApiClient {
     return data;
   }
 
+  /** ONE flow's LAST run — full per-step evidence (step #, status, error/where,
+   *  selector, screenshot) + drift + root-cause hints. Powers the Discovered
+   *  Flows per-step drill-down so "why/where a step failed" is one click away. */
+  async getScenarioLastRun(artifactId: string, scenarioId: string): Promise<any> {
+    const { data } = await this.client.get(
+      `/v1/e2e-architect/${artifactId}/scenarios/${encodeURIComponent(scenarioId)}/last-run`,
+    );
+    return data;
+  }
+
   /** Auth profile status for an artifact (is a session stored + is a capture running). */
   async getAuthStatus(artifactId: string): Promise<any> {
     const { data } = await this.client.get(`/v1/test-factory/${artifactId}/playwright/auth`);

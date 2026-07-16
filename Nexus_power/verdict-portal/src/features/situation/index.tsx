@@ -8,7 +8,7 @@
  * deeper flows (scenario detail, gap adjudication UI, cycle drill-in). Export
  * `AppSituation`.
  */
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { toast } from 'sonner';
 import {
@@ -81,7 +81,10 @@ function SituationHeader({ appId }: { appId: string }) {
       const res = await api.triggerExploration(appId);
       toast.info('Crawl dispatched — exploring the app…', { description: res.crawl_id });
       let terminal: Awaited<ReturnType<typeof api.getExploration>> | null = null;
-      for (let i = 0; i < 45; i += 1) {
+      // Poll up to ~6 min (covers the bounded first-pass crawl's 5-min ceiling); the
+      // on-load crawl-status effect below is the durable signal if the operator
+      // navigates away or reloads, so this loop is just the same-session convenience.
+      for (let i = 0; i < 90; i += 1) {
         await new Promise((r) => setTimeout(r, 4000));
         const exp = await api.getExploration(res.exploration_id);
         if (exp.status === 'completed' || exp.status === 'failed' || exp.status === 'refused') {
@@ -124,11 +127,38 @@ function SituationHeader({ appId }: { appId: string }) {
     }
   };
 
+  // Keep the app view LIVE while a crawl runs server-side: poll so it reflects
+  // progress and flips to the ready state the instant the crawl completes — even
+  // after a page reload, when the local `crawling` flag is gone. This is precisely
+  // why a long crawl no longer leaves an empty Test Studio looking broken: the app
+  // knows, from server truth, that a crawl is still in flight.
+  const crawlActive = state.data?.crawl?.active ?? false;
+  useEffect(() => {
+    if (!crawlActive) return undefined;
+    const t = setInterval(() => state.reload(), 5000);
+    return () => clearInterval(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [crawlActive]);
+
   if (state.isLoading) return <Loading label="Loading app…" />;
   if (state.isError) return <ErrorState error={state.error} onRetry={state.reload} />;
   const app = state.data!;
+  const isCrawling = crawling || (app.crawl?.active ?? false);
 
   return (
+    <div className="space-y-3">
+      {isCrawling && (
+        <div className="flex items-center gap-2.5 rounded-lg border border-teal-500/30 bg-teal-500/10 px-3.5 py-2.5">
+          <Radar size={15} className="text-teal-500 animate-pulse shrink-0" aria-hidden />
+          <div className="min-w-0">
+            <p className="text-xs font-medium text-ink">Crawling in progress — exploring the app…</p>
+            <p className="text-2xs text-ink-low">
+              {(app.crawl?.pages ?? 0) > 0 ? `${app.crawl!.pages} pages captured so far. ` : ''}
+              Test Studio populates automatically when the crawl completes (usually a few minutes). You can leave this page — it keeps running.
+            </p>
+          </div>
+        </div>
+      )}
     <div className="flex items-start justify-between gap-4">
       <div className="min-w-0">
         <Link to="/" className="inline-flex items-center gap-1.5 text-2xs text-ink-low hover:text-ink mb-2 transition-colors">
@@ -150,18 +180,31 @@ function SituationHeader({ appId }: { appId: string }) {
           variant="secondary"
           onClick={() => navigate(`/apps/${appId}/studio`)}
           disabled={!app.latest_artifact_id}
-          title={app.latest_artifact_id ? 'Browse + run every discovered flow' : 'Crawl first to populate the Studio'}
+          title={
+            app.latest_artifact_id
+              ? 'Browse + run every discovered flow'
+              : isCrawling
+                ? 'Crawl in progress — Test Studio opens automatically when it completes'
+                : 'Crawl first to populate the Studio'
+          }
           icon={<FlaskConical size={15} />}
         >
           Test Studio
         </Button>
-        <Button variant="secondary" loading={crawling} onClick={crawl} icon={<Radar size={15} />}>
-          Crawl
+        <Button
+          variant="secondary"
+          loading={isCrawling}
+          disabled={isCrawling}
+          onClick={crawl}
+          icon={<Radar size={15} />}
+        >
+          {isCrawling ? 'Crawling…' : 'Crawl'}
         </Button>
         <Button variant="primary" loading={triggering} onClick={runCycle} icon={<PlayCircle size={15} />}>
           Run cycle
         </Button>
       </div>
+    </div>
     </div>
   );
 }

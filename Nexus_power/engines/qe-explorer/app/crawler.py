@@ -32,11 +32,13 @@ from __future__ import annotations
 import asyncio
 import heapq
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import Any, Optional, Sequence
 from urllib.parse import urlsplit
 
 from . import emit
+from . import value_infer
 from .auth import Authenticator, AuthWindow, Credentials
 from .browser import BrowserPort, PageObservation
 from .fingerprint import state_fingerprint
@@ -69,6 +71,51 @@ _FILLABLE_KINDS = frozenset({"text", "date", "select", "checkbox", "radio", "tog
 #: Kinds a nav-discovery pass may click (links always; buttons only on non-form
 #: states, and never a guard-flagged irreversible one).
 _ACTUATOR_KINDS = frozenset({"link", "button"})
+#: Bound on hover-reveal probes per state (mega-menu / fly-out triggers) so a
+#: nav-heavy page cannot spend the whole budget hovering.
+_MAX_HOVER_REVEALS = 8
+#: Bound on the revealed nav ITEMS a single opened menu is probed for (find the
+#: one the open made clickable) — keeps a big mega-menu from spending the budget.
+_MAX_MENU_ITEMS = 10
+#: Bound on DIRECT nav-link click-groundings per state (top in-scope links clicked to
+#: record a grounded [click → navigation]). Global dedup (``_grounded_navs``) grounds
+#: each unique route once, so this only caps a single nav-heavy page.
+_MAX_GROUND_NAVS = 12
+#: Bound on network (XHR/fetch) calls recorded per state — a chatty SPA can fire
+#: hundreds of requests; keep the evidence stream proportional to the API surface.
+_MAX_NETWORK_CALLS = 100
+#: Wizard/stepper traversal (#1) bounds — steps per single wizard chain, and the
+#: crawl-wide advance total; both cap the SAFETY-SENSITIVE submit-boundary probe.
+_MAX_WIZARD_STEPS = 6
+_MAX_WIZARD_ADVANCES = 24
+#: ENTRY-goto retry bounds — the first navigation can race the per-dispatch
+#: egress-fence reconfigure (squid allowlist re-read); retry it briefly.
+_ENTRY_GOTO_RETRIES = 2
+_ENTRY_RETRY_DELAY_S = 2.5
+
+#: An "advance the wizard" control label (Next / Continue / Proceed / Forward) —
+#: the POSITIVE intent signal.
+_WIZARD_ADVANCE_RE = re.compile(r"\b(next|continue|proceed|forward)\b", re.I)
+#: A commit / terminal-boundary label the refuse pack does NOT universally flag
+#: (a generic "Submit"/"Confirm"/"Place order"/"Checkout"…). Its presence VETOES
+#: an advance even when the guard did not mark the control danger — the second,
+#: fail-closed gate over the guard so a wizard walk can never cross a submit.
+_WIZARD_COMMIT_RE = re.compile(
+    r"\b(submit|send|pay|paying|paid|payment|payments|buy|buying|purchase|"
+    r"purchasing|order|checkout|check\s*out|place\s*order|confirm|finish|"
+    r"complete|done|agree|accept|sign|book|reserve|schedule|activate|create|"
+    r"register|subscribe|delete|cancel|remove|apply)\b",
+    re.I,
+)
+
+
+def _is_wizard_advance(name: str) -> bool:
+    """True for a Next/Continue/Proceed/Forward control that carries NO commit /
+    terminal word — the fail-closed advance gate (any commit signal vetoes)."""
+    n = (name or "").strip()
+    if not _WIZARD_ADVANCE_RE.search(n):
+        return False
+    return not _WIZARD_COMMIT_RE.search(n)
 
 
 # ─── Budgets ─────────────────────────────────────────────────────────────────
@@ -173,26 +220,102 @@ class FrontierItem:
     parent_fingerprint: str = ""
 
 
+def _section_signature(url_template: str) -> str:
+    """The app SECTION an item belongs to — the first two path segments of its
+    (id-collapsed) ``url_template`` (``/account/settings/*`` → ``account/settings``,
+    ``/`` → ``""``).  The unit of novelty for the information-gain planner."""
+    path = urlsplit(url_template or "").path or ""
+    segs = [s for s in path.split("/") if s][:2]
+    return "/".join(segs)
+
+
+#: The explorer RE-BOUNDS a plan from qe-central (defense in depth — a plan is
+#: ordering data, never an attack surface): a safe substring pattern only, weight
+#: clamped 1..3, at most 8 patterns.  Mirrors the qe-central planner validation.
+_PLAN_MAX_PATTERNS = 8
+_PLAN_PATTERN_RX = re.compile(r"^[a-z0-9][a-z0-9/_.#-]{0,59}$")
+
+
+def _parse_plan_patterns(plan: Optional[dict[str, Any]]) -> list[tuple[str, int]]:
+    """Project a dispatch ``plan`` dict onto bounded ``[(pattern, weight)]`` the
+    frontier can apply.  Fully defensive: any malformed/oversized/unsafe entry is
+    dropped, an empty result ⇒ a byte-identical crawl."""
+    out: list[tuple[str, int]] = []
+    seen: set[str] = set()
+    for item in ((plan or {}).get("priority_patterns") or ()):
+        if not isinstance(item, dict) or len(out) >= _PLAN_MAX_PATTERNS:
+            continue
+        pattern = str(item.get("pattern") or "").strip().lower()[:60]
+        if not pattern or pattern in seen or not _PLAN_PATTERN_RX.match(pattern):
+            continue
+        try:
+            weight = max(1, min(3, int(item.get("weight") or 1)))
+        except (TypeError, ValueError):
+            weight = 1
+        seen.add(pattern)
+        out.append((pattern, weight))
+    return out
+
+
 class Frontier:
     """A min-priority queue of :class:`FrontierItem` deduped by reach key.
 
-    Ordering is ``(priority, depth, insertion)`` so a Phase-2 seed manifest can
-    raise a critical route's priority while Phase 1 degrades to breadth-first by
-    depth.  Push-time dedup on the reach key (``url_template``) keeps the queue
-    finite; the crawler additionally dedups on the full state fingerprint at
-    expand time so distinct URLs that render the SAME state are visited once.
+    Ordering is ``(priority, novelty_rank, depth, insertion)``:
+
+      * ``priority``     — an explicit Phase-2 seed can still raise a critical
+        route ahead of everything (unchanged);
+      * ``novelty_rank`` — the INFORMATION-GAIN planner (#3): the Nth item queued
+        from a given app SECTION gets rank N-1, so the FIRST item of every section
+        is visited before any section's second item.  Under a finite state budget
+        this spends the budget on breadth-of-app-regions (maximal new information)
+        instead of draining one link-heavy section before touching the rest;
+      * ``depth`` then ``insertion`` — breadth-first / FIFO within a novelty tier.
+
+    Push-time dedup on the reach key (``url_template``) keeps the queue finite; the
+    crawler additionally dedups on the full state fingerprint at expand time so
+    distinct URLs that render the SAME state are visited once.
     """
 
-    def __init__(self) -> None:
-        self._heap: list[tuple[int, int, int, FrontierItem]] = []
+    def __init__(self, plan_patterns: Sequence[tuple[str, int]] = ()) -> None:
+        self._heap: list[tuple[int, int, int, int, FrontierItem]] = []
         self._seq = 0
         self._enqueued_keys: set[str] = set()
+        #: information-gain planner: items already queued per app section, so a
+        #: newly-seen section outranks the Nth sibling of a saturated one.
+        self._section_counts: dict[str, int] = {}
+        #: CAGED-PLANNER priorities: (lowercased substring, weight 1..3) grounded +
+        #: validated in qe-central. A frontier item whose reach key contains a
+        #: pattern gets priority -weight (min-heap ⇒ visited earlier). This ONLY
+        #: reorders; it can never add a state or change what is reachable.
+        self._plan_patterns: list[tuple[str, int]] = [
+            (str(p).lower(), int(w)) for p, w in (plan_patterns or ()) if str(p).strip()
+        ]
+
+    def _plan_priority(self, key: str) -> int:
+        """The most-negative plan weight among patterns occurring in ``key`` (a
+        url_template), or 0 when the plan does not touch this route."""
+        if not self._plan_patterns:
+            return 0
+        kl = key.lower()
+        best = 0
+        for pattern, weight in self._plan_patterns:
+            if pattern in kl:
+                best = min(best, -weight)
+        return best
 
     def push(self, item: FrontierItem, *, key: str) -> bool:
         if key in self._enqueued_keys:
             return False
         self._enqueued_keys.add(key)
-        heapq.heappush(self._heap, (item.priority, item.depth, self._seq, item))
+        # Novelty rank = how many items are ALREADY queued from this item's section
+        # (the reach key IS the url_template). 0 for the first, growing per sibling.
+        section = _section_signature(key)
+        novelty_rank = self._section_counts.get(section, 0)
+        self._section_counts[section] = novelty_rank + 1
+        # An EXPLICIT caller priority (a Phase-2 seed) wins; otherwise the caged
+        # planner may raise a high-value section ahead of the rest. Ordering-only.
+        priority = item.priority if item.priority != 0 else self._plan_priority(key)
+        heapq.heappush(self._heap, (priority, novelty_rank, item.depth, self._seq, item))
         self._seq += 1
         return True
 
@@ -227,6 +350,29 @@ class GuardContext:
     submit_window: AuthWindow = field(default_factory=lambda: AuthWindow(max_requests=4, window_ms=15_000))
     attestation: Any = None
     submit_flow_approved: bool = False
+    #: Federated / SSO login (#7): the DECLARED trusted Identity-Provider domains
+    #: (login.microsoftonline.com / okta.com / …) a login flow may redirect to.
+    #: Normalized to registrable domains in ``__post_init__``.  Empty ⇒ SSO
+    #: cross-domain is refused exactly as before (byte-identical, fail-closed).
+    idp_domains: frozenset = field(default_factory=frozenset)
+
+    def __post_init__(self) -> None:
+        # Normalize the declared IdP allowlist to registrable domains ONCE so the
+        # per-request check is an exact-set membership (never a suffix/substring
+        # trick like 'okta.com.attacker.net').
+        object.__setattr__(self, "idp_domains", frozenset(
+            rd for rd in (registrable_domain(str(d).strip().lower())
+                          for d in (self.idp_domains or ())) if rd
+        ))
+
+    def _is_declared_idp(self, host: str) -> bool:
+        """True iff ``host``'s registrable domain is in the declared IdP allowlist
+        — EXACT registrable-domain membership (never a substring/suffix match), so
+        only a domain the operator explicitly declared can pass."""
+        if not self.idp_domains or not host:
+            return False
+        rd = registrable_domain(host)
+        return bool(rd) and rd in self.idp_domains
 
     def decide(self, method: str, url: str, *, now_ms: int,
                action_button_name: str = "") -> GuardDecision:
@@ -234,6 +380,13 @@ class GuardContext:
         on top of the pure :func:`app.guard.classify_request`."""
         host = urlsplit(url or "").hostname or ""
         is_login = same_registrable_domain(host, self.login_host) if self.login_host else False
+        # Federated / SSO login (#7): DURING the AUTH window only, a redirect to a
+        # DECLARED IdP registrable domain counts as a login domain so the SSO POST
+        # is not blocked as off-domain.  Narrow + fail-closed: AUTH phase only,
+        # declared domains only, and still bounded by the ≤N-req/≤T-ms auth window
+        # enforced just below (the IdP burst is not an open door).
+        if not is_login and self.phase is Phase.AUTH and self._is_declared_idp(host):
+            is_login = True
         if self.phase is Phase.AUTH:
             self.auth_window.note(now_ms)
             if (method or "").strip().upper() in MUTATING_METHODS and not self.auth_window.is_open(now_ms):
@@ -315,6 +468,8 @@ class Crawler:
         allowed_hosts: Sequence[str] = (),
         max_relogins: int = 3,
         submit_approvals: Sequence[str] = (),
+        wizard_enabled: bool = True,
+        plan: Optional[dict[str, Any]] = None,
         sleep: Any = asyncio.sleep,
     ) -> None:
         self._port = port
@@ -349,13 +504,17 @@ class Crawler:
             next_frame_index=int(prior["next_frame_index"]),
         )
         self._tracker = BudgetTracker(budget, self._clock)
-        self._frontier = Frontier()
+        self._frontier = Frontier(_parse_plan_patterns(plan))
 
         self._cancelled = False
         self._stop_reason = ""
         self._done = False
         self._guard_blocks = 0
         self._storage_state: Optional[dict[str, Any]] = None
+        # Destinations we have already GROUNDED a nav click to (across all states), so
+        # a nav bar repeated on every page grounds each unique route ONCE — the cost of
+        # direct-nav grounding stays ~O(unique navs), not O(states × links).
+        self._grounded_navs: set[str] = set()
         # Coverage accounting (crawl-once/run-many legibility): what the crawl found
         # vs could actually fill/advance, so the shallow-vs-full gap is visible and the
         # human's remediation is a NAMED, targeted seed request — never blind guessing.
@@ -371,6 +530,13 @@ class Crawler:
         self._submit_enabled = bool(self._submit_approvals) and self._guard.attestation is not None
         self._forms_submitted = 0
         self._submitted_flows: set[str] = set()    # dedup key = f"{fingerprint}::{name}"
+        # Wizard/stepper traversal (#1): advance non-danger Next/Continue on filled
+        # form states to record deeper steps (the SPA quote-wizard case). Bounded +
+        # fingerprint-deduped + fail-closed (danger OR commit-word vetoes). ON by
+        # default (the double gate is conservative); a kill-switch for unvetted apps.
+        self._wizard_enabled = bool(wizard_enabled)
+        self._wizard_advances = 0
+        self._wizard_states: set[str] = set()      # entry-step fingerprints already walked
 
     # -- public control / observation -----------------------------------------
 
@@ -502,8 +668,7 @@ class Crawler:
 
         self._guard.phase = Phase.AUTH
         self._guard.login_host = self._target_host
-        nav = await self._port.goto(self.target_url)
-        self._tracker.note_request()
+        nav = await self._goto_entry(self.target_url)
         if not nav.ok:
             self._stop_reason = STOP_AUTH_FAILED
             logger.warning("qec.crawler.auth_entry_unreachable error=%s", nav.error[:200])
@@ -558,10 +723,34 @@ class Crawler:
                                  _host_of(item.url), item.depth)
                 # one bad state must not kill the crawl — continue honestly.
 
+    async def _goto_entry(self, url: str) -> Any:
+        """The crawl's ENTRY navigation, with a small bounded retry.
+
+        The per-dispatch egress fence (squid allowlist) is rewritten just before
+        the crawl starts and re-read asynchronously — the very first goto can race
+        that reconfigure and be refused (live-observed: ERR_TUNNEL_CONNECTION_FAILED
+        killing a whole crawl as auth_failed/0-states).  Retry the ENTRY goto only,
+        a bounded number of times; a still-failing entry stays an HONEST failure."""
+        nav = await self._port.goto(url)
+        self._tracker.note_request()
+        for attempt in range(_ENTRY_GOTO_RETRIES):
+            if nav.ok or self._cancelled:
+                return nav
+            logger.info("qec.crawler.entry_goto_retry attempt=%d error=%s",
+                        attempt + 1, (nav.error or "")[:120])
+            await self._sleep(_ENTRY_RETRY_DELAY_S)
+            nav = await self._port.goto(url)
+            self._tracker.note_request()
+        return nav
+
     async def _expand(self, item: FrontierItem) -> None:
         await self._politeness_delay()
-        nav = await self._port.goto(item.url)
-        self._tracker.note_request()
+        if item.depth == 0 and not item.parent_fingerprint:
+            # the ROOT entry: retry the fence-reconfigure race (see _goto_entry).
+            nav = await self._goto_entry(item.url)
+        else:
+            nav = await self._port.goto(item.url)
+            self._tracker.note_request()
         if not nav.ok:
             self._emitter.emit_edge(from_state=item.parent_fingerprint, to_state="",
                                     verb="navigate",
@@ -628,13 +817,31 @@ class Crawler:
         # ANSWERS P1.B — capture rendered value nodes in the page's FINAL state (after
         # fills + discovery clicks reveal outputs like a computed premium).
         displayed_values = await self._port.collect_displayed_values()
-        self._record_state(
-            url=obs.url, title=obs.title, controls=snapshot_controls,
-            fingerprint=fingerprint, actions=actions,
-            screenshots=[(entry_png, entry_ts)],
-            first_seen_ms=first_seen, last_seen_ms=last_seen,
-            displayed_values=displayed_values,
-        )
+        # API/network mining — drain the XHR/fetch calls the app made during this
+        # visit (diagnostics-only; the app's real API surface as grounded evidence).
+        # Best-effort: a port without the verb yields nothing, never breaks a crawl.
+        network_calls = await self._drain_network()
+        # WIZARD/STEPPER (#1): on a FILLED form state, advance a non-danger
+        # Next/Continue to record deeper wizard steps in place (SPA quote wizards
+        # live at one URL — step 2 is reachable only by the click sequence). The
+        # walk OWNS the recording of this step + every step it reaches; when there
+        # is no advance trigger it returns False and this state is recorded normally.
+        walked = False
+        if self._wizard_enabled and is_form and fill is not None and fill.filled:
+            walked = await self._walk_wizard(
+                item=item, url=obs.url, title=obs.title, controls=snapshot_controls,
+                fingerprint=fingerprint, base_actions=actions,
+                entry_shot=(entry_png, entry_ts), first_seen_ms=first_seen,
+                displayed_values=displayed_values, network_calls=network_calls,
+            )
+        if not walked:
+            self._record_state(
+                url=obs.url, title=obs.title, controls=snapshot_controls,
+                fingerprint=fingerprint, actions=actions,
+                screenshots=[(entry_png, entry_ts)],
+                first_seen_ms=first_seen, last_seen_ms=last_seen,
+                displayed_values=displayed_values, network_calls=network_calls,
+            )
 
         # Phase B (attested submit): after the form state is recorded, drive the
         # FIRST operator-approved non-danger flow and push the post-submit page onto
@@ -669,8 +876,21 @@ class Crawler:
         # convergent: the frontier's url_template key dedups (every /product/{id}
         # collapses to one milestone) and skips already-enqueued / current states.
         self._enqueue_link_hrefs(candidates, item, fingerprint)
-
         actions: list[emit.ActionRecord] = []
+        # MENU-REVEAL: some nav is hidden inside a hover fly-out (aria-haspopup) OR a
+        # click dropdown (aria-expanded) whose items can't be clicked until the menu
+        # opens. Open the menu, click the revealed item, and record the GROUNDED
+        # [open, nav-click] path so the generated flow is runnable. Bounded.
+        actions.extend(await self._menu_reveal(item, controls, fingerprint))
+        # DIRECT-NAV GROUNDING: the href-follow above DISCOVERS link destinations but
+        # records no grounded CLICK (it deliberately skips clicking href links for
+        # speed). Classic multi-page sites (a plain <a href> nav bar) therefore ground
+        # nothing, so no coherent journey can be built. Here we CLICK the top in-scope
+        # nav links and record the [click → navigation] the journey generator needs —
+        # each unique route grounded ONCE (global dedup), menu-gated items left to
+        # _menu_reveal. This is the fix for "link-based site → empty / wandering tests".
+        actions.extend(await self._ground_nav_links(item, candidates, fingerprint, budget_left))
+
         if budget_left <= 0:
             return actions
         # PERF: skip clicking links whose destination was ALREADY enqueued from the
@@ -720,6 +940,95 @@ class Crawler:
                     )
             actions.append(action)
         return actions
+
+    @staticmethod
+    def _nav_is_menu_gated(control: dict[str, Any]) -> bool:
+        """A link HIDDEN inside a collapsed menu (Bootstrap ``dropdown-item`` / ARIA
+        ``menuitem``) or a disclosure TOGGLE (haspopup / aria-expanded) — not a plain
+        visible destination. Menu-gated items are grounded by :meth:`_menu_reveal`
+        (which opens the menu first); clicking one here would just burn the 5s action
+        timeout on a hidden element, so it is skipped."""
+        q = control.get("qec") or {}
+        css = str(q.get("css_hint") or "").lower()
+        role = str(q.get("role") or "").strip().lower()
+        if "dropdown-item" in css or "menu-item" in css or role == "menuitem":
+            return True
+        return bool(str(q.get("haspopup") or "").strip() or str(q.get("expanded") or "").strip())
+
+    async def _ground_nav_links(
+        self, item: FrontierItem, candidates: Sequence[dict[str, Any]],
+        fingerprint: str, budget_left: int,
+    ) -> list[emit.ActionRecord]:
+        """GROUND direct nav-link navigations: CLICK the top in-scope nav links and
+        record the ``[click → navigation]`` a runnable journey needs.
+
+        The discovery pass (:meth:`_enqueue_link_hrefs`) follows link HREFS to find
+        pages but records NO grounded click; this fills that gap for classic
+        multi-page sites (a plain ``<a href>`` nav bar) so they produce coherent
+        grounded journeys instead of empty/wandering tests. Each UNIQUE destination is
+        grounded ONCE across the whole crawl (``self._grounded_navs``) — a nav bar
+        repeated on every page costs ~O(unique routes), not O(states × links).
+        Menu-gated items are left to :meth:`_menu_reveal`; bounded by
+        :data:`_MAX_GROUND_NAVS` and the per-state click budget."""
+        if budget_left <= 0 or item.depth >= self._budget.max_depth:
+            return []
+        click = getattr(self._port, "click", None)
+        if click is None:
+            return []
+        targets: list[tuple[dict[str, Any], str]] = []
+        seen_keys: set[str] = set()
+        for c in candidates:
+            if c.get("kind") != "link" or self._nav_is_menu_gated(c):
+                continue
+            dest = self._link_destination(c, item.url)
+            if not dest:
+                continue
+            key = _url_key(dest)
+            if key in self._grounded_navs or key in seen_keys:
+                continue
+            seen_keys.add(key)
+            targets.append((c, key))
+            if len(targets) >= min(_MAX_GROUND_NAVS, budget_left):
+                break
+        recorded: list[emit.ActionRecord] = []
+        for control, key in targets:
+            if self._tracker.stop_reason() or self._cancelled:
+                break
+            if key in self._grounded_navs:
+                continue
+            # Mark the route TRIED up-front so it is never re-clicked from another
+            # state — bounds the cost to one attempt per unique route even on a
+            # pushState SPA whose click shows no URL delta (href-follow still
+            # discovered it; a grounded click just isn't available there).
+            self._grounded_navs.add(key)
+            await self._politeness_delay()
+            await self._port.goto(item.url)  # reset — a real nav leaves the page
+            self._tracker.note_request()
+            try:
+                obs = await self._port.click(control)
+            except Exception:
+                continue  # hidden / not actionable (5s cap) — href-follow still found it
+            self._tracker.note_request()
+            action = emit.build_action_record(
+                dict(control), verb="click", value=None, observation=obs,
+                phase=Phase.EXPLORE.value, state_id=fingerprint,
+                timestamp_ms=self._clock.now_ms(),
+            )
+            self._tracker.note_action()
+            if action.after and action.after.get("navigated"):
+                arrived = obs.url_after
+                action.to_state = _url_key(arrived)
+                self._grounded_navs.add(key)
+                self._grounded_navs.add(_url_key(arrived))
+                recorded.append(action)
+                if self._in_scope(arrived):
+                    self._frontier.push(
+                        FrontierItem(url=arrived, depth=item.depth + 1,
+                                     discovered_via=str(control.get("name") or ""),
+                                     parent_fingerprint=fingerprint),
+                        key=_url_key(arrived),
+                    )
+        return recorded
 
     # -- href-follow traversal (SPA-robust link following) ---------------------
 
@@ -798,6 +1107,133 @@ class Crawler:
                 ),
                 key=_url_key(dest),
             )
+
+    async def _menu_reveal(
+        self, item: FrontierItem, controls: Sequence[dict[str, Any]], fingerprint: str,
+    ) -> list[emit.ActionRecord]:
+        """Open collapsed nav MENUS and record a GROUNDED click-path to the nav they
+        reveal.  Two menu shapes, both generic (ARIA, never app selectors):
+
+          * ``aria-haspopup`` — a HOVER fly-out / mega-menu (hover to reveal);
+          * ``aria-expanded`` — a CLICK dropdown / disclosure (a Bootstrap
+            ``dropdown-toggle`` etc.) whose items are HIDDEN until it is clicked.
+
+        The second case is the fix for the live defect: a bare click on a hidden
+        dropdown item TIMES OUT (recorded honestly as ``error``), so the crawler
+        reached those routes only by href-follow — leaving NO grounded click a
+        generated test could replay.  Here we OPEN the menu, then CLICK the revealed
+        in-scope nav item and OBSERVE its navigation, returning the grounded
+        ``[open, nav-click]`` actions to attach to this state — so the generator can
+        compile a RUNNABLE flow (open menu → click item → arrive), not an
+        un-driveable href milestone.  Bounded (:data:`_MAX_HOVER_REVEALS`) +
+        best-effort; enqueues the destination even when the click can't be grounded
+        (discovery is preserved)."""
+        click = getattr(self._port, "click", None)
+        hover = getattr(self._port, "hover", None)
+        if click is None or item.depth >= self._budget.max_depth:
+            return []
+
+        def _opener(c: dict[str, Any]) -> str:
+            """'' if not a menu opener, else 'hover' (haspopup) or 'click' (expanded)."""
+            if c.get("danger") or c.get("disabled") or not str(c.get("name") or "").strip():
+                return ""
+            q = c.get("qec") or {}
+            if str(q.get("haspopup") or "").strip():
+                return "hover"
+            if str(q.get("expanded") or "").strip():   # any aria-expanded => a toggle
+                return "click"
+            return ""
+
+        triggers = [(c, _opener(c)) for c in controls]
+        triggers = [(c, m) for c, m in triggers if m][:_MAX_HOVER_REVEALS]
+        if not triggers:
+            return []
+        recorded: list[emit.ActionRecord] = []
+        # In-scope nav DESTINATIONS already reachable without opening a menu — used
+        # only to PREFER a genuinely menu-gated route, NOT to skip (the dropdown
+        # items are inventoried even while HIDDEN, so their hrefs are already
+        # "known"; the whole point is to GROUND a click a bare probe can't perform).
+        preopen = {
+            _url_key(d) for d in
+            (self._link_destination(c, item.url) for c in controls) if d
+        }
+        for control, mode in triggers:
+            if self._tracker.stop_reason() or self._cancelled:
+                break
+            await self._politeness_delay()
+            await self._port.goto(item.url)  # open from the clean recorded state
+            self._tracker.note_request()
+            # OPEN the menu the way its shape requires: a HOVER fly-out (haspopup)
+            # opens on hover — clicking it might navigate away; a CLICK dropdown
+            # (aria-expanded) opens on click, recorded as a grounded action so the
+            # replay opens the menu the same way before clicking an item.
+            open_action: Optional[emit.ActionRecord] = None
+            try:
+                if mode == "hover" and hover is not None:
+                    await hover(control)
+                else:
+                    open_obs = await self._port.click(control)
+                    open_action = emit.build_action_record(
+                        dict(control), verb="click", value=None, observation=open_obs,
+                        phase=Phase.EXPLORE.value, state_id=fingerprint,
+                        timestamp_ms=self._clock.now_ms())
+                    self._tracker.note_action()
+            except Exception:
+                continue
+            self._tracker.note_request()
+            revealed = build_inventory(
+                await self._port.collect_controls(), self._refuse_pack, url=item.url)
+            targets = [
+                (rc, d) for rc in revealed
+                for d in [self._link_destination(rc, item.url)] if d
+            ]
+            # (a) DISCOVERY: enqueue any route that appeared ONLY after opening
+            # (a hover fly-out mints new hrefs) so nothing is lost even when the
+            # grounded click below can't be captured.
+            for _rc, _dest in targets:
+                if _url_key(_dest) not in preopen:
+                    self._frontier.push(
+                        FrontierItem(url=_dest, depth=item.depth + 1,
+                                     discovered_via=f"menu:{control.get('name') or ''}",
+                                     parent_fingerprint=fingerprint),
+                        key=_url_key(_dest))
+            # (b) GROUNDING: try-click the revealed in-scope nav links; KEEP the FIRST
+            # that actually navigates (the one the open made clickable). Prefer a
+            # menu-GATED route (a hidden dropdown item), else any.
+            targets.sort(key=lambda t: 0 if _url_key(t[1]) not in preopen else 1)
+            grounded = False
+            for rc, dest in targets[:_MAX_MENU_ITEMS]:
+                try:
+                    nav_obs = await self._port.click(rc)
+                except Exception:
+                    continue   # still hidden / not actionable — try the next item
+                self._tracker.note_request()
+                nav_action = emit.build_action_record(
+                    dict(rc), verb="click", value=None, observation=nav_obs,
+                    phase=Phase.EXPLORE.value, state_id=fingerprint,
+                    timestamp_ms=self._clock.now_ms())
+                self._tracker.note_action()
+                if nav_action.after and nav_action.after.get("navigated"):
+                    arrived = nav_obs.url_after
+                    if open_action is not None:
+                        recorded.append(open_action)  # replay opens first
+                    nav_action.to_state = _url_key(arrived)
+                    recorded.append(nav_action)
+                    # Mark this route grounded so the direct-nav pass doesn't re-click it.
+                    self._grounded_navs.add(_url_key(arrived))
+                    if self._in_scope(arrived):
+                        self._frontier.push(
+                            FrontierItem(url=arrived, depth=item.depth + 1,
+                                         discovered_via=f"menu:{control.get('name') or ''}",
+                                         parent_fingerprint=fingerprint),
+                            key=_url_key(arrived))
+                    grounded = True
+                    break   # ONE grounded path per state (a nav leaves the page;
+                            # replaying a second open from here would be off-page)
+                # a no-op/hidden probe leaves us on item.url — safe to try the next.
+            if grounded:
+                break   # one grounded menu path is enough to make the flow runnable
+        return recorded
 
     async def _maybe_submit_phase_b(
         self, item: FrontierItem, controls: Sequence[dict[str, Any]],
@@ -879,6 +1315,126 @@ class Crawler:
                 )
             return  # one submit per state — avoid combinatorial explosion
 
+    # -- wizard / stepper traversal (#1) ---------------------------------------
+
+    def _pick_wizard_advance(self, controls: Sequence[dict[str, Any]]) -> Optional[dict[str, Any]]:
+        """The first non-danger advance control (Next/Continue/Proceed/Forward) to
+        step the wizard, or ``None``.  Fail-closed: skips danger/disabled/nameless
+        controls, skips any name the operator approved for an attested Phase-B
+        submit (that path owns it), and vetoes on any commit/terminal word."""
+        for c in controls:
+            if c.get("kind") != "button" or c.get("disabled") or c.get("danger"):
+                continue
+            name = str(c.get("name") or "").strip()
+            if not name or name.lower() in self._submit_approvals:
+                continue
+            if _is_wizard_advance(name):
+                return c
+        return None
+
+    async def _walk_wizard(
+        self, *, item: FrontierItem, url: str, title: str,
+        controls: Sequence[dict[str, Any]], fingerprint: str,
+        base_actions: list[emit.ActionRecord], entry_shot: tuple[bytes, int],
+        first_seen_ms: int, displayed_values: Sequence[dict[str, Any]],
+        network_calls: Sequence[dict[str, Any]],
+    ) -> bool:
+        """Walk a multi-step wizard from a filled form step: click the advance
+        control, RECORD each grounded step in place, repeat.  Returns True when it
+        took over recording (so ``_expand`` must not re-record), False when there
+        is nothing to advance.
+
+        Safety (SAFETY-SENSITIVE submit boundary): bounded by
+        :data:`_MAX_WIZARD_STEPS` / :data:`_MAX_WIZARD_ADVANCES` / ``max_depth``,
+        deduped by state fingerprint (no loop, no entry-step re-walk), and
+        FAIL-CLOSED — an advance happens only when the click has a real observed
+        effect AND yields a new unseen state; a no-op/loop ends the walk.  The
+        advance control itself already passed the danger + commit-word gates."""
+        if fingerprint in self._wizard_states or self._pick_wizard_advance(controls) is None:
+            return False
+        self._wizard_states.add(fingerprint)
+
+        # _discover (hover-reveal + click-pass) may have navigated the live page via a
+        # goto reset, discarding the Phase-A fills done for THIS step. Re-establish the
+        # FILLED entry step so a validation-gated advance actually fires (a nav menu on
+        # the wizard page must not silently defeat the walk). The re-fill's action
+        # records are redundant with base_actions (the canonical Phase-A fills) and are
+        # DISCARDED — the recorded step keeps its original snapshot + fill actions.
+        await self._port.goto(item.url)
+        self._tracker.note_request()
+        reobs = await self._observe()
+        refreshed = build_inventory(reobs.raw_controls, self._refuse_pack, url=reobs.url)
+        if any((c.get("kind") in _FILLABLE_KINDS) and not _is_password(c) for c in refreshed):
+            await fill_form_phase_a(
+                self._port, refreshed, self._answer_key or AnswerKey(), self._clock,
+                phase=Phase.EXPLORE.value, state_id=fingerprint)
+
+        cur_url, cur_title, cur_controls, cur_fp = url, title, controls, fingerprint
+        cur_actions = list(base_actions)
+        cur_shot, cur_first = entry_shot, first_seen_ms
+        cur_dv, cur_nc = displayed_values, network_calls
+        depth, steps = item.depth, 0
+
+        while True:
+            trig = self._pick_wizard_advance(cur_controls)
+            advance: Optional[tuple[Any, list[dict[str, Any]], str]] = None
+            if (trig is not None and steps < _MAX_WIZARD_STEPS
+                    and self._wizard_advances < _MAX_WIZARD_ADVANCES
+                    and depth < self._budget.max_depth
+                    and not (self._tracker.stop_reason() or self._cancelled)):
+                await self._politeness_delay()
+                observation = await self._port.click(trig)
+                self._tracker.note_request()
+                action = emit.build_action_record(
+                    dict(trig), verb="click", value=None, observation=observation,
+                    phase=Phase.EXPLORE.value, state_id=cur_fp,
+                    timestamp_ms=self._clock.now_ms())
+                self._tracker.note_action()
+                outcome = str((action.after or {}).get("outcome") or "")
+                obs = await self._observe()
+                new_controls = build_inventory(obs.raw_controls, self._refuse_pack, url=obs.url)
+                new_fp = state_fingerprint(obs.url, new_controls, obs.dialog_flags)
+                # a GENUINE advance: an observable effect AND a NEW unseen state.
+                if (outcome not in ("", "none") and new_fp != cur_fp
+                        and new_fp not in self._visited_fingerprints):
+                    cur_actions.append(action)
+                    advance = (obs, new_controls, new_fp)
+
+            # record the CURRENT step (its fills + the onward advance click if any).
+            self._record_state(
+                url=cur_url, title=cur_title, controls=cur_controls, fingerprint=cur_fp,
+                actions=cur_actions, screenshots=[cur_shot],
+                first_seen_ms=cur_first, last_seen_ms=self._clock.now_ms(),
+                displayed_values=cur_dv, network_calls=cur_nc)
+            if advance is None:
+                return True
+
+            obs, new_controls, new_fp = advance
+            self._visited_fingerprints.add(new_fp)
+            self._wizard_advances += 1
+            steps += 1
+            depth += 1
+            # capture + fill the new step so a validation-gated onward Next can fire.
+            step_first = self._clock.now_ms()
+            step_png = await self._port.screenshot_png()
+            step_ts = self._clock.now_ms()
+            step_actions: list[emit.ActionRecord] = []
+            if any((c.get("kind") in _FILLABLE_KINDS) and not _is_password(c) for c in new_controls):
+                filled = await fill_form_phase_a(
+                    self._port, new_controls, self._answer_key or AnswerKey(), self._clock,
+                    phase=Phase.EXPLORE.value, state_id=new_fp)
+                step_actions.extend(filled.actions)
+                self._tracker.note_action(len(filled.actions))
+                if filled.filled:
+                    after_fill = await self._observe()
+                    new_controls = build_inventory(
+                        after_fill.raw_controls, self._refuse_pack, url=after_fill.url)
+            cur_url, cur_title, cur_controls, cur_fp = obs.url, obs.title, new_controls, new_fp
+            cur_actions = step_actions
+            cur_shot, cur_first = (step_png, step_ts), step_first
+            cur_dv = await self._port.collect_displayed_values()
+            cur_nc = await self._drain_network()
+
     # -- state recording -------------------------------------------------------
 
     def _record_state(
@@ -893,6 +1449,7 @@ class Crawler:
         first_seen_ms: Optional[int] = None,
         last_seen_ms: Optional[int] = None,
         displayed_values: Sequence[dict[str, Any]] = (),
+        network_calls: Sequence[dict[str, Any]] = (),
     ) -> None:
         """Assemble + emit ONE ``page_state`` record with monotonic indices."""
         seq = self._next_seq
@@ -938,6 +1495,7 @@ class Crawler:
             form_snapshot=form_snapshot,
             form_snapshot_signals=form_signals,
             displayed_values=_displayed_values(displayed_values),
+            network_calls=_network_calls(network_calls),
             actions=ordered_actions,
             screenshots=shot_records,
             state_id=fingerprint,
@@ -956,6 +1514,20 @@ class Crawler:
             dialog_flags=await self._port.dialog_flags(),
             error_texts=await self._port.error_texts(),
         )
+
+    async def _drain_network(self) -> list[dict[str, Any]]:
+        """API/network mining — drain the XHR/fetch calls the app made during this
+        visit from the port's capture buffer (an optional verb, accessed by
+        ``getattr`` so a fake/older adapter without it is a clean no-op).  The
+        adapter buffers + PII-scrubs at source; here we only relay best-effort."""
+        drain = getattr(self._port, "drain_network", None)
+        if drain is None:
+            return []
+        try:
+            return list(await drain() or [])
+        except Exception:
+            logger.warning("qec.crawler.network_drain_failed", exc_info=True)
+            return []
 
     async def _politeness_delay(self) -> None:
         rate = self._budget.rate_per_s
@@ -1035,7 +1607,15 @@ def _displayed_values(raw: Sequence[dict[str, Any]]) -> list[dict[str, str]]:
     """ANSWERS P1.B — normalize + scrub captured displayed value nodes into
     ``[{label, selector, text}]`` (deduped). The text is scrubbed like a form value
     (it may be PII-adjacent, e.g. an amount); label + selector let the value oracle
-    ground an expected outcome to this rendered node without a client source_hint."""
+    ground an expected outcome to this rendered node without a client source_hint.
+
+    VALUE-ORACLE INFERENCE (#2): each node is additively annotated with a
+    crawl-side classification — ``value_type`` (currency/percent/decision/…),
+    ``value_candidate`` (is this a likely expected OUTCOME to assert on?),
+    ``value_confidence`` and ``value_reason``.  Inference ONLY — it surfaces
+    candidates for confirmation; the frozen factory oracle still does the PROVING.
+    The extra keys are all-string + additive (existing consumers read only
+    label/selector/text via ``.get`` and ignore them)."""
     out: list[dict[str, str]] = []
     seen: set[str] = set()
     for r in raw or ():
@@ -1049,8 +1629,62 @@ def _displayed_values(raw: Sequence[dict[str, Any]]) -> list[dict[str, str]]:
         if key in seen:
             continue
         seen.add(key)
-        out.append({"label": str(r.get("label") or "").strip()[:200],
-                    "selector": selector[:300], "text": text[:200]})
+        label = str(r.get("label") or "").strip()[:200]
+        inferred = value_infer.infer_candidate(label, text)
+        out.append({
+            "label": label, "selector": selector[:300], "text": text[:200],
+            "value_type": inferred["value_type"],
+            "value_candidate": "true" if inferred["is_candidate"] else "false",
+            "value_confidence": f"{inferred['confidence']:.2f}",
+            "value_reason": inferred["reason"][:120],
+        })
+    return out
+
+
+def _network_calls(raw: Sequence[dict[str, Any]]) -> list[dict[str, str]]:
+    """API/network mining — normalize + PII-scrub captured XHR/fetch/SSE/WebSocket
+    calls into ``[{method, url, has_query, status, resource_type, request_mime,
+    response_mime, response_bytes, timestamp_ms}]`` (deduped, bounded, ALL-string
+    values so the schema's ``dict[str, str]`` can never refuse a bundle over a
+    diagnostic).
+
+    Safety: the query string is DROPPED here regardless of what the adapter sent
+    (a query param is the likeliest PII carrier — ``has_query`` preserves the
+    honest fact that one existed, without its values), and the query-stripped URL
+    is re-scrubbed for path-embedded PII (belt-and-suspenders over the adapter's
+    source-side scrub).  http(s) API calls AND ws(s) real-time endpoints (D) are
+    evidence; every other scheme is dropped."""
+    out: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for r in raw or ():
+        if not isinstance(r, dict):
+            continue
+        parts = urlsplit(str(r.get("url") or "").strip())
+        if (parts.scheme or "").lower() not in ("http", "https", "ws", "wss"):
+            continue
+        url = emit.scrub_value(f"{parts.scheme}://{parts.netloc}{parts.path}").value.strip()
+        if not url:
+            continue
+        had_query = bool(parts.query) or bool(r.get("has_query"))
+        method = str(r.get("method") or "").strip().upper()[:10]
+        status = str(r.get("status") or "").strip()[:3]
+        key = f"{method}|{url}|{status}"
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append({
+            "method": method,
+            "url": url[:1000],
+            "has_query": "true" if had_query else "false",
+            "status": status,
+            "resource_type": str(r.get("resource_type") or "").strip()[:20],
+            "request_mime": str(r.get("request_mime") or "").strip()[:100],
+            "response_mime": str(r.get("response_mime") or "").strip()[:100],
+            "response_bytes": str(r.get("response_bytes") or "").strip()[:12],
+            "timestamp_ms": str(r.get("timestamp_ms") or "").strip()[:15],
+        })
+        if len(out) >= _MAX_NETWORK_CALLS:
+            break
     return out
 
 

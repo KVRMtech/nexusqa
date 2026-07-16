@@ -278,6 +278,15 @@ class BrowserPort(Protocol):
         best-effort; a no-op is a valid implementation."""
         ...
 
+    async def drain_network(self) -> list[dict[str, Any]]:
+        """API/network mining — return + CLEAR the XHR/fetch calls the adapter
+        buffered since the last drain, as ``[{method, url, has_query, status,
+        resource_type, request_mime, response_mime, response_bytes,
+        timestamp_ms}]``.  The adapter drops query strings + PII-scrubs at source.
+        OPTIONAL + best-effort — the crawler reaches it via ``getattr``, so a fake
+        or older adapter that omits it degrades to no network evidence."""
+        ...
+
     async def fill(self, control: Mapping[str, Any], value: str) -> RawObservation:
         """Type ``value`` into ``control`` and read the committed value back."""
         ...

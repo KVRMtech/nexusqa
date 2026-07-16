@@ -37,7 +37,7 @@ from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy import select
 
 from ..artifacts.creator import create_crawl_artifact
-from ..clients import platform_api
+from ..clients import factory, platform_api
 from ..clients.config import SIGNATURE_HEADER, phase1_settings
 from ..clients.manifest_mapper import (
     ManifestMappingError,
@@ -195,6 +195,32 @@ async def _promote_latest_artifact(tenant_id: str, app_id: str, artifact_id: str
         )
 
 
+async def _app_answer_key(tenant_id: str, app_id: str) -> dict:
+    """The app's value-oracle contract (``{outcomes, rules}``) for auto-generate,
+    or ``{}``.  Best-effort — a read failure just means a body-less generate (still
+    materialises the demonstrated cases from the substrate)."""
+    if not app_id:
+        return {}
+    try:
+        from ..services.answer_key import value_oracle_contract
+        async with tenant_scoped_qec_session(tenant_id) as session:
+            row = (
+                await session.execute(
+                    select(ClientAppRow).where(
+                        ClientAppRow.app_id == app_id,
+                        ClientAppRow.tenant_id == tenant_id,
+                    )
+                )
+            ).scalar_one_or_none()
+            if row is None:
+                return {}
+            return value_oracle_contract(row.answer_key)
+    except Exception as exc:  # pragma: no cover — best-effort
+        logger.warning("qec.internal.answer_key_read_failed",
+                       extra={"app_id": app_id, "error": str(exc)[:200]})
+        return {}
+
+
 @router.post("/crawls/{crawl_id}/complete")
 async def complete_crawl(crawl_id: str, request: Request) -> dict:
     """Ingest a finished crawl: verify HMAC → map manifest → write substrate.
@@ -350,6 +376,40 @@ async def complete_crawl(crawl_id: str, request: Request) -> dict:
     stats_dict["auth_import"] = auth_import
     if body.coverage:  # P4: named seed-remediation surface for the app UI
         stats_dict["coverage"] = body.coverage
+
+    # Promote the recorded artifact onto the app so a cycle / the portal reads it.
+    await _promote_latest_artifact(tenant_id, app_id, created.artifact_id)
+
+    # AUTO-GENERATE: a completed crawl must YIELD test cases. Without this the
+    # substrate is written but factory_test_cases stays 0, so the portal's Test
+    # Studio / Command Center (which gate on cases existing) look empty and the
+    # crawl appears to have "done nothing" — a showstopper for the bare-crawl path
+    # (only the full cycle-driver used to trigger generate). Runs BEFORE the row is
+    # marked completed so its summary is persisted in ``stats.generate`` for the UI.
+    # Best-effort + NON-FATAL: the substrate write above is already durable, so a
+    # generate hiccup is recorded (never a lost crawl); the row still completes. The
+    # app's answer_key seeds the value oracle; re-generate upserts (cycle-safe).
+    generate_result: dict = {"attempted": False}
+    try:
+        answer_key = await _app_answer_key(tenant_id, app_id)
+        summary = await factory.generate(
+            tenant_id=tenant_id, artifact_id=created.artifact_id,
+            answer_key=answer_key or None,
+        )
+        generate_result = {
+            "attempted": True, "ok": bool(summary.get("success")),
+            "generated": summary.get("generated"),
+            "no_cases_reason": summary.get("no_cases_reason") or "",
+        }
+    except Exception as exc:  # never fail the callback over generation
+        generate_result = {"attempted": True, "ok": False, "error": str(exc)[:300]}
+        logger.warning(
+            "qec.internal.autogenerate_failed",
+            extra={"exploration_id": exploration_id, "artifact_id": created.artifact_id,
+                   "error": str(exc)[:300]},
+        )
+    stats_dict["generate"] = generate_result
+
     await _mark(
         tenant_id, exploration_id,
         status="completed",
@@ -359,13 +419,14 @@ async def complete_crawl(crawl_id: str, request: Request) -> dict:
         stats=stats_dict,
         finished_at=utc_now(),
     )
-    # Promote the recorded artifact onto the app so a cycle can run against it.
-    await _promote_latest_artifact(tenant_id, app_id, created.artifact_id)
+
     logger.info(
         "qec.internal.completed",
         extra={"exploration_id": exploration_id, "crawl_id": crawl_id,
                "artifact_id": created.artifact_id, "extractor_version": extractor_version,
-               "auth_import_ok": auth_import.get("ok")},
+               "auth_import_ok": auth_import.get("ok"),
+               "generated": generate_result.get("generated"),
+               "generate_ok": generate_result.get("ok")},
     )
     return {
         "status": "completed",
@@ -375,4 +436,5 @@ async def complete_crawl(crawl_id: str, request: Request) -> dict:
         "extractor_version": extractor_version,
         "stats": stats_dict,
         "auth_import": auth_import,
+        "generate": generate_result,
     }

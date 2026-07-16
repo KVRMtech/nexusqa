@@ -209,6 +209,27 @@ class TestPageStateToPageVisitMapping:
         # every visit the writer stamps carries source='ground_truth'
         assert VISIT_SOURCE == "ground_truth"
 
+    def test_network_calls_stream_maps_additively(self):
+        """API/network mining (#6): a page_state's ``network_calls`` stream rides
+        the mapper into the bundle verbatim, and a manifest WITHOUT it still maps
+        (defaults to []) — the substrate accepts the new evidence additively."""
+        records = _load_records()
+        pages = _page_state_records(records)
+        # a pre-#6 manifest page (no network_calls) → [] (backward-compatible).
+        assert "network_calls" not in pages[0]
+        # inject the stream onto the first page as the crawler would.
+        pages[0]["network_calls"] = [
+            {"method": "GET", "url": "https://app.example/api/quote",
+             "has_query": "true", "status": "200", "resource_type": "xhr",
+             "request_mime": "", "response_mime": "application/json",
+             "response_bytes": "812", "timestamp_ms": "5"},
+        ]
+        bundle = _map(records)
+        assert bundle.pages[0].network_calls[0]["url"] == "https://app.example/api/quote"
+        assert bundle.pages[0].network_calls[0]["response_mime"] == "application/json"
+        # a sibling page that never carried the stream stays honestly empty.
+        assert bundle.pages[1].network_calls == []
+
 
 # ═══════════════════════════════════════════════════════════════════════
 # action → page_actions — field by field (incl. evidence_signals)

@@ -34,6 +34,7 @@ from .generator import (
     PageActionInput,
     PageVisitInput,
     generate_demonstrated_test_cases,
+    generate_grounded_journeys,
 )
 from .validator import validate_and_repair_case
 
@@ -154,6 +155,7 @@ async def _load_current_pages_and_actions(
             sig = a.evidence_signals or {}
             anchor_sig = sig.get("anchor") or {}
             after_sig = sig.get("after") or {}
+            qec_sig = sig.get("qec") or {}
             actions.append(PageActionInput(
                 page_visit_id=a.page_visit_id,
                 subaction_index=a.subaction_index,
@@ -173,6 +175,12 @@ async def _load_current_pages_and_actions(
                     or bool(sig.get("url_changed"))
                     or bool(after_sig.get("navigated"))
                 ),
+                # Menu/disclosure structure — lets the generator ground a menu-gated
+                # navigation (open the disclosure before clicking the hidden item).
+                # Absent on old artifacts → "" → the grounded-menu path stays inert.
+                control_role=str(qec_sig.get("role") or ""),
+                css_hint=str(qec_sig.get("css_hint") or ""),
+                expanded=str(qec_sig.get("expanded") or ""),
             ))
 
     return visits, actions
@@ -328,6 +336,23 @@ async def generate_and_store(
         new_ids.append(values["test_case_id"])
         await _upsert_case(session, values)
 
+    # ── Grounded click-path journeys ──────────────────────────────────────
+    # Each captured navigation becomes a SHORT, coherent, PROVEN flow (open source
+    # → [open menu] → click control → verify destination), built directly from the
+    # grounded click — so a menu nav the crawler grounded on a revisit still yields a
+    # runnable category flow the flattened E2E cannot express. Additive + PROVEN-only.
+    for tc in generate_grounded_journeys(
+        artifact_id=artifact_id, page_visits=visits, page_actions=actions,
+    ):
+        annotate_confidence(tc, ambiguous)
+        values = _row_values(
+            tc, artifact_id=artifact_id, tenant_id=tenant_id,
+            session_id=session_id, confidence="demonstrated",
+            source_evidence={"grounded_journey": True},
+        )
+        new_ids.append(values["test_case_id"])
+        await _upsert_case(session, values)
+
     # ── Phase 2 — critical combinations from captured option domains ──────
     base_case = result.test_cases[0] if result.test_cases else None
     combo = generate_combination_cases(
@@ -389,13 +414,19 @@ async def generate_and_store(
     health = await _extraction_health(session, artifact_id=artifact_id)
     no_cases_reason = ""
     if not result.test_cases:
-        pg = result.page_groups
-        parts = [f"No functional E2E generated — only {pg} distinct page milestone(s) "
-                 "detected (a flow needs at least 2)."]
-        if pg < 2:
-            parts.append("This looks like a single-page app (no URL change between pages): "
-                         "record a flow that navigates between distinct pages/URLs, or click "
-                         "Enrich to re-extract the page data.")
+        if getattr(result, "no_flow_reason", ""):
+            # The E2E was suppressed as an incoherent link-following flatten — surface
+            # that honest reason (it HAS many milestones, so the '< 2 milestones' copy
+            # below would be wrong).
+            parts = [result.no_flow_reason]
+        else:
+            pg = result.page_groups
+            parts = [f"No functional E2E generated — only {pg} distinct page milestone(s) "
+                     "detected (a flow needs at least 2)."]
+            if pg < 2:
+                parts.append("This looks like a single-page app (no URL change between pages): "
+                             "record a flow that navigates between distinct pages/URLs, or click "
+                             "Enrich to re-extract the page data.")
         if health["degraded"]:
             parts.append(health["reason"])
         no_cases_reason = " ".join(parts)

@@ -464,6 +464,12 @@ def build_control_record(
             # Link destination (anchors only) — diagnostics-only; the crawler reads
             # it to FOLLOW routes directly (href-follow traversal). No compiler rung.
             "href": _s(raw.get("href")).strip(),
+            # aria-haspopup — marks a hover/menu trigger the crawler hovers to reveal
+            # a fly-out menu; diagnostics-only, no compiler rung.
+            "haspopup": _s(raw.get("haspopup")).strip(),
+            # aria-expanded — marks a CLICK-to-open dropdown/disclosure toggle the
+            # crawler clicks to reveal hidden menu items; diagnostics-only.
+            "expanded": _s(raw.get("expanded")).strip(),
         },
     }
     return record

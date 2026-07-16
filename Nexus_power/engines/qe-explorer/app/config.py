@@ -94,6 +94,11 @@ class Settings(BaseSettings):
     auth_window_ms: int = Field(default=30_000, alias="QEC_AUTH_WINDOW_MS")
     #: Re-login attempts on session expiry (design §3.2 auth.py: ≤3).
     max_relogins: int = Field(default=3, alias="QEC_MAX_RELOGINS")
+    #: Wizard/stepper traversal (#1) — advance non-danger Next/Continue on filled
+    #: form states to record deeper steps.  Bounded + fingerprint-deduped +
+    #: fail-closed (danger OR commit-word vetoes an advance).  ON by default; a
+    #: per-deploy kill-switch for apps whose "Continue" is not vetted as reversible.
+    wizard_enabled: bool = Field(default=True, alias="QEC_WIZARD_ENABLED")
 
     # ── Security helpers (the HMAC shared secret lives here) ──────────────
 

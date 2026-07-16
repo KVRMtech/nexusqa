@@ -27,8 +27,10 @@ import asyncio
 import hashlib
 import json
 import logging
+import time
 from contextlib import asynccontextmanager
 from typing import Any, Optional, Sequence
+from urllib.parse import urlsplit
 
 import httpx
 from fastapi import Depends, FastAPI, Header, HTTPException, status
@@ -97,6 +99,15 @@ class ExploreRequest(BaseModel):
     allowed_hosts: list[str] = Field(default_factory=list)
     phase: str = "explore"
     submit_approvals: list[str] = Field(default_factory=list)
+    #: Federated / SSO login (#7) — the DECLARED trusted Identity-Provider domains
+    #: the login flow may redirect to (login.microsoftonline.com / okta.com / …).
+    #: The guard treats an AUTH-phase POST to one of these as a login domain; the
+    #: egress fence (qe-central) must also allowlist them. Empty ⇒ no SSO crossing.
+    idp_domains: list[str] = Field(default_factory=list)
+    #: Caged-planner exploration PLAN — grounded {priority_patterns:[{pattern,
+    #: weight}]} from qe-central. Applied as FRONTIER PRIORITY ONLY (reorders; never
+    #: adds a state or changes reachability). Re-bounded defensively on this side.
+    plan: dict[str, Any] = Field(default_factory=dict)
     attestation: Optional[dict[str, Any]] = None
     #: A pre-captured Playwright ``storageState`` (cookies + origins) to START the
     #: browser context authenticated — the tier-4 escape hatch for logins the
@@ -254,6 +265,7 @@ async def explore(req: ExploreRequest, _: None = Depends(require_token)) -> dict
                                window_ms=settings.auth_window_ms),
         attestation=attestation,
         submit_flow_approved=bool(req.submit_approvals),
+        idp_domains=frozenset(req.idp_domains),
     )
 
     # Atomically reserve the single-flight slot (409 if busy). The Crawler is
@@ -366,6 +378,8 @@ async def _run_job(
                 answer_key=answer_key, credentials=credentials,
                 allowed_hosts=req.allowed_hosts, max_relogins=settings.max_relogins,
                 submit_approvals=req.submit_approvals,
+                wizard_enabled=settings.wizard_enabled,
+                plan=req.plan,
             )
             job = _Job(crawler)
             jobs.activate(job)
@@ -503,6 +517,15 @@ def _retry_after_ms(resp: Any) -> int:
     return _DEFAULT_BACKOFF_MS
 
 
+def _safe_headers(obj: Any) -> dict[str, str]:
+    """The cheap SYNC ``headers`` dict of a Playwright request/response (keys are
+    lowercased by Playwright), or ``{}`` — never awaits, never raises."""
+    try:
+        return {str(k).lower(): str(v) for k, v in dict(obj.headers or {}).items()}
+    except Exception:
+        return {}
+
+
 # ─── The Playwright BrowserPort adapter (the only Playwright code) ───────────
 
 
@@ -521,6 +544,97 @@ class PlaywrightBrowserPort(BrowserPort):
     def __init__(self, page: Any, context: Any) -> None:
         self._page = page
         self._context = context
+        # API/network mining — a bounded buffer of the XHR/fetch calls the app
+        # makes, filled by a passive `response` listener and drained per-visit by
+        # the crawler.  Query strings are dropped + paths PII-scrubbed HERE (at
+        # source) so raw PII never lingers in the buffer.
+        self._net_buffer: list[dict[str, Any]] = []
+        try:
+            self._page.on("response", self._on_response)
+        except Exception:  # a fake/None page (defensive) — no network evidence.
+            logger.warning("qec.explorer.network_listener_unavailable")
+        try:  # (D) real-time transports — WebSocket opens are a distinct surface.
+            self._page.on("websocket", self._on_websocket)
+        except Exception:
+            logger.warning("qec.explorer.websocket_listener_unavailable")
+
+    #: Resource types worth recording as API evidence (the app's real surface);
+    #: document/stylesheet/image/font/script/media are chrome, not API calls.
+    #: ``eventsource`` (Server-Sent Events) joins xhr/fetch — a real-time stream is
+    #: as much the app's API surface as a poll (D).
+    _NET_RESOURCE_TYPES = frozenset({"xhr", "fetch", "eventsource"})
+    #: Hard cap on the between-drain buffer so a runaway SPA cannot grow it without
+    #: bound (the crawler applies its own per-state cap on drain).
+    _NET_BUFFER_MAX = 500
+
+    def _record_net(self, entry: dict[str, Any]) -> None:
+        if len(self._net_buffer) < self._NET_BUFFER_MAX:
+            self._net_buffer.append(entry)
+
+    def _on_response(self, response: Any) -> None:
+        """Passive `response` listener — record ONE XHR/fetch/SSE call's shape.
+
+        Sync + fully defensive (a listener exception must never surface into the
+        page): reads only cheap sync properties (never awaits a body), drops the
+        query string, and PII-scrubs the path before buffering."""
+        try:
+            request = response.request
+            rtype = (getattr(request, "resource_type", "") or "")
+            resp_headers = _safe_headers(response)
+            resp_mime = resp_headers.get("content-type", "").split(";", 1)[0]
+            # capture xhr/fetch/eventsource, OR anything whose response is an SSE
+            # stream regardless of how Chromium labelled the resource type.
+            if rtype not in self._NET_RESOURCE_TYPES and resp_mime != "text/event-stream":
+                return
+            parts = urlsplit(str(getattr(response, "url", "") or ""))
+            if (parts.scheme or "").lower() not in ("http", "https"):
+                return
+            url = emit.scrub_value(f"{parts.scheme}://{parts.netloc}{parts.path}").value
+            req_headers = _safe_headers(request)
+            is_sse = (resp_mime == "text/event-stream" or rtype == "eventsource")
+            self._record_net({
+                "method": str(getattr(request, "method", "") or "").upper(),
+                "url": url,
+                "has_query": bool(parts.query),
+                "status": str(getattr(response, "status", "") or ""),
+                "resource_type": "sse" if is_sse else rtype,
+                "request_mime": req_headers.get("content-type", "").split(";", 1)[0],
+                "response_mime": resp_mime,
+                "response_bytes": resp_headers.get("content-length", ""),
+                "timestamp_ms": int(time.monotonic() * 1000),
+            })
+        except Exception:  # never let a listener crash affect the page
+            pass
+
+    def _on_websocket(self, ws: Any) -> None:
+        """Passive `websocket` listener (D) — record the WS OPEN as one evidence
+        entry (endpoint + scheme). Frame PAYLOADS are deliberately NOT captured
+        (a socket carries live user/session data — the same PII posture as the
+        query-drop for HTTP); the app's real-time endpoint is the evidence."""
+        try:
+            parts = urlsplit(str(getattr(ws, "url", "") or ""))
+            if (parts.scheme or "").lower() not in ("ws", "wss", "http", "https"):
+                return
+            url = emit.scrub_value(f"{parts.scheme}://{parts.netloc}{parts.path}").value
+            self._record_net({
+                "method": "WS",
+                "url": url,
+                "has_query": bool(parts.query),
+                "status": "101",                      # WS upgrade
+                "resource_type": "websocket",
+                "request_mime": "",
+                "response_mime": "",
+                "response_bytes": "",
+                "timestamp_ms": int(time.monotonic() * 1000),
+            })
+        except Exception:
+            pass
+
+    async def drain_network(self) -> list[dict[str, Any]]:
+        """Return + CLEAR the network calls buffered since the last drain."""
+        drained = self._net_buffer
+        self._net_buffer = []
+        return drained
 
     async def goto(self, url: str) -> NavResult:
         try:

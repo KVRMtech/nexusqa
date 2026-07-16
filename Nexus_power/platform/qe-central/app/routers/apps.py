@@ -25,12 +25,17 @@ from ..clients import platform_api, repo_intel
 from ..controlplane.scheduling.admission import ADMISSION
 from ..db import new_id, row_to_dict, tenant_scoped_qec_session, utc_now
 from ..db.controlplane_models import AppFingerprintRow
-from ..db.models import ClientAppEnvironmentRow, ClientAppRow
+from ..db.models import ClientAppEnvironmentRow, ClientAppRow, QEExplorationRow
 from ..fleet import quota
 from ..services.brief_compiler import (
     BRIEF_SYSTEM_INSTRUCTION, build_prompt, ground_and_assemble, parse_proposal,
 )
-from ..services.synthesis import known_labels_for_artifact, known_value_nodes_for_artifact
+from ..services.answer_key import _normalize_outcome
+from ..services.synthesis import (
+    known_labels_for_artifact,
+    known_value_nodes_for_artifact,
+    value_candidates_for_artifact,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -443,13 +448,69 @@ async def list_apps(user: dict = Depends(require_auth)) -> dict:
         return {"apps": [_public_view(r) for r in rows], "total": len(rows)}
 
 
+# Exploration statuses that mean a crawl is ACTIVE (not yet terminal). The UI
+# reads these to show a "crawl in progress" state on load — so an empty Test
+# Studio during a long crawl is never mistaken for a broken/completed one.
+_ACTIVE_CRAWL_STATUSES = frozenset({"pending", "writing", "running", "dispatched"})
+
+
+async def _latest_crawl(session, app_id: str) -> dict:
+    """The most recent crawl's live status for this app, so the app view can show
+    'Crawling…' on load (server truth, not ephemeral client state) and never present
+    an empty Test Studio as 'done' while a crawl is still running."""
+    exp = (await session.execute(
+        select(QEExplorationRow)
+        .where(QEExplorationRow.app_id == app_id)
+        .order_by(QEExplorationRow.created_at.desc())
+        .limit(1)
+    )).scalar_one_or_none()
+    if exp is None:
+        return {"status": "none", "active": False}
+    stats = exp.stats if isinstance(exp.stats, dict) else {}
+    status = (exp.status or "unknown").strip().lower()
+    active = status in _ACTIVE_CRAWL_STATUSES
+    # SAFETY VALVE: a crawl that has been active FAR past its wall budget is stalled
+    # (a crashed worker or a lost completion callback) — never leave the UI's
+    # "Crawling…" banner spinning forever. Stale-after = the dispatched wall budget +
+    # a generous buffer for post-crawl substrate write + generation. Falls back to the
+    # 30-min deep-crawl ceiling for older rows that never stamped a budget.
+    stalled = False
+    if active and exp.started_at is not None:
+        try:
+            wall_ms = int(stats.get("budget_wall_ms") or 0)
+            stale_after_s = (wall_ms / 1000.0 if wall_ms > 0 else 1_800.0) + 180.0
+            started = exp.started_at
+            if started.tzinfo is None:  # defensive: treat a naive stamp as UTC
+                started = started.replace(tzinfo=timezone.utc)
+            elapsed_s = (datetime.now(timezone.utc) - started).total_seconds()
+            if elapsed_s > stale_after_s:
+                active = False
+                stalled = True
+        except (TypeError, ValueError, AttributeError):
+            pass  # never let a timestamp edge-case break get_app; keep active as-is
+    return {
+        "exploration_id": exp.exploration_id,
+        "status": "stalled" if stalled else status,
+        "active": active,
+        "started_at": str(exp.started_at or ""),
+        "finished_at": str(exp.finished_at or ""),
+        "artifact_id": exp.artifact_id or "",
+        # Pages captured (populated on completion today; a live heartbeat can fill it
+        # during the crawl later). Best-effort — 0 while a fresh crawl is mid-flight.
+        "pages": int(stats.get("visits") or 0),
+    }
+
+
 @router.get("/apps/{app_id}")
 async def get_app(app_id: str, user: dict = Depends(require_auth)) -> dict:
     """Fetch one app (404 when absent or foreign-tenant — RLS + WHERE)."""
     tenant_id = user["tenant_id"]
     async with tenant_scoped_qec_session(tenant_id) as session:
         row = await _require_app(session, tenant_id, app_id)
-        return _public_view(row)
+        view = _public_view(row)
+        # Live crawl status so the UI shows "Crawling…" instead of an empty Studio.
+        view["crawl"] = await _latest_crawl(session, app_id)
+        return view
 
 
 @router.patch("/apps/{app_id}")
@@ -593,6 +654,156 @@ async def compile_brief(
                "ungrounded": result.get("ungrounded")},
     )
     return result
+
+
+# ─────────────── #2 Value-oracle proving wiring (candidate → confirmed) ──────
+# The crawl CLASSIFIES rendered value nodes as candidate expected outcomes
+# (value_infer: a premium/total/decision). These endpoints close the loop:
+# surface the candidates for review, and let a human CONFIRM one — writing a
+# grounded {field, expected, source_hint} into answer_key.outcomes. Everything
+# downstream is UNCHANGED, FROZEN machinery: value_oracle_contract → factory
+# generate (value_assertions) → compiler → value_oracle.py PROVEN assertion at
+# the captured selector → the frozen verdict reducer classifies a miss.
+
+
+def _outcomes_as_list(answer_key: dict) -> list[dict]:
+    """The stored ``answer_key.outcomes`` READ as a list of structured records
+    (the flat-map form ``{field: expected}`` is projected; the ``_raw`` free-text
+    sentinel and non-dict entries are skipped — ungroundable for matching)."""
+    src = (answer_key or {}).get("outcomes")
+    if isinstance(src, dict):
+        return [{"field": k, "expected": v} for k, v in src.items()
+                if str(k).strip() and str(k).strip() != "_raw"]
+    if isinstance(src, (list, tuple)):
+        return [dict(o) for o in src if isinstance(o, dict)]
+    return []
+
+
+def _outcomes_preserving_upgrade(answer_key: dict) -> list:
+    """The stored ``outcomes`` upgraded to LIST form for a WRITE, preserving
+    everything verbatim that this endpoint did not author: the ``_raw`` free-text
+    sentinel survives as ``{"_raw": ...}`` (the contract projector already skips
+    it) and unknown/non-dict entries ride through untouched — a confirm must
+    never silently prune another author's data."""
+    src = (answer_key or {}).get("outcomes")
+    if isinstance(src, dict):
+        out: list = [{"field": k, "expected": v} for k, v in src.items()
+                     if str(k).strip() and str(k).strip() != "_raw"]
+        if "_raw" in src:
+            out.append({"_raw": src["_raw"]})
+        return out
+    if isinstance(src, (list, tuple)):
+        return list(src)
+    return []
+
+
+@router.get("/apps/{app_id}/value-candidates")
+async def list_value_candidates(
+    app_id: str, user: dict = Depends(require_auth),
+) -> dict:
+    """#2 — the crawl-classified CANDIDATE expected values, for review.
+
+    Each candidate carries the captured selector (``source_hint``), the rendered
+    ``text`` (a runtime observation — shown as a pre-fill hint, never auto-
+    asserted), the inferred ``value_type`` and confidence, plus ``confirmed``
+    when an outcome already pins that selector."""
+    tenant_id = user["tenant_id"]
+    async with tenant_scoped_qec_session(tenant_id) as session:
+        row = await _require_app(session, tenant_id, app_id)
+        artifact_id = row.latest_artifact_id or ""
+        answer_key = dict(row.answer_key or {})
+    candidates = await value_candidates_for_artifact(tenant_id, artifact_id)
+    confirmed_hints = {
+        str(o.get("source_hint") or "").strip()
+        for o in _outcomes_as_list(answer_key)
+    } - {""}
+    for c in candidates:
+        c["confirmed"] = c["source_hint"] in confirmed_hints
+    return {"app_id": app_id, "artifact_id": artifact_id,
+            "candidates": candidates, "count": len(candidates)}
+
+
+class ValueCandidateConfirmIn(BaseModel):
+    """A HUMAN-CONFIRMED expected value for a crawl-captured candidate node."""
+
+    field: str = Field(min_length=1, max_length=200)
+    #: the AUTHORED expected value (the captured text is only a pre-fill hint).
+    expected: str | float | int
+    #: the captured node selector — must match a crawl-captured candidate.
+    source_hint: str = Field(min_length=1, max_length=300)
+    when: dict = Field(default_factory=dict)
+    match: str = Field(default="", max_length=20)      # ''|numeric|exact|contains
+    tolerance: float | None = None
+
+
+@router.post("/apps/{app_id}/value-candidates/confirm")
+async def confirm_value_candidate(
+    app_id: str, body: ValueCandidateConfirmIn, user: dict = Depends(_MUTATE),
+) -> dict:
+    """#2 — CONFIRM one candidate into ``answer_key.outcomes`` (grounded, fail-closed).
+
+    Anti-fabrication gates:
+      * the ``source_hint`` MUST be one of the crawl-captured candidate selectors
+        for the app's current artifact (a hand-typed/hallucinated selector is
+        refused — the assertion must point at evidence);
+      * the expected value is normalized by the SAME frozen
+        :func:`_normalize_outcome` the run contract uses — an ungroundable
+        expectation is refused, never green-washed.
+    One outcome per (field, source_hint): re-confirming replaces the entry."""
+    tenant_id = user["tenant_id"]
+    async with tenant_scoped_qec_session(tenant_id) as session:
+        row = await _require_app(session, tenant_id, app_id)
+        if row.status == "deleted":
+            raise HTTPException(status_code=409, detail="app is deleted")
+        artifact_id = row.latest_artifact_id or ""
+        if not artifact_id:
+            raise HTTPException(
+                status_code=409,
+                detail="no crawl artifact yet — crawl the app before confirming values",
+            )
+
+        candidates = await value_candidates_for_artifact(tenant_id, artifact_id)
+        hint = body.source_hint.strip()
+        if hint not in {c["source_hint"] for c in candidates}:
+            raise HTTPException(
+                status_code=422,
+                detail="ungrounded source_hint — it must be one of the crawl-captured "
+                       "candidate selectors (GET /apps/{app_id}/value-candidates)",
+            )
+
+        if len(json.dumps(body.when, default=str)) > 2000:
+            raise HTTPException(status_code=422, detail="'when' condition too large")
+
+        rec = _normalize_outcome(body.field, body.expected, {
+            "source_hint": hint, "when": body.when,
+            "match": body.match, "tolerance": body.tolerance,
+        })
+        if rec is None:
+            raise HTTPException(
+                status_code=422,
+                detail="ungroundable expectation — supply a non-empty field and a "
+                       "scalar expected value",
+            )
+
+        answer_key = dict(row.answer_key or {})
+        outcomes = _outcomes_preserving_upgrade(answer_key)
+        _key = (rec["field"].strip().lower(), rec["source_hint"])
+        outcomes = [o for o in outcomes
+                    if not (isinstance(o, dict)
+                            and (str(o.get("field") or "").strip().lower(),
+                                 str(o.get("source_hint") or "").strip()) == _key)]
+        outcomes.append(rec)
+        answer_key["outcomes"] = outcomes
+        row.answer_key = answer_key   # reassign: JSONB change detection
+        row.updated_at = utc_now()
+
+    logger.info(
+        "qec.apps.value_candidate_confirmed",
+        extra={"tenant_id": tenant_id, "app_id": app_id,
+               "field": rec["field"], "source_hint": rec["source_hint"],
+               "match": rec["match"], "outcomes": len(outcomes)},
+    )
+    return {"app_id": app_id, "confirmed": rec, "outcomes_count": len(outcomes)}
 
 
 # ─────────────────────── Environment Profiles (multi-env) ───────────────────

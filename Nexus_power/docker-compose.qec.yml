@@ -168,11 +168,16 @@ services:
     # Shared allowlist volume (qe-central writes allowed_domains.txt here).
     - qec-egress-allowlist:/etc/squid/allowlist
     # Seed a FAIL-CLOSED sentinel so squid starts before the first crawl, then
-    # run squid in the foreground. A background watcher re-runs `squid -k
-    # reconfigure` whenever qe-central rewrites the allowlist file (the ACL file
-    # is re-read ONLY on (re)configure, and qe-central — a separate container —
-    # cannot signal squid itself). WITHOUT this, a domain added after squid
-    # started is denied TCP_DENIED/403 forever and the crawl reaches nothing.
+    # run squid in the foreground. A background watcher signals squid to re-read
+    # the allowlist whenever qe-central rewrites it (the ACL file is re-read ONLY
+    # on (re)configure, and qe-central — a separate container — cannot signal
+    # squid itself). WITHOUT this, a domain added after squid started is denied
+    # TCP_DENIED/403 forever and the crawl reaches nothing.
+    # HARDENED (live-observed race): `kill -HUP 1` signals the exec'd foreground
+    # squid (PID 1) DIRECTLY — `squid -k reconfigure` resolves the instance via
+    # the pidfile, which is unreliable under `squid -N` and silently no-ops
+    # (TCP_DENIED despite a correct allowlist write). The old form stays as a
+    # fallback only.
     entrypoint: ["/bin/sh", "-c"]
     command:
     - >
@@ -183,7 +188,8 @@ services:
       { chown proxy:proxy /dev/stdout /dev/stderr 2>/dev/null || true; } &&
       { A=/etc/squid/allowlist/allowed_domains.txt; L=; while :; do
           C=$$(stat -c %Y "$$A" 2>/dev/null || echo 0);
-          [ "$$C" != "$$L" ] && { L=$$C; squid -k reconfigure 2>/dev/null || true; };
+          [ "$$C" != "$$L" ] && { L=$$C;
+            kill -HUP 1 2>/dev/null || squid -k reconfigure 2>/dev/null || true; };
           sleep 1; done & } &&
       exec squid -N -f /etc/squid/squid.conf -d1
     mem_limit: 512m

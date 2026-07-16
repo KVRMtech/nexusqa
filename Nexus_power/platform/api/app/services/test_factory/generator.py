@@ -113,6 +113,14 @@ class PageActionInput:
     # advanced the page (after_outcome=='navigation' or a captured URL change).
     # Gates navigation assertions — page-group adjacency alone is NOT proof.
     navigated: bool = False
+    # Menu/disclosure structure (from ``evidence_signals.qec``) — lets the generator
+    # ground a MENU-GATED navigation: a dropdown item is hidden until its opener is
+    # activated, so replay must click the OPENER first or the item click times out.
+    # ``control_role``/``css_hint`` identify a menu item; ``expanded`` (aria-expanded)
+    # identifies its disclosure toggle. All defaulted → old artifacts stay unchanged.
+    control_role: str = ""
+    css_hint: str = ""
+    expanded: str = ""
 
 
 @dataclass
@@ -131,6 +139,11 @@ class DemonstratedGenerationResult:
     # unbounded test. Defaulted so existing constructors/tests stay valid.
     truncated: bool = False
     truncation_reason: str = ""
+    # Set when the demonstrated E2E was SUPPRESSED as an incoherent flatten — the
+    # crawl reached its pages by link-following with no PROVEN click between them, so
+    # a single flow would just wander across unrelated pages (login/signup included).
+    # Surfaced as the honest ``no_cases_reason`` instead of shipping a misleading test.
+    no_flow_reason: str = ""
 
 
 @dataclass
@@ -303,6 +316,18 @@ def _locator(target_label: str, target_kind: str) -> str:
     if kind in {"button", "link", "menu"}:
         return f'role={kind}|name={label}'
     return f"label={label}"
+
+
+def _upload_basename(value) -> str:
+    """The recorded chosen-file NAME from an upload action's committed value.
+
+    Browsers mask the real path as ``C:\\fakepath\\<name>`` — the basename is
+    the only honest, portable part of the evidence (asserting the mask itself
+    would be brittle noise, not proof).  Control characters / newlines are
+    collapsed to single spaces so an odd or hostile filename can never break
+    the emitted step text or the compiled spec."""
+    v = " ".join(str(value or "").split()).strip().replace("\\", "/")
+    return v.rsplit("/", 1)[-1].strip()
 
 
 # ─── Segmentation ────────────────────────────────────────────────────────────
@@ -548,6 +573,99 @@ def _action_navigated(a: PageActionInput) -> bool:
     outcome was a navigation, or a URL change was recorded. Page-group adjacency is
     NOT proof; only this grounded signal credits a click with navigating onward."""
     return bool(getattr(a, "navigated", False)) or (a.after_outcome or "").strip().lower() == "navigation"
+
+
+def _path_of(url: str) -> str:
+    """Path component of a full/relative URL — scheme, host, query and fragment
+    dropped, trailing slash normalized. Used to compare a click's captured
+    DESTINATION (``after_detail``) against the next page's URL, generically."""
+    u = (url or "").strip()
+    if not u:
+        return ""
+    u = re.sub(r"^[a-zA-Z][\w+.-]*://", "", u)      # drop scheme
+    u = u.split("?", 1)[0].split("#", 1)[0]           # drop query / fragment
+    slash = u.find("/")
+    path = u[slash:] if slash >= 0 else "/"
+    return path.rstrip("/") or "/"
+
+
+# A control that is HIDDEN inside a collapsed menu/disclosure and only becomes
+# clickable after its opener is activated. Two STRONG, generic signals only:
+#   * ARIA ``role="menuitem"`` — only genuine popup-menu items carry it; and
+#   * the Bootstrap ``dropdown-item`` class — the specific class of an item that is
+#     display:none until its ``dropdown-toggle`` is opened.
+# We deliberately do NOT match the bare ``menu-item`` layout class: CMS themes
+# (WordPress et al.) put it on ALWAYS-VISIBLE top-level nav links, so matching it
+# would prepend a spurious "open the menu" step before a directly-clickable link.
+_MENU_ITEM_ROLE = "menuitem"
+_MENU_ITEM_CSS_RX = re.compile(r"\bdropdown-item\b", re.IGNORECASE)
+
+
+def _is_menu_item(a: PageActionInput) -> bool:
+    """True when this control lives inside a collapsed menu/disclosure, so a replay
+    must OPEN the menu before clicking it. Strong signals only (ARIA menuitem role /
+    Bootstrap dropdown-item) — never a generic layout class a visible link also uses."""
+    return (
+        (getattr(a, "control_role", "") or "").strip().lower() == _MENU_ITEM_ROLE
+        or bool(_MENU_ITEM_CSS_RX.search(getattr(a, "css_hint", "") or ""))
+    )
+
+
+def _is_disclosure_opener(a: PageActionInput) -> bool:
+    """True when this click is a disclosure TOGGLE that OPENS a menu — it carries an
+    ``aria-expanded`` state and did NOT itself navigate. The ARIA-standard menu-open
+    signal, framework-agnostic (Bootstrap dropdown-toggle, ngb, MUI, plain ARIA)."""
+    return bool((getattr(a, "expanded", "") or "").strip()) and not _action_navigated(a)
+
+
+def _grounded_commit_sequence(
+    clicks: list[PageActionInput], next_url: str,
+) -> list[PageActionInput] | None:
+    """The GROUNDED transition click(s) for a page that advances to ``next_url``.
+
+    Prefers the click the recording PROVES reached ``next_url`` — the one whose
+    captured destination (``after_detail``) matches — over the chronologically-last
+    click, which is often exploratory noise (a footer credit link, an abandoned
+    side-trip). This is the fix for a non-navigating click being selected as the
+    transition and then hard-asserting a navigation it never caused.
+
+    Returns ``None`` when no click grounded a navigation to ``next_url`` (the caller
+    falls back to the label/position heuristic, and the boundary stays UNPROVEN —
+    never a fabricated hard assertion). When the grounded click is a MENU ITEM, the
+    disclosure opener that made it clickable is prepended so replay opens the menu
+    first. Dialog-confirmation handling (:func:`_submit_sequence`) is preserved for
+    the truncated prefix."""
+    if not next_url:
+        return None
+    want = _path_of(next_url)
+    if not want or want == "/":
+        return None
+    idx = None
+    for i, c in enumerate(clicks):
+        if _action_navigated(c) and _path_of(c.after_detail) == want:
+            idx = i  # last click that PROVED arrival at next_url
+    if idx is None:
+        return None
+    nav = clicks[idx]
+    seq = _submit_sequence(clicks[: idx + 1])  # keeps any dialog-opener for the commit
+    if _is_menu_item(nav):
+        # Prepend the CONTIGUOUS run of disclosure openers immediately preceding the
+        # item (chronological order preserved). Walking the adjacent run — not a
+        # single last-wins pick — reproduces a NESTED/mega-menu's full open sequence
+        # (outer toggle → inner toggle → item) and keeps the item's real opener even
+        # when an unrelated disclosure was opened right before it. A non-opener click
+        # breaks the run: we do NOT reach across it to grab an arbitrary far opener
+        # (that would fabricate an unlinked step) — better an honest miss than a
+        # mis-attributed menu-open.
+        openers: list[PageActionInput] = []
+        j = idx - 1
+        while j >= 0 and _is_disclosure_opener(clicks[j]):
+            openers.append(clicks[j])
+            j -= 1
+        openers = [o for o in reversed(openers) if o not in seq]
+        if openers:
+            seq = [*openers, *seq]
+    return seq
 
 
 # Sources whose URL is GROUND TRUTH (instrumented) or a directly-OCR'd address
@@ -821,6 +939,31 @@ def _detect_data_carry(groups: "Sequence[_PageGroup]") -> list:
     return carry
 
 
+# A flow with NO grounded navigation backbone AND at least this many UNGROUNDED
+# page-jumps is the crawler's BFS traversal flattened — not a coherent demonstrated
+# journey. It would just wander across unrelated pages (into login/signup), so it is
+# suppressed rather than shipped as a misleading "E2E".
+_MIN_FLATTEN_JUMPS = 3
+
+
+def _navigation_backbone(steps: "Sequence[ProductionTestStep]") -> tuple[int, int]:
+    """``(grounded, inferred)`` count of page-to-page transitions in the flow: a
+    boundary asserted as a REAL navigation (a demonstrated ``Verify navigated`` step)
+    vs an honest UNPROVEN jump (an inferred one). Distinguishes a coherent demonstrated
+    journey (a grounded backbone) from a link-following exploration flattened."""
+    grounded = inferred = 0
+    for s in steps:
+        if not (getattr(s, "action", "") or "").startswith("Verify the application navigated"):
+            continue
+        obs = getattr(s, "observed", None) or {}
+        prov = str(getattr(s, "provenance", "") or obs.get("provenance") or "").casefold()
+        if prov == "demonstrated":
+            grounded += 1
+        elif prov == "inferred":
+            inferred += 1
+    return grounded, inferred
+
+
 def _grade_case(case: "ProductionTestCase") -> None:
     """P5: per-case evidence grade from the case's OWN steps. A = every step
     demonstrated; B = <=2 inferred/unproven steps; C = more. Appended as tags
@@ -872,9 +1015,6 @@ def _build_steps(groups: Sequence[_PageGroup]) -> tuple[list[ProductionTestStep]
         next_canon = _canonical_url(groups[gi + 1]) if gi + 1 < len(groups) else ""
         next_path = groups[gi + 1].url_path if gi + 1 < len(groups) else ""
         group_start = len(steps)  # tag this group's steps with its screenshot
-        # Did THIS group grounded-navigate onward? Gates whether the NEXT group's
-        # "verify navigated here" step may hard-assert the URL (vs. honest UNPROVEN).
-        group_navigated = any(_action_navigated(a) for a in group.actions)
 
         # 1) Navigation onto the page.  The entry step navigates to the full URL;
         #    every later assertion checks the PATH only (see _canonical_url).
@@ -943,6 +1083,34 @@ def _build_steps(groups: Sequence[_PageGroup]) -> tuple[list[ProductionTestStep]
                 step.observed["value_conflict"] = {"typed": typed, "committed": value}
             steps.append(step)
 
+        # 2b) Attach demonstrated FILE UPLOADS (verb=upload): the crawler chose a
+        #     seed document on this file input and the browser COMMITTED the
+        #     filename (after.outcome=value_committed) — grounded evidence, so it
+        #     becomes a real step. The compiler's upload rung recreates the seed
+        #     and re-attaches it via setInputFiles (never a fill on a file input).
+        for a in group.actions:
+            if (a.verb or "").strip().lower() != "upload":
+                continue
+            _ulabel = (a.target_label or "").strip()
+            _uname = _upload_basename(a.value)
+            if not _ulabel or not _uname:
+                continue  # a nameless/valueless upload cannot be re-grounded — skip honestly
+            _usig = ("upload", _norm(_ulabel), _norm(_uname))
+            if _usig in seen_fills:
+                continue  # persisted state re-observed on a split visit
+            seen_fills.add(_usig)
+            fields_used += 1
+            n += 1
+            steps.append(ProductionTestStep(
+                step_number=n,
+                action=f"Attach '{_uname}' to the '{_ulabel}' field",
+                expected=f"'{_ulabel}' holds the chosen file '{_uname}'",
+                expected_result=f"'{_ulabel}' holds the chosen file '{_uname}'",
+                selector=_locator(_ulabel, "field"),
+                data_ref=_uname,
+                **_observed(verb="upload", label=_ulabel, kind="file", value=_uname),
+            ))
+
         # 3) Toggles the user turned on.
         for label in toggles:
             n += 1
@@ -995,7 +1163,20 @@ def _build_steps(groups: Sequence[_PageGroup]) -> tuple[list[ProductionTestStep]
             for st in steps[group_start:]:
                 st.screenshot = group.frame_ref
 
-        prev_navigated = group_navigated
+        # Gate the NEXT group's "verify navigated here" boundary on whether THIS
+        # group's EMITTED transition step actually reached that page — a PER-ACTION
+        # signal, not group-level. The old ``any(action navigated)`` green-washed the
+        # boundary whenever *some* click in the group navigated (even elsewhere), so a
+        # non-navigating transition (a footer credit link) still hard-asserted the
+        # next URL and failed RED. Now only a transition step carrying a grounded
+        # ``next_url`` for the next page proves the boundary; anything else demotes it
+        # to an honest UNPROVEN comment.
+        _final_int = interaction_steps[-1] if interaction_steps else None
+        prev_navigated = bool(
+            _final_int and next_path
+            and _path_of((_final_int.observed or {}).get("next_url", ""))
+            == _path_of(next_canon or next_path)
+        )
 
     return steps, fields_used, truncated
 
@@ -1063,7 +1244,10 @@ def _interaction_steps(group: _PageGroup, next_url: str, next_group_proven: bool
     ]
     if not clicks:
         return []
-    seq = _submit_sequence(clicks)
+    # Prefer the GROUNDED transition (the click that PROVED arrival at next_url,
+    # plus its menu opener) over the chronologically-last click. Falls back to the
+    # label/position heuristic when nothing grounded a navigation to next_url.
+    seq = _grounded_commit_sequence(clicks, next_url) or _submit_sequence(clicks)
     out: list[ProductionTestStep] = []
     for i, a in enumerate(seq):
         is_final = i == len(seq) - 1
@@ -1078,8 +1262,19 @@ def _interaction_steps(group: _PageGroup, next_url: str, next_group_proven: bool
         # Page-group adjacency alone is NOT proof — that is what wrongly pinned
         # /checkout-step-one onto the non-navigating 'Add to cart' click.
         navigated = _action_navigated(a)
+        # Destination-aware credit: pin next_url onto this click ONLY when its OWN
+        # captured destination matches next_url — or none was captured (un-enriched,
+        # fall back to the raw navigated flag). Closes a mis-attribution where the
+        # trailing click navigated ELSEWHERE (a footer/side-trip link) yet still had
+        # the next page's URL pinned onto it and hard-asserted a navigation it never
+        # caused. When the destinations disagree, this click did not reach next_url →
+        # no assertion (the boundary stays honestly UNPROVEN), never a fabricated RED.
+        nav_reaches_next = navigated and (
+            not (a.after_detail or "").strip()
+            or _path_of(a.after_detail) == _path_of(next_url)
+        )
         commit_fallback = (not after_outcome) and bool(_COMMIT_RX.search(label))
-        step_next = next_url if (is_final and next_url and (navigated or commit_fallback)) else ""
+        step_next = next_url if (is_final and next_url and (nav_reaches_next or commit_fallback)) else ""
         anchor = (a.anchor or "").strip()
         after = (a.after_detail or "").strip()
         # Fold the anchor into the step so a repeated control is unambiguous:
@@ -1093,6 +1288,10 @@ def _interaction_steps(group: _PageGroup, next_url: str, next_group_proven: bool
                 expected = f"{expected}; {after}"
         elif after:
             expected = after
+        elif not is_final and _is_disclosure_opener(a):
+            # a menu OPENER preceding the grounded item click — replay opens the
+            # disclosure so the hidden item becomes clickable (not a dialog confirm).
+            expected = f"the '{label}'{where} menu opens, revealing its items"
         elif not is_final:
             expected = f"a confirmation step opens after '{label}'{where}"
         else:
@@ -1306,6 +1505,36 @@ def generate_demonstrated_test_cases(
     groups, _branch_groups = _split_revisit_branch(groups)
 
     steps, fields_used, truncated = _build_steps(groups)
+
+    # COHERENCE GATE: a single "E2E" whose transitions are DOMINATED by ungrounded
+    # page-jumps (more inferred than grounded, with >= _MIN_FLATTEN_JUMPS of them) is
+    # the crawler's link-following traversal flattened — it wanders across unrelated
+    # pages (home → cart → login → api list → …), routes through and fills a
+    # login/signup form it happened to land on, and confuses more than it helps. A
+    # coherent flow (a video journey, or a grounded click-path) has a backbone of
+    # PROVEN transitions (grounded >= inferred); those are kept. The flatten is
+    # suppressed in favour of the grounded per-navigation journeys (emitted
+    # separately), and the reason is surfaced honestly — never a silent empty, and a
+    # short flow with a single gap (inferred < _MIN_FLATTEN_JUMPS) is never swept up.
+    _grounded_navs, _inferred_navs = _navigation_backbone(steps)
+    if _inferred_navs >= _MIN_FLATTEN_JUMPS and _grounded_navs < _inferred_navs:
+        return DemonstratedGenerationResult(
+            test_cases=[],
+            page_groups=len(groups),
+            visits_total=len(visits),
+            visits_used=sum(len(g.visit_ids) for g in groups),
+            fields_demonstrated=0,
+            excluded_placeholder_fields=_count_placeholders(visits),
+            no_flow_reason=(
+                f"No coherent functional E2E — the crawl stitched {_inferred_navs + 1} "
+                "pages together but PROVED only "
+                f"{_grounded_navs} of the {_grounded_navs + _inferred_navs} navigations "
+                "between them, so a single flow would wander across unrelated pages "
+                "(routing through login/signup). The grounded per-navigation JOURNEYS "
+                "are the coherent, runnable tests; a re-crawl or richer interaction "
+                "grounds more of the site."),
+        )
+
     truncation_reason = (
         f"Large recording: {len(groups)} page milestones detected — the generated "
         f"test was capped at the first {_MAX_GROUPS} pages. Review/split the "
@@ -1447,3 +1676,175 @@ def _count_placeholders(visits: Sequence[PageVisitInput]) -> int:
             if value is not None and value.strip() and not _is_real_value(label, value):
                 count += 1
     return count
+
+
+def _host_of(url: str) -> str:
+    """Host component of a URL (scheme + path + query dropped, lowercased)."""
+    u = re.sub(r"^[a-zA-Z][\w+.-]*://", "", (url or "").strip())
+    return u.split("/", 1)[0].split("?", 1)[0].split("#", 1)[0].strip().lower()
+
+
+# Bound on grounded-journey cases per artifact — a large crawl can capture many
+# grounded navigations; keep the emitted suite sane (dedup already collapses repeats).
+_MAX_JOURNEYS = 60
+
+
+def generate_grounded_journeys(
+    *,
+    artifact_id: str,
+    page_visits: Sequence[PageVisitInput],
+    page_actions: Sequence[PageActionInput],
+) -> list[ProductionTestCase]:
+    """Emit a SHORT, fully-grounded journey for each captured navigation CLICK:
+    ``open the source page → [open the menu] → click the control → verify the
+    destination``.
+
+    Unlike the demonstrated E2E — which flattens the whole BFS visit stream into one
+    flow and can therefore only use a grounded click that happens to sit at a forward
+    transition boundary — each journey is built DIRECTLY from one grounded click-path.
+    So a menu navigation the crawler grounded on a *revisit* (e.g. Categories ▸ Hand
+    Tools recorded when it returned to the home page) still becomes a runnable,
+    coherent flow. Reuses the transition + disclosure-opener grounding (:func:`
+    _is_menu_item` / :func:`_is_disclosure_opener`).
+
+    PROVEN-ONLY and never green-washed: a journey is emitted ONLY for a click the
+    recording proves navigated (``after_outcome=navigation`` / captured URL change)
+    to a SAME-APP destination, and ONLY from a source page whose URL is trustworthy
+    enough to ``goto`` (entry-trusted). Everything else is skipped, never fabricated.
+    """
+    by_visit: dict[str, list[PageActionInput]] = {}
+    for a in page_actions:
+        by_visit.setdefault(a.page_visit_id, []).append(a)
+    for lst in by_visit.values():
+        lst.sort(key=lambda a: a.subaction_index)
+
+    cases: list[ProductionTestCase] = []
+    seen: set = set()  # dedup by (source_path, dest_path, nav-label)
+
+    for v in sorted(page_visits, key=lambda v: getattr(v, "sequence_index", 0) or 0):
+        # Only start a journey from a page we can trustworthily open (its URL is
+        # instrumented / directly OCR'd, and a host/path exists) — never from a
+        # vision-guessed address.
+        src_host = (v.canonical_host or v.url_host or "").strip()
+        if (v.source or "").strip().lower() not in _ENTRY_TRUSTED_SOURCES or not src_host:
+            continue
+        src_url = f"https://{src_host}{v.url_path}"
+        src_path = _path_of(src_url) or "/"
+        src_name = "home" if src_path == "/" else _page_name(v.url_path, v.location)
+
+        clicks = [
+            a for a in by_visit.get(v.page_visit_id, [])
+            if (a.verb or "").strip().lower() in {"click", "press", "tap"}
+            and (a.target_label or "").strip()
+        ]
+        for i, a in enumerate(clicks):
+            if not _action_navigated(a):
+                continue
+            dest = (a.after_detail or "").strip()
+            if not dest:
+                continue  # navigated but destination not captured — cannot verify, skip
+            dest_path = _path_of(dest)
+            if not dest_path or dest_path == "/" or dest_path == src_path:
+                continue  # no path, or a self/home nav — not a distinct journey
+            if _host_of(dest) and _host_of(dest) != src_host.lower():
+                continue  # left the app (external link) — not an in-app journey
+            # Dedup by (destination, control): a nav-bar control that appears on every
+            # page yields ONE journey (from the earliest source page — visits are in
+            # sequence order), not a near-duplicate per page it was captured on.
+            key = (dest_path, _norm(a.target_label))
+            if key in seen:
+                continue
+            seen.add(key)
+
+            # The disclosure opener(s) that made a MENU item clickable (contiguous
+            # aria-expanded run immediately preceding it) — so replay opens the menu.
+            openers: list[PageActionInput] = []
+            if _is_menu_item(a):
+                j = i - 1
+                while j >= 0 and _is_disclosure_opener(clicks[j]):
+                    openers.append(clicks[j])
+                    j -= 1
+                openers = list(reversed(openers))
+
+            dest_canon = f"https://{src_host}{dest_path}"
+            dest_name = _page_name(dest_path, "")
+            steps: list[ProductionTestStep] = []
+            n = 0
+
+            n += 1
+            steps.append(ProductionTestStep(
+                step_number=n,
+                action=f"Open {src_url}",
+                expected=f"The {src_name} page is displayed",
+                expected_result=f"The {src_name} page is displayed",
+                selector=f"url={src_url}",
+                **_observed(verb="navigate", url=src_url),
+            ))
+            for op in openers:
+                n += 1
+                steps.append(ProductionTestStep(
+                    step_number=n,
+                    action=f"Click '{op.target_label}'",
+                    expected=f"the '{op.target_label}' menu opens, revealing its items",
+                    expected_result=f"the '{op.target_label}' menu opens, revealing its items",
+                    selector=_locator(op.target_label, op.target_kind),
+                    **_observed(verb="click", label=op.target_label,
+                                kind=op.target_kind or "button"),
+                ))
+            n += 1
+            nav_obs = _observed(verb="click", label=a.target_label,
+                                kind=a.target_kind or "link")
+            # Grounded transition: the recording PROVED this click reached dest, so the
+            # compiler emits a HARD toHaveURL (navigation_grounded) — the real oracle.
+            nav_obs["observed"]["next_url"] = dest_canon
+            nav_obs["observed"]["navigation_grounded"] = True
+            steps.append(ProductionTestStep(
+                step_number=n,
+                action=f"Click '{a.target_label}'",
+                expected=f"The application proceeds to {dest_path}",
+                expected_result=f"The application proceeds to {dest_path}",
+                selector=_locator(a.target_label, a.target_kind),
+                **nav_obs,
+            ))
+            n += 1
+            steps.append(ProductionTestStep(
+                step_number=n,
+                action=f"Verify the application navigated to {dest_canon}",
+                expected=f"URL path is {dest_path} and the {dest_name} page is displayed",
+                expected_result=f"URL path is {dest_path} and the {dest_name} page is displayed",
+                selector=f"url={dest_canon}",
+                **_observed(verb="navigate", url=dest_path, provenance="demonstrated"),
+            ))
+            if v.frame_ref:
+                for st in steps:
+                    st.screenshot = v.frame_ref  # all steps share the source page's frame
+
+            test_id = str(uuid.uuid5(
+                _TEST_ID_NAMESPACE,
+                f"{artifact_id}:journey:{src_path}>{dest_path}:{_norm(a.target_label)}"))
+            via = " via the menu" if openers else ""
+            case = ProductionTestCase(
+                test_id=test_id,
+                name=f"Navigate to {dest_name} via '{a.target_label}' — from {src_name} ({src_host})",
+                description=(
+                    f"A grounded click-path on {src_host}: from '{src_name}', "
+                    f"clicking '{a.target_label}'{via} navigates to '{dest_name}' "
+                    f"({dest_path}). Every step was captured — the navigation is a "
+                    f"PROVEN URL oracle, not an assumed transition."),
+                steps=steps,
+                expected_outcome=(
+                    f"Clicking '{a.target_label}' reaches the '{dest_name}' page "
+                    f"({dest_path})."),
+                preconditions=[Precondition(
+                    description="A supported web browser is open and the target site is reachable.",
+                    setup_action=f"Open {src_url}",
+                )],
+                priority="P1_high",
+                type="functional",
+                tags=["demonstrated", "grounded-journey", "navigation", "pages_and_forms"],
+            )
+            _grade_case(case)
+            cases.append(case)
+            if len(cases) >= _MAX_JOURNEYS:
+                return cases
+    return cases

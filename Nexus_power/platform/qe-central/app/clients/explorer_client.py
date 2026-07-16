@@ -42,6 +42,16 @@ class ExploreDispatchRequest(BaseModel):
     answer_key: dict = Field(default_factory=dict)
     budgets: dict = Field(default_factory=dict)
     allowed_hosts: list[str] = Field(default_factory=list)
+    #: Federated / SSO login (#7): the DECLARED trusted IdP domains the login flow
+    #: may redirect to.  The explorer's guard treats an AUTH-phase POST to one of
+    #: these as a login domain; they are ALSO added to the egress allowlist so the
+    #: browser can reach the IdP.  Empty ⇒ no SSO crossing (fail-closed).
+    idp_domains: list[str] = Field(default_factory=list)
+    #: Exploration PLAN (the caged agent) — grounded ``{priority_patterns:[{pattern,
+    #: weight,reason}]}`` an LLM proposed in qe-central. The explorer applies it as
+    #: FRONTIER PRIORITY ONLY (reorders what it would visit; can never add a state,
+    #: cross a submit, or leave the fence). Empty ⇒ byte-identical crawl.
+    plan: dict = Field(default_factory=dict)
     phase: str = Field(default="explore")
     submit_approvals: list[str] = Field(default_factory=list)
     attestation: dict | None = None

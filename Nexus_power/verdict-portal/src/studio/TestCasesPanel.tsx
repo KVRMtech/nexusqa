@@ -570,9 +570,12 @@ export default function TestCasesPanel(
         />
       ) : (
         // ── Two-pane studio: calm list (left) + sticky detail/proof (right) ──
-        <div className="lg:grid lg:grid-cols-[1fr_1.25fr] lg:gap-6 lg:items-start">
+        // minmax(0,…) tracks + min-w-0 children: a raw 1fr track has min-width:auto
+        // (= min-content), so a wide/unbreakable child (a long locator/URL, a 6-col
+        // evidence table) forces the track past the panel and overflows the widget.
+        <div className="lg:grid lg:grid-cols-[minmax(0,1fr)_minmax(0,1.25fr)] lg:gap-6 lg:items-start">
           {/* LEFT — grouped, scannable list */}
-          <div className="space-y-5">
+          <div className="space-y-5 min-w-0">
             {SECTIONS.map((s) => {
               const items = bySection[s.type] || [];
               const count = summary?.by_type?.[s.type] ?? items.length;
@@ -616,7 +619,7 @@ export default function TestCasesPanel(
           </div>
 
           {/* RIGHT — sticky detail pane (the elevated proof surface) */}
-          <div className="mt-5 lg:mt-0 lg:sticky lg:top-4">
+          <div className="mt-5 lg:mt-0 lg:sticky lg:top-4 min-w-0">
             {selectedRow ? (
               <TestCaseCard key={selectedRow.test_case_id} variant="detail" row={selectedRow} accent={NAVY}
                 showDetails={showDetails} busy={busy} artifactId={artifactId}

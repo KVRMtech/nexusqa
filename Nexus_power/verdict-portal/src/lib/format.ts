@@ -54,7 +54,10 @@ export function timeAgo(ts: string | null | undefined): string {
   if (!ts) return '—';
   const d = new Date(ts);
   if (Number.isNaN(d.getTime())) return '—';
-  return `${formatDistanceToNowStrict(d)} ago`;
+  // addSuffix is direction-aware: "30 minutes ago" for the past AND "in 30 days" for
+  // the future — so a FUTURE timestamp (e.g. an attestation expiry) never renders as
+  // "… ago" (which read as an expired gate even though it is valid for 30 more days).
+  return formatDistanceToNowStrict(d, { addSuffix: true });
 }
 
 /** Title-case a snake/kebab token (e.g. "budget_stopped" → "Budget Stopped"). */

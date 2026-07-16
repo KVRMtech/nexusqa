@@ -368,6 +368,35 @@ _NXCLICK_JS = r"""async function __nxClick(loc){
   return await loc.click(); // genuinely ambiguous -> Playwright's honest strict-mode error stands (heal/human)
 }"""
 
+# Grounded file-attach for a recorded `upload` step: recreates the crawl's seed
+# document IN MEMORY (no fs access needed in the spec) and attaches it via
+# Playwright's setInputFiles. The content mirrors the crawler's Phase-A seed (a
+# placeholder PDF — never a real customer document); the caller passes the
+# RECORDED basename so the app sees the same filename the crawl demonstrated.
+#
+# FAIL-CLOSED BIND (adversarial finding): a structural `input[type=file]` rung is
+# NOT keyed to the recorded name, so a `.or()` union with `.first()` could bind a
+# DIFFERENT file input on a multi-upload page (DOM order wins) and green-wash.
+# Preference order instead:
+#   1. the label-keyed locator (the recorded accessible name) when it resolves;
+#   2. else the page's ONLY file input (nothing else it could be);
+#   3. else THROW — a multi-upload page with no label match is ambiguous and goes
+#      to heal/review, never a DOM-order guess.
+_NXSETFILES_JS = r"""async function __nxSetFiles(byLabel, anyFile, name){
+  const mt = /\.pdf$/i.test(name) ? 'application/pdf' : 'application/octet-stream';
+  const payload = { name: name, mimeType: mt, buffer: Buffer.from('%PDF-1.4\n% QE-Central seed document (generated)\n') };
+  let loc = null;
+  if (await byLabel.count().catch(() => 0) > 0) {
+    loc = byLabel.first(); // name-keyed bind (the recorded label)
+  } else {
+    const n = await anyFile.count().catch(() => 0);
+    if (n === 1) loc = anyFile.first(); // unambiguous: the page's only file input
+    else throw new Error('upload bind refused: no control matches the recorded label and the page has ' + n + ' file inputs (ambiguous) - heal/review required');
+  }
+  await loc.setInputFiles(payload);
+  return loc;
+}"""
+
 
 
 _ER_STOPWORDS = frozenset("""
@@ -397,6 +426,17 @@ def _grounded_expectation_token(expected_result: str, grounded_text: str) -> str
         if w in g:
             return re.escape(raw)
     return ""
+
+
+def _comment_safe(text: object, cap: int = 200) -> str:
+    """Collapse a captured value to a SINGLE ``//``-comment-safe line: every newline,
+    CR and tab becomes a space and the result is truncated. A captured observation can
+    carry a MULTI-LINE Playwright error ("Timeout ... Call log:\\n waiting for role=link
+    ...") — emitted raw into a ``// observed outcome: …`` comment it breaks onto later
+    lines that parse as CODE, producing a SYNTAX-ERROR spec that fails the WHOLE run
+    (the live browser is then left stranded on whatever page it reached). One line here
+    keeps the comment a comment, so the spec always compiles."""
+    return " ".join(str(text or "").split())[:cap]
 
 
 def _assertion_from_expected_result(observed: dict, expected_result: str = "",
@@ -472,7 +512,11 @@ def _assertion_from_expected_result(observed: dict, expected_result: str = "",
                 f"await expect(page.getByText(/{tok}/i).first()).toBeVisible(){_er_tail}"
             )
         elif not tok and "await expect(" not in already:
-            out.append(f"// UNVERIFIED expected result (no grounded oracle for this step): {er[:120]}")
+            # newline-safe: a recorded value carrying \r/\n (odd filename, textarea
+            # text) must not break the // comment onto a second line — that emits a
+            # syntactically-broken spec (whole file RED on parse).
+            _er_note = " ".join(er[:120].split())
+            out.append(f"// UNVERIFIED expected result (no grounded oracle for this step): {_er_note}")
     return out
 
 
@@ -662,7 +706,7 @@ def _action_lines(step, field_meta: dict, parametrize: bool = False,
         out.append("await expect(cb)." + ("toBeChecked();" if _on else "not.toBeChecked();"))
         out.extend(_assertion_from_expected_result(observed, nav_proven=_nav_proven))
         if after:
-            out.append(f"// observed outcome: {after}")
+            out.append(f"// observed outcome: {_comment_safe(after)}")
         return out
 
     if verb == "navigate":
@@ -781,7 +825,7 @@ def _action_lines(step, field_meta: dict, parametrize: bool = False,
                     "{ timeout: 30000 }); // nav verified via the recorded transition"
                 )
             else:
-                out.append(f"// observed navigation: {action}")
+                out.append(f"// observed navigation: {_comment_safe(action)}")
     elif verb == "assert_required":
         for fld in [f.strip() for f in str(label).split(",") if f.strip()]:
             out.append(
@@ -979,16 +1023,46 @@ def _action_lines(step, field_meta: dict, parametrize: bool = False,
     elif verb == "click":
         kind = "link" if (observed.get("kind") or "").strip().lower() == "link" else "button"
         out.append(f"await __nxClick({_ladder(observed, kind)});")
+    elif verb == "upload":
+        # A grounded file-attach the crawl DEMONSTRATED (the crawler chose a seed
+        # document on this file input; the browser committed the filename —
+        # after.outcome=value_committed). __nxSetFiles binds FAIL-CLOSED (recorded
+        # label, else the page's only file input, else an honest throw), recreates
+        # the seed in memory and attaches it under the RECORDED basename; the
+        # attach oracle then proves the bound input actually holds a file —
+        # setInputFiles on a mis-bound non-file control silently no-ops, so the
+        # oracle (bounded, labeled) is what fails a wrong/rejected attach RED.
+        _fname = js_str((value or "").replace("\\", "/").rsplit("/", 1)[-1].strip()
+                        or "qec-seed.pdf")
+        _flabel = js_str(observed.get("label", ""))
+        _fscope = _anchor_scope(observed)
+        _by_label = (f"{_fscope}.getByLabel('{_flabel}')" if _fscope != "page"
+                     else f"page.getByLabel('{_flabel}')")
+        out.append(
+            f"const fileInput = await __nxSetFiles({_by_label}, "
+            f"page.locator('input[type=\"file\"]'), '{_fname}');"
+        )
+        out.append(
+            "await expect(async () => { "
+            "const n = await fileInput.evaluate(el => (el.files && el.files.length) || 0); "
+            "expect(n, 'attach oracle: the bound input holds no file (wrong bind or rejected attach)')"
+            ".toBeGreaterThan(0); }).toPass({ timeout: 10000 }); "
+            "// grounded attach oracle (recorded: value_committed)"
+        )
     else:
-        out.append(f"// (no executable action derived) {action}")
+        out.append(f"// (no executable action derived) {_comment_safe(action)}")
 
     # Compile the step's Expected Result into real, grounded assertions
     # (recorded next page + observed outcome region + a grounded visibility
-    # oracle from the step's Expected Result text).
+    # oracle from the step's Expected Result text). An UPLOAD step carries its
+    # own grounded attach oracle above and produces no next_url/after region —
+    # running the generic ER machinery would only stamp a factually-wrong
+    # "UNVERIFIED expected result" note under a step that IS verified.
     _er = (getattr(step, "expected_result", "") or getattr(step, "expected", "") or "").strip()
-    out.extend(_assertion_from_expected_result(observed, _er, nav_proven=_nav_proven))
+    if verb != "upload":
+        out.extend(_assertion_from_expected_result(observed, _er, nav_proven=_nav_proven))
     if after:
-        out.append(f"// observed outcome: {after}")
+        out.append(f"// observed outcome: {_comment_safe(after)}")
     return out
 
 
@@ -1135,10 +1209,10 @@ def compile_case(tc, field_meta: dict | None = None, *, parametrize: bool = Fals
         "// silent wrong-bind). Edit freely — you own this code; UNPROVEN steps are skipped.",
     ]
     if description:
-        out.append(f"// {description}")
+        out.append(f"// {_comment_safe(description, 300)}")
     _expected_outcome = (getattr(tc, "expected_outcome", "") or "").strip()
     if _expected_outcome:
-        out.append(f"// Expected outcome: {_expected_outcome}")
+        out.append(f"// Expected outcome: {_comment_safe(_expected_outcome, 300)}")
     # Multi-env — HARD env-pin assertion emitted ONCE after the first step.
     # DEFAULT-OFF: None ⇒ byte-identical.
     _env_assertion = getattr(tc, "env_assertion", None)
@@ -1170,6 +1244,14 @@ def compile_case(tc, field_meta: dict | None = None, *, parametrize: bool = Fals
     # ReferenceError the parse-only checks cannot catch).
     out.append(_NXSETTLE_JS)
     out.append(_NXCLICK_JS)
+    # File-attach helper — GATED on an upload step existing, so every non-upload
+    # suite stays byte-identical (the same dead-scaffolding rule as __nxTok).
+    _has_upload_steps = any(
+        str((((s.get("observed") if isinstance(s, dict) else getattr(s, "observed", None)) or {}).get("verb") or "")).lower() == "upload"
+        for s in list(getattr(tc, "steps", []) or [])
+    )
+    if _has_upload_steps:
+        out.append(_NXSETFILES_JS)
     if _vo_uses_nxnum:  # ANSWERS P1 — numeric value-oracle comparator (gated)
         from ..test_factory.value_oracle import NXNUM_JS
         out.append(NXNUM_JS)
@@ -1983,7 +2065,7 @@ def _anchor_bundles(steps: list) -> list:
         label = str(obs.get("label") or "").strip()
         kind = str(obs.get("kind") or "").strip().lower()
         num = s.get("step_number") if isinstance(s, dict) else getattr(s, "step_number", None)
-        if verb not in ("fill", "type", "select", "click", "check") or not label:
+        if verb not in ("fill", "type", "select", "click", "check", "upload") or not label:
             continue
         esc = label.replace("'", "\\'")
         if kind in ("button", "link", "radio", "checkbox", "tab", "menu_item"):

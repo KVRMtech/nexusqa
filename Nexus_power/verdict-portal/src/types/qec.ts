@@ -217,11 +217,30 @@ export interface ClientApp {
   created_at: IsoTimestamp;
   updated_at: IsoTimestamp;
   /**
+   * Live status of the app's most recent crawl (from GET /apps/{id}). Lets the app
+   * view show "Crawling…" on load — server truth, not ephemeral client state — so a
+   * long crawl never leaves an empty Test Studio looking broken/completed.
+   */
+  crawl?: AppCrawlStatus;
+  /**
    * CLIENT-SIDE ENRICHMENT (not on the app row): the app's suite tier
    * (`behaves` | `renders`), joined from GET /artifacts/{latest_artifact_id}/
    * tier-label `.suite_tier`. Present only after the client resolves it.
    */
   tier?: Tier;
+}
+
+/** Live status of an app's most recent crawl (GET /apps/{id}.crawl). */
+export interface AppCrawlStatus {
+  status: 'none' | 'pending' | 'writing' | 'running' | 'dispatched' | 'completed' | 'failed' | 'refused' | 'unknown';
+  /** True while the crawl is not yet terminal (still exploring). */
+  active: boolean;
+  exploration_id?: string;
+  started_at?: string;
+  finished_at?: string;
+  artifact_id?: string;
+  /** Pages captured (populated on completion; 0 while a fresh crawl is mid-flight). */
+  pages?: number;
 }
 
 export interface AppListResponse {

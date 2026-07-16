@@ -43,9 +43,16 @@ from pydantic import (
 
 # ─── Vocabularies (pinned to the REAL substrate DDL) ───────────────────────
 
-#: page_actions.verb value set (alembic 035_page_actions.py:61-62).
+#: page_actions.verb value set.  ``page_actions.verb`` is a plain ``String(20)``
+#: (alembic 035_page_actions.py:62) with NO DB CHECK constraint, so THIS frozenset
+#: is the sole verb gate — adding a verb here is the whole substrate change.
+#: ``upload`` (#8) records a file-input attach as grounded evidence; the factory
+#: generates an "Attach" step from it (generator 2b) and compiles a fail-closed
+#: ``setInputFiles`` via ``__nxSetFiles`` (founder-approved rung); any OTHER
+#: unrecognised verb still demotes honestly to a non-executable comment.
 ACTION_VERBS = frozenset(
-    {"click", "type", "select", "scroll", "navigate", "submit", "hover", "none"}
+    {"click", "type", "select", "scroll", "navigate", "submit", "hover",
+     "upload", "none"}
 )
 
 #: page_actions.target_kind value set (alembic 035_page_actions.py:64-65).
@@ -259,6 +266,14 @@ class PageState(BaseModel):
     form_snapshot_signals: dict[str, dict] = Field(default_factory=dict)
     #: ANSWERS P1.B — rendered value nodes ``[{label, selector, text}]``.
     displayed_values: list[dict[str, str]] = Field(default_factory=list)
+    #: API/network mining — XHR/fetch calls observed during the visit, as
+    #: ``[{method, url, status, resource_type, request_mime, response_mime,
+    #: response_bytes, timestamp_ms}]``.  Query strings are DROPPED and the path
+    #: is PII-scrubbed at source (engine ``_network_calls``); DIAGNOSTICS-ONLY —
+    #: no compiler rung, the factory ignores it (mirrors ``displayed_values`` /
+    #: the ``qec`` bucket).  Permissive raw dicts so a best-effort capture can
+    #: never refuse a whole bundle.
+    network_calls: list[dict[str, str]] = Field(default_factory=list)
     actions: list[ActionRecord] = Field(default_factory=list)
     screenshots: list[ScreenshotRef] = Field(default_factory=list)
 

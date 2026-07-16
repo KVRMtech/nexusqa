@@ -251,15 +251,15 @@ async def fill_form_phase_a(
             ))
             continue
         if _is_file(control) and not control.get("disabled"):
-            # Document-upload field — attach a generic seed file so the field is
-            # POPULATED for a later (Phase-B) attested submit. POPULATE-ONLY: no
-            # manifest action is emitted, because an 'upload' verb is not yet in the
-            # substrate vocabulary (schema.ACTION_VERBS / the verb DB constraint) nor
-            # the compiler — recording one would 422 the ingest / green-wash a step.
-            # Full upload-as-a-recorded+generated step is a scoped cross-layer follow-up.
+            # Document-upload field (#8) — attach a generic seed file and RECORD the
+            # attach as a grounded 'upload' action.  The substrate carries the
+            # 'upload' verb (schema.ACTION_VERBS) and the factory generates+compiles
+            # a real setInputFiles step from it (founder-approved rung).
             if not _norm(name):
                 continue
-            if await _upload_seed(port, control):
+            upload_action = await _upload_seed(port, control, clock, phase=phase, state_id=state_id)
+            if upload_action is not None:
+                result.actions.append(upload_action)
                 result.filled += 1
                 result.inferred += 1
                 result.inferred_fields.append(name)
@@ -323,17 +323,32 @@ def _default_seed_file() -> Optional[str]:
         return None
 
 
-async def _upload_seed(port: BrowserPort, control: Mapping[str, Any]) -> bool:
-    """Attach a seed document to a file input so the field is POPULATED for a later
-    Phase-B submit. POPULATE-ONLY — no manifest action (an 'upload' verb is not yet
-    in the substrate vocabulary; see the caller comment). Returns True on a clean
-    populate; honest False if the port has no upload verb or the seed can't be made."""
+async def _upload_seed(
+    port: BrowserPort, control: Mapping[str, Any], clock: emit.MonotonicClock,
+    *, phase: str, state_id: str,
+) -> Optional[emit.ActionRecord]:
+    """Attach a seed document to a file input and RECORD it as an ``upload`` action
+    (#8).  The seed is a placeholder (never a real customer document); a client
+    seed would override it.  The attached filename rides as the action's committed
+    value — grounded evidence of WHAT was uploaded.  Returns the action, or ``None``
+    when the port has no upload verb, the seed can't be created, or the attach
+    errored (an honest skip — never a fabricated step).
+
+    The substrate carries ``upload`` (schema.ACTION_VERBS) and the factory now
+    both generates an "Attach" step from it and compiles a fail-closed
+    ``setInputFiles`` (founder-approved compiler rung)."""
     setter = getattr(port, "set_input_files", None)
     seed = _default_seed_file()
     if setter is None or not seed:
-        return False
-    obs = await setter(dict(control), [seed])
-    return not (obs.error_detail or "").strip()
+        return None
+    observation = await setter(dict(control), [seed])
+    if (observation.error_detail or "").strip():
+        return None
+    return emit.build_action_record(
+        dict(control), verb="upload", value=observation.committed_value,
+        observation=observation, phase=phase, state_id=state_id,
+        timestamp_ms=clock.now_ms(),
+    )
 
 
 async def _fill_one(
@@ -523,11 +538,29 @@ async def execute_submit_phase_b(
         submit_action.screenshot_after = baseline.path
     submit_action.to_state = _terminal_fingerprint(confirmation_url)
 
+    # The POST-SUBMIT page is exactly where an OUTCOME renders (a computed
+    # premium, a decline, a confirmation number). Capture its displayed-value
+    # nodes so the value oracle can ground a confirmed expected outcome to a real
+    # post-submit node — WITHOUT this, submit-depth reaches the page but the value
+    # is invisible. Best-effort (a port without the verb yields nothing).
+    displayed_values: list[dict[str, Any]] = []
+    _collect_dv = getattr(port, "collect_displayed_values", None)
+    if _collect_dv is not None:
+        try:
+            raw_dv = list(await _collect_dv() or [])
+            # normalize + PII-scrub + #2 candidate-classify via the SAME pipeline the
+            # crawler uses (lazy import: forms is imported BY crawler — avoid the cycle).
+            from .crawler import _displayed_values as _normalize_displayed_values
+            displayed_values = _normalize_displayed_values(raw_dv)
+        except Exception:  # never fail a submit over a best-effort capture
+            logger.warning("qec.forms.submit_displayed_values_failed", exc_info=True)
+
     last_seen = clock.now_ms()
     page_state = _build_terminal_state(
         sequence_index=sequence_index, url=confirmation_url,
         actions=[submit_action], baseline=baseline,
         first_seen_ms=first_seen, last_seen_ms=last_seen,
+        displayed_values=displayed_values,
     )
     emitter.emit_page_state(page_state)
 
@@ -597,6 +630,7 @@ def _build_terminal_state(
     baseline: Optional[emit.ScreenshotRecord],
     first_seen_ms: int,
     last_seen_ms: int,
+    displayed_values: Sequence[dict[str, Any]] = (),
 ) -> emit.PageStateRecord:
     """Assemble the terminal confirmation ``page_state`` (design §3.2).
 
@@ -634,6 +668,7 @@ def _build_terminal_state(
         url_path=(parts.path or "")[:2000],
         url_query=(parts.query or "")[:2000],
         canonical_host=(registrable_domain(host) or host)[:500],
+        displayed_values=list(displayed_values or []),
         actions=ordered_actions,
         screenshots=shot_records,
         state_id=terminal_fp,

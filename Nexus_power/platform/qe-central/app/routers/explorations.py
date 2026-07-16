@@ -50,6 +50,7 @@ from ..fleet.lifecycle import TenantNotOperational
 from ..fleet.provisioning import assert_tenant_operational_db
 from ..security import prod_guard
 from ..services.answer_key import explorer_fill_contract
+from ..services.exploration_planner import build_exploration_plan
 from ..substrate.schema import CRAWL_ID_PATTERN, ExplorationBundle, RefusalError
 from ..substrate.writer import write_exploration
 
@@ -61,6 +62,23 @@ router = APIRouter(prefix="/api/v1/qec", tags=["QEC Explorations"])
 # 'qec_live_v1@' (12) + uuid4 (36) = 48 — enforce the ceiling honestly.
 _EXTRACTOR_VERSION_PREFIX = "qec_live_v1@"
 _EXTRACTOR_VERSION_MAX = 50
+
+# A bounded FIRST-PASS crawl budget, applied ONLY when an app has no explicit
+# per-app budget configured. The explorer's own defaults are a DEEP crawl
+# (200 states / 30 min wall / 5000 requests) — right for a scheduled deep pass,
+# but far too long for the interactive "crawl this site and show me tests" flow:
+# an unbounded ~30-min crawl reads as "broken" because Test Studio stays empty
+# the whole time it runs. This ceiling returns a useful first pass in minutes;
+# an app that wants a deep crawl sets its own budgets, which WIN (this only fills
+# the empty default). The 5-min wall is the predictable ceiling on ANY site — a
+# slow/huge site stops at the wall with a partial-but-useful artifact rather than
+# grinding for half an hour.
+_FIRST_PASS_BUDGET = {
+    "max_states": 40,
+    "max_depth": 4,
+    "max_wall_ms": 300_000,  # 5 minutes
+    "max_requests": 1500,
+}
 
 
 class ExplorationCreateRequest(BaseModel):
@@ -224,18 +242,33 @@ async def _write_inline_bundle(
 # ─── Phase-1: explorer dispatch ──────────────────────────────────────────────
 
 
+def _idp_domains(fences: dict) -> list[str]:
+    """The operator-declared federated-login IdP domains (``fences.idp_domains``),
+    cleaned.  Empty ⇒ no SSO crossing (fail-closed) — never guessed."""
+    return [str(d).strip() for d in (fences.get("idp_domains") or []) if str(d).strip()]
+
+
 def _allowlist_domains(base_url: str, fences: dict) -> list[str]:
     """Resolve the egress allowlist for a crawl (operator fences win).
 
     Uses the operator-declared ``fences.allowed_hosts`` verbatim (e.g.
     ``['.acmelife.example']``); falls back to the base_url hostname when none
     are declared.  No public-suffix guessing — the allowlist is explicit data.
+
+    Federated login (#7): the DECLARED ``fences.idp_domains`` are appended so the
+    browser can egress to the IdP during the SSO redirect (the guard separately
+    requires that POST be AUTH-phase + to a declared IdP).
     """
     declared = [str(h).strip() for h in (fences.get("allowed_hosts") or []) if str(h).strip()]
     if declared:
-        return declared
-    host = (urlparse(base_url).hostname or "").strip().lower()
-    return [host] if host else []
+        base = list(declared)
+    else:
+        host = (urlparse(base_url).hostname or "").strip().lower()
+        base = [host] if host else []
+    for d in _idp_domains(fences):
+        if d not in base:
+            base.append(d)
+    return base
 
 
 def _write_egress_allowlist(domains: list[str], allowlist_path: str) -> None:
@@ -468,12 +501,16 @@ async def _dispatch_explorer(
         except TenantNotOperational as exc:
             raise HTTPException(status_code=exc.status_code, detail=exc.as_http_detail())
         base_url = row.base_url
+        prior_artifact_id = row.latest_artifact_id or ""   # the LAST completed crawl
         fences = dict(row.fences or {})
         # Project the canonical answer_key onto the explorer's {exact, semantic,
         # regex_rules} FILL contract — without this, a wizard-shaped key
         # ({fill|notes|outcomes}) resolves to empty and the crawler fills nothing.
         answer_key = explorer_fill_contract(row.answer_key)
-        budgets = dict(row.budgets or {})
+        # Bound the FIRST-PASS crawl (no per-app budget configured) so tests appear
+        # in minutes instead of after a 30-min deep default — the "new site looks
+        # broken" complaint. An explicit per-app budget always wins.
+        budgets = dict(row.budgets or {}) or dict(_FIRST_PASS_BUDGET)
         env_attestation = dict(row.env_attestation or {})
         # Phase-B ATTESTED SUBMIT enablement: the operator-approved flow names, from
         # the app's stored config, gated fail-closed (allow_submit + a DISPOSABLE,
@@ -495,7 +532,9 @@ async def _dispatch_explorer(
     exploration_id = new_id()
 
     # Persist the pending row BEFORE dispatch so a lost callback still leaves an
-    # honest, queryable record (never a silent orphan crawl).
+    # honest, queryable record (never a silent orphan crawl). Stamp the crawl's wall
+    # budget so the UI can tell a still-running crawl from a STALLED one (crashed
+    # worker / lost callback) and never spin the "Crawling…" banner forever.
     async with tenant_scoped_qec_session(tenant_id) as session:
         session.add(
             QEExplorationRow(
@@ -505,10 +544,21 @@ async def _dispatch_explorer(
                 status="pending",
                 extractor_version=extractor_version,
                 started_at=utc_now(),
+                stats={"budget_wall_ms": int(budgets.get("max_wall_ms") or 1_800_000)},
             )
         )
 
     allowed_hosts = _allowlist_domains(base_url, fences)
+    # CAGED PLANNER (agent inside the cage): an LLM proposes grounded frontier-
+    # priority patterns for a RE-crawl. Runs HERE (qe-central), never in the
+    # quarantined explorer; the plan is pure ordering DATA the explorer applies as
+    # frontier priority only. Fail-open: no prior artifact / LLM down / ungrounded
+    # ⇒ empty plan ⇒ byte-identical crawl.
+    plan: dict = {"priority_patterns": []}
+    if phase1_settings.planner_enabled:
+        plan = await build_exploration_plan(
+            tenant_id, app_id, prior_artifact_id, base_url,
+        )
     dispatch_request = ExploreDispatchRequest(
         crawl_id=crawl_id,
         tenant_id=tenant_id,
@@ -518,6 +568,8 @@ async def _dispatch_explorer(
         answer_key=answer_key,
         budgets=budgets,
         allowed_hosts=allowed_hosts,
+        idp_domains=_idp_domains(fences),
+        plan=plan,
         phase="explore",
         attestation=_explorer_attestation(env_attestation),
         submit_approvals=submit_approvals,

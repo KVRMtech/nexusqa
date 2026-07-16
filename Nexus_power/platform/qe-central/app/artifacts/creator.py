@@ -83,14 +83,22 @@ class CreatedArtifact(BaseModel):
 
 def compute_media_fingerprint(
     target_url: str, config_fingerprint: str, explorer_version: str,
+    app_id: str = "",
 ) -> str:
     """Deterministic re-crawl dedup key (§2.1 canonical_artifacts row).
 
-    sha256 over (base URL, crawl config fingerprint, explorer version) —
-    deliberately EXCLUDES crawl_id so an identical re-crawl maps to the
-    same artifact and versions accumulate there (§2.3 rule 2).
+    sha256 over (APP id, base URL, crawl config fingerprint, explorer version) —
+    deliberately EXCLUDES crawl_id so an identical re-crawl OF THE SAME APP maps to
+    the same artifact and versions accumulate there (§2.3 rule 2).
+
+    ``app_id`` is part of the key so TWO DIFFERENT APPS that happen to crawl the SAME
+    URL/config never collapse onto ONE shared artifact — without it, onboarding a
+    second app on the same site made its crawl dedup onto the FIRST app's artifact,
+    so the new app's Studio showed the first crawl's cases. Each app owns its own
+    artifact; only the SAME app re-crawling identical content reuses one.
     """
     payload = "\n".join([
+        (app_id or "").strip(),
         (target_url or "").strip(),
         (config_fingerprint or "").strip(),
         (explorer_version or "").strip(),
@@ -144,8 +152,11 @@ async def create_crawl_artifact(
     meta = dict(meta or {})
 
     explorer_version = str(meta.get("explorer_version") or "")
+    # Scope the dedup key to the APP so a second app on the same URL gets its OWN
+    # artifact instead of reusing the first app's (cross-app artifact bleed).
     fingerprint = compute_media_fingerprint(
         target_url, config_fingerprint, explorer_version,
+        app_id=str(meta.get("app_id") or ""),
     )
     host = (parsed.hostname or "").lower()
     now = utc_now()

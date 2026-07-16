@@ -2484,6 +2484,10 @@ class PageVisitRow(Base):
     #: ANSWERS P1.B — rendered value nodes ``[{label, selector, text}]`` a value
     #: oracle can ground against (list stored as JSON; default [] for old rows).
     displayed_values: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
+    #: API/network mining — XHR/fetch calls observed during the visit
+    #: ``[{method, url, has_query, status, resource_type, ...}]`` (query-dropped +
+    #: PII-scrubbed at source).  Diagnostics-only; default [] for old rows.
+    network_calls: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
 
     extractor_version: Mapped[str] = mapped_column(
         String(50), default="v1", nullable=False,

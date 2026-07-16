@@ -55,6 +55,10 @@ class Phase1Settings(BaseSettings):
     dispatch_enabled: bool = Field(
         default=False, alias="QEC_EXPLORER_DISPATCH_ENABLED",
     )
+    #: Caged exploration PLANNER — an LLM proposes grounded frontier-priority
+    #: patterns for a RE-crawl (no-op on a first crawl: nothing seen to plan yet).
+    #: Fail-open: LLM unavailable/ungrounded ⇒ empty plan ⇒ byte-identical crawl.
+    planner_enabled: bool = Field(default=True, alias="QEC_PLANNER_ENABLED")
     #: qe-central-side mount of the shared ``qec-crawl-storage`` volume; the
     #: explorer writes ``{root}/{crawl_id}/manifest.jsonl`` + staged PNGs here.
     crawl_storage_root: str = Field(

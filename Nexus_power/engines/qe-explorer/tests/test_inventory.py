@@ -318,4 +318,4 @@ def test_injected_js_is_a_self_invoking_expression():
     # Balanced braces is a cheap syntactic guard for a non-executed string.
     assert js.count("{") == js.count("}")
     assert js.count("(") == js.count(")")
-    assert INVENTORY_JS_VERSION == "inv-js-v2"
+    assert INVENTORY_JS_VERSION == "inv-js-v4"
