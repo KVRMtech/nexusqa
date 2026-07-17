@@ -119,3 +119,7 @@ pin_factory_secrets.sh
 activate_llm_factory.sh
 verify_llm_e2e.py
 fix_jwt_align.sh
+provision_customer.py
+provision_customer.sh
+extract_token.sh
+add_onboarding_ttl.sh
