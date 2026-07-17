@@ -41,7 +41,7 @@ from typing import Any
 
 from sqlalchemy import text
 
-from ..db import qec_engine, utc_now
+from ..db import qec_engine, substrate_engine, utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -132,46 +132,76 @@ def _reason_for(status: str) -> str:
     return _QUEUE_TIMEOUT_REASON if (status or "").lower() in ("queued", "claimed") else _REAP_REASON
 
 
-async def reap_stale_explorations(now: datetime | None = None) -> int:
-    """Terminalize every stale non-terminal exploration fleet-wide. Returns the count.
+async def _tenant_ids() -> list[str]:
+    """Enumerate tenants from the global registry so the reap can scope PER-TENANT
+    under RLS. On an RLS-enforced qec role (non-superuser + FORCE RLS), a GUC-less
+    fleet query is filtered to zero rows — so the reaper must set the tenant GUC for
+    each tenant to SEE its own crawls. The ``tenants`` registry lives in the substrate
+    DB (a global, non-tenant-scoped table); falls back to the platform tenant if it
+    cannot be read, so the reaper degrades to platform-scope rather than no-op."""
+    try:
+        async with substrate_engine.begin() as conn:
+            rows = (await conn.execute(text("SELECT tenant_id FROM tenants"))).all()
+        ids = [str(r[0]) for r in rows if r[0]]
+        return ids or ["__platform__"]
+    except Exception as exc:  # pragma: no cover — registry unreadable → platform scope
+        logger.warning("qec.reaper.tenant_enum_failed",
+                       extra={"error": str(exc)[:200]})
+        return ["__platform__"]
 
-    Fleet-wide, GUC-less read/write via ``qec_engine`` — the SAME documented posture
-    the cycle-driver's ``_scan_fleet`` uses (the least-privilege discovery role is the
-    Phase-2/6 backbone seam, tracked separately). Each stale row is transitioned with a
-    STATUS-GUARDED UPDATE so a concurrent completion callback is never clobbered.
+
+async def reap_stale_explorations(now: datetime | None = None) -> int:
+    """Terminalize every stale non-terminal exploration, PER TENANT under RLS.
+
+    On this deployment the qec role is non-superuser with FORCE RLS, so a fleet-wide
+    GUC-less scan sees nothing. The reaper therefore enumerates tenants and reaps each
+    under its own ``nexus.current_tenant_id`` GUC — RLS-compliant, no BYPASSRLS needed
+    (the dedicated least-privilege discovery role remains the Phase-2/6 backbone seam).
+    Each stale row is transitioned with a STATUS-GUARDED UPDATE so a concurrent
+    completion callback is never clobbered; one tenant's failure never stops the rest.
     """
     now = now or utc_now()
     grace_s = _env_float(ENV_REAPER_GRACE, _DEFAULT_GRACE_S)
     queue_max_wait_s = _env_float(ENV_QUEUE_MAX_WAIT, _DEFAULT_QUEUE_MAX_WAIT_S)
     reaped = 0
-    async with qec_engine.begin() as conn:
-        rows = (await conn.execute(text(
-            "SELECT exploration_id, tenant_id, status, started_at, created_at, stats "
-            "FROM qe_explorations "
-            f"WHERE status IN {tuple(ACTIVE_STATUSES)} "
-            "ORDER BY updated_at ASC LIMIT 500"
-        ))).mappings().all()
-        for r in rows:
-            if not is_stale(
-                status=r["status"], started_at=r["started_at"], created_at=r["created_at"],
-                stats=r["stats"], now=now, grace_s=grace_s, queue_max_wait_s=queue_max_wait_s,
-            ):
-                continue
-            result = await conn.execute(text(
-                "UPDATE qe_explorations "
-                "SET status='stalled', error=:err, finished_at=:now, updated_at=:now "
-                "WHERE exploration_id=:eid AND status=:prev"
-            ), {
-                "err": _reason_for(r["status"]), "now": now,
-                "eid": r["exploration_id"], "prev": r["status"],
-            })
-            if (result.rowcount or 0) > 0:
-                reaped += 1
-                logger.warning(
-                    "qec.reaper.reaped",
-                    extra={"exploration_id": r["exploration_id"], "tenant_id": r["tenant_id"],
-                           "prev_status": r["status"]},
+    for tenant in await _tenant_ids():
+        try:
+            async with qec_engine.begin() as conn:
+                # Scope this transaction to the tenant so RLS admits its rows.
+                await conn.execute(
+                    text("SELECT set_config('nexus.current_tenant_id', :t, true)"),
+                    {"t": tenant},
                 )
+                rows = (await conn.execute(text(
+                    "SELECT exploration_id, tenant_id, status, started_at, created_at, stats "
+                    "FROM qe_explorations "
+                    f"WHERE status IN {tuple(ACTIVE_STATUSES)} "
+                    "ORDER BY updated_at ASC LIMIT 500"
+                ))).mappings().all()
+                for r in rows:
+                    if not is_stale(
+                        status=r["status"], started_at=r["started_at"], created_at=r["created_at"],
+                        stats=r["stats"], now=now, grace_s=grace_s, queue_max_wait_s=queue_max_wait_s,
+                    ):
+                        continue
+                    result = await conn.execute(text(
+                        "UPDATE qe_explorations "
+                        "SET status='stalled', error=:err, finished_at=:now, updated_at=:now "
+                        "WHERE exploration_id=:eid AND status=:prev AND tenant_id=:t"
+                    ), {
+                        "err": _reason_for(r["status"]), "now": now,
+                        "eid": r["exploration_id"], "prev": r["status"], "t": tenant,
+                    })
+                    if (result.rowcount or 0) > 0:
+                        reaped += 1
+                        logger.warning(
+                            "qec.reaper.reaped",
+                            extra={"exploration_id": r["exploration_id"], "tenant_id": tenant,
+                                   "prev_status": r["status"]},
+                        )
+        except Exception as exc:  # pragma: no cover — one tenant never stalls the sweep
+            logger.warning("qec.reaper.tenant_failed",
+                           extra={"tenant_id": tenant, "error": str(exc)[:200]})
     if reaped:
         logger.warning("qec.reaper.tick", extra={"reaped": reaped})
     return reaped
