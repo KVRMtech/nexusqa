@@ -36,6 +36,7 @@ from ..services.data_agent import (
     propose_dispositions,
 )
 from ..services.pii_egress_guard import guard_inventory as pii_guard_inventory
+from ..services.flow_grouping import group_into_flows
 from ..services.seed_manifest import build_seed_manifest, library_keys_from_answer_key
 from ..services.brief_compiler import (
     BRIEF_SYSTEM_INSTRUCTION, build_prompt, ground_and_assemble, parse_proposal,
@@ -610,6 +611,8 @@ async def get_seed_manifest(
         row = await _require_app(session, tenant_id, app_id)
         answer_key = row.answer_key if isinstance(row.answer_key, dict) else {}
         artifact_id = row.latest_artifact_id or ""
+        base_url = row.base_url or ""
+        has_credentials = row.creds_blob is not None
         # The crawler's own account of what blocked deeper coverage — a richer source
         # than form_snapshot_signals (which may only hold the entry/login page). Merged
         # into the manifest so deep-form fields (a transfer's From Account / Payee behind
@@ -638,6 +641,20 @@ async def get_seed_manifest(
         tenant_id, artifact_id, answer_key=answer_key, seed_fields=seed_fields,
         today=datetime.now(timezone.utc).date(),
     )
+    # Group the fields into flows so the portal can lead with the flow the app was
+    # onboarded for ("to test Transfer, provide these") instead of a flat, undifferentiated
+    # list. Values already in the answer key drive per-flow progress; stored credentials
+    # mark the login group satisfied so we never re-ask for it.
+    fill = answer_key.get("fill") if isinstance(answer_key.get("fill"), dict) else {}
+    provided_labels = [str(k) for k in fill.keys()]
+    grouping = group_into_flows(
+        manifest.get("full") or [],
+        base_url=base_url,
+        provided_labels=provided_labels,
+        auth_satisfied=has_credentials,
+    )
+    manifest.update(grouping)
+    manifest["has_credentials"] = has_credentials
     mode = mode if mode in ("recommended", "full") else "recommended"
     manifest["mode"] = mode
     manifest["items"] = manifest["full"] if mode == "full" else manifest["recommended"]

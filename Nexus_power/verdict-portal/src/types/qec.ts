@@ -262,6 +262,21 @@ export interface SeedItem {
   options: string[];
   required: boolean;
   editable: boolean;
+  /** Added by flow grouping: true when a value is already in the answer key. */
+  provided?: boolean;
+}
+
+/** A group of fields belonging to one flow (or the shared login group). */
+export interface SeedFlow {
+  key: string;
+  name: string;              // human name — "Transfer", "Sign in", "Fields to provide"
+  kind: 'flow' | 'auth';
+  primary?: boolean;         // the flow the app was onboarded for (lead with it)
+  satisfied?: boolean;       // auth only: stored credentials cover the login group
+  to_provide: number;        // actionable fields not yet provided
+  actionable: number;        // total ASK + APPROVE fields in this flow
+  total: number;             // all fields (incl. auto-handled)
+  items: SeedItem[];
 }
 
 /** GET /apps/{id}/seed-manifest — the discovery-first Seed Manifest. */
@@ -275,6 +290,11 @@ export interface SeedManifest {
   ask_count: number;
   approve_count: number;
   autonomous_count: number;
+  // Flow grouping (added server-side): lead with the primary flow, split off login.
+  flows?: SeedFlow[];
+  auth?: SeedFlow | null;
+  primary_flow?: string | null;
+  has_credentials?: boolean;
   mode?: 'recommended' | 'full';
   items?: SeedItem[];
 }
