@@ -47,6 +47,7 @@ import {
 import type { AppCrawlStatus, CriticalityBand, CrawlDiagnosis, ExplorationCoverage, ScenarioView } from '../../types/qec';
 import VerdictLedger from '../ledger';
 import HonestyFeed from '../honesty';
+import SeedManifestPanel from './SeedManifestPanel';
 
 const BAND_TONE: Record<CriticalityBand, 'crit' | 'warn' | 'teal' | 'neutral'> = {
   P0: 'crit',
@@ -649,6 +650,9 @@ export function AppSituation() {
   return (
     <div className="space-y-6 max-w-[1600px]">
       <SituationHeader appId={id} />
+      {/* Seed Manifest — surfaced full-width and prominent so a user always knows
+          the few real values / approvals this app needs to test its flows. */}
+      <SeedManifestPanel appId={id} />
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 items-start">
         <div className="space-y-4">
           <AttestationCard appId={id} />

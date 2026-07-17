@@ -610,8 +610,33 @@ async def get_seed_manifest(
         row = await _require_app(session, tenant_id, app_id)
         answer_key = row.answer_key if isinstance(row.answer_key, dict) else {}
         artifact_id = row.latest_artifact_id or ""
+        # The crawler's own account of what blocked deeper coverage — a richer source
+        # than form_snapshot_signals (which may only hold the entry/login page). Merged
+        # into the manifest so deep-form fields (a transfer's From Account / Payee behind
+        # a login) surface, matching the crawl's SEEDS_NEEDED diagnosis.
+        exps = (await session.execute(
+            select(QEExplorationRow)
+            .where(QEExplorationRow.app_id == app_id)
+            .order_by(QEExplorationRow.created_at.desc())
+            .limit(10)
+        )).scalars().all()
+        # Union across recent crawls: "fields needing seed" is a stable property of the
+        # app's forms, so a shallow re-crawl (that only reached login) must not hide what
+        # a deeper earlier crawl found (a transfer's From Account / Payee). Deduped,
+        # order-preserving.
+        seed_fields: list[str] = []
+        _seen_seed: set[str] = set()
+        for _e in exps:
+            _st = _e.stats if isinstance(_e.stats, dict) else {}
+            _cov = _st.get("coverage") if isinstance(_st.get("coverage"), dict) else {}
+            for _f in (_cov.get("fields_needing_seed") or []):
+                _s = str(_f).strip()
+                if _s and _s.lower() not in _seen_seed:
+                    _seen_seed.add(_s.lower())
+                    seed_fields.append(_s)
     manifest = await build_seed_manifest(
-        tenant_id, artifact_id, answer_key=answer_key, today=datetime.now(timezone.utc).date(),
+        tenant_id, artifact_id, answer_key=answer_key, seed_fields=seed_fields,
+        today=datetime.now(timezone.utc).date(),
     )
     mode = mode if mode in ("recommended", "full") else "recommended"
     manifest["mode"] = mode

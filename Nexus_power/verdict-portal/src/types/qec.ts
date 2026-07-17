@@ -249,6 +249,36 @@ export interface AppCrawlStatus {
   diagnosis?: CrawlDiagnosis;
 }
 
+/** The six data dispositions — see qe-central `dispositions.py`. */
+export type Disposition = 'SYNTHESIZE' | 'PICK' | 'CARRY' | 'OBSERVE' | 'ASK' | 'APPROVE';
+
+/** One classified field in the Seed Manifest. */
+export interface SeedItem {
+  label: string;
+  disposition: Disposition;
+  default: string | null;
+  grounded: boolean;
+  reason: string;
+  options: string[];
+  required: boolean;
+  editable: boolean;
+}
+
+/** GET /apps/{id}/seed-manifest — the discovery-first Seed Manifest. */
+export interface SeedManifest {
+  artifact_id: string;
+  status: 'ready' | 'no_crawl' | 'no_fields';
+  recommended: SeedItem[]; // only ASK + APPROVE — the human 1%
+  full: SeedItem[];        // every field with its grounded default
+  prefill: Record<string, string>;
+  counts: Partial<Record<Disposition, number>>;
+  ask_count: number;
+  approve_count: number;
+  autonomous_count: number;
+  mode?: 'recommended' | 'full';
+  items?: SeedItem[];
+}
+
 /** Machine-readable crawl outcome — see qe-central `crawl_diagnosis.py`. */
 export interface CrawlDiagnosis {
   code:

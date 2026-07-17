@@ -13,12 +13,32 @@ field, pre-filled + editable), plus the ``prefill`` projection for the crawl's f
 """
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from datetime import date
 from typing import Any
 
-from .dispositions import FieldSignal, classify_manifest
+from .dispositions import FieldSignal, classify_manifest, normalize_label
 from .synthesis import field_inventory_for_artifact, value_candidates_for_artifact
+
+
+# Leading verbs / phrases that mark a UI ACTION control (a button/toggle/link), not a
+# data-input field — these are filtered out of the crawler's coverage list when merged.
+_ACTION_VERBS = (
+    "mark", "enable", "disable", "show", "hide", "switch", "add", "remove", "send",
+    "apply", "edit", "close", "open", "reset", "download", "upload", "filter", "sort",
+    "go to", "previous", "next", "continue", "submit", "save", "cancel", "delete",
+    "review", "confirm", "approve", "reject", "view", "select all", "clear",
+)
+_ACTION_PHRASES = ("as done", "navigation", "steps for", " mode", "page ", "report an issue")
+
+
+def _is_action_label(label: str) -> bool:
+    lo = " ".join(str(label or "").strip().lower().split())
+    if not lo:
+        return True
+    if any(lo.startswith(v + " ") or lo == v for v in _ACTION_VERBS):
+        return True
+    return any(p in lo for p in _ACTION_PHRASES)
 
 
 def library_keys_from_answer_key(answer_key: Mapping[str, Any] | None) -> list[str]:
@@ -37,12 +57,21 @@ async def build_seed_manifest(
     artifact_id: str,
     *,
     answer_key: Mapping[str, Any] | None = None,
+    seed_fields: Iterable[str] = (),
     today: date | None = None,
 ) -> dict:
     """Assemble the two-mode Seed Manifest for a crawled artifact.
 
     ``artifact_id`` empty (app never crawled) yields an empty-but-honest manifest so
     the portal can say "crawl first" rather than error.
+
+    ``seed_fields`` are the crawler's own ``coverage.fields_needing_seed`` — a RICHER
+    account of what blocked deeper coverage than ``form_snapshot_signals`` alone (which
+    may only have captured the entry/login page). Any such field not already in the
+    inventory is added; lacking a type/options, the classifier fail-closes it to ASK —
+    exactly right for a deep-form field the crawl couldn't ground (e.g. a transfer's
+    From Account / Payee behind a login). This keeps the manifest consistent with the
+    crawl's SEEDS_NEEDED diagnosis instead of showing only the login form.
     """
     if not artifact_id:
         return {
@@ -61,6 +90,18 @@ async def build_seed_manifest(
         )
         for f in inventory
     ]
+    # Merge the crawler-flagged seed fields the inventory missed (deep pages behind a
+    # login) — deduped by normalized label. The crawler's coverage list mixes real
+    # data-input fields (From Account, Payee) with UI ACTION controls (buttons/toggles
+    # like "Mark ... as done", "Enable ..."); only data fields belong in a "provide a
+    # value" manifest, so action-shaped labels are filtered out.
+    have = {normalize_label(s.label) for s in signals}
+    for f in seed_fields:
+        lbl = str(f or "").strip()
+        if lbl and not _is_action_label(lbl) and normalize_label(lbl) not in have:
+            signals.append(FieldSignal(label=lbl))
+            have.add(normalize_label(lbl))
+
     library_keys = library_keys_from_answer_key(answer_key)
     observe_labels = [str(c.get("label") or "") for c in candidates if c.get("label")]
 

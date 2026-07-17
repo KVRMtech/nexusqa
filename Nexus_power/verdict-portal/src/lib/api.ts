@@ -35,6 +35,7 @@ import type {
   AutonomyByBand,
   AutonomyTrend,
   ClientApp,
+  SeedManifest,
   EnvAttestation,
   CoverageGap,
   CoverageScorecard,
@@ -277,6 +278,22 @@ export class QecApiClient {
     const fill = { ...((ak.fill as Record<string, unknown> | undefined) || {}), ...newFills };
     const answer_key = { ...ak, fill };
     return this.updateApp(app.app_id, { answer_key }, opts);
+  }
+
+  /**
+   * The discovery-first Seed Manifest (Phase 1): every observed field classified
+   * into one of the six dispositions. `recommended` is the human 1% (ASK + APPROVE);
+   * `full` is every field with its grounded auto-filled default.
+   */
+  getSeedManifest(appId: string, mode: 'recommended' | 'full' = 'full', opts?: RequestOpts): Promise<SeedManifest> {
+    if (this.mock)
+      return this.mocked(
+        () => ({ artifact_id: '', status: 'no_crawl', recommended: [], full: [], prefill: {},
+          counts: {}, ask_count: 0, approve_count: 0, autonomous_count: 0, mode }) as SeedManifest,
+        opts?.signal,
+      );
+    return this.get<SeedManifest>(
+      `${QEC}/apps/${encodeURIComponent(appId)}/seed-manifest?mode=${mode}`, opts);
   }
 
   // ═══════════ Environment Profiles (multi-env, crawl-once/run-many) ═══════════
