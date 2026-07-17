@@ -113,3 +113,9 @@ deploy_portal.sh
 e2e_*.py
 *.tgz
 reconstruct_env.sh
+prep_llm_factory.sh
+apply_llm_main.py
+pin_factory_secrets.sh
+activate_llm_factory.sh
+verify_llm_e2e.py
+fix_jwt_align.sh
