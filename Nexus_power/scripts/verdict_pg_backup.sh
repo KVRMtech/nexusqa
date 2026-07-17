@@ -11,10 +11,16 @@
 # Restore drill: verdict_pg_backup.sh --restore-drill
 # ─────────────────────────────────────────────────────────────────────────────
 set -uo pipefail
-: "${GCS_BACKUP_BUCKET:?set GCS_BACKUP_BUCKET (gs://…)}"
 PG="${PG_CONTAINER:-nexus-postgres}"
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
+# Persistent LOCAL backup dir (always written) + OPTIONAL offsite GCS bucket. When
+# GCS_BACKUP_BUCKET is empty the backup is local-only; when set, the local dump is
+# ALSO copied to GCS (a failed copy is non-fatal — the local dump is the primary).
+LOCAL_BACKUP_DIR="${LOCAL_BACKUP_DIR:-$HOME/db_backups}"
+GCS_BACKUP_BUCKET="${GCS_BACKUP_BUCKET:-}"
+BACKUP_RETENTION="${BACKUP_RETENTION:-14}"   # keep newest N local dumps per db
+mkdir -p "$LOCAL_BACKUP_DIR"
 
 # ── OPT-IN fleet observability (Phase 7): emit a node_exporter textfile metric ──
 # When NODE_EXPORTER_TEXTFILE_DIR is set, record the epoch of the last SUCCESSFUL
@@ -46,22 +52,28 @@ emit_textfile_metric() {
 }
 
 backup() {
-  echo "==== BACKUP $STAMP → $GCS_BACKUP_BUCKET ===="
+  echo "==== BACKUP $STAMP → local:$LOCAL_BACKUP_DIR${GCS_BACKUP_BUCKET:+ + $GCS_BACKUP_BUCKET} ===="
   for db in nexus qecentral; do
     echo "-- dumping $db --"
+    out="$LOCAL_BACKUP_DIR/${db}_${STAMP}.dump"
     # -Fc custom format = compressed + parallel-restorable; SoR integrity first.
-    if ! docker exec "$PG" pg_dump -U nexus -d "$db" -Fc > "$WORK/${db}_${STAMP}.dump"; then
+    if ! docker exec "$PG" pg_dump -U nexus -d "$db" -Fc > "$out"; then
       echo "DUMP_FAILED:$db"; exit 1
     fi
-    sz=$(stat -c%s "$WORK/${db}_${STAMP}.dump" 2>/dev/null || echo 0)
-    echo "   $db dump = ${sz} bytes"
-    [ "$sz" -gt 1000 ] || { echo "DUMP_TOO_SMALL:$db (refusing to ship a suspect backup)"; exit 1; }
-    if command -v gsutil >/dev/null 2>&1; then
-      gsutil cp "$WORK/${db}_${STAMP}.dump" "$GCS_BACKUP_BUCKET/${db}/${db}_${STAMP}.dump" \
-        && echo "   uploaded $db" || { echo "UPLOAD_FAILED:$db"; exit 1; }
-    else
-      echo "   gsutil absent — dump kept locally at $WORK (wire object upload for prod)"
+    sz=$(stat -c%s "$out" 2>/dev/null || echo 0)
+    echo "   $db dump = ${sz} bytes -> $out"
+    [ "$sz" -gt 1000 ] || { echo "DUMP_TOO_SMALL:$db (refusing to keep a suspect backup)"; rm -f "$out"; exit 1; }
+    # Offsite copy (best-effort): a GCS failure NEVER fails the backup — the local
+    # dump is the guaranteed artifact; GCS is the durability copy.
+    if [ -n "$GCS_BACKUP_BUCKET" ] && command -v gsutil >/dev/null 2>&1; then
+      if gsutil cp "$out" "$GCS_BACKUP_BUCKET/${db}/${db}_${STAMP}.dump" >/dev/null 2>&1; then
+        echo "   copied $db to $GCS_BACKUP_BUCKET"
+      else
+        echo "   GCS_COPY_FAILED:$db (local dump retained; offsite copy skipped)"
+      fi
     fi
+    # Retention: keep the newest N local dumps per db.
+    ls -1t "$LOCAL_BACKUP_DIR/${db}_"*.dump 2>/dev/null | tail -n +"$((BACKUP_RETENTION+1))" | xargs -r rm -f
   done
   echo "BACKUP_OK $STAMP"
   emit_textfile_metric verdict_backup_last_success_timestamp_seconds "$(date -u +%s)" \
@@ -89,7 +101,11 @@ alembic_head() {
 # the source is EMPTY in the restore (catches the "schema-present but data-missing"
 # green-wash the old table-count check let through). Returns non-zero on failure.
 drill_one() {
-  local db="$1" drill="verdict_restore_drill_${db}_${STAMP}"
+  # Lowercase the throwaway DB name: an UNQUOTED `CREATE DATABASE` folds identifiers to
+  # lowercase, but pg_restore/-d would use the original mixed-case stamp (…T…Z) and fail
+  # "database does not exist" — making every table read as a (false) empty restore.
+  local db="$1" drill
+  drill=$(printf 'verdict_restore_drill_%s_%s' "$db" "$STAMP" | tr 'A-Z' 'a-z')
   echo "-- restore-drill: $db --"
   docker exec "$PG" pg_dump -U nexus -d "$db" -Fc > "$WORK/drill_${db}.dump" || { echo "DRILL_DUMP_FAIL:$db"; return 1; }
   docker exec "$PG" psql -U nexus -d postgres -c "DROP DATABASE IF EXISTS ${drill};" >/dev/null 2>&1
@@ -106,10 +122,14 @@ drill_one() {
   fi
 
   # (2) per-table row counts — no table with rows in src may be EMPTY in the drill.
-  declare -A SRC DST
+  local empty_restores=0 total_dst=0 dst_tables=0 t
+  # set +u for this block: expanding an EMPTY associative array (${!A[@]} / ${#A[@]})
+  # trips 'unbound variable' under set -u on this bash; the :- defaults keep it safe.
+  set +u
+  declare -A SRC=() DST=()
   while read -r t n; do [ -n "$t" ] && SRC["$t"]="$n"; done < <(counts_for "$db")
   while read -r t n; do [ -n "$t" ] && DST["$t"]="$n"; done < <(counts_for "$drill")
-  local empty_restores=0 total_dst=0 t
+  dst_tables=${#DST[@]}
   for t in "${!SRC[@]}"; do
     local s="${SRC[$t]:-0}" d="${DST[$t]:-0}"
     total_dst=$(( total_dst + d ))
@@ -117,7 +137,8 @@ drill_one() {
       echo "   EMPTY_RESTORE:$db.$t (src=$s drill=0)"; empty_restores=$(( empty_restores + 1 ))
     fi
   done
-  echo "   restored rows total(drill)=$total_dst  tables=${#DST[@]}  empty_restores=$empty_restores"
+  set -u
+  echo "   restored rows total(drill)=$total_dst  tables=$dst_tables  empty_restores=$empty_restores"
   [ "$empty_restores" -eq 0 ] || rc=1
 
   docker exec "$PG" psql -U nexus -d postgres -c "DROP DATABASE IF EXISTS ${drill};" >/dev/null 2>&1
