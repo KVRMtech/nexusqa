@@ -65,10 +65,28 @@ def test_select_with_options_is_grounded_pick():
     assert d.disposition == dp.PICK and d.default == "California" and d.grounded
 
 
-def test_select_with_only_placeholders_fails_closed_to_ask():
-    # No real observed option → we refuse to invent one → ASK.
+def test_select_with_only_placeholders_is_uncaptured_pick_not_ask():
+    # No real observed option, BUT a dropdown is a CHOICE, never a free-text value to
+    # invent. It stays PICK (ungrounded) + flagged uncaptured — the UI says "a choice we
+    # could not read yet — re-crawl", never "enter a real value".
     d = _one("Plan", ftype="select", options=("", "-- Select --", "Choose one"))
-    assert d.disposition == dp.ASK
+    assert d.disposition == dp.PICK and d.default is None
+    assert d.grounded is False and d.uncaptured_options is True
+
+
+def test_custom_dropdown_with_no_captured_options_is_uncaptured_pick():
+    # The live bug: a custom SPA dropdown (From Account / Payee) captured with options=[]
+    # was shown as "enter a real value" (ASK). It must be a choice, not free text.
+    d = _one("From Account", ftype="select", options=())
+    assert d.disposition == dp.PICK and d.uncaptured_options is True
+    assert "re-crawl" in d.reason.lower()
+
+
+def test_checkbox_toggle_is_auto_not_ask():
+    # A boolean checkbox/toggle is set by the crawl itself — never a value to provide.
+    for ft in ("checkbox", "toggle", "switch"):
+        d = _one("Enable notifications", ftype=ft)
+        assert d.disposition == dp.SYNTHESIZE and d.uncaptured_options is False
 
 
 def test_radio_options_pick():

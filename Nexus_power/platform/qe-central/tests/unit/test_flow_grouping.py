@@ -76,19 +76,63 @@ def test_page_url_grounds_flow_generically_without_domain_keywords():
     assert reg["primary"] is True and reg["name"] == "Register"  # base_url points here
 
 
-def test_domain_hint_groups_related_fields_across_pages():
-    # From Account (seen on /send-money) and Amount (on /transfer) are ONE logical
-    # Transfer flow — the hint keeps them together instead of splitting them across two
-    # confusingly-named "Transfer" cards, which is the messy result URL-only produced.
+def test_page_honest_grouping_never_merges_across_pages():
+    # The live defect: "From Account"/"Payee" (captured on /bank/send-money) were merged
+    # into a fabricated "Transfer" flow. Page is ground truth — fields from different
+    # pages must land in different flows, never a keyword-stitched fiction.
     items = [
-        {"label": "From Account", "disposition": "ASK"},
-        {"label": "Amount", "disposition": "SYNTHESIZE"},
+        {"label": "From Account", "disposition": "PICK", "uncaptured_options": True},
+        {"label": "Payee", "disposition": "PICK", "uncaptured_options": True},
+        {"label": "Account", "disposition": "PICK", "uncaptured_options": True},
     ]
-    urls = {"From Account": "https://x.test/bank/send-money", "Amount": "https://x.test/bank/transfer"}
+    urls = {
+        "From Account": "https://x.test/bank/send-money",
+        "Payee": "https://x.test/bank/send-money",
+        "Account": "https://x.test/bank/transactions",
+    }
     g = group_into_flows(items, base_url="https://x.test/bank/transfer", field_urls=urls)
-    transfer = [f for f in g["flows"] if f["key"] == "transfer"]
-    assert len(transfer) == 1
-    assert {i["label"] for i in transfer[0]["items"]} == {"From Account", "Amount"}
+    keys = {f["key"] for f in g["flows"]}
+    assert "send money" in keys and "transactions" in keys
+    assert "transfer" not in keys  # no fabricated Transfer flow
+    sm = next(f for f in g["flows"] if f["key"] == "send money")
+    assert {i["label"] for i in sm["items"]} == {"From Account", "Payee"}
+
+
+def test_missing_primary_flagged_when_entry_page_not_captured():
+    # base_url is /bank/transfer but only Send Money was captured — say so honestly.
+    items = [{"label": "Payee", "disposition": "PICK", "uncaptured_options": True}]
+    urls = {"Payee": "https://x.test/bank/send-money"}
+    g = group_into_flows(items, base_url="https://x.test/bank/transfer", field_urls=urls)
+    assert g["missing_primary"] is not None
+    assert g["missing_primary"]["key"] == "transfer"
+    assert "re-crawl" in g["missing_primary"]["reason"].lower()
+
+
+def test_missing_primary_uses_captured_routes_not_a_hint_bucket():
+    # "Amount" (auto-filled, no page URL) hint-creates a "transfer" bucket, but the real
+    # /bank/transfer page was never crawled. captured_paths is ground truth — so
+    # missing_primary must STILL fire, and the hint bucket must NOT be marked primary.
+    items = [
+        {"label": "Amount", "disposition": "SYNTHESIZE"},
+        {"label": "Payee", "disposition": "PICK", "uncaptured_options": True},
+    ]
+    urls = {"Payee": "https://x.test/bank/send-money"}  # Amount carries no URL
+    g = group_into_flows(
+        items, base_url="https://x.test/bank/transfer", field_urls=urls,
+        captured_paths=["/bank/login", "/bank/send-money"],
+    )
+    assert g["missing_primary"] is not None and g["missing_primary"]["key"] == "transfer"
+    assert g["primary_flow"] is None
+
+
+def test_uncaptured_dropdown_flow_never_reads_ready():
+    # A flow made only of unread dropdowns has 0 actionable — it must carry uncaptured>0
+    # so the UI cannot render it "0 of 0 ready" (a false green).
+    items = [{"label": "From Account", "disposition": "PICK", "uncaptured_options": True}]
+    urls = {"From Account": "https://x.test/bank/send-money"}
+    g = group_into_flows(items, base_url="https://x.test/bank/send-money", field_urls=urls)
+    flow = next(f for f in g["flows"] if f["key"] == "send money")
+    assert flow["actionable"] == 0 and flow["uncaptured"] == 1
 
 
 def test_ui_action_controls_are_dropped_from_data_flows():

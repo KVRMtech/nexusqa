@@ -15,6 +15,7 @@
 import { useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import {
+  AlertTriangle,
   CheckCircle2,
   ChevronDown,
   ChevronRight,
@@ -70,6 +71,7 @@ function fallbackFlows(m: SeedManifest): { flows: SeedFlow[]; auth: SeedFlow | n
         primary: true,
         to_provide: actionable.length,
         actionable: actionable.length,
+        uncaptured: items.filter((i) => i.uncaptured_options).length,
         total: items.length,
         items,
       },
@@ -116,8 +118,10 @@ export default function SeedManifestPanel({ appId, onSeeded }: { appId: string; 
   const flowsNeedingInput = flows.filter((f) => f.actionable > 0).length;
   const autoHandled = (m.autonomous_count ?? 0) + (m.counts?.OBSERVE ?? 0);
 
-  // Fully autonomous app with nothing to seed and login handled — reassure, don't nag.
-  if (totalToProvide === 0 && (!auth || auth.satisfied)) {
+  // Fully autonomous app: nothing to seed, login handled, no unread dropdowns, and the
+  // onboarded flow WAS captured — only then reassure without nagging.
+  const totalUncaptured = m.uncaptured_choice_count ?? 0;
+  if (totalToProvide === 0 && (!auth || auth.satisfied) && totalUncaptured === 0 && !m.missing_primary) {
     return (
       <Panel tone="elevated">
         <div className="flex items-center gap-2.5">
@@ -233,15 +237,29 @@ export default function SeedManifestPanel({ appId, onSeeded }: { appId: string; 
           </div>
         )}
 
+        {/* ── Honest "entry flow not captured yet" banner ── */}
+        {m.missing_primary && (
+          <div className="mt-4 flex items-start gap-2.5 rounded-lg ring-1 ring-amber-500/40 bg-amber-500/[0.06] px-3 py-2.5">
+            <AlertTriangle size={14} className="text-amber-500 shrink-0 mt-0.5" aria-hidden />
+            <p className="text-2xs text-ink leading-relaxed">
+              <span className="font-semibold">We haven’t captured your {m.missing_primary.name} form
+              yet.</span>{' '}
+              The crawl didn’t reach it on this run, so it isn’t shown below — the flows here are the
+              other pages it did capture. Re-crawl to reach and inventory your{' '}
+              {m.missing_primary.name} form.
+            </p>
+          </div>
+        )}
+
         {/* ── Flows — primary first, others collapsed ── */}
         <div className="mt-3 space-y-2.5">
           {auth && !auth.satisfied && (
             <FlowCard flow={auth} defaultOpen ready={readyCount(auth)} ctx={ctx} />
           )}
           {flows
-            // Show the primary flow always; hide other flows that have nothing for the
-            // user to do (all-auto) so the panel never shows a "0 of 0" card.
-            .filter((f) => f.primary || f.actionable > 0)
+            // Show the primary flow, any flow needing input, and any flow with unread
+            // dropdowns to surface — hide only all-auto flows (never a bare "0 of 0").
+            .filter((f) => f.primary || f.actionable > 0 || f.uncaptured > 0)
             .map((f) => (
               <FlowCard key={f.key} flow={f} defaultOpen={!!f.primary} ready={readyCount(f)} ctx={ctx} />
             ))}
@@ -286,8 +304,11 @@ function FlowCard({
 }) {
   const [open, setOpen] = useState(defaultOpen);
   const actionable = flow.items.filter((i) => ACTIONABLE.includes(i.disposition));
-  const auto = flow.items.filter((i) => !ACTIONABLE.includes(i.disposition));
-  const complete = flow.actionable > 0 && ready >= flow.actionable;
+  // Dropdowns whose options we couldn't read — a choice, shown honestly (never a green ✓).
+  const uncaptured = flow.items.filter((i) => i.uncaptured_options);
+  const auto = flow.items.filter((i) => !ACTIONABLE.includes(i.disposition) && !i.uncaptured_options);
+  // "ready" requires no fields to provide AND no unread choices — never a false green.
+  const complete = flow.actionable > 0 && ready >= flow.actionable && flow.uncaptured === 0;
   const Chevron = open ? ChevronDown : ChevronRight;
 
   return (
@@ -309,6 +330,10 @@ function FlowCard({
           {complete ? (
             <span className="inline-flex items-center gap-1 text-2xs text-good font-medium">
               <CheckCircle2 size={12} aria-hidden /> ready
+            </span>
+          ) : flow.uncaptured > 0 && flow.actionable === 0 ? (
+            <span className="text-2xs text-amber-500 font-medium tabular-nums">
+              {flow.uncaptured} {flow.uncaptured === 1 ? 'choice' : 'choices'} to re-capture
             </span>
           ) : (
             <span className="text-2xs text-ink-low tabular-nums">
@@ -371,6 +396,22 @@ function FlowCard({
                 )}
               </SeedRow>
             ),
+          )}
+
+          {uncaptured.length > 0 && (
+            <div className="rounded-lg ring-1 ring-amber-500/30 bg-amber-500/[0.05] px-3 py-2 space-y-1">
+              <div className="flex items-center gap-1.5">
+                <ListChecks size={12} className="text-amber-500 shrink-0" aria-hidden />
+                <span className="text-2xs text-ink font-medium">
+                  {uncaptured.length} {uncaptured.length === 1 ? 'dropdown' : 'dropdowns'} the crawl
+                  couldn’t read
+                </span>
+              </div>
+              <p className="text-2xs text-ink-low">
+                {uncaptured.map((i) => i.label).join(', ')} — these are choices, not free text. The
+                crawl couldn’t capture their options on this run; re-crawl to read them.
+              </p>
+            </div>
           )}
 
           {auto.length > 0 && (

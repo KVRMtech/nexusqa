@@ -78,7 +78,10 @@ _ASK_NOUN_ID_RE = re.compile(rf"\b{_ASK_NOUN}\b.*\b{_ASK_SUFFIX}\b|\b{_ASK_NOUN}
 _LOGIN_TERMS = ("username", "user name", "user id", "userid", "login", "login id")
 
 # Field types the crawler emits (normalised). Anything not here → treated as text.
-_SELECT_TYPES = frozenset({"select", "radio", "checkbox", "listbox", "combobox"})
+# A CHOICE is a pick-one-of-options control; a TOGGLE is a boolean the crawl sets itself.
+_CHOICE_TYPES = frozenset({"select", "radio", "listbox", "combobox"})
+_TOGGLE_TYPES = frozenset({"checkbox", "toggle", "switch"})
+_SELECT_TYPES = _CHOICE_TYPES | _TOGGLE_TYPES  # retained for callers that ask "is a choice-like control"
 _SUBMIT_TYPES = frozenset({"submit", "button", "image"})
 
 # Affirmatively-safe text nouns that MAY be synthesized. A text field whose label
@@ -114,6 +117,11 @@ class Disposition:
     options: tuple[str, ...] = ()
     required: bool = False
     editable: bool = True
+    #: True for a dropdown/choice control whose OPTIONS the crawl could not read (a custom
+    #: SPA widget). It is a PICK (a choice, never free text) but ungrounded — the UI must
+    #: say "a choice we could not read yet — re-crawl to capture the options", and a flow
+    #: holding one must NEVER render "ready". The anti-green-wash keystone for choices.
+    uncaptured_options: bool = False
 
     def as_dict(self) -> dict:
         return {
@@ -125,6 +133,7 @@ class Disposition:
             "options": list(self.options),
             "required": self.required,
             "editable": self.editable,
+            "uncaptured_options": self.uncaptured_options,
         }
 
 
@@ -304,10 +313,11 @@ def classify_field(
     obs = {normalize_label(k) for k in observe_labels}
     sub = {normalize_label(k) for k in submit_labels}
 
-    def make(disp, default, grounded, reason, *, editable=True):
+    def make(disp, default, grounded, reason, *, editable=True, uncaptured_options=False):
         return Disposition(
             label=label, disposition=disp, default=default, grounded=grounded,
             reason=reason, options=options, required=bool(field.required), editable=editable,
+            uncaptured_options=uncaptured_options,
         )
 
     # OBSERVE — an output/oracle target, never filled.
@@ -328,13 +338,21 @@ def classify_field(
     if _is_sensitive(norm):
         return make(ASK, None, False, "a real value the product must never invent (identifier/credential)")
 
-    # PICK — a select/radio/checkbox: the default MUST be an observed option.
-    if ftype in _SELECT_TYPES:
+    # A boolean checkbox/toggle is not a value to invent — the crawl sets it itself.
+    if ftype in _TOGGLE_TYPES:
+        return make(SYNTHESIZE, None, True, "a checkbox/toggle the crawl can set itself")
+
+    # PICK — a choice among options. A dropdown is ALWAYS a choice, never free text.
+    if ftype in _CHOICE_TYPES:
         grounded_opt = _first_grounded_option(options)
         if grounded_opt is not None:
             return make(PICK, grounded_opt, True, "chosen from an option the crawl actually observed")
-        # No observed option → we will NOT invent one. Fail closed to ASK.
-        return make(ASK, None, False, "a choice with no observed options — cannot ground a value")
+        # Options weren't captured (a custom SPA dropdown the crawl couldn't read). It is
+        # STILL a choice — never "invent a real value". Keep it PICK but ungrounded so the
+        # UI says so honestly and the flow can't be marked ready until a re-crawl reads it.
+        return make(PICK, None, False,
+                    "a choice we could not read yet — re-crawl to capture the options",
+                    uncaptured_options=True)
 
     # SYNTHESIZE — only for affirmatively-safe fields; otherwise fail closed.
     value = _synthesize_value(norm, ftype, today=today)
@@ -391,6 +409,10 @@ def classify_manifest(
     counts: dict[str, int] = {d: 0 for d in DISPOSITIONS}
     for i in items:
         counts[i.disposition] = counts.get(i.disposition, 0) + 1
+    # A dropdown whose options weren't read is a PICK, but NOT truly auto-handled — it
+    # needs a re-crawl. Count it separately and keep it OUT of autonomous_count so the
+    # "everything else is handled automatically" claim stays honest.
+    uncaptured_choice_count = sum(1 for i in items if i.uncaptured_options)
 
     return {
         "recommended": recommended,
@@ -399,5 +421,7 @@ def classify_manifest(
         "counts": counts,
         "ask_count": counts[ASK],
         "approve_count": counts[APPROVE],
-        "autonomous_count": counts[SYNTHESIZE] + counts[PICK] + counts[CARRY] + counts[OBSERVE],
+        "autonomous_count": (counts[SYNTHESIZE] + counts[PICK] + counts[CARRY]
+                             + counts[OBSERVE] - uncaptured_choice_count),
+        "uncaptured_choice_count": uncaptured_choice_count,
     }

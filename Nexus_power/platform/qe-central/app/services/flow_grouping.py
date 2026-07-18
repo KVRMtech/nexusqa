@@ -140,6 +140,7 @@ def group_into_flows(
     provided_labels: Sequence[str] = (),
     auth_satisfied: bool = False,
     field_urls: Mapping[str, str] | None = None,
+    captured_paths: Sequence[str] = (),
 ) -> dict:
     """Partition manifest ``items`` (each a Disposition ``as_dict``) into flows.
 
@@ -170,25 +171,49 @@ def group_into_flows(
         if is_action_label(label):
             continue
         enriched = {**it, "provided": norm in provided}
-        # Group by MEANING first: a domain hint keeps related fields together across
-        # pages (a transfer's From Account + Amount, even if on two screens) and reads
-        # cleanly. Fall back to the grounded PAGE for fields no hint recognizes (fully
-        # generic), and finally to one honest bucket.
-        hint_key, hint_name = _flow_of(norm)
-        if hint_key != _FALLBACK_KEY:
-            key, name = hint_key, hint_name
+        # PAGE-HONEST: the page a field was captured on is the ground truth of its flow.
+        # Group by that page URL FIRST so fields from different pages (Send Money vs.
+        # Transactions) NEVER merge into a fabricated flow. A domain hint may only NAME a
+        # bucket when there is no page URL to honor — it must never move a field across
+        # pages (that produced a fictional "Transfer" flow stitched from Send Money +
+        # Transactions fields).
+        grounded = _flow_from_url(urls.get(norm, ""))
+        if grounded:
+            key, name = grounded
         else:
-            grounded = _flow_from_url(urls.get(norm, ""))
-            key, name = grounded if grounded else (_FALLBACK_KEY, _FALLBACK_NAME)
+            hint_key, hint_name = _flow_of(norm)
+            key, name = (hint_key, hint_name) if hint_key != _FALLBACK_KEY else (_FALLBACK_KEY, _FALLBACK_NAME)
         buckets.setdefault(key, {"key": key, "name": name, "items": []})["items"].append(enriched)
 
     present = set(buckets)
-    primary_key = _primary_key_from_url(base_url, present)
+    # The flow keys the crawl ACTUALLY captured a page for (ground truth). When known,
+    # this — NOT the bucket set — decides whether the onboarded entry flow was reached:
+    # an auto-only field can hint-create a same-named bucket without the page ever being
+    # crawled, which must not suppress the "not captured" signal.
+    captured_keys = {fk[0] for p in captured_paths if (fk := _flow_from_url(str(p)))}
+    entry = _flow_from_url(base_url)
+    entry_captured = (
+        entry is not None and (entry[0] in captured_keys if captured_paths else entry[0] in present)
+    )
+    missing_primary = None
+    if entry is not None and not entry_captured:
+        missing_primary = {
+            "key": entry[0],
+            "name": entry[1],
+            "reason": f"we haven't captured your {entry[1]} form yet — re-crawl to reach it",
+        }
+    # Never mark a hint-created bucket the "main flow" when its page was never crawled.
+    primary_key = None if missing_primary else _primary_key_from_url(base_url, present)
 
-    def _counts(bucket_items: list[dict]) -> tuple[int, int]:
+    def _counts(bucket_items: list[dict]) -> tuple[int, int, int]:
         actionable = [x for x in bucket_items if x.get("disposition") in _ACTIONABLE]
         to_provide = sum(1 for x in actionable if not x.get("provided"))
-        return to_provide, len(actionable)
+        # Dropdowns whose options weren't captured: a choice we can't offer until a
+        # re-crawl. They are NOT actionable (not ASK), so they'd otherwise let an
+        # all-dropdown flow read "0 of 0 ready" — a false green. Counted so the flow can
+        # never be shown ready while any remain.
+        uncaptured = sum(1 for x in bucket_items if x.get("uncaptured_options"))
+        return to_provide, len(actionable), uncaptured
 
     # Order: primary first, then remaining flows by domain-hint priority, fallback last.
     hint_order = {key: i for i, (key, _n, _k) in enumerate(_FLOW_HINTS)}
@@ -199,7 +224,7 @@ def group_into_flows(
     flows: list[dict] = []
     for key in sorted(buckets, key=_sort_key):
         b = buckets[key]
-        to_provide, actionable_total = _counts(b["items"])
+        to_provide, actionable_total, uncaptured = _counts(b["items"])
         flows.append({
             "key": key,
             "name": b["name"],
@@ -207,13 +232,14 @@ def group_into_flows(
             "primary": key == primary_key,
             "to_provide": to_provide,
             "actionable": actionable_total,
+            "uncaptured": uncaptured,
             "total": len(b["items"]),
             "items": b["items"],
         })
 
     auth = None
     if auth_items:
-        a_to_provide, a_actionable = _counts(auth_items)
+        a_to_provide, a_actionable, a_uncaptured = _counts(auth_items)
         auth = {
             "key": "auth",
             "name": "Sign in",
@@ -223,8 +249,14 @@ def group_into_flows(
             # progress against the login fields.
             "to_provide": 0 if auth_satisfied else a_to_provide,
             "actionable": a_actionable,
+            "uncaptured": a_uncaptured,
             "total": len(auth_items),
             "items": auth_items,
         }
 
-    return {"flows": flows, "auth": auth, "primary_flow": primary_key}
+    return {
+        "flows": flows,
+        "auth": auth,
+        "primary_flow": primary_key,
+        "missing_primary": missing_primary,
+    }

@@ -264,6 +264,8 @@ export interface SeedItem {
   editable: boolean;
   /** Added by flow grouping: true when a value is already in the answer key. */
   provided?: boolean;
+  /** A dropdown/choice whose OPTIONS the crawl could not read — a choice, not free text. */
+  uncaptured_options?: boolean;
 }
 
 /** A group of fields belonging to one flow (or the shared login group). */
@@ -275,8 +277,16 @@ export interface SeedFlow {
   satisfied?: boolean;       // auth only: stored credentials cover the login group
   to_provide: number;        // actionable fields not yet provided
   actionable: number;        // total ASK + APPROVE fields in this flow
+  uncaptured: number;        // dropdowns whose options weren't read — blocks "ready"
   total: number;             // all fields (incl. auto-handled)
   items: SeedItem[];
+}
+
+/** Set when the app's onboarded entry flow was NOT captured on the crawl. */
+export interface MissingPrimary {
+  key: string;
+  name: string;
+  reason: string;
 }
 
 /** GET /apps/{id}/seed-manifest — the discovery-first Seed Manifest. */
@@ -294,6 +304,8 @@ export interface SeedManifest {
   flows?: SeedFlow[];
   auth?: SeedFlow | null;
   primary_flow?: string | null;
+  missing_primary?: MissingPrimary | null;
+  uncaptured_choice_count?: number;
   has_credentials?: boolean;
   mode?: 'recommended' | 'full';
   items?: SeedItem[];

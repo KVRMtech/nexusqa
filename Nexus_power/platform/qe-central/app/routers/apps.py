@@ -45,6 +45,7 @@ from ..services.answer_key import _normalize_outcome
 from ..services.synthesis import (
     field_inventory_for_artifact,
     known_labels_for_artifact,
+    known_routes_for_artifact,
     known_value_nodes_for_artifact,
     value_candidates_for_artifact,
 )
@@ -655,12 +656,16 @@ async def get_seed_manifest(
     # mark the login group satisfied so we never re-ask for it.
     fill = answer_key.get("fill") if isinstance(answer_key.get("fill"), dict) else {}
     provided_labels = [str(k) for k in fill.keys()]
+    # The page routes the crawl actually reached — ground truth for "was the onboarded
+    # entry flow captured?" (an auto-only field must not hint-fake the primary as present).
+    captured_paths = await known_routes_for_artifact(tenant_id, artifact_id) if artifact_id else []
     grouping = group_into_flows(
         manifest.get("full") or [],
         base_url=base_url,
         provided_labels=provided_labels,
         auth_satisfied=has_credentials,
         field_urls=seed_field_urls,
+        captured_paths=captured_paths,
     )
     manifest.update(grouping)
     manifest["has_credentials"] = has_credentials

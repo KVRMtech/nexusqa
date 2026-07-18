@@ -641,10 +641,23 @@ class Crawler:
                 self._stop_reason = self._stop_reason or STOP_AUTH_FAILED
             else:
                 self._guard.phase = Phase.EXPLORE
+                # GUARANTEE the operator-onboarded entry form is observed post-auth. On the
+                # authenticated path, login often redirects target_url to a login page and
+                # then lands on a DIFFERENT page (a dashboard); root_url is that landing, so
+                # the one page the user explicitly onboarded (base_url) would be dropped
+                # unless a nav happens to point back to it. Seed base_url at depth 0 FIRST
+                # so it is freshly inventoried with the authenticated session; the frontier's
+                # url_template dedup + unique-state fingerprint dedup make it a no-op when
+                # login already landed there.
                 self._frontier.push(
-                    FrontierItem(url=root_url, depth=0),
-                    key=_url_key(root_url),
+                    FrontierItem(url=self.target_url, depth=0),
+                    key=_url_key(self.target_url),
                 )
+                if _url_key(root_url) != _url_key(self.target_url):
+                    self._frontier.push(
+                        FrontierItem(url=root_url, depth=0),
+                        key=_url_key(root_url),
+                    )
                 await self._explore_loop()
         except Exception as exc:  # honest terminal error — never a silent crash
             self._stop_reason = STOP_ERROR
