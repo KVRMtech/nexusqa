@@ -84,6 +84,10 @@ _MAX_GROUND_NAVS = 12
 #: Bound on network (XHR/fetch) calls recorded per state — a chatty SPA can fire
 #: hundreds of requests; keep the evidence stream proportional to the API surface.
 _MAX_NETWORK_CALLS = 100
+#: Dropdown option-probe bounds — custom comboboxes probed per state, and options kept
+#: per dropdown. Read-only (open → read labels → dismiss), bounded, state-restoring.
+_MAX_OPTION_PROBES = 8
+_MAX_PROBED_OPTIONS = 40
 #: Wizard/stepper traversal (#1) bounds — steps per single wizard chain, and the
 #: crawl-wide advance total; both cap the SAFETY-SENSITIVE submit-boundary probe.
 _MAX_WIZARD_STEPS = 6
@@ -854,6 +858,12 @@ class Crawler:
                 snapshot_controls = build_inventory(after_fill.raw_controls,
                                                      self._refuse_pack, url=after_fill.url)
 
+        # Read the real OPTION LABELS of custom dropdowns that build their menu only on
+        # open (a common SPA pattern the static inventory can't see) so a choice is shown
+        # with its actual options, not "options not captured". Runs BEFORE navigation
+        # discovery (which leaves the page); best-effort + state-restoring.
+        await self._probe_select_options(snapshot_controls, url=obs.url)
+
         # Navigation discovery (grounded): click safe actionable controls.
         actions.extend(await self._discover(item, controls, is_form, fingerprint,
                                             budget_left=self._budget.max_actions_per_state - len(actions)))
@@ -1279,6 +1289,63 @@ class Crawler:
             if grounded:
                 break   # one grounded menu path is enough to make the flow runnable
         return recorded
+
+    async def _probe_select_options(
+        self, controls: Sequence[dict[str, Any]], *, url: str,
+    ) -> None:
+        """Read the option LABELS of CUSTOM dropdowns whose options the static inventory
+        couldn't see (a widget that builds them only on OPEN). For each opener: click to
+        open, read the revealed ``[role=option]`` LABELS, then dismiss (Escape) so the page
+        is restored before the next read. Enriches the control's ``options`` in place so the
+        form_snapshot carries the real choices.
+
+        DISCIPLINE (never green-wash): LABELS only, never values/locators; native ``<select>``
+        is skipped (optionsOf already reads it, and a browser-native popup isn't DOM-readable);
+        ONE dropdown open at a time (dismissed before the next) so options are attributed to
+        the control that was opened; bounded by ``_MAX_OPTION_PROBES``; any failure leaves the
+        control's options empty — an honest 'unread choice', never a fabricated list."""
+        collect = getattr(self._port, "collect_controls", None)
+        press = getattr(self._port, "press_key", None)
+        if collect is None:
+            return
+        probed = 0
+        for c in controls:
+            if probed >= _MAX_OPTION_PROBES:
+                break
+            if c.get("kind") != "select" or c.get("options"):
+                continue  # not a choice control, or options already captured statically
+            if c.get("disabled") or c.get("danger"):
+                continue
+            if (c.get("tag") or "").strip().lower() == "select":
+                continue  # NATIVE select — handled by optionsOf; native popup isn't readable
+            if (c.get("role") or "").strip().lower() not in ("combobox", "listbox"):
+                continue  # only an ARIA combobox opener
+            try:
+                open_obs = await self._port.click(dict(c))
+                self._tracker.note_action()
+                self._tracker.note_request()
+                # A dropdown that navigated is not a dropdown — bail on that control.
+                if getattr(open_obs, "url_after", None) and getattr(open_obs, "url_before", None) \
+                        and open_obs.url_after != open_obs.url_before:
+                    continue
+                revealed = build_inventory(await collect(), self._refuse_pack, url=url)
+                opts: list[str] = []
+                seen: set[str] = set()
+                for r in revealed:
+                    if (r.get("role") or "").strip().lower() == "option":
+                        nm = str(r.get("name") or "").strip()
+                        if nm and nm.lower() not in seen:
+                            seen.add(nm.lower())
+                            opts.append(nm)
+                if press is not None:
+                    await press("Escape")  # restore: dismiss the opened listbox
+                if opts:
+                    c["options"] = opts[:_MAX_PROBED_OPTIONS]
+                    if isinstance(c.get("qec"), dict):
+                        c["qec"]["options"] = c["options"]
+                    probed += 1
+            except Exception:
+                continue
 
     async def _maybe_submit_phase_b(
         self, item: FrontierItem, controls: Sequence[dict[str, Any]],

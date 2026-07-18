@@ -739,6 +739,16 @@ class PlaywrightBrowserPort(BrowserPort):
         """Hover ``control`` (reveals menus/fly-outs/tooltips) and observe."""
         return await self._act(control, "hover")
 
+    async def press_key(self, key: str) -> None:
+        """Press a global key (e.g. Escape to dismiss an opened dropdown/overlay so the
+        page is restored before the next read). Best-effort — never raises into the
+        state machine."""
+        try:
+            await self._page.keyboard.press(key)
+            await self._settle()
+        except Exception:
+            pass
+
     async def set_input_files(self, control: dict[str, Any],
                               paths: Sequence[str]) -> RawObservation:
         """Attach ``paths`` to a file-input ``control`` (Phase-A: choose the file,
