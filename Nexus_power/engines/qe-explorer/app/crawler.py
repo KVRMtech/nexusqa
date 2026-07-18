@@ -799,6 +799,16 @@ class Crawler:
             await materialize()
 
         obs = await self._observe()
+        # SCOPE GATE: a goto can REDIRECT off-domain (an SSO re-redirect to an IdP, an
+        # expired session, an external link). Frontier pushes are already scope-gated, but a
+        # redirect lands us elsewhere — we must NOT inventory/record an off-domain page as
+        # the app's own substrate (that would attribute Okta/Google content to the app).
+        if not self._in_scope(obs.url):
+            self._emitter.emit_edge(from_state=item.parent_fingerprint, to_state="",
+                                    verb="navigate", target_label=item.discovered_via)
+            logger.info("qec.crawler.out_of_scope depth=%d url=%s",
+                        item.depth, (obs.url or "")[:120])
+            return
         controls = build_inventory(obs.raw_controls, self._refuse_pack, url=obs.url)
         fingerprint = state_fingerprint(obs.url, controls, obs.dialog_flags)
 

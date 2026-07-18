@@ -208,6 +208,25 @@ INVENTORY_JS = r"""
     return { name: "", source: "none" };
   }
 
+  // The listbox a custom combobox owns/controls, if present in the DOM (aria-controls /
+  // aria-owns id-ref first, else a descendant [role=listbox]). Read-only.
+  function resolveListbox(el) {
+    try {
+      var ref = norm(attr(el, "aria-controls")) || norm(attr(el, "aria-owns"));
+      var ids = ref ? ref.split(/\s+/) : [];
+      for (var i = 0; i < ids.length; i++) {
+        if (ids[i]) { var t = document.getElementById(ids[i]); if (t) return t; }
+      }
+      if (el.getAttribute && lc(el.getAttribute("role")) === "listbox") return el;
+      if (el.querySelector) { var d = el.querySelector('[role="listbox"]'); if (d) return d; }
+    } catch (e) {}
+    return null;
+  }
+
+  // Option LABELS for a control — never values, never locators. Native <select> reads its
+  // <option>s; a custom ARIA combobox reads [role=option] LABELS from the listbox it owns,
+  // WHEN that listbox is present in the DOM (incl. display:none). A widget that builds its
+  // options only on open yields [] here — the crawler's open-probe handles that case.
   function optionsOf(el) {
     var out = [];
     try {
@@ -216,6 +235,19 @@ INVENTORY_JS = r"""
         for (var i = 0; i < opts.length && out.length < MAX_OPTIONS; i++) {
           var t = norm(opts[i].textContent) || norm(opts[i].value);
           if (t) out.push(clip(t, MAX_OPTION));
+        }
+        return out;
+      }
+      var role = lc(attr(el, "role"));
+      var isChoice = role === "combobox" || role === "listbox" || !!norm(attr(el, "aria-haspopup"));
+      if (isChoice) {
+        var lb = resolveListbox(el);
+        if (lb) {
+          var nodes = lb.querySelectorAll ? lb.querySelectorAll('[role="option"]') : [];
+          for (var j = 0; j < nodes.length && out.length < MAX_OPTIONS; j++) {
+            var ot = norm(nodes[j].textContent);
+            if (ot) out.push(clip(ot, MAX_OPTION));
+          }
         }
       }
     } catch (e) {}
