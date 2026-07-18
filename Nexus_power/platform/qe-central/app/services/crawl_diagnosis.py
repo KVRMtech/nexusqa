@@ -161,7 +161,13 @@ def diagnose(*, status: str | None, error: str | None = "", stats: Any = None) -
     # exactly the confusing dead-end this avoids. A crawl that still produced cases is
     # left to grade as productive (an auth wall deeper in, not a hard block).
     stop_reason = str(s.get("stop_reason") or "").strip().lower()
-    login_wall = stop_reason in _LOGIN_STOP_REASONS or any(t in reason_text for t in _LOGIN_TOKENS)
+    # The crawler's own auth_failed stop-reason is the RELIABLE signal (set only when a
+    # login was actually attempted and didn't verify). The generic HTTP tokens (401 /
+    # "unauthorized") can come from a stray sub-resource on a LOGIN-LESS app, so only trust
+    # them on an outright FAILED crawl — never to relabel a COMPLETED login-less crawl.
+    login_wall = stop_reason in _LOGIN_STOP_REASONS or (
+        st == "failed" and any(t in reason_text for t in _LOGIN_TOKENS)
+    )
     if login_wall and generated_n <= 0:
         return _build(CODE_LOGIN_FAILED, SEV_ACTION, "Login blocked",
                       "The crawl reached the app's login page but couldn't sign in, so it "

@@ -5,7 +5,7 @@ transfer and loan fields with identical copy. These lock in: auth is split off (
 satisfied by stored creds), the PRIMARY flow is the onboarded one, and progress reflects
 already-provided values. Grouping degrades to one honest bucket when nothing matches.
 """
-from app.services.flow_grouping import group_into_flows
+from app.services.flow_grouping import _flow_from_url, group_into_flows
 
 # Mirrors the real bb03329f manifest (labels + dispositions).
 ITEMS = [
@@ -50,10 +50,10 @@ def test_progress_counts_provided_values():
     assert "From Account" in provided
     # transfer has 3 actionable ASK fields (From Account, Payee, Account); one provided.
     assert transfer["actionable"] == 3 and transfer["to_provide"] == 2
-    # Auto-handled Amount is in the flow (total 4) but never counted as "to provide".
-    assert transfer["total"] == 4
-    amount = next(i for i in transfer["items"] if i["label"] == "Amount")
-    assert amount["disposition"] == "SYNTHESIZE"
+    # Auto-handled Amount has NO page URL, so it groups neutrally (never a phantom bucket
+    # member) — the hint only names buckets for fields the user must see.
+    assert not any(i["label"] == "Amount" for i in transfer["items"])
+    assert any(i["label"] == "Amount" for f in g["flows"] if f["key"] == "other" for i in f["items"])
 
 
 def test_page_url_grounds_flow_generically_without_domain_keywords():
@@ -137,17 +137,52 @@ def test_uncaptured_dropdown_flow_never_reads_ready():
 
 def test_ui_action_controls_are_dropped_from_data_flows():
     # The practice app's "Mark TC-DASH-001 as done" checkboxes and an "Enable Two-Factor"
-    # toggle are UI actions, not values to provide — they must never appear as ASK rows.
+    # toggle are auto-handled controls (checkbox/toggle -> SYNTHESIZE), not values to
+    # provide — they're dropped. A real ASK/choice field is NEVER dropped even with a verb
+    # label (see test_action_verb_label_on_a_real_field_is_kept).
     items = [
         {"label": "From Account", "disposition": "ASK"},
-        {"label": "Mark TC-DASH-001 as done", "disposition": "ASK"},
-        {"label": "Enable Two-Factor Authentication", "disposition": "ASK"},
+        {"label": "Mark TC-DASH-001 as done", "disposition": "SYNTHESIZE"},
+        {"label": "Enable Two-Factor Authentication", "disposition": "SYNTHESIZE"},
     ]
     g = group_into_flows(items, base_url="https://x.test/bank/transfer")
     labels = {i["label"] for f in g["flows"] for i in f["items"]}
     assert "From Account" in labels
     assert "Mark TC-DASH-001 as done" not in labels
     assert "Enable Two-Factor Authentication" not in labels
+
+
+def test_quiet_auto_field_never_spawns_a_phantom_domain_bucket():
+    # GENERICITY AUDIT P0: an auto-handled "Amount" (SYNTHESIZE) with NO page URL must NOT
+    # create a banking "Transfer" bucket on a non-banking app — that leaks domain vocab as
+    # the grouping mechanism. It groups neutrally instead.
+    items = [{"label": "Amount", "disposition": "SYNTHESIZE"}]
+    g = group_into_flows(items, base_url="https://shop.test/checkout")  # no field_urls
+    keys = {f["key"] for f in g["flows"]}
+    assert "transfer" not in keys and keys <= {"other"}
+
+
+def test_actionable_field_without_url_may_be_named_by_a_hint():
+    # A field the user must PROVIDE may still be named by a hint (a boost, not a cross-page
+    # move) when no page URL is known — that's allowed; only quiet auto fields are neutralized.
+    items = [{"label": "Payee", "disposition": "ASK"}]
+    g = group_into_flows(items, base_url="https://x.test/pay")
+    assert "transfer" in {f["key"] for f in g["flows"]}
+
+
+def test_flow_from_hash_route_fragment():
+    # GENERICITY AUDIT P0: hash-routed SPAs carry the route in the fragment, not the path.
+    assert _flow_from_url("https://app.test/#/checkout/payment")[0] == "payment"
+    assert _flow_from_url("https://app.test/app#/orders")[0] == "orders"
+    assert _flow_from_url("https://x.test/bank/transfer")[0] == "transfer"  # path still wins
+
+
+def test_action_verb_label_on_a_real_field_is_kept():
+    # GENERICITY AUDIT P1: "Add rider" is a real value to provide, not a UI action to drop.
+    items = [{"label": "Add rider", "disposition": "ASK"}]
+    g = group_into_flows(items, base_url="https://ins.test/apply")
+    labels = {i["label"] for f in g["flows"] for i in f["items"]}
+    assert "Add rider" in labels
 
 
 def test_non_domain_app_degrades_to_one_honest_bucket():

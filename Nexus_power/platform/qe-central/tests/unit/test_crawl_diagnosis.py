@@ -77,6 +77,15 @@ def test_login_blocked_on_completed_crawl_with_auth_failed_stop_reason():
     assert d["evidence"]["stop_reason"] == "auth_failed"
 
 
+def test_completed_loginless_crawl_with_stray_401_is_not_login_blocked():
+    # GENERICITY AUDIT P1: a login-less public app whose crawl hit a stray 401 from a
+    # sub-resource (and produced no cases) must NOT be diagnosed "Login blocked" — the
+    # generic 401 token only counts on an outright FAILED crawl, not a COMPLETED one.
+    d = _diag("completed", stats={"visits": 5, "generate": {"generated": 0}},
+              error="GET /api/telemetry returned 401 unauthorized")
+    assert d["code"] != cd.CODE_LOGIN_FAILED
+
+
 def test_auth_failed_does_not_override_a_productive_crawl():
     # If a crawl still generated cases, an auth wall deeper in must not downgrade it.
     d = _diag("completed", stats={

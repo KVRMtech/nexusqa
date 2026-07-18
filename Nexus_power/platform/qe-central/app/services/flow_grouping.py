@@ -91,17 +91,21 @@ def _display_name_for(seg: str) -> str:
 def _flow_from_url(url: str) -> tuple[str, str] | None:
     """Ground a field's flow in the PAGE it appeared on: the last meaningful path segment
     names the flow (``…/orders/dispatch`` -> ``dispatch`` -> "Dispatch"). Domain-agnostic —
-    the URL structure carries the flow on any site. Returns None for a URL with no usable
-    segment (root/query-only) so the caller can fall back to label keywords."""
+    the URL structure carries the flow on any site. Also reads a hash-route FRAGMENT
+    (``app/#/checkout/payment`` -> ``payment``): many SPAs carry the real route there, not
+    in the path. Returns None for a URL with no usable segment so the caller can fall back
+    to label keywords."""
     try:
-        path = urlsplit(url or "").path
+        parts = urlsplit(url or "")
     except ValueError:
         return None
-    for raw in reversed([s for s in path.split("/") if s]):
-        seg = normalize_label(raw.split(".")[0])  # drop any file extension
-        if not seg or seg.isdigit() or seg in _GENERIC_SEGMENTS:
-            continue
-        return seg, _display_name_for(seg)
+    # Path first (the common case); then the hash fragment for hash-routed SPAs.
+    for seg_source in (parts.path, parts.fragment):
+        for raw in reversed([s for s in str(seg_source).split("/") if s]):
+            seg = normalize_label(raw.split(".")[0])  # drop any file extension
+            if not seg or seg.isdigit() or seg in _GENERIC_SEGMENTS:
+                continue
+            return seg, _display_name_for(seg)
     return None
 
 
@@ -166,23 +170,32 @@ def group_into_flows(
         if _is_auth(norm):
             auth_items.append({**it, "provided": norm in provided})
             continue
-        # UI action controls (buttons/toggles: "Mark … as done", "Enable …") are not
-        # values to provide — keep them out of the data flows entirely.
-        if is_action_label(label):
+        disposition = it.get("disposition")
+        uncaptured = bool(it.get("uncaptured_options"))
+        actionable_or_choice = disposition in _ACTIONABLE or uncaptured
+        # UI action controls ("Mark … as done", "Enable …") are not values to provide —
+        # drop them. But NEVER drop a real data field: keep anything the user must provide
+        # (ASK/APPROVE) or any unread choice, even if its label starts with a verb ("Add
+        # rider", "Remove dependent").
+        if is_action_label(label) and not actionable_or_choice:
             continue
         enriched = {**it, "provided": norm in provided}
         # PAGE-HONEST: the page a field was captured on is the ground truth of its flow.
-        # Group by that page URL FIRST so fields from different pages (Send Money vs.
-        # Transactions) NEVER merge into a fabricated flow. A domain hint may only NAME a
-        # bucket when there is no page URL to honor — it must never move a field across
-        # pages (that produced a fictional "Transfer" flow stitched from Send Money +
-        # Transactions fields).
+        # Group by that page URL FIRST so fields from different pages never merge.
         grounded = _flow_from_url(urls.get(norm, ""))
         if grounded:
             key, name = grounded
-        else:
+        elif actionable_or_choice:
+            # No page URL, but the user needs to see this field — a domain hint may NAME
+            # its bucket (a boost, never a cross-page move); else the neutral bucket.
             hint_key, hint_name = _flow_of(norm)
             key, name = (hint_key, hint_name) if hint_key != _FALLBACK_KEY else (_FALLBACK_KEY, _FALLBACK_NAME)
+        else:
+            # A QUIET auto-handled field with no page URL: we don't actually know its flow.
+            # A domain keyword must NOT invent a phantom bucket for it (that would leak
+            # domain vocab as the grouping MECHANISM — e.g. an auto "Amount" spawning a
+            # "Transfer" bucket on a non-banking app). Group it neutrally.
+            key, name = _FALLBACK_KEY, _FALLBACK_NAME
         buckets.setdefault(key, {"key": key, "name": name, "items": []})["items"].append(enriched)
 
     present = set(buckets)
