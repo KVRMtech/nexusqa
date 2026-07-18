@@ -444,6 +444,11 @@ async def field_inventory_for_artifact(tenant_id: str, artifact_id: str) -> list
                 "options": options,
                 "required": bool(sig.get("required")),
             }
+            # A dependent/conditional field (options/existence gated on a driver field) —
+            # the crawler's ACT-THEN-DIFF pass tags it so the coverage ledger reads it as
+            # conditional, not as an always-present fixed control.
+            if sig.get("depends_on"):
+                entry["depends_on"] = str(sig.get("depends_on"))
             prev = best.get(key)
             # Keep the richest signal for a recurring label (more observed options).
             if prev is None or len(options) > len(prev.get("options") or []):

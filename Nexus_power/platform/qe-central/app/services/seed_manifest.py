@@ -17,6 +17,7 @@ from collections.abc import Iterable, Mapping
 from datetime import date
 from typing import Any
 
+from .coverage_ledger import build_coverage_ledger
 from .dispositions import (
     FieldSignal,
     classify_manifest,
@@ -99,4 +100,8 @@ async def build_seed_manifest(
     )
     manifest["artifact_id"] = artifact_id
     manifest["status"] = "ready" if signals else "no_fields"
+    # The coverage ledger — the honesty spine: a measured per-app coverage number + every
+    # control we did NOT fully capture, named with a reason. Computed over what the crawl
+    # actually captured (the field inventory), so "did we miss anything?" is answerable.
+    manifest["coverage"] = build_coverage_ledger(inventory)
     return manifest
