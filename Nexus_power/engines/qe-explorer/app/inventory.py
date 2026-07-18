@@ -219,6 +219,13 @@ def refine_kind(
         return "button"
     if it in _INPUT_DATE_TYPES:
         return "date"
+    # A slider / color is a NON-TEXT value control — typing a string into it is invalid
+    # and must never be reported as a completed fill (a live green-wash: 'autotest' into a
+    # range). Typed distinctly so the filler refuses it and the ledger flags it honestly.
+    if role == "slider" or it == "range":
+        return "slider"
+    if it == "color":
+        return "color"
     if tag in ("input", "textarea") or role in ("textbox", "searchbox", "spinbutton"):
         # Mirror the compiler's ambiguous-field heuristics (compiler.py:204-208):
         # >=2 captured options ⇒ a select rendered as a field; a date-shaped value
