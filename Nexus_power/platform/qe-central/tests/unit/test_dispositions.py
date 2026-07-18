@@ -82,6 +82,15 @@ def test_custom_dropdown_with_no_captured_options_is_uncaptured_pick():
     assert "re-crawl" in d.reason.lower()
 
 
+def test_english_placeholder_prefix_is_not_grounded():
+    # "Select an account" / "Choose your state" are placeholders (English scope), not real
+    # choices — they must not be pinned as a grounded default (which would false-"ready").
+    d = _one("Account", ftype="select", options=("Select an account", "Checking", "Savings"))
+    assert d.disposition == dp.PICK and d.default == "Checking" and d.grounded
+    d2 = _one("State", ftype="select", options=("Choose your state",))
+    assert d2.disposition == dp.PICK and d2.uncaptured_options is True
+
+
 def test_checkbox_toggle_is_auto_not_ask():
     # A boolean checkbox/toggle is set by the crawl itself — never a value to provide.
     for ft in ("checkbox", "toggle", "switch"):

@@ -178,10 +178,21 @@ def _has_word(norm: str, *words: str) -> bool:
     return any(re.search(rf"\b{re.escape(w)}\b", norm) for w in words)
 
 
+# English-only scope: a leading "select/choose/pick/please" almost always marks a dropdown
+# PLACEHOLDER ("Select an account", "Choose your state"), not a real choice. Skipping these
+# stops a placeholder from being pinned as a grounded default (a false "ready").
+_PLACEHOLDER_PREFIXES = ("select ", "choose ", "pick ", "please ")
+
+
+def _is_placeholder_option(text: str) -> bool:
+    lo = text.strip().lower()
+    return (not lo) or lo in _PLACEHOLDER_OPTIONS or lo.startswith(_PLACEHOLDER_PREFIXES)
+
+
 def _first_grounded_option(options: Iterable[str]) -> str | None:
     for opt in options:
         text = str(opt or "").strip()
-        if text and text.lower() not in _PLACEHOLDER_OPTIONS:
+        if text and not _is_placeholder_option(text):
             return text
     return None
 
