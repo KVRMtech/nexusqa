@@ -272,6 +272,15 @@ async def complete_crawl(crawl_id: str, request: Request) -> dict:
         expected_crawl_id = (row_extractor_version or "").removeprefix(EXTRACTOR_VERSION_PREFIX)
         artifact_id_existing = row.artifact_id
         session_id_existing = row.session_id
+        # The app's prior GOOD capture — the clobber-guard preserves it against a flaky
+        # login re-crawl that would otherwise replace it with a login-only page.
+        prior_artifact_id = ""
+        if app_id:
+            prior_artifact_id = (await session.execute(
+                select(ClientAppRow.latest_artifact_id).where(
+                    ClientAppRow.app_id == app_id, ClientAppRow.tenant_id == tenant_id,
+                )
+            )).scalar_one_or_none() or ""
 
     if expected_crawl_id and expected_crawl_id != crawl_id:
         raise HTTPException(
@@ -304,6 +313,36 @@ async def complete_crawl(crawl_id: str, request: Request) -> dict:
             extra={"exploration_id": exploration_id, "crawl_id": crawl_id, "reason": reason[:300]},
         )
         return {"status": "failed", "exploration_id": exploration_id, "error": reason[:500]}
+
+    # ── 4b) CLOBBER-GUARD: a login-blocked / empty crawl must NOT overwrite a good prior
+    # artifact. field_inventory reads the NEWEST version, so a flaky-login re-crawl (which
+    # reaches only the login page) would replace a rich capture with login fields. When this
+    # crawl captured nothing useful (auth_failed OR 0 forms) AND the app already has a good
+    # artifact, record the exploration honestly (its stats still diagnose LOGIN_FAILED) but
+    # SKIP the substrate write, so the prior capture survives.
+    _cov = body.coverage if isinstance(body.coverage, dict) else {}
+    _forms = int(_cov.get("forms_found") or 0)
+    _nfields = len(_cov.get("fields_inferred") or []) + len(_cov.get("fields_needing_seed") or [])
+    # Login-blocked, OR captured nothing at all (no forms AND no fields) — never a rich
+    # capture. A merely form-less content page (0 forms but has fields/content) is NOT guarded.
+    _degraded = (body.stop_reason or "").strip().lower() == "auth_failed" or (_forms == 0 and _nfields == 0)
+    if _degraded and prior_artifact_id:
+        await _mark(
+            tenant_id, exploration_id, status="completed",
+            stats={"coverage": _cov, "stop_reason": body.stop_reason, "clobber_guarded": True},
+            finished_at=utc_now(),
+        )
+        logger.info(
+            "qec.internal.clobber_guarded",
+            extra={"exploration_id": exploration_id, "app_id": app_id,
+                   "stop_reason": body.stop_reason, "forms_found": _forms,
+                   "preserved_artifact": prior_artifact_id},
+        )
+        return {
+            "status": "completed", "exploration_id": exploration_id,
+            "artifact_id": prior_artifact_id, "clobber_guarded": True,
+            "note": "degraded crawl (login-blocked/empty) — prior good artifact preserved",
+        }
 
     # ── 5) Map manifest → bundle → substrate (the §2 write) ───────────────
     extractor_version = _extractor_version(crawl_id)
