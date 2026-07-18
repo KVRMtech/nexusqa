@@ -88,10 +88,15 @@ _MAX_NETWORK_CALLS = 100
 #: per dropdown. Read-only (open → read labels → dismiss), bounded, state-restoring.
 _MAX_OPTION_PROBES = 8
 _MAX_PROBED_OPTIONS = 40
-#: ACT-THEN-DIFF bounds — driver choices committed per state to reveal DEPENDENT fields
-#: (a select whose options populate only after a prior field is chosen). EXPLORE-phase,
-#: no submit; a committed choice is a valid filled-form state to snapshot.
-_MAX_DEP_PROBES = 6
+#: ACT-THEN-DIFF bounds — driver acts committed per state to reveal DEPENDENT options and
+#: CONDITIONALLY-REVEALED fields. EXPLORE-phase, no submit; a committed choice/toggle is a
+#: valid filled-form state to snapshot.
+_MAX_DEP_PROBES = 8
+#: Value-bearing control kinds (a form FIELD, not a button/link) — a newly-appeared one
+#: after a driver act is a conditionally-revealed field.
+_FIELD_KINDS = frozenset({
+    "text", "date", "select", "radio", "checkbox", "toggle", "slider", "color",
+})
 #: Wizard/stepper traversal (#1) bounds — steps per single wizard chain, and the
 #: crawl-wide advance total; both cap the SAFETY-SENSITIVE submit-boundary probe.
 _MAX_WIZARD_STEPS = 6
@@ -1354,6 +1359,30 @@ class Crawler:
             except Exception:
                 continue
 
+    async def _commit_act(self, control: dict[str, Any]) -> bool:
+        """Perform ONE grounded, non-submitting act on a driver control so a dependent
+        field/options can react: a SELECT commits its first option; a RADIO is clicked; a
+        CHECKBOX/TOGGLE is switched on. Returns True iff an act fired. EXPLORE-phase only —
+        none of these submit anything server-side."""
+        kind = control.get("kind")
+        if kind == "select":
+            return await self._commit_choice(control)
+        try:
+            if kind == "radio":
+                await self._port.click(dict(control))
+            elif kind in ("checkbox", "toggle"):
+                set_checked = getattr(self._port, "set_checked", None)
+                if set_checked is not None:
+                    await set_checked(dict(control), True)
+                else:
+                    await self._port.click(dict(control))
+            else:
+                return False
+            self._tracker.note_action()
+            return True
+        except Exception:
+            return False
+
     async def _commit_choice(self, control: dict[str, Any]) -> bool:
         """Grounded-select a driver's FIRST real option so a dependent field can react:
         a native <select> via select_option; a custom combobox by opening it and clicking
@@ -1389,43 +1418,58 @@ class Crawler:
         return False
 
     async def _probe_dependencies(
-        self, controls: Sequence[dict[str, Any]], *, url: str,
+        self, controls: list[dict[str, Any]], *, url: str,
     ) -> None:
-        """ACT-THEN-DIFF (v1: dependent choices). For a DRIVER select (options captured),
-        commit its first option, re-observe, and DIFF: any select that was empty and is now
-        POPULATED is a dependent — capture its options and tag depends_on=<driver>. Bounded,
-        EXPLORE-phase (no submit), enriches ``controls`` in place so the snapshot carries the
-        dependent's real options instead of an empty 'unread choice'.
-
-        HONESTY: the captured options are for ONE branch of the driver, so the dependent is
-        tagged depends_on (never presented as a fixed list). Any failure leaves the dependent
-        empty — an honest unread choice, never fabricated."""
+        """ACT-THEN-DIFF: commit ONE driver act (select an option / pick a radio / switch a
+        toggle), re-observe, and DIFF the inventory to capture what the act CHANGED:
+          (a) a DEPENDENT select whose options only populate after the act (To Account after
+              From Account) — captured + tagged depends_on;
+          (b) a CONDITIONALLY-REVEALED field that only appears after the act (choose 'Other'
+              -> a text field; 'Schedule for later' -> a date picker) — appended to the
+              snapshot + tagged depends_on.
+        Bounded, EXPLORE-phase (no submit). HONESTY: everything captured this way is tagged
+        depends_on=<driver> so it reads as CONDITIONAL on that driver, never as always-present
+        or a fixed list; any failure leaves the field an honest unread/absent state; if an act
+        navigates away, the pass bails rather than attributing another page's fields."""
         collect = getattr(self._port, "collect_controls", None)
+        current_url = getattr(self._port, "current_url", None)
         if collect is None:
             return
+
+        def _key(c: Mapping[str, Any]) -> str:
+            return str(c.get("name") or "").strip().lower()
+
         drivers = [c for c in controls
-                   if c.get("kind") == "select" and c.get("options")
-                   and not c.get("disabled") and not c.get("danger")]
+                   if c.get("kind") in ("select", "radio", "checkbox", "toggle")
+                   and not c.get("disabled") and not c.get("danger")
+                   and (c.get("kind") != "select" or c.get("options"))]
+        if not drivers:
+            return
+        seen_names = {_key(c) for c in controls if c.get("name")}
         empty_by_name = {
             str(c.get("name") or ""): c for c in controls
             if c.get("kind") == "select" and not c.get("options") and c.get("name")
         }
-        if not drivers or not empty_by_name:
-            return
         acted = 0
         for d in drivers:
-            if acted >= _MAX_DEP_PROBES or not empty_by_name:
+            if acted >= _MAX_DEP_PROBES:
                 break
-            if not await self._commit_choice(d):
+            if not await self._commit_act(d):
                 continue
             acted += 1
-            # Re-inventory after the commit; a NATIVE dependent select already carries its
-            # newly-populated options here.
+            # If the act navigated away, this page is gone — do not attribute its fields.
+            if current_url is not None:
+                try:
+                    if self._in_scope_key(await current_url()) != self._in_scope_key(url):
+                        return
+                except Exception:
+                    pass
             after = build_inventory(await collect(), self._refuse_pack, url=url)
+            driver_label = d.get("name") or ""
+
+            # (a) DEPENDENT selects: empty -> populated (open-probe custom ones so they surface).
             pending = [c for c in after
                        if c.get("kind") == "select" and str(c.get("name") or "") in empty_by_name]
-            # A CUSTOM dependent combobox still reveals its (now-populated) options only on
-            # OPEN — open-probe the still-empty ones so the dependency actually surfaces.
             await self._probe_select_options(
                 [c for c in pending if not c.get("options")], url=url)
             for r in pending:
@@ -1433,9 +1477,31 @@ class Crawler:
                 if r.get("options") and nm in empty_by_name:
                     tgt = empty_by_name.pop(nm)
                     tgt["options"] = list(r.get("options") or [])[:_MAX_PROBED_OPTIONS]
-                    tgt["depends_on"] = d.get("name") or ""
+                    tgt["depends_on"] = driver_label
                     if isinstance(tgt.get("qec"), dict):
                         tgt["qec"]["options"] = tgt["options"]
+
+            # (b) CONDITIONALLY-REVEALED fields: value-bearing controls that were not present
+            # before the act. Append to the snapshot (so the manifest sees them) tagged
+            # depends_on; if a revealed field is itself an empty custom select, register it as
+            # a further dependent to probe on a later act.
+            for r in after:
+                k = _key(r)
+                if not k or k in seen_names or r.get("kind") not in _FIELD_KINDS:
+                    continue
+                seen_names.add(k)
+                r["depends_on"] = driver_label
+                if isinstance(r.get("qec"), dict):
+                    r["qec"]["depends_on"] = driver_label
+                controls.append(r)
+                if r.get("kind") == "select" and not r.get("options"):
+                    empty_by_name[str(r.get("name") or "")] = r
+
+    def _in_scope_key(self, url: str) -> str:
+        """Path-level identity of a URL for the ACT-THEN-DIFF nav guard (host+path, query/
+        hash-insensitive) — a same-page DOM change must NOT read as a navigation."""
+        parts = urlsplit(url or "")
+        return f"{(parts.hostname or '').lower()}{parts.path}"
 
     async def _maybe_submit_phase_b(
         self, item: FrontierItem, controls: Sequence[dict[str, Any]],
