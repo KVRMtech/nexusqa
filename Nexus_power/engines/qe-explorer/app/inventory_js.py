@@ -457,6 +457,55 @@ INVENTORY_JS = r"""
 """
 
 
+#: OPAQUE-SURFACE detector — positively FINDS the surfaces the DOM walker cannot read, so a
+#: blind spot becomes a named ledger row instead of an empty "clean" scan. Detects (a)
+#: cross-origin iframes (Stripe/reCAPTCHA/maps/Plaid), (b) large canvas-rendered UIs
+#: (Flutter/WebGL/charts), (c) custom elements rendering via a CLOSED shadow root (heuristic:
+#: a dash-tagged element with size but no readable light DOM). Labels/kinds only, never a
+#: fabricated capture — the honest anti-green-wash of coverage.
+OPAQUE_JS = r"""
+(function () {
+  var out = [], MAXO = 40, seen = {};
+  function vis(el){ try { var r = el.getBoundingClientRect(); var s = getComputedStyle(el);
+    return r.width > 1 && r.height > 1 && s.display !== "none" && s.visibility !== "hidden"
+      && parseFloat(s.opacity || "1") > 0; } catch (e) { return false; } }
+  function push(kind, label, reason){
+    var key = kind + "|" + label;
+    if (out.length < MAXO && !seen[key]) { seen[key] = 1;
+      out.push({ kind: kind, label: ("" + label).slice(0, 160), reason: reason }); } }
+  try {
+    var frames = document.querySelectorAll("iframe");
+    for (var i = 0; i < frames.length; i++) { var f = frames[i]; if (!vis(f)) continue;
+      var readable = false; try { readable = !!f.contentDocument; } catch (e) { readable = false; }
+      if (!readable) { var src = ""; try { src = f.getAttribute("src") || ""; } catch (e) {}
+        var host = src; try { host = new URL(src, location.href).host; } catch (e) {}
+        push("cross_origin_iframe", host || "embedded frame",
+             "a cross-origin embed the DOM can't read (e.g. payment/captcha/map)"); } }
+  } catch (e) {}
+  try {
+    var cs = document.querySelectorAll("canvas");
+    for (var j = 0; j < cs.length; j++) { var c = cs[j]; if (!vis(c)) continue;
+      var rc = c.getBoundingClientRect(); if (rc.width * rc.height < 40000) continue;
+      push("canvas", (c.getAttribute("aria-label") || "canvas region"),
+           "a canvas-rendered surface — no DOM controls to read (chart / Flutter / WebGL)"); }
+  } catch (e) {}
+  try {
+    var all = document.getElementsByTagName("*");
+    for (var k = 0; k < all.length && k < 5000 && out.length < MAXO; k++) { var el = all[k];
+      var tag = (el.tagName || "").toLowerCase();
+      if (tag.indexOf("-") === -1) continue;          // custom element only
+      if (el.shadowRoot) continue;                     // open shadow — already walked
+      if (el.childElementCount > 0) continue;          // has light DOM we read
+      if ((el.textContent || "").trim()) continue;     // has readable text
+      if (!vis(el)) continue;
+      var r = el.getBoundingClientRect(); if (r.height < 40) continue;
+      push("closed_shadow", tag,
+           "a <" + tag + "> element rendering via a closed shadow root the DOM can't pierce"); }
+  } catch (e) {}
+  return out;
+})()
+"""
+
 #: Bumped when either injected snippet changes (traces a manifest to its JS gen).
 DISPLAYED_VALUES_JS_VERSION = "disp-js-v1"
 

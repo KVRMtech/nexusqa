@@ -539,6 +539,10 @@ class Crawler:
         # the Seed Manifest can group "to test Transfer, provide these" grounded in the
         # actual page — not a keyword guess. First-appearance order; deduped in coverage.
         self._fields_seed_detail: list[dict[str, str]] = []
+        # OPAQUE surfaces the DOM can't read (cross-origin embeds, canvas apps, closed
+        # shadow) — detected + named so the coverage ledger flags a blind spot instead of a
+        # silent skip. {kind, label, reason}; deduped in coverage.
+        self._opaque_surfaces: list[dict[str, str]] = []
         self._submit_candidates: list[str] = []    # a submit found but not clicked (Phase-A boundary)
         # Phase-B attested submit (crawl-once/run-many depth): default-OFF. Fires ONLY
         # when the operator supplied a per-flow submit-approval list AND a disposable-env
@@ -594,9 +598,22 @@ class Crawler:
                     out.append({"label": lbl, "url": (d.get("url") or "").strip()})
             return out
 
+        def _dedup_opaque(items: list[dict[str, str]]) -> list[dict[str, str]]:
+            seen: set[str] = set()
+            out: list[dict[str, str]] = []
+            for d in items:
+                k = f"{d.get('kind')}|{d.get('label')}"
+                if k not in seen:
+                    seen.add(k)
+                    out.append({"kind": str(d.get("kind") or ""),
+                                "label": str(d.get("label") or ""),
+                                "reason": str(d.get("reason") or "")})
+            return out
+
         inferred = _dedup(self._fields_inferred)
         needs_seed = _dedup(self._fields_unfilled)
         needs_seed_detail = _dedup_detail(self._fields_seed_detail)
+        opaque_surfaces = _dedup_opaque(self._opaque_surfaces)
         submits = _dedup(self._submit_candidates)
         unexercised = max(0, len(submits) - self._forms_submitted)
         return {
@@ -607,6 +624,8 @@ class Crawler:
             # Per-field page context {label, url} — the grounded source for flow grouping.
             # Kept alongside the flat list (which stays for back-compat).
             "fields_needing_seed_detail": needs_seed_detail,
+            # DOM-unreadable surfaces detected on the crawl → the ledger's OPAQUE rows.
+            "opaque_surfaces": opaque_surfaces,
             "submit_candidates": submits,
             "summary": (
                 f"{self._forms_found} form(s) found; "
@@ -888,6 +907,14 @@ class Crawler:
         # visit (diagnostics-only; the app's real API surface as grounded evidence).
         # Best-effort: a port without the verb yields nothing, never breaks a crawl.
         network_calls = await self._drain_network()
+        # OPAQUE-SURFACE detection (best-effort): positively find DOM-unreadable surfaces on
+        # this state so the coverage ledger names them, never a silent "clean" scan.
+        collect_opaque = getattr(self._port, "collect_opaque", None)
+        if collect_opaque is not None:
+            try:
+                self._opaque_surfaces.extend(await collect_opaque())
+            except Exception:
+                pass
         # WIZARD/STEPPER (#1): on a FILLED form state, advance a non-danger
         # Next/Continue to record deeper wizard steps in place (SPA quote wizards
         # live at one URL — step 2 is reachable only by the click sequence). The

@@ -289,6 +289,31 @@ export interface MissingPrimary {
   reason: string;
 }
 
+export type CoverageDisposition = 'FULLY' | 'PARTIAL' | 'UNHANDLED' | 'OPAQUE';
+
+/** One control in the Coverage Ledger — how fully it was captured, and why. */
+export interface CoverageControl {
+  label: string;
+  type: string;
+  disposition: CoverageDisposition;
+  reason: string;
+  depends_on?: string;
+}
+
+/** The Coverage Ledger — measured per-app UI-capture coverage + every non-fully-captured
+ *  control, named. The honesty spine: "did we miss anything?" as a number, not a surprise. */
+export interface Coverage {
+  controls: CoverageControl[];
+  fully: number;
+  partial: number;
+  unhandled: number;
+  opaque: number;
+  total: number;
+  coverage_pct: number;
+  gaps: CoverageControl[];
+  measures_captured_only?: boolean;
+}
+
 /** GET /apps/{id}/seed-manifest — the discovery-first Seed Manifest. */
 export interface SeedManifest {
   artifact_id: string;
@@ -307,6 +332,7 @@ export interface SeedManifest {
   missing_primary?: MissingPrimary | null;
   uncaptured_choice_count?: number;
   has_credentials?: boolean;
+  coverage?: Coverage;
   mode?: 'recommended' | 'full';
   items?: SeedItem[];
 }

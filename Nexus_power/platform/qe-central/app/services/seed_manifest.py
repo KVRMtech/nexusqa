@@ -44,6 +44,7 @@ async def build_seed_manifest(
     *,
     answer_key: Mapping[str, Any] | None = None,
     seed_fields: Iterable[str] = (),
+    opaque_surfaces: Iterable[Mapping] = (),
     today: date | None = None,
 ) -> dict:
     """Assemble the two-mode Seed Manifest for a crawled artifact.
@@ -103,5 +104,5 @@ async def build_seed_manifest(
     # The coverage ledger — the honesty spine: a measured per-app coverage number + every
     # control we did NOT fully capture, named with a reason. Computed over what the crawl
     # actually captured (the field inventory), so "did we miss anything?" is answerable.
-    manifest["coverage"] = build_coverage_ledger(inventory)
+    manifest["coverage"] = build_coverage_ledger(inventory, opaque_surfaces=opaque_surfaces)
     return manifest

@@ -54,6 +54,21 @@ def test_coverage_number_and_named_gaps():
     assert all(g.get("reason") for g in led["gaps"])
 
 
+def test_opaque_surfaces_are_named_never_counted_as_covered():
+    inv = [{"label": "Amount", "type": "text"}]
+    opaque = [
+        {"kind": "cross_origin_iframe", "label": "js.stripe.com", "reason": "a cross-origin embed the DOM can't read"},
+        {"kind": "canvas", "label": "chart region", "reason": "a canvas-rendered surface"},
+    ]
+    led = cl.build_coverage_ledger(inv, opaque_surfaces=opaque)
+    assert led["opaque"] == 2 and led["fully"] == 1
+    # coverage % is over readable controls (opaque excluded), and stays 100% here.
+    assert led["coverage_pct"] == 100
+    # both opaque surfaces are NAMED gaps with reasons — a blind spot is never silent.
+    opaque_gaps = [g for g in led["gaps"] if g["disposition"] == cl.OPAQUE]
+    assert {g["label"] for g in opaque_gaps} == {"js.stripe.com", "chart region"}
+
+
 def test_empty_inventory_is_honest_zero():
     led = cl.build_coverage_ledger([])
     assert led["total"] == 0 and led["coverage_pct"] == 0 and led["gaps"] == []

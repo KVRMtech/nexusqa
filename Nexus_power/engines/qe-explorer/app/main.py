@@ -44,7 +44,7 @@ from .fingerprint import interactive_signature
 from .forms import AnswerKey
 from .auth import AuthWindow, Credentials
 from .guard import Attestation, RefusePack, load_refuse_pack
-from .inventory_js import DISPLAYED_VALUES_JS, INVENTORY_JS, INVENTORY_JS_VERSION
+from .inventory_js import DISPLAYED_VALUES_JS, INVENTORY_JS, INVENTORY_JS_VERSION, OPAQUE_JS
 
 logging.basicConfig(level=getattr(logging, settings.log_level.upper(), logging.INFO))
 logger = logging.getLogger("qe-explorer")
@@ -682,6 +682,17 @@ class PlaywrightBrowserPort(BrowserPort):
             return list(result or [])
         except Exception as exc:
             logger.warning("qec.explorer.inventory_failed error=%s", str(exc)[:200])
+            return []
+
+    async def collect_opaque(self) -> list[dict[str, Any]]:
+        """OPAQUE surfaces the DOM walker cannot read ``[{kind, label, reason}]`` — a
+        cross-origin embed, a canvas app, a closed shadow host. Best-effort: ``[]`` on any
+        failure so a detection hiccup never breaks the crawl."""
+        try:
+            result = await self._page.evaluate(OPAQUE_JS)
+            return list(result or [])
+        except Exception as exc:
+            logger.warning("qec.explorer.opaque_failed error=%s", str(exc)[:200])
             return []
 
     async def collect_displayed_values(self) -> list[dict[str, Any]]:

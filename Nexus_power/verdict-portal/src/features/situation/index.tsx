@@ -48,6 +48,7 @@ import type { AppCrawlStatus, CriticalityBand, CrawlDiagnosis, ExplorationCovera
 import VerdictLedger from '../ledger';
 import HonestyFeed from '../honesty';
 import SeedManifestPanel from './SeedManifestPanel';
+import CoveragePanel from './CoveragePanel';
 
 const BAND_TONE: Record<CriticalityBand, 'crit' | 'warn' | 'teal' | 'neutral'> = {
   P0: 'crit',
@@ -653,6 +654,8 @@ export function AppSituation() {
       {/* Seed Manifest — surfaced full-width and prominent so a user always knows
           the few real values / approvals this app needs to test its flows. */}
       <SeedManifestPanel appId={id} />
+      {/* Coverage Ledger — the measured "did we miss anything?" honesty spine. */}
+      <CoveragePanel appId={id} />
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 items-start">
         <div className="space-y-4">
           <AttestationCard appId={id} />

@@ -62,9 +62,12 @@ def classify_control(sig: Mapping) -> tuple[str, str]:
     return UNHANDLED, f"control kind “{ftype}” not handled yet — named, on the roadmap"
 
 
-def build_coverage_ledger(inventory: Iterable[Mapping]) -> dict:
+def build_coverage_ledger(
+    inventory: Iterable[Mapping], *, opaque_surfaces: Iterable[Mapping] = (),
+) -> dict:
     """Compute the coverage ledger over a captured field inventory
-    (``[{label, type, options, required, depends_on}]``).
+    (``[{label, type, options, required, depends_on}]``) plus the crawler-detected
+    ``opaque_surfaces`` (``[{kind, label, reason}]`` — DOM-unreadable surfaces).
 
     Returns ``{controls, fully, partial, unhandled, opaque, total, coverage_pct, gaps,
     measures_captured_only}``. ``coverage_pct`` = FULLY / non-opaque total (0 when empty).
@@ -86,6 +89,18 @@ def build_coverage_ledger(inventory: Iterable[Mapping]) -> dict:
         if disp != FULLY:
             gaps.append(row)
 
+    # OPAQUE surfaces the DOM couldn't read — named blind spots, NEVER counted as covered.
+    for o in opaque_surfaces:
+        label = str(o.get("label") or "").strip()
+        if not label:
+            continue
+        counts[OPAQUE] += 1
+        row = {"label": label, "type": str(o.get("kind") or "opaque"),
+               "disposition": OPAQUE, "reason": str(o.get("reason") or "a surface the DOM can't read")}
+        controls.append(row)
+        gaps.append(row)
+
+    # Total EXCLUDES opaque (they were never readable); coverage is over what could be read.
     total = len(controls)
     non_opaque = total - counts[OPAQUE]
     coverage_pct = round(100 * counts[FULLY] / non_opaque) if non_opaque else 0

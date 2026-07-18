@@ -633,6 +633,10 @@ async def get_seed_manifest(
         # Per-field PAGE url {label: url} the crawler now emits — grounds flow grouping in
         # the actual page a field was on instead of a keyword guess. First non-empty wins.
         seed_field_urls: dict[str, str] = {}
+        # DOM-unreadable surfaces the crawl detected → the ledger's OPAQUE rows. Unioned
+        # across crawls, deduped by (kind,label).
+        opaque_surfaces: list[dict] = []
+        _seen_opaque: set[str] = set()
         for _e in exps:
             _st = _e.stats if isinstance(_e.stats, dict) else {}
             _cov = _st.get("coverage") if isinstance(_st.get("coverage"), dict) else {}
@@ -646,9 +650,14 @@ async def get_seed_manifest(
                 _url = str((_d or {}).get("url") or "").strip()
                 if _lbl and _url and _lbl.lower() not in {k.lower() for k in seed_field_urls}:
                     seed_field_urls[_lbl] = _url
+            for _o in (_cov.get("opaque_surfaces") or []):
+                _ok = f"{(_o or {}).get('kind')}|{(_o or {}).get('label')}"
+                if _ok not in _seen_opaque:
+                    _seen_opaque.add(_ok)
+                    opaque_surfaces.append(dict(_o))
     manifest = await build_seed_manifest(
         tenant_id, artifact_id, answer_key=answer_key, seed_fields=seed_fields,
-        today=datetime.now(timezone.utc).date(),
+        opaque_surfaces=opaque_surfaces, today=datetime.now(timezone.utc).date(),
     )
     # Group the fields into flows so the portal can lead with the flow the app was
     # onboarded for ("to test Transfer, provide these") instead of a flat, undifferentiated
