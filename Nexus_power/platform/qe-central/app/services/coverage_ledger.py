@@ -64,6 +64,7 @@ def classify_control(sig: Mapping) -> tuple[str, str]:
 
 def build_coverage_ledger(
     inventory: Iterable[Mapping], *, opaque_surfaces: Iterable[Mapping] = (),
+    unhandled_controls: Iterable[Mapping] = (),
 ) -> dict:
     """Compute the coverage ledger over a captured field inventory
     (``[{label, type, options, required, depends_on}]``) plus the crawler-detected
@@ -88,6 +89,20 @@ def build_coverage_ledger(
         controls.append(row)
         if disp != FULLY:
             gaps.append(row)
+
+    # UNHANDLED controls — the matcher saw an interactive control it has no primitive for.
+    # Named on the roadmap, never silently skipped. Deduped against captured labels.
+    _known = {str(r.get("label") or "").strip().lower() for r in controls}
+    for u in unhandled_controls:
+        label = str(u.get("label") or "").strip()
+        if not label or label.lower() in _known:
+            continue
+        _known.add(label.lower())
+        counts[UNHANDLED] += 1
+        row = {"label": label, "type": str(u.get("kind") or ""), "disposition": UNHANDLED,
+               "reason": f"an interactive control kind we don't capture yet ({u.get('kind') or 'unknown'}) — named, on the roadmap"}
+        controls.append(row)
+        gaps.append(row)
 
     # OPAQUE surfaces the DOM couldn't read — named blind spots, NEVER counted as covered.
     for o in opaque_surfaces:

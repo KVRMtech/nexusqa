@@ -637,6 +637,8 @@ async def get_seed_manifest(
         # across crawls, deduped by (kind,label).
         opaque_surfaces: list[dict] = []
         _seen_opaque: set[str] = set()
+        unhandled_controls: list[dict] = []
+        _seen_unhandled: set[str] = set()
         for _e in exps:
             _st = _e.stats if isinstance(_e.stats, dict) else {}
             _cov = _st.get("coverage") if isinstance(_st.get("coverage"), dict) else {}
@@ -655,9 +657,15 @@ async def get_seed_manifest(
                 if _ok not in _seen_opaque:
                     _seen_opaque.add(_ok)
                     opaque_surfaces.append(dict(_o))
+            for _u in (_cov.get("unhandled_controls") or []):
+                _uk = str((_u or {}).get("label") or "").strip().lower()
+                if _uk and _uk not in _seen_unhandled:
+                    _seen_unhandled.add(_uk)
+                    unhandled_controls.append(dict(_u))
     manifest = await build_seed_manifest(
         tenant_id, artifact_id, answer_key=answer_key, seed_fields=seed_fields,
-        opaque_surfaces=opaque_surfaces, today=datetime.now(timezone.utc).date(),
+        opaque_surfaces=opaque_surfaces, unhandled_controls=unhandled_controls,
+        today=datetime.now(timezone.utc).date(),
     )
     # Group the fields into flows so the portal can lead with the flow the app was
     # onboarded for ("to test Transfer, provide these") instead of a flat, undifferentiated

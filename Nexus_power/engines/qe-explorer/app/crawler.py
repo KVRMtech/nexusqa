@@ -37,7 +37,9 @@ from dataclasses import dataclass, field
 from typing import Any, Optional, Sequence
 from urllib.parse import urlsplit
 
+from . import danger_signals
 from . import emit
+from . import matcher
 from . import value_infer
 from .auth import Authenticator, AuthWindow, Credentials
 from .browser import BrowserPort, PageObservation
@@ -543,6 +545,9 @@ class Crawler:
         # shadow) — detected + named so the coverage ledger flags a blind spot instead of a
         # silent skip. {kind, label, reason}; deduped in coverage.
         self._opaque_surfaces: list[dict[str, str]] = []
+        # Interactive controls the matcher registry has NO primitive for — named in the
+        # ledger as UNHANDLED (on the roadmap), never a silent skip. {label, kind}.
+        self._unhandled_controls: list[dict[str, str]] = []
         self._submit_candidates: list[str] = []    # a submit found but not clicked (Phase-A boundary)
         # Phase-B attested submit (crawl-once/run-many depth): default-OFF. Fires ONLY
         # when the operator supplied a per-flow submit-approval list AND a disposable-env
@@ -610,10 +615,21 @@ class Crawler:
                                 "reason": str(d.get("reason") or "")})
             return out
 
+        def _dedup_unhandled(items: list[dict[str, str]]) -> list[dict[str, str]]:
+            seen: set[str] = set()
+            out: list[dict[str, str]] = []
+            for d in items:
+                lbl = str(d.get("label") or "").strip()
+                if lbl and lbl.lower() not in seen:
+                    seen.add(lbl.lower())
+                    out.append({"label": lbl, "kind": str(d.get("kind") or "")})
+            return out
+
         inferred = _dedup(self._fields_inferred)
         needs_seed = _dedup(self._fields_unfilled)
         needs_seed_detail = _dedup_detail(self._fields_seed_detail)
         opaque_surfaces = _dedup_opaque(self._opaque_surfaces)
+        unhandled_controls = _dedup_unhandled(self._unhandled_controls)
         submits = _dedup(self._submit_candidates)
         unexercised = max(0, len(submits) - self._forms_submitted)
         return {
@@ -626,6 +642,8 @@ class Crawler:
             "fields_needing_seed_detail": needs_seed_detail,
             # DOM-unreadable surfaces detected on the crawl → the ledger's OPAQUE rows.
             "opaque_surfaces": opaque_surfaces,
+            # Interactive controls the matcher has no primitive for → the ledger's UNHANDLED rows.
+            "unhandled_controls": unhandled_controls,
             "submit_candidates": submits,
             "summary": (
                 f"{self._forms_found} form(s) found; "
@@ -894,6 +912,12 @@ class Crawler:
         # ACT-THEN-DIFF: commit a driver choice to reveal DEPENDENT fields whose options
         # only populate after a prior field is chosen (e.g. To Account after From Account).
         await self._probe_dependencies(snapshot_controls, url=obs.url)
+        # UNHANDLED controls: interactive controls the matcher has no primitive for → named in
+        # the coverage ledger (never a silent skip).
+        for _c in snapshot_controls:
+            if matcher.is_unhandled_field(_c):
+                self._unhandled_controls.append(
+                    {"label": str(_c.get("name") or ""), "kind": str(_c.get("kind") or "")})
 
         # Navigation discovery (grounded): click safe actionable controls.
         actions.extend(await self._discover(item, controls, is_form, fingerprint,
@@ -1351,14 +1375,10 @@ class Crawler:
         for c in controls:
             if probed >= _MAX_OPTION_PROBES:
                 break
-            if c.get("kind") != "select" or c.get("options"):
-                continue  # not a choice control, or options already captured statically
-            if c.get("disabled") or c.get("danger"):
+            # The matcher registry decides which controls need the open-probe (a custom choice
+            # whose options only appear on open) — new widgets plug in via a matcher rule.
+            if not matcher.needs_open_probe(c):
                 continue
-            if (c.get("tag") or "").strip().lower() == "select":
-                continue  # NATIVE select — handled by optionsOf; native popup isn't readable
-            if (c.get("role") or "").strip().lower() not in ("combobox", "listbox"):
-                continue  # only an ARIA combobox opener
             try:
                 open_obs = await self._port.click(dict(c))
                 self._tracker.note_action()
@@ -1391,6 +1411,11 @@ class Crawler:
         field/options can react: a SELECT commits its first option; a RADIO is clicked; a
         CHECKBOX/TOGGLE is switched on. Returns True iff an act fired. EXPLORE-phase only —
         none of these submit anything server-side."""
+        # SAFETY: never actuate a control that isn't affirmatively a safe value control —
+        # a destructive / money-moving / account-consequential label (any language) or a
+        # danger-flagged control is left alone (fail-closed).
+        if not danger_signals.safe_to_actuate(control):
+            return False
         kind = control.get("kind")
         if kind == "select":
             return await self._commit_choice(control)
@@ -1466,10 +1491,9 @@ class Crawler:
         def _key(c: Mapping[str, Any]) -> str:
             return str(c.get("name") or "").strip().lower()
 
-        drivers = [c for c in controls
-                   if c.get("kind") in ("select", "radio", "checkbox", "toggle")
-                   and not c.get("disabled") and not c.get("danger")
-                   and (c.get("kind") != "select" or c.get("options"))]
+        # The matcher registry identifies ACT-THEN-DIFF drivers (a choice/radio/toggle whose
+        # act can reveal a dependent); the safety gate in _commit_act still fail-closes each.
+        drivers = [c for c in controls if matcher.is_diff_driver(c)]
         if not drivers:
             return
         seen_names = {_key(c) for c in controls if c.get("name")}

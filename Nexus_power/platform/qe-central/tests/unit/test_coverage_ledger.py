@@ -69,6 +69,16 @@ def test_opaque_surfaces_are_named_never_counted_as_covered():
     assert {g["label"] for g in opaque_gaps} == {"js.stripe.com", "chart region"}
 
 
+def test_unhandled_controls_are_named_in_the_ledger():
+    inv = [{"label": "Amount", "type": "text"}]
+    unhandled = [{"label": "Data grid", "kind": "grid"}, {"label": "Amount", "kind": "text"}]
+    led = cl.build_coverage_ledger(inv, unhandled_controls=unhandled)
+    # 'Amount' already captured → not double-counted; 'Data grid' becomes a named UNHANDLED row.
+    assert led["unhandled"] == 1
+    row = next(g for g in led["gaps"] if g["disposition"] == cl.UNHANDLED)
+    assert row["label"] == "Data grid" and "roadmap" in row["reason"]
+
+
 def test_empty_inventory_is_honest_zero():
     led = cl.build_coverage_ledger([])
     assert led["total"] == 0 and led["coverage_pct"] == 0 and led["gaps"] == []
