@@ -88,6 +88,10 @@ _MAX_NETWORK_CALLS = 100
 #: per dropdown. Read-only (open → read labels → dismiss), bounded, state-restoring.
 _MAX_OPTION_PROBES = 8
 _MAX_PROBED_OPTIONS = 40
+#: ACT-THEN-DIFF bounds — driver choices committed per state to reveal DEPENDENT fields
+#: (a select whose options populate only after a prior field is chosen). EXPLORE-phase,
+#: no submit; a committed choice is a valid filled-form state to snapshot.
+_MAX_DEP_PROBES = 6
 #: Wizard/stepper traversal (#1) bounds — steps per single wizard chain, and the
 #: crawl-wide advance total; both cap the SAFETY-SENSITIVE submit-boundary probe.
 _MAX_WIZARD_STEPS = 6
@@ -863,6 +867,9 @@ class Crawler:
         # with its actual options, not "options not captured". Runs BEFORE navigation
         # discovery (which leaves the page); best-effort + state-restoring.
         await self._probe_select_options(snapshot_controls, url=obs.url)
+        # ACT-THEN-DIFF: commit a driver choice to reveal DEPENDENT fields whose options
+        # only populate after a prior field is chosen (e.g. To Account after From Account).
+        await self._probe_dependencies(snapshot_controls, url=obs.url)
 
         # Navigation discovery (grounded): click safe actionable controls.
         actions.extend(await self._discover(item, controls, is_form, fingerprint,
@@ -1346,6 +1353,89 @@ class Crawler:
                     probed += 1
             except Exception:
                 continue
+
+    async def _commit_choice(self, control: dict[str, Any]) -> bool:
+        """Grounded-select a driver's FIRST real option so a dependent field can react:
+        a native <select> via select_option; a custom combobox by opening it and clicking
+        the matching [role=option]. Returns True iff a value was committed. EXPLORE-phase
+        only — a chosen dropdown value commits NOTHING server-side (no submit)."""
+        opts = [o for o in (control.get("options") or []) if str(o).strip()]
+        if not opts:
+            return False
+        first = str(opts[0]).strip()
+        tag = (control.get("tag") or "").strip().lower()
+        select_option = getattr(self._port, "select_option", None)
+        if tag == "select" and select_option is not None:
+            try:
+                await select_option(dict(control), first)
+                self._tracker.note_action()
+                return True
+            except Exception:
+                return False
+        collect = getattr(self._port, "collect_controls", None)
+        if collect is None:
+            return False
+        try:
+            await self._port.click(dict(control))            # open the listbox
+            revealed = build_inventory(await collect(), self._refuse_pack, url="")
+            for r in revealed:
+                if (r.get("role") or "").strip().lower() == "option" \
+                        and str(r.get("name") or "").strip() == first:
+                    await self._port.click(dict(r))          # commit the choice
+                    self._tracker.note_action()
+                    return True
+        except Exception:
+            return False
+        return False
+
+    async def _probe_dependencies(
+        self, controls: Sequence[dict[str, Any]], *, url: str,
+    ) -> None:
+        """ACT-THEN-DIFF (v1: dependent choices). For a DRIVER select (options captured),
+        commit its first option, re-observe, and DIFF: any select that was empty and is now
+        POPULATED is a dependent — capture its options and tag depends_on=<driver>. Bounded,
+        EXPLORE-phase (no submit), enriches ``controls`` in place so the snapshot carries the
+        dependent's real options instead of an empty 'unread choice'.
+
+        HONESTY: the captured options are for ONE branch of the driver, so the dependent is
+        tagged depends_on (never presented as a fixed list). Any failure leaves the dependent
+        empty — an honest unread choice, never fabricated."""
+        collect = getattr(self._port, "collect_controls", None)
+        if collect is None:
+            return
+        drivers = [c for c in controls
+                   if c.get("kind") == "select" and c.get("options")
+                   and not c.get("disabled") and not c.get("danger")]
+        empty_by_name = {
+            str(c.get("name") or ""): c for c in controls
+            if c.get("kind") == "select" and not c.get("options") and c.get("name")
+        }
+        if not drivers or not empty_by_name:
+            return
+        acted = 0
+        for d in drivers:
+            if acted >= _MAX_DEP_PROBES or not empty_by_name:
+                break
+            if not await self._commit_choice(d):
+                continue
+            acted += 1
+            # Re-inventory after the commit; a NATIVE dependent select already carries its
+            # newly-populated options here.
+            after = build_inventory(await collect(), self._refuse_pack, url=url)
+            pending = [c for c in after
+                       if c.get("kind") == "select" and str(c.get("name") or "") in empty_by_name]
+            # A CUSTOM dependent combobox still reveals its (now-populated) options only on
+            # OPEN — open-probe the still-empty ones so the dependency actually surfaces.
+            await self._probe_select_options(
+                [c for c in pending if not c.get("options")], url=url)
+            for r in pending:
+                nm = str(r.get("name") or "")
+                if r.get("options") and nm in empty_by_name:
+                    tgt = empty_by_name.pop(nm)
+                    tgt["options"] = list(r.get("options") or [])[:_MAX_PROBED_OPTIONS]
+                    tgt["depends_on"] = d.get("name") or ""
+                    if isinstance(tgt.get("qec"), dict):
+                        tgt["qec"]["options"] = tgt["options"]
 
     async def _maybe_submit_phase_b(
         self, item: FrontierItem, controls: Sequence[dict[str, Any]],

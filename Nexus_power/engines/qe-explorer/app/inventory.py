@@ -262,11 +262,18 @@ def form_signal_for(record: ControlRecord) -> Optional[dict[str, Any]]:
     signal_type = _FORM_SIGNAL_TYPE_BY_KIND.get(record.get("kind", ""))
     if signal_type is None:
         return None
-    return {
+    sig = {
         "type": signal_type,
         "options": list(record.get("options") or []),
         "required": bool(record.get("required")),
     }
+    # A DEPENDENT control (its options only populate after a driver field is chosen) carries
+    # the driver's label — set by the crawler's ACT-THEN-DIFF pass. Keeps a downstream
+    # consumer honest that the captured options are for ONE branch of the driver, not fixed.
+    dep = record.get("depends_on")
+    if dep:
+        sig["depends_on"] = str(dep)
+    return sig
 
 
 # ─── Danger classification (delegates to the fail-closed guard) ────────────────
