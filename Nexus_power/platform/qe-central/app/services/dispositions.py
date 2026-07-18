@@ -135,6 +135,29 @@ def normalize_label(label: str) -> str:
     return re.sub(r"\s+", " ", s).strip()
 
 
+# Leading verbs / phrases that mark a UI ACTION control (a button/toggle/link), NOT a
+# data-input field — a "provide a value" manifest must exclude these. "confirm" is left
+# out on purpose: it collides with data fields ("Confirm Password/Email"). Password-shaped
+# fields are routed to the login group before this filter runs, so they're never dropped.
+_ACTION_VERBS = (
+    "mark", "enable", "disable", "show", "hide", "switch", "add", "remove", "send",
+    "apply", "edit", "close", "open", "reset", "download", "upload", "filter", "sort",
+    "go to", "previous", "next", "continue", "submit", "save", "cancel", "delete",
+    "approve", "reject", "select all", "clear",
+)
+_ACTION_PHRASES = ("as done", "navigation", "steps for", " mode", "page ", "report an issue")
+
+
+def is_action_label(label: str) -> bool:
+    """True when a label reads as a UI action control rather than a value to provide."""
+    lo = normalize_label(label)
+    if not lo:
+        return True
+    if any(lo.startswith(v + " ") or lo == v for v in _ACTION_VERBS):
+        return True
+    return any(p in lo for p in _ACTION_PHRASES)
+
+
 def _has_word(norm: str, *words: str) -> bool:
     """Whole-WORD match for short, collision-prone tokens.
 

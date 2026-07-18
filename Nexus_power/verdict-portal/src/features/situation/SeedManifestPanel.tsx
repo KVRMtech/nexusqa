@@ -114,6 +114,7 @@ export default function SeedManifestPanel({ appId, onSeeded }: { appId: string; 
   const totalToProvide =
     flows.reduce((n, f) => n + f.to_provide, 0) + (auth && !auth.satisfied ? auth.to_provide : 0);
   const flowsNeedingInput = flows.filter((f) => f.actionable > 0).length;
+  const autoHandled = (m.autonomous_count ?? 0) + (m.counts?.OBSERVE ?? 0);
 
   // Fully autonomous app with nothing to seed and login handled — reassure, don't nag.
   if (totalToProvide === 0 && (!auth || auth.satisfied)) {
@@ -199,6 +200,24 @@ export default function SeedManifestPanel({ appId, onSeeded }: { appId: string; 
           and <span className="font-medium text-ink">prove</span> each flow end-to-end.
         </p>
 
+        {/* Make the 99%-automated / 1%-you split visible — the "it did the hard work" moment. */}
+        <div className="mt-2.5 flex flex-wrap items-center gap-x-4 gap-y-1 text-2xs">
+          {autoHandled > 0 && (
+            <span className="inline-flex items-center gap-1 text-good font-medium">
+              <Sparkles size={12} aria-hidden /> {autoHandled} handled automatically
+            </span>
+          )}
+          <span className="inline-flex items-center gap-1 text-amber-500 font-medium">
+            <KeyRound size={12} aria-hidden /> {totalToProvide} only you can provide
+          </span>
+          {flowsNeedingInput > 0 && (
+            <span className="inline-flex items-center gap-1 text-ink-low">
+              <ListChecks size={12} aria-hidden /> across {flowsNeedingInput}{' '}
+              {flowsNeedingInput === 1 ? 'flow' : 'flows'}
+            </span>
+          )}
+        </div>
+
         {/* ── Sign in (shared) — satisfied strip or, if no creds, a normal flow ── */}
         {auth && auth.satisfied && (
           <div className="mt-4 flex items-center gap-2.5 rounded-lg ring-1 ring-good/30 bg-good/[0.06] px-3 py-2">
@@ -219,9 +238,13 @@ export default function SeedManifestPanel({ appId, onSeeded }: { appId: string; 
           {auth && !auth.satisfied && (
             <FlowCard flow={auth} defaultOpen ready={readyCount(auth)} ctx={ctx} />
           )}
-          {flows.map((f) => (
-            <FlowCard key={f.key} flow={f} defaultOpen={!!f.primary} ready={readyCount(f)} ctx={ctx} />
-          ))}
+          {flows
+            // Show the primary flow always; hide other flows that have nothing for the
+            // user to do (all-auto) so the panel never shows a "0 of 0" card.
+            .filter((f) => f.primary || f.actionable > 0)
+            .map((f) => (
+              <FlowCard key={f.key} flow={f} defaultOpen={!!f.primary} ready={readyCount(f)} ctx={ctx} />
+            ))}
         </div>
 
         {/* ── actions ── */}

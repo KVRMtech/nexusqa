@@ -521,6 +521,11 @@ class Crawler:
         self._forms_found = 0
         self._fields_inferred: list[str] = []      # filled with a synthesized default
         self._fields_unfilled: list[str] = []      # no seed AND no safe default -> needs seed
+        # Per-field PAGE context for the ones needing a seed: {label, url}. The label
+        # alone can't say WHICH flow a field belongs to; the page it appeared on can, so
+        # the Seed Manifest can group "to test Transfer, provide these" grounded in the
+        # actual page — not a keyword guess. First-appearance order; deduped in coverage.
+        self._fields_seed_detail: list[dict[str, str]] = []
         self._submit_candidates: list[str] = []    # a submit found but not clicked (Phase-A boundary)
         # Phase-B attested submit (crawl-once/run-many depth): default-OFF. Fires ONLY
         # when the operator supplied a per-flow submit-approval list AND a disposable-env
@@ -566,8 +571,19 @@ class Crawler:
                     out.append(k)
             return out
 
+        def _dedup_detail(items: list[dict[str, str]]) -> list[dict[str, str]]:
+            seen: set[str] = set()
+            out: list[dict[str, str]] = []
+            for d in items:
+                lbl = (d.get("label") or "").strip()
+                if lbl and lbl.lower() not in seen:
+                    seen.add(lbl.lower())
+                    out.append({"label": lbl, "url": (d.get("url") or "").strip()})
+            return out
+
         inferred = _dedup(self._fields_inferred)
         needs_seed = _dedup(self._fields_unfilled)
+        needs_seed_detail = _dedup_detail(self._fields_seed_detail)
         submits = _dedup(self._submit_candidates)
         unexercised = max(0, len(submits) - self._forms_submitted)
         return {
@@ -575,6 +591,9 @@ class Crawler:
             "forms_submitted": self._forms_submitted,
             "fields_inferred": inferred,
             "fields_needing_seed": needs_seed,
+            # Per-field page context {label, url} — the grounded source for flow grouping.
+            # Kept alongside the flat list (which stays for back-compat).
+            "fields_needing_seed_detail": needs_seed_detail,
             "submit_candidates": submits,
             "summary": (
                 f"{self._forms_found} form(s) found; "
@@ -801,6 +820,9 @@ class Crawler:
             self._tracker.note_action(len(fill.actions))
             self._fields_inferred.extend(fill.inferred_fields)
             self._fields_unfilled.extend(fill.unfilled_fields)
+            # Tag each unfilled field with the page it appeared on (grounds flow grouping).
+            self._fields_seed_detail.extend(
+                {"label": lbl, "url": obs.url or ""} for lbl in fill.unfilled_fields)
             self._submit_candidates.extend(
                 fc.name for fc in fill.flow_candidates if fc.name and not fc.danger)
             if fill.filled:

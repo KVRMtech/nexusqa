@@ -65,6 +65,27 @@ def test_login_failed_on_401():
     assert _diag("failed", error="server returned HTTP 401").get("code") == cd.CODE_LOGIN_FAILED
 
 
+def test_login_blocked_on_completed_crawl_with_auth_failed_stop_reason():
+    # LIVE: a login-required app whose scripted sign-in can't complete reports
+    # status=COMPLETED with stop_reason=auth_failed and a 1-page substrate. It must
+    # read as "Login blocked", NOT a confusing "nothing captured" / "needs seeds".
+    d = _diag("completed", stats={
+        "visits": 1, "stop_reason": "auth_failed",
+        "coverage": {"forms_found": 1, "fields_needing_seed": ["Remember me"]},
+    })
+    assert d["code"] == cd.CODE_LOGIN_FAILED and d["severity"] == cd.SEV_ACTION
+    assert d["evidence"]["stop_reason"] == "auth_failed"
+
+
+def test_auth_failed_does_not_override_a_productive_crawl():
+    # If a crawl still generated cases, an auth wall deeper in must not downgrade it.
+    d = _diag("completed", stats={
+        "visits": 9, "stop_reason": "auth_failed", "generate": {"generated": 4},
+        "coverage": {"forms_found": 3},
+    })
+    assert d["code"] == cd.CODE_COMPLETED_OK
+
+
 def test_unrelated_failure_is_NOT_login():
     # A timeout / navigation error must never be mislabelled a login problem.
     d = _diag("failed", error="Timeout 30000ms exceeded waiting for selector .foo")

@@ -67,6 +67,12 @@ _LOGIN_TOKENS = (
     "authentication required", "login_wall", "auth_wall", "http 401", " 401 ",
 )
 
+# The crawler's own terminal stop-reason for an unverified sign-in. A login-blocked
+# crawl reports status=COMPLETED (it wrote an honest 1-page substrate) with this
+# stop_reason — so the login wall must be detected here too, or it masquerades as a
+# confusingly empty "nothing captured" / "needs seeds" result.
+_LOGIN_STOP_REASONS = frozenset({"auth_failed"})
+
 
 def _stats_of(stats: Any) -> Mapping:
     return stats if isinstance(stats, Mapping) else {}
@@ -147,13 +153,25 @@ def diagnose(*, status: str | None, error: str | None = "", stats: Any = None) -
                       "Re-run the crawl.",
                       evidence={"error": err})
 
-    # ── Failed — distinguish a login wall from a generic failure ──────────────
+    # ── Login wall — a scripted sign-in could not complete ────────────────────
+    # Fires on a FAILED crawl OR a COMPLETED one whose stop_reason is auth_failed
+    # (the crawl reached the login page, filled it, but the app didn't advance — it
+    # never got past login to the app's flows). Checked BEFORE the completed-grading
+    # below so it never masquerades as "nothing captured" / "needs seeds", which is
+    # exactly the confusing dead-end this avoids. A crawl that still produced cases is
+    # left to grade as productive (an auth wall deeper in, not a hard block).
+    stop_reason = str(s.get("stop_reason") or "").strip().lower()
+    login_wall = stop_reason in _LOGIN_STOP_REASONS or any(t in reason_text for t in _LOGIN_TOKENS)
+    if login_wall and generated_n <= 0:
+        return _build(CODE_LOGIN_FAILED, SEV_ACTION, "Login blocked",
+                      "The crawl reached the app's login page but couldn't sign in, so it "
+                      "couldn't get past it to test the app's flows.",
+                      "Update the app's login credentials (or provide a signed-in session), "
+                      "then re-crawl.",
+                      evidence={"error": err, "stop_reason": stop_reason})
+
+    # ── Failed — a generic failure (login walls handled above) ────────────────
     if st == "failed":
-        if any(tok in reason_text for tok in _LOGIN_TOKENS):
-            return _build(CODE_LOGIN_FAILED, SEV_ACTION, "Login failed",
-                          "The crawl could not sign in to the app.",
-                          "Update the app's login credentials, then re-crawl.",
-                          evidence={"error": err})
         return _build(CODE_FAILED, SEV_WARN, "Crawl failed",
                       err or "The crawl failed before producing a result.",
                       "Review the reason and re-crawl.",

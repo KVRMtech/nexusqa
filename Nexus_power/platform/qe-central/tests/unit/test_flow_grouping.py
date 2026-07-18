@@ -56,6 +56,56 @@ def test_progress_counts_provided_values():
     assert amount["disposition"] == "SYNTHESIZE"
 
 
+def test_page_url_grounds_flow_generically_without_domain_keywords():
+    # No banking vocabulary at all — grouping comes purely from the pages the crawler saw.
+    items = [
+        {"label": "Widget Serial", "disposition": "ASK"},
+        {"label": "Batch Code", "disposition": "ASK"},
+        {"label": "Ship To", "disposition": "ASK"},
+    ]
+    urls = {
+        "Widget Serial": "https://f.test/intake/register",
+        "Batch Code": "https://f.test/intake/register",
+        "Ship To": "https://f.test/orders/dispatch",
+    }
+    g = group_into_flows(items, base_url="https://f.test/intake/register", field_urls=urls)
+    keys = [f["key"] for f in g["flows"]]
+    assert "register" in keys and "dispatch" in keys
+    reg = next(f for f in g["flows"] if f["key"] == "register")
+    assert {i["label"] for i in reg["items"]} == {"Widget Serial", "Batch Code"}
+    assert reg["primary"] is True and reg["name"] == "Register"  # base_url points here
+
+
+def test_domain_hint_groups_related_fields_across_pages():
+    # From Account (seen on /send-money) and Amount (on /transfer) are ONE logical
+    # Transfer flow — the hint keeps them together instead of splitting them across two
+    # confusingly-named "Transfer" cards, which is the messy result URL-only produced.
+    items = [
+        {"label": "From Account", "disposition": "ASK"},
+        {"label": "Amount", "disposition": "SYNTHESIZE"},
+    ]
+    urls = {"From Account": "https://x.test/bank/send-money", "Amount": "https://x.test/bank/transfer"}
+    g = group_into_flows(items, base_url="https://x.test/bank/transfer", field_urls=urls)
+    transfer = [f for f in g["flows"] if f["key"] == "transfer"]
+    assert len(transfer) == 1
+    assert {i["label"] for i in transfer[0]["items"]} == {"From Account", "Amount"}
+
+
+def test_ui_action_controls_are_dropped_from_data_flows():
+    # The practice app's "Mark TC-DASH-001 as done" checkboxes and an "Enable Two-Factor"
+    # toggle are UI actions, not values to provide — they must never appear as ASK rows.
+    items = [
+        {"label": "From Account", "disposition": "ASK"},
+        {"label": "Mark TC-DASH-001 as done", "disposition": "ASK"},
+        {"label": "Enable Two-Factor Authentication", "disposition": "ASK"},
+    ]
+    g = group_into_flows(items, base_url="https://x.test/bank/transfer")
+    labels = {i["label"] for f in g["flows"] for i in f["items"]}
+    assert "From Account" in labels
+    assert "Mark TC-DASH-001 as done" not in labels
+    assert "Enable Two-Factor Authentication" not in labels
+
+
 def test_non_domain_app_degrades_to_one_honest_bucket():
     items = [{"label": "Widget Serial", "disposition": "ASK"}, {"label": "Batch Code", "disposition": "ASK"}]
     g = group_into_flows(items, base_url="https://factory.test/intake")

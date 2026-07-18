@@ -5,7 +5,7 @@ Only real data-input fields belong in a "provide a value" manifest; UI action co
 on a bank app surfaced "Mark TC-DASH-001 as done" and "Enable Two-Factor" as ASK items
 until this filter was added.
 """
-from app.services.seed_manifest import _is_action_label
+from app.services.dispositions import is_action_label as _is_action_label
 
 
 def test_action_controls_are_filtered():

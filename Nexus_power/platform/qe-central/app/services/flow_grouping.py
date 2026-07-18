@@ -31,7 +31,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping, Sequence
 from urllib.parse import urlsplit
 
-from .dispositions import normalize_label
+from .dispositions import is_action_label, normalize_label
 
 # ── Auth / login lexicon ─────────────────────────────────────────────────────
 # Whole-normalized-label or token matches that mark a credential/login field. Kept
@@ -66,12 +66,43 @@ _FLOW_HINTS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
 _FALLBACK_KEY = "other"
 _FALLBACK_NAME = "Fields to provide"
 
+# URL path segments that don't name a flow (skip when reading a flow off a page path).
+_GENERIC_SEGMENTS = frozenset({
+    "", "step", "steps", "page", "pages", "index", "home", "app", "apps", "main",
+    "en", "us", "en-us", "www", "public", "web", "ui",
+})
+
 # Dispositions the user must act on (vs. auto-handled) — drives per-flow "to provide".
 _ACTIONABLE = {"ASK", "APPROVE"}
 
 
 def _is_auth(norm: str) -> bool:
     return any(t in norm for t in _AUTH_TOKENS)
+
+
+def _display_name_for(seg: str) -> str:
+    """A readable flow name from a URL segment — just the segment title-cased. Domain
+    naming is NOT applied here: domain fields group by hint (with the hint's own name)
+    BEFORE the URL fallback, so title-casing the real segment keeps generic pages honest
+    ("send money" -> "Send Money") and avoids two pages collapsing to one hint name."""
+    return seg.replace("-", " ").replace("_", " ").strip().title() or _FALLBACK_NAME
+
+
+def _flow_from_url(url: str) -> tuple[str, str] | None:
+    """Ground a field's flow in the PAGE it appeared on: the last meaningful path segment
+    names the flow (``…/orders/dispatch`` -> ``dispatch`` -> "Dispatch"). Domain-agnostic —
+    the URL structure carries the flow on any site. Returns None for a URL with no usable
+    segment (root/query-only) so the caller can fall back to label keywords."""
+    try:
+        path = urlsplit(url or "").path
+    except ValueError:
+        return None
+    for raw in reversed([s for s in path.split("/") if s]):
+        seg = normalize_label(raw.split(".")[0])  # drop any file extension
+        if not seg or seg.isdigit() or seg in _GENERIC_SEGMENTS:
+            continue
+        return seg, _display_name_for(seg)
+    return None
 
 
 def _flow_of(norm: str) -> tuple[str, str]:
@@ -83,12 +114,13 @@ def _flow_of(norm: str) -> tuple[str, str]:
 
 
 def _primary_key_from_url(base_url: str, present: set[str]) -> str | None:
-    """Infer the onboarded flow from the entry URL's last meaningful path segment.
-
-    Generic: a path segment matching a bucket key (or its hint keywords) wins; e.g.
-    ``…/bank/transfer`` -> ``transfer``. Returns a key only if that flow is actually
-    present among the fields, so we never elect an empty primary.
-    """
+    """Elect the onboarded flow from the entry URL. Prefer the page the URL points at
+    directly (grounded, same rule as the fields); fall back to a domain-hint match on any
+    path segment. Returns a key only if that flow is actually present, so we never elect
+    an empty primary."""
+    grounded = _flow_from_url(base_url)
+    if grounded and grounded[0] in present:
+        return grounded[0]
     try:
         path = urlsplit(base_url or "").path
     except ValueError:
@@ -107,26 +139,47 @@ def group_into_flows(
     base_url: str = "",
     provided_labels: Sequence[str] = (),
     auth_satisfied: bool = False,
+    field_urls: Mapping[str, str] | None = None,
 ) -> dict:
     """Partition manifest ``items`` (each a Disposition ``as_dict``) into flows.
+
+    ``field_urls`` maps a normalized field label to the PAGE URL the crawler saw it on.
+    When present, a field's flow is grounded in that page (exact + fully generic); absent
+    a URL, it falls back to label keyword hints. Auth fields split off by label regardless.
 
     Returns ``{"flows": [...data flows, primary first...], "auth": {...}|None,
     "primary_flow": key|None}``. Each flow carries ``items`` (with a ``provided`` bool
     added), ``to_provide`` (actionable-and-not-yet-provided count) and ``total``.
     """
     provided = {normalize_label(x) for x in provided_labels if str(x).strip()}
+    urls = {normalize_label(k): v for k, v in (field_urls or {}).items() if str(v).strip()}
     auth_items: list[dict] = []
     buckets: dict[str, dict] = {}
 
     for it in items:
-        norm = normalize_label(str(it.get("label") or ""))
+        label = str(it.get("label") or "")
+        norm = normalize_label(label)
         if not norm:
             continue
-        enriched = {**it, "provided": norm in provided}
+        # Login/credential fields split off first (so they are never dropped as actions).
         if _is_auth(norm):
-            auth_items.append(enriched)
+            auth_items.append({**it, "provided": norm in provided})
             continue
-        key, name = _flow_of(norm)
+        # UI action controls (buttons/toggles: "Mark … as done", "Enable …") are not
+        # values to provide — keep them out of the data flows entirely.
+        if is_action_label(label):
+            continue
+        enriched = {**it, "provided": norm in provided}
+        # Group by MEANING first: a domain hint keeps related fields together across
+        # pages (a transfer's From Account + Amount, even if on two screens) and reads
+        # cleanly. Fall back to the grounded PAGE for fields no hint recognizes (fully
+        # generic), and finally to one honest bucket.
+        hint_key, hint_name = _flow_of(norm)
+        if hint_key != _FALLBACK_KEY:
+            key, name = hint_key, hint_name
+        else:
+            grounded = _flow_from_url(urls.get(norm, ""))
+            key, name = grounded if grounded else (_FALLBACK_KEY, _FALLBACK_NAME)
         buckets.setdefault(key, {"key": key, "name": name, "items": []})["items"].append(enriched)
 
     present = set(buckets)

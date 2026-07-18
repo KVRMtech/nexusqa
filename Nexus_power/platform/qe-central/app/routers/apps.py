@@ -629,6 +629,9 @@ async def get_seed_manifest(
         # order-preserving.
         seed_fields: list[str] = []
         _seen_seed: set[str] = set()
+        # Per-field PAGE url {label: url} the crawler now emits — grounds flow grouping in
+        # the actual page a field was on instead of a keyword guess. First non-empty wins.
+        seed_field_urls: dict[str, str] = {}
         for _e in exps:
             _st = _e.stats if isinstance(_e.stats, dict) else {}
             _cov = _st.get("coverage") if isinstance(_st.get("coverage"), dict) else {}
@@ -637,6 +640,11 @@ async def get_seed_manifest(
                 if _s and _s.lower() not in _seen_seed:
                     _seen_seed.add(_s.lower())
                     seed_fields.append(_s)
+            for _d in (_cov.get("fields_needing_seed_detail") or []):
+                _lbl = str((_d or {}).get("label") or "").strip()
+                _url = str((_d or {}).get("url") or "").strip()
+                if _lbl and _url and _lbl.lower() not in {k.lower() for k in seed_field_urls}:
+                    seed_field_urls[_lbl] = _url
     manifest = await build_seed_manifest(
         tenant_id, artifact_id, answer_key=answer_key, seed_fields=seed_fields,
         today=datetime.now(timezone.utc).date(),
@@ -652,6 +660,7 @@ async def get_seed_manifest(
         base_url=base_url,
         provided_labels=provided_labels,
         auth_satisfied=has_credentials,
+        field_urls=seed_field_urls,
     )
     manifest.update(grouping)
     manifest["has_credentials"] = has_credentials

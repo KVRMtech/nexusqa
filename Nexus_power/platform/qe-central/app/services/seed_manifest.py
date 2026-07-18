@@ -17,28 +17,13 @@ from collections.abc import Iterable, Mapping
 from datetime import date
 from typing import Any
 
-from .dispositions import FieldSignal, classify_manifest, normalize_label
-from .synthesis import field_inventory_for_artifact, value_candidates_for_artifact
-
-
-# Leading verbs / phrases that mark a UI ACTION control (a button/toggle/link), not a
-# data-input field — these are filtered out of the crawler's coverage list when merged.
-_ACTION_VERBS = (
-    "mark", "enable", "disable", "show", "hide", "switch", "add", "remove", "send",
-    "apply", "edit", "close", "open", "reset", "download", "upload", "filter", "sort",
-    "go to", "previous", "next", "continue", "submit", "save", "cancel", "delete",
-    "review", "confirm", "approve", "reject", "view", "select all", "clear",
+from .dispositions import (
+    FieldSignal,
+    classify_manifest,
+    is_action_label,
+    normalize_label,
 )
-_ACTION_PHRASES = ("as done", "navigation", "steps for", " mode", "page ", "report an issue")
-
-
-def _is_action_label(label: str) -> bool:
-    lo = " ".join(str(label or "").strip().lower().split())
-    if not lo:
-        return True
-    if any(lo.startswith(v + " ") or lo == v for v in _ACTION_VERBS):
-        return True
-    return any(p in lo for p in _ACTION_PHRASES)
+from .synthesis import field_inventory_for_artifact, value_candidates_for_artifact
 
 
 def library_keys_from_answer_key(answer_key: Mapping[str, Any] | None) -> list[str]:
@@ -98,7 +83,7 @@ async def build_seed_manifest(
     have = {normalize_label(s.label) for s in signals}
     for f in seed_fields:
         lbl = str(f or "").strip()
-        if lbl and not _is_action_label(lbl) and normalize_label(lbl) not in have:
+        if lbl and not is_action_label(lbl) and normalize_label(lbl) not in have:
             signals.append(FieldSignal(label=lbl))
             have.add(normalize_label(lbl))
 
