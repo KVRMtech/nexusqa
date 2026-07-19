@@ -56,6 +56,8 @@ def _attestation(env_kind: str = "disposable", *, expires: str | None = None) ->
         "attested_at": _past_iso(2),
         "expires_at": expires if expires is not None else _future_iso(24),
         "reset_procedure": "terraform destroy && apply",
+        # Authorization to test the target URL (owns / permitted) — the liability gate.
+        "authorization": {"authorized": True, "authorized_by": "ciso@client.example"},
     }
 
 
@@ -115,6 +117,21 @@ def test_status_progresses_draft_attested_live():
     # live: + passed preflight.
     live = _live_app()
     assert onboarding_status(live) == ONBOARDING_LIVE
+
+
+def test_crawl_refused_without_authorization_attestation():
+    # An otherwise-live app (RoE + attestation + preflight) is STILL refused until the
+    # operator attests they own / are permitted to test the URL — the liability gate.
+    app = _live_app()
+    del app.env_attestation["authorization"]
+    ok, reasons = onboarding_ready(app)
+    assert ok is False
+    assert any("authoriz" in r.lower() for r in reasons)
+    with pytest.raises(prod_guard.OnboardingRefused):
+        assert_crawlable(app, phase=prod_guard.PHASE_EXPLORE, env="production")
+    # A blank authorized_by (unattributed) does not count.
+    app.env_attestation["authorization"] = {"authorized": True, "authorized_by": ""}
+    assert onboarding_ready(app)[0] is False
 
 
 def test_live_app_proceeds_for_explore():

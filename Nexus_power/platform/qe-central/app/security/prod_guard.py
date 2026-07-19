@@ -274,6 +274,19 @@ def _preflight_passed(app_row: Any) -> bool:
     return False
 
 
+def _authorized_to_test(app_row: Any) -> bool:
+    """The operator's AUTHORIZATION attestation — they own or are permitted to test the
+    target URL. The liability gate before any crawl reaches a site (esp. a public one):
+    ``env_attestation.authorization = {authorized: True, authorized_by: <non-empty>}``.
+    Attributed (``authorized_by``) so a refusal/allow is auditable — the crawler never
+    touches a URL the operator has not affirmed they may test."""
+    att = _jsonb(app_row, "env_attestation")
+    authz = att.get("authorization")
+    if not isinstance(authz, Mapping):
+        return False
+    return _truthy(authz.get("authorized")) and bool(str(authz.get("authorized_by") or "").strip())
+
+
 def _attestation_status(
     app_row: Any, *, allowed_kinds: frozenset[str], now: datetime,
 ) -> tuple[bool, str, str]:
@@ -365,9 +378,10 @@ def onboarding_status(app_row: Any) -> str:
         app_row, allowed_kinds=NON_PROD_ENV_KINDS, now=now,
     )
     preflight = _preflight_passed(app_row)
-    if roe and att_ok and preflight:
+    authz = _authorized_to_test(app_row)
+    if roe and att_ok and preflight and authz:
         return ONBOARDING_LIVE
-    if roe and att_ok:
+    if roe and att_ok and authz:
         return ONBOARDING_ATTESTED
     return ONBOARDING_DRAFT
 
@@ -381,6 +395,11 @@ def onboarding_ready(app_row: Any) -> tuple[bool, list[str]]:
     """
     now = _utcnow()
     reasons: list[str] = []
+    if not _authorized_to_test(app_row):
+        reasons.append(
+            "authorization to test this URL not attested — confirm you own or are "
+            "permitted to test it (env_attestation.authorization.authorized + authorized_by)"
+        )
     if not _roe_signed(app_row):
         reasons.append(
             "rules-of-engagement not signed "
