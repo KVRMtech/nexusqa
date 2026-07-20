@@ -268,6 +268,23 @@ export class QecApiClient {
   }
 
   /**
+   * Record (or revoke) the operator's AUTHORIZATION to test this URL — the liability
+   * gate prod_guard enforces before any crawl (env_attestation.authorization =
+   * {authorized, authorized_by, authorized_at}). PATCH whole-replaces env_attestation,
+   * so we spread the current attestation and overlay only the authorization block.
+   * authorized_by is REQUIRED (attributed refusal/allow) — the server rejects a blank.
+   */
+  authorize(
+    app: ClientApp,
+    authorized: boolean,
+    authorized_by: string,
+    opts?: RequestOpts,
+  ): Promise<ClientApp> {
+    const authorization = { authorized, authorized_by, authorized_at: new Date().toISOString() };
+    return this.reAttest(app, { authorization }, opts);
+  }
+
+  /**
    * Add answer-key seeds (post-crawl seed-confirm). PATCH is WHOLE-REPLACE on
    * answer_key too, so spread the existing answer_key AND its nested `fill` map
    * before overlaying the new field→value pairs — otherwise one new seed would

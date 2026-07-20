@@ -150,6 +150,10 @@ export interface EnvAttestation {
   expires_at?: IsoTimestamp;
   rules_of_engagement?: RulesOfEngagement;
   preflight?: { passed?: boolean; note?: string };
+  /** The operator's AUTHORIZATION attestation — they own or are permitted to test
+   *  the target URL. prod_guard._authorized_to_test requires authorized===true AND
+   *  a non-empty authorized_by before any crawl reaches a site (the liability gate). */
+  authorization?: { authorized?: boolean; authorized_by?: string; authorized_at?: IsoTimestamp };
   [key: string]: unknown;
 }
 

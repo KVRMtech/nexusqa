@@ -25,9 +25,11 @@ import {
   Radar,
   ScrollText,
   ShieldAlert,
+  ShieldCheck,
 } from 'lucide-react';
 
 import { api, QecApiError } from '../../lib/api';
+import { useAuth } from '../../lib/auth';
 import { cn, formatCount, humanize, timeAgo } from '../../lib/format';
 import { useAsync } from '../../lib/useAsync';
 import {
@@ -552,7 +554,9 @@ function CyclesCard({ appId }: { appId: string }) {
 
 function AttestationCard({ appId }: { appId: string }) {
   const state = useAsync((signal) => api.getApp(appId, { signal }), [appId]);
+  const { session } = useAuth();
   const [busy, setBusy] = useState(false);
+  const [affirmed, setAffirmed] = useState(false);
   const app = state.data;
 
   const reAttest = async () => {
@@ -571,9 +575,36 @@ function AttestationCard({ appId }: { appId: string }) {
     }
   };
 
+  // Record the operator's AUTHORIZATION to test this URL — the liability gate the
+  // crawler enforces (env_attestation.authorization). Attributed to the signed-in
+  // operator so a later allow/refusal is auditable; a blank identity is refused.
+  const authorize = async () => {
+    if (!app) return;
+    const who = (session?.email || session?.sub || '').trim();
+    if (!who) {
+      toast.error('Sign in first', { description: 'Authorization must be attributed to an operator.' });
+      return;
+    }
+    setBusy(true);
+    try {
+      await api.authorize(app, true, who);
+      toast.success('Authorization recorded', {
+        description: `Attributed to ${who}. The crawl gate for this URL is now open.`,
+      });
+      setAffirmed(false);
+      state.reload();
+    } catch (err) {
+      toast.error('Could not record authorization', { description: (err as QecApiError).message });
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const statusTone = (s?: string): 'good' | 'warn' | 'crit' =>
     s === 'live' ? 'good' : s === 'attested' ? 'warn' : 'crit';
   const att = app?.env_attestation ?? {};
+  const authz = att.authorization;
+  const isAuthorized = Boolean(authz?.authorized) && Boolean(String(authz?.authorized_by || '').trim());
 
   return (
     <Panel tone="elevated">
@@ -613,7 +644,56 @@ function AttestationCard({ appId }: { appId: string }) {
                   {app.attestation_expires_at ? timeAgo(app.attestation_expires_at) : '—'}
                 </dd>
               </div>
+              <div className="col-span-2">
+                <dt className="text-ink-low">Authorized to test</dt>
+                <dd className="text-ink font-medium truncate">
+                  {isAuthorized ? `yes — ${authz?.authorized_by}` : 'not attested'}
+                </dd>
+              </div>
             </dl>
+            {/* AUTHORIZATION affirm — the liability gate. Until the operator affirms
+                they own or are permitted to test this URL, the crawler refuses. This is
+                the self-serve control that clears the "authorization … not attested"
+                reason, attributed to the signed-in operator. */}
+            {!isAuthorized && (
+              <div className="mt-3 rounded-lg px-3 py-2.5 ring-1 ring-warn/30 bg-warn/[0.06]">
+                <label className="flex items-start gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={affirmed}
+                    onChange={(e) => setAffirmed(e.target.checked)}
+                    className="mt-0.5 shrink-0 accent-teal"
+                  />
+                  <span className="text-2xs text-ink leading-snug">
+                    I own or am permitted to test this URL, and I authorize this crawl.
+                    <span className="block text-ink-low">
+                      Recorded against {session?.email || session?.sub || 'the signed-in operator'} for audit.
+                    </span>
+                  </span>
+                </label>
+                <div className="mt-2.5 flex justify-end">
+                  <Button
+                    variant="primary"
+                    size="sm"
+                    loading={busy}
+                    disabled={!affirmed}
+                    onClick={authorize}
+                  >
+                    <ShieldCheck size={13} className="mr-1" aria-hidden />
+                    Authorize testing
+                  </Button>
+                </div>
+              </div>
+            )}
+            {isAuthorized && (
+              <div className="mt-3 flex items-center gap-2 rounded-lg px-3 py-2 ring-1 ring-good/25 bg-good/[0.06]">
+                <ShieldCheck size={13} className="text-good shrink-0" aria-hidden />
+                <span className="text-2xs text-ink leading-snug">
+                  Authorized to test by {authz?.authorized_by}
+                  {authz?.authorized_at ? ` · ${timeAgo(authz.authorized_at)}` : ''}.
+                </span>
+              </div>
+            )}
             {!app.onboarding_ready && (app.onboarding_reasons?.length ?? 0) > 0 && (
               <ul className="mt-3 space-y-1.5">
                 {app.onboarding_reasons!.map((reason, i) => (
