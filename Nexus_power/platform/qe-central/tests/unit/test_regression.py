@@ -115,3 +115,58 @@ def test_narrative_for_genuine_regression():
     v = rv.classify(run_status="passed", diffs=diffs, has_baseline=True)
     text = rv.narrative("Transfer", v, diffs)
     assert "review" in text.lower() and "180" in text
+
+
+# ── Phase 5 WIRING: _classify_selected runs the classifier on real cycle outcomes
+# (the choke point that was orphaned — a failed-unhealed case must reach review).
+from app.controlplane.cycle.driver import _classify_selected  # noqa: E402
+from app.controlplane.cycle.selector import SelectionResult  # noqa: E402
+
+
+def _sel(*test_ids):
+    return SelectionResult(
+        mode="full", selected_test_ids=tuple(test_ids),
+        carried_forward=(), selection_reason="test",
+    )
+
+
+def test_wiring_failed_unhealed_is_genuine_regression_for_review():
+    v = _classify_selected(
+        _sel("t1"), prior_verdicts={"t1": {"run_id": "r0", "age": 1}},
+        failed_ids=["t1"], heal_summary=None,
+    )
+    assert v["t1"]["disposition"] == rv.GENUINE_REGRESSION
+    assert v["t1"]["needs_review"] is True
+
+
+def test_wiring_failed_then_healed_clean_is_self_healed():
+    v = _classify_selected(
+        _sel("t1"), prior_verdicts={"t1": {"run_id": "r0", "age": 1}},
+        failed_ids=["t1"], heal_summary={"clean_run_version": "v2"},
+    )
+    assert v["t1"]["disposition"] == rv.SELF_HEALED
+    assert v["t1"]["needs_review"] is False
+
+
+def test_wiring_passed_seen_case_is_pass_unchanged():
+    v = _classify_selected(
+        _sel("t2"), prior_verdicts={"t2": {"run_id": "r1", "age": 0}},
+        failed_ids=[], heal_summary=None,
+    )
+    assert v["t2"]["disposition"] == rv.PASS_UNCHANGED
+
+
+def test_wiring_new_case_is_first_baseline_never_false_regression():
+    v = _classify_selected(
+        _sel("t3"), prior_verdicts={}, failed_ids=[], heal_summary=None,
+    )
+    assert v["t3"]["disposition"] == rv.FIRST_BASELINE
+
+
+def test_wiring_only_selected_cases_get_a_verdict():
+    # A carried-forward case (not in selected_test_ids) is never handed a verdict.
+    v = _classify_selected(
+        _sel("t1"), prior_verdicts={"t9": {"run_id": "r", "age": 3}},
+        failed_ids=[], heal_summary=None,
+    )
+    assert set(v.keys()) == {"t1"}

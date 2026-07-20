@@ -252,5 +252,12 @@ async def get_cycle(cycle_id: str, user: dict = Depends(require_auth)) -> dict:
         },
         "honest_gaps": gaps,
         "coverage_verdict": result.get("coverage_verdict"),
+        # Regression Agent (Phase 5): per-case dispositions + the count of cases
+        # that need a human review (GENUINE_REGRESSION / HONEST_UNPROVEN).
+        "regression_verdicts": result.get("regression_verdicts") or {},
+        "regression_review_count": sum(
+            1 for v in (result.get("regression_verdicts") or {}).values()
+            if isinstance(v, dict) and v.get("needs_review")
+        ),
         "cost": cost,
     }

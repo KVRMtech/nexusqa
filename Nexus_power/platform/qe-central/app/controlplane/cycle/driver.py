@@ -97,6 +97,7 @@ from ...observability import (
     record_cycle_started,
 )
 from . import fingerprints as fp
+from . import regression_verdict
 from .change_detector import (
     MODE_FULL,
     MODE_INCREMENTAL,
@@ -937,6 +938,12 @@ async def execute_cycle(
         await _record_wallclock(budget, _meter)
         base_result["cost"] = {u: str(q) for u, q in metered.items()}
         base_result["failed_test_ids"] = failed_ids
+        # Regression Agent (Phase 5): one honest per-case disposition on the real
+        # run outcomes — a failed-and-unhealed case is a GENUINE_REGRESSION flagged
+        # for review, never a silent green. Only fires on the full-run DONE path.
+        base_result["regression_verdicts"] = _classify_selected(
+            selection, prior_verdicts, failed_ids, heal_summary,
+        )
         return await _finish_done(
             hooks, outcome, base_result, selection, prior_verdicts, failed_ids=failed_ids,
         )
@@ -1285,6 +1292,41 @@ def _next_verdicts(
     for c in selection.carried_forward:
         verdicts[c.test_id] = {"run_id": c.verdict_run_id, "age": c.verdict_age_cycles}
     return verdicts
+
+
+def _classify_selected(
+    selection: SelectionResult,
+    prior_verdicts: Mapping[str, dict],
+    failed_ids: list[str],
+    heal_summary: Mapping | None,
+) -> dict:
+    """Regression Agent (Phase 5) — one honest disposition per SELECTED case.
+
+    Runs :func:`regression_verdict.classify` on the axis real cycle outcomes
+    supply TODAY: ``run_status`` (failed vs passed, from ``failed_ids``) +
+    ``heal_result`` (the batch heal's ``clean_run_version``) + ``has_baseline``
+    (seen in a prior verdict). ``diffs`` and ``semantic_signal`` are honest EMPTY
+    stubs — the oracle value-change axis ($250→$180) needs a per-case observed-
+    value + baseline store the substrate does not expose yet (Stage 2), so it is
+    NOT claimed here.
+
+    ONLY selected cases are classified — a carried-forward case did not run and
+    must never be handed an invented verdict. A failure that did NOT heal to a
+    proven clean run is GENUINE_REGRESSION for review (never a silent green).
+    """
+    failed = set(failed_ids or [])
+    heal = heal_summary if isinstance(heal_summary, Mapping) else None
+    out: dict[str, dict] = {}
+    for tid in selection.selected_test_ids:
+        is_failed = tid in failed
+        out[tid] = regression_verdict.classify(
+            run_status="failed" if is_failed else "passed",
+            diffs=[],
+            has_baseline=bool(prior_verdicts.get(tid)),
+            heal_result=heal if is_failed else None,
+            semantic_signal="",
+        )
+    return out
 
 
 async def _record_wallclock(
