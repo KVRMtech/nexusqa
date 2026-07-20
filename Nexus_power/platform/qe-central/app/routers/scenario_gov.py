@@ -626,7 +626,11 @@ async def materialize_scenario(
 # ══════════════════════ certified invariants ══════════════════════════════
 
 class InvariantCreate(BaseModel):
-    """Author + CERTIFY one human P0 invariant (requires an e-signature)."""
+    """Author + ATTEST one human P0 invariant (requires an e-signature).
+
+    A signature records HUMAN ATTESTATION, never executed proof — the invariant
+    stays ``status='attested'`` until invariant_executor runs a positive +
+    must-refuse break-mode proof and it holds.  Never green-wash 'certified'."""
 
     statement: str = Field(min_length=1, max_length=4000)
     signature: str = Field(min_length=1, max_length=200)
@@ -639,11 +643,14 @@ class InvariantCreate(BaseModel):
 async def create_invariant(
     app_id: str, payload: InvariantCreate, user: dict = Depends(_MUTATE),
 ) -> dict:
-    """Author + e-sign a certified invariant (the non-enumerable half of coverage).
+    """Author + e-sign an ATTESTED invariant (the non-enumerable half of coverage).
 
-    A blank signature is a 422 — an invariant with no human certification has no
-    honest meaning.  Records ONE ``invariant_author`` human touch and appends the
-    certification to the tamper-evident approval chain."""
+    A blank signature is a 422 — an invariant with no human attestation has no
+    honest meaning.  Status is ``'attested'`` (human-declared), NOT ``'certified'``:
+    in this product 'certified' means invariant_executor ran a positive + must-refuse
+    break-mode proof and it held (invariant_executor.py:65) — a signature alone is not
+    that proof.  Records ONE ``invariant_author`` touch and appends the attestation to
+    the tamper-evident approval chain.  Only the executor may promote to 'certified'."""
     tenant_id = user["tenant_id"]
     signature = (payload.signature or "").strip()
     if not signature:
@@ -665,7 +672,9 @@ async def create_invariant(
             signature=signature[:200], signed_by=actor[:200], signed_at=now,
             requires_disposable_env=bool(payload.requires_disposable_env),
             linked_scenario_ids=list(payload.linked_scenario_ids or []),
-            status="certified",
+            # 'attested' not 'certified': a signature is human attestation, not an
+            # executed proof.  Only invariant_executor may promote this to 'certified'.
+            status="attested",
         ))
         await session.flush()
 
@@ -680,12 +689,12 @@ async def create_invariant(
         band=band, app_id=app_id, actor=actor,
     )
     logger.info(
-        "qec.invariant.certified",
+        "qec.invariant.attested",
         extra={"tenant_id": tenant_id, "app_id": app_id,
                "invariant_id": invariant_id, "band": band, "actor": actor},
     )
     return {"invariant_id": invariant_id, "app_id": app_id, "band": band,
-            "status": "certified", "touch": touch}
+            "status": "attested", "touch": touch}
 
 
 @router.get("/apps/{app_id}/invariants")

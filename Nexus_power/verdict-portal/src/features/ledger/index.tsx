@@ -85,11 +85,18 @@ export function VerdictLedger({ appId, limit = 40, title = 'Verdict Ledger', cla
   const state = useAsync((signal) => api.getLedger({ appId, limit }, { signal }), [appId, limit]);
   const { data } = state;
 
+  // Honest subtitle: the LIVE ledger is COMPOSED from cycle + REFUSE-harness signals
+  // that carry no per-row chain link (verified:false) — never claim 'hash-chained'
+  // over composed rows. Only a non-composed (chain-linked) stream earns that label.
+  const subtitle = data?.composed
+    ? 'composed from live cycle + REFUSE-harness verdicts'
+    : 'hash-chained · certified / refused / healed';
+
   return (
     <Panel tone="elevated" className={cn('flex flex-col', className)}>
       <SectionHead
         title={title}
-        subtitle="hash-chained · certified / refused / healed"
+        subtitle={subtitle}
         icon={<Link2 size={16} className="text-teal" />}
         right={
           data && (
