@@ -59,9 +59,15 @@ _ACTION_TIMEOUT_MS = 5000  # per-locator action timeout
 # Hydration gate: after networkidle, poll a cheap DOM-quiescence signature until it
 # is stable for N consecutive reads, so a slow-hydrating SPA (controls mounted after
 # networkidle) is never inventoried half-rendered. Bounded + best-effort.
-_STABILIZE_MS = 4000       # max hydration-stabilization budget beyond networkidle
+_STABILIZE_MS = 12000      # max hydration-stabilization budget beyond networkidle
+                           # (heavy client-rendered SPAs mount controls late)
 _STABLE_POLL_MS = 220      # interval between quiescence probes
 _STABLE_READS = 2          # consecutive equal reads that count as settled
+# A page whose visible-interactive count is below this has NOT rendered yet — a
+# client-rendered SPA shell before its framework paints. A stable-EMPTY signature
+# must NOT satisfy the hydration gate, else the crawler inventories a blank shell
+# (0 forms) and misses the client-rendered login/form.
+_MIN_INTERACTIVE = 2
 # Viewport materialization (lazy-load / virtual-scroll) — bounded step-scroll.
 _MATERIALIZE_STEPS = 8
 # Adaptive backoff on an explicit server rate-limit (429), then ONE retry.
@@ -905,7 +911,15 @@ class PlaywrightBrowserPort(BrowserPort):
             stable = 0
             for _ in range(max(1, _STABILIZE_MS // _STABLE_POLL_MS)):
                 sig = await self._page.evaluate(_QUIESCENCE_JS)
-                if sig == last:
+                # Empty-shell guard: a signature with too few interactive controls is an
+                # un-rendered SPA shell — never let a stable-EMPTY page satisfy the gate,
+                # or a client-rendered login/form is missed (0 forms). Keep polling until
+                # real content mounts, or the bounded budget expires.
+                try:
+                    _interactive = int(str(sig).split(":", 1)[0])
+                except Exception:
+                    _interactive = _MIN_INTERACTIVE  # unparseable ⇒ allow settle
+                if sig == last and _interactive >= _MIN_INTERACTIVE:
                     stable += 1
                     if stable >= _STABLE_READS:
                         break
