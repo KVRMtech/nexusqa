@@ -42,6 +42,7 @@ from ..services.brief_compiler import (
     BRIEF_SYSTEM_INSTRUCTION, build_prompt, ground_and_assemble, parse_proposal,
 )
 from ..services.answer_key import _normalize_outcome
+from ..services.dispositions import ASK as DISP_ASK, OBSERVE as DISP_OBSERVE
 from ..services.synthesis import (
     field_inventory_for_artifact,
     known_labels_for_artifact,
@@ -592,6 +593,111 @@ async def data_agent_propose(app_id: str, user: dict = Depends(_MUTATE)) -> dict
     out["llm_error"] = llm_error
     out["status"] = "ready"
     return out
+
+
+class DataAgentSaveIn(BaseModel):
+    """Human-confirmed seed values to persist into ``answer_key.fill``.
+
+    ``fills`` maps an OBSERVED field LABEL → the value to seed (typically the ASK
+    fields the human must supply, or an override of a grounded default). The
+    grounded auto-fillable defaults are persisted automatically — this body only
+    carries the values a human owns."""
+
+    fills: dict[str, str | float | int] = Field(default_factory=dict)
+
+
+@router.post("/apps/{app_id}/data-agent/save")
+async def data_agent_save(
+    app_id: str, body: DataAgentSaveIn, user: dict = Depends(_MUTATE),
+) -> dict:
+    """Persist the Data Agent's grounded proposal (+ human ASK values) into
+    ``answer_key.fill`` so the NEXT crawl actually seeds them — closing the gap
+    (audit P1) where a grounded, PII-guarded proposal never reached a crawl
+    without a human re-typing it by hand.
+
+    Fail-closed, never green-wash:
+      * grounded auto-fillable defaults (``data_agent_fill``: SYNTHESIZE/PICK/CARRY,
+        already hard-lined) are persisted; OBSERVE (oracle) and ASK (never invented)
+        are EXCLUDED, so no fabricated value can reach the crawl;
+      * a human ``fills`` entry is accepted ONLY for a real OBSERVED field that is
+        NOT an OBSERVE oracle — an unknown/hallucinated label, or an attempt to seed
+        an oracle field, is REFUSED and reported (never silently dropped);
+      * the deterministic FLOOR (no LLM) drives persistence, so what is saved is
+        reproducible and independent of any LLM call;
+      * the response names what is STILL MISSING (ASK fields with no value) so the
+        UI can never show a false 'ready'.
+    """
+    tenant_id = user["tenant_id"]
+    async with tenant_scoped_qec_session(tenant_id) as session:
+        row = await _require_app(session, tenant_id, app_id)
+        if row.status == "deleted":
+            raise HTTPException(status_code=409, detail="app is deleted")
+        answer_key = dict(row.answer_key or {})
+        artifact_id = row.latest_artifact_id or ""
+        if not artifact_id:
+            raise HTTPException(
+                status_code=409,
+                detail="no crawl artifact yet — crawl the app before saving seeds",
+            )
+
+        inventory = await field_inventory_for_artifact(tenant_id, artifact_id)
+        candidates = await value_candidates_for_artifact(tenant_id, artifact_id)
+        library_keys = library_keys_from_answer_key(answer_key)
+        observe_labels = [str(c.get("label") or "") for c in candidates if c.get("label")]
+        items = propose_dispositions(
+            inventory, llm_proposal=None, library_keys=library_keys,
+            observe_labels=observe_labels, today=datetime.now(timezone.utc).date(),
+        )["items"]
+
+        disp_by_label = {str(i.get("label")): str(i.get("disposition") or "") for i in items}
+        oracle_labels = {lbl for lbl, d in disp_by_label.items() if d == DISP_OBSERVE}
+        grounded = data_agent_fill(items)   # SYNTHESIZE/PICK/CARRY defaults only
+
+        accepted: dict[str, str] = {}
+        rejected: list[dict] = []
+        for raw_label, raw_val in (body.fills or {}).items():
+            label = str(raw_label).strip()
+            val = str(raw_val).strip()
+            if not label or not val:
+                rejected.append({"label": raw_label, "reason": "empty label or value"})
+                continue
+            if label not in disp_by_label:
+                rejected.append({"label": label,
+                                 "reason": "not an observed field on this app's crawl"})
+                continue
+            if label in oracle_labels:
+                rejected.append({"label": label,
+                                 "reason": "OBSERVE oracle field — proven, never seeded as a form fill"})
+                continue
+            accepted[label] = val
+
+        existing_fill = answer_key.get("fill") if isinstance(answer_key.get("fill"), dict) else {}
+        # Preserve prior fills; refresh grounded defaults; human-confirmed values WIN.
+        new_fill = {**existing_fill, **grounded, **accepted}
+        answer_key["fill"] = new_fill
+        row.answer_key = answer_key    # reassign for JSONB change detection
+        row.updated_at = utc_now()
+
+        still_missing = sorted(
+            lbl for lbl, d in disp_by_label.items()
+            if d == DISP_ASK and not str(new_fill.get(lbl) or "").strip()
+        )
+
+    logger.info(
+        "qec.apps.data_agent_saved",
+        extra={"tenant_id": tenant_id, "app_id": app_id,
+               "grounded": len(grounded), "human": len(accepted),
+               "rejected": len(rejected), "still_missing_ask": len(still_missing)},
+    )
+    return {
+        "app_id": app_id,
+        "status": "ok",
+        "persisted_fill_count": len(new_fill),
+        "auto_grounded": len(grounded),
+        "human_provided": len(accepted),
+        "rejected": rejected,
+        "still_missing_ask": still_missing,
+    }
 
 
 @router.get("/apps/{app_id}/seed-manifest")
