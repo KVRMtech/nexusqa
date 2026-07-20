@@ -75,6 +75,11 @@ def _cycle_summary(row: AppCycleRow) -> dict:
     """A compact cycle view for the list endpoint (no heavy result JSONB)."""
     scope = dict(row.selected_scope or {})
     gaps = dict(row.honest_gaps or {})
+    # Regression Agent: surface ONLY the lightweight review count (int) here so the
+    # cycles list shows "N cases need review" without the heavy per-case verdict blob
+    # (the full regression_verdicts stay on GET /cycles/{id}).
+    _rv = (dict(row.result or {})).get("regression_verdicts") or {}
+    _review = sum(1 for v in _rv.values() if isinstance(v, dict) and v.get("needs_review"))
     return {
         "cycle_id": row.cycle_id,
         "app_id": row.app_id,
@@ -84,6 +89,7 @@ def _cycle_summary(row: AppCycleRow) -> dict:
         "mode": scope.get("mode"),
         "selected_count": len(scope.get("selected_test_ids") or []),
         "carried_count": len(scope.get("carried_forward") or []),
+        "regression_review_count": _review,
         "possible_deletion": bool(gaps.get("vanished_pages_possible_deletion")),
         "created_at": row.created_at.isoformat() if row.created_at else None,
         "started_at": row.started_at.isoformat() if row.started_at else None,

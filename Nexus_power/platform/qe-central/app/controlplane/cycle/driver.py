@@ -1106,11 +1106,20 @@ async def _heal_and_meter(
     )
     run_id = str(started.get("run_id") or "")
     if not run_id:
+        # No heal run at all → nothing recovered; every case is still failing.
         return {"run_id": "", "terminal_state": "error",
-                "stop_reason": "runner did not return a heal run_id", "clean_run_version": None}
+                "stop_reason": "runner did not return a heal run_id",
+                "clean_run_version": None, "still_failed_ids": list(test_ids)}
     job = await _poll_to_terminal(client=client, app=app, run_id=run_id, budget=budget)
     run_record = await _correlate_run(client=client, app=app, run_id=run_id)
     await _meter_run(run_record, run_id=run_id, meter_fn=meter_fn)
+    heal_status = str(job.get("status") or "unknown").lower()
+    # Per-case heal outcome: which of the failed cases are STILL failing after the
+    # heal re-run. Lets the Regression Agent claim SELF_HEALED only for the cases
+    # that actually recovered — never batch-wide off a single clean_run_version.
+    still_failed_ids = _failed_scenarios(
+        run_record, selected=list(test_ids), run_status=heal_status,
+    )
     return {
         "run_id": run_id,
         "status": str(job.get("status") or "unknown"),
@@ -1118,6 +1127,7 @@ async def _heal_and_meter(
         "stop_reason": job.get("stop_reason") or "",
         "clean_run_version": job.get("clean_run_version"),
         "healed_count": job.get("healed_count"),
+        "still_failed_ids": still_failed_ids,
     }
 
 
@@ -1313,17 +1323,27 @@ def _classify_selected(
     ONLY selected cases are classified — a carried-forward case did not run and
     must never be handed an invented verdict. A failure that did NOT heal to a
     proven clean run is GENUINE_REGRESSION for review (never a silent green).
+
+    SELF_HEALED is attributed PER CASE: a failed case earns it only if it is NOT
+    in the heal's ``still_failed_ids`` AND the heal reached a proven
+    ``clean_run_version`` — never claimed batch-wide off a single clean version.
     """
     failed = set(failed_ids or [])
-    heal = heal_summary if isinstance(heal_summary, Mapping) else None
+    heal = heal_summary if isinstance(heal_summary, Mapping) else {}
+    clean_version = str(heal.get("clean_run_version") or "").strip()
+    still_failed = set(heal.get("still_failed_ids") or [])
     out: dict[str, dict] = {}
     for tid in selection.selected_test_ids:
         is_failed = tid in failed
+        # Only a case that failed, is no longer in the heal's still-failing set,
+        # and rode a PROVEN clean run is honestly SELF_HEALED.
+        recovered = is_failed and bool(clean_version) and tid not in still_failed
+        heal_result = {"clean_run_version": clean_version} if recovered else None
         out[tid] = regression_verdict.classify(
             run_status="failed" if is_failed else "passed",
             diffs=[],
             has_baseline=bool(prior_verdicts.get(tid)),
-            heal_result=heal if is_failed else None,
+            heal_result=heal_result,
             semantic_signal="",
         )
     return out

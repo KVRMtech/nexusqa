@@ -300,6 +300,14 @@ def _finalize_attestation(att: dict | None, user: dict) -> dict:
     if roe.get("signed") and not str(roe.get("signed_by") or "").strip():
         roe["signed_by"] = who
         a["rules_of_engagement"] = roe
+    # The AUTHORIZATION signature ("we own / may test this URL") is a legal liability
+    # gate — bind authorized_by to the AUTHENTICATED operator and OVERWRITE any client
+    # value (unlike attested_by which preserves an explicit one), so a refusal/allow is
+    # always attributable to a real identity, never unverifiable free text.
+    authz = dict(a.get("authorization") or {})
+    if str(authz.get("authorized")).strip().lower() in ("true", "1", "yes"):
+        authz["authorized_by"] = who
+        a["authorization"] = authz
     return a
 
 

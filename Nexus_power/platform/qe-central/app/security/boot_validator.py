@@ -98,6 +98,16 @@ def collect_boot_violations(settings) -> list[str]:
             "envelope encryption); set gcp_kms or aws_kms before storing "
             "client credentials"
         )
+    elif kek not in PRODUCTION_GRADE_KEK_PROVIDERS:
+        # An UNRECOGNISED provider (e.g. a 'gcp' typo instead of 'gcp_kms', or an
+        # empty value) yields a NULL envelope service — every credentialed
+        # create_app then 503s. That is worse than a dev KEK because it boots
+        # GREEN-but-broken; fail LOUD in a deployed env instead of silently.
+        violations.append(
+            f"NEXUS_KEK_PROVIDER={kek or '(empty)'} is not a recognised KMS "
+            "provider (expected gcp_kms or aws_kms) - the envelope service would "
+            "be null and every credentialed onboarding would 503"
+        )
 
     jwt_secret = (getattr(settings, "nexus_jwt_secret", "") or "").strip()
     if jwt_secret in DEV_DEFAULT_JWT_SECRETS:

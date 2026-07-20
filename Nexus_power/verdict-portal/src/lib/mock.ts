@@ -249,6 +249,7 @@ export function mockListCycles(appId: string): CycleListResponse {
     mode: (['auto', 'auto', 'full', 'auto', 'auto'] as const)[i],
     selected_count: [12, 6, 25, 8, 19][i],
     carried_count: [40, 46, 27, 44, 33][i],
+    regression_review_count: [0, 1, 2, 0, 0][i],
     possible_deletion: i === 2 && (fixture(appId)?.coverageBlocked ?? false),
     created_at: iso((i + 1) * 180),
     started_at: iso((i + 1) * 180 - 1),

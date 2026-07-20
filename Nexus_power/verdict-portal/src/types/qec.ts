@@ -492,6 +492,9 @@ export interface CycleSummary {
   mode: CycleMode | null;
   selected_count: number;
   carried_count: number;
+  /** Regression Agent (Phase 5): cases needing human review (GENUINE_REGRESSION /
+   *  HONEST_UNPROVEN) in this cycle. 0 when all selected cases passed or self-healed. */
+  regression_review_count: number;
   possible_deletion: boolean;
   created_at: IsoTimestamp | null;
   started_at: IsoTimestamp | null;

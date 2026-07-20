@@ -532,8 +532,14 @@ function CyclesCard({ appId }: { appId: string }) {
                       </p>
                       <p className="text-2xs text-ink-faint tabular">
                         {c.selected_count} selected · {c.carried_count} carried
+                        {c.regression_review_count > 0 && ` · ${c.regression_review_count} need review`}
                       </p>
                     </div>
+                    {c.regression_review_count > 0 && (
+                      <Pill tone="warn" size="sm">
+                        {c.regression_review_count} regression{c.regression_review_count > 1 ? 's' : ''}
+                      </Pill>
+                    )}
                     {c.possible_deletion && <Pill tone="crit" size="sm">deletion?</Pill>}
                     <time className="text-2xs text-ink-faint shrink-0" dateTime={c.created_at ?? undefined}>
                       {timeAgo(c.created_at)}

@@ -170,3 +170,17 @@ def test_wiring_only_selected_cases_get_a_verdict():
         failed_ids=[], heal_summary=None,
     )
     assert set(v.keys()) == {"t1"}
+
+
+def test_wiring_batch_heal_does_not_overclaim_still_failing_case():
+    # A batch heal produced a clean_run_version, but THIS case is still failing —
+    # it must be GENUINE_REGRESSION, never SELF_HEALED off a batch-wide green.
+    v = _classify_selected(
+        _sel("t1", "t2"),
+        prior_verdicts={"t1": {"run_id": "r", "age": 1}, "t2": {"run_id": "r", "age": 1}},
+        failed_ids=["t1", "t2"],
+        heal_summary={"clean_run_version": "v9", "still_failed_ids": ["t2"]},
+    )
+    assert v["t1"]["disposition"] == rv.SELF_HEALED          # recovered
+    assert v["t2"]["disposition"] == rv.GENUINE_REGRESSION   # still failing — not overclaimed
+    assert v["t2"]["needs_review"] is True

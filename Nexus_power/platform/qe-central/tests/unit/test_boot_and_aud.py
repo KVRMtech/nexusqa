@@ -560,3 +560,14 @@ class TestLifespanBootGate:
 
         with pytest.raises(BootSafetyError):
             asyncio.run(_enter())
+
+
+def test_invalid_kek_provider_is_a_boot_violation():
+    # A 'gcp' typo (valid is gcp_kms) yields a NULL envelope → 503s onboarding.
+    # It must fail the boot gate loudly, not boot green-but-broken.
+    v = collect_boot_violations(_safe_prod_settings(nexus_kek_provider="gcp"))
+    assert any("not a recognised KMS provider" in m for m in v)
+
+
+def test_recognised_kms_provider_is_clean():
+    assert collect_boot_violations(_safe_prod_settings(nexus_kek_provider="gcp_kms")) == []
