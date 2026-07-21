@@ -185,6 +185,9 @@ class CycleClient(Protocol):
     ) -> dict: ...
     async def triage(self, *, tenant_id: str, artifact_id: str) -> dict: ...
     async def get_run(self, *, tenant_id: str, artifact_id: str, run_id: str) -> Optional[dict]: ...
+    async def list_runs(
+        self, *, tenant_id: str, artifact_id: str, limit: int = 25,
+    ) -> list[dict]: ...
 
 
 class _TransientFactory(Exception):
@@ -401,6 +404,22 @@ class HttpCycleClient:
             path=f"/api/v1/test-factory/{artifact_id}/runs/{run_id}",
             timeout_s=30.0, endpoint="get_run",
         )
+
+    async def list_runs(
+        self, *, tenant_id: str, artifact_id: str, limit: int = 25,
+    ) -> list[dict]:
+        """Recent durable run headers (each carries both the PK ``run_id`` AND the
+        runner's ``ci_run_id``) — lets the driver resolve the runner id it holds to
+        the durable PK the per-scenario timeline is keyed by."""
+        out = await self._get(
+            tenant_id=tenant_id,
+            path=f"/api/v1/test-factory/{artifact_id}/runs?limit={int(limit)}",
+            timeout_s=30.0, endpoint="list_runs",
+        )
+        if isinstance(out, Mapping):
+            runs = out.get("runs")
+            return list(runs) if isinstance(runs, list) else []
+        return list(out) if isinstance(out, list) else []
 
 
 # ══════════════════════ budget (vendored SlaBudget + units) ═════════════════
@@ -1200,22 +1219,58 @@ async def _poll_to_terminal(
 async def _correlate_run(
     *, client: CycleClient, app: AppConfig, run_id: str,
 ) -> Optional[dict]:
-    """Fetch the durable run header (``GET …/runs/{run_id}`` → run_header) for
-    cost + failed-scenario detection, retrying briefly for the ingest lag.
+    """Fetch the durable run header + per-scenario timeline for cost + PER-FLOW
+    failed-scenario detection, retrying briefly for the ingest lag.
+
+    Correlation: the runner returns its own ``NEXUS_RUN_ID``, but ``ingest_run``
+    stores that under the durable row's ``ci_run_id`` and mints a FRESH PK
+    ``run_id``.  So a direct ``GET …/runs/{runner_id}`` (keyed on the PK) misses,
+    which used to collapse the timeline to empty and force ``_failed_scenarios``
+    into its batch-wide fallback (every selected case flagged on any failure).
+    We first try the id directly (fast path — fakes / PK-is-runner-id runs), then
+    resolve ``ci_run_id → PK`` via the runs list and fetch the timeline by PK, so
+    failures are attributed to the EXACT flows that failed.
 
     Returns a dict carrying ``run_id`` + ``duration_ms`` (the run_header) plus a
     ``scenarios`` list, or ``None`` when the run never correlated (⇒ the meter
     records an ``unmetered_run`` gap flag — an honest under-count)."""
     retries = _env_int(ENV_GET_RUN_RETRIES, 3)
-    for attempt in range(max(1, retries)):
+
+    async def _timeline_for(rid: str) -> Optional[dict]:
         timeline = await client.get_run(
-            tenant_id=app.tenant_id, artifact_id=app.latest_artifact_id, run_id=run_id,
+            tenant_id=app.tenant_id, artifact_id=app.latest_artifact_id, run_id=rid,
         )
         header = (timeline or {}).get("run_header") if isinstance(timeline, Mapping) else None
         if isinstance(header, Mapping) and header.get("run_id"):
             merged = dict(header)
             merged["scenarios"] = (timeline or {}).get("scenarios") or []
             return merged
+        return None
+
+    _list_runs = getattr(client, "list_runs", None)
+    for attempt in range(max(1, retries)):
+        # Fast path: the runner id already IS the durable PK.
+        merged = await _timeline_for(run_id)
+        if merged is not None:
+            return merged
+        # Real factory: the runner id is stored as ci_run_id — resolve to the PK.
+        if _list_runs is not None:
+            try:
+                runs = await _list_runs(
+                    tenant_id=app.tenant_id, artifact_id=app.latest_artifact_id, limit=50,
+                )
+            except Exception:  # never fail a run over a best-effort correlation
+                runs = []
+            pk = next(
+                (str(r.get("run_id")) for r in (runs or [])
+                 if isinstance(r, Mapping)
+                 and str(r.get("ci_run_id") or "") == run_id and r.get("run_id")),
+                "",
+            )
+            if pk and pk != run_id:
+                merged = await _timeline_for(pk)
+                if merged is not None:
+                    return merged
         if attempt < retries - 1:
             await asyncio.sleep(min(2.0, 0.5 * (attempt + 1)))
     return None
