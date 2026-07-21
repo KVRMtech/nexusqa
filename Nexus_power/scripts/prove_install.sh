@@ -130,8 +130,12 @@ helm upgrade --install verdict "$CHART" -n "$NS" --create-namespace \
     exit 1
   }
 
-echo "== 5) migrations Job to completion =="
-kubectl -n "$NS" wait --for=condition=complete job -l app.kubernetes.io/component=migrations --timeout=300s || true
+echo "== 5) migrations =="
+# The migration Job is a `post-install` Helm HOOK (component=migrate) with
+# hook-delete-policy=hook-succeeded — so `helm --wait` above ALREADY blocked on it
+# and it self-deleted on success (a failed hook would have failed the install). So
+# there is nothing left to wait for here; just confirm the install reported success.
+echo "   migrations ran as a post-install hook (helm --wait blocked on it; a failure would have failed step 4)."
 
 echo "== 6) PROVE each pod's code == git (deploy-verify gate) =="
 fail=0
