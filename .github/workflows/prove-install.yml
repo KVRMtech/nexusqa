@@ -49,6 +49,8 @@ jobs:
           kind version && helm version --short && kubectl version --client --output=yaml | head -3
 
       - name: Prove one real install (scoped pilot core)
+        env:
+          HELM_TIMEOUT: 900s   # 2-core hosted runner is slow to pull/schedule the plane
         run: bash scripts/prove_install.sh --values infrastructure/helm/verdict/values-pilot-core.yaml
 
       - name: Dump diagnostics on failure

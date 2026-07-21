@@ -104,7 +104,18 @@ helm upgrade --install verdict "$CHART" -n "$NS" --create-namespace \
   --set secrets.jwtSecret=proof --set secrets.postgresPassword=proof \
   --set secrets.qecDbPassword=proof --set secrets.substrateDbPassword=proof \
   --set secrets.explorerToken=proof \
-  --wait --timeout 600s
+  --wait --timeout "${HELM_TIMEOUT:-600s}" || {
+    # On a --wait timeout the plane is half-up; dump WHY before the EXIT trap tears
+    # the cluster down, so a CI run shows the actual pod/job state (not an empty log).
+    echo "== helm --wait failed; diagnostics BEFORE cleanup ==" >&2
+    kubectl -n "$NS" get pods,jobs -o wide || true
+    kubectl -n "$NS" get events --sort-by=.lastTimestamp | tail -30 || true
+    for c in postgres qe-central migrations; do
+      echo "--- describe $c ---"; kubectl -n "$NS" describe pod -l "app.kubernetes.io/component=$c" 2>/dev/null | tail -40 || true
+      echo "--- logs $c ---";     kubectl -n "$NS" logs -l "app.kubernetes.io/component=$c" --tail=60 --all-containers 2>/dev/null || true
+    done
+    exit 1
+  }
 
 echo "== 5) migrations Job to completion =="
 kubectl -n "$NS" wait --for=condition=complete job -l app.kubernetes.io/component=migrations --timeout=300s || true
