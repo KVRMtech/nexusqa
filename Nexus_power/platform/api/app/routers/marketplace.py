@@ -1136,6 +1136,7 @@ async def upsert_relationship(
 @router.delete(
     "/api/v1/sovereign/relationships/{related_tenant_id}/{relationship_kind}",
     status_code=204,
+    response_model=None,
 )
 async def delete_relationship(
     related_tenant_id: str,

@@ -340,7 +340,7 @@ async def update_product(
     return _row_to_out(row)
 
 
-@router.delete("/{product_id}", status_code=204)
+@router.delete("/{product_id}", status_code=204, response_model=None)
 async def archive_product(
     product_id: str,
     user: dict = Depends(get_current_user),

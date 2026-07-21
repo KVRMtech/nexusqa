@@ -452,6 +452,9 @@ async def create_or_update_installation(
 @router.delete(
     "/{integration_id}/installations/{installation_id}",
     status_code=204,
+    response_model=None,   # 204 has no body; be explicit so FastAPI never resolves
+                           # the `-> None` return annotation (stringified under
+                           # `from __future__ import annotations`) as a response_model.
 )
 async def uninstall(
     integration_id: str,

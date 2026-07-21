@@ -295,7 +295,7 @@ async def patch_user(
     return _scim_response(resource)
 
 
-@router.delete("/Users/{org_user_id}", status_code=204)
+@router.delete("/Users/{org_user_id}", status_code=204, response_model=None)
 async def delete_user(
     org_user_id: str,
     user: dict = Depends(get_current_user),
@@ -418,7 +418,7 @@ async def patch_group(
     return _scim_response(resource)
 
 
-@router.delete("/Groups/{org_group_id}", status_code=204)
+@router.delete("/Groups/{org_group_id}", status_code=204, response_model=None)
 async def delete_group(
     org_group_id: str,
     user: dict = Depends(get_current_user),

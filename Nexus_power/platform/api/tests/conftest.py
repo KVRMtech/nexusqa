@@ -38,12 +38,6 @@ _KNOWN_REGRESSIONS = {
         "honest passed = not would_block was lost.",
     "test_track_a_fixes.py::test_gate_surfaces_ambiguous_but_does_not_block":
         "efd0269 reverted the ambiguous-locator dimension and the gate ambiguous_locators field.",
-    "test_module_graph_smoke.py::test_platform_main_assembles_app":
-        "integrations.py DELETE uninstall uses status_code=204 with a `-> None` return under "
-        "future-annotations; FastAPI 0.115.2 treats stringified 'None' as a response_model and "
-        "refuses the route → the WHOLE platform app fails to assemble (a clean build won't boot).",
-    "test_module_graph_smoke.py::test_p3_p6_endpoints_registered":
-        "same 204+`-> None` app-assembly break — main import aborts before any P3-P7 router mounts.",
     "test_action_extractor.py::test_reconcile_corroborates_value_via_ocr_and_control":
         "_reconcile matches the audio transcript against target_label (the field prompt) instead of "
         "the value/verb, breaking the documented audio_intent_match contract.",

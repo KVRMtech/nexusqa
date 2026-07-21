@@ -358,7 +358,7 @@ async def create_subscription(
     return _subscription_to_out(row)
 
 
-@router.delete("/subscriptions/{subscription_id}", status_code=204)
+@router.delete("/subscriptions/{subscription_id}", status_code=204, response_model=None)
 async def delete_subscription(
     subscription_id: str,
     user: dict = Depends(get_current_user),
@@ -542,7 +542,7 @@ async def upsert_policy(
 
 
 @router.delete(
-    "/policies/{surface}/{channel_id_ext}", status_code=204
+    "/policies/{surface}/{channel_id_ext}", status_code=204, response_model=None
 )
 async def delete_policy(
     surface: str,
