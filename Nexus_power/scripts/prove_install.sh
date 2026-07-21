@@ -70,8 +70,13 @@ kind create cluster --name "$CLUSTER" --wait 120s
 echo "== 2) discover the images the chart wants (self-adapting, no hardcoded list) =="
 RENDERED="$(helm template verdict "$CHART" -f "$EXTRA_VALUES" \
   --set global.image.tag="$TAG" --set global.image.pullPolicy=Never)"
-mapfile -t OUR_IMAGES < <(printf '%s\n' "$RENDERED" | grep -oE 'image:\s*"?[^"[:space:]]+' \
-  | sed -E 's/image:\s*"?//' | grep "/nexus-qa/" | sort -u)
+_ALL_IMAGES="$(printf '%s\n' "$RENDERED" | grep -oE 'image:\s*"?[^"[:space:]]+' \
+  | sed -E 's/image:\s*"?//' | grep -E ':' | sort -u)"
+mapfile -t OUR_IMAGES        < <(printf '%s\n' "$_ALL_IMAGES" | grep "/nexus-qa/")
+# Third-party images (postgres, redis, …) the chart references but we do NOT build.
+# pullPolicy=Never means the kubelet won't fetch them, so we pull + load them into
+# kind ourselves (else the pod is ErrImageNeverPull).
+mapfile -t THIRD_PARTY_IMAGES < <(printf '%s\n' "$_ALL_IMAGES" | grep -v "/nexus-qa/")
 [ "${#OUR_IMAGES[@]}" -gt 0 ] || { echo "FATAL: chart rendered no first-party images." >&2; exit 1; }
 
 echo "== 2b) build the shared CPU base image the service Dockerfiles FROM =="
@@ -94,6 +99,14 @@ for img in "${OUR_IMAGES[@]}"; do
   # the nexus-base:latest we built in step 2b.
   docker build --build-arg BASE_IMAGE=nexus-base:latest \
     -t "$img" -f "$REPO_ROOT/$dir/Dockerfile" "$REPO_ROOT/$dir"
+  kind load docker-image "$img" --name "$CLUSTER"
+done
+
+echo "== 3b) pull + load the third-party images (pullPolicy=Never can't fetch them) =="
+for img in "${THIRD_PARTY_IMAGES[@]:-}"; do
+  [ -n "$img" ] || continue
+  echo "   pulling + loading $img"
+  docker pull "$img"
   kind load docker-image "$img" --name "$CLUSTER"
 done
 

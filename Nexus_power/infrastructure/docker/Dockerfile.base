@@ -20,7 +20,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Create non-root user
-RUN groupadd -r nexus && useradd -r -g nexus -m nexus
+# Pin nexus to uid/gid 999 (not an auto-assigned system id): the Verdict Helm chart
+# runs pods as runAsUser/runAsGroup/fsGroup=999, and runAsNonRoot enforcement needs a
+# NUMERIC user it can verify — a named USER makes the kubelet refuse to start the pod.
+RUN groupadd -r -g 999 nexus && useradd -r -u 999 -g nexus -m nexus
 
 WORKDIR /app
 

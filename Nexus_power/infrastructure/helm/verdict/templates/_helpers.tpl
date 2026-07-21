@@ -156,17 +156,20 @@ checksum/secret: {{ include (print .Template.BasePath "/secret.yaml") . | sha256
 {{- end }}
 
 {{/*
-Pod-level securityContext. Enforces a non-root, seccomp-confined posture. It
-deliberately does NOT pin runAsUser/runAsGroup — the Verdict images ship their
-own non-root USER (nexus / explorer, both system users), so the container's
-declared user stands and the chowned in-image data dirs keep working. fsGroup
-is added as a supplemental group so mounted PVCs/emptyDirs are group-writable by
-that user regardless of its uid. Operators may TIGHTEN via values.
+Pod-level securityContext. Enforces a non-root, seccomp-confined posture. It pins
+runAsUser/runAsGroup to 999 — the numeric uid/gid the Verdict images' non-root user
+(nexus / explorer) is created with, and the same id as fsGroup so mounted
+PVCs/emptyDirs stay group-writable. This is REQUIRED: with only a NAMED image USER
+and runAsNonRoot=true, the kubelet cannot verify the user is non-root and refuses to
+start the container ("image has non-numeric user (nexus), cannot verify user is
+non-root") on any restricted-PSS cluster. Operators may TIGHTEN/retarget via values.
 Usage: {{ include "verdict.podSecurityContext" . | nindent 8 }}
 */}}
 {{- define "verdict.podSecurityContext" -}}
 {{- $defaults := dict
   "runAsNonRoot" true
+  "runAsUser" 999
+  "runAsGroup" 999
   "fsGroup" 999
   "fsGroupChangePolicy" "OnRootMismatch"
   "seccompProfile" (dict "type" "RuntimeDefault")
