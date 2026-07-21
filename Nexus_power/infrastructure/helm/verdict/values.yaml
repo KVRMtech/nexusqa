@@ -308,6 +308,14 @@ monitoring:
     scrapeTimeout: "10s"
     labels: {}
     metricRelabelings: []
+  # SLO recording rules + alerts over the qec_* metrics (templates/prometheusrule.yaml).
+  prometheusRule:
+    enabled: false
+    namespace: ""        # "" ⇒ the release namespace
+    labels: {}
+    cycleFailureRatio: 0.25   # warn when >25% of cycles end failed/error (30m window)
+    factoryP99Seconds: 90     # warn when factory-call p99 latency exceeds this (seconds)
+    quotaDenyRate: 0.1        # warn when quota denials/sec exceed this, per resource
 
 ingress:
   enabled: false
