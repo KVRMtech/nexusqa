@@ -227,6 +227,20 @@ jobs:
           echo "Built $BUILT image(s), $FAILED failure(s)"
           [ $FAILED -eq 0 ] || exit 1
 
+      # Reproducibility gate: a freshly-built image must contain EXACTLY the git
+      # source it was built from — no COPY drift, no stale/extra/missing runtime
+      # file. This is the same deploy-verify gate scripts/prove_install.sh runs
+      # against a live cluster; here it runs continuously on every build (gateway
+      # is a clean, small service — a representative reproducibility witness).
+      - name: Verify gateway image == git (deploy-verify)
+        run: |
+          set -euo pipefail
+          docker create --name gwverify nexus-gateway:ci >/dev/null
+          trap 'docker rm -f gwverify >/dev/null 2>&1 || true' EXIT
+          python ci/reproducibility/verify_deployment.py \
+            --container gwverify --container-path /app/service/app \
+            --git-root platform/gateway/app
+
       - name: Build client image
         run: |
           docker build -f infrastructure/docker/Dockerfile.client \
