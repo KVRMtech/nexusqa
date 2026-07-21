@@ -36,6 +36,15 @@ jobs:
         run: python infrastructure/helm/nexus-qa/scripts/chart_lint.py --env staging
       - name: Static chart lint (production)
         run: python infrastructure/helm/nexus-qa/scripts/chart_lint.py --env production
+      # The verdict chart is the regulated-buyer (on-prem / air-gapped) install
+      # artifact — guard all three profiles, strict, so a broken .Values path or a
+      # missing secretKeyRef can never ship to a client's cluster.
+      - name: Static chart lint — verdict (base + on-prem + air-gapped)
+        run: |
+          cd infrastructure/helm/verdict
+          python scripts/chart_lint.py --strict
+          python scripts/chart_lint.py --values values-onprem.yaml --strict
+          python scripts/chart_lint.py --values values-airgapped.yaml --strict
 
   helm-template-render:
     runs-on: ubuntu-latest
