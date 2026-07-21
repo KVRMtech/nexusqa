@@ -36,7 +36,7 @@ jobs:
             Nexus_power/platform/api/app/services/test_factory/confidence.py \
             Nexus_power/platform/api/app/services/test_factory/run_screenshots.py \
             Nexus_power/platform/api/app/services/diff_and_heal/control_ledger.py \
-            Nexus_power/platform/api/app/services/script_factory/compiler_vm.py
+            Nexus_power/platform/api/app/services/script_factory/compiler.py
           echo "evidence-engine modules compile from source"
 
   reachability:
