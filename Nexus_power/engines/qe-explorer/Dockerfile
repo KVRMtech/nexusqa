@@ -30,8 +30,12 @@ COPY app/ /app/service/app/
 # explorer-side mount of the shared qec-crawl-storage volume (manifests +
 # staged PNGs land under /work/{crawl_id}/). Created + chowned so startup
 # succeeds before the operator mounts the volume; the mount inherits ownership.
-RUN groupadd --system explorer \
-    && useradd --system --gid explorer --create-home --home-dir /home/explorer explorer \
+# Pin explorer to uid/gid 999 (not an auto-assigned system id): the Verdict Helm
+# chart runs pods as runAsUser/runAsGroup/fsGroup=999, and runAsNonRoot enforcement
+# needs a NUMERIC user it can verify — a named USER makes a restricted-PSS kubelet
+# refuse the pod. 999 also keeps the chowned WORK_DIR/app owned by the running uid.
+RUN groupadd --system --gid 999 explorer \
+    && useradd --system --uid 999 --gid explorer --create-home --home-dir /home/explorer explorer \
     && mkdir -p "${WORK_DIR}" \
     && chown -R explorer:explorer "${WORK_DIR}" /app/service
 
