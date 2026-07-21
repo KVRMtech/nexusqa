@@ -111,19 +111,32 @@ log "Applying QE-Central qecentral schema (alembic upgrade head, as role qec)"
 )
 
 # ── 6. Verify head + table count (fail loudly on a partial build) ───────────
-log "Verifying qecentral is at qec_002 head with 22 tenant tables"
+# The EXPECTED head is derived from the migration chain itself (not hardcoded), so
+# this never goes stale as migrations land. It was previously pinned to qec_002/22
+# and silently aborted the whole security suite the moment qec_003 (app_environments)
+# was added — head became qec_003/23 and set -e killed CI before any test ran.
+EXPECTED_HEAD="$(
+  cd "${QEC_SERVICE_DIR}" &&
+  QEC_DATABASE_URL="postgresql+asyncpg://qec:${QEC_ROLE_PASSWORD}@${PGHOST}:${PGPORT}/${QEC_DB}" \
+    python -m alembic -c "${QEC_SERVICE_DIR}/alembic_qec/alembic.ini" heads 2>/dev/null \
+    | awk 'NR==1{print $1}'
+)"
+log "Verifying qecentral is at the qec chain head (${EXPECTED_HEAD:-<unknown>})"
 HEAD="$(psql -d "${QEC_DB}" -tAc "SELECT version_num FROM alembic_version" | tr -d '[:space:]')"
-if [ "${HEAD}" != "qec_002" ]; then
-  echo "FATAL: qecentral alembic head is '${HEAD}', expected 'qec_002'." >&2
+if [ -z "${EXPECTED_HEAD}" ] || [ "${HEAD}" != "${EXPECTED_HEAD}" ]; then
+  echo "FATAL: qecentral alembic head is '${HEAD}', expected chain head '${EXPECTED_HEAD:-<could-not-derive>}'." >&2
   exit 1
 fi
+# Sanity floor: the qec_001 base creates the 21 core tenant tables and later
+# migrations only ADD; a count below the base means a partial/failed build.
+MIN_TENANT_TABLES=21
 TABLE_COUNT="$(psql -d "${QEC_DB}" -tAc \
   "SELECT count(*) FROM information_schema.tables \
    WHERE table_schema = 'public' AND table_type = 'BASE TABLE' \
      AND table_name <> 'alembic_version'" | tr -d '[:space:]')"
-if [ "${TABLE_COUNT}" != "22" ]; then
-  echo "FATAL: qecentral has ${TABLE_COUNT} tenant tables, expected 22." >&2
+if [ "${TABLE_COUNT}" -lt "${MIN_TENANT_TABLES}" ]; then
+  echo "FATAL: qecentral has ${TABLE_COUNT} tenant tables, expected >= ${MIN_TENANT_TABLES}." >&2
   exit 1
 fi
 
-log "QE-Central CI databases ready: ${NEXUS_DB} (substrate) + ${QEC_DB} (22 tables @ qec_002)"
+log "QE-Central CI databases ready: ${NEXUS_DB} (substrate) + ${QEC_DB} (${TABLE_COUNT} tables @ ${HEAD})"
