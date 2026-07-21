@@ -39,10 +39,29 @@ jobs:
             Nexus_power/platform/api/app/services/script_factory/compiler_vm.py
           echo "evidence-engine modules compile from source"
 
-  import-smoke:
-    name: Import smoke (informational until Stage-2 router wiring)
+  reachability:
+    name: Reproducibility gate (every shipped module is wired into a running service)
     runs-on: ubuntu-latest
-    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      # Static (no imports executed): follows each service's real entrypoint and
+      # fails when a shipped .py is reachable from nothing — the exact drift where
+      # git ships a module the running app never wires in (or a hand-patched box
+      # runs code git orphans). Verdict services are BLOCKING; others report only.
+      - name: Fail on shipped-but-unwired modules (Verdict services)
+        run: >
+          python Nexus_power/ci/reproducibility/reachability_gate.py
+          --discover Nexus_power
+          --gate 'platform/api' --gate 'platform/qe-central'
+          --gate 'platform/gateway' --gate 'platform/auth-service'
+          --gate 'engines/qe-explorer' --gate 'engines/repo-intel'
+
+  import-smoke:
+    name: Import gate (the wired app imports with real dependencies)
+    runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: Nexus_power/platform/api
@@ -57,6 +76,10 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Import the evidence-engine modules with real dependencies
+      # Generic: import the service's REAL entrypoint so this tests the wired app,
+      # not a hand-picked module list. Blocking — a non-blocking import test is the
+      # very green-wash this product exists to prevent. If it needs runtime env,
+      # provision it here (a real, tracked requirement — not a reason to skip).
+      - name: Import the real service entrypoint (proves the wired app imports)
         run: |
-          python -c "import app.services.test_factory.agentic_heal as _a; import app.services.test_factory.defect_report as _d; import app.services.test_factory.network_oracle as _n; import app.services.test_factory.recording_quality as _r; import app.services.diff_and_heal.control_ledger as _l; print('evidence-engine modules import OK')"
+          python -c "import importlib, os, sys; sys.path.insert(0, os.getcwd()); importlib.import_module('main'); print('service entrypoint imports OK')"
