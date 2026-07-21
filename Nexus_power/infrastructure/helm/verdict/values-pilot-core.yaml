@@ -1,0 +1,14 @@
+# Pilot-core scoped install — the Verdict control plane + substrate only.
+#
+# Deploys qe-central + in-cluster Postgres + the migrations Job: enough to PROVE
+# the install path (clean build → deploy → migrate → healthy → code==git) on a
+# resource-bounded host (a CI runner or dev laptop). The crawler (qe-explorer),
+# repo-intel, the portal SPA and the egress proxy are deploy-time OPTIONAL and are
+# switched off here; a real pilot on a client cluster enables them. This is used by
+# .github/workflows/prove-install.yml and scripts/prove_install.sh --values … .
+qeExplorer:
+  enabled: false
+portal:
+  enabled: false
+egressProxy:
+  enabled: false

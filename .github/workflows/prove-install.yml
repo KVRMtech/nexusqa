@@ -1,0 +1,59 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# Prove Install — stands up ONE real install of the Verdict plane on an ephemeral
+# kind cluster, from a clean git build, and PROVES:
+#   * the verdict Helm chart installs (postgres + qe-central + migrations Job),
+#   * the migrations run to completion,
+#   * every deployed pod's code == git (the deploy-verify reproducibility gate),
+#   * the plane is healthy.
+#
+# This is the Phase-0/1 operational proof ("a clean build == what runs" + "one
+# hardened deployment"). It runs the SAME scripts/prove_install.sh an operator
+# runs, scoped to the pilot control plane (values-pilot-core.yaml) so it fits a
+# GitHub-hosted runner. The project lives under Nexus_power/, so every step runs
+# from there via defaults.run.working-directory.
+# ═══════════════════════════════════════════════════════════════════════════
+name: Prove Install (kind)
+
+on:
+  push:
+    branches: [main, develop, "feat/**"]
+    paths:
+      - ".github/workflows/prove-install.yml"
+      - "Nexus_power/infrastructure/helm/verdict/**"
+      - "Nexus_power/scripts/prove_install.sh"
+      - "Nexus_power/ci/reproducibility/**"
+      - "Nexus_power/platform/qe-central/**"
+  workflow_dispatch: {}
+
+concurrency:
+  group: prove-install-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: Nexus_power
+
+jobs:
+  prove-install-core:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install kind + helm + kubectl
+        run: |
+          set -euo pipefail
+          curl -fsSLo ./kind https://kind.sigs.k8s.io/dl/v0.24.0/kind-linux-amd64
+          sudo install -m 0755 ./kind /usr/local/bin/kind && rm ./kind
+          curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+          kind version && helm version --short && kubectl version --client --output=yaml | head -3
+
+      - name: Prove one real install (scoped pilot core)
+        run: bash scripts/prove_install.sh --values infrastructure/helm/verdict/values-pilot-core.yaml
+
+      - name: Dump diagnostics on failure
+        if: failure()
+        run: |
+          kubectl get pods -A -o wide || true
+          kubectl -n verdict describe pods || true
+          kubectl -n verdict logs -l app.kubernetes.io/component=qe-central --tail=100 || true
