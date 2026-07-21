@@ -89,7 +89,11 @@ for img in "${OUR_IMAGES[@]}"; do
   # global.image.tag=$TAG), so build/tag/load it as-is — appending :$TAG again
   # yields an invalid double tag like "…/qe-central:proof:proof".
   echo "   building $name  ($dir/Dockerfile)  ->  $img"
-  docker build -t "$img" -f "$REPO_ROOT/$dir/Dockerfile" "$REPO_ROOT"
+  # Build context is the SERVICE dir (its Dockerfile COPYs app/, requirements.txt,
+  # alembic_qec/ relative to there — same as ci.yml's docker-build). BASE_IMAGE is
+  # the nexus-base:latest we built in step 2b.
+  docker build --build-arg BASE_IMAGE=nexus-base:latest \
+    -t "$img" -f "$REPO_ROOT/$dir/Dockerfile" "$REPO_ROOT/$dir"
   kind load docker-image "$img" --name "$CLUSTER"
 done
 
