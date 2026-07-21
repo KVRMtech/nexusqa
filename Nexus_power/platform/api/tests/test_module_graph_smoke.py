@@ -95,7 +95,7 @@ def test_alembic_migrations_parse_and_chain():
     expected: list[tuple[str, object]] = [
         ("022_e2e_scenario_state", "021_echo_mvp"),
         ("023_test_runs",          "022_e2e_scenario_state"),
-        ("027_merge_e2e_and_knowledge_heads",
+        ("027_merge_heads",   # the migration's real revision id (filename is longer)
          ("023_test_runs", "026_marketplace_and_sovereign")),
     ]
     sys.path.insert(0, str(versions_dir))

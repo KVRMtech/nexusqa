@@ -143,10 +143,12 @@ def test_repair_html_extension_recovers_dropped_dot():
     the extension — deterministically when merged, OCR-evidenced when dropped —
     and NEVER fabricates one without evidence."""
     r = pve._repair_html_extension
-    # Case 1 — merged 'twohtml' (deterministic, no OCR needed).
-    assert r("/checkout-step-twohtml", "") == "/checkout-step-two.html"
-    assert r("/checkout-step-tohtml", "") == "/checkout-step-to.html"
-    assert r("/a/b/foohtml", "") == "/a/b/foo.html"
+    # Case 1 — merged 'twohtml', recovered ONLY with OCR evidence of the gap
+    # (the dropped dot read as a space); never fabricated for a genuine
+    # extensionless route like '/sitemaphtml'.
+    assert r("/checkout-step-twohtml", "checkout-step-two html") == "/checkout-step-two.html"
+    assert r("/checkout-step-tohtml", "checkout-step-to html") == "/checkout-step-to.html"
+    assert r("/a/b/foohtml", "foo html") == "/a/b/foo.html"
     # Case 2 — extension dropped entirely; recovered ONLY with OCR evidence.
     assert r("/inventory", "saucedemo com/inventory html aclion") == "/inventory.html"
     assert r("/checkout-complete", "com/checkout-complete html") == "/checkout-complete.html"
@@ -178,8 +180,8 @@ def test_path_only_ocr_match_is_not_proven_url_regex():
         pve._confidence_for_source(PageVisitSource.URL_REGEX)
     assert loc.source.value not in {"ground_truth", "url_regex"}
 
-    # A FULL URL OCR'd off the address bar stays PROVEN url_regex/1.0.
-    frame2 = _ResolveFrame(extracted_text="open https://www.usaa.com/quote/start now")
+    # A FULL URL OCR'd off the address bar (url_or_path) stays PROVEN url_regex/1.0.
+    frame2 = _ResolveFrame(url_or_path="https://www.usaa.com/quote/start")
     loc2 = pve._resolve_frame_location(
         frame2, scene=None, app_instance=None,
         url_pattern=url_pattern, config=cfg, dominant_host="usaa.com",

@@ -143,6 +143,33 @@ jobs:
           path: coverage.xml
           retention-days: 30
 
+  # ── platform/api suite (the value/outcome oracles, auditor, extractors,
+  #    governance contracts) — 300+ tests the root `testpaths = tests` never
+  #    collected. Run per-file-isolated so cross-file import pollution can't flap
+  #    the result; known runtime regressions are strict-xfail'd (and documented)
+  #    in platform/api/tests/conftest.py, so this gate is BLOCKING and honest. ──
+  platform-api-tests:
+    runs-on: ubuntu-latest
+    needs: [lint, compile]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          pip install -e sdk/nexus-sdk/
+          ( cd platform/api && pip install -r requirements.txt )
+          pip install pytest pytest-asyncio
+
+      - name: platform/api test suite (per-file isolation)
+        env:
+          NEXUS_SECRET_KEY: ci-test-secret-key-not-for-prod
+          NEXUS_JWT_SECRET: ci-test-jwt-secret-not-for-prod
+        run: bash ci/run_platform_api_tests.sh
+
   # ── Docker Build (smoke test) ───────────────────────────────
   docker-build:
     runs-on: ubuntu-latest

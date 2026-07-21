@@ -262,12 +262,13 @@ def test_scene_action_tool_input_schema_matches_pydantic():
     If they drift, the LLM will produce shapes Pydantic can't validate.
     """
     tool = _scene_action_tool()
-    assert tool.name == "record_scene_action"
+    assert tool.name == "record_scene_actions"
     assert tool.description
     # The schema must declare verb and the other required fields
     schema = tool.input_schema
     assert "properties" in schema
-    props = schema["properties"]
+    assert "actions" in schema["properties"]
+    props = schema["$defs"]["SceneAction"]["properties"]
     for required_field in (
         "verb", "target_label", "target_kind",
         "value", "confidence", "automation_ready", "reasoning",

@@ -15,7 +15,7 @@ def test_observed_value_from_nxnum_failure():
 
 
 def test_observed_value_from_containstext_failure():
-    err = 'expect(locator).toContainText\n  Expected string: "UAT"\n  Received string: "Environment: PROD"'
+    err = 'value oracle: expect(locator).toContainText\n  Expected string: "UAT"\n  Received string: "Environment: PROD"'
     assert observed_value_from_error(err) == "Environment: PROD"
 
 
