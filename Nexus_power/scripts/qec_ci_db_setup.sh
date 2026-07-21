@@ -87,6 +87,40 @@ log "Applying VKPower nexus schema (alembic upgrade head)"
     python -m alembic -c "${REPO_ROOT}/alembic.ini" upgrade head
 )
 
+# ── 3b. Materialise the substrate tables the alembic chain does NOT own ──────
+# A few substrate models (ground_truth_events, surface_prefs, …) are create_all-only
+# — the running service binds them to the SDK ``Base`` and relies on create_all, not
+# a migration (surface_prefs.py: "binds the SDK's Base so it shares … create_all").
+# The bootstrap SQL below GRANTs on them, so they must exist first; without this the
+# grant aborts with `relation "ground_truth_events" does not exist`. create_all is
+# checkfirst=True, so it only adds the missing tables and never touches an
+# alembic-owned one. NOTE: these create_all tables carry no migration-defined RLS —
+# tracked separately; the RLS proof itself covers the migration-owned page_visits.
+log "Materialising create_all-only substrate tables (ground_truth_events, surface_prefs, …)"
+(
+  cd "${REPO_ROOT}"
+  DATABASE_URL="postgresql+asyncpg://${PGUSER}:${PGPASSWORD}@${PGHOST}:${PGPORT}/${NEXUS_DB}" \
+  PYTHONPATH="${REPO_ROOT}/platform/api${PYTHONPATH:+:${PYTHONPATH}}" \
+  python - <<'PY'
+import asyncio, os
+from sqlalchemy.ext.asyncio import create_async_engine
+from nexus_sdk.db import Base
+import nexus_sdk.db.models                      # noqa: F401 — register SDK substrate models
+import app.services.storyboard.surface_prefs    # noqa: F401 — bind surface_prefs to Base
+
+
+async def main() -> None:
+    engine = create_async_engine(os.environ["DATABASE_URL"])
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)   # checkfirst: only missing tables
+    await engine.dispose()
+
+
+asyncio.run(main())
+print("substrate create_all complete")
+PY
+)
+
 # ── 4. Roles + qecentral database + least-privilege grants (production SQL) ──
 # scripts/qec_db_bootstrap.sql needs the nexus substrate tables to already
 # exist (step 3) because it GRANTs on them; run it as the superuser.  It creates
