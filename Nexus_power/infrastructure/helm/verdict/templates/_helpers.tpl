@@ -238,3 +238,34 @@ Usage: {{ include "verdict.kekEnv" . | nindent 12 }}
 - name: AWS_REGION
   value: {{ .Values.kek.awsRegion | default "" | quote }}
 {{- end }}
+
+{{/*
+Render-time guard: a multi-replica qe-central is only CORRECT with the shared
+redis admission mutex + a single fleet-scan leader. The `memory` admission
+backend is PROCESS-LOCAL, so each replica keeps its own limiter — two replicas
+would each admit a crawl on the SAME host, breaking the global politeness mutex
+(design P2, "admission is a mutex") and double-crawling the customer's app.
+`daemonLeaderElection=none` means every replica scans the fleet and schedules
+duplicate cycles. This fails the render so an unsafe scale-out can NEVER be
+installed — the safe default (replicas=1 / memory) renders unchanged.
+Usage (once, before the Deployment): {{ include "verdict.validateScaling" . }}
+*/}}
+{{- define "verdict.validateScaling" -}}
+{{- $qc := .Values.qeCentral -}}
+{{- $env := .Values.env -}}
+{{- $maxReplicas := int $qc.replicas -}}
+{{- if $qc.autoscaling.enabled -}}{{- $maxReplicas = int $qc.autoscaling.maxReplicas -}}{{- end -}}
+{{- if eq $env.admissionBackend "redis" -}}
+  {{- if not $env.redisUrl -}}
+    {{- fail "verdict: env.admissionBackend=redis but env.redisUrl is empty — the redis limiter FAIL-CLOSES every admission (nothing would ever crawl). Set env.redisUrl to the shared redis DSN." -}}
+  {{- end -}}
+{{- end -}}
+{{- if gt $maxReplicas 1 -}}
+  {{- if ne $env.admissionBackend "redis" -}}
+    {{- fail (printf "verdict: qe-central can run up to %d replicas but env.admissionBackend=%q. Multi-replica REQUIRES admissionBackend=redis — memory admission is process-local, so replicas would each admit on the same host and break the global politeness mutex. Set env.admissionBackend=redis (+ env.redisUrl), or keep it single-replica (qeCentral.replicas=1 AND qeCentral.autoscaling.maxReplicas=1)." $maxReplicas $env.admissionBackend) -}}
+  {{- end -}}
+  {{- if ne $env.daemonLeaderElection "advisory_lock" -}}
+    {{- fail (printf "verdict: qe-central can run up to %d replicas but env.daemonLeaderElection=%q. Multi-replica REQUIRES daemonLeaderElection=advisory_lock so exactly ONE replica scans the fleet; otherwise every replica schedules duplicate cycles. Set env.daemonLeaderElection=advisory_lock." $maxReplicas $env.daemonLeaderElection) -}}
+  {{- end -}}
+{{- end -}}
+{{- end -}}

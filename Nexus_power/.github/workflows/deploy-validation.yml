@@ -79,6 +79,48 @@ jobs:
             --set secrets.grafanaPassword=ci-placeholder \
             > /tmp/production-rendered.yaml
           echo "Rendered $(wc -l < /tmp/production-rendered.yaml) lines"
+
+      # ── verdict chart (the regulated-buyer on-prem/air-gapped install) — render
+      #    it for REAL (not only static-lint), and PROVE the multi-replica scaling
+      #    guard actually blocks an unsafe scale-out. ──────────────────────────
+      - name: helm lint — verdict
+        run: helm lint infrastructure/helm/verdict
+      - name: helm template — verdict (base + on-prem + air-gapped)
+        run: |
+          set -euo pipefail
+          _secrets=( --set secrets.jwtSecret=ci --set secrets.postgresPassword=ci
+                     --set secrets.qecDbPassword=ci --set secrets.substrateDbPassword=ci
+                     --set secrets.explorerToken=ci )
+          for prof in base onprem airgapped; do
+            f=""; [ "$prof" = base ] || f="-f infrastructure/helm/verdict/values-${prof}.yaml"
+            helm template verdict infrastructure/helm/verdict $f "${_secrets[@]}" \
+              > "/tmp/verdict-${prof}-rendered.yaml"
+            echo "verdict/${prof}: $(wc -l < /tmp/verdict-${prof}-rendered.yaml) lines"
+          done
+      - name: verdict scaling guard blocks an unsafe multi-replica config
+        run: |
+          set -euo pipefail
+          _secrets=( --set secrets.jwtSecret=ci --set secrets.postgresPassword=ci
+                     --set secrets.qecDbPassword=ci --set secrets.substrateDbPassword=ci
+                     --set secrets.explorerToken=ci )
+          # replicas>1 with the DEFAULT (memory) admission backend MUST fail to render.
+          if helm template verdict infrastructure/helm/verdict "${_secrets[@]}" \
+               --set qeCentral.replicas=3 >/dev/null 2>/tmp/guard.err; then
+            echo "FAIL: 3 replicas rendered with memory admission — the scaling guard did NOT fire." >&2
+            exit 1
+          fi
+          if grep -q "admissionBackend=redis" /tmp/guard.err; then
+            echo "OK — guard blocked unsafe scale-out:"; sed 's/^/    /' /tmp/guard.err
+          else
+            echo "FAIL: render failed, but NOT via the scaling guard:" >&2; cat /tmp/guard.err >&2; exit 1
+          fi
+          # The SAFE multi-replica config (redis + url + advisory_lock) renders fine.
+          helm template verdict infrastructure/helm/verdict "${_secrets[@]}" \
+            --set qeCentral.replicas=3 \
+            --set env.admissionBackend=redis --set env.redisUrl=redis://shared:6379/0 \
+            --set env.daemonLeaderElection=advisory_lock >/dev/null
+          echo "OK — safe multi-replica (redis + advisory_lock) renders."
+
       - name: Upload rendered manifests on failure
         if: failure()
         uses: actions/upload-artifact@v4

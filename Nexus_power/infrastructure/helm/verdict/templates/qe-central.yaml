@@ -15,6 +15,7 @@ password, or the `local` KEK — so a missing Secret is a loud CrashLoop, not
 a silent weak deploy.
 =================================================================
 */}}
+{{- include "verdict.validateScaling" . }}
 {{- $fullname := include "verdict.fullname" . }}
 {{- $root := . }}
 {{- $pgEndpoint := include "verdict.pgEndpoint" . }}
