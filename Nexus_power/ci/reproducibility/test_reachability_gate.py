@@ -49,18 +49,43 @@ def test_transitive_and_relative_imports_are_reachable(tmp_path):
     assert rep.orphans == ["app.never"]       # a + b reachable transitively
 
 
-def test_tests_and_migrations_are_excluded(tmp_path):
+def test_real_tests_and_migrations_are_excluded(tmp_path):
     root = str(tmp_path)
     _write(root, "main.py", "from app import wired\n")
     _write(root, "app/__init__.py")
     _write(root, "app/wired.py", "V = 1\n")
-    _write(root, "app/tests/test_wired.py", "def test_x(): pass\n")   # test file
-    _write(root, "app/services/test_helper.py", "def go(): pass\n")   # test_ basename
+    _write(root, "app/tests/test_wired.py", "def test_x(): pass\n")     # test by DIR
+    _write(root, "app/services/foo_test.py", "import pytest\n")         # test by CONTENT
     _write(root, "alembic_x/versions/0001_init.py", "def up(): pass\n")  # migration
 
     rep = rg.analyze(root, ["main"], extra_globs=(), label="svc")
 
-    assert rep.orphans == []                  # every non-app file was excluded
+    assert rep.orphans == []                  # every real test / migration excluded
+
+
+def test_test_prefixed_live_module_is_not_falsely_orphaned(tmp_path):
+    """Regression: a LIVE module whose name starts with ``test_`` (e.g. a
+    test-factory / test-runs router, where "test" is the DOMAIN, not a pytest
+    prefix) must be analysed as real code, not silently dropped. Dropping it
+    orphaned everything it imported and inflated the orphan count."""
+    root = str(tmp_path)
+    _write(root, "main.py", "from app.routers import test_factory\n")
+    _write(root, "app/__init__.py")
+    _write(root, "app/routers/__init__.py")
+    # a live router named test_* — NO pytest markers — wired from main
+    _write(root, "app/routers/test_factory.py", "from app.services import engine\nrouter = 1\n")
+    _write(root, "app/services/__init__.py")
+    _write(root, "app/services/engine.py", "E = 1\n")
+    # a genuinely dead test_*-named live module (no pytest, imported by nobody)
+    _write(root, "app/routers/test_orphan.py", "router = 2\n")
+
+    rep = rg.analyze(root, ["main"], extra_globs=(), label="svc")
+
+    # the wired router and its transitive import are reachable, not orphaned…
+    assert "app.routers.test_factory" not in rep.orphans
+    assert "app.services.engine" not in rep.orphans
+    # …but a truly-unwired test_*-named live module IS correctly flagged
+    assert "app.routers.test_orphan" in rep.orphans
 
 
 def test_missing_entrypoint_is_reported(tmp_path):

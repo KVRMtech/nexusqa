@@ -66,9 +66,29 @@ _EXCLUDE_DIR_PREFIXES: tuple[str, ...] = ("alembic",)
 _EXCLUDE_BASENAMES: frozenset[str] = frozenset({"conftest.py", "setup.py", "__main__.py"})
 
 
+# A pytest test module — detected by CONTENT, never by name. A live module whose
+# name merely starts with ``test_`` (e.g. a ``test_factory`` / ``test_runs`` router
+# where "test" is the DOMAIN, not a pytest prefix) must NOT be excluded, or every
+# module it imports is falsely orphaned. A real co-located test defines a ``test_``
+# function or imports pytest.
+_PYTEST_RE = re.compile(
+    r"^\s*(?:async\s+)?def\s+test_|^\s*import\s+pytest\b|^\s*from\s+pytest\b", re.M)
+
+
+def _looks_like_pytest(path: str) -> bool:
+    try:
+        with open(path, encoding="utf-8", errors="ignore") as fh:
+            return bool(_PYTEST_RE.search(fh.read()))
+    except OSError:
+        return False
+
+
 def _is_excluded(rel_path: str, extra_globs: tuple[str, ...]) -> bool:
     """True when ``rel_path`` (relative to the service root, ``/``-separated) is
-    conventionally not part of the running application import graph."""
+    conventionally not part of the running application import graph. Test files are
+    excluded by DIRECTORY convention here (``tests/``); a ``test_``-named file that
+    is NOT under a tests dir is left for the content check in _iter_py to classify,
+    so misnamed live code is analysed rather than silently dropped."""
     parts = rel_path.split("/")
     segs, base = parts[:-1], parts[-1]
     if any(s in _EXCLUDE_DIR_SEGMENTS for s in segs):
@@ -76,8 +96,6 @@ def _is_excluded(rel_path: str, extra_globs: tuple[str, ...]) -> bool:
     if any(s.startswith(p) for s in segs for p in _EXCLUDE_DIR_PREFIXES):
         return True
     if base in _EXCLUDE_BASENAMES:
-        return True
-    if base.startswith("test_") or base.endswith("_test.py"):
         return True
     return any(fnmatch.fnmatch(rel_path, g) for g in extra_globs)
 
@@ -112,6 +130,11 @@ def _iter_py(source_root: str, extra_globs: tuple[str, ...]) -> list[str]:
             p = os.path.join(base, fn)
             rel = os.path.relpath(p, source_root).replace(os.sep, "/")
             if _is_excluded(rel, extra_globs):
+                continue
+            # A real pytest module (detected by content, not name) is not part of
+            # the running import graph. This is what lets a ``test_``-named LIVE
+            # module through while still excluding genuine co-located tests.
+            if _looks_like_pytest(p):
                 continue
             out.append(p)
     return out
