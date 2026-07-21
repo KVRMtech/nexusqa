@@ -80,7 +80,10 @@ spec:
       labels:
         {{- include "verdict.componentSelectorLabels" (dict "root" $root "component" "verdict-portal") | nindent 8 }}
       annotations:
-        checksum/nginx: {{ include (print $.Template.BasePath "/verdict-portal.yaml") . | sha256sum }}
+        # Restart the portal when its nginx config actually changes. Hash the config's
+        # inputs (portal values + the qe-central upstream) — NOT the whole template
+        # file, which contains this Deployment and would self-include → infinite recursion.
+        checksum/nginx: {{ printf "%v-%v" (.Values.portal | toYaml) $qecUpstream | sha256sum }}
     spec:
       serviceAccountName: {{ .Values.serviceAccount.name | default (include "verdict.fullname" .) }}
       {{- include "verdict.podSpecCommon" $root | nindent 6 }}

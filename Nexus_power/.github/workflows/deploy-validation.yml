@@ -90,7 +90,10 @@ jobs:
           set -euo pipefail
           _secrets=( --set secrets.jwtSecret=ci --set secrets.postgresPassword=ci
                      --set secrets.qecDbPassword=ci --set secrets.substrateDbPassword=ci
-                     --set secrets.explorerToken=ci )
+                     --set secrets.explorerToken=ci
+                     # on-prem/air-gapped enable externalSecrets, which fail-closes unless
+                     # the operator supplies their own secret store — provide a CI stand-in.
+                     --set externalSecrets.secretStoreRef.name=ci-store )
           for prof in base onprem airgapped; do
             f=""; [ "$prof" = base ] || f="-f infrastructure/helm/verdict/values-${prof}.yaml"
             helm template verdict infrastructure/helm/verdict $f "${_secrets[@]}" \
@@ -102,7 +105,8 @@ jobs:
           set -euo pipefail
           _secrets=( --set secrets.jwtSecret=ci --set secrets.postgresPassword=ci
                      --set secrets.qecDbPassword=ci --set secrets.substrateDbPassword=ci
-                     --set secrets.explorerToken=ci )
+                     --set secrets.explorerToken=ci
+                     --set externalSecrets.secretStoreRef.name=ci-store )
           # replicas>1 with the DEFAULT (memory) admission backend MUST fail to render.
           if helm template verdict infrastructure/helm/verdict "${_secrets[@]}" \
                --set qeCentral.replicas=3 >/dev/null 2>/tmp/guard.err; then
