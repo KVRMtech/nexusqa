@@ -107,6 +107,10 @@ tmp_*.py
 tmp_*/
 **/tmp_*.py
 **/tmp_*/
+# dot-prefixed scratch (ad-hoc psql probes etc. — these leaked in once)
+.tmp_*
+**/.tmp_*
+*.bmp
 frames_payload_raw.json
 **/frames_payload_raw.json
 **/contact_sheet*.jpg
