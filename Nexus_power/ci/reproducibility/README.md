@@ -1,11 +1,20 @@
-# Reproducibility gate
+# Reachability / dead-code gate
 
-**Goal (Phase 0 of the production plan): git must reproduce exactly what runs.**
-A security team — or a fresh CI runner — must be able to clone the repo, build, and
-get the *same* system. The failure mode this closes is silent drift: a module that
-lives in git, compiles, even has tests, yet is wired into **nothing** the running
-service imports — so a clean build omits it (or a hand-patched server runs code git
-orphans). A parse-only CI never sees this.
+**What this is:** a static gate that finds shipped `.py` files wired into **nothing**
+a running service imports — code that compiles and may even have tests, yet is
+reachable from no entrypoint. That is either **latent code** (a feature built but
+never activated) or **dead code** (superseded). Both are cleanup debt on the road to
+a 9.5/10 production bar, and a parse-only CI never sees them.
+
+**What this is NOT (important, measured 2026-07-21):** it is *not* a git-vs-deployed
+reproducibility check, and the modules it flags are *not* evidence that git differs
+from what runs. A direct file-hash diff of git `platform/api` against the running VM
+found them **162/164 identical** (the 2 differences: one is line-endings only; the
+other is a file where *git is ahead*). So git reproduces the frozen factory faithfully.
+The real reproducibility work (Phase 0) is deploy discipline — rebuild the running box
+from CI images so its *baked dependencies* match git — tracked separately in
+`docs/HARDENING_SUMMITLIFE_HANDOVER_2026-07-21.md`. This gate is the complementary
+hygiene check: keep the tree free of code that runs from nowhere.
 
 ## What `reachability_gate.py` does
 

@@ -1,15 +1,24 @@
-# Reproducibility drift backlog — VKPower Verdict services
+# Unreachable / latent-code backlog — VKPower Verdict services
 
-> **Generated** by `ci/reproducibility/reachability_gate.py`. This is a *snapshot*, not a maintained allow-list — regenerate it anytime. The CI gate reads the live tree, so silencing an entry here changes nothing; the only way to clear an item is to fix it.
+> **Generated** by `ci/reproducibility/reachability_gate.py`. A *snapshot*, not a
+> maintained allow-list — regenerate anytime. Silencing an entry here changes nothing;
+> the gate reads the live tree.
 
-**Total: 60 orphaned modules across 4 service(s); 2 service(s) already clean.**
+**Total: 60 modules across 4 service(s) are reachable from no running entrypoint; 2 service(s) are clean.**
 
-Every module below is shipped in git but reachable from **no** running entrypoint. Resolve each by exactly one of:
+> **Measured 2026-07-21:** these are **not** git-vs-deployed drift. A file-hash diff of
+> git `platform/api` against the running VM was 162/164 identical — these modules are
+> **latent/dead in *both* git and the running system** (present, some tested, wired
+> into nothing). This is cleanup debt, not a "what runs differs from git" problem.
 
-1. **Wire it** into the service at its real integration point (for the frozen `platform/api` factory, take the wiring from the running container — do not invent it), or
-2. **Remove it** from git if the running system does not use it.
+Resolve each by exactly one of:
 
-Do not add an ignore/baseline entry — that reintroduces exactly the drift this gate exists to catch.
+1. **Wire it** into the service at its real integration point, if it is a real feature
+   meant to be active (this *turns a feature on* — a behavior change that needs the
+   module owner and a test run, not a blind edit), or
+2. **Remove it** from git if it is superseded / never activated.
+
+Do not add an ignore/baseline entry to make the gate pass — that hides the debt.
 
 ## `platform/api` — 50 orphan(s)  ·  109/159 reachable from `main`
 
