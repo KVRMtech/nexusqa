@@ -12,6 +12,17 @@
 # ─────────────────────────────────────────────────────────────────────────────
 set -uo pipefail
 PG="${PG_CONTAINER:-nexus-postgres}"
+# DB role used for every dump/restore/psql call (prod = the `nexus` owner).
+PG_USER="${PG_USER:-nexus}"
+# Transport for reaching Postgres:
+#   docker (default) — run INSIDE the $PG container (production on the VM);
+#   local            — run the client tools directly against the libpq PG* env
+#                      (a CI Postgres service container reached over TCP).
+# Behaviour is otherwise identical, so CI can exercise the SAME script the
+# operator runs (design R-7: prove the production script, never a CI fork).
+PG_TRANSPORT="${PG_TRANSPORT:-docker}"
+_run()   { if [ "$PG_TRANSPORT" = local ]; then "$@"; else docker exec    "$PG" "$@"; fi; }
+_run_i() { if [ "$PG_TRANSPORT" = local ]; then "$@"; else docker exec -i "$PG" "$@"; fi; }
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
 # Persistent LOCAL backup dir (always written) + OPTIONAL offsite GCS bucket. When
@@ -57,7 +68,7 @@ backup() {
     echo "-- dumping $db --"
     out="$LOCAL_BACKUP_DIR/${db}_${STAMP}.dump"
     # -Fc custom format = compressed + parallel-restorable; SoR integrity first.
-    if ! docker exec "$PG" pg_dump -U nexus -d "$db" -Fc > "$out"; then
+    if ! _run pg_dump -U "$PG_USER" -d "$db" -Fc > "$out"; then
       echo "DUMP_FAILED:$db"; exit 1
     fi
     sz=$(stat -c%s "$out" 2>/dev/null || echo 0)
@@ -85,14 +96,14 @@ backup() {
 # ANALYZE and would green-wash an empty restore as "matching").
 counts_for() {
   local db="$1" gen
-  gen=$(docker exec "$PG" psql -U nexus -d "$db" -t -A -c \
+  gen=$(_run psql -U "$PG_USER" -d "$db" -t -A -c \
     "select coalesce(string_agg(format('select %L as t, count(*) as n from public.%I', tablename, tablename), ' union all '), 'select null::text as t, 0 as n where false') from pg_tables where schemaname='public';" 2>/dev/null)
   [ -n "$gen" ] || return 0
-  docker exec "$PG" psql -U nexus -d "$db" -t -A -F' ' -c "$gen" 2>/dev/null
+  _run psql -U "$PG_USER" -d "$db" -t -A -F' ' -c "$gen" 2>/dev/null
 }
 
 alembic_head() {
-  docker exec "$PG" psql -U nexus -d "$1" -t -A -c \
+  _run psql -U "$PG_USER" -d "$1" -t -A -c \
     "select version_num from alembic_version;" 2>/dev/null | tr -d '[:space:]'
 }
 
@@ -107,10 +118,10 @@ drill_one() {
   local db="$1" drill
   drill=$(printf 'verdict_restore_drill_%s_%s' "$db" "$STAMP" | tr 'A-Z' 'a-z')
   echo "-- restore-drill: $db --"
-  docker exec "$PG" pg_dump -U nexus -d "$db" -Fc > "$WORK/drill_${db}.dump" || { echo "DRILL_DUMP_FAIL:$db"; return 1; }
-  docker exec "$PG" psql -U nexus -d postgres -c "DROP DATABASE IF EXISTS ${drill};" >/dev/null 2>&1
-  docker exec "$PG" psql -U nexus -d postgres -c "CREATE DATABASE ${drill};" >/dev/null 2>&1 || { echo "DRILL_CREATE_FAIL:$db"; return 1; }
-  docker exec -i "$PG" pg_restore -U nexus -d "${drill}" --no-owner < "$WORK/drill_${db}.dump" 2>&1 | tail -3
+  _run pg_dump -U "$PG_USER" -d "$db" -Fc > "$WORK/drill_${db}.dump" || { echo "DRILL_DUMP_FAIL:$db"; return 1; }
+  _run psql -U "$PG_USER" -d postgres -c "DROP DATABASE IF EXISTS ${drill};" >/dev/null 2>&1
+  _run psql -U "$PG_USER" -d postgres -c "CREATE DATABASE ${drill};" >/dev/null 2>&1 || { echo "DRILL_CREATE_FAIL:$db"; return 1; }
+  _run_i pg_restore -U "$PG_USER" -d "${drill}" --no-owner < "$WORK/drill_${db}.dump" 2>&1 | tail -3
 
   local rc=0
   # (1) alembic head must match — the restore preserved the schema revision.
@@ -141,7 +152,7 @@ drill_one() {
   echo "   restored rows total(drill)=$total_dst  tables=$dst_tables  empty_restores=$empty_restores"
   [ "$empty_restores" -eq 0 ] || rc=1
 
-  docker exec "$PG" psql -U nexus -d postgres -c "DROP DATABASE IF EXISTS ${drill};" >/dev/null 2>&1
+  _run psql -U "$PG_USER" -d postgres -c "DROP DATABASE IF EXISTS ${drill};" >/dev/null 2>&1
   return $rc
 }
 

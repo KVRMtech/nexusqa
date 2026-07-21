@@ -106,6 +106,10 @@ jobs:
       # Shared HS256 secret + redis (parity with the deployed stack)
       NEXUS_JWT_SECRET: qec-ci-jwt-secret-not-for-prod
       NEXUS_REDIS_URL: redis://localhost:6379
+      # Opt the distributed-admission test into its REAL-Lua path against the live
+      # redis service (isolated on db 1) — proves the two-replica shared mutex +
+      # fail-closed denial that horizontal scaling depends on, instead of skipping.
+      QEC_TEST_REDIS_URL: redis://localhost:6379/1
       QEC_LOG_LEVEL: WARNING
 
     steps:
@@ -186,3 +190,27 @@ jobs:
             tests/test_qec_contract_auth_import.py \
             tests/test_qec_contract_e2_composer.py \
             -v --tb=short
+
+      # (i) Phase 6.3a — backups are PROVEN recoverable, not assumed. Runs LAST so
+      #     the seeded probe rows can never perturb the suites above. Exercises the
+      #     SAME production script the operator runs (scripts/verdict_pg_backup.sh)
+      #     in `local` transport against the CI Postgres, after planting one known
+      #     row per DB so the drill's no-empty-restore check is a real data-recovery
+      #     proof (not a vacuous empty-schema round-trip).
+      - name: Seed DR probe rows (evidence + control-plane roots)
+        run: bash scripts/qec_ci_dr_seed.sh
+
+      - name: Backup lands + restore-drill passes (recovery PROVEN)
+        env:
+          PG_TRANSPORT: local          # direct libpq to the CI Postgres (no docker exec)
+          PG_USER: postgres            # the CI superuser (createdb + RLS-bypass for the drill)
+          LOCAL_BACKUP_DIR: ${{ runner.temp }}/db_backups
+        run: |
+          set -euo pipefail
+          # 1) a backup must LAND (both DBs dumped, size-sane) …
+          bash scripts/verdict_pg_backup.sh | tee "$RUNNER_TEMP/backup.log"
+          grep -q '^BACKUP_OK' "$RUNNER_TEMP/backup.log"
+          # 2) … and a restore must be PROVEN recoverable — alembic head matches AND
+          #    no table with rows in the source comes back empty (the seeded rows).
+          bash scripts/verdict_pg_backup.sh --restore-drill | tee "$RUNNER_TEMP/drill.log"
+          grep -q '^RESTORE_DRILL_PASS' "$RUNNER_TEMP/drill.log"
