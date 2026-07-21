@@ -74,6 +74,12 @@ mapfile -t OUR_IMAGES < <(printf '%s\n' "$RENDERED" | grep -oE 'image:\s*"?[^"[:
   | sed -E 's/image:\s*"?//' | grep "/nexus-qa/" | sort -u)
 [ "${#OUR_IMAGES[@]}" -gt 0 ] || { echo "FATAL: chart rendered no first-party images." >&2; exit 1; }
 
+echo "== 2b) build the shared CPU base image the service Dockerfiles FROM =="
+# Each service Dockerfile does `ARG BASE_IMAGE=nexus-base:latest; FROM ${BASE_IMAGE}`
+# (the SDK is pre-installed in the base). That base lives on no registry, so it must
+# be built locally FIRST or every service build fails "pull access denied … nexus-base".
+docker build -f "$REPO_ROOT/infrastructure/docker/Dockerfile.base" -t nexus-base:latest "$REPO_ROOT"
+
 echo "== 3) build each first-party image from git + load into kind =="
 for img in "${OUR_IMAGES[@]}"; do
   name="$(basename "${img%%:*}")"           # ghcr.io/nexus-qa/qe-central:proof -> qe-central
