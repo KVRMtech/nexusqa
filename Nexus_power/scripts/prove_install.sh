@@ -79,9 +79,12 @@ for img in "${OUR_IMAGES[@]}"; do
   name="$(basename "${img%%:*}")"           # ghcr.io/nexus-qa/qe-central:proof -> qe-central
   dir="${SERVICE_DIR[$name]:-}"
   [ -n "$dir" ] || { echo "FATAL: no build mapping for image '$name' (image=$img)." >&2; exit 1; }
-  echo "   building $name  ($dir/Dockerfile)  ->  $img:$TAG"
-  docker build -t "$img:$TAG" -f "$REPO_ROOT/$dir/Dockerfile" "$REPO_ROOT"
-  kind load docker-image "$img:$TAG" --name "$CLUSTER"
+  # $img already carries :$TAG (the discovery render was done with --set
+  # global.image.tag=$TAG), so build/tag/load it as-is — appending :$TAG again
+  # yields an invalid double tag like "…/qe-central:proof:proof".
+  echo "   building $name  ($dir/Dockerfile)  ->  $img"
+  docker build -t "$img" -f "$REPO_ROOT/$dir/Dockerfile" "$REPO_ROOT"
+  kind load docker-image "$img" --name "$CLUSTER"
 done
 
 echo "== 4) install the verdict chart (on-prem profile, local images) =="
