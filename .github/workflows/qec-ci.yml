@@ -14,10 +14,13 @@
 #   * proves tenant isolation BEHAVIOURALLY (test_rls_isolation.py) through the
 #     least-privilege roles — the security-critical gap Phase 5.5 closes;
 #   * runs the cost budget gate against the real ledger schema;
-#   * runs the VKPower pin suite so the no-break guarantee is enforced in CI.
+#   * runs the VKPower pin suite so the no-break guarantee is enforced in CI;
+#   * proves backups are recoverable (restore-drill) + the real-Lua admission mutex.
 #
-# It is deliberately scoped by path filters to QE-Central changes so it never
-# runs on unrelated VKPower commits.  Any failure fails the build.
+# NOTE: the project lives under Nexus_power/ (the git repo root is one level up),
+# so every `run:` step executes from there via `defaults.run.working-directory`,
+# and the `on.paths` filters + the one step-level working-directory are prefixed
+# with Nexus_power/. Any failure fails the build.
 # ═══════════════════════════════════════════════════════════════════════════
 name: QE-Central CI
 
@@ -26,28 +29,36 @@ on:
     branches: [main, develop, "feat/**"]
     paths:
       - ".github/workflows/qec-ci.yml"
-      - "platform/qe-central/**"
-      - "engines/qe-explorer/**"
-      - "engines/repo-intel/**"
-      - "scripts/qec_*"
-      - "sdk/nexus-sdk/**"
-      - "alembic/**"
-      - "platform/api/tests/test_qec_contract_*.py"
+      - "Nexus_power/platform/qe-central/**"
+      - "Nexus_power/engines/qe-explorer/**"
+      - "Nexus_power/engines/repo-intel/**"
+      - "Nexus_power/scripts/qec_*"
+      - "Nexus_power/scripts/verdict_pg_backup.sh"
+      - "Nexus_power/sdk/nexus-sdk/**"
+      - "Nexus_power/alembic/**"
+      - "Nexus_power/platform/api/tests/test_qec_contract_*.py"
   pull_request:
     branches: [main, develop]
     paths:
       - ".github/workflows/qec-ci.yml"
-      - "platform/qe-central/**"
-      - "engines/qe-explorer/**"
-      - "engines/repo-intel/**"
-      - "scripts/qec_*"
-      - "sdk/nexus-sdk/**"
-      - "alembic/**"
-      - "platform/api/tests/test_qec_contract_*.py"
+      - "Nexus_power/platform/qe-central/**"
+      - "Nexus_power/engines/qe-explorer/**"
+      - "Nexus_power/engines/repo-intel/**"
+      - "Nexus_power/scripts/qec_*"
+      - "Nexus_power/scripts/verdict_pg_backup.sh"
+      - "Nexus_power/sdk/nexus-sdk/**"
+      - "Nexus_power/alembic/**"
+      - "Nexus_power/platform/api/tests/test_qec_contract_*.py"
 
 concurrency:
   group: qec-ci-${{ github.ref }}
   cancel-in-progress: true
+
+# The project root is Nexus_power/ (nested under the git repo root); run every
+# step from there so the relative paths inside the steps resolve unchanged.
+defaults:
+  run:
+    working-directory: Nexus_power
 
 jobs:
   qec:
@@ -121,6 +132,7 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
+          cache-dependency-path: Nexus_power/**/requirements*.txt
 
       # psql / pg_isready for the deterministic DB bootstrap
       - name: Install PostgreSQL client
@@ -182,7 +194,7 @@ jobs:
       # (h) VKPower pin suite — proves the no-break guarantee: the frozen video
       #     path (T1-T4) + the three extension contracts (E1/E2/E3) stay green.
       - name: VKPower no-break pin suite
-        working-directory: platform/api
+        working-directory: Nexus_power/platform/api
         run: |
           python -m pytest \
             tests/test_qec_contract_video_frozen.py \
