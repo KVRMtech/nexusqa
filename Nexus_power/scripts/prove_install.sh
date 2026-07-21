@@ -138,17 +138,31 @@ echo "== 5) migrations =="
 echo "   migrations ran as a post-install hook (helm --wait blocked on it; a failure would have failed step 4)."
 
 echo "== 6) PROVE each pod's code == git (deploy-verify gate) =="
-fail=0
+# A service the chart RENDERED (its image is in OUR_IMAGES) is enabled and MUST have a
+# running pod that matches git; a service that isn't rendered is intentionally disabled
+# and announced as skipped. This closes the green-wash where a missing pod for an
+# enabled service was silently skipped and the proof still passed. We also require that
+# at least one service was actually verified.
+declare -A ENABLED=()
+for img in "${OUR_IMAGES[@]}"; do ENABLED["$(basename "${img%%:*}")"]=1; done
+fail=0; verified=0
 for name in "${!SERVICE_APP[@]}"; do
+  if [ -z "${ENABLED[$name]:-}" ]; then
+    echo "   (skip $name: not enabled in this install)"; continue
+  fi
   pod="$(kubectl -n "$NS" get pod -l "app.kubernetes.io/component=$name" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)"
-  [ -n "$pod" ] || { echo "   (skip $name: no pod found)"; continue; }
+  if [ -z "$pod" ]; then
+    echo "   FAIL: $name is ENABLED but has no running pod to verify." >&2; fail=1; continue
+  fi
   tmp="$(mktemp -d)"
   kubectl -n "$NS" exec "$pod" -- tar -C "${SERVICE_POD_PATH[$name]}" -cf - . 2>/dev/null | tar -C "$tmp" -xf - 2>/dev/null || true
   echo "   verify $name:"
   python "$REPO_ROOT/ci/reproducibility/verify_deployment.py" \
     --git-root "$REPO_ROOT/${SERVICE_APP[$name]}" --deployed-root "$tmp" || fail=1
+  verified=$((verified + 1))
   rm -rf "$tmp"
 done
+[ "$verified" -gt 0 ] || { echo "FATAL: deploy-verify checked ZERO services (nothing was proven)." >&2; fail=1; }
 
 echo "== 7) health =="
 kubectl -n "$NS" get pods
