@@ -147,6 +147,9 @@ class ControlRecord(TypedDict):
     min: str
     max: str
     step: str
+    #: Drag-and-drop signal (HTML5 draggable / ARIA grab); matcher → UNHANDLED.
+    draggable: bool
+    roledescription: str
     value_committed: str
     frame_selector: str
     anchor: Optional[AnchorRecord]
@@ -469,6 +472,9 @@ def build_control_record(
         "min": _s(raw.get("min")).strip(),
         "max": _s(raw.get("max")).strip(),
         "step": _s(raw.get("step")).strip(),
+        # Drag-and-drop signal → matcher names it UNHANDLED (blind spot, ledgered).
+        "draggable": _as_bool(raw.get("draggable")),
+        "roledescription": _s(raw.get("roledescription")).strip(),
         "value_committed": value_committed,
         "frame_selector": frame_selector,
         "anchor": None,   # filled by build_inventory only on collision

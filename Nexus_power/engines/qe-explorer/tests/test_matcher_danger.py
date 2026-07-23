@@ -31,6 +31,30 @@ def test_unknown_interactive_control_is_unhandled_named_not_silent():
     assert m.is_unhandled_field({"kind": "grid", "role": "grid", "name": ""}) is False
 
 
+def test_drag_drop_is_named_unhandled_not_silently_skipped():
+    """R1 honesty leak: drag-drop had no primitive AND no ledger row. Now every
+    drag-drop signal → UNHANDLED with a reason, even on a draggable button."""
+    assert m.primitive_for({"kind": "button", "draggable": True}) == m.UNHANDLED
+    assert m.primitive_for({"role": "listitem", "draggable": True}) == m.UNHANDLED
+    assert m.primitive_for(
+        {"role": "application", "roledescription": "drag handle"}) == m.UNHANDLED
+    assert m.is_drag_drop({"draggable": True}) is True
+    assert m.is_drag_drop({"roledescription": "sortable item"}) is True
+    assert m.is_drag_drop({"kind": "button"}) is False
+    assert "drag-drop" in m.unhandled_reason({"draggable": True})
+
+
+def test_nameless_unhandled_is_still_ledgerable():
+    """The old is_unhandled_field required a name, silently dropping nameless
+    unsupported controls. is_unhandled() ledgers them (the crawler synthesizes a
+    positional label) — never a silent skip."""
+    nameless = {"kind": "grid", "role": "grid", "name": ""}
+    assert m.is_unhandled_field(nameless) is False      # back-compat unchanged
+    assert m.is_unhandled(nameless) is True             # but still ledgerable
+    assert m.is_unhandled({"draggable": True, "name": ""}) is True
+    assert m.is_unhandled({"kind": "text", "name": "x"}) is False  # handled field, not ledgered
+
+
 def test_diff_driver_selection():
     assert m.is_diff_driver({"kind": "select", "options": ["A"]}) is True
     assert m.is_diff_driver({"kind": "radio"}) is True

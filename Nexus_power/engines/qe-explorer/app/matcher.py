@@ -39,6 +39,17 @@ def _s(c: Mapping, key: str) -> str:
     return str(c.get(key) or "").strip().lower()
 
 
+def is_drag_drop(control: Mapping) -> bool:
+    """A drag-and-drop control (HTML5 ``draggable`` or an ARIA grab/drop role).
+    No interaction primitive exists yet — we NAME it as a blind spot rather than
+    silently skip it (the requirements-audit honesty leak)."""
+    if bool(control.get("draggable")):
+        return True
+    role = _s(control, "role")
+    rd = _s(control, "roledescription")
+    return role in ("application",) and "drag" in rd or "drag" in rd or "sortable" in rd
+
+
 def primitive_for(control: Mapping) -> str:
     """The interaction primitive that captures ``control`` — first matching rule wins.
     Adding a widget = insert one rule here mapping its signature to an existing primitive."""
@@ -47,6 +58,11 @@ def primitive_for(control: Mapping) -> str:
     tag = _s(control, "tag")
     has_options = bool(control.get("options"))
 
+    # 0) Drag-and-drop — no primitive yet; ALWAYS named UNHANDLED for the ledger
+    # (a draggable button is still a blind spot, so this precedes the affordance
+    # rule).
+    if is_drag_drop(control):
+        return UNHANDLED
     # 1) Non-value affordances — captured by name only, no field probe.
     if kind in _NON_FIELD_KINDS or role in _NON_FIELD_ROLES or tag in ("button", "a", "summary"):
         return NONE
@@ -96,3 +112,17 @@ def is_unhandled_field(control: Mapping) -> bool:
     coverage ledger as an honest UNHANDLED row rather than a silent gap. Excludes plain
     non-value affordances (buttons/links) which are not fields."""
     return primitive_for(control) == UNHANDLED and bool((control.get("name") or "").strip())
+
+
+def is_unhandled(control: Mapping) -> bool:
+    """Any UNHANDLED control — INCLUDING a nameless one. The old name-required
+    gate silently dropped nameless unsupported controls from the ledger (a
+    requirements-audit honesty leak); the crawler synthesizes a positional label
+    for these so 'never a silent skip' actually holds."""
+    return primitive_for(control) == UNHANDLED
+
+
+def unhandled_reason(control: Mapping) -> str:
+    """A short honest reason for the ledger row."""
+    return "drag-drop (no interaction primitive yet)" if is_drag_drop(control) \
+        else "interactive control kind not handled yet"

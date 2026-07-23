@@ -638,7 +638,8 @@ class Crawler:
                 lbl = str(d.get("label") or "").strip()
                 if lbl and lbl.lower() not in seen:
                     seen.add(lbl.lower())
-                    out.append({"label": lbl, "kind": str(d.get("kind") or "")})
+                    out.append({"label": lbl, "kind": str(d.get("kind") or ""),
+                                "reason": str(d.get("reason") or "")})
             return out
 
         inferred = _dedup(self._fields_inferred)
@@ -961,11 +962,16 @@ class Crawler:
         # only populate after a prior field is chosen (e.g. To Account after From Account).
         await self._probe_dependencies(snapshot_controls, url=obs.url)
         # UNHANDLED controls: interactive controls the matcher has no primitive for → named in
-        # the coverage ledger (never a silent skip).
-        for _c in snapshot_controls:
-            if matcher.is_unhandled_field(_c):
-                self._unhandled_controls.append(
-                    {"label": str(_c.get("name") or ""), "kind": str(_c.get("kind") or "")})
+        # the coverage ledger (never a silent skip). A NAMELESS unsupported control (incl. a
+        # drag-drop handle) is ledgered with a synthesized positional label instead of being
+        # silently dropped — closes the requirements-audit honesty leak.
+        for _idx, _c in enumerate(snapshot_controls):
+            if matcher.is_unhandled(_c):
+                _label = str(_c.get("name") or "").strip() \
+                    or f"{(_c.get('kind') or 'control')}#{_idx} (unnamed)"
+                self._unhandled_controls.append({
+                    "label": _label, "kind": str(_c.get("kind") or ""),
+                    "reason": matcher.unhandled_reason(_c)})
 
         # Navigation discovery (grounded): click safe actionable controls.
         actions.extend(await self._discover(item, controls, is_form, fingerprint,

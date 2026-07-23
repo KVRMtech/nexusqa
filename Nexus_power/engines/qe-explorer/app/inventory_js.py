@@ -418,6 +418,12 @@ INVENTORY_JS = r"""
       min: attr(el, "min") || "",
       max: attr(el, "max") || "",
       step: attr(el, "step") || "",
+      // Drag-and-drop signal (HTML5 draggable / ARIA grab-drop) — no interaction
+      // primitive yet, so the matcher names it UNHANDLED for the coverage ledger
+      // rather than silently skipping it.
+      draggable: (attr(el, "draggable") === "true") ||
+                 (attr(el, "aria-grabbed") !== null && attr(el, "aria-grabbed") !== undefined),
+      roledescription: lc(attr(el, "aria-roledescription")),
       landmark: nearestLandmark(el, doc)
     };
   }
