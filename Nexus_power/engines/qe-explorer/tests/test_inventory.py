@@ -57,9 +57,10 @@ def test_refine_kind_covers_aegis_widgets():
     # Custom ARIA combobox on a div (no native options captured).
     assert refine_kind(role="combobox", tag="div", input_type="",
                        options=[], value="") == "select"
-    # Native range slider — fillable by Playwright ⇒ text.
+    # Native range slider ⇒ 'slider' (a distinct FILLABLE kind: the synthesizer
+    # sets a valid midpoint; a range must never be typed a text string).
     assert refine_kind(role="slider", tag="input", input_type="range",
-                       options=[], value="250000") == "text"
+                       options=[], value="250000") == "slider"
     # Accordion header is a button.
     assert refine_kind(role="button", tag="button", input_type="",
                        options=[], value="") == "button"
@@ -122,7 +123,10 @@ def test_build_inventory_preserves_name_and_kind_and_qec():
     assert form_signal_for(cov) == {"type": "select", "options": [], "required": False}
 
     amount = by_name["Coverage amount"]
-    assert amount["kind"] == "text"          # native range ⇒ fillable text
+    # native range ⇒ kind 'slider' — a first-class FILLABLE control (the
+    # synthesizer sets a valid midpoint from min/max; typing a string into a
+    # range is invalid, which is exactly why it is typed distinctly from text).
+    assert amount["kind"] == "slider"
     assert amount["value_committed"] == "250000"
 
     # A button is not a form field.
