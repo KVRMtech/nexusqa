@@ -26,13 +26,15 @@ _BASE_HEADERS = [
     "S.No",
     "Test Case Name",
     "Test Case Description",
+    "Priority",
+    "Risk",
     "Test Steps",
     "Test Data",
     "Expected Result",
 ]
 _OBSERVED_HEADER = "Observed in Recording"
 _CONFIDENCE_HEADER = "Confidence"
-_BASE_WIDTHS = [8, 34, 46, 62, 28, 50]
+_BASE_WIDTHS = [8, 34, 46, 12, 10, 62, 28, 50]
 _OBSERVED_WIDTH = 42
 _CONFIDENCE_WIDTH = 40
 
@@ -102,15 +104,30 @@ def _expected(step) -> str:
             or getattr(step, "expected", None) or "")
 
 
+def _risk_from_tags(tags) -> str:
+    """Fallback: read risk from a 'risk-level:*' tag when the additive field is
+    absent (older cases / round-tripped rows)."""
+    for t in (tags or []):
+        if str(t).startswith("risk-level:"):
+            return str(t).split(":", 1)[1]
+    return ""
+
+
 def _step_rows(tc: ProductionTestCase, include_details: bool = False) -> list[tuple]:
     """Return one row per step. The trailing 'Observed in Recording' cell is
     included only when ``include_details`` (role/toggle gated)."""
     rows: list[tuple] = []
     name = tc.name or ""
     description = tc.description or ""
+    # R4: case-level Priority + business Risk now survive the handoff to manual
+    # QA (were silently dropped by the Excel/CSV exporters). Repeated per step
+    # row, same as Name/Description; risk_level is the additive generator field
+    # (falls back to a risk-level:* tag).
+    priority = (tc.priority or "").replace("_", " ")
+    risk = str(getattr(tc, "risk_level", "") or _risk_from_tags(tc.tags) or "").upper()
     steps = tc.steps or []
     if not steps:
-        base = (1, name, description, "(No steps defined)", "", "")
+        base = (1, name, description, priority, risk, "(No steps defined)", "", "")
         return [base + (("", "") if include_details else ())]
     for idx, st in enumerate(steps, start=1):
         s_no = st.step_number if st.step_number is not None else idx
@@ -118,6 +135,8 @@ def _step_rows(tc: ProductionTestCase, include_details: bool = False) -> list[tu
             s_no,
             name,
             description,
+            priority,
+            risk,
             st.action or "",
             getattr(st, "data_ref", None) or "",
             _expected(st),

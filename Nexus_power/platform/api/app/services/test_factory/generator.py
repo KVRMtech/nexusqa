@@ -964,10 +964,66 @@ def _navigation_backbone(steps: "Sequence[ProductionTestStep]") -> tuple[int, in
     return grounded, inferred
 
 
+# R4 — business RISK signal vocabulary (generic, mirrors the qec criticality
+# seed-pack v1 classes: money / destructive / PII / auth). Whole-word matched
+# against a case's own step text + name, so a defect on a money/destructive flow
+# is ranked HIGH regardless of its evidence grade. Domain-neutral: works on any
+# app, boosts nothing it can't see.
+_RISK_SIGNALS = {
+    "high": (
+        # money movement
+        "payment", "pay", "checkout", "billing", "transfer", "withdraw",
+        "deposit", "refund", "payout", "purchase", "premium", "quote",
+        "wire", "remit", "invoice", "charge", "card", "bank", "funds",
+        # destructive / irreversible
+        "delete", "remove", "cancel", "deactivate", "close account",
+        "terminate", "wipe", "erase",
+        # sensitive data
+        "ssn", "social security", "passport", "tax id", "date of birth",
+    ),
+    "medium": (
+        "login", "sign in", "register", "sign up", "password", "reset",
+        "submit", "apply", "book", "order", "subscribe", "confirm", "update",
+        "save", "upload", "email", "phone", "address",
+    ),
+}
+_RISK_RANK = {"high": 3, "medium": 2, "low": 1}
+
+
+def _risk_level(case: "ProductionTestCase") -> str:
+    """Deterministic business risk (high/medium/low) for a generated case
+    (R4 audit finding: no risk field existed anywhere). HIGH when the case
+    touches a money / destructive / PII flow; else MEDIUM for a
+    mutating/auth action; else LOW. Grounded in the case's OWN step text +
+    name — never a guess, domain-neutral, no LLM."""
+    import re as _re
+    hay = " ".join([case.name or "", case.description or "",
+                    *[f"{s.action or ''} {s.expected or ''}" for s in case.steps]]).lower()
+
+    def _hit(sigs):
+        # Whole-word (or whole-phrase) match — 'pay' hits 'click pay' but never
+        # 'repay'/'display'; a multi-word signal is a substring match.
+        for sig in sigs:
+            if " " in sig:
+                if sig in hay:
+                    return True
+            elif _re.search(r"\b" + _re.escape(sig) + r"\b", hay):
+                return True
+        return False
+
+    # A P0/critical archetype is at least medium even with no keyword hit.
+    if _hit(_RISK_SIGNALS["high"]):
+        return "high"
+    if _hit(_RISK_SIGNALS["medium"]) or (case.priority or "").startswith("P0"):
+        return "medium"
+    return "low"
+
+
 def _grade_case(case: "ProductionTestCase") -> None:
     """P5: per-case evidence grade from the case's OWN steps. A = every step
     demonstrated; B = <=2 inferred/unproven steps; C = more. Appended as tags
-    so every consumer (UI, export, client) sees WHY to trust the case."""
+    so every consumer (UI, export, client) sees WHY to trust the case. Also
+    stamps the R4 business ``risk_level`` (additive field + tag)."""
     inferred = 0
     for s in case.steps:
         prov = str(getattr(s, "provenance", "") or
@@ -976,9 +1032,15 @@ def _grade_case(case: "ProductionTestCase") -> None:
         if prov == "inferred" or "UNPROVEN" in text:
             inferred += 1
     grade = "A" if inferred == 0 else ("B" if inferred <= 2 else "C")
+    risk = _risk_level(case)
+    # extra='allow' on ProductionTestCase makes this additive — no migration.
+    try:
+        case.risk_level = risk
+    except Exception:
+        pass
     case.tags = list(case.tags or []) + [
         f"evidence-grade:{grade}", f"inferred-steps:{inferred}",
-        f"total-steps:{len(case.steps)}"]
+        f"total-steps:{len(case.steps)}", f"risk-level:{risk}"]
 
 
 def _build_steps(groups: Sequence[_PageGroup]) -> tuple[list[ProductionTestStep], int, bool]:
