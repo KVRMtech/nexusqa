@@ -294,8 +294,14 @@ def _role_locator(observed: dict, role: str) -> str:
     return f"{scope}.{el}" if scope != "page" else f"page.{el}"
 
 
-def _ladder(observed: dict, kind: str) -> str:
-    """A resilient locator: a .or() chain of complementary USER-FACING strategies,
+def _ladder_rungs(observed: dict, kind: str) -> list[str]:
+    """The ORDERED locator strategies (strongest, role/label-keyed, first), each a
+    full scoped locator expression. Exposed separately from the .or() union so a
+    CLICK can try them IN ORDER (a true fallback): the union merges a uniquely-
+    matching role rung with a weaker text rung that can also match a non-
+    interactive twin (live: a footer heading sharing the nav link caption
+    'Products'), turning a clean bind into a strict-mode violation.
+    Original union contract: a .or() chain of complementary USER-FACING strategies,
     all keyed to the SAME accessible name. Survives a UI refactor that breaks one
     strategy, but can never silently bind to a semantically-different element
     (every rung targets the same name). If no rung matches, the action throws —
@@ -325,9 +331,18 @@ def _ladder(observed: dict, kind: str) -> str:
         rungs = [f"getByRole('radio', {{ name: '{label}' }})", f"getByText('{label}', {{ exact: true }})"]
     else:  # button
         rungs = [f"getByRole('button', {{ name: '{label}' }})", f"getByText('{label}', {{ exact: true }})"]
-    chain = f"{scope}.{rungs[0]}"
+    return [f"{scope}.{r}" for r in rungs]
+
+
+def _ladder(observed: dict, kind: str) -> str:
+    """The .or() union of _ladder_rungs - kept for FILL/READ callers (used with
+    .first()). CLICK steps pass the ordered rungs to __nxClick instead, so a
+    text rung can never pollute a uniquely-matching role rung into a strict-
+    mode violation."""
+    rungs = _ladder_rungs(observed, kind)
+    chain = rungs[0]
     for r in rungs[1:]:
-        chain = f"{chain}.or({scope}.{r})"
+        chain = f"{chain}.or({r})"
     return chain
 
 
@@ -349,23 +364,40 @@ _NXTOK_JS = r"""function __nxTok(v){const s=String(v==null?'':v);const m=s.match
 
 _NXSETTLE_JS = r"""async function __nxSettle(page){try{await page.waitForLoadState('domcontentloaded',{timeout:5000});}catch(e){}const sp=page.locator('[class*=spinner i],[class*=loading i],[aria-busy=\"true\"],[role=progressbar]').first();try{if(await sp.isVisible().catch(()=>false)){await sp.waitFor({state:'hidden',timeout:8000});}}catch(e){}}"""
 
+# Ordered-fallback click. Accepts ONE locator (legacy) or an ARRAY of rung
+# locators, strongest (role/label-keyed) first, tried IN ORDER - a true
+# fallback. Rationale: the .or() union merged a uniquely-matching role rung
+# with a weaker text rung that also matched a non-interactive twin (live: a
+# footer heading sharing the nav link caption 'Products'), tripping strict
+# mode on a bind that was never ambiguous. Honesty preserved: within the
+# strongest MATCHING strategy, >1 matches click only when all share one
+# non-empty href/onclick signature (same control rendered twice, e.g.
+# header+footer nav); else the honest strict-mode error stands. 0 matches
+# everywhere -> honest timeout on the primary strategy.
 _NXCLICK_JS = r"""async function __nxClick(loc){
-  let n; try { n = await loc.count(); } catch (e) { return await loc.click(); }
-  if (n <= 1) return await loc.click();
-  const sigs = [];
-  for (let i = 0; i < n; i++) {
-    try {
-      sigs.push(await loc.nth(i).evaluate(el => {
-        const a = (el.closest && el.closest('a')) || el;
-        return ((a.getAttribute && a.getAttribute('href')) || '') + '||' +
-               ((el.getAttribute && el.getAttribute('onclick')) || '');
-      }));
-    } catch (e) { sigs.push('\u0000' + i); }
+  const rungs = Array.isArray(loc) ? loc : [loc];
+  for (let r = 0; r < rungs.length; r++) {
+    const l = rungs[r];
+    let n; try { n = await l.count(); } catch (e) { return await l.click(); }
+    if (n === 1) return await l.click();
+    if (n > 1) {
+      const sigs = [];
+      for (let i = 0; i < n; i++) {
+        try {
+          sigs.push(await l.nth(i).evaluate(el => {
+            const a = (el.closest && el.closest('a')) || el;
+            return ((a.getAttribute && a.getAttribute('href')) || '') + '||' +
+                   ((el.getAttribute && el.getAttribute('onclick')) || '');
+          }));
+        } catch (e) { sigs.push('\u0000' + i); }
+      }
+      const disc = (sigs[0] || '').replace(/\|\|$/, '');
+      if (disc.length > 0 && sigs.every(s => s === sigs[0]))
+        return await l.first().click(); // duplicate control (e.g. header+footer nav share one href) -> first is provably equivalent
+      return await l.click(); // genuinely ambiguous within the strongest matching strategy -> honest strict-mode error stands (heal/human)
+    }
   }
-  const disc = (sigs[0] || '').replace(/\|\|$/, '');
-  if (disc.length > 0 && sigs.every(s => s === sigs[0]))
-    return await loc.first().click(); // duplicate control (e.g. header+footer nav share one href) -> first is provably equivalent
-  return await loc.click(); // genuinely ambiguous -> Playwright's honest strict-mode error stands (heal/human)
+  return await rungs[0].click(); // nothing matched any strategy -> honest timeout on the primary strategy
 }"""
 
 # Grounded file-attach for a recorded `upload` step: recreates the crawl's seed
@@ -1022,7 +1054,8 @@ def _action_lines(step, field_meta: dict, parametrize: bool = False,
                     out.append("await expect(sel).not.toHaveValue(''); // tolerant: a selection was committed")
     elif verb == "click":
         kind = "link" if (observed.get("kind") or "").strip().lower() == "link" else "button"
-        out.append(f"await __nxClick({_ladder(observed, kind)});")
+        _rungs = ", ".join(_ladder_rungs(observed, kind))
+        out.append(f"await __nxClick([{_rungs}]);")
     elif verb == "upload":
         # A grounded file-attach the crawl DEMONSTRATED (the crawler chose a seed
         # document on this file input; the browser committed the filename —
