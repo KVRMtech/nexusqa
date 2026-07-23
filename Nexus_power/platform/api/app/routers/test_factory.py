@@ -3922,6 +3922,31 @@ async def recovery_scan(
         return out
 
 
+@router.get("/api/v1/test-factory/promotion-candidates")
+async def promotion_candidates(
+    min_apps: int = 3,
+    user: dict = Depends(get_current_user),
+):
+    """R6 — mine the tenant's proven-control ledger for HEALS that recur across
+    distinct apps: each becomes a human-gated candidate to graduate into a
+    PERMANENT capability (a UACR recipe benefiting every future client). Pure,
+    read-only, $0 LLM — a maintainer reviews and lands the recipe + its
+    regression test; the agent never self-modifies the product."""
+    tenant_id = user["tenant_id"]
+    async with tenant_scoped_session(tenant_id) as session:
+        from ..services.diff_and_heal import control_ledger as _ledger
+        from ..services.agentic import promotion_miner as _miner
+        # All proven controls for the tenant (app-fingerprint scope = cross-recording).
+        entries = await _ledger.list_proven_controls(
+            session, tenant_id=tenant_id, include_invalidated=False)
+        candidates = _miner.mine_to_dicts(entries, min_apps=max(2, int(min_apps)))
+        return {"count": len(candidates), "min_apps": max(2, int(min_apps)),
+                "candidates": candidates,
+                "note": ("Continuous learning: a heal proven green across multiple "
+                         "distinct apps is a signal to make it permanent so it "
+                         "applies on the first pass. Human-gated — never auto-landed.")}
+
+
 @router.get("/api/v1/test-factory/{artifact_id}/recovery-proposals")
 async def list_recovery_proposals(
     artifact_id: str = PathParam(..., min_length=1, max_length=64),
