@@ -361,6 +361,7 @@ async def generate_and_store(
     # verify the PROVEN destination. The click-journey generator skips
     # submit-verb actions by design, so without this emitter that evidence
     # yielded zero cases. Additive + PROVEN-only.
+    form_flow_cases: list = []
     for tc in generate_form_flow_journeys(
         artifact_id=artifact_id, page_visits=visits, page_actions=actions,
     ):
@@ -372,12 +373,19 @@ async def generate_and_store(
         )
         new_ids.append(values["test_case_id"])
         await _upsert_case(session, values)
+        form_flow_cases.append(tc)
 
-    # ── Phase 2 — critical combinations from captured option domains ──────
-    base_case = result.test_cases[0] if result.test_cases else None
+    # ── Phase 2 — RISK-RANKED critical combinations from captured domains ──
+    # Bases: every demonstrated flow carrying fill steps — the grounded form
+    # flows FIRST (the business flows: quote/checkout/transfer), then the
+    # primary demonstrated E2E when one exists. The old single-base wiring
+    # (result.test_cases[0] only) produced ZERO combinations whenever the
+    # flatten was suppressed — live: the quote app had 6 captured option
+    # domains and no combination cases.
+    combo_bases = form_flow_cases + (result.test_cases[:1] if result.test_cases else [])
     combo = generate_combination_cases(
-        artifact_id=artifact_id, base_case=base_case,
-        page_visits=visits, host=_dominant_host(visits),
+        artifact_id=artifact_id, base_cases=combo_bases,
+        page_visits=visits, page_actions=actions, host=_dominant_host(visits),
     )
     for tc in combo.active:
         annotate_confidence(tc, ambiguous)
@@ -387,6 +395,9 @@ async def generate_and_store(
             source_evidence={
                 "combination": True,
                 "base_test_id": combo.generation_spec.get("base_test_id"),
+                # The client-facing RANKING (risk-desc): survives export/UI.
+                "combination_rank": combo.rank_by_test_id.get(tc.test_id),
+                "combination_risk": combo.risk_by_test_id.get(tc.test_id),
             },
         )
         new_ids.append(values["test_case_id"])

@@ -38,6 +38,13 @@ _DEFAULT_MAX_ACTIVE = 40
 # match them by the axis's OPTION set, not by the field name.
 _SELECT_RX = re.compile(r"^Select '(.+?)'\s*$")
 
+# Grounded FORM-FLOW steps (generator.generate_form_flow_journeys) render fills
+# as "Select '<value>' in '<field>'" / "Enter '<value>' in '<field>'" — a third
+# shape that must also be overridden, or a combination built on a form-flow
+# base silently duplicates the demonstrated case and gets dropped (live: the
+# quote flow produced option domains but zero combinations).
+_FORMFLOW_FILL_RX = re.compile(r"^(Select|Enter) '(.+)' in '(.+)'$")
+
 
 @dataclass
 class OptionDomain:
@@ -55,6 +62,10 @@ class CombinationResult:
     generation_spec: dict
     full_count: int
     selected_count: int
+    #: Per-case structural risk score + 1-based rank (risk-descending) — persisted
+    #: by the service into source_evidence so the RANKING survives to the client.
+    risk_by_test_id: dict = field(default_factory=dict)
+    rank_by_test_id: dict = field(default_factory=dict)
 
 
 # Vision over-capture guards: dates aren't enums, nav-menus aren't form choices.
@@ -91,11 +102,56 @@ def _opt_key(options: Sequence[str]) -> frozenset:
     return frozenset(_norm(o) for o in options)
 
 
-def harvest_option_domains(page_visits: Iterable[PageVisitInput]) -> list[OptionDomain]:
+def _alnum(text: str) -> str:
+    """Lower-cased alphanumerics only — joins a committed VALUE ('250000',
+    'term') to its display-label option ('$250,000', 'VKPower Term')."""
+    return re.sub(r"[^a-z0-9]", "", (text or "").lower())
+
+
+def _committed_fills_by_label(page_actions: Iterable) -> dict[str, str]:
+    """label(normalised) -> last committed fill value, from the DEMONSTRATED
+    type/select actions. This is the crawl-substrate ground truth for 'the user
+    actually selected a value here' — the qe-explorer form_snapshot carries
+    options but no `selected` key, so without this join every captured domain
+    fails the demonstrated-interaction bar (live: quote app, 6 domains, zero
+    combinations)."""
+    out: dict[str, str] = {}
+    for a in page_actions or []:
+        if (getattr(a, "verb", "") or "").strip().lower() in ("type", "select") \
+                and str(getattr(a, "value", "") or "").strip() \
+                and (getattr(a, "target_label", "") or "").strip():
+            out[_norm(a.target_label)] = str(a.value).strip()
+    return out
+
+
+def _map_value_to_option(value: str, options: Sequence[str]) -> str:
+    """Canonicalise a committed VALUE to its display-label option: exact
+    alnum-lower equality first, else UNIQUE containment ('term' ->
+    'VKPower Term'); ambiguity/none -> the committed value verbatim (still an
+    honest demonstrated selection, just not label-canonical)."""
+    v = _alnum(value)
+    if not v:
+        return value
+    exact = [o for o in options if _alnum(o) == v]
+    if len(exact) == 1:
+        return exact[0]
+    contains = [o for o in options if v and v in _alnum(o)]
+    if len(contains) == 1:
+        return contains[0]
+    return value
+
+
+def harvest_option_domains(
+    page_visits: Iterable[PageVisitInput],
+    page_actions: Iterable | None = None,
+) -> list[OptionDomain]:
     """Collect fields that captured >= 2 distinct options (real choices).
 
     Source: ``form_snapshot_signals[label] = {selected, options[], required}``.
-    Only fields whose options were actually observed become axes.
+    Only fields whose options were actually observed become axes. When the
+    signals carry no ``selected`` (the crawl-substrate shape), the demonstrated
+    selection is joined from ``page_actions`` committed fills — grounded, never
+    guessed.
 
     Quality guards against vision over-capture (a field is dropped, never
     guessed):
@@ -106,6 +162,7 @@ def harvest_option_domains(page_visits: Iterable[PageVisitInput]) -> list[Option
       * semantically-duplicate axes (two labels with the SAME option set, e.g.
         "Flight" and "Trip Type" both = [Roundtrip, One-way]) — kept once.
     """
+    committed = _committed_fills_by_label(page_actions)
     candidates: list[OptionDomain] = []
     seen_labels: set[str] = set()
     for visit in page_visits:
@@ -122,6 +179,10 @@ def harvest_option_domains(page_visits: Iterable[PageVisitInput]) -> list[Option
             if len(opts) < 2:
                 continue
             selected = str(meta.get("selected") or "").strip()
+            if not selected:
+                fill = committed.get(_norm(clean), "")
+                if fill:
+                    selected = _map_value_to_option(fill, opts)
             # Principled axis bar: only fields the user ACTUALLY selected a
             # value in (demonstrated interaction) become combination axes.
             # Drops navigation menus the user merely hovered (no selection).
@@ -142,7 +203,7 @@ def harvest_option_domains(page_visits: Iterable[PageVisitInput]) -> list[Option
             seen_labels.add(clean)
             candidates.append(OptionDomain(
                 field_label=clean,
-                selected=str(meta.get("selected") or "").strip(),
+                selected=selected,
                 options=opts,
                 source="signals",
                 required=bool(meta.get("required")),
@@ -190,21 +251,34 @@ def _pairwise(axes: Sequence[tuple[str, list[str]]]) -> list[dict[str, str]]:
     max_guard = sum(len(o) for _l, o in axes) * len(axes) * 4 + 16
     while uncovered and guard < max_guard:
         guard += 1
-        # Greedily build one test maximizing newly-covered pairs.
+        # Per-option remaining-coverage weight: how many UNCOVERED pairs still
+        # involve (axis, option). Without this, the FIRST axis placed in each
+        # test has an empty partner set (gain 0 for every option) and always
+        # falls back to opts[0] — so pairs involving its other options are
+        # never covered, the loop stalls at max_guard, and dedup collapses the
+        # output (live: a 4x4x3x2x2 space "covered" by 6 near-identical rows,
+        # every one Product=first-option).
+        involve: dict[tuple, int] = {}
+        for pair_a, pair_b in uncovered:
+            involve[pair_a] = involve.get(pair_a, 0) + 1
+            involve[pair_b] = involve.get(pair_b, 0) + 1
+        # Greedily build one test maximizing newly-covered pairs; ties broken
+        # by remaining involvement so early-placed axes rotate their options.
         assignment: dict[int, str] = {}
         order = sorted(range(len(axes)), key=lambda k: -len(axes[k][1]))
         for idx in order:
             label, opts = axes[idx]
             best_opt = opts[0]
-            best_gain = -1
+            best_key = (-1, -1)
             for opt in opts:
                 gain = 0
                 for other_idx, other_opt in assignment.items():
                     lo, hi = sorted([(idx, opt), (other_idx, other_opt)])
                     if (lo, hi) in uncovered:
                         gain += 1
-                if gain > best_gain:
-                    best_gain = gain
+                key = (gain, involve.get((idx, opt), 0))
+                if key > best_key:
+                    best_key = key
                     best_opt = opt
             assignment[idx] = best_opt
         for (i, a), (j, b) in list(uncovered):
@@ -260,6 +334,7 @@ def _build_combo_case(
         new = st.model_copy(deep=True)
         action = (st.action or "")
         sel = _SELECT_RX.match(action.strip())
+        flow = _FORMFLOW_FILL_RX.match(action.strip())
         for nlabel, (label, value) in norm_combo.items():
             if f"in the '{label}' field" in action:
                 new.action = f"Enter '{value}' in the '{label}' field"
@@ -268,6 +343,21 @@ def _build_combo_case(
                 new.data_ref = value
                 new.observed = {"verb": "type", "label": label, "kind": "field", "value": value}
                 new.provenance = "available"  # captured option, not demonstrated
+            elif flow and _norm(flow.group(3)) == nlabel:
+                # Form-flow shape: keep the step's own verb/kind (dropdown vs
+                # text) from the base's observed metadata — only the VALUE is a
+                # different captured option.
+                phrase = flow.group(1)
+                new.action = f"{phrase} '{value}' in '{label}'"
+                new.expected = f"'{label}' holds '{value}'"
+                new.expected_result = new.expected
+                new.data_ref = value
+                obs = dict(getattr(st, "observed", None) or {})
+                obs["value"] = value
+                obs.setdefault("verb", "select" if phrase == "Select" else "type")
+                obs.setdefault("label", label)
+                new.observed = obs
+                new.provenance = "available"
             elif sel and _norm(sel.group(1)) in axis_options.get(nlabel, set()):
                 new.action = f"Select '{value}'"
                 new.expected = f"'{value}' is selected"
@@ -300,14 +390,30 @@ def _build_combo_case(
 def generate_combination_cases(
     *,
     artifact_id: str,
-    base_case: ProductionTestCase | None,
+    base_case: ProductionTestCase | None = None,
+    base_cases: Sequence[ProductionTestCase] | None = None,
     page_visits: Iterable[PageVisitInput],
+    page_actions: Iterable | None = None,
     host: str = "",
     max_active: int = _DEFAULT_MAX_ACTIVE,
 ) -> CombinationResult:
-    """Generate the bounded active combination suite + the reserve spec."""
+    """Generate the bounded, RISK-RANKED active combination suite + reserve spec.
+
+    ``base_cases`` (preferred): combinations are built over EVERY demonstrated
+    base flow — the primary E2E when one exists, plus each grounded form-flow
+    (the business flows carrying real fill steps). One base per combination
+    signature: bases are tried in the given order and a combo already emitted
+    by an earlier base is not re-emitted by a later one (live: the quote app's
+    flatten was suppressed, so the single-base wiring produced ZERO combinations
+    despite 6 captured option domains). ``base_case`` is kept for back-compat.
+
+    Ranking: pairwise combos are ordered by the structural risk score
+    (required-field +2, non-demonstrated option +1), globally across bases; the
+    1-based rank + score are returned per test_id and stamped into tags so the
+    ordering survives to the client (Rank 1 = highest risk first).
+    """
     visits = list(page_visits)
-    domains = harvest_option_domains(visits)
+    domains = harvest_option_domains(visits, page_actions)
     axes = [(d.field_label, d.options) for d in domains]
     domain_map = {d.field_label: d for d in domains}
 
@@ -321,7 +427,10 @@ def generate_combination_cases(
         for d in domains
     }
 
-    if not axes or base_case is None:
+    bases = [b for b in (base_cases if base_cases is not None else [base_case])
+             if b is not None]
+
+    if not axes or not bases:
         return CombinationResult(
             active=[],
             option_domains=option_domains_json,
@@ -330,7 +439,8 @@ def generate_combination_cases(
                 "axes": [{"field": l, "options": o} for l, o in axes],
                 "full_count": 0,
                 "selected_count": 0,
-                "base_test_id": getattr(base_case, "test_id", None),
+                "base_test_id": getattr(bases[0], "test_id", None) if bases else None,
+                "base_test_ids": [b.test_id for b in bases],
                 "note": "no captured option domains (>=2 options) — no combinations",
             },
             full_count=0,
@@ -344,28 +454,56 @@ def generate_combination_cases(
     combos = _pairwise(axes)
     combos.sort(key=lambda c: _risk(c, domain_map), reverse=True)
 
-    # Keep only variants that actually DIFFER from the demonstrated base.  A
-    # combo whose generated steps are identical to the base (because its values
-    # match what the recording already showed) adds no coverage — drop it.
-    # This is robust to a noisy captured `selected` signal: the source of truth
-    # is the base case's own steps, not the OCR-reported selection.  Generic.
-    base_sig = [s.action for s in (base_case.steps or [])]
+    # Build across ALL bases; one case per combination signature (first base in
+    # order wins — form-flow bases should be passed before nav-only bases).
+    # Keep only variants that actually DIFFER from their demonstrated base: a
+    # combo whose generated steps are identical to the base (values match what
+    # the recording already showed) adds no coverage — drop it. Robust to a
+    # noisy captured `selected` signal: the source of truth is the base case's
+    # own steps, not the OCR-reported selection. Generic.
+    scored: list[tuple[ProductionTestCase, int]] = []
+    emitted_signatures: set[str] = set()
+    for base in bases:
+        base_sig = [s.action for s in (base.steps or [])]
+        for combo in combos:
+            # The all-demonstrated combo duplicates the base flow even when its
+            # step TEXT differs (committed values 'term'/'250000' vs canonical
+            # option labels 'VKPower Term'/'$250,000') — no added coverage.
+            if all(_norm(v) == _norm(domain_map[k].selected)
+                   for k, v in combo.items() if k in domain_map):
+                continue
+            desc = ", ".join(f"{k}={v}" for k, v in combo.items())
+            if desc in emitted_signatures:
+                continue
+            case = _build_combo_case(base, combo, host, artifact_id, domain_map)
+            if [s.action for s in case.steps] == base_sig:
+                continue
+            emitted_signatures.add(desc)
+            scored.append((case, _risk(combo, domain_map)))
+
+    # Global risk-descending rank across bases; bounded active suite.
+    scored.sort(key=lambda cs: cs[1], reverse=True)
+    scored = scored[:max_active]
     active: list[ProductionTestCase] = []
-    for combo in combos:
-        case = _build_combo_case(base_case, combo, host, artifact_id, domain_map)
-        if [s.action for s in case.steps] == base_sig:
-            continue
+    risk_by_test_id: dict = {}
+    rank_by_test_id: dict = {}
+    for rank, (case, risk) in enumerate(scored, start=1):
+        case.name = f"Rank {rank} — {case.name}"[:500]
+        case.tags = list(case.tags or []) + [
+            f"combination-rank:{rank}", f"combination-risk:{risk}"]
+        risk_by_test_id[case.test_id] = risk
+        rank_by_test_id[case.test_id] = rank
         active.append(case)
-        if len(active) >= max_active:
-            break
 
     spec = {
         "strategy": "pairwise",
         "axes": [{"field": l, "options": o} for l, o in axes],
         "full_count": full_count,
         "selected_count": len(active),
-        "base_test_id": base_case.test_id,
+        "base_test_id": bases[0].test_id,
+        "base_test_ids": [b.test_id for b in bases],
         "max_active": max_active,
+        "ranking": "risk-desc (required +2, non-demonstrated option +1)",
     }
 
     return CombinationResult(
@@ -374,4 +512,6 @@ def generate_combination_cases(
         generation_spec=spec,
         full_count=full_count,
         selected_count=len(active),
+        risk_by_test_id=risk_by_test_id,
+        rank_by_test_id=rank_by_test_id,
     )
