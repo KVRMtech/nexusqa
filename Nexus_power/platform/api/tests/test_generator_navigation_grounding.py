@@ -510,6 +510,107 @@ def test_grounded_journey_dedups_and_requires_grounded_nav():
     assert journeys == [], "a non-navigating click must not produce a journey"
 
 
+def _quote_form_visits():
+    full = "vkpowerlife.35-186-147-245.sslip.io"
+    return [
+        PV(page_visit_id="q", sequence_index=0, location="Get a quote",
+           url_host=full, url_path="/quote", url_query="plan=term",
+           canonical_host="sslip.io", source="ground_truth", form_snapshot={}),
+        PV(page_visit_id="r", sequence_index=1, location="Quote result",
+           url_host=full, url_path="/quote",
+           url_query="submitted=1&plan=term&age=18", canonical_host="sslip.io",
+           source="ground_truth", form_snapshot={}),
+    ]
+
+
+def _quote_form_actions(*, submit_outcome="navigation", submit_navigated=True,
+                        submit_detail="https://vkpowerlife.35-186-147-245.sslip.io/quote?submitted=1&plan=term&age=18",
+                        submit_visit="r"):
+    """Live-verified shape: the explorer records the submit ACTION on the
+    DESTINATION visit ('r'); the fills live on the form visit ('q')."""
+    return [
+        PA(page_visit_id="q", subaction_index=0, verb="select", target_label="Product",
+           target_kind="dropdown", value="term", after_outcome="value_committed",
+           after_detail="", navigated=False, control_role="combobox", css_hint="", expanded=""),
+        PA(page_visit_id="q", subaction_index=1, verb="type", target_label="Age",
+           target_kind="text_field", value="18", after_outcome="value_committed",
+           after_detail="", navigated=False, control_role="spinbutton", css_hint="", expanded=""),
+        # a valueless fill artifact must never become a replay step
+        PA(page_visit_id="q", subaction_index=2, verb="type", target_label="Nickname",
+           target_kind="text_field", value=None, after_outcome="none",
+           after_detail="", navigated=False, control_role="textbox", css_hint="", expanded=""),
+        PA(page_visit_id=submit_visit, subaction_index=0, verb="submit",
+           target_label="Calculate my premium", target_kind="button", value=None,
+           after_outcome=submit_outcome, after_detail=submit_detail,
+           navigated=submit_navigated, control_role="button", css_hint="", expanded=""),
+    ]
+
+
+def test_grounded_form_flow_from_demonstrated_submit():
+    """The live VKPower quote incident: fills committed on the FORM visit +
+    operator-approved Phase-B submit recorded on the DESTINATION visit, PROVEN to
+    navigate to /quote?submitted=1&… — must emit ONE P0 form-flow case: open (with
+    the entry query) → replay fills → click submit (hard URL oracle) → verify the
+    FULL demonstrated destination."""
+    flows = gen.generate_form_flow_journeys(
+        artifact_id="t", page_visits=_quote_form_visits(),
+        page_actions=_quote_form_actions())
+    assert len(flows) == 1, "exactly one form flow for one demonstrated submit"
+    case = flows[0]
+    acts = [s.action for s in case.steps]
+    assert acts[0] == "Open https://vkpowerlife.35-186-147-245.sslip.io/quote?plan=term", acts
+    assert "Select 'term' in 'Product'" in acts[1], acts
+    assert "Enter '18' in 'Age'" in acts[2], acts
+    assert not any("Nickname" in a for a in acts), "valueless fill must not be replayed"
+    assert "Click 'Calculate my premium'" in acts[3], acts
+    sub = case.steps[3]
+    assert (sub.observed or {}).get("navigation_grounded") is True
+    assert "submitted=1" in (sub.observed or {}).get("next_url", "")
+    verify = case.steps[4]
+    assert verify.action.startswith("Verify the application navigated to https://")
+    assert "submitted=1" in verify.action
+    assert getattr(verify, "provenance", "") == "demonstrated"
+    assert case.priority == "P0_critical"
+    assert "grounded-form-flow" in case.tags
+
+
+def test_form_flow_requires_proven_submit_navigation():
+    """No navigation proof (outcome=none — the min-blocked submit) → NO case.
+    A form flow is never fabricated from an unproven submit (never green-wash)."""
+    flows = gen.generate_form_flow_journeys(
+        artifact_id="t", page_visits=_quote_form_visits(),
+        page_actions=_quote_form_actions(
+            submit_outcome="none", submit_navigated=False, submit_detail=""))
+    assert flows == []
+
+
+def test_form_flow_skips_external_and_selfsame_destinations():
+    """A submit landing byte-identically on the source URL proves nothing moved;
+    a cross-host destination left the app — neither becomes a flow."""
+    flows_self = gen.generate_form_flow_journeys(
+        artifact_id="t", page_visits=_quote_form_visits(),
+        page_actions=_quote_form_actions(
+            submit_detail="https://vkpowerlife.35-186-147-245.sslip.io/quote?plan=term"))
+    assert flows_self == []
+    flows_ext = gen.generate_form_flow_journeys(
+        artifact_id="t", page_visits=_quote_form_visits(),
+        page_actions=_quote_form_actions(
+            submit_detail="https://evil.example.com/quote?submitted=1"))
+    assert flows_ext == []
+
+
+def test_form_flow_same_visit_shape_also_emits():
+    """A recorder that attaches the submit to the FORM visit itself (fills and
+    submit on one visit) must yield the same single flow — both shapes covered."""
+    flows = gen.generate_form_flow_journeys(
+        artifact_id="t", page_visits=_quote_form_visits(),
+        page_actions=_quote_form_actions(submit_visit="q"))
+    assert len(flows) == 1
+    acts = [s.action for s in flows[0].steps]
+    assert acts[0].startswith("Open https://"), acts
+    assert any("Calculate my premium" in a for a in acts)
+
+
 def test_incoherent_flatten_is_suppressed_with_honest_reason():
     """A long flow the crawler reached by LINK-FOLLOWING (no proven click between any
     two pages) is the BFS traversal flattened — it would wander home→cart→login→…,

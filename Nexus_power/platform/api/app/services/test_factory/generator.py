@@ -1856,3 +1856,206 @@ def generate_grounded_journeys(
             if len(cases) >= _MAX_JOURNEYS:
                 return cases
     return cases
+
+
+def generate_form_flow_journeys(
+    *,
+    artifact_id: str,
+    page_visits: Sequence[PageVisitInput],
+    page_actions: Sequence[PageActionInput],
+) -> list[ProductionTestCase]:
+    """Emit ONE fully-grounded FORM FLOW per demonstrated Phase-B submit:
+    ``open the form page → replay each demonstrated fill (its committed value)
+    → click the operator-APPROVED submit → verify the demonstrated destination``.
+
+    The grounded-journey generator deliberately skips ``submit``-verb actions
+    (they are gated interactions, not free navigation), so a crawl that filled a
+    form AND crossed the submit boundary (fences.submit_approvals) produced the
+    complete evidence for the app's CORE business flow — a quote, a transfer, a
+    checkout — but no case consumed it (live: the VKPower quote submit landed on
+    ``/quote?submitted=1&…`` with the premium displayed, and generate still
+    returned only nav journeys). This emitter closes that gap.
+
+    PROVEN-ONLY, nothing invented:
+      * only fills whose committed value was read back from the live control;
+      * only a submit the recording PROVES navigated (after_outcome=navigation)
+        to a captured same-app destination;
+      * the verify step asserts the FULL demonstrated destination URL
+        (path+query — the query derives from the replayed fills, so an
+        identical replay reproduces it);
+      * source page must be entry-trusted (instrumented URL), same rule as
+        grounded journeys.
+
+    Recording shape (live-verified): the explorer records the submit ACTION on
+    the DESTINATION visit (the post-submit state), while the fills live on the
+    FORM visit that precedes it. The pairing is therefore: for each proven
+    submit, the source form is the latest visit at-or-before it (by
+    sequence_index) that HAS demonstrated fills and shares the destination's
+    path (a form that posts to itself), falling back to the immediate
+    predecessor visit with fills (a form that posts to a different path). Both
+    the same-visit and split-visit shapes are covered by tests.
+    """
+    by_visit: dict[str, list[PageActionInput]] = {}
+    for a in page_actions:
+        by_visit.setdefault(a.page_visit_id, []).append(a)
+    for lst in by_visit.values():
+        lst.sort(key=lambda a: a.subaction_index)
+
+    def _visit_fills(visit_id: str) -> list[PageActionInput]:
+        """Demonstrated fills on one visit: committed, non-empty values only; a
+        control filled twice keeps its LAST committed value (the state the
+        submit was made in)."""
+        fills_by_label: dict[str, PageActionInput] = {}
+        for a in by_visit.get(visit_id, []):
+            if (a.verb or "").strip().lower() in ("type", "select") \
+                    and (a.target_label or "").strip() and (a.value or "").strip():
+                fills_by_label[_norm(a.target_label)] = a
+        return sorted(fills_by_label.values(), key=lambda a: a.subaction_index)
+
+    ordered = sorted(page_visits, key=lambda v: getattr(v, "sequence_index", 0) or 0)
+    cases: list[ProductionTestCase] = []
+    seen: set = set()  # dedup by (source_path, submit-label)
+
+    for vi, sv in enumerate(ordered):
+        sv_host = (sv.url_host or sv.canonical_host or "").strip()
+        if (sv.source or "").strip().lower() not in _ENTRY_TRUSTED_SOURCES or not sv_host:
+            continue
+        submits = [
+            a for a in by_visit.get(sv.page_visit_id, [])
+            if (a.verb or "").strip().lower() == "submit"
+            and (a.target_label or "").strip()
+            and (bool(getattr(a, "navigated", False))
+                 or (a.after_outcome or "").strip().lower() == "navigation")
+        ]
+        if not submits:
+            continue
+
+        for sub in submits:
+            dest = (sub.after_detail or "").strip()
+            if not dest:
+                continue  # navigated but destination not captured — cannot verify
+            dest_host = _host_of(dest)
+            if dest_host and dest_host != sv_host.lower():
+                continue  # left the app — not this app's business flow
+            dest_path = _path_of(dest) or "/"
+
+            # ── Pair the submit with its SOURCE form visit ────────────────
+            # Prefer the latest at-or-before visit (entry-trusted, same host)
+            # with demonstrated fills on the DESTINATION's path (a form posting
+            # to itself); else the immediate predecessor visit with fills.
+            src_visit = None
+            for cand in reversed(ordered[: vi + 1]):
+                if (cand.source or "").strip().lower() not in _ENTRY_TRUSTED_SOURCES:
+                    continue
+                cand_host = (cand.url_host or cand.canonical_host or "").strip()
+                if not cand_host or cand_host.lower() != sv_host.lower():
+                    continue
+                if (cand.url_path or "/") == dest_path and _visit_fills(cand.page_visit_id):
+                    src_visit = cand
+                    break
+            if src_visit is None and vi > 0:
+                prev = ordered[vi - 1]
+                if _visit_fills(prev.page_visit_id):
+                    src_visit = prev
+            if src_visit is None:
+                continue  # no demonstrated fills to ground the flow — skip, never invent
+
+            fills = _visit_fills(src_visit.page_visit_id)
+            src_host = (src_visit.url_host or src_visit.canonical_host or "").strip()
+            src_query = (getattr(src_visit, "url_query", "") or "").strip()
+            src_url = (f"https://{src_host}{src_visit.url_path}"
+                       + (f"?{src_query}" if src_query else ""))
+            src_path = _path_of(src_url) or "/"
+            src_name = ("home" if src_path == "/"
+                        else _page_name(src_visit.url_path, src_visit.location))
+            # Same path WITH a different query is a legitimate submit landing
+            # (?submitted=1&…); only a byte-identical URL proves nothing moved.
+            if dest.rstrip("/") == src_url.rstrip("/"):
+                continue
+            key = (src_path, _norm(sub.target_label))
+            if key in seen:
+                continue
+            seen.add(key)
+
+            steps: list[ProductionTestStep] = []
+            n = 1
+            steps.append(ProductionTestStep(
+                step_number=n,
+                action=f"Open {src_url}",
+                expected=f"The {src_name} page is displayed with its form",
+                expected_result=f"The {src_name} page is displayed with its form",
+                selector=f"url={src_url}",
+                **_observed(verb="navigate", url=src_url),
+            ))
+            for f in fills:
+                n += 1
+                verb = (f.verb or "").strip().lower()
+                phrase = "Select" if verb == "select" else "Enter"
+                steps.append(ProductionTestStep(
+                    step_number=n,
+                    action=f"{phrase} '{f.value}' in '{f.target_label}'",
+                    expected=f"'{f.target_label}' holds '{f.value}'",
+                    expected_result=f"'{f.target_label}' holds '{f.value}'",
+                    selector=_locator(f.target_label, f.target_kind),
+                    **_observed(verb=verb, label=f.target_label,
+                                kind=f.target_kind or "text_field",
+                                value=str(f.value)),
+                ))
+            n += 1
+            sub_obs = _observed(verb="click", label=sub.target_label,
+                                kind=sub.target_kind or "button")
+            # The recording PROVED this submit reached dest — hard URL oracle.
+            sub_obs["observed"]["next_url"] = dest
+            sub_obs["observed"]["navigation_grounded"] = True
+            steps.append(ProductionTestStep(
+                step_number=n,
+                action=f"Click '{sub.target_label}'",
+                expected=f"The form submits and the application proceeds to {dest_path}",
+                expected_result=f"The form submits and the application proceeds to {dest_path}",
+                selector=_locator(sub.target_label, sub.target_kind),
+                **sub_obs,
+            ))
+            n += 1
+            steps.append(ProductionTestStep(
+                step_number=n,
+                action=f"Verify the application navigated to {dest}",
+                expected=f"URL is {dest} and the submitted {src_name} result is displayed",
+                expected_result=f"URL is {dest} and the submitted {src_name} result is displayed",
+                selector=f"url={dest}",
+                **_observed(verb="navigate", url=dest, provenance="demonstrated"),
+            ))
+            if src_visit.frame_ref:
+                for st in steps:
+                    st.screenshot = src_visit.frame_ref
+
+            test_id = str(uuid.uuid5(
+                _TEST_ID_NAMESPACE,
+                f"{artifact_id}:formflow:{src_path}:{_norm(sub.target_label)}"))
+            case = ProductionTestCase(
+                test_id=test_id,
+                name=(f"{src_name.title()} flow: fill the form and submit via "
+                      f"'{sub.target_label}' ({src_host})"),
+                description=(
+                    f"The demonstrated {src_name} business flow on {src_host}: "
+                    f"{len(fills)} field(s) filled with their captured values, then "
+                    f"'{sub.target_label}' (operator-approved Phase-B submit) — the "
+                    f"recording PROVED the submit navigated to {dest_path}. Every "
+                    f"step replays captured evidence; the destination URL is a hard "
+                    f"oracle, never an assumed transition."),
+                steps=steps,
+                expected_outcome=(
+                    f"Submitting the {src_name} form via '{sub.target_label}' "
+                    f"reaches {dest_path} with the submitted result displayed."),
+                preconditions=[Precondition(
+                    description="A supported web browser is open and the target site is reachable.",
+                    setup_action=f"Open {src_url}",
+                )],
+                priority="P0_critical",
+                type="functional",
+                tags=["demonstrated", "grounded-form-flow", "submit", "pages_and_forms"],
+            )
+            _grade_case(case)
+            cases.append(case)
+            if len(cases) >= _MAX_JOURNEYS:
+                return cases
+    return cases

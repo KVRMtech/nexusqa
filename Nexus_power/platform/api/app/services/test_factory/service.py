@@ -34,6 +34,7 @@ from .generator import (
     PageActionInput,
     PageVisitInput,
     generate_demonstrated_test_cases,
+    generate_form_flow_journeys,
     generate_grounded_journeys,
 )
 from .validator import validate_and_repair_case
@@ -349,6 +350,25 @@ async def generate_and_store(
             tc, artifact_id=artifact_id, tenant_id=tenant_id,
             session_id=session_id, confidence="demonstrated",
             source_evidence={"grounded_journey": True},
+        )
+        new_ids.append(values["test_case_id"])
+        await _upsert_case(session, values)
+
+    # ── Grounded FORM FLOWS (Phase-B submits) ─────────────────────────────
+    # A crawl that filled a form AND crossed the operator-approved submit
+    # boundary captured the app's CORE business flow (quote/checkout/transfer):
+    # open form → replay the demonstrated fills → click the approved submit →
+    # verify the PROVEN destination. The click-journey generator skips
+    # submit-verb actions by design, so without this emitter that evidence
+    # yielded zero cases. Additive + PROVEN-only.
+    for tc in generate_form_flow_journeys(
+        artifact_id=artifact_id, page_visits=visits, page_actions=actions,
+    ):
+        annotate_confidence(tc, ambiguous)
+        values = _row_values(
+            tc, artifact_id=artifact_id, tenant_id=tenant_id,
+            session_id=session_id, confidence="demonstrated",
+            source_evidence={"grounded_form_flow": True},
         )
         new_ids.append(values["test_case_id"])
         await _upsert_case(session, values)
