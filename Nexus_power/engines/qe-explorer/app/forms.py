@@ -160,6 +160,41 @@ _PLACEHOLDER_OPTIONS = frozenset({
 })
 
 
+def _number_default(control: Mapping[str, Any]) -> str:
+    """A number-input default that satisfies the control's OWN declared
+    constraints — the DOM's ``min``/``max``/``step`` attributes, captured by the
+    inventory. Grounded: nothing is invented; the app itself declared the range.
+
+    A constraint-blind ``"1"`` in an ``<input type=number min="18">`` passes the
+    fill but silently VOIDS the whole form submit via browser-native validation
+    (live incident: the quote form's Age min=18 → submit outcome=none), so:
+      * ``min`` declared → ``min`` (by the HTML spec, min is the step base, so
+        it is always a valid value);
+      * no min but ``max`` declared below 1 → ``max``;
+      * otherwise → ``"1"`` (the old default, still right for unconstrained
+        quantity-style fields).
+    Values are emitted integer-formatted when whole so ``fill`` commits cleanly.
+    """
+    def _num(key: str) -> Optional[float]:
+        rawv = str(control.get(key) or "").strip()
+        if not rawv:
+            return None
+        try:
+            return float(rawv)
+        except ValueError:
+            return None  # a non-numeric bound (e.g. a date min) is not ours to use
+
+    def _fmt(x: float) -> str:
+        return str(int(x)) if float(x).is_integer() else str(x)
+
+    minimum, maximum = _num("min"), _num("max")
+    if minimum is not None:
+        return _fmt(minimum)
+    if maximum is not None and maximum < 1:
+        return _fmt(maximum)
+    return "1"
+
+
 def _synthesize_default(control: Mapping[str, Any], kind: str, name: str) -> Optional[str]:
     """A structurally-VALID, LOW-CONFIDENCE value for a fillable control that the
     answer key does not cover — so a client-side-validation-gated form can be advanced
@@ -193,7 +228,7 @@ def _synthesize_default(control: Mapping[str, Any], kind: str, name: str) -> Opt
     if itype == "tel" or "phone" in n or "mobile" in n or "telephone" in n:
         return "5551234567"
     if itype == "number" or n in ("age", "quantity", "qty") or n.endswith(" age"):
-        return "1"
+        return _number_default(control)
     if itype == "url" or "website" in n or n.endswith(" url"):
         return "https://example.com"
     if "zip" in n or "postal" in n or "postcode" in n or "post code" in n:

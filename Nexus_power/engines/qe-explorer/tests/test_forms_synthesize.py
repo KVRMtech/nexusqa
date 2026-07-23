@@ -6,9 +6,9 @@ from __future__ import annotations
 from app.forms import _synthesize_default
 
 
-def _syn(kind="text", name="", input_type="", options=None, required=False):
+def _syn(kind="text", name="", input_type="", options=None, required=False, **extra):
     ctl = {"kind": kind, "name": name, "input_type": input_type,
-           "options": options or [], "required": required}
+           "options": options or [], "required": required, **extra}
     return _synthesize_default(ctl, kind, name)
 
 
@@ -30,6 +30,20 @@ def test_phone_number_zip_url():
     assert _syn(name="Zip Code") == "12345"
     assert _syn(name="Postal Code") == "12345"
     assert _syn(input_type="url", name="Website") == "https://example.com"
+
+
+def test_number_default_honours_declared_min_max_step():
+    """Live incident: <input type=number min=18 max=80> ('Age' on the quote form)
+    auto-filled with a constraint-blind '1' → browser-native validation silently
+    VOIDED the Phase-B submit (outcome=none). The default must satisfy the
+    control's OWN declared constraints — min when present (spec: min is the step
+    base, always valid), max when it forbids 1, else the old '1'."""
+    assert _syn(input_type="number", name="Age", min="18", max="80") == "18"
+    assert _syn(input_type="number", name="Qty", min="0.5", step="0.5") == "0.5"
+    assert _syn(input_type="number", name="Discount", max="0") == "0"
+    assert _syn(input_type="number", name="Qty", max="10") == "1"      # 1 still valid
+    assert _syn(input_type="number", name="Qty", min="oops") == "1"    # junk bound ignored
+    assert _syn(name="Age") == "1"                                     # no constraints -> unchanged
 
 
 def test_name_fields():

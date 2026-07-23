@@ -411,6 +411,13 @@ INVENTORY_JS = r"""
       href: hrefOf(el),
       haspopup: lc(attr(el, "aria-haspopup")),
       expanded: lc(attr(el, "aria-expanded")),
+      // Declared value constraints (number/range/date inputs). The DOM's OWN
+      // truth — the default synthesizer uses them so an auto-filled value can
+      // never violate the app's min/max/step validation (a constraint-blind
+      // "1" in an <input min=18> silently voids the whole submit).
+      min: attr(el, "min") || "",
+      max: attr(el, "max") || "",
+      step: attr(el, "step") || "",
       landmark: nearestLandmark(el, doc)
     };
   }

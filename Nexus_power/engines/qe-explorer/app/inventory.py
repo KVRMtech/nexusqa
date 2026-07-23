@@ -143,6 +143,10 @@ class ControlRecord(TypedDict):
     options: list[str]
     required: bool
     disabled: bool
+    #: Declared value constraints (number/range/date inputs); "" when undeclared.
+    min: str
+    max: str
+    step: str
     value_committed: str
     frame_selector: str
     anchor: Optional[AnchorRecord]
@@ -459,6 +463,12 @@ def build_control_record(
         "options": options,
         "required": _as_bool(raw.get("required")),
         "disabled": _as_bool(raw.get("disabled")),
+        # Declared value constraints (number/range/date inputs) — the DOM's own
+        # truth, consumed by the default synthesizer so an auto-filled value can
+        # never violate the app's min/max/step validation.
+        "min": _s(raw.get("min")).strip(),
+        "max": _s(raw.get("max")).strip(),
+        "step": _s(raw.get("step")).strip(),
         "value_committed": value_committed,
         "frame_selector": frame_selector,
         "anchor": None,   # filled by build_inventory only on collision
