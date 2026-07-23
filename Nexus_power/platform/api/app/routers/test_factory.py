@@ -3895,6 +3895,7 @@ async def recovery_scan(
         )
         from ..services.agentic import auto_diagnosis as _sentinel
         from ..services.agentic import recovery_agent as _recovery
+        from ..services.agentic import recovery_store as _store
         try:
             diags = await _sentinel.diagnose_failures(
                 session, artifact_id=artifact_id, tenant_id=tenant_id,
@@ -3902,7 +3903,73 @@ async def recovery_scan(
             )
         except Exception:
             diags = {}
-        return _recovery.scan_to_dict(_recovery.scan(timeline, diags))
+        scan = _recovery.scan(timeline, diags)
+        out = _recovery.scan_to_dict(scan)
+        # R5 v2: PERSIST the capability-gap proposals (human-gated) + auto-RESOLVE
+        # any approved proposal whose repro scenario now passes. Additive, fail-open.
+        try:
+            passing = {sc.get("scenario_id") for sc in (timeline.get("scenarios") or [])
+                       if all(st.get("status") == "passed" for st in (sc.get("steps") or []))
+                       and sc.get("scenario_id")}
+            await _store.resolve_if_passing(
+                session, tenant_id=tenant_id, artifact_id=artifact_id,
+                passing_scenario_ids=passing)
+            out["persisted"] = await _store.persist_scan(
+                session, tenant_id=tenant_id, artifact_id=artifact_id,
+                run_id=scan.run_id, proposals=scan.proposals)
+        except Exception:
+            out["persisted"] = 0
+        return out
+
+
+@router.get("/api/v1/test-factory/{artifact_id}/recovery-proposals")
+async def list_recovery_proposals(
+    artifact_id: str = PathParam(..., min_length=1, max_length=64),
+    status: str = "",
+    user: dict = Depends(get_current_user),
+):
+    """R5 v2 — the persisted, human-gated proposal queue for an artifact
+    (optionally filtered by status: proposed/approved/rejected/resolved).
+    Read-only, $0 LLM."""
+    tenant_id = user["tenant_id"]
+    async with tenant_scoped_session(tenant_id) as session:
+        await _require_artifact(session, artifact_id, tenant_id)
+        from ..services.agentic import recovery_store as _store
+        entries = await _store.list_proposals(
+            session, tenant_id=tenant_id, artifact_id=artifact_id, status=status.strip())
+        return {"artifact_id": artifact_id, "count": len(entries), "proposals": entries,
+                "note": ("Propose-only: an APPROVE records intent + attribution; the "
+                         "agent never applies the fix. A green run of the repro case "
+                         "resolves it.")}
+
+
+@router.post("/api/v1/test-factory/{artifact_id}/recovery-proposals/{proposal_id}/decision")
+async def decide_recovery_proposal(
+    payload: dict,
+    artifact_id: str = PathParam(..., min_length=1, max_length=64),
+    proposal_id: str = PathParam(..., min_length=1, max_length=64),
+    user: dict = Depends(get_current_user),
+):
+    """R5 v2 — record a human APPROVE / REJECT on a capability-gap proposal
+    (attributed to the authenticated operator + timestamped). The agent applies
+    nothing; this is the auditable human gate."""
+    if (user.get("role") or "viewer").lower() not in ("admin", "manager"):
+        raise HTTPException(403, "admin or manager role required to decide a proposal")
+    tenant_id = user["tenant_id"]
+    decision = str((payload or {}).get("decision") or "").strip().lower()
+    if decision not in ("approve", "reject"):
+        raise HTTPException(422, "decision must be 'approve' or 'reject'")
+    async with tenant_scoped_session(tenant_id) as session:
+        await _require_artifact(session, artifact_id, tenant_id)
+        from ..services.agentic import recovery_store as _store
+        who = str(user.get("sub") or user.get("email") or "").strip() or "unknown"
+        updated = await _store.record_decision(
+            session, tenant_id=tenant_id, proposal_id=proposal_id,
+            decision=decision, decided_by=who,
+            note=str((payload or {}).get("note") or ""))
+        if updated is None:
+            raise HTTPException(404, "proposal not found")
+        return updated
 
 
 @router.get("/api/v1/test-factory/{artifact_id}/steps/{scenario_id}/{step_number}/analyze")
