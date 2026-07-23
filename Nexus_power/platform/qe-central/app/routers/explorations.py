@@ -508,6 +508,13 @@ async def _dispatch_explorer(
         base_url = row.base_url
         prior_artifact_id = row.latest_artifact_id or ""   # the LAST completed crawl
         fences = dict(row.fences or {})
+        # TARGET MODE (R3 Mode 2): operator-declared path prefixes the crawl is
+        # CONFINED to (schedule.scope_paths, e.g. ["/quote"]). Only well-formed
+        # absolute paths pass; empty ⇒ classic whole-app Explore mode.
+        scope_paths = [
+            str(p).strip() for p in ((row.schedule or {}).get("scope_paths") or [])
+            if str(p).strip().startswith("/")
+        ][:20]
         # Project the canonical answer_key onto the explorer's {exact, semantic,
         # regex_rules} FILL contract — without this, a wizard-shaped key
         # ({fill|notes|outcomes}) resolves to empty and the crawler fills nothing.
@@ -579,6 +586,7 @@ async def _dispatch_explorer(
         attestation=_explorer_attestation(env_attestation),
         submit_approvals=submit_approvals,
         session=auth_session,
+        scope_path_prefixes=scope_paths,
     )
     # Dispatch to an available WORKER in the pool. For EACH worker we fence egress
     # into THAT worker's OWN allowlist file (fail-closed) BEFORE dispatching to it —

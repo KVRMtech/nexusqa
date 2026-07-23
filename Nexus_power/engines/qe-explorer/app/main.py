@@ -105,6 +105,13 @@ class ExploreRequest(BaseModel):
     allowed_hosts: list[str] = Field(default_factory=list)
     phase: str = "explore"
     submit_approvals: list[str] = Field(default_factory=list)
+    #: TARGET MODE (R3 Mode 2) — URL-path prefixes the crawl is CONFINED to
+    #: (e.g. ["/quote"]): only URLs whose path equals a prefix or sits under it
+    #: are enqueued/recorded; everything else on the host is out of scope. The
+    #: journey the operator supplied is validated exhaustively instead of the
+    #: whole app being explored. Empty ⇒ classic whole-app Explore mode
+    #: (byte-identical behaviour).
+    scope_path_prefixes: list[str] = Field(default_factory=list)
     #: Federated / SSO login (#7) — the DECLARED trusted Identity-Provider domains
     #: the login flow may redirect to (login.microsoftonline.com / okta.com / …).
     #: The guard treats an AUTH-phase POST to one of these as a login domain; the
@@ -138,13 +145,19 @@ class ExploreRequest(BaseModel):
 
 def _config_fingerprint(req: ExploreRequest, refuse_pack_version: str) -> str:
     """Deterministic dedup key for the crawl config (→ artifact media_fingerprint)."""
-    material = json.dumps({
+    parts = {
         "target_url": req.target_url,
         "budgets": Budget.from_dict(req.budgets).as_dict(),
         "explorer_version": EXPLORER_VERSION,
         "refuse_pack_version": refuse_pack_version,
         "allowed_hosts": sorted(h.lower() for h in req.allowed_hosts),
-    }, sort_keys=True, separators=(",", ":"))
+    }
+    # Only when SET — a scoped (Target-mode) crawl captures a different slice of
+    # the app, so it must mint its own artifact; unscoped crawls keep their
+    # historical fingerprints byte-stable (dedup reuse unaffected).
+    if req.scope_path_prefixes:
+        parts["scope_path_prefixes"] = sorted(req.scope_path_prefixes)
+    material = json.dumps(parts, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(material.encode("utf-8")).hexdigest()
 
 
@@ -386,6 +399,7 @@ async def _run_job(
                 submit_approvals=req.submit_approvals,
                 wizard_enabled=settings.wizard_enabled,
                 plan=req.plan,
+                scope_path_prefixes=req.scope_path_prefixes,
             )
             job = _Job(crawler)
             jobs.activate(job)

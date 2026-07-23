@@ -54,6 +54,11 @@ class ExploreDispatchRequest(BaseModel):
     plan: dict = Field(default_factory=dict)
     phase: str = Field(default="explore")
     submit_approvals: list[str] = Field(default_factory=list)
+    #: TARGET MODE (R3 Mode 2) — path prefixes the crawl is CONFINED to (e.g.
+    #: ["/quote"]): the operator-supplied journey is validated exhaustively and
+    #: nothing else on the host is explored. Sourced from the app's
+    #: ``schedule.scope_paths``. Empty ⇒ whole-app Explore mode.
+    scope_path_prefixes: list[str] = Field(default_factory=list)
     attestation: dict | None = None
     #: A pre-captured Playwright storageState to start the crawl authenticated
     #: (tier-4: logins the crawler cannot script). Resolved by qe-central from a

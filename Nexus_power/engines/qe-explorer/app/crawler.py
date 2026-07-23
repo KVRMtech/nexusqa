@@ -485,6 +485,7 @@ class Crawler:
         submit_approvals: Sequence[str] = (),
         wizard_enabled: bool = True,
         plan: Optional[dict[str, Any]] = None,
+        scope_path_prefixes: Sequence[str] = (),
         sleep: Any = asyncio.sleep,
     ) -> None:
         self._port = port
@@ -508,6 +509,15 @@ class Crawler:
         self._allowed_hosts = {h.strip().lower() for h in allowed_hosts if str(h).strip()}
         self._allowed_registrable = {registrable_domain(h) for h in self._allowed_hosts}
         self._allowed_registrable.add(registrable_domain(self._target_host))
+        # TARGET MODE (R3 Mode 2): normalised path prefixes the crawl is CONFINED
+        # to. Only well-formed absolute paths survive; trailing slashes are
+        # stripped (except root) so "/quote" matches "/quote" and "/quote/x"
+        # but never "/quotes". Empty ⇒ classic whole-app Explore mode.
+        self._scope_path_prefixes: tuple[str, ...] = tuple(dict.fromkeys(
+            (p.rstrip("/") or "/")
+            for p in (str(s).strip() for s in scope_path_prefixes)
+            if p.startswith("/")
+        ))
 
         # Resume: seed visited/seq/frame from the durable manifest prefix.
         prior = emit.scan_resume_state(emit.read_records(work_dir, crawl_id))
@@ -1892,12 +1902,28 @@ class Crawler:
             await self._sleep(1.0 / rate)
 
     def _in_scope(self, url: str) -> bool:
-        host = (urlsplit(url or "").hostname or "").lower()
+        parts = urlsplit(url or "")
+        host = (parts.hostname or "").lower()
         if not host:
             return False
-        if self._target_host and same_registrable_domain(host, self._target_host):
+        host_ok = (
+            (self._target_host and same_registrable_domain(host, self._target_host))
+            or host in self._allowed_hosts
+            or registrable_domain(host) in self._allowed_registrable
+        )
+        if not host_ok:
+            return False
+        # TARGET MODE: the crawl is confined to the supplied journey's path
+        # prefixes — a URL on the right host but outside every prefix is out of
+        # scope (the whole point of Mode 2: exhaustive validation of ONE
+        # workflow, no unrelated exploration). Query/fragment never matter.
+        if not self._scope_path_prefixes:
             return True
-        return host in self._allowed_hosts or registrable_domain(host) in self._allowed_registrable
+        path = parts.path or "/"
+        for p in self._scope_path_prefixes:
+            if p == "/" or path == p or path.startswith(p + "/"):
+                return True
+        return False
 
     def _emit_initial_meta(self) -> None:
         self._emitter.emit_crawl_meta(self._meta(stop_reason=""))
@@ -1913,7 +1939,7 @@ class Crawler:
 
     def _meta(self, *, stop_reason: str) -> dict[str, Any]:
         attestation = self._guard.attestation
-        return {
+        meta = {
             "crawl_id": self.crawl_id,
             "target_url": self.target_url,
             "explorer_version": self._explorer_version,
@@ -1925,6 +1951,9 @@ class Crawler:
             "attestation": _attestation_dict(attestation),
             "stop_reason": stop_reason,
         }
+        if self._scope_path_prefixes:  # Target-mode audit trail (mapper ignores extras)
+            meta["scope_path_prefixes"] = list(self._scope_path_prefixes)
+        return meta
 
 
 # ─── module helpers ──────────────────────────────────────────────────────────

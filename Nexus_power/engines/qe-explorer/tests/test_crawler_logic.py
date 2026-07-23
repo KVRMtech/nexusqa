@@ -169,7 +169,7 @@ async def _no_sleep(_seconds: float) -> None:
 
 
 def _build_crawler(port, work_dir, *, budget=None, target_url="https://app.example/home",
-                   credentials=None):
+                   credentials=None, scope_path_prefixes=()):
     guard_ctx = GuardContext(refuse_pack=_REFUSE_PACK)
     return Crawler(
         port,
@@ -177,7 +177,7 @@ def _build_crawler(port, work_dir, *, budget=None, target_url="https://app.examp
         refuse_pack=_REFUSE_PACK, budget=budget or Budget(rate_per_s=0),
         explorer_version="test/1.0", guard_version="test", refuse_pack_version=_REFUSE_PACK.version,
         config_fingerprint="fp", guard_context=guard_ctx, sleep=_no_sleep,
-        credentials=credentials,
+        credentials=credentials, scope_path_prefixes=scope_path_prefixes,
     )
 
 
@@ -405,6 +405,68 @@ def test_crawl_budget_max_states_stops_honestly():
         summary = asyncio.run(crawler.run())
         assert summary.stop_reason == STOP_MAX_STATES
         assert summary.states == 1
+
+
+# ─── TARGET MODE (R3 Mode 2): journey-confined crawling ─────────────────────────
+
+
+def _journey_site():
+    """A quote journey (/quote → /quote/review) plus unrelated pages the scope
+    must exclude — including /quotes, the prefix-boundary trap."""
+    quote = "https://app.example/quote"
+    review = "https://app.example/quote/review"
+    products = "https://app.example/products"
+    quotes_list = "https://app.example/quotes"
+    pages = {
+        quote: FakePage(quote, [
+            _raw("link", "Review"), _raw("link", "Products"), _raw("link", "All quotes"),
+        ], title="Quote", click_targets={
+            "Review": review, "Products": products, "All quotes": quotes_list}),
+        review: FakePage(review, [_raw("link", "Back")], title="Review",
+                         click_targets={"Back": quote}),
+        products: FakePage(products, [], title="Products"),
+        quotes_list: FakePage(quotes_list, [], title="Quotes"),
+    }
+    return pages, quote
+
+
+def test_target_scope_confines_crawl_to_the_journey():
+    """scope=['/quote']: the crawl records /quote and /quote/review ONLY —
+    /products (unrelated) and /quotes (prefix-boundary trap) are out of scope."""
+    import tempfile
+    with tempfile.TemporaryDirectory() as work:
+        pages, quote = _journey_site()
+        crawler = _build_crawler(FakeBrowser(pages, quote), work, target_url=quote,
+                                 scope_path_prefixes=["/quote"])
+        summary = asyncio.run(crawler.run())
+        assert summary.stop_reason == STOP_COMPLETED
+        states = [r for r in read_records(work, "c1") if r["type"] == REC_PAGE_STATE]
+        paths = sorted({s["url_path"] for s in states})
+        assert paths == ["/quote", "/quote/review"], paths
+
+
+def test_no_scope_is_byte_identical_whole_app_explore():
+    """Empty scope: classic Explore mode — every reachable page is visited."""
+    import tempfile
+    with tempfile.TemporaryDirectory() as work:
+        pages, quote = _journey_site()
+        crawler = _build_crawler(FakeBrowser(pages, quote), work, target_url=quote)
+        asyncio.run(crawler.run())
+        states = [r for r in read_records(work, "c1") if r["type"] == REC_PAGE_STATE]
+        paths = sorted({s["url_path"] for s in states})
+        assert paths == ["/products", "/quote", "/quote/review", "/quotes"], paths
+
+
+def test_scope_meta_is_recorded_for_audit():
+    import tempfile
+    with tempfile.TemporaryDirectory() as work:
+        pages, quote = _journey_site()
+        crawler = _build_crawler(FakeBrowser(pages, quote), work, target_url=quote,
+                                 scope_path_prefixes=["/quote/", "bad-no-slash", "/quote"])
+        asyncio.run(crawler.run())
+        metas = [r for r in read_records(work, "c1") if r["type"] == "crawl_meta"]
+        assert metas and metas[-1].get("scope_path_prefixes") == ["/quote"], \
+            "normalised scope (deduped, trailing slash stripped, junk dropped) must be auditable"
 
 
 # ─── auth: public-page resilience vs honest login-wall failure (Fix #1 + #2) ────
