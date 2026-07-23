@@ -1725,7 +1725,15 @@ def generate_grounded_journeys(
         # Only start a journey from a page we can trustworthily open (its URL is
         # instrumented / directly OCR'd, and a host/path exists) — never from a
         # vision-guessed address.
-        src_host = (v.canonical_host or v.url_host or "").strip()
+        #
+        # ``url_host`` (the REAL page hostname) is preferred over ``canonical_host``:
+        # canonical_host is a registrable-domain REDUCTION (grouping key), so on a
+        # multi-label host (``vkpowerlife.35-186-147-245.sslip.io`` → ``sslip.io``)
+        # it is neither a goto-able address for the opening step NOR comparable to
+        # the full destination hostname below — preferring it mis-killed every
+        # same-app navigation as "cross-host" (live: 11-page crawl → 0 journeys).
+        # On an IP or single-label host the two are identical, so nothing changes.
+        src_host = (v.url_host or v.canonical_host or "").strip()
         if (v.source or "").strip().lower() not in _ENTRY_TRUSTED_SOURCES or not src_host:
             continue
         src_url = f"https://{src_host}{v.url_path}"

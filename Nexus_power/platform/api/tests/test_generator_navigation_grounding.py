@@ -459,6 +459,44 @@ def test_grounded_journey_skips_external_navigation():
                    for c in journeys for s in c.steps)
 
 
+def test_grounded_journey_on_multilabel_host_is_same_app_not_cross_host():
+    """Live regression (VKPower Life on vkpowerlife.35-186-147-245.sslip.io): the
+    visit's ``canonical_host`` is the registrable-domain REDUCTION (``sslip.io``),
+    while every navigation click's captured destination carries the FULL hostname.
+    Comparing the reduction to the full host mis-killed all 9 same-app navigations
+    as "cross-host" → an 11-page crawl emitted ZERO journeys. The real page host
+    (``url_host``) must anchor both the same-app check and the opening goto."""
+    full = "vkpowerlife.35-186-147-245.sslip.io"
+    visits = [
+        PV(page_visit_id="q", sequence_index=0, location="Get a quote",
+           url_host=full, url_path="/quote", url_query="plan=term",
+           canonical_host="sslip.io", source="ground_truth", form_snapshot={}),
+        PV(page_visit_id="p", sequence_index=1, location="Products",
+           url_host=full, url_path="/products", url_query="",
+           canonical_host="sslip.io", source="ground_truth", form_snapshot={}),
+    ]
+    actions = [
+        PA(page_visit_id="q", subaction_index=0, verb="click", target_label="Products",
+           target_kind="link", value=None, after_outcome="navigation",
+           after_detail=f"https://{full}/products", navigated=True,
+           control_role="link", css_hint="a.nav-link", expanded=""),
+        # a genuinely external link must STILL be excluded (the check keeps teeth)
+        PA(page_visit_id="q", subaction_index=1, verb="click", target_label="Twitter",
+           target_kind="link", value=None, after_outcome="navigation",
+           after_detail="https://twitter.com/vkpower", navigated=True,
+           control_role="link", css_hint="a", expanded=""),
+    ]
+    journeys = gen.generate_grounded_journeys(
+        artifact_id="t", page_visits=visits, page_actions=actions)
+    prods = [c for c in journeys
+             if any("/products" in (s.action or "") for s in c.steps)]
+    assert prods, "the same-app navigation on a multi-label host must emit a journey"
+    open_step = prods[0].steps[0]
+    assert open_step.action == f"Open https://{full}/quote", open_step.action
+    assert not any("twitter" in (s.action or "").lower()
+                   for c in journeys for s in c.steps), "external nav must stay excluded"
+
+
 def test_grounded_journey_dedups_and_requires_grounded_nav():
     """No journey for a non-navigating click; identical (src,dest,label) collapses."""
     visits = _journey_visits()
