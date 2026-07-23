@@ -43,14 +43,32 @@ def _excerpt(s: str, n: int = 220) -> str:
     return s[:n] + ("…" if len(s) > n else "")
 
 
-def classify_network_signal(entries, *, step_start_ms=None, step_end_ms=None) -> dict | None:
+def _same_app_host(host: str, base_host: str) -> bool:
+    """True when ``host`` belongs to the app under test (exact or sub/super
+    domain of the base host). Conservative string containment on dot
+    boundaries — no PSL dependency."""
+    h, b = (host or "").lower(), (base_host or "").lower()
+    if not h or not b:
+        return True  # no base to compare against — keep legacy behaviour
+    return h == b or h.endswith("." + b) or b.endswith("." + h)
+
+
+def classify_network_signal(entries, *, step_start_ms=None, step_end_ms=None,
+                            base_host: str = "") -> dict | None:
     """Structured path: scan captured network entries for the WORST 4xx/5xx in the step window.
 
     ``entries`` = list of {url, method, status, start_ms?, failed?/error?}. When a step window
     is given, entries outside it are ignored. Severity order: 5xx > network-failure > 4xx.
-    Returns the signal dict or None. This is the real adjudication path once the runner emits
-    per-run network entries; it stays inert (None) until then."""
+
+    ORIGIN GATE (R7 — External Dependency Failure): when ``base_host`` is given,
+    a failing request to a FOREIGN origin (analytics, CDN, payment sandbox…)
+    never classifies as the application's own server error — it returns an
+    advisory ``external_dependency`` signal instead (``is_real_bug_signal`` is
+    False for it), and a same-origin signal always wins over a foreign one.
+    Without ``base_host`` behaviour is unchanged (legacy callers).
+    Returns the signal dict or None."""
     worst = None
+    foreign = None
     for e in (entries or []):
         if not isinstance(e, dict):
             continue
@@ -64,6 +82,16 @@ def classify_network_signal(entries, *, step_start_ms=None, step_end_ms=None) ->
             status = 0
         url = str(e.get("url") or "")
         method = str(e.get("method") or "").upper()
+        if base_host and not _same_app_host(_host_of(url), base_host):
+            # Foreign origin: record the worst as an advisory external signal.
+            if (500 <= status <= 599) or (status == 0 and (e.get("failed") or e.get("error"))):
+                foreign = foreign or {
+                    "kind": "external_dependency", "status": status or None,
+                    "url": url, "method": method,
+                    "detail": (f"{method} {url} -> "
+                               f"{status if status else 'network failure'} "
+                               f"(third-party origin, not {base_host})").strip()}
+            continue
         if 500 <= status <= 599:
             return {"kind": "server_error", "status": status, "url": url, "method": method,
                     "detail": f"{method} {url} -> {status}".strip()}
@@ -73,7 +101,7 @@ def classify_network_signal(entries, *, step_start_ms=None, step_end_ms=None) ->
         elif 400 <= status <= 499 and worst is None:
             worst = {"kind": "client_error", "status": status, "url": url, "method": method,
                      "detail": f"{method} {url} -> {status}".strip()}
-    return worst
+    return worst or foreign
 
 
 def network_signal_from_error(error_message: str) -> dict | None:
@@ -90,12 +118,18 @@ def network_signal_from_error(error_message: str) -> dict | None:
     return None
 
 
-def detect(failure_record: dict, observed: dict | None = None) -> dict | None:
+def detect(failure_record: dict, observed: dict | None = None,
+           base_host: str = "") -> dict | None:
     """Best available network signal for a failing step: structured entries if the runner
-    provided them (``failure_record['network']``), else the conservative error-text fallback."""
+    provided them (``failure_record['network']``), else the conservative error-text fallback.
+    ``base_host`` (the app under test) enables the origin gate — a third-party
+    5xx surfaces as ``external_dependency``, never as the app's own defect."""
     fr = failure_record or {}
+    if not base_host:
+        base_host = _host_of(str((observed or {}).get("url")
+                                 or (observed or {}).get("next_url") or ""))
     entries = fr.get("network") or fr.get("network_entries")
-    sig = classify_network_signal(entries) if entries else None
+    sig = classify_network_signal(entries, base_host=base_host) if entries else None
     return sig or network_signal_from_error(fr.get("error_message", "") or "")
 
 

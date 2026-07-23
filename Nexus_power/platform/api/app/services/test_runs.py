@@ -46,6 +46,22 @@ from nexus_sdk.db.models import (
 _logger = logging.getLogger(__name__)
 
 
+def ingested_step_status(step: dict) -> str:
+    """The honest status of one CI-reported step.
+
+    R7 green-wash hole closed (requirements-audit finding): a step with an
+    ABSENT/blank status used to default to 'passed' — an unverified green. A
+    missing status now ingests as BROKEN (counted failed), exactly like an
+    unrecognised value. PASS requires the reporter to say so explicitly."""
+    raw = str((step or {}).get("status") or "").strip().lower()
+    if raw in (
+        E2E_STEP_STATUS_PASSED, E2E_STEP_STATUS_FAILED, E2E_STEP_STATUS_SKIPPED,
+        E2E_STEP_STATUS_TIMED_OUT, E2E_STEP_STATUS_BROKEN,
+    ):
+        return raw
+    return E2E_STEP_STATUS_BROKEN
+
+
 # ─── Scenario-id extraction ──────────────────────────────────────────────
 #
 # Playwright + Cypress exporters embed the scenario id at the start of test
@@ -155,7 +171,7 @@ async def ingest_run(
     # Aggregates computed from steps; trust the steps over any top-level field
     passed = failed = skipped = total_duration = 0
     for s in steps_in:
-        status = (s.get("status") or E2E_STEP_STATUS_PASSED).lower()
+        status = ingested_step_status(s)
         total_duration += int(s.get("duration_ms") or 0)
         if status == E2E_STEP_STATUS_PASSED:
             passed += 1
@@ -165,9 +181,13 @@ async def ingest_run(
             failed += 1
     total = len(steps_in)
 
-    # Top-level status: caller's value wins if valid; otherwise derive
+    # Top-level status: caller's value fills in when VALID and CONSISTENT with
+    # the step evidence; otherwise derive. R7 green-wash hole closed: a
+    # declared 'passed' can never override failing steps — a PASS is claimed
+    # only on positive evidence, never by declaration.
     declared_status = (payload.get("status") or "").lower()
-    if declared_status in E2E_RUN_TERMINAL_STATUSES:
+    if declared_status in E2E_RUN_TERMINAL_STATUSES and not (
+            declared_status == E2E_RUN_STATUS_PASSED and failed > 0):
         run_status = declared_status
     elif failed > 0:
         run_status = E2E_RUN_STATUS_FAILED
@@ -212,12 +232,7 @@ async def ingest_run(
         )
         if not scenario_id:
             parse_misses += 1
-        step_status = (s.get("status") or E2E_STEP_STATUS_PASSED).lower()
-        if step_status not in (
-            E2E_STEP_STATUS_PASSED, E2E_STEP_STATUS_FAILED, E2E_STEP_STATUS_SKIPPED,
-            E2E_STEP_STATUS_TIMED_OUT, E2E_STEP_STATUS_BROKEN,
-        ):
-            step_status = E2E_STEP_STATUS_BROKEN
+        step_status = ingested_step_status(s)
 
         step_row = E2ETestRunStepRow(
             step_run_id=_new_id(),

@@ -42,7 +42,12 @@ from nexus_sdk.db import Base
 
 # Fix channels the auto-heal loop can prove green and reuse. Kept open (a free-text
 # column, validated by the caller) so a new heal channel needs no schema change.
-FIX_KINDS = ("control_kind", "reanchor", "interaction", "wait")
+# nav/advance/nav_recover: the write-on-green path has always PASSED these kinds
+# (test_factory.py proven-fix loop) but this gate silently dropped them
+# (fail-open False, no trace) — so entry-URL corrections, wizard advances and
+# nav recoveries were never memoized. Requirements-audit finding, R6.
+FIX_KINDS = ("control_kind", "reanchor", "interaction", "wait",
+             "nav", "advance", "nav_recover")
 
 _FP_LEN = 40            # sha256 prefix — collision-safe, fits any VARCHAR comfortably
 _MAX_LABEL = 400        # provenance label is stored readable; bound it defensively

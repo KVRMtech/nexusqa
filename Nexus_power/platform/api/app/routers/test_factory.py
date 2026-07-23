@@ -2279,6 +2279,33 @@ async def _run_auto_heal(run_id: str, ctx: dict) -> None:
                 observed=observed, field_meta=field_meta, baseline_step=bs,
                 is_flaky=False, selector_drifted=False, prior_step_passed=f.get("prior_passed", False),
             )
+            # NETWORK ORACLE (R5 wiring — was built, never threaded): attach the
+            # best available network signal to the diagnosis. Origin-gated (R7):
+            # a third-party 5xx/failure surfaces as External Dependency — the
+            # application under test is NOT accused by a foreign origin's error.
+            # Advisory only; never breaks diagnosis.
+            try:
+                from ..services.test_factory import network_oracle as _net_oracle
+                _nsig = _net_oracle.detect(
+                    f, observed, base_host=_net_oracle._host_of(base_url))
+                if _nsig:
+                    diag = {**diag, "network": _nsig}
+                    if _nsig.get("kind") == "external_dependency":
+                        diag = {**diag,
+                                "cause_label": ((diag.get("cause_label") or "")
+                                                + " — a THIRD-PARTY dependency failed ("
+                                                + str(_nsig.get("detail") or "")[:120]
+                                                + "), not the application under test"),
+                                "recommended_action": (
+                                    "A third-party origin failed during this step ("
+                                    + str(_nsig.get("url") or "")[:100]
+                                    + "). Verify the external service/stub; this signal does "
+                                      "NOT prove the application defective. "
+                                    + (diag.get("recommended_action") or "")).strip()}
+                    trace(event="network_signal", scenario_id=sid, step=step,
+                          kind=_nsig.get("kind"))
+            except Exception:
+                pass
             # P2-full: a locator/selector-class failure → auto-capture the live a11y tree
             # and try a MULTI-SIGNAL (similo) re-anchor automatically, instead of stopping
             # for a human. One capture+reanchor attempt per step; similo only returns a
@@ -2682,6 +2709,29 @@ async def _run_auto_heal(run_id: str, ctx: dict) -> None:
                     + " (CONFIRMED: the regression reproduced across 2 independent runs — "
                       "not a flake.)")}
                 trace(event="regression_confirmed", scenario_id=sid, step=step)
+                # AUTO-AUTHORED DEFECT REPORT (R5): a CONFIRMED real regression
+                # ships with a filing-ready defect — repro steps with the failing
+                # one flagged, expected-vs-actual, flow-mechanical severity, and
+                # paste-ready markdown — folded into diag so it persists on
+                # stop_diag and reaches every surface that renders the stop.
+                # (build_defect existed complete+pure with ZERO call sites —
+                # requirements-audit finding.) Additive: never breaks the stop.
+                try:
+                    from ..services.test_factory.defect_report import (
+                        build_defect, defect_to_markdown)
+                    _defect = build_defect(
+                        tc=tc, failing_step_number=step, diag=diag,
+                        network=diag.get("network"),
+                        error_message=str(job.get("output") or "")[-2000:],
+                        base_url=str(observed.get("url")
+                                     or observed.get("next_url") or ""),
+                        scenario_id=sid,
+                    )
+                    diag = {**diag, "defect_report": _defect,
+                            "defect_markdown": defect_to_markdown(_defect)}
+                    trace(event="defect_report_authored", scenario_id=sid, step=step)
+                except Exception:
+                    pass  # authoring is additive — never break the honest stop
 
             if diag["cause"] != "WRONG_CONTROL_KIND":
                 # P0 legibility: lead with the GROUNDED cause + the recommended action,
