@@ -60,9 +60,41 @@ _MUTATE = require_role("admin", "manager")
 # Statuses an operator may set via PATCH; 'deleted' only via DELETE.
 _SETTABLE_STATUSES = frozenset({"active", "paused"})
 
-# Attestable environment kinds; only 'disposable' may host the mutating submit tier.
-_ENV_KINDS = frozenset({"prod", "staging", "disposable"})
+# Attestable environment kinds; only 'disposable' may host the mutating submit
+# tier. 'uat' (R2) postures as staging: crawlable, never submit-tier.
+_ENV_KINDS = frozenset({"prod", "staging", "uat", "disposable"})
 _SUBMIT_ENV_KIND = "disposable"
+
+
+def _validated_env_kind(att: dict | None) -> dict | None:
+    """422 on an UNKNOWN ``env_kind`` at WRITE time (R2 audit finding: the
+    vocabulary was defined but never enforced, so a typo like 'disposible' was
+    stored silently and then fail-closed-degraded to prod at READ time — the
+    operator saw refusals with no clue why). A blank kind stays allowed (it
+    degrades to prod honestly); only a NON-EMPTY unknown value is rejected."""
+    if not att:
+        return att
+    kind = str((att or {}).get("env_kind") or "").strip().lower()
+    if kind and kind not in _ENV_KINDS:
+        raise HTTPException(
+            status_code=422,
+            detail=(f"unknown env_kind {kind!r} — must be one of: "
+                    f"{'|'.join(sorted(_ENV_KINDS))} (unknown kinds are treated "
+                    f"as prod at enforcement time, which refuses crawls)"))
+    return att
+
+
+async def _bound_run_environment(session, tenant_id: str, app_id: str) -> str:
+    """The app's schedule.run_environment (the profile name every cycle runs
+    against), or ""."""
+    app_row = (await session.execute(
+        select(ClientAppRow).where(
+            ClientAppRow.app_id == app_id, ClientAppRow.tenant_id == tenant_id,
+        )
+    )).scalar_one_or_none()
+    if app_row is None:
+        return ""
+    return str(((app_row.schedule or {}).get("run_environment")) or "").strip()
 
 
 class AppCreate(BaseModel):
@@ -430,7 +462,7 @@ async def create_app(
         canonical_host=_derive_canonical_host(base_url, payload.canonical_host),
         creds_blob=creds_blob,
         answer_key=payload.answer_key or {},
-        env_attestation=_finalize_attestation(payload.env_attestation, user),
+        env_attestation=_finalize_attestation(_validated_env_kind(payload.env_attestation), user),
         fences=payload.fences or {},
         repo_binding=repo_binding,
         schedule=payload.schedule or {},
@@ -843,7 +875,7 @@ async def update_app(
                 setattr(row, field, value)
         if payload.env_attestation is not None:
             # (Re-)attest binds the accountable human to the authenticated identity.
-            row.env_attestation = _finalize_attestation(payload.env_attestation, user)
+            row.env_attestation = _finalize_attestation(_validated_env_kind(payload.env_attestation), user)
         if payload.repo_binding is not None:
             # Seal the webhook secret + (re)provision the repo-intel connection.
             row.repo_binding = await _prepare_repo_binding(
@@ -1135,7 +1167,7 @@ async def create_environment(
             headers=dict(payload.headers or {}),
             data_overrides=dict(payload.data_overrides or {}),
             fences=dict(payload.fences or {}),
-            env_attestation=dict(payload.env_attestation or {}),
+            env_attestation=dict(_validated_env_kind(payload.env_attestation) or {}),
             env_assertion=env_assertion,
             creds_blob=creds_blob,
             status="active",
@@ -1188,7 +1220,18 @@ async def update_environment(
             request, tenant_id, app_id, payload.credentials, aad_id=env_id)
     async with tenant_scoped_qec_session(tenant_id) as session:
         row = await _require_env(session, tenant_id, app_id, env_id)
-        if payload.name is not None:
+        if payload.name is not None and payload.name.strip() != row.name:
+            # R2 guard: renaming the profile the app's cycles are BOUND to would
+            # fail-close every subsequent cycle (the daemon resolves by name).
+            _bound = await _bound_run_environment(session, tenant_id, app_id)
+            if _bound and _bound == row.name:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(f"environment {row.name!r} is the app's bound "
+                            f"run_environment — re-bind (PATCH app.run_environment) "
+                            f"before renaming"))
+            row.name = payload.name.strip()[:200]
+        elif payload.name is not None:
             row.name = payload.name.strip()[:200]
         if payload.base_url is not None:
             _bu = payload.base_url.strip()
@@ -1203,7 +1246,7 @@ async def update_environment(
         if payload.fences is not None:
             row.fences = dict(payload.fences)
         if payload.env_attestation is not None:
-            row.env_attestation = dict(payload.env_attestation)
+            row.env_attestation = dict(_validated_env_kind(payload.env_attestation) or {})
         if payload.env_assertion is not None:
             row.env_assertion = _validated_env_assertion(payload.env_assertion)
         if payload.credentials is not None:
@@ -1228,6 +1271,15 @@ async def delete_environment(
     tenant_id = user["tenant_id"]
     async with tenant_scoped_qec_session(tenant_id) as session:
         row = await _require_env(session, tenant_id, app_id, env_id)
+        # R2 guard: deleting the profile the app's cycles are BOUND to would
+        # fail-close every subsequent cycle. Re-bind first.
+        _bound = await _bound_run_environment(session, tenant_id, app_id)
+        if _bound and _bound == row.name:
+            raise HTTPException(
+                status_code=409,
+                detail=(f"environment {row.name!r} is the app's bound "
+                        f"run_environment — re-bind (PATCH app.run_environment) "
+                        f"before deleting"))
         await session.delete(row)
     logger.info("qec.apps.env_deleted",
                 extra={"tenant_id": tenant_id, "app_id": app_id, "environment_id": env_id,

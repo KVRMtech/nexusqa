@@ -69,10 +69,15 @@ PHASE_SUBMIT = "submit"
 # ── env_attestation.env_kind vocabulary (client_apps.env_attestation, §3.5) ─
 ENV_KIND_DISPOSABLE = "disposable"
 ENV_KIND_STAGING = "staging"
+#: R2: UAT is a first-class attested kind (the requirement's Test/UAT/Prod
+#: selector). Posture = staging: crawlable, never the mutating submit tier
+#: (that stays disposable-only) — "same capabilities as Test unless client
+#: policy restricts".
+ENV_KIND_UAT = "uat"
 ENV_KIND_PROD = "prod"
 #: Even a READ-ONLY explore crawl requires a NON-PROD attestation — prod is never
 #: an attested target (a crawl can never touch a production environment).
-NON_PROD_ENV_KINDS = frozenset({ENV_KIND_DISPOSABLE, ENV_KIND_STAGING})
+NON_PROD_ENV_KINDS = frozenset({ENV_KIND_DISPOSABLE, ENV_KIND_STAGING, ENV_KIND_UAT})
 
 
 def resolve_effective_fences(

@@ -236,9 +236,17 @@ async def _prove_isolation(
     assert enabled is True, f"{table}: ROW LEVEL SECURITY is OFF"
 
     # Tidy up (disposable DB, but keep it clean for repeat local runs).
-    await _scoped_write(
-        engine, tenant_a, f"DELETE FROM {table} WHERE {pk_col} = :pk", {"pk": pk_a},
-    )
+    # BEST-EFFORT: the substrate role is deliberately SELECT/INSERT-only
+    # (least-privilege — it must never be widened just so a test can clean
+    # up), so on the least-privilege connection this DELETE is denied. That
+    # is a PASSING posture, not a failure: every isolation assertion above
+    # already ran. Was the KNOWN-RED 'page_visits permission denied' finding.
+    try:
+        await _scoped_write(
+            engine, tenant_a, f"DELETE FROM {table} WHERE {pk_col} = :pk", {"pk": pk_a},
+        )
+    except Exception:
+        pass  # insufficient privilege == least-privilege role doing its job
 
 
 # ── qecentral-owned tables ──────────────────────────────────────────────────

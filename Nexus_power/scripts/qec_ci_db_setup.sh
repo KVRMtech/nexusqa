@@ -121,6 +121,17 @@ print("substrate create_all complete")
 PY
 )
 
+# ── 3c. RLS for the create_all-only capture tables ───────────────────────────
+# ground_truth_events is a tenant-PII-bearing capture table materialised by
+# create_all (step 3b) with NO migration-owned RLS — the KNOWN-RED isolation
+# finding: any environment built from migrations+create_all shipped it
+# unprotected. scripts/apply_ground_truth_events.sql is idempotent and carries
+# ENABLE+FORCE ROW LEVEL SECURITY + the tenant_isolation policy; apply it here
+# so CI proves the protected posture, same as an operator install.
+log "Applying ground_truth_events RLS (scripts/apply_ground_truth_events.sql)"
+psql -d "${NEXUS_DB}" -v ON_ERROR_STOP=on \
+  -f "${REPO_ROOT}/scripts/apply_ground_truth_events.sql"
+
 # ── 4. Roles + qecentral database + least-privilege grants (production SQL) ──
 # scripts/qec_db_bootstrap.sql needs the nexus substrate tables to already
 # exist (step 3) because it GRANTs on them; run it as the superuser.  It creates

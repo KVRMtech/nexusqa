@@ -223,6 +223,19 @@ def _synthesize_default(control: Mapping[str, Any], kind: str, name: str) -> Opt
     # text / date value fields — input_type first, then accessible-name heuristics.
     if itype == "email" or "email" in n or "e-mail" in n:
         return "qa.autotest@example.com"
+    # Temporal inputs: every native flavour needs ITS OWN value format — the
+    # old blanket ISO-date default made Playwright's fill THROW on
+    # input[type=time|month|week|datetime-local] ("Malformed value"), so those
+    # fields always errored and were never advanced (requirements-audit R1
+    # finding). All values derive from today's clock — valid on any app.
+    if itype == "time":
+        return "12:00"
+    if itype == "month":
+        return date.today().strftime("%Y-%m")
+    if itype == "week":
+        return f"{date.today().isocalendar()[0]}-W{date.today().isocalendar()[1]:02d}"
+    if itype == "datetime-local":
+        return f"{date.today().isoformat()}T12:00"
     if itype == "date" or kind == "date":
         return date.today().isoformat()
     if itype == "tel" or "phone" in n or "mobile" in n or "telephone" in n:

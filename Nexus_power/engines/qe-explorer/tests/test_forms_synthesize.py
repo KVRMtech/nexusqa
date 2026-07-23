@@ -23,6 +23,19 @@ def test_date_is_iso_today():
     assert _syn(input_type="date", name="Start") == date.today().isoformat()
 
 
+def test_each_temporal_input_gets_its_own_valid_format():
+    """R1 audit finding: time/month/week/datetime-local were synthesized a plain
+    DATE — an invalid value for those input types, so Playwright's fill threw
+    and the field always errored. Each flavour now gets its own valid format."""
+    from datetime import date
+    assert _syn(input_type="time", kind="date", name="Appointment time") == "12:00"
+    assert _syn(input_type="month", kind="date", name="Statement month") == date.today().strftime("%Y-%m")
+    wk = _syn(input_type="week", kind="date", name="Delivery week")
+    assert "-W" in wk and len(wk.split("-W")[1]) == 2
+    dtl = _syn(input_type="datetime-local", kind="date", name="Pickup")
+    assert dtl == f"{date.today().isoformat()}T12:00"
+
+
 def test_phone_number_zip_url():
     assert _syn(input_type="tel", name="Mobile") == "5551234567"
     assert _syn(name="Phone Number") == "5551234567"

@@ -3844,6 +3844,37 @@ async def run_timeline_by_id(
         return timeline
 
 
+@router.get("/api/v1/test-factory/{artifact_id}/proven-controls")
+async def get_proven_controls(
+    artifact_id: str = PathParam(..., min_length=1, max_length=64),
+    include_invalidated: bool = False,
+    user: dict = Depends(get_current_user),
+):
+    """R6 — the LEARNED-CAPABILITY ledger, visible for the first time
+    (requirements-audit finding: list_proven_controls had no route or UI, so
+    accumulated learning was invisible and unauditable). Every oracle-proven
+    heal memoized for this artifact: fix kind, payload, provenance
+    (proven_by_run), confirmed_count (rising trust), stale/quarantine
+    lifecycle. Read-only, $0 LLM, no migration."""
+    tenant_id = user["tenant_id"]
+    async with tenant_scoped_session(tenant_id) as session:
+        await _require_artifact(session, artifact_id, tenant_id)
+        from ..services.diff_and_heal import control_ledger as _ledger
+        entries = await _ledger.list_proven_controls(
+            session, tenant_id=tenant_id, app_key=artifact_id,
+            include_invalidated=include_invalidated,
+        )
+        return {
+            "artifact_id": artifact_id,
+            "count": len(entries),
+            "entries": entries,
+            "note": ("Each entry is an oracle-PROVEN heal reused across runs; "
+                     "2 consecutive misfires quarantine it, a green re-prove "
+                     "reactivates it — learning with an audit trail, never "
+                     "silent memory."),
+        }
+
+
 @router.get("/api/v1/test-factory/{artifact_id}/runs/{run_id}/recovery-scan")
 async def recovery_scan(
     artifact_id: str = PathParam(..., min_length=1, max_length=64),
