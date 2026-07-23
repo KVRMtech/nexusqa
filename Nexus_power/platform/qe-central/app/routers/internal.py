@@ -43,6 +43,7 @@ from ..clients.manifest_mapper import (
     ManifestMappingError,
     map_manifest_records_to_bundle,
 )
+from ..clients.refusal_messages import client_refusal_message
 from ..db import tenant_scoped_qec_session, utc_now
 from ..db.models import ClientAppRow, QEExplorationRow
 from ..substrate.schema import CRAWL_ID_PATTERN, ExplorationBundle, RefusalError
@@ -379,15 +380,22 @@ async def complete_crawl(crawl_id: str, request: Request) -> dict:
             extractor_version=extractor_version,
         )
     except RefusalError as exc:  # includes ManifestMappingError
-        reason = str(exc)[:2000]
-        await _mark(tenant_id, exploration_id, status="refused", error=reason, finished_at=utc_now())
+        reason = str(exc)[:2000]                        # technical (logs / support / stats)
+        friendly = client_refusal_message(exc.reason)   # plain-English, actionable (Fix B)
+        await _mark(
+            tenant_id, exploration_id, status="refused",
+            error=friendly,                             # the operator READS this (portal shows row.error)
+            stats={"refusal_code": exc.reason, "refusal_technical": reason},
+            finished_at=utc_now(),
+        )
         logger.warning(
             "qec.internal.refused",
             extra={"exploration_id": exploration_id, "crawl_id": crawl_id, "reason": reason[:300]},
         )
         raise HTTPException(
             status_code=422,
-            detail={"refused": True, "reason": reason, "exploration_id": exploration_id},
+            detail={"refused": True, "reason": reason, "message": friendly,
+                    "reason_code": exc.reason, "exploration_id": exploration_id},
         )
     except Exception as exc:
         message = str(exc)[:2000]

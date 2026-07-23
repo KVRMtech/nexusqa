@@ -42,6 +42,7 @@ from pydantic import ValidationError
 
 from ..substrate.schema import (
     ExplorationBundle,
+    FILL_VERBS,
     RefusalError,
     _refusal_from_validation_error,
 )
@@ -118,6 +119,40 @@ def _clean_action(raw: dict) -> dict:
         "url_changed": bool(raw.get("url_changed", False)),
         "qec": dict(raw.get("qec") or {}),
     }
+
+
+def _drop_uncommitted_fill_artifacts(actions: list[dict]) -> list[dict]:
+    """Drop a valueless ``type``/``select`` keystroke ARTIFACT when a committed
+    sibling for the same target proves the real value was captured.
+
+    A dropdown (or a typed field) commonly emits BOTH the real committed fill (a
+    ``FILL_VERBS`` action carrying a value) AND a valueless keystroke event for
+    the SAME target — merely opening/focusing the control. The valueless one is
+    not a real interaction and must never become a test step; dropping it is
+    GROUNDED, because the committed sibling carries the actually-observed value —
+    nothing is invented. A valueless fill with NO committed sibling is a GENUINE
+    gap and is left intact for the schema to refuse honestly (the client-facing
+    layer turns that refusal into a one-click "provide a value" ask). Surviving
+    actions are re-indexed so the subaction timeline stays contiguous.
+    """
+    committed = {
+        a["target_label"]
+        for a in actions
+        if a.get("verb") in FILL_VERBS and a.get("value") not in (None, "")
+    }
+    kept = [
+        a
+        for a in actions
+        if not (
+            a.get("verb") in FILL_VERBS
+            and a.get("value") is None
+            and a.get("target_label") in committed
+        )
+    ]
+    if len(kept) != len(actions):
+        for i, action in enumerate(kept):
+            action["subaction_index"] = i
+    return kept
 
 
 def _clean_screenshot(raw: dict, loader: Callable[[str], bytes]) -> dict:
@@ -216,6 +251,10 @@ def map_manifest_records_to_bundle(
             _clean_action(a)
             for a in sorted(raw_actions, key=lambda a: a.get("subaction_index", 0))
         ]
+        # Grounded de-dup: a control (e.g. a dropdown) can emit a real committed
+        # fill AND a valueless keystroke artifact for the same target. Drop the
+        # artifact when the committed sibling proves the value — never invent one.
+        cleaned_actions = _drop_uncommitted_fill_artifacts(cleaned_actions)
 
         cleaned_shots = [_clean_screenshot(s, screenshot_loader) for s in (rec.get("screenshots") or [])]
         total_shots += len(cleaned_shots)

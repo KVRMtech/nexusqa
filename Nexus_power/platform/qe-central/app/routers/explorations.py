@@ -44,6 +44,7 @@ from ..auth import require_auth, require_role
 from ..clients import explorer_client
 from ..clients.config import phase1_settings
 from ..clients.explorer_client import ExploreDispatchRequest, ExplorerDispatchError
+from ..clients.refusal_messages import client_refusal_message
 from ..db import new_id, row_to_dict, tenant_scoped_qec_session, utc_now
 from ..db.models import ClientAppRow, QEExplorationRow
 from ..fleet.lifecycle import TenantNotOperational
@@ -175,10 +176,13 @@ async def _write_inline_bundle(
             extractor_version=extractor_version,
         )
     except RefusalError as exc:
-        reason = str(exc)[:2000]
+        reason = str(exc)[:2000]                        # technical (logs / support / stats)
+        friendly = client_refusal_message(exc.reason)   # plain-English, actionable (Fix B)
         await _mark(
             tenant_id, exploration_id,
-            status="refused", error=reason, finished_at=utc_now(),
+            status="refused", error=friendly,           # the operator READS this (portal shows row.error)
+            stats={"refusal_code": exc.reason, "refusal_technical": reason},
+            finished_at=utc_now(),
         )
         logger.warning(
             "qec.explorations.refused",
@@ -187,8 +191,8 @@ async def _write_inline_bundle(
         )
         raise HTTPException(
             status_code=422,
-            detail={"refused": True, "reason": reason,
-                    "exploration_id": exploration_id},
+            detail={"refused": True, "reason": reason, "message": friendly,
+                    "reason_code": exc.reason, "exploration_id": exploration_id},
         )
     except HTTPException:
         await _mark(
