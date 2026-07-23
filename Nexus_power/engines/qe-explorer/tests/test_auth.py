@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import dataclasses
 
 from app import auth
 from app.auth import (
@@ -318,3 +319,44 @@ def test_login_unmatched_is_honest_failure():
     pages = {"https://app/x": {"controls": [_btn("Somewhere")]}}
     res = _login(pages, "https://app/x", _CREDS)
     assert not res.success and "login_unverified" in res.reason
+
+
+# ─── uncommitted fills are never recorded (the live Age-spinbutton incident) ────
+
+
+class _NumberRejectingBrowser(FakeBrowser):
+    """Playwright semantics for the live incident: ``fill()`` on an
+    ``input[type=number]`` with non-numeric text ERRORS and commits nothing."""
+
+    async def fill(self, control, value):
+        if (control.get("input_type") or "").lower() == "number":
+            return RawObservation(
+                url_before=self._cur, url_after=self._cur, committed_value=None,
+                error_detail="action_error: Locator.fill: Cannot type text into input[type=number]",
+            )
+        return await super().fill(control, value)
+
+
+def test_uncommitted_username_fill_is_not_recorded_and_not_a_secret_submit():
+    """The exact client scenario: a PUBLIC quote page (no login form) whose first
+    text-like field is a number input ('Age'). The username heuristic grabs it, the
+    fill errors — the manifest must NOT carry a valueless 'type' action (that record
+    is what refused the whole crawl), login fails honestly, and ``secret_submitted``
+    stays False so the crawler explores the page unauthenticated (Fix #2)."""
+    pages = {"https://app/quote": {"controls": [
+        _raw("textbox", "Age", input_type="number", kind="number"),
+        _raw("combobox", "Product", input_type="select-one", tag="select", kind="select",
+             options=["VKPower Term", "Heritage Whole Life"]),
+        _btn("Get my quote"),
+    ]}}
+    port = _NumberRejectingBrowser(pages, "https://app/quote")
+    a = Authenticator(port, _CREDS, FakeClock(), _REFUSE,
+                      AuthWindow(max_requests=50, window_ms=10 ** 9), max_relogins=1)
+    res = asyncio.run(a.login(_observe(port)))
+
+    assert not res.success                       # honest failure, never a fake login
+    assert res.secret_submitted is False         # no password/OTP went anywhere
+    dicts = [dataclasses.asdict(rec) for rec in res.actions]
+    valueless_fills = [d for d in dicts
+                       if d.get("verb") in ("type", "select") and d.get("value") in (None, "")]
+    assert valueless_fills == []                 # the refusal-causing record never exists

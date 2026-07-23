@@ -29,7 +29,9 @@ from app.browser import (
     classify_after,
 )
 from app.config import Settings
+from app.auth import Credentials
 from app.crawler import (
+    STOP_AUTH_FAILED,
     STOP_COMPLETED,
     STOP_MAX_REQUESTS,
     STOP_MAX_STATES,
@@ -166,7 +168,8 @@ async def _no_sleep(_seconds: float) -> None:
     return None
 
 
-def _build_crawler(port, work_dir, *, budget=None, target_url="https://app.example/home"):
+def _build_crawler(port, work_dir, *, budget=None, target_url="https://app.example/home",
+                   credentials=None):
     guard_ctx = GuardContext(refuse_pack=_REFUSE_PACK)
     return Crawler(
         port,
@@ -174,6 +177,7 @@ def _build_crawler(port, work_dir, *, budget=None, target_url="https://app.examp
         refuse_pack=_REFUSE_PACK, budget=budget or Budget(rate_per_s=0),
         explorer_version="test/1.0", guard_version="test", refuse_pack_version=_REFUSE_PACK.version,
         config_fingerprint="fp", guard_context=guard_ctx, sleep=_no_sleep,
+        credentials=credentials,
     )
 
 
@@ -401,6 +405,66 @@ def test_crawl_budget_max_states_stops_honestly():
         summary = asyncio.run(crawler.run())
         assert summary.stop_reason == STOP_MAX_STATES
         assert summary.states == 1
+
+
+# ─── auth: public-page resilience vs honest login-wall failure (Fix #1 + #2) ────
+
+
+def _quote_page_no_login():
+    """A PUBLIC quote page: a native Product <select> + a benign nav, and NO login
+    form anywhere — the exact shape that aborted the client's crawl auth_failed."""
+    quote = "https://app.example/quote"
+    pages = {
+        quote: FakePage(quote, [
+            _raw("combobox", "Product", input_type="select-one", tag="select",
+                 options=["VKPower Term", "Heritage Whole Life"]),
+            _raw("link", "Home"),
+        ], title="Get a quote", click_targets={"Home": quote}),
+    }
+    return pages, quote
+
+
+def test_credentialed_crawl_of_public_page_explores_and_flags_auth_incomplete():
+    """Fix #2: credentials supplied, but the entry has NO login form (a public quote
+    page). The crawl must NOT abort auth_failed — it explores unauthenticated and flags
+    ``auth_incomplete`` LOUDLY so the operator knows authenticated areas were skipped.
+    Also proves Fix #1: the Product <select> is never mistaken for a username field
+    (no valueless ``type Product`` action is ever produced)."""
+    import tempfile
+    with tempfile.TemporaryDirectory() as work:
+        pages, quote = _quote_page_no_login()
+        crawler = _build_crawler(FakeBrowser(pages, quote), work, target_url=quote,
+                                 credentials=Credentials(username="u", password="p"))
+        summary = asyncio.run(crawler.run())
+        assert summary.stop_reason != STOP_AUTH_FAILED          # did NOT throw the page away
+        assert summary.stop_reason == STOP_COMPLETED            # explored + finished honestly
+        assert summary.coverage.get("auth_incomplete") is True
+        assert "AUTHENTICATED AREAS NOT COVERED" in summary.coverage.get("summary", "")
+        # Fix #1: the <select> never became a valueless 'type Product' (the crash's signature).
+        actions = [r for r in read_records(work, "c1") if r["type"] == "action"]
+        product = [a for a in actions if a.get("target_label") == "Product"]
+        assert all(not (a["verb"] == "type" and a.get("value") in (None, "")) for a in product)
+
+
+def test_credentialed_crawl_login_wall_still_aborts_auth_failed():
+    """Fix #2 must NOT green-wash a genuine auth failure: a REAL login wall (a password
+    is submitted but login can't be verified) stays an honest auth_failed hard stop, and
+    ``auth_incomplete`` is NOT set (that flag is only for public, no-login-form pages)."""
+    import tempfile
+    with tempfile.TemporaryDirectory() as work:
+        login = "https://app.example/login"
+        pages = {
+            login: FakePage(login, [
+                _raw("textbox", "Username", input_type="text"),
+                _raw("textbox", "Password", input_type="password"),
+                _raw("button", "Sign in", tag="button"),
+            ], title="Login"),   # submit has no click_target → never advances → login_unverified
+        }
+        crawler = _build_crawler(FakeBrowser(pages, login), work, target_url=login,
+                                 credentials=Credentials(username="u", password="p"))
+        summary = asyncio.run(crawler.run())
+        assert summary.stop_reason == STOP_AUTH_FAILED
+        assert summary.coverage.get("auth_incomplete") is not True
 
 
 def _href_site():

@@ -71,9 +71,14 @@ DEFAULT_DELIVERY_HINTS: tuple[str, ...] = (
 )
 
 _PASSWORD_INPUT_TYPES = frozenset({"password"})
-#: Inventory ``kind`` values a fillable text-like field may have (OTP fields are
-#: often ``text`` / ``tel`` / ``number``).
-_TEXT_LIKE_KINDS = frozenset({"text", "date", "select", "number", "tel", "search", "email"})
+#: Inventory ``kind`` values a fillable text-like CREDENTIAL field may have (OTP
+#: fields are often ``text`` / ``tel`` / ``number``).  A native ``<select>`` is
+#: NEVER a username/OTP field: including it here made ``_match_username_control``
+#: fall back to a page's first dropdown (e.g. a "Product" quote select) and call
+#: ``Locator.fill()`` on it — which errors ("Element is not an <input>…"), so the
+#: crawl recorded a valueless ``type`` action and aborted ``auth_failed``. Selects
+#: are exercised correctly by the FORMS path (``_fill_one`` → ``select_option``).
+_TEXT_LIKE_KINDS = frozenset({"text", "date", "number", "tel", "search", "email"})
 
 
 def _pad_b32(seed: str) -> str:
@@ -213,6 +218,13 @@ class AuthResult:
     storage_state: Optional[dict[str, Any]] = None
     before_fingerprint: str = ""
     after_fingerprint: str = ""
+    #: True iff a login secret (password or OTP) was actually submitted to a form
+    #: — i.e. a REAL authentication gate was present and driven. False when no
+    #: login form was found/completed (an accessible public page the operator
+    #: pointed us at, with credentials configured for OTHER, gated areas). The
+    #: crawler uses this to tell a genuine login FAILURE (abort, honest) apart
+    #: from a public page with no login (explore unauthenticated + loud warning).
+    secret_submitted: bool = False
 
 
 def _norm(text: Any) -> str:
@@ -555,20 +567,46 @@ class Authenticator:
             acted = False
             if username_ctrl is not None and _norm(username_ctrl.get("name")) and not filled_username:
                 obs_u = await self._port.fill(dict(username_ctrl), self._creds.username)
-                actions.append(emit.build_action_record(
-                    dict(username_ctrl), verb="type", value=obs_u.committed_value,
-                    observation=obs_u, phase=Phase.AUTH.value, timestamp_ms=self._clock.now_ms(),
-                ))
-                filled_username = True
-                acted = True
+                if obs_u.committed_value is None:
+                    # The fill DID NOT TAKE (e.g. the username heuristic grabbed a
+                    # non-text control — "Cannot type text into input[type=number]").
+                    # Nothing happened on the page, so NOTHING is recorded: a
+                    # valueless 'type' action would be a dishonest manifest the
+                    # substrate rightly refuses, killing the whole crawl over one
+                    # broken fill. Mark it tried (never loop on the same broken
+                    # fill); ``acted`` stays False so a submit is never clicked on
+                    # the back of a fill that didn't happen.
+                    logger.warning(
+                        "qec.auth.username_fill_uncommitted control=%r detail=%s",
+                        _norm(username_ctrl.get("name")), (obs_u.error_detail or "")[:160],
+                    )
+                    filled_username = True
+                else:
+                    actions.append(emit.build_action_record(
+                        dict(username_ctrl), verb="type", value=obs_u.committed_value,
+                        observation=obs_u, phase=Phase.AUTH.value, timestamp_ms=self._clock.now_ms(),
+                    ))
+                    filled_username = True
+                    acted = True
             if password_ctrl is not None and _norm(password_ctrl.get("name")):
                 obs_p = await self._port.fill(dict(password_ctrl), self._creds.password)
-                actions.append(emit.build_action_record(
-                    dict(password_ctrl), verb="type", value="", observation=obs_p,
-                    phase=Phase.AUTH.value, timestamp_ms=self._clock.now_ms(), is_secret=True,
-                ))
-                filled_password = True
-                acted = True
+                if obs_p.committed_value is None:
+                    # An uncommitted password fill is NOT recorded and does NOT set
+                    # ``filled_password`` — that flag gates the login-success claim,
+                    # and claiming a password was typed when the fill errored would
+                    # green-wash the verify. Bounded by MAX_LOGIN_STEPS + the
+                    # not-acted break, so this can never spin.
+                    logger.warning(
+                        "qec.auth.password_fill_uncommitted detail=%s",
+                        (obs_p.error_detail or "")[:160],
+                    )
+                else:
+                    actions.append(emit.build_action_record(
+                        dict(password_ctrl), verb="type", value="", observation=obs_p,
+                        phase=Phase.AUTH.value, timestamp_ms=self._clock.now_ms(), is_secret=True,
+                    ))
+                    filled_password = True
+                    acted = True
             if delivery_ctrl is not None:
                 obs_d = await self._port.click(dict(delivery_ctrl))
                 actions.append(emit.build_action_record(
@@ -581,12 +619,20 @@ class Authenticator:
                 code = self._creds.mfa.current_code()
                 if code:
                     obs_o = await self._port.fill(dict(otp_ctrl), code)
-                    actions.append(emit.build_action_record(
-                        dict(otp_ctrl), verb="type", value="", observation=obs_o,
-                        phase=Phase.AUTH.value, timestamp_ms=self._clock.now_ms(), is_secret=True,
-                    ))
-                    filled_otp = True
-                    acted = True
+                    if obs_o.committed_value is None:
+                        # Same honesty rule as the password: an uncommitted OTP fill
+                        # is neither recorded nor counted as entered.
+                        logger.warning(
+                            "qec.auth.otp_fill_uncommitted detail=%s",
+                            (obs_o.error_detail or "")[:160],
+                        )
+                    else:
+                        actions.append(emit.build_action_record(
+                            dict(otp_ctrl), verb="type", value="", observation=obs_o,
+                            phase=Phase.AUTH.value, timestamp_ms=self._clock.now_ms(), is_secret=True,
+                        ))
+                        filled_otp = True
+                        acted = True
 
             if acted and submit_ctrl is not None:
                 # Open the guard AUTH window at the moment of each login POST.
@@ -627,6 +673,7 @@ class Authenticator:
                     success=False,
                     reason=f"login_failed: error region present ({live_errors[0][:120]!r})",
                     actions=actions, before_fingerprint=before_fp, after_fingerprint=after_fp,
+                    secret_submitted=(filled_password or filled_otp),
                 )
 
             # Success: password entered, no password/OTP field remains, state moved,
@@ -643,6 +690,7 @@ class Authenticator:
                         success=True, reason=reason, actions=actions,
                         storage_state=storage_state, before_fingerprint=before_fp,
                         after_fingerprint=after_fp,
+                        secret_submitted=(filled_password or filled_otp),
                     )
 
             # Stuck: we submitted but the screen did not advance and no error/next
@@ -656,6 +704,7 @@ class Authenticator:
             reason="login_unverified: could not complete the login sequence "
                    "(username/password/MFA not groundable, or state did not advance)",
             actions=actions, before_fingerprint=before_fp,
+            secret_submitted=(filled_password or filled_otp),
         )
 
     async def _capture_storage_state(self) -> Optional[dict[str, Any]]:

@@ -526,6 +526,12 @@ class Crawler:
         self._done = False
         self._guard_blocks = 0
         self._storage_state: Optional[dict[str, Any]] = None
+        # Auth was requested (credentials supplied) but no login form could be driven at
+        # the entry — the page is accessible PUBLIC content, so we explore it rather than
+        # throw it away. Surfaced LOUDLY in coverage so the operator knows authenticated
+        # areas were NOT covered (never a silent, green-washed "success").
+        self._auth_incomplete = False
+        self._auth_incomplete_reason = ""
         # Destinations we have already GROUNDED a nav click to (across all states), so
         # a nav bar repeated on every page grounds each unique route ONCE — the cost of
         # direct-nav grounding stays ~O(unique navs), not O(states × links).
@@ -632,6 +638,15 @@ class Crawler:
         unhandled_controls = _dedup_unhandled(self._unhandled_controls)
         submits = _dedup(self._submit_candidates)
         unexercised = max(0, len(submits) - self._forms_submitted)
+        # Honest, LOUD auth prefix: if credentials were supplied but no login form could
+        # be driven, the crawl covered PUBLIC pages only — say so plainly, never imply the
+        # authenticated app was covered.
+        auth_prefix = (
+            "AUTHENTICATED AREAS NOT COVERED — credentials were supplied but no login "
+            f"form was found/completed at the entry ({self._auth_incomplete_reason}); "
+            "crawled the accessible (public) pages only. "
+            if self._auth_incomplete else ""
+        )
         return {
             "forms_found": self._forms_found,
             "forms_submitted": self._forms_submitted,
@@ -645,8 +660,13 @@ class Crawler:
             # Interactive controls the matcher has no primitive for → the ledger's UNHANDLED rows.
             "unhandled_controls": unhandled_controls,
             "submit_candidates": submits,
+            # Auth was requested but no login form could be driven → PUBLIC-only crawl.
+            # Surfaced as first-class coverage so the operator is never misled.
+            "auth_incomplete": self._auth_incomplete,
+            "auth_reason": self._auth_incomplete_reason,
             "summary": (
-                f"{self._forms_found} form(s) found; "
+                auth_prefix
+                + f"{self._forms_found} form(s) found; "
                 f"{len(inferred)} field(s) auto-filled with a default; "
                 f"{len(needs_seed)} field(s) need a real seed; "
                 f"{self._forms_submitted} submit(s) exercised (Phase-B), "
@@ -779,9 +799,27 @@ class Crawler:
         )
 
         if not result.success:
-            self._stop_reason = STOP_AUTH_FAILED
-            logger.warning("qec.crawler.login_failed reason=%s", result.reason)
-            return None
+            # A GENUINE login wall — a password/OTP was submitted and login still
+            # failed (wrong credentials or an unautomatable gate) — is an HONEST hard
+            # stop: the authenticated app is unreachable, and the operator must fix the
+            # credentials. But when NO login form was found or driven
+            # (``secret_submitted`` is False) the entry is simply ACCESSIBLE public
+            # content the operator pointed us at (credentials are configured for OTHER,
+            # gated areas). Refusing to crawl it would throw away a real, reachable flow
+            # for no reason — so explore it UNAUTHENTICATED and record a LOUD warning
+            # that the authenticated areas were NOT covered (never a silent success).
+            if result.secret_submitted:
+                self._stop_reason = STOP_AUTH_FAILED
+                logger.warning("qec.crawler.login_failed reason=%s", result.reason)
+                return None
+            self._auth_incomplete = True
+            self._auth_incomplete_reason = result.reason
+            logger.warning(
+                "qec.crawler.auth_incomplete reason=%s — no login form driven at the "
+                "entry; exploring UNAUTHENTICATED (authenticated areas NOT covered)",
+                result.reason,
+            )
+            return await self._port.current_url()
         return await self._port.current_url()
 
     # -- EXPLORE phase ---------------------------------------------------------
