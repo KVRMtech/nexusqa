@@ -54,6 +54,24 @@ def test_url_template_drops_query_and_scheme_and_port():
     assert a == b == "x.example/search"
 
 
+def test_url_template_preserves_pagination_so_pages_are_distinct_states():
+    """R1: dropping the whole query collapsed every page of a listing into one
+    state, so the crawler never advanced past page 1. Pagination params are now
+    preserved (only those params — cosmetic query stays dropped)."""
+    p1 = url_template("https://x.example/products?page=1&utm_source=ad")
+    p2 = url_template("https://x.example/products?page=2&utm_source=ad")
+    p3 = url_template("https://x.example/products?page=3")
+    assert p1 != p2 != p3, "paginated views must be DISTINCT states"
+    assert p2 == "x.example/products?page=2", p2      # only the pagination param kept
+    # cosmetic-only query still collapses to the bare path
+    assert url_template("https://x.example/products?utm_source=ad&ref=x") == "x.example/products"
+    # offset/start style pagination also recognised; keys normalised + sorted
+    assert (url_template("https://x.example/list?OFFSET=20")
+            == "x.example/list?offset=20")
+    assert (url_template("https://x.example/list?start=40&page=3")
+            == "x.example/list?page=3&start=40")
+
+
 def test_url_template_normalises_spa_hash_route_and_drops_scroll_anchor():
     assert url_template("https://x.example/#/orders/99") == "x.example/#/orders/*"
     assert url_template("https://x.example/app#!/dashboard") == "x.example/app#!/dashboard"

@@ -52,7 +52,11 @@ from .inventory import target_kind_for
 logger = logging.getLogger(__name__)
 
 #: Control kinds that hold a value and can be filled in Phase A.
-FILLABLE_KINDS = frozenset({"text", "date", "select", "checkbox", "radio", "toggle"})
+#: ``slider``/``color`` (native ``input[type=range|color]``) are Playwright-
+#: fillable with a numeric/hex value; a CUSTOM (non-input) slider is not filled
+#: here — it stays honestly UNHANDLED (needs the keyboard set-range verb).
+FILLABLE_KINDS = frozenset({"text", "date", "select", "checkbox", "radio",
+                            "toggle", "slider", "color"})
 #: Kinds that toggle a boolean/selected state (verb ``click``, value = state).
 _TOGGLE_KINDS = frozenset({"checkbox", "radio", "toggle"})
 _TRUTHY = frozenset({"true", "1", "yes", "on", "checked", "y", "selected"})
@@ -262,9 +266,38 @@ def _synthesize_default(control: Mapping[str, Any], kind: str, name: str) -> Opt
         return "Autotest Inc"
     if "country" in n:
         return "United States"
+    # Native range slider / color input — a structurally-VALID value (grounded
+    # in the DOM's declared min/max), so the field commits instead of erroring.
+    if kind == "slider" or itype == "range":
+        return _slider_default(control)
+    if kind == "color" or itype == "color":
+        return "#1a2b3c"
     if itype in ("", "text", "search") or kind == "text":
         return "autotest"
     return None
+
+
+def _slider_default(control: Mapping[str, Any]) -> str:
+    """A valid range value: the MIDPOINT of the declared min/max (snapped to
+    step when given), else min, else '50'. Grounded in the control's own
+    attributes — never invents an out-of-range value."""
+    def _num(key: str):
+        try:
+            return float(str(control.get(key) or "").strip())
+        except ValueError:
+            return None
+
+    lo, hi, step = _num("min"), _num("max"), _num("step")
+    if lo is not None and hi is not None and hi >= lo:
+        mid = (lo + hi) / 2.0
+        if step and step > 0:
+            mid = lo + round((mid - lo) / step) * step
+        return str(int(mid)) if float(mid).is_integer() else str(mid)
+    if lo is not None:
+        return str(int(lo)) if float(lo).is_integer() else str(lo)
+    if hi is not None:
+        return str(int(hi)) if float(hi).is_integer() else str(hi)
+    return "50"
 
 
 async def fill_form_phase_a(
@@ -423,6 +456,20 @@ async def _fill_one(
         recorded = observation.committed_value if observation.committed_value is not None else value
         return emit.build_action_record(
             control, verb="select", value=recorded, observation=observation,
+            phase=phase, state_id=state_id, timestamp_ms=clock.now_ms(),
+        )
+    if kind in ("slider", "color"):
+        # A NATIVE input[type=range|color] is Playwright-fillable with the
+        # synthesized value; a CUSTOM (non-input) slider is NOT — return None so
+        # it is recorded UNHANDLED in the coverage ledger, never a fake fill.
+        if _norm(control.get("tag")) != "input":
+            return None
+        observation = await port.fill(control, value)
+        recorded = observation.committed_value if observation.committed_value is not None else value
+        if recorded is None:  # the fill did not commit — honest UNHANDLED, no dishonest action
+            return None
+        return emit.build_action_record(
+            control, verb="type", value=recorded, observation=observation,
             phase=phase, state_id=state_id, timestamp_ms=clock.now_ms(),
         )
     # text / date

@@ -93,12 +93,39 @@ def _template_fragment(fragment: str) -> str:
     return lead + _template_path(body)
 
 
+# Query params that signal a DISTINCT paginated view (?page=2 is not ?page=3).
+# Dropping the whole query collapsed every page of a listing into ONE state, so
+# the crawler never advanced past page 1 (requirements-audit R1 finding). These
+# are preserved (normalised) in the template; every other query param stays
+# cosmetic and dropped (so ?utm_source=x never fragments the state space).
+_PAGINATION_PARAMS = ("page", "p", "pg", "offset", "start", "skip", "pagenumber", "pageindex")
+
+
+def _pagination_suffix(query: str) -> str:
+    """A deterministic ``?page=2`` style suffix from ONLY the pagination params
+    present in ``query`` — sorted, lower-cased keys; a non-numeric value is kept
+    verbatim (a token cursor still distinguishes pages). "" when none present."""
+    if not query:
+        return ""
+    from urllib.parse import parse_qsl
+    present = []
+    for k, v in parse_qsl(query, keep_blank_values=False):
+        if k.lower() in _PAGINATION_PARAMS and str(v).strip():
+            present.append((k.lower(), str(v).strip()))
+    if not present:
+        return ""
+    present.sort()
+    return "?" + "&".join(f"{k}={v}" for k, v in present)
+
+
 def url_template(url: str) -> str:
     """Return the cosmetic-invariant URL template for ``url``.
 
     ``scheme://host/path?query#frag`` → ``host + id-normalised-path
-    (+ '#' + normalised-route)``.  Scheme, port and query are dropped; the host
-    is lower-cased.  Deterministic and safe on malformed input.
+    (+ pagination-query + '#' + normalised-route)``.  Scheme, port and COSMETIC
+    query params are dropped; PAGINATION params are preserved (so paginated
+    views are distinct states); the host is lower-cased.  Deterministic and
+    safe on malformed input.
     """
     try:
         parts = urlsplit((url or "").strip())
@@ -106,6 +133,7 @@ def url_template(url: str) -> str:
         return (url or "").strip().lower()
     host = (parts.hostname or "").lower()
     template = host + _template_path(parts.path or "")
+    template += _pagination_suffix(parts.query or "")
     route = _template_fragment(parts.fragment or "")
     if route:
         template += "#" + route

@@ -45,6 +45,18 @@ def test_phone_number_zip_url():
     assert _syn(input_type="url", name="Website") == "https://example.com"
 
 
+def test_slider_default_is_valid_and_grounded_in_min_max():
+    """R1: sliders were detected + refused (None), so a range-gated form never
+    advanced. A native range now gets a VALID midpoint value grounded in the
+    control's declared min/max/step — never an out-of-range guess."""
+    assert _syn(kind="slider", name="Coverage", min="0", max="100") == "50"      # midpoint
+    assert _syn(kind="slider", name="Amount", min="10", max="30", step="5") == "20"
+    assert _syn(input_type="range", name="Volume", min="18") == "18"             # min only
+    assert _syn(kind="slider", name="Bare") == "50"                             # no bounds
+    assert _syn(kind="color", name="Theme colour") == "#1a2b3c"
+    assert _syn(input_type="color", name="Accent") == "#1a2b3c"
+
+
 def test_number_default_honours_declared_min_max_step():
     """Live incident: <input type=number min=18 max=80> ('Age' on the quote form)
     auto-filled with a constraint-blind '1' → browser-native validation silently
