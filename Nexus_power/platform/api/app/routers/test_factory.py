@@ -3776,9 +3776,23 @@ async def latest_run_timeline(
     tenant_id = user["tenant_id"]
     async with tenant_scoped_session(tenant_id) as session:
         await _require_artifact(session, artifact_id, tenant_id)
-        return await build_latest_run_timeline(
+        timeline = await build_latest_run_timeline(
             session, artifact_id=artifact_id, tenant_id=tenant_id,
         )
+        # SENTINEL (R5 wiring — was built, never called): auto-diagnose every
+        # scenario's first failure and attach the unified diagnosis (cause +
+        # PRODUCT/SCRIPT/ENVIRONMENT triage verdict + provenance) to the
+        # timeline. $0 deterministic, Governor-gated, additive, fail-open.
+        try:
+            from ..services.agentic import auto_diagnosis as _sentinel
+            _diags = await _sentinel.diagnose_failures(
+                session, artifact_id=artifact_id, tenant_id=tenant_id,
+                scenario_ids=None, timeline=timeline,
+            )
+            timeline = _sentinel.attach_to_timeline(timeline, _diags)
+        except Exception:
+            pass  # rendering aid only — the honest timeline stands on its own
+        return timeline
 
 
 @router.get("/api/v1/test-factory/{artifact_id}/runs")
@@ -3814,9 +3828,50 @@ async def run_timeline_by_id(
     tenant_id = user["tenant_id"]
     async with tenant_scoped_session(tenant_id) as session:
         await _require_artifact(session, artifact_id, tenant_id)
-        return await build_run_timeline_by_id(
+        timeline = await build_run_timeline_by_id(
             session, artifact_id=artifact_id, tenant_id=tenant_id, run_id=run_id,
         )
+        # SENTINEL: same additive auto-diagnosis as /runs/latest (fail-open).
+        try:
+            from ..services.agentic import auto_diagnosis as _sentinel
+            _diags = await _sentinel.diagnose_failures(
+                session, artifact_id=artifact_id, tenant_id=tenant_id,
+                scenario_ids=None, timeline=timeline,
+            )
+            timeline = _sentinel.attach_to_timeline(timeline, _diags)
+        except Exception:
+            pass
+        return timeline
+
+
+@router.get("/api/v1/test-factory/{artifact_id}/runs/{run_id}/recovery-scan")
+async def recovery_scan(
+    artifact_id: str = PathParam(..., min_length=1, max_length=64),
+    run_id: str = PathParam(..., min_length=1, max_length=64),
+    user: dict = Depends(get_current_user),
+):
+    """Recovery Agent v1 (R5) — PROPOSE-ONLY scan of one run: every failing
+    scenario classified into the 9-class outcome taxonomy; capability-gap
+    findings become human-gated PROPOSAL BUNDLES (diagnosis + failing-repro
+    pointer + grounded strategy suggestion); application defects surface their
+    auto-authored reports. The agent never applies anything — every proposal
+    requires explicit human approval. Read-only, $0 LLM, no migration."""
+    tenant_id = user["tenant_id"]
+    async with tenant_scoped_session(tenant_id) as session:
+        await _require_artifact(session, artifact_id, tenant_id)
+        timeline = await build_run_timeline_by_id(
+            session, artifact_id=artifact_id, tenant_id=tenant_id, run_id=run_id,
+        )
+        from ..services.agentic import auto_diagnosis as _sentinel
+        from ..services.agentic import recovery_agent as _recovery
+        try:
+            diags = await _sentinel.diagnose_failures(
+                session, artifact_id=artifact_id, tenant_id=tenant_id,
+                scenario_ids=None, timeline=timeline,
+            )
+        except Exception:
+            diags = {}
+        return _recovery.scan_to_dict(_recovery.scan(timeline, diags))
 
 
 @router.get("/api/v1/test-factory/{artifact_id}/steps/{scenario_id}/{step_number}/analyze")
@@ -3834,10 +3889,25 @@ async def analyze_failed_step(
     tenant_id = user["tenant_id"]
     async with tenant_scoped_session(tenant_id) as session:
         await _require_artifact(session, artifact_id, tenant_id)
-        return await self_heal.analyze_step(
+        diag = await self_heal.analyze_step(
             session, artifact_id=artifact_id, tenant_id=tenant_id,
             scenario_id=scenario_id, step_number=step_number,
         )
+        # TRIAGE VERDICT (R5 wiring — was built, never exposed here): attach
+        # the deterministic PRODUCT / SCRIPT / ENVIRONMENT source + fix/build/
+        # flag route to the on-click diagnosis. $0, Governor-gated, additive,
+        # fail-open — the grounded diagnosis stands on its own without it.
+        try:
+            from ..services.agentic import governor as _gov
+            from ..services.agentic import triage as _triage
+            if isinstance(diag, dict) and diag.get("found") is not False \
+                    and _gov.agent_enabled("triage"):
+                _t = _triage.triage(diag, error_message=str(diag.get("error_message") or ""))
+                diag = {**diag, "triage": _t,
+                        "source": _t["source"], "route": _t["route"]}
+        except Exception:
+            pass
+        return diag
 
 
 @router.get("/api/v1/test-factory/{artifact_id}/triage")
