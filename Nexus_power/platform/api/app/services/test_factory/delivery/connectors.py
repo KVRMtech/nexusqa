@@ -106,7 +106,9 @@ class QTestConnector(TMConnector):
         for tc in test_cases:
             payload = {
                 "name": (tc.name or "Untitled")[:255],
-                "description": tc.description or "",
+                # priority/risk as a portable prefix (qTest property ids are
+                # instance-configured -> never guessed)
+                "description": (priority_prefix(tc) + (tc.description or "")).strip(),
                 "test_steps": [
                     {"description": _step_text(s), "expected": s.expected}
                     for s in _steps(tc)
@@ -141,6 +143,7 @@ class TestRailConnector(TMConnector):
         for tc in test_cases:
             payload = {
                 "title": (tc.name or "Untitled")[:250],
+                "priority_id": testrail_priority_id(tc),   # 4=Critical..1=Low (built-in)
                 "custom_steps_separated": [
                     {"content": _step_text(s), "expected": s.expected}
                     for s in _steps(tc)
@@ -181,7 +184,9 @@ class ZephyrConnector(TMConnector):
             try:
                 r = await http.post(
                     f"{base}/testcases", headers=headers,
-                    json={"projectKey": pk, "name": (tc.name or "Untitled")[:255]},
+                    json={"projectKey": pk, "name": (tc.name or "Untitled")[:255],
+                          "priorityName": zephyr_priority_name(tc),
+                          "labels": ([f"risk-{_risk_of(tc)}"] if _risk_of(tc) else [])},
                 )
                 if r.status_code >= 300:
                     res.failed += 1
@@ -250,10 +255,12 @@ class XrayConnector(TMConnector):
             )
             mutation = (
                 'mutation {{ createTest(jira: {{fields: {{summary: {summary}, '
-                'project: {{id: "{pid}"}}, issuetype: {{name: "Test"}} }}}}, '
+                'project: {{id: "{pid}"}}, issuetype: {{name: "Test"}}, '
+                'priority: {{name: "{prio}"}} }}}}, '
                 'testType: {{name: "Manual"}}, steps: [{steps}]) '
                 '{{ test {{ issueId jira(fields: ["key"]) }} warnings }} }}'
-            ).format(summary=_gql_str(tc.name or "Untitled"), pid=pid, steps=steps_gql)
+            ).format(summary=_gql_str(tc.name or "Untitled"), pid=pid,
+                     prio=jira_priority_name(tc), steps=steps_gql)
             try:
                 r = await http.post(gql, headers=headers, json={"query": mutation})
                 data = r.json() if r.status_code < 300 else {}
@@ -274,6 +281,65 @@ def _gql_str(value: str) -> str:
     """Safely encode a Python string as a GraphQL string literal."""
     import json
     return json.dumps(value or "")
+
+
+# ── R4: priority + business risk survive into every TM tool ──────────────────
+# (audit finding: connectors mapped only name/description/steps). Mapped to the
+# tool's STABLE native field where one exists; instance-specific fields (qTest
+# property ids) get an honest description prefix instead — portable, never a
+# guessed field id.
+
+def _risk_of(tc) -> str:
+    rl = str(getattr(tc, "risk_level", "") or "").strip().lower()
+    if rl:
+        return rl
+    for t in (getattr(tc, "tags", None) or []):
+        if str(t).startswith("risk-level:"):
+            return str(t).split(":", 1)[1]
+    return ""
+
+
+def testrail_priority_id(tc) -> int:
+    """TestRail built-in priority_id: 4=Critical, 3=High, 2=Medium, 1=Low."""
+    p = (getattr(tc, "priority", "") or "").upper()
+    if p.startswith("P0"):
+        return 4
+    if p.startswith("P1"):
+        return 3
+    if p.startswith("P2"):
+        return 2
+    return 1
+
+
+def zephyr_priority_name(tc) -> str:
+    """Zephyr Scale default priorities: High / Normal / Low."""
+    p = (getattr(tc, "priority", "") or "").upper()
+    if p.startswith(("P0", "P1")):
+        return "High"
+    if p.startswith("P2"):
+        return "Normal"
+    return "Low"
+
+
+def jira_priority_name(tc) -> str:
+    """Jira default priority scheme (Xray): Highest/High/Medium/Low."""
+    p = (getattr(tc, "priority", "") or "").upper()
+    if p.startswith("P0"):
+        return "Highest"
+    if p.startswith("P1"):
+        return "High"
+    if p.startswith("P2"):
+        return "Medium"
+    return "Low"
+
+
+def priority_prefix(tc) -> str:
+    """Portable '[P0 critical | risk: high] ' description prefix for tools whose
+    native priority field is instance-configured (qTest property ids)."""
+    p = (getattr(tc, "priority", "") or "").replace("_", " ").strip()
+    r = _risk_of(tc)
+    bits = [b for b in (p, f"risk: {r}" if r else "") if b]
+    return f"[{' | '.join(bits)}] " if bits else ""
 
 
 CONNECTORS: dict[str, type[TMConnector]] = {

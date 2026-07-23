@@ -84,3 +84,42 @@ jobs:
       - name: Import the real service entrypoint (proves the wired app imports)
         run: |
           python -c "import importlib, os, sys; sys.path.insert(0, os.getcwd()); importlib.import_module('main'); print('service entrypoint imports OK')"
+
+  # R6 (requirements audit): these suites existed but ran ONLY when a developer
+  # invoked them manually — the regression net wasn't wired to any gate. Pure
+  # unit/logic suites (no DB, no browser): blocking.
+  qe-explorer-tests:
+    name: qe-explorer suite (crawler/auth/forms/matcher — pure logic)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: Nexus_power/engines/qe-explorer
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install explorer requirements + pytest
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pytest pytest-asyncio
+      - name: Run the full explorer suite (339 tests, no browser needed)
+        run: python -m pytest tests/ -q
+
+  qe-central-unit-tests:
+    name: qe-central unit suite (guards/refusals/quota/planner — no DB)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: Nexus_power/platform/qe-central
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install qe-central requirements + pytest
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pytest pytest-asyncio
+      - name: Run the unit suite (DB-gated contract tests live in qec-ci)
+        run: python -m pytest tests/unit -q
