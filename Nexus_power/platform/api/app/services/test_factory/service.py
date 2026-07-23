@@ -33,6 +33,7 @@ from .generator import (
     DemonstratedGenerationResult,
     PageActionInput,
     PageVisitInput,
+    _grade_case,
     generate_demonstrated_test_cases,
     generate_form_flow_journeys,
     generate_grounded_journeys,
@@ -389,6 +390,8 @@ async def generate_and_store(
     )
     for tc in combo.active:
         annotate_confidence(tc, ambiguous)
+        _grade_case(tc)   # R4/R3: stamp business risk_level on combos too (a quote
+                          # combo inherits the money-flow HIGH band from its steps)
         values = _row_values(
             tc, artifact_id=artifact_id, tenant_id=tenant_id,
             session_id=session_id, confidence="available",
