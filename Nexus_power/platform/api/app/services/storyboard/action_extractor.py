@@ -146,6 +146,21 @@ _EYES_BASE_URL = os.environ.get(
 
 logger = logging.getLogger(__name__)
 
+# Action-verb synonyms for audio-intent corroboration: the SME narrates an
+# INTENT ("now I select …", "enter your email", "click continue"); the extractor
+# matches that intent to the LLM's verb without a language model. Generic +
+# domain-neutral.
+_VERB_SYNONYMS = {
+    "select": ("select", "choose", "pick", "set"),
+    "type": ("type", "enter", "fill", "input", "write", "put"),
+    "click": ("click", "press", "tap", "hit", "push"),
+    "navigate": ("navigate", "go to", "open", "visit", "browse"),
+    "submit": ("submit", "send", "confirm", "save", "apply", "continue", "finish"),
+    "check": ("check", "tick", "enable", "toggle"),
+    "upload": ("upload", "attach", "browse"),
+    "hover": ("hover", "point"),
+}
+
 
 _NAMESPACE_STORYBOARD = uuid.UUID("d4f6c9a2-6d8b-4f5b-9a32-8f4b1c1a2d3e")
 """Same namespace as the rest of the storyboard layer — keeps derived IDs grouped."""
@@ -627,9 +642,23 @@ def _reconcile(
     if inputs.before_url and inputs.after_url and inputs.before_url != inputs.after_url:
         evidence.url_changed = True
 
-    # Audio intent
-    if inputs.audio_intent and action.target_label:
-        if action.target_label.lower() in inputs.audio_intent.lower():
+    # Audio intent — match on the VERB+TARGET combo the SME narrated, per the
+    # ExtractionEvidence.audio_intent_match contract ("now I select Texas" +
+    # verb=select,value=TX -> True). The old code matched target_label (the field
+    # PROMPT, e.g. "What state do you live in?"), which real narration never
+    # contains, so the signal was always False (efd0269-era regression). Now:
+    # the narration expresses the action's VERB (synonym-aware) OR names its
+    # value/label token. A coded value ('TX' for 'Texas') is spoken in long form,
+    # so the verb match carries it; OCR/control corroborate the value separately.
+    if inputs.audio_intent:
+        _narr = inputs.audio_intent.lower()
+        _verb = str(getattr(action.verb, "value", action.verb) or "").lower()
+        _verb_hit = any(s in _narr for s in _VERB_SYNONYMS.get(_verb, (_verb,)) if s)
+        _val = str(getattr(action, "value", "") or "").strip().lower()
+        _lbl = str(getattr(action, "target_label", "") or "").strip().lower()
+        _val_hit = bool(_val) and _val in _narr
+        _lbl_hit = any(w in _narr for w in _lbl.split() if len(w) > 3)
+        if _verb_hit or _val_hit or _lbl_hit:
             evidence.audio_intent_match = True
             if "audio_intent" not in evidence.sources:
                 evidence.sources.append("audio_intent")

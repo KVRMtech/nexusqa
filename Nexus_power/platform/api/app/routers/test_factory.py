@@ -2102,14 +2102,18 @@ async def _run_auto_heal(run_id: str, ctx: dict) -> None:
                     _atc = case_by_id.get(_asid)
                     _asteps = list(getattr(_atc, "steps", None) or []) if _atc is not None else []
                     try:
-                        _ag = _pwa.gate(_asrc, _asteps, enforce=_enforce_audit)
+                        # Phase-0 auditor restored (efd0269 revert undone): gate()
+                        # consumes a score_spec REPORT and reports an HONEST
+                        # would_block independent of enforcement.
+                        _arep = _pwa.score_spec(_asrc, _asteps, evidence=None)
+                        _ag = _pwa.gate(_arep, blocking=_enforce_audit)
                     except Exception:
                         _ag = None
                     if _ag is not None:
                         _audits[_asid] = _ag
-                        trace(event="auditor_gate", scenario_id=_asid, decision=_ag["decision"],
-                              score=_ag["overall_score"], would_block=_ag["would_block"],
-                              findings=_ag["findings"][:4])
+                        trace(event="auditor_gate", scenario_id=_asid, decision=_ag.get("decision"),
+                              score=_ag.get("overall_score"), would_block=_ag.get("would_block"),
+                              findings=(_ag.get("warnings") or [])[:4])
                 _blocked = [s for s, g in _audits.items() if g.get("would_block")]
                 if _enforce_audit and _blocked:
                     _bf = (_audits[_blocked[0]].get("findings") or ["structural audit failed"])[0]

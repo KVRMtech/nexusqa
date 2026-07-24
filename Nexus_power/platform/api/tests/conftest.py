@@ -23,25 +23,16 @@ import pytest
 _FINDINGS = "docs/FINDINGS_PLATFORM_API_REGRESSIONS_2026-07-21.md"
 
 # "test_file.py::test_name" -> why it fails at HEAD (the regression, not the symptom).
-_KNOWN_REGRESSIONS = {
-    "test_track_a_fixes.py::test_auditor_flags_ambiguous_locator_without_anchor":
-        "efd0269 reverted the auditor's ambiguous-locator dimension "
-        "(V_AMBIGUOUS / _ambiguous_labels gone) — the saucedemo 6x 'Add to cart' blind spot is uncaught.",
-    "test_track_a_fixes.py::test_gate_default_is_warning_only_but_honest":
-        "efd0269 reverted gate() to the pre-Phase-0 signature; the honest "
-        "enforced/would_block/block_reasons warning-only reporting was lost.",
-    "test_track_a_fixes.py::test_gate_blocking_rejects_impossible_transition":
-        "efd0269 reverted gate() to gate(spec_text,steps,*,enforce=): the block-impossible "
-        "BEHAVIOUR survives but the structured block_reasons API this test asserts regressed.",
-    "test_track_a_fixes.py::test_gate_passes_a_clean_report":
-        "efd0269 reverted gate() so it no longer consumes a score_spec report; "
-        "honest passed = not would_block was lost.",
-    "test_track_a_fixes.py::test_gate_surfaces_ambiguous_but_does_not_block":
-        "efd0269 reverted the ambiguous-locator dimension and the gate ambiguous_locators field.",
-    "test_action_extractor.py::test_reconcile_corroborates_value_via_ocr_and_control":
-        "_reconcile matches the audio transcript against target_label (the field prompt) instead of "
-        "the value/verb, breaking the documented audio_intent_match contract.",
-}
+# EMPTY: the efd0269 regressions are RESOLVED (founder-signed-off restoration).
+#   * The Phase-0 never-green-wash auditor (V_AMBIGUOUS ambiguous-locator
+#     dimension + report-consuming gate() with honest independent would_block)
+#     was restored from 6bfcbad; the one live gate() caller was reconciled to
+#     the report API.
+#   * _reconcile now matches the audio transcript against the action's
+#     verb/value (audio_intent_match contract), not the field prompt.
+# Each formerly-xfail test now passes for real. A NEW genuine regression can be
+# re-registered here as a documented strict-xfail (kept visible, never hidden).
+_KNOWN_REGRESSIONS: dict[str, str] = {}
 
 
 def pytest_collection_modifyitems(config, items):

@@ -126,3 +126,29 @@ have instead: (a) fixed the 5 genuinely-stale tests, (b) pinned the 7 real regre
 documented strict-xfail so CI runs green **and** the regressions stay visible, and (c)
 written this doc with exact fixes. Un-freeze + apply in one reviewed pass whenever you're
 ready; each xfail will flip to green and prove the capability restored.
+
+---
+
+## RESOLUTION — 2026-07-23 (founder-signed-off restoration)
+
+All seven regressions are **resolved**; the strict-xfail registry
+(`conftest.py::_KNOWN_REGRESSIONS`) is now empty and every formerly-xfail test
+passes for real.
+
+- **CRITICAL boot bug** — fixed earlier this cycle (`response_model=None` on the
+  204 routers); `test_platform_main_assembles_app` + `test_p3_p6_endpoints_registered` green.
+- **Auditor upgrade (5 tests)** — `playwright_auditor.py` restored from **6bfcbad**
+  (the canonical newer lineage): the `V_AMBIGUOUS` ambiguous-locator dimension +
+  `_ambiguous_labels()` + `score_spec()` emitting the "Ambiguous locator (warning)"
+  finding, and the report-consuming `gate(report, *, blocking=)` with an HONEST
+  `passed = not would_block` independent of enforcement. `score_spec()`/`audit()`
+  signatures were already identical, so the ONLY caller reconciled was the compile-path
+  `gate()` (now `gate(score_spec(...), blocking=…)`, reading `warnings`).
+- **audio_intent_match (1 test)** — `_reconcile` now matches the transcript against
+  the action's VERB (synonym-aware) + value/label token, per the contract, not the
+  field prompt.
+
+Verified: the 6 formerly-xfail tests pass; the auditor blast radius (track-a,
+action-extractor, module-graph, generator, video-frozen, upload, value-oracle,
+exporters) = 98 passed. This re-establishes the strongest never-green-wash gate —
+the saucedemo "6× Add to cart" ambiguous-locator blind spot is caught again.

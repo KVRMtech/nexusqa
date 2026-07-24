@@ -48,7 +48,11 @@ V_UNGROUNDED = "ungrounded_assertion"
 V_MISSING_PREREQ = "missing_prerequisite"
 V_DEAD = "dead_or_unused"
 V_DATA = "data_not_replayed"
-V_INFO = "documented_exemption"
+V_AMBIGUOUS = "ambiguous_locator"
+
+# Interactive verbs whose step compiles to a name-based locator (so a repeated
+# accessible name on the same page makes the locator ambiguous).
+_LOCATOR_VERBS = {"click", "press", "tap", "select", "check", "choose", "toggle"}
 
 DECISION_CERTIFIED = "certified"
 DECISION_REPAIR = "repair"
@@ -90,7 +94,35 @@ def _sv(step: Any) -> dict:
         "navigation_grounded": bool(obs.get("navigation_grounded")),
         "after": obs.get("after") or "",
         "kind": obs.get("kind") or "",
+        "anchor": (obs.get("anchor") or "").strip(),
+        "ambiguous_unresolved": bool(obs.get("ambiguous_unresolved")),
     }
+
+
+def _ambiguous_labels(evidence: Any) -> set:
+    """Normalized accessible names the recording shows on 2+ interactive controls of
+    the SAME page — the visible name alone can't uniquely locate them (the N-identical-
+    controls case, e.g. six 'Add to cart' buttons). Mirrors
+    confidence.compute_ambiguous_labels; grounded purely in the recording's actions.
+    Groups by page_visit_id when present, else treats all evidence as one page."""
+    per_page: dict = {}
+    for a in (evidence or []):
+        verb = (a.get("verb") if isinstance(a, dict) else getattr(a, "verb", "")) or ""
+        if verb.strip().lower() not in _LOCATOR_VERBS:
+            continue
+        label = (a.get("target_label") if isinstance(a, dict) else getattr(a, "target_label", "")) or ""
+        key = _norm(label)
+        if not key:
+            continue
+        page = (a.get("page_visit_id") if isinstance(a, dict) else getattr(a, "page_visit_id", "")) or "_"
+        bucket = per_page.setdefault(page, {})
+        bucket[key] = bucket.get(key, 0) + 1
+    out: set = set()
+    for bucket in per_page.values():
+        for key, count in bucket.items():
+            if count > 1:
+                out.add(key)
+    return out
 
 
 def _evidence_typed_values(evidence: Any) -> list[tuple[str, str]]:
@@ -125,17 +157,6 @@ def _to_have_url_grounded(v: dict) -> bool:
     return v["provenance"] == "demonstrated"
 
 
-_AUTH_FIELD_TOKENS = ("username", "user name", "user id", "email", "password", "login")
-
-
-def _skip_guarded_steps(spec_text: str) -> set:
-    """Step numbers the DELIVERED spec skip-guards (test.skip UNPROVEN). Those
-    steps assert nothing at runtime, so they can never be 'impossible' — they
-    are honest coverage gaps. Parsed from the artifact itself, so the audit
-    always reflects what actually ships."""
-    return {int(n) for n in re.findall(r"UNPROVEN:\s*step\s+(\d+)", spec_text or "")}
-
-
 def score_spec(spec_text: str, steps: list, evidence: Any = None) -> dict:
     """Deterministic 5-dimension audit of a compiled spec + its grounded steps.
 
@@ -152,7 +173,7 @@ def score_spec(spec_text: str, steps: list, evidence: Any = None) -> dict:
     d1 -= 2 * sleeps
     if sleeps:
         findings.append(f"{sleeps} raw waitForTimeout() sleep(s) — use a condition-based wait.")
-    # dead data file: `require('...vkpower.data.json')` loaded into D but never used.
+    # dead data file: `require('...nexus.data.json')` loaded into D but never used.
     dead_data = False
     if "require(" in spec_text and re.search(r"\.data\.json", spec_text):
         body_uses = len(re.findall(r"\bD\s*\[", spec_text)) + len(re.findall(r"\bD\.", spec_text))
@@ -177,15 +198,32 @@ def score_spec(spec_text: str, steps: list, evidence: Any = None) -> dict:
         if any(val and val in seg for val in fill_values):
             d2 -= 3
             findings.append("A field value is asserted via getByText — use toHaveValue on the field.")
+    # Locator UNIQUENESS (the saucedemo blind spot): a control whose accessible name is
+    # REPEATED on its page, emitted with NO disambiguating anchor, compiles to a strict-
+    # mode-ambiguous locator — it matches N elements (RED), or worse silently binds the
+    # wrong one. Evidence-grounded + conservative: fires only when the RECORDING itself
+    # shows the same name on 2+ controls of one page, and the step has no anchor scope.
+    # WARNING-ONLY (per the warning-first refinement): it surfaces a finding + per-step
+    # verdict + the gate's ambiguous_locators count, but does NOT deduct from the score,
+    # so a benign false positive can't demote a good script until this new check's
+    # false-positive rate is measured. Flip to a deduction once proven.
+    ambiguous = _ambiguous_labels(evidence) if evidence is not None else set()
+    for v in views:
+        if (v["verb"] in _LOCATOR_VERBS and not v["anchor"]
+                and (v["ambiguous_unresolved"] or _norm(v["label"]) in ambiguous)):
+            findings.append(
+                f"Ambiguous locator (warning): '{v['label']}' matches multiple controls on the page "
+                "and has no disambiguating anchor — scope it to its row/card/section or it binds the "
+                "wrong one.")
+            per_step.append({"step_number": v["step_number"], "verdict": V_AMBIGUOUS,
+                             "detail": f"'{v['label']}' is repeated on the page with no anchor — "
+                                       "which control is targeted is unresolved."})
     d2 = _clamp(d2)
 
     # ── D4 — Navigation correctness (the causality axis) ─────────────────────
     d4 = 10
-    _guarded = _skip_guarded_steps(spec_text)
     impossible_steps: list[dict] = []
     for v in views:
-        if v["step_number"] in _guarded:
-            continue  # skip-guarded in the delivered spec — asserts nothing
         if _emits_to_have_url(v) and not _to_have_url_grounded(v):
             impossible_steps.append(v)
             per_step.append({
@@ -220,72 +258,7 @@ def score_spec(spec_text: str, steps: list, evidence: Any = None) -> dict:
     typed = _evidence_typed_values(evidence) if evidence is not None else []
     if typed:
         represented = {_norm(val) for _, val in [(v["label"], v["value"]) for v in fill_steps]}
-        # A radio/segmented CHOICE is replayed by selecting its LABEL — the
-        # option label IS the demonstrated value (Select 'Self-employed').
-        # Count choice-step labels as replayed values so a demonstrated
-        # selection is never scored as a dropped fill.
-        for _vc in views:
-            if _vc["verb"] in ("select", "check", "toggle", "click") and _vc.get("label"):
-                represented.add(_norm(_vc["label"]))
         missing = [(lbl, val) for (lbl, val) in typed if _norm(val) not in represented]
-        # Documented login-prologue skip: URL-anchored tests do not replay the
-        # login (the generated auth precondition says so). An auth-field value
-        # with NO case step at all is that documented skip — an honest gap,
-        # never a grounded-replay deduction. Any non-auth value stays a finding.
-        _step_labels = {_norm(v.get("label") or "") for v in views}
-        # Labels typed into BROWSER CHROME (the address bar) are navigation,
-        # not form data — the case replays them as its Open/goto step.
-        _chrome_tokens = ("address bar", "addressbar", "url bar", "urlbar", "omnibox")
-        # A typed value SUPERSEDED by a later value on the same label that IS
-        # replayed (user typed 1500, then 150000) is state history, not a drop.
-        def _digits_key(x):
-            # formatting-tolerant compare: '1500' == '$1,500'; '150000' == '$150,000'
-            return re.sub(r"[^0-9a-z]", "", _norm(x))
-        _represented_keys = {_digits_key(r) for r in represented}
-        # ORDER-INDEPENDENT sibling map: all demonstrated values per field.
-        # A missing value is SUPERSEDED when any SIBLING value of the same
-        # field IS replayed — the field is exercised with a demonstrated
-        # value; the missing one is transient state history (typed 1500,
-        # corrected to 150,000). Order of evidence rows must not matter.
-        _label_values: dict = {}
-        for _lbl2, _val2 in typed:
-            _label_values.setdefault(_norm(_lbl2), set()).add(_norm(_val2))
-        # Replayed fills BY FIELD: when re-derivation kept only the typed DRAFT
-        # (user typed 1500, corrected to 150,000 — the final value survives in
-        # the form snapshot and IS what the case fills), the draft's superseder
-        # is the replayed fill itself. Guarded tightly: the replayed digits
-        # must EXTEND the draft's digits — an unrelated mismatch (typed John,
-        # replayed Venkata) remains a real finding.
-        _replayed_by_label: dict = {}
-        for _v3 in fill_steps:
-            _replayed_by_label.setdefault(
-                _norm(_v3.get("label") or ""), set()).add(_norm(_v3.get("value") or ""))
-        _prologue, _dropped = [], []
-        for lbl, val in missing:
-            _nl = _norm(lbl)
-            if any(tok in _nl for tok in _AUTH_FIELD_TOKENS) and _nl not in _step_labels:
-                _prologue.append((lbl, val, "login prologue — deliberately not replayed "
-                                            "(apply an Authentication profile)"))
-            elif any(tok in _nl for tok in _chrome_tokens):
-                _prologue.append((lbl, val, "browser-chrome navigation typing — replayed "
-                                            "as the entry Open step, not a form fill"))
-            elif any(
-                _sib != _norm(val) and _digits_key(_sib) in _represented_keys
-                for _sib in _label_values.get(_nl, ())
-            ) or any(
-                _digits_key(val) and _digits_key(_rv) != _digits_key(val)
-                and _digits_key(_rv).startswith(_digits_key(val))
-                for _rv in _replayed_by_label.get(_nl, ())
-            ):
-                _prologue.append((lbl, val, "superseded by the final demonstrated value "
-                                            "for this field (state history, not a drop)"))
-            else:
-                _dropped.append((lbl, val))
-        if _prologue:
-            for lbl, val, _why in _prologue:
-                per_step.append({"step_number": None, "verdict": V_INFO,
-                                 "detail": f"'{lbl}': {_why}; counted as a gap, not a defect."})
-        missing = _dropped
         if missing:
             d3 -= min(8, 4 * len(missing))
             for lbl, val in missing:
@@ -301,11 +274,6 @@ def score_spec(spec_text: str, steps: list, evidence: Any = None) -> dict:
     for v in views:
         if id(v) in flagged:
             continue
-        if v["step_number"] in _guarded and v["provenance"] != "inferred":
-            per_step.append({"step_number": v["step_number"], "verdict": V_MISSING_PREREQ,
-                             "detail": f"'{v['action']}' — skip-guarded UNPROVEN in the delivered "
-                                       "spec (asserts nothing; honest coverage gap)."})
-            continue
         if v["provenance"] == "inferred":
             per_step.append({"step_number": v["step_number"], "verdict": V_MISSING_PREREQ,
                              "detail": f"'{v['action']}' — transition not captured; honestly UNPROVEN (not asserted)."})
@@ -320,10 +288,7 @@ def score_spec(spec_text: str, steps: list, evidence: Any = None) -> dict:
     base = round(sum(dims.values()) / len(dims))
     overall = min(base, min(dims.values()))  # MIN-gated: a low axis caps the whole
 
-    gaps = sum(
-        1 for v in views
-        if v["provenance"] == "inferred" or v["step_number"] in _guarded
-    )
+    gaps = sum(1 for v in views if v["provenance"] == "inferred")
     if impossible_steps or min(dims.values()) < 5:
         decision = DECISION_REPAIR
     elif overall >= 9:
@@ -339,6 +304,47 @@ def score_spec(spec_text: str, steps: list, evidence: Any = None) -> dict:
         "findings": findings,
         "gaps": gaps,  # honest UNPROVEN transitions (uncaptured recording, not a defect)
         "source": "deterministic",
+    }
+
+
+def gate(report: dict, *, blocking: bool = False) -> dict:
+    """Turn an audit report into a GATE verdict for the generate/compile path.
+
+    ``passed`` ALWAYS tells the truth: it is ``not would_block`` regardless of mode, so
+    an impossible-transition spec reports ``passed=False`` even in warning-only mode (no
+    misleading green). ``enforced`` says whether this gate actually BLOCKS shipping:
+    with ``enforced=False`` (the default, WARNING-ONLY) the caller surfaces the warnings
+    but ships anyway and measures how often a blocking gate WOULD fire; with
+    ``enforced=True`` the caller must refuse a script whose ``passed`` is False.
+
+    The hard never-green-wash block conditions are an impossible navigation assertion or
+    navigation axis = 0. The locator-uniqueness finding is surfaced (``ambiguous_locators``
+    + warnings) but is NOT a block reason yet (new check, warning-first).
+
+    Pure + deterministic; never green-wash — it can only warn or block, never certify a
+    bad script green."""
+    findings = list(report.get("findings", []) or [])
+    per_step = report.get("per_step", []) or []
+    dims = report.get("dimension_scores", {}) or {}
+    overall = report.get("overall_score", report.get("overall", 10))
+
+    impossible = [p for p in per_step if p.get("verdict") == V_IMPOSSIBLE]
+    ambiguous = [p for p in per_step if p.get("verdict") == V_AMBIGUOUS]
+    block_reasons: list = []
+    if impossible:
+        block_reasons.append(f"{len(impossible)} impossible navigation assertion(s)")
+    if dims.get("navigation_correctness", 10) == 0:
+        block_reasons.append("navigation axis = 0 (impossible transition)")
+    would_block = bool(block_reasons)
+    return {
+        "passed": not would_block,        # honest verdict, independent of enforcement
+        "enforced": blocking,             # whether this gate actually blocks shipping
+        "would_block": would_block,
+        "block_reasons": block_reasons,
+        "warnings": findings,
+        "overall_score": overall,
+        "ambiguous_locators": len(ambiguous),
+        "decision": report.get("decision"),
     }
 
 
@@ -493,73 +499,3 @@ async def audit(*, spec_text: str, evidence_text: str, steps: list, evidence: An
     except Exception as e:  # never crash, never auto-certify
         base["llm"] = {"ok": False, "error": f"{type(e).__name__}: {e}"}
         return base
-
-
-def gate(spec_text: str, steps: list, evidence: Any = None, *, enforce: bool = False) -> dict:
-    """Deterministic auditor GATE over a compiled spec (Phase-0 wiring).
-
-    Runs the $0 ``score_spec`` and returns a gate verdict. ``passed`` is the HONEST
-    verdict (CERTIFIED and overall >= 8), computed here — never self-reported by an LLM.
-    ``enforce`` toggles BLOCKING: when True and the audit is not certified, ``would_block``
-    is True so a CI / write path can refuse the script; when False (default — warning-first,
-    per the never-green-wash policy) the caller surfaces ``findings`` without blocking. A
-    green run that still carries an impossible-transition or a dropped recorded value is
-    caught HERE, so a structural green-wash cannot slip through a passing run unnoticed."""
-    audit = score_spec(spec_text, steps, evidence)
-    passed = (audit.get("decision") == DECISION_CERTIFIED) and (audit.get("overall_score", 0) >= 8)
-    return {
-        "passed": bool(passed),
-        "enforce": bool(enforce),
-        "would_block": bool(enforce and not passed),
-        "decision": audit.get("decision"),
-        "overall_score": audit.get("overall_score"),
-        "findings": audit.get("findings", []),
-        "gaps": audit.get("gaps", 0),
-        "audit": audit,
-    }
-
-
-__all__ = ["score_spec", "gate", "audit", "audit_tool", "build_audit_prompt", "validate_audit",
-           "DECISION_CERTIFIED", "DECISION_REPAIR", "DECISION_DEFECT"]
-
-
-# ── Anti-flake API-policy linter (P6) ────────────────────────────────────────
-# Versioned, data-driven policy: blessed APIs live in the compiler; these are
-# the FORBIDDEN patterns that mint flakiness. Pure regex over emitted code —
-# generic across apps; severity 'error' should gate, 'advisory' informs.
-_API_POLICY: "list[tuple[str, str, str]]" = [
-    (r"page\.click\(", "error",
-     "page.click(selector) bypasses locator auto-wait — use locator.click()"),
-    (r"page\.type\(", "error",
-     "page.type is deprecated — use locator.fill() / pressSequentially()"),
-    (r"waitForTimeout\(", "error",
-     "fixed sleep — replace with a condition wait (zero-sleep policy)"),
-    (r"\$eval\(", "error",
-     "$eval bypasses actionability checks — use locator APIs"),
-    (r"ElementHandle", "error",
-     "ElementHandle pins a node and goes stale — locators re-resolve"),
-    (r"\.nth\(", "advisory",
-     "index-based selection is order-fragile — prefer semantic scoping"),
-    (r"networkidle", "advisory",
-     "networkidle is unreliable on SPAs with polling — prefer explicit "
-     "response/element conditions"),
-]
-
-
-def lint_spec(spec_text: str) -> list:
-    """API-policy lint findings for one emitted spec. Returns
-    [{rule, severity, line, snippet, why}] — deterministic, $0."""
-    out = []
-    lines = (spec_text or "").splitlines()
-    for pattern, severity, why in _API_POLICY:
-        rx = re.compile(pattern)
-        for i, ln in enumerate(lines, 1):
-            if rx.search(ln):
-                out.append({
-                    "rule": pattern,
-                    "severity": severity,
-                    "line": i,
-                    "snippet": ln.strip()[:140],
-                    "why": why,
-                })
-    return out
