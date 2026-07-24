@@ -38,15 +38,29 @@ CREATE INDEX IF NOT EXISTS ix_ground_truth_events_tenant_session
 ALTER TABLE ground_truth_events ENABLE ROW LEVEL SECURITY;
 ALTER TABLE ground_truth_events FORCE ROW LEVEL SECURITY;
 
+-- Policy name is `tenant_isolation` (NOT a table-prefixed name): every Phase-2
+-- substrate table names its RLS policy `tenant_isolation`, and the substrate
+-- contract test (test_substrate_contract.py::test_unique_constraints_policies_
+-- and_force_rls) asserts (table, 'tenant_isolation') is present. A prefixed
+-- name is a policy the test cannot see -> "ground_truth_events missing policy".
 DO $$
 BEGIN
     IF NOT EXISTS (
         SELECT 1 FROM pg_policies
         WHERE schemaname = 'public' AND tablename = 'ground_truth_events'
-          AND policyname = 'ground_truth_events_tenant_isolation'
+          AND policyname = 'tenant_isolation'
     ) THEN
-        CREATE POLICY ground_truth_events_tenant_isolation ON ground_truth_events
+        CREATE POLICY tenant_isolation ON ground_truth_events
             USING (tenant_id = current_setting('nexus.current_tenant_id', true))
             WITH CHECK (tenant_id = current_setting('nexus.current_tenant_id', true));
+    END IF;
+    -- Idempotent cleanup: drop the legacy table-prefixed policy if a prior
+    -- apply created it, so both names never coexist.
+    IF EXISTS (
+        SELECT 1 FROM pg_policies
+        WHERE schemaname = 'public' AND tablename = 'ground_truth_events'
+          AND policyname = 'ground_truth_events_tenant_isolation'
+    ) THEN
+        DROP POLICY ground_truth_events_tenant_isolation ON ground_truth_events;
     END IF;
 END $$;

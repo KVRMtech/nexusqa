@@ -122,6 +122,13 @@ jobs:
       # fail-closed denial that horizontal scaling depends on, instead of skipping.
       QEC_TEST_REDIS_URL: redis://localhost:6379/1
       QEC_LOG_LEVEL: WARNING
+      # The DB-gated contract suite drives each test through its own asyncio.run()
+      # (a fresh event loop per test). A pooled async connection binds to the
+      # first loop, so every later test raised "got Future attached to a
+      # different loop" — the sole reason qec-ci never went green end-to-end.
+      # NullPool (fresh connection per checkout, current-loop-bound) fixes it;
+      # test-only, so production pooling is untouched.
+      QEC_TEST_DB_NULLPOOL: "1"
 
     steps:
       # (a) checkout + Python 3.10 (the QE-Central runtime; qe-explorer's base

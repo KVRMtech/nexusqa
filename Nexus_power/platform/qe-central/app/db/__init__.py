@@ -45,7 +45,20 @@ def _make_engine(url: str) -> AsyncEngine:
 
     Engine creation is lazy (no connection is attempted until first use),
     so module-import is safe even when the database is unreachable.
+
+    TEST-ONLY NullPool escape hatch (``QEC_TEST_DB_NULLPOOL``): the DB-gated
+    contract suite drives each test through its own ``asyncio.run()`` (a fresh
+    event loop per test), but a POOLED connection binds to the first loop —
+    every later test then raises ``RuntimeError: got Future attached to a
+    different loop`` (the sole reason qec-ci never went green end-to-end).
+    NullPool opens a fresh connection per checkout bound to the CURRENT loop, so
+    each test is loop-independent. Guarded by an env flag set only in CI's test
+    job — production keeps its long-lived pool untouched.
     """
+    import os
+    if os.getenv("QEC_TEST_DB_NULLPOOL"):
+        from sqlalchemy.pool import NullPool
+        return create_async_engine(url, poolclass=NullPool, pool_pre_ping=True)
     return create_async_engine(
         url,
         pool_size=10,
