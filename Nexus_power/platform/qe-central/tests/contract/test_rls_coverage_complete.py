@@ -24,6 +24,7 @@ import os
 import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
+from sqlalchemy.pool import NullPool  # test-only: no cross-event-loop pooling
 
 QEC_DB_URL = os.environ.get("QEC_TEST_QEC_DATABASE_URL", "")
 
@@ -52,7 +53,7 @@ def run(coro):
 
 
 async def _catalog():
-    engine = create_async_engine(QEC_DB_URL, pool_pre_ping=True)
+    engine = create_async_engine(QEC_DB_URL, pool_pre_ping=True, poolclass=NullPool)
     try:
         async with engine.connect() as conn:
             tables = (await conn.execute(text(

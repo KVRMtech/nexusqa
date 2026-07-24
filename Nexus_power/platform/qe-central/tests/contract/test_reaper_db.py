@@ -16,6 +16,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
+from sqlalchemy.pool import NullPool  # test-only: no cross-event-loop pooling
 
 from app.controlplane import reaper
 from app.routers.internal import _TERMINAL_STATES
@@ -37,7 +38,7 @@ def _repoint_engine():
     if not DB_URL:
         yield
         return
-    engine = create_async_engine(DB_URL, pool_pre_ping=True)
+    engine = create_async_engine(DB_URL, pool_pre_ping=True, poolclass=NullPool)
     original = reaper.qec_engine
     reaper.qec_engine = engine  # the reaper reads/writes fleet-wide via this engine
     try:

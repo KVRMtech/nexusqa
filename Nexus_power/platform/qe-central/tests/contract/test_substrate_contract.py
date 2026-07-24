@@ -412,6 +412,7 @@ sys.path.insert(0, os.environ["QEC_PLATFORM_API_ROOT"])
 sys.path.insert(0, os.environ["QEC_SDK_ROOT"])
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.pool import NullPool  # test-only: no cross-event-loop pooling
 from app.services.test_factory.service import (
     _latest_version,
     _load_current_pages_and_actions,
@@ -421,7 +422,7 @@ from nexus_sdk.db.models import PageVisitRow
 
 async def main():
     tenant_id, artifact_id = sys.argv[1], sys.argv[2]
-    engine = create_async_engine(os.environ["QEC_TEST_DATABASE_URL"])
+    engine = create_async_engine(os.environ["QEC_TEST_DATABASE_URL"], poolclass=NullPool)
     try:
         factory = async_sessionmaker(engine, expire_on_commit=False)
         async with factory() as session:
@@ -473,7 +474,7 @@ async def _patched_substrate(tmp_path):
 
     import app.db as qec_db
 
-    engine = create_async_engine(DB_URL)
+    engine = create_async_engine(DB_URL, poolclass=NullPool)
     factory = async_sessionmaker(engine, expire_on_commit=False)
     cfg = StorageConfig(backend="local", local_root=str(tmp_path / "artifact-store"))
 
@@ -640,7 +641,7 @@ class TestConstraintAndRlsNames:
         from sqlalchemy import text
         from sqlalchemy.ext.asyncio import create_async_engine
 
-        engine = create_async_engine(DB_URL)
+        engine = create_async_engine(DB_URL, poolclass=NullPool)
         try:
             async with engine.connect() as conn:
                 constraints = set((await conn.execute(text(

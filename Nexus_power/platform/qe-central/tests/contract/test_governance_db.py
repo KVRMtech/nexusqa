@@ -26,6 +26,7 @@ import uuid
 import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.pool import NullPool  # test-only: no cross-event-loop pooling
 
 from app.services import approval, coverage
 from app.services.approval import SUBJECT_SCENARIO, SUBJECT_UNIVERSE
@@ -54,7 +55,7 @@ def _repoint_qec_engine():
         return
     import app.db as qdb
 
-    engine = create_async_engine(DB_URL, pool_pre_ping=True)
+    engine = create_async_engine(DB_URL, pool_pre_ping=True, poolclass=NullPool)
     factory = async_sessionmaker(engine, expire_on_commit=False)
     original = qdb._qec_session_factory
     qdb._qec_session_factory = factory
