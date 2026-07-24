@@ -367,7 +367,10 @@ def _build_combo_case(
         steps.append(new)
 
     desc_combo = ", ".join(f"{k}={v}" for k, v in combo.items())
-    name = f"Combination: {desc_combo} ({host})"[:500]
+    # F5 (business-intent name): the reader sees WHICH data mix is verified —
+    # "Verify user can complete the flow with age=65, tobacco=yes" — grounded:
+    # this case replays the demonstrated flow with exactly these values.
+    name = f"Verify user can complete the flow with {desc_combo}"[:500]
     test_id = str(uuid.uuid5(
         _TEST_ID_NAMESPACE, f"{artifact_id}:combination:{desc_combo}",
     ))

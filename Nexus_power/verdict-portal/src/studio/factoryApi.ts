@@ -476,6 +476,17 @@ class FactoryApiClient {
     return data;
   }
 
+  /** P2.8 — north-star quality metric: client-visible product-fault failures
+   *  (target zero) vs. product faults caught by certification before any
+   *  client run. */
+  async getProductFaults(artifactId: string, windowDays = 30): Promise<any> {
+    const { data } = await this.client.get(
+      `/v1/test-factory/${artifactId}/quality/product-faults`,
+      { params: { window_days: windowDays } },
+    );
+    return data;
+  }
+
   /** Structured listing of the compiled Playwright suite (each script's source +
    *  spec path + category + per-step stats, project files, run commands) for the
    *  Execution view. Same compilation as the zip, returned as JSON. */

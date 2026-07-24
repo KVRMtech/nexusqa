@@ -589,6 +589,30 @@ def _path_of(url: str) -> str:
     return path.rstrip("/") or "/"
 
 
+# Starts-with-a-URL test for prose fields: an ``after_detail`` captured from the
+# crawl substrate is the post-action URL, not page text.
+_URL_SHAPED_RX = re.compile(r"^\s*(?:https?://|www\.)", re.IGNORECASE)
+
+
+def _dest_phrase(url_or_path: str) -> str:
+    """Business phrasing for a recorded destination — "the 'apply' page (/portal/apply)".
+
+    F2 (business-language Expected Results): a step's Expected Result must speak
+    the reader's language — the page NAME first, the path as a parenthetical.
+    A raw URL never belongs in the prose: the machine-side copy already rides
+    ``observed.next_url`` into the compiler's hard toHaveURL oracle, and URL
+    prose is what let scheme fragments masquerade as expected page text
+    (run 7c89de7e step 7 compiled ``getByText(/https/i)`` — a guaranteed
+    false RED on every app). Generic: built from URL structure + the app's own
+    path words, no domain vocabulary.
+    """
+    path = _path_of(url_or_path)
+    name = _page_name(path, "")
+    if not name:
+        return f"the '{path or '/'}' page"
+    return f"the '{name}' page ({path or '/'})"
+
+
 # A control that is HIDDEN inside a collapsed menu/disclosure and only becomes
 # clickable after its opener is activated. Two STRONG, generic signals only:
 #   * ARIA ``role="menuitem"`` — only genuine popup-menu items carry it; and
@@ -808,7 +832,7 @@ def _variant_cases(
             f"{artifact_id}:variant:{_norm(label)}={_norm(alt)}"))
         cases.append(ProductionTestCase(
             test_id=tid,
-            name=f"Variant — {label}: '{alt}' ({host})",
+            name=f"Verify user can complete the journey with '{label}' = '{alt}'",
             description=(
                 f"Demonstrated-alternate variant: the recording shows the user "
                 f"entering '{alt}' for '{label}' before settling on '{final}'. "
@@ -892,7 +916,7 @@ def _negative_case(
                 f"{artifact_id}:negative:{_norm(label)}"))
             return ProductionTestCase(
                 test_id=tid,
-                name=f"Negative — required field '{label}' left empty ({host})",
+                name=f"Verify submission is blocked when required field '{label}' is left empty",
                 description=(
                     f"'{label}' was demonstrated as a REQUIRED field. This case "
                     f"replays the flow up to it, leaves it empty and attempts to "
@@ -1344,12 +1368,24 @@ def _interaction_steps(group: _PageGroup, next_url: str, next_group_proven: bool
         where = f" in the '{anchor}' {a.anchor_kind or 'section'}" if anchor else ""
         # The Expected Result reflects the OBSERVED outcome (wait + assertion):
         # navigation, a results panel appearing, a validation error, etc.
+        # F2 (business-language Expected Result): name the destination PAGE the
+        # way a person would — never a raw URL. The URL stays machine-side
+        # (observed.next_url → the compiler's hard toHaveURL oracle); URL prose
+        # was unreadable AND let scheme fragments masquerade as expected page
+        # text (run 7c89de7e step 7). The "proceeds to" keyphrase is kept —
+        # confidence.py and recording_quality.py key on it to recognise
+        # navigation-asserting steps.
         if step_next:
-            expected = f"The application proceeds to {step_next}"
-            if after:
-                expected = f"{expected}; {after}"
+            expected = f"The application proceeds to {_dest_phrase(step_next)}"
+            if after and not _URL_SHAPED_RX.match(after):
+                expected = f"{expected}; {after}"  # real observed page text
+            elif after and _path_of(after) != _path_of(step_next):
+                # URL-shaped capture landing on a DIFFERENT path — still business
+                # phrasing, still grounded in the recorded destination.
+                expected = f"{expected}, then {_dest_phrase(after)}"
         elif after:
-            expected = after
+            expected = (after if not _URL_SHAPED_RX.match(after)
+                        else f"The page updates to {_dest_phrase(after)}")
         elif not is_final and _is_disclosure_opener(a):
             # a menu OPENER preceding the grounded item click — replay opens the
             # disclosure so the hidden item becomes clickable (not a dialog confirm).
@@ -1610,7 +1646,15 @@ def generate_demonstrated_test_cases(
     # flow still runs against the Environment base-URL, so fall back to a neutral
     # label rather than an empty "()".
     host = groups[0].canonical_host or groups[0].url_host or "the recorded app"
-    name = f"Functional E2E: {entry} → {outcome} ({host})"
+    # F5 (business-intent names): say WHAT is verified in the app's own words —
+    # readable by business users, QA, POs and developers without opening the
+    # steps. Technical provenance (host, paths) stays in the description. The
+    # name never claims more than the case's oracles prove: expected_outcome
+    # asserts the flow reaches '{outcome}'.
+    if entry == outcome:
+        name = f"Verify user can complete the '{entry}' flow"
+    else:
+        name = f"Verify user can complete the '{entry}' journey to '{outcome}'"
     description = (
         f"Replays the demonstrated flow on {host}: starting at '{entry}', "
         f"entering the values the user provided, and verifying the application "
@@ -1677,12 +1721,22 @@ def generate_demonstrated_test_cases(
         try:
             b_steps, _bf, _bt = _build_steps(_branch_groups)
             b_entry = _page_name(_branch_groups[0].url_path, _branch_groups[0].location)
+            # F5 (business-intent name): name the destination the side-path
+            # actually visits ("navigate from 'apply' to 'dashboard' and
+            # return"), from the app's own page words — never crawler jargon
+            # ("Branch — exploration…"), never a host.
+            _b_names = [_page_name(x.url_path, x.location) for x in _branch_groups]
+            b_far = next(
+                (n for n in reversed(_b_names[1:]) if n and n != b_entry), "")
             cases.append(ProductionTestCase(
                 test_id=str(uuid.uuid5(
                     _TEST_ID_NAMESPACE,
                     f"{artifact_id}:branch:" + "|".join(
                         f"{x.url_host}{x.url_path}" for x in _branch_groups))),
-                name=f"Branch — exploration from '{b_entry}' and back ({host})",
+                name=(
+                    f"Verify user can navigate from '{b_entry}' to '{b_far}' and return"
+                    if b_far else
+                    f"Verify user can leave '{b_entry}' and return to it"),
                 description=(
                     "The recording left this page, explored, and returned — a "
                     "demonstrated side-path emitted as its own case so the main "
@@ -1871,8 +1925,8 @@ def generate_grounded_journeys(
             steps.append(ProductionTestStep(
                 step_number=n,
                 action=f"Click '{a.target_label}'",
-                expected=f"The application proceeds to {dest_path}",
-                expected_result=f"The application proceeds to {dest_path}",
+                expected=f"The application proceeds to {_dest_phrase(dest_path)}",
+                expected_result=f"The application proceeds to {_dest_phrase(dest_path)}",
                 selector=_locator(a.target_label, a.target_kind),
                 **nav_obs,
             ))
@@ -1895,7 +1949,7 @@ def generate_grounded_journeys(
             via = " via the menu" if openers else ""
             case = ProductionTestCase(
                 test_id=test_id,
-                name=f"Navigate to {dest_name} via '{a.target_label}' — from {src_name} ({src_host})",
+                name=f"Verify user can navigate from '{src_name}' to '{dest_name}' via '{a.target_label}'",
                 description=(
                     f"A grounded click-path on {src_host}: from '{src_name}', "
                     f"clicking '{a.target_label}'{via} navigates to '{dest_name}' "
@@ -2072,8 +2126,8 @@ def generate_form_flow_journeys(
             steps.append(ProductionTestStep(
                 step_number=n,
                 action=f"Click '{sub.target_label}'",
-                expected=f"The form submits and the application proceeds to {dest_path}",
-                expected_result=f"The form submits and the application proceeds to {dest_path}",
+                expected=f"The form submits and the application proceeds to {_dest_phrase(dest_path)}",
+                expected_result=f"The form submits and the application proceeds to {_dest_phrase(dest_path)}",
                 selector=_locator(sub.target_label, sub.target_kind),
                 **sub_obs,
             ))
@@ -2095,8 +2149,8 @@ def generate_form_flow_journeys(
                 f"{artifact_id}:formflow:{src_path}:{_norm(sub.target_label)}"))
             case = ProductionTestCase(
                 test_id=test_id,
-                name=(f"{src_name.title()} flow: fill the form and submit via "
-                      f"'{sub.target_label}' ({src_host})"),
+                name=(f"Verify user can complete the '{src_name}' form and "
+                      f"submit via '{sub.target_label}'"),
                 description=(
                     f"The demonstrated {src_name} business flow on {src_host}: "
                     f"{len(fills)} field(s) filled with their captured values, then "

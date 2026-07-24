@@ -49,6 +49,7 @@ V_MISSING_PREREQ = "missing_prerequisite"
 V_DEAD = "dead_or_unused"
 V_DATA = "data_not_replayed"
 V_AMBIGUOUS = "ambiguous_locator"
+V_URL_TEXT = "url_as_text_oracle"
 
 # Interactive verbs whose step compiles to a name-based locator (so a repeated
 # accessible name on the same page makes the locator ambiguous).
@@ -61,6 +62,18 @@ DECISION_DEFECT = "defect"
 _FILL_VERBS = {"type", "fill", "input", "select"}
 _SLEEP_RX = re.compile(r"waitForTimeout\s*\(")
 _GETBYTEXT_RX = re.compile(r"getByText\(\s*['\"/]")
+
+# URL-as-text oracle (F3, run 7c89de7e step 7): an EXPECT whose getByText pattern
+# is a bare URL scheme/www token — expect(getByText(/https/i)) — asserts text NO
+# page renders (a page does not display its own URL as text). It can only-ever-
+# fail-RED, so it is a spec DEFECT, never an app signal. Scoped to expect(…) so a
+# legitimate ACTION on a URL-labelled link (click getByText('www.example.com'))
+# is never flagged. The QUOTED-full-URL form is warning-only: a docs-style page
+# genuinely can render a URL as visible text.
+_URL_TEXT_ORACLE_RX = re.compile(
+    r"expect\([^\n]*?getByText\(\s*/\s*(?:https?|www)\b", re.IGNORECASE)
+_URL_TEXT_QUOTED_RX = re.compile(
+    r"expect\([^\n]*?getByText\(\s*['\"](?:https?://|www\.)", re.IGNORECASE)
 
 
 def _clamp(n: int) -> int:
@@ -250,6 +263,28 @@ def score_spec(spec_text: str, steps: list, evidence: Any = None) -> dict:
     # honest "solid" count: a step asserting an ungrounded nav must not be high-confidence.
     if impossible_steps:
         d5 = min(d5, 3)
+    # URL-as-text oracle (F3): a bare scheme/www token asserted as visible page
+    # text is an always-RED spec defect — tank the axis exactly like an
+    # impossible transition so the block-gate refuses to ship it. Generic:
+    # keys on URL *shape* in the compiled spec, no host/domain vocabulary.
+    url_text_hits = [m.group(0) for m in _URL_TEXT_ORACLE_RX.finditer(spec_text)]
+    if url_text_hits:
+        d5 = min(d5, 1)
+        findings.append(
+            f"{len(url_text_hits)} text oracle(s) assert a URL fragment as visible page "
+            "text (e.g. getByText(/https/)) — no page renders its own URL; the "
+            "navigation oracle is toHaveURL. Always-RED spec defect (product-side), "
+            "never an application failure.")
+        per_step.append({"step_number": None, "verdict": V_URL_TEXT,
+                         "detail": "Compiled spec asserts URL text visibility: "
+                                   + "; ".join(h.strip()[:80] for h in url_text_hits[:3])})
+    # Quoted-full-URL text oracle: warning-only (a docs-style page CAN render a
+    # URL as literal text) — surfaced so a reviewer decides, never auto-blocked.
+    quoted_hits = len(_URL_TEXT_QUOTED_RX.findall(spec_text))
+    if quoted_hits:
+        findings.append(
+            f"{quoted_hits} text oracle(s) assert a full URL string as page text — "
+            "verify the page really renders that URL as text; otherwise use toHaveURL.")
     d5 = _clamp(d5)
 
     # ── D3 — Grounded replay (evidence fidelity) ─────────────────────────────
@@ -330,11 +365,18 @@ def gate(report: dict, *, blocking: bool = False) -> dict:
 
     impossible = [p for p in per_step if p.get("verdict") == V_IMPOSSIBLE]
     ambiguous = [p for p in per_step if p.get("verdict") == V_AMBIGUOUS]
+    url_text = [p for p in per_step if p.get("verdict") == V_URL_TEXT]
     block_reasons: list = []
     if impossible:
         block_reasons.append(f"{len(impossible)} impossible navigation assertion(s)")
     if dims.get("navigation_correctness", 10) == 0:
         block_reasons.append("navigation axis = 0 (impossible transition)")
+    # F3: an always-RED URL-as-text oracle is the same severity class as an
+    # impossible transition — a spec that CANNOT pass must never ship (it would
+    # report an application failure the application did not cause).
+    if url_text:
+        block_reasons.append(
+            f"{len(url_text)} URL-as-text oracle(s) (always-RED spec defect)")
     would_block = bool(block_reasons)
     return {
         "passed": not would_block,        # honest verdict, independent of enforcement
@@ -344,6 +386,7 @@ def gate(report: dict, *, blocking: bool = False) -> dict:
         "warnings": findings,
         "overall_score": overall,
         "ambiguous_locators": len(ambiguous),
+        "url_text_oracles": len(url_text),
         "decision": report.get("decision"),
     }
 

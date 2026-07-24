@@ -42,6 +42,17 @@ interface CaseRow {
   step_count?: number;
 }
 
+interface FailureAttribution {
+  attribution: string;
+  cause: string;
+  blame: string;
+  detail: string;
+  /** Attribution Engine v1 category (P1.4): product_script_defect |
+   *  application_defect | environment | configuration | test_data | unknown */
+  category?: string;
+  tier?: string;
+}
+
 interface ScriptRun {
   runs?: Array<{ status: string; at: string | null }>;
   is_flaky?: boolean;
@@ -49,12 +60,34 @@ interface ScriptRun {
   consecutive_failures?: number;
   last_run_status?: string;
   last_run_at?: string | null;
+  /** P1.4 — ingest-time failure attribution: present only when the failure
+   *  cause is PROVABLE from evidence; the UI never blames the client's
+   *  application without it. */
+  failure_attribution?: FailureAttribution | null;
+  /** P0.2 — soft-oracle misses on the latest client run (non-fatal
+   *  best-effort hints under the proven-oracle policy; visible, never silent). */
+  soft_oracle_misses?: number;
+  /** P0.3 — latest CERTIFICATION run (baseline self-proof; kept out of the
+   *  client stats above). */
+  certification?: {
+    status: 'certified' | 'failed';
+    at: string | null;
+    attribution?: FailureAttribution | null;
+  } | null;
+  /** P0.3 — server truth: quarantined from client runs until re-certified. */
+  quarantined?: boolean;
 }
 
 interface FlowsData {
   cases: CaseRow[];
   total: number;
   scripts: Record<string, ScriptRun>;
+  /** P2.8 — the north-star quality metric (null when the endpoint is absent). */
+  quality?: {
+    client_visible_product_faults: number;
+    caught_in_certification: number;
+    window_days: number;
+  } | null;
 }
 
 const STATUS_META: Record<FlowStatus, { label: string; tone: 'good' | 'crit' | 'neutral'; icon: React.ReactNode }> = {
@@ -69,10 +102,55 @@ const PASS_STATES = new Set(['passed', 'pass', 'success', 'green', 'ok']);
 
 /** Classify ONE flow from its run record. Defaults to Candidate; only a concrete
  *  green, non-flaky, no-consecutive-failure run earns Proven — never green-wash.
+ *
+ *  P0.1 (neutral-by-default blame): a failure NEVER implicitly points at the
+ *  client's application. With evidence (P1.4 attribution) the reason names the
+ *  proven cause; without it, the reason says "cause under analysis".
+ *  P0.3: quarantined flows say the product is repairing them; certification
+ *  state is surfaced for flows the client has not run yet.
  *  Exported for the never-green-wash unit test. */
 export function classify(script: ScriptRun | undefined): { status: FlowStatus; reason: string } {
+  const cert = script?.certification ?? null;
+  const certWhen = cert?.at ? ` · ${timeAgo(cert.at)}` : '';
+
+  // P0.3 — quarantined: failed certification for a product/unproven cause.
+  if (script?.quarantined) {
+    const cat = cert?.attribution?.category;
+    const cause = cat === 'product_script_defect'
+      ? `a product-side cause (${cert?.attribution?.cause ?? 'script defect'})`
+      : 'a not-yet-attributed cause (under diagnosis)';
+    return {
+      status: 'attention',
+      reason: `Quarantined — failed its certification run on the baseline for ${cause}${certWhen}. ` +
+        'The product is repairing it; it returns automatically once re-certified. ' +
+        'Your application is NOT implicated.',
+    };
+  }
+
   const hasRunEvidence = !!script && ((script.runs?.length ?? 0) > 0 || Boolean(script.last_run_status));
   if (!hasRunEvidence) {
+    // No CLIENT runs yet — surface the certification state honestly.
+    if (cert?.status === 'certified') {
+      return {
+        status: 'candidate',
+        reason: `Certified — proved itself end-to-end on the baseline${certWhen}. Ready for its first client run.`,
+      };
+    }
+    if (cert?.status === 'failed') {
+      const cat = cert.attribution?.category;
+      if (cat === 'application_defect') {
+        return {
+          status: 'attention',
+          reason: `Certification found a grounded application regression on the baseline${certWhen} — ` +
+            'review the run evidence (this is a real signal, not a script problem).',
+        };
+      }
+      return {
+        status: 'candidate',
+        reason: `Certification was blocked by ${cat === 'environment' ? 'an environment outage' : 'a configuration issue'}${certWhen} — ` +
+          'fix it and regenerate to re-certify. No verdict on the application was made.',
+      };
+    }
     return { status: 'candidate', reason: 'Discovered + compiled — never executed end-to-end.' };
   }
   const last = String(script.last_run_status ?? '').toLowerCase();
@@ -80,15 +158,61 @@ export function classify(script: ScriptRun | undefined): { status: FlowStatus; r
   const flaky = Boolean(script.is_flaky);
   const consec = script.consecutive_failures ?? 0;
   const when = script.last_run_at ? ` · ${timeAgo(script.last_run_at)}` : '';
+  const soft = script.soft_oracle_misses ?? 0;
+  const softNote = soft > 0 ? ` ${soft} soft oracle hint${soft === 1 ? '' : 's'} recorded (non-fatal).` : '';
 
   if (passed && !flaky && consec === 0) {
-    return { status: 'proven', reason: `Passed end-to-end${when}.` };
+    return { status: 'proven', reason: `Passed end-to-end${when}.${softNote}` };
   }
   const bits: string[] = [];
   if (!passed) bits.push(`last run ${script.last_run_status || 'did not pass'}`);
   if (flaky) bits.push(`flaky (${Math.round(script.flake_rate_pct ?? 0)}%)`);
   if (consec > 0) bits.push(`${consec} consecutive failure${consec === 1 ? '' : 's'}`);
-  return { status: 'attention', reason: `Ran but not clean — ${bits.join(', ')}${when}.` };
+
+  // P1.4 — evidence-based blame, category by category. Without evidence the
+  // wording stays NEUTRAL — never implicit application blame.
+  const attr = script.failure_attribution;
+  if (!passed && attr) {
+    const cat = attr.category ??
+      ((attr.blame === 'product' || attr.blame === 'product_probable') ? 'product_script_defect' : '');
+    if (cat === 'product_script_defect') {
+      const qualifier = attr.blame === 'product' ? 'a product-side script defect' : 'a probable product-side script defect';
+      return {
+        status: 'attention',
+        reason: `Failed on ${qualifier} (${attr.cause}) — not an application failure. ${bits.join(', ')}${when}.${softNote}`,
+      };
+    }
+    if (cat === 'environment') {
+      return {
+        status: 'attention',
+        reason: `Failed — the target environment was unreachable (${attr.cause}). ` +
+          `Not an application failure. ${bits.join(', ')}${when}.`,
+      };
+    }
+    if (cat === 'configuration') {
+      return {
+        status: 'attention',
+        reason: `Failed — test configuration blocked the run (${attr.cause}, e.g. auth/session). ` +
+          `Not an application failure. ${bits.join(', ')}${when}.`,
+      };
+    }
+    if (cat === 'application_defect') {
+      return {
+        status: 'attention',
+        reason: `Failed — evidence points at an application change (${attr.cause}): a grounded oracle broke. ` +
+          `${bits.join(', ')}${when}.${softNote}`,
+      };
+    }
+    // unknown / test_data → fall through to the neutral wording below.
+  }
+  if (!passed) {
+    return {
+      status: 'attention',
+      reason: `Failed — cause under analysis (not yet attributed to the application, the product, or the environment). ` +
+        `${bits.join(', ')}${when}.${softNote}`,
+    };
+  }
+  return { status: 'attention', reason: `Ran but not clean — ${bits.join(', ')}${when}.${softNote}` };
 }
 
 // ── Per-step execution evidence (the client's "which step ran / failed / why /
@@ -207,14 +331,16 @@ export function DiscoveredFlows({
 
   const state = useAsync<FlowsData>(async () => {
     // All discovered flows + the run/verdict summary, composed client-side.
-    const [list, summary] = await Promise.all([
+    const [list, summary, quality] = await Promise.all([
       studioApi.listTestFactoryCases(artifactId, 1, 200, 'active'),
       studioApi.getRunsSummary(artifactId, 10).catch(() => ({ scripts: {} })),
+      studioApi.getProductFaults(artifactId).catch(() => null),
     ]);
     return {
       cases: (list?.items ?? []) as CaseRow[],
       total: Number(list?.total ?? (list?.items?.length ?? 0)),
       scripts: (summary?.scripts ?? {}) as Record<string, ScriptRun>,
+      quality: quality as FlowsData['quality'],
     };
   }, [artifactId]);
 
@@ -266,6 +392,23 @@ export function DiscoveredFlows({
           )
         }
       />
+
+      {/* P2.8 — honest-quality strip: the product grades ITSELF in front of the
+          client. Client-visible product faults target ZERO; certification
+          catches show the gate doing its job before any client run. */}
+      {state.isSuccess && state.data?.quality && (
+        <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 rounded-lg bg-inset ring-1 ring-line px-3 py-2">
+          <span className="text-2xs font-semibold text-ink-mid">
+            Product honesty ({state.data.quality.window_days}d):
+          </span>
+          <span className={`text-2xs font-mono ${state.data.quality.client_visible_product_faults > 0 ? 'text-crit' : 'text-good'}`}>
+            {state.data.quality.client_visible_product_faults} client-visible product fault{state.data.quality.client_visible_product_faults === 1 ? '' : 's'}
+          </span>
+          <span className="text-2xs font-mono text-ink-low">
+            {state.data.quality.caught_in_certification} caught by certification before any client run
+          </span>
+        </div>
+      )}
 
       <div className="mt-3">
         {state.isLoading && <SkeletonRows rows={4} />}

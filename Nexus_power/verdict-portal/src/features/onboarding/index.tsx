@@ -61,6 +61,10 @@ interface WizardForm {
    *  '' = the app base URL (single-env). Applied via a PATCH after the profiles
    *  are created, so server-side validation sees the existing profile. */
   run_environment: string;
+  /** Crawl scope (Target mode, R3 Mode 2): path prefixes the crawl is CONFINED
+   *  to (one per line / comma-separated, e.g. "/quote"). Compiled to
+   *  schedule.scope_paths on submit. BLANK ⇒ Explore mode (whole-app crawl). */
+  scope_paths: string;
 }
 
 const EMPTY: WizardForm = {
@@ -89,6 +93,7 @@ const EMPTY: WizardForm = {
   usd_per_cycle: '',
   environments: [],
   run_environment: '',
+  scope_paths: '',
 };
 
 interface Bucket {
@@ -556,6 +561,15 @@ export function OnboardingWizard() {
       .split(/[\s,]+/)
       .map((h) => h.trim())
       .filter(Boolean);
+    // Target mode (R3 Mode 2): parse the operator's crawl-scope prefixes into
+    // schedule.scope_paths — normalize each to a leading '/', drop blanks. Empty
+    // ⇒ the key is omitted ⇒ Explore mode (the backend confines the crawl only
+    // when scope_paths is non-empty; see explorations.py::_dispatch_explorer).
+    const scopePaths = form.scope_paths
+      .split(/[\s,]+/)
+      .map((p) => p.trim())
+      .filter(Boolean)
+      .map((p) => (p.startsWith('/') ? p : `/${p}`));
     let answers: Record<string, unknown> = {};
     try {
       answers = form.answers.trim() ? (JSON.parse(form.answers) as Record<string, unknown>) : {};
@@ -614,7 +628,10 @@ export function OnboardingWizard() {
         preflight: { passed: form.preflight_passed },
       },
       fences: { allowed_hosts: hosts, allow_submit: form.env_kind === 'disposable' && form.allow_submit },
-      schedule: { cadence: form.cadence },
+      schedule: {
+        cadence: form.cadence,
+        ...(scopePaths.length ? { scope_paths: scopePaths } : {}),
+      },
       budgets: form.usd_per_cycle ? { usd_per_cycle: Number(form.usd_per_cycle) } : {},
     };
   }, [form]);
@@ -984,6 +1001,24 @@ export function OnboardingWizard() {
                   ))}
                 </select>
               </Field>
+            </div>
+            <div className="sm:col-span-2">
+              <Field
+                label="Crawl scope — Target mode (optional)"
+                hint="Blank = Explore mode (whole-app crawl). Enter path prefixes (one per line or comma-separated) to CONFINE the crawl to a journey — e.g. /quote — Target mode. Applied to every crawl of this app."
+              >
+                <textarea
+                  className={cn(INPUT_CLS, 'min-h-[3.25rem] resize-y font-mono text-xs')}
+                  value={form.scope_paths}
+                  onChange={(e) => set('scope_paths', e.target.value)}
+                  placeholder="/quote"
+                />
+              </Field>
+              <p className="text-2xs text-ink-faint mt-1">
+                {form.scope_paths.trim()
+                  ? 'Target mode — the crawl is confined to the path(s) above.'
+                  : 'Explore mode — the whole app is crawled.'}
+              </p>
             </div>
           </div>
         )}

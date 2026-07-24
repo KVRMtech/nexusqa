@@ -75,6 +75,8 @@ from ..services.flywheel import ledger as flywheel_ledger
 from ..services.test_factory import fidelity as tf_fidelity
 from ..services.test_runs import (
     last_run_summary_by_scenario,
+    product_quarantined_scenarios,
+    quarantine_decision,
     _status_severity,
     build_latest_run_timeline,
     build_run_timeline_by_id,
@@ -188,6 +190,7 @@ class GenerateRequest(BaseModel):
 
 @router.post("/api/v1/test-factory/{artifact_id}/generate")
 async def generate_test_cases(
+    request: Request,
     artifact_id: str = PathParam(..., min_length=1, max_length=64),
     body: GenerateRequest | None = Body(None),
     user: dict = Depends(get_current_user),
@@ -206,8 +209,13 @@ async def generate_test_cases(
     added_cases = await proposer.reapply_added_cases(artifact_id, tenant_id)
     reapplied = await _reapply_tf_overrides(artifact_id, tenant_id)
     approved_protected = await proposer.reapply_approved(artifact_id, tenant_id)
+    # P0.3 — certification-before-client: prove the fresh suite on the baseline
+    # (fire-and-forget; generation returns immediately, certification results
+    # land via the normal ingest path tagged environment='certification').
+    _spawn_certification(request, artifact_id, tenant_id)
     return {"success": True, "overrides_reapplied": reapplied, "added_cases": added_cases,
-            "approved_protected": approved_protected, **summary}
+            "approved_protected": approved_protected, "certification": "dispatched",
+            **summary}
 
 
 def _bearer(request: Request) -> str:
@@ -398,6 +406,7 @@ _CATEGORIES = {"negative", "boundary", "error_state"}
 
 @router.post("/api/v1/test-factory/{artifact_id}/generate/{category}")
 async def generate_category_endpoint(
+    request: Request,
     artifact_id: str = PathParam(..., min_length=1, max_length=64),
     category: str = PathParam(..., min_length=1, max_length=40),
     user: dict = Depends(get_current_user),
@@ -422,7 +431,9 @@ async def generate_category_endpoint(
     await proposer.reapply_added_cases(artifact_id, tenant_id)
     await _reapply_tf_overrides(artifact_id, tenant_id)
     await proposer.reapply_approved(artifact_id, tenant_id)
-    return {"success": True, **result}
+    # P0.3 — the rebuilt suite must re-prove itself on the baseline too.
+    _spawn_certification(request, artifact_id, tenant_id)
+    return {"success": True, "certification": "dispatched", **result}
 
 
 @router.get("/api/v1/test-factory/{artifact_id}/summary")
@@ -1004,6 +1015,91 @@ async def _run_storage_state(request, artifact_id: str, tenant_id: str) -> str |
 # loss on restart / across workers is harmless.
 _RUNNER_JOBS: dict[str, dict] = {}
 _RUNNER_TASKS: set = set()
+
+
+async def _certify_generated_suite(
+    *, request: Request, artifact_id: str, tenant_id: str, token: str,
+) -> None:
+    """P0.3 — certification-before-client ("a test must prove itself on the
+    baseline before it may judge the application").
+
+    Runs the freshly generated ACTIVE suite once against the app's own
+    baseline, tagged ``environment='certification'``.  Results flow through the
+    SAME reporter → ingest path as every run; the summary keeps certification
+    runs OUT of client-facing stats, and ``product_quarantined_scenarios``
+    turns a product/unproven certification failure into a run-gate quarantine
+    — so the first failure of a defective generated script is OURS, never the
+    client's.  Fire-and-forget: any error here is logged and never blocks or
+    fails generation.
+    """
+    try:
+        async with tenant_scoped_session(tenant_id) as session:
+            cases = await factory_service.load_active_production_cases(
+                session, artifact_id=artifact_id,
+            )
+            visits, _ = await factory_service._load_current_pages_and_actions(
+                session, artifact_id=artifact_id,
+            )
+            edited_map = await _active_edited_map(session, artifact_id=artifact_id)
+        if not cases or not visits:
+            return
+        # Baseline URL — the app's own recorded host (generic: structure only).
+        host = ""
+        for v in visits:
+            host = (
+                (getattr(v, "canonical_host", "") or getattr(v, "url_host", "") or "")
+            ).strip()
+            if host:
+                break
+        if not host:
+            _logger.info(
+                "test_factory.certification.skipped artifact=%s reason=no_recorded_host",
+                artifact_id,
+            )
+            return
+        # Dotless hosts are internal container names (http); public hosts https.
+        base_url = f"{'http' if '.' not in host else 'https'}://{host}"
+        storage_state = await _run_storage_state(request, artifact_id, tenant_id)
+        files = _configured_files(
+            cases, build_field_meta(visits), base_url, None,
+            browsers=["chromium"], headed=False, workers=2, retries=0,
+            edited=edited_map, storage_state=storage_state,
+        )
+        run_id = uuid.uuid4().hex
+        env = {
+            "NEXUS_ENDPOINT": _INGEST_BASE,
+            "NEXUS_TOKEN": token or "",
+            "NEXUS_ARTIFACT_ID": artifact_id,
+            "NEXUS_RUN_ID": run_id,
+            "NEXUS_BASE_URL": base_url,
+            "NEXUS_ENV": "certification",
+        }
+        await _register_job(run_id, {
+            "run_id": run_id, "status": "running", "artifact_id": artifact_id,
+            "tenant_id": tenant_id, "kind": "certification",
+            "target": base_url, "scripts": len(cases), "exit_code": None,
+            "output": "", "steps_completed": 0, "total_tests": len(cases),
+        })
+        _logger.info(
+            "test_factory.certification.dispatched artifact=%s run=%s cases=%d target=%s",
+            artifact_id, run_id, len(cases), base_url,
+        )
+        await _execute_run(run_id, files, env)
+    except Exception:
+        _logger.exception(
+            "test_factory.certification.failed artifact=%s (generation unaffected)",
+            artifact_id,
+        )
+
+
+def _spawn_certification(request: Request, artifact_id: str, tenant_id: str) -> None:
+    """Schedule the post-generation certification run (fire-and-forget)."""
+    token = _bearer(request)
+    task = asyncio.create_task(_certify_generated_suite(
+        request=request, artifact_id=artifact_id, tenant_id=tenant_id, token=token,
+    ))
+    _RUNNER_TASKS.add(task)
+    task.add_done_callback(_RUNNER_TASKS.discard)
 
 
 async def _register_job(run_id: str, job: dict) -> None:
@@ -3023,6 +3119,38 @@ async def playwright_run(
     if not cases:
         raise HTTPException(status_code=404, detail="no matching active test cases to run")
 
+    # P0.3 — quarantine gate: a case whose latest CERTIFICATION run failed for
+    # a product-side (or unproven) reason has not earned the right to judge
+    # the client's application — it is excluded from client runs until it
+    # re-certifies. Application/environment/config certification failures are
+    # NOT quarantined (a grounded regression on the baseline is a real signal;
+    # infra outages must not shame the cases).
+    async with tenant_scoped_session(tenant_id) as session:
+        _quarantined = await product_quarantined_scenarios(
+            session, artifact_id=artifact_id, tenant_id=tenant_id,
+        )
+    excluded_quarantined: list[str] = []
+    if _quarantined:
+        excluded_quarantined = [
+            (getattr(c, "test_id", "") or "") for c in cases
+            if (getattr(c, "test_id", "") or "") in _quarantined
+        ]
+        cases = [
+            c for c in cases
+            if (getattr(c, "test_id", "") or "") not in _quarantined
+        ]
+        if not cases:
+            raise HTTPException(status_code=409, detail={
+                "error": "all requested cases are quarantined",
+                "reason": (
+                    "Their latest certification run failed for a product-side "
+                    "(or not-yet-attributed) cause. The product is repairing "
+                    "them; they return automatically once they re-certify. "
+                    "This is NOT an application failure."
+                ),
+                "quarantined_test_ids": excluded_quarantined[:50],
+            })
+
     base_url = (body.base_url or "").strip()
     if body.env_context and body.env_context.get("base_url"):
         base_url = str(body.env_context["base_url"]).strip()  # env profile base_url wins (SSRF-guarded)
@@ -3058,7 +3186,9 @@ async def playwright_run(
     task = asyncio.create_task(_execute_run(run_id, files, env))
     _RUNNER_TASKS.add(task)
     task.add_done_callback(_RUNNER_TASKS.discard)
-    return {"run_id": run_id, "status": "running", "scripts": len(cases), "target": base_url}
+    return {"run_id": run_id, "status": "running", "scripts": len(cases),
+            "target": base_url,
+            "excluded_quarantined": excluded_quarantined}
 
 
 @router.post("/api/v1/test-factory/{artifact_id}/playwright/run-live")
@@ -3631,10 +3761,99 @@ async def runs_summary(
             "consecutive_failures": s.get("consecutive_failures", 0),
             "last_run_status": s.get("last_run_status", ""),
             "last_run_at": s.get("last_run_at"),
+            # F4 — failure attribution: when the latest failure is PROVABLY a
+            # generated-oracle defect, the UI must say "product-side", never
+            # painting the client's application red for our oracle.
+            "failure_attribution": s.get("failure_attribution"),
+            # P0.2 — soft-oracle misses on the latest client run (visible,
+            # non-fatal best-effort hints under the proven-oracle policy).
+            "soft_oracle_misses": s.get("soft_oracle_misses", 0),
+            # P0.3 — latest certification-run state (kept OUT of the client
+            # stats above; quarantine is derived server-side from it).
+            "certification": s.get("certification"),
         }
+    # P0.3 — per-script quarantine flag (server truth mirrored for the UI,
+    # via the SAME pure rule the run-gate uses).
+    for _sid, v in scripts.items():
+        v["quarantined"] = quarantine_decision(v.get("certification"))
     board["total_scripts"] = len(scripts)
     board["flaky"] = sum(1 for v in scripts.values() if v["is_flaky"])
+    board["quarantined"] = sum(1 for v in scripts.values() if v.get("quarantined"))
     return {"artifact_id": artifact_id, "board": board, "scripts": scripts}
+
+
+@router.get("/api/v1/test-factory/{artifact_id}/quality/product-faults")
+async def product_fault_metric(
+    artifact_id: str = PathParam(..., min_length=1, max_length=64),
+    window_days: int = Query(30, ge=1, le=365),
+    user: dict = Depends(get_current_user),
+):
+    """P2.8 — the north-star quality metric: CLIENT-VISIBLE product-fault
+    failures (target: zero). Counts every failed step on a NON-certification
+    run whose attribution is product-side, against the certification catches
+    (product faults intercepted BEFORE a client run). Read-only, $0 LLM,
+    deterministic over the ingested run/step tables.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    tenant_id = user["tenant_id"]
+    since = datetime.now(timezone.utc) - timedelta(days=window_days)
+    async with tenant_scoped_session(tenant_id) as session:
+        await _require_artifact(session, artifact_id, tenant_id)
+        rows = (await session.execute(
+            select(
+                E2ETestRunStepRow.scenario_id,
+                E2ETestRunStepRow.step_number,
+                E2ETestRunStepRow.metadata_json,
+                E2ETestRunRow.environment,
+                E2ETestRunRow.started_at,
+                E2ETestRunRow.run_id,
+            )
+            .join(E2ETestRunRow, E2ETestRunStepRow.run_id == E2ETestRunRow.run_id)
+            .where(
+                E2ETestRunStepRow.artifact_id == artifact_id,
+                E2ETestRunStepRow.tenant_id == tenant_id,
+                E2ETestRunRow.started_at >= since,
+            )
+            .order_by(desc(E2ETestRunRow.started_at))
+        )).all()
+
+    client_visible: list[dict] = []
+    caught_in_certification = 0
+    by_cause: dict[str, int] = {}
+    for sid, step_no, meta, env_name, started_at, run_id in rows:
+        attr = (meta or {}).get("failure_attribution")
+        if not attr:
+            continue
+        category = str(attr.get("category") or "")
+        if category != "product_script_defect":
+            continue
+        is_cert = str(env_name or "").strip().lower() == "certification"
+        by_cause[attr.get("cause") or "unspecified"] = (
+            by_cause.get(attr.get("cause") or "unspecified", 0) + 1
+        )
+        if is_cert:
+            caught_in_certification += 1
+        else:
+            client_visible.append({
+                "run_id": run_id,
+                "scenario_id": sid,
+                "step_number": step_no,
+                "cause": attr.get("cause"),
+                "tier": attr.get("tier"),
+                "at": started_at.isoformat() if started_at else None,
+            })
+
+    return {
+        "artifact_id": artifact_id,
+        "window_days": window_days,
+        # THE metric — a client saw a run fail on OUR defect. Target: 0.
+        "client_visible_product_faults": len(client_visible),
+        # The gate working — product faults intercepted before any client run.
+        "caught_in_certification": caught_in_certification,
+        "by_cause": by_cause,
+        "recent_client_visible": client_visible[:25],
+    }
 
 
 async def _fidelity_inputs(session, artifact_id: str):

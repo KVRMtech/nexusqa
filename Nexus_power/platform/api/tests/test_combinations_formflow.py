@@ -81,7 +81,9 @@ def test_formflow_base_yields_ranked_combinations():
     assert res.active, "combinations must generate off a form-flow base"
     # Ranked: names carry Rank N, tags carry rank+risk, dicts populated.
     first = res.active[0]
-    assert first.name.startswith("Rank 1 — Combination:"), first.name
+    # F5 (business-intent names): the ranked prefix stays, the body now states
+    # the business intent instead of the crawler-mechanics "Combination:" label.
+    assert first.name.startswith("Rank 1 — Verify user can complete the flow with"), first.name
     assert any(t.startswith("combination-rank:1") for t in first.tags)
     assert res.rank_by_test_id[first.test_id] == 1
     assert res.risk_by_test_id[first.test_id] >= res.risk_by_test_id[res.active[-1].test_id]

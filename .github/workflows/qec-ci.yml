@@ -210,6 +210,30 @@ jobs:
             tests/test_qec_contract_e2_composer.py \
             -v --tb=short
 
+      # (h2) Execution-reliability guard suite (P0-P2, doctrine 2026-07-24):
+      #     the golden corpus (generate→compile→audit invariants I1-I6), the
+      #     escape→guard registry law, the attribution engine ladder, the
+      #     certification quarantine rule, the proven-oracle soft-miss
+      #     recording, and every escaped-defect regression (URL-text oracle,
+      #     business names, business Expected Results). A verdict flip here
+      #     fails OUR build before a deploy can ship it — see
+      #     docs/EXECUTION_RELIABILITY_DOCTRINE.md.
+      - name: Execution-reliability guard suite
+        working-directory: Nexus_power/platform/api
+        run: |
+          python -m pytest \
+            tests/test_golden_corpus_generation.py \
+            tests/test_escape_guard_registry.py \
+            tests/test_attribution_engine.py \
+            tests/test_certification_quarantine.py \
+            tests/test_soft_oracle_recording.py \
+            tests/test_failure_attribution.py \
+            tests/test_compiler_url_text_oracle.py \
+            tests/test_auditor_url_text_oracle.py \
+            tests/test_business_case_names.py \
+            tests/test_generator_business_expected.py \
+            -v --tb=short
+
       # (i) Phase 6.3a — backups are PROVEN recoverable, not assumed. Runs LAST so
       #     the seeded probe rows can never perturb the suites above. Exercises the
       #     SAME production script the operator runs (scripts/verdict_pg_backup.sh)

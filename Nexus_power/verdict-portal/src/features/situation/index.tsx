@@ -15,6 +15,7 @@ import {
   AlertTriangle,
   ArrowLeft,
   CheckCircle2,
+  Crosshair,
   FileCheck2,
   FlaskConical,
   GitBranch,
@@ -46,7 +47,7 @@ import {
   StatusDot,
   VerdictBadge,
 } from '../../components';
-import type { AppCrawlStatus, CriticalityBand, CrawlDiagnosis, ExplorationCoverage, ScenarioView } from '../../types/qec';
+import type { AppCrawlStatus, ClientApp, CriticalityBand, CrawlDiagnosis, ExplorationCoverage, ScenarioView } from '../../types/qec';
 import VerdictLedger from '../ledger';
 import HonestyFeed from '../honesty';
 import SeedManifestPanel from './SeedManifestPanel';
@@ -105,6 +106,92 @@ function CrawlDiagnosisCard({ crawl }: { crawl?: AppCrawlStatus }) {
             ))}
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+// ── crawl mode: Explore (whole-app) vs Target (path-confined) ─────────────────
+// Surfaces + edits schedule.scope_paths on an EXISTING app. Non-empty scope_paths
+// ⇒ Target mode (the crawl is confined to those path prefixes, R3 Mode 2); empty
+// ⇒ Explore mode. PATCH /apps whole-replaces `schedule`, so we send the full
+// object (cadence / run_environment survive) with scope_paths added or removed.
+function CrawlModeControl({ app, onSaved }: { app: ClientApp; onSaved: () => void }) {
+  const raw = (app.schedule as Record<string, unknown> | undefined)?.scope_paths;
+  const current = Array.isArray(raw) ? raw.filter((p): p is string => typeof p === 'string') : [];
+  const [editing, setEditing] = useState(false);
+  const [text, setText] = useState(current.join('\n'));
+  const [saving, setSaving] = useState(false);
+  const isTarget = current.length > 0;
+
+  const save = async () => {
+    const paths = text
+      .split(/[\s,]+/)
+      .map((p) => p.trim())
+      .filter(Boolean)
+      .map((p) => (p.startsWith('/') ? p : `/${p}`))
+      .slice(0, 20);
+    setSaving(true);
+    try {
+      // Whole-replace `schedule`: spread the existing object so cadence /
+      // run_environment survive, then set or clear scope_paths.
+      const schedule: Record<string, unknown> = { ...(app.schedule as Record<string, unknown> | undefined) };
+      if (paths.length) schedule.scope_paths = paths;
+      else delete schedule.scope_paths;
+      await api.updateApp(app.app_id, { schedule });
+      toast.success(
+        paths.length ? `Target mode — crawl confined to ${paths.join(', ')}` : 'Explore mode — whole-app crawl',
+      );
+      setEditing(false);
+      onSaved();
+    } catch (err) {
+      toast.error('Could not update crawl scope', { description: (err as QecApiError).message });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (!editing) {
+    return (
+      <button
+        type="button"
+        onClick={() => {
+          setText(current.join('\n'));
+          setEditing(true);
+        }}
+        className="inline-flex items-center gap-1.5 rounded-md bg-ink/5 px-2 py-1 text-2xs text-ink-mid ring-1 ring-line hover:text-ink transition-colors"
+        title="Set the crawl mode: Explore (whole app) or Target (path-confined)"
+      >
+        <Crosshair size={12} aria-hidden />
+        <span className="font-semibold">{isTarget ? 'Target' : 'Explore'}</span>
+        {isTarget && <span className="font-mono text-ink-low">{current.join(' ')}</span>}
+        <span className="text-ink-faint">· edit</span>
+      </button>
+    );
+  }
+
+  return (
+    <div className="rounded-lg bg-inset ring-1 ring-line px-3 py-2.5 space-y-2 w-full max-w-md">
+      <p className="text-2xs font-semibold text-ink-mid">Crawl mode — Explore vs Target</p>
+      <textarea
+        className="w-full rounded-lg bg-panel text-ink text-xs ring-1 ring-line focus-visible:ring-teal/60 px-2.5 py-1.5 font-mono min-h-[3rem] resize-y"
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        placeholder="/quote"
+        autoFocus
+      />
+      <p className="text-2xs text-ink-faint leading-snug">
+        {text.trim()
+          ? 'Target mode — the crawl is confined to the path prefix(es) above.'
+          : 'Blank = Explore mode — the whole app is crawled.'}
+      </p>
+      <div className="flex items-center gap-2">
+        <Button size="sm" variant="primary" loading={saving} onClick={save}>
+          Save
+        </Button>
+        <Button size="sm" variant="ghost" onClick={() => setEditing(false)} disabled={saving}>
+          Cancel
+        </Button>
       </div>
     </div>
   );
@@ -232,6 +319,9 @@ function SituationHeader({ appId }: { appId: string }) {
           )}
         </div>
         <p className="text-2xs text-ink-low font-mono mt-1 truncate">{app.base_url}</p>
+        <div className="mt-2">
+          <CrawlModeControl app={app} onSaved={state.reload} />
+        </div>
       </div>
       <div className="flex items-center gap-2 shrink-0">
         <Button

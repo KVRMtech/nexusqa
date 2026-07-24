@@ -362,6 +362,20 @@ _OUTCOME_REGION_RX = re.compile(
 # non-empty check when the value has no stable token.
 _NXTOK_JS = r"""function __nxTok(v){const s=String(v==null?'':v);const m=s.match(/[A-Za-z]{2,}|[0-9]{2,}/);return m?new RegExp(m[0].replace(/[.*+?^${}()|[\]\\]/g,'\\$&'),'i'):/\S/;}"""
 
+# P0.2 — soft-oracle miss recorder. Under the proven-oracle policy a prose-
+# derived (best-effort) oracle is non-fatal, but a silent .catch(() => {})
+# would be a mini green-wash in the other direction: the miss must be VISIBLE.
+# The helper records the miss as a test annotation (the bundled reporter ships
+# annotations into the step's ingest metadata → run summary → UI warning) and
+# mirrors it to stdout for local runs. Defined ONLY when the body calls it
+# (the auditor's dead-scaffolding rule).
+_NXSOFTMISS_JS = (
+    "function __nxSoftMiss(n, d){"
+    "try{test.info().annotations.push({type:'nexus-soft-oracle-miss',"
+    "description:String(n)+'|'+String(d)});}catch{}"
+    "try{console.warn('NEXUS_SOFT_ORACLE_MISS step '+n+': '+d);}catch{}}"
+)
+
 _NXSETTLE_JS = r"""async function __nxSettle(page){try{await page.waitForLoadState('domcontentloaded',{timeout:5000});}catch(e){}const sp=page.locator('[class*=spinner i],[class*=loading i],[aria-busy=\"true\"],[role=progressbar]').first();try{if(await sp.isVisible().catch(()=>false)){await sp.waitFor({state:'hidden',timeout:8000});}}catch(e){}}"""
 
 # Ordered-fallback click. Accepts ONE locator (legacy) or an ARRAY of rung
@@ -441,17 +455,39 @@ out new view click clicked select selected enter entered submit submitted screen
 """.split())
 
 
+# URL-shaped "grounding" guard: a URL is NEVER rendered page text. The generator
+# threads `observed.after` as the observed OUTCOME TEXT, but crawl-substrate steps
+# can carry the post-action URL there, and Expected-Result prose often embeds the
+# recorded destination URL ("The application proceeds to https://…"). Grounding a
+# text-visibility oracle against a URL lets scheme/host fragments pass the
+# appears-in-the-ground check — compiling expect(getByText(/https/i)) which NO page
+# ever renders: a guaranteed false RED on every app (run 7c89de7e step 7, 2026-07-24).
+# Stripping URL substrings from BOTH the token source and the ground means a URL
+# fragment can never ground a text oracle; "proceeds to <URL>" is already covered by
+# the CORRECT oracle — the hard toHaveURL compiled from observed.next_url.
+_URL_SUBSTRING_RX = re.compile(r"(?:https?://|www\.)\S+", re.IGNORECASE)
+
+
+def _strip_urls(text: str) -> str:
+    """Remove URL substrings (scheme:// or www.) — URL text is not page text."""
+    return _URL_SUBSTRING_RX.sub(" ", text or "")
+
+
 def _grounded_expectation_token(expected_result: str, grounded_text: str) -> str:
     """Pick a regex-safe token that the Expected Result names AND that appears in the
     OBSERVED OUTCOME text — so the compiled visibility oracle is grounded in real
     rendered page text (getByText-safe), not in un-observed prose or a field value
     (which lives in an <input> / closed <option> and would false-RED). Returns ''
     when nothing the Expected Result names was actually observed (caller emits an
-    honest UNVERIFIED comment instead of a brittle assertion)."""
-    g = (grounded_text or "").lower()
+    honest UNVERIFIED comment instead of a brittle assertion).
+
+    URL-guard: URL substrings are stripped from BOTH inputs first — a URL-valued
+    ground (crawl-substrate `after`) or a URL embedded in the Expected Result can
+    otherwise ground a scheme/host fragment ("https") as if it were page text."""
+    g = _strip_urls(grounded_text).lower()
     if not g.strip():
         return ""
-    for raw in re.findall(r"[A-Za-z][A-Za-z0-9]{3,}", expected_result or ""):
+    for raw in re.findall(r"[A-Za-z][A-Za-z0-9]{3,}", _strip_urls(expected_result)):
         w = raw.lower()
         if w in _ER_STOPWORDS:
             continue
@@ -472,7 +508,8 @@ def _comment_safe(text: object, cap: int = 200) -> str:
 
 
 def _assertion_from_expected_result(observed: dict, expected_result: str = "",
-                                    *, nav_proven: bool = True) -> list[str]:
+                                    *, nav_proven: bool = True,
+                                    step_number: int = 0) -> list[str]:
     """Compile GROUNDED, tolerant assertions from a step's observed outcome.
 
     Closes the two oracles the compiler previously left as comments:
@@ -508,20 +545,30 @@ def _assertion_from_expected_result(observed: dict, expected_result: str = "",
                     f"navigation to {path} — NOT hard-asserted (inferred/review nav). The action "
                     f"still ran; a PROVEN navigation would be a hard toHaveURL oracle."
                 )
-    # PROVEN-only outcome oracle (gated NEXUS_PROVEN_NAV_ORACLE): a getByText derived from
-    # the LLM's PROSE outcome description (`after` / expected-result) is NOT a grounded oracle
-    # — the prose word may not be literal page text (e.g. 'product listing' → getByText(/listing/)
-    # which SauceDemo's inventory never renders). Under the policy, emit it as a NON-FAILING hint
-    # (.catch) so a fabricated description never false-reds a step whose real action + navigation
-    # already passed (those stay the hard oracles). Off => byte-identical (hard assertion).
-    _soft_outcome = os.getenv("NEXUS_PROVEN_NAV_ORACLE") == "1"
-    _oc_tail = (".catch(() => {}); // best-effort: LLM-prose outcome hint (non-failing under the "
-                "proven-only policy; the action + navigation are the hard oracles)"
-                if _soft_outcome else "; // grounded: observed outcome region is shown")
-    after = (observed.get("after") or "").strip()
+    # PROVEN-only outcome oracle (NEXUS_PROVEN_NAV_ORACLE, DEFAULT ON since
+    # 2026-07-24 — founder-authorized P0.2): a getByText derived from the
+    # prose outcome description (`after` / expected-result) is NOT a grounded
+    # oracle — the prose word may not be literal page text. Under the policy
+    # it is a NON-FAILING hint whose miss is RECORDED (__nxSoftMiss →
+    # reporter annotation → ingest metadata → visible run warning), so a
+    # fabricated description never false-reds a step whose real action +
+    # navigation already passed — and never fails silently either. Set
+    # NEXUS_PROVEN_NAV_ORACLE=0 to restore the legacy hard assertions.
+    _soft_outcome = os.getenv("NEXUS_PROVEN_NAV_ORACLE", "1") != "0"
+    _sn = int(step_number or 0)
+    # URL-guard: an `after` that is (or embeds) a URL is not rendered page text.
+    # Strip URL substrings BEFORE the region scan, so a path/query fragment
+    # ("/portal/dashboard", "?view=summary") can never fake an outcome-region
+    # text oracle the page does not render.
+    after = _strip_urls(observed.get("after") or "").strip()
     if after:
         m = _OUTCOME_REGION_RX.search(after)
         if m:
+            _oc_tail = (
+                f".catch(() => __nxSoftMiss({_sn}, "
+                f"{js_str('outcome region ' + m.group(1).lower() + ' not visible (best-effort hint)')}"
+                ")); // best-effort: prose outcome hint (non-failing, miss RECORDED)"
+                if _soft_outcome else "; // grounded: observed outcome region is shown")
             out.append(
                 f"await expect(page.getByText(/{m.group(1).lower()}/i).first())"
                 f".toBeVisible(){_oc_tail}"
@@ -536,10 +583,12 @@ def _assertion_from_expected_result(observed: dict, expected_result: str = "",
         already = " ".join(out).lower()
         tok = _grounded_expectation_token(er, after)
         if tok and tok.lower() not in already:
-            _er_tail = (".catch(() => {}); // best-effort: LLM-prose Expected-Result hint "
-                        "(non-failing under the proven-only policy)"
-                        if _soft_outcome
-                        else "; // grounded: step Expected Result, verified against the observed outcome")
+            _er_tail = (
+                f".catch(() => __nxSoftMiss({_sn}, "
+                f"{js_str('expected-result text ' + tok + ' not visible (best-effort hint)')}"
+                ")); // best-effort: Expected-Result hint (non-failing, miss RECORDED)"
+                if _soft_outcome
+                else "; // grounded: step Expected Result, verified against the observed outcome")
             out.append(
                 f"await expect(page.getByText(/{tok}/i).first()).toBeVisible(){_er_tail}"
             )
@@ -736,7 +785,9 @@ def _action_lines(step, field_meta: dict, parametrize: bool = False,
         out.append(f"const cb = {_cb}.first();")
         out.append(f"await cb.{'check' if _on else 'uncheck'}();")
         out.append("await expect(cb)." + ("toBeChecked();" if _on else "not.toBeChecked();"))
-        out.extend(_assertion_from_expected_result(observed, nav_proven=_nav_proven))
+        out.extend(_assertion_from_expected_result(
+            observed, nav_proven=_nav_proven,
+            step_number=getattr(step, "step_number", 0) or 0))
         if after:
             out.append(f"// observed outcome: {_comment_safe(after)}")
         return out
@@ -1093,7 +1144,9 @@ def _action_lines(step, field_meta: dict, parametrize: bool = False,
     # "UNVERIFIED expected result" note under a step that IS verified.
     _er = (getattr(step, "expected_result", "") or getattr(step, "expected", "") or "").strip()
     if verb != "upload":
-        out.extend(_assertion_from_expected_result(observed, _er, nav_proven=_nav_proven))
+        out.extend(_assertion_from_expected_result(
+            observed, _er, nav_proven=_nav_proven,
+            step_number=getattr(step, "step_number", 0) or 0))
     if after:
         out.append(f"// observed outcome: {_comment_safe(after)}")
     return out
@@ -1455,7 +1508,17 @@ def compile_case(tc, field_meta: dict | None = None, *, parametrize: bool = Fals
         out.append("")
         out.append(_HEAL_CAPTURE_AFTEREACH.replace("__TEST_ID__", test_id))
     out.append("")
-    return "\n".join(out)
+    spec = "\n".join(out)
+    # P0.2 — define the soft-miss recorder ONLY when the body calls it (the
+    # auditor's dead-scaffolding rule); JS function declarations hoist, but
+    # placing it right after the import keeps the spec readable.
+    if "__nxSoftMiss(" in spec:
+        spec = spec.replace(
+            "import { test, expect } from '@playwright/test';",
+            "import { test, expect } from '@playwright/test';\n" + _NXSOFTMISS_JS,
+            1,
+        )
+    return spec
 
 
 _PACKAGE_JSON = """\
@@ -1616,6 +1679,7 @@ type StepRecord = {
   duration_ms: number;
   error_message: string;
   screenshot_url?: string;
+  metadata?: { soft_oracle_misses?: string[] };
 };
 
 type PendingShot = {
@@ -1673,6 +1737,33 @@ export default class VKPowerReporter implements Reporter {
           duration_ms: Math.round(s.duration),
           error_message: (s.error?.message || '').slice(0, 8000),
         });
+      }
+    }
+    // Soft-oracle misses (proven-oracle policy): the compiled spec records a
+    // non-fatal best-effort oracle miss as a 'nexus-soft-oracle-miss'
+    // annotation ("stepNumber|description"). Ship them into the matching step
+    // record's metadata so the platform surfaces them as visible warnings —
+    // a soft miss is never fatal AND never silent.
+    const softAnns = ([] as any[])
+      .concat((result as any).annotations || [], (test.annotations as any[]) || [])
+      .filter((a) => a && a.type === 'nexus-soft-oracle-miss');
+    if (softAnns.length) {
+      const byStep: Record<string, string[]> = {};
+      for (const a of softAnns) {
+        const d = String(a.description || '');
+        const bar = d.indexOf('|');
+        const n = bar > 0 ? d.slice(0, bar) : '0';
+        (byStep[n] = byStep[n] || []).push(bar > 0 ? d.slice(bar + 1) : d);
+      }
+      for (let i = startIdx; i < this.steps.length; i++) {
+        const hits = byStep[String(this.steps[i].step_number)];
+        if (hits && hits.length) {
+          this.steps[i].metadata = { soft_oracle_misses: hits.slice(0, 20) };
+        }
+      }
+      const orphan = byStep['0'];
+      if (orphan && orphan.length && this.steps.length > startIdx && !this.steps[startIdx].metadata) {
+        this.steps[startIdx].metadata = { soft_oracle_misses: orphan.slice(0, 20) };
       }
     }
     // Associate Playwright's only-on-failure screenshot with the failing step

@@ -29,7 +29,14 @@ from fastapi import HTTPException
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from .test_factory.attribution_engine import (
+    CATEGORY_PRODUCT,
+    CATEGORY_UNKNOWN,
+    attribute_failure,
+)
+from .test_factory.failure_attribution import summarize_attributions
 from nexus_sdk.db.models import (
+    FactoryTestCaseRow,
     E2ETestRunRow,
     E2ETestRunStepRow,
     E2E_RUN_STATUS_PASSED,
@@ -223,7 +230,44 @@ async def ingest_run(
     db.add(run)
     await db.flush()  # populate FK
 
+    # Certification runs (P0.3) execute against the ATTESTED baseline right
+    # after generation; they are tagged environment='certification' by the
+    # dispatcher and are kept OUT of client-facing stats by the summary.
+    is_certification = (
+        str(payload.get("environment") or "").strip().lower() == "certification"
+    )
+
+    # P1.4 — resolve each failed step's stored definition (the factory case
+    # JSON) so the attribution engine can use grounded evidence (provenance,
+    # navigation_grounded, observed.after) — one query, failed scenarios only.
+    failed_sids = {
+        (
+            s.get("scenario_id")
+            or extract_scenario_id_from_test_name(s.get("test_name"))
+            or ""
+        )
+        for s in steps_in
+        if ingested_step_status(s) not in (E2E_STEP_STATUS_PASSED, E2E_STEP_STATUS_SKIPPED)
+    }
+    failed_sids.discard("")
+    case_steps_by_sid: dict[str, list] = {}
+    if failed_sids:
+        rows = (
+            await db.execute(
+                select(FactoryTestCaseRow.test_case_id, FactoryTestCaseRow.test_case)
+                .where(
+                    FactoryTestCaseRow.test_case_id.in_(failed_sids),
+                    FactoryTestCaseRow.tenant_id == tenant_id,
+                    FactoryTestCaseRow.artifact_id == artifact_id,
+                )
+            )
+        ).all()
+        for tc_id, tc_json in rows:
+            case_steps_by_sid[str(tc_id)] = list((tc_json or {}).get("steps") or [])
+
     parse_misses = 0
+    attributions: list[dict | None] = []
+    soft_miss_total = 0
     for s in steps_in:
         scenario_id = (
             s.get("scenario_id")
@@ -233,6 +277,33 @@ async def ingest_run(
         if not scenario_id:
             parse_misses += 1
         step_status = ingested_step_status(s)
+
+        # P1.4 — Attribution Engine: never blame the app for a product defect,
+        # never claim an application defect without positive evidence, UNKNOWN
+        # is honest. Deterministic + evidence-quoted; unprovable → NO claim.
+        attribution = None
+        if step_status not in (E2E_STEP_STATUS_PASSED, E2E_STEP_STATUS_SKIPPED):
+            step_def = None
+            steps_json = case_steps_by_sid.get(scenario_id)
+            if steps_json:
+                n = int(s.get("step_number") or 0)
+                if 1 <= n <= len(steps_json) and isinstance(steps_json[n - 1], dict):
+                    step_def = steps_json[n - 1]
+            attribution = attribute_failure(
+                s.get("error_message"),
+                step_def=step_def,
+                is_certification=is_certification,
+            )
+        attributions.append(attribution)
+        step_meta = dict(s.get("metadata") or {})
+        if attribution:
+            step_meta["failure_attribution"] = attribution
+        # P0.2 — soft-oracle misses recorded by the compiled spec (non-fatal
+        # best-effort oracles under the proven-oracle policy) arrive in step
+        # metadata from the reporter; roll them up for the run summary.
+        misses = step_meta.get("soft_oracle_misses")
+        if isinstance(misses, list):
+            soft_miss_total += len(misses)
 
         step_row = E2ETestRunStepRow(
             step_run_id=_new_id(),
@@ -251,10 +322,28 @@ async def ingest_run(
             evidence_edge_id=str(s.get("evidence_edge_id") or "")[:64],
             error_message=str(s.get("error_message") or "")[:8000],
             screenshot_url=str(s.get("screenshot_url") or "")[:2000],
-            metadata_json=dict(s.get("metadata") or {}),
+            metadata_json=step_meta,
             created_at=_utc_now(),
         )
         db.add(step_row)
+
+    # F4/P1.4 — run-level rollup so list views can say "failed on a
+    # product-side script defect" without re-reading step rows. Absent when
+    # nothing was provably attributed (no claim is a claim of nothing).
+    run_meta_extra: dict = {}
+    attr_summary = summarize_attributions(attributions)
+    if attr_summary:
+        # P1.4 category counts alongside the F4 tiers.
+        cat_counts: dict[str, int] = {}
+        for a in attributions:
+            if a and a.get("category"):
+                cat_counts[a["category"]] = cat_counts.get(a["category"], 0) + 1
+        attr_summary["categories"] = cat_counts
+        run_meta_extra["failure_attribution_summary"] = attr_summary
+    if soft_miss_total:
+        run_meta_extra["soft_oracle_misses_total"] = soft_miss_total
+    if run_meta_extra:
+        run.metadata_json = {**(run.metadata_json or {}), **run_meta_extra}
 
     await db.commit()
     _logger.info(
@@ -332,18 +421,83 @@ async def last_run_summary_by_scenario(
             if _status_severity(step_row.status) > _status_severity(entry["worst_status"]):
                 entry["worst_status"] = step_row.status
 
-        # Order runs descending by started_at
-        runs_desc = sorted(
+        # Order runs descending by started_at, then SPLIT certification runs
+        # (P0.3) out of the client-facing stats: a certification failure is the
+        # PRODUCT proving (or failing to prove) its own script on the attested
+        # baseline — it must never read as "your app's last run failed".
+        all_runs_desc = sorted(
             run_statuses_by_run.values(),
             key=lambda r: r["run"].started_at,
             reverse=True,
         )
+        cert_runs = [
+            r for r in all_runs_desc
+            if str(r["run"].environment or "").strip().lower() == "certification"
+        ]
+        runs_desc = [r for r in all_runs_desc if r not in cert_runs]
+
+        certification: dict | None = None
+        if cert_runs:
+            c = cert_runs[0]
+            c_run: E2ETestRunRow = c["run"]
+            c_attr = next(
+                (
+                    (s.metadata_json or {}).get("failure_attribution")
+                    for s in c["steps"]
+                    if (s.metadata_json or {}).get("failure_attribution")
+                ),
+                None,
+            )
+            certification = {
+                "status": (
+                    "certified"
+                    if c["worst_status"] == E2E_STEP_STATUS_PASSED
+                    else "failed"
+                ),
+                "at": c_run.started_at.isoformat() if c_run.started_at else None,
+                "attribution": c_attr,
+            }
+
+        if not runs_desc:
+            # Certification-only scenario: no client runs yet. Surface the
+            # certification state with EMPTY client fields so the flows view
+            # renders it as a candidate-with-certification, never "run failed".
+            summary[scenario_id] = {
+                "last_run_id": "",
+                "last_run_status": "",
+                "last_run_at": None,
+                "last_duration_ms": 0,
+                "last_error_message": "",
+                "ci_commit_sha": "",
+                "ci_pipeline_url": "",
+                "flake_rate_pct": 0.0,
+                "is_flaky": False,
+                "consecutive_failures": 0,
+                "runs_in_window": 0,
+                "selector_drift_observed": False,
+                "failure_attribution": None,
+                "soft_oracle_misses": 0,
+                "certification": certification,
+            }
+            continue
+
         latest = runs_desc[0]
         latest_run: E2ETestRunRow = latest["run"]
         latest_steps: list[E2ETestRunStepRow] = latest["steps"]
         latest_error = next(
             (s.error_message for s in latest_steps if s.status == E2E_STEP_STATUS_FAILED),
             "",
+        )
+        # F4 — surface the ingest-time failure attribution (if any step of the
+        # latest run carries one) so the UI can say "product-side script
+        # defect", never painting the client's application red for our oracle.
+        latest_attribution = next(
+            (
+                (s.metadata_json or {}).get("failure_attribution")
+                for s in latest_steps
+                if (s.metadata_json or {}).get("failure_attribution")
+            ),
+            None,
         )
         latest_duration = sum(s.duration_ms for s in latest_steps)
         selector_drift = any(
@@ -368,8 +522,71 @@ async def last_run_summary_by_scenario(
             "consecutive_failures": flake["consecutive_failures"],
             "runs_in_window": len(flake_window),
             "selector_drift_observed": selector_drift,
+            "failure_attribution": latest_attribution,
+            # P0.2 — soft-oracle misses on the latest client run (non-fatal
+            # best-effort oracles that did not match; visible, never silent).
+            "soft_oracle_misses": sum(
+                len((s.metadata_json or {}).get("soft_oracle_misses") or [])
+                for s in latest_steps
+            ),
+            "certification": certification,
         }
     return summary
+
+
+# ─── Certification quarantine (P0.3) ─────────────────────────────────────
+
+
+def quarantine_decision(cert: dict | None) -> bool:
+    """The PURE quarantine rule (doctrine — quarantine and blame are separate):
+
+      * no certification record / certification passed  → NOT quarantined;
+      * certification failed, category product/unknown/absent
+            → QUARANTINED (the case has not proven it can pass on the
+              attested baseline — product-side until proven otherwise);
+      * certification failed, category application
+            → NOT quarantined (a grounded regression on the baseline is a
+              REAL signal the client pays for — hiding it would green-wash);
+      * certification failed, category environment/configuration
+            → NOT quarantined (infra/config outages never shame the cases).
+    """
+    if not cert or cert.get("status") != "failed":
+        return False
+    category = str(((cert.get("attribution") or {}).get("category")) or "")
+    return (not category) or category in (CATEGORY_PRODUCT, CATEGORY_UNKNOWN)
+
+
+async def product_quarantined_scenarios(
+    db: AsyncSession,
+    *,
+    artifact_id: str,
+    tenant_id: str,
+) -> dict[str, dict]:
+    """Scenarios whose LATEST certification run failed for a product-side (or
+    unproven) reason — these must not be offered to the client as runnable
+    until they re-certify.
+
+    Quarantine rules (doctrine — quarantine and blame are separate decisions):
+      * certification failed + attribution category product/unknown/absent
+            → QUARANTINED (the case has not proven it can pass; product-side
+              until proven otherwise — the baseline is attested-good);
+      * certification failed + category application
+            → NOT quarantined: a grounded oracle breaking on the baseline is a
+              REAL signal the client pays for — hiding it would green-wash;
+      * certification failed + category environment/configuration
+            → NOT quarantined: infra/config outages are surfaced as such and
+              must not shame the cases (they never got to prove anything).
+
+    Returns {scenario_id: certification-block} for the quarantined set.
+    """
+    summary = await last_run_summary_by_scenario(
+        db, artifact_id=artifact_id, tenant_id=tenant_id,
+    )
+    return {
+        sid: entry["certification"]
+        for sid, entry in summary.items()
+        if quarantine_decision(entry.get("certification"))
+    }
 
 
 def _status_severity(status: str) -> int:
