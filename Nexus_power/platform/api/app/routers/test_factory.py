@@ -1070,22 +1070,15 @@ async def _certify_generated_suite(
                 artifact_id,
             )
             return
-        # Baseline URL — the app's own recorded host (generic: structure only).
-        host = ""
-        for v in visits:
-            host = (
-                (getattr(v, "canonical_host", "") or getattr(v, "url_host", "") or "")
-            ).strip()
-            if host:
-                break
-        if not host:
+        # Baseline URL — the app's recorded FULL host (url_host, not the
+        # registrable canonical_host which yields the dead https://sslip.io).
+        base_url = _recorded_origin(visits)
+        if not base_url:
             _logger.warning(
                 "test_factory.certification.skipped artifact=%s reason=no_recorded_host",
                 artifact_id,
             )
             return
-        # Dotless hosts are internal container names (http); public hosts https.
-        base_url = f"{'http' if '.' not in host else 'https'}://{host}"
         storage_state = await _run_storage_state(request, artifact_id, tenant_id)
         files = _configured_files(
             cases, build_field_meta(visits), base_url, None,
@@ -1141,6 +1134,31 @@ async def _certify_generated_suite(
         )
 
 
+def _recorded_origin(visits) -> str:
+    """The app ORIGIN (scheme://host) a server-side run must navigate to.
+
+    Uses ``url_host`` — the ACTUAL recorded host — NOT ``canonical_host``, which
+    is the registrable/politeness domain (e.g. 'sslip.io' for
+    'vkpowerlife.35-186-147-245.sslip.io'). Deriving the base URL from
+    canonical_host produced ``https://sslip.io`` → nginx 404, so every
+    certification / diagnosis / auto-heal run navigated to a dead host and died
+    at the first field (proven 2026-07-25 by a diagnosis run's 404 screenshot).
+    Dotless hosts are internal container names (http); public hosts https."""
+    host = ""
+    for v in (visits or []):
+        host = (getattr(v, "url_host", "") or "").strip()
+        if host:
+            break
+    if not host:  # last resort — a capture with no full host recorded
+        for v in (visits or []):
+            host = (getattr(v, "canonical_host", "") or "").strip()
+            if host:
+                break
+    if not host:
+        return ""
+    return f"{'http' if '.' not in host else 'https'}://{host}"
+
+
 def _spawn_certification(request: Request, artifact_id: str, tenant_id: str) -> None:
     """Schedule the post-generation certification run (fire-and-forget)."""
     token = _bearer(request)
@@ -1194,18 +1212,12 @@ async def _auto_heal_scenario(
                     scenario_id)
                 return
             field_meta = build_field_meta(visits)
-            host = ""
-            for v in visits:
-                host = ((getattr(v, "canonical_host", "")
-                         or getattr(v, "url_host", "") or "")).strip()
-                if host:
-                    break
-            if not host:
+            base_url = _recorded_origin(visits)   # url_host, never canonical_host
+            if not base_url:
                 _logger.warning(
                     "test_factory.auto_heal.skipped scenario=%s reason=no_recorded_host",
                     scenario_id)
                 return
-            base_url = f"{'http' if '.' not in host else 'https'}://{host}"
             storage_state = await _run_storage_state(request, artifact_id, tenant_id)
             id_to_path = {s["test_id"]: s["path"]
                           for s in compile_manifest([tc], field_meta).get("scripts", [])}
