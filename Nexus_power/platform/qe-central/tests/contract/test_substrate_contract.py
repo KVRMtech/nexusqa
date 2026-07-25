@@ -48,6 +48,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 import pytest
+from sqlalchemy.pool import NullPool  # test-only: fresh conn per checkout, no cross-event-loop pooling
 
 from app.config import settings
 from app.db import safe_frame_asset_path

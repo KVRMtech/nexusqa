@@ -40,8 +40,10 @@ needs_qec_db = pytest.mark.skipif(
 # table cannot be added silently without either RLS or a justified exemption.
 _ALLOWLIST: dict[str, str] = {
     "alembic_version": "migration bookkeeping — a single global revision string, no tenant data",
-    "tenants": "the global tenant registry itself; a tenant IS the row (tenant_id is the PK) "
-               "and it is provisioned only by the platform super-admin scope, not per-tenant RLS",
+    # NOTE: no "tenants" entry — the global tenant registry lives in the NEXUS
+    # (platform) database, not in qecentral; no qec migration creates it. The
+    # stale-entry gate below caught the dead exemption the first time this
+    # suite truly RAN (post the NullPool event-loop fix).
     "tenant_provisioning": "platform-super-admin lifecycle registry keyed by tenant_id as PK; "
                            "governed by the fleet super-admin scope, RLS enable/force still "
                            "asserted structurally by test_migration_applies.py",

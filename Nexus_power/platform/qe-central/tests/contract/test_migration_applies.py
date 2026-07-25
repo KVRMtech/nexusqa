@@ -115,9 +115,14 @@ async def _fetch():
                     "WHERE schemaname = 'public'"
                 ))).all()
             }
+            # contype is a "char" column — asyncpg returns it as BYTES (b'u'),
+            # which silently fails a == "u" comparison. Cast to text in SQL so
+            # the assertion compares strings (this test only started truly
+            # RUNNING once the NullPool loop fix landed; the bytes mismatch was
+            # latent until then).
             constraints = {
                 r[0]: r[1] for r in (await conn.execute(text(
-                    "SELECT conname, contype FROM pg_constraint con "
+                    "SELECT conname, contype::text FROM pg_constraint con "
                     "JOIN pg_namespace n ON n.oid = con.connamespace "
                     "WHERE n.nspname = 'public'"
                 ))).all()
