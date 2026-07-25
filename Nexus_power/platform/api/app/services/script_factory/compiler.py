@@ -322,9 +322,18 @@ def _ladder_rungs(observed: dict, kind: str) -> list[str]:
         # wrong bind fails RED — never green-wash.
         _optval = js_str(observed.get("value", ""))
         if _optval:
+            # EXACT option name — getByRole('option', {name}) defaults to a
+            # SUBSTRING, case-insensitive match, so a short option like 'MA'
+            # (State) also matches 'Male' in a sibling <select id="gender">.
+            # The union then includes the wrong select and .first() binds it
+            # (DOM order), so selectOption('MA') times out on Gender. Exact
+            # match keys this rung to the ONE select that truly holds the
+            # recorded option. (Verified: run e2bde351 — State=MA combos RED
+            # because 'MA' ⊂ 'Male'.) The step's committed-value oracle still
+            # independently proves green, so a wrong bind fails RED — no green-wash.
             rungs.append(
                 f"locator('select').filter({{ has: {scope}.getByRole('option', "
-                f"{{ name: '{_optval}' }}) }})")
+                f"{{ name: '{_optval}', exact: true }}) }})")
     elif kind == "link":
         rungs = [f"getByRole('link', {{ name: '{label}' }})", f"getByText('{label}', {{ exact: true }})"]
     elif kind == "toggle":
