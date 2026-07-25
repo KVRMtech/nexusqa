@@ -856,9 +856,22 @@ def _split_revisit_branch(
 ) -> tuple["list[_PageGroup]", "list[_PageGroup]"]:
     """(trunk, branch): first clean revisit pair A..A (same canonical URL,
     >=1 page between, trunk stays >=2) — the middle is a demonstrated
-    side-exploration. No revisit -> (groups, [])."""
-    canon = [f"{(x.canonical_host or x.url_host or '').lower()}{x.url_path or ''}"
-             for x in groups]
+    side-exploration. No revisit -> (groups, []).
+
+    The revisit key includes url_query. A multi-step wizard served on ONE path
+    (``/portal/apply?step=1..4``) advances only its query, so keying on
+    host+path alone made every wizard step hash identical — the forward
+    progression was mis-detected as a "left and returned" revisit, and the
+    middle steps (Coverage, Health) were peeled into a branch case, leaving the
+    PRIMARY flow jumping Applicant->Beneficiary with the fields it needs
+    dropped (the venkata 0% root cause, 2026-07-25). A genuine return-to-the-
+    same-page revisit still matches (same path AND query); a forward wizard
+    (distinct ?step=) correctly does NOT."""
+    canon = [
+        f"{(x.canonical_host or x.url_host or '').lower()}"
+        f"{x.url_path or ''}?{(x.url_query or '').strip()}"
+        for x in groups
+    ]
     for i in range(len(groups) - 2):
         if not canon[i]:
             continue
