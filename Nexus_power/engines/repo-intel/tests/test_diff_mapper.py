@@ -6,7 +6,16 @@ template / dependency edit can never masquerade as "nothing changed".
 """
 from __future__ import annotations
 
-from app.diff.mapper import map_changed_atoms
+import sys
+from pathlib import Path
+
+# Same bootstrap as every sibling suite (test_pipeline_logic.py:9): the repo-intel
+# `app` package is imported by path, not pip-installed — without this line the file
+# only collects when pytest happens to run from engines/repo-intel/ (why it passed
+# locally and died in qec-ci, which runs from the Nexus_power root).
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from app.diff.mapper import map_changed_atoms  # noqa: E402
 
 
 def _atom(atom_id, kind, path, value=None):
