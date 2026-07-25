@@ -174,3 +174,46 @@ def test_report_and_exports_carry_the_new_sections():
     assert "Execution Timeline" in html and "sev-critical" in html
     assert '"severity": d.get("severity")' in exp
     assert "Severity (suggested)" in fmt and "Timeline" in fmt
+
+
+# ── §2.18 Needs-Review QUEUE (a queue with owners, not a label) ──────────────
+
+def _router() -> str:
+    import os
+    return open(os.path.join(os.path.dirname(__file__), "..", "app", "routers",
+                             "test_factory.py"), encoding="utf-8").read()
+
+
+def test_review_queue_endpoint_exists_and_joins_dispositions():
+    r = _router()
+    assert '/report/review-queue' in r
+    assert '"state": "resolved" if disp else "open"' in r
+    # dispositions are read back STRUCTURALLY, not parsed out of prose
+    assert 'ev.get("event_type") != "review_disposition"' in r
+
+
+def test_disposition_is_recorded_structurally_so_the_queue_can_query_it():
+    """The first cut wrote scenario_id="" / step_number=0 and stuffed everything
+    into a prose string, which no queue could join on."""
+    r = _router()
+    assert "scenario_id=body.scenario_id, step_number=body.step_number" in r
+    assert '"assignee": (body.assignee or "").strip()' in r
+    assert '"electronically_signed": bool(body.signature_name)' in r
+
+
+def test_queue_lists_unattributed_items_first():
+    """Severity 'unset' means the machine could not decide — exactly the items a
+    human must see first."""
+    r = _router()
+    assert 'rank = {"unset": 0, "critical": 1, "high": 2, "medium": 3, "low": 4}' in r
+
+
+def test_queue_never_counts_an_unsigned_disposition_as_a_sign_off():
+    r = _router()
+    assert "an unsigned one is reported as" in r
+    assert "never counted as a sign-off" in r
+
+
+def test_assignee_is_part_of_the_review_contract():
+    r = _router()
+    assert "assignee: str | None = Field(None, max_length=200," in r

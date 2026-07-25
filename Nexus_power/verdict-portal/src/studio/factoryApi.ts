@@ -706,6 +706,27 @@ class FactoryApiClient {
     return data;
   }
 
+  /** §2.18 — the Needs-Review QUEUE, joined with recorded dispositions. */
+  async getReviewQueue(artifactId: string, includeResolved = false): Promise<any> {
+    const { data } = await this.client.get(
+      `/v1/test-factory/${artifactId}/report/review-queue`,
+      { params: includeResolved ? { include_resolved: true } : {} },
+    );
+    return data;
+  }
+
+  /** Record a human disposition (with optional assignee + typed-name e-signature). */
+  async recordReviewDisposition(artifactId: string, body: {
+    scenario_id: string; step_number: number; disposition: string; reason: string;
+    assignee?: string; reclassify_to?: string; signature_name?: string;
+    defect_signature?: string;
+  }): Promise<any> {
+    const { data } = await this.client.post(
+      `/v1/test-factory/${artifactId}/report/review`, body,
+    );
+    return data;
+  }
+
   /** Dashboard metrics — rates over EXECUTED cases only. */
   async getEvidenceAnalytics(artifactId: string, runId?: string): Promise<any> {
     const { data } = await this.client.get(

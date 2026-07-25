@@ -13,7 +13,7 @@
  */
 import { useCallback, useEffect, useState } from 'react';
 import {
-  AlertTriangle, ChevronRight, Clock, Download, ExternalLink, FileSpreadsheet,
+  AlertTriangle, ChevronRight, ClipboardCheck, Clock, Download, ExternalLink, FileSpreadsheet,
   FileText, Loader2, Package, RefreshCw, ShieldCheck,
 } from 'lucide-react';
 import { api } from './factoryApi';
@@ -78,6 +78,42 @@ export default function EvidenceReportPanel({ artifactId }: Props) {
   const [q, setQ] = useState('');
   const [openCase, setOpenCase] = useState<string>('');
   const [showTimeline, setShowTimeline] = useState(false);
+  const [queue, setQueue] = useState<any>(null);
+  const [forms, setForms] = useState<Record<string, any>>({});
+
+  const setForm = (key: string, patch: any) =>
+    setForms((prev) => ({ ...prev, [key]: { ...(prev[key] || {}), ...patch } }));
+
+  const loadQueue = useCallback(async () => {
+    try {
+      setQueue(await api.getReviewQueue(artifactId, true));
+    } catch {
+      setQueue(null);   // the rest of the report is unaffected
+    }
+  }, [artifactId]);
+
+  const submit = async (item: any, key: string) => {
+    const f = forms[key] || {};
+    setForm(key, { busy: true, error: '', done: false });
+    try {
+      const res = await api.recordReviewDisposition(artifactId, {
+        scenario_id: item.scenario_id,
+        step_number: item.step_number,
+        disposition: f.disposition,
+        reason: (f.reason || '').trim(),
+        assignee: (f.assignee || '').trim() || undefined,
+        signature_name: (f.signature_name || '').trim() || undefined,
+        defect_signature: item.defect_signature,
+      });
+      setForm(key, { busy: false, done: true, signed: !!res?.electronically_signed });
+      void loadQueue();
+    } catch (e: any) {
+      setForm(key, {
+        busy: false,
+        error: e?.response?.data?.detail || e?.message || 'could not record the disposition',
+      });
+    }
+  };
 
   const loadRuns = useCallback(async () => {
     try {
@@ -107,6 +143,7 @@ export default function EvidenceReportPanel({ artifactId }: Props) {
   }, [artifactId]);
 
   useEffect(() => { void loadRuns(); }, [loadRuns]);
+  useEffect(() => { void loadQueue(); }, [loadQueue]);
   useEffect(() => { void load(runId); }, [load, runId]);
 
   const trust = report?.trust;
@@ -302,6 +339,103 @@ export default function EvidenceReportPanel({ artifactId }: Props) {
               <Stat label="Uncertified exploratory" value={coverage?.uncertified_exploratory_count} />
             </div>
           </div>
+
+          {/* ── §2.18 Needs-Review QUEUE — a queue with owners, not a label ── */}
+          {queue && (queue.open_count > 0 || queue.resolved_count > 0) && (
+            <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+              <div className="mb-2 flex flex-wrap items-center gap-2">
+                <ClipboardCheck className="h-4 w-4 text-indigo-600" />
+                <h4 className="mr-auto text-[13px] font-semibold text-slate-900">
+                  Review queue
+                </h4>
+                <span className="text-[11px] text-slate-500">
+                  {queue.open_count} open · {queue.resolved_count} dispositioned
+                </span>
+              </div>
+              <p className="mb-3 text-[11px] text-slate-500">{queue.note}</p>
+
+              <div className="divide-y divide-slate-100 rounded-lg border border-slate-200">
+                {(queue.open || []).map((it: any) => {
+                  const key = `${it.scenario_id}:${it.step_number}`;
+                  const f = forms[key] || {};
+                  return (
+                    <div key={key} className="p-3">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${
+                          it.severity === 'critical' ? 'border-rose-200 bg-rose-50 text-rose-700'
+                            : it.severity === 'high' ? 'border-amber-200 bg-amber-50 text-amber-700'
+                              : it.severity === 'unset' ? 'border-slate-300 bg-slate-100 text-slate-600'
+                                : 'border-indigo-200 bg-indigo-50 text-indigo-700'}`}>
+                          severity {it.severity}
+                        </span>
+                        <span className="flex-1 truncate text-[12px] text-slate-800">
+                          {it.case_name} · step {it.step_number}
+                        </span>
+                        <span className="text-[11px] text-slate-500">
+                          {it.cause} · ×{it.occurrence_count} · blast {it.blast_radius}
+                        </span>
+                      </div>
+                      {(it.assessment_reasons || []).slice(0, 2).map((r: string, i: number) => (
+                        <p key={i} className="mt-1 border-l-2 border-slate-200 pl-2 text-[11px] text-slate-500">{r}</p>
+                      ))}
+                      <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                        <select
+                          value={f.disposition || ''}
+                          onChange={(e) => setForm(key, { disposition: e.target.value })}
+                          className="rounded-md border border-slate-200 bg-white px-2 py-1 text-[11px] text-slate-700"
+                        >
+                          <option value="">Disposition…</option>
+                          {(queue.dispositions || []).map((d: string) => (
+                            <option key={d} value={d}>{d.replace(/_/g, ' ')}</option>
+                          ))}
+                        </select>
+                        <input
+                          value={f.assignee || ''}
+                          onChange={(e) => setForm(key, { assignee: e.target.value })}
+                          placeholder="Assignee"
+                          className="w-32 rounded-md border border-slate-200 px-2 py-1 text-[11px]"
+                        />
+                        <input
+                          value={f.reason || ''}
+                          onChange={(e) => setForm(key, { reason: e.target.value })}
+                          placeholder="Reason (required)"
+                          className="min-w-[180px] flex-1 rounded-md border border-slate-200 px-2 py-1 text-[11px]"
+                        />
+                        <input
+                          value={f.signature_name || ''}
+                          onChange={(e) => setForm(key, { signature_name: e.target.value })}
+                          placeholder="Type full name to sign"
+                          className="w-44 rounded-md border border-slate-200 px-2 py-1 text-[11px]"
+                        />
+                        <button
+                          disabled={!f.disposition || !(f.reason || '').trim() || f.busy}
+                          onClick={() => void submit(it, key)}
+                          className="rounded-md bg-indigo-600 px-2.5 py-1 text-[11px] font-medium text-white disabled:opacity-40"
+                        >
+                          {f.busy ? 'Recording…' : 'Record'}
+                        </button>
+                      </div>
+                      {f.error && <p className="mt-1 text-[11px] text-rose-700">{f.error}</p>}
+                      {f.done && (
+                        <p className="mt-1 text-[11px] text-emerald-700">
+                          Recorded on the audit chain{f.signed ? ' (electronically signed)' : ' (unsigned)'}.
+                        </p>
+                      )}
+                    </div>
+                  );
+                })}
+                {queue.open_count === 0 && (
+                  <div className="p-3 text-[12px] text-slate-500">
+                    Nothing awaiting a human decision.
+                  </div>
+                )}
+              </div>
+              <p className="mt-2 text-[11px] text-slate-500">
+                A reason is required, and an unsigned disposition is recorded as unsigned —
+                never presented as a sign-off.
+              </p>
+            </div>
+          )}
 
           {/* ── §2.12 hierarchy + §2.13 filters — drill into the actual rows ── */}
           <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">

@@ -6802,7 +6802,9 @@ def _export_role_ok(user: dict) -> bool:
 
 
 async def _audit_report_event(*, tenant_id: str, artifact_id: str, actor: str,
-                              event_type: str, detail: str) -> None:
+                              event_type: str, detail: str,
+                              scenario_id: str = "", step_number: int = 0,
+                              verdict: str = "", details: dict | None = None) -> None:
     """Append a report-lifecycle event to the tenant's Part-11 hash chain.
 
     Best-effort by design: an audit-write failure must not corrupt the caller's
@@ -6813,8 +6815,10 @@ async def _audit_report_event(*, tenant_id: str, artifact_id: str, actor: str,
             await heal_evidence.record_heal_event(
                 session, tenant_id=tenant_id, artifact_id=artifact_id,
                 event_type=event_type, actor=actor or "unknown",
-                scenario_id="", step_number=0, engine_verdict="",
+                scenario_id=(scenario_id or "")[:100], step_number=int(step_number or 0),
+                engine_verdict=(verdict or "")[:40],
                 verified_green=False, reason_for_change=(detail or "")[:500],
+                details=dict(details or {}),
             )
             await session.commit()
     except Exception as exc:
@@ -6891,6 +6895,9 @@ class _ReviewDispositionBody(BaseModel):
     disposition: str = Field(..., description="confirm_defect | reclassify | retest | dismiss")
     reason: str = Field(..., min_length=3, max_length=500)
     reclassify_to: str | None = Field(None, max_length=40)
+    assignee: str | None = Field(None, max_length=200,
+                                 description="who owns this item (a queue, not a label)")
+    defect_signature: str | None = Field(None, max_length=64)
     signature_name: str | None = Field(
         None, max_length=200,
         description="typed full name = electronic signature (regulated tenants)")
@@ -6925,17 +6932,125 @@ async def record_review_disposition(
         await _require_artifact(session, artifact_id, tenant_id)
     detail = (f"disposition={body.disposition} scenario={body.scenario_id} "
               f"step={body.step_number} reclassify_to={body.reclassify_to or '-'} "
+              f"assignee={body.assignee or '-'} "
               f"signed_by={body.signature_name or '(unsigned)'} :: {body.reason}")
     await _audit_report_event(
         tenant_id=tenant_id, artifact_id=artifact_id, actor=actor,
-        event_type="review_disposition", detail=detail)
+        event_type="review_disposition", detail=detail,
+        scenario_id=body.scenario_id, step_number=body.step_number,
+        verdict=body.disposition,
+        details={
+            "disposition": body.disposition,
+            "assignee": (body.assignee or "").strip(),
+            "reclassify_to": (body.reclassify_to or "").strip(),
+            "defect_signature": (body.defect_signature or "").strip(),
+            "reason": body.reason,
+            # We record WHETHER it was signed and by what typed name — never a
+            # claim that an unsigned disposition was signed.
+            "electronically_signed": bool(body.signature_name),
+            "signature_name": (body.signature_name or "").strip(),
+        })
     return {"recorded": True, "disposition": body.disposition,
             "scenario_id": body.scenario_id, "step_number": body.step_number,
-            "actor": actor,
+            "assignee": body.assignee or "", "actor": actor,
             "electronically_signed": bool(body.signature_name),
             "note": ("Recorded on the tenant's tamper-evident chain. An unsigned "
                      "disposition is still recorded — it is simply marked unsigned, "
                      "never presented as a signed one.")}
+
+
+@router.get("/api/v1/test-factory/{artifact_id}/report/review-queue")
+async def report_review_queue(
+    request: Request,
+    artifact_id: str = PathParam(..., min_length=1, max_length=64),
+    include_resolved: bool = Query(False),
+    user: dict = Depends(get_current_user),
+):
+    """§2.18 — Needs Review as a QUEUE, not a label.
+
+    Every finding that needs a human owner, joined with whatever disposition has
+    already been recorded on the tamper-evident chain. An item is OPEN until a
+    named human dispositions it, so "who signed off?" is always answerable — and
+    an unsigned disposition is reported as unsigned rather than quietly counted
+    as a sign-off.
+    """
+    tenant_id = user["tenant_id"]
+    report = await _assemble_report(request, artifact_id, tenant_id, None, True)
+    defects = ((report.get("defects") or {}).get("defects") or [])
+
+    # Dispositions live on the audit chain; read them back structurally.
+    latest: dict[tuple, dict] = {}
+    try:
+        async with tenant_scoped_session(tenant_id) as session:
+            events = await heal_evidence.list_heal_events(
+                session, tenant_id=tenant_id, artifact_id=artifact_id)
+        for ev in (events.get("events") or []):
+            if ev.get("event_type") != "review_disposition":
+                continue
+            d = dict(ev.get("details") or {})
+            key = (str(ev.get("scenario_id") or ""), int(ev.get("step_number") or 0))
+            latest[key] = {          # ordered oldest→newest, so last wins
+                "disposition": d.get("disposition") or ev.get("engine_verdict") or "",
+                "assignee": d.get("assignee") or "",
+                "reclassify_to": d.get("reclassify_to") or "",
+                "reason": d.get("reason") or ev.get("reason_for_change") or "",
+                "electronically_signed": bool(d.get("electronically_signed")),
+                "signature_name": d.get("signature_name") or "",
+                "decided_by": ev.get("actor") or "",
+                "decided_at": ev.get("created_at"),
+                "chain_ok": ev.get("chain_ok"),
+            }
+    except Exception as exc:
+        _logger.warning("test_factory.review_queue_dispositions_failed err=%s", str(exc)[:200])
+
+    items, resolved = [], []
+    for d in defects:
+        key = (str(d.get("scenario_id") or ""), int(d.get("step_number") or 0))
+        disp = latest.get(key)
+        item = {
+            "defect_signature": d.get("signature"),
+            "scenario_id": d.get("scenario_id"),
+            "case_name": d.get("case_name"),
+            "step_number": d.get("step_number"),
+            "class": d.get("display_status"),
+            "category": d.get("category"),
+            "cause": d.get("cause"),
+            "severity": d.get("severity"),
+            "priority": d.get("priority"),
+            "suggested_component": d.get("suggested_component"),
+            "suggested_fix_area": d.get("suggested_fix_area"),
+            "assessment_reasons": d.get("assessment_reasons"),
+            "blast_radius": d.get("blast_radius"),
+            "occurrence_count": d.get("occurrence_count"),
+            "lifecycle": d.get("lifecycle"),
+            "first_seen": d.get("first_seen"),
+            "last_seen": d.get("last_seen"),
+            "fingerprint": d.get("fingerprint"),
+            "disposition": disp,
+            "state": "resolved" if disp else "open",
+        }
+        (resolved if disp else items).append(item)
+
+    # Worst first: unattributed items ('unset') sit at the top because they are
+    # precisely the ones a machine could not decide.
+    rank = {"unset": 0, "critical": 1, "high": 2, "medium": 3, "low": 4}
+    items.sort(key=lambda i: (rank.get(i.get("severity"), 5),
+                              -(i.get("occurrence_count") or 0)))
+
+    return {
+        "artifact_id": artifact_id,
+        "open": items,
+        "open_count": len(items),
+        "resolved": resolved if include_resolved else [],
+        "resolved_count": len(resolved),
+        "dispositions": sorted(_ALLOWED_DISPOSITIONS),
+        "note": ("An item stays OPEN until a named human dispositions it. "
+                 "Severity 'unset' means the attribution ladder could not prove a "
+                 "cause — those are listed first because they are exactly the ones "
+                 "a machine must not decide. Dispositions are recorded on the "
+                 "tenant's tamper-evident chain; an unsigned one is reported as "
+                 "unsigned, never counted as a sign-off."),
+    }
 
 
 @router.get("/api/v1/test-factory/{artifact_id}/report/audit-trail")
