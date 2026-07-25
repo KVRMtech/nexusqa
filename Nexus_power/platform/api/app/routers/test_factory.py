@@ -105,6 +105,7 @@ from ..services.test_factory import evidence_report
 from ..services.test_factory import report_html
 from ..services.test_factory import report_export
 from ..services.test_factory import evidence_manifest
+from ..services.test_factory import report_formats
 from ..services.test_factory.assistant import answer as assistant_answer
 from ..services.test_factory.delivery import (
     EXPORT_MEDIA_TYPES,
@@ -6916,3 +6917,100 @@ async def report_audit_trail(
         chain = {"verified": None, "error": "chain verification unavailable"}
     return {"artifact_id": artifact_id, "audit": events, "chain_verification": chain,
             "signing_enabled": evidence_manifest.signing_enabled()}
+
+
+# ── Phase R4: reach formats, analytics, filters (spec §2.13-§2.16) ──────────
+
+_REPORT_FORMATS = ("csv", "junit", "xlsx", "pdf")
+
+
+async def _filtered_report(request: Request, artifact_id: str, tenant_id: str,
+                           run_id: str | None, status: str | None, flow: str | None,
+                           test_type: str | None, search: str | None) -> dict:
+    report = await _assemble_report(request, artifact_id, tenant_id, run_id, True)
+    if not any((status, flow, test_type, search)):
+        return report
+    statuses = {s.strip() for s in (status or "").split(",") if s.strip()} or None
+    return report_formats.filter_report(
+        report, statuses=statuses, flow=flow, test_type=test_type, search=search)
+
+
+@router.get("/api/v1/test-factory/{artifact_id}/report/analytics")
+async def execution_report_analytics(
+    request: Request,
+    artifact_id: str = PathParam(..., min_length=1, max_length=64),
+    run_id: str | None = Query(None, max_length=64),
+    user: dict = Depends(get_current_user),
+):
+    """§2.14 dashboard metrics. Rates are over EXECUTED cases only — a case that
+    never ran is reported under coverage, never folded into a pass rate. The
+    distribution is evidence CLASS (measured), not a model confidence score."""
+    report = await _assemble_report(request, artifact_id, user["tenant_id"],
+                                    (run_id or "").strip() or None, True)
+    return report_formats.build_analytics(report)
+
+
+@router.get("/api/v1/test-factory/{artifact_id}/report/export.{fmt}")
+async def execution_report_format(
+    request: Request,
+    artifact_id: str = PathParam(..., min_length=1, max_length=64),
+    fmt: str = PathParam(..., min_length=2, max_length=8),
+    run_id: str | None = Query(None, max_length=64),
+    status: str | None = Query(None, description="comma-separated display statuses"),
+    flow: str | None = Query(None, max_length=120),
+    test_type: str | None = Query(None, max_length=40),
+    search: str | None = Query(None, max_length=200),
+    user: dict = Depends(get_current_user),
+):
+    """Render the report as csv | junit | xlsx | pdf, with the §2.13 filters.
+
+    Same governance as the ZIP: these carry evidence out of the platform, so a
+    write-capable role is required, credential-shaped values are redacted, and
+    the export is recorded on the tenant's audit chain. JUnit is LOSSY by
+    construction — the mapping keeps `<failure>` for application defects and
+    `<error>` for our own automation faults so a CI gate never mistakes one for
+    the other.
+    """
+    f = (fmt or "").strip().lower()
+    if f not in _REPORT_FORMATS:
+        raise HTTPException(
+            status_code=404,
+            detail=f"unknown format '{fmt}' (use: {', '.join(_REPORT_FORMATS)})")
+    if not _export_role_ok(user):
+        raise HTTPException(
+            status_code=403,
+            detail="Exporting evidence requires an editor, manager or admin role.")
+    tenant_id = user["tenant_id"]
+    report = await _filtered_report(request, artifact_id, tenant_id,
+                                    (run_id or "").strip() or None,
+                                    status, flow, test_type, search)
+    # Redact before ANY format leaves the platform — the ZIP is not a special case.
+    report, _stats = report_export.redact_report(report)
+    actor = user.get("email") or user.get("user_id") or "unknown"
+    stem = f"evidence-{artifact_id[:12]}"
+
+    if f == "csv":
+        blob, media, name = (report_formats.to_csv(report).encode("utf-8"),
+                             "text/csv; charset=utf-8", f"{stem}.csv")
+    elif f == "junit":
+        blob, media, name = (report_formats.to_junit_xml(report).encode("utf-8"),
+                             "application/xml; charset=utf-8", f"{stem}-junit.xml")
+    elif f == "xlsx":
+        try:
+            blob = report_formats.to_xlsx(report)
+        except ImportError:
+            raise HTTPException(status_code=503,
+                                detail="XLSX export unavailable (openpyxl not installed)")
+        media = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        name = f"{stem}.xlsx"
+    else:
+        blob, media, name = (report_formats.to_pdf(report), "application/pdf",
+                             f"{stem}.pdf")
+
+    await _audit_report_event(
+        tenant_id=tenant_id, artifact_id=artifact_id, actor=actor,
+        event_type="evidence_exported",
+        detail=(f"format={f} bytes={len(blob)} filters=status:{status} "
+                f"flow:{flow} type:{test_type} q:{'yes' if search else 'no'}"))
+    return Response(content=blob, media_type=media,
+                    headers={"Content-Disposition": f'attachment; filename="{name}"'})

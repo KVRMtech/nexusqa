@@ -7,6 +7,9 @@ nicer report"; it is the artifact that IS the product category.
 **Supersedes:** the raw requirement draft of 2026-07-25 (all 17 sections are
 incorporated here, amended by the doctrine fixes below).
 
+**BUILD STATUS: R1–R4 IMPLEMENTED, DEPLOYED AND VERIFIED (2026-07-25).**
+See §7 for the as-built record, exit proofs and known gaps.
+
 ---
 
 ## 0. Doctrine (non-negotiable, governs every section)
@@ -329,7 +332,72 @@ report emailing — post-adoption features, not category proof.
 ## 6. Open Decisions (founder)
 
 1. Trace retention window (traces are MBs; propose 30 days hot, then archive
-   with hash retained in the chain).
+   with hash retained in the chain). **Still open** — traces are stored
+   uncapped today.
 2. Redaction defaults: mask all input values in exports, or opt-in per field?
-   (Propose: mask credential-kind fields always; others configurable.)
+   **Resolved as built:** credential-shaped values are ALWAYS masked;
+   `?mask_all_inputs=true` is the stricter per-export switch.
 3. e-sign mechanism: platform-native click-sign vs delegated (SSO assertion)?
+   **Built as platform-native typed-name** (`signature_name`) recorded on the
+   chain; an SSO-delegated assertion can replace it without changing callers.
+
+---
+
+## 7. As-Built Record (2026-07-25)
+
+All four phases implemented, deployed to `nexus-platform-api`, and verified
+against live data on artifact `574ce778` (the venkata suite: 47 cases).
+**81 tests.** Commits: R1 `ff46eda`, R2 `0223ff6`, R3 `2def694`, R4 (this).
+
+### Modules
+| File | Role |
+|---|---|
+| `services/test_factory/evidence_report.py` | assembler + §1 state machine + Trust Block |
+| `services/test_factory/report_html.py` | self-contained offline HTML |
+| `services/test_factory/defect_ledger.py` | defect identity/dedup/lifecycle + run diff |
+| `services/test_factory/evidence_manifest.py` | SHA-256 chain, optional signature, offline verifier |
+| `services/test_factory/report_export.py` | ZIP packaging, redaction, watermark, verdict JSON |
+| `services/test_factory/report_formats.py` | CSV / JUnit / XLSX / PDF + analytics + filters |
+| `scripts/apply_heal_events.sql` | Part-11 ledger table (idempotent, append-only grant) |
+
+### Endpoints
+`GET …/report` · `GET …/report.html` · `GET …/report.zip` ·
+`GET …/report/verdict.json` · `GET …/report/analytics` ·
+`GET …/report/export.{csv|junit|xlsx|pdf}` · `POST …/report/review` ·
+`GET …/report/audit-trail` · `POST /api/v1/test-runs/trace`
+
+### Exit proofs (measured, not asserted)
+* **R1** — cert `1572fe06` renders 47 cases / 855 steps; the report's
+  independent per-step rollup MATCHES the ingested run totals exactly on both a
+  clean run (855/855) and a failing one (780 passed / 4 non-passing).
+* **R2** — 27 defect occurrences deduplicated to **7 unique defects**; the same
+  `selectOption` defect across 6 runs is ONE defect with 6 occurrences;
+  lifecycle marks 6 of 7 `fixed_verified` (our `3ba0890` fix); the diff between
+  the pre- and post-fix certifications reports exactly the 3 State combos as
+  `needs_review → passed`. Trace upload round-trips byte-identical.
+* **R3** — exported the real package and ran the bundled verifier: pristine
+  exits 0 `VERIFIED`; flipping **one bit** of `report.html` exits 1 with
+  `MODIFIED report.html` + `CHAIN ROOT MISMATCH`. Viewer gets 403 on export and
+  review; chain verification `ok=true, first_break=null`.
+* **R4** — see the live format/analytics/filter verification in the commit.
+
+### Bugs this build FOUND in the existing system
+1. **`heal_events` table absent in the deployed DB** — every audit write had
+   been silently degrading to a WARNING, so the Part-11 "immutable audit trail"
+   had nothing behind it. Fixed with an idempotent migration that also enforces
+   append-only AT THE GRANT (SELECT+INSERT only).
+2. **`report/audit-trail` shared one session across two queries** — a failing
+   statement aborted the transaction and produced a *second wrong answer*
+   derived from the first failure. Each query now owns its session.
+3. **Traces were never captured on server runs** — the generated config used
+   `trace: 'on-first-retry'` while server runs use `retries=0`.
+
+### Known gaps (deliberate, not hidden)
+* Trace end-to-end capture is wired and the upload path is proven by round-trip,
+  but no *failing* run has exercised the reporter→trace→report chain yet
+  (the suite is currently 47/47 green). It will exercise on the next real failure.
+* Manifests are **unsigned** in this deployment (`NEXUS_EVIDENCE_SIGNING_KEY`
+  unset), so packages are tamper-EVIDENT, not tamper-PROOF. The manifest says so.
+* T3 deep diagnostics (HAR, a11y, performance capture) not built.
+* No UI surface yet — the report is API + HTML; the portal still links the old
+  views.
