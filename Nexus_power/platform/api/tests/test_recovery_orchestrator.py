@@ -129,3 +129,67 @@ def test_summary_counts_are_honest():
     assert s["actions"][ro.ACTION_RECERTIFY] == 1
     assert s["actions"][ro.ACTION_NONE] == 1
     assert s["proposals"] == 2 and s["recertify"] is True
+
+
+# ── V2 (FULL-AUTO auto-heal): run_recovery drives one heal per scenario ──────
+
+class _FakeScope:
+    """Async-context session factory yielding a fake session whose execute()
+    returns the prepared failed-step rows."""
+    def __init__(self, rows):
+        self._rows = rows
+
+    def __call__(self):
+        rows = self._rows
+
+        class _Res:
+            def all(self):
+                return rows
+
+        class _Sess:
+            async def execute(self, *_a, **_k):
+                return _Res()
+
+        class _Ctx:
+            async def __aenter__(self):
+                return _Sess()
+
+            async def __aexit__(self, *a):
+                return False
+
+        return _Ctx()
+
+
+def _row(sid, n, attribution, err=""):
+    return (sid, n, {"failure_attribution": attribution} if attribution else {}, err)
+
+
+def test_run_recovery_spawns_one_heal_per_failing_scenario():
+    import asyncio as _aio
+
+    healed: list[tuple] = []
+    certs: list[bool] = []
+    rows = [
+        _row("s2", 9, _attr("unknown", "action_locator_timeout")),
+        _row("s2", 10, _attr("unknown", "action_locator_timeout")),  # same scenario
+        _row("s5", 3, _attr("product_script_defect", "url_as_text_oracle")),
+        _row("s6", 1, _attr("application_defect", "grounded_navigation_broken")),
+    ]
+
+    # recovery_store.persist_scan is fail-open by design: against the fake
+    # session it swallows its own error and returns 0 — exactly the posture
+    # run_recovery relies on (a store hiccup never blocks the reflex arc).
+    summary = _aio.run(ro.run_recovery(
+        artifact_id="a", tenant_id="t", run_id="r1",
+        is_certification=False,
+        session_scope=_FakeScope(rows),
+        spawn_certification=lambda: certs.append(True),
+        spawn_auto_heal=lambda sid, step, cause: healed.append((sid, step, cause)),
+    ))
+
+    # exactly ONE heal per failing scenario (s2 deduped), NEVER for the
+    # application-attributed scenario (s6) — repairing it would be green-wash.
+    assert healed == [("s2", 9, "action_locator_timeout")]
+    assert certs == [True]                      # recompile-class → recertify
+    assert summary["actions"][ro.ACTION_HEAL_CANDIDATE] == 2
+    assert summary["actions"][ro.ACTION_DEFECT_DOSSIER] == 1

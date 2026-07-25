@@ -222,17 +222,24 @@ async def ingest_test_run(
     # ingests pass NO certification spawner (loop guard — a failing cert must
     # not re-trigger itself; POST /certify is the deliberate retry).
     try:
-        if int(summary.get("failed_steps") or 0) > 0:
+        env_name = str(req.environment or "").strip().lower()
+        # 'diagnosis' runs are the auto-heal driver's OWN instruments (capture /
+        # verify) — they must never re-trigger the reflex arc (recursion guard).
+        if int(summary.get("failed_steps") or 0) > 0 and env_name != "diagnosis":
             from ..services.test_factory.recovery_orchestrator import run_recovery
-            is_cert = (
-                str(req.environment or "").strip().lower() == "certification"
-            )
+            is_cert = env_name == "certification"
             spawn = None
             if not is_cert:
                 from .test_factory import _spawn_certification
 
                 def spawn(request=request, aid=req.artifact_id, tid=tenant_id):
                     _spawn_certification(request, aid, tid)
+
+            from .test_factory import _spawn_auto_heal
+
+            def spawn_heal(sid: str, step: int, cause: str,
+                           request=request, aid=req.artifact_id, tid=tenant_id):
+                _spawn_auto_heal(request, aid, tid, sid, step, cause)
 
             task = asyncio.create_task(run_recovery(
                 artifact_id=req.artifact_id,
@@ -241,6 +248,7 @@ async def ingest_test_run(
                 is_certification=is_cert,
                 session_scope=lambda tid=tenant_id: tenant_scoped_session(tid),
                 spawn_certification=spawn,
+                spawn_auto_heal=spawn_heal,
             ))
             _RECOVERY_TASKS.add(task)
             task.add_done_callback(_RECOVERY_TASKS.discard)

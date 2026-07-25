@@ -421,10 +421,11 @@ async def last_run_summary_by_scenario(
             if _status_severity(step_row.status) > _status_severity(entry["worst_status"]):
                 entry["worst_status"] = step_row.status
 
-        # Order runs descending by started_at, then SPLIT certification runs
-        # (P0.3) out of the client-facing stats: a certification failure is the
-        # PRODUCT proving (or failing to prove) its own script on the attested
-        # baseline — it must never read as "your app's last run failed".
+        # Order runs descending by started_at, then SPLIT the product's own
+        # runs out of the client-facing stats: certification (P0.3 baseline
+        # self-proof) and diagnosis (the auto-heal driver's capture/verify
+        # instruments) are the PRODUCT working on itself — neither may ever
+        # read as "your app's last run failed".
         all_runs_desc = sorted(
             run_statuses_by_run.values(),
             key=lambda r: r["run"].started_at,
@@ -434,7 +435,12 @@ async def last_run_summary_by_scenario(
             r for r in all_runs_desc
             if str(r["run"].environment or "").strip().lower() == "certification"
         ]
-        runs_desc = [r for r in all_runs_desc if r not in cert_runs]
+        diagnosis_runs = [
+            r for r in all_runs_desc
+            if str(r["run"].environment or "").strip().lower() == "diagnosis"
+        ]
+        runs_desc = [r for r in all_runs_desc
+                     if r not in cert_runs and r not in diagnosis_runs]
 
         certification: dict | None = None
         if cert_runs:

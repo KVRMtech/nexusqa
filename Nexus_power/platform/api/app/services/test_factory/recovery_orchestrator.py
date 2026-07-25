@@ -163,6 +163,7 @@ async def run_recovery(
     is_certification: bool,
     session_scope: Callable[[], Any],
     spawn_certification: Callable[[], None] | None,
+    spawn_auto_heal: Callable[[str, int, str], None] | None = None,
 ) -> dict:
     """The reflex arc: load the run's failed steps, plan, act, persist, log.
 
@@ -178,7 +179,10 @@ async def run_recovery(
         from sqlalchemy import select
 
         from nexus_sdk.db.models import E2ETestRunStepRow
-        from ..agentic import recovery_store
+        try:
+            from ..agentic import recovery_store
+        except ImportError:  # file-path-loaded (unit tests) — absolute fallback
+            from app.services.agentic import recovery_store
 
         async with session_scope() as session:
             rows = (await session.execute(
@@ -217,6 +221,21 @@ async def run_recovery(
 
         if plan.recertify and spawn_certification is not None:
             spawn_certification()
+
+        # V2 (founder-approved FULL-AUTO): drive one unattended heal per failing
+        # scenario — capture → grounded candidate → verify → activate on the
+        # double proof → re-certify. Deduped per scenario (first failing step);
+        # the driver's own guards enforce one attempt + never-touch-oracles.
+        if spawn_auto_heal is not None:
+            seen: set[str] = set()
+            for a in plan.actions:
+                if a["action"] != ACTION_HEAL_CANDIDATE:
+                    continue
+                sid = a["scenario_id"]
+                if not sid or sid in seen:
+                    continue
+                seen.add(sid)
+                spawn_auto_heal(sid, a["step_number"], a["cause"] or a["action"])
 
         summary = plan.summary()
         logger.warning(

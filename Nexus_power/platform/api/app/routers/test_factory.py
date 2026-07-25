@@ -1151,6 +1151,272 @@ def _spawn_certification(request: Request, artifact_id: str, tenant_id: str) -> 
     task.add_done_callback(_RUNNER_TASKS.discard)
 
 
+# ── Auto-heal driver (V2 reflex arc, founder-approved FULL-AUTO 2026-07-25) ──
+# The unattended version of the TrueFix flow a human drives from the Studio:
+#   capture re-run (failure-state a11y) → grounded candidate (re-anchor or
+#   control-kind) → NEVER-GREEN-WASH check (assertions byte-unchanged) →
+#   headless verify run → persist ACTIVE only on green + verdict gate →
+#   re-certify the suite. A candidate that cannot be grounded, or does not
+#   PROVE green, changes NOTHING — the dossier stays open for a human.
+# All driver runs are tagged environment='diagnosis': excluded from client
+# stats AND from recovery-orchestrator triggering (no reflex recursion).
+_AUTO_HEAL_ATTEMPTED: set = set()   # (tenant, artifact, scenario, step) — one try per process
+_AUTO_HEAL_LOCK = asyncio.Lock()    # the runner is shared — one unattended heal at a time
+_ENV_DIAGNOSIS = "diagnosis"
+
+
+async def _auto_heal_scenario(
+    *, request: Request, artifact_id: str, tenant_id: str, scenario_id: str,
+    step_number: int, cause: str, token: str,
+) -> None:
+    key = (tenant_id, artifact_id, scenario_id, int(step_number))
+    if key in _AUTO_HEAL_ATTEMPTED:
+        _logger.warning(
+            "test_factory.auto_heal.skipped scenario=%s step=%s reason=already_attempted",
+            scenario_id, step_number)
+        return
+    _AUTO_HEAL_ATTEMPTED.add(key)
+    async with _AUTO_HEAL_LOCK:
+        try:
+            from ..services.agentic import recovery_store
+
+            async with tenant_scoped_session(tenant_id) as session:
+                cases = await factory_service.load_active_production_cases(
+                    session, artifact_id=artifact_id)
+                visits, _ = await factory_service._load_current_pages_and_actions(
+                    session, artifact_id=artifact_id)
+                edited_map = await _active_edited_map(session, artifact_id=artifact_id)
+            tc = next((c for c in cases
+                       if (getattr(c, "test_id", "") or "") == scenario_id), None)
+            if tc is None or not visits:
+                _logger.warning(
+                    "test_factory.auto_heal.skipped scenario=%s reason=no_case_or_visits",
+                    scenario_id)
+                return
+            field_meta = build_field_meta(visits)
+            host = ""
+            for v in visits:
+                host = ((getattr(v, "canonical_host", "")
+                         or getattr(v, "url_host", "") or "")).strip()
+                if host:
+                    break
+            if not host:
+                _logger.warning(
+                    "test_factory.auto_heal.skipped scenario=%s reason=no_recorded_host",
+                    scenario_id)
+                return
+            base_url = f"{'http' if '.' not in host else 'https'}://{host}"
+            storage_state = await _run_storage_state(request, artifact_id, tenant_id)
+            id_to_path = {s["test_id"]: s["path"]
+                          for s in compile_manifest([tc], field_meta).get("scripts", [])}
+            spec_path = id_to_path.get(scenario_id, "")
+
+            # ── 1) CAPTURE: failure-state a11y snapshot (headless, this case) ──
+            capture_spec = compile_case(tc, field_meta, parametrize=True, heal_capture=True)
+            cap_run = uuid.uuid4().hex
+            cap_files = _configured_files(
+                [tc], field_meta, base_url, None,
+                browsers=["chromium"], headed=False, workers=1, retries=0,
+                edited={**edited_map,
+                        scenario_id: {"spec_path": spec_path, "script_source": capture_spec}},
+                storage_state=storage_state,
+            )
+            await _register_job(cap_run, {
+                "run_id": cap_run, "status": "running", "artifact_id": artifact_id,
+                "tenant_id": tenant_id, "kind": "diagnosis", "target": base_url,
+                "scripts": 1, "exit_code": None, "output": "",
+                "steps_completed": 0, "total_tests": 1,
+            })
+            _logger.warning(
+                "test_factory.auto_heal.capture artifact=%s scenario=%s step=%s run=%s",
+                artifact_id, scenario_id, step_number, cap_run)
+            try:
+                await runner_client.run_suite(cap_files, {
+                    "NEXUS_ENDPOINT": _INGEST_BASE, "NEXUS_TOKEN": token or "",
+                    "NEXUS_ARTIFACT_ID": artifact_id, "NEXUS_RUN_ID": cap_run,
+                    "NEXUS_BASE_URL": base_url, "NEXUS_ENV": _ENV_DIAGNOSIS,
+                    "NEXUS_HEAL_CAPTURE": "1",
+                    "NEXUS_HEAL_ENDPOINT": f"{_INGEST_BASE}/api/v1/test-runs/heal-capture",
+                }, timeout_ms=180000)
+            except Exception as exc:
+                _logger.warning(
+                    "test_factory.auto_heal.capture_failed scenario=%s err=%s",
+                    scenario_id, str(exc)[:200])
+                return
+
+            # ── 2) CANDIDATE: grounded re-anchor first, else control-kind ─────
+            candidate = ""
+            fixmeta: dict = {}
+            fix_kind = ""
+            heal_note = ""
+            reanchor = self_heal.resolve_reanchor_for_step(
+                tenant_id=tenant_id, artifact_id=artifact_id, scenario_id=scenario_id,
+                baseline_step=self_heal._baseline_step(tc, step_number),
+                field_meta=field_meta,
+            )
+            try:
+                if reanchor:
+                    candidate, fixmeta = self_heal.build_reanchor_candidate(
+                        tc, field_meta, step_number, reanchor)
+                    fix_kind = "reanchor"
+                    heal_note = (
+                        f"Auto-healed (unattended): re-anchored "
+                        f"'{fixmeta.get('label', '')}' to '{reanchor['name']}', "
+                        "verified green + re-certified")
+                else:
+                    candidate, fixmeta = self_heal.build_candidate_for_step(
+                        tc, field_meta, step_number)
+                    fix_kind = "control_kind_fix"
+                    heal_note = ("Auto-healed (unattended): control-kind fix, "
+                                 "verified green + re-certified")
+            except Exception as exc:
+                _logger.warning(
+                    "test_factory.auto_heal.no_grounded_fix scenario=%s step=%s err=%s "
+                    "— dossier stays open for human review",
+                    scenario_id, step_number, str(exc)[:200])
+                return
+            baseline_spec = compile_case(tc, field_meta, parametrize=True)
+            if not candidate or candidate == baseline_spec:
+                _logger.warning(
+                    "test_factory.auto_heal.no_grounded_fix scenario=%s step=%s "
+                    "reason=candidate_empty_or_identical — dossier stays open",
+                    scenario_id, step_number)
+                return
+            # NEVER-GREEN-WASH invariant: a heal may move LOCATORS, never oracles.
+            ok, why = self_heal.assert_assertions_unchanged(baseline_spec, candidate)
+            if not ok:
+                _logger.warning(
+                    "test_factory.auto_heal.refused scenario=%s step=%s "
+                    "reason=assertions_changed detail=%s", scenario_id, step_number, why)
+                return
+
+            # ── 3) VERIFY: headless candidate run, correlated by run id ───────
+            ver_run = uuid.uuid4().hex
+            ver_files = _configured_files(
+                [tc], field_meta, base_url, None,
+                browsers=["chromium"], headed=False, workers=1, retries=0,
+                edited={**edited_map,
+                        scenario_id: {"spec_path": spec_path, "script_source": candidate}},
+                storage_state=storage_state,
+            )
+            await _register_job(ver_run, {
+                "run_id": ver_run, "status": "running", "artifact_id": artifact_id,
+                "tenant_id": tenant_id, "kind": "auto-heal", "target": base_url,
+                "scripts": 1, "exit_code": None, "output": "",
+                "steps_completed": 0, "total_tests": 1,
+            })
+            _logger.warning(
+                "test_factory.auto_heal.verify artifact=%s scenario=%s fix=%s run=%s",
+                artifact_id, scenario_id, fix_kind, ver_run)
+            try:
+                await runner_client.run_suite(ver_files, {
+                    "NEXUS_ENDPOINT": _INGEST_BASE, "NEXUS_TOKEN": token or "",
+                    "NEXUS_ARTIFACT_ID": artifact_id, "NEXUS_RUN_ID": ver_run,
+                    "NEXUS_BASE_URL": base_url, "NEXUS_ENV": _ENV_DIAGNOSIS,
+                }, timeout_ms=180000)
+            except Exception as exc:
+                _logger.warning(
+                    "test_factory.auto_heal.verify_failed scenario=%s err=%s",
+                    scenario_id, str(exc)[:200])
+                return
+            ev = None
+            for _ in range(10):   # ~15s for the reporter's ingest to land
+                await asyncio.sleep(1.5)
+                async with tenant_scoped_session(tenant_id) as session:
+                    real_run_id = await find_run_by_ci_run_id(
+                        session, artifact_id=artifact_id, tenant_id=tenant_id,
+                        ci_run_id=ver_run)
+                    if real_run_id is None:
+                        continue
+                    timeline = await build_run_timeline_by_id(
+                        session, artifact_id=artifact_id, tenant_id=tenant_id,
+                        run_id=real_run_id)
+                ev = self_heal.evaluate_heal(timeline, scenario_id, step_number)
+                break
+
+            if not ev or not ev.get("healed"):
+                reason = (ev or {}).get("reason") or "verification run not correlated"
+                _logger.warning(
+                    "test_factory.auto_heal.not_proven scenario=%s step=%s reason=%s "
+                    "— nothing changed; dossier stays open", scenario_id, step_number,
+                    str(reason)[:200])
+                try:
+                    async with tenant_scoped_session(tenant_id) as session:
+                        await flywheel_ledger.record_label(
+                            session, tenant_id=tenant_id, decision_point=fix_kind,
+                            artifact_id=artifact_id, scenario_id=scenario_id,
+                            verified_green=False, human_decision_enum="not_promoted",
+                            engine_verdict_enum=((ev or {}).get("verdict") or ""),
+                            git_commit=os.getenv("NEXUS_GIT_COMMIT", ""))
+                        await session.commit()
+                except Exception:
+                    pass
+                return
+
+            # ── 4) PERSIST (full-auto policy) + close the dossier + re-prove ──
+            async with tenant_scoped_session(tenant_id) as session:
+                row = await script_versions.save_new_version(
+                    session, artifact_id=artifact_id, tenant_id=tenant_id,
+                    session_id="", test_case_id=scenario_id,
+                    spec_path=spec_path, script_source=candidate,
+                    data_json={}, author="nexus-auto-heal", note=heal_note,
+                    # Founder-approved FULL-AUTO: the fix activates on the
+                    # DOUBLE proof — step green + verdict gate here, and the
+                    # whole-suite certification dispatched below (the client
+                    # gates keep holding until that passes).
+                    proposed=False,
+                )
+                await heal_evidence.record_heal_event(
+                    session, tenant_id=tenant_id, artifact_id=artifact_id,
+                    event_type="heal_persisted", actor="nexus-auto-heal",
+                    scenario_id=scenario_id, step_number=int(step_number),
+                    fix_kind=fix_kind,
+                    before_locator=str(fixmeta.get("label", "")),
+                    after_locator=(reanchor["name"] if reanchor
+                                   else str(fixmeta.get("label", ""))),
+                    engine_verdict=(ev.get("verdict") or ""), verified_green=True,
+                    version_no=getattr(row, "version_no", 0), run_id=ver_run,
+                    reason_for_change=heal_note,
+                )
+                await flywheel_ledger.record_label(
+                    session, tenant_id=tenant_id, decision_point=fix_kind,
+                    artifact_id=artifact_id, scenario_id=scenario_id,
+                    emitted_method_enum=("" if fix_kind == "reanchor" else "selectOption"),
+                    verified_green=True, human_decision_enum="auto_approved",
+                    engine_verdict_enum=(ev.get("verdict") or ""),
+                    git_commit=os.getenv("NEXUS_GIT_COMMIT", ""))
+                await recovery_store.record_decision(
+                    session, tenant_id=tenant_id,
+                    proposal_id=recovery_store._proposal_id(
+                        tenant_id, artifact_id, scenario_id, cause),
+                    decision="approve", decided_by="nexus-auto-heal",
+                    note=heal_note)
+                await session.commit()
+            _logger.warning(
+                "test_factory.auto_heal.HEALED artifact=%s scenario=%s step=%s fix=%s "
+                "version=%s — dispatching certification to re-prove the suite",
+                artifact_id, scenario_id, step_number, fix_kind,
+                getattr(row, "version_no", 0))
+            _spawn_certification(request, artifact_id, tenant_id)
+        except Exception:
+            _logger.exception(
+                "test_factory.auto_heal.error artifact=%s scenario=%s (nothing changed)",
+                artifact_id, scenario_id)
+
+
+def _spawn_auto_heal(request: Request, artifact_id: str, tenant_id: str,
+                     scenario_id: str, step_number: int, cause: str) -> None:
+    """Schedule one unattended heal attempt (fire-and-forget, deduped)."""
+    token = _bearer(request)
+    task = asyncio.create_task(_auto_heal_scenario(
+        request=request, artifact_id=artifact_id, tenant_id=tenant_id,
+        scenario_id=scenario_id, step_number=int(step_number),
+        cause=cause, token=token,
+    ))
+    _RUNNER_TASKS.add(task)
+    task.add_done_callback(_RUNNER_TASKS.discard)
+
+
 async def _register_job(run_id: str, job: dict) -> None:
     """Store the job in-memory (fast path) AND mirror it to the durable registry
     (best-effort) so a restart / a second worker can still read its status and
@@ -3957,6 +4223,7 @@ async def product_fault_metric(
 
     client_visible: list[dict] = []
     caught_in_certification = 0
+    caught_in_diagnosis = 0
     by_cause: dict[str, int] = {}
     for sid, step_no, meta, env_name, started_at, run_id in rows:
         attr = (meta or {}).get("failure_attribution")
@@ -3965,12 +4232,16 @@ async def product_fault_metric(
         category = str(attr.get("category") or "")
         if category != "product_script_defect":
             continue
-        is_cert = str(env_name or "").strip().lower() == "certification"
+        env_l = str(env_name or "").strip().lower()
         by_cause[attr.get("cause") or "unspecified"] = (
             by_cause.get(attr.get("cause") or "unspecified", 0) + 1
         )
-        if is_cert:
+        if env_l == "certification":
             caught_in_certification += 1
+        elif env_l == "diagnosis":
+            # The auto-heal driver's own capture/verify instruments — the
+            # product examining itself, never client-visible.
+            caught_in_diagnosis += 1
         else:
             client_visible.append({
                 "run_id": run_id,
@@ -3986,8 +4257,9 @@ async def product_fault_metric(
         "window_days": window_days,
         # THE metric — a client saw a run fail on OUR defect. Target: 0.
         "client_visible_product_faults": len(client_visible),
-        # The gate working — product faults intercepted before any client run.
+        # The gates working — product faults intercepted before any client run.
         "caught_in_certification": caught_in_certification,
+        "caught_in_diagnosis": caught_in_diagnosis,
         "by_cause": by_cause,
         "recent_client_visible": client_visible[:25],
     }
