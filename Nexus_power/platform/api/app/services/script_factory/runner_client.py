@@ -26,8 +26,12 @@ async def run_suite(files: dict, env: dict, timeout_ms: int = 240000) -> dict:
     if _RUNNER_TOKEN:
         headers["X-Runner-Token"] = _RUNNER_TOKEN
     payload = {"files": files, "env": env, "timeout_ms": timeout_ms}
-    # Read timeout must outlast the run's hard cap so we get the real verdict.
-    timeout = httpx.Timeout(connect=10.0, read=660.0, write=60.0, pool=10.0)
+    # Read timeout must outlast the run's hard cap so we get the real verdict —
+    # SCALED with timeout_ms (a certification of a 48-case suite legitimately
+    # runs far past the old fixed 660s; a fixed read timeout silently truncated
+    # long runs into transport errors).
+    read_s = max(660.0, timeout_ms / 1000.0 + 60.0)
+    timeout = httpx.Timeout(connect=10.0, read=read_s, write=60.0, pool=10.0)
     async with httpx.AsyncClient(timeout=timeout) as client:
         resp = await client.post(f"{_RUNNER_URL}/run", json=payload, headers=headers)
         resp.raise_for_status()

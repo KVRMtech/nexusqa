@@ -78,3 +78,56 @@ def test_application_regression_is_never_hidden():
 def test_environment_and_config_outages_do_not_shame_cases():
     assert quarantine_decision(_cert("failed", "environment")) is False
     assert quarantine_decision(_cert("failed", "configuration")) is False
+
+
+# ── the fail-CLOSED exploratory gate (combination cases) ─────────────────────
+# Learned from run 40110431 (2026-07-25): a freshly generated combination
+# (option-captured values, never demonstrated) was client-runnable in the gap
+# before its certification completed — the cert run was killed mid-flight and
+# the founder met the broken case. Exploratory cases now require a PASSED
+# certification before facing the client at all.
+
+_m2 = re.search(
+    r"\ndef exploratory_gate_decision\(.*?\n(?=\nasync def |\ndef |\Z)", _SRC, re.S)
+assert _m2, "exploratory_gate_decision not found in test_runs.py"
+exec(compile(_m2.group(0), "test_runs.py::exploratory_gate_decision", "exec"), _ns)  # noqa: S102
+exploratory_gate_decision = _ns["exploratory_gate_decision"]
+
+
+def test_exploratory_blocked_until_certified():
+    """Fail-closed: no certification record at all → blocked."""
+    assert exploratory_gate_decision(None) is True
+    assert exploratory_gate_decision({}) is True
+
+
+def test_exploratory_blocked_when_certification_failed():
+    assert exploratory_gate_decision(_cert("failed", "product_script_defect")) is True
+    assert exploratory_gate_decision(_cert("failed", "unknown")) is True
+
+
+def test_exploratory_unblocked_only_by_a_passed_certification():
+    assert exploratory_gate_decision(_cert("certified", None)) is False
+
+
+def test_cert_timeout_scales_with_suite_size():
+    """The 240s default cap killed the 48-case certification (job a66d0e69);
+    the per-suite formula must give a 48-case suite real room and stay capped."""
+    import importlib.util as _ilu
+    import os as _os
+    import sys as _sys
+    import types as _types
+    _rt = _os.path.join(_os.path.dirname(__file__), "..", "app", "routers",
+                        "test_factory.py")
+    src = open(_rt, encoding="utf-8").read()
+    m = re.search(r"\ndef _cert_timeout_ms\(.*?\n(?=\n[a-zA-Z@_])", src, re.S)
+    assert m, "_cert_timeout_ms not found in the router"
+    ns: dict = {}
+    exec(compile(m.group(0), "test_factory.py::_cert_timeout_ms", "exec"), ns)  # noqa: S102
+    f = ns["_cert_timeout_ms"]
+    assert f(48) == 120_000 + 30_000 * 48          # ~26 min for the real suite
+    assert f(48) > 240_000                          # far beyond the killer cap
+    assert f(1_000) == 1_800_000                    # hard ceiling
+    assert f(0) == 120_000
+    # and the certification is retried, never one-shot:
+    assert "_CERT_MAX_ATTEMPTS = 3" in src
+    assert '"error", "timed_out"' in src.replace("'", '"')

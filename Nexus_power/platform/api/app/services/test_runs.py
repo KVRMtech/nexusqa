@@ -556,6 +556,49 @@ def quarantine_decision(cert: dict | None) -> bool:
     return (not category) or category in (CATEGORY_PRODUCT, CATEGORY_UNKNOWN)
 
 
+def exploratory_gate_decision(cert: dict | None) -> bool:
+    """The PURE fail-closed rule for EXPLORATORY cases (combination cases are
+    built over option-captured — 'available', never demonstrated — values):
+
+        an exploratory case may face the client ONLY after a certification
+        run has PROVED it can pass on the attested baseline.
+
+    True = blocked (no certification yet, or the latest one did not certify).
+    Demonstrated cases are NOT subject to this rule — they earned their
+    grounding from the recording itself. Learned from run 40110431
+    (2026-07-25): a freshly generated combination whose certification was
+    killed mid-flight was client-runnable in the gap and failed in front of
+    the founder — fail-open windows on unproven cases are now closed."""
+    return not (cert and cert.get("status") == "certified")
+
+
+async def uncertified_exploratory_scenarios(
+    db: AsyncSession,
+    *,
+    artifact_id: str,
+    tenant_id: str,
+    exploratory_ids: set[str],
+) -> dict[str, str]:
+    """The subset of ``exploratory_ids`` currently BLOCKED by the fail-closed
+    exploratory gate, mapped to a human reason. Empty when all are certified
+    (or none were exploratory)."""
+    if not exploratory_ids:
+        return {}
+    summary = await last_run_summary_by_scenario(
+        db, artifact_id=artifact_id, tenant_id=tenant_id,
+    )
+    out: dict[str, str] = {}
+    for sid in exploratory_ids:
+        cert = (summary.get(sid) or {}).get("certification")
+        if exploratory_gate_decision(cert):
+            out[sid] = (
+                "awaiting certification (never certified on the baseline)"
+                if not cert else
+                f"certification {cert.get('status')} — not proven runnable"
+            )
+    return out
+
+
 async def product_quarantined_scenarios(
     db: AsyncSession,
     *,

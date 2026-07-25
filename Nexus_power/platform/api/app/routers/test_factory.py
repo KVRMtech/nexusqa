@@ -77,6 +77,7 @@ from ..services.test_runs import (
     last_run_summary_by_scenario,
     product_quarantined_scenarios,
     quarantine_decision,
+    uncertified_exploratory_scenarios,
     _status_severity,
     build_latest_run_timeline,
     build_run_timeline_by_id,
@@ -1017,6 +1018,23 @@ _RUNNER_JOBS: dict[str, dict] = {}
 _RUNNER_TASKS: set = set()
 
 
+# Certification-run resilience (learned from job a66d0e69, 2026-07-25): a
+# 48-case certification hit the 240s default runner cap and DIED SILENTLY —
+# INFO logs were suppressed at the deployed level, there was no retry, and the
+# reporter only ingests at run end, so the quarantine that was mid-flight never
+# landed and the client met the broken case two minutes later.
+_CERT_RETRYABLE_STATUSES = frozenset({"error", "timed_out"})
+_CERT_MAX_ATTEMPTS = 3
+_CERT_RETRY_BACKOFF_S = 30.0
+
+
+def _cert_timeout_ms(case_count: int) -> int:
+    """Per-suite certification cap: base 2 min + 30s/case, ceiling 30 min.
+    A 48-case suite gets ~26 min — the 240s default is for SMALL ad-hoc runs
+    and is exactly what killed certification job a66d0e69."""
+    return min(1_800_000, 120_000 + 30_000 * max(0, int(case_count)))
+
+
 async def _certify_generated_suite(
     *, request: Request, artifact_id: str, tenant_id: str, token: str,
 ) -> None:
@@ -1026,11 +1044,16 @@ async def _certify_generated_suite(
     Runs the freshly generated ACTIVE suite once against the app's own
     baseline, tagged ``environment='certification'``.  Results flow through the
     SAME reporter → ingest path as every run; the summary keeps certification
-    runs OUT of client-facing stats, and ``product_quarantined_scenarios``
-    turns a product/unproven certification failure into a run-gate quarantine
-    — so the first failure of a defective generated script is OURS, never the
-    client's.  Fire-and-forget: any error here is logged and never blocks or
-    fails generation.
+    runs OUT of client-facing stats, and ``product_quarantined_scenarios`` /
+    the exploratory gate turn certification outcomes into run-gate decisions —
+    so the first failure of a defective generated script is OURS, never the
+    client's.
+
+    Resilient by design: per-suite scaled timeout, up to ``_CERT_MAX_ATTEMPTS``
+    attempts on runner error/timeout (a busy or freshly-restarted runner must
+    not silently cost the suite its certification), and WARNING-level
+    lifecycle logs so the trail is visible under the deployed log level.
+    Fire-and-forget: never blocks or fails generation.
     """
     try:
         async with tenant_scoped_session(tenant_id) as session:
@@ -1042,6 +1065,10 @@ async def _certify_generated_suite(
             )
             edited_map = await _active_edited_map(session, artifact_id=artifact_id)
         if not cases or not visits:
+            _logger.warning(
+                "test_factory.certification.skipped artifact=%s reason=no_cases_or_visits",
+                artifact_id,
+            )
             return
         # Baseline URL — the app's own recorded host (generic: structure only).
         host = ""
@@ -1052,7 +1079,7 @@ async def _certify_generated_suite(
             if host:
                 break
         if not host:
-            _logger.info(
+            _logger.warning(
                 "test_factory.certification.skipped artifact=%s reason=no_recorded_host",
                 artifact_id,
             )
@@ -1065,26 +1092,48 @@ async def _certify_generated_suite(
             browsers=["chromium"], headed=False, workers=2, retries=0,
             edited=edited_map, storage_state=storage_state,
         )
-        run_id = uuid.uuid4().hex
-        env = {
-            "NEXUS_ENDPOINT": _INGEST_BASE,
-            "NEXUS_TOKEN": token or "",
-            "NEXUS_ARTIFACT_ID": artifact_id,
-            "NEXUS_RUN_ID": run_id,
-            "NEXUS_BASE_URL": base_url,
-            "NEXUS_ENV": "certification",
-        }
-        await _register_job(run_id, {
-            "run_id": run_id, "status": "running", "artifact_id": artifact_id,
-            "tenant_id": tenant_id, "kind": "certification",
-            "target": base_url, "scripts": len(cases), "exit_code": None,
-            "output": "", "steps_completed": 0, "total_tests": len(cases),
-        })
-        _logger.info(
-            "test_factory.certification.dispatched artifact=%s run=%s cases=%d target=%s",
-            artifact_id, run_id, len(cases), base_url,
-        )
-        await _execute_run(run_id, files, env)
+        timeout_ms = _cert_timeout_ms(len(cases))
+
+        for attempt in range(1, _CERT_MAX_ATTEMPTS + 1):
+            run_id = uuid.uuid4().hex
+            env = {
+                "NEXUS_ENDPOINT": _INGEST_BASE,
+                "NEXUS_TOKEN": token or "",
+                "NEXUS_ARTIFACT_ID": artifact_id,
+                "NEXUS_RUN_ID": run_id,
+                "NEXUS_BASE_URL": base_url,
+                "NEXUS_ENV": "certification",
+            }
+            await _register_job(run_id, {
+                "run_id": run_id, "status": "running", "artifact_id": artifact_id,
+                "tenant_id": tenant_id, "kind": "certification",
+                "target": base_url, "scripts": len(cases), "exit_code": None,
+                "output": "", "steps_completed": 0, "total_tests": len(cases),
+            })
+            _logger.warning(
+                "test_factory.certification.dispatched artifact=%s run=%s cases=%d "
+                "target=%s timeout_ms=%d attempt=%d/%d",
+                artifact_id, run_id, len(cases), base_url, timeout_ms,
+                attempt, _CERT_MAX_ATTEMPTS,
+            )
+            await _execute_run(run_id, files, env, timeout_ms=timeout_ms)
+            status = str((_RUNNER_JOBS.get(run_id) or {}).get("status") or "error")
+            if status not in _CERT_RETRYABLE_STATUSES:
+                _logger.warning(
+                    "test_factory.certification.completed artifact=%s run=%s status=%s",
+                    artifact_id, run_id, status,
+                )
+                return
+            _logger.warning(
+                "test_factory.certification.attempt_failed artifact=%s run=%s "
+                "status=%s attempt=%d/%d%s",
+                artifact_id, run_id, status, attempt, _CERT_MAX_ATTEMPTS,
+                " — retrying" if attempt < _CERT_MAX_ATTEMPTS else " — GIVING UP "
+                "(suite stays uncertified; exploratory cases remain gated; "
+                "re-trigger via POST /certify)",
+            )
+            if attempt < _CERT_MAX_ATTEMPTS:
+                await asyncio.sleep(_CERT_RETRY_BACKOFF_S)
     except Exception:
         _logger.exception(
             "test_factory.certification.failed artifact=%s (generation unaffected)",
@@ -1125,12 +1174,14 @@ async def _persist_job(run_id: str) -> None:
     )
 
 
-async def _execute_run(run_id: str, files: dict, env: dict) -> None:
+async def _execute_run(run_id: str, files: dict, env: dict,
+                       timeout_ms: int | None = None) -> None:
     job = _RUNNER_JOBS.get(run_id)
     if job is None:
         return
     try:
-        result = await runner_client.run_suite(files, env)
+        result = await runner_client.run_suite(
+            files, env, timeout_ms=timeout_ms or 240000)
         job.update(
             status=result.get("status", "error"),
             exit_code=result.get("exit_code"),
@@ -3125,30 +3176,54 @@ async def playwright_run(
     # re-certifies. Application/environment/config certification failures are
     # NOT quarantined (a grounded regression on the baseline is a real signal;
     # infra outages must not shame the cases).
+    #
+    # Exploratory gate (fail-CLOSED): combination cases are built over
+    # option-captured ('available', never demonstrated) values — they may face
+    # the client ONLY after a certification run PROVED them on the baseline.
+    # Closes the generate→certify window run 40110431 fell through.
+    _exploratory_ids = {
+        (getattr(c, "test_id", "") or "") for c in cases
+        if str(getattr(c, "type", "") or "").lower() == "combination"
+    }
+    _exploratory_ids.discard("")
     async with tenant_scoped_session(tenant_id) as session:
         _quarantined = await product_quarantined_scenarios(
             session, artifact_id=artifact_id, tenant_id=tenant_id,
         )
+        _ungated = await uncertified_exploratory_scenarios(
+            session, artifact_id=artifact_id, tenant_id=tenant_id,
+            exploratory_ids=_exploratory_ids,
+        )
     excluded_quarantined: list[str] = []
-    if _quarantined:
+    excluded_uncertified: list[str] = []
+    if _quarantined or _ungated:
         excluded_quarantined = [
             (getattr(c, "test_id", "") or "") for c in cases
             if (getattr(c, "test_id", "") or "") in _quarantined
         ]
+        excluded_uncertified = [
+            (getattr(c, "test_id", "") or "") for c in cases
+            if (getattr(c, "test_id", "") or "") in _ungated
+            and (getattr(c, "test_id", "") or "") not in _quarantined
+        ]
+        _blocked = set(excluded_quarantined) | set(excluded_uncertified)
         cases = [
             c for c in cases
-            if (getattr(c, "test_id", "") or "") not in _quarantined
+            if (getattr(c, "test_id", "") or "") not in _blocked
         ]
         if not cases:
             raise HTTPException(status_code=409, detail={
-                "error": "all requested cases are quarantined",
+                "error": "all requested cases are gated",
                 "reason": (
-                    "Their latest certification run failed for a product-side "
-                    "(or not-yet-attributed) cause. The product is repairing "
-                    "them; they return automatically once they re-certify. "
-                    "This is NOT an application failure."
+                    "Quarantined cases failed certification for a product-side "
+                    "(or not-yet-attributed) cause; exploratory combination "
+                    "cases must PASS a certification run before facing the "
+                    "client. Re-trigger certification (POST …/certify) or run "
+                    "the demonstrated flows. This is NOT an application "
+                    "failure."
                 ),
                 "quarantined_test_ids": excluded_quarantined[:50],
+                "uncertified_exploratory_test_ids": excluded_uncertified[:50],
             })
 
     base_url = (body.base_url or "").strip()
@@ -3188,7 +3263,8 @@ async def playwright_run(
     task.add_done_callback(_RUNNER_TASKS.discard)
     return {"run_id": run_id, "status": "running", "scripts": len(cases),
             "target": base_url,
-            "excluded_quarantined": excluded_quarantined}
+            "excluded_quarantined": excluded_quarantined,
+            "excluded_uncertified_exploratory": excluded_uncertified}
 
 
 @router.post("/api/v1/test-factory/{artifact_id}/playwright/run-live")
@@ -3229,9 +3305,18 @@ async def playwright_run_live(
     # still allowed to run — the operator is inspecting it ON PURPOSE. Quarantine
     # protects the CLIENT-facing headless verdict (playwright_run excludes there),
     # not the operator's ability to watch a product-side failure reproduce live.
+    _exploratory_ids = {
+        (getattr(c, "test_id", "") or "") for c in cases
+        if str(getattr(c, "type", "") or "").lower() == "combination"
+    }
+    _exploratory_ids.discard("")
     async with tenant_scoped_session(tenant_id) as session:
         _quarantined = await product_quarantined_scenarios(
             session, artifact_id=artifact_id, tenant_id=tenant_id,
+        )
+        _ungated = await uncertified_exploratory_scenarios(
+            session, artifact_id=artifact_id, tenant_id=tenant_id,
+            exploratory_ids=_exploratory_ids,
         )
     quarantine_warning = [
         {
@@ -3241,6 +3326,9 @@ async def playwright_run_live(
         }
         for tid in ((getattr(c, "test_id", "") or "") for c in cases)
         if tid in _quarantined
+    ] + [
+        {"test_id": tid, "cause": reason, "category": "uncertified_exploratory"}
+        for tid, reason in _ungated.items()
     ]
 
     base_url = (body.base_url or "").strip()
@@ -3801,6 +3889,34 @@ async def runs_summary(
     board["flaky"] = sum(1 for v in scripts.values() if v["is_flaky"])
     board["quarantined"] = sum(1 for v in scripts.values() if v.get("quarantined"))
     return {"artifact_id": artifact_id, "board": board, "scripts": scripts}
+
+
+@router.post("/api/v1/test-factory/{artifact_id}/certify")
+async def certify_suite(
+    request: Request,
+    artifact_id: str = PathParam(..., min_length=1, max_length=64),
+    user: dict = Depends(get_current_user),
+):
+    """P0.3 — re-trigger certification WITHOUT regenerating. The recovery path
+    for a lost certification run (runner busy/restarted/timed out — job
+    a66d0e69 was killed mid-flight and the suite silently stayed uncertified).
+    Fire-and-forget: results land via the normal reporter → ingest path tagged
+    environment='certification'; the run-gates read them automatically."""
+    tenant_id = user["tenant_id"]
+    async with tenant_scoped_session(tenant_id) as session:
+        await _require_artifact(session, artifact_id, tenant_id)
+        cases = await factory_service.load_active_production_cases(
+            session, artifact_id=artifact_id,
+        )
+    if not cases:
+        raise HTTPException(status_code=404, detail="no active cases to certify")
+    _spawn_certification(request, artifact_id, tenant_id)
+    return {
+        "certification": "dispatched",
+        "cases": len(cases),
+        "timeout_ms": _cert_timeout_ms(len(cases)),
+        "attempts": _CERT_MAX_ATTEMPTS,
+    }
 
 
 @router.get("/api/v1/test-factory/{artifact_id}/quality/product-faults")
