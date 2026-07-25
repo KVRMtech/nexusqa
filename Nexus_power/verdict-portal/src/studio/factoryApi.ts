@@ -685,6 +685,56 @@ class FactoryApiClient {
     );
     return data;
   }
+
+  // ── Execution Evidence Report (Certificate of Execution) ─────────────────
+  // Viewing is open to any authenticated tenant user; the EXPORT endpoints are
+  // gated on the operator's role by the qe-central bridge, so a viewer gets a
+  // 403 on the download links rather than a silent evidence egress.
+
+  /** Recent runs the report can be pointed at, each with its own step counts. */
+  async listEvidenceRuns(artifactId: string): Promise<any> {
+    const { data } = await this.client.get(`/v1/test-factory/${artifactId}/report/runs`);
+    return data;
+  }
+
+  /** The full structured report (Trust Block, flows, cases, steps, defects, diff). */
+  async getEvidenceReport(artifactId: string, runId?: string): Promise<any> {
+    const { data } = await this.client.get(
+      `/v1/test-factory/${artifactId}/report`,
+      { params: runId ? { run_id: runId } : {} },
+    );
+    return data;
+  }
+
+  /** Dashboard metrics — rates over EXECUTED cases only. */
+  async getEvidenceAnalytics(artifactId: string, runId?: string): Promise<any> {
+    const { data } = await this.client.get(
+      `/v1/test-factory/${artifactId}/report/analytics`,
+      { params: runId ? { run_id: runId } : {} },
+    );
+    return data;
+  }
+
+  /**
+   * Absolute URL for the self-contained HTML report / an export, carrying the
+   * operator's verdict token as `?token=` (the bridge accepts a GET-only query
+   * token for browser-loaded resources, exactly like frames and screenshots).
+   * Used for `window.open` and download anchors, which cannot set a header.
+   */
+  getEvidenceUrl(artifactId: string, kind: 'html' | 'zip' | 'csv' | 'junit' | 'xlsx' | 'pdf',
+                 runId?: string): string {
+    const path = kind === 'html'
+      ? `report.html`
+      : kind === 'zip'
+        ? `report.zip`
+        : `report/export.${kind}`;
+    const token = getAuthToken() ?? '';
+    const qs = new URLSearchParams();
+    if (runId) qs.set('run_id', runId);
+    if (token) qs.set('token', token);
+    const q = qs.toString();
+    return `${FACTORY_BASE}/v1/test-factory/${artifactId}/${path}${q ? `?${q}` : ''}`;
+  }
 }
 
 /** The shared singleton — the ported Studio panels import `{ api }` from here. */
