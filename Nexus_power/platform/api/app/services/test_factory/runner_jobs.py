@@ -98,6 +98,40 @@ async def persist_job(
         logger.debug("runner_jobs.persist_skipped run=%s err=%s", run_id, exc)
 
 
+async def sweep_stale(*, tenant_id: str, older_than_hours: float = 2.0) -> int:
+    """Mark durable 'running' jobs older than the window as 'stale'.
+
+    A job row whose owning process died (platform-api restart, crash) never
+    receives its terminal update and reads 'running' forever — observed
+    2026-07-25 with pre-V2 auto-heal rows stuck since 03:0x. Called lazily
+    from job registration; fail-open, never raises. Returns rows swept."""
+    if not tenant_id:
+        return 0
+    try:
+        from datetime import timedelta
+
+        from sqlalchemy import update
+
+        cutoff = _utc_now() - timedelta(hours=max(0.25, float(older_than_hours)))
+        async with tenant_scoped_session(tenant_id) as session:
+            res = await session.execute(
+                update(E2ERunnerJobRow)
+                .where(
+                    E2ERunnerJobRow.tenant_id == tenant_id,
+                    E2ERunnerJobRow.status == "running",
+                    E2ERunnerJobRow.updated_at < cutoff,
+                )
+                .values(status="stale", updated_at=_utc_now())
+            )
+            n = int(getattr(res, "rowcount", 0) or 0)
+        if n:
+            logger.warning("runner_jobs.swept_stale tenant=%s rows=%d", tenant_id, n)
+        return n
+    except Exception as exc:  # pre-migration / DB error — hygiene is optional
+        logger.debug("runner_jobs.sweep_skipped err=%s", exc)
+        return 0
+
+
 async def get_job(*, tenant_id: str, run_id: str, artifact_id: str = "") -> dict | None:
     """Durable fallback for the status endpoint when the in-memory job is gone
     (restart / other worker). None if absent or pre-migration."""

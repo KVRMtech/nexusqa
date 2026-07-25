@@ -227,6 +227,7 @@ jobs:
             tests/test_attribution_engine.py \
             tests/test_certification_quarantine.py \
             tests/test_recovery_orchestrator.py \
+            tests/test_combination_regen.py \
             tests/test_soft_oracle_recording.py \
             tests/test_failure_attribution.py \
             tests/test_compiler_url_text_oracle.py \

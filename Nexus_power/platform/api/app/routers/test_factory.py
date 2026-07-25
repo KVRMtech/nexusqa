@@ -1231,14 +1231,23 @@ async def _auto_heal_scenario(
                 "test_factory.auto_heal.capture artifact=%s scenario=%s step=%s run=%s",
                 artifact_id, scenario_id, step_number, cap_run)
             try:
-                await runner_client.run_suite(cap_files, {
+                _res = await runner_client.run_suite(cap_files, {
                     "NEXUS_ENDPOINT": _INGEST_BASE, "NEXUS_TOKEN": token or "",
                     "NEXUS_ARTIFACT_ID": artifact_id, "NEXUS_RUN_ID": cap_run,
                     "NEXUS_BASE_URL": base_url, "NEXUS_ENV": _ENV_DIAGNOSIS,
                     "NEXUS_HEAL_CAPTURE": "1",
                     "NEXUS_HEAL_ENDPOINT": f"{_INGEST_BASE}/api/v1/test-runs/heal-capture",
                 }, timeout_ms=180000)
+                _j = _RUNNER_JOBS.get(cap_run)
+                if _j is not None:
+                    _j.update(status=str(_res.get("status") or "done"),
+                              exit_code=_res.get("exit_code"))
+                await _persist_job(cap_run)
             except Exception as exc:
+                _j = _RUNNER_JOBS.get(cap_run)
+                if _j is not None:
+                    _j.update(status="error", output=f"capture error: {exc}"[-800:])
+                await _persist_job(cap_run)
                 _logger.warning(
                     "test_factory.auto_heal.capture_failed scenario=%s err=%s",
                     scenario_id, str(exc)[:200])
@@ -1271,16 +1280,21 @@ async def _auto_heal_scenario(
                                  "verified green + re-certified")
             except Exception as exc:
                 _logger.warning(
-                    "test_factory.auto_heal.no_grounded_fix scenario=%s step=%s err=%s "
-                    "— dossier stays open for human review",
+                    "test_factory.auto_heal.no_grounded_fix scenario=%s step=%s err=%s",
                     scenario_id, step_number, str(exc)[:200])
+                await _regenerate_combination(
+                    request=request, artifact_id=artifact_id, tenant_id=tenant_id,
+                    scenario_id=scenario_id, step_number=step_number, cause=cause)
                 return
             baseline_spec = compile_case(tc, field_meta, parametrize=True)
             if not candidate or candidate == baseline_spec:
                 _logger.warning(
                     "test_factory.auto_heal.no_grounded_fix scenario=%s step=%s "
-                    "reason=candidate_empty_or_identical — dossier stays open",
+                    "reason=candidate_empty_or_identical",
                     scenario_id, step_number)
+                await _regenerate_combination(
+                    request=request, artifact_id=artifact_id, tenant_id=tenant_id,
+                    scenario_id=scenario_id, step_number=step_number, cause=cause)
                 return
             # NEVER-GREEN-WASH invariant: a heal may move LOCATORS, never oracles.
             ok, why = self_heal.assert_assertions_unchanged(baseline_spec, candidate)
@@ -1309,12 +1323,21 @@ async def _auto_heal_scenario(
                 "test_factory.auto_heal.verify artifact=%s scenario=%s fix=%s run=%s",
                 artifact_id, scenario_id, fix_kind, ver_run)
             try:
-                await runner_client.run_suite(ver_files, {
+                _res = await runner_client.run_suite(ver_files, {
                     "NEXUS_ENDPOINT": _INGEST_BASE, "NEXUS_TOKEN": token or "",
                     "NEXUS_ARTIFACT_ID": artifact_id, "NEXUS_RUN_ID": ver_run,
                     "NEXUS_BASE_URL": base_url, "NEXUS_ENV": _ENV_DIAGNOSIS,
                 }, timeout_ms=180000)
+                _j = _RUNNER_JOBS.get(ver_run)
+                if _j is not None:
+                    _j.update(status=str(_res.get("status") or "done"),
+                              exit_code=_res.get("exit_code"))
+                await _persist_job(ver_run)
             except Exception as exc:
+                _j = _RUNNER_JOBS.get(ver_run)
+                if _j is not None:
+                    _j.update(status="error", output=f"verify error: {exc}"[-800:])
+                await _persist_job(ver_run)
                 _logger.warning(
                     "test_factory.auto_heal.verify_failed scenario=%s err=%s",
                     scenario_id, str(exc)[:200])
@@ -1338,8 +1361,7 @@ async def _auto_heal_scenario(
                 reason = (ev or {}).get("reason") or "verification run not correlated"
                 _logger.warning(
                     "test_factory.auto_heal.not_proven scenario=%s step=%s reason=%s "
-                    "— nothing changed; dossier stays open", scenario_id, step_number,
-                    str(reason)[:200])
+                    "— nothing changed", scenario_id, step_number, str(reason)[:200])
                 try:
                     async with tenant_scoped_session(tenant_id) as session:
                         await flywheel_ledger.record_label(
@@ -1351,6 +1373,9 @@ async def _auto_heal_scenario(
                         await session.commit()
                 except Exception:
                     pass
+                await _regenerate_combination(
+                    request=request, artifact_id=artifact_id, tenant_id=tenant_id,
+                    scenario_id=scenario_id, step_number=step_number, cause=cause)
                 return
 
             # ── 4) PERSIST (full-auto policy) + close the dossier + re-prove ──
@@ -1404,6 +1429,101 @@ async def _auto_heal_scenario(
                 artifact_id, scenario_id)
 
 
+async def _regenerate_combination(
+    *, request: Request, artifact_id: str, tenant_id: str,
+    scenario_id: str, step_number: int, cause: str,
+) -> bool:
+    """V3 — the truthful repair when heal honestly refuses: a COMBINATION case
+    whose option-captured axis targets a field ABSENT from the form state its
+    other values produce is REGENERATED without that axis (coverage reduction
+    LABELED in name/description/tags), then re-proven through certification.
+
+    Honesty rails live in ``combination_regen.drop_absent_axis``: only
+    'available'-provenance steps, only combination cases — a demonstrated step
+    failing is a real signal and is never touched. The recovery dossier stays
+    OPEN (design-vs-application ambiguity is a human's question); its bundle is
+    refreshed with the regeneration record. Returns True if regenerated."""
+    key = ("regen", tenant_id, artifact_id, scenario_id, int(step_number))
+    if key in _AUTO_HEAL_ATTEMPTED:
+        return False
+    _AUTO_HEAL_ATTEMPTED.add(key)
+    try:
+        from datetime import datetime, timezone
+
+        from nexus_sdk.db.models import FactoryTestCaseRow
+
+        from ..services.agentic import recovery_store
+        from ..services.test_factory.combination_regen import drop_absent_axis
+
+        async with tenant_scoped_session(tenant_id) as session:
+            row = (await session.execute(
+                select(FactoryTestCaseRow).where(
+                    FactoryTestCaseRow.test_case_id == scenario_id,
+                    FactoryTestCaseRow.tenant_id == tenant_id,
+                    FactoryTestCaseRow.artifact_id == artifact_id,
+                )
+            )).scalar_one_or_none()
+            if row is None:
+                _logger.warning(
+                    "test_factory.auto_heal.regen_skipped scenario=%s reason=no_row",
+                    scenario_id)
+                return False
+            result = drop_absent_axis(
+                test_case=dict(row.test_case or {}),
+                name=str(row.name or ""),
+                test_type=str(row.test_type or ""),
+                step_number=int(step_number),
+                diagnosed_at=datetime.now(timezone.utc).date().isoformat(),
+            )
+            if result is None:
+                _logger.warning(
+                    "test_factory.auto_heal.regen_ineligible scenario=%s step=%s "
+                    "(non-combination or demonstrated step — dossier stays open "
+                    "for human review)", scenario_id, step_number)
+                return False
+            row.test_case = result.test_case
+            row.name = result.name[:500]
+            row.step_count = int(result.step_count)
+            row.description = str(result.test_case.get("description")
+                                  or row.description)[:8000]
+            tags = list(row.tags or [])
+            if result.tag not in tags:
+                tags.append(result.tag)
+            row.tags = tags
+            row.updated_at = datetime.now(timezone.utc)
+            # Refresh the OPEN dossier with the regeneration record (UPSERT on
+            # the same (scenario, cause) identity — terminal states respected).
+            await recovery_store.persist_scan(
+                session, tenant_id=tenant_id, artifact_id=artifact_id,
+                run_id="", proposals=[{
+                    "scenario_id": scenario_id,
+                    "step_number": int(step_number),
+                    "cause": cause,
+                    "kind": "heal_candidate",
+                    "suggested_strategy": (
+                        f"REGENERATED without axis '{result.dropped_label}'"
+                        + (f"='{result.dropped_value}'" if result.dropped_value else "")
+                        + " (field absent in this combination's form state); "
+                        "re-certifying. OPEN QUESTION for a human: if the field "
+                        "SHOULD appear for these values, that is an application "
+                        "finding."),
+                    "regenerated": True,
+                    "auto": True,
+                }])
+            await session.commit()
+        _logger.warning(
+            "test_factory.auto_heal.REGENERATED artifact=%s scenario=%s "
+            "dropped=%s=%s — dispatching certification to re-prove",
+            artifact_id, scenario_id, result.dropped_label, result.dropped_value)
+        _spawn_certification(request, artifact_id, tenant_id)
+        return True
+    except Exception:
+        _logger.exception(
+            "test_factory.auto_heal.regen_error scenario=%s (nothing changed)",
+            scenario_id)
+        return False
+
+
 def _spawn_auto_heal(request: Request, artifact_id: str, tenant_id: str,
                      scenario_id: str, step_number: int, cause: str) -> None:
     """Schedule one unattended heal attempt (fire-and-forget, deduped)."""
@@ -1427,6 +1547,12 @@ async def _register_job(run_id: str, job: dict) -> None:
         tenant_id=job.get("tenant_id", ""), run_id=run_id,
         artifact_id=job.get("artifact_id", ""), kind=job.get("kind", "run"), job=job,
     )
+    # Lazy registry hygiene: any durable 'running' row whose process died on a
+    # restart would read 'running' forever — sweep them stale on registration.
+    _t = asyncio.create_task(runner_jobs.sweep_stale(
+        tenant_id=job.get("tenant_id", "")))
+    _RUNNER_TASKS.add(_t)
+    _t.add_done_callback(_RUNNER_TASKS.discard)
 
 
 async def _persist_job(run_id: str) -> None:

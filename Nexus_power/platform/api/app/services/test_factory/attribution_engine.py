@@ -80,6 +80,24 @@ ESCAPED_DEFECT_REGISTRY: dict[str, dict] = {
         ],
         "tests": ["test_attribution_engine.py", "test_soft_oracle_recording.py"],
     },
+    "combination_absent_conditional_field": {
+        "escaped": "2026-07-25 runs 40110431/38a08e74 (founder-visible): a "
+                   "combination set an option-captured axis on a field absent "
+                   "from the form state its other values produce",
+        "guards": [
+            "fail-closed exploratory gate (uncertified combinations never "
+            "face the client)",
+            "auto-heal driver honest refusal (no locator fix for a missing "
+            "field)",
+            "combination_regen.drop_absent_axis (labeled regeneration, "
+            "demonstrated steps untouchable) + re-certification",
+        ],
+        "tests": [
+            "test_combination_regen.py",
+            "test_certification_quarantine.py",
+            "test_recovery_orchestrator.py",
+        ],
+    },
 }
 
 # ── Error-shape recognisers (deterministic, quoted as evidence) ──────────────
