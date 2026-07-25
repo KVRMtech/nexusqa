@@ -6727,6 +6727,56 @@ async def execution_evidence_report(
                                   (run_id or "").strip() or None, include_steps)
 
 
+@router.get("/api/v1/test-factory/{artifact_id}/report/runs")
+async def execution_report_runs(
+    artifact_id: str = PathParam(..., min_length=1, max_length=64),
+    limit: int = Query(25, ge=1, le=100),
+    user: dict = Depends(get_current_user),
+):
+    """Recent runs this report can be pointed at, newest first.
+
+    The report DEFAULTS to the newest run, which is honest but can be a
+    one-case ad-hoc run — so a reader needs to see what else exists rather than
+    conclude the suite shrank. Each entry carries its own counts, so choosing a
+    run is an informed choice and not a hunt for the greenest one.
+    """
+    tenant_id = user["tenant_id"]
+    async with tenant_scoped_session(tenant_id) as session:
+        await _require_artifact(session, artifact_id, tenant_id)
+        rows = (await session.execute(
+            select(E2ETestRunRow)
+            .where(E2ETestRunRow.artifact_id == artifact_id,
+                   E2ETestRunRow.tenant_id == tenant_id)
+            .order_by(E2ETestRunRow.started_at.desc())
+            .limit(limit)
+        )).scalars().all()
+    runs = []
+    for r in rows:
+        total = int(getattr(r, "total_steps", 0) or 0)
+        passed = int(getattr(r, "passed_steps", 0) or 0)
+        runs.append({
+            "run_id": r.run_id,
+            "environment": getattr(r, "environment", "") or "",
+            "status": getattr(r, "status", "") or "",
+            "started_at": (getattr(r, "started_at", None).isoformat()
+                           if getattr(r, "started_at", None) else None),
+            "total_steps": total,
+            "passed_steps": passed,
+            "failed_steps": int(getattr(r, "failed_steps", 0) or 0),
+            "skipped_steps": int(getattr(r, "skipped_steps", 0) or 0),
+            "is_certification": (getattr(r, "environment", "") == "certification"),
+        })
+    return {
+        "artifact_id": artifact_id,
+        "runs": runs,
+        "default": runs[0]["run_id"] if runs else None,
+        "note": ("The report defaults to the newest non-diagnosis run. Pick a "
+                 "run explicitly with ?run_id=… — every entry shows its own "
+                 "step counts so the choice is informed, not a search for the "
+                 "most flattering one."),
+    }
+
+
 @router.get("/api/v1/test-factory/{artifact_id}/report.html")
 async def execution_evidence_report_html(
     request: Request,

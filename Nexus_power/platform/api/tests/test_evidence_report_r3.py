@@ -288,3 +288,22 @@ def test_audit_endpoint_isolates_sessions_so_one_failure_cannot_poison_the_other
     body = _ROUTER[i:i + 2200]
     assert body.count("async with tenant_scoped_session(tenant_id) as session:") >= 3, \
         "list, verify and the artifact check must each own their session"
+
+
+# ── proxy egress gate (found while wiring the portal) ───────────────────────
+
+def test_portal_bridge_gates_evidence_export_on_the_portal_users_role():
+    """The qe-central bridge mints a SERVICE token that is always role=manager,
+    and it only checked the portal user's role on NON-GET methods. Evidence
+    exports are GETs, so a portal VIEWER could have downloaded a full evidence
+    package — silently defeating the export RBAC the factory believes it is
+    enforcing. Viewing the report stays open; packaging it out does not."""
+    proxy = open(os.path.join(os.path.dirname(__file__), "..", "..", "qe-central",
+                              "app", "routers", "factory_proxy.py"),
+                 encoding="utf-8").read()
+    assert "_PRIVILEGED_READ_RX" in proxy
+    for guarded in (r"/report\.zip$", r"/report/export\.", r"/report/verdict\.json$"):
+        assert guarded in proxy
+    assert "_MUTATE_ROLES" in proxy.split("_PRIVILEGED_READ_RX")[-1]
+    # the plain report + html must NOT be gated (a viewer may read in-product)
+    assert "/report.html$" not in proxy and r"/report$" not in proxy

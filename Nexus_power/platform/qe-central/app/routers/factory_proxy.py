@@ -27,6 +27,7 @@ no existing qe-central route is changed.
 from __future__ import annotations
 
 import logging
+import re
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
@@ -55,6 +56,22 @@ _READ_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 #: Roles allowed to trigger a mutating factory call (run/generate/heal/edit/approve).
 _MUTATE_ROLES = frozenset({"admin", "manager"})
 
+#: PRIVILEGED READS — GETs that are egress, not viewing.
+#:
+#: The bridge mints a SERVICE token that always carries ``role: manager``, so the
+#: factory's own role gate sees "manager" no matter who is driving the portal.
+#: For mutations that is fine (the check above already gates on the PORTAL
+#: user's role), but the Execution Evidence *export* endpoints are GETs that
+#: package screenshots, traces and network detail out of the platform. Without
+#: this list a portal VIEWER could download a full evidence package, silently
+#: defeating the export RBAC the factory believes it is enforcing.
+#:
+#: Viewing the report in-product stays open to any authenticated user; only
+#: packaging it out is privileged.
+_PRIVILEGED_READ_RX = re.compile(
+    r"/report\.zip$|/report/export\.[a-z0-9]+$|/report/verdict\.json$",
+    re.IGNORECASE)
+
 #: Hop-by-hop / auth headers we must not forward upstream or echo downstream.
 _STRIP_REQUEST_HEADERS = frozenset({
     "host", "authorization", "content-length", "connection",
@@ -81,6 +98,17 @@ async def _forward(request: Request, user: dict, factory_path: str) -> Response:
             raise HTTPException(
                 status_code=403,
                 detail="running, generating or healing requires an admin or manager role",
+            )
+    # …and an evidence EXPORT is egress, not viewing: gate it on the PORTAL
+    # user's role even though it is a GET. The service token we mint below is
+    # always role=manager, so without this the factory's own export RBAC would
+    # be bypassed for every portal user.
+    elif _PRIVILEGED_READ_RX.search(factory_path or ""):
+        if str(user.get("role", "viewer")).strip().lower() not in _MUTATE_ROLES:
+            raise HTTPException(
+                status_code=403,
+                detail=("exporting an evidence package requires an admin or "
+                        "manager role (viewing the report in-product does not)"),
             )
 
     try:
