@@ -889,7 +889,8 @@ def _configured_files(cases, field_meta, base_url: str, data: dict,
                       workers=None, retries=None,
                       edited: dict | None = None,
                       storage_state: str | None = None,
-                      env_context: dict | None = None) -> dict:
+                      env_context: dict | None = None,
+                      auth_config: dict | None = None) -> dict:
     """Parametrized bundle + nexus.config.json (chosen base URL) + vkpower.data.json
     + run README. Shared by the download and the server-side runner so both run
     exactly the same thing. Browser projects / headed / workers / retries are
@@ -974,10 +975,18 @@ def _configured_files(cases, field_meta, base_url: str, data: dict,
     files["README.md"] = _run_config_readme(
         len(cases), files.get("nexus.config.json", ""), has_data,
     )
+    # AUTH PERMANENCE — form-login takes precedence over a captured session. When
+    # a form-login profile is bound, overwrite vkpower.auth.config.json with the
+    # 'form' config so the runner's globalSetup logs in FRESH each run (creds ride
+    # the run ENV, never the bundle). This self-renews the session, so we do NOT
+    # inject the (possibly-expired) captured storageState — globalSetup is the sole
+    # source of truth; the config self-detects the vkpower.auth.json it writes.
+    if auth_config:
+        files["vkpower.auth.config.json"] = json.dumps(auth_config, indent=2) + "\n"
     # Inject a captured authenticated session for SERVER runs ONLY (the caller
     # passes storage_state from the artifact's auth profile). The generated config
     # self-detects vkpower.auth.json; downloaded bundles never receive one.
-    if storage_state and storage_state.strip():
+    elif storage_state and storage_state.strip():
         files["vkpower.auth.json"] = storage_state
     # #8 multi-env sidecar — ONLY when the bound Environment Profile carries routing
     # headers / basic-auth. Absent ⇒ no file ⇒ the config's self-detection is a no-op
@@ -1010,6 +1019,24 @@ async def _run_storage_state(request, artifact_id: str, tenant_id: str) -> str |
         return await auth_profiles.get_storage_state(
             session, envelope=envelope, tenant_id=tenant_id, artifact_id=artifact_id,
         )
+
+
+async def _run_form_login(request, artifact_id: str, tenant_id: str) -> tuple[dict | None, dict]:
+    """AUTH PERMANENCE — the artifact's form-login profile split into
+    (auth_config, login_env) for a SERVER run, or (None, {}) if none is bound.
+
+    When present, the run's globalSetup logs in FRESH (credentials from the run
+    env, form shape from vkpower.auth.config.json), so a run's green reproduces
+    without re-importing an expiring session. Never raises — absent/undecryptable
+    falls back to the captured-session path exactly as before."""
+    envelope = getattr(request.app.state, "envelope_service", None)
+    async with tenant_scoped_session(tenant_id) as session:
+        cfg = await auth_profiles.get_form_login(
+            session, envelope=envelope, tenant_id=tenant_id, artifact_id=artifact_id,
+        )
+    if not cfg:
+        return None, {}
+    return auth_profiles.build_form_login_bundle(cfg)
 
 # Transient run status for the live "running -> done" indicator. The durable
 # record is the ingested run (triage board); this only drives the UI spinner, so
@@ -1101,10 +1128,11 @@ async def _certify_generated_suite(
             )
             return
         storage_state = await _run_storage_state(request, artifact_id, tenant_id)
+        auth_config, login_env = await _run_form_login(request, artifact_id, tenant_id)
         files = _configured_files(
             cases, build_field_meta(visits), base_url, None,
             browsers=["chromium"], headed=False, workers=2, retries=0,
-            edited=edited_map, storage_state=storage_state,
+            edited=edited_map, storage_state=storage_state, auth_config=auth_config,
         )
         timeout_ms = _cert_timeout_ms(len(cases))
 
@@ -1130,6 +1158,7 @@ async def _certify_generated_suite(
                 "NEXUS_RUN_ID": run_id,
                 "NEXUS_BASE_URL": base_url,
                 "NEXUS_ENV": "certification",
+                **login_env,
             }
             await _register_job(run_id, {
                 "run_id": run_id, "status": "running", "artifact_id": artifact_id,
@@ -1281,6 +1310,7 @@ async def _auto_heal_scenario(
                     scenario_id)
                 return
             storage_state = await _run_storage_state(request, artifact_id, tenant_id)
+            auth_config, login_env = await _run_form_login(request, artifact_id, tenant_id)
             id_to_path = {s["test_id"]: s["path"]
                           for s in compile_manifest([tc], field_meta).get("scripts", [])}
             spec_path = id_to_path.get(scenario_id, "")
@@ -1293,7 +1323,7 @@ async def _auto_heal_scenario(
                 browsers=["chromium"], headed=False, workers=1, retries=0,
                 edited={**edited_map,
                         scenario_id: {"spec_path": spec_path, "script_source": capture_spec}},
-                storage_state=storage_state,
+                storage_state=storage_state, auth_config=auth_config,
             )
             await _register_job(cap_run, {
                 "run_id": cap_run, "status": "running", "artifact_id": artifact_id,
@@ -1309,6 +1339,7 @@ async def _auto_heal_scenario(
                     "NEXUS_ENDPOINT": _INGEST_BASE, "NEXUS_TOKEN": token or "",
                     "NEXUS_ARTIFACT_ID": artifact_id, "NEXUS_RUN_ID": cap_run,
                     "NEXUS_BASE_URL": base_url, "NEXUS_ENV": _ENV_DIAGNOSIS,
+                    **login_env,
                     "NEXUS_HEAL_CAPTURE": "1",
                     "NEXUS_HEAL_ENDPOINT": f"{_INGEST_BASE}/api/v1/test-runs/heal-capture",
                 }, timeout_ms=180000)
@@ -1385,7 +1416,7 @@ async def _auto_heal_scenario(
                 browsers=["chromium"], headed=False, workers=1, retries=0,
                 edited={**edited_map,
                         scenario_id: {"spec_path": spec_path, "script_source": candidate}},
-                storage_state=storage_state,
+                storage_state=storage_state, auth_config=auth_config,
             )
             await _register_job(ver_run, {
                 "run_id": ver_run, "status": "running", "artifact_id": artifact_id,
@@ -1401,6 +1432,7 @@ async def _auto_heal_scenario(
                     "NEXUS_ENDPOINT": _INGEST_BASE, "NEXUS_TOKEN": token or "",
                     "NEXUS_ARTIFACT_ID": artifact_id, "NEXUS_RUN_ID": ver_run,
                     "NEXUS_BASE_URL": base_url, "NEXUS_ENV": _ENV_DIAGNOSIS,
+                    **login_env,
                 }, timeout_ms=180000)
                 _j = _RUNNER_JOBS.get(ver_run)
                 if _j is not None:
@@ -1837,19 +1869,21 @@ async def heal_step(
     spec_path = id_to_path.get(scenario_id, "")
     base_url = (body.base_url or "").strip()
     storage_state = await _run_storage_state(request, artifact_id, tenant_id)
+    auth_config, login_env = await _run_form_login(request, artifact_id, tenant_id)
     # Inject the candidate as a TRANSIENT edited override for just this test — the
     # exact source we'll persist on green. Verify what you save.
     edited = {**edited_map, scenario_id: {"spec_path": spec_path, "script_source": candidate}}
     files = _configured_files(
         [tc], field_meta, base_url, body.data, data_by_test=body.data_by_test,
         browsers=(body.browsers or ["chromium"])[:1], headed=True, workers=1,
-        retries=0, edited=edited, storage_state=storage_state,
+        retries=0, edited=edited, storage_state=storage_state, auth_config=auth_config,
     )
     run_id = uuid.uuid4().hex
     env = {
         "NEXUS_ENDPOINT": _INGEST_BASE, "NEXUS_TOKEN": token or "",
         "NEXUS_ARTIFACT_ID": artifact_id, "NEXUS_RUN_ID": run_id,
         "NEXUS_BASE_URL": base_url, "NEXUS_ENV": _env_run_label(body.env_context),
+        **login_env,
     }
     try:
         await runner_client.run_live(files, env)            # 202; raises on 409
@@ -1919,17 +1953,19 @@ async def capture_failure_state(
     spec_path = id_to_path.get(scenario_id, "")
     base_url = (body.base_url or "").strip()
     storage_state = await _run_storage_state(request, artifact_id, tenant_id)
+    auth_config, login_env = await _run_form_login(request, artifact_id, tenant_id)
     edited = {**edited_map, scenario_id: {"spec_path": spec_path, "script_source": capture_spec}}
     files = _configured_files(
         [tc], field_meta, base_url, body.data, data_by_test=body.data_by_test,
         browsers=["chromium"], headed=False, workers=1, retries=0,
-        edited=edited, storage_state=storage_state,
+        edited=edited, storage_state=storage_state, auth_config=auth_config,
     )
     run_id = uuid.uuid4().hex
     env = {
         "NEXUS_ENDPOINT": _INGEST_BASE, "NEXUS_TOKEN": token or "",
         "NEXUS_ARTIFACT_ID": artifact_id, "NEXUS_RUN_ID": run_id,
         "NEXUS_BASE_URL": base_url, "NEXUS_ENV": "nexus-runner",
+        **login_env,
         "NEXUS_HEAL_CAPTURE": "1",
         "NEXUS_HEAL_ENDPOINT": f"{_INGEST_BASE}/api/v1/test-runs/heal-capture",
     }
@@ -2207,6 +2243,7 @@ async def _auto_capture_and_reanchor(
     *, tenant_id: str, artifact_id: str, token: str, scenario_id: str, step_number: int,
     tc, field_meta: dict, base_url: str, data, storage_state, ov, ra, spec_path: str,
     env_context: dict | None = None,
+    auth_config: dict | None = None, login_env: dict | None = None,
 ) -> dict | None:
     """P2-full: re-run ONE scenario HEADLESS with a11y capture ON, then resolve a
     MULTI-SIGNAL (similo) re-anchor for the failing step — automatically, so the live
@@ -2231,11 +2268,13 @@ async def _auto_capture_and_reanchor(
             [tc], field_meta, base_url, data, data_by_test={},
             browsers=["chromium"], headed=False, workers=1, retries=0,
             edited=edited, storage_state=storage_state, env_context=env_context,
+            auth_config=auth_config,
         )
         env = {
             "NEXUS_ENDPOINT": _INGEST_BASE, "NEXUS_TOKEN": token or "",
             "NEXUS_ARTIFACT_ID": artifact_id, "NEXUS_RUN_ID": uuid.uuid4().hex,
             "NEXUS_BASE_URL": base_url, "NEXUS_ENV": "nexus-runner",
+            **(login_env or {}),
             "NEXUS_HEAL_CAPTURE": "1",
             "NEXUS_HEAL_ENDPOINT": f"{_INGEST_BASE}/api/v1/test-runs/heal-capture",
         }
@@ -2279,6 +2318,7 @@ async def _run_auto_heal(run_id: str, ctx: dict) -> None:
     data = ctx.get("data") or {}
     max_attempts = int(ctx.get("max_attempts") or 3)
     storage_state = ctx.get("storage_state")  # captured auth session (or None)
+    _fl_auth_config, _fl_login_env = ctx.get("form_login") or (None, {})  # AUTH PERMANENCE
     # Multi-env (#7 heal parity): the resolved Environment Profile. When present the
     # heal re-runs REBIND to that env (base_url + cookies + headers + basic-auth + pin)
     # exactly like the graded run — so a fix is proven against the RIGHT env, never the
@@ -2460,7 +2500,8 @@ async def _run_auto_heal(run_id: str, ctx: dict) -> None:
                     scenario_id=sid, step_number=step, tc=tc, field_meta=field_meta,
                     base_url=base_url, data=data, storage_state=storage_state,
                     ov=overrides.get(sid), ra=reanchors.get(sid),
-                    spec_path=spec_path_by_sid.get(sid, ""), env_context=env_context)
+                    spec_path=spec_path_by_sid.get(sid, ""), env_context=env_context,
+                    auth_config=_fl_auth_config, login_env=_fl_login_env)
                 cap = heal_capture_store.get(tenant_id=tenant_id, artifact_id=artifact_id, scenario_id=sid)
                 nodes = (cap or {}).get("nodes") or []
             if not nodes:
@@ -2569,12 +2610,14 @@ async def _run_auto_heal(run_id: str, ctx: dict) -> None:
                 sel_cases, field_meta, base_url, data, data_by_test={},
                 browsers=["chromium"], headed=True, workers=1, retries=0, edited=edited,
                 storage_state=storage_state, env_context=env_context,
+                auth_config=_fl_auth_config,
             )
             sub_run_id = uuid.uuid4().hex
             env = {
                 "NEXUS_ENDPOINT": _INGEST_BASE, "NEXUS_TOKEN": token or "",
                 "NEXUS_ARTIFACT_ID": artifact_id, "NEXUS_RUN_ID": sub_run_id,
                 "NEXUS_BASE_URL": base_url, "NEXUS_ENV": "nexus-runner",
+                **_fl_login_env,
             }
             started = False
             for _try in range(6):
@@ -3483,6 +3526,9 @@ async def auto_heal_run(
         # rebind to. None (single-env) ⇒ unchanged.
         "env_context": body.env_context,
         "storage_state": await _run_storage_state(request, artifact_id, tenant_id),
+        # AUTH PERMANENCE — form-login (config + creds) so the heal loop's re-runs
+        # self-login instead of riding an expiring captured cookie.
+        "form_login": await _run_form_login(request, artifact_id, tenant_id),
         # AUTOPILOT (Mode B) — fully autonomous: execute+prove UNPROVEN steps + auto-apply
         # the grounded agentic analyst (no human approval). Default off => byte-identical.
         "autonomous": bool(getattr(body, "autonomous", False)),
@@ -3698,6 +3744,7 @@ async def playwright_run(
     if body.env_context and body.env_context.get("base_url"):
         base_url = str(body.env_context["base_url"]).strip()  # env profile base_url wins (SSRF-guarded)
     storage_state = await _run_storage_state(request, artifact_id, tenant_id)
+    auth_config, login_env = await _run_form_login(request, artifact_id, tenant_id)
     # The Nexus runner container is headless (Xvfb-free); honor browsers/workers/
     # retries but force headless regardless of the requested mode.
     files = _configured_files(
@@ -3706,7 +3753,7 @@ async def playwright_run(
         browsers=body.browsers, headed=False,
         workers=body.workers, retries=body.retries,
         edited=edited_map, storage_state=storage_state,
-        env_context=body.env_context,
+        env_context=body.env_context, auth_config=auth_config,
     )
     run_id = uuid.uuid4().hex
     env = {
@@ -3719,6 +3766,9 @@ async def playwright_run(
         # parity can group by it (else every run collapses to one env). Falls back to
         # the deploy label when no profile is bound.
         "NEXUS_ENV": _env_run_label(body.env_context),
+        # AUTH PERMANENCE — form-login credentials (empty dict when no profile is
+        # bound). Secrets ride the run env, never the bundle.
+        **login_env,
     }
     await _register_job(run_id, {
         "run_id": run_id, "status": "running", "artifact_id": artifact_id,
@@ -3803,6 +3853,7 @@ async def playwright_run_live(
     if body.env_context and body.env_context.get("base_url"):
         base_url = str(body.env_context["base_url"]).strip()  # env profile base_url wins (SSRF-guarded)
     storage_state = await _run_storage_state(request, artifact_id, tenant_id)
+    auth_config, login_env = await _run_form_login(request, artifact_id, tenant_id)
     files = _configured_files(
         cases, build_field_meta(visits), base_url, body.data,
         data_by_test=body.data_by_test,
@@ -3810,13 +3861,14 @@ async def playwright_run_live(
         headed=True,                                     # the live difference
         workers=1,                                       # serialize onto one screen
         retries=body.retries, edited=edited_map, storage_state=storage_state,
-        env_context=body.env_context,
+        env_context=body.env_context, auth_config=auth_config,
     )
     run_id = uuid.uuid4().hex
     env = {
         "NEXUS_ENDPOINT": _INGEST_BASE, "NEXUS_TOKEN": token or "",
         "NEXUS_ARTIFACT_ID": artifact_id, "NEXUS_RUN_ID": run_id,
         "NEXUS_BASE_URL": base_url, "NEXUS_ENV": _env_run_label(body.env_context),
+        **login_env,
     }
     try:
         await runner_client.run_live(files, env)         # 202; raises on 409
@@ -3974,6 +4026,64 @@ class _AuthImportBody(BaseModel):
 
     storage_state: dict = Field(..., description="Playwright storageState JSON")
     label: str | None = Field(None, max_length=200)
+
+
+class _FormLoginBody(BaseModel):
+    """AUTH PERMANENCE — a form-login profile so server-side runs log in FRESH
+    each time (self-renewing auth) instead of riding an expiring captured cookie.
+    Credentials are ENCRYPTED at rest (same envelope as the session profile) and
+    are NEVER written into a bundle — the runner reads them from the run env."""
+
+    user: str = Field(..., min_length=1, max_length=300, description="login username/email")
+    password: str = Field(..., min_length=1, max_length=500, description="login password")
+    login_path: str = Field("/", max_length=500, description="path to the login form")
+    submit_label: str = Field("Sign in", max_length=120, description="submit button accessible name")
+    fields: list[dict] | None = Field(
+        None, description="[{label, value}] — value 'user'/'password' maps to the creds")
+    label: str | None = Field(None, max_length=200, description="non-secret note")
+
+
+@router.post("/api/v1/test-factory/{artifact_id}/playwright/auth/form-login")
+async def set_form_login(
+    body: _FormLoginBody,
+    request: Request,
+    artifact_id: str = PathParam(..., min_length=1, max_length=64),
+    user: dict = Depends(get_current_user),
+):
+    """Store a form-login profile (credentials + form shape) so every server-side
+    run of this artifact self-authenticates via the runner's globalSetup — the
+    green is reproducible without re-importing an expiring session. Same gates as
+    /auth/import: OFF unless NEXUS_QEC_AUTH_IMPORT_ENABLED, admin|manager only,
+    503 if encryption is unavailable. Secrets are envelope-encrypted, never
+    returned."""
+    if os.getenv("NEXUS_QEC_AUTH_IMPORT_ENABLED", "").strip().lower() not in ("1", "true", "yes", "on"):
+        raise HTTPException(status_code=403, detail="Auth import is disabled for this deployment.")
+    if (user.get("role") or "viewer").lower() not in ("admin", "manager"):
+        raise HTTPException(status_code=403, detail="Form-login setup requires an admin or manager role.")
+    tenant_id = user["tenant_id"]
+    envelope = getattr(request.app.state, "envelope_service", None)
+    if envelope is None:
+        raise HTTPException(status_code=503, detail="encryption unavailable — cannot store credentials securely")
+    config = {
+        "user": body.user, "password": body.password,
+        "login_path": body.login_path, "submit_label": body.submit_label,
+        "fields": body.fields or [
+            {"label": "Email", "value": "user"},
+            {"label": "Password", "value": "password"},
+        ],
+    }
+    async with tenant_scoped_session(tenant_id) as session:
+        await _require_artifact(session, artifact_id, tenant_id)
+        try:
+            await auth_profiles.save_form_login(
+                session, envelope=envelope, tenant_id=tenant_id, artifact_id=artifact_id,
+                config=config, label=(body.label or f"form-login ({body.user})"),
+            )
+        except (ValueError, RuntimeError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
+        await session.commit()
+    return {"status": "saved", "strategy": "form", "login_path": body.login_path,
+            "user_masked": (body.user[:2] + "***") if body.user else ""}
 
 
 @router.post("/api/v1/test-factory/{artifact_id}/playwright/auth/import")
