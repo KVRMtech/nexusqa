@@ -29,6 +29,7 @@ from urllib.parse import urlsplit
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Path as PathParam, Query, Request, Body
+from fastapi import Response
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import desc, select, text
@@ -100,6 +101,8 @@ _KNOWN_VERDICTS = frozenset({
 })
 from ..services.test_factory import runner_jobs
 from ..services.test_factory import auth_profiles
+from ..services.test_factory import evidence_report
+from ..services.test_factory import report_html
 from ..services.test_factory.assistant import answer as assistant_answer
 from ..services.test_factory.delivery import (
     EXPORT_MEDIA_TYPES,
@@ -6653,3 +6656,84 @@ async def precision_report(
         "honesty": ("every number here is measured from stored events/labels; "
                     "dimensions without labels report counts, never precision"),
     }
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Execution Evidence Report — the audit-grade Certificate of Execution
+# (QECentral/docs/EXECUTION_EVIDENCE_REPORT_SPEC.md, Phase R1)
+# ═══════════════════════════════════════════════════════════════════════════
+
+#: Async + cached (AC-19): report assembly never blocks run completion, and a
+#: reviewer refreshing the page does not re-scan every step row. Keyed by
+#: (tenant, artifact, run, depth); short TTL so a fresh ingest shows up quickly.
+_REPORT_CACHE: dict[tuple, tuple[float, dict]] = {}
+_REPORT_CACHE_TTL_S = 45.0
+_REPORT_CACHE_MAX = 64
+
+
+def _report_cache_get(key: tuple) -> dict | None:
+    hit = _REPORT_CACHE.get(key)
+    if not hit:
+        return None
+    stamped, payload = hit
+    if (_loop_now() - stamped) > _REPORT_CACHE_TTL_S:
+        _REPORT_CACHE.pop(key, None)
+        return None
+    return payload
+
+
+def _report_cache_put(key: tuple, payload: dict) -> None:
+    if len(_REPORT_CACHE) >= _REPORT_CACHE_MAX:
+        _REPORT_CACHE.clear()          # tiny cache; wholesale reset is fine
+    _REPORT_CACHE[key] = (_loop_now(), payload)
+
+
+async def _assemble_report(request: Request, artifact_id: str, tenant_id: str,
+                           run_id: str | None, include_steps: bool) -> dict:
+    key = (tenant_id, artifact_id, run_id or "", bool(include_steps))
+    cached = _report_cache_get(key)
+    if cached is not None:
+        return cached
+    async with tenant_scoped_session(tenant_id) as session:
+        await _require_artifact(session, artifact_id, tenant_id)
+        report = await evidence_report.build_report(
+            session, artifact_id=artifact_id, tenant_id=tenant_id,
+            run_id=run_id, include_steps=include_steps,
+        )
+    _report_cache_put(key, report)
+    return report
+
+
+@router.get("/api/v1/test-factory/{artifact_id}/report")
+async def execution_evidence_report(
+    request: Request,
+    artifact_id: str = PathParam(..., min_length=1, max_length=64),
+    run_id: str | None = Query(None, max_length=64,
+                               description="specific run; default = latest non-diagnosis run"),
+    include_steps: bool = Query(True, description="include per-step detail"),
+    user: dict = Depends(get_current_user),
+):
+    """The Execution Evidence Report as JSON: Crawl → Flow → Case → Step with
+    the spec's status state machine applied, opened by the Trust Block.
+
+    Read-only, ZERO LLM, deterministic. Every number is a count of stored rows;
+    every failure sentence is an Attribution Engine verdict that quotes the
+    evidence it matched. Skipped steps are NEVER counted as passes.
+    """
+    return await _assemble_report(request, artifact_id, user["tenant_id"],
+                                  (run_id or "").strip() or None, include_steps)
+
+
+@router.get("/api/v1/test-factory/{artifact_id}/report.html")
+async def execution_evidence_report_html(
+    request: Request,
+    artifact_id: str = PathParam(..., min_length=1, max_length=64),
+    run_id: str | None = Query(None, max_length=64),
+    user: dict = Depends(get_current_user),
+):
+    """The same report as ONE self-contained, offline-openable HTML document
+    (no CDN, no external assets) — the artifact a reviewer or auditor keeps."""
+    report = await _assemble_report(request, artifact_id, user["tenant_id"],
+                                    (run_id or "").strip() or None, True)
+    return Response(content=report_html.render_html(report),
+                    media_type="text/html; charset=utf-8")
