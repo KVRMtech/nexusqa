@@ -35,6 +35,11 @@ _ALLOWED_CONTENT_TYPES = frozenset({"image/png", "image/jpeg", "image/webp"})
 # Hard ceiling on a stored run video (opt-in proving clip). Larger than a
 # screenshot but still bounded so a single Postgres BYTEA row stays sane.
 MAX_VIDEO_BYTES = 64 * 1024 * 1024  # 64 MiB
+# A Playwright trace.zip carries DOM snapshots + network + console + screencast
+# for ONE test — the single richest evidence artifact we can keep (spec §2.8
+# tier T2). Capped like a video; the trace of a long test is a few MiB.
+MAX_TRACE_BYTES = 64 * 1024 * 1024  # 64 MiB
+_TRACE_CONTENT_TYPE = "application/zip"
 _ALLOWED_VIDEO_CONTENT_TYPES = frozenset({"video/webm", "video/mp4"})
 
 
@@ -197,7 +202,54 @@ async def store_video(
     return vid
 
 
+def normalize_trace_content_type(ct: str | None) -> str:
+    """Traces are always zips; anything else is coerced (never trusted blindly)."""
+    return _TRACE_CONTENT_TYPE
+
+
+async def store_trace(
+    session: AsyncSession,
+    *,
+    tenant_id: str,
+    artifact_id: str,
+    run_id: str,
+    scenario_id: str,
+    step_number: int,
+    trace: bytes,
+) -> str:
+    """Persist one Playwright ``trace.zip`` into the shared blob table and return
+    its id. Mirrors ``store_video``: same table, same tenant scoping, served back
+    through ``fetch_screenshot``. One trace replaces a pile of separate DOM,
+    network, console and video artifacts — and it is time-travel replayable, so
+    a reviewer can step THROUGH the failure rather than squint at a still.
+    Raises ValueError on empty/oversize; caller commits."""
+    if not trace:
+        raise ValueError("empty trace")
+    if len(trace) > MAX_TRACE_BYTES:
+        raise ValueError(f"trace too large ({len(trace)} bytes > {MAX_TRACE_BYTES})")
+    tid = _new_id()
+    session.add(
+        E2ERunScreenshotRow(
+            screenshot_id=tid,
+            run_id=(run_id or "")[:64],
+            artifact_id=(artifact_id or "")[:64],
+            tenant_id=tenant_id,
+            scenario_id=(scenario_id or "")[:64],
+            step_number=int(step_number or 0),
+            content_type=_TRACE_CONTENT_TYPE,
+            byte_size=len(trace),
+            image=trace,
+            created_at=_utc_now(),
+        )
+    )
+    await session.flush()
+    return tid
+
+
 __all__ = [
+    "MAX_TRACE_BYTES",
+    "normalize_trace_content_type",
+    "store_trace",
     "E2ERunScreenshotRow",
     "store_screenshot",
     "fetch_screenshot",

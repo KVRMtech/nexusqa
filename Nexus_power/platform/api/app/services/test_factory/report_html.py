@@ -187,9 +187,15 @@ def _steps_table(steps: list) -> str:
             for k, v in (("scene", prov.get("scene_id")), ("control", prov.get("control_id")),
                          ("edge", prov.get("edge_id")), ("prov", prov.get("recorded_provenance")))
             if v)
-        shot = (s.get("evidence") or {}).get("screenshot_url") or ""
-        shot_html = (f'<a href="{_e(shot)}">screenshot</a>' if shot else
-                     '<span class="meta">—</span>')
+        evd = s.get("evidence") or {}
+        shot = evd.get("screenshot_url") or ""
+        trace = evd.get("trace_url") or ""
+        links = []
+        if shot:
+            links.append(f'<a href="{_e(shot)}">screenshot</a>')
+        if trace:
+            links.append(f'<a href="{_e(trace)}">trace.zip</a>')
+        shot_html = "<br>".join(links) if links else '<span class="meta">—</span>' 
         body.append(
             f'<tr><td class="mono">{_e(s.get("step_number"))}</td>'
             f'<td><span class="chip c-{_e(st)}">{_LABEL.get(st, st)}</span>{badge}</td>'
@@ -238,6 +244,73 @@ def _flow(f: dict) -> str:
         f'</summary><div class="body">{_chips(f.get("counts") or {})}{cases}</div></details>')
 
 
+def _defects(d: dict | None) -> str:
+    """§2.6 — deduplicated defects with lifecycle. One signature = ONE defect."""
+    if not d:
+        return ""
+    rows = []
+    for x in (d.get("defects") or [])[:120]:
+        occ = x.get("occurrence_count", 0)
+        st = x.get("display_status", "")
+        rows.append(
+            f'<tr><td><span class="chip c-{_e(st)}">{_LABEL.get(st, st)}</span></td>'
+            f'<td>{_e(x.get("case_name") or x.get("scenario_id"))}'
+            f'<div class="meta">step {_e(x.get("step_number"))} · '
+            f'<code>{_e(x.get("signature"))[:16]}</code></div></td>'
+            f'<td>{_e(x.get("cause"))}<div class="meta">{_e(x.get("category") or "unattributed")}</div></td>'
+            f'<td class="mono">{occ}</td>'
+            f'<td><span class="tag">{_e(x.get("lifecycle"))}</span></td>'
+            f'<td class="meta">{_e(x.get("first_seen"))}<br>{_e(x.get("last_seen"))}</td>'
+            f'<td><div class="quote">{_e(x.get("fingerprint"))}</div></td></tr>')
+    if not rows:
+        rows = ['<tr><td colspan="7" class="meta">No defects in the window.</td></tr>']
+    lc = d.get("by_lifecycle") or {}
+    return (f'<h2>Defects (deduplicated)</h2><div class="card">'
+            f'<div class="grid">'
+            f'{_kv("Unique defects", d.get("unique_defects"))}'
+            f'{_kv("Total occurrences", d.get("total_occurrences"))}'
+            f'{_kv("Open", lc.get("open"))}'
+            f'{_kv("Fixed (verified)", lc.get("fixed_verified"))}'
+            f'{_kv("Regressed", lc.get("regressed"))}'
+            f'{_kv("Runs in window", d.get("window_runs"))}</div>'
+            f'<div class="note" style="margin-top:10px">{_e(d.get("note"))}</div>'
+            f'<div class="scroll" style="margin-top:10px"><table>'
+            f'<tr><th>Class</th><th>Case</th><th>Cause</th><th>Occurrences</th>'
+            f'<th>Lifecycle</th><th>First / Last seen</th><th>Signature shape</th></tr>'
+            f'{"".join(rows)}</table></div></div>')
+
+
+def _diff(d: dict | None) -> str:
+    """§2.14 — what changed since the previous execution (incl. coverage)."""
+    if not d:
+        return ""
+    if not d.get("available"):
+        return (f'<h2>Change since previous run</h2><div class="card">'
+                f'<div class="note">Not available — {_e(d.get("reason"))}</div></div>')
+
+    def lst(items, title):
+        if not items:
+            return ""
+        li = "".join(f'<li>{_e(i.get("case_name") or i.get("test_case_id"))} '
+                     f'<span class="meta">({_e(i.get("from"))} → {_e(i.get("to"))})</span></li>'
+                     for i in items[:40])
+        return f'<div class="note" style="margin-top:8px"><b>{title}</b><ul>{li}</ul></div>'
+    return (f'<h2>Change since previous run</h2><div class="card">'
+            f'<div class="meta">Comparing <code>{_e(d.get("current_run_id"))}</code> '
+            f'({_e(d.get("current_started_at"))}) against '
+            f'<code>{_e(d.get("previous_run_id"))}</code> ({_e(d.get("previous_started_at"))}).</div>'
+            f'<div class="grid" style="margin-top:10px">'
+            f'{_kv("Newly failing", d.get("newly_failing_count"))}'
+            f'{_kv("Fixed", d.get("fixed_count"))}'
+            f'{_kv("Still failing", d.get("still_failing_count"))}'
+            f'{_kv("Coverage gained", d.get("coverage_gained_count"))}'
+            f'{_kv("Coverage lost", d.get("coverage_lost_count"))}</div>'
+            f'{lst(d.get("newly_failing"), "Newly failing")}'
+            f'{lst(d.get("fixed"), "Fixed")}'
+            f'{lst(d.get("coverage_lost"), "Coverage LOST (ran before, not now)")}'
+            f'<div class="note">{_e(d.get("note"))}</div></div>')
+
+
 def render_html(report: dict) -> str:
     """One self-contained HTML document for the whole report."""
     s = report.get("summary") or {}
@@ -279,6 +352,8 @@ generated {_e(report.get('generated_at'))}</div>
 execute is never counted as a pass.</div></div>
 <h2>User Flows</h2>
 {flows}
+{_defects(report.get('defects'))}
+{_diff(report.get('diff'))}
 <h2>Coverage Honesty</h2>
 <div class="card"><div class="note">{_e(cov.get('note'))}</div>
 <div class="grid" style="margin-top:10px">

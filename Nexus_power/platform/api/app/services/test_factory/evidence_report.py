@@ -320,6 +320,10 @@ def _build_case(
                 "screenshot_url": getattr(row, "screenshot_url", "") or "",
                 "baseline_screenshot": step_def.get("screenshot") or "",
                 "step_run_id": getattr(row, "step_run_id", "") or "",
+                # Tier T2 — one trace.zip replays this failure step-by-step
+                # (DOM + network + console + screencast). Empty when the test
+                # passed (traces are retained on failure only) or pre-migration.
+                "trace_url": str((getattr(row, "metadata_json", None) or {}).get("trace_url") or ""),
             },
             # D2: prose ONLY on non-passing steps, and only what the engine
             # PROVED, with the evidence it matched quoted verbatim.
@@ -381,7 +385,7 @@ def _build_case(
 
 async def build_report(
     session, *, artifact_id: str, tenant_id: str, run_id: str | None = None,
-    include_steps: bool = True,
+    include_steps: bool = True, include_cross_run: bool = True,
 ) -> dict:
     """Assemble the full Execution Evidence Report. Read-only, ZERO LLM.
 
@@ -525,6 +529,27 @@ async def build_report(
         session, artifact_id=artifact_id, tenant_id=tenant_id,
         quarantined=quarantined, ungated=ungated, cases=cases)
 
+    # ── cross-run derivations (§2.6 defect identity, §2.14 diff) ───────────
+    defects = None
+    diff = None
+    if include_cross_run:
+        from .defect_ledger import build_defect_ledger, build_run_diff
+        case_names = {str(getattr(c, "test_case_id", "")): (getattr(c, "name", "") or "")
+                      for c in cases}
+        try:
+            defects = await build_defect_ledger(
+                session, artifact_id=artifact_id, tenant_id=tenant_id,
+                case_names=case_names)
+        except Exception as exc:
+            logger.warning("evidence_report.defect_ledger_failed err=%s", str(exc)[:200])
+        if run is not None:
+            try:
+                diff = await build_run_diff(
+                    session, artifact_id=artifact_id, tenant_id=tenant_id,
+                    current_run_id=run.run_id, case_names=case_names)
+            except Exception as exc:
+                logger.warning("evidence_report.run_diff_failed err=%s", str(exc)[:200])
+
     coverage = {
         "cases_not_executed": not_executed,
         "cases_not_executed_count": len(not_executed),
@@ -548,6 +573,8 @@ async def build_report(
         "trust": trust,
         "summary": summary,
         "flows": sorted(flows.values(), key=lambda f: (-f["case_count"], f["flow_key"])),
+        "defects": defects,
+        "diff": diff,
         "coverage": coverage,
     }
 

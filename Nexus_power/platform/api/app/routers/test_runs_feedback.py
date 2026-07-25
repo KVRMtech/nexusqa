@@ -56,9 +56,11 @@ from ..services.test_runs import (
 )
 from ..services.test_factory.run_screenshots import (
     MAX_SCREENSHOT_BYTES,
+    MAX_TRACE_BYTES,
     MAX_VIDEO_BYTES,
     fetch_screenshot,
     store_screenshot,
+    store_trace,
     store_video,
 )
 from ..services.diff_and_heal import heal_capture_store
@@ -301,6 +303,53 @@ async def upload_run_screenshot(
             _logger.warning("test_runs.screenshot_store_unavailable: %s", exc)
             raise HTTPException(503, "screenshot store unavailable")
     return {"screenshot_id": sid, "url": f"/api/v1/test-runs/screenshot/{sid}"}
+
+
+@router.post("/api/v1/test-runs/trace")
+async def upload_run_trace(
+    file: UploadFile = File(...),
+    run_id: str = Form(""),
+    artifact_id: str = Form(...),
+    scenario_id: str = Form(""),
+    step_number: int = Form(0),
+    user: dict = Depends(get_current_user),
+):
+    """Upload one Playwright ``trace.zip`` for a FAILED test from the bundled
+    reporter (spec §2.8 evidence tier T2).
+
+    One trace carries the DOM snapshots, network log, console log and a
+    screencast for that test, and is time-travel replayable — so it satisfies
+    "replay from the exact step" without a bespoke video pipeline. Same
+    guarantees as the screenshot upload: tenant-scoped, artifact-verified,
+    best-effort (503 pre-migration → the reporter skips and the report simply
+    shows no trace, never a fabricated one)."""
+    _require_write_role(user)
+    tenant_id = user["tenant_id"]
+    data = await file.read(MAX_TRACE_BYTES + 1)
+    if not data:
+        raise HTTPException(422, "empty trace")
+    if len(data) > MAX_TRACE_BYTES:
+        raise HTTPException(413, "trace too large")
+    async with tenant_scoped_session(tenant_id) as session:
+        await _verify_artifact_in_tenant(
+            session, artifact_id=artifact_id, tenant_id=tenant_id,
+        )
+        try:
+            tid = await store_trace(
+                session,
+                tenant_id=tenant_id,
+                artifact_id=artifact_id,
+                run_id=run_id,
+                scenario_id=scenario_id,
+                step_number=step_number,
+                trace=data,
+            )
+        except ValueError as exc:
+            raise HTTPException(422, str(exc))
+        except Exception as exc:      # table missing (pre-migration) / DB error
+            _logger.warning("test_runs.trace_store_unavailable: %s", exc)
+            raise HTTPException(503, "trace store unavailable")
+    return {"trace_id": tid, "url": f"/api/v1/test-runs/screenshot/{tid}"}
 
 
 class HealCaptureRequest(BaseModel):

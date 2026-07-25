@@ -1560,7 +1560,11 @@ export default defineConfig({
   expect: { timeout: 15_000 },
   reporter: [['list'], ['html', { open: 'never' }], ['junit', { outputFile: 'results/junit.xml' }], ['./vkpower-reporter.ts']],
   use: {
-    trace: 'on-first-retry',
+    // Evidence tier T2: one trace.zip per FAILED test carries DOM snapshots,
+    // network, console and a screencast, and is time-travel replayable — it
+    // replaces a bespoke video/DOM/network pipeline. 'on-first-retry' never
+    // fired for server runs (retries=0), so failures shipped with no trace.
+    trace: (process.env.NEXUS_TRACE as any) || 'retain-on-failure',
     screenshot: 'only-on-failure',
     // Reuse a captured authenticated session when VKPower injects one (auth profile
     // → vkpower.auth.json in the run dir). Self-detecting, so a downloaded bundle
@@ -1612,7 +1616,11 @@ __WORKERS__  reporter: [['list'], ['html', { open: 'never' }], ['junit', { outpu
   use: {
     baseURL: nexusBaseURL(),
     headless: __HEADLESS__,
-    trace: 'on-first-retry',
+    // Evidence tier T2: one trace.zip per FAILED test carries DOM snapshots,
+    // network, console and a screencast, and is time-travel replayable — it
+    // replaces a bespoke video/DOM/network pipeline. 'on-first-retry' never
+    // fired for server runs (retries=0), so failures shipped with no trace.
+    trace: (process.env.NEXUS_TRACE as any) || 'retain-on-failure',
     screenshot: 'only-on-failure',
     // Reuse a captured authenticated session when VKPower injects one (auth profile
     // → vkpower.auth.json in the run dir). Self-detecting, so a downloaded bundle
@@ -1709,6 +1717,7 @@ function mapRunStatus(s: string): string {
 export default class VKPowerReporter implements Reporter {
   private steps: StepRecord[] = [];
   private pendingShots: PendingShot[] = [];
+  private pendingTraces: { scenarioId: string; path: string }[] = [];
   private startedAt = new Date(0).toISOString();
   private done = 0;
   private total = 0;
@@ -1776,6 +1785,13 @@ export default class VKPowerReporter implements Reporter {
     // Associate Playwright's only-on-failure screenshot with the failing step
     // record; uploaded at onEnd. Best-effort — never affects the run result.
     if (result.status === 'failed' || result.status === 'timedOut') {
+      // Trace (evidence tier T2) — the richest single artifact for this failure.
+      const tr = result.attachments.find(
+        (a) => a.name === 'trace' && a.path,
+      );
+      if (tr && tr.path) {
+        this.pendingTraces.push({ scenarioId, path: tr.path });
+      }
       const shot = result.attachments.find(
         (a) => (a.name === 'screenshot' || (a.contentType || '').startsWith('image/')) && (a.path || a.body),
       );
@@ -1844,6 +1860,37 @@ export default class VKPowerReporter implements Reporter {
           if (j && j.url && this.steps[ps.idx]) this.steps[ps.idx].screenshot_url = j.url;
         }
       } catch { /* best-effort screenshot upload */ }
+    }
+
+    // Upload one trace.zip per failed test. Best-effort and completely
+    // non-blocking: a missing endpoint (pre-migration 503) or an oversize
+    // trace simply means the report shows no trace — never a fabricated one.
+    for (const pt of this.pendingTraces) {
+      try {
+        const buf: Buffer = fs.readFileSync(pt.path);
+        if (!buf || !buf.length) continue;
+        const fd = new FormData();
+        fd.append('run_id', runId);
+        fd.append('artifact_id', ARTIFACT_ID);
+        fd.append('scenario_id', pt.scenarioId);
+        fd.append('step_number', '0');
+        fd.append('file', new Blob([buf], { type: 'application/zip' }), 'trace.zip');
+        const tr2 = await fetch(`${base}/api/v1/test-runs/trace`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${TOKEN}` },
+          body: fd as any,
+        });
+        if (tr2.ok) {
+          const j: any = await tr2.json().catch(() => null);
+          if (j && j.url) {
+            for (let i = 0; i < this.steps.length; i++) {
+              if (this.steps[i].scenario_id === pt.scenarioId) {
+                this.steps[i].metadata = { ...(this.steps[i].metadata || {}), trace_url: j.url };
+              }
+            }
+          }
+        }
+      } catch { /* best-effort trace upload */ }
     }
 
     const body = {
