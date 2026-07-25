@@ -103,6 +103,8 @@ from ..services.test_factory import runner_jobs
 from ..services.test_factory import auth_profiles
 from ..services.test_factory import evidence_report
 from ..services.test_factory import report_html
+from ..services.test_factory import report_export
+from ..services.test_factory import evidence_manifest
 from ..services.test_factory.assistant import answer as assistant_answer
 from ..services.test_factory.delivery import (
     EXPORT_MEDIA_TYPES,
@@ -6737,3 +6739,180 @@ async def execution_evidence_report_html(
                                     (run_id or "").strip() or None, True)
     return Response(content=report_html.render_html(report),
                     media_type="text/html; charset=utf-8")
+
+
+# ── Phase R3: audit-grade export + review workflow (spec §2.16-§2.18) ────────
+
+def _export_role_ok(user: dict) -> bool:
+    """Exporting evidence is an EGRESS event (screenshots, traces, network
+    detail leave the platform), so it needs a write-capable role — a viewer can
+    read the report in-product but cannot package it out."""
+    return (user.get("role") or "viewer").lower() in ("admin", "manager", "editor")
+
+
+async def _audit_report_event(*, tenant_id: str, artifact_id: str, actor: str,
+                              event_type: str, detail: str) -> None:
+    """Append a report-lifecycle event to the tenant's Part-11 hash chain.
+
+    Best-effort by design: an audit-write failure must not corrupt the caller's
+    response, but it is logged at WARNING so the gap is VISIBLE in the trail
+    rather than invisible."""
+    try:
+        async with tenant_scoped_session(tenant_id) as session:
+            await heal_evidence.record_heal_event(
+                session, tenant_id=tenant_id, artifact_id=artifact_id,
+                event_type=event_type, actor=actor or "unknown",
+                scenario_id="", step_number=0, engine_verdict="",
+                verified_green=False, reason_for_change=(detail or "")[:500],
+            )
+            await session.commit()
+    except Exception as exc:
+        _logger.warning("test_factory.report_audit_failed artifact=%s type=%s err=%s",
+                        artifact_id, event_type, str(exc)[:200])
+
+
+@router.get("/api/v1/test-factory/{artifact_id}/report.zip")
+async def execution_evidence_export(
+    request: Request,
+    artifact_id: str = PathParam(..., min_length=1, max_length=64),
+    run_id: str | None = Query(None, max_length=64),
+    mask_all_inputs: bool = Query(False,
+                                  description="also mask every recorded input value"),
+    user: dict = Depends(get_current_user),
+):
+    """The complete evidence package: report.html + report.json + verdict.json +
+    manifest.json (SHA-256 chain) + an offline verifier script.
+
+    Governed egress: write-role only, credential-shaped values always redacted,
+    watermarked with who exported it and when, and the export itself recorded as
+    an audit event on the tenant's hash chain.
+    """
+    if not _export_role_ok(user):
+        raise HTTPException(
+            status_code=403,
+            detail="Exporting evidence requires an editor, manager or admin role.")
+    tenant_id = user["tenant_id"]
+    rid = (run_id or "").strip() or None
+    report = await _assemble_report(request, artifact_id, tenant_id, rid, True)
+    html = report_html.render_html(report)
+    actor = user.get("email") or user.get("user_id") or "unknown"
+    blob, manifest = report_export.build_zip(
+        report=report, html=html, exported_by=actor, artifact_id=artifact_id,
+        run_id=(report.get("run") or {}).get("run_id", "") or "",
+        mask_all_inputs=bool(mask_all_inputs),
+    )
+    await _audit_report_event(
+        tenant_id=tenant_id, artifact_id=artifact_id, actor=actor,
+        event_type="evidence_exported",
+        detail=(f"chain_root={manifest.get('chain_root')} "
+                f"signed={manifest.get('signed')} "
+                f"files={manifest.get('file_count')} "
+                f"run={(report.get('run') or {}).get('run_id', '')}"))
+    fname = f"evidence-{artifact_id[:12]}-{(manifest.get('chain_root') or '')[:8]}.zip"
+    return Response(
+        content=blob, media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"',
+                 "X-Nexus-Chain-Root": str(manifest.get("chain_root") or ""),
+                 "X-Nexus-Signed": "true" if manifest.get("signed") else "false"})
+
+
+@router.get("/api/v1/test-factory/{artifact_id}/report/verdict.json")
+async def execution_verdict_json(
+    request: Request,
+    artifact_id: str = PathParam(..., min_length=1, max_length=64),
+    run_id: str | None = Query(None, max_length=64),
+    user: dict = Depends(get_current_user),
+):
+    """Machine-readable verdict for CI gates and dashboards — the SAME truth the
+    humans read, carrying what JUnit XML structurally cannot (attribution class,
+    evidence class, defect signatures, certification state)."""
+    report = await _assemble_report(request, artifact_id, user["tenant_id"],
+                                    (run_id or "").strip() or None, True)
+    return report_export.build_verdict_json(report)
+
+
+class _ReviewDispositionBody(BaseModel):
+    """§2.18 — Needs Review is a WORKFLOW, not a label. A disposition records
+    WHO decided WHAT and why, on the tamper-evident chain."""
+
+    scenario_id: str = Field(..., min_length=1, max_length=64)
+    step_number: int = Field(0, ge=0, le=10000)
+    disposition: str = Field(..., description="confirm_defect | reclassify | retest | dismiss")
+    reason: str = Field(..., min_length=3, max_length=500)
+    reclassify_to: str | None = Field(None, max_length=40)
+    signature_name: str | None = Field(
+        None, max_length=200,
+        description="typed full name = electronic signature (regulated tenants)")
+
+
+_ALLOWED_DISPOSITIONS = ("confirm_defect", "reclassify", "retest", "dismiss")
+
+
+@router.post("/api/v1/test-factory/{artifact_id}/report/review")
+async def record_review_disposition(
+    body: _ReviewDispositionBody,
+    artifact_id: str = PathParam(..., min_length=1, max_length=64),
+    user: dict = Depends(get_current_user),
+):
+    """Record a human disposition on a Needs-Review (or AI-suggested) finding.
+
+    This closes the D3 loop: the machine SUGGESTS, a named human ASSERTS, and
+    the transition is written to the tenant's Part-11 hash chain so the report
+    can always answer "who signed off?".
+    """
+    if not _export_role_ok(user):
+        raise HTTPException(
+            status_code=403,
+            detail="Recording a disposition requires an editor, manager or admin role.")
+    if body.disposition not in _ALLOWED_DISPOSITIONS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"disposition must be one of {', '.join(_ALLOWED_DISPOSITIONS)}")
+    tenant_id = user["tenant_id"]
+    actor = user.get("email") or user.get("user_id") or "unknown"
+    async with tenant_scoped_session(tenant_id) as session:
+        await _require_artifact(session, artifact_id, tenant_id)
+    detail = (f"disposition={body.disposition} scenario={body.scenario_id} "
+              f"step={body.step_number} reclassify_to={body.reclassify_to or '-'} "
+              f"signed_by={body.signature_name or '(unsigned)'} :: {body.reason}")
+    await _audit_report_event(
+        tenant_id=tenant_id, artifact_id=artifact_id, actor=actor,
+        event_type="review_disposition", detail=detail)
+    return {"recorded": True, "disposition": body.disposition,
+            "scenario_id": body.scenario_id, "step_number": body.step_number,
+            "actor": actor,
+            "electronically_signed": bool(body.signature_name),
+            "note": ("Recorded on the tenant's tamper-evident chain. An unsigned "
+                     "disposition is still recorded — it is simply marked unsigned, "
+                     "never presented as a signed one.")}
+
+
+@router.get("/api/v1/test-factory/{artifact_id}/report/audit-trail")
+async def report_audit_trail(
+    artifact_id: str = PathParam(..., min_length=1, max_length=64),
+    user: dict = Depends(get_current_user),
+):
+    """The artifact's audit trail plus a LIVE verification of the hash chain —
+    so "immutable" is a checkable claim, not an adjective."""
+    tenant_id = user["tenant_id"]
+    async with tenant_scoped_session(tenant_id) as session:
+        await _require_artifact(session, artifact_id, tenant_id)
+    # SEPARATE sessions per query on purpose: a failing statement aborts its
+    # whole Postgres transaction, so sharing one session made a missing-table
+    # error on the first call cascade into a bogus "chain verification
+    # unavailable" on the second. Each answer now stands on its own evidence.
+    try:
+        async with tenant_scoped_session(tenant_id) as session:
+            events = await heal_evidence.list_heal_events(
+                session, tenant_id=tenant_id, artifact_id=artifact_id)
+    except Exception as exc:
+        _logger.warning("test_factory.audit_list_failed err=%s", str(exc)[:200])
+        events = {"events": [], "error": "audit trail unavailable"}
+    try:
+        async with tenant_scoped_session(tenant_id) as session:
+            chain = await heal_evidence.verify_chain(session, tenant_id=tenant_id)
+    except Exception as exc:
+        _logger.warning("test_factory.audit_verify_failed err=%s", str(exc)[:200])
+        chain = {"verified": None, "error": "chain verification unavailable"}
+    return {"artifact_id": artifact_id, "audit": events, "chain_verification": chain,
+            "signing_enabled": evidence_manifest.signing_enabled()}
