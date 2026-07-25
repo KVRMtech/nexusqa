@@ -396,41 +396,47 @@ async def _run_load():
         await conn.run_sync(QecBase.metadata.create_all)
     factory = async_sessionmaker(engine, expire_on_commit=False)
     tenant = f"qec-inv-{uuid.uuid4().hex[:10]}"
+    # app_id / scenario_id / invariant_id are GLOBAL primary keys — fixed
+    # literals collide with rows other suites commit into the shared CI DB
+    # (test_autonomy_trend seeded scenario_id='sc1' first and this test then
+    # hit qec_scenarios_pkey). Unique per run, like production's uuid ids.
+    u = uuid.uuid4().hex[:8]
+    aid, sid, iid = f"a1-{u}", f"sc1-{u}", f"inv1-{u}"
     original = ie.tenant_scoped_qec_session
     try:
         ie.tenant_scoped_qec_session = lambda tid: _scoped(factory, tid)
         async with _scoped(factory, tenant) as s:
             s.add(ClientAppRow(
-                app_id="a1", tenant_id=tenant, name="Acme", base_url=_POS_URL,
+                app_id=aid, tenant_id=tenant, name="Acme", base_url=_POS_URL,
                 canonical_host="example",
                 env_attestation={"env_kind": "disposable", "expires_at": _future_iso(),
                                  "break_probe": {"base_url": _BREAK_URL}},
                 fences={},
             ))
             s.add(ScenarioRow(
-                scenario_id="sc1", tenant_id=tenant, app_id="a1",
+                scenario_id=sid, tenant_id=tenant, app_id=aid,
                 source_artifact_id="art-src", materialized_artifact_id="art-mat",
             ))
             s.add(CertifiedInvariantRow(
-                invariant_id="inv1", tenant_id=tenant, app_id="a1",
+                invariant_id=iid, tenant_id=tenant, app_id=aid,
                 statement="ceiling", criticality_band="P0", signature="Jane QA",
                 signed_by="Jane QA", requires_disposable_env=True,
-                linked_scenario_ids=["sc1"], status="certified",
+                linked_scenario_ids=[sid], status="certified",
             ))
 
-        ctx = await ie.load_invariant_context(tenant_id=tenant, invariant_id="inv1")
+        ctx = await ie.load_invariant_context(tenant_id=tenant, invariant_id=iid)
         assert ctx is not None
-        assert ctx.app_id == "a1"
+        assert ctx.app_id == aid
         assert ctx.scenario_artifact_id == "art-mat"     # materialized preferred
         assert ctx.env_attestation["env_kind"] == "disposable"
         assert ctx.requires_disposable_env is True
-        assert ctx.linked_scenario_ids == ("sc1",)
+        assert ctx.linked_scenario_ids == (sid,)
 
         # A valid disposable attestation → the executor certifies with a fake factory.
         fake = _FakeFactory(positive=GREEN_EVIDENCED, break_=BROKEN)
-        result = await execute_invariant("ignored", "inv1", factory=fake,
+        result = await execute_invariant("ignored", iid, factory=fake,
                                          loader=lambda **kw: ie.load_invariant_context(
-                                             tenant_id=tenant, invariant_id="inv1"))
+                                             tenant_id=tenant, invariant_id=iid))
         assert result.status == STATUS_CERTIFIED
 
         missing = await ie.load_invariant_context(tenant_id=tenant, invariant_id="nope")

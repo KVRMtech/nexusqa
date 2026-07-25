@@ -162,6 +162,11 @@ async def _run_trend():
         await conn.run_sync(QecBase.metadata.create_all)
     factory = async_sessionmaker(engine, expire_on_commit=False)
     tenant = f"qec-trend-{uuid.uuid4().hex[:10]}"
+    # scenario_id / cycle_id are GLOBAL primary keys (uuid5 identities in prod)
+    # — fixed literals collide across suites sharing the one CI database, so
+    # every seeded id is made unique per run.
+    u = uuid.uuid4().hex[:8]
+    c1, c2 = f"c1-{u}", f"c2-{u}"
     now = utc_now()
     original = touch_meter.tenant_scoped_qec_session
     try:
@@ -170,21 +175,21 @@ async def _run_trend():
             # Two active P0 scenarios (the governed denominator).
             for i in (1, 2):
                 s.add(ScenarioRow(
-                    scenario_id=f"sc{i}", tenant_id=tenant, app_id="a1",
+                    scenario_id=f"sc{i}-{u}", tenant_id=tenant, app_id="a1",
                     criticality_band="P0", status="active",
                 ))
             # Two cycles: c1 older, c2 newer.
-            s.add(AppCycleRow(cycle_id="c1", tenant_id=tenant, app_id="a1",
+            s.add(AppCycleRow(cycle_id=c1, tenant_id=tenant, app_id="a1",
                               trigger="manual", state="done",
                               created_at=now - timedelta(hours=2)))
-            s.add(AppCycleRow(cycle_id="c2", tenant_id=tenant, app_id="a1",
+            s.add(AppCycleRow(cycle_id=c2, tenant_id=tenant, app_id="a1",
                               trigger="manual", state="done",
                               created_at=now - timedelta(hours=1)))
             # One P0 human touch, attributed to c2 only.
             s.add(TouchEventRow(
                 touch_id=uuid.uuid4().hex, tenant_id=tenant, app_id="a1",
                 touch_type=touch_meter.TOUCH_SCENARIO_APPROVE, band="P0",
-                cycle_id="c2", source=touch_meter.SOURCE_QEC_DIRECT,
+                cycle_id=c2, source=touch_meter.SOURCE_QEC_DIRECT,
                 actor="jane", created_at=now,
             ))
 
@@ -192,14 +197,14 @@ async def _run_trend():
             tenant_id=tenant, app_id="a1", cycles=10,
         )
         assert trend["window"] == 2
-        assert [c["cycle_id"] for c in trend["cycles"]] == ["c1", "c2"]  # chronological
+        assert [c["cycle_id"] for c in trend["cycles"]] == [c1, c2]  # chronological
         p0 = trend["per_band"]["P0"]
         by_cycle = {e["cycle_id"]: e for e in p0}
         # c1: 2 governed, 0 touches → 100% autonomous.
-        assert by_cycle["c1"]["autonomy_pct"] == 100.0
+        assert by_cycle[c1]["autonomy_pct"] == 100.0
         # c2: 2 governed, 1 touch → 50%.
-        assert by_cycle["c2"]["human_touches"] == 1
-        assert by_cycle["c2"]["autonomy_pct"] == 50.0
+        assert by_cycle[c2]["human_touches"] == 1
+        assert by_cycle[c2]["autonomy_pct"] == 50.0
         # Still no single averaged number.
         assert "autonomy_pct" not in trend
     finally:

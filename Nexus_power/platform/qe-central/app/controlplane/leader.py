@@ -138,8 +138,14 @@ class LeaderElection:
         try:
             # AUTOCOMMIT so no transaction is left idle-in-transaction while we
             # hold the (session-level, txn-independent) advisory lock.
+            # NOTE: AsyncConnection.execution_options is a COROUTINE in
+            # SQLAlchemy 2.x — un-awaited it rebound `conn` to a coroutine
+            # object, every subsequent execute() raised, and acquire() fell
+            # into the error path returning False: advisory-lock election
+            # could NEVER become leader. Latent until qec-ci first exercised
+            # the real-Postgres path (test_real_pg_advisory_lock_contention).
             try:
-                conn = conn.execution_options(isolation_level="AUTOCOMMIT")
+                conn = await conn.execution_options(isolation_level="AUTOCOMMIT")
             except Exception:  # noqa: BLE001 - optional; the lock works regardless
                 pass
             got = (await conn.execute(
