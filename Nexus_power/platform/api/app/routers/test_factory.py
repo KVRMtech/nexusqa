@@ -1027,6 +1027,27 @@ _CERT_RETRYABLE_STATUSES = frozenset({"error", "timed_out"})
 _CERT_MAX_ATTEMPTS = 3
 _CERT_RETRY_BACKOFF_S = 30.0
 
+# ── Concurrency budget for BACKGROUND recovery runs (cert + auto-heal + regen) ──
+# They share the ONE runner with client-initiated runs. An unbounded fan-out — a
+# certification on every regenerate + an auto-heal per failing scenario — thrashed
+# the runner: client runs 409'd and clean measurement was impossible (2026-07-25).
+# The budget: at most ONE background recovery run holds the runner at a time
+# (this lock), acquired with a bounded wait so a wedged job never blocks forever;
+# and a per-artifact cert cooldown so rapid regenerates coalesce into one cert.
+# Client runs (playwright_run / run_live / heal_step) NEVER take this lock — they
+# always get the runner ahead of background recovery.
+_RECOVERY_RUNNER_LOCK = asyncio.Lock()
+_RECOVERY_LOCK_WAIT_S = 1200.0        # give up the slot rather than queue forever
+_CERT_COOLDOWN_S = 120.0
+_CERT_LAST_DISPATCH: dict[str, float] = {}   # artifact_id -> loop time of last cert
+
+
+def _loop_now() -> float:
+    try:
+        return asyncio.get_event_loop().time()
+    except Exception:  # pragma: no cover — no running loop
+        return 0.0
+
 
 def _cert_timeout_ms(case_count: int) -> int:
     """Per-suite certification cap: base 2 min + 30s/case, ceiling 30 min.
@@ -1087,7 +1108,20 @@ async def _certify_generated_suite(
         )
         timeout_ms = _cert_timeout_ms(len(cases))
 
-        for attempt in range(1, _CERT_MAX_ATTEMPTS + 1):
+        # Concurrency budget: hold the shared recovery-runner lock for the whole
+        # attempt loop so cert + auto-heal never contend for the runner. Bounded
+        # wait — if another recovery run is wedged, give up rather than pile on.
+        try:
+            await asyncio.wait_for(_RECOVERY_RUNNER_LOCK.acquire(),
+                                   timeout=_RECOVERY_LOCK_WAIT_S)
+        except asyncio.TimeoutError:
+            _logger.warning(
+                "test_factory.certification.skipped artifact=%s reason=recovery_"
+                "runner_busy (another recovery run held the slot > %ds)",
+                artifact_id, int(_RECOVERY_LOCK_WAIT_S))
+            return
+        try:
+          for attempt in range(1, _CERT_MAX_ATTEMPTS + 1):
             run_id = uuid.uuid4().hex
             env = {
                 "NEXUS_ENDPOINT": _INGEST_BASE,
@@ -1127,6 +1161,8 @@ async def _certify_generated_suite(
             )
             if attempt < _CERT_MAX_ATTEMPTS:
                 await asyncio.sleep(_CERT_RETRY_BACKOFF_S)
+        finally:
+            _RECOVERY_RUNNER_LOCK.release()
     except Exception:
         _logger.exception(
             "test_factory.certification.failed artifact=%s (generation unaffected)",
@@ -1160,7 +1196,21 @@ def _recorded_origin(visits) -> str:
 
 
 def _spawn_certification(request: Request, artifact_id: str, tenant_id: str) -> None:
-    """Schedule the post-generation certification run (fire-and-forget)."""
+    """Schedule the post-generation certification run (fire-and-forget).
+
+    Debounced per artifact: rapid regenerates (or an auto-heal + a regenerate)
+    within the cooldown coalesce into ONE certification instead of stacking
+    certs that fight the runner. POST /certify is the explicit override for a
+    deliberate re-certify."""
+    now = _loop_now()
+    last = _CERT_LAST_DISPATCH.get(artifact_id, 0.0)
+    if now - last < _CERT_COOLDOWN_S:
+        _logger.warning(
+            "test_factory.certification.debounced artifact=%s (a cert was "
+            "dispatched %.0fs ago < %.0fs cooldown)",
+            artifact_id, now - last, _CERT_COOLDOWN_S)
+        return
+    _CERT_LAST_DISPATCH[artifact_id] = now
     token = _bearer(request)
     task = asyncio.create_task(_certify_generated_suite(
         request=request, artifact_id=artifact_id, tenant_id=tenant_id, token=token,
@@ -1194,7 +1244,19 @@ async def _auto_heal_scenario(
             scenario_id, step_number)
         return
     _AUTO_HEAL_ATTEMPTED.add(key)
-    async with _AUTO_HEAL_LOCK:
+    # Share the ONE recovery-runner budget with certification (serialize, never
+    # thrash the runner). Bounded wait — if a cert holds the slot too long, drop
+    # this heal rather than queue forever; the dossier stays open for the next
+    # pass or a human.
+    try:
+        await asyncio.wait_for(_RECOVERY_RUNNER_LOCK.acquire(),
+                               timeout=_RECOVERY_LOCK_WAIT_S)
+    except asyncio.TimeoutError:
+        _logger.warning(
+            "test_factory.auto_heal.skipped scenario=%s reason=recovery_runner_busy",
+            scenario_id)
+        return
+    try:
         try:
             from ..services.agentic import recovery_store
 
@@ -1439,6 +1501,8 @@ async def _auto_heal_scenario(
             _logger.exception(
                 "test_factory.auto_heal.error artifact=%s scenario=%s (nothing changed)",
                 artifact_id, scenario_id)
+    finally:
+        _RECOVERY_RUNNER_LOCK.release()
 
 
 async def _regenerate_combination(
