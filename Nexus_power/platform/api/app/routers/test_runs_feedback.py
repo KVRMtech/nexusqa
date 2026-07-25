@@ -22,6 +22,7 @@ can be layered on later without touching this code.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import time
@@ -186,9 +187,14 @@ async def _fetch_visual_graph(
 # ─── Endpoints ─────────────────────────────────────────────────────────
 
 
+# Recovery Orchestrator background tasks — referenced so they are never GC'd.
+_RECOVERY_TASKS: set = set()
+
+
 @router.post("/api/v1/test-runs/ingest")
 async def ingest_test_run(
     req: IngestRequest,
+    request: Request,
     user: dict = Depends(get_current_user),
 ):
     """Ingest a CI run. Authenticated with a standard JWT — CI generates a
@@ -202,12 +208,48 @@ async def ingest_test_run(
         payload = req.model_dump()
         # ingest_run wants 'metadata' on each step; the pydantic dump
         # already produced that. Translate top-level into kwargs:
-        return await ingest_run(
+        summary = await ingest_run(
             db,
             artifact_id=req.artifact_id,
             tenant_id=tenant_id,
             payload=payload,
         )
+
+    # ── Recovery Orchestrator (the reflex arc, founder-approved FULL-AUTO) ──
+    # A failed run triggers automatic diagnosis → routed repair → re-prove the
+    # moment it lands, instead of waiting for a human to notice. Fire-and-
+    # forget: a recovery error can never break ingest. Certification-run
+    # ingests pass NO certification spawner (loop guard — a failing cert must
+    # not re-trigger itself; POST /certify is the deliberate retry).
+    try:
+        if int(summary.get("failed_steps") or 0) > 0:
+            from ..services.test_factory.recovery_orchestrator import run_recovery
+            is_cert = (
+                str(req.environment or "").strip().lower() == "certification"
+            )
+            spawn = None
+            if not is_cert:
+                from .test_factory import _spawn_certification
+
+                def spawn(request=request, aid=req.artifact_id, tid=tenant_id):
+                    _spawn_certification(request, aid, tid)
+
+            task = asyncio.create_task(run_recovery(
+                artifact_id=req.artifact_id,
+                tenant_id=tenant_id,
+                run_id=str(summary.get("run_id") or ""),
+                is_certification=is_cert,
+                session_scope=lambda tid=tenant_id: tenant_scoped_session(tid),
+                spawn_certification=spawn,
+            ))
+            _RECOVERY_TASKS.add(task)
+            task.add_done_callback(_RECOVERY_TASKS.discard)
+    except Exception:
+        logging.getLogger(__name__).exception(
+            "test_runs.recovery_spawn_failed artifact=%s (ingest unaffected)",
+            req.artifact_id,
+        )
+    return summary
 
 
 @router.post("/api/v1/test-runs/screenshot")
