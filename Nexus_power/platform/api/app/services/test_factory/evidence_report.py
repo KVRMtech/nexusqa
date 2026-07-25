@@ -536,10 +536,12 @@ async def build_report(
         from .defect_ledger import build_defect_ledger, build_run_diff
         case_names = {str(getattr(c, "test_case_id", "")): (getattr(c, "name", "") or "")
                       for c in cases}
+        case_priorities = {str(getattr(c, "test_case_id", "")): (getattr(c, "priority", "") or "")
+                           for c in cases}
         try:
             defects = await build_defect_ledger(
                 session, artifact_id=artifact_id, tenant_id=tenant_id,
-                case_names=case_names)
+                case_names=case_names, case_priorities=case_priorities)
         except Exception as exc:
             logger.warning("evidence_report.defect_ledger_failed err=%s", str(exc)[:200])
         if run is not None:
@@ -549,6 +551,11 @@ async def build_report(
                     current_run_id=run.run_id, case_names=case_names)
             except Exception as exc:
                 logger.warning("evidence_report.run_diff_failed err=%s", str(exc)[:200])
+
+    timeline = build_timeline(
+        run=run, step_rows=step_rows,
+        case_names={str(getattr(c, "test_case_id", "")): (getattr(c, "name", "") or "")
+                    for c in cases})
 
     coverage = {
         "cases_not_executed": not_executed,
@@ -575,7 +582,77 @@ async def build_report(
         "flows": sorted(flows.values(), key=lambda f: (-f["case_count"], f["flow_key"])),
         "defects": defects,
         "diff": diff,
+        "timeline": timeline,
         "coverage": coverage,
+    }
+
+
+def build_timeline(*, run: Any, step_rows: list, case_names: dict,
+                   max_events: int = 400) -> dict:
+    """§2.11 — the chronological account of the execution.
+
+    Assembled from timestamps that already exist (run lifecycle + per-step
+    ingest), so it can never disagree with the rest of the report. Non-passing
+    steps are always kept; passing steps are sampled when a run is long, and
+    the sampling is DISCLOSED rather than silently truncating the story.
+    """
+    events: list[dict] = []
+    if run is not None:
+        events.append({
+            "at": _iso(getattr(run, "started_at", None)),
+            "kind": "run_started",
+            "label": f"Execution started ({getattr(run, 'environment', '') or 'run'})",
+            "detail": f"run {getattr(run, 'run_id', '')}",
+            "status": "",
+        })
+
+    ordered = sorted(
+        step_rows,
+        key=lambda r: (getattr(r, "created_at", None) or datetime.min,
+                       int(getattr(r, "step_number", 0) or 0)))
+    non_passing = [r for r in ordered
+                   if str(getattr(r, "status", "")).lower() != _DB_PASSED]
+    budget = max(0, max_events - len(non_passing) - 2)
+    passing = [r for r in ordered if str(getattr(r, "status", "")).lower() == _DB_PASSED]
+    stride = max(1, (len(passing) // budget) + 1) if budget and passing else 1
+    kept_passing = passing[::stride] if budget else []
+    sampled = len(passing) - len(kept_passing)
+
+    for r in sorted(non_passing + kept_passing,
+                    key=lambda x: (getattr(x, "created_at", None) or datetime.min,
+                                   int(getattr(x, "step_number", 0) or 0))):
+        sid = str(getattr(r, "scenario_id", "") or "")
+        db_status = str(getattr(r, "status", "") or "")
+        err = (getattr(r, "error_message", "") or "").strip()
+        events.append({
+            "at": _iso(getattr(r, "created_at", None)),
+            "kind": "step",
+            "label": f"{case_names.get(sid, sid)[:70]} · step {getattr(r, 'step_number', 0)}",
+            "detail": (err[:180] if err else ""),
+            "status": db_status,
+            "scenario_id": sid,
+            "step_number": int(getattr(r, "step_number", 0) or 0),
+            "duration_ms": int(getattr(r, "duration_ms", 0) or 0),
+        })
+
+    if run is not None and getattr(run, "completed_at", None):
+        events.append({
+            "at": _iso(getattr(run, "completed_at", None)),
+            "kind": "run_completed",
+            "label": "Execution completed",
+            "detail": (f"{getattr(run, 'passed_steps', 0)} passed, "
+                       f"{getattr(run, 'failed_steps', 0)} failed, "
+                       f"{getattr(run, 'skipped_steps', 0)} skipped"),
+            "status": getattr(run, "status", "") or "",
+        })
+
+    return {
+        "events": events,
+        "event_count": len(events),
+        "passing_steps_sampled_out": sampled,
+        "note": ("Every non-passing step appears. Passing steps are sampled on a "
+                 "long run to keep the timeline readable — the number omitted is "
+                 "stated above rather than the list being silently truncated."),
     }
 
 
@@ -648,6 +725,6 @@ __all__ = [
     "ST_SKIPPED", "ST_CANCELLED", "ST_COMPLETED_WITH_DEFECTS",
     "ST_DEFECT_HALTED", "ST_NOT_EXECUTED",
     "EV_PROVEN", "EV_INFERRED", "EV_UNVERIFIED",
-    "derive_step_status", "derive_case_status", "count_triplet",
+    "derive_step_status", "derive_case_status", "count_triplet", "build_timeline",
     "evidence_class", "derive_flow", "build_report", "build_trust_block",
 ]

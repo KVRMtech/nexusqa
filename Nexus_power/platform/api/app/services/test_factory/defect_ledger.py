@@ -134,9 +134,157 @@ def _classify(step: Any, *, is_cert: bool) -> tuple[str, dict | None]:
     return status, attribution
 
 
+# ── §2.6 severity / priority / component / fix area ──────────────────────────
+#
+# DERIVED, never guessed. Every field below comes from signals we can point at:
+# the attribution category, how often it recurred, whether it regressed, how
+# many DIFFERENT cases share the same root cause (blast radius), and the
+# business priority the case already carries. There is no model and no
+# fabricated score — and every assessment ships the reasons that produced it,
+# so a reviewer can disagree with the rule rather than with a black box.
+#
+# D3: all four are marked SUGGESTED until a human confirms them via the review
+# endpoint. We never assert severity on the customer's behalf.
+
+SEV_CRITICAL, SEV_HIGH, SEV_MEDIUM, SEV_LOW = "critical", "high", "medium", "low"
+SEV_UNSET = "unset"          # honest: an unattributed failure has no severity yet
+
+_P0 = ("p0", "critical", "blocker")
+_P1 = ("p1", "high")
+
+
+def assess_defect(defect: dict, *, case_priority: str = "", blast_radius: int = 1) -> dict:
+    """Severity / priority / component / fix-area for one deduplicated defect.
+
+    ``blast_radius`` = how many DISTINCT cases share this exact failure shape.
+    A root cause that breaks nine journeys is more severe than the same shape
+    breaking one, and that is a countable fact rather than a judgement call.
+    """
+    cls = str(defect.get("display_status") or "")
+    lifecycle = str(defect.get("lifecycle") or "")
+    occurrences = int(defect.get("occurrence_count") or 0)
+    step = int(defect.get("step_number") or 0)
+    prio = str(case_priority or "").strip().lower()
+    reasons: list[str] = []
+
+    # An unattributed failure gets NO severity — inventing one would be exactly
+    # the fabricated precision the report exists to eliminate.
+    if cls == ST_NEEDS_REVIEW:
+        return {
+            "severity": SEV_UNSET,
+            "priority": SEV_UNSET,
+            "suggested_component": _component_of(defect),
+            "suggested_fix_area": "attribution — cause not yet proven",
+            "assessment_reasons": [
+                "No rung of the attribution ladder could prove a cause, so no "
+                "severity is asserted. A human decides; the report does not guess."],
+            "owner_note": _OWNER_NOTE,
+            "suggested": True,
+        }
+
+    if cls == ST_DEFECT:                      # the APPLICATION is at fault
+        sev = SEV_MEDIUM
+        reasons.append("classified as an application defect by the attribution engine")
+        if lifecycle == LC_REGRESSED:
+            sev = SEV_CRITICAL
+            reasons.append("REGRESSED — it had previously passed, so this is new breakage")
+        elif blast_radius >= 3:
+            sev = SEV_CRITICAL
+            reasons.append(f"blast radius {blast_radius}: the same failure shape breaks "
+                           f"{blast_radius} different test cases")
+        elif any(p in prio for p in _P0):
+            sev = SEV_HIGH
+            reasons.append(f"the affected case is business-critical (priority {case_priority})")
+        elif occurrences >= 3:
+            sev = SEV_HIGH
+            reasons.append(f"recurred in {occurrences} runs")
+        elif any(p in prio for p in _P1):
+            sev = SEV_HIGH
+            reasons.append(f"the affected case is high priority ({case_priority})")
+        if step <= 1 and sev in (SEV_MEDIUM, SEV_HIGH):
+            reasons.append("fails at the entry step, so nothing downstream is exercised")
+            sev = SEV_HIGH if sev == SEV_MEDIUM else sev
+        fix_area = "application under test"
+    else:                                      # OUR automation / environment
+        # Severity here describes OUR fix urgency, and is never presented as a
+        # defect in the customer's product.
+        sev = SEV_MEDIUM
+        reasons.append("execution error — our automation or environment, "
+                       "NOT a defect in the application under test")
+        if blast_radius >= 3:
+            sev = SEV_HIGH
+            reasons.append(f"blast radius {blast_radius}: it blocks "
+                           f"{blast_radius} different cases from running")
+        elif lifecycle == LC_REGRESSED:
+            sev = SEV_HIGH
+            reasons.append("REGRESSED — this step used to run cleanly")
+        if step <= 1:
+            reasons.append("fails at the entry step, so the whole case is blocked")
+            sev = SEV_HIGH if sev == SEV_MEDIUM else sev
+        fix_area = _fix_area_of(defect)
+
+    # Priority follows severity, bumped once when the defect is actively getting
+    # worse (regressed) and damped when it is already verified fixed.
+    order = [SEV_LOW, SEV_MEDIUM, SEV_HIGH, SEV_CRITICAL]
+    idx = order.index(sev)
+    if lifecycle == LC_FIXED:
+        idx = max(0, idx - 1)
+        reasons.append("already verified fixed in a later run — priority damped")
+    prio_out = order[min(len(order) - 1, idx)]
+
+    return {
+        "severity": sev,
+        "priority": prio_out,
+        "suggested_component": _component_of(defect),
+        "suggested_fix_area": fix_area,
+        "assessment_reasons": reasons,
+        "owner_note": _OWNER_NOTE,
+        "suggested": True,
+    }
+
+
+#: We refuse to invent a person. An owner is only ever a mapping the customer
+#: supplies; until then we name the grounded COMPONENT and stop there.
+_OWNER_NOTE = ("No owner is suggested: assigning a person requires an ownership "
+               "map this deployment has not been given. The component below is "
+               "derived from where the failure actually occurred.")
+
+_FIX_AREA_BY_CAUSE = {
+    "ambiguous_locator": "test generation — locator binding",
+    "action_locator_timeout": "test generation — locator binding / wait strategy",
+    "target_unreachable": "environment — target reachability",
+    "auth_wall": "environment — authentication/session",
+    "url_as_text_oracle": "test generation — oracle construction",
+}
+
+
+def _fix_area_of(defect: dict) -> str:
+    cause = str(defect.get("cause") or "")
+    for key, area in _FIX_AREA_BY_CAUSE.items():
+        if key in cause:
+            return area
+    cat = str(defect.get("category") or "")
+    if cat == attribution_engine.CATEGORY_ENVIRONMENT:
+        return "environment"
+    if cat == attribution_engine.CATEGORY_CONFIG:
+        return "run configuration"
+    if cat == attribution_engine.CATEGORY_DATA:
+        return "test data"
+    return "test automation"
+
+
+def _component_of(defect: dict) -> str:
+    """The grounded location of the failure — the case and step it happened in.
+    Not a guess about which team owns it."""
+    name = str(defect.get("case_name") or defect.get("scenario_id") or "")
+    step = defect.get("step_number")
+    return f"{name} · step {step}" if name else f"step {step}"
+
+
 async def build_defect_ledger(
     session, *, artifact_id: str, tenant_id: str, window_runs: int = 20,
     case_names: dict[str, str] | None = None,
+    case_priorities: dict[str, str] | None = None,
 ) -> dict:
     """Deduplicated defects across the last ``window_runs`` runs, each with its
     occurrences and lifecycle state.
@@ -222,6 +370,19 @@ async def build_defect_ledger(
                                 for h in hist)
             d["lifecycle"] = LC_REGRESSED if passed_before else LC_OPEN
 
+    # ── §2.6 assessment ─────────────────────────────────────────────────────
+    # Blast radius first: how many DISTINCT cases share one failure shape. A
+    # root cause that breaks nine journeys is more severe than the same shape
+    # breaking one — and that is a count, not an opinion.
+    radius: dict[str, set] = {}
+    for d in defects.values():
+        radius.setdefault(d["fingerprint"], set()).add(d["scenario_id"])
+    prios = case_priorities or {}
+    for d in defects.values():
+        d["blast_radius"] = len(radius.get(d["fingerprint"], {d["scenario_id"]}))
+        d.update(assess_defect(d, case_priority=prios.get(d["scenario_id"], ""),
+                               blast_radius=d["blast_radius"]))
+
     items = sorted(defects.values(),
                    key=lambda d: (-d["occurrence_count"], d["scenario_id"], d["step_number"]))
     by_lifecycle = {LC_OPEN: 0, LC_FIXED: 0, LC_REGRESSED: 0}
@@ -230,6 +391,9 @@ async def build_defect_ledger(
     by_class: dict[str, int] = {}
     for d in items:
         by_class[d["display_status"]] = by_class.get(d["display_status"], 0) + 1
+    by_severity: dict[str, int] = {}
+    for d in items:
+        by_severity[d["severity"]] = by_severity.get(d["severity"], 0) + 1
 
     return {
         "window_runs": len(runs),
@@ -241,11 +405,17 @@ async def build_defect_ledger(
         "total_occurrences": sum(d["occurrence_count"] for d in items),
         "by_lifecycle": by_lifecycle,
         "by_class": by_class,
+        "by_severity": by_severity,
         "defects": items,
         "note": ("One signature = ONE defect with N occurrences. Signatures mask "
                  "volatile detail (timings, ids, URLs) so the same defect in two "
                  "runs is not double-counted. Automation faults stay classified as "
-                 "Execution Errors and are never reported as application defects."),
+                 "Execution Errors and are never reported as application defects. "
+                 "Severity and priority are DERIVED from countable signals "
+                 "(attribution class, recurrence, regression, blast radius, the "
+                 "case's own business priority) and every assessment carries the "
+                 "reasons that produced it — they are SUGGESTED until a human "
+                 "confirms them."),
     }
 
 

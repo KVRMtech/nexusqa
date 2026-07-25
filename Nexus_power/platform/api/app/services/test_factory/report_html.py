@@ -96,6 +96,10 @@ font-weight:700;margin-bottom:4px}
 white-space:pre-wrap;word-break:break-word}
 .note{color:var(--dim);font-size:12px;margin-top:8px}
 .ev{font-size:11px;font-weight:700;letter-spacing:.04em}
+.sev-critical{background:rgba(209,73,91,.18);color:var(--err);border-color:rgba(209,73,91,.45)}
+.sev-high{background:rgba(200,135,26,.16);color:var(--defect);border-color:rgba(200,135,26,.4)}
+.sev-medium{background:rgba(111,125,214,.14);color:var(--review);border-color:rgba(111,125,214,.35)}
+.sev-low,.sev-unset{background:rgba(91,100,117,.14);color:var(--skip);border-color:rgba(91,100,117,.3)}
 .ev-PROVEN{color:var(--pass)}.ev-INFERRED{color:var(--defect)}.ev-UNVERIFIED{color:var(--skip)}
 """
 
@@ -258,14 +262,24 @@ def _defects(d: dict | None) -> str:
             f'<div class="meta">step {_e(x.get("step_number"))} · '
             f'<code>{_e(x.get("signature"))[:16]}</code></div></td>'
             f'<td>{_e(x.get("cause"))}<div class="meta">{_e(x.get("category") or "unattributed")}</div></td>'
-            f'<td class="mono">{occ}</td>'
+            f'<td><span class="chip sev-{_e(x.get("severity"))}">{_e(x.get("severity"))}</span>'
+            f'<div class="meta">priority {_e(x.get("priority"))}</div>'
+            f'<div class="meta">{_e(x.get("suggested_fix_area"))}</div>'
+            + "".join(f'<div class="quote">{_e(r)}</div>'
+                      for r in (x.get("assessment_reasons") or [])[:3])
+            + f'<div class="meta"><em>AI-suggested — confirm before acting</em></div></td>'
+            f'<td class="mono">{occ}<div class="meta">blast {_e(x.get("blast_radius"))}</div></td>'
             f'<td><span class="tag">{_e(x.get("lifecycle"))}</span></td>'
             f'<td class="meta">{_e(x.get("first_seen"))}<br>{_e(x.get("last_seen"))}</td>'
             f'<td><div class="quote">{_e(x.get("fingerprint"))}</div></td></tr>')
     if not rows:
         rows = ['<tr><td colspan="7" class="meta">No defects in the window.</td></tr>']
     lc = d.get("by_lifecycle") or {}
+    sev = d.get("by_severity") or {}
+    sevbits = "".join(f'<span class="chip sev-{_e(k)}">{_e(k)}: {_e(v)}</span>'
+                      for k, v in sev.items())
     return (f'<h2>Defects (deduplicated)</h2><div class="card">'
+            f'<div class="chips">{sevbits}</div>'
             f'<div class="grid">'
             f'{_kv("Unique defects", d.get("unique_defects"))}'
             f'{_kv("Total occurrences", d.get("total_occurrences"))}'
@@ -275,8 +289,9 @@ def _defects(d: dict | None) -> str:
             f'{_kv("Runs in window", d.get("window_runs"))}</div>'
             f'<div class="note" style="margin-top:10px">{_e(d.get("note"))}</div>'
             f'<div class="scroll" style="margin-top:10px"><table>'
-            f'<tr><th>Class</th><th>Case</th><th>Cause</th><th>Occurrences</th>'
-            f'<th>Lifecycle</th><th>First / Last seen</th><th>Signature shape</th></tr>'
+            f'<tr><th>Class</th><th>Case</th><th>Cause</th><th>Severity (suggested)</th>'
+            f'<th>Occurrences</th><th>Lifecycle</th><th>First / Last seen</th>'
+            f'<th>Signature shape</th></tr>'
             f'{"".join(rows)}</table></div></div>')
 
 
@@ -309,6 +324,33 @@ def _diff(d: dict | None) -> str:
             f'{lst(d.get("fixed"), "Fixed")}'
             f'{lst(d.get("coverage_lost"), "Coverage LOST (ran before, not now)")}'
             f'<div class="note">{_e(d.get("note"))}</div></div>')
+
+
+def _timeline(t: dict | None) -> str:
+    """§2.11 — the chronological account. Non-passing events always appear;
+    sampling of passing steps is stated, never silent."""
+    if not t or not (t.get("events") or []):
+        return ""
+    rows = []
+    for e in t["events"][:400]:
+        st = str(e.get("status") or "")
+        cls = {"passed": "c-passed", "failed": "c-execution_error",
+               "skipped": "c-skipped"}.get(st, "")
+        badge = f'<span class="chip {cls}">{_e(st)}</span>' if st else ""
+        rows.append(
+            f'<tr><td class="mono">{_e(e.get("at"))}</td>'
+            f'<td>{badge}</td>'
+            f'<td>{_e(e.get("label"))}'
+            + (f'<div class="err">{_e(e.get("detail"))}</div>' if e.get("detail") else "")
+            + '</td></tr>')
+    omitted = int(t.get("passing_steps_sampled_out") or 0)
+    note = (f'<div class="note">{_e(t.get("note"))}'
+            + (f' <b>{omitted} passing step(s) omitted from this view.</b>' if omitted else '')
+            + '</div>')
+    return (f'<h2>Execution Timeline</h2><div class="card">{note}'
+            f'<div class="scroll" style="margin-top:10px;max-height:520px;overflow-y:auto">'
+            f'<table><tr><th>Time</th><th>Status</th><th>Event</th></tr>'
+            f'{"".join(rows)}</table></div></div>')
 
 
 def render_html(report: dict) -> str:
@@ -353,6 +395,7 @@ execute is never counted as a pass.</div></div>
 <h2>User Flows</h2>
 {flows}
 {_defects(report.get('defects'))}
+{_timeline(report.get('timeline'))}
 {_diff(report.get('diff'))}
 <h2>Coverage Honesty</h2>
 <div class="card"><div class="note">{_e(cov.get('note'))}</div>

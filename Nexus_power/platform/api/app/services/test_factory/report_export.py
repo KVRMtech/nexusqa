@@ -161,6 +161,13 @@ def build_verdict_json(report: dict) -> dict:
              "category": d.get("category"), "cause": d.get("cause"),
              "lifecycle": d.get("lifecycle"),
              "occurrence_count": d.get("occurrence_count"),
+             "blast_radius": d.get("blast_radius"),
+             # SUGGESTED, derived from countable signals — never a model score.
+             "severity": d.get("severity"), "priority": d.get("priority"),
+             "suggested_component": d.get("suggested_component"),
+             "suggested_fix_area": d.get("suggested_fix_area"),
+             "assessment_reasons": d.get("assessment_reasons"),
+             "assessment_suggested": True,
              "first_seen": d.get("first_seen"), "last_seen": d.get("last_seen")}
             for d in ((report.get("defects") or {}).get("defects") or [])
         ],

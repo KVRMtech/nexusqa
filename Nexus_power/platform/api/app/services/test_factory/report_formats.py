@@ -348,15 +348,32 @@ def to_xlsx(report: dict) -> bytes:
 
     wd = wb.create_sheet("Defects")
     wd.append(["Signature", "Case", "Step", "Class", "Category", "Cause",
-               "Lifecycle", "Occurrences", "First seen", "Last seen", "Shape"])
+               "Severity (suggested)", "Priority (suggested)", "Fix area",
+               "Blast radius", "Lifecycle", "Occurrences", "First seen",
+               "Last seen", "Shape", "Assessment reasons"])
     for cell in wd[1]:
         cell.font = bold
     for d in ((report.get("defects") or {}).get("defects") or []):
         wd.append([d.get("signature"), d.get("case_name") or d.get("scenario_id"),
                    d.get("step_number"), d.get("display_status"), d.get("category"),
-                   d.get("cause"), d.get("lifecycle"), d.get("occurrence_count"),
+                   d.get("cause"), d.get("severity"), d.get("priority"),
+                   d.get("suggested_fix_area"), d.get("blast_radius"),
+                   d.get("lifecycle"), d.get("occurrence_count"),
                    d.get("first_seen"), d.get("last_seen"),
-                   str(d.get("fingerprint") or "")[:300]])
+                   str(d.get("fingerprint") or "")[:300],
+                   " | ".join(d.get("assessment_reasons") or [])[:500]])
+
+    tl = (report.get("timeline") or {}).get("events") or []
+    if tl:
+        wt = wb.create_sheet("Timeline")
+        wt.append(["Time", "Kind", "Status", "Event", "Detail", "Duration ms"])
+        for cell in wt[1]:
+            cell.font = bold
+        for e in tl:
+            wt.append([e.get("at"), e.get("kind"), e.get("status"),
+                       str(e.get("label") or "")[:300],
+                       str(e.get("detail") or "")[:400], e.get("duration_ms")])
+        wt.column_dimensions["D"].width = 60
 
     out = io.BytesIO()
     wb.save(out)
@@ -475,7 +492,8 @@ def to_pdf(report: dict) -> bytes:
         for x in (d.get("defects") or [])[:12]:
             lines.append((f"  [{x.get('display_status')}] {str(x.get('case_name') or x.get('scenario_id'))[:52]} "
                           f"step {x.get('step_number')} ×{x.get('occurrence_count')} "
-                          f"({x.get('lifecycle')})", 8, 0))
+                          f"({x.get('lifecycle')}) severity={x.get('severity')} "
+                          f"priority={x.get('priority')} blast={x.get('blast_radius')}", 8, 0))
             for ln in _wrap(f"cause: {x.get('cause')} — {x.get('fingerprint')}", 105)[:2]:
                 lines.append(("      " + ln, 7, 2))
     lines += [("", 8, 0), ("Coverage honesty", 12, 1),
