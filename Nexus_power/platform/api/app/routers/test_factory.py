@@ -3223,6 +3223,26 @@ async def playwright_run_live(
     if not cases:
         raise HTTPException(status_code=404, detail="no matching active test cases to run")
 
+    # P0.3 — quarantine on the LIVE/HEADED path is SURFACED, not enforced: this
+    # is the operator's deliberate diagnostic tool (a human choosing one case to
+    # watch), so a quarantined case is flagged with its certification verdict but
+    # still allowed to run — the operator is inspecting it ON PURPOSE. Quarantine
+    # protects the CLIENT-facing headless verdict (playwright_run excludes there),
+    # not the operator's ability to watch a product-side failure reproduce live.
+    async with tenant_scoped_session(tenant_id) as session:
+        _quarantined = await product_quarantined_scenarios(
+            session, artifact_id=artifact_id, tenant_id=tenant_id,
+        )
+    quarantine_warning = [
+        {
+            "test_id": tid,
+            "cause": ((_quarantined.get(tid, {}).get("attribution") or {}).get("cause")),
+            "category": ((_quarantined.get(tid, {}).get("attribution") or {}).get("category")),
+        }
+        for tid in ((getattr(c, "test_id", "") or "") for c in cases)
+        if tid in _quarantined
+    ]
+
     base_url = (body.base_url or "").strip()
     if body.env_context and body.env_context.get("base_url"):
         base_url = str(body.env_context["base_url"]).strip()  # env profile base_url wins (SSRF-guarded)
@@ -3260,7 +3280,8 @@ async def playwright_run_live(
     _RUNNER_TASKS.add(task)
     task.add_done_callback(_RUNNER_TASKS.discard)
     return {"run_id": run_id, "status": "running", "scripts": len(cases),
-            "target": base_url, "live_url": _LIVE_PATH}
+            "target": base_url, "live_url": _LIVE_PATH,
+            "quarantine_warning": quarantine_warning}
 
 
 @router.get("/api/v1/test-factory/{artifact_id}/playwright/run/{run_id}")
