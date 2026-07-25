@@ -46,8 +46,16 @@ _TEST_ID_NAMESPACE = uuid.UUID("6f9619ff-8b86-d011-b42d-00cf4fc964ff")
 _EMPTY_MARKERS = frozenset({"", "-", "—", "–", "n/a", "na", "none", "null", "select"})
 
 # Booleans captured for toggles/checkboxes.
-_TRUE_TOKENS = frozenset({"true", "yes", "on", "checked", "selected", "1"})
-_FALSE_TOKENS = frozenset({"false", "no", "off", "unchecked", "0"})
+# EXPLICIT boolean words only. Bare "1"/"0" are NOT booleans here: they are
+# ordinary numeric values a user types into a TEXT field (a percentage, a
+# quantity, an age). Treating "1"/"0" as boolean misclassified any such field
+# as a checkbox turned ON — dropping its real value and control kind. The
+# venkata "Benefit share (%) = 1" text field became an empty toggle, which the
+# compiler then whole-test-SKIPPED, wiping the entire 21-step flow
+# (2026-07-25). A genuine checkbox is captured via a `check` verb with an
+# explicit on/checked value, so it is unaffected.
+_TRUE_TOKENS = frozenset({"true", "yes", "on", "checked", "selected"})
+_FALSE_TOKENS = frozenset({"false", "no", "off", "unchecked"})
 
 # Action verbs that enter data into a field (carry a value).
 _FILL_VERBS = frozenset({"type", "fill", "input", "enter", "select"})

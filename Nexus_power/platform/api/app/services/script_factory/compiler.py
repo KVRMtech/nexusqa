@@ -1074,20 +1074,18 @@ def _action_lines(step, field_meta: dict, parametrize: bool = False,
                 "// tolerant post-state: a real toggle reports checked (no-op click fails red)"
             )
             out.append("} else {")
-            if autonomous_resolve:
-                # AUTOPILOT: test.skip() inside a test.step skips the WHOLE test
-                # (wiping every already-passed step) — fail THIS step RED instead so
-                # the heal loop binds it live (toggle recipe) or stops honestly.
-                out.append(
-                    f"  throw new Error('UNPROVEN toggle: no interactive role for "
-                    f"{_tname} — autopilot binds + proves it live');"
-                )
-            else:
-                out.append(
-                    f"  // REVIEW: no interactive toggle role (switch/checkbox/radio) found for "
-                    f"'{_tname}' — state cannot be proven; not asserting (no false green)."
-                )
-                out.append("  test.skip(true, 'UNPROVEN toggle: no interactive role to bind/verify');")
+            # Never skip the WHOLE test for ONE un-bindable control — test.skip()
+            # inside a test.step wipes every already-proven step (the venkata
+            # complete-apply flow lost all 21 steps to one mis-generated 'Benefit
+            # share' toggle). Fail THIS step RED with a clear cause instead: the
+            # preceding steps keep their honest proof, the run shows (N-1) green +
+            # one truthful red, and heal/review can bind this control live. Never
+            # a false green, never a silent whole-flow skip.
+            out.append(
+                f"  throw new Error('UNVERIFIABLE control: no interactive "
+                f"toggle/switch/checkbox/radio found for {_tname} — this step "
+                f"cannot be proven; the preceding steps proved independently');"
+            )
             out.append("}")
         else:
             _sel = _ladder(observed, 'select')
