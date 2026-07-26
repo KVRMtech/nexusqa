@@ -202,6 +202,44 @@ async def store_video(
     return vid
 
 
+async def store_diagnostics(
+    session: AsyncSession,
+    *,
+    tenant_id: str,
+    artifact_id: str,
+    run_id: str,
+    scenario_id: str,
+    payload: bytes,
+) -> str:
+    """Persist one tier-T3 diagnostics document (JSON) and return its id.
+
+    Deliberately NOT reusing the trace content type: serving a JSON document as
+    application/zip would make a browser download it as a broken archive, and
+    mislabelling an artifact is the small dishonesty that makes an evidence
+    store untrustworthy. Same table, same tenant scoping, correct media type."""
+    if not payload:
+        raise ValueError("empty diagnostics")
+    if len(payload) > MAX_TRACE_BYTES:
+        raise ValueError(f"diagnostics too large ({len(payload)} bytes)")
+    did = _new_id()
+    session.add(
+        E2ERunScreenshotRow(
+            screenshot_id=did,
+            run_id=(run_id or "")[:64],
+            artifact_id=(artifact_id or "")[:64],
+            tenant_id=tenant_id,
+            scenario_id=(scenario_id or "")[:64],
+            step_number=0,
+            content_type="application/json",
+            byte_size=len(payload),
+            image=payload,
+            created_at=_utc_now(),
+        )
+    )
+    await session.flush()
+    return did
+
+
 def normalize_trace_content_type(ct: str | None) -> str:
     """Traces are always zips; anything else is coerced (never trusted blindly)."""
     return _TRACE_CONTENT_TYPE
@@ -250,6 +288,7 @@ __all__ = [
     "MAX_TRACE_BYTES",
     "normalize_trace_content_type",
     "store_trace",
+    "store_diagnostics",
     "E2ERunScreenshotRow",
     "store_screenshot",
     "fetch_screenshot",

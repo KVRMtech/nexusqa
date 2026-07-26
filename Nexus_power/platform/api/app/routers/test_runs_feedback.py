@@ -23,6 +23,7 @@ can be layered on later without touching this code.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import time
@@ -60,6 +61,7 @@ from ..services.test_factory.run_screenshots import (
     MAX_VIDEO_BYTES,
     fetch_screenshot,
     store_screenshot,
+    store_diagnostics,
     store_trace,
     store_video,
 )
@@ -394,6 +396,65 @@ async def upload_run_trace(
             _logger.warning("test_runs.trace_store_unavailable: %s", exc)
             raise HTTPException(503, "trace store unavailable")
     return {"trace_id": tid, "url": f"/api/v1/test-runs/screenshot/{tid}"}
+
+
+class T3DiagnosticsRequest(BaseModel):
+    """Tier-T3 deep diagnostics from a run with NEXUS_T3_DIAGNOSTICS=1."""
+
+    artifact_id: str = Field(..., min_length=1, max_length=64)
+    run_id: str = Field("", max_length=64)
+    scenario_id: str = Field("", max_length=64)
+    status: str = Field("", max_length=30)
+    url: str = Field("", max_length=2000)
+    performance: dict | None = None
+    accessibility_snapshot: dict | None = None
+    console: list[dict] | None = None
+    page_errors: list[str] | None = None
+    html_source: str = Field("", max_length=500_000)
+    note: str = Field("", max_length=300)
+
+
+@router.post("/api/v1/test-runs/diagnostics")
+async def ingest_t3_diagnostics(
+    req: T3DiagnosticsRequest,
+    user: dict = Depends(get_current_user),
+):
+    """Store tier-T3 diagnostics for one executed scenario (spec §2.10).
+
+    Performance timings, the accessibility SNAPSHOT, console output, page errors
+    and (opt-in) the rendered HTML — the things a trace does not expose in a
+    queryable form. Off unless the run sets NEXUS_T3_DIAGNOSTICS=1.
+
+    The accessibility payload is the browser's AX tree, NOT a WCAG audit: we
+    record what the browser exposes and assert no conformance, because claiming
+    an audit we did not run is precisely the fabricated claim this report exists
+    to eliminate. Best-effort — a storage failure never affects a verdict.
+    """
+    _require_write_role(user)
+    tenant_id = user["tenant_id"]
+    blob = json.dumps({
+        "scenario_id": req.scenario_id, "status": req.status, "url": req.url,
+        "performance": req.performance, "accessibility_snapshot": req.accessibility_snapshot,
+        "console": (req.console or [])[:200], "page_errors": (req.page_errors or [])[:50],
+        "html_source": req.html_source,
+        "note": req.note or ("accessibility_snapshot is the browser AX tree, NOT a "
+                             "WCAG audit; no conformance is asserted"),
+    }, default=str).encode("utf-8")
+    async with tenant_scoped_session(tenant_id) as session:
+        await _verify_artifact_in_tenant(
+            session, artifact_id=req.artifact_id, tenant_id=tenant_id,
+        )
+        try:
+            did = await store_diagnostics(
+                session, tenant_id=tenant_id, artifact_id=req.artifact_id,
+                run_id=req.run_id, scenario_id=f"t3:{req.scenario_id}"[:64],
+                payload=blob,
+            )
+        except Exception as exc:
+            _logger.warning("test_runs.diagnostics_store_unavailable: %s", exc)
+            raise HTTPException(503, "diagnostics store unavailable")
+    return {"diagnostics_id": did, "bytes": len(blob),
+            "url": f"/api/v1/test-runs/screenshot/{did}"}
 
 
 class HealCaptureRequest(BaseModel):

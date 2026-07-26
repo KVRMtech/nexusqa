@@ -263,3 +263,62 @@ def test_snapshot_migration_is_append_or_update_never_deletable_by_the_app():
     assert "GRANT SELECT, INSERT, UPDATE ON e2e_run_reports" in sql
     assert "GRANT DELETE" not in sql and "GRANT ALL" not in sql
     assert "ENABLE ROW LEVEL SECURITY" in sql
+
+
+# ── T3 deep diagnostics (§2.10) — default OFF, no new dependency ─────────────
+
+def _compiler_src() -> str:
+    import os
+    return open(os.path.join(os.path.dirname(__file__), "..", "app", "services",
+                             "script_factory", "compiler.py"), encoding="utf-8").read()
+
+
+def test_t3_is_inert_unless_explicitly_enabled():
+    """The owned script a customer downloads must behave identically whether or
+    not they ever turn diagnostics on."""
+    src = _compiler_src()
+    assert "_T3_DIAGNOSTICS_AFTEREACH" in src
+    assert "process.env.NEXUS_T3_DIAGNOSTICS !== '1') return" in src
+    # the HTML dump is a SECOND opt-in on top of the first (it is the heavy one)
+    assert "process.env.NEXUS_T3_HTML === '1'" in src
+
+
+def test_t3_uses_only_browser_builtins_no_new_dependency():
+    """axe-core would be a new dependency and would break an air-gapped install."""
+    src = _compiler_src()
+    assert "axe" not in src.lower().split("_T3_DIAGNOSTICS_AFTEREACH")[-1][:4000]
+    assert "page.accessibility.snapshot" in src
+    assert "performance.getEntriesByType" in src
+
+
+def test_t3_never_claims_a_wcag_audit_it_did_not_run():
+    """The AX tree is a snapshot. Calling it an accessibility AUDIT would be the
+    exact fabricated claim the report exists to eliminate."""
+    src = _compiler_src()
+    assert "NOT a WCAG audit" in src
+    assert "no conformance is asserted" in src
+    fb = open(__file__.replace("tests\test_evidence_report_r5_gaps.py",
+                               "app\routers\test_runs_feedback.py")
+              .replace("tests/test_evidence_report_r5_gaps.py",
+                       "app/routers/test_runs_feedback.py"), encoding="utf-8").read()
+    assert "NOT a WCAG audit" in fb
+
+
+def test_t3_can_never_change_a_verdict():
+    src = _compiler_src()
+    tail = src.split("_T3_DIAGNOSTICS_AFTEREACH")[1][:4000]
+    assert "diagnostics never affect the verdict" in tail
+    assert "never let diagnostics change a run result" in tail
+
+
+def test_t3_endpoint_exists_and_is_write_gated():
+    fb = open(__file__.replace("tests\test_evidence_report_r5_gaps.py",
+                               "app\routers\test_runs_feedback.py")
+              .replace("tests/test_evidence_report_r5_gaps.py",
+                       "app/routers/test_runs_feedback.py"), encoding="utf-8").read()
+    assert '@router.post("/api/v1/test-runs/diagnostics")' in fb
+    assert "_require_write_role(user)" in fb
+
+
+def test_runs_advertise_the_diagnostics_endpoint():
+    assert "NEXUS_DIAGNOSTICS_ENDPOINT" in _router()

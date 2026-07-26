@@ -1162,6 +1162,84 @@ def _action_lines(step, field_meta: dict, parametrize: bool = False,
 # ─── Case + project compilation ───────────────────────────────────────────────
 
 
+# ── T3 deep diagnostics (spec §2.10, evidence tier T3) — DEFAULT OFF ─────────
+# Only when NEXUS_T3_DIAGNOSTICS=1. Collects what a trace does NOT give you in a
+# queryable form: navigation/paint timings, the accessibility tree, console and
+# page errors, and optionally the rendered HTML. Built-ins only — no axe, no new
+# dependency — so an air-gapped install is unaffected and the owned spec is
+# byte-identical when the flag is off.
+#
+# HONESTY: the accessibility payload is a SNAPSHOT of the browser's AX tree, not
+# a WCAG audit. We record what the browser exposes and assert NO violations,
+# because claiming conformance we did not measure is exactly the fabricated
+# claim this report exists to eliminate.
+_T3_DIAGNOSTICS_AFTEREACH = """\
+const __nxT3 = { console: [], errors: [] };
+
+test.beforeEach(async ({ page }) => {
+  if (process.env.NEXUS_T3_DIAGNOSTICS !== '1') return;
+  __nxT3.console.length = 0; __nxT3.errors.length = 0;
+  page.on('console', (m) => {
+    if (__nxT3.console.length < 200) {
+      __nxT3.console.push({ type: m.type(), text: (m.text() || '').slice(0, 500) });
+    }
+  });
+  page.on('pageerror', (e) => {
+    if (__nxT3.errors.length < 50) __nxT3.errors.push(String(e).slice(0, 800));
+  });
+});
+
+test.afterEach(async ({ page }, testInfo) => {
+  if (process.env.NEXUS_T3_DIAGNOSTICS !== '1') return;
+  const ep = process.env.NEXUS_DIAGNOSTICS_ENDPOINT;
+  const token = process.env.NEXUS_TOKEN;
+  const artifactId = process.env.NEXUS_ARTIFACT_ID;
+  if (!ep || !token || !artifactId) return;
+  const ann = testInfo.annotations.find((a) => a.type === 'nexus-test-id');
+  try {
+    const perf = await page.evaluate(() => {
+      const nav = performance.getEntriesByType('navigation')[0] || {};
+      const paints = {};
+      for (const p of performance.getEntriesByType('paint')) paints[p.name] = Math.round(p.startTime);
+      const r = performance.getEntriesByType('resource') || [];
+      return {
+        dom_content_loaded: Math.round(nav.domContentLoadedEventEnd || 0),
+        load_event: Math.round(nav.loadEventEnd || 0),
+        transfer_size: Math.round(nav.transferSize || 0),
+        paints,
+        resource_count: r.length,
+        resource_bytes: r.reduce((a, x) => a + (x.transferSize || 0), 0),
+        slowest_resources: r.map((x) => ({ name: String(x.name).slice(0, 200), ms: Math.round(x.duration) }))
+          .sort((a, b) => b.ms - a.ms).slice(0, 10),
+      };
+    }).catch(() => null);
+    const a11y = await page.accessibility.snapshot({ interestingOnly: false }).catch(() => null);
+    let html = '';
+    if (process.env.NEXUS_T3_HTML === '1') {
+      html = (await page.content().catch(() => '')).slice(0, 500000);
+    }
+    await fetch(ep, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({
+        artifact_id: artifactId,
+        run_id: process.env.NEXUS_RUN_ID || '',
+        scenario_id: (ann && ann.description) || '',
+        status: testInfo.status || '',
+        url: page.url(),
+        performance: perf,
+        accessibility_snapshot: a11y,
+        console: __nxT3.console.slice(0, 200),
+        page_errors: __nxT3.errors.slice(0, 50),
+        html_source: html,
+        note: 'accessibility_snapshot is the browser AX tree, NOT a WCAG audit; no conformance is asserted',
+      }),
+    }).catch(() => { /* best-effort: diagnostics never affect the verdict */ });
+  } catch { /* never let diagnostics change a run result */ }
+});
+"""
+
+
 # TrueFix re-anchor capture (P-B): a COMPILE-TIME-gated afterEach that, only on a
 # heal-capture re-run (NEXUS_HEAL_CAPTURE=1) AND only when the test FAILED,
 # snapshots the live page's accessibility tree and posts it to NEXUS_HEAL_ENDPOINT
@@ -1514,6 +1592,11 @@ def compile_case(tc, field_meta: dict | None = None, *, parametrize: bool = Fals
     if heal_capture:
         out.append("")
         out.append(_HEAL_CAPTURE_AFTEREACH.replace("__TEST_ID__", test_id))
+    # T3 deep diagnostics ride in every spec but are inert unless
+    # NEXUS_T3_DIAGNOSTICS=1 is set on the run — so the owned script a customer
+    # downloads behaves identically whether or not they ever enable them.
+    out.append("")
+    out.append(_T3_DIAGNOSTICS_AFTEREACH)
     out.append("")
     spec = "\n".join(out)
     # P0.2 — define the soft-miss recorder ONLY when the body calls it (the

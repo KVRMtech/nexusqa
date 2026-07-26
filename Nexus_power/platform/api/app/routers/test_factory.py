@@ -792,6 +792,12 @@ class RunConfigRequest(BaseModel):
     # data_overrides, env_assertion, ...). qe-central owns app_environments + seals
     # per-env creds; platform-api only APPLIES the resolved context. None ⇒ unchanged.
     env_context: dict | None = None
+    # Tier-T3 deep diagnostics (spec §2.10): performance timings, the browser
+    # accessibility snapshot, console + page errors, optionally the rendered
+    # HTML. OFF by default because it costs time and storage on every step; the
+    # compiled spec is inert without it, so a run is byte-identical when unset.
+    diagnostics: bool = False
+    diagnostics_html: bool = False
 
 
 class SaveVersionRequest(BaseModel):
@@ -1160,6 +1166,7 @@ async def _certify_generated_suite(
             run_id = uuid.uuid4().hex
             env = {
                 "NEXUS_ENDPOINT": _INGEST_BASE,
+        "NEXUS_DIAGNOSTICS_ENDPOINT": f"{_INGEST_BASE}/api/v1/test-runs/diagnostics",
                 "NEXUS_TOKEN": token or "",
                 "NEXUS_ARTIFACT_ID": artifact_id,
                 "NEXUS_RUN_ID": run_id,
@@ -1343,7 +1350,8 @@ async def _auto_heal_scenario(
                 artifact_id, scenario_id, step_number, cap_run)
             try:
                 _res = await runner_client.run_suite(cap_files, {
-                    "NEXUS_ENDPOINT": _INGEST_BASE, "NEXUS_TOKEN": token or "",
+                    "NEXUS_ENDPOINT": _INGEST_BASE,
+        "NEXUS_DIAGNOSTICS_ENDPOINT": f"{_INGEST_BASE}/api/v1/test-runs/diagnostics", "NEXUS_TOKEN": token or "",
                     "NEXUS_ARTIFACT_ID": artifact_id, "NEXUS_RUN_ID": cap_run,
                     "NEXUS_BASE_URL": base_url, "NEXUS_ENV": _ENV_DIAGNOSIS,
                     **login_env,
@@ -1436,7 +1444,8 @@ async def _auto_heal_scenario(
                 artifact_id, scenario_id, fix_kind, ver_run)
             try:
                 _res = await runner_client.run_suite(ver_files, {
-                    "NEXUS_ENDPOINT": _INGEST_BASE, "NEXUS_TOKEN": token or "",
+                    "NEXUS_ENDPOINT": _INGEST_BASE,
+        "NEXUS_DIAGNOSTICS_ENDPOINT": f"{_INGEST_BASE}/api/v1/test-runs/diagnostics", "NEXUS_TOKEN": token or "",
                     "NEXUS_ARTIFACT_ID": artifact_id, "NEXUS_RUN_ID": ver_run,
                     "NEXUS_BASE_URL": base_url, "NEXUS_ENV": _ENV_DIAGNOSIS,
                     **login_env,
@@ -1887,7 +1896,8 @@ async def heal_step(
     )
     run_id = uuid.uuid4().hex
     env = {
-        "NEXUS_ENDPOINT": _INGEST_BASE, "NEXUS_TOKEN": token or "",
+        "NEXUS_ENDPOINT": _INGEST_BASE,
+        "NEXUS_DIAGNOSTICS_ENDPOINT": f"{_INGEST_BASE}/api/v1/test-runs/diagnostics", "NEXUS_TOKEN": token or "",
         "NEXUS_ARTIFACT_ID": artifact_id, "NEXUS_RUN_ID": run_id,
         "NEXUS_BASE_URL": base_url, "NEXUS_ENV": _env_run_label(body.env_context),
         **login_env,
@@ -1969,7 +1979,8 @@ async def capture_failure_state(
     )
     run_id = uuid.uuid4().hex
     env = {
-        "NEXUS_ENDPOINT": _INGEST_BASE, "NEXUS_TOKEN": token or "",
+        "NEXUS_ENDPOINT": _INGEST_BASE,
+        "NEXUS_DIAGNOSTICS_ENDPOINT": f"{_INGEST_BASE}/api/v1/test-runs/diagnostics", "NEXUS_TOKEN": token or "",
         "NEXUS_ARTIFACT_ID": artifact_id, "NEXUS_RUN_ID": run_id,
         "NEXUS_BASE_URL": base_url, "NEXUS_ENV": "nexus-runner",
         **login_env,
@@ -2278,7 +2289,8 @@ async def _auto_capture_and_reanchor(
             auth_config=auth_config,
         )
         env = {
-            "NEXUS_ENDPOINT": _INGEST_BASE, "NEXUS_TOKEN": token or "",
+            "NEXUS_ENDPOINT": _INGEST_BASE,
+        "NEXUS_DIAGNOSTICS_ENDPOINT": f"{_INGEST_BASE}/api/v1/test-runs/diagnostics", "NEXUS_TOKEN": token or "",
             "NEXUS_ARTIFACT_ID": artifact_id, "NEXUS_RUN_ID": uuid.uuid4().hex,
             "NEXUS_BASE_URL": base_url, "NEXUS_ENV": "nexus-runner",
             **(login_env or {}),
@@ -2621,7 +2633,8 @@ async def _run_auto_heal(run_id: str, ctx: dict) -> None:
             )
             sub_run_id = uuid.uuid4().hex
             env = {
-                "NEXUS_ENDPOINT": _INGEST_BASE, "NEXUS_TOKEN": token or "",
+                "NEXUS_ENDPOINT": _INGEST_BASE,
+        "NEXUS_DIAGNOSTICS_ENDPOINT": f"{_INGEST_BASE}/api/v1/test-runs/diagnostics", "NEXUS_TOKEN": token or "",
                 "NEXUS_ARTIFACT_ID": artifact_id, "NEXUS_RUN_ID": sub_run_id,
                 "NEXUS_BASE_URL": base_url, "NEXUS_ENV": "nexus-runner",
                 **_fl_login_env,
@@ -3765,6 +3778,7 @@ async def playwright_run(
     run_id = uuid.uuid4().hex
     env = {
         "NEXUS_ENDPOINT": _INGEST_BASE,
+        "NEXUS_DIAGNOSTICS_ENDPOINT": f"{_INGEST_BASE}/api/v1/test-runs/diagnostics",
         "NEXUS_TOKEN": token or "",
         "NEXUS_ARTIFACT_ID": artifact_id,
         "NEXUS_RUN_ID": run_id,
@@ -3776,6 +3790,9 @@ async def playwright_run(
         # AUTH PERMANENCE — form-login credentials (empty dict when no profile is
         # bound). Secrets ride the run env, never the bundle.
         **login_env,
+        # Tier-T3 diagnostics: opt-in per run (the fixture is inert otherwise).
+        **({"NEXUS_T3_DIAGNOSTICS": "1"} if body.diagnostics else {}),
+        **({"NEXUS_T3_HTML": "1"} if (body.diagnostics and body.diagnostics_html) else {}),
     }
     await _register_job(run_id, {
         "run_id": run_id, "status": "running", "artifact_id": artifact_id,
@@ -3872,7 +3889,8 @@ async def playwright_run_live(
     )
     run_id = uuid.uuid4().hex
     env = {
-        "NEXUS_ENDPOINT": _INGEST_BASE, "NEXUS_TOKEN": token or "",
+        "NEXUS_ENDPOINT": _INGEST_BASE,
+        "NEXUS_DIAGNOSTICS_ENDPOINT": f"{_INGEST_BASE}/api/v1/test-runs/diagnostics", "NEXUS_TOKEN": token or "",
         "NEXUS_ARTIFACT_ID": artifact_id, "NEXUS_RUN_ID": run_id,
         "NEXUS_BASE_URL": base_url, "NEXUS_ENV": _env_run_label(body.env_context),
         **login_env,
