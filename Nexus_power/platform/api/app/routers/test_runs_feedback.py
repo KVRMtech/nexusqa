@@ -193,6 +193,11 @@ async def _fetch_visual_graph(
 _RECOVERY_TASKS: set = set()
 
 
+#: Strong refs for in-flight snapshot tasks (asyncio only holds weak ones,
+#: so an un-referenced task can be collected before it finishes).
+_SNAPSHOT_TASKS: set = set()
+
+
 @router.post("/api/v1/test-runs/ingest")
 async def ingest_test_run(
     req: IngestRequest,
@@ -216,6 +221,45 @@ async def ingest_test_run(
             tenant_id=tenant_id,
             payload=payload,
         )
+
+    # ── AC-1: freeze the report for this run the moment it lands ───────────
+    # The report is otherwise assembled on demand, so re-rendering an old run
+    # after cases were regenerated need not reproduce the account that
+    # described it at the time. Fire-and-forget: a snapshot failure must never
+    # break ingest, but it is logged at WARNING so a gap in the record shows.
+    try:
+        import asyncio as _asyncio
+
+        async def _freeze_report(aid: str, tid: str, rid: str, env: str) -> None:
+            try:
+                from ..database import tenant_scoped_session
+                from ..services.test_factory import evidence_report, report_store
+                async with tenant_scoped_session(tid) as sess:
+                    report = await evidence_report.build_report(
+                        sess, artifact_id=aid, tenant_id=tid, run_id=rid,
+                        include_steps=True)
+                    report["source"] = "snapshot"
+                    root = await report_store.save_snapshot(
+                        sess, tenant_id=tid, artifact_id=aid, run_id=rid,
+                        environment=env, report=report)
+                    await sess.commit()
+                _logger.warning(
+                    "test_runs.report_snapshot_saved run=%s artifact=%s root=%s",
+                    rid, aid, root[:12])
+            except Exception as exc:
+                _logger.warning(
+                    "test_runs.report_snapshot_failed run=%s artifact=%s err=%s",
+                    rid, aid, str(exc)[:200])
+
+        _rid = str(summary.get("run_id") or "")
+        if _rid:
+            _t = _asyncio.create_task(
+                _freeze_report(req.artifact_id, tenant_id, _rid,
+                               str(req.environment or "")))
+            _SNAPSHOT_TASKS.add(_t)
+            _t.add_done_callback(_SNAPSHOT_TASKS.discard)
+    except Exception as exc:      # scheduling itself must never break ingest
+        _logger.warning("test_runs.report_snapshot_spawn_failed err=%s", str(exc)[:200])
 
     # ── Recovery Orchestrator (the reflex arc, founder-approved FULL-AUTO) ──
     # A failed run triggers automatic diagnosis → routed repair → re-prove the

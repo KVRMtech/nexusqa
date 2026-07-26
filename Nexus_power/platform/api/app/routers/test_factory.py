@@ -106,6 +106,7 @@ from ..services.test_factory import report_html
 from ..services.test_factory import report_export
 from ..services.test_factory import evidence_manifest
 from ..services.test_factory import report_formats
+from ..services.test_factory import report_store
 from ..services.test_factory.assistant import answer as assistant_answer
 from ..services.test_factory.delivery import (
     EXPORT_MEDIA_TYPES,
@@ -6714,6 +6715,8 @@ async def execution_evidence_report(
     run_id: str | None = Query(None, max_length=64,
                                description="specific run; default = latest non-diagnosis run"),
     include_steps: bool = Query(True, description="include per-step detail"),
+    snapshot: bool = Query(False,
+                           description="read the FROZEN report for this run instead of recomputing"),
     user: dict = Depends(get_current_user),
 ):
     """The Execution Evidence Report as JSON: Crawl → Flow → Case → Step with
@@ -6723,8 +6726,22 @@ async def execution_evidence_report(
     every failure sentence is an Attribution Engine verdict that quotes the
     evidence it matched. Skipped steps are NEVER counted as passes.
     """
-    return await _assemble_report(request, artifact_id, user["tenant_id"],
-                                  (run_id or "").strip() or None, include_steps)
+    tenant_id = user["tenant_id"]
+    rid = (run_id or "").strip() or None
+    if snapshot:
+        if not rid:
+            raise HTTPException(status_code=422,
+                                detail="run_id is required to read a frozen snapshot")
+        async with tenant_scoped_session(tenant_id) as session:
+            await _require_artifact(session, artifact_id, tenant_id)
+            frozen = await report_store.get_snapshot(
+                session, tenant_id=tenant_id, run_id=rid)
+        if frozen is None:
+            raise HTTPException(status_code=404,
+                                detail="no frozen report for that run (it may predate snapshotting)")
+        return frozen
+    live = await _assemble_report(request, artifact_id, tenant_id, rid, include_steps)
+    return {**live, "source": "live"}
 
 
 @router.get("/api/v1/test-factory/{artifact_id}/report/runs")
@@ -6774,6 +6791,32 @@ async def execution_report_runs(
                  "run explicitly with ?run_id=… — every entry shows its own "
                  "step counts so the choice is informed, not a search for the "
                  "most flattering one."),
+    }
+
+
+@router.get("/api/v1/test-factory/{artifact_id}/report/snapshots")
+async def report_snapshots(
+    artifact_id: str = PathParam(..., min_length=1, max_length=64),
+    limit: int = Query(50, ge=1, le=200),
+    user: dict = Depends(get_current_user),
+):
+    """Frozen reports (AC-1) — one per ingested run, each with its own chain root.
+
+    A snapshot is the account of a run AS IT STOOD when the run landed. The live
+    report is recomputed from current data, so the two can legitimately differ
+    after a regenerate — the API says which one you are reading rather than
+    quietly reconciling them.
+    """
+    tenant_id = user["tenant_id"]
+    async with tenant_scoped_session(tenant_id) as session:
+        await _require_artifact(session, artifact_id, tenant_id)
+        rows = await report_store.list_snapshots(
+            session, tenant_id=tenant_id, artifact_id=artifact_id, limit=limit)
+    return {
+        "artifact_id": artifact_id, "snapshots": rows, "count": len(rows),
+        "note": ("Each snapshot was frozen when its run was ingested and carries a "
+                 "SHA-256 chain root, so a stored report can itself be checked for "
+                 "tampering. Read one with ?snapshot=true on the report endpoint."),
     }
 
 

@@ -217,3 +217,49 @@ def test_queue_never_counts_an_unsigned_disposition_as_a_sign_off():
 def test_assignee_is_part_of_the_review_contract():
     r = _router()
     assert "assignee: str | None = Field(None, max_length=200," in r
+
+
+# ── AC-1: a report is frozen for every run, and says which one you're reading ─
+
+def test_snapshot_chain_root_detects_tampering():
+    from app.services.test_factory import report_store as rs
+    a = {"summary": {"total_cases_executed": 47}}
+    b = {"summary": {"total_cases_executed": 46}}
+    assert rs.snapshot_chain_root(a) != rs.snapshot_chain_root(b)
+    # …and is stable for the same content regardless of key order
+    assert rs.snapshot_chain_root({"x": 1, "y": 2}) == rs.snapshot_chain_root({"y": 2, "x": 1})
+
+
+def test_snapshot_is_written_fire_and_forget_and_never_breaks_ingest():
+    import os
+    fb = open(os.path.join(os.path.dirname(__file__), "..", "app", "routers",
+                           "test_runs_feedback.py"), encoding="utf-8").read()
+    assert "_freeze_report" in fb and "_SNAPSHOT_TASKS" in fb
+    # a failure is logged, never raised into the ingest path
+    assert "report_snapshot_failed" in fb
+    assert "report_snapshot_spawn_failed" in fb
+
+
+def test_reader_is_always_told_snapshot_or_live():
+    r = _router()
+    assert '{**live, "source": "live"}' in r
+    assert "no frozen report for that run" in r
+    from app.services.test_factory import report_store as rs
+    src = open(rs.__file__, encoding="utf-8").read()
+    assert 'report["source"] = "snapshot"' in src
+    assert '"integrity_ok"' in src
+
+
+def test_snapshot_divergence_is_a_finding_not_something_to_reconcile():
+    from app.services.test_factory import report_store as rs
+    src = open(rs.__file__, encoding="utf-8").read()
+    assert "is a finding" in src and "reconcile silently" in src
+
+
+def test_snapshot_migration_is_append_or_update_never_deletable_by_the_app():
+    import os
+    sql = open(os.path.join(os.path.dirname(__file__), "..", "scripts",
+                            "apply_run_reports.sql"), encoding="utf-8").read()
+    assert "GRANT SELECT, INSERT, UPDATE ON e2e_run_reports" in sql
+    assert "GRANT DELETE" not in sql and "GRANT ALL" not in sql
+    assert "ENABLE ROW LEVEL SECURITY" in sql
