@@ -186,7 +186,64 @@ secrets unreadable via every read API.
   personas; it does not fabricate them).
 * Cross-client persona federation — never: personas are tenant-private.
 
-## 4. Client-input questions (answers shape config, never code)
-1. MFA posture per test environment: fixed code, TOTP, or real SMS?
-2. Can a second test member be provisioned per app (enables the diff crawl)?
-3. Does any test env expose an impersonation/"switch user" endpoint?
+## 4. Client answers (2026-07-26) — locked into the design
+1. **MFA: FIXED codes in test environments.** Simplest rung. The `fixed_code`
+   slot type carries it; TOTP support stays in the schema for the next client,
+   but nothing in P1 blocks on it.
+2. **Second test member: YES** — e.g. age 25 with 2 children vs age 50 with
+   5 children. This answer upgraded the design (see §5): those two members do
+   not merely SHOW different values — the application BEHAVES differently for
+   them. The diff crawl therefore classifies on two layers, not one.
+3. **Impersonation endpoint: unconfirmed; member numbers differ per env
+   (confirmed).** Industry reality check applied: large insurers' lower envs
+   rarely expose a clean impersonation endpoint to external tooling — internal
+   support consoles sometimes have "view as member", but it is seldom
+   available (or permitted) for test automation. DESIGN ASSUMPTION: build as
+   if impersonation does NOT exist; keep the P5 adapter optional so we exploit
+   it where a client offers it, and lose nothing where they don't. The
+   confirmed per-env member numbers are exactly what `persona_credentials`
+   keyed by (persona, environment) already handles.
+
+---
+
+## 5. Design amendment — personas change BEHAVIOR, not just values
+
+The client's own example proves it: a 50-year-old with 5 children does not see
+the same screens with different numbers — the application may branch (medical
+questions past an age threshold), repeat sections (five beneficiary rows, not
+two), and price differently. So a persona diff has TWO layers:
+
+* **Value differences** — same page, different content (name, premium,
+  policy number). Handled by classification + per-persona answer sheets (§1.4,
+  §1.6) as designed.
+* **Structural differences** — the JOURNEY itself forks or repeats:
+  extra pages, extra repeated blocks, different required fields. A suite that
+  blindly replays persona-0's step sequence against a structurally different
+  persona would fail dishonestly — not because the app is broken, but because
+  the map no longer matches the territory.
+
+Consequences (amendments, all landing inside the existing phases):
+
+* **§1.2 personas gain `behavior_class`** (client-defined label, e.g.
+  "young-small-family" / "senior-large-family"). Personas sharing a class are
+  interchangeable for a journey; personas across classes are not assumed so.
+* **§1.6 classifications gain `structural` alongside the value classes**, with
+  the same evidence discipline: a structural difference is only asserted when
+  the diff crawl OBSERVED it (`diff_proven`), never inferred.
+* **P3 diff crawl emits two reports:** the value diff (as designed) and a
+  STRUCTURE diff (pages/steps/sections present for one persona and not the
+  other, repeat-counts of repeated blocks). Output feeds two mechanisms:
+  - **cardinality-driven repetition**: where the structure differs only by
+    COUNT (5 beneficiary rows vs 2), the journey marks the block repeatable
+    and drives the count from persona data — one suite, any family size;
+  - **behavior-class scoped runs**: where the structure genuinely forks
+    (medical exam page appears at 50), the affected cases bind to the
+    behavior class that demonstrated them. Running them as an out-of-class
+    persona is refused HONESTLY at dispatch ("this journey was demonstrated
+    for behavior class X; persona Y belongs to class Z — record or diff-crawl
+    class Z to unlock") — never run-and-fail, never silently skipped.
+* **Trust wording extends:** certified per (suite, environment,
+  behavior-class). The Trust Block says which classes a suite has actually
+  proven itself for — which is the honest answer to "does this work for ALL
+  our members?": it works for the classes it has evidence for, and it TELLS
+  you which those are.
