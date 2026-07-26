@@ -6991,39 +6991,71 @@ _ESIGN_METHOD = (os.getenv("NEXUS_ESIGN_METHOD", "") or "typed_name").strip().lo
 _ESIGN_METHODS = ("typed_name", "sso_session", "both")
 
 
+#: Subjects that are OUR OWN machinery, never a signing human. An SSO signature
+#: that a service token could satisfy would be a signature in name only.
+_SERVICE_SUBJECT_PREFIXES = ("svc-", "platform-", "nexus-", "qe-central")
+
+
 def _esign_evidence(user: dict, typed_name: str) -> dict:
     """What we can HONESTLY assert about who signed, and how.
 
-    Never claims more than the deployment actually proves: with no typed name
-    and no SSO issuer we record an unsigned disposition rather than treating the
-    API caller's identity as a signature."""
+    The SSO component requires a REAL identity-provider assertion: an `iss`
+    claim, a subject that is not one of our own service principals, and an
+    email. Our internally minted tokens have none of that, so they can never
+    satisfy an SSO signature — which was the whole point of offering the mode.
+
+    Fails CLOSED: when the configured method cannot be satisfied the disposition
+    is recorded as UNSIGNED with the reason, never upgraded to a sign-off just
+    because the request happened to carry a valid token.
+    """
     method = _ESIGN_METHOD if _ESIGN_METHOD in _ESIGN_METHODS else "typed_name"
     typed = (typed_name or "").strip()
-    sso_sub = str(user.get("user_id") or "")
-    sso_email = str(user.get("email") or "")
-    sso_iss = str(user.get("iss") or user.get("issuer") or "")
+    sub = str(user.get("user_id") or "")
+    email = str(user.get("email") or "")
+    iss = str(user.get("iss") or "")
+    auth_time = user.get("auth_time") or ""
+
     has_typed = bool(typed)
-    # An SSO component requires a real authenticated subject, not a default.
-    has_sso = bool(sso_sub and sso_sub != "anonymous")
+    is_service = (not sub or sub == "anonymous"
+                  or any(sub.lower().startswith(p) for p in _SERVICE_SUBJECT_PREFIXES))
+    # A real IdP assertion needs an issuer AND a human subject AND an email.
+    has_sso = bool(iss) and not is_service and bool(email)
+
     if method == "typed_name":
-        signed = has_typed
+        signed, need = has_typed, "a typed full name"
     elif method == "sso_session":
-        signed = has_sso
+        signed, need = has_sso, "an identity-provider authenticated session"
     else:
-        signed = has_typed and has_sso
+        signed, need = (has_typed and has_sso), "BOTH a typed full name and an IdP session"
+
+    reasons = []
+    if not signed:
+        if not has_typed and method in ("typed_name", "both"):
+            reasons.append("no full name was typed")
+        if not has_sso and method in ("sso_session", "both"):
+            if not iss:
+                reasons.append("the token carries no issuer (iss) — not an IdP session")
+            elif is_service:
+                reasons.append(f"subject {sub!r} is an internal service principal, not a person")
+            elif not email:
+                reasons.append("the token carries no email to identify the signer")
     return {
         "method": method,
         "electronically_signed": bool(signed),
+        "requires": need,
         "typed_name": typed,
-        "sso_subject": sso_sub if has_sso else "",
-        "sso_email": sso_email if has_sso else "",
-        "sso_issuer": sso_iss,
-        "components": ([c for c, ok in (("typed_name", has_typed),
-                                        ("sso_session", has_sso)) if ok]),
+        "sso_subject": sub if has_sso else "",
+        "sso_email": email if has_sso else "",
+        "sso_issuer": iss if has_sso else "",
+        "sso_auth_time": auth_time if has_sso else "",
+        "components": [c for c, ok in (("typed_name", has_typed),
+                                       ("sso_session", has_sso)) if ok],
+        "unsigned_reasons": reasons,
         "note": ("A signature is asserted only when this deployment's configured "
                  "method is actually satisfied. An unmet requirement is recorded "
-                 "as UNSIGNED — never upgraded to a sign-off because a request "
-                 "happened to be authenticated."),
+                 "as UNSIGNED with the reason — never upgraded to a sign-off "
+                 "because a request happened to be authenticated. An internally "
+                 "minted service token can never satisfy the SSO component."),
     }
 
 
@@ -7183,6 +7215,8 @@ async def evidence_retention_pass(
     artifact_id: str = PathParam(..., min_length=1, max_length=64),
     apply: bool = Query(False, description="actually reclaim; default is a dry run"),
     limit: int = Query(500, ge=1, le=5000),
+    only_ids: str | None = Query(None, max_length=4000,
+                                 description="comma-separated artifact ids for a TARGETED reclaim"),
     user: dict = Depends(get_current_user),
 ):
     """Reclaim evidence bytes past their retention window (spec §6 decision 1).
@@ -7199,8 +7233,10 @@ async def evidence_retention_pass(
     tenant_id = user["tenant_id"]
     async with tenant_scoped_session(tenant_id) as session:
         await _require_artifact(session, artifact_id, tenant_id)
+        ids = [i.strip() for i in (only_ids or "").split(",") if i.strip()] or None
         result = await evidence_retention.apply_retention(
-            session, tenant_id=tenant_id, dry_run=not apply, limit=limit)
+            session, tenant_id=tenant_id, dry_run=not apply, limit=limit,
+            only_ids=ids)
         if apply:
             await session.commit()
     if apply:

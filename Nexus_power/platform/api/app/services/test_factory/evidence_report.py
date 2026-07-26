@@ -38,6 +38,7 @@ from nexus_sdk.db.models import (
     E2ETestRunStepRow,
     FactoryTestCaseRow,
 )
+from .run_screenshots import E2ERunScreenshotRow
 
 from . import attribution_engine
 
@@ -236,7 +237,11 @@ async def _load_run(session, *, artifact_id: str, tenant_id: str,
         E2ETestRunRow.tenant_id == tenant_id,
     )
     if run_id:
-        q = q.where(E2ETestRunRow.run_id == run_id)
+        # Accept EITHER id. A dispatch hands the caller the runner job id, while
+        # ingest mints its own run_id — asking for the one you were given should
+        # not silently return "no run".
+        q = q.where((E2ETestRunRow.run_id == run_id)
+                    | (E2ETestRunRow.ci_run_id == run_id))
     else:
         # Newest execution that a human would call "the run" — diagnosis runs
         # are internal capture probes and are excluded.
@@ -255,6 +260,72 @@ async def _load_steps(session, *, run_id: str, tenant_id: str) -> list[Any]:
     return list(rows)
 
 
+async def _load_diagnostics(session, *, run_id: str, tenant_id: str,
+                            also_run_ids: list[str] | None = None) -> dict[str, dict]:
+    """Tier-T3 diagnostics for a run, keyed by scenario.
+
+    Captured documents were invisible until now: they were stored correctly and
+    surfaced nowhere, which for a reader is the same as not existing. We attach a
+    SUMMARY (the few numbers worth seeing inline) plus a link to the full JSON —
+    never the whole document inline, which would bloat every report.
+    """
+    import json as _json
+    out: dict[str, dict] = {}
+    try:
+        rows = (await session.execute(
+            select(E2ERunScreenshotRow).where(
+                # A run has TWO ids: the one ingest mints (test_run.run_id) and
+                # the runner job id the bundle knew about (test_run.ci_run_id).
+                # Diagnostics are uploaded by the bundle, so they carry the JOB
+                # id — matching only on the ingested id silently found nothing.
+                E2ERunScreenshotRow.run_id.in_(
+                    [i for i in ([run_id] + list(also_run_ids or [])) if i]),
+                E2ERunScreenshotRow.tenant_id == tenant_id,
+                E2ERunScreenshotRow.scenario_id.like("t3:%"),
+            )
+        )).scalars().all()
+    except Exception as exc:
+        logger.debug("evidence_report.diagnostics_skipped run=%s err=%s", run_id, exc)
+        return out
+    for r in rows:
+        sid = str(getattr(r, "scenario_id", "") or "")[3:]
+        if not sid:
+            continue
+        summary, note = {}, ""
+        try:
+            doc = _json.loads(bytes(r.image or b"").decode("utf-8"))
+            perf = doc.get("performance") or {}
+            paints = perf.get("paints") or {}
+            errs = doc.get("page_errors") or []
+            console = doc.get("console") or []
+            summary = {
+                "dom_content_loaded_ms": perf.get("dom_content_loaded"),
+                "load_event_ms": perf.get("load_event"),
+                "first_contentful_paint_ms": paints.get("first-contentful-paint"),
+                "resource_count": perf.get("resource_count"),
+                "resource_bytes": perf.get("resource_bytes"),
+                "slowest_resource_ms": ((perf.get("slowest_resources") or [{}])[0] or {}).get("ms"),
+                "console_lines": len(console),
+                "console_errors": sum(1 for c in console
+                                      if str(c.get("type", "")).lower() == "error"),
+                "page_errors": len(errs),
+                "accessibility_snapshot_present": bool(doc.get("accessibility_snapshot")),
+                "html_source_captured": bool(doc.get("html_source")),
+            }
+            note = doc.get("note") or ""
+        except Exception:
+            note = "diagnostics document could not be parsed"
+        out[sid] = {
+            "url": f"/api/v1/test-runs/screenshot/{getattr(r, 'screenshot_id', '')}",
+            "bytes": int(getattr(r, "byte_size", 0) or 0),
+            "captured_at": _iso(getattr(r, "created_at", None)),
+            "summary": summary,
+            "note": note or ("accessibility_snapshot is the browser AX tree, NOT a "
+                             "WCAG audit; no conformance is asserted"),
+        }
+    return out
+
+
 def _case_step_def(case_json: dict, step_number: int) -> dict:
     for s in (case_json.get("steps") or []):
         if int(s.get("step_number") or 0) == int(step_number or 0):
@@ -264,7 +335,7 @@ def _case_step_def(case_json: dict, step_number: int) -> dict:
 
 def _build_case(
     *, case_row: Any, case_json: dict, step_rows: list[Any],
-    is_certification: bool, include_steps: bool,
+    is_certification: bool, include_steps: bool, diagnostics: dict | None = None,
 ) -> dict:
     """One test case with its steps, statuses, evidence links and provenance."""
     steps_out: list[dict] = []
@@ -379,6 +450,9 @@ def _build_case(
             "inferred_steps": next((t.split(":", 1)[1] for t in tags
                                     if str(t).startswith("inferred-steps:")), ""),
         },
+        # Tier-T3 deep diagnostics for this case (None unless the run enabled
+        # them) — a summary plus a link to the full document.
+        "diagnostics": diagnostics,
         "steps": steps_out,
     }
 
@@ -423,6 +497,10 @@ async def build_report(
         by_scenario.setdefault(str(getattr(r, "scenario_id", "") or ""), []).append(r)
 
     is_cert = bool(run is not None and str(getattr(run, "environment", "")) == "certification")
+    diag_by_scenario = (await _load_diagnostics(
+        session, run_id=run.run_id, tenant_id=tenant_id,
+        also_run_ids=[str(getattr(run, "ci_run_id", "") or "")])
+        if run is not None else {})
 
     # ── gates (Trust Block inputs) ──────────────────────────────────────────
     exploratory_ids = {
@@ -455,7 +533,8 @@ async def build_report(
         tcid = str(getattr(c, "test_case_id", "") or "")
         rows = by_scenario.get(tcid, [])
         built = _build_case(case_row=c, case_json=case_json, step_rows=rows,
-                            is_certification=is_cert, include_steps=include_steps)
+                            is_certification=is_cert, include_steps=include_steps,
+                            diagnostics=diag_by_scenario.get(tcid))
         # Gate transparency: a case excluded by a run-gate did not "fail" — say
         # exactly why it did not execute (never silently absent, never green).
         if not built["executed"]:

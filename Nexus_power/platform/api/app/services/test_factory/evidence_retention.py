@@ -81,6 +81,7 @@ def _tombstone(digest: str, original_bytes: int, at: datetime) -> bytes:
 async def apply_retention(
     session: AsyncSession, *, tenant_id: str, dry_run: bool = True,
     limit: int = 500, now: datetime | None = None,
+    only_ids: list[str] | None = None,
 ) -> dict:
     """Reclaim evidence bytes past their window, leaving a verifiable tombstone.
 
@@ -89,11 +90,14 @@ async def apply_retention(
     the accidental result of calling a function.
     """
     now = now or datetime.now(timezone.utc)
+    q = select(E2ERunScreenshotRow).where(E2ERunScreenshotRow.tenant_id == tenant_id)
+    if only_ids:
+        # Targeted reclaim: operate on exactly these artifacts and nothing else.
+        # Useful for a scoped clean-up, and it is what lets the destructive path
+        # be exercised end-to-end without putting real evidence at risk.
+        q = q.where(E2ERunScreenshotRow.screenshot_id.in_(list(only_ids)[:1000]))
     rows = (await session.execute(
-        select(E2ERunScreenshotRow)
-        .where(E2ERunScreenshotRow.tenant_id == tenant_id)
-        .order_by(E2ERunScreenshotRow.created_at.asc())
-        .limit(limit)
+        q.order_by(E2ERunScreenshotRow.created_at.asc()).limit(limit)
     )).scalars().all()
 
     candidates: list[dict] = []
@@ -152,6 +156,7 @@ async def apply_retention(
         "by_class": by_class,
         "reclaimable_bytes": reclaimed_bytes,
         "windows_days": {k: window_days(k) for k in sorted(DEFAULT_WINDOWS)},
+        "scoped_to_ids": bool(only_ids),
         "items": candidates[:100],
         "note": ("Reclaimed evidence is TOMBSTONED, not deleted: the row survives "
                  "with the artifact's SHA-256, its original size and the date it "

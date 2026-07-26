@@ -387,9 +387,74 @@ def test_esign_method_is_configurable_and_never_over_claims():
     assert "_ESIGN_METHOD" in r
     for m in ("typed_name", "sso_session", "both"):
         assert f'"{m}"' in r
-    # an authenticated request is NOT by itself a signature
-    assert "never upgraded to a sign-off because a request" in r
-    assert 'sso_sub != "anonymous"' in r
+    # an authenticated request is NOT by itself a signature (the sentence is
+    # line-wrapped in the source, so match a contiguous fragment)
+    assert "never upgraded to a sign-off" in r
+    assert "happened to be authenticated" in r
+
+
+def test_sso_signature_rejects_our_own_service_tokens():
+    """The audit found sso_session was hollow: it accepted ANY authenticated
+    token, including internally minted service principals. An SSO signature a
+    service token can satisfy is a signature in name only."""
+    r = _router()
+    assert "_SERVICE_SUBJECT_PREFIXES" in r
+    for p in ("svc-", "platform-", "nexus-"):
+        assert f'"{p}"' in r
+    # a real IdP assertion needs issuer + human subject + email, all three
+    assert "has_sso = bool(iss) and not is_service and bool(email)" in r
+
+
+def test_unsigned_dispositions_state_WHY():
+    r = _router()
+    assert '"unsigned_reasons": reasons' in r
+    assert "not an IdP session" in r
+    assert "internal service principal, not a person" in r
+
+
+def test_auth_layer_propagates_the_idp_claims_sso_mode_needs():
+    """Without iss/auth_time an 'SSO signature' cannot be distinguished from our
+    own machinery signing itself."""
+    import os
+    auth = open(os.path.join(os.path.dirname(__file__), "..", "app", "auth.py"),
+                encoding="utf-8").read()
+    assert '"iss": payload.get("iss", "")' in auth
+    assert '"auth_time"' in auth
+
+
+def test_t3_diagnostics_are_actually_surfaced_not_just_stored():
+    """The audit found T3 documents were stored correctly and shown NOWHERE —
+    for a reader that is the same as not existing."""
+    import os
+    rep = open(os.path.join(os.path.dirname(__file__), "..", "app", "services",
+                            "test_factory", "evidence_report.py"), encoding="utf-8").read()
+    html = open(os.path.join(os.path.dirname(__file__), "..", "app", "services",
+                             "test_factory", "report_html.py"), encoding="utf-8").read()
+    assert "_load_diagnostics" in rep and '"diagnostics": diagnostics' in rep
+    assert "Deep diagnostics (T3)" in html
+    # a summary inline + a link to the full document, never the whole blob
+    assert "console_errors" in rep and "accessibility_snapshot_present" in rep
+
+
+def test_retention_can_be_scoped_to_specific_artifacts():
+    """Lets the DESTRUCTIVE path be exercised end-to-end without putting real
+    evidence at risk — and is a useful targeted clean-up in its own right."""
+    import inspect
+    from app.services.test_factory import evidence_retention as ret
+    assert "only_ids" in inspect.signature(ret.apply_retention).parameters
+    assert "only_ids" in _router()
+
+
+def test_tombstone_retains_the_digest_and_is_self_describing():
+    from app.services.test_factory import evidence_retention as ret
+    from datetime import datetime, timezone
+    stone = ret._tombstone("abc123", 4096, datetime(2026, 7, 26, tzinfo=timezone.utc))
+    assert ret.is_tombstone(stone)
+    assert b"sha256=abc123" in stone and b"original_bytes=4096" in stone
+    assert b"reclaimed_at=2026-07-26" in stone
+    assert b"verdicts are unaffected" in stone
+    # a tombstone is never mistaken for real evidence, and never for an empty upload
+    assert not ret.is_tombstone(b"") and not ret.is_tombstone(b"real-bytes")
 
 
 def test_retention_endpoint_is_admin_gated_and_audited():

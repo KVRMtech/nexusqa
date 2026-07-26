@@ -57,6 +57,12 @@ async def get_current_user(
             "tenant_id": payload.get("tenant_id", "default"),
             "email": payload.get("email", ""),
             "role": payload.get("role", "viewer"),
+            # IdP provenance — needed to tell an SSO-authenticated HUMAN from an
+            # internally minted service token. Without these an "SSO signature"
+            # would be indistinguishable from our own machinery signing itself.
+            "iss": payload.get("iss", ""),
+            "auth_time": payload.get("auth_time", payload.get("iat", "")),
+            "amr": payload.get("amr", []),
         }
         return request.state.user
     except Exception:

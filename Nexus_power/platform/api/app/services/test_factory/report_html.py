@@ -225,6 +225,16 @@ def _case(c: dict) -> str:
     tags = "".join(f'<span class="tag">{_e(t)}</span>' for t in (c.get("tags") or [])[:10])
     ne = (f'<div class="note"><b>Not executed:</b> {_e(c.get("not_executed_reason"))}</div>'
           if not c.get("executed") else "")
+    dg = c.get("diagnostics") or None
+    diag_html = ""
+    if dg:
+        sm = dg.get("summary") or {}
+        bits = " ".join(
+            f'<span class="tag">{_e(k.replace("_", " "))}: {_e(v)}</span>'
+            for k, v in sm.items() if v not in (None, "", False))
+        diag_html = (f'<div class="note" style="margin-top:6px"><b>Deep diagnostics (T3):</b> '
+                     f'{bits} <a href="{_e(dg.get("url"))}">full document</a>'
+                     f'<div class="meta">{_e(dg.get("note"))}</div></div>')
     return (
         f'<details><summary>'
         f'<span class="chip c-{_e(st)}">{_LABEL.get(st, st)}</span>'
@@ -235,6 +245,7 @@ def _case(c: dict) -> str:
         f'<div class="body">{ne}'
         f'{_chips(c.get("counts") or {})}'
         f'<div class="note">{_e(c.get("description"))}</div>'
+        f'{diag_html}'
         f'<div class="note" style="margin-top:6px"><b>Reproducibility:</b> {rbits}'
         f'<span class="tag">case: {_e(c.get("test_case_id"))}</span></div>'
         f'<div style="margin:6px 0 10px">{tags}</div>'

@@ -13,7 +13,8 @@
  */
 import { useCallback, useEffect, useState } from 'react';
 import {
-  AlertTriangle, ChevronRight, ClipboardCheck, Clock, Download, ExternalLink, FileSpreadsheet,
+  Activity, AlertTriangle, ChevronRight, ClipboardCheck, Clock, Download, ExternalLink,
+  FileSpreadsheet,
   FileText, Loader2, Package, RefreshCw, ShieldCheck,
 } from 'lucide-react';
 import { api } from './factoryApi';
@@ -518,6 +519,30 @@ export default function EvidenceReportPanel({ artifactId }: Props) {
                                   <p className="mb-2 text-[11px] text-slate-600">
                                     <b>Not executed:</b> {c.not_executed_reason}
                                   </p>
+                                )}
+                                {c.diagnostics && (
+                                  <div className="mb-2 rounded border border-slate-200 bg-white p-2">
+                                    <div className="mb-1 flex items-center gap-2">
+                                      <Activity className="h-3.5 w-3.5 text-slate-500" />
+                                      <span className="text-[11px] font-semibold text-slate-800">
+                                        Deep diagnostics (T3)
+                                      </span>
+                                      <a className="ml-auto text-[11px] text-sky-700 underline"
+                                         href={api.getRunScreenshotUrl(c.diagnostics.url)}
+                                         target="_blank" rel="noreferrer">full document</a>
+                                    </div>
+                                    <div className="flex flex-wrap gap-1">
+                                      {Object.entries(c.diagnostics.summary || {})
+                                        .filter(([, v]) => v !== null && v !== '' && v !== false)
+                                        .map(([k, v]) => (
+                                          <span key={k}
+                                                className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-600">
+                                            {k.replace(/_/g, ' ')}: {String(v)}
+                                          </span>
+                                        ))}
+                                    </div>
+                                    <p className="mt-1 text-[10px] text-slate-500">{c.diagnostics.note}</p>
+                                  </div>
                                 )}
                                 <div className="overflow-x-auto">
                                   <table className="w-full text-[11px]">
