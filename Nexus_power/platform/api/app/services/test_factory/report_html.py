@@ -198,7 +198,13 @@ def _steps_table(steps: list) -> str:
         if shot:
             links.append(f'<a href="{_e(shot)}">screenshot</a>')
         if trace:
-            links.append(f'<a href="{_e(trace)}">trace.zip</a>')
+            # Replay link points at the SELF-HOSTED viewer (portal /trace/), so a
+            # reviewer steps THROUGH the failure instead of squinting at a still.
+            # Falls back to the raw .zip, which is what an offline/exported copy
+            # of this document can still offer honestly.
+            links.append(
+                f'<a href="/trace/index.html?trace={_e(trace)}">replay</a>'
+                f' <a href="{_e(trace)}">.zip</a>')
         shot_html = "<br>".join(links) if links else '<span class="meta">—</span>' 
         body.append(
             f'<tr><td class="mono">{_e(s.get("step_number"))}</td>'

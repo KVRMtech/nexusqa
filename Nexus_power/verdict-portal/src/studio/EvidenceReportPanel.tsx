@@ -576,9 +576,17 @@ export default function EvidenceReportPanel({ artifactId }: Props) {
                                                  target="_blank" rel="noreferrer">shot</a>
                                             )}
                                             {s.evidence?.trace_url && (
-                                              <a className="ml-2 text-sky-700 underline"
-                                                 href={api.getRunScreenshotUrl(s.evidence.trace_url)}
-                                                 target="_blank" rel="noreferrer">trace</a>
+                                              <>
+                                                <a className="ml-2 font-medium text-sky-700 underline"
+                                                   href={api.getTraceViewerUrl(s.evidence.trace_url)}
+                                                   target="_blank" rel="noreferrer"
+                                                   title="Replay this failure step-by-step in the self-hosted Playwright trace viewer">
+                                                  replay
+                                                </a>
+                                                <a className="ml-1.5 text-slate-500 underline"
+                                                   href={api.getRunScreenshotUrl(s.evidence.trace_url)}
+                                                   target="_blank" rel="noreferrer">.zip</a>
+                                              </>
                                             )}
                                           </td>
                                         </tr>

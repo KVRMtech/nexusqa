@@ -706,6 +706,22 @@ class FactoryApiClient {
     return data;
   }
 
+  /**
+   * Open a Playwright trace in the SELF-HOSTED viewer at `/trace/`.
+   *
+   * The viewer is served from our own origin (its static assets are copied out
+   * of the runner at deploy time), so an air-gapped on-prem install can replay
+   * a failure step-by-step without reaching trace.playwright.dev or any CDN.
+   * The trace itself is fetched same-origin with the operator's `?token=`.
+   */
+  getTraceViewerUrl(traceUrlOrPath: string): string {
+    if (!traceUrlOrPath) return '';
+    const abs = /^https?:\/\//i.test(traceUrlOrPath)
+      ? traceUrlOrPath
+      : `${window.location.origin}${this.getRunScreenshotUrl(traceUrlOrPath)}`;
+    return `/trace/index.html?trace=${encodeURIComponent(abs)}`;
+  }
+
   /** §2.18 — the Needs-Review QUEUE, joined with recorded dispositions. */
   async getReviewQueue(artifactId: string, includeResolved = false): Promise<any> {
     const { data } = await this.client.get(
