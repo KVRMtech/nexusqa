@@ -3976,6 +3976,36 @@ async def playwright_run(
                     "excluded_quarantined": excluded_quarantined,
                     "excluded_uncertified_exploratory": excluded_uncertified,
                 }
+        # Scoped certification (R3, OPT-IN): an environment that requires it admits
+        # only cases CERTIFIED for THIS (environment, behavior_class) cell — a
+        # certification on the baseline (or another env/class) does NOT grant trust
+        # here. Default off ⇒ unchanged behaviour.
+        if governance_env.get("require_scoped_certification"):
+            async with tenant_scoped_session(tenant_id) as session:
+                _certified = await persona_store.cell_certified_scenarios(
+                    session, tenant_id=tenant_id, artifact_id=artifact_id,
+                    environment_id=environment_id, behavior_class=persona_class)
+            cases = [c for c in cases
+                     if str(getattr(c, "test_id", "") or "") in _certified]
+            if not cases:
+                return {
+                    "run_id": run_id, "status": "blocked",
+                    "blocked_reason": "needs_scoped_certification",
+                    "persona_id": persona_id, "environment_id": environment_id,
+                    "behavior_class": persona_class, "posture": posture,
+                    "detail": (f"environment '{environment_id}' requires a scoped "
+                               f"certification for the ('{environment_id}', "
+                               f"'{persona_class or 'any'}') cell; none of the requested "
+                               "cases are certified there yet. Certify on THIS "
+                               "environment as THIS member class first — a certification "
+                               "on the baseline or another env/class does not grant "
+                               "trust here."),
+                    "note": ("Environment policy: scoped certification required. This "
+                             "is an environment decision, NOT an application failure."),
+                    "scripts": 0,
+                    "excluded_quarantined": excluded_quarantined,
+                    "excluded_uncertified_exploratory": excluded_uncertified,
+                }
     if persona_id:
         auth_config, login_env = await _persona_auth_bundle(
             request, artifact_id, tenant_id, persona_id, environment_id)
@@ -8323,6 +8353,8 @@ class _EnvironmentBody(BaseModel):
     write_authorized: bool = Field(False, description="explicit, revocable authorization to WRITE to production")
     base_url: str = Field("", max_length=2000)
     data_epoch: str = Field("", max_length=64)
+    require_scoped_certification: bool = Field(False,
+        description="opt-in: a persona run here needs a certification for its (env, behavior_class) cell")
 
 
 @router.put("/api/v1/test-factory/{artifact_id}/environments/{environment_id}")
@@ -8344,7 +8376,8 @@ async def put_environment_endpoint(
             session, tenant_id=tenant_id, artifact_id=artifact_id,
             environment_id=environment_id, label=body.label, posture=body.posture,
             is_production=body.is_production, write_authorized=body.write_authorized,
-            base_url=body.base_url, data_epoch=body.data_epoch)
+            base_url=body.base_url, data_epoch=body.data_epoch,
+            require_scoped_certification=body.require_scoped_certification)
         await session.commit()
     await _persona_audit(tenant_id=tenant_id, artifact_id=artifact_id,
                          actor=user.get("email") or user.get("user_id") or "?",
@@ -8370,6 +8403,70 @@ async def list_environments_endpoint(
     for e in envs:
         e["effective_posture"] = persona_governance.effective_posture(e)
     return {"artifact_id": artifact_id, "environments": envs, "count": len(envs)}
+
+
+class _CertRecordItem(BaseModel):
+    scenario_id: str = Field(..., min_length=1, max_length=64)
+    status: str = Field("certified", max_length=16, description="certified | failed")
+
+
+class _CertRecordBody(BaseModel):
+    environment_id: str = Field(..., min_length=1, max_length=64)
+    behavior_class: str = Field("", max_length=64)
+    run_id: str = Field("", max_length=64)
+    scenarios: list[_CertRecordItem] = Field(..., min_length=1, max_length=2000)
+
+
+@router.post("/api/v1/test-factory/{artifact_id}/certification/record")
+async def record_certification_endpoint(
+    body: _CertRecordBody,
+    artifact_id: str = PathParam(..., min_length=1, max_length=64),
+    user: dict = Depends(get_current_user),
+):
+    """Record a scoped certification: which scenarios are certified for a specific
+    (environment, behavior_class) cell. A cell is proven on its OWN — a baseline
+    certification does not grant trust on another env/class. Editor+. (The cert
+    orchestrator calls this after a per-(env,class) certification run.)"""
+    if not _persona_write_ok(user):
+        raise HTTPException(403, "Recording a certification requires an editor, manager or admin role.")
+    tenant_id = user["tenant_id"]
+    n = 0
+    async with tenant_scoped_session(tenant_id) as session:
+        await _require_artifact(session, artifact_id, tenant_id)
+        for it in body.scenarios:
+            await persona_store.record_certification(
+                session, tenant_id=tenant_id, artifact_id=artifact_id,
+                scenario_id=it.scenario_id, environment_id=body.environment_id,
+                behavior_class=body.behavior_class, status=it.status, run_id=body.run_id)
+            n += 1
+        await session.commit()
+    await _persona_audit(tenant_id=tenant_id, artifact_id=artifact_id,
+                         actor=user.get("email") or user.get("user_id") or "?",
+                         event_type="scoped_certification_recorded",
+                         detail=f"env={body.environment_id} class={body.behavior_class} scenarios={n}")
+    return {"status": "recorded", "environment_id": body.environment_id,
+            "behavior_class": body.behavior_class, "recorded": n}
+
+
+@router.get("/api/v1/test-factory/{artifact_id}/certification/matrix")
+async def certification_matrix_endpoint(
+    artifact_id: str = PathParam(..., min_length=1, max_length=64),
+    user: dict = Depends(get_current_user),
+):
+    """The (environment × behavior_class) proof grid: how much of the suite is
+    certified for each cell. A cell with no rows is simply not certified there —
+    never assumed from another cell."""
+    tenant_id = user["tenant_id"]
+    async with tenant_scoped_session(tenant_id) as session:
+        await _require_artifact(session, artifact_id, tenant_id)
+        ledger = await persona_store.get_certification_ledger(
+            session, tenant_id=tenant_id, artifact_id=artifact_id)
+    return {"artifact_id": artifact_id,
+            "certification_matrix": persona_store.certification_matrix(ledger),
+            "cells": len(ledger),
+            "note": ("Each (env × class) cell is proven on its own. A baseline "
+                     "certification does not grant trust on another environment or "
+                     "member class.")}
 
 
 class _CaseScopeBody(BaseModel):

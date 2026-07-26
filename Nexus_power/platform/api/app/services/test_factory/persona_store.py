@@ -146,7 +146,21 @@ class TpEnvironmentRow(Base):
     health_status: Mapped[str] = mapped_column(String(16), default="unknown")
     health_detail: Mapped[str] = mapped_column(Text, default="")
     last_health_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    require_scoped_certification: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utc_now)
+
+
+class TpCertificationLedgerRow(Base):
+    __tablename__ = "tp_certification_ledger"
+    artifact_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    scenario_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    environment_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    behavior_class: Mapped[str] = mapped_column(String(64), primary_key=True, default="")
+    status: Mapped[str] = mapped_column(String(16), default="certified")
+    run_id: Mapped[str] = mapped_column(String(64), default="")
+    detail: Mapped[dict] = mapped_column(JSONB, default=dict)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utc_now)
 
 
 class TpCaseScopeRow(Base):
@@ -737,13 +751,15 @@ def _env_dict(r) -> dict:
             "is_production": r.is_production, "write_authorized": r.write_authorized,
             "base_url": r.base_url, "data_epoch": r.data_epoch,
             "health_status": r.health_status, "health_detail": r.health_detail,
+            "require_scoped_certification": getattr(r, "require_scoped_certification", False),
             "last_health_at": _iso(r.last_health_at)}
 
 
 async def save_environment(session: AsyncSession, *, tenant_id: str, artifact_id: str,
                            environment_id: str, label: str = "", posture: str = "read_write",
                            is_production: bool = False, write_authorized: bool = False,
-                           base_url: str = "", data_epoch: str = "", app_id: str = "") -> dict:
+                           base_url: str = "", data_epoch: str = "", app_id: str = "",
+                           require_scoped_certification: bool = False) -> dict:
     """Upsert an environment's governance record. Caller commits."""
     from .persona_governance import normalize_posture
     posture = normalize_posture(posture)
@@ -751,16 +767,87 @@ async def save_environment(session: AsyncSession, *, tenant_id: str, artifact_id
         environment_id=environment_id, artifact_id=artifact_id, tenant_id=tenant_id,
         app_id=app_id, label=label, posture=posture, is_production=bool(is_production),
         write_authorized=bool(write_authorized), base_url=base_url,
-        data_epoch=data_epoch, created_at=_utc_now())
+        data_epoch=data_epoch, require_scoped_certification=bool(require_scoped_certification),
+        created_at=_utc_now())
         .on_conflict_do_update(
             index_elements=[TpEnvironmentRow.environment_id, TpEnvironmentRow.artifact_id,
                             TpEnvironmentRow.tenant_id],
             set_={"label": label, "posture": posture, "is_production": bool(is_production),
                   "write_authorized": bool(write_authorized), "base_url": base_url,
-                  "data_epoch": data_epoch}))
+                  "data_epoch": data_epoch,
+                  "require_scoped_certification": bool(require_scoped_certification)}))
     await session.execute(stmt)
     return {"environment_id": environment_id, "posture": posture,
-            "is_production": bool(is_production), "write_authorized": bool(write_authorized)}
+            "is_production": bool(is_production), "write_authorized": bool(write_authorized),
+            "require_scoped_certification": bool(require_scoped_certification)}
+
+
+# ── Scoped certification ledger (R3) ─────────────────────────────────────────
+
+async def record_certification(session: AsyncSession, *, tenant_id: str, artifact_id: str,
+                               scenario_id: str, environment_id: str, behavior_class: str,
+                               status: str = "certified", run_id: str = "",
+                               detail: dict | None = None) -> None:
+    """Record a certification outcome for one (scenario, environment, behavior_class)
+    cell. 'cert on env A does not grant trust on env B' — each cell is proven on its
+    own. Caller commits."""
+    stmt = (pg_insert(TpCertificationLedgerRow).values(
+        artifact_id=artifact_id, tenant_id=tenant_id, scenario_id=scenario_id,
+        environment_id=environment_id, behavior_class=(behavior_class or ""),
+        status=status, run_id=run_id, detail=dict(detail or {}), updated_at=_utc_now())
+        .on_conflict_do_update(
+            index_elements=[TpCertificationLedgerRow.artifact_id, TpCertificationLedgerRow.tenant_id,
+                            TpCertificationLedgerRow.scenario_id, TpCertificationLedgerRow.environment_id,
+                            TpCertificationLedgerRow.behavior_class],
+            set_={"status": status, "run_id": run_id, "detail": dict(detail or {}),
+                  "updated_at": _utc_now()}))
+    await session.execute(stmt)
+
+
+async def get_certification_ledger(session: AsyncSession, *, tenant_id: str,
+                                   artifact_id: str) -> list[dict]:
+    try:
+        rows = (await session.execute(select(TpCertificationLedgerRow).where(
+            TpCertificationLedgerRow.tenant_id == tenant_id,
+            TpCertificationLedgerRow.artifact_id == artifact_id))).scalars().all()
+    except Exception:
+        return []
+    return [{"scenario_id": r.scenario_id, "environment_id": r.environment_id,
+             "behavior_class": r.behavior_class, "status": r.status,
+             "run_id": r.run_id, "at": _iso(r.updated_at)} for r in rows]
+
+
+def certification_matrix(ledger: list[dict]) -> dict:
+    """Build the (environment × behavior_class) proof grid from the ledger:
+    {environment: {behavior_class: {certified, failed, scenarios}}}. The honest
+    answer to 'how much is proven for THIS env and THIS member class' — a cell with
+    no rows is simply not certified there (never assumed from another cell)."""
+    grid: dict = {}
+    for row in (ledger or []):
+        env = row.get("environment_id") or ""
+        cls = row.get("behavior_class") or "(any)"
+        cell = grid.setdefault(env, {}).setdefault(cls, {"certified": 0, "failed": 0, "scenarios": 0})
+        cell["scenarios"] += 1
+        if row.get("status") == "certified":
+            cell["certified"] += 1
+        else:
+            cell["failed"] += 1
+    return grid
+
+
+async def cell_certified_scenarios(session: AsyncSession, *, tenant_id: str, artifact_id: str,
+                                   environment_id: str, behavior_class: str) -> set[str]:
+    """Scenario ids CERTIFIED for a specific (environment, behavior_class) cell."""
+    try:
+        rows = (await session.execute(select(TpCertificationLedgerRow.scenario_id).where(
+            TpCertificationLedgerRow.tenant_id == tenant_id,
+            TpCertificationLedgerRow.artifact_id == artifact_id,
+            TpCertificationLedgerRow.environment_id == environment_id,
+            TpCertificationLedgerRow.behavior_class == (behavior_class or ""),
+            TpCertificationLedgerRow.status == "certified"))).scalars().all()
+    except Exception:
+        return set()
+    return set(rows)
 
 
 async def get_environment(session: AsyncSession, *, tenant_id: str, artifact_id: str,
@@ -884,5 +971,7 @@ __all__ = [
     "count_live_reservations",
     "save_environment", "get_environment", "list_environments", "stamp_env_health",
     "bind_case_scope", "get_case_scopes",
+    "record_certification", "get_certification_ledger", "certification_matrix",
+    "cell_certified_scenarios",
     "build_persona_bundle",
 ]

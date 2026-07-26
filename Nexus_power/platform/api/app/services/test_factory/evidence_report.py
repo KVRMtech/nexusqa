@@ -835,6 +835,16 @@ async def build_trust_block(
                         ("proven", "inferred", "unverified", "total")}
         except Exception:
             pass
+    # R3: the (environment × behavior_class) certification matrix — how much is
+    # proven for each cell. A baseline certification does not grant trust on
+    # another env/class; an empty cell is simply not certified there.
+    cert_matrix = {}
+    try:
+        from . import persona_store as _ps
+        _ledger = await _ps.get_certification_ledger(session, tenant_id=tenant_id, artifact_id=artifact_id)
+        cert_matrix = _ps.certification_matrix(_ledger)
+    except Exception:
+        cert_matrix = {}
     return {
         "identity": identity,
         "statement": (
@@ -844,6 +854,7 @@ async def build_trust_block(
             "and excluded from client-facing runs until they re-certify."
         ),
         "certification_run": cert_block,
+        "certification_matrix": cert_matrix,
         "certified": bool(cert_block and cert_block["failed_steps"] == 0
                           and cert_block["total_steps"] > 0),
         "quarantined": [
