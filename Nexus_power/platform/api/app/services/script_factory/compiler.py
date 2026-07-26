@@ -2046,10 +2046,12 @@ export default class VKPowerReporter implements Reporter {
       started_at: this.startedAt,
       completed_at: new Date().toISOString(),
       steps: this.steps,
-      // Persona identity (P2) + environment posture (P4) — WHO the run ran as
-      // and the governance floor it ran under, for the report's Trust Block.
+      // Persona identity (P2) + environment posture (P4) + repetition plan (R4)
+      // — WHO the run ran as, the governance floor it ran under, and the per-member
+      // repeat counts, for the report's Trust Block.
       metadata: { persona: process.env.NEXUS_PERSONA || '',
-                  posture: process.env.NEXUS_POSTURE || '' },
+                  posture: process.env.NEXUS_POSTURE || '',
+                  repetition: process.env.NEXUS_REPETITION || '' },
     };
     try {
       const resp = await fetch(`${base}/api/v1/test-runs/ingest`, {
@@ -2099,6 +2101,19 @@ function __nxSlotValue(slot: any): string {
   const raw = process.env[slot.env || ('NEXUS_LOGIN_' + String(slot.name || '').toUpperCase())] || '';
   if ((slot.type || 'secret') === 'totp_seed' && raw) return __nxTotp(raw);
   return raw;   // secret | fixed_code | plain all pass through literally
+}
+
+// Cardinality-driven repetition (R4): how many times a repeatable block runs for
+// the member this run is executing as. A data-driven repeatable step calls
+// __nxRepeat('beneficiary', 1) to read THIS member's proven count from the run
+// env (NEXUS_REPETITION = {block: count}); an unset block repeats once (the
+// recorded shape) — never an invented number.
+function __nxRepeat(block: string, fallback: number = 1): number {
+  try {
+    const plan = JSON.parse(process.env.NEXUS_REPETITION || '{}');
+    const n = plan && plan[block];
+    return (typeof n === 'number' && n > 0) ? n : Math.max(1, fallback);
+  } catch { return Math.max(1, fallback); }
 }
 
 export default async function globalSetup(config: FullConfig) {

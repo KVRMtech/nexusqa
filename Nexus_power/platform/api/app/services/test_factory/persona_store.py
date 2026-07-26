@@ -597,6 +597,49 @@ async def get_expected_values(session: AsyncSession, *, tenant_id: str, persona_
             for r in rows}
 
 
+# ── Cardinality (per-persona repeat counts) ──────────────────────────────────
+# A repeated block (beneficiaries, dependents) runs as many times as THIS
+# persona's data demands. Stored on the answer sheet under a reserved value_key
+# so no migration is needed; consumed by the run dispatch (NEXUS_REPETITION) and
+# surfaced in the report.
+
+_CARD_PREFIX = "__cardinality__::"
+
+
+async def set_persona_cardinality(session: AsyncSession, *, tenant_id: str, persona_id: str,
+                                  environment_id: str, counts: dict) -> dict:
+    """Store {block: count} for a persona/environment. Caller commits."""
+    clean: dict[str, int] = {}
+    for block, n in (counts or {}).items():
+        b = str(block).strip()
+        try:
+            c = int(n)
+        except (TypeError, ValueError):
+            continue
+        if b and c > 0:
+            clean[b] = c
+            await set_expected_value(
+                session, tenant_id=tenant_id, persona_id=persona_id,
+                environment_id=environment_id, value_key=f"{_CARD_PREFIX}{b}",
+                expected_value=str(c), source="cardinality")
+    return clean
+
+
+async def get_persona_cardinality(session: AsyncSession, *, tenant_id: str, persona_id: str,
+                                  environment_id: str) -> dict:
+    """{block: count} for a persona/environment (empty when none set)."""
+    vals = await get_expected_values(
+        session, tenant_id=tenant_id, persona_id=persona_id, environment_id=environment_id)
+    out: dict[str, int] = {}
+    for key, v in vals.items():
+        if key.startswith(_CARD_PREFIX):
+            try:
+                out[key[len(_CARD_PREFIX):]] = int(v.get("expected_value") or 0)
+            except (TypeError, ValueError):
+                continue
+    return {b: c for b, c in out.items() if c > 0}
+
+
 # ── Value classifications ────────────────────────────────────────────────────
 
 async def save_classification(session: AsyncSession, *, tenant_id: str, artifact_id: str,
@@ -835,6 +878,7 @@ __all__ = [
     "save_persona_credential", "get_persona_credential", "credential_status",
     "stamp_card_verified", "all_credential_status", "rotate_cards", "flag_stale_cards",
     "set_expected_value", "get_expected_values",
+    "set_persona_cardinality", "get_persona_cardinality",
     "save_classification", "get_classifications",
     "acquire_reservation", "release_reservation", "expire_stale_reservations",
     "count_live_reservations",

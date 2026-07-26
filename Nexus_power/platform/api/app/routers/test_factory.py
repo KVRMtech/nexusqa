@@ -4058,6 +4058,20 @@ async def playwright_run(
             }
     else:
         auth_config, login_env = await _run_form_login(request, artifact_id, tenant_id)
+    # Cardinality-driven repetition (P4/R4): a repeated block runs to THIS
+    # persona's PROVEN count (5 beneficiaries vs 2). The plan rides NEXUS_REPETITION
+    # into the run so a data-driven repeatable step reads its count from the member
+    # instead of a hardcoded number; it is also surfaced in the report.
+    repetition: dict[str, int] = {}
+    if persona_id:
+        async with tenant_scoped_session(tenant_id) as session:
+            _counts = await persona_store.get_persona_cardinality(
+                session, tenant_id=tenant_id, persona_id=persona_id, environment_id=environment_id)
+        if _counts:
+            _cd = [{"block": b, "count_b": n} for b, n in _counts.items()]
+            _pc = {f"{persona_id}::{b}": n for b, n in _counts.items()}
+            repetition = {p["block"]: p["repeat"]
+                          for p in persona_governance.repetition_plan(_cd, _pc, persona_id)}
     # The Nexus runner container is headless (Xvfb-free); honor browsers/workers/
     # retries but force headless regardless of the requested mode.
     files = _configured_files(
@@ -4096,6 +4110,9 @@ async def playwright_run(
         # Environment posture (P4) — the run knows the governance floor it runs
         # under (read_write | read_only | no_submit); surfaced in the report.
         "NEXUS_POSTURE": posture,
+        # Cardinality-driven repetition (R4) — {block: count} for this member, so a
+        # data-driven repeatable step runs the RIGHT number of times.
+        **({"NEXUS_REPETITION": json.dumps(repetition)} if repetition else {}),
     }
     await _register_job(run_id, {
         "run_id": run_id, "status": "running", "artifact_id": artifact_id,
@@ -4125,7 +4142,7 @@ async def playwright_run(
     return {"run_id": run_id, "status": "running", "scripts": len(cases),
             "target": base_url, "persona_id": persona_id,
             "environment_id": environment_id, "posture": posture,
-            "out_of_scope": out_of_scope,
+            "out_of_scope": out_of_scope, "repetition_plan": repetition,
             "excluded_quarantined": excluded_quarantined,
             "excluded_uncertified_exploratory": excluded_uncertified}
 
@@ -7893,6 +7910,55 @@ async def get_expected_values_endpoint(
         vals = await persona_store.get_expected_values(
             session, tenant_id=tenant_id, persona_id=persona_id, environment_id=environment_id)
     return {"values": vals, "count": len(vals)}
+
+
+class _CardinalityBody(BaseModel):
+    counts: dict[str, int] = Field(..., description="{repeatable_block: count} for this member, e.g. {'beneficiary': 5}")
+
+
+@router.put("/api/v1/test-factory/{artifact_id}/personas/{persona_id}/cardinality/{environment_id}")
+async def set_persona_cardinality_endpoint(
+    body: _CardinalityBody,
+    artifact_id: str = PathParam(..., min_length=1, max_length=64),
+    persona_id: str = PathParam(..., min_length=1, max_length=64),
+    environment_id: str = PathParam(..., min_length=1, max_length=64),
+    user: dict = Depends(get_current_user),
+):
+    """Set how many times a repeated block runs for THIS member (5 beneficiaries
+    vs 2). One suite serves any family size — the count rides the run and a
+    data-driven repeatable step reads it. Editor+."""
+    if not _persona_write_ok(user):
+        raise HTTPException(403, "Setting cardinality requires an editor, manager or admin role.")
+    tenant_id = user["tenant_id"]
+    async with tenant_scoped_session(tenant_id) as session:
+        await _require_artifact(session, artifact_id, tenant_id)
+        out = await persona_store.set_persona_cardinality(
+            session, tenant_id=tenant_id, persona_id=persona_id,
+            environment_id=environment_id, counts=body.counts)
+        await session.commit()
+    return {"status": "saved", "persona_id": persona_id, "environment_id": environment_id,
+            "counts": out}
+
+
+@router.get("/api/v1/test-factory/{artifact_id}/personas/{persona_id}/repetition-plan/{environment_id}")
+async def persona_repetition_plan_endpoint(
+    artifact_id: str = PathParam(..., min_length=1, max_length=64),
+    persona_id: str = PathParam(..., min_length=1, max_length=64),
+    environment_id: str = PathParam(..., min_length=1, max_length=64),
+    user: dict = Depends(get_current_user),
+):
+    """The repeat plan a run applies for this member: {block: count}. Never
+    invents a count — an unset block repeats once (the recorded shape)."""
+    tenant_id = user["tenant_id"]
+    async with tenant_scoped_session(tenant_id) as session:
+        await _require_artifact(session, artifact_id, tenant_id)
+        counts = await persona_store.get_persona_cardinality(
+            session, tenant_id=tenant_id, persona_id=persona_id, environment_id=environment_id)
+    cd = [{"block": b, "count_b": n} for b, n in counts.items()]
+    pc = {f"{persona_id}::{b}": n for b, n in counts.items()}
+    plan = persona_governance.repetition_plan(cd, pc, persona_id)
+    return {"persona_id": persona_id, "environment_id": environment_id,
+            "repetition_plan": {p["block"]: p["repeat"] for p in plan}, "detail": plan}
 
 
 @router.get("/api/v1/test-factory/{artifact_id}/recipes")
