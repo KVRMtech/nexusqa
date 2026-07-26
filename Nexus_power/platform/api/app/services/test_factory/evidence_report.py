@@ -796,13 +796,26 @@ async def build_trust_block(
     persona_name = ""
     if persona_id and not persona_id.startswith("persona0::"):
         try:
-            from . import persona_store
+            from . import persona_store, persona_diff
             p = await persona_store.get_persona(session, tenant_id=tenant_id, persona_id=persona_id)
             if p:
                 persona_name = p.get("name") or ""
                 identity["persona_name"] = persona_name
                 identity["behavior_class"] = p.get("behavior_class") or ""
                 identity["traits"] = p.get("traits") or []
+                # P3 honest oracle split: how much of the suite is PROVEN for
+                # THIS member (app-constant + their answer-sheet values), vs
+                # UNVERIFIED where we have no grounded member value.
+                classifications = await persona_store.get_classifications(
+                    session, tenant_id=tenant_id, artifact_id=artifact_id)
+                answers = await persona_store.get_expected_values(
+                    session, tenant_id=tenant_id, persona_id=persona_id,
+                    environment_id=environment or "")
+                if classifications:
+                    sp = persona_diff.per_persona_split(classifications, answers,
+                                                        bool(p.get("is_recording_baseline")))
+                    identity["oracle_split"] = {k: sp[k] for k in
+                        ("proven", "inferred", "unverified", "total")}
         except Exception:
             pass
     return {

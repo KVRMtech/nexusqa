@@ -108,6 +108,7 @@ from ..services.test_factory import report_export
 from ..services.test_factory import evidence_manifest
 from ..services.test_factory import report_formats
 from ..services.test_factory import persona_store
+from ..services.test_factory import persona_diff
 from ..services.test_factory import report_store
 from ..services.test_factory import evidence_retention
 from ..services.test_factory.assistant import answer as assistant_answer
@@ -7901,3 +7902,173 @@ async def verify_recipe_endpoint(
                        "an application failure." if drift
                        else "Login did not confirm; check the persona card and recipe.")),
     }
+
+
+# ── Persona diff / honest oracles (P3) ──────────────────────────────────────
+
+def _suite_observed_values(cases) -> dict[str, str]:
+    """value_key -> observed/expected text across the active suite. value_key is
+    stable (scenario:step:kind) so a classification binds to one assertion."""
+    out: dict[str, str] = {}
+    for c in cases:
+        tc = dict(getattr(c, "test_case", None) or {})
+        sid = str(getattr(c, "test_case_id", "") or tc.get("test_id") or "")
+        for st in (tc.get("steps") or []):
+            n = int(st.get("step_number") or 0)
+            obs = st.get("observed") or {}
+            for kind, val in (("expected", st.get("expected_result") or st.get("expected")),
+                              ("observed_value", obs.get("value")),
+                              ("observed_text", obs.get("text"))):
+                if val:
+                    out[f"{sid}:{n}:{kind}"] = str(val)
+    return out
+
+
+class _ClassifyBody(BaseModel):
+    baseline_persona_id: str = Field("", max_length=64,
+                                     description="persona whose card identity grounds the echo test; default persona-0")
+    environment_id: str = Field("uat", max_length=64)
+
+
+@router.post("/api/v1/test-factory/{artifact_id}/oracles/classify")
+async def classify_oracles_endpoint(
+    body: _ClassifyBody,
+    request: Request,
+    artifact_id: str = PathParam(..., min_length=1, max_length=64),
+    user: dict = Depends(get_current_user),
+):
+    """Single-crawl oracle classification: tag every suite expected-value that
+    echoes the recording member's own identity as member_derived/identity_echo.
+    Everything else stays unknown until a two-persona diff proves it. Persisted
+    to value_classifications; consumed by the per-persona oracle split and (at
+    run time) by the compiler's honest downgrade."""
+    if not _persona_write_ok(user):
+        raise HTTPException(403, "Classifying oracles requires an editor, manager or admin role.")
+    tenant_id = user["tenant_id"]
+    envelope = getattr(request.app.state, "envelope_service", None)
+    async with tenant_scoped_session(tenant_id) as session:
+        await _require_artifact(session, artifact_id, tenant_id)
+        cases = await factory_service.load_active_production_cases(session, artifact_id=artifact_id)
+        # identity values = the baseline persona's card (persona-0 = form-login)
+        bp = (body.baseline_persona_id or "").strip() or f"persona0::{artifact_id}"
+        card = await persona_store.get_persona_credential(
+            session, envelope=envelope, tenant_id=tenant_id,
+            persona_id=bp, environment_id=body.environment_id)
+    identity_values = set()
+    for v in (card or {}).values():
+        if v and len(str(v)) >= 3:
+            identity_values.add(str(v))
+            # also the local-part of an email is a strong identity token
+            if "@" in str(v):
+                identity_values.add(str(v).split("@", 1)[0])
+    observed = _suite_observed_values(cases)
+    classified = persona_diff.classify_single_persona(observed, identity_values)
+    member_derived = 0
+    async with tenant_scoped_session(tenant_id) as session:
+        for key, c in classified.items():
+            sid, _, _ = (key.split(":", 2) + ["", ""])[:3]
+            await persona_store.save_classification(
+                session, tenant_id=tenant_id, artifact_id=artifact_id,
+                value_key=key, class_=c["class"], evidence=c["evidence"],
+                scenario_id=sid)
+            if c["class"] == persona_diff.CLASS_MEMBER_DERIVED:
+                member_derived += 1
+        await session.commit()
+    return {
+        "classified": len(classified),
+        "member_derived": member_derived,
+        "app_constant_or_unknown": len(classified) - member_derived,
+        "note": ("Values echoing the recording member's own identity are tagged "
+                 "member_derived (identity_echo). The rest stay unknown until a "
+                 "two-persona diff proves app-constancy — never assumed."),
+    }
+
+
+@router.get("/api/v1/test-factory/{artifact_id}/personas/{persona_id}/oracle-split/{environment_id}")
+async def persona_oracle_split_endpoint(
+    artifact_id: str = PathParam(..., min_length=1, max_length=64),
+    persona_id: str = PathParam(..., min_length=1, max_length=64),
+    environment_id: str = PathParam(..., min_length=1, max_length=64),
+    user: dict = Depends(get_current_user),
+):
+    """How much of the suite is PROVEN for this persona: app-constant values +
+    member-derived values the persona's answer sheet supplies are PROVEN; the
+    rest are UNVERIFIED (asserted structurally, never faked). The honest answer
+    to 'does this suite hold for THIS member?'."""
+    tenant_id = user["tenant_id"]
+    async with tenant_scoped_session(tenant_id) as session:
+        await _require_artifact(session, artifact_id, tenant_id)
+        classifications = await persona_store.get_classifications(
+            session, tenant_id=tenant_id, artifact_id=artifact_id)
+        answer_sheet = await persona_store.get_expected_values(
+            session, tenant_id=tenant_id, persona_id=persona_id, environment_id=environment_id)
+        p = await persona_store.get_persona(session, tenant_id=tenant_id, persona_id=persona_id)
+    is_baseline = bool((p or {}).get("is_recording_baseline")) or persona_id.startswith("persona0::")
+    split = persona_diff.per_persona_split(classifications, answer_sheet, is_baseline)
+    return {"artifact_id": artifact_id, "persona_id": persona_id,
+            "environment_id": environment_id, "is_baseline": is_baseline, **split}
+
+
+class _PersonaDiffBody(BaseModel):
+    persona_a: str = Field(..., min_length=1, max_length=64)
+    persona_b: str = Field(..., min_length=1, max_length=64)
+    environment_id: str = Field("uat", max_length=64)
+    observed_a: dict[str, str] = Field(default_factory=dict)
+    observed_b: dict[str, str] = Field(default_factory=dict)
+    pages_a: list[str] = Field(default_factory=list)
+    pages_b: list[str] = Field(default_factory=list)
+    repeat_counts_a: dict[str, int] = Field(default_factory=dict)
+    repeat_counts_b: dict[str, int] = Field(default_factory=dict)
+
+
+@router.post("/api/v1/test-factory/{artifact_id}/oracles/persona-diff")
+async def persona_diff_endpoint(
+    body: _PersonaDiffBody,
+    artifact_id: str = PathParam(..., min_length=1, max_length=64),
+    user: dict = Depends(get_current_user),
+):
+    """Two-persona diff (the proven classifier). Given the values two personas
+    saw on the same journey, classify each: differ ⇒ member_derived (and each
+    persona's value is written to its answer sheet); identical ⇒ app_constant;
+    time-shaped ⇒ volatile. Also reports the STRUCTURE diff (page forks +
+    cardinality) that drives repetition and behavior-class scoping.
+
+    Values may be supplied in the body (from two persona runs' captures) — the
+    classification and its evidence are persisted so the run-time oracle and the
+    report read the same proven truth."""
+    if not _persona_write_ok(user):
+        raise HTTPException(403, "Running a persona diff requires an editor, manager or admin role.")
+    tenant_id = user["tenant_id"]
+    value_diff = persona_diff.diff_two_personas(body.observed_a, body.observed_b)
+    structure = persona_diff.diff_structure(
+        body.pages_a, body.pages_b, body.repeat_counts_a, body.repeat_counts_b)
+    md = 0
+    async with tenant_scoped_session(tenant_id) as session:
+        await _require_artifact(session, artifact_id, tenant_id)
+        for key, c in value_diff.items():
+            sid = key.split(":", 1)[0]
+            await persona_store.save_classification(
+                session, tenant_id=tenant_id, artifact_id=artifact_id,
+                value_key=key, class_=c["class"], evidence=c["evidence"], scenario_id=sid,
+                detail=c.get("detail") or {})
+            if c["class"] == persona_diff.CLASS_MEMBER_DERIVED:
+                md += 1
+                # write each persona's PROVEN value to its own answer sheet
+                await persona_store.set_expected_value(
+                    session, tenant_id=tenant_id, persona_id=body.persona_a,
+                    environment_id=body.environment_id, value_key=key,
+                    expected_value=body.observed_a.get(key, ""), source="diff_proven")
+                await persona_store.set_expected_value(
+                    session, tenant_id=tenant_id, persona_id=body.persona_b,
+                    environment_id=body.environment_id, value_key=key,
+                    expected_value=body.observed_b.get(key, ""), source="diff_proven")
+        await session.commit()
+    by_class: dict[str, int] = {}
+    for c in value_diff.values():
+        by_class[c["class"]] = by_class.get(c["class"], 0) + 1
+    return {"value_diff": {"by_class": by_class, "member_derived": md,
+                           "keys": len(value_diff)},
+            "structure": structure,
+            "note": ("Member-derived values were written to each persona's answer "
+                     "sheet (diff_proven), so a later run asserts the RIGHT value "
+                     "per member. Nothing was assumed — differences are observed.")}
