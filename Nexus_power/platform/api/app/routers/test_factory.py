@@ -109,6 +109,7 @@ from ..services.test_factory import evidence_manifest
 from ..services.test_factory import report_formats
 from ..services.test_factory import persona_store
 from ..services.test_factory import persona_diff
+from ..services.test_factory import persona_governance
 from ..services.test_factory import report_store
 from ..services.test_factory import evidence_retention
 from ..services.test_factory.assistant import answer as assistant_answer
@@ -822,6 +823,11 @@ class RunConfigRequest(BaseModel):
     # registry row for the card + (P4) posture.
     persona_id: str = ""
     environment_id: str = ""
+    # Environment governance (P4): does this run intend to MUTATE (submit/write)?
+    # Default True — a regression suite mutates, so a production target is
+    # default-deny unless the environment carries an explicit write authorization.
+    # A read-only verification run sets this False and is allowed on a locked env.
+    mutating: bool = True
 
 
 class SaveVersionRequest(BaseModel):
@@ -3881,6 +3887,72 @@ async def playwright_run(
         if not (body.environment_id or "").strip() else body.environment_id.strip()
     run_id = uuid.uuid4().hex
     reservation_id = ""
+    # ── Environment governance (P4): posture, production default-deny, health ──
+    # The ENVIRONMENT is a governed target regardless of persona. An unregistered
+    # environment resolves to {} ⇒ a default read_write, non-production target
+    # (today's behaviour, byte-identical). A production target is default-deny.
+    async with tenant_scoped_session(tenant_id) as session:
+        governance_env = await persona_store.get_environment(
+            session, tenant_id=tenant_id, artifact_id=artifact_id,
+            environment_id=environment_id) or {}
+    gate = persona_governance.gate_dispatch(
+        governance_env, mutating_requested=bool(body.mutating))
+    posture = gate["posture"]
+    if not gate["allowed"]:
+        return {
+            "run_id": run_id, "status": "blocked",
+            "blocked_reason": gate["attribution"],   # environment_policy
+            "persona_id": persona_id, "environment_id": environment_id,
+            "posture": posture, "detail": " ".join(gate["reasons"]),
+            "note": ("The ENVIRONMENT policy refused this run (production is "
+                     "default-deny, or the environment is in a known-bad health "
+                     "state). This is an environment decision — the application "
+                     "under test is NOT implicated."),
+            "scripts": 0, "excluded_quarantined": excluded_quarantined,
+            "excluded_uncertified_exploratory": excluded_uncertified,
+        }
+    # ── Behavior-class scoping (P4): out-of-class cases refused, never failed ──
+    # A case a structure fork bound to a behavior class (a 5-beneficiary journey a
+    # 2-kid member never walks) does not apply to an out-of-class persona. Such a
+    # case is SKIPPED with a test_scope attribution — never run-and-failed as if
+    # the app broke. Only named personas carry a class; the recording baseline
+    # walks its own journeys by construction.
+    out_of_scope: list[dict] = []
+    if persona_id and not persona_id.startswith("persona0::"):
+        async with tenant_scoped_session(tenant_id) as session:
+            _p = await persona_store.get_persona(
+                session, tenant_id=tenant_id, persona_id=persona_id)
+            scopes = await persona_store.get_case_scopes(
+                session, tenant_id=tenant_id, artifact_id=artifact_id)
+        persona_class = (_p or {}).get("behavior_class", "") if _p else ""
+        if scopes:
+            # a case's stable scenario id is ProductionTestCase.test_id, which
+            # equals FactoryTestCaseRow.test_case_id (the id the scope registry
+            # and the UI use) — see service._row_values ("test_case_id": tc.test_id).
+            req_by_case = {str(getattr(c, "test_id", "") or ""):
+                           scopes.get(str(getattr(c, "test_id", "") or ""), "")
+                           for c in cases}
+            part = persona_governance.partition_suite(req_by_case, persona_class)
+            drop = {o["scenario_id"] for o in part["out_of_scope"]}
+            out_of_scope = part["out_of_scope"]
+            if drop:
+                cases = [c for c in cases
+                         if str(getattr(c, "test_id", "") or "") not in drop]
+            if not cases:
+                return {
+                    "run_id": run_id, "status": "blocked",
+                    "blocked_reason": persona_governance.ATTR_TEST_SCOPE,
+                    "persona_id": persona_id, "environment_id": environment_id,
+                    "behavior_class": persona_class, "posture": posture,
+                    "detail": "; ".join(o["reason"] for o in out_of_scope[:5]),
+                    "note": ("Every requested case belongs to a behavior class this "
+                             "persona is not in. The suite does not apply to this "
+                             "member — skipped as out-of-scope, NOT failed. The "
+                             "application is not implicated."),
+                    "scripts": 0, "out_of_scope": out_of_scope,
+                    "excluded_quarantined": excluded_quarantined,
+                    "excluded_uncertified_exploratory": excluded_uncertified,
+                }
     if persona_id:
         auth_config, login_env = await _persona_auth_bundle(
             request, artifact_id, tenant_id, persona_id, environment_id)
@@ -3967,6 +4039,9 @@ async def playwright_run(
             else ("on" if body.screenshots else "off")),
         # Persona identity tag — the run knows AS WHOM it ran, for the report.
         **({"NEXUS_PERSONA": persona_id} if persona_id else {}),
+        # Environment posture (P4) — the run knows the governance floor it runs
+        # under (read_write | read_only | no_submit); surfaced in the report.
+        "NEXUS_POSTURE": posture,
     }
     await _register_job(run_id, {
         "run_id": run_id, "status": "running", "artifact_id": artifact_id,
@@ -3995,7 +4070,8 @@ async def playwright_run(
         task.add_done_callback(_release)
     return {"run_id": run_id, "status": "running", "scripts": len(cases),
             "target": base_url, "persona_id": persona_id,
-            "environment_id": environment_id,
+            "environment_id": environment_id, "posture": posture,
+            "out_of_scope": out_of_scope,
             "excluded_quarantined": excluded_quarantined,
             "excluded_uncertified_exploratory": excluded_uncertified}
 
@@ -8072,3 +8148,241 @@ async def persona_diff_endpoint(
             "note": ("Member-derived values were written to each persona's answer "
                      "sheet (diff_proven), so a later run asserts the RIGHT value "
                      "per member. Nothing was assumed — differences are observed.")}
+
+
+# ── Environment governance (P4) ──────────────────────────────────────────────
+
+class _EnvironmentBody(BaseModel):
+    label: str = Field("", max_length=120)
+    posture: str = Field("read_write", max_length=16, description="read_write | read_only | no_submit")
+    is_production: bool = False
+    write_authorized: bool = Field(False, description="explicit, revocable authorization to WRITE to production")
+    base_url: str = Field("", max_length=2000)
+    data_epoch: str = Field("", max_length=64)
+
+
+@router.put("/api/v1/test-factory/{artifact_id}/environments/{environment_id}")
+async def put_environment_endpoint(
+    body: _EnvironmentBody,
+    artifact_id: str = PathParam(..., min_length=1, max_length=64),
+    environment_id: str = PathParam(..., min_length=1, max_length=64),
+    user: dict = Depends(get_current_user),
+):
+    """Register/update an environment's governance: posture, the production flag,
+    and (for production) the explicit write authorization. A run inherits this at
+    dispatch — production is default-deny without ``write_authorized``. Editor+."""
+    if not _persona_write_ok(user):
+        raise HTTPException(403, "Configuring an environment requires an editor, manager or admin role.")
+    tenant_id = user["tenant_id"]
+    async with tenant_scoped_session(tenant_id) as session:
+        await _require_artifact(session, artifact_id, tenant_id)
+        out = await persona_store.save_environment(
+            session, tenant_id=tenant_id, artifact_id=artifact_id,
+            environment_id=environment_id, label=body.label, posture=body.posture,
+            is_production=body.is_production, write_authorized=body.write_authorized,
+            base_url=body.base_url, data_epoch=body.data_epoch)
+        await session.commit()
+    await _persona_audit(tenant_id=tenant_id, artifact_id=artifact_id,
+                         actor=user.get("email") or user.get("user_id") or "?",
+                         event_type="environment_configured",
+                         detail=f"env={environment_id} posture={out['posture']} "
+                                f"prod={out['is_production']} write_auth={out['write_authorized']}")
+    return {"status": "saved", "environment_id": environment_id,
+            "effective_posture": persona_governance.effective_posture({
+                "posture": out["posture"], "is_production": out["is_production"]}),
+            **out}
+
+
+@router.get("/api/v1/test-factory/{artifact_id}/environments")
+async def list_environments_endpoint(
+    artifact_id: str = PathParam(..., min_length=1, max_length=64),
+    user: dict = Depends(get_current_user),
+):
+    tenant_id = user["tenant_id"]
+    async with tenant_scoped_session(tenant_id) as session:
+        await _require_artifact(session, artifact_id, tenant_id)
+        envs = await persona_store.list_environments(
+            session, tenant_id=tenant_id, artifact_id=artifact_id)
+    for e in envs:
+        e["effective_posture"] = persona_governance.effective_posture(e)
+    return {"artifact_id": artifact_id, "environments": envs, "count": len(envs)}
+
+
+class _CaseScopeBody(BaseModel):
+    required_behavior_class: str = Field(..., max_length=64,
+                                         description="behavior class this case belongs to; '' clears the binding")
+    evidence: str = Field("editor", max_length=24)
+
+
+@router.put("/api/v1/test-factory/{artifact_id}/cases/{scenario_id}/behavior-class")
+async def bind_case_scope_endpoint(
+    body: _CaseScopeBody,
+    artifact_id: str = PathParam(..., min_length=1, max_length=64),
+    scenario_id: str = PathParam(..., min_length=1, max_length=64),
+    user: dict = Depends(get_current_user),
+):
+    """Bind a case to the behavior class it belongs to. An out-of-class persona is
+    then refused at dispatch (test_scope) — the journey does not apply to that
+    member, so it is skipped, never run-and-failed. Editor+."""
+    if not _persona_write_ok(user):
+        raise HTTPException(403, "Scoping a case requires an editor, manager or admin role.")
+    tenant_id = user["tenant_id"]
+    async with tenant_scoped_session(tenant_id) as session:
+        await _require_artifact(session, artifact_id, tenant_id)
+        await persona_store.bind_case_scope(
+            session, tenant_id=tenant_id, artifact_id=artifact_id, scenario_id=scenario_id,
+            required_behavior_class=body.required_behavior_class.strip(),
+            evidence=body.evidence)
+        await session.commit()
+    return {"status": "bound", "scenario_id": scenario_id,
+            "required_behavior_class": body.required_behavior_class.strip()}
+
+
+class _ScopeFromStructureBody(BaseModel):
+    behavior_class: str = Field(..., min_length=1, max_length=64)
+    forked_scenario_ids: list[str] = Field(..., min_length=1,
+                                           description="cases a structure fork proved belong to this class")
+
+
+@router.post("/api/v1/test-factory/{artifact_id}/scopes/from-structure")
+async def scopes_from_structure_endpoint(
+    body: _ScopeFromStructureBody,
+    artifact_id: str = PathParam(..., min_length=1, max_length=64),
+    user: dict = Depends(get_current_user),
+):
+    """Bulk-bind the cases a P3 structure fork identified to the behavior class
+    that walks them. Turns a proven fork into enforced scoping in one call."""
+    if not _persona_write_ok(user):
+        raise HTTPException(403, "Scoping cases requires an editor, manager or admin role.")
+    tenant_id = user["tenant_id"]
+    bc = body.behavior_class.strip()
+    bound = 0
+    async with tenant_scoped_session(tenant_id) as session:
+        await _require_artifact(session, artifact_id, tenant_id)
+        for sid in body.forked_scenario_ids:
+            sid = str(sid).strip()
+            if not sid:
+                continue
+            await persona_store.bind_case_scope(
+                session, tenant_id=tenant_id, artifact_id=artifact_id, scenario_id=sid,
+                required_behavior_class=bc, evidence="structure_fork")
+            bound += 1
+        await session.commit()
+    return {"status": "bound", "behavior_class": bc, "bound": bound,
+            "note": ("These cases now REFUSE an out-of-class persona at dispatch "
+                     "(test_scope) — proven-fork scoping, never a false red.")}
+
+
+def _probe_url_ok(url: str) -> bool:
+    """Minimal SSRF guard for the reachability probe: http(s) only, and no
+    link-local / cloud-metadata host. base_url is operator-configured, so this is
+    a backstop, not the primary control."""
+    from urllib.parse import urlparse
+    try:
+        u = urlparse(url)
+    except Exception:
+        return False
+    if u.scheme not in ("http", "https") or not u.hostname:
+        return False
+    host = u.hostname.lower()
+    if host in ("169.254.169.254", "metadata", "metadata.google.internal"):
+        return False
+    return True
+
+
+class _EnvHealthBody(BaseModel):
+    base_url: str = Field("", max_length=2000, description="overrides the stored base_url for this probe")
+    persona_id: str = Field("", max_length=64, description="probe login with this persona's card (optional)")
+
+
+@router.post("/api/v1/test-factory/{artifact_id}/environments/{environment_id}/health")
+async def environment_health_endpoint(
+    body: _EnvHealthBody,
+    request: Request,
+    artifact_id: str = PathParam(..., min_length=1, max_length=64),
+    environment_id: str = PathParam(..., min_length=1, max_length=64),
+    user: dict = Depends(get_current_user),
+):
+    """Environment health probe — reachability, and (with a persona) a login probe.
+    This is NOT a re-crawl: it checks the target is up and the recipe still logs
+    in, then stamps the environment. A known-bad environment is refused at
+    dispatch (environment_policy), never blamed on the application. Editor+."""
+    if not _persona_write_ok(user):
+        raise HTTPException(403, "Probing an environment requires an editor, manager or admin role.")
+    tenant_id = user["tenant_id"]
+    async with tenant_scoped_session(tenant_id) as session:
+        await _require_artifact(session, artifact_id, tenant_id)
+        env_row = await persona_store.get_environment(
+            session, tenant_id=tenant_id, artifact_id=artifact_id,
+            environment_id=environment_id) or {}
+    base_url = (body.base_url or env_row.get("base_url") or "").strip()
+    status = "unknown"
+    detail = ""
+    # 1) reachability
+    if base_url:
+        if not _probe_url_ok(base_url):
+            status, detail = "unreachable", "base_url failed the safety guard (scheme/host)"
+        else:
+            try:
+                async with httpx.AsyncClient(follow_redirects=True, timeout=15.0) as client:
+                    r = await client.get(base_url)
+                if r.status_code >= 500:
+                    status, detail = "unreachable", f"reachability GET returned {r.status_code}"
+                else:
+                    status, detail = "healthy", f"reachability GET {r.status_code}"
+            except Exception as exc:
+                status, detail = "unreachable", f"reachability error: {str(exc)[:200]}"
+    else:
+        detail = "no base_url configured — reachability skipped"
+    # 2) optional login probe (reuses the recipe/card probe, honest drift naming)
+    if status in ("healthy", "unknown") and body.persona_id.strip():
+        try:
+            auth_config, login_env = await _persona_auth_bundle(
+                request, artifact_id, tenant_id, body.persona_id.strip(), environment_id)
+            if auth_config:
+                token = _bearer(request)
+                async with tenant_scoped_session(tenant_id) as session:
+                    cases = await factory_service.load_active_production_cases(session, artifact_id=artifact_id)
+                    visits, _ = await factory_service._load_current_pages_and_actions(session, artifact_id=artifact_id)
+                    edited_map = await _active_edited_map(session, artifact_id=artifact_id)
+                carrier = cases[:1]
+                if carrier:
+                    probe_url = base_url or _recorded_origin(visits)
+                    files = _configured_files(
+                        carrier, build_field_meta(visits), probe_url, {},
+                        browsers=["chromium"], headed=False, workers=1, retries=0,
+                        edited=edited_map, storage_state=None, auth_config=auth_config)
+                    run_id = uuid.uuid4().hex
+                    penv = {"NEXUS_ENDPOINT": _INGEST_BASE, "NEXUS_TOKEN": token or "",
+                            "NEXUS_ARTIFACT_ID": artifact_id, "NEXUS_RUN_ID": run_id,
+                            "NEXUS_BASE_URL": probe_url, "NEXUS_ENV": "env-health-probe",
+                            **login_env}
+                    try:
+                        await runner_client.run_suite(files, penv, timeout_ms=120000)
+                    except Exception as exc:
+                        _logger.warning("env_health.probe_runner_err env=%s err=%s", environment_id, str(exc)[:200])
+                    output = str((_RUNNER_JOBS.get(run_id) or {}).get("output") or "")
+                    if "recipe login OK" in output or "form login OK" in output:
+                        status, detail = "healthy", "reachable + login OK"
+                    else:
+                        m = re.search(r"recipe drift at step (\d+) \(([^)]*)\)", output)
+                        if m:
+                            status = "recipe_drift"
+                            detail = f"recipe drift at step {m.group(1)} ({m.group(2)})"
+                        else:
+                            status, detail = "login_failed", "reachable, but login did not confirm"
+        except Exception as exc:
+            _logger.warning("env_health.login_probe_err env=%s err=%s", environment_id, str(exc)[:200])
+    async with tenant_scoped_session(tenant_id) as session:
+        await persona_store.stamp_env_health(
+            session, tenant_id=tenant_id, artifact_id=artifact_id,
+            environment_id=environment_id, health_status=status, health_detail=detail)
+        await session.commit()
+    await _persona_audit(tenant_id=tenant_id, artifact_id=artifact_id,
+                         actor=user.get("email") or user.get("user_id") or "?",
+                         event_type="environment_health_probe",
+                         detail=f"env={environment_id} status={status}")
+    return {"environment_id": environment_id, "health_status": status, "detail": detail,
+            "note": ("A health probe checks the environment is up and the recipe "
+                     "still logs in — it is NOT a re-crawl. A known-bad environment "
+                     "is refused at dispatch, never blamed on the application.")}

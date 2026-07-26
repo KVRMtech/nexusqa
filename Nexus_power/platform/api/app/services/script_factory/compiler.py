@@ -2046,8 +2046,10 @@ export default class VKPowerReporter implements Reporter {
       started_at: this.startedAt,
       completed_at: new Date().toISOString(),
       steps: this.steps,
-      // Persona identity (P2) — WHO the run ran as, for the report's Trust Block.
-      metadata: { persona: process.env.NEXUS_PERSONA || '' },
+      // Persona identity (P2) + environment posture (P4) — WHO the run ran as
+      // and the governance floor it ran under, for the report's Trust Block.
+      metadata: { persona: process.env.NEXUS_PERSONA || '',
+                  posture: process.env.NEXUS_POSTURE || '' },
     };
     try {
       const resp = await fetch(`${base}/api/v1/test-runs/ingest`, {

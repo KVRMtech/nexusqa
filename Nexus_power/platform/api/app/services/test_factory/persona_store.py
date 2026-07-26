@@ -130,6 +130,35 @@ class TpPersonaReservationRow(Base):
     released_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
+class TpEnvironmentRow(Base):
+    __tablename__ = "tp_environments"
+    environment_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    artifact_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    app_id: Mapped[str] = mapped_column(String(64), default="")
+    label: Mapped[str] = mapped_column(String(120), default="")
+    posture: Mapped[str] = mapped_column(String(16), default="read_write")
+    is_production: Mapped[bool] = mapped_column(Boolean, default=False)
+    write_authorized: Mapped[bool] = mapped_column(Boolean, default=False)
+    base_url: Mapped[str] = mapped_column(Text, default="")
+    data_epoch: Mapped[str] = mapped_column(String(64), default="")
+    health_status: Mapped[str] = mapped_column(String(16), default="unknown")
+    health_detail: Mapped[str] = mapped_column(Text, default="")
+    last_health_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utc_now)
+
+
+class TpCaseScopeRow(Base):
+    __tablename__ = "tp_case_scopes"
+    artifact_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    scenario_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    required_behavior_class: Mapped[str] = mapped_column(String(64), default="")
+    evidence: Mapped[str] = mapped_column(String(24), default="structure_fork")
+    detail: Mapped[dict] = mapped_column(JSONB, default=dict)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utc_now)
+
+
 # ── Recipes ──────────────────────────────────────────────────────────────────
 
 async def save_recipe(session: AsyncSession, *, tenant_id: str, artifact_id: str,
@@ -210,9 +239,13 @@ async def save_persona(session: AsyncSession, *, tenant_id: str, artifact_id: st
         .on_conflict_do_update(
             index_elements=[TpPersonaRow.tenant_id, TpPersonaRow.artifact_id, TpPersonaRow.name],
             set_={"description": description, "traits": list(traits or []),
-                  "behavior_class": behavior_class}))
-    await session.execute(stmt)
-    return {"persona_id": pid, "name": name}
+                  "behavior_class": behavior_class})
+        # RETURN the row's ACTUAL persona_id: on a name conflict the stored row
+        # keeps its original id, so the freshly minted pid would be a phantom.
+        # Callers dispatch/scope by this id — it MUST be the persisted one.
+        .returning(TpPersonaRow.persona_id))
+    real_pid = (await session.execute(stmt)).scalar_one()
+    return {"persona_id": real_pid, "name": name}
 
 
 async def get_persona(session: AsyncSession, *, tenant_id: str, persona_id: str) -> dict | None:
@@ -479,6 +512,115 @@ async def expire_stale_reservations(session: AsyncSession, *, tenant_id: str) ->
     return res.rowcount or 0
 
 
+# ── Environments (P4 governance) ─────────────────────────────────────────────
+
+def _env_dict(r) -> dict:
+    return {"environment_id": r.environment_id, "artifact_id": r.artifact_id,
+            "app_id": r.app_id, "label": r.label, "posture": r.posture,
+            "is_production": r.is_production, "write_authorized": r.write_authorized,
+            "base_url": r.base_url, "data_epoch": r.data_epoch,
+            "health_status": r.health_status, "health_detail": r.health_detail,
+            "last_health_at": _iso(r.last_health_at)}
+
+
+async def save_environment(session: AsyncSession, *, tenant_id: str, artifact_id: str,
+                           environment_id: str, label: str = "", posture: str = "read_write",
+                           is_production: bool = False, write_authorized: bool = False,
+                           base_url: str = "", data_epoch: str = "", app_id: str = "") -> dict:
+    """Upsert an environment's governance record. Caller commits."""
+    from .persona_governance import normalize_posture
+    posture = normalize_posture(posture)
+    stmt = (pg_insert(TpEnvironmentRow).values(
+        environment_id=environment_id, artifact_id=artifact_id, tenant_id=tenant_id,
+        app_id=app_id, label=label, posture=posture, is_production=bool(is_production),
+        write_authorized=bool(write_authorized), base_url=base_url,
+        data_epoch=data_epoch, created_at=_utc_now())
+        .on_conflict_do_update(
+            index_elements=[TpEnvironmentRow.environment_id, TpEnvironmentRow.artifact_id,
+                            TpEnvironmentRow.tenant_id],
+            set_={"label": label, "posture": posture, "is_production": bool(is_production),
+                  "write_authorized": bool(write_authorized), "base_url": base_url,
+                  "data_epoch": data_epoch}))
+    await session.execute(stmt)
+    return {"environment_id": environment_id, "posture": posture,
+            "is_production": bool(is_production), "write_authorized": bool(write_authorized)}
+
+
+async def get_environment(session: AsyncSession, *, tenant_id: str, artifact_id: str,
+                          environment_id: str) -> dict | None:
+    """The governance record for one environment, or None (unregistered ⇒ the
+    caller treats it as a default read_write non-production target)."""
+    try:
+        row = (await session.execute(select(TpEnvironmentRow).where(
+            TpEnvironmentRow.environment_id == environment_id,
+            TpEnvironmentRow.artifact_id == artifact_id,
+            TpEnvironmentRow.tenant_id == tenant_id))).scalar_one_or_none()
+    except Exception as exc:
+        logger.debug("persona_store.get_environment_skipped err=%s", exc)
+        return None
+    return _env_dict(row) if row else None
+
+
+async def list_environments(session: AsyncSession, *, tenant_id: str, artifact_id: str) -> list[dict]:
+    try:
+        rows = (await session.execute(select(TpEnvironmentRow).where(
+            TpEnvironmentRow.tenant_id == tenant_id,
+            TpEnvironmentRow.artifact_id == artifact_id)
+            .order_by(TpEnvironmentRow.created_at))).scalars().all()
+    except Exception:
+        return []
+    return [_env_dict(r) for r in rows]
+
+
+async def stamp_env_health(session: AsyncSession, *, tenant_id: str, artifact_id: str,
+                           environment_id: str, health_status: str, health_detail: str = "") -> None:
+    """Record the outcome of a health probe (NOT a re-crawl). Upserts a shell row
+    when the environment was never registered, so a probe result is never lost."""
+    stmt = (pg_insert(TpEnvironmentRow).values(
+        environment_id=environment_id, artifact_id=artifact_id, tenant_id=tenant_id,
+        health_status=health_status, health_detail=(health_detail or "")[:2000],
+        last_health_at=_utc_now(), created_at=_utc_now())
+        .on_conflict_do_update(
+            index_elements=[TpEnvironmentRow.environment_id, TpEnvironmentRow.artifact_id,
+                            TpEnvironmentRow.tenant_id],
+            set_={"health_status": health_status,
+                  "health_detail": (health_detail or "")[:2000],
+                  "last_health_at": _utc_now()}))
+    await session.execute(stmt)
+
+
+# ── Case scopes (behavior-class binding) ─────────────────────────────────────
+
+async def bind_case_scope(session: AsyncSession, *, tenant_id: str, artifact_id: str,
+                          scenario_id: str, required_behavior_class: str,
+                          evidence: str = "structure_fork", detail: dict | None = None) -> None:
+    """Bind a case to the behavior class a structure fork proved it belongs to.
+    An out-of-class persona is later refused at dispatch (test_scope). Caller
+    commits."""
+    stmt = (pg_insert(TpCaseScopeRow).values(
+        artifact_id=artifact_id, tenant_id=tenant_id, scenario_id=scenario_id,
+        required_behavior_class=required_behavior_class, evidence=evidence,
+        detail=dict(detail or {}), updated_at=_utc_now())
+        .on_conflict_do_update(
+            index_elements=[TpCaseScopeRow.artifact_id, TpCaseScopeRow.tenant_id,
+                            TpCaseScopeRow.scenario_id],
+            set_={"required_behavior_class": required_behavior_class,
+                  "evidence": evidence, "detail": dict(detail or {}),
+                  "updated_at": _utc_now()}))
+    await session.execute(stmt)
+
+
+async def get_case_scopes(session: AsyncSession, *, tenant_id: str, artifact_id: str) -> dict[str, str]:
+    """scenario_id → required behavior class ('' = applies to any persona)."""
+    try:
+        rows = (await session.execute(select(TpCaseScopeRow).where(
+            TpCaseScopeRow.artifact_id == artifact_id,
+            TpCaseScopeRow.tenant_id == tenant_id))).scalars().all()
+    except Exception:
+        return {}
+    return {r.scenario_id: r.required_behavior_class for r in rows}
+
+
 # ── Bundle: recipe + card → (auth_config, login_env) ─────────────────────────
 
 def build_persona_bundle(recipe: dict | None, slot_values: dict | None) -> tuple[dict | None, dict]:
@@ -512,12 +654,14 @@ def build_persona_bundle(recipe: dict | None, slot_values: dict | None) -> tuple
 
 __all__ = [
     "TpLoginRecipeRow", "TpPersonaRow", "TpPersonaCredentialRow", "TpPersonaExpectedValueRow",
-    "TpValueClassificationRow", "TpPersonaReservationRow",
+    "TpValueClassificationRow", "TpPersonaReservationRow", "TpEnvironmentRow", "TpCaseScopeRow",
     "save_recipe", "get_recipe", "list_recipes", "stamp_recipe_verified",
     "save_persona", "get_persona", "list_personas", "retire_persona",
     "save_persona_credential", "get_persona_credential", "credential_status",
     "set_expected_value", "get_expected_values",
     "save_classification", "get_classifications",
     "acquire_reservation", "release_reservation", "expire_stale_reservations",
+    "save_environment", "get_environment", "list_environments", "stamp_env_health",
+    "bind_case_scope", "get_case_scopes",
     "build_persona_bundle",
 ]

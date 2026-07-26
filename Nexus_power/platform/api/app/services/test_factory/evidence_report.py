@@ -616,13 +616,17 @@ async def build_report(
             # Persona × Environment (P2): WHO the run ran as. Empty = the
             # artifact's default identity (persona-0 / captured session).
             "persona": str((getattr(run, "metadata_json", None) or {}).get("persona") or ""),
+            # Environment posture (P4): the governance floor the run ran under.
+            "posture": str((getattr(run, "metadata_json", None) or {}).get("posture") or ""),
         }
 
     _persona = str((getattr(run, "metadata_json", None) or {}).get("persona") or "") if run is not None else ""
+    _posture = str((getattr(run, "metadata_json", None) or {}).get("posture") or "") if run is not None else ""
     trust = await build_trust_block(
         session, artifact_id=artifact_id, tenant_id=tenant_id,
         quarantined=quarantined, ungated=ungated, cases=cases,
-        persona_id=_persona, environment=(getattr(run, "environment", "") if run is not None else ""))
+        persona_id=_persona, environment=(getattr(run, "environment", "") if run is not None else ""),
+        posture=_posture)
 
     # ── cross-run derivations (§2.6 defect identity, §2.14 diff) ───────────
     defects = None
@@ -754,7 +758,7 @@ def build_timeline(*, run: Any, step_rows: list, case_names: dict,
 async def build_trust_block(
     session, *, artifact_id: str, tenant_id: str,
     quarantined: dict, ungated: dict, cases: list,
-    persona_id: str = "", environment: str = "",
+    persona_id: str = "", environment: str = "", posture: str = "",
 ) -> dict:
     """§2.0 — the report's opening section and our category differentiator:
     proof that this suite EARNED the right to judge the application."""
@@ -792,7 +796,10 @@ async def build_trust_block(
 
     identity = {"persona_id": persona_id or "default",
                 "login": "fresh-recipe" if persona_id else "default",
-                "environment": environment or ""}
+                "environment": environment or "",
+                # P4 governance floor the run ran under (read_write|read_only|
+                # no_submit). Empty ⇒ an ungoverned target (default read_write).
+                "posture": posture or ""}
     persona_name = ""
     if persona_id and not persona_id.startswith("persona0::"):
         try:
