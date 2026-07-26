@@ -42,13 +42,18 @@ def normalize_posture(posture: str | None) -> str:
 
 
 def effective_posture(env: dict | None) -> str:
-    """The posture a run actually gets. A production environment floors the
-    posture at no_submit even when configured read_write — writing to production
-    requires the explicit gate in :func:`gate_dispatch`, never a bare posture."""
+    """The posture a run actually gets.
+
+    A production environment floors the posture at no_submit — UNLESS an explicit,
+    revocable ``write_authorized`` is on file, in which case the declared posture
+    stands (a client who authorized production writes gets read_write and really
+    does mutate — no dishonest 'no_submit' label over a mutating run). Writing to
+    an unauthorized production env is refused outright by :func:`gate_dispatch`.
+    """
     env = env or {}
     declared = normalize_posture(env.get("posture"))
-    if env.get("is_production"):
-        # production can never be MORE permissive than no_submit via posture alone
+    if env.get("is_production") and not env.get("write_authorized"):
+        # unauthorized production can never be more permissive than no_submit
         return declared if _RANK[declared] >= _RANK[POSTURE_NO_SUBMIT] else POSTURE_NO_SUBMIT
     return declared
 
@@ -59,38 +64,22 @@ def posture_forbids_submit(posture: str) -> bool:
 
 def gate_dispatch(env: dict | None, *, mutating_requested: bool) -> dict:
     """Decide whether a run may proceed against an environment, and under what
-    posture. Production is default-deny.
+    posture. A forbidding posture is ENFORCED here (the run is refused), never a
+    label the compiler ignores.
 
     ``mutating_requested`` — does the caller intend the run to submit/mutate?
-    (A read-only verification suite passes ``False`` and is allowed even on a
-    locked environment.)
+    A read-only verification suite passes ``False`` and is allowed even on a
+    locked environment; a mutating run against a read_only/no_submit environment
+    (or an unauthorized production one) is REFUSED with 0 scripts.
 
     Returns {allowed, posture, attribution, reasons[]}. When not allowed, the
     caller emits ZERO scripts and reports the attribution — never the app.
     """
     env = env or {}
     posture = effective_posture(env)
-    reasons: list[str] = []
     is_prod = bool(env.get("is_production"))
 
-    if is_prod:
-        if not env.get("write_authorized") and mutating_requested:
-            return {
-                "allowed": False, "posture": posture, "attribution": ATTR_ENV_POLICY,
-                "reasons": ["production is default-deny: no write authorization on "
-                            "file for this environment, and the run intends to "
-                            "mutate. This is an environment policy decision, not an "
-                            "application failure."],
-            }
-        reasons.append("production environment — posture floored at "
-                       f"'{posture}'; a mutating step is refused at run time.")
-
-    if mutating_requested and posture_forbids_submit(posture):
-        # allowed to RUN, but submit steps will be fenced; say so plainly.
-        reasons.append(f"environment posture is '{posture}': submit/mutation steps "
-                       "are fenced. Read-only verification proceeds; a mutation is "
-                       "reported UNVERIFIED (fenced), never a false pass.")
-
+    # 1) a known-bad environment is refused regardless of intent.
     if env.get("health_status") in ("unreachable", "login_failed", "recipe_drift"):
         return {
             "allowed": False, "posture": posture, "attribution": ATTR_ENV_POLICY,
@@ -100,8 +89,33 @@ def gate_dispatch(env: dict | None, *, mutating_requested: bool) -> dict:
                         "this is an environment condition, not an app defect."],
         }
 
-    return {"allowed": True, "posture": posture, "attribution": "",
-            "reasons": reasons or [f"environment posture '{posture}'."]}
+    # 2) production default-deny: a mutating run needs explicit write authorization.
+    if is_prod and mutating_requested and not env.get("write_authorized"):
+        return {
+            "allowed": False, "posture": posture, "attribution": ATTR_ENV_POLICY,
+            "reasons": ["production is default-deny: no write authorization on file "
+                        "for this environment, and the run intends to mutate. Run "
+                        "read-only (mutating=false) to verify, or authorize writes. "
+                        "This is an environment policy decision, not an application "
+                        "failure."],
+        }
+
+    # 3) a forbidding posture ENFORCES read-only: a mutating run is refused, not
+    #    silently executed and reported green. (This is the doctrine control that
+    #    used to be a mere label.)
+    if mutating_requested and posture_forbids_submit(posture):
+        return {
+            "allowed": False, "posture": posture, "attribution": ATTR_ENV_POLICY,
+            "reasons": [f"environment posture '{posture}' forbids mutation, and this "
+                        "run intends to submit/mutate. It is REFUSED (0 scripts) — a "
+                        "mutation is never run on a locked environment and reported "
+                        "as a pass. Run read-only (mutating=false) to verify. This "
+                        "is an environment policy decision, not an application failure."],
+        }
+
+    reasons = ([f"production environment, authorized for this run; posture '{posture}'."]
+               if is_prod else [f"environment posture '{posture}'."])
+    return {"allowed": True, "posture": posture, "attribution": "", "reasons": reasons}
 
 
 def scope_case(required_behavior_class: str, persona_behavior_class: str) -> dict:

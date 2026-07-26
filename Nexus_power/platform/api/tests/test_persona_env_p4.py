@@ -4,7 +4,8 @@ scoping, cardinality-driven repetition, and the env health probe.
 Pins the doctrine that a governance decision is NEVER an application failure:
   * production is default-deny — a mutating run is refused unless the environment
     carries an explicit, revocable write authorization (attribution env_policy);
-  * a read-only posture floors the run — a mutation is fenced, never faked pass;
+  * a read_only/no_submit posture ENFORCES read-only — a mutating run is REFUSED
+    (0 scripts, env_policy), never silently executed and reported as a pass;
   * a case a structure fork bound to a behavior class REFUSES an out-of-class
     persona (attribution test_scope) — skipped, never run-and-failed;
   * a cardinality-driven block repeats to THIS persona's proven count, not a
@@ -42,12 +43,20 @@ def test_normalize_posture_defaults_to_read_write():
 
 
 def test_production_floors_posture_at_no_submit():
-    # a production env configured read_write is floored — never bare read_write
+    # an UNAUTHORIZED production env configured read_write is floored — never bare read_write
     assert pg.effective_posture({"posture": "read_write", "is_production": True}) == pg.POSTURE_NO_SUBMIT
     # a stricter production posture is kept
     assert pg.effective_posture({"posture": "read_only", "is_production": True}) == pg.POSTURE_READ_ONLY
     # non-production keeps its declared posture
     assert pg.effective_posture({"posture": "read_write", "is_production": False}) == pg.POSTURE_READ_WRITE
+
+
+def test_authorized_production_is_genuinely_read_write_not_a_no_submit_label():
+    # once writes are authorized the posture is HONEST read_write — the run really
+    # mutates, so we never label a mutating prod run as 'no_submit'.
+    assert pg.effective_posture(
+        {"posture": "read_write", "is_production": True, "write_authorized": True}
+    ) == pg.POSTURE_READ_WRITE
 
 
 # ── production default-deny ───────────────────────────────────────────────────
@@ -64,11 +73,34 @@ def test_production_mutating_run_allowed_with_authorization():
         {"is_production": True, "posture": "read_write", "write_authorized": True},
         mutating_requested=True)
     assert d["allowed"] is True
+    assert d["posture"] == pg.POSTURE_READ_WRITE   # honest: it really mutates
 
 
 def test_production_read_only_run_allowed_without_authorization():
     # a NON-mutating verification suite is allowed even on locked production
     d = pg.gate_dispatch({"is_production": True, "posture": "read_only"}, mutating_requested=False)
+    assert d["allowed"] is True
+
+
+# ── posture is ENFORCED, not a label ─────────────────────────────────────────
+
+def test_read_only_env_refuses_a_mutating_run_not_a_label():
+    # the doctrine control: a mutating run on a read_only env is REFUSED with 0
+    # scripts, never silently executed and reported green.
+    d = pg.gate_dispatch({"posture": "read_only", "is_production": False}, mutating_requested=True)
+    assert d["allowed"] is False
+    assert d["attribution"] == pg.ATTR_ENV_POLICY
+    assert "forbids mutation" in d["reasons"][0]
+
+
+def test_no_submit_env_refuses_a_mutating_run():
+    d = pg.gate_dispatch({"posture": "no_submit", "is_production": False}, mutating_requested=True)
+    assert d["allowed"] is False
+    assert d["attribution"] == pg.ATTR_ENV_POLICY
+
+
+def test_read_only_env_allows_a_read_only_verification_run():
+    d = pg.gate_dispatch({"posture": "read_only", "is_production": False}, mutating_requested=False)
     assert d["allowed"] is True
 
 
