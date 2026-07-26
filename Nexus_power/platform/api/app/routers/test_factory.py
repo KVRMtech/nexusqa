@@ -106,6 +106,7 @@ from ..services.test_factory import report_html
 from ..services.test_factory import report_export
 from ..services.test_factory import evidence_manifest
 from ..services.test_factory import report_formats
+from ..services.test_factory import persona_store
 from ..services.test_factory import report_store
 from ..services.test_factory import evidence_retention
 from ..services.test_factory.assistant import answer as assistant_answer
@@ -7410,3 +7411,236 @@ async def execution_report_format(
                 f"flow:{flow} type:{test_type} q:{'yes' if search else 'no'}"))
     return Response(content=blob, media_type=media,
                     headers={"Content-Disposition": f'attachment; filename="{name}"'})
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Persona × Environment Matrix — registries (P0). RUN = Suite × Env × Persona.
+# ═══════════════════════════════════════════════════════════════════════════
+
+def _persona_write_ok(user: dict) -> bool:
+    return (user.get("role") or "viewer").lower() in ("admin", "manager", "editor")
+
+
+async def _persona_audit(*, tenant_id: str, artifact_id: str, actor: str,
+                         event_type: str, detail: str) -> None:
+    try:
+        async with tenant_scoped_session(tenant_id) as session:
+            await heal_evidence.record_heal_event(
+                session, tenant_id=tenant_id, artifact_id=artifact_id,
+                event_type=event_type, actor=actor or "unknown", scenario_id="",
+                step_number=0, engine_verdict="", verified_green=False,
+                reason_for_change=(detail or "")[:500])
+            await session.commit()
+    except Exception as exc:
+        _logger.warning("persona.audit_failed artifact=%s type=%s err=%s",
+                        artifact_id, event_type, str(exc)[:200])
+
+
+class _PersonaBody(BaseModel):
+    name: str = Field(..., min_length=1, max_length=120)
+    description: str = Field("", max_length=2000)
+    traits: list[str] = Field(default_factory=list)
+    behavior_class: str = Field("", max_length=64)
+
+
+class _RecipeBody(BaseModel):
+    steps: list[dict] = Field(..., min_length=1)
+    slots: list[dict] = Field(default_factory=list)
+    source: str = Field("recorded", max_length=24)
+
+
+class _CredentialBody(BaseModel):
+    slot_values: dict[str, str] = Field(..., description="slot name -> secret value")
+
+
+class _ExpectedValuesBody(BaseModel):
+    values: dict[str, str] = Field(..., description="value_key -> expected value")
+
+
+@router.get("/api/v1/test-factory/{artifact_id}/personas")
+async def list_personas_endpoint(
+    artifact_id: str = PathParam(..., min_length=1, max_length=64),
+    traits: str | None = Query(None, description="comma-separated trait filter"),
+    user: dict = Depends(get_current_user),
+):
+    """Personas defined for this artifact (+ a synthetic 'default' persona-0 when
+    a legacy form-login exists, so every current client already has one)."""
+    tenant_id = user["tenant_id"]
+    tlist = [t.strip() for t in (traits or "").split(",") if t.strip()] or None
+    async with tenant_scoped_session(tenant_id) as session:
+        await _require_artifact(session, artifact_id, tenant_id)
+        personas = await persona_store.list_personas(
+            session, tenant_id=tenant_id, artifact_id=artifact_id, traits=tlist)
+    return {"artifact_id": artifact_id, "personas": personas, "count": len(personas)}
+
+
+@router.post("/api/v1/test-factory/{artifact_id}/personas")
+async def create_persona_endpoint(
+    body: _PersonaBody,
+    artifact_id: str = PathParam(..., min_length=1, max_length=64),
+    user: dict = Depends(get_current_user),
+):
+    if not _persona_write_ok(user):
+        raise HTTPException(403, "Defining a persona requires an editor, manager or admin role.")
+    tenant_id = user["tenant_id"]
+    async with tenant_scoped_session(tenant_id) as session:
+        await _require_artifact(session, artifact_id, tenant_id)
+        out = await persona_store.save_persona(
+            session, tenant_id=tenant_id, artifact_id=artifact_id, name=body.name,
+            description=body.description, traits=body.traits,
+            behavior_class=body.behavior_class)
+        await session.commit()
+    await _persona_audit(tenant_id=tenant_id, artifact_id=artifact_id,
+                         actor=user.get("email") or user.get("user_id") or "?",
+                         event_type="persona_defined", detail=f"name={body.name}")
+    return out
+
+
+@router.post("/api/v1/test-factory/{artifact_id}/personas/{persona_id}/retire")
+async def retire_persona_endpoint(
+    artifact_id: str = PathParam(..., min_length=1, max_length=64),
+    persona_id: str = PathParam(..., min_length=1, max_length=64),
+    user: dict = Depends(get_current_user),
+):
+    if not _persona_write_ok(user):
+        raise HTTPException(403, "Retiring a persona requires an editor, manager or admin role.")
+    tenant_id = user["tenant_id"]
+    async with tenant_scoped_session(tenant_id) as session:
+        await _require_artifact(session, artifact_id, tenant_id)
+        await persona_store.retire_persona(session, tenant_id=tenant_id, persona_id=persona_id)
+        await session.commit()
+    return {"retired": True, "persona_id": persona_id}
+
+
+@router.put("/api/v1/test-factory/{artifact_id}/personas/{persona_id}/credentials/{environment_id}")
+async def set_persona_credential_endpoint(
+    body: _CredentialBody,
+    request: Request,
+    artifact_id: str = PathParam(..., min_length=1, max_length=64),
+    persona_id: str = PathParam(..., min_length=1, max_length=64),
+    environment_id: str = PathParam(..., min_length=1, max_length=64),
+    user: dict = Depends(get_current_user),
+):
+    """Store a persona's credential card for one environment (write-only —
+    slot NAMES are returned, values never). Secrets are envelope-encrypted."""
+    if not _persona_write_ok(user):
+        raise HTTPException(403, "Storing credentials requires an editor, manager or admin role.")
+    tenant_id = user["tenant_id"]
+    envelope = getattr(request.app.state, "envelope_service", None)
+    if envelope is None:
+        raise HTTPException(503, "encryption unavailable — cannot store credentials securely")
+    async with tenant_scoped_session(tenant_id) as session:
+        await _require_artifact(session, artifact_id, tenant_id)
+        try:
+            out = await persona_store.save_persona_credential(
+                session, envelope=envelope, tenant_id=tenant_id, persona_id=persona_id,
+                environment_id=environment_id, slot_values=body.slot_values)
+        except (ValueError, RuntimeError) as exc:
+            raise HTTPException(422, str(exc))
+        await session.commit()
+    await _persona_audit(tenant_id=tenant_id, artifact_id=artifact_id,
+                         actor=user.get("email") or user.get("user_id") or "?",
+                         event_type="persona_credential_set",
+                         detail=f"persona={persona_id} env={environment_id} slots={out['slot_names']}")
+    return {"status": "saved", **out}
+
+
+@router.get("/api/v1/test-factory/{artifact_id}/personas/{persona_id}/credentials/{environment_id}/status")
+async def persona_credential_status_endpoint(
+    artifact_id: str = PathParam(..., min_length=1, max_length=64),
+    persona_id: str = PathParam(..., min_length=1, max_length=64),
+    environment_id: str = PathParam(..., min_length=1, max_length=64),
+    user: dict = Depends(get_current_user),
+):
+    tenant_id = user["tenant_id"]
+    async with tenant_scoped_session(tenant_id) as session:
+        await _require_artifact(session, artifact_id, tenant_id)
+        st = await persona_store.credential_status(
+            session, tenant_id=tenant_id, persona_id=persona_id, environment_id=environment_id)
+    return st
+
+
+@router.put("/api/v1/test-factory/{artifact_id}/personas/{persona_id}/expected-values/{environment_id}")
+async def set_expected_values_endpoint(
+    body: _ExpectedValuesBody,
+    artifact_id: str = PathParam(..., min_length=1, max_length=64),
+    persona_id: str = PathParam(..., min_length=1, max_length=64),
+    environment_id: str = PathParam(..., min_length=1, max_length=64),
+    user: dict = Depends(get_current_user),
+):
+    if not _persona_write_ok(user):
+        raise HTTPException(403, "Setting expected values requires an editor, manager or admin role.")
+    tenant_id = user["tenant_id"]
+    async with tenant_scoped_session(tenant_id) as session:
+        await _require_artifact(session, artifact_id, tenant_id)
+        for k, v in body.values.items():
+            await persona_store.set_expected_value(
+                session, tenant_id=tenant_id, persona_id=persona_id,
+                environment_id=environment_id, value_key=k, expected_value=v)
+        await session.commit()
+    return {"status": "saved", "count": len(body.values)}
+
+
+@router.get("/api/v1/test-factory/{artifact_id}/personas/{persona_id}/expected-values/{environment_id}")
+async def get_expected_values_endpoint(
+    artifact_id: str = PathParam(..., min_length=1, max_length=64),
+    persona_id: str = PathParam(..., min_length=1, max_length=64),
+    environment_id: str = PathParam(..., min_length=1, max_length=64),
+    user: dict = Depends(get_current_user),
+):
+    tenant_id = user["tenant_id"]
+    async with tenant_scoped_session(tenant_id) as session:
+        await _require_artifact(session, artifact_id, tenant_id)
+        vals = await persona_store.get_expected_values(
+            session, tenant_id=tenant_id, persona_id=persona_id, environment_id=environment_id)
+    return {"values": vals, "count": len(vals)}
+
+
+@router.get("/api/v1/test-factory/{artifact_id}/recipes")
+async def list_recipes_endpoint(
+    artifact_id: str = PathParam(..., min_length=1, max_length=64),
+    user: dict = Depends(get_current_user),
+):
+    tenant_id = user["tenant_id"]
+    async with tenant_scoped_session(tenant_id) as session:
+        await _require_artifact(session, artifact_id, tenant_id)
+        recipes = await persona_store.list_recipes(
+            session, tenant_id=tenant_id, artifact_id=artifact_id)
+    return {"artifact_id": artifact_id, "recipes": recipes, "count": len(recipes)}
+
+
+@router.post("/api/v1/test-factory/{artifact_id}/recipes")
+async def create_recipe_endpoint(
+    body: _RecipeBody,
+    artifact_id: str = PathParam(..., min_length=1, max_length=64),
+    user: dict = Depends(get_current_user),
+):
+    """Store a login recipe (steps + named slots). Usually produced by the crawl;
+    this endpoint also allows an explicit re-record."""
+    if not _persona_write_ok(user):
+        raise HTTPException(403, "Storing a recipe requires an editor, manager or admin role.")
+    tenant_id = user["tenant_id"]
+    async with tenant_scoped_session(tenant_id) as session:
+        await _require_artifact(session, artifact_id, tenant_id)
+        out = await persona_store.save_recipe(
+            session, tenant_id=tenant_id, artifact_id=artifact_id,
+            steps=body.steps, slots=body.slots, source=body.source)
+        await session.commit()
+    await _persona_audit(tenant_id=tenant_id, artifact_id=artifact_id,
+                         actor=user.get("email") or user.get("user_id") or "?",
+                         event_type="login_recipe_saved",
+                         detail=f"version={out['version']}")
+    return {"status": "saved", **out}
+
+
+@router.get("/api/v1/test-factory/{artifact_id}/classifications")
+async def get_classifications_endpoint(
+    artifact_id: str = PathParam(..., min_length=1, max_length=64),
+    user: dict = Depends(get_current_user),
+):
+    tenant_id = user["tenant_id"]
+    async with tenant_scoped_session(tenant_id) as session:
+        await _require_artifact(session, artifact_id, tenant_id)
+        cls = await persona_store.get_classifications(
+            session, tenant_id=tenant_id, artifact_id=artifact_id)
+    return {"artifact_id": artifact_id, "classifications": cls, "count": len(cls)}
