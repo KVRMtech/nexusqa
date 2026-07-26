@@ -22,7 +22,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import (
-    Boolean, DateTime, Integer, LargeBinary, String, Text, and_, select, update,
+    Boolean, DateTime, Integer, LargeBinary, String, Text, and_, func, select, update,
 )
 from sqlalchemy.dialects.postgresql import JSONB, insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -503,6 +503,68 @@ async def all_credential_status(session: AsyncSession, *, tenant_id: str,
     return out
 
 
+async def _artifact_persona_ids(session: AsyncSession, *, tenant_id: str,
+                                artifact_id: str) -> set[str]:
+    rows = (await session.execute(select(TpPersonaRow.persona_id).where(
+        TpPersonaRow.tenant_id == tenant_id,
+        TpPersonaRow.artifact_id == artifact_id))).scalars().all()
+    return set(rows)
+
+
+async def rotate_cards(session: AsyncSession, *, envelope, tenant_id: str,
+                       artifact_id: str) -> dict:
+    """Secret rotation (P5 ops): re-encrypt every card of an artifact's personas
+    so the CURRENT envelope key wraps them. Decrypt-then-encrypt in place; the
+    plaintext is never returned or logged. Caller commits. Idempotent (re-wrapping
+    identical plaintext is safe)."""
+    if envelope is None:
+        raise RuntimeError("encryption unavailable — refusing to rotate credentials")
+    pids = await _artifact_persona_ids(session, tenant_id=tenant_id, artifact_id=artifact_id)
+    rotated = 0
+    failed = 0
+    rows = (await session.execute(select(TpPersonaCredentialRow).where(
+        TpPersonaCredentialRow.tenant_id == tenant_id))).scalars().all()
+    for r in rows:
+        if r.persona_id not in pids:
+            continue
+        aad = _card_aad(r.persona_id, r.environment_id)
+        try:
+            blob = EnvelopeBlob.from_bytes(bytes(r.blob))
+            plaintext = await envelope.decrypt(tenant_id, blob, expected_aad=aad)
+            fresh = await envelope.encrypt(tenant_id, plaintext, aad=aad)
+            r.blob = fresh.to_bytes()
+            rotated += 1
+        except Exception as exc:
+            failed += 1
+            logger.warning("persona_store.rotate_card_failed persona=%s env=%s err=%s",
+                           r.persona_id, r.environment_id, str(exc)[:200])
+    return {"rotated": rotated, "failed": failed}
+
+
+async def flag_stale_cards(session: AsyncSession, *, tenant_id: str, artifact_id: str,
+                           environment_id: str, current_epoch: str) -> dict:
+    """Staleness sweep (P5 ops): when an environment's data epoch rolls, mark every
+    card that was verified against an OLDER epoch back to ``unverified`` so the next
+    run must re-prove it before it is trusted. The honest 'env refresh ⇒ cards
+    stale' half of the scheduler; re-validation itself happens at the next run's
+    preflight (which re-stamps the card). Caller commits."""
+    epoch = str(current_epoch or "")
+    pids = await _artifact_persona_ids(session, tenant_id=tenant_id, artifact_id=artifact_id)
+    rows = (await session.execute(select(TpPersonaCredentialRow).where(
+        TpPersonaCredentialRow.tenant_id == tenant_id,
+        TpPersonaCredentialRow.environment_id == environment_id))).scalars().all()
+    flagged = []
+    for r in rows:
+        if r.persona_id not in pids:
+            continue
+        prev = getattr(r, "verified_epoch", "") or ""
+        if r.verify_status == "verified" and epoch and prev and prev != epoch:
+            r.verify_status = "unverified"
+            flagged.append(r.persona_id)
+    return {"flagged": flagged, "flagged_count": len(flagged),
+            "environment_id": environment_id, "current_epoch": epoch}
+
+
 # ── Answer sheets ────────────────────────────────────────────────────────────
 
 async def set_expected_value(session: AsyncSession, *, tenant_id: str, persona_id: str,
@@ -609,6 +671,19 @@ async def expire_stale_reservations(session: AsyncSession, *, tenant_id: str) ->
         TpPersonaReservationRow.released_at.is_(None),
         TpPersonaReservationRow.expires_at < _utc_now()).values(released_at=_utc_now()))
     return res.rowcount or 0
+
+
+async def count_live_reservations(session: AsyncSession, *, tenant_id: str) -> int:
+    """Live (unreleased) reservations for a tenant, after expiring stale holds —
+    the P5 per-tenant concurrency cap reads this at dispatch."""
+    await expire_stale_reservations(session, tenant_id=tenant_id)
+    try:
+        n = (await session.execute(select(func.count()).select_from(TpPersonaReservationRow).where(
+            TpPersonaReservationRow.tenant_id == tenant_id,
+            TpPersonaReservationRow.released_at.is_(None)))).scalar_one()
+    except Exception:
+        return 0
+    return int(n or 0)
 
 
 # ── Environments (P4 governance) ─────────────────────────────────────────────
@@ -758,10 +833,11 @@ __all__ = [
     "ensure_baseline_from_form_login",
     "save_persona", "get_persona", "list_personas", "retire_persona",
     "save_persona_credential", "get_persona_credential", "credential_status",
-    "stamp_card_verified", "all_credential_status",
+    "stamp_card_verified", "all_credential_status", "rotate_cards", "flag_stale_cards",
     "set_expected_value", "get_expected_values",
     "save_classification", "get_classifications",
     "acquire_reservation", "release_reservation", "expire_stale_reservations",
+    "count_live_reservations",
     "save_environment", "get_environment", "list_environments", "stamp_env_health",
     "bind_case_scope", "get_case_scopes",
     "build_persona_bundle",

@@ -3987,6 +3987,29 @@ async def playwright_run(
                           "never fabricates a session. This is NOT an application failure.",
             })
         # Reserve the persona so two runs never mutate the same member at once.
+        # P5 ops: a per-tenant live-reservation CAP bounds concurrent persona runs
+        # so one tenant cannot exhaust the runner fleet. Default 50, override with
+        # NEXUS_PERSONA_RESERVATION_CAP.
+        try:
+            _resv_cap = int(os.getenv("NEXUS_PERSONA_RESERVATION_CAP", "50"))
+        except ValueError:
+            _resv_cap = 50
+        async with tenant_scoped_session(tenant_id) as session:
+            _live = await persona_store.count_live_reservations(session, tenant_id=tenant_id)
+            await session.commit()
+        if _resv_cap > 0 and _live >= _resv_cap:
+            return {
+                "run_id": run_id, "status": "blocked",
+                "blocked_reason": "tenant_capacity",
+                "persona_id": persona_id, "environment_id": environment_id,
+                "detail": f"{_live} persona runs already in flight for this tenant "
+                          f"(cap {_resv_cap}). Retry when one finishes.",
+                "note": ("A per-tenant concurrency cap deferred this run so the "
+                         "runner fleet stays fair. This is a capacity decision, "
+                         "not an application failure."),
+                "scripts": 0, "excluded_quarantined": excluded_quarantined,
+                "excluded_uncertified_exploratory": excluded_uncertified,
+            }
         async with tenant_scoped_session(tenant_id) as session:
             reservation_id = await persona_store.acquire_reservation(
                 session, tenant_id=tenant_id, persona_id=persona_id,
@@ -8579,11 +8602,13 @@ async def bulk_import_credentials_endpoint(
 @router.get("/api/v1/test-factory/{artifact_id}/credentials/manifest")
 async def credentials_manifest_endpoint(
     artifact_id: str = PathParam(..., min_length=1, max_length=64),
+    export: bool = Query(False, description="mark a deliberate export (audit-logged); a plain view is not"),
     user: dict = Depends(get_current_user),
 ):
     """The NON-SECRET provisioning grid: every persona×environment card, its slot
     NAMES (never values), verify status + epoch. Export this to see what is
-    provisioned and what is missing — secrets never leave the envelope."""
+    provisioned and what is missing — secrets never leave the envelope. A
+    deliberate ``export=true`` is redacted AND audit-logged (P5 ops)."""
     tenant_id = user["tenant_id"]
     async with tenant_scoped_session(tenant_id) as session:
         await _require_artifact(session, artifact_id, tenant_id)
@@ -8594,9 +8619,83 @@ async def credentials_manifest_endpoint(
     pname = {p["persona_id"]: p["name"] for p in personas}
     for c in cards:
         c["persona_name"] = pname.get(c["persona_id"], "")
+    if export:
+        await _persona_audit(tenant_id=tenant_id, artifact_id=artifact_id,
+                             actor=user.get("email") or user.get("user_id") or "?",
+                             event_type="credentials_manifest_exported",
+                             detail=f"cards={len(cards)} personas={len(personas)}")
     return {"artifact_id": artifact_id, "personas": len(personas),
-            "cards": cards, "card_count": len(cards),
+            "cards": cards, "card_count": len(cards), "exported": bool(export),
             "note": "Slot NAMES only — a credential value never leaves the envelope."}
+
+
+@router.post("/api/v1/test-factory/{artifact_id}/credentials/rotate")
+async def rotate_credentials_endpoint(
+    request: Request,
+    artifact_id: str = PathParam(..., min_length=1, max_length=64),
+    user: dict = Depends(get_current_user),
+):
+    """Secret rotation (P5 ops): re-encrypt every persona card of this artifact so
+    the CURRENT envelope key wraps them (after a key roll). Decrypt-then-encrypt in
+    place; no plaintext is returned or logged. Admin/manager only."""
+    if (user.get("role") or "viewer").lower() not in ("admin", "manager"):
+        raise HTTPException(403, "Rotating credentials requires an admin or manager role.")
+    tenant_id = user["tenant_id"]
+    envelope = getattr(request.app.state, "envelope_service", None)
+    if envelope is None:
+        raise HTTPException(503, "encryption unavailable — cannot rotate credentials")
+    async with tenant_scoped_session(tenant_id) as session:
+        await _require_artifact(session, artifact_id, tenant_id)
+        out = await persona_store.rotate_cards(
+            session, envelope=envelope, tenant_id=tenant_id, artifact_id=artifact_id)
+        await session.commit()
+    await _persona_audit(tenant_id=tenant_id, artifact_id=artifact_id,
+                         actor=user.get("email") or user.get("user_id") or "?",
+                         event_type="credentials_rotated",
+                         detail=f"rotated={out.get('rotated')} failed={out.get('failed')}")
+    return {"artifact_id": artifact_id, **out,
+            "note": "Cards re-wrapped under the current envelope key. No secret was exposed."}
+
+
+class _StalenessSweepBody(BaseModel):
+    data_epoch: str = Field("", max_length=64,
+                            description="the environment's NEW data epoch; defaults to the stored one")
+
+
+@router.post("/api/v1/test-factory/{artifact_id}/environments/{environment_id}/staleness/sweep")
+async def staleness_sweep_endpoint(
+    body: _StalenessSweepBody,
+    artifact_id: str = PathParam(..., min_length=1, max_length=64),
+    environment_id: str = PathParam(..., min_length=1, max_length=64),
+    user: dict = Depends(get_current_user),
+):
+    """Staleness sweep (P5 ops): when an environment's data epoch rolls, flag every
+    card verified against an OLDER epoch back to unverified, so the next run must
+    re-prove it before it is trusted. Idempotent. An external scheduler calls this
+    after a data refresh; re-validation itself happens at the next run's preflight.
+    Editor+."""
+    if not _persona_write_ok(user):
+        raise HTTPException(403, "Sweeping staleness requires an editor, manager or admin role.")
+    tenant_id = user["tenant_id"]
+    async with tenant_scoped_session(tenant_id) as session:
+        await _require_artifact(session, artifact_id, tenant_id)
+        env = await persona_store.get_environment(
+            session, tenant_id=tenant_id, artifact_id=artifact_id,
+            environment_id=environment_id) or {}
+        epoch = (body.data_epoch or "").strip() or str(env.get("data_epoch") or "")
+        out = await persona_store.flag_stale_cards(
+            session, tenant_id=tenant_id, artifact_id=artifact_id,
+            environment_id=environment_id, current_epoch=epoch)
+        await session.commit()
+    if out.get("flagged_count"):
+        await _persona_audit(tenant_id=tenant_id, artifact_id=artifact_id,
+                             actor=user.get("email") or user.get("user_id") or "?",
+                             event_type="cards_flagged_stale",
+                             detail=f"env={environment_id} epoch={epoch} flagged={out['flagged_count']}")
+    return {"artifact_id": artifact_id, **out,
+            "note": ("Cards proven against an older epoch are now unverified; the "
+                     "next run re-proves them before trusting a member value. A stale "
+                     "card is a signal, never a silent pass.")}
 
 
 @router.get("/api/v1/test-factory/{artifact_id}/personas/ops/summary")
