@@ -722,6 +722,14 @@ class FactoryApiClient {
     return `/trace/index.html?trace=${encodeURIComponent(abs)}`;
   }
 
+  /** Personas defined for this artifact (+ the synthetic 'default' persona-0). */
+  async listPersonas(artifactId: string, traits?: string): Promise<any> {
+    const { data } = await this.client.get(
+      `/v1/test-factory/${artifactId}/personas`,
+      { params: traits ? { traits } : {} });
+    return data;
+  }
+
   /** §2.18 — the Needs-Review QUEUE, joined with recorded dispositions. */
   async getReviewQueue(artifactId: string, includeResolved = false): Promise<any> {
     const { data } = await this.client.get(

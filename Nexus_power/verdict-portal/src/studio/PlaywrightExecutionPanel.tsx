@@ -793,6 +793,17 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
   const [histData, setHistData] = useState<Record<string, any[]>>({});
   const [histBusy, setHistBusy] = useState<string>('');
   const [baseUrl, setBaseUrl] = useState('');
+  // Persona × Environment (P2): run AS a declared member. '' = the artifact's
+  // default identity. environmentId names the registry row for the card.
+  const [personaId, setPersonaId] = useState('');
+  const [environmentId, setEnvironmentId] = useState('uat');
+  const [personas, setPersonas] = useState<any[]>([]);
+  useEffect(() => {
+    let alive = true;
+    api.listPersonas(artifactId).then((r) => { if (alive) setPersonas(r?.personas || []); })
+      .catch(() => { if (alive) setPersonas([]); });
+    return () => { alive = false; };
+  }, [artifactId]);
   const [dataOverrides, setDataOverrides] = useState<Record<string, string>>({});
   const [runBusy, setRunBusy] = useState(false);
   const [runStatus, setRunStatus] = useState<any>(null);
@@ -1262,6 +1273,8 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
       };
       if (scope?.test_ids) body.test_ids = scope.test_ids;
       else body.categories = Array.from(selectedCats);
+      // Persona × Environment: run AS a member (empty = default identity).
+      if (personaId) { body.persona_id = personaId; body.environment_id = environmentId; }
       const r = await api.startNexusRun(artifactId, body);
       setRunStatus({ run_id: r.run_id, status: r.status, target: r.target, scripts: r.scripts });
       for (let i = 0; i < 160; i++) {
@@ -1823,6 +1836,29 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
                 <input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)}
                   placeholder="https://staging.your-app.com"
                   className="flex-1 min-w-0 rounded-md border border-slate-200 px-2.5 py-1.5 text-[12px] font-mono text-slate-700 focus:outline-none focus:border-nexus-300" />
+              </div>
+              {/* Run as… (persona) + environment for the credential card */}
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                <span className="text-[10px] font-bold uppercase text-nexus-500">Run as</span>
+                <select value={personaId} onChange={(e) => setPersonaId(e.target.value)}
+                  className="rounded-md border border-slate-200 px-2 py-1 text-[12px] text-slate-700">
+                  <option value="">Default identity (persona-0)</option>
+                  {personas.filter((p) => !p.legacy).map((p) => (
+                    <option key={p.persona_id} value={p.persona_id}>
+                      {p.name}{p.behavior_class ? ` · ${p.behavior_class}` : ''}
+                    </option>
+                  ))}
+                </select>
+                {personaId && (
+                  <input value={environmentId} onChange={(e) => setEnvironmentId(e.target.value)}
+                    placeholder="environment id (e.g. uat)"
+                    className="w-40 rounded-md border border-slate-200 px-2 py-1 text-[12px] text-slate-700" />
+                )}
+                {personaId && (
+                  <span className="text-[10px] text-slate-400">
+                    logs in fresh as this member; the run is BLOCKED (not failed) if the member can't sign in
+                  </span>
+                )}
               </div>
               {data.recorded_base_url && (
                 <p className="text-[10px] text-slate-400 mt-1">

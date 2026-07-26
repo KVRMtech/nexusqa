@@ -815,6 +815,12 @@ class RunConfigRequest(BaseModel):
     video: bool = True
     screenshots: bool = True
     screenshot_mode: str = "on"        # on | only-on-failure | off
+    # Persona × Environment (P2): run AS a declared member, resolved to a
+    # recipe + credential card at dispatch. Empty ⇒ today's behaviour (the
+    # artifact's form-login / captured session). environment_id names the
+    # registry row for the card + (P4) posture.
+    persona_id: str = ""
+    environment_id: str = ""
 
 
 class SaveVersionRequest(BaseModel):
@@ -1100,6 +1106,45 @@ async def _persona_auth_bundle(request, artifact_id: str, tenant_id: str,
         return auth_profiles.build_form_login_bundle(card)
     # a persona with no recipe and no legacy card cannot log in — honest None
     return None, {}
+
+
+async def _persona_preflight(request, artifact_id: str, tenant_id: str, cases,
+                             visits, edited_map, base_url: str,
+                             auth_config: dict, login_env: dict, token: str) -> dict:
+    """Prove a persona can log in BEFORE running the suite. Runs ONE carrier test
+    headless and reads the runner's login log. Returns {ok, detail}. A failure
+    here is a TEST-DATA block (dead member / recipe drift), never app-blame."""
+    carrier = cases[:1]
+    if not carrier:
+        return {"ok": False, "detail": "no carrier test available for preflight"}
+    files = _configured_files(
+        carrier, build_field_meta(visits), base_url, {},
+        browsers=["chromium"], headed=False, workers=1, retries=0,
+        edited=edited_map, storage_state=None, auth_config=auth_config)
+    pf_run = uuid.uuid4().hex
+    env = {
+        "NEXUS_ENDPOINT": _INGEST_BASE, "NEXUS_TOKEN": token or "",
+        "NEXUS_ARTIFACT_ID": artifact_id, "NEXUS_RUN_ID": pf_run,
+        "NEXUS_BASE_URL": base_url, "NEXUS_ENV": "persona-preflight",
+        "NEXUS_VIDEO": "off", "NEXUS_SCREENSHOT": "off",
+        **login_env,
+    }
+    try:
+        res = await runner_client.run_suite(files, env, timeout_ms=90000)
+    except Exception as exc:
+        return {"ok": False, "detail": f"preflight runner error: {exc}"}
+    output = str((_RUNNER_JOBS.get(pf_run) or {}).get("output") or "")
+    if not output:
+        try:
+            output = str((res or {}).get("output") or "")
+        except Exception:
+            output = ""
+    ok = ("recipe login OK" in output) or ("form login OK" in output)
+    detail = "login confirmed" if ok else "login not confirmed"
+    m = re.search(r"recipe drift at step (\d+) \(([^)]*)\)", output)
+    if m:
+        detail = f"recipe drift at step {m.group(1)} ({m.group(2)})"
+    return {"ok": ok, "detail": detail}
 
 # Transient run status for the live "running -> done" indicator. The durable
 # record is the ingested run (triage board); this only drives the UI spinner, so
@@ -3826,7 +3871,66 @@ async def playwright_run(
     if body.env_context and body.env_context.get("base_url"):
         base_url = str(body.env_context["base_url"]).strip()  # env profile base_url wins (SSRF-guarded)
     storage_state = await _run_storage_state(request, artifact_id, tenant_id)
-    auth_config, login_env = await _run_form_login(request, artifact_id, tenant_id)
+    # Persona × Environment (P2): a NAMED persona resolves to a recipe + card and
+    # the run authenticates AS that member. Absent ⇒ the form-login path exactly
+    # as before. Identity is a DECLARED input, never an ambient session.
+    persona_id = (body.persona_id or "").strip()
+    environment_id = (body.environment_id or body.env_context and
+                      str((body.env_context or {}).get("environment_id") or "") or "").strip() \
+        if not (body.environment_id or "").strip() else body.environment_id.strip()
+    run_id = uuid.uuid4().hex
+    reservation_id = ""
+    if persona_id:
+        auth_config, login_env = await _persona_auth_bundle(
+            request, artifact_id, tenant_id, persona_id, environment_id)
+        if not auth_config:
+            raise HTTPException(status_code=422, detail={
+                "error": "persona has no login recipe + credential card for this environment",
+                "persona_id": persona_id, "environment_id": environment_id,
+                "reason": "store a recipe and the persona's card first — a run "
+                          "never fabricates a session. This is NOT an application failure.",
+            })
+        # Reserve the persona so two runs never mutate the same member at once.
+        async with tenant_scoped_session(tenant_id) as session:
+            reservation_id = await persona_store.acquire_reservation(
+                session, tenant_id=tenant_id, persona_id=persona_id,
+                environment_id=environment_id, run_id=run_id,
+                ttl_seconds=int((body.retries or 0) + 1) * 1800)
+            await session.commit()
+        if not reservation_id:
+            raise HTTPException(status_code=409, detail={
+                "error": "persona is busy",
+                "persona_id": persona_id, "environment_id": environment_id,
+                "reason": "another run currently holds this member. Retry shortly "
+                          "or pick a different persona. This is NOT an application failure.",
+            })
+        # Persona preflight — prove the member can log in BEFORE the suite. A dead
+        # test member BLOCKS with a test-data cause; the application is never
+        # blamed for a rotten credential.
+        try:
+            pf = await _persona_preflight(
+                request, artifact_id, tenant_id, cases, visits, edited_map,
+                base_url or _recorded_origin(visits), auth_config, login_env, token)
+        except Exception as exc:
+            pf = {"ok": False, "detail": f"preflight error: {exc}"}
+        if not pf.get("ok"):
+            async with tenant_scoped_session(tenant_id) as session:
+                await persona_store.release_reservation(
+                    session, tenant_id=tenant_id, run_id=run_id)
+                await session.commit()
+            return {
+                "run_id": run_id, "status": "blocked",
+                "blocked_reason": "test_data",
+                "persona_id": persona_id, "environment_id": environment_id,
+                "detail": pf.get("detail"),
+                "note": ("The test MEMBER could not log in (recipe drift or bad "
+                         "credentials) — the run is BLOCKED, not executed. The "
+                         "application under test is NOT implicated."),
+                "scripts": 0, "excluded_quarantined": excluded_quarantined,
+                "excluded_uncertified_exploratory": excluded_uncertified,
+            }
+    else:
+        auth_config, login_env = await _run_form_login(request, artifact_id, tenant_id)
     # The Nexus runner container is headless (Xvfb-free); honor browsers/workers/
     # retries but force headless regardless of the requested mode.
     files = _configured_files(
@@ -3837,7 +3941,6 @@ async def playwright_run(
         edited=edited_map, storage_state=storage_state,
         env_context=body.env_context, auth_config=auth_config,
     )
-    run_id = uuid.uuid4().hex
     env = {
         "NEXUS_ENDPOINT": _INGEST_BASE,
         "NEXUS_DIAGNOSTICS_ENDPOINT": f"{_INGEST_BASE}/api/v1/test-runs/diagnostics",
@@ -3861,18 +3964,37 @@ async def playwright_run(
             body.screenshot_mode
             if (body.screenshots and body.screenshot_mode in _SCREENSHOT_MODES)
             else ("on" if body.screenshots else "off")),
+        # Persona identity tag — the run knows AS WHOM it ran, for the report.
+        **({"NEXUS_PERSONA": persona_id} if persona_id else {}),
     }
     await _register_job(run_id, {
         "run_id": run_id, "status": "running", "artifact_id": artifact_id,
-        "tenant_id": tenant_id, "kind": "run",
+        "tenant_id": tenant_id, "kind": "run", "persona_id": persona_id,
+        "environment_id": environment_id,
         "target": base_url, "scripts": len(cases), "exit_code": None, "output": "",
         "steps_completed": 0, "total_tests": len(cases),
     })
     task = asyncio.create_task(_execute_run(run_id, files, env))
     _RUNNER_TASKS.add(task)
     task.add_done_callback(_RUNNER_TASKS.discard)
+    if reservation_id:
+        # Release the persona hold when the run task finishes — a member is never
+        # wedged past its run (TTL is the backstop for a crashed process).
+        def _release(_t, _rid=run_id, _tid=tenant_id):
+            async def _do():
+                try:
+                    async with tenant_scoped_session(_tid) as s:
+                        await persona_store.release_reservation(s, tenant_id=_tid, run_id=_rid)
+                        await s.commit()
+                except Exception as exc:
+                    _logger.warning("persona.release_failed run=%s err=%s", _rid, str(exc)[:200])
+            rt = asyncio.create_task(_do())
+            _RUNNER_TASKS.add(rt)
+            rt.add_done_callback(_RUNNER_TASKS.discard)
+        task.add_done_callback(_release)
     return {"run_id": run_id, "status": "running", "scripts": len(cases),
-            "target": base_url,
+            "target": base_url, "persona_id": persona_id,
+            "environment_id": environment_id,
             "excluded_quarantined": excluded_quarantined,
             "excluded_uncertified_exploratory": excluded_uncertified}
 

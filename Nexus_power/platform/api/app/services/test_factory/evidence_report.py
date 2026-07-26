@@ -613,11 +613,16 @@ async def build_report(
             "ci_run_id": getattr(run, "ci_run_id", "") or "",
             "ci_commit_sha": getattr(run, "ci_commit_sha", "") or "",
             "is_certification": is_cert,
+            # Persona × Environment (P2): WHO the run ran as. Empty = the
+            # artifact's default identity (persona-0 / captured session).
+            "persona": str((getattr(run, "metadata_json", None) or {}).get("persona") or ""),
         }
 
+    _persona = str((getattr(run, "metadata_json", None) or {}).get("persona") or "") if run is not None else ""
     trust = await build_trust_block(
         session, artifact_id=artifact_id, tenant_id=tenant_id,
-        quarantined=quarantined, ungated=ungated, cases=cases)
+        quarantined=quarantined, ungated=ungated, cases=cases,
+        persona_id=_persona, environment=(getattr(run, "environment", "") if run is not None else ""))
 
     # ── cross-run derivations (§2.6 defect identity, §2.14 diff) ───────────
     defects = None
@@ -749,6 +754,7 @@ def build_timeline(*, run: Any, step_rows: list, case_names: dict,
 async def build_trust_block(
     session, *, artifact_id: str, tenant_id: str,
     quarantined: dict, ungated: dict, cases: list,
+    persona_id: str = "", environment: str = "",
 ) -> dict:
     """§2.0 — the report's opening section and our category differentiator:
     proof that this suite EARNED the right to judge the application."""
@@ -784,7 +790,23 @@ async def build_trust_block(
     except Exception as exc:
         logger.debug("evidence_report.scorecard_skipped err=%s", str(exc)[:200])
 
+    identity = {"persona_id": persona_id or "default",
+                "login": "fresh-recipe" if persona_id else "default",
+                "environment": environment or ""}
+    persona_name = ""
+    if persona_id and not persona_id.startswith("persona0::"):
+        try:
+            from . import persona_store
+            p = await persona_store.get_persona(session, tenant_id=tenant_id, persona_id=persona_id)
+            if p:
+                persona_name = p.get("name") or ""
+                identity["persona_name"] = persona_name
+                identity["behavior_class"] = p.get("behavior_class") or ""
+                identity["traits"] = p.get("traits") or []
+        except Exception:
+            pass
     return {
+        "identity": identity,
         "statement": (
             "This suite was certified against the application's own baseline "
             "BEFORE it was allowed to judge the application. Cases that failed "
