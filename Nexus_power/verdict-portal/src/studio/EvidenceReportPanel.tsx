@@ -15,7 +15,7 @@ import { useCallback, useEffect, useState } from 'react';
 import {
   Activity, AlertTriangle, ChevronRight, ClipboardCheck, Clock, Download, ExternalLink,
   FileSpreadsheet,
-  FileText, Loader2, Package, RefreshCw, ShieldCheck,
+  FileText, Loader2, Package, RefreshCw, ShieldCheck, Video,
 } from 'lucide-react';
 import { api } from './factoryApi';
 
@@ -519,6 +519,25 @@ export default function EvidenceReportPanel({ artifactId }: Props) {
                                   <p className="mb-2 text-[11px] text-slate-600">
                                     <b>Not executed:</b> {c.not_executed_reason}
                                   </p>
+                                )}
+                                {c.video_url && (
+                                  <div className="mb-2 rounded border border-slate-200 bg-white p-2">
+                                    <div className="mb-1 flex items-center gap-2">
+                                      <Video className="h-3.5 w-3.5 text-slate-500" />
+                                      <span className="text-[11px] font-semibold text-slate-800">
+                                        Recording of this journey
+                                      </span>
+                                      <span className="ml-auto text-[10px] text-slate-500">
+                                        silent — browser automation captures no audio
+                                      </span>
+                                    </div>
+                                    <video
+                                      controls
+                                      preload="metadata"
+                                      className="w-full max-w-2xl rounded border border-slate-200"
+                                      src={api.getRunScreenshotUrl(c.video_url)}
+                                    />
+                                  </div>
                                 )}
                                 {c.diagnostics && (
                                   <div className="mb-2 rounded border border-slate-200 bg-white p-2">

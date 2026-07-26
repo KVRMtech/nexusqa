@@ -225,6 +225,11 @@ def _case(c: dict) -> str:
     tags = "".join(f'<span class="tag">{_e(t)}</span>' for t in (c.get("tags") or [])[:10])
     ne = (f'<div class="note"><b>Not executed:</b> {_e(c.get("not_executed_reason"))}</div>'
           if not c.get("executed") else "")
+    vid = c.get("video_url") or ""
+    vid_html = (f'<div class="note" style="margin-top:6px"><b>Recording:</b> '
+                f'<a href="{_e(vid)}">watch this journey (webm)</a>'
+                f'<div class="meta">Silent by design — browser automation captures no audio.</div>'
+                f'</div>') if vid else ""
     dg = c.get("diagnostics") or None
     diag_html = ""
     if dg:
@@ -245,6 +250,7 @@ def _case(c: dict) -> str:
         f'<div class="body">{ne}'
         f'{_chips(c.get("counts") or {})}'
         f'<div class="note">{_e(c.get("description"))}</div>'
+        f'{vid_html}'
         f'{diag_html}'
         f'<div class="note" style="margin-top:6px"><b>Reproducibility:</b> {rbits}'
         f'<span class="tag">case: {_e(c.get("test_case_id"))}</span></div>'

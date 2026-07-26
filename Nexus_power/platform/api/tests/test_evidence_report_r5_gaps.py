@@ -462,3 +462,79 @@ def test_retention_endpoint_is_admin_gated_and_audited():
     assert "/evidence/retention" in r
     assert 'event_type="evidence_retention"' in r
     assert "requires an admin or manager role" in r
+
+
+# ── visual evidence: video + screenshots ON by default ──────────────────────
+
+def test_video_and_screenshots_are_on_by_default_in_the_config():
+    src = _compiler_src()
+    assert "video: (process.env.NEXUS_VIDEO as any) || 'on'" in src
+    assert "screenshot: (process.env.NEXUS_SCREENSHOT as any) || 'on'" in src
+    # both generated config variants must agree
+    assert src.count("|| 'on',") >= 4
+    assert "screenshot: 'only-on-failure'" not in src
+
+
+def test_video_is_recorded_for_passing_tests_too():
+    """A clip of a passing journey is the evidence a reviewer wants to watch —
+    capturing only failures would miss the point of the product.
+
+    The property that matters: video capture sits OUTSIDE the failure branch,
+    unlike the trace which is deliberately failure-only.
+    """
+    src = _compiler_src()
+    vid_at = src.index("const vid = result.attachments")
+    fail_branch_at = src.index("if (result.status === 'failed' || result.status === 'timedOut')")
+    assert vid_at < fail_branch_at, "video must be captured before/outside the failure branch"
+    block = src[vid_at:fail_branch_at]
+    assert "pendingVideos.push" in block
+    assert "result.status" not in block, "video capture must not be gated on failure"
+
+
+def test_video_upload_is_best_effort_and_never_changes_a_verdict():
+    src = _compiler_src()
+    assert "/api/v1/test-runs/video" in src
+    assert "best-effort video upload" in src
+
+
+def test_run_request_defaults_video_and_screenshots_on():
+    r = _router()
+    assert "video: bool = True" in r
+    assert "screenshots: bool = True" in r
+    assert 'screenshot_mode: str = "on"' in r
+    assert '"NEXUS_VIDEO": "on" if body.video else "off"' in r
+
+
+def test_screenshot_mode_falls_back_rather_than_disabling_capture():
+    r = _router()
+    assert '_SCREENSHOT_MODES = ("on", "only-on-failure", "off")' in r
+    assert "in _SCREENSHOT_MODES" in r
+
+
+def test_report_surfaces_the_recording_on_the_case():
+    import os
+    rep = open(os.path.join(os.path.dirname(__file__), "..", "app", "services",
+                            "test_factory", "evidence_report.py"), encoding="utf-8").read()
+    html = open(os.path.join(os.path.dirname(__file__), "..", "app", "services",
+                             "test_factory", "report_html.py"), encoding="utf-8").read()
+    assert '"video_url": video_url' in rep
+    assert "watch this journey" in html
+    # we say plainly that there is no audio rather than letting a viewer wonder
+    assert "captures no audio" in html
+
+
+def test_screenshots_are_uploaded_for_passing_tests_too():
+    """Capture was switched on, but the reporter still only UPLOADED on failure —
+    so a green run had no picture at all. Verified live: 0 screenshots on a
+    passing run before this fix."""
+    src = _compiler_src()
+    shot_at = src.index("const shot = result.attachments.find(")
+    fail_at = src.index("if (result.status === 'failed' || result.status === 'timedOut')")
+    # the screenshot collector must sit AFTER (outside) the failure-only block,
+    # which now contains ONLY the trace
+    assert shot_at > fail_at
+    failure_block = src[fail_at:shot_at]
+    assert "pendingTraces.push" in failure_block
+    assert "pendingShots.push" not in failure_block, \
+        "screenshot upload must not be gated on failure"
+    assert "Screenshot for EVERY test, not only failures." in src

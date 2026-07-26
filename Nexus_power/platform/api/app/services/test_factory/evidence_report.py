@@ -415,6 +415,15 @@ def _build_case(
                 if status == ST_NEEDS_REVIEW else None)),
         })
 
+    # Video is recorded per TEST, so it is surfaced on the case rather than on
+    # a single step: it is the clip of the whole journey.
+    video_url = ""
+    for _r in step_rows:
+        _v = str((getattr(_r, "metadata_json", None) or {}).get("video_url") or "")
+        if _v:
+            video_url = _v
+            break
+
     executed = bool(step_rows)
     reached_final = bool(statuses) and (declared == 0 or len(statuses) >= declared)
     case_status = derive_case_status(statuses, executed=executed,
@@ -453,6 +462,8 @@ def _build_case(
         # Tier-T3 deep diagnostics for this case (None unless the run enabled
         # them) — a summary plus a link to the full document.
         "diagnostics": diagnostics,
+        # The recorded clip of this journey (empty when video was turned off).
+        "video_url": video_url,
         "steps": steps_out,
     }
 

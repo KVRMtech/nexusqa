@@ -778,6 +778,11 @@ async def playwright_manifest(
     return manifest
 
 
+#: Playwright's screenshot modes, so an unknown value degrades to a sane one
+#: rather than silently disabling capture.
+_SCREENSHOT_MODES = ("on", "only-on-failure", "off")
+
+
 class RunConfigRequest(BaseModel):
     categories: list[str] = Field(default_factory=list)
     test_ids: list[str] = Field(default_factory=list)
@@ -799,6 +804,15 @@ class RunConfigRequest(BaseModel):
     # compiled spec is inert without it, so a run is byte-identical when unset.
     diagnostics: bool = False
     diagnostics_html: bool = False
+    # Visual evidence — ON by default for every run, whether you launch ONE
+    # test or the whole suite (this is a run-level policy, not a per-test one).
+    # A test-evidence product should show what the run SAW, not only the
+    # wreckage of a failure. Set false to dial back on a large suite or a
+    # storage-constrained deployment; `screenshot_mode` allows the middle
+    # ground ('only-on-failure') without turning capture off entirely.
+    video: bool = True
+    screenshots: bool = True
+    screenshot_mode: str = "on"        # on | only-on-failure | off
 
 
 class SaveVersionRequest(BaseModel):
@@ -3794,6 +3808,12 @@ async def playwright_run(
         # Tier-T3 diagnostics: opt-in per run (the fixture is inert otherwise).
         **({"NEXUS_T3_DIAGNOSTICS": "1"} if body.diagnostics else {}),
         **({"NEXUS_T3_HTML": "1"} if (body.diagnostics and body.diagnostics_html) else {}),
+        # Visual evidence (default ON) — same policy for one test or the suite.
+        "NEXUS_VIDEO": "on" if body.video else "off",
+        "NEXUS_SCREENSHOT": (
+            body.screenshot_mode
+            if (body.screenshots and body.screenshot_mode in _SCREENSHOT_MODES)
+            else ("on" if body.screenshots else "off")),
     }
     await _register_job(run_id, {
         "run_id": run_id, "status": "running", "artifact_id": artifact_id,

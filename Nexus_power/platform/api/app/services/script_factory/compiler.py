@@ -1648,7 +1648,13 @@ export default defineConfig({
     // replaces a bespoke video/DOM/network pipeline. 'on-first-retry' never
     // fired for server runs (retries=0), so failures shipped with no trace.
     trace: (process.env.NEXUS_TRACE as any) || 'retain-on-failure',
-    screenshot: 'only-on-failure',
+    // Screenshots and video are ON by default: a test-evidence product should
+    // show what the run SAW, not only what it saw when something broke. Both
+    // are env-overridable ('off' | 'only-on-failure' | 'on') so a large suite
+    // or a storage-constrained deployment can dial them back without editing
+    // the owned script.
+    screenshot: (process.env.NEXUS_SCREENSHOT as any) || 'on',
+    video: (process.env.NEXUS_VIDEO as any) || 'on',
     // Reuse a captured authenticated session when VKPower injects one (auth profile
     // → vkpower.auth.json in the run dir). Self-detecting, so a downloaded bundle
     // (no auth file) is unaffected; a normal unauthenticated run is unchanged.
@@ -1704,7 +1710,13 @@ __WORKERS__  reporter: [['list'], ['html', { open: 'never' }], ['junit', { outpu
     // replaces a bespoke video/DOM/network pipeline. 'on-first-retry' never
     // fired for server runs (retries=0), so failures shipped with no trace.
     trace: (process.env.NEXUS_TRACE as any) || 'retain-on-failure',
-    screenshot: 'only-on-failure',
+    // Screenshots and video are ON by default: a test-evidence product should
+    // show what the run SAW, not only what it saw when something broke. Both
+    // are env-overridable ('off' | 'only-on-failure' | 'on') so a large suite
+    // or a storage-constrained deployment can dial them back without editing
+    // the owned script.
+    screenshot: (process.env.NEXUS_SCREENSHOT as any) || 'on',
+    video: (process.env.NEXUS_VIDEO as any) || 'on',
     // Reuse a captured authenticated session when VKPower injects one (auth profile
     // → vkpower.auth.json in the run dir). Self-detecting, so a downloaded bundle
     // (no auth file) is unaffected; a normal unauthenticated run is unchanged.
@@ -1801,6 +1813,7 @@ export default class VKPowerReporter implements Reporter {
   private steps: StepRecord[] = [];
   private pendingShots: PendingShot[] = [];
   private pendingTraces: { scenarioId: string; path: string }[] = [];
+  private pendingVideos: { scenarioId: string; path: string }[] = [];
   private startedAt = new Date(0).toISOString();
   private done = 0;
   private total = 0;
@@ -1867,6 +1880,15 @@ export default class VKPowerReporter implements Reporter {
     }
     // Associate Playwright's only-on-failure screenshot with the failing step
     // record; uploaded at onEnd. Best-effort — never affects the run result.
+    // Video is recorded for EVERY test (pass or fail): the clip of a passing
+    // journey is the evidence a reviewer actually wants to watch, not just the
+    // wreckage of a failing one.
+    const vid = result.attachments.find(
+      (a) => a.name === 'video' && a.path,
+    );
+    if (vid && vid.path) {
+      this.pendingVideos.push({ scenarioId, path: vid.path });
+    }
     if (result.status === 'failed' || result.status === 'timedOut') {
       // Trace (evidence tier T2) — the richest single artifact for this failure.
       const tr = result.attachments.find(
@@ -1875,6 +1897,13 @@ export default class VKPowerReporter implements Reporter {
       if (tr && tr.path) {
         this.pendingTraces.push({ scenarioId, path: tr.path });
       }
+    }
+    // Screenshot for EVERY test, not only failures. With screenshot:'on' the
+    // run captures one per test; uploading it only when something broke left a
+    // green run with no picture at all, which is not what a test-EVIDENCE
+    // product should hand a reviewer. It is attached to the failing step when
+    // there is one, otherwise to the last step of the case.
+    {
       const shot = result.attachments.find(
         (a) => (a.name === 'screenshot' || (a.contentType || '').startsWith('image/')) && (a.path || a.body),
       );
@@ -1974,6 +2003,37 @@ export default class VKPowerReporter implements Reporter {
           }
         }
       } catch { /* best-effort trace upload */ }
+    }
+
+    // Upload one video per test. Best-effort and non-blocking, exactly like the
+    // trace: a missing or oversize clip means the report shows no video, never
+    // a fabricated one and never a changed verdict.
+    for (const pv of this.pendingVideos) {
+      try {
+        const buf: Buffer = fs.readFileSync(pv.path);
+        if (!buf || !buf.length) continue;
+        const fd = new FormData();
+        fd.append('run_id', runId);
+        fd.append('artifact_id', ARTIFACT_ID);
+        fd.append('scenario_id', pv.scenarioId);
+        fd.append('step_number', '0');
+        fd.append('file', new Blob([buf], { type: 'video/webm' }), 'run.webm');
+        const vr = await fetch(`${base}/api/v1/test-runs/video`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${TOKEN}` },
+          body: fd as any,
+        });
+        if (vr.ok) {
+          const j: any = await vr.json().catch(() => null);
+          if (j && j.url) {
+            for (let i = 0; i < this.steps.length; i++) {
+              if (this.steps[i].scenario_id === pv.scenarioId) {
+                this.steps[i].metadata = { ...(this.steps[i].metadata || {}), video_url: j.url };
+              }
+            }
+          }
+        }
+      } catch { /* best-effort video upload */ }
     }
 
     const body = {
