@@ -13,7 +13,7 @@
  */
 import { useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { ArrowLeft, FlaskConical, PlayCircle, ShieldCheck, Sparkles } from 'lucide-react';
+import { ArrowLeft, FlaskConical, KeyRound, PlayCircle, ShieldCheck, Sparkles } from 'lucide-react';
 
 import { api } from '../../lib/api';
 import { useAsync } from '../../lib/useAsync';
@@ -22,8 +22,9 @@ import DiscoveredFlows from './DiscoveredFlows';
 import TestCasesPanel from '../../studio/TestCasesPanel';
 import PlaywrightExecutionPanel from '../../studio/PlaywrightExecutionPanel';
 import EvidenceReportPanel from '../../studio/EvidenceReportPanel';
+import PersonaMatrixPanel from '../../studio/PersonaMatrixPanel';
 
-type StudioTab = 'flows' | 'cases' | 'playwright' | 'evidence';
+type StudioTab = 'flows' | 'cases' | 'playwright' | 'evidence' | 'personas';
 
 function TabButton({
   active,
@@ -121,6 +122,12 @@ export function TestStudio() {
               icon={<ShieldCheck size={15} />}
               label="Evidence Report"
             />
+            <TabButton
+              active={tab === 'personas'}
+              onClick={() => setTab('personas')}
+              icon={<KeyRound size={15} />}
+              label="Personas & Environments"
+            />
           </div>
 
           {/* Discovered Flows is a native governance overlay (token surfaces). The
@@ -135,6 +142,8 @@ export function TestStudio() {
                 <TestCasesPanel artifactId={artifactId} onOpenPlaywright={() => setTab('playwright')} />
               ) : tab === 'evidence' ? (
                 <EvidenceReportPanel artifactId={artifactId} />
+              ) : tab === 'personas' ? (
+                <PersonaMatrixPanel artifactId={artifactId} />
               ) : (
                 <PlaywrightExecutionPanel artifactId={artifactId} />
               )}

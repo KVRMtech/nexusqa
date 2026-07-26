@@ -14,7 +14,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle, Check, CheckCircle2, CheckSquare, ChevronDown, ChevronRight, Copy, Database, Download,
   FileCode2, Gauge, Globe, History, Loader2, Lock, MoreVertical, Pencil, Play, RefreshCw, RotateCcw, Rocket,
-  Save, Server, ShieldAlert, ShieldCheck, SlidersHorizontal, Square, Terminal, Wand2,
+  Save, Server, ShieldAlert, ShieldCheck, SlidersHorizontal, Square, Terminal, UserRound, Wand2,
 } from 'lucide-react';
 import { api } from './factoryApi';
 import TriagePanel from './TriagePanel';
@@ -1814,6 +1814,36 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
               </div>
             </div>
 
+            {/* Run as… (persona) — PROMINENT: 'next to Run', a simple dropdown so
+                switching the member the same suite runs as is a first-class choice,
+                not buried in Advanced. */}
+            <div className="rounded-lg border border-nexus-200 bg-nexus-50/50 px-3 py-2 flex flex-wrap items-center gap-2">
+              <span className="inline-flex items-center gap-1.5 text-[11px] font-bold uppercase text-nexus-600">
+                <UserRound className="h-3.5 w-3.5 text-nexus-500" /> Run as
+              </span>
+              <select value={personaId} onChange={(e) => setPersonaId(e.target.value)}
+                className="rounded-md border border-slate-200 px-2 py-1 text-[12px] font-medium text-slate-700 bg-white">
+                <option value="">Default identity (persona-0)</option>
+                {personas.filter((p) => !p.legacy).map((p) => (
+                  <option key={p.persona_id} value={p.persona_id}>
+                    {p.name}{p.behavior_class ? ` · ${p.behavior_class}` : ''}
+                  </option>
+                ))}
+              </select>
+              {personaId && (
+                <>
+                  <span className="text-[10px] text-nexus-400">on env</span>
+                  <input value={environmentId} onChange={(e) => setEnvironmentId(e.target.value)}
+                    placeholder="uat"
+                    className="w-24 rounded-md border border-slate-200 px-2 py-1 text-[12px] font-mono text-slate-700 bg-white" />
+                  <span className="text-[10px] text-slate-400">
+                    logs in fresh as this member; BLOCKED (not failed) if they can’t sign in
+                  </span>
+                </>
+              )}
+              <span className="ml-auto text-[10px] text-nexus-400">manage in <span className="font-semibold text-nexus-500">Personas &amp; Environments</span></span>
+            </div>
+
             {/* Advanced configuration — collapsed by default so the flow reads Select → Run → Verdict */}
             <details className="group rounded-lg border border-nexus-100 bg-white">
               <summary className="flex items-center gap-2 cursor-pointer select-none px-3 py-2 text-[11px] font-bold text-nexus-700 list-none [&::-webkit-details-marker]:hidden">
@@ -1836,29 +1866,6 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
                 <input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)}
                   placeholder="https://staging.your-app.com"
                   className="flex-1 min-w-0 rounded-md border border-slate-200 px-2.5 py-1.5 text-[12px] font-mono text-slate-700 focus:outline-none focus:border-nexus-300" />
-              </div>
-              {/* Run as… (persona) + environment for the credential card */}
-              <div className="mt-2 flex flex-wrap items-center gap-2">
-                <span className="text-[10px] font-bold uppercase text-nexus-500">Run as</span>
-                <select value={personaId} onChange={(e) => setPersonaId(e.target.value)}
-                  className="rounded-md border border-slate-200 px-2 py-1 text-[12px] text-slate-700">
-                  <option value="">Default identity (persona-0)</option>
-                  {personas.filter((p) => !p.legacy).map((p) => (
-                    <option key={p.persona_id} value={p.persona_id}>
-                      {p.name}{p.behavior_class ? ` · ${p.behavior_class}` : ''}
-                    </option>
-                  ))}
-                </select>
-                {personaId && (
-                  <input value={environmentId} onChange={(e) => setEnvironmentId(e.target.value)}
-                    placeholder="environment id (e.g. uat)"
-                    className="w-40 rounded-md border border-slate-200 px-2 py-1 text-[12px] text-slate-700" />
-                )}
-                {personaId && (
-                  <span className="text-[10px] text-slate-400">
-                    logs in fresh as this member; the run is BLOCKED (not failed) if the member can't sign in
-                  </span>
-                )}
               </div>
               {data.recorded_base_url && (
                 <p className="text-[10px] text-slate-400 mt-1">

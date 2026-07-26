@@ -730,6 +730,81 @@ class FactoryApiClient {
     return data;
   }
 
+  // ── Persona × Environment matrix (management surface) ──────────────────────
+
+  /** Define a persona (identity + behavior class + traits). */
+  async createPersona(artifactId: string, body: {
+    name: string; description?: string; traits?: string[]; behavior_class?: string;
+  }): Promise<any> {
+    const { data } = await this.client.post(`/v1/test-factory/${artifactId}/personas`, body);
+    return data;
+  }
+
+  /** Retire a persona (status → retired; never a hard delete). */
+  async retirePersona(artifactId: string, personaId: string): Promise<any> {
+    const { data } = await this.client.post(
+      `/v1/test-factory/${artifactId}/personas/${personaId}/retire`, {});
+    return data;
+  }
+
+  /** WRITE-ONLY: store a persona's envelope-encrypted credential card for an
+   *  environment. Slot VALUES are sent once and never returned. */
+  async putCredentialCard(artifactId: string, personaId: string, environmentId: string,
+    slot_values: Record<string, string>): Promise<any> {
+    const { data } = await this.client.put(
+      `/v1/test-factory/${artifactId}/personas/${personaId}/credentials/${environmentId}`,
+      { slot_values });
+    return data;
+  }
+
+  /** The NON-SECRET provisioning grid: persona × env cards, slot NAMES only. */
+  async credentialsManifest(artifactId: string): Promise<any> {
+    const { data } = await this.client.get(`/v1/test-factory/${artifactId}/credentials/manifest`);
+    return data;
+  }
+
+  /** Environments + governance (posture, production flag, health). */
+  async listEnvironments(artifactId: string): Promise<any> {
+    const { data } = await this.client.get(`/v1/test-factory/${artifactId}/environments`);
+    return data;
+  }
+
+  /** Register/update an environment's governance. */
+  async putEnvironment(artifactId: string, environmentId: string, body: {
+    label?: string; posture?: string; is_production?: boolean;
+    write_authorized?: boolean; base_url?: string; data_epoch?: string;
+  }): Promise<any> {
+    const { data } = await this.client.put(
+      `/v1/test-factory/${artifactId}/environments/${environmentId}`, body);
+    return data;
+  }
+
+  /** Which cards for an environment need re-verification (staleness due-list). */
+  async environmentStaleness(artifactId: string, environmentId: string): Promise<any> {
+    const { data } = await this.client.get(
+      `/v1/test-factory/${artifactId}/environments/${environmentId}/staleness`);
+    return data;
+  }
+
+  /** Login recipes (versions + verify state). */
+  async listRecipes(artifactId: string): Promise<any> {
+    const { data } = await this.client.get(`/v1/test-factory/${artifactId}/recipes`);
+    return data;
+  }
+
+  /** Derive a baseline login recipe from a configured form-login (idempotent). */
+  async ensureBaselineRecipe(artifactId: string): Promise<any> {
+    const { data } = await this.client.post(
+      `/v1/test-factory/${artifactId}/recipes/ensure-baseline`, {});
+    return data;
+  }
+
+  /** Ops rollup: personas / environments+postures / credentials / recipes. */
+  async personaOpsSummary(artifactId: string): Promise<any> {
+    const { data } = await this.client.get(`/v1/test-factory/${artifactId}/personas/ops/summary`);
+    return data;
+  }
+
   /** §2.18 — the Needs-Review QUEUE, joined with recorded dispositions. */
   async getReviewQueue(artifactId: string, includeResolved = false): Promise<any> {
     const { data } = await this.client.get(
