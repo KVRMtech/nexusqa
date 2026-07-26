@@ -91,6 +91,7 @@ class TpPersonaCredentialRow(Base):
     slot_names: Mapped[list] = mapped_column(JSONB, default=list)
     last_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     verify_status: Mapped[str] = mapped_column(String(16), default="unverified")
+    verified_epoch: Mapped[str] = mapped_column(String(64), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utc_now)
 
 
@@ -401,7 +402,49 @@ async def credential_status(session: AsyncSession, *, tenant_id: str,
         return {"present": False}
     return {"present": True, "slot_names": row.slot_names,
             "verify_status": row.verify_status,
+            "verified_epoch": getattr(row, "verified_epoch", "") or "",
             "last_verified_at": _iso(row.last_verified_at)}
+
+
+async def stamp_card_verified(session: AsyncSession, *, tenant_id: str, persona_id: str,
+                              environment_id: str, verified: bool, data_epoch: str = "") -> None:
+    """Record a card verification outcome + the data epoch it was proven against
+    (P5 staleness). A later run knows whether the card still holds for the
+    environment's current data snapshot. Caller commits."""
+    try:
+        await session.execute(update(TpPersonaCredentialRow)
+            .where(TpPersonaCredentialRow.persona_id == persona_id,
+                   TpPersonaCredentialRow.environment_id == environment_id,
+                   TpPersonaCredentialRow.tenant_id == tenant_id)
+            .values(verify_status=("verified" if verified else "failed"),
+                    last_verified_at=_utc_now(), verified_epoch=str(data_epoch or "")))
+    except Exception as exc:
+        logger.debug("persona_store.stamp_card_skipped err=%s", exc)
+
+
+async def all_credential_status(session: AsyncSession, *, tenant_id: str,
+                                artifact_id: str) -> list[dict]:
+    """Every card's NON-SECRET status for an artifact (persona×env grid) — feeds
+    the provisioning manifest and the staleness report. Ciphertext never leaves."""
+    try:
+        # personas for this artifact bound to their cards (any environment)
+        prows = (await session.execute(select(TpPersonaRow.persona_id).where(
+            TpPersonaRow.tenant_id == tenant_id,
+            TpPersonaRow.artifact_id == artifact_id))).scalars().all()
+        pids = set(prows)
+        rows = (await session.execute(select(TpPersonaCredentialRow).where(
+            TpPersonaCredentialRow.tenant_id == tenant_id))).scalars().all()
+    except Exception:
+        return []
+    out = []
+    for r in rows:
+        if r.persona_id not in pids:
+            continue
+        out.append({"persona_id": r.persona_id, "environment_id": r.environment_id,
+                    "slot_names": r.slot_names, "verify_status": r.verify_status,
+                    "verified_epoch": getattr(r, "verified_epoch", "") or "",
+                    "last_verified_at": _iso(r.last_verified_at), "present": True})
+    return out
 
 
 # ── Answer sheets ────────────────────────────────────────────────────────────
@@ -658,6 +701,7 @@ __all__ = [
     "save_recipe", "get_recipe", "list_recipes", "stamp_recipe_verified",
     "save_persona", "get_persona", "list_personas", "retire_persona",
     "save_persona_credential", "get_persona_credential", "credential_status",
+    "stamp_card_verified", "all_credential_status",
     "set_expected_value", "get_expected_values",
     "save_classification", "get_classifications",
     "acquire_reservation", "release_reservation", "expire_stale_reservations",

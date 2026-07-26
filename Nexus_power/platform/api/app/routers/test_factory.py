@@ -110,6 +110,7 @@ from ..services.test_factory import report_formats
 from ..services.test_factory import persona_store
 from ..services.test_factory import persona_diff
 from ..services.test_factory import persona_governance
+from ..services.test_factory import persona_scale
 from ..services.test_factory import report_store
 from ..services.test_factory import evidence_retention
 from ..services.test_factory.assistant import answer as assistant_answer
@@ -823,6 +824,10 @@ class RunConfigRequest(BaseModel):
     # registry row for the card + (P4) posture.
     persona_id: str = ""
     environment_id: str = ""
+    # Scale (P5): resolve a persona by TRAITS / behavior class instead of a
+    # pinned id — "run as any senior-large-family member". Ignored when
+    # persona_id is set. {"traits": [...], "behavior_class": "..."}.
+    persona_match: dict | None = None
     # Environment governance (P4): does this run intend to MUTATE (submit/write)?
     # Default True — a regression suite mutates, so a production target is
     # default-deny unless the environment carries an explicit write authorization.
@@ -3885,6 +3890,24 @@ async def playwright_run(
     environment_id = (body.environment_id or body.env_context and
                       str((body.env_context or {}).get("environment_id") or "") or "").strip() \
         if not (body.environment_id or "").strip() else body.environment_id.strip()
+    # Scale (P5): resolve a persona by TRAITS / behavior class when no id is
+    # pinned — "run as any senior-large-family member". An honest miss (no
+    # match) is a 422, never a guessed member.
+    if not persona_id and body.persona_match:
+        async with tenant_scoped_session(tenant_id) as session:
+            _pl = await persona_store.list_personas(
+                session, tenant_id=tenant_id, artifact_id=artifact_id)
+        sel = persona_scale.select_persona(
+            _pl, traits=(body.persona_match or {}).get("traits") or [],
+            behavior_class=(body.persona_match or {}).get("behavior_class") or "")
+        if not sel.get("persona"):
+            raise HTTPException(status_code=422, detail={
+                "error": "no persona matches the requested traits/behavior class",
+                "persona_match": body.persona_match, "reason": sel.get("reason"),
+                "note": "No member is guessed. Define a matching persona or relax "
+                        "the request. This is NOT an application failure.",
+            })
+        persona_id = sel["persona"]["persona_id"]
     run_id = uuid.uuid4().hex
     reservation_id = ""
     # ── Environment governance (P4): posture, production default-deny, health ──
@@ -3986,6 +4009,14 @@ async def playwright_run(
                 base_url or _recorded_origin(visits), auth_config, login_env, token)
         except Exception as exc:
             pf = {"ok": False, "detail": f"preflight error: {exc}"}
+        # P5: record the card verification + the epoch it proved against, so a
+        # later run knows if it went stale when the environment data rolled.
+        async with tenant_scoped_session(tenant_id) as session:
+            await persona_store.stamp_card_verified(
+                session, tenant_id=tenant_id, persona_id=persona_id,
+                environment_id=environment_id, verified=bool(pf.get("ok")),
+                data_epoch=str(governance_env.get("data_epoch") or ""))
+            await session.commit()
         if not pf.get("ok"):
             async with tenant_scoped_session(tenant_id) as session:
                 await persona_store.release_reservation(
@@ -8386,3 +8417,197 @@ async def environment_health_endpoint(
             "note": ("A health probe checks the environment is up and the recipe "
                      "still logs in — it is NOT a re-crawl. A known-bad environment "
                      "is refused at dispatch, never blamed on the application.")}
+
+
+# ── Scale (P5) ───────────────────────────────────────────────────────────────
+
+class _PersonaSelectBody(BaseModel):
+    traits: list[str] = Field(default_factory=list)
+    behavior_class: str = Field("", max_length=64)
+
+
+@router.post("/api/v1/test-factory/{artifact_id}/personas/select")
+async def select_persona_endpoint(
+    body: _PersonaSelectBody,
+    artifact_id: str = PathParam(..., min_length=1, max_length=64),
+    user: dict = Depends(get_current_user),
+):
+    """Resolve a concrete persona from a trait / behavior-class request — the
+    preview behind 'run as any senior-large-family member'. Deterministic (the
+    most specific match), and an honest miss returns persona=None, never a
+    guessed member."""
+    tenant_id = user["tenant_id"]
+    async with tenant_scoped_session(tenant_id) as session:
+        await _require_artifact(session, artifact_id, tenant_id)
+        personas = await persona_store.list_personas(
+            session, tenant_id=tenant_id, artifact_id=artifact_id)
+    sel = persona_scale.select_persona(personas, traits=body.traits,
+                                       behavior_class=body.behavior_class)
+    p = sel.get("persona")
+    return {"artifact_id": artifact_id,
+            "persona_id": (p or {}).get("persona_id"),
+            "name": (p or {}).get("name"),
+            "ambiguous": sel.get("ambiguous"), "candidates": sel.get("candidates"),
+            "reason": sel.get("reason")}
+
+
+@router.get("/api/v1/test-factory/{artifact_id}/environments/{environment_id}/staleness")
+async def environment_staleness_endpoint(
+    artifact_id: str = PathParam(..., min_length=1, max_length=64),
+    environment_id: str = PathParam(..., min_length=1, max_length=64),
+    ttl_days: int = Query(30, ge=1, le=365),
+    user: dict = Depends(get_current_user),
+):
+    """Which persona cards for this environment need re-verification — because the
+    environment's data epoch rolled since they were proven, or the TTL lapsed, or
+    they were never verified. The honest due-list before a regression run; a
+    stale card is a signal, never a silent pass."""
+    from datetime import datetime, timezone
+    tenant_id = user["tenant_id"]
+    async with tenant_scoped_session(tenant_id) as session:
+        await _require_artifact(session, artifact_id, tenant_id)
+        env = await persona_store.get_environment(
+            session, tenant_id=tenant_id, artifact_id=artifact_id,
+            environment_id=environment_id) or {}
+        cards = await persona_store.all_credential_status(
+            session, tenant_id=tenant_id, artifact_id=artifact_id)
+    by_persona = {c["persona_id"]: c for c in cards
+                  if c["environment_id"] == environment_id}
+    rep = persona_scale.staleness_report(
+        by_persona, env, now=datetime.now(timezone.utc), ttl_days=ttl_days)
+    return {"artifact_id": artifact_id, "environment_id": environment_id, **rep}
+
+
+class _BulkCard(BaseModel):
+    persona_name: str = Field(..., min_length=1, max_length=120)
+    environment_id: str = Field(..., min_length=1, max_length=64)
+    slot_values: dict[str, str] = Field(..., min_length=1)
+    behavior_class: str = Field("", max_length=64)
+    traits: list[str] = Field(default_factory=list)
+
+
+class _BulkImportBody(BaseModel):
+    cards: list[_BulkCard] = Field(..., min_length=1, max_length=500)
+
+
+@router.post("/api/v1/test-factory/{artifact_id}/credentials/bulk-import")
+async def bulk_import_credentials_endpoint(
+    body: _BulkImportBody,
+    request: Request,
+    artifact_id: str = PathParam(..., min_length=1, max_length=64),
+    user: dict = Depends(get_current_user),
+):
+    """Provision many members at once: for each row, upsert the persona (by name)
+    and its envelope-encrypted card for an environment. One call stands up a whole
+    app's test population. Ciphertext only — nothing plaintext is ever stored."""
+    if not _persona_write_ok(user):
+        raise HTTPException(403, "Importing credentials requires an editor, manager or admin role.")
+    tenant_id = user["tenant_id"]
+    envelope = getattr(request.app.state, "envelope_service", None)
+    if envelope is None:
+        raise HTTPException(503, "encryption unavailable — refusing to import credentials in plaintext")
+    imported = 0
+    errors: list[dict] = []
+    async with tenant_scoped_session(tenant_id) as session:
+        await _require_artifact(session, artifact_id, tenant_id)
+        for i, c in enumerate(body.cards):
+            try:
+                p = await persona_store.save_persona(
+                    session, tenant_id=tenant_id, artifact_id=artifact_id,
+                    name=c.persona_name, behavior_class=c.behavior_class, traits=c.traits)
+                await persona_store.save_persona_credential(
+                    session, envelope=envelope, tenant_id=tenant_id,
+                    persona_id=p["persona_id"], environment_id=c.environment_id,
+                    slot_values=c.slot_values)
+                imported += 1
+            except Exception as exc:
+                errors.append({"index": i, "persona_name": c.persona_name,
+                               "error": str(exc)[:200]})
+        await session.commit()
+    await _persona_audit(tenant_id=tenant_id, artifact_id=artifact_id,
+                         actor=user.get("email") or user.get("user_id") or "?",
+                         event_type="credentials_bulk_imported",
+                         detail=f"imported={imported} errors={len(errors)}")
+    return {"imported": imported, "errors": errors, "requested": len(body.cards),
+            "note": "Personas + envelope-encrypted cards provisioned. No secret is echoed back."}
+
+
+@router.get("/api/v1/test-factory/{artifact_id}/credentials/manifest")
+async def credentials_manifest_endpoint(
+    artifact_id: str = PathParam(..., min_length=1, max_length=64),
+    user: dict = Depends(get_current_user),
+):
+    """The NON-SECRET provisioning grid: every persona×environment card, its slot
+    NAMES (never values), verify status + epoch. Export this to see what is
+    provisioned and what is missing — secrets never leave the envelope."""
+    tenant_id = user["tenant_id"]
+    async with tenant_scoped_session(tenant_id) as session:
+        await _require_artifact(session, artifact_id, tenant_id)
+        personas = await persona_store.list_personas(
+            session, tenant_id=tenant_id, artifact_id=artifact_id)
+        cards = await persona_store.all_credential_status(
+            session, tenant_id=tenant_id, artifact_id=artifact_id)
+    pname = {p["persona_id"]: p["name"] for p in personas}
+    for c in cards:
+        c["persona_name"] = pname.get(c["persona_id"], "")
+    return {"artifact_id": artifact_id, "personas": len(personas),
+            "cards": cards, "card_count": len(cards),
+            "note": "Slot NAMES only — a credential value never leaves the envelope."}
+
+
+@router.get("/api/v1/test-factory/{artifact_id}/personas/ops/summary")
+async def persona_ops_summary_endpoint(
+    artifact_id: str = PathParam(..., min_length=1, max_length=64),
+    user: dict = Depends(get_current_user),
+):
+    """Ops rollup for the persona × environment matrix: personas, environments +
+    postures, cards + verification state, recipes. A single glance at the health
+    of an app's test population."""
+    tenant_id = user["tenant_id"]
+    async with tenant_scoped_session(tenant_id) as session:
+        await _require_artifact(session, artifact_id, tenant_id)
+        personas = await persona_store.list_personas(
+            session, tenant_id=tenant_id, artifact_id=artifact_id)
+        envs = await persona_store.list_environments(
+            session, tenant_id=tenant_id, artifact_id=artifact_id)
+        cards = await persona_store.all_credential_status(
+            session, tenant_id=tenant_id, artifact_id=artifact_id)
+        recipes = await persona_store.list_recipes(
+            session, tenant_id=tenant_id, artifact_id=artifact_id)
+    verified = sum(1 for c in cards if c.get("verify_status") == "verified")
+    prod = sum(1 for e in envs if e.get("is_production"))
+    return {"artifact_id": artifact_id,
+            "personas": len(personas),
+            "environments": {"total": len(envs), "production": prod,
+                             "postures": {e["environment_id"]:
+                                          persona_governance.effective_posture(e) for e in envs}},
+            "credentials": {"total": len(cards), "verified": verified,
+                            "unverified": len(cards) - verified},
+            "recipes": len(recipes)}
+
+
+class _ImpersonationScaffoldBody(BaseModel):
+    admin_login_steps: list[dict] = Field(..., min_length=1,
+                                          description="the admin login choreography (recipe steps)")
+    impersonate_path: str = Field(..., min_length=1, max_length=2000)
+    member_slot: str = Field("member_number", max_length=64)
+    submit_selector: str = Field("", max_length=400)
+
+
+@router.post("/api/v1/test-factory/{artifact_id}/recipes/impersonation-scaffold")
+async def impersonation_scaffold_endpoint(
+    body: _ImpersonationScaffoldBody,
+    artifact_id: str = PathParam(..., min_length=1, max_length=64),
+    user: dict = Depends(get_current_user),
+):
+    """Scaffold a recipe for an environment where a run reaches a member by ADMIN
+    impersonation (a switch-user endpoint) rather than a member login — the
+    env-dependent path some enterprises use. Returns recipe steps + slots ready
+    to POST to /recipes; it verifies and runs through the same machinery. No
+    secret is embedded."""
+    if not _persona_write_ok(user):
+        raise HTTPException(403, "Scaffolding a recipe requires an editor, manager or admin role.")
+    scaffold = persona_scale.build_impersonation_recipe(
+        admin_login_steps=body.admin_login_steps, impersonate_path=body.impersonate_path,
+        member_slot=body.member_slot, submit_selector=body.submit_selector)
+    return {"artifact_id": artifact_id, **scaffold}
