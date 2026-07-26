@@ -30,6 +30,30 @@ MANIFEST_FILENAME = "manifest.json"
 VERIFIER_FILENAME = "verify_evidence.py"
 
 _SIGNING_ENV = "NEXUS_EVIDENCE_SIGNING_KEY"
+#: Preferred over the env var for on-prem: a secret in a FILE can be mounted,
+#: rotated and permission-controlled without recreating the container, and it
+#: does not leak into `docker inspect`, crash dumps or a process listing.
+_SIGNING_KEY_FILE_ENV = "NEXUS_EVIDENCE_SIGNING_KEY_FILE"
+_DEFAULT_KEY_PATH = "/run/secrets/nexus_evidence_signing_key"
+
+
+def _signing_key() -> str:
+    """The signing secret, from a key FILE if present, else the env var.
+
+    File first, deliberately. Returns "" when neither is configured — and that
+    absence is reported honestly as ``signed: false`` rather than papered over
+    with a locally-derived pseudo-key, which would look like a signature while
+    proving nothing an attacker with code access could not also produce.
+    """
+    path = (os.getenv(_SIGNING_KEY_FILE_ENV, "") or "").strip() or _DEFAULT_KEY_PATH
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            key = fh.read().strip()
+        if key:
+            return key
+    except Exception:
+        pass          # no key file is a normal, supported state
+    return (os.getenv(_SIGNING_ENV, "") or "").strip()
 
 
 def sha256_hex(data: bytes) -> str:
@@ -56,7 +80,7 @@ def chain_root(entries: list[dict]) -> str:
 
 
 def signing_enabled() -> bool:
-    return bool(os.getenv(_SIGNING_ENV, "").strip())
+    return bool(_signing_key())
 
 
 def sign_root(root: str) -> str:
@@ -65,7 +89,7 @@ def sign_root(root: str) -> str:
     Swapping in an asymmetric private-key signature is a drop-in here: nothing
     else in the manifest depends on how the root is signed.
     """
-    key = os.getenv(_SIGNING_ENV, "").strip()
+    key = _signing_key()
     if not key or not root:
         return ""
     return hmac.new(key.encode("utf-8"), root.encode("utf-8"), hashlib.sha256).hexdigest()
@@ -77,6 +101,19 @@ def verify_root_signature(root: str, signature: str) -> bool | None:
     if not signing_enabled() or not signature:
         return None
     return hmac.compare_digest(sign_root(root), str(signature))
+
+
+def signing_key_source() -> str:
+    """WHERE the key came from — surfaced so an operator can confirm the intended
+    secret is in play rather than assuming it."""
+    path = (os.getenv(_SIGNING_KEY_FILE_ENV, "") or "").strip() or _DEFAULT_KEY_PATH
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            if fh.read().strip():
+                return f"file:{path}"
+    except Exception:
+        pass
+    return f"env:{_SIGNING_ENV}" if (os.getenv(_SIGNING_ENV, "") or "").strip() else "none"
 
 
 def build_manifest(files: dict[str, bytes], *, meta: dict | None = None) -> dict:
@@ -98,7 +135,8 @@ def build_manifest(files: dict[str, bytes], *, meta: dict | None = None) -> dict
         "signature": sig,
         "signed": bool(sig),
         "algorithm": {"file_digest": "sha256", "chain": "sha256-fold-sorted-by-path",
-                      "signature": "hmac-sha256-detached" if sig else "none"},
+                      "signature": "hmac-sha256-detached" if sig else "none",
+                      "key_source": signing_key_source()},
         "verification": (
             "Recompute sha256 of each listed file, fold them per `algorithm.chain` "
             "and compare with chain_root. Any single changed byte changes the root. "
@@ -259,6 +297,6 @@ if __name__ == "__main__":
 
 __all__ = [
     "MANIFEST_VERSION", "MANIFEST_FILENAME", "VERIFIER_FILENAME", "VERIFIER_SCRIPT",
-    "sha256_hex", "chain_root", "signing_enabled", "sign_root",
+    "sha256_hex", "chain_root", "signing_enabled", "sign_root", "signing_key_source",
     "verify_root_signature", "build_manifest", "verify_manifest",
 ]

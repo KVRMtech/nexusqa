@@ -198,7 +198,9 @@ def test_disposition_is_recorded_structurally_so_the_queue_can_query_it():
     r = _router()
     assert "scenario_id=body.scenario_id, step_number=body.step_number" in r
     assert '"assignee": (body.assignee or "").strip()' in r
-    assert '"electronically_signed": bool(body.signature_name)' in r
+    # signed-state comes from the configured e-signature method, not from the
+    # mere presence of a string (see test_esign_method_is_configurable_...)
+    assert '"electronically_signed": _esign_evidence(' in r
 
 
 def test_queue_lists_unattributed_items_first():
@@ -322,3 +324,76 @@ def test_t3_endpoint_exists_and_is_write_gated():
 
 def test_runs_advertise_the_diagnostics_endpoint():
     assert "NEXUS_DIAGNOSTICS_ENDPOINT" in _router()
+
+
+# ── §6 config decisions: signing key source, retention, e-signature ──────────
+
+def test_signing_key_prefers_a_file_over_an_env_var(tmp_path, monkeypatch):
+    """A mounted secret file can be rotated without recreating the container and
+    does not leak into `docker inspect` or a process listing."""
+    from app.services.test_factory import evidence_manifest as em
+    kf = tmp_path / "key"
+    kf.write_text("file-secret\n", encoding="utf-8")
+    monkeypatch.setenv("NEXUS_EVIDENCE_SIGNING_KEY", "env-secret")
+    monkeypatch.setenv("NEXUS_EVIDENCE_SIGNING_KEY_FILE", str(kf))
+    assert em._signing_key() == "file-secret"
+    assert em.signing_key_source().startswith("file:")
+    monkeypatch.delenv("NEXUS_EVIDENCE_SIGNING_KEY_FILE")
+    assert em._signing_key() == "env-secret"
+    assert em.signing_key_source().startswith("env:")
+
+
+def test_no_key_means_unsigned_never_a_locally_derived_pseudo_key(monkeypatch):
+    from app.services.test_factory import evidence_manifest as em
+    monkeypatch.delenv("NEXUS_EVIDENCE_SIGNING_KEY", raising=False)
+    monkeypatch.setenv("NEXUS_EVIDENCE_SIGNING_KEY_FILE", "/nonexistent/key")
+    assert em.signing_enabled() is False
+    m = em.build_manifest({"a": b"1"})
+    assert m["signed"] is False and m["algorithm"]["key_source"] == "none"
+
+
+def test_retention_tombstones_rather_than_deletes():
+    from app.services.test_factory import evidence_retention as ret
+    stone_src = open(ret.__file__, encoding="utf-8").read()
+    assert "TOMBSTONE_PREFIX" in stone_src
+    assert "sha256=" in stone_src            # the digest survives the reclaim
+    # the run/step rows and verdicts must never be touched by retention
+    assert "run/step rows" in stone_src.lower() or "Run/step rows" in stone_src
+
+
+def test_retention_is_a_dry_run_by_default():
+    import inspect
+    from app.services.test_factory import evidence_retention as ret
+    sig = inspect.signature(ret.apply_retention)
+    assert sig.parameters["dry_run"].default is True
+
+
+def test_retention_windows_differ_by_cost_of_the_artifact():
+    from app.services.test_factory import evidence_retention as ret
+    assert ret.window_days("application/zip") < ret.window_days("image/png")
+    assert ret.window_days("application/zip") == 30
+
+
+def test_retention_window_is_env_overridable(monkeypatch):
+    from app.services.test_factory import evidence_retention as ret
+    monkeypatch.setenv("NEXUS_RETENTION_APPLICATION_ZIP_DAYS", "60")
+    assert ret.window_days("application/zip") == 60
+    monkeypatch.setenv("NEXUS_RETENTION_APPLICATION_ZIP_DAYS", "0")
+    assert ret.window_days("application/zip") == 0      # keep forever
+
+
+def test_esign_method_is_configurable_and_never_over_claims():
+    r = _router()
+    assert "_ESIGN_METHOD" in r
+    for m in ("typed_name", "sso_session", "both"):
+        assert f'"{m}"' in r
+    # an authenticated request is NOT by itself a signature
+    assert "never upgraded to a sign-off because a request" in r
+    assert 'sso_sub != "anonymous"' in r
+
+
+def test_retention_endpoint_is_admin_gated_and_audited():
+    r = _router()
+    assert "/evidence/retention" in r
+    assert 'event_type="evidence_retention"' in r
+    assert "requires an admin or manager role" in r

@@ -107,6 +107,7 @@ from ..services.test_factory import report_export
 from ..services.test_factory import evidence_manifest
 from ..services.test_factory import report_formats
 from ..services.test_factory import report_store
+from ..services.test_factory import evidence_retention
 from ..services.test_factory.assistant import answer as assistant_answer
 from ..services.test_factory.delivery import (
     EXPORT_MEDIA_TYPES,
@@ -6917,6 +6918,17 @@ async def execution_evidence_export(
         run_id=(report.get("run") or {}).get("run_id", "") or "",
         mask_all_inputs=bool(mask_all_inputs),
     )
+    if not manifest.get("signed"):
+        # The package still says signed=false honestly, but an operator would
+        # not notice a signing key that vanished (e.g. a container recreate
+        # dropping a key stored outside a mounted volume). Say so, loudly, in
+        # the logs — a silent downgrade from tamper-PROOF to tamper-EVIDENT is
+        # exactly the kind of quiet regression this product refuses to allow.
+        _logger.warning(
+            "test_factory.evidence_export_UNSIGNED artifact=%s key_source=%s — "
+            "packages are tamper-EVIDENT only; provision "
+            "NEXUS_EVIDENCE_SIGNING_KEY_FILE (see docs/EVIDENCE_SIGNING_AND_RETENTION.md)",
+            artifact_id, evidence_manifest.signing_key_source())
     await _audit_report_event(
         tenant_id=tenant_id, artifact_id=artifact_id, actor=actor,
         event_type="evidence_exported",
@@ -6966,6 +6978,54 @@ class _ReviewDispositionBody(BaseModel):
 
 _ALLOWED_DISPOSITIONS = ("confirm_defect", "reclassify", "retest", "dismiss")
 
+#: E-signature method (spec §6 decision 3), per deployment.
+#:   typed_name  — the reviewer types their full name (default; simple, and
+#:                 honest about being a single factor);
+#:   sso_session — the signature is the IdP-authenticated session itself: we
+#:                 record sub / email / issuer / auth-time from the validated
+#:                 token, which is a stronger identity claim than free text
+#:                 because the reviewer cannot type someone else's name;
+#:   both        — require BOTH (closest to a 21 CFR Part 11 two-component
+#:                 signature: an authenticated identity plus a deliberate act).
+_ESIGN_METHOD = (os.getenv("NEXUS_ESIGN_METHOD", "") or "typed_name").strip().lower()
+_ESIGN_METHODS = ("typed_name", "sso_session", "both")
+
+
+def _esign_evidence(user: dict, typed_name: str) -> dict:
+    """What we can HONESTLY assert about who signed, and how.
+
+    Never claims more than the deployment actually proves: with no typed name
+    and no SSO issuer we record an unsigned disposition rather than treating the
+    API caller's identity as a signature."""
+    method = _ESIGN_METHOD if _ESIGN_METHOD in _ESIGN_METHODS else "typed_name"
+    typed = (typed_name or "").strip()
+    sso_sub = str(user.get("user_id") or "")
+    sso_email = str(user.get("email") or "")
+    sso_iss = str(user.get("iss") or user.get("issuer") or "")
+    has_typed = bool(typed)
+    # An SSO component requires a real authenticated subject, not a default.
+    has_sso = bool(sso_sub and sso_sub != "anonymous")
+    if method == "typed_name":
+        signed = has_typed
+    elif method == "sso_session":
+        signed = has_sso
+    else:
+        signed = has_typed and has_sso
+    return {
+        "method": method,
+        "electronically_signed": bool(signed),
+        "typed_name": typed,
+        "sso_subject": sso_sub if has_sso else "",
+        "sso_email": sso_email if has_sso else "",
+        "sso_issuer": sso_iss,
+        "components": ([c for c, ok in (("typed_name", has_typed),
+                                        ("sso_session", has_sso)) if ok]),
+        "note": ("A signature is asserted only when this deployment's configured "
+                 "method is actually satisfied. An unmet requirement is recorded "
+                 "as UNSIGNED — never upgraded to a sign-off because a request "
+                 "happened to be authenticated."),
+    }
+
 
 @router.post("/api/v1/test-factory/{artifact_id}/report/review")
 async def record_review_disposition(
@@ -7006,15 +7066,19 @@ async def record_review_disposition(
             "reclassify_to": (body.reclassify_to or "").strip(),
             "defect_signature": (body.defect_signature or "").strip(),
             "reason": body.reason,
-            # We record WHETHER it was signed and by what typed name — never a
+            # We record WHETHER it was signed and by what method — never a
             # claim that an unsigned disposition was signed.
-            "electronically_signed": bool(body.signature_name),
+            **{"signature": _esign_evidence(user, body.signature_name or "")},
+            "electronically_signed": _esign_evidence(
+                user, body.signature_name or "")["electronically_signed"],
             "signature_name": (body.signature_name or "").strip(),
         })
     return {"recorded": True, "disposition": body.disposition,
             "scenario_id": body.scenario_id, "step_number": body.step_number,
             "assignee": body.assignee or "", "actor": actor,
-            "electronically_signed": bool(body.signature_name),
+            "signature": _esign_evidence(user, body.signature_name or ""),
+            "electronically_signed": _esign_evidence(
+                user, body.signature_name or "")["electronically_signed"],
             "note": ("Recorded on the tenant's tamper-evident chain. An unsigned "
                      "disposition is still recorded — it is simply marked unsigned, "
                      "never presented as a signed one.")}
@@ -7114,6 +7178,41 @@ async def report_review_queue(
     }
 
 
+@router.post("/api/v1/test-factory/{artifact_id}/evidence/retention")
+async def evidence_retention_pass(
+    artifact_id: str = PathParam(..., min_length=1, max_length=64),
+    apply: bool = Query(False, description="actually reclaim; default is a dry run"),
+    limit: int = Query(500, ge=1, le=5000),
+    user: dict = Depends(get_current_user),
+):
+    """Reclaim evidence bytes past their retention window (spec §6 decision 1).
+
+    DRY RUN by default: an irreversible sweep must be an explicit act, never the
+    accidental result of calling an endpoint. Reclaimed artifacts are
+    TOMBSTONED, not deleted — the row survives with the SHA-256, the original
+    size and the reclaim date, so an exported copy can still be proven genuine.
+    Run/step rows and verdicts are never touched.
+    """
+    if (user.get("role") or "viewer").lower() not in ("admin", "manager"):
+        raise HTTPException(status_code=403,
+                            detail="Evidence retention requires an admin or manager role.")
+    tenant_id = user["tenant_id"]
+    async with tenant_scoped_session(tenant_id) as session:
+        await _require_artifact(session, artifact_id, tenant_id)
+        result = await evidence_retention.apply_retention(
+            session, tenant_id=tenant_id, dry_run=not apply, limit=limit)
+        if apply:
+            await session.commit()
+    if apply:
+        await _audit_report_event(
+            tenant_id=tenant_id, artifact_id=artifact_id,
+            actor=user.get("email") or user.get("user_id") or "unknown",
+            event_type="evidence_retention",
+            detail=(f"reclaimed={result.get('candidates')} "
+                    f"bytes={result.get('reclaimable_bytes')} (tombstoned, not deleted)"))
+    return result
+
+
 @router.get("/api/v1/test-factory/{artifact_id}/report/audit-trail")
 async def report_audit_trail(
     artifact_id: str = PathParam(..., min_length=1, max_length=64),
@@ -7142,7 +7241,10 @@ async def report_audit_trail(
         _logger.warning("test_factory.audit_verify_failed err=%s", str(exc)[:200])
         chain = {"verified": None, "error": "chain verification unavailable"}
     return {"artifact_id": artifact_id, "audit": events, "chain_verification": chain,
-            "signing_enabled": evidence_manifest.signing_enabled()}
+            "signing_enabled": evidence_manifest.signing_enabled(),
+            "signing_key_source": evidence_manifest.signing_key_source(),
+            "esign_method": _ESIGN_METHOD,
+            "retention_windows_days": evidence_retention.DEFAULT_WINDOWS}
 
 
 # ── Phase R4: reach formats, analytics, filters (spec §2.13-§2.16) ──────────
