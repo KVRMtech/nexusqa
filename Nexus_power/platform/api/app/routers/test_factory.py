@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 import io
 import json
+import re
 import logging
 import os
 import uuid
@@ -1066,6 +1067,39 @@ async def _run_form_login(request, artifact_id: str, tenant_id: str) -> tuple[di
     if not cfg:
         return None, {}
     return auth_profiles.build_form_login_bundle(cfg)
+
+
+async def _persona_auth_bundle(request, artifact_id: str, tenant_id: str,
+                               persona_id: str, environment_id: str
+                               ) -> tuple[dict | None, dict]:
+    """Resolve (persona, environment) → (auth_config, login_env) for a run.
+
+    Prefers a login RECIPE (the general, multi-step path) filled from the
+    persona's credential card; falls back to the legacy form-login when the
+    persona is the synthetic persona-0. Returns (None, {}) when nothing is
+    bound. Shared by the P1 recipe probe and the P2 run dispatch — one resolver,
+    so a probe and a real run authenticate identically. Never raises."""
+    if not persona_id:
+        return await _run_form_login(request, artifact_id, tenant_id)
+    envelope = getattr(request.app.state, "envelope_service", None)
+    try:
+        async with tenant_scoped_session(tenant_id) as session:
+            recipe = await persona_store.get_recipe(
+                session, tenant_id=tenant_id, artifact_id=artifact_id)
+            card = await persona_store.get_persona_credential(
+                session, envelope=envelope, tenant_id=tenant_id,
+                persona_id=persona_id, environment_id=environment_id)
+    except Exception as exc:
+        _logger.warning("persona.auth_resolve_failed persona=%s err=%s",
+                        persona_id, str(exc)[:200])
+        return None, {}
+    if recipe and card:
+        return persona_store.build_persona_bundle(recipe, card)
+    # persona-0 (or any persona whose card is a legacy form-login shape):
+    if card and ("user" in card or "password" in card):
+        return auth_profiles.build_form_login_bundle(card)
+    # a persona with no recipe and no legacy card cannot log in — honest None
+    return None, {}
 
 # Transient run status for the live "running -> done" indicator. The durable
 # record is the ingested run (triage board); this only drives the UI spinner, so
@@ -7644,3 +7678,104 @@ async def get_classifications_endpoint(
         cls = await persona_store.get_classifications(
             session, tenant_id=tenant_id, artifact_id=artifact_id)
     return {"artifact_id": artifact_id, "classifications": cls, "count": len(cls)}
+
+
+class _RecipeProbeBody(BaseModel):
+    """Verify a login recipe by replaying it with a persona's card."""
+    persona_id: str = Field(..., min_length=1, max_length=64)
+    environment_id: str = Field(..., min_length=1, max_length=64)
+    base_url: str = Field("", max_length=2000)
+    test_id: str = Field("", max_length=64, description="a functional test to carry the probe run")
+
+
+@router.post("/api/v1/test-factory/{artifact_id}/recipes/verify")
+async def verify_recipe_endpoint(
+    body: _RecipeProbeBody,
+    request: Request,
+    artifact_id: str = PathParam(..., min_length=1, max_length=64),
+    user: dict = Depends(get_current_user),
+):
+    """Replay the active login recipe with a persona's card and report whether it
+    logs in — the honest recipe-verification probe (P1 exit proof).
+
+    Runs ONE test headless so the recipe drives a real login; then reads the
+    runner's own log. 'recipe login OK' → verified (stamped). 'recipe drift at
+    step N' → the recipe no longer matches the login page — a NAMED drift, never
+    a misleading product failure. Read-only on the artifact, admin|manager."""
+    if not _persona_write_ok(user):
+        raise HTTPException(403, "Verifying a recipe requires an editor, manager or admin role.")
+    tenant_id = user["tenant_id"]
+    token = _bearer(request)
+    auth_config, login_env = await _persona_auth_bundle(
+        request, artifact_id, tenant_id, body.persona_id, body.environment_id)
+    if not auth_config:
+        raise HTTPException(422, {
+            "error": "no login recipe + card resolved for this persona/environment",
+            "hint": "store a recipe (POST …/recipes) and a credential card "
+                    "(PUT …/personas/{id}/credentials/{env}) first",
+        })
+
+    # Pick a carrier test (any active functional case) so the run has a page to
+    # land on after the recipe login. The probe judges the LOGIN, not the case.
+    async with tenant_scoped_session(tenant_id) as session:
+        await _require_artifact(session, artifact_id, tenant_id)
+        cases = await factory_service.load_active_production_cases(session, artifact_id=artifact_id)
+        visits, _ = await factory_service._load_current_pages_and_actions(session, artifact_id=artifact_id)
+        edited_map = await _active_edited_map(session, artifact_id=artifact_id)
+    tcid = (body.test_id or "").strip()
+    carrier = [c for c in cases if (getattr(c, "test_id", "") or "") == tcid] if tcid else cases[:1]
+    if not carrier:
+        raise HTTPException(404, "no active test to carry the probe run")
+
+    base_url = (body.base_url or "").strip() or _recorded_origin(visits)
+    files = _configured_files(
+        carrier, build_field_meta(visits), base_url, {},
+        browsers=["chromium"], headed=False, workers=1, retries=0,
+        edited=edited_map, storage_state=None, auth_config=auth_config)
+    run_id = uuid.uuid4().hex
+    env = {
+        "NEXUS_ENDPOINT": _INGEST_BASE, "NEXUS_TOKEN": token or "",
+        "NEXUS_ARTIFACT_ID": artifact_id, "NEXUS_RUN_ID": run_id,
+        "NEXUS_BASE_URL": base_url, "NEXUS_ENV": "recipe-probe",
+        **login_env,
+    }
+    try:
+        res = await runner_client.run_suite(files, env, timeout_ms=120000)
+    except Exception as exc:
+        raise HTTPException(502, f"probe runner error: {exc}")
+
+    output = ""
+    j = _RUNNER_JOBS.get(run_id) or {}
+    output = str(j.get("output") or "")
+    if not output:
+        try:
+            output = str((res or {}).get("output") or "")
+        except Exception:
+            output = ""
+    ok = "recipe login OK" in output or "form login OK" in output
+    drift = None
+    m = re.search(r"recipe drift at step (\d+) \(([^)]*)\)", output)
+    if m:
+        drift = {"step": int(m.group(1)), "action": m.group(2)}
+    if ok:
+        async with tenant_scoped_session(tenant_id) as session:
+            rec = await persona_store.get_recipe(session, tenant_id=tenant_id, artifact_id=artifact_id)
+            if rec:
+                await persona_store.stamp_recipe_verified(
+                    session, tenant_id=tenant_id, recipe_id=rec["recipe_id"],
+                    environment_id=body.environment_id)
+                await session.commit()
+    await _persona_audit(tenant_id=tenant_id, artifact_id=artifact_id,
+                         actor=user.get("email") or user.get("user_id") or "?",
+                         event_type="recipe_verified",
+                         detail=f"persona={body.persona_id} env={body.environment_id} ok={ok} drift={drift}")
+    return {
+        "verified": bool(ok),
+        "recipe_drift": drift,
+        "run_id": run_id,
+        "note": ("Recipe login replayed successfully." if ok
+                 else ("Recipe DRIFT — the login page no longer matches the recorded "
+                       "recipe at the named step; re-record the recipe. This is NOT "
+                       "an application failure." if drift
+                       else "Login did not confirm; check the persona card and recipe.")),
+    }

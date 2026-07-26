@@ -2070,18 +2070,98 @@ import * as fs from 'fs';
 // (never in the file). On success it writes ./vkpower.auth.json (storageState),
 // which playwright.config auto-loads. Fully defensive: any missing config or
 // error is a silent no-op, so a non-auth run is completely unaffected.
+// ── RFC 6238 TOTP (no dependency) — for a slot typed 'totp_seed' (base32) ────
+import * as crypto from 'crypto';
+function __nxTotp(base32Secret: string): string {
+  try {
+    const clean = (base32Secret || '').replace(/=+$/,'').replace(/\\s/g,'').toUpperCase();
+    const alpha = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+    let bits = '';
+    for (const c of clean) { const i = alpha.indexOf(c); if (i < 0) continue; bits += i.toString(2).padStart(5,'0'); }
+    const bytes: number[] = [];
+    for (let i = 0; i + 8 <= bits.length; i += 8) bytes.push(parseInt(bits.slice(i, i+8), 2));
+    const key = Buffer.from(bytes);
+    const counter = Math.floor(Date.now() / 1000 / 30);
+    const cb = Buffer.alloc(8); cb.writeBigInt64BE(BigInt(counter));
+    const hmac = crypto.createHmac('sha1', key).update(cb).digest();
+    const off = hmac[hmac.length - 1] & 0xf;
+    const code = ((hmac[off] & 0x7f) << 24 | (hmac[off+1] & 0xff) << 16 | (hmac[off+2] & 0xff) << 8 | (hmac[off+3] & 0xff)) % 1000000;
+    return code.toString().padStart(6, '0');
+  } catch { return ''; }
+}
+
+// Resolve a recipe slot's value from the run env, computing TOTP if seeded.
+function __nxSlotValue(slot: any): string {
+  const raw = process.env[slot.env || ('NEXUS_LOGIN_' + String(slot.name || '').toUpperCase())] || '';
+  if ((slot.type || 'secret') === 'totp_seed' && raw) return __nxTotp(raw);
+  return raw;   // secret | fixed_code | plain all pass through literally
+}
+
 export default async function globalSetup(config: FullConfig) {
   try {
     if (!fs.existsSync('./vkpower.auth.config.json')) return;
     const cfg = JSON.parse(fs.readFileSync('./vkpower.auth.config.json', 'utf-8'));
-    if (!cfg || (cfg.strategy || 'none') !== 'form') return;
+    const strategy = cfg && (cfg.strategy || 'none');
+    if (strategy !== 'form' && strategy !== 'recipe') return;
     const p0: any = (config.projects && config.projects[0]) || {};
     const baseURL = process.env.NEXUS_BASE_URL || cfg.baseURL || (p0.use && p0.use.baseURL) || '';
-    const user = process.env[cfg.userEnv || 'NEXUS_LOGIN_USER'] || '';
-    const pass = process.env[cfg.passwordEnv || 'NEXUS_LOGIN_PASSWORD'] || '';
-    if (!user || !pass) { console.warn('[nexus-auth] form login configured but credentials env not set -- skipping.'); return; }
     const browser = await chromium.launch();
     const page = await browser.newPage(baseURL ? { baseURL } : {});
+
+    if (strategy === 'recipe') {
+      // Multi-step recipe interpreter — drives ANY login shape (member number ->
+      // next screen -> password + PIN -> OTP), each slot resolved from the run
+      // env (secrets never enter the bundle). A missing required slot value is a
+      // hard skip, NOT a fabricated session.
+      const slotByName: any = {};
+      for (const s of (cfg.slots || [])) slotByName[s.name] = s;
+      const missing = (cfg.slots || []).filter((s: any) => !__nxSlotValue(s) && (s.type || 'secret') !== 'plain');
+      if (missing.length) {
+        console.warn('[nexus-auth] recipe login: credential env not set for slots ' +
+          missing.map((s: any) => s.name).join(',') + ' -- skipping.');
+        await browser.close(); return;
+      }
+      let stepNo = 0;
+      for (const step of (cfg.steps || [])) {
+        stepNo += 1;
+        try {
+          const action = step.action;
+          if (action === 'goto') {
+            await page.goto(step.path || cfg.loginPath || '/');
+          } else if (action === 'fill') {
+            const slot = slotByName[step.slot] || { name: step.slot };
+            const val = __nxSlotValue(slot);
+            const loc = step.label
+              ? page.getByLabel(step.label).or(page.getByRole('textbox', { name: step.label }))
+              : (step.selector ? page.locator(step.selector)
+                 : page.getByLabel(String(step.slot).replace(/_/g,' ')));
+            await loc.first().fill(val);
+          } else if (action === 'click') {
+            const loc = step.name
+              ? page.getByRole((step.role || 'button'), { name: new RegExp(step.name, 'i') })
+              : page.locator(step.selector || 'button[type=submit]');
+            await loc.first().click();
+          } else if (action === 'wait') {
+            await page.waitForLoadState(step.state || 'networkidle').catch(() => {});
+          }
+        } catch (se) {
+          // A recipe step that will not replay is RECIPE DRIFT, not a product
+          // failure. Name the step so the operator re-records; do not fabricate.
+          console.warn('[nexus-auth] recipe drift at step ' + stepNo + ' (' + (step.action || '?') + '): ' + (se as Error).message);
+          await browser.close(); return;
+        }
+      }
+      await page.waitForLoadState('networkidle').catch(() => {});
+      await page.context().storageState({ path: './vkpower.auth.json' });
+      await browser.close();
+      console.log('[nexus-auth] recipe login OK (' + (cfg.steps || []).length + ' steps) -- wrote ./vkpower.auth.json');
+      return;
+    }
+
+    // strategy === 'form' — the original single-page path, unchanged.
+    const user = process.env[cfg.userEnv || 'NEXUS_LOGIN_USER'] || '';
+    const pass = process.env[cfg.passwordEnv || 'NEXUS_LOGIN_PASSWORD'] || '';
+    if (!user || !pass) { console.warn('[nexus-auth] form login configured but credentials env not set -- skipping.'); await browser.close(); return; }
     await page.goto(cfg.loginPath || '/');
     for (const f of (cfg.fields || [])) {
       const v = f.value === 'user' ? user : f.value === 'password' ? pass : (f.value || '');
