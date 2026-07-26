@@ -4405,8 +4405,20 @@ async def set_form_login(
         except (ValueError, RuntimeError) as exc:
             raise HTTPException(status_code=422, detail=str(exc))
         await session.commit()
+    # R2: configuring auth YIELDS a baseline login recipe (no hand-authoring) so a
+    # named persona fills the same choreography with its own card. Idempotent +
+    # best-effort — a hiccup never fails the auth save.
+    baseline = {"materialized": False, "reason": "skipped"}
+    try:
+        async with tenant_scoped_session(tenant_id) as session:
+            baseline = await persona_store.ensure_baseline_from_form_login(
+                session, tenant_id=tenant_id, artifact_id=artifact_id, form_login_cfg=config)
+            await session.commit()
+    except Exception as exc:
+        _logger.warning("ensure_baseline_failed artifact=%s err=%s", artifact_id, str(exc)[:200])
     return {"status": "saved", "strategy": "form", "login_path": body.login_path,
-            "user_masked": (body.user[:2] + "***") if body.user else ""}
+            "user_masked": (body.user[:2] + "***") if body.user else "",
+            "baseline_recipe": baseline}
 
 
 @router.post("/api/v1/test-factory/{artifact_id}/playwright/auth/import")
@@ -7895,6 +7907,38 @@ async def create_recipe_endpoint(
                          event_type="login_recipe_saved",
                          detail=f"version={out['version']}")
     return {"status": "saved", **out}
+
+
+@router.post("/api/v1/test-factory/{artifact_id}/recipes/ensure-baseline")
+async def ensure_baseline_recipe_endpoint(
+    request: Request,
+    artifact_id: str = PathParam(..., min_length=1, max_length=64),
+    user: dict = Depends(get_current_user),
+):
+    """Backfill: derive a baseline login recipe from this artifact's configured
+    form-login, so named personas fill the same choreography with their own card
+    instead of anyone hand-authoring it. Idempotent (no-op if a recipe already
+    exists); honest skip when there is no form-login to derive from. Editor+."""
+    if not _persona_write_ok(user):
+        raise HTTPException(403, "Materializing a baseline recipe requires an editor, manager or admin role.")
+    tenant_id = user["tenant_id"]
+    envelope = getattr(request.app.state, "envelope_service", None)
+    async with tenant_scoped_session(tenant_id) as session:
+        await _require_artifact(session, artifact_id, tenant_id)
+        cfg = await auth_profiles.get_form_login(
+            session, envelope=envelope, tenant_id=tenant_id, artifact_id=artifact_id)
+        out = await persona_store.ensure_baseline_from_form_login(
+            session, tenant_id=tenant_id, artifact_id=artifact_id, form_login_cfg=cfg)
+        await session.commit()
+    if out.get("materialized"):
+        await _persona_audit(tenant_id=tenant_id, artifact_id=artifact_id,
+                             actor=user.get("email") or user.get("user_id") or "?",
+                             event_type="baseline_recipe_materialized",
+                             detail=f"recipe={out.get('recipe_id')} slots={out.get('slots')}")
+    return {"artifact_id": artifact_id, **out,
+            "note": ("A crawl/auth-setup now yields a login recipe on file. A bare "
+                     "captured SESSION (cookies only, no login steps) cannot derive "
+                     "one — record a multi-step login demonstration for those.")}
 
 
 @router.get("/api/v1/test-factory/{artifact_id}/classifications")

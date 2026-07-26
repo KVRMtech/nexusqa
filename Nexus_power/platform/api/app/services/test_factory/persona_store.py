@@ -224,6 +224,62 @@ async def stamp_recipe_verified(session: AsyncSession, *, tenant_id: str,
         .values(verified_at=_utc_now(), verified_env=environment_id))
 
 
+def _recipe_from_form_login(cfg: dict) -> tuple[list, list]:
+    """Derive a v1 login RECIPE (steps + slots) from a stored form-login profile.
+
+    A form-login already IS the login choreography — the login path, the labelled
+    fields, and the submit control. Turning it into a recipe means a named persona
+    fills the SAME choreography with its own card instead of anyone hand-authoring
+    it. Slot names come from each field's ``value`` (``user``/``password``), so a
+    persona card keyed by those slots drops straight in. Emits steps in the exact
+    shape the compiler's recipe interpreter replays (goto/fill/click/wait)."""
+    login_path = str(cfg.get("login_path") or "/")
+    fields = cfg.get("fields") or [{"label": "Email", "value": "user"},
+                                   {"label": "Password", "value": "password"}]
+    submit = str(cfg.get("submit_label") or "Sign in")
+    steps: list = [{"action": "goto", "path": login_path}]
+    slots: list = []
+    seen: set = set()
+    for f in fields:
+        slot = str((f or {}).get("value") or "").strip() or "user"
+        label = str((f or {}).get("label") or slot).strip()
+        steps.append({"action": "fill", "slot": slot, "label": label})
+        if slot not in seen:
+            slots.append({"name": slot, "type": "secret"})
+            seen.add(slot)
+    steps.append({"action": "click", "name": submit})
+    steps.append({"action": "wait", "state": "networkidle"})
+    return steps, slots
+
+
+async def ensure_baseline_from_form_login(session: AsyncSession, *, tenant_id: str,
+                                          artifact_id: str, form_login_cfg: dict | None
+                                          ) -> dict:
+    """Materialize a baseline login recipe from a configured form-login, so a
+    crawl/auth-setup YIELDS a recipe on file — no hand-authoring. Idempotent: a
+    no-op when a recipe already exists; honest skip when there is no form-login.
+    Caller commits.
+
+    The synthetic persona-0 (the recording baseline) keeps working via the legacy
+    form path; this recipe is the shared choreography a NAMED persona fills with
+    its own credential card."""
+    try:
+        existing = await get_recipe(session, tenant_id=tenant_id, artifact_id=artifact_id)
+    except Exception:
+        existing = None
+    if existing:
+        return {"materialized": False, "reason": "recipe_already_exists",
+                "recipe_id": existing.get("recipe_id")}
+    cfg = form_login_cfg or {}
+    if not (cfg.get("user") and cfg.get("password")):
+        return {"materialized": False, "reason": "no_form_login_to_derive_from"}
+    steps, slots = _recipe_from_form_login(cfg)
+    out = await save_recipe(session, tenant_id=tenant_id, artifact_id=artifact_id,
+                            steps=steps, slots=slots, source="derived_from_form_login")
+    return {"materialized": True, "recipe_id": out["recipe_id"], "version": out["version"],
+            "step_count": len(steps), "slots": [s["name"] for s in slots]}
+
+
 # ── Personas ─────────────────────────────────────────────────────────────────
 
 async def save_persona(session: AsyncSession, *, tenant_id: str, artifact_id: str,
@@ -699,6 +755,7 @@ __all__ = [
     "TpLoginRecipeRow", "TpPersonaRow", "TpPersonaCredentialRow", "TpPersonaExpectedValueRow",
     "TpValueClassificationRow", "TpPersonaReservationRow", "TpEnvironmentRow", "TpCaseScopeRow",
     "save_recipe", "get_recipe", "list_recipes", "stamp_recipe_verified",
+    "ensure_baseline_from_form_login",
     "save_persona", "get_persona", "list_personas", "retire_persona",
     "save_persona_credential", "get_persona_credential", "credential_status",
     "stamp_card_verified", "all_credential_status",
