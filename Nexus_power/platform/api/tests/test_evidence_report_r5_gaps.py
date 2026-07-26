@@ -538,3 +538,15 @@ def test_screenshots_are_uploaded_for_passing_tests_too():
     assert "pendingShots.push" not in failure_block, \
         "screenshot upload must not be gated on failure"
     assert "Screenshot for EVERY test, not only failures." in src
+
+
+def test_video_covers_client_live_AND_certification_runs():
+    """Video was wired into the client run only. A live run is watched and then
+    gone, and certification is the run the Trust Block asks a client to believe
+    — both must carry the recording too."""
+    r = _router()
+    assert r.count("NEXUS_VIDEO") >= 3, "client run, run-live and certification"
+    assert 'os.getenv("NEXUS_CERT_VIDEO", "on")' in r
+    # diagnosis/auto-heal probes deliberately stay lean (they are our own
+    # instruments, not client-facing evidence)
+    assert r.count('"NEXUS_ENV": _ENV_DIAGNOSIS') >= 1

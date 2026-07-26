@@ -1188,6 +1188,11 @@ async def _certify_generated_suite(
                 "NEXUS_BASE_URL": base_url,
                 "NEXUS_ENV": "certification",
                 **login_env,
+                # Certification is the run the Trust Block points at — the one a
+                # client is asked to believe. It should carry the richest
+                # evidence we can produce, not the thinnest.
+                "NEXUS_VIDEO": os.getenv("NEXUS_CERT_VIDEO", "on"),
+                "NEXUS_SCREENSHOT": os.getenv("NEXUS_CERT_SCREENSHOT", "on"),
             }
             await _register_job(run_id, {
                 "run_id": run_id, "status": "running", "artifact_id": artifact_id,
@@ -1916,6 +1921,13 @@ async def heal_step(
         "NEXUS_ARTIFACT_ID": artifact_id, "NEXUS_RUN_ID": run_id,
         "NEXUS_BASE_URL": base_url, "NEXUS_ENV": _env_run_label(body.env_context),
         **login_env,
+        # Watching it live and KEEPING the recording are different things — a
+        # live viewer is gone the moment you look away.
+        "NEXUS_VIDEO": "on" if body.video else "off",
+        "NEXUS_SCREENSHOT": (
+            body.screenshot_mode
+            if (body.screenshots and body.screenshot_mode in _SCREENSHOT_MODES)
+            else ("on" if body.screenshots else "off")),
     }
     try:
         await runner_client.run_live(files, env)            # 202; raises on 409
