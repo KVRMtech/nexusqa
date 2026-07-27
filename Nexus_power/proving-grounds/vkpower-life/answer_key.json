@@ -1,0 +1,44 @@
+{
+  "app": "VKPower Life Insurance",
+  "kind": "life-insurance (member portal, VKPower-branded)",
+  "base_url": "http://vkpower-life:80",
+  "ui_stack": "vanilla-js-spa (hash routing) — accessible, framework-agnostic",
+  "provenance": "hand-authored VKPower Life proving ground for VKPower Verdict (fresh-account rebuild)",
+  "auth_recipe": {
+    "strategy": "recipe",
+    "login_path": "/#/login",
+    "note": "USAA-style multi-step ladder: member number + password, then a 6-digit security PIN.",
+    "slots": [
+      {"name": "member_number", "type": "plain"},
+      {"name": "password", "type": "secret"},
+      {"name": "pin", "type": "fixed_code"}
+    ],
+    "steps": [
+      {"action": "goto", "path": "/#/login"},
+      {"action": "fill", "slot": "member_number", "label": "Member number"},
+      {"action": "fill", "slot": "password", "label": "Password"},
+      {"action": "click", "name": "Continue"},
+      {"action": "fill", "slot": "pin", "label": "Security PIN"},
+      {"action": "click", "name": "Verify"},
+      {"action": "wait", "state": "networkidle"}
+    ]
+  },
+  "members": {
+    "25000001": {"name": "Maria Young", "age": 25, "behavior_class": "young-small-family",
+                 "policy": "VKPL-25000001", "coverage": 250000, "beneficiaries": 2, "password": "Member#2026", "pin": "246810"},
+    "50000005": {"name": "John Senior", "age": 55, "behavior_class": "senior-large-family",
+                 "policy": "VKPL-50000005", "coverage": 500000, "beneficiaries": 5, "password": "Member#2026", "pin": "135790"}
+  },
+  "critical_scenarios": [
+    "member logs in via member-number + password + PIN and reaches the dashboard",
+    "dashboard shows the member's own name, policy number and coverage (member-derived)",
+    "beneficiaries page lists the member's beneficiaries (2 for young-small-family, 5 for senior-large-family)",
+    "quote -> apply -> review -> bind issues a confirmation number"
+  ],
+  "certified_invariants": [
+    "the dashboard heading echoes the logged-in member's name (identity_echo)",
+    "the beneficiary COUNT is member-derived (cardinality varies by behavior class)",
+    "policy number and coverage are member-derived; the page chrome/labels are app-constant"
+  ],
+  "grading": "a correct crawl distinguishes member-derived values (name, policy, coverage, beneficiary count) from app-constant chrome, and captures the multi-step login as a replayable recipe."
+}
