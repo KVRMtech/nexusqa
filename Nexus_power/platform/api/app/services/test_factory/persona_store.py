@@ -236,6 +236,7 @@ async def list_recipes(session: AsyncSession, *, tenant_id: str, artifact_id: st
         return []
     return [{"recipe_id": r.recipe_id, "version": r.version, "status": r.status,
              "slots": r.slots, "step_count": len(r.steps or []),
+             "source": r.source, "login_type_key": r.login_type_key,
              "verified_at": _iso(r.verified_at)} for r in rows]
 
 

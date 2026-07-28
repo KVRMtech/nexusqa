@@ -15,6 +15,7 @@ const path = require('path');
 const { spawn, execFileSync } = require('child_process');
 const crypto = require('crypto');
 const { attachGroundTruthRecorder } = require('./ground_truth_recorder');
+const { attachLoginObserver } = require('./login_observer');
 
 const PORT = parseInt(process.env.PORT || '4555', 10);
 const RUNNER_TOKEN = process.env.RUNNER_TOKEN || '';      // optional shared secret
@@ -237,6 +238,16 @@ async function startCapture(url, launchArgs, recorderOpts) {
     if (prev === undefined) delete process.env.DISPLAY; else process.env.DISPLAY = prev;
   }
   const context = await browser.newContext({ viewport: null });
+  // Login observation: record the CHOREOGRAPHY of the login being performed here
+  // (field identifiers + control presses, never a credential value) so this one
+  // hand-performed login becomes a recipe replayable with any member's card.
+  // Attached to the CONTEXT and BEFORE the first page, so the login page itself is
+  // instrumented and an SSO popup in a second tab is observed too.
+  let loginObserver = null;
+  try {
+    loginObserver = attachLoginObserver(context, { startUrl: url });
+    await loginObserver.ready;
+  } catch (e) { loginObserver = null; /* capture must never fail on observation */ }
   const page = await context.newPage();
   // Guided ground-truth capture: instrument the page BEFORE the first navigation
   // so the very first page is recorded (real URL + SPA routes + redacted fields).
@@ -252,14 +263,21 @@ async function startCapture(url, launchArgs, recorderOpts) {
   const timer = setTimeout(() => {
     stopCapture().catch(() => {}).finally(() => { busy = false; });
   }, CAPTURE_MAX_MS);
-  capture = { browser, context, page, timer, password: pw, recorder };
+  capture = { browser, context, page, timer, password: pw, recorder, loginObserver };
 }
 
 async function saveCapture() {
   if (!capture || !capture.context) throw new Error('no active capture session');
   const state = await capture.context.storageState();
+  // Snapshot the login choreography BEFORE stopCapture() closes the browser —
+  // page.url() is unreadable once the context is gone. Never fatal: losing the
+  // observation must never cost the operator their captured session.
+  let observation = null;
+  try {
+    if (capture.loginObserver) observation = capture.loginObserver.snapshot();
+  } catch (e) { observation = null; }
   await stopCapture();
-  return state;
+  return { state, observation };
 }
 
 const server = http.createServer((req, res) => {
@@ -352,8 +370,9 @@ const server = http.createServer((req, res) => {
     if (RUNNER_TOKEN && req.headers['x-runner-token'] !== RUNNER_TOKEN) return send(401, { error: 'unauthorized' });
     (async () => {
       try {
-        const state = await saveCapture();
-        send(200, { status: 'saved', storage_state: state });
+        const saved = await saveCapture();
+        send(200, { status: 'saved', storage_state: saved.state,
+                    login_observation: saved.observation });
       } catch (e) {
         send(400, { status: 'error', error: String((e && e.message) || e) });
       } finally {
@@ -374,6 +393,18 @@ const server = http.createServer((req, res) => {
 
   if (req.method === 'GET' && req.url === '/auth-capture/status') {
     return send(200, { active: !!capture });
+  }
+
+  // Live view of the login choreography recorded so far, so the operator can be
+  // shown "we captured member_number, password" WHILE still logged in — before
+  // committing the session. Identifiers only; never a credential value.
+  if (req.method === 'GET' && req.url === '/auth-capture/observation') {
+    if (RUNNER_TOKEN && req.headers['x-runner-token'] !== RUNNER_TOKEN) return send(401, { error: 'unauthorized' });
+    if (!capture) return send(200, { active: false, observation: null });
+    let observation = null;
+    try { if (capture.loginObserver) observation = capture.loginObserver.snapshot(); }
+    catch (e) { observation = null; }
+    return send(200, { active: true, observation });
   }
 
   // ── GROUND-TRUTH CAPTURE — guided web capture → instrumented sidecar ────────

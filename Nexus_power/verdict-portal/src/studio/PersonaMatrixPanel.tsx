@@ -10,7 +10,7 @@
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  AlertTriangle, KeyRound, Loader2, Lock, Plus, RefreshCw, ShieldCheck, Users, Boxes,
+  AlertTriangle, KeyRound, Loader2, Lock, Plus, RefreshCw, ShieldCheck, Users, Boxes, Video,
 } from 'lucide-react';
 import { api } from './factoryApi';
 
@@ -63,6 +63,15 @@ function HealthDot({ s }: { s?: string }) {
 
 const INPUT = 'rounded-md border border-slate-200 px-2 py-1 text-[12px] text-slate-700 focus:outline-none focus:border-nexus-300';
 const BTN = 'inline-flex items-center gap-1 rounded-md px-2.5 py-1 text-[11px] font-semibold ring-1 disabled:opacity-50';
+
+/** Why a recording produced no recipe — said plainly, never as a raw code. */
+const RECIPE_REASONS: Record<string, string> = {
+  no_observation_from_runner: 'the runner sent no recording (an older runner build?)',
+  no_credential_fields_observed: 'no login fields were filled during the recording',
+  no_submit_control_observed: 'no submit button was pressed',
+  derivation_failed: 'the recording could not be read',
+  unusable_observation: 'the recording did not contain a login',
+};
 
 export default function PersonaMatrixPanel({ artifactId }: { artifactId: string }) {
   const [personas, setPersonas] = useState<Persona[]>([]);
@@ -147,6 +156,42 @@ export default function PersonaMatrixPanel({ artifactId }: { artifactId: string 
         : `No new recipe: ${r?.reason || 'nothing to derive'}.`);
       await load();
     } catch (ex) { fail(ex); } finally { setBusy(''); }
+  };
+
+  // ── RECORD LOGIN ─────────────────────────────────────────────────────────────
+  // Log in ONCE by hand in our browser; we record the choreography (which fields,
+  // which buttons — identifiers only, never a value) and turn it into a recipe any
+  // member can replay with their own card. The same pass also stores the session.
+  const [liveUrl, setLiveUrl] = useState('');
+  const [recorded, setRecorded] = useState<any>(null);
+
+  const startRecording = async () => {
+    setBusy('record'); setErr(''); setRecorded(null);
+    try {
+      const r = await api.startAuthCapture(artifactId);
+      if (!r?.live_url) throw new Error('the runner did not return a live view');
+      setLiveUrl(r.live_url);
+    } catch (ex) { fail(ex); } finally { setBusy(''); }
+  };
+
+  const finishRecording = async () => {
+    setBusy('record-save'); setErr('');
+    try {
+      const r = await api.saveAuthCapture(artifactId);
+      setLiveUrl('');
+      const rec = r?.recipe || null;
+      setRecorded(rec);
+      say(rec?.recorded
+        ? `Login recorded — slots: ${(rec.slots || []).join(', ')}.`
+        : `Session saved, but no recipe: ${RECIPE_REASONS[rec?.reason] || rec?.reason || 'unknown'}.`);
+      await load();
+    } catch (ex) { fail(ex); } finally { setBusy(''); }
+  };
+
+  const abortRecording = async () => {
+    setBusy('record-cancel');
+    try { await api.cancelAuthCapture(artifactId); } catch (ex) { /* closing anyway */ }
+    setLiveUrl(''); setBusy('');
   };
 
   const cardKey = (c: Card) => `${c.persona_id}::${c.environment_id}`;
@@ -316,15 +361,85 @@ export default function PersonaMatrixPanel({ artifactId }: { artifactId: string 
       {/* ── Recipes ──────────────────────────────────────────────────────── */}
       <Section icon={<ShieldCheck className="h-4 w-4" />} title="Login recipes"
         sub="the login choreography named members fill with their card"
-        right={<button onClick={materializeRecipe} disabled={busy === 'recipe'} className={`${BTN} ring-nexus-200 text-nexus-700 bg-nexus-50 hover:bg-nexus-100`}>
-          {busy === 'recipe' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />} Derive from form-login
-        </button>}>
-        {recipes.length === 0 && <p className="text-[11px] text-nexus-400">No recipe yet. Configure a form-login (auth) then “Derive from form-login”, or POST a multi-step recipe.</p>}
+        right={<div className="flex items-center gap-1.5">
+          <button onClick={startRecording} disabled={!!liveUrl || busy === 'record'}
+            className={`${BTN} ring-nexus-600 text-white bg-nexus-600 hover:bg-nexus-700`}>
+            {busy === 'record' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Video className="h-3.5 w-3.5" />} Record login
+          </button>
+          <button onClick={materializeRecipe} disabled={busy === 'recipe' || !!liveUrl} className={`${BTN} ring-nexus-200 text-nexus-700 bg-nexus-50 hover:bg-nexus-100`}>
+            {busy === 'recipe' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />} Derive from form-login
+          </button>
+        </div>}>
+
+        {/* live recorder — log in once, by hand, in our browser */}
+        {liveUrl && (
+          <div className="mb-3 rounded-lg ring-1 ring-nexus-300 bg-nexus-50/40 p-2.5">
+            <div className="flex items-center gap-2 mb-2">
+              <span className="inline-block h-2 w-2 rounded-full bg-rose-500 animate-pulse" />
+              <span className="text-[12px] font-bold text-nexus-800">Recording — log in below as any member</span>
+              <div className="ml-auto flex items-center gap-1.5">
+                <button onClick={finishRecording} disabled={busy === 'record-save'}
+                  className={`${BTN} ring-emerald-600 text-white bg-emerald-600 hover:bg-emerald-700`}>
+                  {busy === 'record-save' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ShieldCheck className="h-3.5 w-3.5" />} I’ve logged in — save recipe
+                </button>
+                <button onClick={abortRecording} disabled={busy === 'record-cancel'}
+                  className={`${BTN} ring-slate-200 text-slate-600 bg-white hover:bg-slate-50`}>Cancel</button>
+              </div>
+            </div>
+            <iframe src={liveUrl} title="Log in to record the login"
+              className="w-full h-[460px] rounded-md ring-1 ring-nexus-200 bg-white" />
+            <p className="text-[10px] text-nexus-500 mt-1.5">
+              We record WHICH fields you fill and WHICH controls you press — never the values you type.
+              Your credentials are not stored by this recording; each member supplies their own in a credential card.
+            </p>
+            <p className="text-[10px] text-amber-700 mt-1">
+              Save as soon as you reach the logged-in home page — whatever page you are on when you
+              save becomes the “logged in” checkpoint we assert for every other member.
+            </p>
+          </div>
+        )}
+
+        {/* what the recording produced */}
+        {recorded && !liveUrl && (
+          <div className={`mb-3 rounded-lg p-2.5 ring-1 text-[11px] ${recorded.recorded
+            ? 'ring-emerald-200 bg-emerald-50 text-emerald-800'
+            : 'ring-amber-200 bg-amber-50 text-amber-800'}`}>
+            {recorded.recorded ? (
+              <>
+                <span className="font-bold">Login recorded.</span>{' '}
+                {recorded.step_count} steps · slots{' '}
+                <span className="font-semibold">{(recorded.slots || []).join(', ')}</span>.
+                {' '}Any member with a card for these slots can now run this suite.
+                {(recorded.login_path || recorded.home_path) && (
+                  <span className="block mt-1 font-mono text-[10px]">
+                    login {recorded.login_path || '?'} → logged-in check {recorded.home_path || '(none — steps-completed only)'}
+                  </span>
+                )}
+                {recorded.home_path === '' && (
+                  <span className="block mt-1">
+                    No landing page was seen, so success is judged on the steps completing rather than
+                    on reaching a page. Re-record and save once you are on the home page to add that check.
+                  </span>
+                )}
+                {recorded.truncated && <span className="block mt-1">Note: the session was long — some events were dropped; check the steps below.</span>}
+              </>
+            ) : (
+              <>
+                <span className="font-bold">Session saved, but no recipe.</span>{' '}
+                {RECIPE_REASONS[recorded.reason] || recorded.reason || 'unknown reason'}.
+                {' '}Runs will still start logged in as the member you used — but to run as OTHER members, record again and complete a full login.
+              </>
+            )}
+          </div>
+        )}
+
+        {recipes.length === 0 && !liveUrl && <p className="text-[11px] text-nexus-400">No recipe yet. <span className="font-semibold text-nexus-600">Record login</span> — log in once by hand and we turn it into a recipe every member can replay. (Or derive one from a configured form-login.)</p>}
         <div className="space-y-1">
           {recipes.map((r) => (
             <div key={r.recipe_id} className="flex items-center gap-2 text-[12px] rounded-md bg-nexus-50/60 px-2.5 py-1.5">
               <span className="font-semibold text-nexus-800">v{r.version}</span>
               <span className={`text-[10px] px-1.5 py-0.5 rounded ${r.status === 'active' ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-500'}`}>{r.status}</span>
+              {r.source === 'login_recording' && <span className="text-[10px] px-1.5 py-0.5 rounded bg-nexus-100 text-nexus-700 font-semibold">recorded</span>}
               <span className="text-[10px] text-nexus-400">{r.step_count} steps · slots {(r.slots || []).map((s: any) => s.name).join(', ')}</span>
               {r.verified_at && <span className="ml-auto text-[10px] text-emerald-600">verified</span>}
             </div>

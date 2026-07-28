@@ -108,6 +108,7 @@ from ..services.test_factory import report_export
 from ..services.test_factory import evidence_manifest
 from ..services.test_factory import report_formats
 from ..services.test_factory import persona_store, login_recorder, login_fingerprint
+from ..services.test_factory import login_observation
 from ..services.test_factory import persona_diff
 from ..services.test_factory import persona_governance
 from ..services.test_factory import persona_scale
@@ -4382,7 +4383,15 @@ async def save_auth_capture(
 ):
     """Pull the captured storageState from the runner, ENCRYPT it, and store it as
     this artifact's auth profile. Never returns the session. Refuses (503) if
-    encryption is unavailable rather than store a session in plaintext."""
+    encryption is unavailable rather than store a session in plaintext.
+
+    ALSO derives a reusable LOGIN RECIPE from how the operator actually logged in
+    (RECORD ONCE): the runner observed which fields were filled and which controls
+    were pressed — identifiers only, never a credential value — so the same login
+    replays for any member with their own card. The session is one member; the
+    recipe is all of them. Recipe derivation is BEST-EFFORT and strictly
+    subordinate: any failure there is reported, never fatal, and never costs the
+    operator the session they just captured."""
     tenant_id = user["tenant_id"]
     envelope = getattr(request.app.state, "envelope_service", None)
     if envelope is None:
@@ -4409,8 +4418,67 @@ async def save_auth_capture(
             )
         except (ValueError, RuntimeError) as exc:
             raise HTTPException(status_code=422, detail=str(exc))
+        recipe_info = await _derive_recipe_from_capture(
+            session, tenant_id=tenant_id, artifact_id=artifact_id,
+            snapshot=res.get("login_observation"))
         await session.commit()
-    return {"status": "saved"}
+    return {"status": "saved", "recipe": recipe_info}
+
+
+async def _derive_recipe_from_capture(session, *, tenant_id: str, artifact_id: str,
+                                      snapshot: dict | None) -> dict:
+    """Turn a recorded login into a persisted, replayable recipe.
+
+    Returns a non-secret summary for the UI: ``{recorded, reason, slots,
+    step_count, login_type_key, recipe_id, version}``. NEVER raises — the caller
+    has already stored the operator's session and must not lose it because the
+    choreography could not be read."""
+    if not snapshot:
+        return {"recorded": False, "reason": "no_observation_from_runner"}
+    try:
+        observation = login_observation.observation_from_events(snapshot)
+        if observation.get("unusable"):
+            return {"recorded": False,
+                    "reason": observation.get("reason") or "unusable_observation"}
+        derived = login_recorder.recipe_from_observed_login(observation)
+        steps, slots = derived.get("steps") or [], derived.get("slots") or []
+        if not slots:
+            return {"recorded": False, "reason": "no_credential_fields_observed"}
+        # Captures are re-run routinely (an expired cookie), and save_recipe is NOT
+        # idempotent — it mints max(version)+1 and supersedes the prior active row,
+        # clearing the verified_at that certification reads. So an UNCHANGED
+        # choreography must not mint a version: re-capturing a session is not a
+        # change to how the app is logged into.
+        current = await persona_store.get_recipe(
+            session, tenant_id=tenant_id, artifact_id=artifact_id)
+        if current and (current.get("steps") or []) == steps:
+            return {"recorded": False, "reason": "unchanged",
+                    "slots": [s.get("name") for s in slots],
+                    "recipe_id": current.get("recipe_id", ""),
+                    "version": current.get("version", 0)}
+        stored = await persona_store.save_recipe(
+            session, tenant_id=tenant_id, artifact_id=artifact_id,
+            steps=steps, slots=slots, source="login_recording",
+            login_type_key=derived.get("login_type_key") or "")
+        return {
+            "recorded": True,
+            "reason": observation.get("reason") or "",
+            "slots": [s.get("name") for s in slots],
+            # Shown back to the operator: the login page we will replay, and the
+            # landing we will assert as "logged in". If they browsed on before
+            # saving, the Home here is where they wandered — visible, not silent.
+            "login_path": observation.get("login_path") or "",
+            "home_path": (observation.get("home") or {}).get("url_pattern") or "",
+            "step_count": stored.get("step_count", len(steps)),
+            "login_type_key": stored.get("login_type_key", ""),
+            "recipe_id": stored.get("recipe_id", ""),
+            "version": stored.get("version", 0),
+            "truncated": bool((snapshot or {}).get("truncated")),
+        }
+    except Exception as exc:   # noqa: BLE001 — the session must survive any failure
+        _logger.warning("auth_capture.recipe_derivation_failed artifact=%s err=%s",
+                        artifact_id, exc)
+        return {"recorded": False, "reason": "derivation_failed"}
 
 
 class _AuthImportBody(BaseModel):
