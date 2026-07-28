@@ -107,7 +107,7 @@ from ..services.test_factory import report_html
 from ..services.test_factory import report_export
 from ..services.test_factory import evidence_manifest
 from ..services.test_factory import report_formats
-from ..services.test_factory import persona_store
+from ..services.test_factory import persona_store, login_recorder, login_fingerprint
 from ..services.test_factory import persona_diff
 from ..services.test_factory import persona_governance
 from ..services.test_factory import persona_scale
@@ -8026,6 +8026,84 @@ async def create_recipe_endpoint(
                          event_type="login_recipe_saved",
                          detail=f"version={out['version']}")
     return {"status": "saved", **out}
+
+
+class _ObsField(BaseModel):
+    slot: str
+    label: str | None = None
+    type: str | None = None
+
+
+class _RecordObservationBody(BaseModel):
+    domain: str = ""
+    login_path: str = "/"
+    fields: list[_ObsField] = Field(default_factory=list)
+    submit: str = ""
+    verify_documents: list[dict] | None = None
+    home: dict | None = None
+
+
+class _ReuseCheckBody(BaseModel):
+    domain: str = ""
+    login_path: str = "/"
+    fields: list[_ObsField] = Field(default_factory=list)
+    submit: str = ""
+
+
+@router.post("/api/v1/test-factory/{artifact_id}/recipes/from-observation")
+async def record_recipe_from_observation_endpoint(
+    body: _RecordObservationBody,
+    artifact_id: str = PathParam(..., min_length=1, max_length=64),
+    user: dict = Depends(get_current_user),
+):
+    """Record a login recipe from the crawler's OBSERVED login (Phase 3/5): the
+    observed fields/submit + any verify-documents interstitial + the Home landing
+    become a replayable recipe (Member -> [verify-doc, optional] -> Home oracle),
+    stamped with its login_type_key for fleet reuse. Editor+."""
+    if not _persona_write_ok(user):
+        raise HTTPException(403, "Recording a recipe requires an editor, manager or admin role.")
+    built = login_recorder.recipe_from_observed_login({
+        "domain": body.domain, "login_path": body.login_path,
+        "fields": [{"slot": f.slot, "label": f.label, "type": f.type} for f in body.fields],
+        "submit": body.submit,
+        "verify_documents": body.verify_documents, "home": body.home,
+    })
+    if not built["steps"]:
+        raise HTTPException(422, "no login steps observed — nothing to record")
+    tenant_id = user["tenant_id"]
+    async with tenant_scoped_session(tenant_id) as session:
+        await _require_artifact(session, artifact_id, tenant_id)
+        out = await persona_store.save_recipe(
+            session, tenant_id=tenant_id, artifact_id=artifact_id,
+            steps=built["steps"], slots=built["slots"],
+            source="crawl_demonstration", login_type_key=built["login_type_key"])
+        await session.commit()
+    await _persona_audit(tenant_id=tenant_id, artifact_id=artifact_id,
+                         actor=user.get("email") or user.get("user_id") or "?",
+                         event_type="login_recipe_recorded",
+                         detail=f"version={out['version']} key={built['login_type_key']}")
+    return {"status": "recorded", **out}
+
+
+@router.post("/api/v1/test-factory/recipes/reuse-check")
+async def recipe_reuse_check_endpoint(
+    body: _ReuseCheckBody,
+    user: dict = Depends(get_current_user),
+):
+    """Reuse proposal (Phase 5): given a login form, compute its login_type_key and
+    report whether this tenant ALREADY has a matching recipe (``reuse`` — 'portal
+    login already recorded, just enter your member number') or none (``record``).
+    Tenant-scoped; spans artifacts (a recipe is reused across a client's apps)."""
+    key = login_fingerprint.login_type_key(
+        domain=body.domain, login_path=body.login_path,
+        fields=[{"name": f.slot, "type": f.type or "text"} for f in body.fields],
+        submit=body.submit)
+    tenant_id = user["tenant_id"]
+    async with tenant_scoped_session(tenant_id) as session:
+        hits = await persona_store.find_recipes_by_login_type(
+            session, tenant_id=tenant_id, login_type_key=key)
+    return {"action": "reuse" if hits else "record",
+            "login_type_key": key, "recipes": hits}
 
 
 @router.post("/api/v1/test-factory/{artifact_id}/recipes/ensure-baseline")
