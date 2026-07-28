@@ -473,6 +473,12 @@ services:
       NEXUS_KEK_GCP_KEY: ${NEXUS_KEK_GCP_KEY:-}
       NEXUS_AUDITOR_GATE: "block"
       NEXUS_AUDITOR_MIN_SCORE: "9"
+      # Shared secret for the Playwright runner's job API (:4555/run-live). The
+      # runner rejects tokenless requests with 401, so platform-api MUST send the
+      # SAME value the runner enforces (both read ${RUNNER_TOKEN} from .env). Keep
+      # it here so any platform-api recreate carries the token — omitting it is
+      # exactly what caused "Could not start run … 401 Unauthorized … /run-live".
+      RUNNER_TOKEN: ${RUNNER_TOKEN:-}
       STORYBOARD_PAGE_VISIT_VISION_IDENTITY: "true"
       STORYBOARD_PAGE_VISIT_ADDRESS_BAR_CROP: "true"
       STORYBOARD_PAGE_VISIT_LLM_INFERENCE: "true"

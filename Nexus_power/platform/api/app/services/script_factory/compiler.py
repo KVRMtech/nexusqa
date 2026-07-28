@@ -2141,8 +2141,13 @@ export default async function globalSetup(config: FullConfig) {
         await browser.close(); return;
       }
       let stepNo = 0;
+      let homeAsserted = false;
       for (const step of (cfg.steps || [])) {
         stepNo += 1;
+        // An OPTIONAL step (e.g. a verify-documents interstitial that only SOME
+        // members hit) is attempted with a short timeout and SKIPPED when absent,
+        // instead of aborting the whole login. Required steps keep the full timeout.
+        const optTimeout = step.optional ? 4000 : undefined;
         try {
           const action = step.action;
           if (action === 'goto') {
@@ -2154,16 +2159,43 @@ export default async function globalSetup(config: FullConfig) {
               ? page.getByLabel(step.label).or(page.getByRole('textbox', { name: step.label }))
               : (step.selector ? page.locator(step.selector)
                  : page.getByLabel(String(step.slot).replace(/_/g,' ')));
-            await loc.first().fill(val);
+            await loc.first().fill(val, { timeout: optTimeout });
           } else if (action === 'click') {
             const loc = step.name
               ? page.getByRole((step.role || 'button'), { name: new RegExp(step.name, 'i') })
               : page.locator(step.selector || 'button[type=submit]');
-            await loc.first().click();
+            await loc.first().click({ timeout: optTimeout });
           } else if (action === 'wait') {
             await page.waitForLoadState(step.state || 'networkidle').catch(() => {});
+          } else if (action === 'assert_home') {
+            // HOME-REACHED ORACLE: the login sequence succeeds only when the
+            // logged-in landing state is ACTUALLY reached -- not merely because the
+            // recorded steps ran. A member who went through verify-documents and one
+            // who skipped it both converge here; an unrecorded interstitial that
+            // blocks Home is surfaced (in the catch), never papered over.
+            const homeTimeout = step.timeout || 15000;
+            if (step.url_pattern) {
+              await page.waitForURL(new RegExp(step.url_pattern), { timeout: homeTimeout });
+            }
+            if (step.selector) {
+              await page.locator(step.selector).first().waitFor({ state: 'visible', timeout: homeTimeout });
+            } else if (step.expect_text) {
+              await page.getByText(step.expect_text, { exact: false }).first().waitFor({ state: 'visible', timeout: homeTimeout });
+            }
+            homeAsserted = true;
           }
         } catch (se) {
+          if (step.optional) {
+            console.log('[nexus-auth] optional step ' + stepNo + ' (' + (step.action || '?') + ') not applicable -- skipping');
+            continue;
+          }
+          if (step.action === 'assert_home') {
+            // Steps replayed but the logged-in Home was never reached -- most likely
+            // an UNRECORDED interstitial (e.g. a new document to verify). SURFACE it;
+            // do NOT write an authenticated session from an unverified landing.
+            console.warn('[nexus-auth] login did NOT reach Home at step ' + stepNo + ' -- unrecorded interstitial? surfacing, not fabricating a session: ' + (se as Error).message);
+            await browser.close(); return;
+          }
           // A recipe step that will not replay is RECIPE DRIFT, not a product
           // failure. Name the step so the operator re-records; do not fabricate.
           console.warn('[nexus-auth] recipe drift at step ' + stepNo + ' (' + (step.action || '?') + '): ' + (se as Error).message);
@@ -2173,7 +2205,7 @@ export default async function globalSetup(config: FullConfig) {
       await page.waitForLoadState('networkidle').catch(() => {});
       await page.context().storageState({ path: './vkpower.auth.json' });
       await browser.close();
-      console.log('[nexus-auth] recipe login OK (' + (cfg.steps || []).length + ' steps) -- wrote ./vkpower.auth.json');
+      console.log('[nexus-auth] recipe login OK (' + (cfg.steps || []).length + ' steps' + (homeAsserted ? ', home reached' : '') + ') -- wrote ./vkpower.auth.json');
       return;
     }
 

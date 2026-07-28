@@ -1,0 +1,304 @@
+<title>Production Implementation Plan — 100+ clients · 1000+ apps</title>
+<style>
+  :root{
+    --ground:#eef1f6; --surface:#ffffff; --surface-2:#f6f8fb; --line:#dde3ec;
+    --ink:#16232f; --muted:#5b6a7d; --faint:#8493a4;
+    --navy:#0f1d33; --gold:#c9891f; --gold-soft:#f3e6c9;
+    --built:#2f7d5c; --built-bg:#e7f3ec;
+    --partial:#b0731a; --partial-bg:#f7edda;
+    --new:#2f66a6; --new-bg:#e6eef8;
+    --mono:ui-monospace,"SF Mono","Cascadia Code",Consolas,"Roboto Mono",monospace;
+    --sans:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+    --radius:14px; --shadow:0 1px 2px rgba(16,29,51,.04),0 6px 20px rgba(16,29,51,.06);
+  }
+  @media (prefers-color-scheme:dark){
+    :root{
+      --ground:#0b1420; --surface:#121f2e; --surface-2:#0e1926; --line:#233448;
+      --ink:#e5ecf4; --muted:#9fb0c2; --faint:#6f8298;
+      --navy:#0a1220; --gold:#f0bd55; --gold-soft:#3a2f18;
+      --built:#5cc196; --built-bg:#12291f; --partial:#e0a94a; --partial-bg:#2e2412; --new:#6ea6e6; --new-bg:#132436;
+      --shadow:0 1px 2px rgba(0,0,0,.25),0 8px 26px rgba(0,0,0,.35);
+    }
+  }
+  :root[data-theme="light"]{
+    --ground:#eef1f6; --surface:#ffffff; --surface-2:#f6f8fb; --line:#dde3ec; --ink:#16232f; --muted:#5b6a7d;
+    --faint:#8493a4; --navy:#0f1d33; --gold:#c9891f; --gold-soft:#f3e6c9; --built:#2f7d5c; --built-bg:#e7f3ec;
+    --partial:#b0731a; --partial-bg:#f7edda; --new:#2f66a6; --new-bg:#e6eef8; --shadow:0 1px 2px rgba(16,29,51,.04),0 6px 20px rgba(16,29,51,.06);
+  }
+  :root[data-theme="dark"]{
+    --ground:#0b1420; --surface:#121f2e; --surface-2:#0e1926; --line:#233448; --ink:#e5ecf4; --muted:#9fb0c2;
+    --faint:#6f8298; --navy:#0a1220; --gold:#f0bd55; --gold-soft:#3a2f18; --built:#5cc196; --built-bg:#12291f;
+    --partial:#e0a94a; --partial-bg:#2e2412; --new:#6ea6e6; --new-bg:#132436; --shadow:0 1px 2px rgba(0,0,0,.25),0 8px 26px rgba(0,0,0,.35);
+  }
+  *{box-sizing:border-box}
+  body{background:var(--ground);color:var(--ink);font-family:var(--sans);line-height:1.6;-webkit-font-smoothing:antialiased;margin:0}
+  .wrap{max-width:960px;margin:0 auto;padding:clamp(20px,4vw,56px) clamp(16px,4vw,32px)}
+  .eyebrow{font-size:12px;letter-spacing:.16em;text-transform:uppercase;color:var(--gold);font-weight:700}
+  h1{font-size:clamp(27px,5vw,42px);line-height:1.08;letter-spacing:-.02em;margin:.35em 0 .3em;text-wrap:balance}
+  h2{font-size:clamp(20px,3.2vw,26px);letter-spacing:-.01em;margin:0 0 .1em;text-wrap:balance}
+  h3{font-size:16px;margin:0 0 .2em}
+  .lede{font-size:clamp(16px,2.3vw,19px);color:var(--muted);max-width:66ch;text-wrap:pretty}
+  .meta{margin-top:18px;font-size:13px;color:var(--faint);display:flex;gap:14px;flex-wrap:wrap;align-items:center}
+  .meta b{color:var(--muted);font-weight:600}
+  section{margin-top:clamp(34px,6vw,60px)}
+  .sec-head{display:flex;align-items:baseline;gap:12px;margin-bottom:16px}
+  .sec-num{font-family:var(--mono);font-size:13px;color:var(--gold);font-weight:700;flex:none}
+  p{margin:0 0 14px;max-width:70ch}
+  .muted{color:var(--muted)}
+  .card{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);padding:clamp(18px,3vw,26px)}
+  /* scale bar */
+  .scalebar{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
+  @media(max-width:640px){.scalebar{grid-template-columns:repeat(2,1fr)}}
+  .stat{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:14px 16px;box-shadow:var(--shadow)}
+  .stat .k{font-size:clamp(22px,4vw,30px);font-weight:800;letter-spacing:-.02em;color:var(--gold);font-family:var(--mono)}
+  .stat .l{font-size:12.5px;color:var(--muted);margin-top:2px}
+  /* invariant / quote */
+  .invariant{background:var(--navy);color:#eaf0f8;border-radius:var(--radius);padding:clamp(20px,3.5vw,30px);position:relative;overflow:hidden}
+  .invariant::before{content:"";position:absolute;left:0;top:0;bottom:0;width:4px;background:var(--gold)}
+  .invariant .big{font-family:var(--mono);font-size:clamp(13px,2.2vw,16px);color:#dbe4f0;line-height:1.9}
+  .invariant b{color:var(--gold)}
+  .seq{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:12px;font-family:var(--mono);font-size:13px}
+  .seq .s{background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.14);border-radius:7px;padding:5px 10px;color:#eaf0f8}
+  .seq .s.hi{border-color:var(--gold);color:var(--gold)}
+  .seq .a{color:#7d90ab}
+  /* principles */
+  .principles{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  @media(max-width:680px){.principles{grid-template-columns:1fr}}
+  .pr{display:grid;grid-template-columns:26px 1fr;gap:12px;background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:14px 16px;box-shadow:var(--shadow)}
+  .pr .i{font-family:var(--mono);color:var(--gold);font-weight:700}
+  .pr b{display:block;margin-bottom:1px}
+  .pr span{font-size:13.5px;color:var(--muted)}
+  /* tracks + phases */
+  .track-h{display:flex;align-items:center;gap:12px;margin:26px 0 12px}
+  .track-h .tl{font-family:var(--mono);font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:var(--gold);font-weight:700;white-space:nowrap}
+  .track-h .rule{height:1px;background:var(--line);flex:1}
+  .phase{display:grid;grid-template-columns:46px 1fr auto;gap:16px;align-items:start;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:16px 18px;box-shadow:var(--shadow);margin-bottom:12px}
+  .phase .pn{width:46px;height:46px;border-radius:11px;display:grid;place-items:center;font-family:var(--mono);font-weight:700;font-size:18px;background:var(--navy);color:var(--gold)}
+  .phase h3{margin:0 0 3px;font-size:16.5px}
+  .phase .goal{font-size:14px;color:var(--muted);margin:0 0 8px}
+  .phase .scale{font-size:13px;margin:0 0 6px;padding-left:14px;position:relative;color:var(--ink)}
+  .phase .scale::before{content:"◆";position:absolute;left:0;color:var(--gold);font-size:10px;top:3px}
+  .where{font-family:var(--mono);font-size:12px;color:var(--faint)}
+  .where b{color:var(--gold);font-weight:600}
+  .badge{font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;padding:4px 9px;border-radius:999px;white-space:nowrap;align-self:start}
+  .badge.built{background:var(--built-bg);color:var(--built)}
+  .badge.partial{background:var(--partial-bg);color:var(--partial)}
+  .badge.new{background:var(--new-bg);color:var(--new)}
+  @media(max-width:640px){.phase{grid-template-columns:40px 1fr}.phase .badge{grid-column:2}.phase .pn{width:40px;height:40px;font-size:16px}}
+  /* pipeline */
+  .pipe{display:flex;gap:0;overflow-x:auto;padding:4px 2px 12px}
+  .stage{flex:1 0 150px;min-width:150px;background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:12px 13px 14px;position:relative;margin-right:24px;box-shadow:var(--shadow)}
+  .stage:last-child{margin-right:0}
+  .stage::after{content:"→";position:absolute;right:-20px;top:50%;transform:translateY(-50%);color:var(--faint);font-size:17px}
+  .stage:last-child::after{content:""}
+  .stage.star{border-color:var(--gold);box-shadow:0 0 0 1px var(--gold),var(--shadow)}
+  .stage .st-k{font-family:var(--mono);font-size:11px;color:var(--faint)}
+  .stage .st-t{font-weight:700;font-size:14.5px;margin:2px 0 7px}
+  .stage.star .st-t{color:var(--gold)}
+  .tag{display:block;font-size:12px;color:var(--muted);padding-left:15px;position:relative;margin-top:5px;line-height:1.4}
+  .tag::before{position:absolute;left:0;top:.5em;width:7px;height:7px;border-radius:50%;content:""}
+  .tag.rec::before{background:var(--new)}.tag.disc::before{background:var(--partial)}.tag.swp::before{background:var(--built)}
+  /* examples */
+  pre{font-family:var(--mono);font-size:12.5px;line-height:1.5;background:var(--surface-2);border:1px solid var(--line);border-radius:12px;padding:14px 16px;overflow-x:auto;margin:0;color:var(--ink)}
+  pre .b{color:var(--gold);font-weight:600}pre .g{color:var(--built);font-weight:600}pre .c{color:var(--faint)}
+  .two{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  @media(max-width:720px){.two{grid-template-columns:1fr}}
+  .legend{display:flex;gap:20px;flex-wrap:wrap;font-size:13.5px;color:var(--muted);margin-top:16px}
+  .legend span{display:inline-flex;align-items:center;gap:7px}
+  .dot{width:9px;height:9px;border-radius:50%;display:inline-block}
+  .callout{background:var(--surface-2);border:1px solid var(--line);border-left:3px solid var(--gold);border-radius:10px;padding:14px 16px;font-size:14px;color:var(--muted)}
+  .callout b{color:var(--ink)}
+  .dec{display:grid;gap:12px}
+  .dec .card{display:grid;grid-template-columns:30px 1fr;gap:14px;padding:16px 18px}
+  .dec .q{font-weight:700;color:var(--gold);font-family:var(--mono)}
+  .foot{margin-top:50px;padding-top:20px;border-top:1px solid var(--line);font-size:13px;color:var(--faint)}
+</style>
+
+<div class="wrap">
+  <header>
+    <div class="eyebrow">QE-Central · Finalized production plan</div>
+    <h1>Record once. Reuse across the fleet. Run anywhere.</h1>
+    <p class="lede">The end-to-end implementation plan for capturing <b>login</b> and <b>environment</b> as reusable, parameterized recipes in the crawl — engineered from the start for <b>100+ clients</b> and <b>1000+ apps</b>. Phase by phase, with an honest build status on each.</p>
+    <div class="meta"><span><b>Sequence:</b> Environment → Member → Verify-documents → Home → Scenario</span><span><b>Posture:</b> extend &amp; harden, not rebuild</span></div>
+  </header>
+
+  <!-- SCALE -->
+  <section>
+    <div class="sec-head"><span class="sec-num">01</span><div><h2>What the scale demands</h2><p class="muted" style="margin:2px 0 0">These numbers are the design constraint on every phase below.</p></div></div>
+    <div class="scalebar">
+      <div class="stat"><div class="k">100+</div><div class="l">clients (tenants) — hard isolation, per-tenant keys</div></div>
+      <div class="stat"><div class="k">1000+</div><div class="l">apps — only tractable if recipes are reused fleet-wide</div></div>
+      <div class="stat"><div class="k">1&nbsp;→&nbsp;N</div><div class="l">record login once, run for every member &amp; environment</div></div>
+      <div class="stat"><div class="k">24×7</div><div class="l">concurrent runs — fair, isolated, self-healing</div></div>
+    </div>
+  </section>
+
+  <!-- INVARIANT -->
+  <section>
+    <div class="sec-head"><span class="sec-num">02</span><div><h2>The one invariant everything is built on</h2></div></div>
+    <div class="invariant">
+      <div class="big">A <b>RUN</b> = Tenant · App · Environment · Member · Scenario<br>— executed in one fixed order, recorded during the crawl:</div>
+      <div class="seq">
+        <span class="s hi">Environment</span><span class="a">→</span>
+        <span class="s">Member</span><span class="a">→</span>
+        <span class="s hi">Verify&nbsp;documents</span><span class="a">→</span>
+        <span class="s g" style="color:var(--gold)">Home</span><span class="a">→</span>
+        <span class="s">Flow / Scenario</span>
+      </div>
+      <p class="muted" style="color:#93a7c2;margin:14px 0 0;font-size:13.5px">Environment is always first. <b style="color:var(--gold)">Verify-documents</b> is a real stage (some members verify/sign, some skip). <b style="color:var(--gold)">Home reached</b> is the success signal — so both branches count as logged-in.</p>
+    </div>
+  </section>
+
+  <!-- PRINCIPLES -->
+  <section>
+    <div class="sec-head"><span class="sec-num">03</span><div><h2>Six non-negotiables at this scale</h2></div></div>
+    <div class="principles">
+      <div class="pr"><div class="i">1</div><div><b>Tenant isolation is absolute</b><span>Every row tenant-scoped, RLS backstop, and a per-tenant encryption key. One client's secrets never share a key with another's.</span></div></div>
+      <div class="pr"><div class="i">2</div><div><b>Record once → reuse fleet-wide</b><span>Recipes are shared assets keyed by login-type/domain — a handful serve hundreds of apps. This is what makes 1000+ apps possible.</span></div></div>
+      <div class="pr"><div class="i">3</div><div><b>Everything is a parameterized recipe</b><span>Login and environment are both steps + blanks. Members, boxes, runways are just values you swap.</span></div></div>
+      <div class="pr"><div class="i">4</div><div><b>Home is the truth</b><span>Login success = reaching the logged-in state, so a verify-documents branch never breaks replay.</span></div></div>
+      <div class="pr"><div class="i">5</div><div><b>Fair, self-healing runs</b><span>Per-tenant fairness + admission mutex + orphan cleanup. No client starves another; no stuck "busy" locks.</span></div></div>
+      <div class="pr"><div class="i">6</div><div><b>Backup &amp; audit are foundations</b><span>Automated per-tenant backup/restore and tamper-evident evidence — from day one, not bolted on.</span></div></div>
+    </div>
+  </section>
+
+  <!-- THE PLAN -->
+  <section>
+    <div class="sec-head"><span class="sec-num">04</span><div><h2>The plan — 4 tracks, Phase 0 → 8</h2><p class="muted" style="margin:2px 0 0">Ordered by dependency and risk. Each phase: goal, <b>scale design</b>, where in the crawl, status. Full deliverables + “done-when” exit criteria live in the engineering blueprint <code style="font-family:var(--mono);color:var(--gold)">QECentral/docs/RECORD_ONCE_RUN_ANYWHERE_PLAN.md</code>.</p></div></div>
+
+    <div class="track-h"><span class="tl">Track A · Foundation</span><span class="rule"></span></div>
+
+    <div class="phase"><div class="pn">0</div><div>
+      <h3>Baseline audit &amp; lock</h3>
+      <p class="goal">Inventory what exists (data model, crawl pipeline, per-tenant crypto, posture, evidence) so every later phase is “extend,” not “rebuild.” Produce a keep / rename / extend / new ledger.</p>
+      <p class="scale">Confirms the P0–R6 engine is a sound base for 100+/1000+ before we touch it.</p>
+      <div class="where">Where: <b>whole codebase (read-only audit)</b></div>
+    </div><span class="badge built">Built · audit</span></div>
+
+    <div class="phase"><div class="pn">1</div><div>
+      <h3>Multi-tenant spine + the canonical run-model</h3>
+      <p class="goal">Lock the shared model (Run = Tenant·App·Environment·Member·Scenario, in the 5-stage order). Enforce isolation: tenant_id everywhere, FORCE RLS, explicit filters, and a per-tenant envelope key.</p>
+      <p class="scale">100+ tenants logically isolated; per-tenant crypto; pooled cloud by default, any client siloable to a dedicated / on-prem / per-region instance without rework.</p>
+      <div class="where">Where: <b>data model + every service</b></div>
+    </div><span class="badge built">Built → add Verify-docs stage</span></div>
+
+    <div class="phase"><div class="pn">2</div><div>
+      <h3>Backup, DR &amp; tenant lifecycle</h3>
+      <p class="goal">Automated per-tenant backups (DB + encryption key), tested point-in-time restore, tenant provision / de-provision / export.</p>
+      <p class="scale">100+ tenants each backed up on a schedule; one-command restore runbook. (We just lived this risk — it moves to the front.)</p>
+      <div class="where">Where: <b>platform ops</b></div>
+    </div><span class="badge new">New · biggest gap</span></div>
+
+    <div class="track-h"><span class="tl">Track B · Capture — record once</span><span class="rule"></span></div>
+
+    <div class="phase"><div class="pn">3</div><div>
+      <h3>Login recorder in the crawl — incl. Verify-documents</h3>
+      <p class="goal">At Access, “Record login once” → recipe with the login field auto-blanked (member #, email, …); <b>Verify-documents recorded as its own steps</b> (replayed; skipped when the member has none); success = <b>Home reached</b>. A document the recording doesn't cover is surfaced, not auto-clicked.</p>
+      <p class="scale">The recipe is app-level and library-shared (Phase 5) — recorded once, never per tester.</p>
+      <div class="where">Where: <b>Access → Explore</b></div>
+    </div><span class="badge partial">Partial → firm up</span></div>
+
+    <div class="phase"><div class="pn">4</div><div>
+      <h3>Environment recorder in the crawl</h3>
+      <p class="goal">Record environment selection as a parameterized recipe — URL box <code style="font-family:var(--mono);color:var(--gold)">{box}</code>, cookie/runway <code style="font-family:var(--mono);color:var(--gold)">{runway}</code>, or prod + guardrails — recorded <b>first</b> in the run order.</p>
+      <p class="scale">The box/runway is a <code style="font-family:var(--mono);color:var(--gold)">{parameter}</code> — save presets for fixed boxes (786, 787…) or pass it at launch for spun-up-per-test. Thousands of boxes ≠ thousands of registrations.</p>
+      <div class="where">Where: <b>Access + Environments list + Run launcher</b></div>
+    </div><span class="badge partial">Partial → firm up</span></div>
+
+    <div class="track-h"><span class="tl">Track C · Reuse at fleet scale</span><span class="rule"></span></div>
+
+    <div class="phase"><div class="pn">5</div><div>
+      <h3>Recipe Library + smart reuse <span class="muted" style="font-weight:400">— the fleet lever</span></h3>
+      <p class="goal">Store login recipes keyed by <b>login-type/domain</b> (“usaa.com portal login”), shared across apps &amp; testers. Propose on onboard: <b>“Portal login already captured — just enter your member number.”</b> Detect dotcom vs portal.</p>
+      <p class="scale">THE lever for 1000+ apps: a few login-types serve hundreds of apps; one tester records, the fleet reuses. Kills the “1000 testers re-record” waste.</p>
+      <div class="where">Where: <b>Onboard/Access proposal + recipe library</b></div>
+    </div><span class="badge new">New · highest leverage</span></div>
+
+    <div class="phase"><div class="pn">6</div><div>
+      <h3>Members &amp; credentials at scale</h3>
+      <p class="goal">Members as tenant-level entities (one member reused across a client's apps), encrypted per tenant; reservation (one live session per member — no collisions), rotation, staleness sweep, reservation cap.</p>
+      <p class="scale">With 1000+ apps running, reservation prevents session collisions; rotation/staleness keep secrets healthy.</p>
+      <div class="where">Where: <b>Members list + Run launcher + credential store</b></div>
+    </div><span class="badge partial">Partial → scale-harden</span></div>
+
+    <div class="track-h"><span class="tl">Track D · Run &amp; operate at scale</span><span class="rule"></span></div>
+
+    <div class="phase"><div class="pn">7</div><div>
+      <h3>Run orchestration at scale</h3>
+      <p class="goal">A queue/scheduler with per-tenant fairness + concurrency limits, admission control (one-run-per-key mutex), an autoscaling runner pool, and robust run lifecycle — heartbeats, timeouts, orphan cleanup (no stuck “busy” locks).</p>
+      <p class="scale">100+ clients × 1000+ apps → many concurrent runs; fairness stops one client starving others; lifecycle keeps the fleet self-healing.</p>
+      <div class="where">Where: <b>orchestrator + runner pool</b></div>
+    </div><span class="badge partial">Partial → scale-harden</span></div>
+
+    <div class="phase"><div class="pn">8</div><div>
+      <h3>Governance, evidence &amp; operate</h3>
+      <p class="goal">Per-tenant RBAC, audit trail, approval workflows, PII-egress controls, posture governance (prod default-deny / no-submit), tamper-evident Certificate-of-Execution per run — plus observability (health, SLOs, per-tenant cost).</p>
+      <p class="scale">Regulated 100+ clients require per-tenant audit + evidence + cost; posture fences prod across the fleet.</p>
+      <div class="where">Where: <b>all services + governance/observability layer</b></div>
+    </div><span class="badge partial">Partial → complete for enterprise</span></div>
+
+    <div class="legend">
+      <span><i class="dot" style="background:var(--built)"></i> <b style="color:var(--built)">Built</b> — exists today</span>
+      <span><i class="dot" style="background:var(--partial)"></i> <b style="color:var(--partial)">Partial</b> — pieces exist, make first-class / scale-harden</span>
+      <span><i class="dot" style="background:var(--new)"></i> <b style="color:var(--new)">New</b> — to build</span>
+    </div>
+  </section>
+
+  <!-- WHERE IN CRAWL -->
+  <section>
+    <div class="sec-head"><span class="sec-num">05</span><div><h2>Where the new capture lives in the crawl</h2><p class="muted" style="margin:2px 0 0">Almost everything new slots into <b>one place — the Access step</b>. Downstream is untouched.</p></div></div>
+    <div class="pipe">
+      <div class="stage"><div class="st-k">1</div><div class="st-t">Onboard</div><div class="tag" style="padding-left:0;color:var(--muted)">App + base URL, tenant-scoped.</div></div>
+      <div class="stage star"><div class="st-k">2 · ★ insertion point</div><div class="st-t">Access</div>
+        <span class="tag rec">Record Environment (first) + Login (blanks + verify-docs)</span>
+        <span class="tag rec">Reuse: “login already captured — enter member #”</span>
+      </div>
+      <div class="stage"><div class="st-k">3</div><div class="st-t">Explore</div><span class="tag disc">Crawl walks the app; discovers verify-doc branches</span></div>
+      <div class="stage"><div class="st-k">4</div><div class="st-t">Generate</div><div class="tag" style="padding-left:0;color:var(--muted)">Scenarios — member- &amp; env-agnostic.</div></div>
+      <div class="stage"><div class="st-k">5</div><div class="st-t">Run</div><span class="tag swp">Environment × Member × Scenario → honest verdict</span></div>
+    </div>
+  </section>
+
+  <!-- EXAMPLES -->
+  <section>
+    <div class="sec-head"><span class="sec-num">06</span><div><h2>Grounded in your apps</h2></div></div>
+    <div class="two">
+      <div>
+        <h3 style="margin-bottom:8px">VKPower Life — the login recipe</h3>
+        <pre><span class="c">recorded once · reused per member</span>
+ set env    <span class="b">{uat|prod}</span>            <span class="c">← stage 1</span>
+ fill       member  <span class="b">{member_number}</span>  <span class="c">← stage 2</span>
+ fill       pin     <span class="b">{pin}</span>
+ verify-doc <span class="c">sign if present, else skip  ← stage 3</span>
+ wait       <span class="g">HOME reached</span>            <span class="c">← stage 4 = success</span>
+ run        <span class="g">beneficiaries scenario</span>   <span class="c">← stage 5</span></pre>
+      </div>
+      <div>
+        <h3 style="margin-bottom:8px">USAA — environments &amp; branch</h3>
+        <pre><span class="c">environment = a recorded step, not just a URL</span>
+ CIT box    go to  http://<span class="b">{box}</span>.usaa.com
+ Runway     cookie runway=<span class="b">{RWA|RWB|RWC|RWD}</span>
+ Prod       https://www.usaa.com  <span class="g">+guardrails</span>
+
+ member A → verify-documents → <span class="g">HOME</span>
+ member B → (no docs, skip) ──→ <span class="g">HOME</span>
+ <span class="c">new / legal doc → SURFACE it, don't auto-click</span></pre>
+      </div>
+    </div>
+  </section>
+
+  <!-- DECISIONS LOCKED -->
+  <section>
+    <div class="sec-head"><span class="sec-num">07</span><div><h2>Decisions — locked</h2><p class="muted" style="margin:2px 0 0">Confirmed with the founder; folded into the phases above.</p></div></div>
+    <div class="dec">
+      <div class="card"><div class="q">A1</div><div><b>“Members”, not “Personas”</b> — and the identifier is generic: the login blank adapts to whatever the app uses (<code style="font-family:var(--mono);color:var(--gold)">{member_number}</code>, <code style="font-family:var(--mono);color:var(--gold)">{email}</code>, <code style="font-family:var(--mono);color:var(--gold)">{username}</code>, <code style="font-family:var(--mono);color:var(--gold)">{policy_no}</code>). Label re-skinnable per client (Members / Customers / Users); default <b>Members</b>.</div></div>
+      <div class="card"><div class="q">A2</div><div><b>CIT boxes = both.</b> The box/runway is a <code style="font-family:var(--mono);color:var(--gold)">{parameter}</code>: save named presets for fixed boxes (786, 787…), or pass the value at launch for spun-up-per-test. One recipe, filled from a preset or at run time.</div></div>
+      <div class="card"><div class="q">A3</div><div><b>Verify-documents = recorded steps.</b> Record the document-verification steps in the crawl (like login); replay them, skip when the member has none. Safety net: a document the recording doesn't cover is <b>surfaced</b>, not auto-clicked.</div></div>
+      <div class="card"><div class="q">A4</div><div><b>Pooled cloud now, siloable per client.</b> One multi-tenant cloud with per-tenant keys by default; Phase 1 keeps tenant boundaries clean so any regulated client can be carved into a dedicated / on-prem / per-region instance without rework.</div></div>
+    </div>
+  </section>
+
+  <div class="foot">
+    Decisions locked (§7). Ready to begin at <b>Phase 1 — Multi-tenant spine + the canonical run-model</b> on your go-ahead. · <b>Record once. Reuse across the fleet. Run anywhere.</b>
+  </div>
+</div>
