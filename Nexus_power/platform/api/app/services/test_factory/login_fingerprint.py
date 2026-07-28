@@ -44,19 +44,22 @@ def _norm_path(path: object) -> str:
 
 
 def _field_signature(fields: list | None) -> list:
-    """Order- and case-invariant list of ``identifier:kind`` for each login field.
+    """Order- and case-invariant list of field IDENTIFIERS for each login field.
 
     The identifier is the strongest stable handle available (name > label > slot >
-    autocomplete); the kind is the input type. Fields with neither are dropped."""
+    autocomplete). Field TYPE is deliberately NOT part of the signature: types are
+    often unknown when a recipe is RECORDED (from steps) yet known when a form is
+    MATCHED at onboarding — including type would make those two keys differ and
+    reuse would silently never match. Field names already separate login types
+    (email vs member_number vs …). Fields with no identifier are dropped."""
     sig: list = []
     for raw in (fields or []):
         field = raw or {}
         ident = _norm_token(
             field.get("name") or field.get("label")
             or field.get("slot") or field.get("autocomplete") or "")
-        kind = _norm_token(field.get("type") or "text")
-        if ident or kind:
-            sig.append(ident + ":" + kind)
+        if ident:
+            sig.append(ident)
     return sorted(sig)
 
 
