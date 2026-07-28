@@ -72,9 +72,14 @@ The heavy **scale infrastructure already exists and is tested** — admission/fa
 
 ## Phase 0 completion status + execution feasibility (autonomous session 2026-07-27)
 
-**DONE + VERIFIED this session** (branch `feat/record-once-run-anywhere`, commit `8625e98`):
+**DONE + VERIFIED this session** (branch `feat/record-once-run-anywhere`, commits `8625e98`, `8e50922`):
 - Phase 0 audit + this ledger (read-only) — complete.
-- **Phase 1/3 CORE**, additive & backward-compatible: the login-recipe interpreter (`compiler.py::_AUTH_SETUP_TS`) now supports **optional steps** (a verify-documents interstitial some members hit / others skip — skipped when absent with a short timeout, not a drift-abort) and an **`assert_home` home-reached oracle** (success = the logged-in state is actually reached, not a completed step count), with the **surface-don't-fabricate** safety net (an unrecorded interstitial that blocks Home fails the login honestly, writing no session). New test `tests/test_verify_documents_oracle.py`; **27 local tests green** (new + existing compiler/recipe/auth, no regression).
+- **Phase 1/3 CORE — verify-documents + Home-reached oracle, both sides, additive & backward-compatible:**
+  - *Interpreter (replay):* `compiler.py::_AUTH_SETUP_TS` now supports **optional steps** (a verify-documents interstitial some members hit / others skip — skipped when absent, short timeout, not a drift-abort) + an **`assert_home` oracle** (success = logged-in state reached, not step count) + **surface-don't-fabricate** (an unrecorded interstitial that blocks Home fails honestly, no session). Test `tests/test_verify_documents_oracle.py`.
+  - *Builder (produce):* `persona_store.build_login_recipe(cfg, verify_documents=, home=)` + `_assert_home_step` (refuses a signal-less oracle) + `_verify_document_steps` (marks interstitial steps optional). Test `tests/test_verify_documents_recipe.py`.
+  - *End-to-end data path CONFIRMED:* `save_recipe` stores `steps` JSONB verbatim; `build_persona_bundle` (persona_store.py:1017) passes `recipe.steps` verbatim into `auth_config` → the new `assert_home`/`optional` steps flow untouched from builder → store → run → interpreter. Both ends unit-tested, middle traced.
+  - **35 local tests green** (new + existing compiler/recipe/auth, no regression).
+  - *Remaining for this capability (NOT locally verifiable — needs crawler/CI/VM):* the crawl RECORDER that calls `build_login_recipe` with the login/interstitial/landing it observes during a crawl, and the API/onboarding wiring. That is Phase 3 proper.
 
 **Verification reality (this GATES the rest — no green-washing):**
 - ✅ **Locally verifiable, no DB/browser:** the compiler + recipe-interpreter + pure-logic layers (`persona_diff`/`persona_scale`/`persona_governance`). Real, test-verified code is possible here now.
