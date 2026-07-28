@@ -99,8 +99,58 @@ def login_type_descriptor(*, domain: object, login_path: object,
     }
 
 
+def match_by_key(candidate_key: str, library: list | None) -> dict | None:
+    """The single library entry whose ``key`` equals ``candidate_key``, else None.
+    ``library`` is an iterable of entries each carrying at least a ``key``."""
+    for entry in (library or []):
+        if entry and entry.get("key") == candidate_key:
+            return entry
+    return None
+
+
+def candidates_by_domain(domain: object, library: list | None) -> list:
+    """Login types already recorded on a domain — for the 'dotcom or portal?'
+    prompt when a new app is onboarded on a known host before its form is seen."""
+    dom = _norm_token(domain)
+    return [e for e in (library or [])
+            if e and _norm_token(e.get("domain")) == dom]
+
+
+def propose_reuse(*, domain: object, login_path: object = None,
+                  fields: list | None = None, submit: object = "",
+                  library: list | None = None) -> dict:
+    """The reuse decision for a newly-onboarding app — the heart of 'don't make
+    the 1000th tester re-record':
+
+    - a login FORM was observed (``fields`` given) -> compute its key and either
+      ``reuse`` the exact match or ``record`` fresh;
+    - only the domain is known (no form yet) and it already has recorded logins ->
+      ``reuse`` when there is exactly one, else ``disambiguate`` (dotcom vs portal);
+    - nothing matches -> ``record`` fresh.
+
+    Never guesses: a form is matched only by its exact key; a bare domain with
+    multiple types asks rather than picking one."""
+    lib = list(library or [])
+    if fields is not None:
+        key = login_type_key(domain=domain, login_path=login_path or "/",
+                             fields=fields, submit=submit)
+        hit = match_by_key(key, lib)
+        if hit:
+            return {"action": "reuse", "key": key, "recipe": hit}
+        return {"action": "record", "key": key}
+    doms = candidates_by_domain(domain, lib)
+    if len(doms) == 1:
+        return {"action": "reuse", "key": doms[0].get("key"), "recipe": doms[0]}
+    if len(doms) > 1:
+        return {"action": "disambiguate", "options": doms}
+    return {"action": "record"}
+
+
 __all__ = [
     "login_form_signature",
     "login_type_key",
     "login_type_descriptor",
+    "match_by_key",
+    "candidates_by_domain",
+    "propose_reuse",
 ]
