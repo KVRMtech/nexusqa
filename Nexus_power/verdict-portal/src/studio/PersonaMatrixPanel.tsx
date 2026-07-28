@@ -86,7 +86,7 @@ export default function PersonaMatrixPanel({ artifactId }: { artifactId: string 
       setPersonas(p?.personas || []); setEnvs(e?.environments || []);
       setCards(m?.cards || []); setRecipes(r?.recipes || []); setOps(o || null);
     } catch (ex: any) {
-      setErr(ex?.response?.data?.detail || ex?.message || 'failed to load the persona matrix');
+      setErr(ex?.response?.data?.detail || ex?.message || 'failed to load the member matrix');
     } finally { setLoading(false); }
   }, [artifactId]);
 
@@ -105,7 +105,7 @@ export default function PersonaMatrixPanel({ artifactId }: { artifactId: string 
         name: np.name.trim(), behavior_class: np.behavior_class.trim(),
         traits: np.traits.split(',').map((t) => t.trim()).filter(Boolean),
       });
-      setNp({ name: '', behavior_class: '', traits: '' }); say('Persona saved.'); await load();
+      setNp({ name: '', behavior_class: '', traits: '' }); say('Member saved.'); await load();
     } catch (ex) { fail(ex); } finally { setBusy(''); }
   };
 
@@ -160,16 +160,16 @@ export default function PersonaMatrixPanel({ artifactId }: { artifactId: string 
 
   if (loading) {
     return <div className="flex items-center gap-2 text-[12px] text-nexus-500 py-6">
-      <Loader2 className="h-4 w-4 animate-spin" /> loading the persona × environment matrix…</div>;
+      <Loader2 className="h-4 w-4 animate-spin" /> loading the member × environment matrix…</div>;
   }
 
   return (
     <div className="space-y-4">
       <div className="flex items-start gap-2">
         <div>
-          <h2 className="text-[15px] font-bold tracking-tight text-nexus-900">Personas &amp; Environments</h2>
+          <h2 className="text-[15px] font-bold tracking-tight text-nexus-900">Members &amp; Environments</h2>
           <p className="text-[11px] text-nexus-400">
-            RUN = Suite × Environment × Persona. Define members, govern environments,
+            RUN = Suite × Environment × Member. Define members, govern environments,
             and provision credential cards (write-only). Everything here gates a run.
           </p>
         </div>
@@ -181,7 +181,7 @@ export default function PersonaMatrixPanel({ artifactId }: { artifactId: string 
       {ops && (
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
           {[
-            { k: 'Personas', v: ops.personas, icon: <Users className="h-3.5 w-3.5" /> },
+            { k: 'Members', v: ops.personas, icon: <Users className="h-3.5 w-3.5" /> },
             { k: 'Environments', v: `${ops.environments?.total ?? 0} · ${ops.environments?.production ?? 0} prod`, icon: <Boxes className="h-3.5 w-3.5" /> },
             { k: 'Cards verified', v: `${ops.credentials?.verified ?? 0}/${ops.credentials?.total ?? 0}`, icon: <KeyRound className="h-3.5 w-3.5" /> },
             { k: 'Recipes', v: ops.recipes, icon: <ShieldCheck className="h-3.5 w-3.5" /> },
@@ -199,10 +199,10 @@ export default function PersonaMatrixPanel({ artifactId }: { artifactId: string 
       {flash && <div className="rounded-md bg-emerald-50 ring-1 ring-emerald-200 px-3 py-2 text-[12px] text-emerald-700">{flash}</div>}
 
       {/* ── Personas ─────────────────────────────────────────────────────── */}
-      <Section icon={<Users className="h-4 w-4" />} title="Members (personas)"
+      <Section icon={<Users className="h-4 w-4" />} title="Members"
         sub="identity + behavior class the same suite runs as">
         <div className="space-y-1.5 mb-3">
-          {namedPersonas.length === 0 && <p className="text-[11px] text-nexus-400">No personas yet — add one below. Runs use the default identity until then.</p>}
+          {namedPersonas.length === 0 && <p className="text-[11px] text-nexus-400">No members yet — add one below. Runs use the default identity until then.</p>}
           {namedPersonas.map((p) => (
             <div key={p.persona_id} className="flex items-center gap-2 text-[12px] rounded-md bg-nexus-50/60 px-2.5 py-1.5">
               <span className="font-semibold text-nexus-800">{p.name}</span>
@@ -271,7 +271,7 @@ export default function PersonaMatrixPanel({ artifactId }: { artifactId: string 
               <th className="py-1 pr-3">Member</th><th className="py-1 pr-3">Environment</th>
               <th className="py-1 pr-3">Slots</th><th className="py-1 pr-3">Verified</th></tr></thead>
             <tbody>
-              {cards.length === 0 && <tr><td colSpan={4} className="py-2 text-[11px] text-nexus-400">No cards yet. Add one below — a persona needs a card for the environment it runs in.</td></tr>}
+              {cards.length === 0 && <tr><td colSpan={4} className="py-2 text-[11px] text-nexus-400">No cards yet. Add one below — a member needs a card for the environment it runs in.</td></tr>}
               {cards.map((c) => (
                 <tr key={cardKey(c)} className="border-t border-nexus-50">
                   <td className="py-1 pr-3 font-semibold text-nexus-800">{c.persona_name || c.persona_id.slice(0, 8)}</td>

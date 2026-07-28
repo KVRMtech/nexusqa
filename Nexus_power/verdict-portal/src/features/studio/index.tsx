@@ -126,7 +126,7 @@ export function TestStudio() {
               active={tab === 'personas'}
               onClick={() => setTab('personas')}
               icon={<KeyRound size={15} />}
-              label="Personas & Environments"
+              label="Members & Environments"
             />
           </div>
 

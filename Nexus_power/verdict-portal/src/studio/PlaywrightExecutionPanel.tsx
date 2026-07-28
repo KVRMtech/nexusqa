@@ -1823,7 +1823,7 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
               </span>
               <select value={personaId} onChange={(e) => setPersonaId(e.target.value)}
                 className="rounded-md border border-slate-200 px-2 py-1 text-[12px] font-medium text-slate-700 bg-white">
-                <option value="">Default identity (persona-0)</option>
+                <option value="">Default identity</option>
                 {personas.filter((p) => !p.legacy).map((p) => (
                   <option key={p.persona_id} value={p.persona_id}>
                     {p.name}{p.behavior_class ? ` · ${p.behavior_class}` : ''}
@@ -1841,7 +1841,7 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
                   </span>
                 </>
               )}
-              <span className="ml-auto text-[10px] text-nexus-400">manage in <span className="font-semibold text-nexus-500">Personas &amp; Environments</span></span>
+              <span className="ml-auto text-[10px] text-nexus-400">manage in <span className="font-semibold text-nexus-500">Members &amp; Environments</span></span>
             </div>
 
             {/* Advanced configuration — collapsed by default so the flow reads Select → Run → Verdict */}
