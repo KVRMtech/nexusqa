@@ -67,3 +67,23 @@ The heavy **scale infrastructure already exists and is tested** — admission/fa
 - **Phase 1 (tenancy/crypto):** already ready; Phase 1 becomes the **Member rename + Verify-documents stage**.
 
 ⇒ The genuine build effort concentrates where the plan said the leverage is: the **record-once capture UX** (Phase 3/4), the **recipe library + reuse** (Phase 5, genuinely new), and the **Member rename + Verify-documents** model (Phase 1) — plus the narrow orchestration/backup gaps above. This is a smaller, sharper surface than the raw plan implied — good news, honestly arrived at.
+
+---
+
+## Phase 0 completion status + execution feasibility (autonomous session 2026-07-27)
+
+**DONE + VERIFIED this session** (branch `feat/record-once-run-anywhere`, commit `8625e98`):
+- Phase 0 audit + this ledger (read-only) — complete.
+- **Phase 1/3 CORE**, additive & backward-compatible: the login-recipe interpreter (`compiler.py::_AUTH_SETUP_TS`) now supports **optional steps** (a verify-documents interstitial some members hit / others skip — skipped when absent with a short timeout, not a drift-abort) and an **`assert_home` home-reached oracle** (success = the logged-in state is actually reached, not a completed step count), with the **surface-don't-fabricate** safety net (an unrecorded interstitial that blocks Home fails the login honestly, writing no session). New test `tests/test_verify_documents_oracle.py`; **27 local tests green** (new + existing compiler/recipe/auth, no regression).
+
+**Verification reality (this GATES the rest — no green-washing):**
+- ✅ **Locally verifiable, no DB/browser:** the compiler + recipe-interpreter + pure-logic layers (`persona_diff`/`persona_scale`/`persona_governance`). Real, test-verified code is possible here now.
+- ⛔ **NOT locally verifiable** (needs Postgres / CI / the live VM / an npm frontend build): member DB CRUD, the run + crawl pipeline, RLS, and ALL frontend. Per the no-stubs rule, code in these layers is NOT claimed "done" from an unattended local session — it must pass on CI or the VM first.
+
+**The rename (Persona→Member) — do NOT blind-execute unattended:**
+- Surface = 2016 refs across DB + API + frontend + 11 tests, colliding with TWO frozen concepts. Safe strategy: rename the **entity at the API / domain / UI layer only and KEEP physical table names** (`tp_personas`…) to avoid a live-DB data migration; cut the API routes + frontend over together (frontend build on the VM/PowerShell, never git-bash — known API-base mangling bug); run the DB + frontend suites on CI/VM. Needs the founder in the loop + the full test loop.
+
+**Honest sequencing recommendation (resume here):**
+1. Verified interpreter slice — DONE. Next locally-verifiable slice: a recipe-builder/recorder pure-function that emits `assert_home` + optional verify-doc steps.
+2. **Phase 2 = activate + verify** the EXISTING backup substrate on the live box + fill `DR_RUNBOOK` RTO/RPO (ops, low-risk, high-value).
+3. Phases 1 (rename, keep-tables), 3 (crawl→`save_recipe` wiring), 4 (env recorder), 5 (recipe library/fingerprint) → execute against the DB/CI/VM/frontend loops with review, phase-gated.
