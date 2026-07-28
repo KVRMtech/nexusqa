@@ -9042,7 +9042,10 @@ class _ImpersonationScaffoldBody(BaseModel):
     admin_login_steps: list[dict] = Field(..., min_length=1,
                                           description="the admin login choreography (recipe steps)")
     impersonate_path: str = Field(..., min_length=1, max_length=2000)
-    member_slot: str = Field("member_number", max_length=64)
+    # No default: the switch-on field is whatever the target app calls it. A
+    # default would quietly bake one client's vocabulary into every other's.
+    member_slot: str = Field(..., min_length=1, max_length=64,
+                             description="the field the app switches identity on, named as the app names it")
     submit_selector: str = Field("", max_length=400)
 
 

@@ -136,14 +136,18 @@ def staleness_report(cards_by_persona: dict[str, dict], env: dict | None, *,
 # ── Impersonation recipe scaffold (env-dependent switch-user) ─────────────────
 
 def build_impersonation_recipe(*, admin_login_steps: list, impersonate_path: str,
-                               member_slot: str = "member_number",
+                               member_slot: str,
                                submit_selector: str = "") -> dict:
     """Scaffold a recipe for an env where a run reaches a member by ADMIN
     impersonation (a switch-user endpoint) instead of a member login. It is an
     ordinary recipe — admin login steps, then goto the impersonation path, fill
     the member slot, submit — so it verifies and runs through the SAME machinery.
-    Secrets never appear here; the member number rides its slot, the admin
+    Secrets never appear here; the identifier rides its slot, the admin
     credentials ride theirs. Returns {steps, slots} ready to POST to /recipes.
+
+    ``member_slot`` is REQUIRED and has no default: it is whatever the target app
+    calls the field it switches on, and there is no vocabulary this engine is
+    entitled to assume on the caller's behalf.
     """
     steps = list(admin_login_steps or [])
     steps.append({"action": "goto", "path": impersonate_path or "/"})
@@ -158,7 +162,10 @@ def build_impersonation_recipe(*, admin_login_steps: list, impersonate_path: str
         if sl and sl not in seen:
             slots.append({"name": sl, "type": "secret"}); seen.add(sl)
     if member_slot not in seen:
-        slots.append({"name": member_slot, "type": "plain"})
+        # ``secret``, not ``plain``: the interpreter EXEMPTS non-secret slots from
+        # the missing-credential guard, so a plain slot would let a run whose card
+        # lacks this value proceed and pass. The card encrypts every slot anyway.
+        slots.append({"name": member_slot, "type": "secret"})
     return {"steps": steps, "slots": slots,
             "note": ("An impersonation recipe reaches a member via an admin "
                      "switch-user endpoint — env-dependent, but it verifies and "
