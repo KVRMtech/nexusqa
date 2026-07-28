@@ -266,6 +266,70 @@ def _recipe_from_form_login(cfg: dict) -> tuple[list, list]:
     return steps, slots
 
 
+def _assert_home_step(home: dict | None) -> dict | None:
+    """Build the terminal ``assert_home`` step — the Home-reached ORACLE — from a
+    landing signal observed after login. A signal is any of ``url_pattern`` /
+    ``selector`` / ``expect_text`` (+ optional ``timeout`` ms). Returns ``None`` when
+    no usable signal is present, so the recipe falls back to the unchanged
+    steps-completed success (never a bare, always-passing assert)."""
+    if not home:
+        return None
+    step: dict = {"action": "assert_home"}
+    has_signal = False
+    for key in ("url_pattern", "selector", "expect_text"):
+        val = str((home or {}).get(key) or "").strip()
+        if val:
+            step[key] = val
+            has_signal = True
+    # refuse a signal-less assert_home — an oracle that asserts nothing is a lie.
+    # A timeout alone is NOT a signal (it would just wait, then pass vacuously).
+    if not has_signal:
+        return None
+    if home.get("timeout"):
+        try:
+            step["timeout"] = int(home["timeout"])
+        except (TypeError, ValueError):
+            pass
+    return step
+
+
+def _verify_document_steps(recorded: list | None) -> list:
+    """Mark recorded verify-documents interstitial steps OPTIONAL, so a member who
+    hits the document handles it and a member who does not skips it — both converge
+    at Home. Only actionable ``fill``/``click`` steps become optional; ``goto``/
+    ``wait`` stay unconditional. Unknown/missing actions pass through untouched."""
+    out: list = []
+    for raw in (recorded or []):
+        step = dict(raw or {})
+        if step.get("action") in ("fill", "click"):
+            step["optional"] = True
+        out.append(step)
+    return out
+
+
+def build_login_recipe(cfg: dict, *, verify_documents: list | None = None,
+                       home: dict | None = None) -> tuple[list, list]:
+    """Assemble a full login recipe in the exact shape the compiler's interpreter
+    replays, following the canonical login sequence:
+
+        Member (form-login)  ->  [Verify-documents, OPTIONAL]  ->  [assert_home ORACLE]
+
+    ``cfg`` is the form-login choreography (see ``_recipe_from_form_login``);
+    ``verify_documents`` are recorded interstitial steps (marked optional here);
+    ``home`` is the post-login landing signal for the Home-reached oracle.
+
+    Backward-compatible: with neither ``verify_documents`` nor ``home`` this returns
+    exactly ``_recipe_from_form_login(cfg)``."""
+    steps, slots = _recipe_from_form_login(cfg)
+    vdoc = _verify_document_steps(verify_documents)
+    if vdoc:
+        steps = steps + vdoc
+    home_step = _assert_home_step(home)
+    if home_step:
+        steps = steps + [home_step]
+    return steps, slots
+
+
 async def ensure_baseline_from_form_login(session: AsyncSession, *, tenant_id: str,
                                           artifact_id: str, form_login_cfg: dict | None
                                           ) -> dict:
@@ -960,7 +1024,7 @@ __all__ = [
     "TpLoginRecipeRow", "TpPersonaRow", "TpPersonaCredentialRow", "TpPersonaExpectedValueRow",
     "TpValueClassificationRow", "TpPersonaReservationRow", "TpEnvironmentRow", "TpCaseScopeRow",
     "save_recipe", "get_recipe", "list_recipes", "stamp_recipe_verified",
-    "ensure_baseline_from_form_login",
+    "ensure_baseline_from_form_login", "build_login_recipe",
     "save_persona", "get_persona", "list_personas", "retire_persona",
     "save_persona_credential", "get_persona_credential", "credential_status",
     "stamp_card_verified", "all_credential_status", "rotate_cards", "flag_stale_cards",
