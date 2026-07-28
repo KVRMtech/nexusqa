@@ -64,6 +64,11 @@ class TpLoginRecipeRow(Base):
     status: Mapped[str] = mapped_column(String(16), default="active")
     verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     verified_env: Mapped[str] = mapped_column(String(64), default="")
+    # Reuse-matching key (Phase 5): domain + login-page + login-FORM fingerprint,
+    # computed by the caller from the observed form (login_fingerprint.login_type_key)
+    # so the fleet can propose an existing recipe instead of re-recording. Empty when
+    # the recipe predates the key or the form was not fingerprinted.
+    login_type_key: Mapped[str] = mapped_column(String(64), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utc_now)
 
 
@@ -178,9 +183,11 @@ class TpCaseScopeRow(Base):
 
 async def save_recipe(session: AsyncSession, *, tenant_id: str, artifact_id: str,
                       steps: list, slots: list, app_id: str = "",
-                      source: str = "crawl_demonstration") -> dict:
+                      source: str = "crawl_demonstration",
+                      login_type_key: str = "") -> dict:
     """Persist a NEW recipe version (monotonic per artifact); supersede prior
-    active ones. Caller commits. Returns the stored recipe (non-secret)."""
+    active ones. ``login_type_key`` (from login_fingerprint) keys the recipe for
+    fleet reuse. Caller commits. Returns the stored recipe (non-secret)."""
     existing = list((await session.execute(
         select(TpLoginRecipeRow).where(TpLoginRecipeRow.tenant_id == tenant_id,
                                      TpLoginRecipeRow.artifact_id == artifact_id)
@@ -193,10 +200,11 @@ async def save_recipe(session: AsyncSession, *, tenant_id: str, artifact_id: str
     session.add(TpLoginRecipeRow(
         recipe_id=rid, tenant_id=tenant_id, artifact_id=artifact_id, app_id=app_id,
         version=next_version, steps=list(steps or []), slots=list(slots or []),
-        source=source, status="active", created_at=_utc_now()))
+        source=source, status="active", login_type_key=str(login_type_key or ""),
+        created_at=_utc_now()))
     await session.flush()
     return {"recipe_id": rid, "version": next_version, "slots": list(slots or []),
-            "step_count": len(steps or [])}
+            "step_count": len(steps or []), "login_type_key": str(login_type_key or "")}
 
 
 async def get_recipe(session: AsyncSession, *, tenant_id: str, artifact_id: str,
@@ -236,6 +244,30 @@ async def stamp_recipe_verified(session: AsyncSession, *, tenant_id: str,
     await session.execute(update(TpLoginRecipeRow)
         .where(TpLoginRecipeRow.recipe_id == recipe_id, TpLoginRecipeRow.tenant_id == tenant_id)
         .values(verified_at=_utc_now(), verified_env=environment_id))
+
+
+async def find_recipes_by_login_type(session: AsyncSession, *, tenant_id: str,
+                                     login_type_key: str) -> list[dict]:
+    """Active recipes across the TENANT that share a login type — the fleet-wide
+    reuse lookup (Phase 5). An empty key returns nothing (an unfingerprinted recipe
+    is never a reuse candidate). RLS + the explicit tenant filter keep it scoped."""
+    key = str(login_type_key or "").strip()
+    if not key:
+        return []
+    try:
+        rows = (await session.execute(
+            select(TpLoginRecipeRow).where(
+                TpLoginRecipeRow.tenant_id == tenant_id,
+                TpLoginRecipeRow.login_type_key == key,
+                TpLoginRecipeRow.status == "active")
+            .order_by(TpLoginRecipeRow.created_at.desc()))).scalars().all()
+    except Exception as exc:
+        logger.debug("persona_store.find_by_login_type_skipped err=%s", exc)
+        return []
+    return [{"recipe_id": r.recipe_id, "artifact_id": r.artifact_id,
+             "app_id": r.app_id, "version": r.version, "slots": r.slots,
+             "login_type_key": r.login_type_key,
+             "verified_at": _iso(r.verified_at)} for r in rows]
 
 
 def _recipe_from_form_login(cfg: dict) -> tuple[list, list]:
@@ -1024,7 +1056,7 @@ __all__ = [
     "TpLoginRecipeRow", "TpPersonaRow", "TpPersonaCredentialRow", "TpPersonaExpectedValueRow",
     "TpValueClassificationRow", "TpPersonaReservationRow", "TpEnvironmentRow", "TpCaseScopeRow",
     "save_recipe", "get_recipe", "list_recipes", "stamp_recipe_verified",
-    "ensure_baseline_from_form_login", "build_login_recipe",
+    "ensure_baseline_from_form_login", "build_login_recipe", "find_recipes_by_login_type",
     "save_persona", "get_persona", "list_personas", "retire_persona",
     "save_persona_credential", "get_persona_credential", "credential_status",
     "stamp_card_verified", "all_credential_status", "rotate_cards", "flag_stale_cards",
