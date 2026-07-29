@@ -16,10 +16,23 @@ Two things come out of one pass, because the operator does both in one sitting:
     the browser there. A routing cookie is how many estates select a box, so it is
     part of "where", not part of "who".
 
-NOTHING SENSITIVE CROSSES. Credential values are never captured by the observer in
-the first place. Session cookies are deliberately dropped here too: a draft is a
-description of how to log in, not a logged-in session, and the wizard is not a
-place to be carrying one.
+WHAT COMES BACK, AND WHY EACH PART EXISTS. A recording is what finally lets a crawl
+past a login, so three things come out and they are kept strictly apart:
+
+  * ``login``       the choreography + named slots. No values, ever — the observer
+                    does not read them. This is what OTHER members replay later.
+  * ``environment`` the origin landed on and the cookies that ROUTED the browser
+                    there. Session cookies are excluded: routing is "where", not
+                    "who".
+  * ``session``     the storageState — a real logged-in session, which is what gets
+                    THIS crawl in. The crawler already accepts one
+                    (``explorations._resolve_session``), so nothing new is invented.
+
+The session is returned SEPARATELY and is never folded into ``login`` or
+``environment``, so a caller that only wants a description of the login cannot
+accidentally end up holding a live one. It travels the same path the onboarding
+password already travels — posted once over TLS and encrypted at rest by the
+service that stores it — and is never written to disk here.
 
 Pure — no DB, no I/O. The caller talks to the runner and decides what to store.
 """
@@ -77,15 +90,20 @@ def derive_draft(*, observation_snapshot: dict | None,
         "base_url": base_url,
         "cookies": routing_cookies(storage_state),
     }
+    # Kept apart from `environment` on purpose: one describes where to go, the
+    # other IS an authenticated session.
+    session = storage_state if isinstance(storage_state, dict) and (
+        storage_state.get("cookies") or storage_state.get("origins")) else None
 
     if observation.get("unusable"):
-        return {"login": None, "environment": environment, "usable": False,
+        return {"login": None, "environment": environment, "session": session,
+                "usable": False,
                 "reason": observation.get("reason") or "no_login_observed"}
 
     built = login_recorder.recipe_from_observed_login(observation)
     if not built.get("steps") or not built.get("slots"):
-        return {"login": None, "environment": environment, "usable": False,
-                "reason": "no_credential_fields_observed"}
+        return {"login": None, "environment": environment, "session": session,
+                "usable": False, "reason": "no_credential_fields_observed"}
 
     return {
         "login": {
@@ -99,6 +117,7 @@ def derive_draft(*, observation_snapshot: dict | None,
             "slot_names": [s.get("name") for s in built["slots"]],
         },
         "environment": environment,
+        "session": session,
         "usable": True,
         "reason": "",
     }

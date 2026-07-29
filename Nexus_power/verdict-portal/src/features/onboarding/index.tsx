@@ -564,6 +564,50 @@ export function OnboardingWizard() {
   const [form, setForm] = useState<WizardForm>(EMPTY);
   // Don't make the next tester record a login somebody already recorded.
   const [reuse, setReuse] = useState<any>(null);
+  // RECORD AT ONBOARDING. The crawl cannot get past a login without one, so the
+  // recording happens here — before the app exists — and rides along when it does.
+  const [recLive, setRecLive] = useState('');
+  const [recBusy, setRecBusy] = useState('');
+  const [recorded, setRecorded] = useState<any>(null);
+  const [recErr, setRecErr] = useState('');
+
+  const startRecording = async () => {
+    const url = form.base_url.trim();
+    if (!url) { setRecErr('Enter the Base URL first — that is where the recording starts.'); return; }
+    setRecBusy('start'); setRecErr(''); setRecorded(null);
+    try {
+      const r = await factoryApi.startRecording(url);
+      if (!r?.live_url) throw new Error('the runner did not return a live view');
+      setRecLive(r.live_url);
+    } catch (e: any) {
+      setRecErr(e?.response?.data?.detail || e?.message || 'could not start recording');
+    } finally { setRecBusy(''); }
+  };
+
+  const finishRecording = async () => {
+    setRecBusy('save'); setRecErr('');
+    try {
+      const r = await factoryApi.saveRecording();
+      setRecLive('');
+      setRecorded(r);
+      if (!r?.usable) {
+        setRecErr(r?.reason === 'no_credential_fields_observed'
+          ? 'No login fields were filled, so only the environment was captured.'
+          : `No login recipe: ${r?.reason || 'unknown'}.`);
+      }
+      // The recording knows the real entry point better than a typed guess.
+      if (r?.environment?.base_url) set('base_url', r.environment.base_url);
+    } catch (e: any) {
+      setRecErr(e?.response?.data?.detail || e?.message || 'could not save the recording');
+    } finally { setRecBusy(''); }
+  };
+
+  const abortRecording = async () => {
+    setRecBusy('cancel');
+    try { await factoryApi.cancelRecording(); } catch { /* closing anyway */ }
+    setRecLive(''); setRecBusy('');
+  };
+
   const [submitting, setSubmitting] = useState(false);
 
   const set = <K extends keyof WizardForm>(key: K, value: WizardForm[K]) => setForm((f) => ({ ...f, [key]: value }));
@@ -643,19 +687,30 @@ export function OnboardingWizard() {
     // Tier-4 auth-hook (login the crawler can't script): an https URL that
     // returns a fresh Playwright storageState, fetched per crawl.
     const authHook = form.mfa_method === 'hook' && form.mfa_secret.trim() ? form.mfa_secret.trim() : null;
+    // A RECORDED session is what actually gets the crawl past the login. The
+    // crawler already prefers one over trying to script the form itself
+    // (explorations._resolve_session), so recording removes the guesswork rather
+    // than adding a new mechanism. Typed credentials still ride along so the login
+    // can be re-driven when the session expires.
+    const recordedSession = recorded?.usable ? recorded.session : null;
     const credentials =
-      form.username || form.password || authHook
+      form.username || form.password || authHook || recordedSession
         ? {
             username: form.username,
             password: form.password,
             ...(mfa ? { mfa } : {}),
             ...(authHook ? { auth_hook: authHook } : {}),
+            ...(recordedSession ? { session: recordedSession } : {}),
           }
         : null;
     return {
       name: form.name.trim(),
       base_url: form.base_url.trim(),
       credentials,
+      // The recorded choreography travels with the app. It becomes a real recipe
+      // when the first crawl mints an artifact — recipes are artifact-scoped, and
+      // no artifact exists yet at this point.
+      ...(recorded?.usable && recorded.login ? { login_recording: recorded.login } : {}),
       repo_binding: { provider: form.repo_provider, project: form.repo_project, webhook_secret: form.webhook_secret },
       answer_key: { fill, notes: form.seed_notes, outcomes: answers },
       env_attestation: {
@@ -673,7 +728,7 @@ export function OnboardingWizard() {
       },
       budgets: form.usd_per_cycle ? { usd_per_cycle: Number(form.usd_per_cycle) } : {},
     };
-  }, [form]);
+  }, [form, recorded]);   // `recorded` matters: a saved recording changes the payload
 
   const submit = async () => {
     if (!canProceedAccess) {
@@ -861,6 +916,74 @@ export function OnboardingWizard() {
                 />
               </Field>
             )}
+            {/* RECORD — at the foot of Access, because the crawl cannot get past a
+                login without one. One pass captures the environment landed on, the
+                login choreography, and the session that gets THIS crawl in. */}
+            <div className="sm:col-span-2 rounded-lg ring-1 ring-slate-200 bg-slate-50/70 p-3">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-2xs font-semibold text-ink">Record the login &amp; environment</span>
+                <span className="text-3xs text-ink-low">
+                  optional — log in once by hand instead of hoping we work your form out
+                </span>
+                {!recLive && (
+                  <button type="button" onClick={startRecording} disabled={recBusy === 'start'}
+                    className="ml-auto inline-flex items-center gap-1 rounded-md bg-brand px-2.5 py-1 text-2xs font-semibold text-white disabled:opacity-50">
+                    {recBusy === 'start' ? 'Starting…' : recorded ? 'Record again' : 'Record'}
+                  </button>
+                )}
+              </div>
+
+              {recLive && (
+                <div className="mt-2">
+                  <div className="flex items-center gap-2 mb-2">
+                    <span className="inline-block h-2 w-2 rounded-full bg-rose-500 animate-pulse" />
+                    <span className="text-2xs font-semibold text-ink">
+                      Recording — go to the right environment, then log in
+                    </span>
+                    <div className="ml-auto flex items-center gap-1.5">
+                      <button type="button" onClick={finishRecording} disabled={recBusy === 'save'}
+                        className="rounded-md bg-emerald-600 px-2.5 py-1 text-2xs font-semibold text-white disabled:opacity-50">
+                        {recBusy === 'save' ? 'Saving…' : "I'm logged in — save"}
+                      </button>
+                      <button type="button" onClick={abortRecording} disabled={recBusy === 'cancel'}
+                        className="rounded-md ring-1 ring-slate-200 bg-white px-2.5 py-1 text-2xs font-semibold text-ink-low">
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                  <iframe src={recLive} title="Log in to record the login"
+                    className="w-full h-[420px] rounded-md ring-1 ring-slate-200 bg-white" />
+                  <p className="text-3xs text-ink-low mt-1.5">
+                    We record WHICH fields you fill and WHICH controls you press — never the values you type.
+                    Save as soon as you reach the logged-in page.
+                  </p>
+                </div>
+              )}
+
+              {recorded?.usable && !recLive && (
+                <div className="mt-2 rounded-md ring-1 ring-emerald-200 bg-emerald-50 px-2.5 py-2 text-2xs text-emerald-900">
+                  <span className="font-semibold">Login recorded.</span>{' '}
+                  slots <span className="font-semibold">{(recorded.login?.slot_names || []).join(', ')}</span>
+                  {' · '}<span className="font-mono">{recorded.login?.login_path}</span>
+                  {recorded.login?.home_path && <> → <span className="font-mono">{recorded.login.home_path}</span></>}
+                  {recorded.session
+                    ? <div className="mt-1">This crawl will start already logged in, and other members can replay these steps with their own credentials.</div>
+                    : <div className="mt-1">No session was captured, so the crawl will start logged out.</div>}
+                  {(recorded.environment?.cookies || []).length > 0 && (
+                    <div className="mt-1">
+                      routing cookies: <span className="font-mono">
+                        {recorded.environment.cookies.map((c: any) => c.name).join(', ')}
+                      </span>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {recErr && !recLive && (
+                <p className="mt-2 text-2xs text-amber-700">{recErr}</p>
+              )}
+            </div>
+
             {(form.mfa_method === 'totp' || form.mfa_method === 'otp') && (
               <Field label="Delivery channel (optional)" hint="If the app asks 'email or mobile?', which to pick. Blank = let the app default.">
                 <input

@@ -133,3 +133,40 @@ def test_a_federated_login_is_flagged_and_keys_on_the_application():
 def test_the_draft_carries_the_reuse_key_so_it_can_be_matched_later():
     draft = dr.derive_draft(observation_snapshot=_snap(_LOGIN), storage_state=None)
     assert draft["login"]["login_type_key"].startswith("lt_")
+
+
+# ── the session: what actually gets THIS crawl in ─────────────────────────────
+
+def test_the_session_comes_back_separately_from_the_login_and_environment():
+    """Three things, strictly apart: how to log in, where to go, and a real
+    logged-in session. A caller that wants a description must not end up holding
+    a live login by accident."""
+    state = {"cookies": [{"name": "route", "value": "B", "domain": "d", "path": "/"},
+                         {"name": "JSESSIONID", "value": "LIVE", "domain": "d", "path": "/"}],
+             "origins": []}
+    draft = dr.derive_draft(observation_snapshot=_snap(_LOGIN), storage_state=state)
+
+    assert draft["session"] is state                     # the crawl needs this
+    assert "JSESSIONID" not in repr(draft["environment"])  # routing is not identity
+    assert "JSESSIONID" not in repr(draft["login"])
+    assert [c["name"] for c in draft["environment"]["cookies"]] == ["route"]
+
+
+def test_a_public_flow_returns_no_session():
+    draft = dr.derive_draft(observation_snapshot=_snap([]), storage_state=None)
+    assert draft["session"] is None
+
+
+def test_an_empty_storage_state_is_not_a_session():
+    """An empty state is not a login — returning it would make the crawler think
+    it was authenticated when it is not."""
+    for state in ({}, {"cookies": [], "origins": []}, None):
+        draft = dr.derive_draft(observation_snapshot=_snap(_LOGIN), storage_state=state)
+        assert draft["session"] is None
+
+
+def test_the_login_recipe_never_contains_the_session():
+    state = {"cookies": [{"name": "SESSIONID", "value": "LIVE-SECRET"}]}
+    draft = dr.derive_draft(observation_snapshot=_snap(_LOGIN), storage_state=state)
+    assert "LIVE-SECRET" not in repr(draft["login"])
+    assert "LIVE-SECRET" not in repr(draft["environment"])

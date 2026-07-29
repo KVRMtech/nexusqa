@@ -792,6 +792,31 @@ class FactoryApiClient {
     return data;
   }
 
+  /** RECORD AT ONBOARDING. Deliberately not artifact-scoped: a recipe lives
+   *  against an artifact and an artifact is only minted by the first crawl, so at
+   *  the Access step there is nothing to attach to. One pass yields the login
+   *  choreography, the environment landed on, and the session that gets THIS
+   *  crawl past the login. */
+  async startRecording(url: string): Promise<any> {
+    const { data } = await this.client.post('/v1/test-factory/recordings/start', { url });
+    return data;
+  }
+
+  async recordingObservation(): Promise<any> {
+    const { data } = await this.client.get('/v1/test-factory/recordings/observation');
+    return data;
+  }
+
+  async saveRecording(): Promise<any> {
+    const { data } = await this.client.post('/v1/test-factory/recordings/save', {});
+    return data;
+  }
+
+  async cancelRecording(): Promise<any> {
+    const { data } = await this.client.post('/v1/test-factory/recordings/cancel', {});
+    return data;
+  }
+
   /** Has this tenant already recorded a login for this host?
    *  At onboarding no form has been seen, so only the domain is sent and the
    *  server matches on that: one recorded login is a reuse, several are a
