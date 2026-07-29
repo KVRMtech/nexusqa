@@ -139,6 +139,17 @@ def _host_of(url: object) -> str:
         return ""
 
 
+def _origin_of(url: object) -> str:
+    """scheme://host[:port] — how we tell 'the login happened somewhere else'."""
+    try:
+        parts = urlsplit(str(url or ""))
+    except ValueError:
+        return ""
+    if not parts.scheme or not parts.netloc:
+        return ""
+    return f"{parts.scheme}://{parts.netloc}".lower()
+
+
 def _is_advancing(click: dict) -> bool:
     """A control that plausibly advances the login (not Cancel / Forgot / a
     language toggle). Conservative: unknown controls DO advance, because missing a
@@ -201,7 +212,22 @@ def observation_from_events(snapshot: dict | None, *, base_url: str = "") -> dic
                 "login_path": _path_of(login_url or start_url),
                 "fields": [], "submit": "", "sequence": []}
 
-    login_path = _path_of(login_url)
+    # FEDERATED LOGIN (SSO / OIDC / SAML). The credential fields are entered on the
+    # identity provider's origin, not the application's. Keying on where the typing
+    # happened would be wrong twice over: the reuse fingerprint would belong to the
+    # IdP, so every application behind one provider would collide; and the replayed
+    # goto would be the provider's path resolved against the application's base URL,
+    # which is simply a wrong address.
+    #
+    # A login belongs to the APPLICATION being tested. So the recipe enters where
+    # the recording entered and lets the application redirect exactly as it did for
+    # the operator — which is also the only way the provider receives a valid
+    # authorization request.
+    app_origin = _origin_of(start_url)
+    login_origin = _origin_of(login_url)
+    federated = bool(app_origin and login_origin and app_origin != login_origin)
+    fingerprint_host = _host_of(start_url) if (federated and start_url) else _host_of(login_url)
+    login_path = _path_of(start_url) if federated else _path_of(login_url)
 
     # ── pass 2: RETRY COLLAPSE ─────────────────────────────────────────────────
     # A mistyped password means the operator filled the same slots twice. Replaying
@@ -226,10 +252,17 @@ def observation_from_events(snapshot: dict | None, *, base_url: str = "") -> dic
     # "use my member number" tab) is at login_path and is correctly kept.
     kept: list = []
     for c in clicks:
-        if c["pos"] < first_fill_pos and _path_of(c["url"]) != login_path:
-            continue                            # got us TO the login page
-        if c["pos"] < first_fill_pos and attempt_start and c["pos"] < first_fill_pos:
-            continue                            # belonged to the abandoned attempt
+        if c["pos"] < first_fill_pos:
+            on_entry_page = _path_of(c["url"]) == login_path
+            if not on_entry_page:
+                # Navigation that merely got us to the login page: the recipe
+                # already goes straight there, so replaying it would hunt a control
+                # that is not on that page.
+                continue
+            if attempt_start:
+                # An earlier, abandoned attempt (a mistyped password). Replaying its
+                # submit would fire before the fields of the kept attempt exist.
+                continue
         kept.append(c)
     clicks = kept
 
@@ -300,13 +333,14 @@ def observation_from_events(snapshot: dict | None, *, base_url: str = "") -> dic
     # would fill the form and never submit, then "succeed" because the steps ran.
     if not submit:
         return {"unusable": True, "reason": "no_submit_control_observed",
-                "domain": registrable_domain(_host_of(login_url)),
+                "domain": registrable_domain(fingerprint_host),
                 "login_path": login_path, "fields": fields, "submit": "",
-                "sequence": sequence}
+                "sequence": sequence, "federated": federated}
 
     return {
-        "domain": registrable_domain(_host_of(login_url)),
+        "domain": registrable_domain(fingerprint_host),
         "login_path": login_path,
+        "federated": federated,
         "fields": fields,
         "submit": submit,
         "verify_documents": interstitial,

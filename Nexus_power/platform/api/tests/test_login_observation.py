@@ -392,3 +392,91 @@ def test_slot_name_falls_back_when_the_field_has_no_name():
         _click(1, "Sign in"),
     ]))
     assert [f["slot"] for f in obs["fields"]] == ["member_number"]
+
+
+# ── phase 6: federated (SSO/OIDC/SAML) and embedded logins ───────────────────
+
+def test_federated_login_keys_on_the_APPLICATION_not_the_identity_provider():
+    """The credential fields are typed on the provider's origin. Keying there would
+    make every application behind one provider share a fingerprint, and would emit
+    the provider's path to be replayed against the application's base URL."""
+    obs = lo.observation_from_events(_snap([
+        _nav(0, "https://app.example.com/"),
+        _click(1, "Sign in with SSO"),
+        _nav(2, "https://login.idp-provider.com/authorize"),
+        _fill(3, "username"),
+        _fill(4, "password", type_="password"),
+        _click(5, "Log in"),
+        _nav(6, "https://app.example.com/portal"),
+    ], start="https://app.example.com/", current="https://app.example.com/portal"))
+
+    assert obs["federated"] is True
+    assert obs["domain"] == "example.com"          # NOT idp-provider.com
+    assert obs["login_path"] == "/"                # the application's entry
+    assert obs["home"] == {"url_pattern": "/portal"}
+
+
+def test_a_federated_login_keeps_the_click_that_hands_off_to_the_provider():
+    """Without it the recipe never leaves the application, so the provider is never
+    reached — the mirror image of the ordinary case, where that click is dropped."""
+    obs = lo.observation_from_events(_snap([
+        _nav(0, "https://app.example.com/"),
+        _click(1, "Sign in with SSO"),
+        _nav(2, "https://login.idp-provider.com/authorize"),
+        _fill(3, "username"), _fill(4, "password", type_="password"),
+        _click(5, "Log in"),
+        _nav(6, "https://app.example.com/portal"),
+    ], start="https://app.example.com/", current="https://app.example.com/portal"))
+
+    clicks = [s["name"] for s in obs["sequence"] if s["action"] == "click"]
+    assert clicks == ["Sign in with SSO", "Log in"]
+
+
+def test_two_applications_behind_one_provider_do_not_collide():
+    """The reuse key must belong to the application under test."""
+    def sso(app_host):
+        return lo.observation_from_events(_snap([
+            _nav(0, f"https://{app_host}/"),
+            _click(1, "Sign in with SSO"),
+            _nav(2, "https://login.idp-provider.com/authorize"),
+            _fill(3, "username"), _fill(4, "password", type_="password"),
+            _click(5, "Log in"),
+        ], start=f"https://{app_host}/"))
+
+    a = lr.recipe_from_observed_login(sso("app-one.example.com"))
+    b = lr.recipe_from_observed_login(sso("app-two.other-co.com"))
+    assert a["login_type_key"] != b["login_type_key"]
+
+
+def test_a_same_origin_login_is_not_treated_as_federated():
+    """Regression guard: the ordinary case must be completely unchanged."""
+    obs = lo.observation_from_events(_snap([
+        _nav(0, "https://www.usaa.com/"),
+        _click(1, "Log in"),
+        _nav(2, "https://www.usaa.com/login"),
+        _fill(3, "member_number"), _fill(4, "password", type_="password"),
+        _click(5, "Sign in"),
+    ], start="https://www.usaa.com/"))
+
+    assert obs["federated"] is False
+    assert obs["login_path"] == "/login"
+    assert [s["name"] for s in obs["sequence"] if s["action"] == "click"] == ["Sign in"]
+
+
+def test_an_iframe_hosted_login_keys_on_the_HOST_page():
+    """An embedded identity widget types into a child frame, but the page a tester
+    visits — and the page a replay must open — is the host. Child-frame navigations
+    are deliberately not recorded, so the host URL is what the fills attribute to."""
+    obs = lo.observation_from_events(_snap([
+        _nav(0, "https://app.example.com/signin"),
+        # the widget's own frame navigation is NOT emitted by the observer
+        _fill(1, "username"), _fill(2, "password", type_="password"),
+        _click(3, "Sign in"),
+        _nav(4, "https://app.example.com/home"),
+    ], start="https://app.example.com/signin",
+       current="https://app.example.com/home"))
+
+    assert obs["federated"] is False
+    assert obs["domain"] == "example.com"
+    assert obs["login_path"] == "/signin"
+    assert obs["home"] == {"url_pattern": "/home"}
