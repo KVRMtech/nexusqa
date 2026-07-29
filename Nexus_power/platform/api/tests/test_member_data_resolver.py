@@ -209,6 +209,47 @@ def test_empty_and_malformed_input_is_survivable():
         assert plan["data_by_test"] == {}
 
 
+# ── the answer-sheet shape the store actually returns ────────────────────────
+
+def test_the_real_answer_sheet_shape_from_the_store_is_understood():
+    """REGRESSION. persona_store.get_expected_values returns
+    {value_key: {"expected_value": ..., "source": ...}} — not a flat string map.
+    Treating that dict as the value would type its repr into the field: a wrong
+    value that still looks committed, so every guard downstream passes."""
+    plan = mdr.plan_member_data(
+        _SUITE,
+        classifications={"tc-1:1:observed_value": _MEMBER_DERIVED},
+        answers={"tc-1:1:observed_value": {"expected_value": "5550001",
+                                           "source": "diff_proven"}},
+        data_key=_data_key)
+
+    assert plan["data_by_test"] == {"tc-1": {"member-number": "5550001"}}
+    assert plan["missing"] == []
+    assert "expected_value" not in repr(plan["data_by_test"])
+
+
+def test_both_answer_shapes_agree():
+    """A flat map and the store's dict map must resolve identically."""
+    flat = mdr.plan_member_data(
+        _SUITE, classifications={"tc-1:1:observed_value": _MEMBER_DERIVED},
+        answers={"tc-1:1:observed_value": "5550001"}, data_key=_data_key)
+    rich = mdr.plan_member_data(
+        _SUITE, classifications={"tc-1:1:observed_value": _MEMBER_DERIVED},
+        answers={"tc-1:1:observed_value": {"expected_value": "5550001"}},
+        data_key=_data_key)
+    assert flat["data_by_test"] == rich["data_by_test"]
+
+
+def test_a_store_row_with_an_empty_value_still_counts_as_no_answer():
+    plan = mdr.plan_member_data(
+        _SUITE,
+        classifications={"tc-1:1:observed_value": _MEMBER_DERIVED},
+        answers={"tc-1:1:observed_value": {"expected_value": "", "source": "x"}},
+        data_key=_data_key)
+    assert plan["data_by_test"] == {}
+    assert plan["missing"], "an empty stored value must block, not resolve"
+
+
 # ── the flag: off means the previous behaviour, exactly ──────────────────────
 
 def test_the_resolver_is_off_unless_explicitly_enabled(monkeypatch):

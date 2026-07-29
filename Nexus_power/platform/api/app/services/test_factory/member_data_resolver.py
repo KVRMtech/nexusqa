@@ -50,6 +50,18 @@ __all__ = [
 ]
 
 
+def _answer_text(entry) -> str:
+    """The member's value, from either shape an answer sheet is handed to us in.
+
+    ``persona_store.get_expected_values`` returns ``{value_key: {expected_value,
+    source}}``; callers with a flat ``{value_key: value}`` map are also supported.
+    Without this the dict would stringify into the override and the script would
+    type its repr into the field — a wrong value that still looks committed."""
+    if isinstance(entry, dict):
+        return str(entry.get("expected_value") or "")
+    return "" if entry is None else str(entry)
+
+
 def _steps_of(case) -> tuple:
     """(scenario_id, [step dicts]) for a stored case row or a bare test-case dict."""
     tc = getattr(case, "test_case", None)
@@ -111,11 +123,11 @@ def plan_member_data(cases, *, classifications: dict | None,
                 key = f"{scenario_id}:{number}:{kind}"
                 if key not in derived:
                     continue
-                answer = sheet.get(key)
+                answer = _answer_text(sheet.get(key))
                 # An empty answer is NOT an answer. A member whose value is
                 # genuinely blank must be recorded as blank deliberately, not
                 # inferred from a missing row.
-                if answer is None or str(answer).strip() == "":
+                if answer.strip() == "":
                     missing.append({"value_key": key, "scenario_id": scenario_id,
                                     "step_number": number, "kind": kind,
                                     "label": label})
