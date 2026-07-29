@@ -792,6 +792,19 @@ class FactoryApiClient {
     return data;
   }
 
+  /** Has this tenant already recorded a login for this host?
+   *  At onboarding no form has been seen, so only the domain is sent and the
+   *  server matches on that: one recorded login is a reuse, several are a
+   *  question (a public login and a member portal are not the same), none is a
+   *  fresh recording. Sending `fields` later tightens it to the exact form. */
+  async reuseCheck(body: {
+    domain: string; login_path?: string;
+    fields?: Array<{ slot: string; type?: string }>; submit?: string;
+  }): Promise<any> {
+    const { data } = await this.client.post('/v1/test-factory/recipes/reuse-check', body);
+    return data;
+  }
+
   /** Derive a baseline login recipe from a configured form-login (idempotent). */
   async ensureBaselineRecipe(artifactId: string): Promise<any> {
     const { data } = await this.client.post(

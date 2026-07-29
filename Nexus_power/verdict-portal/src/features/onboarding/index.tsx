@@ -8,8 +8,9 @@
  * `onboarding` feature agent owns richer validation / preflight. Export
  * `OnboardingWizard`.
  */
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { api as factoryApi } from '../../studio/factoryApi';
 import { toast } from 'sonner';
 import {
   ClipboardCheck,
@@ -538,10 +539,31 @@ function EnvCard({
 
 // ── the wizard ───────────────────────────────────────────────────────────────
 
+/** Registrable domain of a base URL, mirroring the server's reduction so a host
+ *  and its sub-hosts (uat./prod./a numbered box) all propose the same recipe. */
+function reuseDomain(raw: string): string {
+  try {
+    const host = new URL(raw.trim()).hostname.toLowerCase();
+    if (/^[\d.]+$/.test(host) || !host.includes('.')) return host;
+    const parts = host.split('.');
+    if (parts.length <= 2) return host;
+    const lastTwo = parts.slice(-2).join('.');
+    return MULTI_PART_SUFFIXES.has(lastTwo) ? parts.slice(-3).join('.') : lastTwo;
+  } catch { return ''; }
+}
+
+const MULTI_PART_SUFFIXES = new Set([
+  'co.uk', 'org.uk', 'gov.uk', 'ac.uk', 'com.au', 'net.au', 'org.au', 'co.nz',
+  'co.jp', 'co.kr', 'co.in', 'co.za', 'com.br', 'com.mx', 'com.sg', 'com.hk',
+  'com.cn', 'com.tw', 'com.my', 'com.tr', 'co.th', 'co.id', 'co.il',
+]);
+
 export function OnboardingWizard() {
   const navigate = useNavigate();
   const [step, setStep] = useState(0);
   const [form, setForm] = useState<WizardForm>(EMPTY);
+  // Don't make the next tester record a login somebody already recorded.
+  const [reuse, setReuse] = useState<any>(null);
   const [submitting, setSubmitting] = useState(false);
 
   const set = <K extends keyof WizardForm>(key: K, value: WizardForm[K]) => setForm((f) => ({ ...f, [key]: value }));
@@ -552,6 +574,23 @@ export function OnboardingWizard() {
     setForm((f) => ({ ...f, environments: f.environments.map((e, k) => (k === i ? { ...e, ...patch } : e)) }));
   const removeEnv = (i: number) =>
     setForm((f) => ({ ...f, environments: f.environments.filter((_, k) => k !== i) }));
+
+  useEffect(() => {
+    const domain = reuseDomain(form.base_url);
+    if (!domain) { setReuse(null); return; }
+    let cancelled = false;
+    const t = window.setTimeout(async () => {
+      try {
+        const r = await factoryApi.reuseCheck({ domain });
+        if (!cancelled) setReuse(r && r.action && r.action !== 'record' ? r : null);
+      } catch {
+        // A proposal is a convenience. If the lookup fails the tester simply
+        // records as they would have anyway — it must never block onboarding.
+        if (!cancelled) setReuse(null);
+      }
+    }, 600);
+    return () => { cancelled = true; window.clearTimeout(t); };
+  }, [form.base_url]);
 
   const canProceedAccess = form.name.trim().length > 0 && form.base_url.trim().length > 0;
   const isLast = step === BUCKETS.length - 1;
@@ -743,6 +782,31 @@ export function OnboardingWizard() {
             <Field label="Base URL" required hint="Absolute http(s) URL. Point at the SPECIFIC flow's entry, not a hub page.">
               <input className={INPUT_CLS} value={form.base_url} onChange={(e) => set('base_url', e.target.value)} placeholder="https://quote.acmelife.example" />
             </Field>
+            {reuse && (
+              <div className="sm:col-span-2 rounded-lg ring-1 ring-emerald-200 bg-emerald-50 px-3 py-2 text-2xs text-emerald-900">
+                {reuse.action === 'reuse' ? (
+                  <>
+                    <span className="font-semibold">This login is already recorded.</span>{' '}
+                    Someone on your team recorded a login for <span className="font-mono">{reuse.domain}</span>
+                    {(reuse.recipes?.[0]?.slots?.length ?? 0) > 0 && (
+                      <> — it asks for <span className="font-semibold">
+                        {reuse.recipes[0].slots.map((sl: any) => sl.name).join(', ')}
+                      </span></>
+                    )}. You don't need to record it again; just add this member's credentials after onboarding.
+                  </>
+                ) : (
+                  <>
+                    <span className="font-semibold">
+                      {reuse.recipes?.length ?? reuse.options?.length ?? 0} logins are already recorded for{' '}
+                      <span className="font-mono">{reuse.domain}</span>.
+                    </span>{' '}
+                    They are genuinely different (a public login and a member portal are not the same),
+                    so pick the right one in Members &amp; Environments after onboarding rather than re-recording.
+                  </>
+                )}
+              </div>
+            )}
+
             <Field label="Login username" hint="Envelope-encrypted at rest, never echoed. Leave blank for a public app.">
               <input className={INPUT_CLS} value={form.username} onChange={(e) => set('username', e.target.value)} autoComplete="off" />
             </Field>
