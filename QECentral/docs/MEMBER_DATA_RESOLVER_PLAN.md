@@ -1,6 +1,7 @@
 # Record once, run anywhere — final implementation plan
 
-**Status:** approved, not started · **Date:** 2026-07-28
+**Status:** phases 0,1,2,3,4,6 SHIPPED + LIVE (flag on) · 5 blocked on a decision · 7,8 remaining
+**Date:** 2026-07-28, updated 2026-07-29
 **Branch:** `feat/record-once-run-anywhere` · **Restore point:** tag `pre-member-data-resolver-20260728` (`ff77c40`)
 **Companion docs:** [RECORD_ONCE_RUN_ANYWHERE_PLAN.md](RECORD_ONCE_RUN_ANYWHERE_PLAN.md) (the login-recording design this continues),
 [PERSONA_ENVIRONMENT_MATRIX_PLAN.md](PERSONA_ENVIRONMENT_MATRIX_PLAN.md) (RUN = Suite × Environment × Member)
@@ -88,14 +89,14 @@ lives in the globalSetup template (`compiler.py:2111`) and **is never called by 
 
 ## Track A · correctness
 
-### Phase 0 — Safety net  *(mostly done)*
+### Phase 0 — Safety net  ✅ SHIPPED `8e2e049`
 
 Restore point taken (§0). **Remaining:** characterisation tests capturing what a compiled script emits *today*, so
 phases 2–5 prove they changed only what they intended.
 
 *Done when:* a deliberate change to compiler output fails a test that names it.
 
-### Phase 1 — Learn which values belong to a person  *(foundation)*
+### Phase 1 — Learn which values belong to a person  ✅ SHIPPED `83ab7d6` (`value_harvest.py`)
 
 Everything downstream needs to know which values are member-specific. Decided by evidence; changes no run behaviour.
 
@@ -108,7 +109,7 @@ Everything downstream needs to know which values are member-specific. Decided by
 member is **unknown**, never assumed shared.
 *Nothing breaks:* write-only, nothing reads it yet.
 
-### Phase 2 — Resolve values for the running member  *(core fix)*
+### Phase 2 — Resolve values for the running member  ✅ SHIPPED `9c160e8` (+ `0aff767` answer-shape fix)
 
 The substitution already exists in the compiled script — it is fed from the request body today.
 
@@ -124,7 +125,7 @@ D after phase 2:  the running member's answers, resolved at dispatch
 *Verified by:* same suite, two members ⇒ each drives its own values; flag off ⇒ compiled output byte-identical.
 **Ships together with Phase 3. Never on its own.**
 
-### Phase 3 — Block when the answer is missing  *(honesty gate)*
+### Phase 3 — Block when the answer is missing  ✅ SHIPPED `9c160e8`
 
 Phase 2 alone falls back to the recorded literal when a member has no answer — the original bug wearing a
 different hat.
@@ -135,7 +136,7 @@ different hat.
 
 *Done when:* a member with one missing answer is blocked and told exactly which.
 
-### Phase 4 — Separate what you type from what you assert  *(core fix)*
+### Phase 4 — Separate what you type from what you assert  ✅ SHIPPED `48a6d2c`
 
 A member-specific value typed into a field is **input**; displayed on a page it is an **expectation**. Today both
 are the same baked literal.
@@ -147,23 +148,41 @@ are the same baked literal.
 *Verified by:* a pre-populated field asserts the running member's value; a shared value still fails red if the
 application changes it.
 
-### Phase 5 — Counts that vary by member
+### Phase 5 — Counts that vary by member  ⛔ BLOCKED ON A DESIGN DECISION
 
 Members differ in *how many* of a thing they have. Storage, plan and env injection exist
 (`persona_store.py:711-751`, `persona_governance.py:177-189`, `routers/test_factory.py:4096-4105,4146`);
-the consuming helper is never called.
+the consuming helper `__nxRepeat` is never called.
 
-- Generator marks a repeated block as repeatable rather than emitting a flat list.
-- Compiler drives that block from the injected per-member count.
+**The blocker, confirmed against the live suite (2026-07-29).** Every step in the real 47-case suite carries
+exactly these keys:
 
-*Verified by:* one suite runs the block the right number of times for two differently-shaped members; an unknown
-count runs once and says so.
+```
+action  data_ref  expected  observed  selector  confidence
+provenance  screenshot  step_number  expected_result  confidence_reason
+```
+
+There is **no block / group / repeat marker of any kind**. The generator emits a flat step list, so nothing
+downstream can know which consecutive steps form one repeatable unit. The consuming side cannot be built
+until the producing side marks a block.
+
+**Why this is not being speed-run.** Inferring "these five steps are one beneficiary, repeated" from a flat
+list is structure inference, and a wrong guess silently repeats or drops real test steps — corrupting suites
+while still reporting green. That is the precise failure class this whole plan exists to remove, so it needs
+a deliberate decision rather than a fast heuristic.
+
+**The decision needed:** how a repeatable block is identified. Two credible routes —
+(a) the crawler marks blocks during generation from observed DOM repetition (a container repeated N times),
+which is earned evidence and consistent with the rest of the design; or
+(b) an operator marks the block once per suite in the UI, which is explicit but manual.
+
+Everything else in Phase 5 is already in place and waiting for the marker.
 
 ---
 
 ## Track B · login coverage
 
-### Phase 6 — Close the known login gaps
+### Phase 6 — Close the known login gaps  ✅ SSO SHIPPED `753125c` · iframe needs no change
 
 The credential model is generic — arbitrary field names, any count, any number of steps (proven live: two
 different slot sets produce two different reuse keys through one engine). Two mechanisms are currently
@@ -265,3 +284,32 @@ Phase 9.
 
 **The one-line test of success:** run the same suite as a member it has never seen, and it either proves that
 member's data or refuses — but never reports green on someone else's.
+
+---
+
+## Delivery log — 2026-07-29
+
+`NEXUS_MEMBER_DATA_RESOLVER=1` is **live** on the box (compose + `.env`, `1d8e1dc`).
+
+| Phase | Commit | State |
+|---|---|---|
+| 0 · characterisation tests | `8e2e049` | live — sensitivity proven by two reverted compiler mutations |
+| 1 · earned classification | `83ab7d6` | live — 1421 values harvested from the real 47-case suite |
+| 2 · resolver | `9c160e8`, `0aff767` | live |
+| 3 · block on missing | `9c160e8` | live |
+| 4 · assertions rewritten | `48a6d2c` | live |
+| 6 · federated login | `753125c` | live — keys on the application, not the provider |
+| 5 · counts | — | **blocked on a design decision** (no block marker exists; see above) |
+| 7 · recorder at Access | — | not started |
+| 8 · reuse prompt | — | not started |
+
+**Proven live on real data, end to end:** harvest 1421 values → classify against a second member
+(1 `member_derived` by `diff_proven`, 1420 `app_constant`) → resolver **BLOCKS** when the member has no
+answer, **redirects** when they do, and rewrites the assertion to their truth without mutating the stored
+case. Full suite **839 passed** (794 at baseline); the 5 failures are pre-existing ordering pollution.
+
+**A defect found and fixed with the flag already live** (`0aff767`): `get_expected_values` returns
+`{value_key: {expected_value, source}}`, not a flat map, and dispatch hands it straight to the resolver —
+the dict stringified into the override, so the script would have typed a Python repr into the field. A
+wrong value that still looks committed, which every downstream guard passes. Tests had used a flat map,
+which is not what production supplies. **Test against the real store signature, not an assumed shape.**
