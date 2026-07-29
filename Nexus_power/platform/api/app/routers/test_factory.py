@@ -109,6 +109,8 @@ from ..services.test_factory import evidence_manifest
 from ..services.test_factory import report_formats
 from ..services.test_factory import persona_store, login_recorder, login_fingerprint
 from ..services.test_factory import login_observation
+from ..services.test_factory import member_data_resolver
+from ..services.script_factory.compiler import _data_key as compiler_data_key
 from ..services.test_factory import persona_diff
 from ..services.test_factory import persona_governance
 from ..services.test_factory import persona_scale
@@ -180,6 +182,15 @@ _logger = logging.getLogger(__name__)
 
 _BUILDERS = {"excel": build_excel, "csv": build_csv, "json": build_json}
 _EXTENSIONS = {"excel": "xlsx", "csv": "csv", "json": "json"}
+
+
+def _member_data_enabled() -> bool:
+    """Resolve PROVEN member-derived values to the running member, and block when
+    that member has no answer. Read per call (not cached at import) so it can be
+    turned off on a live box without a rebuild. Default OFF: unset means the data
+    map is untouched and the compiled output is unchanged."""
+    return os.getenv("NEXUS_MEMBER_DATA_RESOLVER", "").strip().lower() in (
+        "1", "true", "yes", "on")
 
 
 async def _require_artifact(session, artifact_id: str, tenant_id: str) -> CanonicalArtifactRow:
@@ -4103,11 +4114,57 @@ async def playwright_run(
             _pc = {f"{persona_id}::{b}": n for b, n in _counts.items()}
             repetition = {p["block"]: p["repeat"]
                           for p in persona_governance.repetition_plan(_cd, _pc, persona_id)}
+    # MEMBER DATA — run the suite as the member who is actually running.
+    # A crawl-generated case carries the crawl member's values as literals; replayed
+    # as someone else those are the wrong person's data, and the compiled oracle
+    # asserts them against the value it just typed, so the run goes green having
+    # tested nobody. Redirect every PROVEN member-derived field to this member's own
+    # answer, and BLOCK when an answer is not known — never fall back to the literal.
+    # Default OFF: with the flag unset the data map is untouched and the compiled
+    # output is byte-identical to before.
+    _member_data_by_test = dict(body.data_by_test or {})
+    if persona_id and _member_data_enabled():
+        async with tenant_scoped_session(tenant_id) as session:
+            _classifications = await persona_store.get_classifications(
+                session, tenant_id=tenant_id, artifact_id=artifact_id)
+            _answers = await persona_store.get_expected_values(
+                session, tenant_id=tenant_id, persona_id=persona_id,
+                environment_id=environment_id)
+        _plan = member_data_resolver.plan_member_data(
+            cases, classifications=_classifications, answers=_answers,
+            data_key=compiler_data_key)
+        if _plan["missing"]:
+            async with tenant_scoped_session(tenant_id) as session:
+                await persona_store.release_reservation(
+                    session, tenant_id=tenant_id, run_id=run_id)
+                await session.commit()
+            _unknown = [{"value_key": m["value_key"], "field": m.get("label") or "",
+                         "scenario_id": m.get("scenario_id"),
+                         "step_number": m.get("step_number"),
+                         "reason": m.get("reason") or "no_answer_for_this_member"}
+                        for m in _plan["missing"][:50]]
+            return {
+                "run_id": run_id, "status": "blocked",
+                "blocked_reason": "member_data",
+                "persona_id": persona_id, "environment_id": environment_id,
+                "missing_count": len(_plan["missing"]),
+                "missing": _unknown,
+                "note": ("This suite asserts values that belong to a MEMBER, and this "
+                         "member has no recorded answer for them. The run is BLOCKED, "
+                         "not executed — running would have asserted another member's "
+                         "data and reported green. Record this member's answers, or "
+                         "reclassify the values as shared. The application under test "
+                         "is NOT implicated."),
+                "scripts": 0, "excluded_quarantined": excluded_quarantined,
+                "excluded_uncertified_exploratory": excluded_uncertified,
+            }
+        for _sid, _fields in (_plan["data_by_test"] or {}).items():
+            _member_data_by_test[_sid] = {**(_member_data_by_test.get(_sid) or {}), **_fields}
     # The Nexus runner container is headless (Xvfb-free); honor browsers/workers/
     # retries but force headless regardless of the requested mode.
     files = _configured_files(
         cases, build_field_meta(visits), base_url, body.data,
-        data_by_test=body.data_by_test,
+        data_by_test=_member_data_by_test,
         browsers=body.browsers, headed=False,
         workers=body.workers, retries=body.retries,
         edited=edited_map, storage_state=storage_state,
