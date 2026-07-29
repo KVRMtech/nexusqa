@@ -26,10 +26,15 @@ THREE KEY SPACES MEET HERE, and conflating them is the whole difficulty:
     data key    "member-number"              how the COMPILED SPEC names an override
                                              (a slug of the field's visible LABEL)
 
-Only ``observed_value`` entries correspond to something the script types, so only
-those produce an override. A member-derived *expectation* cannot be substituted —
-it is asserted, not filled — so it can only ever block. That asymmetry is
-deliberate: an unanswerable assertion must stop the run, never soften it.
+INPUT AND ASSERTION ARE RESOLVED DIFFERENTLY, because they fail differently.
+``observed_value`` is something the script TYPES, so it is redirected through the
+data map without the compiler knowing a member exists. An ``expected`` /
+``observed_text`` value is something the page must SHOW — the spec asserts it
+rather than reading it from data — so ``apply_member_expectations`` rewrites the
+assertion itself, on a copy of the suite, before the case is compiled.
+
+Either way, an unanswerable value stops the run. It is never softened and never
+falls back to the value belonging to whoever the crawl ran as.
 
 Classification is EARNED upstream by comparing two members on the same journey
 (``persona_diff.diff_two_personas``); nothing here inspects a field's name to
@@ -45,6 +50,7 @@ KIND_INPUT = "observed_value"
 
 __all__ = [
     "plan_member_data",
+    "apply_member_expectations",
     "member_derived_keys",
     "KIND_INPUT",
 ]
@@ -133,11 +139,10 @@ def plan_member_data(cases, *, classifications: dict | None,
                                     "label": label})
                     continue
                 if kind != KIND_INPUT:
-                    # A member-derived ASSERTION. We have this member's answer, but
-                    # the compiled spec asserts expectations rather than reading them
-                    # from the data map, so there is nothing to override here. It is
-                    # recorded as resolved so it does not block; substituting it is
-                    # the separate input-vs-assertion phase.
+                    # A member-derived ASSERTION: this member's answer exists, and
+                    # apply_member_expectations rewrites the assertion itself before
+                    # the case is compiled. Nothing goes in the data map — the spec
+                    # asserts expectations, it does not read them from data.
                     resolved.append({"value_key": key, "kind": kind,
                                      "override_key": "", "label": label})
                     continue
@@ -160,3 +165,95 @@ def plan_member_data(cases, *, classifications: dict | None,
         "missing": missing,
         "member_derived_total": len(resolved) + len(missing),
     }
+
+
+def apply_member_expectations(cases, *, classifications: dict | None,
+                              answers: dict | None) -> tuple:
+    """Rewrite PROVEN member-derived EXPECTATIONS to the running member's own.
+
+    A value typed into a field is redirected by the data map (``plan_member_data``).
+    A value the page is expected to SHOW cannot be — the compiled spec asserts it
+    rather than reading it from data — so the assertion itself has to carry this
+    member's truth before the case is compiled.
+
+    The rewrite happens on a COPY of the suite handed to the compiler; the stored
+    case is never mutated, so what a crawl recorded stays exactly as recorded and
+    the change lives only in this run.
+
+    Only ``expected`` and ``observed_text`` are touched, and only where a verdict of
+    member-derived was EARNED and this member has an answer. Anything shared keeps
+    the recorded wording, so a genuine application regression still fails red.
+
+    Returns ``(cases_for_this_run, [rewrites])``.
+    """
+    derived = member_derived_keys(classifications)
+    sheet = {str(k): v for k, v in (answers or {}).items()}
+    if not derived or not sheet:
+        return cases, []
+
+    out: list = []
+    rewrites: list = []
+    for case in (cases or []):
+        scenario_id, steps = _steps_of(case)
+        if not scenario_id:
+            out.append(case)
+            continue
+        tc = getattr(case, "test_case", None)
+        source = dict(tc or {}) if tc is not None else dict(case or {})
+        new_steps: list = []
+        touched = False
+        for step in steps:
+            step = dict(step)
+            try:
+                number = int(step.get("step_number") or 0)
+            except (TypeError, ValueError):
+                number = 0
+
+            key = f"{scenario_id}:{number}:expected"
+            if key in derived:
+                answer = _answer_text(sheet.get(key))
+                if answer.strip():
+                    step["expected_result"] = answer
+                    if step.get("expected"):
+                        step["expected"] = answer
+                    rewrites.append({"value_key": key, "kind": "expected"})
+                    touched = True
+
+            key = f"{scenario_id}:{number}:observed_text"
+            if key in derived:
+                answer = _answer_text(sheet.get(key))
+                if answer.strip():
+                    observed = dict(step.get("observed") or {})
+                    observed["text"] = answer
+                    step["observed"] = observed
+                    rewrites.append({"value_key": key, "kind": "observed_text"})
+                    touched = True
+
+            new_steps.append(step)
+
+        if not touched:
+            out.append(case)
+            continue
+        source["steps"] = new_steps
+        # Preserve the row's identity for a stored case; the compiler and the run
+        # manifest key off test_case_id, so a rewritten copy must keep it.
+        if tc is not None:
+            out.append(_RewrittenCase(case, source))
+        else:
+            out.append(source)
+    return out, rewrites
+
+
+class _RewrittenCase:
+    """A stored case row with a per-run test_case body. Proxies every other
+    attribute to the original row so nothing downstream can tell the difference,
+    and the row itself is left untouched."""
+
+    __slots__ = ("_row", "test_case")
+
+    def __init__(self, row, test_case: dict):
+        self._row = row
+        self.test_case = test_case
+
+    def __getattr__(self, name):
+        return getattr(self._row, name)

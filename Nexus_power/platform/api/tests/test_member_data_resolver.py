@@ -1,21 +1,25 @@
 """Member-data resolution — the running member's values, or an honest refusal.
 
-Phases 2 and 3 of MEMBER_DATA_RESOLVER_PLAN, tested together because shipping the
-resolver without the refusal would swap one silent wrong answer for another.
+Phases 2, 3 and 4 of MEMBER_DATA_RESOLVER_PLAN. The resolver and the refusal are
+tested together because shipping either alone swaps one silent wrong answer for
+another.
 
 The properties that matter:
   * a proven member-derived INPUT is redirected into the compiled spec's own
     override key space (a slug of the field label);
+  * a proven member-derived ASSERTION is rewritten to this member's truth on a
+    COPY of the suite — what the crawl recorded is never mutated;
   * an unclassified value is left completely alone — first use of the feature
     cannot start blocking every run;
   * a member-derived value with NO answer for this member is reported missing, and
     never falls back to the value belonging to whoever the crawl ran as;
-  * a member-derived ASSERTION can only block, never be quietly softened.
+  * a blank answer never erases an assertion, which would delete the oracle.
 
 Pure — no DB, no compiler, no live stack.
 """
 from __future__ import annotations
 
+import json
 import re
 
 from app.services.test_factory import member_data_resolver as mdr
@@ -277,3 +281,100 @@ def test_the_override_key_bridge_matches_the_real_compiler():
 
     for label in ("Member number", "Coverage amount", "Policy No.", "Date of Birth"):
         assert compiler_data_key(label) == _data_key(label), label
+
+
+# ── phase 4: assertions carry the running member's truth ─────────────────────
+
+def _expect_case(scenario_id="tc-e", expected="'Full name' shows 'A Name'",
+                 text="Welcome, A Name"):
+    return {"test_id": scenario_id, "steps": [{
+        "step_number": 1, "expected": expected, "expected_result": expected,
+        "observed": {"kind": "field", "label": "Full name",
+                     "value": "A Name", "text": text}}]}
+
+
+def test_a_member_derived_expectation_is_rewritten_to_this_members_truth():
+    cases = [_expect_case()]
+    out, rewrites = mdr.apply_member_expectations(
+        cases,
+        classifications={"tc-e:1:expected": _MEMBER_DERIVED},
+        answers={"tc-e:1:expected": "'Full name' shows 'B Name'"})
+
+    step = out[0]["steps"][0]
+    assert step["expected_result"] == "'Full name' shows 'B Name'"
+    assert step["expected"] == "'Full name' shows 'B Name'"
+    assert [r["kind"] for r in rewrites] == ["expected"]
+
+
+def test_member_derived_page_text_is_rewritten_too():
+    out, rewrites = mdr.apply_member_expectations(
+        [_expect_case()],
+        classifications={"tc-e:1:observed_text": _MEMBER_DERIVED},
+        answers={"tc-e:1:observed_text": "Welcome, B Name"})
+    assert out[0]["steps"][0]["observed"]["text"] == "Welcome, B Name"
+    assert [r["kind"] for r in rewrites] == ["observed_text"]
+
+
+def test_the_STORED_case_is_never_mutated():
+    """A crawl recorded what it recorded. The rewrite belongs to one run only."""
+    cases = [_expect_case()]
+    original = json.loads(json.dumps(cases))
+    mdr.apply_member_expectations(
+        cases,
+        classifications={"tc-e:1:expected": _MEMBER_DERIVED,
+                         "tc-e:1:observed_text": _MEMBER_DERIVED},
+        answers={"tc-e:1:expected": "changed", "tc-e:1:observed_text": "changed"})
+    assert cases == original
+
+
+def test_a_shared_expectation_keeps_its_recorded_wording():
+    """So a real application regression still fails red."""
+    out, rewrites = mdr.apply_member_expectations(
+        [_expect_case()],
+        classifications={"tc-e:1:expected": _APP_CONSTANT},
+        answers={"tc-e:1:expected": "'Full name' shows 'B Name'"})
+    assert out[0]["steps"][0]["expected_result"] == "'Full name' shows 'A Name'"
+    assert rewrites == []
+
+
+def test_no_classifications_or_no_answers_is_a_no_op():
+    cases = [_expect_case()]
+    for cls, ans in (({}, {"tc-e:1:expected": "x"}),
+                     ({"tc-e:1:expected": _MEMBER_DERIVED}, {}),
+                     ({}, {})):
+        out, rewrites = mdr.apply_member_expectations(
+            cases, classifications=cls, answers=ans)
+        assert out is cases and rewrites == []
+
+
+def test_a_blank_answer_never_erases_an_assertion():
+    """Rewriting an expectation to '' would delete the oracle — a silent green."""
+    out, rewrites = mdr.apply_member_expectations(
+        [_expect_case()],
+        classifications={"tc-e:1:expected": _MEMBER_DERIVED},
+        answers={"tc-e:1:expected": {"expected_value": "   "}})
+    assert out[0]["steps"][0]["expected_result"] == "'Full name' shows 'A Name'"
+    assert rewrites == []
+
+
+def test_a_stored_row_keeps_its_identity_when_rewritten():
+    """The compiler and run manifest key off test_case_id — a rewritten copy must
+    still answer to it, and every other attribute must proxy to the real row."""
+    class _Row:
+        test_case_id = "tc-row"
+        artifact_id = "art-1"
+        def __init__(self):
+            self.test_case = {"test_id": "tc-row", "steps": [{
+                "step_number": 1, "expected_result": "shows 'A'",
+                "observed": {"label": "Name", "value": "A"}}]}
+
+    row = _Row()
+    out, rewrites = mdr.apply_member_expectations(
+        [row],
+        classifications={"tc-row:1:expected": _MEMBER_DERIVED},
+        answers={"tc-row:1:expected": "shows 'B'"})
+
+    assert out[0].test_case_id == "tc-row"
+    assert out[0].artifact_id == "art-1"          # proxied to the original row
+    assert out[0].test_case["steps"][0]["expected_result"] == "shows 'B'"
+    assert row.test_case["steps"][0]["expected_result"] == "shows 'A'"   # untouched

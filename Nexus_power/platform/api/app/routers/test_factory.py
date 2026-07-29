@@ -4160,6 +4160,15 @@ async def playwright_run(
             }
         for _sid, _fields in (_plan["data_by_test"] or {}).items():
             _member_data_by_test[_sid] = {**(_member_data_by_test.get(_sid) or {}), **_fields}
+        # A value the page must SHOW cannot be redirected through the data map —
+        # the spec asserts it rather than reading it. Rewrite those assertions to
+        # this member's truth on a COPY of the suite, so the recorded case is
+        # untouched and the change lives only in this run.
+        cases, _rewrites = member_data_resolver.apply_member_expectations(
+            cases, classifications=_classifications, answers=_answers)
+        if _rewrites:
+            _logger.warning("member_data.expectations_rewritten persona=%s env=%s count=%d",
+                            persona_id, environment_id, len(_rewrites))
     # The Nexus runner container is headless (Xvfb-free); honor browsers/workers/
     # retries but force headless regardless of the requested mode.
     files = _configured_files(
