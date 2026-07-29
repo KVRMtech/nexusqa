@@ -8210,7 +8210,8 @@ async def record_recipe_from_observation_endpoint(
         out = await persona_store.save_recipe(
             session, tenant_id=tenant_id, artifact_id=artifact_id,
             steps=built["steps"], slots=built["slots"],
-            source="crawl_demonstration", login_type_key=built["login_type_key"])
+            source="crawl_demonstration", login_type_key=built["login_type_key"],
+            login_domain=body.domain)
         await session.commit()
     await _persona_audit(tenant_id=tenant_id, artifact_id=artifact_id,
                          actor=user.get("email") or user.get("user_id") or "?",
@@ -8228,15 +8229,38 @@ async def recipe_reuse_check_endpoint(
     report whether this tenant ALREADY has a matching recipe (``reuse`` — 'portal
     login already recorded, just enter your member number') or none (``record``).
     Tenant-scoped; spans artifacts (a recipe is reused across a client's apps)."""
+    tenant_id = user["tenant_id"]
+    domain = str(body.domain or "").strip().lower()
+
+    # NO FORM SEEN YET. At onboarding only the base URL is known, which is exactly
+    # when the proposal is worth making — the point is to stop the next tester
+    # recording a login somebody already recorded. The key is a hash of the form
+    # shape and cannot be computed without one, so match on the domain instead and
+    # let propose_reuse decide: one recorded login on that host is a reuse, several
+    # are a genuine question (a public login and a member portal are not the same),
+    # none is a fresh recording.
+    if not body.fields:
+        async with tenant_scoped_session(tenant_id) as session:
+            candidates = await persona_store.find_recipes_by_domain(
+                session, tenant_id=tenant_id, login_domain=domain)
+        proposal = login_fingerprint.propose_reuse(
+            domain=domain,
+            library=[dict(c, domain=c.get("login_domain") or domain,
+                          key=c.get("login_type_key")) for c in candidates])
+        return {"action": proposal.get("action", "record"),
+                "matched_on": "domain", "domain": domain,
+                "recipes": candidates,
+                "options": proposal.get("options", []),
+                "login_type_key": proposal.get("key") or ""}
+
     key = login_fingerprint.login_type_key(
-        domain=body.domain, login_path=body.login_path,
+        domain=domain, login_path=body.login_path,
         fields=[{"name": f.slot, "type": f.type or "text"} for f in body.fields],
         submit=body.submit)
-    tenant_id = user["tenant_id"]
     async with tenant_scoped_session(tenant_id) as session:
         hits = await persona_store.find_recipes_by_login_type(
             session, tenant_id=tenant_id, login_type_key=key)
-    return {"action": "reuse" if hits else "record",
+    return {"action": "reuse" if hits else "record", "matched_on": "form",
             "login_type_key": key, "recipes": hits}
 
 

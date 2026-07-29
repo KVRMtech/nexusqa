@@ -69,6 +69,10 @@ class TpLoginRecipeRow(Base):
     # so the fleet can propose an existing recipe instead of re-recording. Empty when
     # the recipe predates the key or the form was not fingerprinted.
     login_type_key: Mapped[str] = mapped_column(String(64), default="")
+    # registrable domain the recipe was recorded against. The key above is a
+    # hash and cannot be reversed, so this is what lets a NEW app on a known
+    # host be offered an existing recipe before any form has been seen.
+    login_domain: Mapped[str] = mapped_column(String(253), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utc_now)
 
 
@@ -184,7 +188,7 @@ class TpCaseScopeRow(Base):
 async def save_recipe(session: AsyncSession, *, tenant_id: str, artifact_id: str,
                       steps: list, slots: list, app_id: str = "",
                       source: str = "crawl_demonstration",
-                      login_type_key: str = "") -> dict:
+                      login_type_key: str = "", login_domain: str = "") -> dict:
     """Persist a NEW recipe version (monotonic per artifact); supersede prior
     active ones. ``login_type_key`` (from login_fingerprint) keys the recipe for
     fleet reuse. Caller commits. Returns the stored recipe (non-secret)."""
@@ -201,6 +205,7 @@ async def save_recipe(session: AsyncSession, *, tenant_id: str, artifact_id: str
         recipe_id=rid, tenant_id=tenant_id, artifact_id=artifact_id, app_id=app_id,
         version=next_version, steps=list(steps or []), slots=list(slots or []),
         source=source, status="active", login_type_key=str(login_type_key or ""),
+        login_domain=str(login_domain or "").strip().lower(),
         created_at=_utc_now()))
     await session.flush()
     return {"recipe_id": rid, "version": next_version, "slots": list(slots or []),
@@ -1072,3 +1077,31 @@ __all__ = [
     "cell_certified_scenarios",
     "build_persona_bundle",
 ]
+
+
+async def find_recipes_by_domain(session: AsyncSession, *, tenant_id: str,
+                                 login_domain: str) -> list[dict]:
+    """Active recipes this tenant recorded against a domain.
+
+    Used at onboarding, where only the base URL is known: the login_type_key is a
+    hash of the form shape and no form has been observed yet, so the domain is the
+    only handle available. An empty domain matches nothing — a recipe recorded
+    before this column existed is simply not proposed, rather than proposed wrongly.
+    """
+    domain = str(login_domain or "").strip().lower()
+    if not domain:
+        return []
+    try:
+        rows = (await session.execute(
+            select(TpLoginRecipeRow).where(
+                TpLoginRecipeRow.tenant_id == tenant_id,
+                TpLoginRecipeRow.login_domain == domain,
+                TpLoginRecipeRow.status == "active")
+            .order_by(TpLoginRecipeRow.created_at.desc()))).scalars().all()
+    except Exception as exc:
+        logger.debug("persona_store.find_by_domain_skipped err=%s", exc)
+        return []
+    return [{"recipe_id": r.recipe_id, "artifact_id": r.artifact_id,
+             "app_id": r.app_id, "version": r.version, "slots": r.slots,
+             "login_type_key": r.login_type_key, "login_domain": r.login_domain,
+             "verified_at": _iso(r.verified_at)} for r in rows]
