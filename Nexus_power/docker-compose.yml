@@ -479,6 +479,7 @@ services:
       # it here so any platform-api recreate carries the token — omitting it is
       # exactly what caused "Could not start run … 401 Unauthorized … /run-live".
       RUNNER_TOKEN: ${RUNNER_TOKEN:-}
+      NEXUS_MEMBER_DATA_RESOLVER: ${NEXUS_MEMBER_DATA_RESOLVER:-}
       STORYBOARD_PAGE_VISIT_VISION_IDENTITY: "true"
       STORYBOARD_PAGE_VISIT_ADDRESS_BAR_CROP: "true"
       STORYBOARD_PAGE_VISIT_LLM_INFERENCE: "true"
