@@ -110,6 +110,7 @@ from ..services.test_factory import report_formats
 from ..services.test_factory import persona_store, login_recorder, login_fingerprint
 from ..services.test_factory import login_observation
 from ..services.test_factory import member_data_resolver
+from ..services.test_factory import draft_recording
 from ..services.script_factory.compiler import _data_key as compiler_data_key
 from ..services.test_factory import persona_diff
 from ..services.test_factory import persona_governance
@@ -8218,6 +8219,73 @@ async def record_recipe_from_observation_endpoint(
                          event_type="login_recipe_recorded",
                          detail=f"version={out['version']} key={built['login_type_key']}")
     return {"status": "recorded", **out}
+
+
+class _DraftStartBody(BaseModel):
+    """Where the operator wants to begin recording — normally the app's entry."""
+    url: str = Field(..., min_length=1, max_length=2000)
+
+
+@router.post("/api/v1/test-factory/recordings/start")
+async def draft_recording_start(
+    body: _DraftStartBody,
+    user: dict = Depends(get_current_user),
+):
+    """Begin a recording BEFORE the application exists (onboarding, Access step).
+
+    Deliberately NOT artifact-scoped: a recipe lives against an artifact, and an
+    artifact is only minted by the first crawl, so at this point there is nothing
+    to attach to. The recording is derived and handed back; persisting it is the
+    caller's business, and happens when the app is created."""
+    if not _persona_write_ok(user):
+        raise HTTPException(403, "Recording a login requires an editor, manager or admin role.")
+    try:
+        res = await runner_client.auth_capture_start(body.url.strip())
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"runner error: {exc}")
+    pw = (res or {}).get("vnc_password", "") if isinstance(res, dict) else ""
+    return {"status": "recording",
+            "live_url": _AUTH_LIVE_PATH + (f"&password={pw}" if pw else "")}
+
+
+@router.get("/api/v1/test-factory/recordings/observation")
+async def draft_recording_observation(user: dict = Depends(get_current_user)):
+    """What the recording has captured SO FAR — identifiers only, never a value.
+    Lets the operator see the fields being picked up while still logged in."""
+    try:
+        return await runner_client.auth_capture_observation()
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"runner error: {exc}")
+
+
+@router.post("/api/v1/test-factory/recordings/save")
+async def draft_recording_save(user: dict = Depends(get_current_user)):
+    """Close the recording and return the DRAFT — a login recipe and the
+    environment the browser ended up on. Persists nothing.
+
+    A public flow with no login is a legitimate outcome: the environment is still
+    returned, and ``usable`` says plainly that no login was seen."""
+    if not _persona_write_ok(user):
+        raise HTTPException(403, "Recording a login requires an editor, manager or admin role.")
+    try:
+        res = await runner_client.auth_capture_save()
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"runner error: {exc}")
+    snapshot = (res or {}).get("login_observation")
+    draft = draft_recording.derive_draft(
+        observation_snapshot=snapshot,
+        storage_state=(res or {}).get("storage_state"),
+        start_url=str((snapshot or {}).get("start_url") or ""))
+    return {"status": "recorded", **draft}
+
+
+@router.post("/api/v1/test-factory/recordings/cancel")
+async def draft_recording_cancel(user: dict = Depends(get_current_user)):
+    try:
+        await runner_client.auth_capture_cancel()
+    except Exception:
+        pass
+    return {"status": "cancelled"}
 
 
 @router.post("/api/v1/test-factory/recipes/reuse-check")

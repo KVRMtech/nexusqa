@@ -288,6 +288,12 @@ def observation_from_events(snapshot: dict | None, *, base_url: str = "") -> dic
     landing = after[-1] if after else None
     landing_pos = landing["pos"] if landing else None
     home = {"url_pattern": _path_of(landing["url"])} if landing else {}
+    if not home and current_url and _path_of(current_url) != login_path:
+        # No navigation event after the submit, but the browser is demonstrably
+        # somewhere else when the recording is saved. A client-routed login can
+        # change the page without a navigation the observer sees, and where the
+        # browser actually IS is observed state, not an inference.
+        home = {"url_pattern": _path_of(current_url)}
 
     # ── pass 5: rebuild the true performed order ──────────────────────────────
     ladder = [c for c in clicks if submit_i is None or c["pos"] <= submit_pos]

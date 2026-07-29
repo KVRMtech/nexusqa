@@ -130,3 +130,12 @@ def add_legacy_artifact_aliases(files: dict) -> dict:
     except Exception:  # pragma: no cover — aliasing must never break a run
         pass
     return files
+
+
+async def auth_capture_observation() -> dict:
+    """The login choreography recorded so far, WITHOUT ending the capture.
+    Identifiers only — the observer never reads a credential value."""
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        resp = await client.get(f"{_RUNNER_URL}/auth-capture/observation", headers=_headers())
+        resp.raise_for_status()
+        return resp.json()
