@@ -19,6 +19,7 @@ import {
   KeyRound,
   Layers,
   Plus,
+  Radio,
   Settings,
   ShieldCheck,
   Trash2,
@@ -918,42 +919,47 @@ export function OnboardingWizard() {
             )}
             {/* RECORD — at the foot of Access, because the crawl cannot get past a
                 login without one. One pass captures the environment landed on, the
-                login choreography, and the session that gets THIS crawl in. */}
-            <div className="sm:col-span-2 rounded-lg ring-1 ring-slate-200 bg-slate-50/70 p-3">
+                login choreography, and the session that gets THIS crawl in.
+                Styling uses the portal's own tokens + Button: a hand-rolled
+                `bg-brand` is not a defined colour here and rendered an INVISIBLE
+                button (white text on a pale panel). */}
+            <div className="sm:col-span-2 rounded-lg ring-1 ring-line bg-inset p-3">
               <div className="flex items-center gap-2 flex-wrap">
-                <span className="text-2xs font-semibold text-ink">Record the login &amp; environment</span>
-                <span className="text-3xs text-ink-low">
+                <span className="text-xs font-semibold text-ink">Record the login &amp; environment</span>
+                <span className="text-2xs text-ink-low">
                   optional — log in once by hand instead of hoping we work your form out
                 </span>
                 {!recLive && (
-                  <button type="button" onClick={startRecording} disabled={recBusy === 'start'}
-                    className="ml-auto inline-flex items-center gap-1 rounded-md bg-brand px-2.5 py-1 text-2xs font-semibold text-white disabled:opacity-50">
-                    {recBusy === 'start' ? 'Starting…' : recorded ? 'Record again' : 'Record'}
-                  </button>
+                  <span className="ml-auto">
+                    <Button variant="primary" size="sm" onClick={startRecording}
+                      loading={recBusy === 'start'} icon={<Radio size={14} />}>
+                      {recorded ? 'Record again' : 'Record'}
+                    </Button>
+                  </span>
                 )}
               </div>
 
               {recLive && (
-                <div className="mt-2">
-                  <div className="flex items-center gap-2 mb-2">
-                    <span className="inline-block h-2 w-2 rounded-full bg-rose-500 animate-pulse" />
-                    <span className="text-2xs font-semibold text-ink">
+                <div className="mt-3">
+                  <div className="flex items-center gap-2 mb-2 flex-wrap">
+                    <span className="inline-block h-2 w-2 rounded-full bg-crit animate-pulse" />
+                    <span className="text-xs font-semibold text-ink">
                       Recording — go to the right environment, then log in
                     </span>
-                    <div className="ml-auto flex items-center gap-1.5">
-                      <button type="button" onClick={finishRecording} disabled={recBusy === 'save'}
-                        className="rounded-md bg-emerald-600 px-2.5 py-1 text-2xs font-semibold text-white disabled:opacity-50">
-                        {recBusy === 'save' ? 'Saving…' : "I'm logged in — save"}
-                      </button>
-                      <button type="button" onClick={abortRecording} disabled={recBusy === 'cancel'}
-                        className="rounded-md ring-1 ring-slate-200 bg-white px-2.5 py-1 text-2xs font-semibold text-ink-low">
+                    <span className="ml-auto flex items-center gap-2">
+                      <Button variant="primary" size="sm" onClick={finishRecording}
+                        loading={recBusy === 'save'} icon={<ShieldCheck size={14} />}>
+                        I&apos;m logged in — save
+                      </Button>
+                      <Button variant="secondary" size="sm" onClick={abortRecording}
+                        loading={recBusy === 'cancel'}>
                         Cancel
-                      </button>
-                    </div>
+                      </Button>
+                    </span>
                   </div>
                   <iframe src={recLive} title="Log in to record the login"
-                    className="w-full h-[420px] rounded-md ring-1 ring-slate-200 bg-white" />
-                  <p className="text-3xs text-ink-low mt-1.5">
+                    className="w-full h-[420px] rounded-md ring-1 ring-line bg-panel" />
+                  <p className="text-2xs text-ink-low mt-2">
                     We record WHICH fields you fill and WHICH controls you press — never the values you type.
                     Save as soon as you reach the logged-in page.
                   </p>
@@ -961,16 +967,18 @@ export function OnboardingWizard() {
               )}
 
               {recorded?.usable && !recLive && (
-                <div className="mt-2 rounded-md ring-1 ring-emerald-200 bg-emerald-50 px-2.5 py-2 text-2xs text-emerald-900">
-                  <span className="font-semibold">Login recorded.</span>{' '}
+                <div className="mt-3 rounded-md ring-1 ring-teal/40 bg-teal/10 px-3 py-2 text-2xs text-ink">
+                  <span className="font-semibold text-ink">Login recorded.</span>{' '}
                   slots <span className="font-semibold">{(recorded.login?.slot_names || []).join(', ')}</span>
                   {' · '}<span className="font-mono">{recorded.login?.login_path}</span>
                   {recorded.login?.home_path && <> → <span className="font-mono">{recorded.login.home_path}</span></>}
-                  {recorded.session
-                    ? <div className="mt-1">This crawl will start already logged in, and other members can replay these steps with their own credentials.</div>
-                    : <div className="mt-1">No session was captured, so the crawl will start logged out.</div>}
+                  <div className="mt-1 text-ink-mid">
+                    {recorded.session
+                      ? 'This crawl will start already logged in, and other members can replay these steps with their own credentials.'
+                      : 'No session was captured, so the crawl will start logged out.'}
+                  </div>
                   {(recorded.environment?.cookies || []).length > 0 && (
-                    <div className="mt-1">
+                    <div className="mt-1 text-ink-mid">
                       routing cookies: <span className="font-mono">
                         {recorded.environment.cookies.map((c: any) => c.name).join(', ')}
                       </span>
@@ -980,7 +988,7 @@ export function OnboardingWizard() {
               )}
 
               {recErr && !recLive && (
-                <p className="mt-2 text-2xs text-amber-700">{recErr}</p>
+                <p className="mt-2 text-2xs text-warn">{recErr}</p>
               )}
             </div>
 
