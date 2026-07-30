@@ -179,6 +179,7 @@ async def materialise_login_recipe(
         return False
 
     token = mint_service_jwt(tenant_id)
+    headers = {"Authorization": f"Bearer {token}"}
     body = {
         "steps": steps,
         "slots": slots,
@@ -190,9 +191,25 @@ async def materialise_login_recipe(
         async with httpx.AsyncClient(
             base_url=settings.platform_api_url, timeout=30.0,
         ) as client:
+            # IDEMPOTENT PER ARTIFACT. The recording is deliberately kept on the app
+            # rather than consumed, because one app yields many artifacts and each
+            # needs its own recipe. So the guard against re-minting lives HERE: an
+            # artifact that already has a recipe is left alone, and every later crawl
+            # still gets one. save_recipe is version-monotonic and supersedes the
+            # prior active row, so blind re-posting would churn versions and clear the
+            # verified_at that certification reads.
+            existing = await client.get(
+                f"/api/v1/test-factory/{artifact_id}/recipes", headers=headers,
+            )
+            if existing.status_code == 200 and (existing.json() or {}).get("count", 0) > 0:
+                logger.info(
+                    "qec.platform_api.recipe_already_present",
+                    extra={"tenant_id": tenant_id, "artifact_id": artifact_id},
+                )
+                return False
             response = await client.post(
                 f"/api/v1/test-factory/{artifact_id}/recipes",
-                json=body, headers={"Authorization": f"Bearer {token}"},
+                json=body, headers=headers,
             )
     except Exception as exc:
         logger.warning(

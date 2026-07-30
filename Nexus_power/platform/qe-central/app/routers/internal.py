@@ -168,6 +168,46 @@ async def _mark(
         row.updated_at = utc_now()
 
 
+async def _recorded_session(request, tenant_id: str, app_id: str) -> dict | None:
+    """The session captured when the operator RECORDED the login, if any.
+
+    Lives in the app's encrypted creds_blob (AAD=app_id), same envelope the
+    dispatcher reads. Returns None on anything unexpected — a run without an auth
+    profile fails HONESTLY on a logged-out page, which is far better than a
+    half-decrypted state being written as if it were a real session."""
+    if not app_id:
+        return None
+    envelope = getattr(request.app.state, "envelope_service", None)
+    if envelope is None:
+        return None
+    try:
+        async with tenant_scoped_qec_session(tenant_id) as session:
+            row = (await session.execute(
+                select(ClientAppRow).where(
+                    ClientAppRow.app_id == app_id,
+                    ClientAppRow.tenant_id == tenant_id,
+                )
+            )).scalar_one_or_none()
+        if row is None or not row.creds_blob:
+            return None
+        from nexus_sdk.security.envelope import EnvelopeBlob
+
+        blob = EnvelopeBlob.from_bytes(row.creds_blob)
+        plaintext = await envelope.decrypt(
+            tenant_id, blob, expected_aad=row.app_id.encode("utf-8"),
+        )
+        creds = json.loads(plaintext)
+        state = (creds or {}).get("session") if isinstance(creds, dict) else None
+        if isinstance(state, dict) and (state.get("cookies") or state.get("origins")):
+            return state
+    except Exception as exc:
+        logger.warning(
+            "qec.internal.recorded_session_unavailable",
+            extra={"app_id": app_id, "error": str(exc)[:200]},
+        )
+    return None
+
+
 async def _promote_latest_artifact(tenant_id: str, app_id: str, artifact_id: str) -> None:
     """Promote a freshly-recorded crawl artifact onto its registered app so a
     cycle can run against it (own transaction; best-effort — a promote failure
@@ -190,12 +230,14 @@ async def _promote_latest_artifact(tenant_id: str, app_id: str, artifact_id: str
             if row is not None and row.status != "deleted":
                 row.latest_artifact_id = artifact_id
                 row.updated_at = utc_now()
-                # A login recorded at onboarding has been waiting for an artifact to
-                # exist. Now one does — hand it over and clear it, so a re-crawl does
-                # not keep re-minting the same recipe. Read before the session closes.
+                # A login recorded at onboarding waits here for an artifact to exist.
+                # KEPT, not consumed: one app produces many artifacts over time and
+                # each needs its own recipe (they are artifact-scoped). Clearing it on
+                # first use left later crawls — including the one carrying the
+                # generated suite — with no way to log in as another member.
+                # Re-minting is prevented by materialise_login_recipe skipping an
+                # artifact that already has a recipe, not by discarding the source.
                 pending_recording = dict(row.login_recording or {})
-                if pending_recording:
-                    row.login_recording = {}
     except Exception as exc:  # pragma: no cover — promotion is best-effort
         logger.warning(
             "qec.internal.promote_failed",
@@ -433,16 +475,35 @@ async def complete_crawl(crawl_id: str, request: Request) -> dict:
         raise HTTPException(status_code=500, detail=f"substrate write failed: {message[:500]}")
 
     # ── 6) Relay storageState to E3 (best-effort — never discards the write) ─
+    #
+    # A CRAWL and a RUN authenticate through different doors: the crawl is handed
+    # `credentials.session` at dispatch, while a run reads the ARTIFACT's auth
+    # profile. So a login recorded at onboarding got the crawl in and left every
+    # run logged out — they failed on a nav link that only exists once signed in,
+    # which reads as an application fault rather than a missing session.
+    #
+    # The crawler only returns a storageState when it captured one itself. When it
+    # does not, fall back to the session the operator RECORDED, which is already
+    # stored (encrypted) on the app. Same session, both doors.
+    auth_state = body.storage_state
+    auth_label = body.auth_label
+    if not auth_state:
+        recorded = await _recorded_session(request, tenant_id, app_id)
+        if recorded:
+            auth_state = recorded
+            auth_label = "recorded at onboarding"
+
     auth_import = {"attempted": False}
-    if body.storage_state:
+    if auth_state:
         result = await platform_api.import_auth_profile(
             tenant_id=tenant_id,
             artifact_id=created.artifact_id,
-            storage_state=body.storage_state,
-            label=body.auth_label,
+            storage_state=auth_state,
+            label=auth_label,
         )
         auth_import = {"attempted": True, "ok": result.ok,
-                       "status_code": result.status_code, "detail": result.detail}
+                       "status_code": result.status_code, "detail": result.detail,
+                       "source": "crawler" if body.storage_state else "recording"}
 
     # ── 7) Honest terminal state ──────────────────────────────────────────
     stats_dict = stats.model_dump()
