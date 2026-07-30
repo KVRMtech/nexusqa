@@ -8272,10 +8272,39 @@ async def draft_recording_save(user: dict = Depends(get_current_user)):
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"runner error: {exc}")
     snapshot = (res or {}).get("login_observation")
+    state = (res or {}).get("storage_state")
     draft = draft_recording.derive_draft(
         observation_snapshot=snapshot,
-        storage_state=(res or {}).get("storage_state"),
+        storage_state=state,
         start_url=str((snapshot or {}).get("start_url") or ""))
+
+    # Shape-only diagnostics. "No session was captured" is otherwise unfalsifiable
+    # from the outside: it could mean the runner returned nothing, or a state with
+    # no cookies, or an app that keeps its session somewhere storageState cannot
+    # see (sessionStorage). NAMES only — never a cookie value. WARNING level
+    # because platform-api suppresses INFO.
+    _cookies = (state or {}).get("cookies") if isinstance(state, dict) else None
+    _origins = (state or {}).get("origins") if isinstance(state, dict) else None
+    _names = [str((c or {}).get("name") or "") for c in (_cookies or [])][:25]
+    _ls = sum(len((o or {}).get("localStorage") or []) for o in (_origins or []))
+    _logger.warning(
+        "recordings.save state_type=%s cookies=%d origins=%d localStorage_keys=%d "
+        "cookie_names=%s events=%d login=%s",
+        type(state).__name__, len(_cookies or []), len(_origins or []), _ls,
+        ",".join(_names) or "-", len((snapshot or {}).get("events") or []),
+        bool(draft.get("login")))
+
+    # Tell the caller WHY there is no session, so the UI can say something true
+    # rather than just "none".
+    draft["session_detail"] = {
+        "cookies": len(_cookies or []),
+        "origins": len(_origins or []),
+        "local_storage_keys": _ls,
+        "cookie_names": _names,
+        "reason": ("" if draft.get("session")
+                   else "runner_returned_no_state" if not isinstance(state, dict)
+                   else "state_empty__app_may_keep_session_in_sessionStorage"),
+    }
     return {"status": "recorded", **draft}
 
 
