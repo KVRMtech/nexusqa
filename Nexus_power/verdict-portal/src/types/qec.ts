@@ -369,6 +369,11 @@ export interface AppCreatePayload {
   canonical_host?: string;
   /** Login credentials — envelope-encrypted at rest, never echoed back. */
   credentials?: Record<string, unknown> | null;
+  /** A login RECORDED on the Access page: steps, slot NAMES and the reuse keys.
+   *  Never credential values — the session from the same recording rides in
+   *  `credentials.session`. Held on the app until the first crawl mints an
+   *  artifact, then materialised into a replayable recipe. */
+  login_recording?: Record<string, unknown> | null;
   answer_key?: Record<string, unknown>;
   env_attestation?: EnvAttestation;
   fences?: Fences;

@@ -149,3 +149,69 @@ async def import_auth_profile(
                "status_code": response.status_code, "detail": detail[:300]},
     )
     return AuthImportResult(ok=False, status_code=response.status_code, detail=detail[:300])
+
+
+async def materialise_login_recipe(
+    *,
+    tenant_id: str,
+    artifact_id: str,
+    recording: dict,
+) -> bool:
+    """Turn a login RECORDED at onboarding into a real recipe on its artifact.
+
+    A recipe is artifact-scoped, but a recording happens before any artifact exists
+    — so the choreography waits on the app row until the first crawl mints one, and
+    this is what completes the journey. Once stored, ANY member with a credential
+    card for its slots can replay the login; until then only the recorded session
+    works, and only for whoever recorded it.
+
+    The reuse keys are carried through deliberately: without login_type_key and
+    login_domain the recipe can never be PROPOSED to the next app on the same host,
+    which is the whole point of recording once.
+
+    NEVER raises. A failure here must not fail a crawl that already produced a
+    valid, evidence-passing artifact — the crawl's own session already got it in.
+    Returns True only when the recipe was actually stored.
+    """
+    steps = (recording or {}).get("steps") or []
+    slots = (recording or {}).get("slots") or []
+    if not steps or not slots:
+        return False
+
+    token = mint_service_jwt(tenant_id)
+    body = {
+        "steps": steps,
+        "slots": slots,
+        "source": "login_recording",
+        "login_type_key": str((recording or {}).get("login_type_key") or "")[:64],
+        "login_domain": str((recording or {}).get("domain") or "")[:253],
+    }
+    try:
+        async with httpx.AsyncClient(
+            base_url=settings.platform_api_url, timeout=30.0,
+        ) as client:
+            response = await client.post(
+                f"/api/v1/test-factory/{artifact_id}/recipes",
+                json=body, headers={"Authorization": f"Bearer {token}"},
+            )
+    except Exception as exc:
+        logger.warning(
+            "qec.platform_api.recipe_materialise_transport_error",
+            extra={"tenant_id": tenant_id, "artifact_id": artifact_id,
+                   "error": str(exc)[:300]},
+        )
+        return False
+
+    if response.status_code in (200, 201):
+        logger.info(
+            "qec.platform_api.recipe_materialised",
+            extra={"tenant_id": tenant_id, "artifact_id": artifact_id,
+                   "slots": [s.get("name") for s in slots][:10]},
+        )
+        return True
+    logger.warning(
+        "qec.platform_api.recipe_materialise_failed",
+        extra={"tenant_id": tenant_id, "artifact_id": artifact_id,
+               "status": response.status_code, "detail": response.text[:200]},
+    )
+    return False

@@ -97,6 +97,35 @@ async def _bound_run_environment(session, tenant_id: str, app_id: str) -> str:
     return str(((app_row.schedule or {}).get("run_environment")) or "").strip()
 
 
+#: The ONLY keys kept from a client-supplied login recording. An allowlist rather
+#: than a denylist: this column is NOT encrypted, so anything unexpected — a value,
+#: a cookie, a token — must be dropped by default rather than caught by name.
+_LOGIN_RECORDING_KEYS = (
+    "steps", "slots", "login_type_key", "domain", "login_path", "home_path",
+    "federated", "slot_names",
+)
+
+
+def _sanitised_login_recording(raw: dict | None) -> dict:
+    """Keep the choreography, drop everything else.
+
+    A recipe is steps + slot NAMES. Credential values never belong here (they live
+    in a member's encrypted card) and neither does a session (that rides the
+    encrypted creds_blob). Steps are additionally stripped of any `value`, so even a
+    hand-crafted payload cannot park a secret in plaintext."""
+    if not isinstance(raw, dict) or not raw.get("steps"):
+        return {}
+    out = {k: raw[k] for k in _LOGIN_RECORDING_KEYS if k in raw}
+    clean_steps = []
+    for step in (out.get("steps") or []):
+        if not isinstance(step, dict):
+            continue
+        clean_steps.append({k: v for k, v in step.items()
+                            if k not in ("value", "secret", "password")})
+    out["steps"] = clean_steps
+    return out
+
+
 class AppCreate(BaseModel):
     """Registration payload for one client application."""
 
@@ -105,6 +134,11 @@ class AppCreate(BaseModel):
     canonical_host: str = Field(default="", max_length=500)
     # Login credentials — envelope-encrypted at rest, never echoed.
     credentials: dict | None = None
+    # A login RECORDED at onboarding: steps, slot NAMES and the reuse keys. NO
+    # credential values — the session from the same recording rides in
+    # `credentials.session` and is encrypted. Held on the app until the first crawl
+    # mints an artifact, then materialised into a real recipe.
+    login_recording: dict | None = None
     answer_key: dict = Field(default_factory=dict)
     env_attestation: dict = Field(default_factory=dict)
     fences: dict = Field(default_factory=dict)
@@ -461,6 +495,9 @@ async def create_app(
         base_url=base_url,
         canonical_host=_derive_canonical_host(base_url, payload.canonical_host),
         creds_blob=creds_blob,
+        # Sanitised deliberately: only the shape a recipe needs is stored, so a
+        # caller cannot smuggle a credential value into an unencrypted column.
+        login_recording=_sanitised_login_recording(payload.login_recording),
         answer_key=payload.answer_key or {},
         env_attestation=_finalize_attestation(_validated_env_kind(payload.env_attestation), user),
         fences=payload.fences or {},

@@ -7928,6 +7928,11 @@ class _RecipeBody(BaseModel):
     steps: list[dict] = Field(..., min_length=1)
     slots: list[dict] = Field(default_factory=list)
     source: str = Field("recorded", max_length=24)
+    # Reuse keys. Without these a recipe stored through this endpoint can never be
+    # PROPOSED to the next app on the same host — the fingerprint and the domain are
+    # what make "already recorded, just add your credentials" possible.
+    login_type_key: str = Field("", max_length=64)
+    login_domain: str = Field("", max_length=253)
 
 
 class _CredentialBody(BaseModel):
@@ -8154,7 +8159,8 @@ async def create_recipe_endpoint(
         await _require_artifact(session, artifact_id, tenant_id)
         out = await persona_store.save_recipe(
             session, tenant_id=tenant_id, artifact_id=artifact_id,
-            steps=body.steps, slots=body.slots, source=body.source)
+            steps=body.steps, slots=body.slots, source=body.source,
+            login_type_key=body.login_type_key, login_domain=body.login_domain)
         await session.commit()
     await _persona_audit(tenant_id=tenant_id, artifact_id=artifact_id,
                          actor=user.get("email") or user.get("user_id") or "?",

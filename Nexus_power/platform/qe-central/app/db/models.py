@@ -68,6 +68,11 @@ class ClientAppRow(QecBase):
     repo_binding: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     schedule: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     budgets: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    # A login RECORDED at onboarding, held here until the first crawl mints an
+    # artifact. Recipes are artifact-scoped, and no artifact exists when the app is
+    # created — so the choreography waits here and is materialised on completion.
+    # Contains NO credential values: steps, slot NAMES, and the reuse keys only.
+    login_recording: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     latest_artifact_id: Mapped[str] = mapped_column(String(64), nullable=False, default="")
     baseline_fingerprint_id: Mapped[str] = mapped_column(String(64), nullable=False, default="")
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="active")

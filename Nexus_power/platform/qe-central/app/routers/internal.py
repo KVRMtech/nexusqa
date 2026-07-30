@@ -176,6 +176,7 @@ async def _promote_latest_artifact(tenant_id: str, app_id: str, artifact_id: str
     cycle 409s with 'register a crawl/exploration first'."""
     if not (app_id and artifact_id):
         return
+    pending_recording: dict = {}
     try:
         async with tenant_scoped_qec_session(tenant_id) as session:
             row = (
@@ -189,11 +190,36 @@ async def _promote_latest_artifact(tenant_id: str, app_id: str, artifact_id: str
             if row is not None and row.status != "deleted":
                 row.latest_artifact_id = artifact_id
                 row.updated_at = utc_now()
+                # A login recorded at onboarding has been waiting for an artifact to
+                # exist. Now one does — hand it over and clear it, so a re-crawl does
+                # not keep re-minting the same recipe. Read before the session closes.
+                pending_recording = dict(row.login_recording or {})
+                if pending_recording:
+                    row.login_recording = {}
     except Exception as exc:  # pragma: no cover — promotion is best-effort
         logger.warning(
             "qec.internal.promote_failed",
             extra={"app_id": app_id, "artifact_id": artifact_id, "error": str(exc)[:300]},
         )
+        return
+
+    # Materialise AFTER the promote transaction commits: platform-api requires the
+    # artifact to exist, and this must never hold a DB transaction open across an
+    # HTTP call. Strictly best-effort — the crawl already produced a valid artifact
+    # and its own recorded session already got it in; a recipe failure only means
+    # OTHER members cannot replay the login yet.
+    if pending_recording:
+        try:
+            await platform_api.materialise_login_recipe(
+                tenant_id=tenant_id, artifact_id=artifact_id,
+                recording=pending_recording,
+            )
+        except Exception as exc:  # pragma: no cover — never fail a good crawl
+            logger.warning(
+                "qec.internal.recipe_materialise_error",
+                extra={"app_id": app_id, "artifact_id": artifact_id,
+                       "error": str(exc)[:300]},
+            )
 
 
 async def _app_answer_key(tenant_id: str, app_id: str) -> dict:
