@@ -194,6 +194,25 @@ function attachLoginObserver(target, opts) {
     // record ZERO fields. `input` catches those; the de-dupe above keeps them one.
     document.addEventListener('change', (ev) => reportField(ev.target), true);
     document.addEventListener('input', (ev) => reportField(ev.target), true);
+
+    // EVENTS ARE NOT ENOUGH ON THEIR OWN. Browser autofill and password managers
+    // routinely populate a login WITHOUT firing change or input that a page can
+    // observe — so a tester whose browser filled the form for them logs in
+    // successfully while the recorder sees an empty form and reports "no login
+    // fields were filled".
+    //
+    // So before any control is pressed, look at the form as it ACTUALLY IS: any
+    // field holding a value was filled, however it got there — typed, pasted,
+    // autofilled, or set by the page. State at submit time is evidence; the absence
+    // of an event is not. reportField de-dupes, so a field already seen is ignored.
+    const sweepFields = () => {
+      try {
+        const els = document.querySelectorAll('input, textarea');
+        for (let i = 0; i < els.length; i++) reportField(els[i]);
+      } catch (e) {}
+    };
+    // A real form submission (Enter, or a submit button doing its job).
+    document.addEventListener('submit', sweepFields, true);
     // Enter-to-submit is a press of the form's default control, not a click —
     // record it so the submit rung is never missing.
     document.addEventListener('keydown', (ev) => {
@@ -234,6 +253,10 @@ function attachLoginObserver(target, opts) {
           const isControl = tag === 'button' || tag === 'a' || role === 'button'
             || (tag === 'input' && (type === 'submit' || type === 'button'));
           if (isControl) {
+            // Sweep BEFORE reporting the press, so an autofilled field is recorded
+            // as a fill that precedes the submit rather than being lost. Order is
+            // the recipe: fill, fill, click.
+            sweepFields();
             // An icon-only submit has no innerText; without the aria-label/title
             // fallback its click is recorded nameless and silently dropped, so
             // the recipe loses its submit rung entirely.
