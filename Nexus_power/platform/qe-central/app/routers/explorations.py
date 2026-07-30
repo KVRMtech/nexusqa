@@ -515,6 +515,36 @@ async def _dispatch_explorer(
             str(p).strip() for p in ((row.schedule or {}).get("scope_paths") or [])
             if str(p).strip().startswith("/")
         ][:20]
+        # REFUSE A CONFIGURATION THAT CANNOT CRAWL ANYTHING. Target mode confines the
+        # crawl to these prefixes, and the crawl STARTS at base_url — so if the entry
+        # path is not inside the scope, the very first URL is out_of_scope at depth 0
+        # and the crawl "completes" having captured nothing. That reads as success and
+        # sends the operator to check whether their URL is reachable, which it is.
+        # Refusing up front, naming both values, is the honest failure.
+        if scope_paths:
+            # STRICT: the entry must be INSIDE a scope prefix. A parent is not
+            # enough — the crawler skips an out-of-scope URL at depth 0 rather than
+            # walking down from it (observed: `out_of_scope depth=0` then states=0),
+            # so entering above the scope captures nothing either. A "parent counts"
+            # rule also makes '/' a parent of every scope and voids this guard.
+            _entry = urlparse(base_url).path or "/"
+            if not any(_entry.startswith(sp) for sp in scope_paths):
+                raise HTTPException(
+                    status_code=422,
+                    detail={
+                        "error": "the crawl scope excludes the entry point",
+                        "base_url_path": _entry,
+                        "scope_paths": scope_paths,
+                        "reason": (
+                            f"Target mode confines this crawl to {scope_paths}, but the "
+                            f"Base URL enters at '{_entry}' — which is outside that scope, "
+                            "so the crawl would start out-of-scope and capture nothing. "
+                            f"Point the Base URL at {scope_paths[0]}, or clear the target "
+                            "scope to crawl the whole app. This is a configuration "
+                            "conflict, NOT an unreachable URL."
+                        ),
+                    },
+                )
         # Project the canonical answer_key onto the explorer's {exact, semantic,
         # regex_rules} FILL contract — without this, a wizard-shaped key
         # ({fill|notes|outcomes}) resolves to empty and the crawler fills nothing.
