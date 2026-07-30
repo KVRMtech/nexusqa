@@ -577,11 +577,33 @@ export function OnboardingWizard() {
     if (!url) { setRecErr('Enter the Base URL first — that is where the recording starts.'); return; }
     setRecBusy('start'); setRecErr(''); setRecorded(null);
     try {
-      const r = await factoryApi.startRecording(url);
+      let r;
+      try {
+        r = await factoryApi.startRecording(url);
+      } catch (first: any) {
+        // The recorder browser is single-occupancy: one recording at a time. A
+        // 409 means an earlier one was left open — a double-click, or a tab closed
+        // mid-recording. That is recoverable and the operator should not have to
+        // understand it, so close the stale one and take the slot.
+        const conflict = first?.response?.status === 409 ||
+          /409|already|busy|in progress/i.test(String(first?.response?.data?.detail || first?.message || ''));
+        if (!conflict) throw first;
+        await factoryApi.cancelRecording().catch(() => {});
+        r = await factoryApi.startRecording(url);
+      }
       if (!r?.live_url) throw new Error('the runner did not return a live view');
       setRecLive(r.live_url);
     } catch (e: any) {
-      setRecErr(e?.response?.data?.detail || e?.message || 'could not start recording');
+      const status = e?.response?.status;
+      const detail = e?.response?.data?.detail || e?.message || '';
+      setRecErr(
+        status === 409
+          ? 'A recording is already open and could not be closed automatically. Wait a moment and press Record again.'
+          : status === 502
+            ? 'The recorder browser is unreachable. It may be mid-restart — try again shortly.'
+            : status === 403
+              ? 'Recording needs an editor, manager or admin role on this tenant.'
+              : String(detail) || 'Could not start recording.');
     } finally { setRecBusy(''); }
   };
 
