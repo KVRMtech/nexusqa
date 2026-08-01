@@ -1,6 +1,7 @@
 # Members × Environments — findings and design
 
-**Date:** 2026-08-01 · **Status:** design, not implemented
+**Date:** 2026-08-01 · **Status:** F1 and F2 built + deployed; F3–F7 outstanding
+(see *Build status* at the foot)
 **Method:** 51 scenarios enumerated across 4 lenses (slot/card binding, member lifecycle,
 environments, operator surface), each judged against real code. Adversarial verification was
 **partial** — 25 of 56 agents hit session limits, including the synthesis step — so the findings
@@ -192,3 +193,34 @@ Steps 4–6 are refused server-side when their prerequisite is missing, each wit
 4. **F5** — retired/foreign persona refusal.
 5. **F7** — the matrix view.
 6. **F6** — unify the environment registries (largest, least urgent).
+
+---
+
+## Build status
+
+| | state | where |
+|---|---|---|
+| **F1** environment routes the run | **built · deployed · flag `NEXUS_ENV_ROUTING` OFF** | `environment_routing.py`, dispatch in `test_factory.py` |
+| **F2** card derived from the recipe + server-side refusal | **built · deployed · live-proven** | `card_contract.py`, `GET …/login-contract`, `PUT …/credentials/{env}`, `PersonaMatrixPanel.tsx` |
+| F3 `verified` must mean a real login | not built (card rewrite already resets `verify_status`) | |
+| F4 a slot change must BLOCK, not skip | not built (cards now record `login_type_key` + `recipe_version`, which is the hook) | |
+| F5 retired / foreign-artifact persona refused at dispatch | not built | |
+| F7 the matrix view | not built | |
+| F6 one environment registry | not built | |
+
+### F2, proven live (2026-08-01, `8831d6a4…`, real recorded login)
+
+```
+login-contract      -> email "Email address", password "Password"  (v1, lt_a99e085a…)
+member_number/password -> 422  missing [email]     unexpected [member_number]
+e-mail/password        -> 422  missing [email]     unexpected [e-mail]
+email/"   "            -> 422  missing [password]  unexpected []
+email/password         -> 200  slot_names [email, password] · recipe_version 1 · unverified
+stored row             -> names only, 354 bytes ciphertext, no plaintext
+```
+
+**Known gap surfaced by the proof, not yet addressed:** `login_domain` resolved to
+`sslip.io` for `136-85-106-73.sslip.io`. The registrable-domain rule collapses every
+app on a public suffix-adjacent host into one domain, which weakens fleet reuse keying
+(`login_type_key` still includes the login path and the field signature, so it is not a
+correctness hole today). Worth a PSL check before reuse is offered across tenants.

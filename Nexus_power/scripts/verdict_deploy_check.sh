@@ -27,6 +27,8 @@ for f in app/routers/test_factory.py \
          app/services/test_factory/login_recorder.py \
          app/services/test_factory/login_fingerprint.py \
          app/services/test_factory/persona_store.py \
+         app/services/test_factory/environment_routing.py \
+         app/services/test_factory/card_contract.py \
          app/services/script_factory/compiler.py \
          app/services/script_factory/runner_client.py ; do
   check nexus-platform-api "/app/service/$f"
