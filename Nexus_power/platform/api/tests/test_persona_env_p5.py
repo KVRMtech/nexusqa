@@ -156,7 +156,29 @@ def test_dispatch_resolves_persona_by_match():
 def test_dispatch_stamps_card_verification_with_epoch():
     assert "stamp_card_verified(" in _ROUTER
     seg = _ROUTER[_ROUTER.index("Persona preflight"):]
-    assert "data_epoch=str(governance_env.get" in seg[:1500]
+    assert "data_epoch=str(governance_env.get" in seg[:2600]
+
+
+def test_dispatch_stamps_verified_only_when_the_login_was_PROVEN():
+    """F3. The stamp used to be unconditional with `verified=bool(pf['ok'])`, and
+    `ok` is true for a login that only replayed its steps — so a card could be
+    marked verified when nobody had logged in. On a permissive test app nothing
+    would ever reveal it."""
+    seg = _ROUTER[_ROUTER.index("Persona preflight"):]
+    seg = seg[:3000]
+    assert 'verified=bool(pf.get("proven"))' in seg
+    assert 'verified=bool(pf.get("ok"))' not in seg
+    # an ALLOWED-but-unproven run leaves the card's previous state alone rather
+    # than overwriting it with a claim the run cannot support
+    assert 'if pf.get("proven") or (not pf.get("ok") and _blames_card):' in seg
+    # …and a FAILURE is only recorded against the card when the card is what failed.
+    # Recipe drift and a runner outage are not the credential's fault; marking it
+    # failed for them destroys a good proof and points at a password that was never
+    # wrong — the exact misattribution login_probe exists to prevent.
+    assert '_blames_card = (pf.get("attribution") == "credential")' in seg
+    # the proof records WHICH login version it proved, or `ready` is unreachable
+    # after any re-record
+    assert "recipe_version=int((_auth.get(\"recipe\") or {}).get(\"version\") or 0)" in seg
 
 
 def test_p5_endpoints_exist():

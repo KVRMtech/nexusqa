@@ -216,6 +216,54 @@ async def save_recipe(session: AsyncSession, *, tenant_id: str, artifact_id: str
             "step_count": len(steps or []), "login_type_key": str(login_type_key or "")}
 
 
+async def withdraw_card_proofs(session: AsyncSession, *, tenant_id: str,
+                               artifact_id: str, required_slots: list) -> dict:
+    """A new login recipe was recorded — withdraw every proof it invalidated.
+
+    A card's ``verified`` badge is a claim about a SPECIFIC login. The moment a new
+    version supersedes the old one, that claim is about a login that is no longer
+    active, so it is retracted here rather than left standing until someone notices.
+
+    Cards are also classified against the new slot set so the operator learns
+    immediately which members stopped working, instead of discovering it when a run
+    is blocked:
+
+      * ``broken``  — the card no longer covers the login. Every run for this member
+        is refused until it is re-provisioned. (The dispatch gate re-derives this
+        independently; this is the visible half, not the enforcing one.)
+      * ``unproven`` — the card still fits, but its proof was about the old version.
+
+    Returns ``{broken, unproven, checked}`` — persona ids, no secrets. Caller commits.
+    """
+    req = [str(s) for s in (required_slots or []) if str(s)]
+    pids = await _artifact_persona_ids(session, tenant_id=tenant_id, artifact_id=artifact_id)
+    if not pids:
+        return {"broken": [], "unproven": [], "checked": 0}
+    try:
+        rows = (await session.execute(select(TpPersonaCredentialRow).where(
+            TpPersonaCredentialRow.tenant_id == tenant_id))).scalars().all()
+    except Exception as exc:
+        logger.warning("persona_store.withdraw_proofs_failed err=%s", str(exc)[:200])
+        return {"broken": [], "unproven": [], "checked": 0}
+    broken, unproven, checked = [], [], 0
+    for r in rows:
+        if r.persona_id not in pids:
+            continue
+        checked += 1
+        held = set(str(s) for s in (r.slot_names or []))
+        covers = bool(req) and not (set(req) - held) and not (held - set(req))
+        # The proof is withdrawn either way: it was made against a login that is no
+        # longer the active one, and that is true whether or not the slots still fit.
+        if r.verify_status == "verified":
+            r.verify_status = "unverified"
+        (broken if not covers else unproven).append(r.persona_id)
+    if broken:
+        logger.warning(
+            "persona_store.cards_broken_by_recipe artifact=%s count=%d slots=%s",
+            artifact_id, len(broken), ",".join(req))
+    return {"broken": broken, "unproven": unproven, "checked": checked}
+
+
 async def get_recipe(session: AsyncSession, *, tenant_id: str, artifact_id: str,
                      version: int | None = None) -> dict | None:
     try:
@@ -599,19 +647,38 @@ async def credential_status(session: AsyncSession, *, tenant_id: str,
 
 
 async def stamp_card_verified(session: AsyncSession, *, tenant_id: str, persona_id: str,
-                              environment_id: str, verified: bool, data_epoch: str = "") -> None:
-    """Record a card verification outcome + the data epoch it was proven against
-    (P5 staleness). A later run knows whether the card still holds for the
-    environment's current data snapshot. Caller commits."""
+                              environment_id: str, verified: bool, data_epoch: str = "",
+                              recipe_version: int | None = None) -> None:
+    """Record a card verification outcome, the data epoch it was proven against
+    (P5 staleness), and WHICH login version it proved.
+
+    ``recipe_version`` is what makes a proof re-attachable. Without it the column
+    only ever held the version the card was PROVISIONED against, so after any
+    re-record a card was permanently ``proof_superseded``: proving it again changed
+    nothing, and the state it needed to leave was the state it could never leave.
+    Every pre-contract and bulk-imported card (version 0) was stuck the same way.
+    Pass it whenever the caller knows which recipe the login actually replayed.
+
+    Caller commits."""
+    values = {"verify_status": ("verified" if verified else "failed"),
+              "last_verified_at": _utc_now(), "verified_epoch": str(data_epoch or "")}
+    # Only on a PROOF: a failed attempt says nothing about which login the card
+    # belongs to, and re-pointing it at the active version on failure would quietly
+    # adopt a recipe it was never checked against.
+    if verified and recipe_version is not None:
+        values["recipe_version"] = int(recipe_version or 0)
     try:
         await session.execute(update(TpPersonaCredentialRow)
             .where(TpPersonaCredentialRow.persona_id == persona_id,
                    TpPersonaCredentialRow.environment_id == environment_id,
                    TpPersonaCredentialRow.tenant_id == tenant_id)
-            .values(verify_status=("verified" if verified else "failed"),
-                    last_verified_at=_utc_now(), verified_epoch=str(data_epoch or "")))
+            .values(**values))
     except Exception as exc:
-        logger.debug("persona_store.stamp_card_skipped err=%s", exc)
+        # WARNING, not debug: the platform suppresses INFO, and a silently skipped
+        # stamp means the next run re-reads a proof state that no longer reflects
+        # what just happened.
+        logger.warning("persona_store.stamp_card_failed persona=%s err=%s",
+                       persona_id, str(exc)[:200])
 
 
 async def all_credential_status(session: AsyncSession, *, tenant_id: str,
@@ -696,7 +763,11 @@ async def flag_stale_cards(session: AsyncSession, *, tenant_id: str, artifact_id
         if r.persona_id not in pids:
             continue
         prev = getattr(r, "verified_epoch", "") or ""
-        if r.verify_status == "verified" and epoch and prev and prev != epoch:
+        # No `and prev` guard: a blank verified_epoch means the card was proven while
+        # the environment had no epoch label, so nothing ties that proof to the
+        # snapshot running now. Exempting blanks left every pre-P5 card permanently
+        # un-flaggable — and disagreed with the gate that actually stops runs.
+        if r.verify_status == "verified" and epoch and prev != epoch:
             r.verify_status = "unverified"
             flagged.append(r.persona_id)
     return {"flagged": flagged, "flagged_count": len(flagged),
@@ -1056,18 +1127,34 @@ def build_persona_bundle(recipe: dict | None, slot_values: dict | None) -> tuple
 
     Emits a ``strategy:"recipe"`` config (non-secret: steps + slot metadata) and
     the run env carrying each secret under ``NEXUS_LOGIN_<SLOT>``. Secrets ride
-    the env, never the bundle. Returns (None, {}) when there is no recipe."""
+    the env, never the bundle. Returns (None, {}) when there is no recipe.
+
+    The emitted slot list is every slot the recipe's STEPS fill, union the declared
+    list — not the declaration alone. The interpreter's missing-credential guard
+    only inspects the slots this config declares, so a step that fills a slot absent
+    from the declaration used to produce no env key AND no warning: the field was
+    filled with the empty string and the login failed as though the application were
+    broken. Declaring it means the guard sees it."""
     if not recipe or not (recipe.get("steps")):
         return None, {}
-    slots = recipe.get("slots") or []
+    from . import card_contract
+    declared = {str((sl or {}).get("name") or ""): (sl or {})
+                for sl in (recipe.get("slots") or [])}
+    names = list(card_contract.required_slots(recipe))
+    for name in declared:                      # declared-but-never-filled stays declared
+        if name and name not in names:
+            names.append(name)
     login_env: dict = {}
     out_slots = []
-    for sl in slots:
-        name = str(sl.get("name") or "")
+    for name in names:
         if not name:
             continue
         env_key = f"NEXUS_LOGIN_{name.upper()}"
-        out_slots.append({"name": name, "type": sl.get("type") or "secret",
+        # Default 'secret', never 'plain': the guard EXEMPTS plain slots, so an
+        # unclassified slot typed plain would let a run with no value proceed and
+        # report green.
+        out_slots.append({"name": name,
+                          "type": declared.get(name, {}).get("type") or "secret",
                           "env": env_key})
         if slot_values and name in slot_values:
             login_env[env_key] = str(slot_values[name])

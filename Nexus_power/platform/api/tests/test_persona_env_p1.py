@@ -78,8 +78,18 @@ def test_shared_resolver_prefers_recipe_then_legacy_form_login():
     assert "persona_store.build_persona_bundle(recipe, card)" in _ROUTER
     # legacy fallback for persona-0
     assert "auth_profiles.build_form_login_bundle(card)" in _ROUTER
-    # a persona with neither cannot log in — honest None, never a fake
-    assert "cannot log in — honest None" in _ROUTER
+    # A persona with neither cannot log in, and the resolver says so instead of
+    # producing a bundle that would run the suite logged out. Pinned as BEHAVIOUR
+    # (the honest empty return) rather than as a comment string, which moved when
+    # F4 split the resolver in two and told us nothing when it did.
+    seg = _ROUTER[_ROUTER.index("async def _persona_auth_resolve("):]
+    seg = seg[:seg.index("async def _persona_auth_bundle(")]
+    assert '"auth_config": None' in seg
+    assert "build_persona_bundle" in seg and "build_form_login_bundle" in seg
+    # …and the bundle wrapper is exactly that resolver, so a probe and a run can
+    # never authenticate differently.
+    wrap = _ROUTER[_ROUTER.index("async def _persona_auth_bundle("):]
+    assert "_persona_auth_resolve(" in wrap[:1200]
 
 
 def test_verify_probe_reports_drift_distinctly_from_login_ok():
@@ -87,11 +97,23 @@ def test_verify_probe_reports_drift_distinctly_from_login_ok():
     assert '"recipe_drift": drift' in _ROUTER
     # drift note says, in contiguous fragments, that it is NOT an app failure
     assert "This is NOT " in _ROUTER and "an application failure" in _ROUTER
-    assert 'recipe drift at step (\\d+)' in _ROUTER  # the drift parser
+    # The drift parser moved OUT of the router into login_probe, where the run gate,
+    # the verify probe and the environment health probe all read the same signal.
+    # Three private copies of one regex is how they drifted apart in the first place.
+    assert "login_probe.read_outcome(" in _ROUTER
+    probe = open("app/services/test_factory/login_probe.py", encoding="utf-8").read()
+    assert r"recipe drift at step (\d+) \(([^)]*)\)" in probe
+    assert "_RX_DRIFT" in probe
 
 
 def test_probe_stamps_verified_only_on_success():
+    """F3 tightened this: the gate used to be `if ok:`, where `ok` was a substring
+    match that is ALSO printed when the login steps merely replayed and when a form
+    login was submitted with no assertion at all. Now only a probe that reached the
+    recorded landing page may stamp — `proven`, not `ok`."""
     seg = _ROUTER[_ROUTER.index("async def verify_recipe_endpoint"):]
     assert "stamp_recipe_verified" in seg
-    # stamping sits under the ok branch
-    assert "if ok:" in seg and seg.index("if ok:") < seg.index("stamp_recipe_verified")
+    assert 'if v["proven"]:' in seg
+    assert seg.index('if v["proven"]:') < seg.index("stamp_recipe_verified")
+    # and the weaker signal must NOT be what gates it any more
+    assert "if ok:" not in seg[:seg.index("stamp_recipe_verified")]

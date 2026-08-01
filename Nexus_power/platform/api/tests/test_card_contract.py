@@ -202,3 +202,57 @@ def test_the_form_and_the_refusal_agree_on_the_same_slot_set():
     assert [f["name"] for f in slot_fields(recipe)] == required_slots(recipe)
     assert check_card(recipe=recipe,
                       slot_values={f["name"]: "v" for f in slot_fields(recipe)})
+
+
+# ── a logged-in checkpoint must check something ──────────────────────────────
+
+def test_a_signal_less_assert_home_is_refused():
+    """`assert_home` is the ONE thing that can mark a login proven: the interpreter
+    sets homeAsserted in that branch and prints 'home reached'. But it only waits on
+    the signals the step carries, so a step with none of them awaits nothing, cannot
+    throw, and reports proof for a login that never happened. The recorder refuses
+    to emit one; this closes the hand-authored door."""
+    from app.services.test_factory.card_contract import check_recipe_steps
+    with pytest.raises(CardContractError) as exc:
+        check_recipe_steps([{"action": "goto", "path": "/login"},
+                            {"action": "assert_home"}])
+    assert exc.value.detail["reason"] == "signal_less_home_oracle"
+    assert exc.value.detail["step"] == 2
+
+
+def test_any_one_signal_is_enough_for_a_checkpoint():
+    from app.services.test_factory.card_contract import check_recipe_steps
+    for signal in ({"url_pattern": "/portal"}, {"selector": "#nav"},
+                   {"expect_text": "Sign out"}):
+        check_recipe_steps([dict({"action": "assert_home"}, **signal)])
+
+
+def test_a_blank_signal_does_not_count():
+    from app.services.test_factory.card_contract import check_recipe_steps
+    with pytest.raises(CardContractError):
+        check_recipe_steps([{"action": "assert_home", "url_pattern": "   ",
+                             "selector": "", "expect_text": None}])
+
+
+def test_a_recipe_with_no_checkpoint_at_all_is_allowed_but_unprovable():
+    """Not every app gives us a landing signal. That recipe is legal — it simply can
+    never be proven, which card_state reports honestly as unproven."""
+    from app.services.test_factory.card_contract import check_recipe_steps
+    check_recipe_steps([{"action": "goto", "path": "/login"},
+                        {"action": "fill", "slot": "email"},
+                        {"action": "click", "name": "Sign in"}])
+
+
+# ── optional steps ───────────────────────────────────────────────────────────
+
+def test_optional_fill_slots_are_not_required_but_are_accepted():
+    from app.services.test_factory.card_contract import optional_slots
+    recipe = {"steps": [{"action": "fill", "slot": "email"},
+                        {"action": "fill", "slot": "doc_ack", "optional": True}],
+              "slots": [{"name": "email"}, {"name": "doc_ack"}]}
+    assert required_slots(recipe) == ["email"]
+    assert optional_slots(recipe) == ["doc_ack"]
+    # a card without it is complete…
+    assert check_card(recipe=recipe, slot_values={"email": "a@b.c"})["slot_names"] == ["email"]
+    # …and a card WITH it is not "unexpected"
+    check_card(recipe=recipe, slot_values={"email": "a@b.c", "doc_ack": "yes"})

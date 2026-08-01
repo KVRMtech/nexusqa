@@ -113,6 +113,8 @@ from ..services.test_factory import member_data_resolver
 from ..services.test_factory import draft_recording
 from ..services.test_factory import environment_routing
 from ..services.test_factory import card_contract
+from ..services.test_factory import card_state
+from ..services.test_factory import login_probe
 from ..services.script_factory.compiler import _data_key as compiler_data_key
 from ..services.test_factory import persona_diff
 from ..services.test_factory import persona_governance
@@ -193,6 +195,18 @@ def _env_routing_enabled() -> bool:
     exactly as before. Read per call so a live box reverts without a rebuild."""
     return os.getenv("NEXUS_ENV_ROUTING", "").strip().lower() in (
         "1", "true", "yes", "on")
+
+
+def _card_gate_enabled() -> bool:
+    """Refuse a run whose member cannot perform the recorded login (F4).
+
+    Default ON, unlike the other two flags, and deliberately: this gate can only
+    refuse a run that would otherwise have executed logged out and attributed every
+    failure to the application under test. Turning it off restores that green-wash,
+    so the escape hatch exists for an emergency, not as the resting state.
+    Read per call, so ``NEXUS_CARD_HEALTH_GATE=0`` takes effect without a rebuild."""
+    return os.getenv("NEXUS_CARD_HEALTH_GATE", "1").strip().lower() not in (
+        "0", "false", "no", "off")
 
 
 def _member_data_enabled() -> bool:
@@ -1110,6 +1124,68 @@ async def _run_form_login(request, artifact_id: str, tenant_id: str) -> tuple[di
     return auth_profiles.build_form_login_bundle(cfg)
 
 
+async def _persona_auth_resolve(request, artifact_id: str, tenant_id: str,
+                                persona_id: str, environment_id: str,
+                                environment: dict | None = None) -> dict:
+    """Resolve (persona, environment) → the login bundle AND a verdict on it.
+
+    ``{auth_config, login_env, state, recipe, has_card}``. ``state`` is
+    ``card_state.evaluate`` over the ACTIVE recipe and the DECRYPTED card, so it
+    sees what the login will actually be handed — including a slot that exists but
+    holds an empty value, which the stored slot-name list cannot show.
+
+    This is the single place both the run gate and the probes learn whether a member
+    can log in, so a probe and a run can never disagree about it. Never raises."""
+    envelope = getattr(request.app.state, "envelope_service", None)
+    out = {"auth_config": None, "login_env": {}, "state": None,
+           "recipe": None, "has_card": False}
+    if not persona_id:
+        cfg, env = await _run_form_login(request, artifact_id, tenant_id)
+        out["auth_config"], out["login_env"] = cfg, env
+        return out
+    try:
+        async with tenant_scoped_session(tenant_id) as session:
+            recipe = await persona_store.get_recipe(
+                session, tenant_id=tenant_id, artifact_id=artifact_id)
+            card = await persona_store.get_persona_credential(
+                session, envelope=envelope, tenant_id=tenant_id,
+                persona_id=persona_id, environment_id=environment_id)
+            status = await persona_store.credential_status(
+                session, tenant_id=tenant_id, persona_id=persona_id,
+                environment_id=environment_id)
+    except Exception as exc:
+        _logger.warning("persona.auth_resolve_failed persona=%s err=%s",
+                        persona_id, str(exc)[:200])
+        return out
+
+    out["recipe"] = recipe
+    out["has_card"] = bool(card)
+    # A legacy form-login shape is not a slot-checked card; it predates slots and is
+    # judged by its own guard, so it is reported as the legacy stand-in rather than
+    # diffed against a recipe it was never provisioned for.
+    #
+    # Decided by WHERE the card came from, not by what it looks like. Sniffing for a
+    # key named 'user'/'password' would classify a perfectly ordinary email+password
+    # card as legacy the moment `credential_status` returned nothing — a transient DB
+    # error would then skip the slot check entirely. `get_persona_credential` returns
+    # a legacy profile for exactly one input, the synthetic persona-0.
+    legacy = bool(card) and (str(persona_id).startswith("persona0::") or not recipe)
+    out["state"] = card_state.evaluate(
+        recipe=recipe, card=status, environment=environment,
+        legacy_login_available=legacy,
+        live_slot_values=(card if (card and not legacy) else None))
+
+    if recipe and card:
+        cfg, env = persona_store.build_persona_bundle(recipe, card)
+        out["auth_config"], out["login_env"] = cfg, env
+        return out
+    if card and ("user" in card or "password" in card):
+        cfg, env = auth_profiles.build_form_login_bundle(card)
+        out["auth_config"], out["login_env"] = cfg, env
+        return out
+    return out
+
+
 async def _persona_auth_bundle(request, artifact_id: str, tenant_id: str,
                                persona_id: str, environment_id: str
                                ) -> tuple[dict | None, dict]:
@@ -1119,36 +1195,33 @@ async def _persona_auth_bundle(request, artifact_id: str, tenant_id: str,
     persona's credential card; falls back to the legacy form-login when the
     persona is the synthetic persona-0. Returns (None, {}) when nothing is
     bound. Shared by the P1 recipe probe and the P2 run dispatch — one resolver,
-    so a probe and a real run authenticate identically. Never raises."""
-    if not persona_id:
-        return await _run_form_login(request, artifact_id, tenant_id)
-    envelope = getattr(request.app.state, "envelope_service", None)
-    try:
-        async with tenant_scoped_session(tenant_id) as session:
-            recipe = await persona_store.get_recipe(
-                session, tenant_id=tenant_id, artifact_id=artifact_id)
-            card = await persona_store.get_persona_credential(
-                session, envelope=envelope, tenant_id=tenant_id,
-                persona_id=persona_id, environment_id=environment_id)
-    except Exception as exc:
-        _logger.warning("persona.auth_resolve_failed persona=%s err=%s",
-                        persona_id, str(exc)[:200])
-        return None, {}
-    if recipe and card:
-        return persona_store.build_persona_bundle(recipe, card)
-    # persona-0 (or any persona whose card is a legacy form-login shape):
-    if card and ("user" in card or "password" in card):
-        return auth_profiles.build_form_login_bundle(card)
-    # a persona with no recipe and no legacy card cannot log in — honest None
-    return None, {}
+    so a probe and a real run authenticate identically. Never raises.
+
+    Thin wrapper over ``_persona_auth_resolve`` for callers that only need the
+    bundle. Anything that must REFUSE a run should use the resolver and read its
+    ``state`` — a bundle alone cannot tell a covering card from one that will make
+    the interpreter skip the entire login."""
+    r = await _persona_auth_resolve(request, artifact_id, tenant_id,
+                                    persona_id, environment_id)
+    return r["auth_config"], r["login_env"]
 
 
 async def _persona_preflight(request, artifact_id: str, tenant_id: str, cases,
                              visits, edited_map, base_url: str,
                              auth_config: dict, login_env: dict, token: str) -> dict:
     """Prove a persona can log in BEFORE running the suite. Runs ONE carrier test
-    headless and reads the runner's login log. Returns {ok, detail}. A failure
-    here is a TEST-DATA block (dead member / recipe drift), never app-blame."""
+    headless and reads the runner's login log.
+
+    Returns ``{ok, proven, outcome, attribution, detail, note}``. ``ok`` means the
+    login attempt did not fail; ``proven`` means the recorded logged-in landing was
+    actually REACHED. They are different, and only ``proven`` may stamp a card
+    verified — the interpreter prints ``recipe login OK`` for steps that merely
+    replayed, and prints ``form login OK`` unconditionally after a click with no
+    assertion at all, so treating either as proof marks a card verified when nobody
+    logged in. On a permissive test app that mistake is invisible.
+
+    A failure here is ours — a card that does not cover the login, an unrecorded
+    interstitial, or recipe drift — never app-blame."""
     carrier = cases[:1]
     if not carrier:
         return {"ok": False, "detail": "no carrier test available for preflight"}
@@ -1167,19 +1240,26 @@ async def _persona_preflight(request, artifact_id: str, tenant_id: str, cases,
     try:
         res = await runner_client.run_suite(files, env, timeout_ms=90000)
     except Exception as exc:
-        return {"ok": False, "detail": f"preflight runner error: {exc}"}
+        return {"ok": False, "proven": False, "outcome": login_probe.NO_ATTEMPT,
+                "attribution": "configuration",
+                "detail": f"preflight runner error: {exc}",
+                "note": "The preflight could not be run, so nothing is claimed about this login."}
     output = str((_RUNNER_JOBS.get(pf_run) or {}).get("output") or "")
     if not output:
         try:
             output = str((res or {}).get("output") or "")
         except Exception:
             output = ""
-    ok = ("recipe login OK" in output) or ("form login OK" in output)
-    detail = "login confirmed" if ok else "login not confirmed"
-    m = re.search(r"recipe drift at step (\d+) \(([^)]*)\)", output)
-    if m:
-        detail = f"recipe drift at step {m.group(1)} ({m.group(2)})"
-    return {"ok": ok, "detail": detail}
+    v = login_probe.read_outcome(output)
+    # A login that merely REPLAYED is allowed to run — refusing it would strand every
+    # recipe recorded without a logged-in checkpoint — but it is not proof, so it can
+    # never stamp the card. That split is the whole point of F3.
+    return {
+        "ok": v["outcome"] in (login_probe.PROVEN, login_probe.STEPS_ONLY),
+        "proven": v["proven"], "outcome": v["outcome"],
+        "attribution": v["attribution"], "detail": v["detail"], "note": v["note"],
+        "step": v["step"], "slots": v["slots"],
+    }
 
 # Transient run status for the live "running -> done" indicator. The durable
 # record is the ingested run (triage board); this only drives the UI spinner, so
@@ -4063,8 +4143,42 @@ async def playwright_run(
                     "excluded_uncertified_exploratory": excluded_uncertified,
                 }
     if persona_id:
-        auth_config, login_env = await _persona_auth_bundle(
-            request, artifact_id, tenant_id, persona_id, environment_id)
+        _auth = await _persona_auth_resolve(
+            request, artifact_id, tenant_id, persona_id, environment_id,
+            environment=governance_env)
+        auth_config, login_env = _auth["auth_config"], _auth["login_env"]
+
+        # F4 — A SLOT CHANGE MUST BLOCK, NOT SKIP.
+        # The recorded login can be re-recorded at any time, and slot names come from
+        # the app's own form (a framework-regenerated id is enough to change one), so
+        # a card provisioned yesterday can stop matching today. Without this, the
+        # compiled globalSetup finds the slot's env unset, SKIPS THE ENTIRE LOGIN,
+        # the suite executes logged out, and every failure is attributed to the
+        # application under test. Refusing costs an afternoon; the alternative costs
+        # trust in the verdict.
+        #
+        # Derived live from (active recipe x decrypted card) rather than read from a
+        # stored flag: a card row can be written by a script, a bulk import or a
+        # migration that never ran the marker, and enforcement must not depend on
+        # every past code path having remembered.
+        _state = _auth.get("state") or {}
+        if _card_gate_enabled() and _state and not _state.get("runnable", True):
+            return {
+                "run_id": run_id, "status": "blocked",
+                "blocked_reason": "credential",
+                "persona_id": persona_id, "environment_id": environment_id,
+                "reason": _state.get("reason") or _state.get("state"),
+                "detail": _state.get("detail") or {},
+                "note": ("This member cannot perform the recorded login for this "
+                         "environment, so the run is BLOCKED rather than executed "
+                         "logged out. A skipped login would have run the whole suite "
+                         "unauthenticated and attributed every failure to the "
+                         "application. This is a CREDENTIAL configuration gap, NOT an "
+                         "application failure."),
+                "scripts": 0, "excluded_quarantined": excluded_quarantined,
+                "excluded_uncertified_exploratory": excluded_uncertified,
+            }
+
         if not auth_config:
             raise HTTPException(status_code=422, detail={
                 "error": "persona has no login recipe + credential card for this environment",
@@ -4118,27 +4232,50 @@ async def playwright_run(
                 base_url or _recorded_origin(visits), auth_config, login_env, token)
         except Exception as exc:
             pf = {"ok": False, "detail": f"preflight error: {exc}"}
-        # P5: record the card verification + the epoch it proved against, so a
-        # later run knows if it went stale when the environment data rolled.
-        async with tenant_scoped_session(tenant_id) as session:
-            await persona_store.stamp_card_verified(
-                session, tenant_id=tenant_id, persona_id=persona_id,
-                environment_id=environment_id, verified=bool(pf.get("ok")),
-                data_epoch=str(governance_env.get("data_epoch") or ""))
-            await session.commit()
+        # F3 — 'verified' MUST MEAN A REAL LOGIN.
+        # Only a preflight that reached the recorded logged-in landing may stamp the
+        # card. `pf['ok']` is merely "the attempt did not fail": the interpreter
+        # prints 'recipe login OK' for steps that only replayed, and prints
+        # 'form login OK' unconditionally after a click with no assertion at all — so
+        # stamping on `ok` marked cards verified when nobody had logged in, and on a
+        # permissive test app nothing would ever reveal it.
+        #
+        # A run that is allowed but unproven leaves the card's previous state alone
+        # rather than overwriting it with a claim this run cannot support.
+        #
+        # A FAILURE is only recorded against the card when the card is what failed.
+        # Recipe drift, an unrecorded interstitial and a runner outage are not the
+        # credential's fault, and marking it 'failed' for them destroys a good proof
+        # and sends the operator to re-type a password that was never wrong — the
+        # precise misattribution login_probe exists to prevent.
+        _blames_card = (pf.get("attribution") == "credential")
+        if pf.get("proven") or (not pf.get("ok") and _blames_card):
+            async with tenant_scoped_session(tenant_id) as session:
+                await persona_store.stamp_card_verified(
+                    session, tenant_id=tenant_id, persona_id=persona_id,
+                    environment_id=environment_id, verified=bool(pf.get("proven")),
+                    data_epoch=str(governance_env.get("data_epoch") or ""),
+                    recipe_version=int((_auth.get("recipe") or {}).get("version") or 0))
+                await session.commit()
         if not pf.get("ok"):
             async with tenant_scoped_session(tenant_id) as session:
                 await persona_store.release_reservation(
                     session, tenant_id=tenant_id, run_id=run_id)
                 await session.commit()
+            # Attribute the block to what actually went wrong. Reporting an
+            # unrecorded interstitial as a credential problem sends the operator to
+            # re-type a password that was never wrong.
+            _attr = pf.get("attribution") or "test_data"
             return {
                 "run_id": run_id, "status": "blocked",
-                "blocked_reason": "test_data",
+                "blocked_reason": ("credential" if _attr == "credential"
+                                   else "test_data"),
                 "persona_id": persona_id, "environment_id": environment_id,
+                "reason": pf.get("outcome") or "login_not_confirmed",
                 "detail": pf.get("detail"),
-                "note": ("The test MEMBER could not log in (recipe drift or bad "
-                         "credentials) — the run is BLOCKED, not executed. The "
-                         "application under test is NOT implicated."),
+                "note": pf.get("note") or (
+                    "The test MEMBER could not log in — the run is BLOCKED, not "
+                    "executed. The application under test is NOT implicated."),
                 "scripts": 0, "excluded_quarantined": excluded_quarantined,
                 "excluded_uncertified_exploratory": excluded_uncertified,
             }
@@ -4570,10 +4707,17 @@ async def _derive_recipe_from_capture(session, *, tenant_id: str, artifact_id: s
             session, tenant_id=tenant_id, artifact_id=artifact_id,
             steps=steps, slots=slots, source="login_recording",
             login_type_key=derived.get("login_type_key") or "")
+        # F4: a re-record can rename the slots the cards were provisioned for.
+        _impact = await persona_store.withdraw_card_proofs(
+            session, tenant_id=tenant_id, artifact_id=artifact_id,
+            required_slots=card_contract.required_slots(
+                {"steps": steps, "slots": slots}))
         return {
             "recorded": True,
             "reason": observation.get("reason") or "",
             "slots": [s.get("name") for s in slots],
+            "cards_broken": _impact["broken"],
+            "cards_unproven": _impact["unproven"],
             # Shown back to the operator: the login page we will replay, and the
             # landing we will assert as "logged in". If they browsed on before
             # saving, the Home here is where they wandered — visible, not silent.
@@ -8252,18 +8396,36 @@ async def create_recipe_endpoint(
     if not _persona_write_ok(user):
         raise HTTPException(403, "Storing a recipe requires an editor, manager or admin role.")
     tenant_id = user["tenant_id"]
+    # A hand-authored recipe is the one path that can carry a logged-in checkpoint
+    # that checks nothing — and that checkpoint is the only thing that can mark a
+    # login proven.
+    try:
+        card_contract.check_recipe_steps(body.steps)
+    except card_contract.CardContractError as exc:
+        raise HTTPException(422, detail={"error": str(exc), **exc.detail})
     async with tenant_scoped_session(tenant_id) as session:
         await _require_artifact(session, artifact_id, tenant_id)
         out = await persona_store.save_recipe(
             session, tenant_id=tenant_id, artifact_id=artifact_id,
             steps=body.steps, slots=body.slots, source=body.source,
             login_type_key=body.login_type_key, login_domain=body.login_domain)
+        impact = await persona_store.withdraw_card_proofs(
+            session, tenant_id=tenant_id, artifact_id=artifact_id,
+            required_slots=card_contract.required_slots(
+                {"steps": body.steps, "slots": body.slots}))
         await session.commit()
     await _persona_audit(tenant_id=tenant_id, artifact_id=artifact_id,
                          actor=user.get("email") or user.get("user_id") or "?",
                          event_type="login_recipe_saved",
-                         detail=f"version={out['version']}")
-    return {"status": "saved", **out}
+                         detail=f"version={out['version']} "
+                                f"cards_broken={len(impact['broken'])}")
+    return {"status": "saved", **out, "cards": impact,
+            "note": (("%d member card(s) no longer match this login and are BLOCKED "
+                      "until re-provisioned." % len(impact["broken"]))
+                     if impact["broken"] else
+                     ("Existing cards still fit; their earlier proof was withdrawn "
+                      "because it was made against the previous version."
+                      if impact["unproven"] else ""))}
 
 
 class _ObsField(BaseModel):
@@ -8316,12 +8478,16 @@ async def record_recipe_from_observation_endpoint(
             steps=built["steps"], slots=built["slots"],
             source="crawl_demonstration", login_type_key=built["login_type_key"],
             login_domain=body.domain)
+        impact = await persona_store.withdraw_card_proofs(
+            session, tenant_id=tenant_id, artifact_id=artifact_id,
+            required_slots=card_contract.required_slots(built))
         await session.commit()
     await _persona_audit(tenant_id=tenant_id, artifact_id=artifact_id,
                          actor=user.get("email") or user.get("user_id") or "?",
                          event_type="login_recipe_recorded",
-                         detail=f"version={out['version']} key={built['login_type_key']}")
-    return {"status": "recorded", **out}
+                         detail=f"version={out['version']} key={built['login_type_key']} "
+                                f"cards_broken={len(impact['broken'])}")
+    return {"status": "recorded", **out, "cards": impact}
 
 
 class _DraftStartBody(BaseModel):
@@ -8524,13 +8690,21 @@ async def verify_recipe_endpoint(
     artifact_id: str = PathParam(..., min_length=1, max_length=64),
     user: dict = Depends(get_current_user),
 ):
-    """Replay the active login recipe with a persona's card and report whether it
-    logs in — the honest recipe-verification probe (P1 exit proof).
+    """Replay the active login recipe with a member's card and report whether it
+    actually logs in — the honest verification probe, and the per-card **Verify**
+    action (F3).
 
-    Runs ONE test headless so the recipe drives a real login; then reads the
-    runner's own log. 'recipe login OK' → verified (stamped). 'recipe drift at
-    step N' → the recipe no longer matches the login page — a NAMED drift, never
-    a misleading product failure. Read-only on the artifact, admin|manager."""
+    Runs ONE test headless so the recipe drives a real login, then reads the
+    runner's own log through ``login_probe``. **Only reaching the recorded
+    logged-in landing counts as verified**, and it stamps both the recipe and the
+    card. Steps that merely replayed do NOT — the interpreter prints
+    ``recipe login OK`` for a sequence that ran without proving anyone got in, and
+    prints ``form login OK`` unconditionally after a click with no assertion at all.
+
+    A definite failure (drift, an unrecorded interstitial, a card that does not
+    cover the login) is recorded as failed and named for what it is. An inconclusive
+    outcome leaves the card's existing state alone rather than overwriting it with a
+    claim in either direction. Editor+."""
     if not _persona_write_ok(user):
         raise HTTPException(403, "Verifying a recipe requires an editor, manager or admin role.")
     tenant_id = user["tenant_id"]
@@ -8551,12 +8725,38 @@ async def verify_recipe_endpoint(
         cases = await factory_service.load_active_production_cases(session, artifact_id=artifact_id)
         visits, _ = await factory_service._load_current_pages_and_actions(session, artifact_id=artifact_id)
         edited_map = await _active_edited_map(session, artifact_id=artifact_id)
+        _probe_env = await persona_store.get_environment(
+            session, tenant_id=tenant_id, artifact_id=artifact_id,
+            environment_id=body.environment_id) or {}
+        _recipe_row = await persona_store.get_recipe(
+            session, tenant_id=tenant_id, artifact_id=artifact_id)
+        # The epoch a proof is stamped against — without it the card would be
+        # recorded as proven with no tie to the data snapshot it was proven on.
+        _env_epoch = str(_probe_env.get("data_epoch") or "")
     tcid = (body.test_id or "").strip()
     carrier = [c for c in cases if (getattr(c, "test_id", "") or "") == tcid] if tcid else cases[:1]
     if not carrier:
         raise HTTPException(404, "no active test to carry the probe run")
 
-    base_url = (body.base_url or "").strip() or _recorded_origin(visits)
+    # THE PROOF MUST HAPPEN WHERE THE PROOF IS CLAIMED.
+    # A card is per (member, ENVIRONMENT), and this probe stamps it. Defaulting the
+    # destination to the crawled origin meant a card could be marked "proven for
+    # uat" by a login performed against whatever host the crawl happened to use —
+    # and it would carry that environment's decrypted secrets there to do it. Same
+    # class of defect as F1, with the added harm of sending credentials to a host
+    # nobody selected.
+    _routed = environment_routing.resolve_destination(
+        environment_id=body.environment_id, environment=_probe_env or None,
+        requested_base_url=(body.base_url or "").strip())
+    if not _routed["allowed"]:
+        raise HTTPException(422, {
+            "error": "cannot establish where to verify this card",
+            "reason": _routed["reason"], "detail": _routed["detail"],
+            "note": ("A credential card is proven for ONE environment. Verifying it "
+                     "somewhere else would prove nothing about that environment and "
+                     "would send its credentials to a host that was not selected."),
+        })
+    base_url = _routed["base_url"] or _recorded_origin(visits)
     files = _configured_files(
         carrier, build_field_meta(visits), base_url, {},
         browsers=["chromium"], headed=False, workers=1, retries=0,
@@ -8581,32 +8781,49 @@ async def verify_recipe_endpoint(
             output = str((res or {}).get("output") or "")
         except Exception:
             output = ""
-    ok = "recipe login OK" in output or "form login OK" in output
-    drift = None
-    m = re.search(r"recipe drift at step (\d+) \(([^)]*)\)", output)
-    if m:
-        drift = {"step": int(m.group(1)), "action": m.group(2)}
-    if ok:
+    v = login_probe.read_outcome(output)
+    drift = ({"step": v["step"], "action": v["action"]}
+             if v["outcome"] == login_probe.DRIFT else None)
+    # Only a login that REACHED the recorded landing page counts. Stamping on the
+    # weaker 'the steps replayed' signal is what let a recipe be marked verified
+    # against a login nobody completed.
+    if v["proven"]:
         async with tenant_scoped_session(tenant_id) as session:
             rec = await persona_store.get_recipe(session, tenant_id=tenant_id, artifact_id=artifact_id)
             if rec:
                 await persona_store.stamp_recipe_verified(
                     session, tenant_id=tenant_id, recipe_id=rec["recipe_id"],
                     environment_id=body.environment_id)
-                await session.commit()
+            await persona_store.stamp_card_verified(
+                session, tenant_id=tenant_id, persona_id=body.persona_id,
+                environment_id=body.environment_id, verified=True,
+                data_epoch=str(_env_epoch or ""),
+                recipe_version=int((_recipe_row or {}).get("version") or 0))
+            await session.commit()
+    elif v["attribution"] == "credential":
+        # The CARD is marked failed only when the card is what failed. Recipe drift,
+        # an unrecorded interstitial and a runner outage are not the credential's
+        # fault; recording them against it would destroy a good proof and point the
+        # operator at a password that was never wrong.
+        async with tenant_scoped_session(tenant_id) as session:
+            await persona_store.stamp_card_verified(
+                session, tenant_id=tenant_id, persona_id=body.persona_id,
+                environment_id=body.environment_id, verified=False,
+                data_epoch=str(_env_epoch or ""))
+            await session.commit()
     await _persona_audit(tenant_id=tenant_id, artifact_id=artifact_id,
                          actor=user.get("email") or user.get("user_id") or "?",
                          event_type="recipe_verified",
-                         detail=f"persona={body.persona_id} env={body.environment_id} ok={ok} drift={drift}")
+                         detail=f"persona={body.persona_id} env={body.environment_id} "
+                                f"outcome={v['outcome']} proven={v['proven']}")
     return {
-        "verified": bool(ok),
+        "verified": bool(v["proven"]),
+        "outcome": v["outcome"],
+        "attribution": v["attribution"],
         "recipe_drift": drift,
         "run_id": run_id,
-        "note": ("Recipe login replayed successfully." if ok
-                 else ("Recipe DRIFT — the login page no longer matches the recorded "
-                       "recipe at the named step; re-record the recipe. This is NOT "
-                       "an application failure." if drift
-                       else "Login did not confirm; check the persona card and recipe.")),
+        "detail": v["detail"],
+        "note": v["note"],
     }
 
 
@@ -9059,15 +9276,26 @@ async def environment_health_endpoint(
                     except Exception as exc:
                         _logger.warning("env_health.probe_runner_err env=%s err=%s", environment_id, str(exc)[:200])
                     output = str((_RUNNER_JOBS.get(run_id) or {}).get("output") or "")
-                    if "recipe login OK" in output or "form login OK" in output:
-                        status, detail = "healthy", "reachable + login OK"
+                    # Read the same signal the run gate reads. This branch was the
+                    # last holder of the old substring test, and health is not a
+                    # cosmetic label: gate_dispatch REFUSES a known-bad environment,
+                    # so calling an environment 'healthy + login OK' on the strength
+                    # of a line printed without anyone logging in re-opened the gate
+                    # for exactly the case F3 exists to close.
+                    pv = login_probe.read_outcome(output)
+                    if pv["proven"]:
+                        status, detail = "healthy", "reachable, and a login reached the recorded page"
+                    elif pv["outcome"] == login_probe.DRIFT:
+                        status, detail = "recipe_drift", pv["detail"]
+                    elif pv["outcome"] == login_probe.STEPS_ONLY:
+                        # Not a failure of the environment: the login ran, nothing
+                        # proved it. Naming the environment bad here would refuse
+                        # every run against it.
+                        status = "healthy"
+                        detail = ("reachable; the login replayed but this recipe has no "
+                                  "logged-in checkpoint, so nothing proved it")
                     else:
-                        m = re.search(r"recipe drift at step (\d+) \(([^)]*)\)", output)
-                        if m:
-                            status = "recipe_drift"
-                            detail = f"recipe drift at step {m.group(1)} ({m.group(2)})"
-                        else:
-                            status, detail = "login_failed", "reachable, but login did not confirm"
+                        status, detail = "login_failed", pv["detail"] or "login did not confirm"
         except Exception as exc:
             _logger.warning("env_health.login_probe_err env=%s err=%s", environment_id, str(exc)[:200])
     async with tenant_scoped_session(tenant_id) as session:
@@ -9176,16 +9404,28 @@ async def bulk_import_credentials_endpoint(
     errors: list[dict] = []
     async with tenant_scoped_session(tenant_id) as session:
         await _require_artifact(session, artifact_id, tenant_id)
+        # The card contract applies HERE too. Bulk import is exactly the path where a
+        # column-mapping mistake produces five hundred cards that all save cleanly and
+        # all silently skip the login — the single-card PUT enforcing it while this
+        # one did not is how "the API is the contract" quietly stops being true.
+        recipe = await persona_store.get_recipe(
+            session, tenant_id=tenant_id, artifact_id=artifact_id)
         for i, c in enumerate(body.cards):
             try:
+                card_contract.check_card(recipe=recipe, slot_values=c.slot_values)
                 p = await persona_store.save_persona(
                     session, tenant_id=tenant_id, artifact_id=artifact_id,
                     name=c.persona_name, behavior_class=c.behavior_class, traits=c.traits)
                 await persona_store.save_persona_credential(
                     session, envelope=envelope, tenant_id=tenant_id,
                     persona_id=p["persona_id"], environment_id=c.environment_id,
-                    slot_values=c.slot_values)
+                    slot_values=c.slot_values,
+                    login_type_key=str((recipe or {}).get("login_type_key") or ""),
+                    recipe_version=int((recipe or {}).get("version") or 0))
                 imported += 1
+            except card_contract.CardContractError as exc:
+                errors.append({"index": i, "persona_name": c.persona_name,
+                               "error": str(exc), **exc.detail})
             except Exception as exc:
                 errors.append({"index": i, "persona_name": c.persona_name,
                                "error": str(exc)[:200]})
@@ -9207,7 +9447,13 @@ async def credentials_manifest_endpoint(
     """The NON-SECRET provisioning grid: every persona×environment card, its slot
     NAMES (never values), verify status + epoch. Export this to see what is
     provisioned and what is missing — secrets never leave the envelope. A
-    deliberate ``export=true`` is redacted AND audit-logged (P5 ops)."""
+    deliberate ``export=true`` is redacted AND audit-logged (P5 ops).
+
+    Each card also carries the DERIVED state the run gate will apply — ready /
+    unproven / stale_slots — computed against the artifact's ACTIVE recipe and the
+    environment's current epoch. It is derived on read rather than stored so a card
+    orphaned by a re-record shows as broken immediately, without anything having had
+    to remember to mark it."""
     tenant_id = user["tenant_id"]
     async with tenant_scoped_session(tenant_id) as session:
         await _require_artifact(session, artifact_id, tenant_id)
@@ -9215,9 +9461,22 @@ async def credentials_manifest_endpoint(
             session, tenant_id=tenant_id, artifact_id=artifact_id)
         cards = await persona_store.all_credential_status(
             session, tenant_id=tenant_id, artifact_id=artifact_id)
+        recipe = await persona_store.get_recipe(
+            session, tenant_id=tenant_id, artifact_id=artifact_id)
+        envs = await persona_store.list_environments(
+            session, tenant_id=tenant_id, artifact_id=artifact_id)
+    by_env = {e["environment_id"]: e for e in envs}
     pname = {p["persona_id"]: p["name"] for p in personas}
     for c in cards:
         c["persona_name"] = pname.get(c["persona_id"], "")
+        st = card_state.evaluate(recipe=recipe, card=c,
+                                 environment=by_env.get(c["environment_id"]))
+        c["state"] = st["state"]
+        c["runnable"] = st["runnable"]
+        c["state_reason"] = st["reason"]
+        c["missing_slots"] = st["missing"]
+        c["unexpected_slots"] = st["unexpected"]
+        c["state_note"] = st["detail"].get("note", "")
     if export:
         await _persona_audit(tenant_id=tenant_id, artifact_id=artifact_id,
                              actor=user.get("email") or user.get("user_id") or "?",

@@ -98,11 +98,18 @@ def card_staleness(card: dict | None, env: dict | None, *, now: datetime,
                 "reason": "the card has never been verified against this environment."}
     verified_epoch = str(card.get("verified_epoch") or "")
     env_epoch = str(env.get("data_epoch") or "")
-    if env_epoch and verified_epoch and env_epoch != verified_epoch:
+    # A BLANK verified_epoch is not a free pass. It means the card was proven while
+    # the environment carried no epoch label at all, so nothing ties that proof to
+    # the snapshot running now. Requiring `and verified_epoch` here made every such
+    # card permanently un-stale-able — and every card predating the P5 migration has
+    # a blank epoch, so the blind spot covered the whole existing estate. It also
+    # disagreed with card_state, which gates the run; two modules answering "is this
+    # card stale?" opposite ways is how a withdrawn proof gets quietly reinstated.
+    if env_epoch and env_epoch != verified_epoch:
         return {"state": STALE_EPOCH,
                 "reason": (f"the environment data epoch rolled to '{env_epoch}' since this "
-                           f"card was verified against '{verified_epoch}' — the member's "
-                           "data may have changed; re-verify before trusting it.")}
+                           f"card was verified against '{verified_epoch or 'no epoch'}' — the "
+                           "member's data may have changed; re-verify before trusting it.")}
     last = _parse_dt(card.get("last_verified_at"))
     if last is not None and (now - last) > timedelta(days=max(1, int(ttl_days))):
         age = (now - last).days

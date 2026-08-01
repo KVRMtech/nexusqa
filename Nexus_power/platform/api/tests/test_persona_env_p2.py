@@ -44,11 +44,16 @@ def test_persona_is_reserved_and_busy_serializes():
 
 
 def test_dead_member_blocks_with_test_data_never_app_blame():
-    assert '"blocked_reason": "test_data"' in _ROUTER
+    """The reason is now chosen from what actually went wrong — a card that does not
+    cover the login is attributed 'credential', everything else stays 'test_data' —
+    because reporting an unrecorded interstitial as a credential problem sends the
+    operator to re-type a password that was never wrong. Both are still blocks, and
+    neither implicates the application."""
+    assert '"test_data"' in _ROUTER and '"credential"' in _ROUTER
     assert "application under test is NOT implicated" in _ROUTER
     # a block executes ZERO suite steps
-    seg = _ROUTER[_ROUTER.index('"blocked_reason": "test_data"'):]
-    assert '"scripts": 0' in seg
+    seg = _ROUTER[_ROUTER.index('else "test_data")'):]
+    assert '"scripts": 0' in seg[:1200]
 
 
 def test_reservation_released_when_the_run_finishes():

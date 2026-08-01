@@ -29,7 +29,8 @@ Pure — no DB, no I/O. The caller loads the recipe and applies the verdict.
 """
 from __future__ import annotations
 
-__all__ = ["required_slots", "slot_fields", "check_card", "CardContractError"]
+__all__ = ["required_slots", "optional_slots", "slot_fields", "check_card",
+           "check_recipe_steps", "CardContractError"]
 
 
 class CardContractError(ValueError):
@@ -42,32 +43,57 @@ class CardContractError(ValueError):
         self.detail = detail
 
 
-def required_slots(recipe: dict | None) -> list:
-    """The slot names this recipe's steps actually fill, in first-seen order.
-
-    Derived from the STEPS, not the declared ``slots`` list, because the steps are
-    what the replay executes: a recipe whose steps fill a slot absent from ``slots``
-    (hand-edited, or partially migrated) would otherwise pass a check against the
-    declaration and still skip the login. Falls back to the declaration when the
-    steps carry no fills."""
-    rec = recipe or {}
+def _fill_slots(recipe: dict | None, *, optional: bool) -> list:
+    """Slot names filled by this recipe's steps, in first-seen order, selecting
+    either the unconditional steps or the optional ones."""
     out: list = []
     seen: set = set()
-    for step in (rec.get("steps") or []):
+    for step in ((recipe or {}).get("steps") or []):
         if not isinstance(step, dict) or step.get("action") != "fill":
+            continue
+        if bool(step.get("optional")) is not optional:
             continue
         name = str(step.get("slot") or "").strip()
         if name and name not in seen:
             seen.add(name)
             out.append(name)
+    return out
+
+
+def required_slots(recipe: dict | None) -> list:
+    """The slot names a card MUST supply, in first-seen order.
+
+    Derived from the STEPS, not the declared ``slots`` list, because the steps are
+    what the replay executes: a recipe whose steps fill a slot absent from ``slots``
+    (hand-edited, or partially migrated) would otherwise pass a check against the
+    declaration and still skip the login. Falls back to the declaration when the
+    steps carry no fills.
+
+    OPTIONAL steps are excluded. They exist for screens only SOME members are shown
+    — the verify-documents interstitial being the recorded example — and demanding a
+    value for a screen a member never reaches would refuse exactly the members the
+    optional marking was introduced to accommodate."""
+    rec = recipe or {}
+    out = _fill_slots(rec, optional=False)
     if out:
         return out
+    if _fill_slots(rec, optional=True):
+        # Every fill is conditional; nothing is unconditionally required.
+        return []
+    seen: set = set()
     for slot in (rec.get("slots") or []):
         name = str((slot or {}).get("name") or "").strip()
         if name and name not in seen:
             seen.add(name)
             out.append(name)
     return out
+
+
+def optional_slots(recipe: dict | None) -> list:
+    """Slots filled only by OPTIONAL steps — supply them if you have them, but a
+    card without them is not broken."""
+    req = set(required_slots(recipe))
+    return [s for s in _fill_slots(recipe, optional=True) if s not in req]
 
 
 def slot_fields(recipe: dict | None) -> list:
@@ -93,6 +119,38 @@ def slot_fields(recipe: dict | None) -> list:
     return [{"name": name, "label": labels.get(name) or name,
              "type": types.get(name) or "secret"}
             for name in required_slots(rec)]
+
+
+def check_recipe_steps(steps: list | None) -> None:
+    """Refuse a recipe whose ``assert_home`` step asserts nothing.
+
+    ``assert_home`` is the ONE thing that can mark a login proven: the interpreter
+    sets ``homeAsserted`` in that branch and prints ``home reached``, and that token
+    is what stamps a card ``verified``. But the branch waits only on the signals the
+    step carries — ``url_pattern`` / ``selector`` / ``expect_text`` — so a step with
+    NONE of them awaits nothing, cannot throw, and reports proof for a login that
+    was never checked.
+
+    The recorder already refuses to emit a signal-less oracle. This closes the other
+    door: ``POST …/recipes`` accepts hand-authored steps and validated none of them,
+    so a signal-less ``assert_home`` was a one-line way to forge proof for the whole
+    fleet.
+    """
+    for i, step in enumerate(steps or [], start=1):
+        if not isinstance(step, dict) or step.get("action") != "assert_home":
+            continue
+        if not any(str(step.get(k) or "").strip()
+                   for k in ("url_pattern", "selector", "expect_text")):
+            raise CardContractError(
+                f"step {i}: assert_home has nothing to assert",
+                {"reason": "signal_less_home_oracle", "step": i,
+                 "note": ("The logged-in checkpoint must name something observable — "
+                          "a url_pattern, a selector, or expected text. A checkpoint "
+                          "with none of these asserts nothing and would report every "
+                          "login as proven, including logins that never happened. "
+                          "Re-record the login from the logged-in page, or give this "
+                          "step a signal.")},
+            )
 
 
 def check_card(*, recipe: dict | None, slot_values: dict | None) -> dict:
@@ -125,7 +183,9 @@ def check_card(*, recipe: dict | None, slot_values: dict | None) -> dict:
         )
 
     missing = [name for name in required if not str(supplied.get(name, "")).strip()]
-    unexpected = sorted(set(supplied) - set(required))
+    # A slot filled only by an OPTIONAL step is legitimately present on a card, so
+    # it is not "unexpected" even though it is not required.
+    unexpected = sorted(set(supplied) - set(required) - set(optional_slots(recipe)))
 
     if missing or unexpected:
         # Both are refused for the same reason: either one means the card and the

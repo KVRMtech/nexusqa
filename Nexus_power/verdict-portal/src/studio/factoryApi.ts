@@ -792,6 +792,19 @@ class FactoryApiClient {
     return data;
   }
 
+  /** PROVE a card: replay the recorded login with this member's credentials
+   *  against this environment, for real, and report what happened. Only reaching
+   *  the recorded logged-in page counts as proven — steps that merely replayed do
+   *  not, and neither does a form login submitted with nothing asserting it
+   *  succeeded. Returns {verified, outcome, attribution, recipe_drift, note}. */
+  async verifyRecipe(artifactId: string, personaId: string, environmentId: string,
+    baseUrl = ''): Promise<any> {
+    const { data } = await this.client.post(`/v1/test-factory/${artifactId}/recipes/verify`, {
+      persona_id: personaId, environment_id: environmentId, base_url: baseUrl,
+    });
+    return data;
+  }
+
   /** The fields a credential card must supply, DERIVED from the recorded login —
    *  `{has_recipe, fields:[{name,label,type}], reason}`. The card editor renders
    *  exactly this rather than asking anyone to retype slot names; the same

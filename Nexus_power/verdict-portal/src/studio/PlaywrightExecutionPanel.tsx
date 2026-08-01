@@ -96,6 +96,12 @@ function runStatusStyle(status: string): Record<string, string> {
   if (status === 'passed') return { background: 'rgba(34,197,94,0.16)', color: '#15803d' };
   if (status === 'failed') return { background: 'rgba(239,68,68,0.16)', color: '#b91c1c' };
   if (status === 'timed_out' || status === 'error') return { background: 'rgba(245,158,11,0.18)', color: '#b45309' };
+  // BLOCKED is a deliberate refusal — the run did not execute because something on
+  // our side (a card that cannot log in, an environment policy, a member with no
+  // answer) would have made the result meaningless. It rendered in the same grey as
+  // 'queued', so the one status that demands attention looked like the one that
+  // demands none.
+  if (status === 'blocked') return { background: 'rgba(217,119,6,0.20)', color: '#92400e' };
   return { background: 'rgba(100,116,139,0.14)', color: '#475569' };
 }
 

@@ -27,6 +27,10 @@ type Card = {
   persona_id: string; persona_name?: string; environment_id: string;
   slot_names?: string[]; verify_status?: string; verified_epoch?: string;
   last_verified_at?: string | null;
+  /** Derived by the server against the ACTIVE recipe — the same verdict the run
+   *  gate applies, so what is shown here is what will actually happen. */
+  state?: string; runnable?: boolean; state_reason?: string; state_note?: string;
+  missing_slots?: string[]; unexpected_slots?: string[];
 };
 /** One field of the recorded login — the app's OWN label, and the slot the card
  *  is keyed by. Never authored here; always derived from the recording. */
@@ -59,6 +63,44 @@ function PostureBadge({ env }: { env: Environment }) {
     : p === 'read_only' ? 'bg-rose-50 text-rose-700 ring-rose-200'
       : 'bg-amber-50 text-amber-700 ring-amber-200';
   return <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ring-1 ${tone}`}>{p}</span>;
+}
+
+/** What a card can actually do, and why — said in the operator's terms.
+ *
+ *  This used to be a binary badge: `verified` in emerald, EVERYTHING else in the
+ *  same grey. A card that had never been tried, one whose proof was withdrawn, and
+ *  one that had just FAILED to log in were visually identical — so the state that
+ *  most needs attention was the state that looked most ordinary. */
+const CARD_STATE: Record<string, { label: string; tone: string }> = {
+  ready: { label: 'proven', tone: 'bg-emerald-50 text-emerald-700 ring-emerald-200' },
+  unproven: { label: 'unproven', tone: 'bg-amber-50 text-amber-800 ring-amber-200' },
+  stale_slots: { label: 'blocked · does not fit the login', tone: 'bg-rose-50 text-rose-700 ring-rose-200' },
+  no_card: { label: 'no card', tone: 'bg-slate-100 text-slate-500 ring-slate-200' },
+  no_recipe: { label: 'no recorded login', tone: 'bg-slate-100 text-slate-500 ring-slate-200' },
+};
+
+/** The reason, in a few words, for the row. The full sentence is the tooltip. */
+const CARD_REASON: Record<string, string> = {
+  never_proven: 'never used for a real login yet',
+  proof_failed: 'the last login attempt did not reach the logged-in page',
+  proof_superseded: 'proven against an earlier version of this login',
+  proof_predates_contract: 'proven before we recorded which login it was checked against',
+  proof_stale_epoch: 'the environment data was refreshed since it was proven',
+  card_slots_do_not_match_recipe: 'the login was re-recorded and this card no longer fits',
+  legacy_form_login: 'runs on the stored form login, not a card',
+};
+
+function CardStateBadge({ c }: { c: Card }) {
+  const st = CARD_STATE[c.state || ''] || CARD_STATE.unproven;
+  const why = CARD_REASON[c.state_reason || ''] || '';
+  return (
+    <span title={c.state_note || ''} className="inline-flex flex-col gap-0.5">
+      <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ring-1 w-fit ${st.tone}`}>
+        {st.label}
+      </span>
+      {why && <span className="text-[10px] text-nexus-400">{why}</span>}
+    </span>
+  );
 }
 
 function HealthDot({ s }: { s?: string }) {
@@ -176,6 +218,22 @@ export default function PersonaMatrixPanel({ artifactId }: { artifactId: string 
     } catch (ex) { fail(ex); } finally { setBusy(''); }
   };
 
+  const cardKey = (c: Card) => `${c.persona_id}::${c.environment_id}`;
+
+  /** Prove a card by actually logging in with it — the only thing that may set
+   *  'proven'. Reports what really happened, including the outcomes that are NOT
+   *  the card's fault (an unrecorded interstitial, a login page that changed), so
+   *  nobody re-types a password that was never wrong. */
+  const verifyCard = async (c: Card) => {
+    setBusy(`verify:${cardKey(c)}`); setErr('');
+    try {
+      const r = await api.verifyRecipe(artifactId, c.persona_id, c.environment_id);
+      if (r?.verified) say('Logged in and reached the recorded page — this card is proven.');
+      else setErr(r?.note || r?.detail || 'the login did not confirm');
+      await load();
+    } catch (ex) { fail(ex); } finally { setBusy(''); }
+  };
+
   const materializeRecipe = async () => {
     setBusy('recipe'); setErr('');
     try {
@@ -222,7 +280,6 @@ export default function PersonaMatrixPanel({ artifactId }: { artifactId: string 
     setLiveUrl(''); setBusy('');
   };
 
-  const cardKey = (c: Card) => `${c.persona_id}::${c.environment_id}`;
   const cardsByPersona = useMemo(() => {
     const m: Record<string, Card[]> = {};
     for (const c of cards) (m[c.persona_id] ||= []).push(c);
@@ -342,18 +399,36 @@ export default function PersonaMatrixPanel({ artifactId }: { artifactId: string 
           <table className="w-full text-[12px]">
             <thead><tr className="text-[10px] uppercase text-nexus-400 text-left">
               <th className="py-1 pr-3">Member</th><th className="py-1 pr-3">Environment</th>
-              <th className="py-1 pr-3">Slots</th><th className="py-1 pr-3">Verified</th></tr></thead>
+              <th className="py-1 pr-3">Slots</th><th className="py-1 pr-3">State</th>
+              <th className="py-1 pr-3"></th></tr></thead>
             <tbody>
-              {cards.length === 0 && <tr><td colSpan={4} className="py-2 text-[11px] text-nexus-400">No cards yet. Add one below — a member needs a card for the environment it runs in.</td></tr>}
+              {cards.length === 0 && <tr><td colSpan={5} className="py-2 text-[11px] text-nexus-400">No cards yet. Add one below — a member needs a card for the environment it runs in.</td></tr>}
               {cards.map((c) => (
-                <tr key={cardKey(c)} className="border-t border-nexus-50">
+                <tr key={cardKey(c)} className={`border-t border-nexus-50 ${c.state === 'stale_slots' ? 'bg-rose-50/40' : ''}`}>
                   <td className="py-1 pr-3 font-semibold text-nexus-800">{c.persona_name || c.persona_id.slice(0, 8)}</td>
                   <td className="py-1 pr-3 font-mono text-nexus-600">{c.environment_id}</td>
-                  <td className="py-1 pr-3 text-nexus-500">{(c.slot_names || []).join(', ')}</td>
-                  <td className="py-1 pr-3">
-                    <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${c.verify_status === 'verified' ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-500'}`}>
-                      {c.verify_status || 'unverified'}{c.verified_epoch ? ` · ${c.verified_epoch}` : ''}
-                    </span>
+                  <td className="py-1 pr-3 text-nexus-500">
+                    {(c.slot_names || []).join(', ')}
+                    {/* A card orphaned by a re-record: name what changed, so the fix is
+                        obvious without opening the recipe. */}
+                    {!!c.missing_slots?.length && (
+                      <span className="block text-[10px] text-rose-700">
+                        the login now needs: {c.missing_slots.join(', ')}
+                      </span>)}
+                    {!!c.unexpected_slots?.length && (
+                      <span className="block text-[10px] text-rose-700">
+                        no longer part of this login: {c.unexpected_slots.join(', ')}
+                      </span>)}
+                  </td>
+                  <td className="py-1 pr-3"><CardStateBadge c={c} /></td>
+                  <td className="py-1 pr-3 text-right">
+                    <button onClick={() => verifyCard(c)} disabled={busy === `verify:${cardKey(c)}`}
+                      title="Log in for real with this card and report what happened"
+                      className={`${BTN} ring-nexus-200 text-nexus-700 bg-white hover:bg-nexus-50`}>
+                      {busy === `verify:${cardKey(c)}`
+                        ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        : <ShieldCheck className="h-3.5 w-3.5" />} Verify
+                    </button>
                   </td>
                 </tr>
               ))}
