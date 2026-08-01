@@ -349,6 +349,31 @@ _MULTI_PART_SUFFIXES = frozenset({
     "com.kw", "com.bh", "com.lb",
 })
 
+# WILDCARD-HOST SERVICES: anyone may claim any subdomain, so the registrable
+# domain says nothing about WHOSE application this is.
+#
+# `vkpowerlife.136-85-106-73.sslip.io` reduces to `sslip.io` under the rule above,
+# which would make every unrelated application on that service share a login domain
+# — and the domain is half of the reuse key that decides whether a recorded login is
+# PROPOSED to another app. A false match there offers one customer's login recipe
+# for another customer's application.
+#
+# For these, the full host IS the identity. Over-specific keying costs a missed
+# reuse offer; over-general keying makes a wrong one. Only one of those is safe.
+# KEEP IN SYNC with login_observation._WILDCARD_HOST_SUFFIXES.
+_WILDCARD_HOST_SUFFIXES = frozenset({
+    # IP-embedding wildcard DNS (dev/test estates live here)
+    "sslip.io", "nip.io", "xip.io", "traefik.me", "localtest.me", "lvh.me",
+    # tunnels
+    "ngrok.io", "ngrok-free.app", "loca.lt", "trycloudflare.com",
+    # PaaS app hosting where each customer gets a subdomain
+    "herokuapp.com", "azurewebsites.net", "vercel.app", "netlify.app",
+    "pages.dev", "workers.dev", "onrender.com", "fly.dev", "railway.app",
+    "github.io", "gitlab.io", "cloudfront.net", "elasticbeanstalk.com",
+    "appspot.com", "web.app", "firebaseapp.com", "repl.co", "glitch.me",
+})
+
+
 
 def registrable_domain(host: str) -> str:
     """Best-effort eTLD+1 for a hostname (conservative heuristic; see above).
@@ -370,6 +395,11 @@ def registrable_domain(host: str) -> str:
     labels = host.split(".")
     if len(labels) <= 2:
         return host
+    # A wildcard-host service hands any subdomain to anyone, so reducing further
+    # would group unrelated applications under one domain. Keep the whole host.
+    for _i in range(2, len(labels)):
+        if ".".join(labels[-_i:]) in _WILDCARD_HOST_SUFFIXES:
+            return host
     last_two = ".".join(labels[-2:])
     if last_two in _MULTI_PART_SUFFIXES:
         return ".".join(labels[-3:])
