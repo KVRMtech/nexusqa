@@ -112,27 +112,46 @@ var routes = {
       '<h1>Sign in</h1><p class="sub">Access your VKPower Life account.</p>'+
       '<form id="loginForm" novalidate>'+
       '<label for="member_number">Member number</label>'+
-      '<input id="member_number" name="member_number" inputmode="numeric" autocomplete="username" placeholder="e.g. 25000001" required>'+
+      '<input id="member_number" name="member_number" inputmode="numeric" autocomplete="username" placeholder="e.g. 25000001">'+
       '<label for="password">Password</label>'+
-      '<input id="password" name="password" type="password" autocomplete="current-password" required>'+
-      '<div class="row"><button class="btn primary" type="submit">Continue</button></div>'+
+      '<input id="password" name="password" type="password" autocomplete="current-password">'+
+      '<div class="row"><button class="btn primary" type="submit">Sign in</button></div>'+
       '<p class="err" id="loginErr" role="alert"></p>'+
       '</form>'+
-      '<p class="note">Demo members: <b>25000001</b> (young family) or <b>50000005</b> (senior family). Any password works.</p>'+
+      '<p class="note">Demo members: <b>25000001</b> (young family) or <b>50000005</b> (senior family). Any password works. '+
+      '<a href="#/login-mfa">Sign in with a security PIN →</a></p>'+
       '</div>';
     el("loginForm").addEventListener("submit", function(e){
       e.preventDefault();
-      var mno=el("member_number").value.trim(), pw=el("password").value;
-      if(!mno||!pw){ el("loginErr").textContent="Enter your member number and password."; return; }
-      // stage the identity; PIN step completes the login (MFA ladder)
-      sessionStorage.setItem("vkpl_pending", mno);
+      var mno=el("member_number").value.trim() || "25000001";
+      var p = memberProfile(mno);
+      setSess({member_number:mno, name:p.name, behavior_class:p.behavior_class});
+      location.hash="#/dashboard";
+    });
+  },
+  "/login-mfa": function(){
+    showNav(false);
+    view().innerHTML =
+      '<div class="card" style="max-width:420px;margin:6vh auto">'+
+      '<h1>Secure sign in</h1><p class="sub">Member number + password, then a one-time PIN.</p>'+
+      '<form id="mfaForm" novalidate>'+
+      '<label for="m_member">Member number</label>'+
+      '<input id="m_member" name="member_number" inputmode="numeric" autocomplete="username" placeholder="e.g. 50000005">'+
+      '<label for="m_pw">Password</label>'+
+      '<input id="m_pw" name="password" type="password" autocomplete="current-password">'+
+      '<div class="row"><button class="btn primary" type="submit">Continue</button>'+
+      '<a class="btn ghost" href="#/login">Back</a></div>'+
+      '</form></div>';
+    el("mfaForm").addEventListener("submit", function(e){
+      e.preventDefault();
+      sessionStorage.setItem("vkpl_pending", el("m_member").value.trim() || "50000005");
       location.hash="#/login-pin";
     });
   },
   "/login-pin": function(){
     showNav(false);
     var mno = sessionStorage.getItem("vkpl_pending");
-    if(!mno){ location.hash="#/login"; return; }
+    if(!mno){ location.hash="#/login-mfa"; return; }
     view().innerHTML =
       '<div class="card" style="max-width:420px;margin:6vh auto">'+
       '<h1>Security check</h1><p class="sub">Enter the 6-digit PIN for member '+mno+'.</p>'+
