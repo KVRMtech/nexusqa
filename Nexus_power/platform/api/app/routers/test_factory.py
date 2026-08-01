@@ -111,6 +111,7 @@ from ..services.test_factory import persona_store, login_recorder, login_fingerp
 from ..services.test_factory import login_observation
 from ..services.test_factory import member_data_resolver
 from ..services.test_factory import draft_recording
+from ..services.test_factory import environment_routing
 from ..services.script_factory.compiler import _data_key as compiler_data_key
 from ..services.test_factory import persona_diff
 from ..services.test_factory import persona_governance
@@ -183,6 +184,14 @@ _logger = logging.getLogger(__name__)
 
 _BUILDERS = {"excel": build_excel, "csv": build_csv, "json": build_json}
 _EXTENSIONS = {"excel": "xlsx", "csv": "csv", "json": "json"}
+
+
+def _env_routing_enabled() -> bool:
+    """Let the SELECTED environment decide where a run goes, and judge posture on
+    that destination. Default OFF: unset, the address still comes from the request
+    exactly as before. Read per call so a live box reverts without a rebuild."""
+    return os.getenv("NEXUS_ENV_ROUTING", "").strip().lower() in (
+        "1", "true", "yes", "on")
 
 
 def _member_data_enabled() -> bool:
@@ -3931,6 +3940,39 @@ async def playwright_run(
         governance_env = await persona_store.get_environment(
             session, tenant_id=tenant_id, artifact_id=artifact_id,
             environment_id=environment_id) or {}
+
+    # F1 — THE SELECTED ENVIRONMENT DECIDES THE DESTINATION.
+    # environment_id already chose the credential card, the posture, the reservation
+    # and the member-data answers; the ADDRESS came from the request body, which the
+    # portal defaults to the crawled origin. Posture is therefore enforced from the
+    # row named by the LABEL while the traffic goes wherever the request pointed — so
+    # selecting 'uat' with a production address passes uat's read_write gate and
+    # mutates production, while the report, the parity trend and the certification
+    # ledger all record 'uat'. Resolve the destination FIRST, then gate on it.
+    env_routing = {"source": "request", "reason": ""}
+    if _env_routing_enabled():
+        env_routing = environment_routing.resolve_destination(
+            environment_id=environment_id, environment=governance_env or None,
+            requested_base_url=base_url,
+            requested_env_context=body.env_context)
+        if not env_routing["allowed"]:
+            return {
+                "run_id": run_id, "status": "blocked",
+                "blocked_reason": "environment",
+                "environment_id": environment_id,
+                "reason": env_routing["reason"],
+                "detail": env_routing["detail"],
+                "note": ("The run was BLOCKED before dispatch because its destination "
+                         "could not be established honestly. Running would have "
+                         "exercised one target while reporting another. This is a "
+                         "configuration conflict, NOT an application failure."),
+                "scripts": 0, "excluded_quarantined": excluded_quarantined,
+                "excluded_uncertified_exploratory": excluded_uncertified,
+            }
+        if env_routing["source"] == "environment":
+            base_url = env_routing["base_url"]
+            body.env_context = env_routing["env_context"]
+
     gate = persona_governance.gate_dispatch(
         governance_env, mutating_requested=bool(body.mutating))
     posture = gate["posture"]
