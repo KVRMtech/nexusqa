@@ -58,6 +58,8 @@ x-healthcheck:
   start_period: 30s
 volumes:
   redis-data: null
+  kek-store: null
+  api-data: null
   postgres-data: null
   neo4j-data: null
   ollama-data: null
@@ -457,6 +459,10 @@ services:
     ports:
     - 8091:8091
     environment:
+      RUNNER_TOKEN: ${RUNNER_TOKEN:-}
+      NEXUS_MEMBER_DATA_RESOLVER: ${NEXUS_MEMBER_DATA_RESOLVER:-}
+      NEXUS_ENV_ROUTING: ${NEXUS_ENV_ROUTING:-}
+      NEXUS_CARD_HEALTH_GATE: ${NEXUS_CARD_HEALTH_GATE:-}
       # Session hand-off (E3): accept a crawler-relayed Playwright storageState and
       # store it as this artifact's ENCRYPTED auth profile, so a generated test can
       # run from a cold, authenticated session. OFF by default (endpoint 403s);
@@ -473,13 +479,6 @@ services:
       NEXUS_KEK_GCP_KEY: ${NEXUS_KEK_GCP_KEY:-}
       NEXUS_AUDITOR_GATE: "block"
       NEXUS_AUDITOR_MIN_SCORE: "9"
-      # Shared secret for the Playwright runner's job API (:4555/run-live). The
-      # runner rejects tokenless requests with 401, so platform-api MUST send the
-      # SAME value the runner enforces (both read ${RUNNER_TOKEN} from .env). Keep
-      # it here so any platform-api recreate carries the token — omitting it is
-      # exactly what caused "Could not start run … 401 Unauthorized … /run-live".
-      RUNNER_TOKEN: ${RUNNER_TOKEN:-}
-      NEXUS_MEMBER_DATA_RESOLVER: ${NEXUS_MEMBER_DATA_RESOLVER:-}
       STORYBOARD_PAGE_VISIT_VISION_IDENTITY: "true"
       STORYBOARD_PAGE_VISIT_ADDRESS_BAR_CROP: "true"
       STORYBOARD_PAGE_VISIT_LLM_INFERENCE: "true"
@@ -610,6 +609,9 @@ services:
         condition: service_completed_successfully
     networks:
     - nexus
+    volumes:
+    - kek-store:/home/nexus/.nexus/kek
+    - api-data:/app/service/data
   shield:
     build:
       context: ./engines/shield-engine
