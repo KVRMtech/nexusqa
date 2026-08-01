@@ -11,8 +11,8 @@ No DB, no LLM. Mirrors the pattern of the P5 + P4 smoke suites.
 """
 from __future__ import annotations
 
+import importlib
 import sys
-import types
 from pathlib import Path
 
 _API_ROOT = Path(__file__).resolve().parents[1]
@@ -21,61 +21,23 @@ sys.path.insert(0, str(_API_ROOT))
 sys.path.insert(0, str(_SDK_ROOT))
 
 
-# ─── Stub nexus_sdk pieces that aren't installed in the test env ─────────
-
-
-def _make_placeholder(name: str) -> type:
-    return type(name, (), {"__init__": lambda self, *a, **kw: None})
-
-
-def _stub(name: str, **attrs):
-    mod = types.ModuleType(name)
-    for k, v in attrs.items():
-        setattr(mod, k, v)
-    sys.modules[name] = mod
-
-
-_stub(
-    "nexus_sdk",
-    NexusEngine=_make_placeholder("NexusEngine"),
-    EngineConfig=_make_placeholder("EngineConfig"),
-)
-_stub(
-    "nexus_sdk.db",
-    Base=_make_placeholder("Base"),
-)
-# Provide the symbols our service imports from nexus_sdk.db.models. The
-# service uses them as plain constants + classes for typing, so empty
-# placeholders are fine.
-_stub(
-    "nexus_sdk.db.models",
-    E2ETestRunRow=_make_placeholder("E2ETestRunRow"),
-    E2ETestRunStepRow=_make_placeholder("E2ETestRunStepRow"),
-    E2E_RUN_STATUS_RUNNING="running",
-    E2E_RUN_STATUS_PASSED="passed",
-    E2E_RUN_STATUS_FAILED="failed",
-    E2E_RUN_STATUS_ERROR="error",
-    E2E_RUN_STATUS_CANCELLED="cancelled",
-    E2E_RUN_TERMINAL_STATUSES=frozenset({"passed", "failed", "error", "cancelled"}),
-    E2E_STEP_STATUS_PASSED="passed",
-    E2E_STEP_STATUS_FAILED="failed",
-    E2E_STEP_STATUS_SKIPPED="skipped",
-    E2E_STEP_STATUS_TIMED_OUT="timed_out",
-    E2E_STEP_STATUS_BROKEN="broken",
-)
-
-
-# Load test_runs.py directly by file path to skip ``app/__init__.py``
-# (which eagerly imports the live SQLAlchemy stack).
-import importlib.util as _util  # noqa: E402
-
-_TEST_RUNS_PATH = _API_ROOT / "app" / "services" / "test_runs.py"
-_spec = _util.spec_from_file_location("_test_runs_under_test", _TEST_RUNS_PATH)
-assert _spec is not None and _spec.loader is not None
-_module = _util.module_from_spec(_spec)
-# Dataclass introspection needs the module registered in sys.modules.
-sys.modules["_test_runs_under_test"] = _module
-_spec.loader.exec_module(_module)
+# ─── Import the real module ──────────────────────────────────────────────
+#
+# This file used to (a) shove hand-written ``types.ModuleType`` stubs for
+# ``nexus_sdk`` / ``nexus_sdk.db`` / ``nexus_sdk.db.models`` into
+# ``sys.modules`` and (b) exec ``app/services/test_runs.py`` by file path.
+#
+# Both were harmful.  pytest imports EVERY test module during collection,
+# before running a single test, so the stubs shadowed the real SDK module
+# for the entire process.  Any later test doing ``from nexus_sdk.db.models
+# import <anything not in the stub>`` then died with
+# ``ImportError: cannot import name '<X>' from 'nexus_sdk.db.models'
+# (unknown location)`` -- "(unknown location)" being the tell that the
+# module in sys.modules is a bare ModuleType with no ``__file__``.
+#
+# The SDK is importable in the test env, so import it for real.  If the SDK
+# ever regresses, THIS test must fail -- that is the signal we want.
+_module = importlib.import_module("app.services.test_runs")
 
 detect_drift = _module.detect_drift
 detect_flake_from_pass_fail_sequence = _module.detect_flake_from_pass_fail_sequence

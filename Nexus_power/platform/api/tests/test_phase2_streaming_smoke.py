@@ -22,6 +22,7 @@ Run:
 """
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
 import sys
@@ -36,7 +37,42 @@ _SDK_ROOT = _REPO_ROOT / "sdk" / "nexus-sdk"
 _EYES_ROOT = _REPO_ROOT / "engines" / "eyes-engine"
 sys.path.insert(0, str(_API_ROOT))
 sys.path.insert(0, str(_SDK_ROOT))
-sys.path.insert(0, str(_EYES_ROOT))
+# NOTE: _EYES_ROOT is deliberately NOT put on sys.path.  See _load_eyes_module.
+
+
+# ── Eyes-engine module loading (collision-proof) ──────────────────────────
+#
+# This monorepo has ~20 sibling top-level ``app`` packages (platform/api/app,
+# engines/eyes-engine/app, engines/heart-engine/app, ...).  ``sys.modules``
+# has exactly ONE slot for the name ``app``, and it is claimed by whichever
+# service imports first — sys.path order is irrelevant once the name is bound.
+#
+# In a full-suite run dozens of sibling tests import platform/api's ``app``
+# during pytest's collection phase, so by the time these tests execute
+# ``sys.modules['app']`` is platform/api/app and
+# ``from app.chunk_checkpoint import ...`` dies with
+# ``ModuleNotFoundError: No module named 'app.chunk_checkpoint'``.  Running
+# this file alone it "passed" only because it won the race — and it then
+# broke platform/api tests in the same process.
+#
+# Loading the eyes-engine modules by explicit file path under unique names
+# never touches ``sys.modules['app']``, so the collision cannot happen in
+# either direction.  This is the pattern the rest of this suite already uses
+# (``nexus_generator_under_test``, ``nexus_recovery_orch_ut``, ...).
+def _load_eyes_module(unique_name: str, *rel_parts: str):
+    """Import an eyes-engine module by path, bound to ``unique_name``."""
+    path = _EYES_ROOT.joinpath(*rel_parts)
+    is_pkg = path.name == "__init__.py"
+    spec = importlib.util.spec_from_file_location(
+        unique_name,
+        path,
+        submodule_search_locations=[str(path.parent)] if is_pkg else None,
+    )
+    assert spec is not None and spec.loader is not None, f"cannot load {path}"
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[unique_name] = mod  # dataclass/typing introspection needs this
+    spec.loader.exec_module(mod)
+    return mod
 
 
 PASS = 0
@@ -56,13 +92,12 @@ def check(label: str, condition: bool, detail: str = "") -> None:
 # ── Chunk checkpoint round-trip ───────────────────────────────────────────
 def test_chunk_checkpoint() -> None:
     print("\n=== chunk_checkpoint round-trip ===")
-    from app.chunk_checkpoint import (
-        save_chunk_result,
-        load_chunk_result,
-        completed_chunks,
-        chunk_result_path,
-        clear_chunk_checkpoints,
-    )
+    _cc = _load_eyes_module("eyes_chunk_checkpoint_ut", "app", "chunk_checkpoint.py")
+    save_chunk_result = _cc.save_chunk_result
+    load_chunk_result = _cc.load_chunk_result
+    completed_chunks = _cc.completed_chunks
+    chunk_result_path = _cc.chunk_result_path
+    clear_chunk_checkpoints = _cc.clear_chunk_checkpoints
     from nexus_sdk.media.models import VisualAnalysisResult, FrameAnalysis
 
     def _result(job_id: str, n_frames: int) -> VisualAnalysisResult:
@@ -136,7 +171,9 @@ def test_ollama_load_balance() -> None:
     # Importing VisualAnalyzer pulls in heavy CV / Ollama modules that
     # we don't need.  Construct it via __new__ to skip __init__ and
     # set just the attributes the helper consults.
-    from app.vision import VisualAnalyzer
+    VisualAnalyzer = _load_eyes_module(
+        "eyes_vision_ut", "app", "vision", "__init__.py"
+    ).VisualAnalyzer
 
     def _make(clients: list[str], load_balance: bool) -> VisualAnalyzer:
         va = VisualAnalyzer.__new__(VisualAnalyzer)
@@ -194,19 +231,10 @@ def test_phase2_defaults() -> None:
     ):
         os.environ.pop(k, None)
 
-    # Re-import the eyes main module so the config class loads with
-    # the test-time environment.
-    sys.modules.pop("main", None)
-    sys.path.insert(0, str(_EYES_ROOT))
-    # Importing the eyes engine main pulls in heavy deps (cv2, httpx,
-    # etc.); we only need the config class.  Pull it from the source
-    # via importlib to avoid the side-effectful main module init.
-    import importlib.util
-    spec = importlib.util.spec_from_file_location(
-        "eyes_main_config", _EYES_ROOT / "main.py",
-    )
-    # We can't easily exec the full main module (it imports nexus_sdk
-    # heavy bits), so we just regex the source for the defaults.
+    # We can't easily exec the full eyes ``main`` module (it imports heavy
+    # deps and there are ~20 sibling top-level ``main`` modules in this
+    # monorepo, so the name is ambiguous) -- we just read the source and
+    # assert on the declared defaults.
     src = (_EYES_ROOT / "main.py").read_text(encoding="utf-8")
     check("chunk_concurrency default raised to 2",
           "chunk_concurrency: int = Field(\n        default=2," in src,

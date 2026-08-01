@@ -42,26 +42,50 @@ def _load_module_from_path(name: str, path: Path):
     return mod
 
 
+_STUBBED_MODULES = (
+    "nexus_sdk", "nexus_sdk.db", "nexus_sdk.db.models", "app", "app.config",
+)
+
+
 def _load_safe_frame_asset_path():
-    """Import only ``safe_frame_asset_path`` without dragging in the DB layer."""
-    # Stub the upstream imports that database.py touches at import time.
-    sys.modules.setdefault("nexus_sdk", types.ModuleType("nexus_sdk"))
-    sys.modules.setdefault("nexus_sdk.db", types.ModuleType("nexus_sdk.db"))
-    models_stub = types.ModuleType("nexus_sdk.db.models")
-    models_stub.Base = type("Base", (), {})
-    sys.modules["nexus_sdk.db.models"] = models_stub
+    """Import only ``safe_frame_asset_path`` without dragging in the DB layer.
 
-    # Stub ``app.config`` so PlatformAPIConfig import succeeds.
-    if "app" not in sys.modules:
-        app_pkg = types.ModuleType("app")
-        app_pkg.__path__ = [str(_API_ROOT / "app")]
-        sys.modules["app"] = app_pkg
-    config_stub = types.ModuleType("app.config")
-    config_stub.PlatformAPIConfig = type("PlatformAPIConfig", (), {})
-    sys.modules["app.config"] = config_stub
+    The stubs below are installed ONLY for the duration of the module load and
+    are then restored: leaving a bare ``types.ModuleType`` in
+    ``sys.modules['nexus_sdk.db.models']`` permanently shadows the real SDK
+    module for every later test in the same process (they then get
+    ``ImportError: cannot import name '<Row>' from 'nexus_sdk.db.models'
+    (unknown location)``).
+    """
+    _saved = {k: sys.modules.get(k, None) for k in _STUBBED_MODULES}
+    try:
+        # Stub the upstream imports that database.py touches at import time.
+        sys.modules.setdefault("nexus_sdk", types.ModuleType("nexus_sdk"))
+        sys.modules.setdefault("nexus_sdk.db", types.ModuleType("nexus_sdk.db"))
+        models_stub = types.ModuleType("nexus_sdk.db.models")
+        models_stub.Base = type("Base", (), {})
+        sys.modules["nexus_sdk.db.models"] = models_stub
 
-    mod = _load_module_from_path("app.database_under_test", _API_ROOT / "app" / "database.py")
-    return mod.safe_frame_asset_path
+        # Stub ``app.config`` so PlatformAPIConfig import succeeds.
+        if "app" not in sys.modules:
+            app_pkg = types.ModuleType("app")
+            app_pkg.__path__ = [str(_API_ROOT / "app")]
+            sys.modules["app"] = app_pkg
+        config_stub = types.ModuleType("app.config")
+        config_stub.PlatformAPIConfig = type("PlatformAPIConfig", (), {})
+        sys.modules["app.config"] = config_stub
+
+        mod = _load_module_from_path("app.database_under_test", _API_ROOT / "app" / "database.py")
+        return mod.safe_frame_asset_path
+    finally:
+        for _k, _v in _saved.items():
+            if _v is None:
+                sys.modules.pop(_k, None)
+            else:
+                sys.modules[_k] = _v
+        # ``safe_frame_asset_path`` is a pure path function; the loaded module
+        # itself needs no lingering registration.
+        sys.modules.pop("app.database_under_test", None)
 
 
 # ── Tests ─────────────────────────────────────────────────────────────────
