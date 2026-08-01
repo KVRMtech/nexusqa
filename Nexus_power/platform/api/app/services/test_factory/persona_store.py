@@ -101,6 +101,10 @@ class TpPersonaCredentialRow(Base):
     last_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     verify_status: Mapped[str] = mapped_column(String(16), default="unverified")
     verified_epoch: Mapped[str] = mapped_column(String(64), default="")
+    # WHICH login this card was provisioned against. A re-record that renames a slot
+    # otherwise leaves every card looking healthy while none can authenticate.
+    login_type_key: Mapped[str] = mapped_column(String(64), default="")
+    recipe_version: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utc_now)
 
 
@@ -228,6 +232,7 @@ async def get_recipe(session: AsyncSession, *, tenant_id: str, artifact_id: str,
         return None
     return {"recipe_id": row.recipe_id, "version": row.version, "steps": row.steps,
             "slots": row.slots, "source": row.source, "status": row.status,
+            "login_type_key": row.login_type_key, "login_domain": row.login_domain,
             "verified_at": _iso(row.verified_at), "verified_env": row.verified_env}
 
 
@@ -491,9 +496,14 @@ def _card_aad(persona_id: str, environment_id: str) -> bytes:
 
 async def save_persona_credential(session: AsyncSession, *, envelope, tenant_id: str,
                                   persona_id: str, environment_id: str,
-                                  slot_values: dict) -> dict:
+                                  slot_values: dict, login_type_key: str = "",
+                                  recipe_version: int = 0) -> dict:
     """Encrypt + persist a card. Raises if encryption unavailable (never
-    plaintext). Caller commits. Returns non-secret slot names."""
+    plaintext). Caller commits. Returns non-secret slot names.
+
+    ``login_type_key``/``recipe_version`` record WHICH login the card was checked
+    against, so a later re-record that renames a slot is a detectable break rather
+    than a card that silently stops authenticating."""
     clean = {str(k): ("" if v is None else str(v)) for k, v in (slot_values or {}).items() if str(k)}
     if not clean:
         raise ValueError("a credential card needs at least one slot value")
@@ -506,17 +516,25 @@ async def save_persona_credential(session: AsyncSession, *, envelope, tenant_id:
                                   aad=_card_aad(persona_id, environment_id))
     raw = blob.to_bytes()
     slot_names = sorted(clean.keys())
+    key = str(login_type_key or "")
+    version = int(recipe_version or 0)
     stmt = (pg_insert(TpPersonaCredentialRow).values(
         persona_id=persona_id, environment_id=environment_id, tenant_id=tenant_id,
-        blob=raw, slot_names=slot_names, verify_status="unverified", created_at=_utc_now())
+        blob=raw, slot_names=slot_names, verify_status="unverified",
+        login_type_key=key, recipe_version=version, created_at=_utc_now())
         .on_conflict_do_update(
             index_elements=[TpPersonaCredentialRow.persona_id,
                             TpPersonaCredentialRow.environment_id,
                             TpPersonaCredentialRow.tenant_id],
+            # verify_status resets on every rewrite: a card whose secret just changed
+            # has not been proven, and carrying the old 'verified' forward would make
+            # the badge a claim about a value that is no longer stored (F3).
             set_={"blob": raw, "slot_names": slot_names, "verify_status": "unverified",
+                  "login_type_key": key, "recipe_version": version,
                   "created_at": _utc_now()}))
     await session.execute(stmt)
-    return {"persona_id": persona_id, "environment_id": environment_id, "slot_names": slot_names}
+    return {"persona_id": persona_id, "environment_id": environment_id,
+            "slot_names": slot_names, "login_type_key": key, "recipe_version": version}
 
 
 async def get_persona_credential(session: AsyncSession, *, envelope, tenant_id: str,
@@ -575,6 +593,8 @@ async def credential_status(session: AsyncSession, *, tenant_id: str,
     return {"present": True, "slot_names": row.slot_names,
             "verify_status": row.verify_status,
             "verified_epoch": getattr(row, "verified_epoch", "") or "",
+            "login_type_key": getattr(row, "login_type_key", "") or "",
+            "recipe_version": int(getattr(row, "recipe_version", 0) or 0),
             "last_verified_at": _iso(row.last_verified_at)}
 
 
@@ -615,6 +635,8 @@ async def all_credential_status(session: AsyncSession, *, tenant_id: str,
         out.append({"persona_id": r.persona_id, "environment_id": r.environment_id,
                     "slot_names": r.slot_names, "verify_status": r.verify_status,
                     "verified_epoch": getattr(r, "verified_epoch", "") or "",
+                    "login_type_key": getattr(r, "login_type_key", "") or "",
+                    "recipe_version": int(getattr(r, "recipe_version", 0) or 0),
                     "last_verified_at": _iso(r.last_verified_at), "present": True})
     return out
 

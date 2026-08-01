@@ -792,6 +792,15 @@ class FactoryApiClient {
     return data;
   }
 
+  /** The fields a credential card must supply, DERIVED from the recorded login —
+   *  `{has_recipe, fields:[{name,label,type}], reason}`. The card editor renders
+   *  exactly this rather than asking anyone to retype slot names; the same
+   *  derivation backs the server-side refusal, so form and contract cannot drift. */
+  async loginContract(artifactId: string): Promise<any> {
+    const { data } = await this.client.get(`/v1/test-factory/${artifactId}/login-contract`);
+    return data;
+  }
+
   /** RECORD AT ONBOARDING. Deliberately not artifact-scoped: a recipe lives
    *  against an artifact and an artifact is only minted by the first crawl, so at
    *  the Access step there is nothing to attach to. One pass yields the login

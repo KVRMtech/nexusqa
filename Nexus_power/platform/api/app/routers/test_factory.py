@@ -112,6 +112,7 @@ from ..services.test_factory import login_observation
 from ..services.test_factory import member_data_resolver
 from ..services.test_factory import draft_recording
 from ..services.test_factory import environment_routing
+from ..services.test_factory import card_contract
 from ..services.script_factory.compiler import _data_key as compiler_data_key
 from ..services.test_factory import persona_diff
 from ..services.test_factory import persona_governance
@@ -8050,7 +8051,14 @@ async def set_persona_credential_endpoint(
     user: dict = Depends(get_current_user),
 ):
     """Store a persona's credential card for one environment (write-only —
-    slot NAMES are returned, values never). Secrets are envelope-encrypted."""
+    slot NAMES are returned, values never). Secrets are envelope-encrypted.
+
+    The card must be able to FILL the artifact's active login recipe. A card whose
+    slots do not match is refused here rather than in the form, because a card is
+    also reachable from a script, a bulk import or curl — and a mismatch is silent
+    downstream: the compiled login finds the slot missing, skips the whole login,
+    the suite runs unauthenticated, and every failure is attributed to the
+    application under test."""
     if not _persona_write_ok(user):
         raise HTTPException(403, "Storing credentials requires an editor, manager or admin role.")
     tenant_id = user["tenant_id"]
@@ -8059,10 +8067,18 @@ async def set_persona_credential_endpoint(
         raise HTTPException(503, "encryption unavailable — cannot store credentials securely")
     async with tenant_scoped_session(tenant_id) as session:
         await _require_artifact(session, artifact_id, tenant_id)
+        recipe = await persona_store.get_recipe(
+            session, tenant_id=tenant_id, artifact_id=artifact_id)
+        try:
+            card_contract.check_card(recipe=recipe, slot_values=body.slot_values)
+        except card_contract.CardContractError as exc:
+            raise HTTPException(422, detail={"error": str(exc), **exc.detail})
         try:
             out = await persona_store.save_persona_credential(
                 session, envelope=envelope, tenant_id=tenant_id, persona_id=persona_id,
-                environment_id=environment_id, slot_values=body.slot_values)
+                environment_id=environment_id, slot_values=body.slot_values,
+                login_type_key=str((recipe or {}).get("login_type_key") or ""),
+                recipe_version=int((recipe or {}).get("version") or 0))
         except (ValueError, RuntimeError) as exc:
             raise HTTPException(422, str(exc))
         await session.commit()
@@ -8184,6 +8200,45 @@ async def list_recipes_endpoint(
         recipes = await persona_store.list_recipes(
             session, tenant_id=tenant_id, artifact_id=artifact_id)
     return {"artifact_id": artifact_id, "recipes": recipes, "count": len(recipes)}
+
+
+@router.get("/api/v1/test-factory/{artifact_id}/login-contract")
+async def login_contract_endpoint(
+    artifact_id: str = PathParam(..., min_length=1, max_length=64),
+    user: dict = Depends(get_current_user),
+):
+    """The fields a credential card for THIS app must supply — derived from the
+    recorded login, never from a vocabulary of ours.
+
+    The card editor renders exactly this, so what an operator is asked to fill is
+    what the application's own login form asked for, under the app's own labels.
+    The same derivation backs the server-side refusal in PUT …/credentials/{env},
+    so the form and the contract cannot drift apart.
+
+    ``fields`` is empty and ``reason`` is set when no card can be provisioned yet."""
+    tenant_id = user["tenant_id"]
+    async with tenant_scoped_session(tenant_id) as session:
+        await _require_artifact(session, artifact_id, tenant_id)
+        recipe = await persona_store.get_recipe(
+            session, tenant_id=tenant_id, artifact_id=artifact_id)
+    if not recipe:
+        return {"artifact_id": artifact_id, "has_recipe": False, "fields": [],
+                "reason": "no_recipe",
+                "note": ("No login has been recorded for this application yet. Record "
+                         "the login first — the card's fields come from that recording, "
+                         "so there is nothing to fill in until it exists.")}
+    fields = card_contract.slot_fields(recipe)
+    return {
+        "artifact_id": artifact_id, "has_recipe": True,
+        "recipe_id": recipe.get("recipe_id", ""), "version": recipe.get("version", 0),
+        "login_type_key": recipe.get("login_type_key", ""),
+        "login_domain": recipe.get("login_domain", ""),
+        "source": recipe.get("source", ""), "fields": fields,
+        "reason": "" if fields else "recipe_has_no_slots",
+        "note": ("" if fields else
+                 "The recorded login fills no fields, so it cannot be driven by a "
+                 "credential card. Re-record the login."),
+    }
 
 
 @router.post("/api/v1/test-factory/{artifact_id}/recipes")

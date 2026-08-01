@@ -28,6 +28,13 @@ type Card = {
   slot_names?: string[]; verify_status?: string; verified_epoch?: string;
   last_verified_at?: string | null;
 };
+/** One field of the recorded login — the app's OWN label, and the slot the card
+ *  is keyed by. Never authored here; always derived from the recording. */
+type SlotField = { name: string; label: string; type?: string };
+type LoginContract = {
+  has_recipe: boolean; fields: SlotField[]; reason?: string; note?: string;
+  version?: number; login_domain?: string;
+};
 
 function Section({ icon, title, sub, children, right }: {
   icon: React.ReactNode; title: string; sub?: string;
@@ -78,6 +85,7 @@ export default function PersonaMatrixPanel({ artifactId }: { artifactId: string 
   const [envs, setEnvs] = useState<Environment[]>([]);
   const [cards, setCards] = useState<Card[]>([]);
   const [recipes, setRecipes] = useState<any[]>([]);
+  const [contract, setContract] = useState<LoginContract | null>(null);
   const [ops, setOps] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState('');
@@ -87,13 +95,14 @@ export default function PersonaMatrixPanel({ artifactId }: { artifactId: string 
   const load = useCallback(async () => {
     setLoading(true); setErr('');
     try {
-      const [p, e, m, r, o] = await Promise.all([
+      const [p, e, m, r, o, lc] = await Promise.all([
         api.listPersonas(artifactId), api.listEnvironments(artifactId),
         api.credentialsManifest(artifactId), api.listRecipes(artifactId),
-        api.personaOpsSummary(artifactId),
+        api.personaOpsSummary(artifactId), api.loginContract(artifactId),
       ]);
       setPersonas(p?.personas || []); setEnvs(e?.environments || []);
       setCards(m?.cards || []); setRecipes(r?.recipes || []); setOps(o || null);
+      setContract(lc || null);
     } catch (ex: any) {
       setErr(ex?.response?.data?.detail || ex?.message || 'failed to load the member matrix');
     } finally { setLoading(false); }
@@ -102,7 +111,19 @@ export default function PersonaMatrixPanel({ artifactId }: { artifactId: string 
   useEffect(() => { load(); }, [load]);
 
   const say = (m: string) => { setFlash(m); window.setTimeout(() => setFlash(''), 3500); };
-  const fail = (ex: any) => setErr(ex?.response?.data?.detail?.error || ex?.response?.data?.detail || ex?.message || 'action failed');
+  const fail = (ex: any) => {
+    const d = ex?.response?.data?.detail;
+    // A card refused for not matching the login must say WHICH names are wrong —
+    // a bare "does not match" just moves the guessing somewhere else.
+    if (d && typeof d === 'object' && d.reason === 'slots_do_not_match_recipe') {
+      const bits = [`the login fills ${(d.required || []).join(', ')}`];
+      if (d.missing?.length) bits.push(`missing ${d.missing.join(', ')}`);
+      if (d.unexpected?.length) bits.push(`not part of this login: ${d.unexpected.join(', ')}`);
+      setErr(`${d.error || 'this card does not match the recorded login'} — ${bits.join(' · ')}`);
+      return;
+    }
+    setErr(d?.error || (typeof d === 'string' ? d : '') || ex?.message || 'action failed');
+  };
 
   // ── forms ──────────────────────────────────────────────────────────────────
   const [np, setNp] = useState({ name: '', behavior_class: '', traits: '' });
@@ -132,15 +153,22 @@ export default function PersonaMatrixPanel({ artifactId }: { artifactId: string 
     } catch (ex) { fail(ex); } finally { setBusy(''); }
   };
 
-  const [nc, setNc] = useState({ persona_id: '', environment_id: '', slots: 'member_number, password' });
+  const [nc, setNc] = useState({ persona_id: '', environment_id: '' });
   const [slotVals, setSlotVals] = useState<Record<string, string>>({});
-  const slotNames = useMemo(
-    () => nc.slots.split(',').map((s) => s.trim()).filter(Boolean), [nc.slots]);
+  // The card's fields come from the RECORDED LOGIN, not from anything typed here.
+  // A hand-typed slot name that does not match saves cleanly and then skips the
+  // whole login at run time, so the suite runs logged out and the application gets
+  // blamed. There is deliberately no way to author a slot name in this panel.
+  const loginFields: SlotField[] = contract?.fields || [];
   const saveCard = async () => {
-    if (!nc.persona_id || !nc.environment_id.trim() || !slotNames.length) return;
+    if (!nc.persona_id || !nc.environment_id.trim() || !loginFields.length) return;
     const values: Record<string, string> = {};
-    for (const s of slotNames) values[s] = slotVals[s] || '';
-    if (Object.values(values).every((v) => !v)) { setErr('enter at least one slot value'); return; }
+    for (const f of loginFields) values[f.name] = slotVals[f.name] || '';
+    const blank = loginFields.filter((f) => !values[f.name].trim());
+    if (blank.length) {
+      setErr(`the login needs every field — still empty: ${blank.map((f) => f.label).join(', ')}`);
+      return;
+    }
     setBusy('card'); setErr('');
     try {
       await api.putCredentialCard(artifactId, nc.persona_id, nc.environment_id.trim(), values);
@@ -333,26 +361,46 @@ export default function PersonaMatrixPanel({ artifactId }: { artifactId: string 
           </table>
         </div>
         <div className="border-t border-nexus-100 pt-3 space-y-2">
-          <div className="flex flex-wrap items-center gap-2">
-            <select className={INPUT} value={nc.persona_id} onChange={(e) => setNc({ ...nc, persona_id: e.target.value })}>
-              <option value="">member…</option>
-              {namedPersonas.map((p) => <option key={p.persona_id} value={p.persona_id}>{p.name}</option>)}
-            </select>
-            <input className={`${INPUT} w-28`} placeholder="env id (uat)" value={nc.environment_id} onChange={(e) => setNc({ ...nc, environment_id: e.target.value })}
-              list="env-ids" />
-            <datalist id="env-ids">{envs.map((e) => <option key={e.environment_id} value={e.environment_id} />)}</datalist>
-            <input className={`${INPUT} w-64`} placeholder="slot names (member_number, password, pin)" value={nc.slots} onChange={(e) => setNc({ ...nc, slots: e.target.value })} />
-          </div>
-          {nc.persona_id && slotNames.length > 0 && (
-            <div className="flex flex-wrap items-center gap-2">
-              {slotNames.map((s) => (
-                <input key={s} className={`${INPUT} w-40`} type="password" autoComplete="new-password"
-                  placeholder={s} value={slotVals[s] || ''} onChange={(e) => setSlotVals({ ...slotVals, [s]: e.target.value })} />
-              ))}
-              <button onClick={saveCard} disabled={busy === 'card'} className={`${BTN} ring-nexus-200 text-nexus-700 bg-nexus-50 hover:bg-nexus-100`}>
-                {busy === 'card' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Lock className="h-3.5 w-3.5" />} Store card
-              </button>
+          {/* No recorded login means there is nothing a card could fill. Provisioning
+              one now would be guessing at field names, and a guessed name skips the
+              login instead of failing — so the form is not offered at all. */}
+          {loginFields.length === 0 ? (
+            <div className="rounded-lg ring-1 ring-amber-200 bg-amber-50 p-2.5 text-[11px] text-amber-800">
+              <span className="font-bold">Record the login first.</span>{' '}
+              {contract?.note || 'No login has been recorded for this application yet.'}
+              {' '}A card supplies the values for the fields that login fills, so there
+              is nothing to fill in until the recording exists. Use <span className="font-semibold">Record login</span> below.
             </div>
+          ) : (
+            <>
+              <div className="flex flex-wrap items-center gap-2">
+                <select className={INPUT} value={nc.persona_id} onChange={(e) => setNc({ ...nc, persona_id: e.target.value })}>
+                  <option value="">member…</option>
+                  {namedPersonas.map((p) => <option key={p.persona_id} value={p.persona_id}>{p.name}</option>)}
+                </select>
+                <input className={`${INPUT} w-28`} placeholder="env id (uat)" value={nc.environment_id} onChange={(e) => setNc({ ...nc, environment_id: e.target.value })}
+                  list="env-ids" />
+                <datalist id="env-ids">{envs.map((e) => <option key={e.environment_id} value={e.environment_id} />)}</datalist>
+                <span className="text-[10px] text-nexus-400">
+                  fields from the recorded login{contract?.version ? ` (v${contract.version})` : ''}
+                </span>
+              </div>
+              {nc.persona_id && (
+                <div className="flex flex-wrap items-end gap-2">
+                  {loginFields.map((f) => (
+                    <label key={f.name} className="flex flex-col gap-0.5">
+                      <span className="text-[10px] font-semibold text-nexus-600">{f.label}</span>
+                      <input className={`${INPUT} w-44`} type="password" autoComplete="new-password"
+                        placeholder={f.label} value={slotVals[f.name] || ''}
+                        onChange={(e) => setSlotVals({ ...slotVals, [f.name]: e.target.value })} />
+                    </label>
+                  ))}
+                  <button onClick={saveCard} disabled={busy === 'card'} className={`${BTN} ring-nexus-200 text-nexus-700 bg-nexus-50 hover:bg-nexus-100`}>
+                    {busy === 'card' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Lock className="h-3.5 w-3.5" />} Store card
+                  </button>
+                </div>
+              )}
+            </>
           )}
           <p className="text-[10px] text-nexus-400">Values are envelope-encrypted on save and never returned — this panel can set a card, never read one.</p>
         </div>
