@@ -421,8 +421,17 @@ INVENTORY_JS = r"""
       // Drag-and-drop signal (HTML5 draggable / ARIA grab-drop) — no interaction
       // primitive yet, so the matcher names it UNHANDLED for the coverage ledger
       // rather than silently skipping it.
+      //
+      // The absence test MUST compare against "" and not null/undefined: attr()
+      // returns "" for a missing attribute (`getAttribute(n) || ""`), so
+      // `!== null && !== undefined` was true for EVERY element ever inspected.
+      // That marked every control drag-and-drop, and the matcher's drag rule runs
+      // BEFORE the affordance rule — so every link, button and field resolved to
+      // UNHANDLED and the crawler refused to click anything. A crawl would land on
+      // its entry page, read the form, and report one visit with every nav link
+      // ledgered as "drag-drop (no interaction primitive yet)".
       draggable: (attr(el, "draggable") === "true") ||
-                 (attr(el, "aria-grabbed") !== null && attr(el, "aria-grabbed") !== undefined),
+                 (attr(el, "aria-grabbed") !== ""),
       roledescription: lc(attr(el, "aria-roledescription")),
       landmark: nearestLandmark(el, doc)
     };

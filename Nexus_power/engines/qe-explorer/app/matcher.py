@@ -45,9 +45,12 @@ def is_drag_drop(control: Mapping) -> bool:
     silently skip it (the requirements-audit honesty leak)."""
     if bool(control.get("draggable")):
         return True
-    role = _s(control, "role")
     rd = _s(control, "roledescription")
-    return role in ("application",) and "drag" in rd or "drag" in rd or "sortable" in rd
+    # Written out rather than `role in ("application",) and "drag" in rd or ...`:
+    # `and` binds tighter than `or`, so the role clause was dead — the expression
+    # already reduced to exactly this. Stating it plainly so the next reader is not
+    # misled into thinking a role check is happening.
+    return "drag" in rd or "sortable" in rd
 
 
 def primitive_for(control: Mapping) -> str:
