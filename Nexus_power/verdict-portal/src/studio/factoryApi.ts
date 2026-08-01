@@ -792,6 +792,14 @@ class FactoryApiClient {
     return data;
   }
 
+  /** The member × environment grid: one verdict per cell, from the same derivation
+   *  the dispatch gate applies. Slot NAMES only — no credential value is reachable. */
+  async memberMatrix(artifactId: string, mutating = true): Promise<any> {
+    const { data } = await this.client.get(
+      `/v1/test-factory/${artifactId}/matrix`, { params: { mutating } });
+    return data;
+  }
+
   /** PROVE a card: replay the recorded login with this member's credentials
    *  against this environment, for real, and report what happened. Only reaching
    *  the recorded logged-in page counts as proven — steps that merely replayed do

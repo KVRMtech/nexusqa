@@ -103,6 +103,84 @@ function CardStateBadge({ c }: { c: Card }) {
   );
 }
 
+/** The member × environment grid. Members down, environments across, one verdict
+ *  per cell — all of it previously discovered by dispatching a run and reading the
+ *  refusal, which trains people to treat a BLOCKED run as noise.
+ *
+ *  The cell IS the affordance: click one that needs a card to start provisioning it. */
+const CELL: Record<string, { label: string; tone: string; hint: string }> = {
+  ready: { label: 'ready', tone: 'bg-emerald-50 text-emerald-800 ring-emerald-200', hint: 'proven — runs from here' },
+  unproven: { label: 'unproven', tone: 'bg-amber-50 text-amber-800 ring-amber-200', hint: 'will run; nothing has proven it yet' },
+  stale_slots: { label: 'blocked', tone: 'bg-rose-100 text-rose-800 ring-rose-300', hint: 'the card cannot perform the recorded login' },
+  no_card: { label: 'no card', tone: 'bg-slate-50 text-slate-500 ring-slate-200', hint: 'click to provision this member here' },
+  blocked_posture: { label: 'locked', tone: 'bg-violet-50 text-violet-800 ring-violet-200', hint: 'the environment refuses this run' },
+  no_recipe: { label: '—', tone: 'bg-slate-50 text-slate-400 ring-slate-200', hint: 'record the login first' },
+};
+
+function MatrixGrid({ m, onPick }: { m: any; onPick: (pid: string, eid: string) => void }) {
+  const members: any[] = m?.members || [];
+  const envs: any[] = m?.environments || [];
+  if (!members.length || !envs.length) {
+    return (
+      <p className="text-[11px] text-nexus-400">
+        {members.length ? 'No environments registered yet.' : 'No members defined yet.'}
+        {' '}The grid appears once there is at least one of each.
+      </p>
+    );
+  }
+  return (
+    <div className="overflow-x-auto">
+      <table className="text-[12px] border-separate" style={{ borderSpacing: '2px' }}>
+        <thead>
+          <tr>
+            <th className="text-left text-[10px] uppercase text-nexus-400 font-semibold pr-3">Member</th>
+            {envs.map((e) => (
+              <th key={e.environment_id} className="px-1 pb-1 text-left">
+                <span className="block text-[11px] font-bold text-nexus-800">{e.label}</span>
+                <span className="block text-[9px] text-nexus-400 font-mono">
+                  {e.environment_id}{e.is_production ? ' · prod' : ''}
+                </span>
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {members.map((p) => (
+            <tr key={p.persona_id}>
+              <td className="pr-3 py-0.5 whitespace-nowrap">
+                <span className="font-semibold text-nexus-800">{p.name}</span>
+                {/* A stable short id beside the name: two members can read alike in
+                    a picker, and the id is what a pipeline actually pins. */}
+                <span className="ml-1.5 font-mono text-[9px] text-nexus-400">
+                  {String(p.persona_id).slice(0, 8)}
+                </span>
+              </td>
+              {envs.map((e) => {
+                const c = m.cells?.[`${p.persona_id}::${e.environment_id}`];
+                const look = CELL[c?.state] || CELL.no_recipe;
+                return (
+                  <td key={e.environment_id} className="px-0.5 py-0.5">
+                    <button
+                      onClick={() => onPick(p.persona_id, e.environment_id)}
+                      title={c?.note || look.hint}
+                      className={`w-full text-left rounded px-1.5 py-1 ring-1 text-[10px] font-bold ${look.tone} hover:brightness-95`}>
+                      {look.label}
+                      {!!c?.missing_slots?.length && (
+                        <span className="block font-normal text-[9px] opacity-80">
+                          needs {c.missing_slots.join(', ')}
+                        </span>)}
+                    </button>
+                  </td>
+                );
+              })}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 function HealthDot({ s }: { s?: string }) {
   const c = s === 'healthy' ? 'bg-emerald-500'
     : (s === 'unreachable' || s === 'login_failed' || s === 'recipe_drift') ? 'bg-rose-500'
@@ -128,6 +206,7 @@ export default function PersonaMatrixPanel({ artifactId }: { artifactId: string 
   const [cards, setCards] = useState<Card[]>([]);
   const [recipes, setRecipes] = useState<any[]>([]);
   const [contract, setContract] = useState<LoginContract | null>(null);
+  const [grid, setGrid] = useState<any>(null);
   const [ops, setOps] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState('');
@@ -137,14 +216,15 @@ export default function PersonaMatrixPanel({ artifactId }: { artifactId: string 
   const load = useCallback(async () => {
     setLoading(true); setErr('');
     try {
-      const [p, e, m, r, o, lc] = await Promise.all([
+      const [p, e, m, r, o, lc, mx] = await Promise.all([
         api.listPersonas(artifactId), api.listEnvironments(artifactId),
         api.credentialsManifest(artifactId), api.listRecipes(artifactId),
         api.personaOpsSummary(artifactId), api.loginContract(artifactId),
+        api.memberMatrix(artifactId),
       ]);
       setPersonas(p?.personas || []); setEnvs(e?.environments || []);
       setCards(m?.cards || []); setRecipes(r?.recipes || []); setOps(o || null);
-      setContract(lc || null);
+      setContract(lc || null); setGrid(mx || null);
     } catch (ex: any) {
       setErr(ex?.response?.data?.detail || ex?.message || 'failed to load the member matrix');
     } finally { setLoading(false); }
@@ -232,6 +312,15 @@ export default function PersonaMatrixPanel({ artifactId }: { artifactId: string 
       else setErr(r?.note || r?.detail || 'the login did not confirm');
       await load();
     } catch (ex) { fail(ex); } finally { setBusy(''); }
+  };
+
+  /** The cell IS the affordance — clicking one loads that member/environment into
+   *  the card form below, so the next correct action is one click from the state
+   *  that showed the problem. */
+  const pickCell = (persona_id: string, environment_id: string) => {
+    setNc({ persona_id, environment_id });
+    setSlotVals({});
+    setErr('');
   };
 
   const materializeRecipe = async () => {
@@ -326,6 +415,21 @@ export default function PersonaMatrixPanel({ artifactId }: { artifactId: string 
 
       {err && <div className="flex items-center gap-2 rounded-md bg-rose-50 ring-1 ring-rose-200 px-3 py-2 text-[12px] text-rose-700">
         <AlertTriangle className="h-4 w-4 shrink-0" /> {String(err)}</div>}
+
+      {/* ── The grid: what can actually run, before anyone dispatches ────── */}
+      <Section icon={<Boxes className="h-4 w-4" />} title="What can run"
+        sub="members down, environments across — the same verdict the run gate applies"
+        right={grid?.summary && (
+          <span className="text-[10px] text-nexus-500 tabular-nums">
+            {grid.summary.runnable}/{grid.summary.total} runnable · {grid.summary.proven} proven
+          </span>
+        )}>
+        <MatrixGrid m={grid} onPick={pickCell} />
+        <p className="text-[10px] text-nexus-400 mt-2">
+          Click a cell to provision or fix that member here. Judged for a mutating run —
+          a read-only run is permitted on a locked environment.
+        </p>
+      </Section>
       {flash && <div className="rounded-md bg-emerald-50 ring-1 ring-emerald-200 px-3 py-2 text-[12px] text-emerald-700">{flash}</div>}
 
       {/* ── Personas ─────────────────────────────────────────────────────── */}

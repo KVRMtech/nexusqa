@@ -917,6 +917,35 @@ async def release_reservation(session: AsyncSession, *, tenant_id: str,
     return res.rowcount or 0
 
 
+async def live_runs_for_persona(session: AsyncSession, *, tenant_id: str,
+                                persona_id: str) -> list[str]:
+    """Run ids currently holding this member. Used when a member is retired
+    mid-flight: those runs are authenticating as an account that has just been
+    decommissioned, and finishing quietly would file evidence under it."""
+    try:
+        rows = (await session.execute(select(TpPersonaReservationRow).where(
+            TpPersonaReservationRow.tenant_id == tenant_id,
+            TpPersonaReservationRow.persona_id == persona_id,
+            TpPersonaReservationRow.released_at.is_(None)))).scalars().all()
+    except Exception as exc:
+        logger.warning("persona_store.live_runs_failed persona=%s err=%s",
+                       persona_id, str(exc)[:200])
+        return []
+    return [r.run_id for r in rows if r.run_id]
+
+
+async def release_persona_reservations(session: AsyncSession, *, tenant_id: str,
+                                       persona_id: str) -> int:
+    """Release every live hold on a member. Without this, retiring a member leaves
+    its reservation held until the TTL expires — the member is gone from the picker
+    and still counts against the concurrency cap. Caller commits."""
+    res = await session.execute(update(TpPersonaReservationRow).where(
+        TpPersonaReservationRow.tenant_id == tenant_id,
+        TpPersonaReservationRow.persona_id == persona_id,
+        TpPersonaReservationRow.released_at.is_(None)).values(released_at=_utc_now()))
+    return res.rowcount or 0
+
+
 async def expire_stale_reservations(session: AsyncSession, *, tenant_id: str) -> int:
     res = await session.execute(update(TpPersonaReservationRow).where(
         TpPersonaReservationRow.tenant_id == tenant_id,

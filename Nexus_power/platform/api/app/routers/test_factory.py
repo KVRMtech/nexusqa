@@ -115,6 +115,8 @@ from ..services.test_factory import environment_routing
 from ..services.test_factory import card_contract
 from ..services.test_factory import card_state
 from ..services.test_factory import login_probe
+from ..services.test_factory import persona_identity
+from ..services.test_factory import matrix
 from ..services.script_factory.compiler import _data_key as compiler_data_key
 from ..services.test_factory import persona_diff
 from ..services.test_factory import persona_governance
@@ -4013,6 +4015,30 @@ async def playwright_run(
         persona_id = sel["persona"]["persona_id"]
     run_id = uuid.uuid4().hex
     reservation_id = ""
+
+    # F5 — RUN AS A REAL, CURRENT MEMBER OF THIS APPLICATION.
+    # persona_id is a declared input and nothing checked it. A retired member kept
+    # running from a pinned CI config; a member of a different application in the
+    # same tenant was accepted and its card typed into this app's login; an id that
+    # resolved to nothing ran anyway while the report named a member nobody defined.
+    # Checked here rather than in the picker, because the picker already hides
+    # retired members and every one of these arrives from a caller that never sees it.
+    if persona_id:
+        async with tenant_scoped_session(tenant_id) as session:
+            _prow = await persona_store.get_persona(
+                session, tenant_id=tenant_id, persona_id=persona_id)
+        _ident = persona_identity.check_persona(
+            persona_id=persona_id, persona=_prow, artifact_id=artifact_id)
+        if not _ident["allowed"]:
+            return {
+                "run_id": run_id, "status": "blocked",
+                "blocked_reason": "member_identity",
+                "persona_id": persona_id, "environment_id": environment_id,
+                "reason": _ident["reason"], "detail": _ident["detail"],
+                "note": _ident["detail"].get("note", ""),
+                "scripts": 0, "excluded_quarantined": excluded_quarantined,
+                "excluded_uncertified_exploratory": excluded_uncertified,
+            }
     # ── Environment governance (P4): posture, production default-deny, health ──
     # The ENVIRONMENT is a governed target regardless of persona. An unregistered
     # environment resolves to {} ⇒ a default read_write, non-production target
@@ -8180,9 +8206,38 @@ async def retire_persona_endpoint(
     tenant_id = user["tenant_id"]
     async with tenant_scoped_session(tenant_id) as session:
         await _require_artifact(session, artifact_id, tenant_id)
+        # F5: retirement has to STOP things, not merely hide the member. Runs in
+        # flight are authenticating as an account that has just been decommissioned;
+        # letting them finish files evidence under it. And a reservation left held
+        # keeps counting against the tenant's concurrency cap until its TTL expires,
+        # for a member nobody can select any more.
+        in_flight = await persona_store.live_runs_for_persona(
+            session, tenant_id=tenant_id, persona_id=persona_id)
         await persona_store.retire_persona(session, tenant_id=tenant_id, persona_id=persona_id)
+        released = await persona_store.release_persona_reservations(
+            session, tenant_id=tenant_id, persona_id=persona_id)
         await session.commit()
-    return {"retired": True, "persona_id": persona_id}
+    for rid in in_flight:
+        job = _RUNNER_JOBS.get(rid)
+        if job is not None:
+            job["status"] = "blocked"
+            job["blocked_reason"] = "member_identity"
+            job["detail"] = ("the member this run authenticates as was retired while "
+                             "it was still running; its results are not filed under a "
+                             "decommissioned account. This is NOT an application failure.")
+            await _persist_job(rid)
+    await _persona_audit(tenant_id=tenant_id, artifact_id=artifact_id,
+                         actor=user.get("email") or user.get("user_id") or "?",
+                         event_type="persona_retired",
+                         detail=f"persona={persona_id} in_flight={len(in_flight)} "
+                                f"reservations_released={released}")
+    return {"retired": True, "persona_id": persona_id,
+            "reservations_released": released,
+            "runs_blocked": in_flight,
+            "note": (("%d run(s) in flight as this member were BLOCKED — their "
+                      "results are not filed under a retired account."
+                      % len(in_flight)) if in_flight else
+                     "No runs were in flight as this member.")}
 
 
 @router.put("/api/v1/test-factory/{artifact_id}/personas/{persona_id}/credentials/{environment_id}")
@@ -9436,6 +9491,41 @@ async def bulk_import_credentials_endpoint(
                          detail=f"imported={imported} errors={len(errors)}")
     return {"imported": imported, "errors": errors, "requested": len(body.cards),
             "note": "Personas + envelope-encrypted cards provisioned. No secret is echoed back."}
+
+
+@router.get("/api/v1/test-factory/{artifact_id}/matrix")
+async def member_environment_matrix_endpoint(
+    artifact_id: str = PathParam(..., min_length=1, max_length=64),
+    mutating: bool = Query(True, description="judge posture for a mutating run (a run's default)"),
+    user: dict = Depends(get_current_user),
+):
+    """Which member × environment combinations can actually run — members down,
+    environments across, one verdict per cell.
+
+    Every state here comes from the SAME derivation the dispatch gate applies, so a
+    cell that reads ready is not refused for that reason and a cell that reads
+    blocked would have been. Previously all of it was discovered by dispatching a
+    run and reading the refusal, which is a slow way to learn a fact the server
+    already knows — and it trains people to treat a BLOCKED run as noise.
+
+    Slot NAMES only; no credential value is reachable from this endpoint."""
+    tenant_id = user["tenant_id"]
+    async with tenant_scoped_session(tenant_id) as session:
+        await _require_artifact(session, artifact_id, tenant_id)
+        personas = await persona_store.list_personas(
+            session, tenant_id=tenant_id, artifact_id=artifact_id)
+        envs = await persona_store.list_environments(
+            session, tenant_id=tenant_id, artifact_id=artifact_id)
+        cards = await persona_store.all_credential_status(
+            session, tenant_id=tenant_id, artifact_id=artifact_id)
+        recipe = await persona_store.get_recipe(
+            session, tenant_id=tenant_id, artifact_id=artifact_id)
+    # persona-0 is synthetic and runs on the stored form login, not a card.
+    legacy = {p["persona_id"] for p in personas if p.get("legacy")
+              or str(p.get("persona_id", "")).startswith(persona_identity.PERSONA0_PREFIX)}
+    out = matrix.build(personas=personas, environments=envs, cards=cards,
+                       recipe=recipe, mutating=mutating, legacy_persona_ids=legacy)
+    return {"artifact_id": artifact_id, **out}
 
 
 @router.get("/api/v1/test-factory/{artifact_id}/credentials/manifest")
