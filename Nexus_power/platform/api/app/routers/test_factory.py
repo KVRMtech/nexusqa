@@ -9063,6 +9063,14 @@ class _EnvironmentBody(BaseModel):
     data_epoch: str = Field("", max_length=64)
     require_scoped_certification: bool = Field(False,
         description="opt-in: a persona run here needs a certification for its (env, behavior_class) cell")
+    # F6 — routing the run must APPLY. NON-SECRET only: an onboarding profile's sealed
+    # credentials stay in qe-central and are never mirrored here. Omitted (None) keeps
+    # whatever is stored, so a governance-only edit cannot blank a lane selector.
+    cookies: list[dict] | None = Field(None, description="non-secret routing cookies [{name,value,domain,path}]")
+    headers: dict[str, str] | None = Field(None, description="non-secret routing headers")
+    env_assertion: dict | None = Field(None, description="{url_pattern|selector|expect_text} — proof the run landed here")
+    source: str = Field("", max_length=24, description="which registry this row came from: studio | onboarding")
+    app_env_id: str = Field("", max_length=64, description="the onboarding Environment Profile this mirrors")
 
 
 @router.put("/api/v1/test-factory/{artifact_id}/environments/{environment_id}")
@@ -9085,7 +9093,10 @@ async def put_environment_endpoint(
             environment_id=environment_id, label=body.label, posture=body.posture,
             is_production=body.is_production, write_authorized=body.write_authorized,
             base_url=body.base_url, data_epoch=body.data_epoch,
-            require_scoped_certification=body.require_scoped_certification)
+            require_scoped_certification=body.require_scoped_certification,
+            cookies=body.cookies, headers=body.headers,
+            env_assertion=body.env_assertion,
+            source=body.source, app_env_id=body.app_env_id)
         await session.commit()
     await _persona_audit(tenant_id=tenant_id, artifact_id=artifact_id,
                          actor=user.get("email") or user.get("user_id") or "?",

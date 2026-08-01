@@ -232,3 +232,82 @@ async def materialise_login_recipe(
                "status": response.status_code, "detail": response.text[:200]},
     )
     return False
+
+
+async def mirror_environment_profile(
+    *,
+    tenant_id: str,
+    artifact_id: str,
+    environment: dict,
+) -> bool:
+    """Push an onboarding Environment Profile's NON-SECRET routing to the runner's
+    governance registry, so the two lists behave as one.
+
+    Onboarding collects the rich profile — base_url, routing cookies/headers, an
+    env assertion — while Studio's registry held only posture/production/base_url/
+    epoch. Nothing linked them, and an operator reasonably believes they are one
+    list. The harm was not cosmetic: ``environment_routing`` copies cookies, headers
+    and the env assertion out of the runner-side row into the run context, and that
+    row had nowhere to hold them. A cookie-selected lane on a shared host therefore
+    landed on the host's default, which for these estates is production.
+
+    Ownership does not move. qe-central remains the owner of the profile; this
+    mirrors only what the runner must APPLY, and marks the row ``source=onboarding``
+    with a link back, so the panel can say plainly where a row came from.
+
+    SECRETS ARE NOT MIRRORED — the profile's sealed ``creds_blob`` stays here.
+
+    NEVER raises: a failure must not fail the crawl that produced a valid artifact.
+    Returns True only when the mirror was actually stored.
+    """
+    env_id = str((environment or {}).get("environment_id") or "").strip()
+    if not env_id or not artifact_id:
+        return False
+
+    token = mint_service_jwt(tenant_id)
+    headers = {"Authorization": f"Bearer {token}"}
+    body = {
+        "label": str(environment.get("name") or env_id)[:120],
+        "base_url": str(environment.get("base_url") or "")[:2000],
+        # Non-secret routing only. `cookies`/`headers` on the profile row are
+        # explicitly the non-secret pair; the secret ones live in creds_blob.
+        "cookies": list(environment.get("cookies") or []),
+        "headers": dict(environment.get("headers") or {}),
+        "env_assertion": dict(environment.get("env_assertion") or {}),
+        "source": "onboarding",
+        "app_env_id": env_id,
+        # Posture is NOT asserted here. It is a governance decision that belongs to
+        # whoever owns the runner-side registry, and overwriting it from onboarding
+        # would silently re-open a production environment somebody had locked.
+    }
+    try:
+        async with httpx.AsyncClient(
+            base_url=settings.platform_api_url, timeout=30.0,
+        ) as client:
+            response = await client.put(
+                f"/api/v1/test-factory/{artifact_id}/environments/{env_id}",
+                json=body, headers=headers,
+            )
+    except Exception as exc:
+        logger.warning(
+            "qec.platform_api.env_mirror_transport_error",
+            extra={"tenant_id": tenant_id, "artifact_id": artifact_id,
+                   "environment_id": env_id, "error": str(exc)[:300]},
+        )
+        return False
+
+    if response.status_code in (200, 201):
+        logger.info(
+            "qec.platform_api.env_mirrored",
+            extra={"tenant_id": tenant_id, "artifact_id": artifact_id,
+                   "environment_id": env_id,
+                   "cookies": len(body["cookies"]), "headers": len(body["headers"])},
+        )
+        return True
+    logger.warning(
+        "qec.platform_api.env_mirror_failed",
+        extra={"tenant_id": tenant_id, "artifact_id": artifact_id,
+               "environment_id": env_id, "status": response.status_code,
+               "detail": response.text[:200]},
+    )
+    return False

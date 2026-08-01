@@ -156,6 +156,17 @@ class TpEnvironmentRow(Base):
     write_authorized: Mapped[bool] = mapped_column(Boolean, default=False)
     base_url: Mapped[str] = mapped_column(Text, default="")
     data_epoch: Mapped[str] = mapped_column(String(64), default="")
+    # Routing the run must APPLY (F6). environment_routing copies these into the run
+    # context, and the row previously had nowhere to hold them — so a cookie-selected
+    # lane on a shared host silently landed on the host's default. Non-secret only:
+    # the onboarding profile's sealed credentials never leave qe-central.
+    cookies: Mapped[list] = mapped_column(JSONB, default=list)
+    headers: Mapped[dict] = mapped_column(JSONB, default=dict)
+    env_assertion: Mapped[dict] = mapped_column(JSONB, default=dict)
+    # Which registry this row came from, and the onboarding profile it mirrors — so
+    # the panel can say plainly what it is showing instead of implying one list.
+    source: Mapped[str] = mapped_column(String(24), default="studio")
+    app_env_id: Mapped[str] = mapped_column(String(64), default="")
     health_status: Mapped[str] = mapped_column(String(16), default="unknown")
     health_detail: Mapped[str] = mapped_column(Text, default="")
     last_health_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -976,6 +987,12 @@ def _env_dict(r) -> dict:
             "base_url": r.base_url, "data_epoch": r.data_epoch,
             "health_status": r.health_status, "health_detail": r.health_detail,
             "require_scoped_certification": getattr(r, "require_scoped_certification", False),
+            # F6 routing — what environment_routing carries into the run.
+            "cookies": list(getattr(r, "cookies", None) or []),
+            "headers": dict(getattr(r, "headers", None) or {}),
+            "env_assertion": dict(getattr(r, "env_assertion", None) or {}),
+            "source": getattr(r, "source", "") or "studio",
+            "app_env_id": getattr(r, "app_env_id", "") or "",
             "last_health_at": _iso(r.last_health_at)}
 
 
@@ -983,27 +1000,57 @@ async def save_environment(session: AsyncSession, *, tenant_id: str, artifact_id
                            environment_id: str, label: str = "", posture: str = "read_write",
                            is_production: bool = False, write_authorized: bool = False,
                            base_url: str = "", data_epoch: str = "", app_id: str = "",
-                           require_scoped_certification: bool = False) -> dict:
-    """Upsert an environment's governance record. Caller commits."""
+                           require_scoped_certification: bool = False,
+                           cookies: list | None = None, headers: dict | None = None,
+                           env_assertion: dict | None = None,
+                           source: str = "", app_env_id: str = "") -> dict:
+    """Upsert an environment's governance record + the routing a run must apply.
+
+    ``cookies``/``headers``/``env_assertion`` are what ``environment_routing`` carries
+    into the run context; they are NON-SECRET routing only. When this row mirrors an
+    onboarding Environment Profile, ``source='onboarding'`` and ``app_env_id`` links
+    back to it — the profile remains the owner and its sealed credentials never leave
+    qe-central. Omitted routing keeps whatever is stored, so a governance-only edit
+    from Studio cannot silently blank a lane selector pushed by onboarding.
+
+    Caller commits."""
     from .persona_governance import normalize_posture
     posture = normalize_posture(posture)
-    stmt = (pg_insert(TpEnvironmentRow).values(
+    values = dict(
         environment_id=environment_id, artifact_id=artifact_id, tenant_id=tenant_id,
         app_id=app_id, label=label, posture=posture, is_production=bool(is_production),
         write_authorized=bool(write_authorized), base_url=base_url,
-        data_epoch=data_epoch, require_scoped_certification=bool(require_scoped_certification),
+        data_epoch=data_epoch,
+        require_scoped_certification=bool(require_scoped_certification),
+        cookies=list(cookies or []), headers=dict(headers or {}),
+        env_assertion=dict(env_assertion or {}),
+        source=str(source or "studio"), app_env_id=str(app_env_id or ""),
         created_at=_utc_now())
-        .on_conflict_do_update(
-            index_elements=[TpEnvironmentRow.environment_id, TpEnvironmentRow.artifact_id,
-                            TpEnvironmentRow.tenant_id],
-            set_={"label": label, "posture": posture, "is_production": bool(is_production),
-                  "write_authorized": bool(write_authorized), "base_url": base_url,
-                  "data_epoch": data_epoch,
-                  "require_scoped_certification": bool(require_scoped_certification)}))
+    updates = {"label": label, "posture": posture, "is_production": bool(is_production),
+               "write_authorized": bool(write_authorized), "base_url": base_url,
+               "data_epoch": data_epoch,
+               "require_scoped_certification": bool(require_scoped_certification)}
+    # Only overwrite routing that was actually supplied.
+    if cookies is not None:
+        updates["cookies"] = list(cookies)
+    if headers is not None:
+        updates["headers"] = dict(headers)
+    if env_assertion is not None:
+        updates["env_assertion"] = dict(env_assertion)
+    if source:
+        updates["source"] = str(source)
+    if app_env_id:
+        updates["app_env_id"] = str(app_env_id)
+    stmt = (pg_insert(TpEnvironmentRow).values(**values)
+            .on_conflict_do_update(
+                index_elements=[TpEnvironmentRow.environment_id, TpEnvironmentRow.artifact_id,
+                                TpEnvironmentRow.tenant_id],
+                set_=updates))
     await session.execute(stmt)
     return {"environment_id": environment_id, "posture": posture,
             "is_production": bool(is_production), "write_authorized": bool(write_authorized),
-            "require_scoped_certification": bool(require_scoped_certification)}
+            "require_scoped_certification": bool(require_scoped_certification),
+            "source": str(source or "studio"), "app_env_id": str(app_env_id or "")}
 
 
 # ── Scoped certification ledger (R3) ─────────────────────────────────────────

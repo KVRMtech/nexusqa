@@ -45,7 +45,7 @@ from ..clients.manifest_mapper import (
 )
 from ..clients.refusal_messages import client_refusal_message
 from ..db import tenant_scoped_qec_session, utc_now
-from ..db.models import ClientAppRow, QEExplorationRow
+from ..db.models import ClientAppEnvironmentRow, ClientAppRow, QEExplorationRow
 from ..substrate.schema import CRAWL_ID_PATTERN, ExplorationBundle, RefusalError
 from ..substrate.writer import (
     EXTRACTOR_VERSION_PREFIX,
@@ -217,6 +217,7 @@ async def _promote_latest_artifact(tenant_id: str, app_id: str, artifact_id: str
     if not (app_id and artifact_id):
         return
     pending_recording: dict = {}
+    pending_envs: list = []
     try:
         async with tenant_scoped_qec_session(tenant_id) as session:
             row = (
@@ -238,6 +239,24 @@ async def _promote_latest_artifact(tenant_id: str, app_id: str, artifact_id: str
                 # Re-minting is prevented by materialise_login_recipe skipping an
                 # artifact that already has a recipe, not by discarding the source.
                 pending_recording = dict(row.login_recording or {})
+            # F6 — the Environment Profiles collected at onboarding and the runner's
+            # governance registry were two disjoint lists. The routing a run must
+            # APPLY (base_url, cookies, headers, env assertion) lived only here, and
+            # the runner-side row had nowhere to hold it — so a cookie-selected lane
+            # on a shared host silently landed on the host's default.
+            pending_envs = [
+                {"environment_id": e.environment_id, "name": e.name,
+                 "base_url": e.base_url, "cookies": list(e.cookies or []),
+                 "headers": dict(e.headers or {}),
+                 "env_assertion": dict(e.env_assertion or {})}
+                for e in (await session.execute(
+                    select(ClientAppEnvironmentRow).where(
+                        ClientAppEnvironmentRow.app_id == app_id,
+                        ClientAppEnvironmentRow.tenant_id == tenant_id,
+                        ClientAppEnvironmentRow.status == "active",
+                    )
+                )).scalars().all()
+            ]
     except Exception as exc:  # pragma: no cover — promotion is best-effort
         logger.warning(
             "qec.internal.promote_failed",
@@ -260,6 +279,24 @@ async def _promote_latest_artifact(tenant_id: str, app_id: str, artifact_id: str
             logger.warning(
                 "qec.internal.recipe_materialise_error",
                 extra={"app_id": app_id, "artifact_id": artifact_id,
+                       "error": str(exc)[:300]},
+            )
+
+    # Mirror each Environment Profile's NON-SECRET routing onto the artifact, so the
+    # governance registry and the profiles behave as one list. Ownership stays here;
+    # posture is deliberately NOT asserted, because overwriting it from onboarding
+    # would silently re-open a production environment somebody had locked. Sealed
+    # credentials never leave. Best-effort, exactly like the recipe above.
+    for _env in pending_envs:
+        try:
+            await platform_api.mirror_environment_profile(
+                tenant_id=tenant_id, artifact_id=artifact_id, environment=_env,
+            )
+        except Exception as exc:  # pragma: no cover — never fail a good crawl
+            logger.warning(
+                "qec.internal.env_mirror_error",
+                extra={"app_id": app_id, "artifact_id": artifact_id,
+                       "environment_id": _env.get("environment_id"),
                        "error": str(exc)[:300]},
             )
 

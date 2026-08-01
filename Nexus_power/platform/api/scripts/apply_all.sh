@@ -27,6 +27,7 @@ FILES=(
   apply_login_type_key.sql       # recipe fleet-reuse key
   apply_login_domain.sql         # recipe login domain
   apply_card_contract.sql        # card -> which login it was checked against (F2/F3)
+  apply_env_registry_link.sql    # environment routing fields + link to the onboarding profile (F6)
   apply_heal_events.sql
   apply_run_reports.sql
 )

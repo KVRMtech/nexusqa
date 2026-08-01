@@ -22,6 +22,11 @@ type Environment = {
   environment_id: string; label?: string; posture?: string; effective_posture?: string;
   is_production?: boolean; write_authorized?: boolean; base_url?: string;
   data_epoch?: string; health_status?: string; health_detail?: string;
+  /** F6 — the routing a run applies, and where this row came from. Onboarding owns
+   *  its Environment Profiles; these mirror the NON-SECRET routing so the two lists
+   *  behave as one. Sealed credentials never leave onboarding. */
+  cookies?: any[]; headers?: Record<string, string>; env_assertion?: any;
+  source?: string; app_env_id?: string;
 };
 type Card = {
   persona_id: string; persona_name?: string; environment_id: string;
@@ -464,19 +469,41 @@ export default function PersonaMatrixPanel({ artifactId }: { artifactId: string 
 
       {/* ── Environments ─────────────────────────────────────────────────── */}
       <Section icon={<Boxes className="h-4 w-4" />} title="Environments"
-        sub="posture · production default-deny · health">
+        sub="posture · production default-deny · health · routing">
         <div className="space-y-1.5 mb-3">
           {envs.length === 0 && <p className="text-[11px] text-nexus-400">No environments registered — a run against an unregistered environment is an ordinary read_write target.</p>}
-          {envs.map((e) => (
-            <div key={e.environment_id} className="flex items-center gap-2 text-[12px] rounded-md bg-nexus-50/60 px-2.5 py-1.5">
-              <HealthDot s={e.health_status} />
-              <span className="font-semibold text-nexus-800 font-mono">{e.environment_id}</span>
-              <PostureBadge env={e} />
-              {e.is_production && <span className="text-[9px] font-bold px-1 py-0.5 rounded bg-rose-100 text-rose-700">PROD{e.write_authorized ? ' · write-authorized' : ' · default-deny'}</span>}
-              {e.data_epoch && <span className="text-[10px] text-nexus-400">epoch {e.data_epoch}</span>}
-              {e.base_url && <span className="ml-auto text-[10px] text-nexus-400 font-mono truncate max-w-[220px]">{e.base_url}</span>}
-            </div>
-          ))}
+          {envs.map((e) => {
+            const routing = (e.cookies?.length || 0) + Object.keys(e.headers || {}).length;
+            return (
+              <div key={e.environment_id} className="flex items-center gap-2 text-[12px] rounded-md bg-nexus-50/60 px-2.5 py-1.5">
+                <HealthDot s={e.health_status} />
+                <span className="font-semibold text-nexus-800 font-mono">{e.environment_id}</span>
+                <PostureBadge env={e} />
+                {e.is_production && <span className="text-[9px] font-bold px-1 py-0.5 rounded bg-rose-100 text-rose-700">PROD{e.write_authorized ? ' · write-authorized' : ' · default-deny'}</span>}
+                {/* Where the row came from. Onboarding's Environment Profiles and this
+                    registry used to be two lists that looked like one; saying which is
+                    which is the difference between editing the row a run reads and
+                    editing a copy of it. */}
+                {e.source === 'onboarding' && (
+                  <span title="Created during onboarding. Its routing is mirrored here; posture is set here."
+                    className="text-[9px] font-bold px-1 py-0.5 rounded bg-sky-50 text-sky-700 ring-1 ring-sky-200">
+                    from onboarding
+                  </span>)}
+                {/* Routing that actually travels with the run — a cookie-selected lane
+                    on a shared host is the difference between uat and production. */}
+                {routing > 0 && (
+                  <span title={[
+                    ...(e.cookies || []).map((c: any) => `cookie ${c?.name}`),
+                    ...Object.keys(e.headers || {}).map((h) => `header ${h}`),
+                  ].join('\n')}
+                    className="text-[9px] font-bold px-1 py-0.5 rounded bg-nexus-100 text-nexus-600">
+                    {routing} routing
+                  </span>)}
+                {e.data_epoch && <span className="text-[10px] text-nexus-400">epoch {e.data_epoch}</span>}
+                {e.base_url && <span className="ml-auto text-[10px] text-nexus-400 font-mono truncate max-w-[220px]">{e.base_url}</span>}
+              </div>
+            );
+          })}
         </div>
         <div className="flex flex-wrap items-center gap-2 border-t border-nexus-100 pt-3">
           <input className={`${INPUT} w-28`} placeholder="env id (uat)" value={ne.environment_id} onChange={(e) => setNe({ ...ne, environment_id: e.target.value })} />
