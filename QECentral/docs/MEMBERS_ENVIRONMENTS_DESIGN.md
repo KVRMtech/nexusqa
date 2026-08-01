@@ -198,15 +198,72 @@ Steps 4–6 are refused server-side when their prerequisite is missing, each wit
 
 ## Build status
 
+**All seven are built, deployed and live-proven on verdict-box. Flags
+`NEXUS_ENV_ROUTING`, `NEXUS_CARD_HEALTH_GATE` and `NEXUS_MEMBER_DATA_RESOLVER` are ON.**
+
 | | state | where |
 |---|---|---|
-| **F1** environment routes the run | **built · deployed · flag `NEXUS_ENV_ROUTING` OFF** | `environment_routing.py`, dispatch in `test_factory.py` |
-| **F2** card derived from the recipe + server-side refusal | **built · deployed · live-proven** | `card_contract.py`, `GET …/login-contract`, `PUT …/credentials/{env}`, `PersonaMatrixPanel.tsx` |
-| F3 `verified` must mean a real login | not built (card rewrite already resets `verify_status`) | |
-| F4 a slot change must BLOCK, not skip | not built (cards now record `login_type_key` + `recipe_version`, which is the hook) | |
-| F5 retired / foreign-artifact persona refused at dispatch | not built | |
-| F7 the matrix view | not built | |
-| F6 one environment registry | not built | |
+| **F1** environment routes the run | **live · flag ON** | `environment_routing.py` |
+| **F2** card derived from the recipe + server-side refusal | **live** | `card_contract.py`, `GET …/login-contract` |
+| **F3** `verified` means a login that reached Home | **live** | `login_probe.py`, preflight + `POST …/recipes/verify` |
+| **F4** a slot change BLOCKS, never skips | **live · flag ON** | `card_state.py`, dispatch gate |
+| **F5** retired / foreign / unknown member refused | **live** | `persona_identity.py` |
+| **F7** the member × environment matrix | **live** | `matrix.py`, `GET …/matrix` |
+| **F6** one environment registry | **live** | `tp_environments` routing columns + qe-central mirror |
+
+### Proven end-to-end on the real app (2026-08-01, `8831d6a4…`)
+
+```
+F2  member_number/password        -> 422 missing[email] unexpected[member_number]
+F4  re-record renames a slot      -> cards broken [Member A]
+    matrix                        -> stale_slots · runnable=False · needs user_email
+    dispatch                      -> blocked · credential · card_slots_do_not_match_recipe · 0 scripts
+F5  retired member (CI-pinned)    -> blocked · member_identity · persona_retired
+    member of another app         -> blocked · persona_belongs_to_another_application
+F1  select uat, address = prod    -> blocked · destination_conflicts_with_environment
+    unregistered environment      -> blocked · environment_not_registered
+    production, mutating          -> blocked · environment_policy (default-deny)
+F3  Verify Member A               -> REAL login reached the recorded landing page
+    card                          -> verified · recipe_version 3 · epoch 2026-08
+    matrix                        -> Member A / uat = ready · 1 PROVEN
+```
+
+### F3 was worse than this document assumed
+
+`assert_home` is optional, so a recipe recorded without a logged-in checkpoint
+replays its steps and prints `recipe login OK` over an anonymous cookie jar; and
+`form login OK` is printed unconditionally after a click with nothing asserting
+success. `verified` could therefore be true with **no login having happened at all**
+— invisible on a permissive test app, which is what we test against. The interpreter
+already emitted the distinction (`home reached`); nothing read it.
+
+### Deferred, and why
+
+- **Perishable sessions, out-of-band second factors, per-member branching of one
+  recipe** — unchanged from the scope note above.
+- **A true single environment TABLE.** `env_resolver`'s bounded-context boundary
+  ("the runner owns NO env data") is a deliberate decision. F6 links the two by
+  mirroring the non-secret routing the runner must apply; collapsing the tables would
+  undo that decision and is not a change to make unattended.
+- **Registrable-domain resolution** still collapses `136-85-106-73.sslip.io` to
+  `sslip.io`. Not a correctness hole (`login_type_key` also carries login path and
+  field signature) but it weakens fleet reuse keying; wants a PSL check.
+
+### Operational risk this work surfaced ⚠️
+
+The platform-api **image is far behind the code it runs** — `login_recorder`,
+`login_observation`, `draft_recording`, `member_data_resolver`, `value_harvest`,
+`environment_routing` and others exist only as hot-deployed files. A
+`docker compose up --force-recreate` reverts to the image and takes all of them with
+it (this caused a crash-loop during this work). Worse, **the local KEK master key
+lives inside the container, not on a volume**, so a recreate regenerates it and every
+envelope blob written under the old key stops decrypting — `wrapped DEK failed
+authentication`. Recovered from `/home/srika/kek_backup_20260728.key`; zero decrypt
+failures since.
+
+**Until the image is rebuilt from the repo, treat any recreate of platform-api as a
+data-loss event unless the KEK is backed up and the full app tree is re-copied in the
+same operation.** Both belong on a volume.
 
 ### F2, proven live (2026-08-01, `8831d6a4…`, real recorded login)
 
