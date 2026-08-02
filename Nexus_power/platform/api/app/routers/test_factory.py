@@ -3987,6 +3987,12 @@ async def playwright_run(
     base_url = (body.base_url or "").strip()
     if body.env_context and body.env_context.get("base_url"):
         base_url = str(body.env_context["base_url"]).strip()  # env profile base_url wins (SSRF-guarded)
+    # Fall back to the ORIGIN THE CRAWL RECORDED when neither the caller nor a
+    # selected environment supplied one. Without it NEXUS_BASE_URL is "", and the
+    # compiled spec's relative `page.goto('/portal/...')` has no origin to resolve
+    # against — every step fails for a reason that has nothing to do with the app.
+    if not base_url:
+        base_url = _recorded_origin(visits)
     storage_state = await _run_storage_state(request, artifact_id, tenant_id)
     # Persona × Environment (P2): a NAMED persona resolves to a recipe + card and
     # the run authenticates AS that member. Absent ⇒ the form-login path exactly
@@ -4518,6 +4524,14 @@ async def playwright_run_live(
     base_url = (body.base_url or "").strip()
     if body.env_context and body.env_context.get("base_url"):
         base_url = str(body.env_context["base_url"]).strip()  # env profile base_url wins (SSRF-guarded)
+    # Same fallback as every other dispatch path — run-live was the one that lacked
+    # it. The portal's "run this test live" button sends no base_url, so the run
+    # started with NEXUS_BASE_URL="" and the headed browser had nowhere to navigate:
+    # Playwright launched it, failed the first goto, and relaunched. The noVNC viewer
+    # therefore showed a BLANK screen, and the response reported target "" — which is
+    # the tell, and was ignored for two rounds of "the live view is blank".
+    if not base_url:
+        base_url = _recorded_origin(visits)
     storage_state = await _run_storage_state(request, artifact_id, tenant_id)
     auth_config, login_env = await _run_form_login(request, artifact_id, tenant_id)
     files = _configured_files(
