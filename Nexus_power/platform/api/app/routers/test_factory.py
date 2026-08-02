@@ -114,6 +114,7 @@ from ..services.test_factory import draft_recording
 from ..services.test_factory import environment_routing
 from ..services.test_factory import card_contract
 from ..services.test_factory import card_state
+from ..services.test_factory import session_handoff
 from ..services.test_factory import login_probe
 from ..services.test_factory import persona_identity
 from ..services.test_factory import matrix
@@ -4662,6 +4663,58 @@ async def start_auth_capture(
     return {"status": "capturing", "live_url": live, "url": url}
 
 
+class _SaveAndRunBody(RunConfigRequest):
+    """A run request plus how to run it. Inherits every run option (test_ids,
+    categories, retries, browsers, persona/environment) so Record + Run is the SAME
+    run as any other — reporting, attribution, auto-heal and certification all fire
+    on the ingest path exactly as they do today."""
+    watch: bool = Field(True, description="true = headed live run you can watch; false = headless")
+
+
+@router.post("/api/v1/test-factory/{artifact_id}/playwright/auth/save-and-run")
+async def save_auth_capture_and_run(
+    body: _SaveAndRunBody,
+    request: Request,
+    artifact_id: str = PathParam(..., min_length=1, max_length=64),
+    user: dict = Depends(get_current_user),
+):
+    """RECORD + RUN — store the login just recorded, then immediately run with it.
+
+    The point of doing this in ONE call is that it cannot half-happen. Chained by
+    hand, the middle step can appear to succeed while producing nothing usable: the
+    recorder always returns a storage state, so an operator who opened the browser
+    and closed it still gets a stored "session" that is an empty cookie jar. Running
+    with it executes the whole suite LOGGED OUT, every step fails, and the report
+    attributes those failures to the application under test.
+
+    So: save, then judge what was saved, and only dispatch when it can actually
+    authenticate. A refusal here has run NOTHING and says why.
+
+    Returns the run's own response on success, so the caller drives it exactly like
+    any other run.
+    """
+    saved = await save_auth_capture(request=request, artifact_id=artifact_id, user=user)
+    verdict = (saved or {}).get("session") or {}
+    if not verdict.get("usable"):
+        raise HTTPException(status_code=422, detail={
+            "error": "the recorded login did not produce a usable session",
+            "reason": verdict.get("reason") or "no_session",
+            "cookies": verdict.get("cookies", 0),
+            "storage_keys": verdict.get("storage_keys", 0),
+            "note": verdict.get("note", ""),
+            "recipe": (saved or {}).get("recipe"),
+            "ran": False,
+        })
+
+    run = (await playwright_run_live(body=body, request=request, artifact_id=artifact_id,
+                                     user=user)
+           if body.watch else
+           await playwright_run(body=body, request=request, artifact_id=artifact_id,
+                                user=user))
+    return {**(run or {}), "recorded_login": True,
+            "session": verdict, "recipe": (saved or {}).get("recipe")}
+
+
 @router.post("/api/v1/test-factory/{artifact_id}/playwright/auth/save")
 async def save_auth_capture(
     request: Request,
@@ -4696,6 +4749,11 @@ async def save_auth_capture(
         raise HTTPException(status_code=400, detail="no captured session — start a capture and log in first")
     state_json = json.dumps(state)
     cookie_n = len((state or {}).get("cookies", []) if isinstance(state, dict) else [])
+    # Storing ALWAYS succeeds — the recorder returns a state even when the operator
+    # never completed the login. Say plainly whether what we just stored can actually
+    # authenticate, so a caller chaining a run onto this can refuse rather than run
+    # the whole suite logged out and blame the application for every failure.
+    session_verdict = session_handoff.assess(state)
     async with tenant_scoped_session(tenant_id) as session:
         await _require_artifact(session, artifact_id, tenant_id)
         try:
@@ -4709,7 +4767,7 @@ async def save_auth_capture(
             session, tenant_id=tenant_id, artifact_id=artifact_id,
             snapshot=res.get("login_observation"))
         await session.commit()
-    return {"status": "saved", "recipe": recipe_info}
+    return {"status": "saved", "recipe": recipe_info, "session": session_verdict}
 
 
 async def _derive_recipe_from_capture(session, *, tenant_id: str, artifact_id: str,
