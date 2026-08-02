@@ -15,6 +15,8 @@ Framebuffer evidence (RFB read straight off :5900):
 The headless verdict path must keep its exact timing: slowing a client-facing run
 would change the very thing the product certifies.
 """
+import re
+
 from app.services.script_factory.compiler import _playwright_config_param
 
 
@@ -23,6 +25,30 @@ def test_a_headed_live_run_is_slowed_enough_to_watch():
     assert "slowMo" in cfg
     assert "250" in cfg
     assert "headless: false" in cfg
+
+
+def test_there_is_exactly_ONE_launchOptions_key_in_the_use_block():
+    """THE BUG THIS FILE EXISTS FOR. The first attempt added a second
+    `launchOptions:` to the same object literal. JavaScript keeps the LAST
+    duplicate key, so the pre-existing `launchOptions: { args: ... }` further down
+    silently erased slowMo — no error, no warning, config loads fine, and the run is
+    simply not slowed. It took a framebuffer measurement to notice.
+    """
+    for headed in (True, False):
+        cfg = _playwright_config_param(["chromium"], headed=headed, workers=1)
+        use_block = cfg[cfg.index("use: {\n"):cfg.index("projects: [")]
+        keys = re.findall(r"^\s*launchOptions:", use_block, re.M)
+        assert len(keys) == 1, f"{len(keys)} launchOptions keys — the later one wins"
+
+
+def test_slowMo_and_launch_args_coexist_in_that_one_object():
+    """Merging them is the fix; losing the container's --no-sandbox args would break
+    every containerised run."""
+    cfg = _playwright_config_param(["chromium"], headed=True, workers=1)
+    i = cfg.index("launchOptions: {")
+    block = cfg[i:cfg.index("},", i)]
+    assert "NEXUS_LAUNCH_ARGS" in block
+    assert "slowMo" in block
 
 
 def test_a_headless_verdict_run_is_NOT_slowed():

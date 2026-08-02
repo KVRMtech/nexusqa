@@ -1705,13 +1705,6 @@ __WORKERS__  reporter: [['list'], ['html', { open: 'never' }], ['junit', { outpu
   use: {
     baseURL: nexusBaseURL(),
     headless: __HEADLESS__,
-    // A LIVE run exists to be WATCHED. Headless runs are unaffected (0), so the
-    // client-facing verdict and its timings never change. Without this the whole
-    // suite finishes in a few seconds — measured on a real client run: 1.1s, 969ms,
-    // 614ms per test — so by the time an operator opened the noVNC viewer the
-    // browser had already exited and they were looking at an empty desktop,
-    // indistinguishable from a broken stream. Overridable per run.
-    launchOptions: { slowMo: Number(process.env.NEXUS_SLOWMO || __SLOWMO__) },
     // Evidence tier T2: one trace.zip per FAILED test carries DOM snapshots,
     // network, console and a screencast, and is time-travel replayable — it
     // replaces a bespoke video/DOM/network pipeline. 'on-first-retry' never
@@ -1733,7 +1726,16 @@ __WORKERS__  reporter: [['list'], ['html', { open: 'never' }], ['junit', { outpu
     // no-op, so a normal run / downloaded bundle (no sidecar) is byte-for-byte unchanged.
     ...((() => { try { const _e = JSON.parse(fs.readFileSync('./vkpower.env.json', 'utf-8')) || {}; return { ...(_e.extraHTTPHeaders ? { extraHTTPHeaders: _e.extraHTTPHeaders } : {}), ...(_e.httpCredentials ? { httpCredentials: _e.httpCredentials } : {}) }; } catch { return {}; } })()),
     // Container runners set NEXUS_LAUNCH_ARGS (e.g. --no-sandbox); empty locally.
-    launchOptions: { args: (process.env.NEXUS_LAUNCH_ARGS || '').split(' ').filter(Boolean) },
+    //
+    // slowMo paces a LIVE (headed) run so a human can follow it; it is 0 for a
+    // headless verdict run, whose timing must not change. It MUST live in this one
+    // launchOptions object: a second `launchOptions:` key in the same literal
+    // silently REPLACES this one (last duplicate key wins in JS), which is exactly
+    // how a first attempt at this shipped with no effect and no error.
+    launchOptions: {
+      args: (process.env.NEXUS_LAUNCH_ARGS || '').split(' ').filter(Boolean),
+      slowMo: Number(process.env.NEXUS_SLOWMO || __SLOWMO__),
+    },
   },
   projects: [
 __PROJECTS__
