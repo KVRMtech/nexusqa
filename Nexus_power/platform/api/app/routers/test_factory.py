@@ -1209,6 +1209,21 @@ async def _persona_auth_bundle(request, artifact_id: str, tenant_id: str,
     return r["auth_config"], r["login_env"]
 
 
+def _probe_diag(where: str, run_id: str, output: str, verdict: dict) -> None:
+    """Say WHY a login probe could not read its own outcome.
+
+    UNREADABLE blocks proof and tells the operator nothing — it cannot distinguish
+    "the runner produced nothing" from "the login never ran" from "our markers
+    changed". Logs OUR OWN emitted markers only, never page content, so no
+    credential or application data can travel into a log line."""
+    if verdict.get("outcome") != login_probe.UNREADABLE:
+        return
+    lines = [ln.strip()[:160] for ln in output.splitlines() if "[nexus-auth]" in ln][:5]
+    _logger.warning(
+        "test_factory.login_probe.unreadable where=%s run=%s output_len=%d auth_lines=%r",
+        where, run_id, len(output), lines)
+
+
 async def _persona_preflight(request, artifact_id: str, tenant_id: str, cases,
                              visits, edited_map, base_url: str,
                              auth_config: dict, login_env: dict, token: str) -> dict:
@@ -1254,6 +1269,7 @@ async def _persona_preflight(request, artifact_id: str, tenant_id: str, cases,
         except Exception:
             output = ""
     v = login_probe.read_outcome(output)
+    _probe_diag("preflight", pf_run, output, v)
     # A login that merely REPLAYED is allowed to run — refusing it would strand every
     # recipe recorded without a logged-in checkpoint — but it is not proof, so it can
     # never stamp the card. That split is the whole point of F3.
@@ -9153,6 +9169,7 @@ async def verify_recipe_endpoint(
         except Exception:
             output = ""
     v = login_probe.read_outcome(output)
+    _probe_diag("verify", run_id, output, v)
     drift = ({"step": v["step"], "action": v["action"]}
              if v["outcome"] == login_probe.DRIFT else None)
     # Only a login that REACHED the recorded landing page counts. Stamping on the

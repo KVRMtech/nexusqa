@@ -57,6 +57,28 @@ function writeBundle(files) {
   }
 }
 
+const OUT_TAIL = 8000;
+// A login proof must not depend on how chatty a run was.
+//
+// The [nexus-auth] markers that prove a login happened are printed at the START of
+// a run — before any test output. Returning a pure TAIL window therefore drops them
+// the moment a run gets talkative, and the reader upstream sees no marker at all and
+// reports 'unreadable'. That is exactly how the per-card Verify button came to be
+// unable to prove anything: the preflight survived only because it happens to run
+// with video and screenshots off, so it stayed under the cap. Proof by luck is not
+// proof. Keep every marker line, then the tail.
+function clipOutput(out) {
+  out = String(out || '');
+  if (out.length <= OUT_TAIL) return out;
+  const tail = out.slice(-OUT_TAIL);
+  // Markers carry identifiers only, never a credential value, so keeping them
+  // cannot move a secret into a response that the tail would not already carry.
+  const NL = String.fromCharCode(10);
+  const kept = out.split(NL)
+    .filter((l) => l.indexOf('[nexus-auth]') !== -1 && tail.indexOf(l) === -1);
+  return kept.length ? kept.join(NL) + NL + '...[truncated]...' + NL + tail : tail;
+}
+
 function runPlaywright(env, timeoutMs) {
   return new Promise((resolve) => {
     const bin = path.join(ROOT, 'node_modules', '.bin', 'playwright');
@@ -72,7 +94,7 @@ function runPlaywright(env, timeoutMs) {
       clearTimeout(timer);
       wipeAuth();
       const status = timedOut ? 'timed_out' : (code === 0 ? 'passed' : 'failed');
-      resolve({ status, exit_code: code, output: out.slice(-8000) });
+      resolve({ status, exit_code: code, output: clipOutput(out) });
     });
     child.on('error', (e) => {
       clearTimeout(timer);
@@ -147,7 +169,7 @@ function runPlaywrightLive(env, timeoutMs) {
     wipeAuth();
     liveRun.status = timedOut ? 'timed_out' : (code === 0 ? 'passed' : 'failed');
     liveRun.exit_code = code;
-    liveRun.output = liveRun.output.slice(-8000);
+    liveRun.output = clipOutput(liveRun.output);
     busy = false;
   });
   child.on('error', (e) => {
