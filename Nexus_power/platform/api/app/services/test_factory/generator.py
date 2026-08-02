@@ -1581,6 +1581,17 @@ def generate_demonstrated_test_cases(
     # distinct page (entry → outcome).  Fewer than two URL milestones means the
     # recording never demonstrated a completed flow.
     if len(groups) < 2:
+        # WHY there is only one milestone matters more than the count. A crawl that
+        # filled a form and STOPPED at its submit has one milestone because the
+        # submit was never pressed — the post-submit page is the missing second one.
+        # Reporting that as "looks like a single-page app" sent a real client round
+        # a re-crawl loop: they re-crawled twice, got the same message, and the
+        # actual fix was one unapproved flow name (fences.submit_approvals).
+        _submitted = any(
+            (getattr(a, "verb", "") or "").strip().lower() == "submit"
+            for lst in actions_by_visit.values() for a in lst
+        )
+        _has_form = any(v.form_snapshot for v in visits)
         return DemonstratedGenerationResult(
             test_cases=[],
             page_groups=len(groups),
@@ -1588,6 +1599,15 @@ def generate_demonstrated_test_cases(
             visits_used=sum(len(g.visit_ids) for g in groups),
             fields_demonstrated=0,
             excluded_placeholder_fields=_count_placeholders(visits),
+            no_flow_reason=(
+                "No functional E2E generated — a form was filled but its submit was "
+                "never pressed, so the page AFTER the submit (the second milestone a "
+                "flow needs) was never recorded. This is almost always an unapproved "
+                "flow: the crawler only presses a submit whose name the operator has "
+                "approved (fences.submit_approvals). Approve the submit for this form "
+                "and re-crawl. The application is NOT at fault."
+                if (_has_form and not _submitted) else ""
+            ),
         )
 
     # PHASE-A TRUSTED ENTRY: drop leading groups whose page identity is
