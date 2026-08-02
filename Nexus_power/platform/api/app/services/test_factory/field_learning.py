@@ -41,7 +41,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Mapped, mapped_column
 
-from .persona_store import Base
+from .persona_store import Base, EnvelopeBlob
 
 _logger = logging.getLogger(__name__)
 
@@ -238,10 +238,18 @@ async def recall(session: AsyncSession, *, envelope, tenant_id: str,
         if r.reject_count > r.accept_count and r.reject_count > 0:
             continue
         try:
+            # The envelope takes a parsed blob and names the AAD `expected_aad` —
+            # passing raw bytes silently fails every decrypt, which looks exactly
+            # like "we remembered nothing" and is impossible to tell apart from an
+            # empty memory without reading the row.
+            blob = EnvelopeBlob.from_bytes(bytes(r.value_blob))
             plain = await envelope.decrypt(
-                tenant_id, r.value_blob, aad=_aad(tenant_id, artifact_id, r.signature))
+                tenant_id, blob,
+                expected_aad=_aad(tenant_id, artifact_id, r.signature))
             out[r.signature] = plain.decode("utf-8")
-        except Exception:
+        except Exception as exc:
+            _logger.warning("test_factory.field_memory.decrypt_failed sig=%s err=%s",
+                            r.signature[:12], str(exc)[:160])
             # A blob we cannot open is a field we must ask about again. Silently
             # skipping is right; raising would strand the whole crawl.
             continue

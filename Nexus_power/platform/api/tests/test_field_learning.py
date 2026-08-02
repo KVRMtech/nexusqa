@@ -265,3 +265,33 @@ def test_every_learning_endpoint_is_artifact_scoped():
                  "forget_field_memory_endpoint", "field_resolution_endpoint",
                  "field_outcome_endpoint"):
         assert "_require_artifact(session, artifact_id, tenant_id)" in _handler(name), name
+
+
+# ── the envelope contract ────────────────────────────────────────────────────
+
+def test_decryption_uses_the_same_call_shape_as_the_proven_credential_path():
+    """THE BUG THIS PINS. `recall` first called `envelope.decrypt(tenant, raw_bytes,
+    aad=...)`. The envelope wants a PARSED blob and names the argument
+    `expected_aad`, so every decrypt raised, every exception was swallowed per-row
+    (correctly — a crawl must survive an unreadable memory), and the result was an
+    empty dict.
+
+    That is indistinguishable from "nothing was ever remembered": the client
+    answers, the crawl asks again next time, and nothing anywhere reports a fault.
+    Source-level assertions could not catch it because the strings were all
+    present — only comparing against the path that provably works can."""
+    from app.services.test_factory import persona_store
+    proven = inspect.getsource(persona_store.get_persona_credential)
+    ours = inspect.getsource(fl.recall)
+    for required in ("EnvelopeBlob.from_bytes(bytes(", "expected_aad="):
+        assert required in proven, "the reference path changed: %s" % required
+        assert required in ours, "field memory drifted from the proven path: %s" % required
+    assert "aad=" not in ours.replace("expected_aad=", ""), "the wrong kwarg is back"
+
+
+def test_a_failed_decrypt_is_reported_not_silently_swallowed():
+    """Swallowing is right — a crawl must survive an unreadable memory — but doing
+    it silently is what made the bug above invisible."""
+    src = inspect.getsource(fl.recall)
+    assert "decrypt_failed" in src
+    assert "_logger.warning" in src
