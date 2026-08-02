@@ -1328,7 +1328,10 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
         setRunStatus((prev: any) => (prev && prev.run_id === r.run_id ? { ...prev, ...s } : prev));
         if (s.status && !['running', 'queued'].includes(s.status) && (s.status !== 'unknown' || i > 4)) break;
       }
-      setLiveUrl(null);
+      // Keep the viewer mounted for a moment with its "run finished" header. Tearing
+      // it down the instant the run ends left a black frame and no explanation — the
+      // exact ambiguity this panel now exists to remove.
+      window.setTimeout(() => setLiveUrl(null), 12000);
       setTriageKey((k) => k + 1);
     } catch (e: any) {
       setRunErr(e?.response?.data?.detail || String(e));
@@ -2082,18 +2085,40 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
       )}
       {/* Live execution — auto-heal trace + headed run stream (results view only;
           mounts here so the noVNC websocket is torn down when you go Back) */}
-      {view === 'run' && ((autoHealing || autoHealJob) || (liveUrl && running)) && (
+      {view === 'run' && ((autoHealing || autoHealJob) || liveUrl) && (
         <div className="space-y-3">
           {(autoHealing || autoHealJob) && (
             <AutoHealPanel job={autoHealJob} live={autoHealLive} healing={autoHealing} err={autoHealErr} />
           )}
-          {liveUrl && running && (
+          {liveUrl && (
+            /* The stream shows a VIRTUAL DESKTOP, which is black whenever no browser
+               is drawing on it. "Run finished" and "stream broken" therefore look
+               IDENTICAL — measured: the framebuffer carried 30 colours while the
+               browser ran and exactly 1 colour a few seconds later. So the state is
+               always stated ON the panel, and the panel is kept up briefly after the
+               run ends instead of vanishing, which used to leave a black frame with
+               no explanation. */
             <div ref={liveRef} className="rounded-lg overflow-hidden border-2 border-nexus-300 bg-black">
-              <div className="px-2 py-1 bg-nexus-600 text-[#fff] text-[10px] font-bold flex items-center gap-1.5">
-                <span className="inline-block h-2 w-2 rounded-full bg-red-400 animate-pulse" />
-                LIVE — headed Chromium on the VKPower runner (view-only stream)
+              <div className={`px-2 py-1 text-[#fff] text-[10px] font-bold flex items-center gap-1.5 ${running ? 'bg-nexus-600' : 'bg-slate-600'}`}>
+                {running ? (
+                  <>
+                    <span className="inline-block h-2 w-2 rounded-full bg-red-400 animate-pulse" />
+                    LIVE — headed Chromium on the VKPower runner (view-only stream)
+                  </>
+                ) : (
+                  <>
+                    <span className="inline-block h-2 w-2 rounded-full bg-slate-300" />
+                    RUN FINISHED — the browser has closed, so this screen is now blank. That is expected, not a broken stream.
+                  </>
+                )}
               </div>
               <iframe title="VKPower live run" src={liveUrl} className="w-full" style={{ height: 520, border: 0 }} />
+              {!running && (
+                <div className="px-2 py-1 bg-slate-800 text-slate-200 text-[10px]">
+                  Results are below. Re-run to watch again — a live run is paced so it
+                  can be followed; a headless run is not slowed and its timing is unchanged.
+                </div>
+              )}
             </div>
           )}
           {runStatus && running && (

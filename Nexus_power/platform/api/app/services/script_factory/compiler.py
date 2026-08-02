@@ -1705,6 +1705,13 @@ __WORKERS__  reporter: [['list'], ['html', { open: 'never' }], ['junit', { outpu
   use: {
     baseURL: nexusBaseURL(),
     headless: __HEADLESS__,
+    // A LIVE run exists to be WATCHED. Headless runs are unaffected (0), so the
+    // client-facing verdict and its timings never change. Without this the whole
+    // suite finishes in a few seconds — measured on a real client run: 1.1s, 969ms,
+    // 614ms per test — so by the time an operator opened the noVNC viewer the
+    // browser had already exited and they were looking at an empty desktop,
+    // indistinguishable from a broken stream. Overridable per run.
+    launchOptions: { slowMo: Number(process.env.NEXUS_SLOWMO || __SLOWMO__) },
     // Evidence tier T2: one trace.zip per FAILED test carries DOM snapshots,
     // network, console and a screencast, and is time-travel replayable — it
     // replaces a bespoke video/DOM/network pipeline. 'on-first-retry' never
@@ -1750,6 +1757,9 @@ def _playwright_config_param(projects=None, headed: bool = False,
         .replace("__RETRIES__", str(int(retries or 0)))
         .replace("__WORKERS__", workers_line)
         .replace("__HEADLESS__", "false" if headed else "true")
+        # Only a HEADED (live-view) run is slowed; a headless verdict run keeps its
+        # exact timing, so nothing about the client-facing result changes.
+        .replace("__SLOWMO__", "250" if headed else "0")
         .replace("__PROJECTS__", proj_lines)
     )
 
