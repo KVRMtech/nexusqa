@@ -14,7 +14,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle, Check, CheckCircle2, CheckSquare, ChevronDown, ChevronRight, Copy, Database, Download,
   FileCode2, Gauge, Globe, History, Loader2, Lock, MoreVertical, Pencil, Play, RefreshCw, RotateCcw, Rocket,
-  Save, Server, ShieldAlert, ShieldCheck, SlidersHorizontal, Square, Terminal, UserRound, Wand2,
+  Save, Server, ShieldAlert, ShieldCheck, SlidersHorizontal, Square, Terminal, UserRound, Video, Wand2,
 } from 'lucide-react';
 import { api } from './factoryApi';
 import TriagePanel from './TriagePanel';
@@ -853,6 +853,9 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
   const [authStatus, setAuthStatus] = useState<any>(null);   // { profile, capturing, encryption_available }
   const [authBusy, setAuthBusy] = useState<string>('');       // 'capture' | 'save' | 'cancel' | 'clear'
   const [captureLive, setCaptureLive] = useState<string | null>(null);
+  // RECORD + RUN: when the capture was started by one of the Record + Run
+  // buttons, saving it also dispatches the run. null = plain capture.
+  const [recordThenRun, setRecordThenRun] = useState<null | 'live' | 'headless'>(null);
   const [authErr, setAuthErr] = useState<string | null>(null);
 
   const auditScript = async (testId: string) => {
@@ -1088,7 +1091,8 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
   }, [artifactId]);
   useEffect(() => { void refreshAuth(); }, [refreshAuth]);
 
-  const startCapture = async () => {
+  const startCapture = async (thenRun: null | 'live' | 'headless' = null) => {
+    setRecordThenRun(thenRun);
     setAuthBusy('capture'); setAuthErr(null);
     try {
       const r = await api.startAuthCapture(artifactId, baseUrl || data?.recorded_base_url || '');
@@ -1098,6 +1102,12 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
     finally { setAuthBusy(''); }
   };
   const saveCapture = async () => {
+    // RECORD + RUN: the same "I've logged in" button, but when the capture was
+    // started from a Record + Run button it hands straight off to a run. The server
+    // does save-then-judge-then-dispatch in ONE call, so a recording that never
+    // completed the login refuses (422) instead of running the suite logged out and
+    // blaming the application for every failure.
+    if (recordThenRun) { await saveCaptureAndRun(recordThenRun); return; }
     setAuthBusy('save'); setAuthErr(null);
     try { await api.saveAuthCapture(artifactId); setCaptureLive(null); void refreshAuth(); }
     catch (e: any) { setAuthErr(e?.response?.data?.detail || String(e)); }
@@ -1106,7 +1116,7 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
   const cancelCapture = async () => {
     setAuthBusy('cancel');
     try { await api.cancelAuthCapture(artifactId); } catch { /* best-effort */ }
-    finally { setCaptureLive(null); setAuthBusy(''); void refreshAuth(); }
+    finally { setCaptureLive(null); setRecordThenRun(null); setAuthBusy(''); void refreshAuth(); }
   };
   const clearAuth = async () => {
     setAuthBusy('clear'); setAuthErr(null);
@@ -1299,6 +1309,55 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
     }
   };
   const running = runStatus?.status === 'running' || runStatus?.status === 'queued';
+
+  /** Store the login just recorded, then run with it. One server call so it cannot
+   *  half-happen; the refusal path has run nothing and says why. */
+  const saveCaptureAndRun = async (mode: 'live' | 'headless') => {
+    setAuthBusy('save'); setAuthErr(null); setRunErr(null);
+    try {
+      const body: any = {
+        watch: mode === 'live',
+        base_url: baseUrl.trim(), data: buildData(), data_by_test: buildDataByTest(),
+        browsers: Array.from(browsers), retries,
+        enable_video: Object.values(recordVideoByTest).some(Boolean),
+        categories: Array.from(selectedCats),
+      };
+      const r = await api.recordAndRun(artifactId, body);
+      setCaptureLive(null); setRecordThenRun(null); void refreshAuth();
+      setView('run');
+      if (mode === 'live') {
+        setLiveUrl(r.live_url);
+        setRunStatus({ run_id: r.run_id, status: r.status, target: r.target, scripts: r.scripts });
+        await followRun(r.run_id);
+        window.setTimeout(() => setLiveUrl(null), 12000);
+      } else {
+        setRunStatus({ run_id: r.run_id, status: r.status, target: r.target, scripts: r.scripts });
+        await followRun(r.run_id);
+      }
+      setTriageKey((k) => k + 1);
+    } catch (e: any) {
+      // A 422 here means the recording produced no usable session — nothing ran.
+      // Say that plainly rather than leaving the operator to guess.
+      const d = e?.response?.data?.detail;
+      const msg = (d && typeof d === 'object')
+        ? (d.note || d.error || 'the recorded login did not produce a usable session')
+        : (d || String(e));
+      setAuthErr(msg); setRunErr(msg);
+      setCaptureLive(null); setRecordThenRun(null);
+    } finally { setAuthBusy(''); }
+  };
+
+  /** Poll one run to completion — shared by the live, headless and Record + Run
+   *  paths so they cannot drift apart in how they report progress. */
+  const followRun = async (runId: string) => {
+    for (let i = 0; i < 260; i++) {
+      await new Promise((res) => setTimeout(res, 2500));
+      let s: any;
+      try { s = await api.getNexusRunStatus(artifactId, runId); } catch { continue; }
+      setRunStatus((prev: any) => (prev && prev.run_id === runId ? { ...prev, ...s } : prev));
+      if (s.status && !['running', 'queued'].includes(s.status) && (s.status !== 'unknown' || i > 4)) break;
+    }
+  };
 
   // Live: headed run on the runner, streamed into the portal via noVNC.
   const runLive = async (scope?: { test_ids?: string[] }) => {
@@ -1501,7 +1560,7 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
                     ) : (
                       <>
                         <span className="font-semibold text-amber-800">⚠ No saved login — a cold run starts logged out and may stop at the login screen (fails at step 1).</span>
-                        <button onClick={startCapture} disabled={!!authBusy || !authStatus?.encryption_available}
+                        <button onClick={() => void startCapture()} disabled={!!authBusy || !authStatus?.encryption_available}
                           className="rounded-md px-2 py-0.5 text-[10px] font-bold bg-amber-600 text-[#fff] hover:bg-amber-500 disabled:opacity-50">
                           {authBusy === 'capture' ? 'Opening…' : 'Capture login session'}
                         </button>
@@ -1853,6 +1912,33 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
               <span className="ml-auto text-[10px] text-nexus-400">manage in <span className="font-semibold text-nexus-500">Members &amp; Environments</span></span>
             </div>
 
+            {/* RECORD + RUN — log in by hand as anyone, then run as them immediately.
+                The shortest path to "try this as a different person": no member, no
+                environment, no card. The session it captures is perishable, so a
+                SCHEDULED run still wants a member's card — that is what the hint says
+                rather than letting an operator discover it at 2am. */}
+            <div className="rounded-lg border border-nexus-300 bg-white px-3 py-2 flex flex-wrap items-center gap-2">
+              <span className="inline-flex items-center gap-1.5 text-[11px] font-bold uppercase text-nexus-600">
+                <Video className="h-3.5 w-3.5 text-nexus-500" /> Record + Run
+              </span>
+              <button onClick={() => void startCapture('live')}
+                disabled={!!authBusy || !!captureLive || authStatus?.encryption_available === false}
+                title="Log in by hand, then watch the suite run as that person"
+                className="inline-flex items-center gap-1 rounded-md px-2.5 py-1 text-[11px] font-bold bg-nexus-600 text-[#fff] hover:bg-nexus-700 disabled:opacity-50">
+                <Play className="h-3.5 w-3.5" /> Record + Run live ▸ watch
+              </button>
+              <button onClick={() => void startCapture('headless')}
+                disabled={!!authBusy || !!captureLive || authStatus?.encryption_available === false}
+                title="Log in by hand, then run headless as that person"
+                className="inline-flex items-center gap-1 rounded-md px-2.5 py-1 text-[11px] font-bold ring-1 ring-nexus-300 text-nexus-700 bg-nexus-50 hover:bg-nexus-100 disabled:opacity-50">
+                <Play className="h-3.5 w-3.5" /> Record + Run on VKPower
+              </button>
+              <span className="text-[10px] text-slate-400">
+                switches who the suite runs as, right now — a recorded login expires, so a
+                scheduled run still needs a member’s card
+              </span>
+            </div>
+
             {/* Advanced configuration — collapsed by default so the flow reads Select → Run → Verdict */}
             <details className="group rounded-lg border border-nexus-100 bg-white">
               <summary className="flex items-center gap-2 cursor-pointer select-none px-3 py-2 text-[11px] font-bold text-nexus-700 list-none [&::-webkit-details-marker]:hidden">
@@ -1895,10 +1981,19 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
               {captureLive ? (
                 <div className="rounded-md border-2 border-nexus-300 overflow-hidden bg-black">
                   <div className="px-2 py-1 flex items-center gap-2 bg-nexus-600">
-                    <span className="text-[10px] font-bold uppercase text-[#fff]">Log in below, then save the session</span>
+                    {/* The button must say what pressing it DOES: with Record + Run the
+                        same press also dispatches the suite. */}
+                    <span className="text-[10px] font-bold uppercase text-[#fff]">
+                      {recordThenRun
+                        ? 'Log in below as the person you want to run as'
+                        : 'Log in below, then save the session'}
+                    </span>
                     <button onClick={saveCapture} disabled={authBusy === 'save'}
                       className="ml-auto inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-[10px] font-bold bg-emerald-500 text-[#fff] shadow-sm ring-1 ring-emerald-700/40 transition-all hover:brightness-110 active:translate-y-px disabled:opacity-50">
-                      {authBusy === 'save' ? <Loader2 className="h-3 w-3 animate-spin text-[#fff]" /> : <Check className="h-3 w-3 text-[#fff]" />} I've logged in — Save session
+                      {authBusy === 'save' ? <Loader2 className="h-3 w-3 animate-spin text-[#fff]" /> : <Check className="h-3 w-3 text-[#fff]" />}
+                      {recordThenRun
+                        ? (authBusy === 'save' ? 'Starting the run…' : "I've logged in — run now")
+                        : "I've logged in — Save session"}
                     </button>
                     <button onClick={cancelCapture} disabled={authBusy === 'cancel'}
                       className="rounded px-2 py-0.5 text-[10px] font-semibold bg-white/20 text-[#fff]">Cancel</button>

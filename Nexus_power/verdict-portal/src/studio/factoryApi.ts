@@ -343,6 +343,20 @@ class FactoryApiClient {
     return data;
   }
 
+  /** RECORD + RUN — store the login just recorded, then immediately run with it.
+   *
+   *  One call on purpose: saving always "succeeds" even when the operator never
+   *  completed the login (the recorder returns an empty cookie jar), and a run
+   *  started on that would execute the whole suite logged out and report every
+   *  failure against the application. The server judges the captured session and
+   *  refuses with 422 `{ran:false, note}` rather than dispatch. `watch:true` gives
+   *  the headed run you can watch; false runs headless. */
+  async recordAndRun(artifactId: string, body: Record<string, unknown>): Promise<any> {
+    const { data } = await this.client.post(
+      `/v1/test-factory/${artifactId}/playwright/auth/save-and-run`, body);
+    return data;
+  }
+
   /** Cancel an in-progress capture. */
   async cancelAuthCapture(artifactId: string): Promise<any> {
     const { data } = await this.client.post(`/v1/test-factory/${artifactId}/playwright/auth/cancel`, {});
