@@ -103,6 +103,7 @@ _KNOWN_VERDICTS = frozenset({
 from ..services.test_factory import runner_jobs
 from ..services.test_factory import auth_profiles
 from ..services.test_factory import evidence_report
+from ..services.test_factory import field_learning
 from ..services.test_factory import report_html
 from ..services.test_factory import report_export
 from ..services.test_factory import evidence_manifest
@@ -8731,6 +8732,207 @@ async def list_recipes_endpoint(
         recipes = await persona_store.list_recipes(
             session, tenant_id=tenant_id, artifact_id=artifact_id)
     return {"artifact_id": artifact_id, "recipes": recipes, "count": len(recipes)}
+
+
+
+# --- FIELD LEARNING (P1/P4/P5) ----------------------------------------------
+# The crawl asks a client for what it could not fill. Answering the same question
+# on the next crawl means nothing was learned. These endpoints are the memory.
+
+
+class _FieldAnswerBody(BaseModel):
+    """One answer to one residue question, keyed by the field's own signature."""
+    signature: str = Field(..., min_length=8, max_length=64)
+    value: str = Field(..., min_length=1, max_length=4096)
+    semantic_type: str = Field("unknown", max_length=48)
+    field_label: str = Field("", max_length=300)
+    signature_version: int = Field(1, ge=1, le=99)
+
+
+class _FieldAnswersBody(BaseModel):
+    answers: list[_FieldAnswerBody] = Field(default_factory=list, max_length=200)
+
+
+class _LearningConsentBody(BaseModel):
+    contribute: bool = False
+    consume: bool = True
+
+
+@router.post("/api/v1/test-factory/{artifact_id}/field-memory")
+async def remember_field_answers_endpoint(
+    body: _FieldAnswersBody,
+    request: Request,
+    artifact_id: str = PathParam(..., min_length=1, max_length=64),
+    user: dict = Depends(get_current_user),
+):
+    """Remember what the client just told us, so the next crawl does not ask again.
+
+    Values are envelope-encrypted exactly like a credential card and scoped to this
+    tenant — never readable by another client, and never written to the shared
+    priors table. What DOES generalise is the shape: that a field with this
+    signature is this semantic type. That contribution is opt-in and off by
+    default, and is skipped silently when the tenant has not opted in."""
+    if not _persona_write_ok(user):
+        raise HTTPException(403, "Saving test data requires an editor, manager or admin role.")
+    tenant_id = user["tenant_id"]
+    envelope = getattr(request.app.state, "envelope_service", None)
+    if envelope is None:
+        raise HTTPException(503, "encryption unavailable - refusing to store test data in plaintext")
+
+    stored, shared, errors = 0, 0, []
+    async with tenant_scoped_session(tenant_id) as session:
+        await _require_artifact(session, artifact_id, tenant_id)
+        for a in body.answers:
+            try:
+                await field_learning.remember(
+                    session, envelope=envelope, tenant_id=tenant_id,
+                    artifact_id=artifact_id, signature=a.signature, value=a.value,
+                    semantic_type=a.semantic_type, field_label=a.field_label,
+                    signature_version=a.signature_version)
+                stored += 1
+                # SHAPE ONLY. observe_prior has no parameter a value could travel
+                # through, and forces the type into the closed vocabulary.
+                if await field_learning.observe_prior(
+                        session, tenant_id=tenant_id, signature=a.signature,
+                        semantic_type=a.semantic_type,
+                        signature_version=a.signature_version):
+                    shared += 1
+            except (ValueError, RuntimeError) as exc:
+                errors.append({"signature": a.signature, "error": str(exc)[:200]})
+        await session.commit()
+    return {"status": "saved", "remembered": stored, "contributed_shapes": shared,
+            "errors": errors,
+            "note": ("Remembered for this application only. The next crawl fills these "
+                     "without asking. Values are encrypted and never leave this tenant.")}
+
+
+@router.get("/api/v1/test-factory/{artifact_id}/field-memory")
+async def list_field_memory_endpoint(
+    artifact_id: str = PathParam(..., min_length=1, max_length=64),
+    user: dict = Depends(get_current_user),
+):
+    """What we remember for this application - labels and outcomes, never values."""
+    tenant_id = user["tenant_id"]
+    async with tenant_scoped_session(tenant_id) as session:
+        await _require_artifact(session, artifact_id, tenant_id)
+        items = await field_learning.list_memories(
+            session, tenant_id=tenant_id, artifact_id=artifact_id)
+    return {"artifact_id": artifact_id, "count": len(items), "memories": items}
+
+
+@router.delete("/api/v1/test-factory/{artifact_id}/field-memory")
+async def forget_field_memory_endpoint(
+    artifact_id: str = PathParam(..., min_length=1, max_length=64),
+    signature: str = Query("", max_length=64),
+    user: dict = Depends(get_current_user),
+):
+    """Forget. A client must be able to make us stop holding their data."""
+    if not _persona_write_ok(user):
+        raise HTTPException(403, "Deleting test data requires an editor, manager or admin role.")
+    tenant_id = user["tenant_id"]
+    async with tenant_scoped_session(tenant_id) as session:
+        await _require_artifact(session, artifact_id, tenant_id)
+        removed = await field_learning.forget(
+            session, tenant_id=tenant_id, artifact_id=artifact_id, signature=signature)
+        await session.commit()
+    return {"status": "forgotten", "removed": removed}
+
+
+@router.get("/api/v1/test-factory/{artifact_id}/field-resolution")
+async def field_resolution_endpoint(
+    request: Request,
+    artifact_id: str = PathParam(..., min_length=1, max_length=64),
+    user: dict = Depends(get_current_user),
+):
+    """Everything a crawl of this application needs in order not to ask twice.
+
+    Called by the orchestrator immediately before dispatch. Returns the tenant's own
+    remembered values (decrypted for this dispatch only) AND the pooled, value-free
+    priors. They are separate keys because they carry entirely different risk and
+    the caller must never conflate them."""
+    tenant_id = user["tenant_id"]
+    envelope = getattr(request.app.state, "envelope_service", None)
+    async with tenant_scoped_session(tenant_id) as session:
+        await _require_artifact(session, artifact_id, tenant_id)
+        recalled = await field_learning.recall(
+            session, envelope=envelope, tenant_id=tenant_id, artifact_id=artifact_id)
+        priors = await field_learning.load_priors(session, tenant_id=tenant_id)
+        consent = await field_learning.get_consent(session, tenant_id=tenant_id)
+    # Refuse to hand out priors that are not value-free rather than distribute them:
+    # the check costs nothing and the failure it catches is unrecoverable.
+    if not field_learning.priors_are_value_free(priors):
+        _logger.error("test_factory.field_priors.not_value_free artifact=%s", artifact_id)
+        priors = {}
+    return {"artifact_id": artifact_id, "recalled_values": recalled,
+            "field_priors": priors, "consent": consent,
+            "identity_seed": f"{tenant_id}::{artifact_id}"}
+
+
+@router.post("/api/v1/test-factory/{artifact_id}/field-outcome")
+async def field_outcome_endpoint(
+    body: dict,
+    artifact_id: str = PathParam(..., min_length=1, max_length=64),
+    user: dict = Depends(get_current_user),
+):
+    """P5 - did the APPLICATION accept the value we remembered?
+
+    A remembered value the app rejects is worse than none, because it looks like an
+    answer. Once rejected more often than accepted it stops being offered and the
+    field returns to the residue ask. The loop closes on the application's verdict,
+    never on our optimism."""
+    tenant_id = user["tenant_id"]
+    outcomes = body.get("outcomes") if isinstance(body, dict) else None
+    if not isinstance(outcomes, list):
+        raise HTTPException(422, "outcomes must be a list of {signature, accepted}")
+    applied = 0
+    async with tenant_scoped_session(tenant_id) as session:
+        await _require_artifact(session, artifact_id, tenant_id)
+        for o in outcomes[:500]:
+            if not isinstance(o, dict):
+                continue
+            sig = str(o.get("signature") or "").strip()
+            if not sig:
+                continue
+            accepted = bool(o.get("accepted"))
+            await field_learning.record_outcome(
+                session, tenant_id=tenant_id, artifact_id=artifact_id,
+                signature=sig, accepted=accepted)
+            await field_learning.observe_prior(
+                session, tenant_id=tenant_id, signature=sig,
+                semantic_type=str(o.get("semantic_type") or "unknown"),
+                accepted=accepted)
+            applied += 1
+        await session.commit()
+    return {"status": "recorded", "applied": applied}
+
+
+@router.get("/api/v1/test-factory/learning-consent")
+async def get_learning_consent_endpoint(user: dict = Depends(get_current_user)):
+    """Whether this tenant contributes field SHAPES to the shared pool.
+
+    Contributing is off until somebody decides, because a regulated client must be
+    able to use the product without their field shapes reaching a shared table, and
+    the safe default is the one that applies before anyone has chosen."""
+    tenant_id = user["tenant_id"]
+    async with tenant_scoped_session(tenant_id) as session:
+        return await field_learning.get_consent(session, tenant_id=tenant_id)
+
+
+@router.post("/api/v1/test-factory/learning-consent")
+async def set_learning_consent_endpoint(
+    body: _LearningConsentBody,
+    user: dict = Depends(get_current_user),
+):
+    if not _persona_write_ok(user):
+        raise HTTPException(403, "Changing the learning consent requires an editor, manager or admin role.")
+    tenant_id = user["tenant_id"]
+    async with tenant_scoped_session(tenant_id) as session:
+        out = await field_learning.set_consent(
+            session, tenant_id=tenant_id, contribute=body.contribute,
+            consume=body.consume,
+            decided_by=user.get("email") or user.get("user_id") or "?")
+        await session.commit()
+    return out
 
 
 @router.get("/api/v1/test-factory/{artifact_id}/login-contract")

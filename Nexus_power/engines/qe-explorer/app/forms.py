@@ -46,6 +46,8 @@ from .browser import (
     BrowserPort,
     classify_submit_after,
 )
+from . import field_semantics, field_signature, field_values
+from .identity_pack import Identity, derive as derive_identity
 from .guard import GuardDecision, Phase, classify_request, registrable_domain
 from .inventory import target_kind_for
 
@@ -142,6 +144,12 @@ class FormFillResult:
     #: Fillable fields left EMPTY (no seed AND no safe default) — the exact set the
     #: coverage report names as "add seed for these to unlock more flows".
     unfilled_fields: list[str] = field(default_factory=list)
+    #: PER-FIELD LEDGER — one entry for every fillable control the crawl met, filled
+    #: or not: {name, signature, semantic_type, basis, provenance, filled, sensitive}.
+    #: Never a value. This is what makes the residue ask specific ("give me these
+    #: three") and what the learning loop is keyed on; without it a second crawl has
+    #: no way to know it already asked.
+    field_ledger: list[dict[str, Any]] = field(default_factory=list)
 
 
 def _norm(text: Any) -> str:
@@ -300,6 +308,69 @@ def _slider_default(control: Mapping[str, Any]) -> str:
     return "50"
 
 
+#: Where a filled value came from. Carried into evidence for EVERY field, because
+#: a green result that rested on a value nobody confirmed is worth less than one
+#: that rested on the client's own data — and a reader cannot tell the difference
+#: unless we say so.
+PROV_PROVIDED = "provided"        # the client's answer key — explicit, highest trust
+PROV_RECALLED = "recalled"        # remembered from a previous crawl of THIS client
+PROV_SYNTHESIZED = "synthesized"  # generated from the crawl's fictional identity
+PROV_NEEDS_INPUT = "needs_input"  # nothing honest could be produced — ask the client
+
+
+def resolve_field(control: Mapping[str, Any], kind: str, name: str,
+                  answer_key: "AnswerKey", identity: Identity,
+                  *, recalled: Optional[Mapping[str, str]] = None,
+                  priors: Optional[Mapping[str, Any]] = None) -> dict[str, Any]:
+    """Decide what to type into one control, and record HOW it was decided.
+
+    The order is fixed and fails toward asking rather than guessing:
+
+      1. the client's answer key — an explicit instruction always wins;
+      2. a value this same client supplied for this same field before;
+      3. a value generated for the semantic type the field was classified as;
+      4. nothing — the field joins the residue the client is asked for.
+
+    Rungs 3 and 4 are the difference between a crawl that stops at the first
+    unfamiliar form and one that reaches the end of a funnel. Rung 1 staying first
+    is what stops the learning from ever overriding a client who told us the
+    answer."""
+    sig = field_signature.compute(control, kind=kind)
+    verdict = field_semantics.classify(sig, priors=priors)
+    entry = {
+        "name": name,
+        "signature": sig["signature"],
+        "semantic_type": verdict["type"],
+        "basis": verdict["basis"],
+        "confidence": verdict["confidence"],
+        "sensitive": verdict["sensitive"],
+        "filled": False,
+        "provenance": PROV_NEEDS_INPUT,
+    }
+
+    explicit = answer_key.resolve(name)
+    if explicit is not None:
+        entry.update(provenance=PROV_PROVIDED, filled=True)
+        return {"value": explicit, "entry": entry}
+
+    if recalled:
+        prior_value = recalled.get(sig["signature"])
+        if prior_value not in (None, ""):
+            entry.update(provenance=PROV_RECALLED, filled=True)
+            return {"value": str(prior_value), "entry": entry}
+
+    generated = field_values.value_for(verdict["type"], control, identity, kind=kind)
+    if generated is None:
+        # Last resort: the structural default ladder, which knows control shapes the
+        # semantic vocabulary does not cover. Still synthesized, still declared.
+        generated = _synthesize_default(control, kind, name)
+    if generated is not None:
+        entry.update(provenance=PROV_SYNTHESIZED, filled=True)
+        return {"value": generated, "entry": entry}
+
+    return {"value": None, "entry": entry}
+
+
 async def fill_form_phase_a(
     port: BrowserPort,
     controls: Sequence[Mapping[str, Any]],
@@ -308,6 +379,9 @@ async def fill_form_phase_a(
     *,
     phase: str = Phase.EXPLORE.value,
     state_id: str = "",
+    identity: Optional[Identity] = None,
+    recalled: Optional[Mapping[str, str]] = None,
+    priors: Optional[Mapping[str, Any]] = None,
 ) -> FormFillResult:
     """Phase A: fill fillable controls from ``answer_key``, read back, STOP.
 
@@ -318,6 +392,10 @@ async def fill_form_phase_a(
     unclicked — the submit boundary is the whole point.
     """
     result = FormFillResult()
+    # One coherent person for the whole crawl. Regenerating per field would give a
+    # form whose postcode belongs to a different state than its region — internally
+    # inconsistent in exactly the way an application validates.
+    identity = identity or derive_identity(state_id or "qec")
     for control in controls:
         kind = _norm(control.get("kind"))
         name = str(control.get("name") or "")
@@ -352,24 +430,29 @@ async def fill_form_phase_a(
         if not _norm(name):
             logger.info("qec.forms.skip_nameless_field kind=%s", kind)
             continue
-        value = answer_key.resolve(name)
-        seeded = value is not None
+        decision = resolve_field(control, kind, name, answer_key, identity,
+                                 recalled=recalled, priors=priors)
+        entry, value = decision["entry"], decision["value"]
         if value is None:
-            # No client seed for this field — synthesize a valid low-confidence value
-            # so the form can reach validity and deeper flows become reachable.
-            value = _synthesize_default(control, kind, name)
-            if value is None:
-                result.unfilled_fields.append(name)
-                continue
+            result.unfilled_fields.append(name)
+            result.field_ledger.append(entry)
+            continue
 
         action = await _fill_one(port, control, kind, value, clock, phase=phase,
                                  state_id=state_id)
-        if action is not None:
-            result.actions.append(action)
-            result.filled += 1
-            if not seeded:
-                result.inferred += 1
-                result.inferred_fields.append(name)
+        if action is None:
+            # The fill did not commit. Recording it as filled would be a claim the
+            # evidence does not support, so it becomes residue like any other.
+            entry.update(filled=False, provenance=PROV_NEEDS_INPUT)
+            result.unfilled_fields.append(name)
+            result.field_ledger.append(entry)
+            continue
+        result.actions.append(action)
+        result.filled += 1
+        result.field_ledger.append(entry)
+        if entry["provenance"] != PROV_PROVIDED:
+            result.inferred += 1
+            result.inferred_fields.append(name)
 
     logger.info("qec.forms.phase_a filled=%d inferred=%d flow_candidates=%d dangerous=%d unfilled=%d",
                 result.filled, result.inferred, len(result.flow_candidates),

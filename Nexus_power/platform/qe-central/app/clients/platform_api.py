@@ -311,3 +311,81 @@ async def mirror_environment_profile(
                "detail": response.text[:200]},
     )
     return False
+
+
+async def fetch_field_resolution(*, tenant_id: str, artifact_id: str) -> dict:
+    """Everything a crawl of this application needs in order not to ask twice.
+
+    Two halves under separate keys because they carry entirely different risk:
+    ``recalled_values`` is this tenant's own data, decrypted for this one dispatch;
+    ``field_priors`` is pooled and value-free. They must never be conflated, so
+    they are never merged here.
+
+    NEVER raises. Without memory a crawl still runs — it fills what it can and asks
+    for the rest, which is exactly the behaviour that existed before any of this.
+    """
+    if not artifact_id:
+        return {"recalled_values": {}, "field_priors": {}, "identity_seed": ""}
+    try:
+        token = mint_service_jwt(tenant_id)
+        async with httpx.AsyncClient(
+            base_url=settings.platform_api_url,
+            timeout=phase1_settings.auth_import_timeout_s,
+        ) as client:
+            resp = await client.get(
+                f"/api/v1/test-factory/{artifact_id}/field-resolution",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if resp.status_code != 200:
+                logger.info("qec.field_resolution.unavailable status=%s", resp.status_code)
+                return {"recalled_values": {}, "field_priors": {}, "identity_seed": ""}
+            data = resp.json() or {}
+    except Exception as exc:
+        logger.info("qec.field_resolution.failed error=%s", str(exc)[:160])
+        return {"recalled_values": {}, "field_priors": {}, "identity_seed": ""}
+
+    recalled = data.get("recalled_values")
+    priors = data.get("field_priors")
+    return {
+        "recalled_values": recalled if isinstance(recalled, dict) else {},
+        "field_priors": priors if isinstance(priors, dict) else {},
+        "identity_seed": str(data.get("identity_seed") or ""),
+    }
+
+
+async def contribute_field_shapes(*, tenant_id: str, artifact_id: str,
+                                  verdicts: dict) -> int:
+    """Record what a field turned out to be. SHAPES ONLY.
+
+    ``verdicts`` is ``{signature: {type, confidence}}`` from the field agent. There
+    is no value in it and no parameter one could be passed through; the receiving
+    endpoint forces every type into the closed vocabulary before storing it, and
+    drops the whole contribution when the tenant has not opted in.
+
+    NEVER raises: learning is an optimisation, and an optimisation must not be able
+    to fail a crawl that already produced a valid artifact."""
+    if not artifact_id or not verdicts:
+        return 0
+    outcomes = [{"signature": sig, "semantic_type": (v or {}).get("type") or "unknown",
+                 "accepted": True}
+                for sig, v in list(verdicts.items())[:500]
+                if isinstance(v, dict) and v.get("type")]
+    if not outcomes:
+        return 0
+    try:
+        token = mint_service_jwt(tenant_id)
+        async with httpx.AsyncClient(
+            base_url=settings.platform_api_url,
+            timeout=phase1_settings.auth_import_timeout_s,
+        ) as client:
+            resp = await client.post(
+                f"/api/v1/test-factory/{artifact_id}/field-outcome",
+                headers={"Authorization": f"Bearer {token}"},
+                json={"outcomes": outcomes},
+            )
+            if resp.status_code != 200:
+                return 0
+            return int((resp.json() or {}).get("applied") or 0)
+    except Exception as exc:
+        logger.info("qec.field_shapes.contribute_failed error=%s", str(exc)[:160])
+        return 0

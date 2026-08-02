@@ -52,6 +52,13 @@ class ExploreDispatchRequest(BaseModel):
     #: FRONTIER PRIORITY ONLY (reorders what it would visit; can never add a state,
     #: cross a submit, or leave the fence). Empty ⇒ byte-identical crawl.
     plan: dict = Field(default_factory=dict)
+    #: FIELD LEARNING. ``recalled_values`` carries values THIS tenant supplied on a
+    #: previous crawl, decrypted for this one dispatch — as sensitive as
+    #: ``answer_key`` and treated identically: never logged, only its presence is.
+    #: ``field_priors`` is pooled and VALUE-FREE, so it is safe to carry anywhere.
+    recalled_values: dict = Field(default_factory=dict)
+    field_priors: dict = Field(default_factory=dict)
+    identity_seed: str = Field(default="", max_length=200)
     phase: str = Field(default="explore")
     submit_approvals: list[str] = Field(default_factory=list)
     #: TARGET MODE (R3 Mode 2) — path prefixes the crawl is CONFINED to (e.g.
@@ -102,6 +109,11 @@ def _log_safe(req: ExploreDispatchRequest) -> dict:
         "phase": req.phase,
         "has_credentials": bool(req.credentials),
         "has_answer_key": bool(req.answer_key),
+        # COUNTS, never contents: a remembered value is client data and must not
+        # reach a log line, but "did memory arrive" is what an operator needs when
+        # a crawl asks for something it should already know.
+        "recalled_count": len(req.recalled_values or {}),
+        "priors_count": len(req.field_priors or {}),
         # Booleans only — never the raw routing cookies/headers/basic-auth (secret).
         "has_cookies": bool(req.cookies),
         "has_headers": bool(req.extra_http_headers),

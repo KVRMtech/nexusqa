@@ -30,6 +30,7 @@ FILES=(
   apply_env_registry_link.sql    # environment routing fields + link to the onboarding profile (F6)
   apply_heal_events.sql
   apply_run_reports.sql
+  apply_field_learning.sql      # field memory (tenant-private) + priors (value-free)
 )
 
 run_sql() {

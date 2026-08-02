@@ -121,6 +121,20 @@ class ExploreRequest(BaseModel):
     #: weight}]} from qe-central. Applied as FRONTIER PRIORITY ONLY (reorders; never
     #: adds a state or changes reachability). Re-bounded defensively on this side.
     plan: dict[str, Any] = Field(default_factory=dict)
+    #: FIELD LEARNING (P1/P4). Two value-carrying-vs-shape-carrying halves, kept
+    #: separate on purpose:
+    #:   ``recalled_values``  {signature: value} — values THIS tenant supplied
+    #:       before, decrypted by qe-central for this one crawl. Tenant-private;
+    #:       never logged, never emitted, never leaves this process.
+    #:   ``field_priors``     {signature: {type, confidence, ...}} — pooled,
+    #:       VALUE-FREE knowledge of what a field with that signature is FOR.
+    #: Both are optional: absent, the crawl behaves exactly as it did before.
+    recalled_values: dict[str, str] = Field(default_factory=dict)
+    field_priors: dict[str, Any] = Field(default_factory=dict)
+    #: Seed for the crawl's fictional identity. Stable per tenant+app so the same
+    #: client presents the same person every crawl — a quote that changes because
+    #: the age changed between runs is a false difference, not a regression.
+    identity_seed: str = Field(default="", max_length=200)
     attestation: Optional[dict[str, Any]] = None
     #: A pre-captured Playwright ``storageState`` (cookies + origins) to START the
     #: browser context authenticated — the tier-4 escape hatch for logins the
@@ -400,6 +414,12 @@ async def _run_job(
                 wizard_enabled=settings.wizard_enabled,
                 plan=req.plan,
                 scope_path_prefixes=req.scope_path_prefixes,
+                recalled_values=req.recalled_values,
+                field_priors=req.field_priors,
+                # Stable per tenant+app: the same client must present the same
+                # fictional person every crawl, or a re-quote differs for a reason
+                # that has nothing to do with the application.
+                identity_seed=req.identity_seed or f"{req.tenant_id}::{req.target_url}",
             )
             job = _Job(crawler)
             jobs.activate(job)

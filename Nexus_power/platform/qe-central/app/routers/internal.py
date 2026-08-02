@@ -38,6 +38,7 @@ from sqlalchemy import select
 
 from ..artifacts.creator import create_crawl_artifact
 from ..clients import factory, platform_api
+from ..services import field_agent
 from ..clients.config import SIGNATURE_HEADER, phase1_settings
 from ..clients.manifest_mapper import (
     ManifestMappingError,
@@ -547,6 +548,42 @@ async def complete_crawl(crawl_id: str, request: Request) -> dict:
     stats_dict["auth_import"] = auth_import
     if body.coverage:  # P4: named seed-remediation surface for the app UI
         stats_dict["coverage"] = body.coverage
+
+    # ── FIELD LEARNING (P3/P4) — what did this crawl teach us? ────────────
+    # The crawl's residue is every field nothing deterministic could name. A
+    # language model reads their SHAPES ONLY — label words, input type, declared
+    # constraints, option count — and returns a semantic TYPE from a closed
+    # vocabulary. It never sees a value and never produces one; a generator does
+    # that, from a fictional identity, so every value stays reproducible and
+    # provably not a real person's.
+    #
+    # What is learned is stored as a SHAPE against the field's signature, so the
+    # next crawl of ANY application with the same field starts knowing what it is.
+    # Contribution is opt-in per tenant and refused server-side when it is off.
+    #
+    # Entirely best-effort: this runs after the substrate is already durable, and a
+    # classifier hiccup must never cost a client a valid crawl.
+    learning = {"attempted": False}
+    try:
+        ledger = ((body.coverage or {}).get("field_ledger") or []) if body.coverage else []
+        residue = [f for f in ledger
+                   if isinstance(f, dict)
+                   and str(f.get("semantic_type") or "unknown") == "unknown"
+                   and f.get("signature")]
+        if residue:
+            learning["attempted"] = True
+            verdicts = await field_agent.classify_fields(tenant_id, residue)
+            applied = await platform_api.contribute_field_shapes(
+                tenant_id=tenant_id, artifact_id=created.artifact_id,
+                verdicts=verdicts,
+            )
+            learning.update(unnamed=len(residue), classified=len(verdicts),
+                            contributed=applied)
+        else:
+            learning.update(unnamed=0, classified=0, contributed=0)
+    except Exception as exc:                       # never fail a durable crawl
+        learning = {"attempted": True, "error": str(exc)[:200]}
+    stats_dict["field_learning"] = learning
 
     # Promote the recorded artifact onto the app so a cycle / the portal reads it.
     await _promote_latest_artifact(tenant_id, app_id, created.artifact_id)

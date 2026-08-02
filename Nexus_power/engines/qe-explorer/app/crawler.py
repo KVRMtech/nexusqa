@@ -44,6 +44,7 @@ from . import value_infer
 from .auth import Authenticator, AuthWindow, Credentials
 from .browser import BrowserPort, PageObservation
 from .fingerprint import state_fingerprint
+from .identity_pack import derive as derive_identity
 from .forms import AnswerKey, execute_submit_phase_b, fill_form_phase_a
 from .guard import (
     EVENT_BLOCKED_METHOD,
@@ -479,6 +480,9 @@ class Crawler:
         config_fingerprint: str,
         guard_context: GuardContext,
         answer_key: Optional[AnswerKey] = None,
+        recalled_values: Optional[dict[str, str]] = None,
+        field_priors: Optional[dict[str, Any]] = None,
+        identity_seed: str = "",
         credentials: Optional[Credentials] = None,
         allowed_hosts: Sequence[str] = (),
         max_relogins: int = 3,
@@ -501,6 +505,18 @@ class Crawler:
         self._config_fingerprint = config_fingerprint
         self._guard = guard_context
         self._answer_key = answer_key or AnswerKey()
+        # FIELD LEARNING. `recalled_values` is tenant-private data decrypted for this
+        # one crawl — it is never logged, never emitted into the manifest, and never
+        # crosses a process boundary. `field_priors` is pooled and value-free.
+        self._recalled_values = dict(recalled_values or {})
+        self._field_priors = dict(field_priors or {})
+        # ONE person for the whole crawl: regenerating per form would produce a
+        # postcode belonging to a different region than the one selected two steps
+        # earlier, which is exactly what an application cross-validates.
+        self._identity = derive_identity(identity_seed or "qec")
+        # Every fillable control the crawl met, filled or not — the residue ask and
+        # the learning loop are both keyed on this. Values are NOT in it.
+        self._field_ledger: list[dict[str, Any]] = []
         self._credentials = credentials
         self._max_relogins = max_relogins
         self._sleep = sleep
@@ -593,6 +609,24 @@ class Crawler:
         decision + guard_event timestamps — one clock across the whole crawl)."""
         return self._clock.now_ms()
 
+    def _collect_ledger(self, entries: list[dict[str, Any]], url: str) -> None:
+        """Merge this state's field ledger into the crawl-wide one, deduped by
+        signature.
+
+        Deduped because the same field on ten pages is ONE thing to ask the client
+        about — a residue list that repeats itself is the reason operators stop
+        reading it. The first sighting wins and keeps its page, which is what lets
+        the ask say WHICH flow the field belongs to."""
+        seen = {e.get("signature") for e in self._field_ledger}
+        for entry in entries or ():
+            sig = entry.get("signature")
+            if not sig or sig in seen:
+                continue
+            seen.add(sig)
+            row = dict(entry)
+            row["url"] = url
+            self._field_ledger.append(row)
+
     def _build_coverage(self) -> dict[str, Any]:
         """The crawl's coverage account (deduped, first-appearance order): what was
         found vs could be filled/advanced. ``forms_submitted`` is 0 in the explore
@@ -644,6 +678,7 @@ class Crawler:
 
         inferred = _dedup(self._fields_inferred)
         needs_seed = _dedup(self._fields_unfilled)
+        field_ledger = self._field_ledger[:500]
         needs_seed_detail = _dedup_detail(self._fields_seed_detail)
         opaque_surfaces = _dedup_opaque(self._opaque_surfaces)
         unhandled_controls = _dedup_unhandled(self._unhandled_controls)
@@ -662,6 +697,10 @@ class Crawler:
             "forms_found": self._forms_found,
             "forms_submitted": self._forms_submitted,
             "fields_inferred": inferred,
+            # PER-FIELD LEDGER (field learning). One entry per distinct field the
+            # crawl met: what it is, how it was answered, whether it committed.
+            # No values — this travels back to qe-central and into evidence.
+            "field_ledger": field_ledger,
             "fields_needing_seed": needs_seed,
             # Per-field page context {label, url} — the grounded source for flow grouping.
             # Kept alongside the flat list (which stays for back-compat).
@@ -937,6 +976,8 @@ class Crawler:
             fill = await fill_form_phase_a(
                 self._port, controls, self._answer_key or AnswerKey(), self._clock,
                 phase=Phase.EXPLORE.value, state_id=fingerprint,
+                identity=self._identity, recalled=self._recalled_values,
+                priors=self._field_priors,
             )
             actions.extend(fill.actions)
             self._tracker.note_action(len(fill.actions))
@@ -945,6 +986,11 @@ class Crawler:
             # Tag each unfilled field with the page it appeared on (grounds flow grouping).
             self._fields_seed_detail.extend(
                 {"label": lbl, "url": obs.url or ""} for lbl in fill.unfilled_fields)
+            # The signature ledger: what each field IS and how it got answered. This
+            # is the key the residue ask and the learning loop are both built on —
+            # without it a second crawl has no way to know it already asked. Values
+            # are deliberately not carried.
+            self._collect_ledger(fill.field_ledger, obs.url or "")
             self._submit_candidates.extend(
                 fc.name for fc in fill.flow_candidates if fc.name and not fc.danger)
             if fill.filled:
@@ -1740,7 +1786,9 @@ class Crawler:
         if any((c.get("kind") in _FILLABLE_KINDS) and not _is_password(c) for c in refreshed):
             await fill_form_phase_a(
                 self._port, refreshed, self._answer_key or AnswerKey(), self._clock,
-                phase=Phase.EXPLORE.value, state_id=fingerprint)
+                phase=Phase.EXPLORE.value, state_id=fingerprint,
+                identity=self._identity, recalled=self._recalled_values,
+                priors=self._field_priors)
 
         cur_url, cur_title, cur_controls, cur_fp = url, title, controls, fingerprint
         cur_actions = list(base_actions)
@@ -1795,7 +1843,9 @@ class Crawler:
             if any((c.get("kind") in _FILLABLE_KINDS) and not _is_password(c) for c in new_controls):
                 filled = await fill_form_phase_a(
                     self._port, new_controls, self._answer_key or AnswerKey(), self._clock,
-                    phase=Phase.EXPLORE.value, state_id=new_fp)
+                    phase=Phase.EXPLORE.value, state_id=new_fp,
+                    identity=self._identity, recalled=self._recalled_values,
+                    priors=self._field_priors)
                 step_actions.extend(filled.actions)
                 self._tracker.note_action(len(filled.actions))
                 if filled.filled:

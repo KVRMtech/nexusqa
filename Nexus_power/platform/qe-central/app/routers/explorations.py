@@ -42,6 +42,7 @@ from sqlalchemy import select
 from ..artifacts.creator import create_crawl_artifact
 from ..auth import require_auth, require_role
 from ..clients import explorer_client
+from ..clients import platform_api
 from ..clients.config import phase1_settings
 from ..clients.explorer_client import ExploreDispatchRequest, ExplorerDispatchError
 from ..clients.refusal_messages import client_refusal_message
@@ -601,6 +602,13 @@ async def _dispatch_explorer(
         plan = await build_exploration_plan(
             tenant_id, app_id, prior_artifact_id, base_url,
         )
+    # FIELD LEARNING (P1/P4). What this client already told us, plus the pooled
+    # value-free knowledge of what a field with a given signature is FOR. Fetched
+    # HERE, never in the quarantined explorer, and fail-open: no memory means the
+    # crawl fills what it can and asks for the rest, exactly as it always did.
+    resolution = await platform_api.fetch_field_resolution(
+        tenant_id=tenant_id, artifact_id=prior_artifact_id,
+    )
     dispatch_request = ExploreDispatchRequest(
         crawl_id=crawl_id,
         tenant_id=tenant_id,
@@ -617,6 +625,9 @@ async def _dispatch_explorer(
         submit_approvals=submit_approvals,
         session=auth_session,
         scope_path_prefixes=scope_paths,
+        recalled_values=resolution["recalled_values"],
+        field_priors=resolution["field_priors"],
+        identity_seed=resolution["identity_seed"] or f"{tenant_id}::{app_id}",
     )
     # Dispatch to an available WORKER in the pool. For EACH worker we fence egress
     # into THAT worker's OWN allowlist file (fail-closed) BEFORE dispatching to it —
