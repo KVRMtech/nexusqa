@@ -8393,6 +8393,124 @@ async def create_persona_endpoint(
     return out
 
 
+class _MemberFromLoginBody(BaseModel):
+    name: str = Field(..., min_length=1, max_length=120)
+    environment_id: str = Field(..., min_length=1, max_length=64)
+    slot_values: dict = Field(default_factory=dict)
+    behavior_class: str = Field("", max_length=64)
+    traits: list[str] = Field(default_factory=list)
+    description: str = Field("", max_length=2000)
+
+
+@router.post("/api/v1/test-factory/{artifact_id}/personas/from-recorded-login")
+async def member_from_recorded_login_endpoint(
+    body: _MemberFromLoginBody,
+    request: Request,
+    artifact_id: str = PathParam(..., min_length=1, max_length=64),
+    user: dict = Depends(get_current_user),
+):
+    """Turn the login just recorded into a REUSABLE member.
+
+    Record + Run authenticates with a captured session. A session is perishable —
+    it expires, and nothing can replay it. So the moment the operator closes the
+    tab, tomorrow's scheduled run has no way to be that user again. This is the
+    bridge: it pairs the recipe the recording already derived (the choreography,
+    which does NOT expire) with a card (the values, encrypted) so the same login
+    can be performed again, unattended, for as long as the credentials are valid.
+
+    The recording deliberately captures identifiers only, never a credential value
+    — so the values cannot be harvested from it and the operator supplies them
+    once here. The recipe is what makes that a short, correct form instead of
+    hand-authoring: the fields asked for are the fields the application's own
+    login asked for.
+
+    The new member is NOT proven. The recording proved a *session*; it did not
+    prove that these values, typed into this recipe, log in. Only a replay proves
+    that, so the card is stored ``unverified`` and Verify is left to do its job."""
+    if not _persona_write_ok(user):
+        raise HTTPException(403, "Saving a member requires an editor, manager or admin role.")
+    tenant_id = user["tenant_id"]
+    envelope = getattr(request.app.state, "envelope_service", None)
+    if envelope is None:
+        raise HTTPException(503, "encryption unavailable — refusing to store credentials in plaintext")
+    name = str(body.name or "").strip()
+    if not name:
+        raise HTTPException(422, "a member needs a name")
+
+    async with tenant_scoped_session(tenant_id) as session:
+        await _require_artifact(session, artifact_id, tenant_id)
+
+        # A card is values FOR a recipe. Without the recipe there are no slots, so
+        # any names supplied would be a guess — and a guessed name silently skips
+        # the login at run time.
+        recipe = await persona_store.get_recipe(
+            session, tenant_id=tenant_id, artifact_id=artifact_id)
+
+        # save_persona upserts by name, and the upsert does not touch ``status`` —
+        # so reusing a RETIRED member's name would attach the card to a member that
+        # every dispatch then refuses, after telling the operator it saved fine.
+        # Retirement is a decision; silently reviving it would defeat it.
+        existing = await persona_store.list_personas(
+            session, tenant_id=tenant_id, artifact_id=artifact_id, include_retired=True)
+        clash = next((p for p in existing
+                      if str(p.get("name") or "").strip().lower() == name.lower()
+                      and str(p.get("status") or "active").lower() != "active"), None)
+        if clash:
+            raise HTTPException(status_code=409, detail={
+                "error": "a retired member already uses that name",
+                "reason": "name_retired",
+                "persona_id": clash.get("persona_id", ""),
+                "note": ("A member with this name was retired, and saving over it would "
+                         "produce a member that looks fine here but is refused by every "
+                         "run. Choose a different name, or un-retire that member."),
+            })
+
+        try:
+            # Refuse BEFORE creating anything, so a rejected card cannot leave a
+            # nameless member behind with no way to log in.
+            card_contract.check_card(recipe=recipe, slot_values=body.slot_values)
+        except card_contract.CardContractError as exc:
+            raise HTTPException(status_code=422,
+                                detail={"error": str(exc), **exc.detail})
+
+        p = await persona_store.save_persona(
+            session, tenant_id=tenant_id, artifact_id=artifact_id, name=name,
+            description=body.description, traits=body.traits,
+            behavior_class=body.behavior_class)
+        try:
+            card = await persona_store.save_persona_credential(
+                session, envelope=envelope, tenant_id=tenant_id,
+                persona_id=p["persona_id"], environment_id=body.environment_id,
+                slot_values=body.slot_values,
+                login_type_key=str((recipe or {}).get("login_type_key") or ""),
+                recipe_version=int((recipe or {}).get("version") or 0))
+        except (ValueError, RuntimeError) as exc:
+            # No commit — the member goes with the card it could not be given.
+            raise HTTPException(status_code=422, detail=str(exc))
+        await session.commit()
+
+    await _persona_audit(tenant_id=tenant_id, artifact_id=artifact_id,
+                         actor=user.get("email") or user.get("user_id") or "?",
+                         event_type="member_saved_from_recorded_login",
+                         detail=f"name={name} env={body.environment_id}")
+    return {
+        "status": "saved",
+        "persona_id": p["persona_id"],
+        "name": name,
+        "environment_id": body.environment_id,
+        # Names only. The values just travelled one way.
+        "slot_names": card.get("slot_names", []),
+        "login_type_key": card.get("login_type_key", ""),
+        "recipe_version": card.get("recipe_version", 0),
+        "verify_status": "unverified",
+        "proven": False,
+        "note": ("Saved. This member can now be picked under 'Run as' and used by a "
+                 "schedule. It is NOT proven yet: the recording proved a session, not "
+                 "this card. Press Verify to replay the recorded login with these "
+                 "values and find out before a schedule does."),
+    }
+
+
 @router.post("/api/v1/test-factory/{artifact_id}/personas/{persona_id}/retire")
 async def retire_persona_endpoint(
     artifact_id: str = PathParam(..., min_length=1, max_length=64),

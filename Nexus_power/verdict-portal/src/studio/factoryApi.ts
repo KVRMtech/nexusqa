@@ -836,6 +836,24 @@ class FactoryApiClient {
     return data;
   }
 
+  /** Turn the login just recorded into a REUSABLE member.
+   *
+   *  A recorded session is perishable — it expires, and nothing can replay it, so
+   *  a schedule cannot be that user tomorrow. This pairs the recipe the recording
+   *  already derived (the choreography, which does not expire) with a card (the
+   *  values, encrypted). The values travel one way: only names come back.
+   *
+   *  The member is deliberately NOT proven — the recording proved a session, not
+   *  this card — so `verifyRecipe` still has to do its job. */
+  async saveMemberFromLogin(artifactId: string, body: {
+    name: string; environment_id: string; slot_values: Record<string, string>;
+    behavior_class?: string; traits?: string[];
+  }): Promise<any> {
+    const { data } = await this.client.post(
+      `/v1/test-factory/${artifactId}/personas/from-recorded-login`, body);
+    return data;
+  }
+
   /** RECORD AT ONBOARDING. Deliberately not artifact-scoped: a recipe lives
    *  against an artifact and an artifact is only minted by the first crawl, so at
    *  the Access step there is nothing to attach to. One pass yields the login

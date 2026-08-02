@@ -856,6 +856,16 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
   // RECORD + RUN: when the capture was started by one of the Record + Run
   // buttons, saving it also dispatches the run. null = plain capture.
   const [recordThenRun, setRecordThenRun] = useState<null | 'live' | 'headless'>(null);
+  // A recorded session is perishable: it expires and nothing can replay it, so a
+  // schedule cannot be that user tomorrow. This is the bridge to a MEMBER, which
+  // pairs the recipe the recording already derived with an encrypted card.
+  const [bridgeOpen, setBridgeOpen] = useState(false);
+  const [bridgeFields, setBridgeFields] = useState<any[]>([]);
+  const [bridgeName, setBridgeName] = useState('');
+  const [bridgeVals, setBridgeVals] = useState<Record<string, string>>({});
+  const [bridgeBusy, setBridgeBusy] = useState(false);
+  const [bridgeErr, setBridgeErr] = useState<string | null>(null);
+  const [bridgeSaved, setBridgeSaved] = useState<any>(null);
   const [authErr, setAuthErr] = useState<string | null>(null);
 
   const auditScript = async (testId: string) => {
@@ -1348,6 +1358,35 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
       setAuthErr(msg); setRunErr(msg);
       setCaptureLive(null); setRecordThenRun(null);
     } finally { setAuthBusy(''); }
+  };
+
+  /** Open the bridge with the fields the APPLICATION'S OWN login asked for — never
+   *  a vocabulary of ours, and never a name anyone has to retype. */
+  const openBridge = async () => {
+    setBridgeErr(null); setBridgeSaved(null); setBridgeOpen(true);
+    try {
+      const c = await api.loginContract(artifactId);
+      setBridgeFields(c?.fields || []);
+      if (!c?.has_recipe || !(c?.fields || []).length) setBridgeErr(c?.note || 'No recorded login to build a member from.');
+    } catch (e: any) { setBridgeErr(String(e?.response?.data?.detail || e)); }
+  };
+
+  const saveMember = async () => {
+    setBridgeBusy(true); setBridgeErr(null);
+    try {
+      const r = await api.saveMemberFromLogin(artifactId, {
+        name: bridgeName.trim(), environment_id: environmentId, slot_values: bridgeVals,
+      });
+      setBridgeSaved(r);
+      // Don't leave the secret sitting in component state once it is stored.
+      setBridgeVals({});
+      // Run as THIS member from here on — that is the point of having saved it.
+      setPersonaId(r.persona_id);
+      try { setPersonas((await api.listPersonas(artifactId))?.personas || []); } catch { /* the id is already selected */ }
+    } catch (e: any) {
+      const d = e?.response?.data?.detail;
+      setBridgeErr((d && typeof d === 'object') ? (d.note || d.error || 'could not save the member') : (d || String(e)));
+    } finally { setBridgeBusy(false); }
   };
 
   /** Poll one run to completion — shared by the live, headless and Record + Run
@@ -2035,6 +2074,89 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
                 </div>
               )}
               {authErr && <p className="text-[10px] text-rose-600 mt-1">{authErr}</p>}
+
+              {/* SAVE THIS LOGIN AS A MEMBER.
+                  The session above is perishable — it expires, and nothing can replay
+                  it, so an unattended run tomorrow has no way to be this user. A member
+                  pairs the recipe the recording already derived (the choreography, which
+                  does NOT expire) with an encrypted card. The recording captures
+                  identifiers only and never a value, so the values are supplied once
+                  here — against the fields the app's own login asked for. */}
+              {authStatus?.profile?.present && !captureLive && (
+                <div className="mt-1.5">
+                  {!bridgeOpen ? (
+                    <button onClick={() => void openBridge()}
+                      title="A saved session expires. A member does not — it can log in again, unattended, on a schedule."
+                      className="inline-flex items-center gap-1.5 rounded px-2 py-0.5 text-[10px] font-semibold bg-white border border-nexus-200 text-nexus-700 hover:bg-nexus-50">
+                      <UserRound className="h-3 w-3" /> Save this login as a member
+                    </button>
+                  ) : (
+                    <div className="rounded-md border border-nexus-200 bg-nexus-50/50 p-2">
+                      <p className="text-[10px] font-bold uppercase text-nexus-700 flex items-center gap-1.5">
+                        <UserRound className="h-3 w-3" /> Save this login as a member
+                        <button onClick={() => { setBridgeOpen(false); setBridgeVals({}); }}
+                          className="ml-auto rounded px-1.5 py-0.5 text-[10px] font-semibold normal-case bg-white border border-slate-200 text-slate-500 hover:bg-slate-50">Close</button>
+                      </p>
+                      <p className="text-[10px] text-slate-500 mt-0.5 mb-1.5">
+                        The session you captured expires. A member doesn't — it can perform this
+                        same login again, unattended, so a schedule can run as this person.
+                        {' '}These are the fields <em>this application's</em> login asks for.
+                      </p>
+
+                      {bridgeSaved ? (
+                        <div className="rounded border border-emerald-200 bg-emerald-50 px-2 py-1.5">
+                          <p className="text-[11px] font-semibold text-emerald-800">
+                            Saved “{bridgeSaved.name}” — now selected under Run as.
+                          </p>
+                          {/* Never let a save read as a proof. The recording proved a
+                              SESSION; it did not prove this card can log in. */}
+                          <p className="text-[10px] text-amber-700 mt-0.5">
+                            Not proven yet: the recording proved a session, not this card.
+                            Verify it in Members &amp; Environments to find out before a schedule does.
+                          </p>
+                        </div>
+                      ) : (
+                        <>
+                          <div className="flex flex-wrap gap-1.5 items-end">
+                            <label className="flex flex-col gap-0.5">
+                              <span className="text-[9px] font-semibold uppercase text-slate-400">Member name</span>
+                              <input value={bridgeName} onChange={(e) => setBridgeName(e.target.value)}
+                                placeholder="who this login is"
+                                className="rounded border border-slate-200 px-1.5 py-1 text-[11px] w-[160px]" />
+                            </label>
+                            <label className="flex flex-col gap-0.5">
+                              <span className="text-[9px] font-semibold uppercase text-slate-400">Environment</span>
+                              <input value={environmentId} onChange={(e) => setEnvironmentId(e.target.value)}
+                                className="rounded border border-slate-200 px-1.5 py-1 text-[11px] w-[100px]" />
+                            </label>
+                            {bridgeFields.map((f: any) => (
+                              <label key={f.name} className="flex flex-col gap-0.5">
+                                <span className="text-[9px] font-semibold uppercase text-slate-400">{f.label || f.name}</span>
+                                <input type={f.type === 'password' ? 'password' : 'text'}
+                                  autoComplete="off"
+                                  value={bridgeVals[f.name] || ''}
+                                  onChange={(e) => setBridgeVals((v) => ({ ...v, [f.name]: e.target.value }))}
+                                  className="rounded border border-slate-200 px-1.5 py-1 text-[11px] w-[150px]" />
+                              </label>
+                            ))}
+                            <button onClick={() => void saveMember()}
+                              disabled={bridgeBusy || !bridgeName.trim() || !bridgeFields.length}
+                              className="inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-[11px] font-semibold bg-nexus-600 text-[#fff] hover:bg-nexus-500 disabled:opacity-50">
+                              {bridgeBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <UserRound className="h-3.5 w-3.5" />}
+                              Save member
+                            </button>
+                          </div>
+                          <p className="text-[9px] text-slate-400 mt-1">
+                            Stored encrypted. The recording never captured these values — it records
+                            which fields were filled, never what was typed — so they are supplied once here.
+                          </p>
+                        </>
+                      )}
+                      {bridgeErr && <p className="text-[10px] text-rose-600 mt-1">{bridgeErr}</p>}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
 
             {/* 3 · data — comparison table: Global + one column per selected script, diffs highlighted */}
