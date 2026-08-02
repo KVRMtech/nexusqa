@@ -46,6 +46,7 @@ async def build_seed_manifest(
     seed_fields: Iterable[str] = (),
     opaque_surfaces: Iterable[Mapping] = (),
     unhandled_controls: Iterable[Mapping] = (),
+    submit_candidates: Iterable[str] = (),
     today: date | None = None,
 ) -> dict:
     """Assemble the two-mode Seed Manifest for a crawled artifact.
@@ -90,6 +91,18 @@ async def build_seed_manifest(
             signals.append(FieldSignal(label=lbl))
             have.add(normalize_label(lbl))
 
+    # The submit the crawl FOUND but is not allowed to press. Without this the
+    # manifest lists only the form's value fields, no APPROVE item is ever produced,
+    # and the portal's "Allow the crawl to submit ..." checkbox — the ONLY way to
+    # populate fences.submit_approvals — can never render. The product then asks for
+    # an approval it gives you no way to grant: a client crawled three times, each
+    # time stopping at "Submit claim", with no control anywhere to approve it.
+    submit_labels = [str(x).strip() for x in submit_candidates if str(x or "").strip()]
+    for lbl in submit_labels:
+        if normalize_label(lbl) not in have:
+            signals.append(FieldSignal(label=lbl, type="submit"))
+            have.add(normalize_label(lbl))
+
     library_keys = library_keys_from_answer_key(answer_key)
     observe_labels = [str(c.get("label") or "") for c in candidates if c.get("label")]
 
@@ -98,6 +111,7 @@ async def build_seed_manifest(
         library_keys=library_keys,
         observe_labels=observe_labels,
         observe_targets=candidates,
+        submit_labels=submit_labels,
         today=today,
     )
     manifest["artifact_id"] = artifact_id

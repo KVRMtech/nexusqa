@@ -822,6 +822,11 @@ async def get_seed_manifest(
         _seen_opaque: set[str] = set()
         unhandled_controls: list[dict] = []
         _seen_unhandled: set[str] = set()
+        # The submit the crawl FOUND but is not allowed to press. Read here so the
+        # manifest can offer an APPROVE row for it — without this the product asks for
+        # an approval it provides no way to grant.
+        submit_candidates: list[str] = []
+        _seen_submit: set[str] = set()
         for _e in exps:
             _st = _e.stats if isinstance(_e.stats, dict) else {}
             _cov = _st.get("coverage") if isinstance(_st.get("coverage"), dict) else {}
@@ -840,6 +845,11 @@ async def get_seed_manifest(
                 if _ok not in _seen_opaque:
                     _seen_opaque.add(_ok)
                     opaque_surfaces.append(dict(_o))
+            for _sc in (_cov.get("submit_candidates") or []):
+                _s2 = str(_sc).strip()
+                if _s2 and _s2.lower() not in _seen_submit:
+                    _seen_submit.add(_s2.lower())
+                    submit_candidates.append(_s2)
             for _u in (_cov.get("unhandled_controls") or []):
                 _uk = str((_u or {}).get("label") or "").strip().lower()
                 if _uk and _uk not in _seen_unhandled:
@@ -848,6 +858,7 @@ async def get_seed_manifest(
     manifest = await build_seed_manifest(
         tenant_id, artifact_id, answer_key=answer_key, seed_fields=seed_fields,
         opaque_surfaces=opaque_surfaces, unhandled_controls=unhandled_controls,
+        submit_candidates=submit_candidates,
         today=datetime.now(timezone.utc).date(),
     )
     # Group the fields into flows so the portal can lead with the flow the app was
