@@ -2063,7 +2063,12 @@ export default class VKPowerReporter implements Reporter {
       // repeat counts, for the report's Trust Block.
       metadata: { persona: process.env.NEXUS_PERSONA || '',
                   posture: process.env.NEXUS_POSTURE || '',
-                  repetition: process.env.NEXUS_REPETITION || '' },
+                  repetition: process.env.NEXUS_REPETITION || '',
+                  // HOW the run authenticated: a member's stored card, a login
+                  // recorded moments ago (Record + Run), or the artifact's stored
+                  // session. 'persona' alone cannot distinguish the last two, and a
+                  // result you cannot attribute to an identity is weak evidence.
+                  identity: process.env.NEXUS_IDENTITY || '' },
     };
     try {
       const resp = await fetch(`${base}/api/v1/test-runs/ingest`, {

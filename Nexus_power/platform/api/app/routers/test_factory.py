@@ -1431,6 +1431,26 @@ async def _certify_generated_suite(
         )
 
 
+def _identity_label(body, persona_id: str) -> str:
+    """WHO this run authenticated as, for the report's Trust Block.
+
+    A result you cannot attribute to an identity is weak evidence: "it passed" means
+    little without "as whom". ``persona`` alone cannot separate a login recorded
+    moments ago from the artifact's long-stored session, and those have very
+    different shelf lives — one is a deliberate act by the operator standing there,
+    the other may be days old.
+
+    Only ``recorded_session`` is honoured from the request (set server-side by
+    Record + Run); everything else is DERIVED, so a caller cannot label a run with an
+    identity it does not have.
+    """
+    if persona_id:
+        return "member"
+    if str(getattr(body, "identity", "") or "").strip() == "recorded_session":
+        return "recorded_session"
+    return "stored_session"
+
+
 def _recorded_origin(visits) -> str:
     """The app ORIGIN (scheme://host) a server-side run must navigate to.
 
@@ -4418,6 +4438,7 @@ async def playwright_run(
             else ("on" if body.screenshots else "off")),
         # Persona identity tag — the run knows AS WHOM it ran, for the report.
         **({"NEXUS_PERSONA": persona_id} if persona_id else {}),
+        "NEXUS_IDENTITY": _identity_label(body, persona_id),
         # Environment posture (P4) — the run knows the governance floor it runs
         # under (read_write | read_only | no_submit); surfaced in the report.
         "NEXUS_POSTURE": posture,
@@ -4546,6 +4567,7 @@ async def playwright_run_live(
         }
 
     governance_env = {}
+    _live_posture = ""
     if environment_id:
         async with tenant_scoped_session(tenant_id) as session:
             governance_env = await persona_store.get_environment(
@@ -4583,6 +4605,7 @@ async def playwright_run_live(
     if environment_id:
         _gate = persona_governance.gate_dispatch(
             governance_env, mutating_requested=bool(body.mutating))
+        _live_posture = _gate["posture"]
         if not _gate["allowed"]:
             return _blocked("environment_policy", " ".join(_gate["reasons"]),
                             "The ENVIRONMENT policy refused this run. This is an "
@@ -4640,6 +4663,12 @@ async def playwright_run_live(
         "NEXUS_DIAGNOSTICS_ENDPOINT": f"{_INGEST_BASE}/api/v1/test-runs/diagnostics", "NEXUS_TOKEN": token or "",
         "NEXUS_ARTIFACT_ID": artifact_id, "NEXUS_RUN_ID": run_id,
         "NEXUS_BASE_URL": base_url, "NEXUS_ENV": _env_run_label(body.env_context),
+        # A WATCHED run must be as attributable as a headless one. This path recorded
+        # no identity at all, so the report's Trust Block read "default identity" for
+        # every live run — including one deliberately run as a named member.
+        **({"NEXUS_PERSONA": persona_id} if persona_id else {}),
+        "NEXUS_IDENTITY": _identity_label(body, persona_id),
+        **({"NEXUS_POSTURE": _live_posture} if _live_posture else {}),
         **login_env,
     }
     try:
@@ -4760,6 +4789,9 @@ class _SaveAndRunBody(RunConfigRequest):
     run as any other — reporting, attribution, auto-heal and certification all fire
     on the ingest path exactly as they do today."""
     watch: bool = Field(True, description="true = headed live run you can watch; false = headless")
+    # Set by THIS endpoint, never trusted from the caller — _identity_label only
+    # honours the literal "recorded_session" and derives everything else.
+    identity: str = Field("", description="server-set; do not supply")
 
 
 @router.post("/api/v1/test-factory/{artifact_id}/playwright/auth/save-and-run")
@@ -4797,6 +4829,9 @@ async def save_auth_capture_and_run(
             "ran": False,
         })
 
+    # The run is authenticating with the login just recorded — say so, so the report
+    # can distinguish it from the artifact's long-stored session.
+    body.identity = "recorded_session"
     run = (await playwright_run_live(body=body, request=request, artifact_id=artifact_id,
                                      user=user)
            if body.watch else

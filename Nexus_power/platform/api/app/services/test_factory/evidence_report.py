@@ -618,6 +618,12 @@ async def build_report(
             "persona": str((getattr(run, "metadata_json", None) or {}).get("persona") or ""),
             # Environment posture (P4): the governance floor the run ran under.
             "posture": str((getattr(run, "metadata_json", None) or {}).get("posture") or ""),
+            # HOW it authenticated: 'member' (a stored credential card),
+            # 'recorded_session' (a login recorded moments before the run) or
+            # 'stored_session' (the artifact's saved session). A persona id alone
+            # cannot separate the last two, and they have very different shelf
+            # lives — so a reader cannot judge how much the result is worth.
+            "identity": str((getattr(run, "metadata_json", None) or {}).get("identity") or ""),
         }
 
     _persona = str((getattr(run, "metadata_json", None) or {}).get("persona") or "") if run is not None else ""
