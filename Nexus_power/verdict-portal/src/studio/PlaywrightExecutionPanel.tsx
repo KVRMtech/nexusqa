@@ -1322,6 +1322,9 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
         enable_video: Object.values(recordVideoByTest).some(Boolean),
         categories: Array.from(selectedCats),
       };
+      // A recorded login normally IS the identity, so a member is not required —
+      // but if one is selected, respect it rather than silently ignoring the picker.
+      if (personaId) { body.persona_id = personaId; body.environment_id = environmentId; }
       const r = await api.recordAndRun(artifactId, body);
       setCaptureLive(null); setRecordThenRun(null); void refreshAuth();
       setView('run');
@@ -1377,6 +1380,11 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
       };
       if (scope?.test_ids) body.test_ids = scope.test_ids;
       else body.categories = Array.from(selectedCats);
+      // The live path must honour "Run as" exactly as the headless one does. It
+      // used to drop it, so the picker had no effect on the button an operator
+      // actually presses to WATCH a run — and none of the member/environment gates
+      // could fire on it either.
+      if (personaId) { body.persona_id = personaId; body.environment_id = environmentId; }
       const r = await api.startNexusLiveRun(artifactId, body);
       setLiveUrl(r.live_url);
       setRunStatus({ run_id: r.run_id, status: r.status, target: r.target, scripts: r.scripts });

@@ -4522,6 +4522,73 @@ async def playwright_run_live(
         for tid, reason in _ungated.items()
     ]
 
+    # ── MEMBERS & ENVIRONMENTS APPLY HERE TOO (Record + Run, phase 3) ─────────
+    # This path used to have NO concept of a member: it always authenticated with
+    # the one stored form-login, whatever the "Run as" picker said. So the whole
+    # Members & Environments surface had no relationship to the button an operator
+    # actually presses to watch a run — and, worse, every governance control the
+    # headless path enforces was simply absent here. Two run buttons with two
+    # different sets of safety rules is how a decommissioned member or a broken
+    # card slips through unnoticed.
+    #
+    # Same resolution, same refusals, same words as playwright_run.
+    run_id = uuid.uuid4().hex
+    persona_id = (body.persona_id or "").strip()
+    environment_id = (body.environment_id or "").strip() or str(
+        (body.env_context or {}).get("environment_id") or "").strip()
+
+    def _blocked(reason_code: str, detail, note: str, blocked_reason: str) -> dict:
+        return {
+            "run_id": run_id, "status": "blocked", "blocked_reason": blocked_reason,
+            "persona_id": persona_id, "environment_id": environment_id,
+            "reason": reason_code, "detail": detail, "note": note,
+            "scripts": 0, "live_url": "", "quarantine_warning": quarantine_warning,
+        }
+
+    governance_env = {}
+    if environment_id:
+        async with tenant_scoped_session(tenant_id) as session:
+            governance_env = await persona_store.get_environment(
+                session, tenant_id=tenant_id, artifact_id=artifact_id,
+                environment_id=environment_id) or {}
+
+    # F5 — a real, current member of THIS application.
+    if persona_id:
+        async with tenant_scoped_session(tenant_id) as session:
+            _prow = await persona_store.get_persona(
+                session, tenant_id=tenant_id, persona_id=persona_id)
+        _ident = persona_identity.check_persona(
+            persona_id=persona_id, persona=_prow, artifact_id=artifact_id)
+        if not _ident["allowed"]:
+            return _blocked(_ident["reason"], _ident["detail"],
+                            _ident["detail"].get("note", ""), "member_identity")
+
+    # F1 — the selected environment decides where the run goes.
+    if _env_routing_enabled() and environment_id:
+        _routed = environment_routing.resolve_destination(
+            environment_id=environment_id, environment=governance_env or None,
+            requested_base_url=(body.base_url or "").strip(),
+            requested_env_context=body.env_context)
+        if not _routed["allowed"]:
+            return _blocked(_routed["reason"], _routed["detail"],
+                            "The run was BLOCKED before dispatch because its destination "
+                            "could not be established honestly. This is a configuration "
+                            "conflict, NOT an application failure.", "environment")
+        if _routed["source"] == "environment":
+            body.base_url = _routed["base_url"]
+            body.env_context = _routed["env_context"]
+
+    # P4 — the environment's posture governs a watched run exactly as it governs a
+    # headless one. Watching is not a licence to mutate a locked environment.
+    if environment_id:
+        _gate = persona_governance.gate_dispatch(
+            governance_env, mutating_requested=bool(body.mutating))
+        if not _gate["allowed"]:
+            return _blocked("environment_policy", " ".join(_gate["reasons"]),
+                            "The ENVIRONMENT policy refused this run. This is an "
+                            "environment decision — the application under test is NOT "
+                            "implicated.", _gate["attribution"])
+
     base_url = (body.base_url or "").strip()
     if body.env_context and body.env_context.get("base_url"):
         base_url = str(body.env_context["base_url"]).strip()  # env profile base_url wins (SSRF-guarded)
@@ -4534,7 +4601,31 @@ async def playwright_run_live(
     if not base_url:
         base_url = _recorded_origin(visits)
     storage_state = await _run_storage_state(request, artifact_id, tenant_id)
-    auth_config, login_env = await _run_form_login(request, artifact_id, tenant_id)
+    if persona_id:
+        _auth = await _persona_auth_resolve(
+            request, artifact_id, tenant_id, persona_id, environment_id,
+            environment=governance_env)
+        auth_config, login_env = _auth["auth_config"], _auth["login_env"]
+        # F4 — a card that cannot perform the recorded login BLOCKS, here too. The
+        # alternative is the compiled globalSetup skipping the login and the operator
+        # WATCHING a suite run logged out, with every failure attributed to the app.
+        _state = _auth.get("state") or {}
+        if _card_gate_enabled() and _state and not _state.get("runnable", True):
+            return _blocked(_state.get("reason") or _state.get("state"),
+                            _state.get("detail") or {},
+                            "This member cannot perform the recorded login for this "
+                            "environment, so the run is BLOCKED rather than watched "
+                            "running logged out. This is a CREDENTIAL configuration "
+                            "gap, NOT an application failure.", "credential")
+        if not auth_config:
+            raise HTTPException(status_code=422, detail={
+                "error": "persona has no login recipe + credential card for this environment",
+                "persona_id": persona_id, "environment_id": environment_id,
+                "reason": "store a recipe and the persona's card first — a run never "
+                          "fabricates a session. This is NOT an application failure.",
+            })
+    else:
+        auth_config, login_env = await _run_form_login(request, artifact_id, tenant_id)
     files = _configured_files(
         cases, build_field_meta(visits), base_url, body.data,
         data_by_test=body.data_by_test,
@@ -4544,7 +4635,6 @@ async def playwright_run_live(
         retries=body.retries, edited=edited_map, storage_state=storage_state,
         env_context=body.env_context, auth_config=auth_config,
     )
-    run_id = uuid.uuid4().hex
     env = {
         "NEXUS_ENDPOINT": _INGEST_BASE,
         "NEXUS_DIAGNOSTICS_ENDPOINT": f"{_INGEST_BASE}/api/v1/test-runs/diagnostics", "NEXUS_TOKEN": token or "",
@@ -4571,6 +4661,7 @@ async def playwright_run_live(
     task.add_done_callback(_RUNNER_TASKS.discard)
     return {"run_id": run_id, "status": "running", "scripts": len(cases),
             "target": base_url, "live_url": _LIVE_PATH,
+            "persona_id": persona_id, "environment_id": environment_id,
             "quarantine_warning": quarantine_warning}
 
 
