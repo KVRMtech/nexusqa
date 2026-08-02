@@ -111,41 +111,132 @@ function CrawlDiagnosisCard({ crawl }: { crawl?: AppCrawlStatus }) {
   );
 }
 
-// ── crawl mode: Explore (whole-app) vs Target (path-confined) ─────────────────
-// Surfaces + edits schedule.scope_paths on an EXISTING app. Non-empty scope_paths
-// ⇒ Target mode (the crawl is confined to those path prefixes, R3 Mode 2); empty
-// ⇒ Explore mode. PATCH /apps whole-replaces `schedule`, so we send the full
-// object (cadence / run_environment survive) with scope_paths added or removed.
+// ── the two dials that decide what a crawl does ────────────────────────
+// SCOPE (where it walks) and DATA (who supplies the values) are independent, so
+// they are two controls rather than one combined setting. Both live on the app's
+// `schedule`; PATCH /apps whole-replaces it, so the existing object is spread and
+// only the keys below are set or removed — cadence / run_environment survive.
+//
+// Everything defaults to the conservative option: no `scope_paths` means Explore,
+// and no `data_mode` means "user", which is the behaviour that existed before the
+// data agent. An app nobody has configured must never be silently upgraded.
+
+type ScopeMode = 'explore' | 'target' | 'e2e';
+type DataMode = 'user' | 'agent';
+
+/** The path prefix a Target crawl would use if the operator sets nothing.
+ *
+ *  The client's own complaint: being asked to identify a deep URL AND then repeat
+ *  its path as a scope is work the system can do itself. The Base URL already says
+ *  which section they mean. */
+function derivedScope(baseUrl: string): string {
+  try {
+    const p = new URL(baseUrl).pathname.replace(/\/+$/, '');
+    return p && p !== '' ? p : '/';
+  } catch {
+    return '/';
+  }
+}
+
+function RadioRow({
+  checked, onSelect, disabled, title, note,
+}: {
+  checked: boolean; onSelect: () => void; disabled?: boolean; title: string; note: string;
+}) {
+  return (
+    <button
+      type="button"
+      role="radio"
+      aria-checked={checked}
+      disabled={disabled}
+      onClick={onSelect}
+      className={cn(
+        'w-full text-left flex items-start gap-2.5 rounded-lg px-2.5 py-2 ring-1 transition-colors',
+        checked ? 'bg-teal/10 ring-teal/50' : 'bg-panel ring-line hover:ring-ink/20',
+        disabled && 'opacity-55 cursor-not-allowed hover:ring-line',
+      )}
+    >
+      <span
+        aria-hidden
+        className={cn(
+          'mt-0.5 h-3.5 w-3.5 shrink-0 rounded-full ring-2 transition-colors',
+          checked ? 'ring-teal bg-teal/70' : 'ring-ink-faint bg-transparent',
+        )}
+      />
+      <span className="min-w-0">
+        <span className="block text-xs font-semibold text-ink">{title}</span>
+        <span className="block text-2xs text-ink-faint leading-snug">{note}</span>
+      </span>
+    </button>
+  );
+}
+
 function CrawlModeControl({ app, onSaved }: { app: ClientApp; onSaved: () => void }) {
-  const raw = (app.schedule as Record<string, unknown> | undefined)?.scope_paths;
-  const current = Array.isArray(raw) ? raw.filter((p): p is string => typeof p === 'string') : [];
+  const schedule = (app.schedule as Record<string, unknown> | undefined) ?? {};
+  const rawScope = schedule.scope_paths;
+  const currentPaths = Array.isArray(rawScope)
+    ? rawScope.filter((p): p is string => typeof p === 'string')
+    : [];
+  const currentData: DataMode = schedule.data_mode === 'agent' ? 'agent' : 'user';
+  const currentScope: ScopeMode = currentPaths.length ? 'target' : 'explore';
+
   const [editing, setEditing] = useState(false);
-  const [text, setText] = useState(current.join('\n'));
+  const [scopeMode, setScopeMode] = useState<ScopeMode>(currentScope);
+  const [dataMode, setDataMode] = useState<DataMode>(currentData);
+  const [paths, setPaths] = useState(currentPaths.join('\n'));
   const [saving, setSaving] = useState(false);
-  const isTarget = current.length > 0;
+
+  const open = () => {
+    setScopeMode(currentScope);
+    setDataMode(currentData);
+    // Prefill Target with the section the Base URL already points at, so the
+    // operator confirms a scope instead of retyping one.
+    setPaths(currentPaths.length ? currentPaths.join('\n') : derivedScope(app.base_url));
+    setEditing(true);
+  };
+
+  const cleanPaths = paths
+    .split(/[\s,]+/)
+    .map((p) => p.trim())
+    .filter(Boolean)
+    .map((p) => (p.startsWith('/') ? p : `/${p}`))
+    .slice(0, 20);
+
+  // The server refuses a Target crawl whose Base URL enters outside the scope — it
+  // would start out-of-scope and capture nothing while reporting success. Catch it
+  // here so the operator fixes it now rather than reading a 422 after dispatch.
+  const entryPath = derivedScope(app.base_url);
+  const entryOutOfScope =
+    scopeMode === 'target' &&
+    cleanPaths.length > 0 &&
+    !cleanPaths.some((p) => entryPath === p || entryPath.startsWith(p.endsWith('/') ? p : `${p}/`));
 
   const save = async () => {
-    const paths = text
-      .split(/[\s,]+/)
-      .map((p) => p.trim())
-      .filter(Boolean)
-      .map((p) => (p.startsWith('/') ? p : `/${p}`))
-      .slice(0, 20);
     setSaving(true);
     try {
-      // Whole-replace `schedule`: spread the existing object so cadence /
-      // run_environment survive, then set or clear scope_paths.
-      const schedule: Record<string, unknown> = { ...(app.schedule as Record<string, unknown> | undefined) };
-      if (paths.length) schedule.scope_paths = paths;
-      else delete schedule.scope_paths;
-      await api.updateApp(app.app_id, { schedule });
+      const next: Record<string, unknown> = { ...schedule };
+      if (scopeMode === 'target' && cleanPaths.length) next.scope_paths = cleanPaths;
+      else delete next.scope_paths;
+      if (dataMode === 'agent') next.data_mode = 'agent';
+      else delete next.data_mode;   // absent = 'user' = the conservative default
+      await api.updateApp(app.app_id, { schedule: next });
       toast.success(
-        paths.length ? `Target mode — crawl confined to ${paths.join(', ')}` : 'Explore mode — whole-app crawl',
+        scopeMode === 'target'
+          ? `Target — confined to ${cleanPaths.join(', ')}`
+          : 'Explore — the whole app is crawled',
+        {
+          description:
+            dataMode === 'agent'
+              ? 'Data: the agent fills what it can, and asks for the rest.'
+              : 'Data: you provide the values; the crawl asks for what it needs.',
+        },
       );
       setEditing(false);
       onSaved();
     } catch (err) {
-      toast.error('Could not update crawl scope', { description: (err as QecApiError).message });
+      toast.error('Could not update the crawl settings', {
+        description: (err as QecApiError).message,
+      });
     } finally {
       setSaving(false);
     }
@@ -155,38 +246,104 @@ function CrawlModeControl({ app, onSaved }: { app: ClientApp; onSaved: () => voi
     return (
       <button
         type="button"
-        onClick={() => {
-          setText(current.join('\n'));
-          setEditing(true);
-        }}
+        onClick={open}
         className="inline-flex items-center gap-1.5 rounded-md bg-ink/5 px-2 py-1 text-2xs text-ink-mid ring-1 ring-line hover:text-ink transition-colors"
-        title="Set the crawl mode: Explore (whole app) or Target (path-confined)"
+        title="Set what the crawl walks, and who supplies the test data"
       >
         <Crosshair size={12} aria-hidden />
-        <span className="font-semibold">{isTarget ? 'Target' : 'Explore'}</span>
-        {isTarget && <span className="font-mono text-ink-low">{current.join(' ')}</span>}
+        <span className="font-semibold">{currentScope === 'target' ? 'Target' : 'Explore'}</span>
+        {currentScope === 'target' && (
+          <span className="font-mono text-ink-low">{currentPaths.join(' ')}</span>
+        )}
+        <span className="text-ink-faint">·</span>
+        <span className="font-semibold">{currentData === 'agent' ? 'Agent data' : 'Your data'}</span>
         <span className="text-ink-faint">· edit</span>
       </button>
     );
   }
 
   return (
-    <div className="rounded-lg bg-inset ring-1 ring-line px-3 py-2.5 space-y-2 w-full max-w-md">
-      <p className="text-2xs font-semibold text-ink-mid">Crawl mode — Explore vs Target</p>
-      <textarea
-        className="w-full rounded-lg bg-panel text-ink text-xs ring-1 ring-line focus-visible:ring-teal/60 px-2.5 py-1.5 font-mono min-h-[3rem] resize-y"
-        value={text}
-        onChange={(e) => setText(e.target.value)}
-        placeholder="/quote"
-        autoFocus
-      />
-      <p className="text-2xs text-ink-faint leading-snug">
-        {text.trim()
-          ? 'Target mode — the crawl is confined to the path prefix(es) above.'
-          : 'Blank = Explore mode — the whole app is crawled.'}
-      </p>
-      <div className="flex items-center gap-2">
-        <Button size="sm" variant="primary" loading={saving} onClick={save}>
+    <div className="rounded-lg bg-inset ring-1 ring-line px-3 py-3 space-y-3.5 w-full max-w-lg">
+      {/* dial 1 — where it walks */}
+      <div className="space-y-1.5" role="radiogroup" aria-label="Crawl scope">
+        <p className="text-2xs font-semibold uppercase tracking-wide text-ink-faint">
+          Scope — where the crawl walks
+        </p>
+        <RadioRow
+          checked={scopeMode === 'explore'}
+          onSelect={() => setScopeMode('explore')}
+          title="Explore — the whole application"
+          note="Every page reachable from the Base URL. Use this to discover what exists."
+        />
+        <RadioRow
+          checked={scopeMode === 'target'}
+          onSelect={() => setScopeMode('target')}
+          title="Target — one section, thoroughly"
+          note="Confined to the path below, taken from your Base URL. Nothing else on the host is crawled."
+        />
+        {scopeMode === 'target' && (
+          <div className="pl-6 space-y-1">
+            <input
+              className="w-full rounded-lg bg-panel text-ink text-xs ring-1 ring-line focus-visible:ring-teal/60 px-2.5 py-1.5 font-mono"
+              value={paths}
+              onChange={(e) => setPaths(e.target.value)}
+              placeholder={entryPath}
+              aria-label="Target path prefix"
+            />
+            {entryOutOfScope ? (
+              <p className="text-2xs text-amber-600 leading-snug">
+                Your Base URL enters at <span className="font-mono">{entryPath}</span>, which is
+                outside this scope — the crawl would start out of bounds and capture nothing.
+                Use <span className="font-mono">{entryPath}</span>, or switch to Explore.
+              </p>
+            ) : (
+              <p className="text-2xs text-ink-faint">Derived from your Base URL. Edit if you meant a different section.</p>
+            )}
+          </div>
+        )}
+        <RadioRow
+          checked={false}
+          onSelect={() => undefined}
+          disabled
+          title="End-to-end flow — complete business journeys"
+          note="Not available yet. Covering every decision point means driving each option and re-walking the funnel behind it — a different engine from this one, and it is being designed."
+        />
+      </div>
+
+      {/* dial 2 — who supplies the values */}
+      <div className="space-y-1.5" role="radiogroup" aria-label="Test data">
+        <p className="text-2xs font-semibold uppercase tracking-wide text-ink-faint">
+          Data — who supplies the values
+        </p>
+        <RadioRow
+          checked={dataMode === 'user'}
+          onSelect={() => setDataMode('user')}
+          title="You provide the data"
+          note="The crawl fills what it can from your test data and names anything it could not, so you supply only what is actually missing."
+        />
+        <RadioRow
+          checked={dataMode === 'agent'}
+          onSelect={() => setDataMode('agent')}
+          title="Let the agent fill what it can"
+          note="A coherent fictional person answers every field it honestly can — including the choices that decide which path a funnel takes. Every choice is recorded. One-time codes and document uploads are still asked for."
+        />
+        {dataMode === 'agent' && (
+          <p className="pl-6 text-2xs text-ink-faint leading-snug">
+            The agent chooses answers that change what the application does — picking
+            &ldquo;no&rdquo; on a smoker question selects the whole downstream funnel. The report
+            says which path was taken, but it is the agent&rsquo;s choice, not yours.
+          </p>
+        )}
+      </div>
+
+      <div className="flex items-center gap-2 pt-0.5">
+        <Button
+          size="sm"
+          variant="primary"
+          loading={saving}
+          onClick={save}
+          disabled={entryOutOfScope || (scopeMode === 'target' && !cleanPaths.length)}
+        >
           Save
         </Button>
         <Button size="sm" variant="ghost" onClick={() => setEditing(false)} disabled={saving}>

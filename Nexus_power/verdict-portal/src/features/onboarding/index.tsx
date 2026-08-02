@@ -67,6 +67,69 @@ interface WizardForm {
    *  to (one per line / comma-separated, e.g. "/quote"). Compiled to
    *  schedule.scope_paths on submit. BLANK ⇒ Explore mode (whole-app crawl). */
   scope_paths: string;
+  /** DATA dial: 'user' (default) = you supply the values and the crawl names what
+   *  it could not fill; 'agent' = a coherent fictional person answers every field
+   *  it honestly can. Compiled to schedule.data_mode; 'user' is written as ABSENT
+   *  so an app nobody configured keeps the pre-agent behaviour. */
+  data_mode: 'user' | 'agent';
+}
+
+/** The section a Base URL already points at — so Target confirms a scope instead
+ *  of asking the operator to retype one they have already given us. */
+function entryPathOf(baseUrl: string): string {
+  try {
+    const p = new URL(baseUrl).pathname.replace(/\/+$/, '');
+    return p || '/';
+  } catch {
+    return '/';
+  }
+}
+
+/** The server refuses a Target crawl whose Base URL enters outside the scope: it
+ *  would start out-of-scope and capture nothing while reporting success. Catching
+ *  it in the form means the operator fixes it before dispatch, not after a 422. */
+function entryOutOfScope(baseUrl: string, scopeText: string): boolean {
+  const entry = entryPathOf(baseUrl);
+  const paths = scopeText
+    .split(/[\s,]+/)
+    .map((p) => p.trim())
+    .filter(Boolean)
+    .map((p) => (p.startsWith('/') ? p : `/${p}`));
+  if (!paths.length) return false;
+  return !paths.some((p) => entry === p || entry.startsWith(p.endsWith('/') ? p : `${p}/`));
+}
+
+function WizardRadio({
+  checked, onSelect, disabled, title, note,
+}: {
+  checked: boolean; onSelect: () => void; disabled?: boolean; title: string; note: string;
+}) {
+  return (
+    <button
+      type="button"
+      role="radio"
+      aria-checked={checked}
+      disabled={disabled}
+      onClick={onSelect}
+      className={cn(
+        'w-full text-left flex items-start gap-2.5 rounded-lg px-2.5 py-2 ring-1 transition-colors',
+        checked ? 'bg-teal/10 ring-teal/50' : 'bg-panel ring-line hover:ring-ink/20',
+        disabled && 'opacity-55 cursor-not-allowed hover:ring-line',
+      )}
+    >
+      <span
+        aria-hidden
+        className={cn(
+          'mt-0.5 h-3.5 w-3.5 shrink-0 rounded-full ring-2 transition-colors',
+          checked ? 'ring-teal bg-teal/70' : 'ring-ink-faint bg-transparent',
+        )}
+      />
+      <span className="min-w-0">
+        <span className="block text-xs font-semibold text-ink">{title}</span>
+        <span className="block text-2xs text-ink-faint leading-snug">{note}</span>
+      </span>
+    </button>
+  );
 }
 
 const EMPTY: WizardForm = {
@@ -96,6 +159,7 @@ const EMPTY: WizardForm = {
   environments: [],
   run_environment: '',
   scope_paths: '',
+  data_mode: 'user',
 };
 
 interface Bucket {
@@ -748,6 +812,9 @@ export function OnboardingWizard() {
       schedule: {
         cadence: form.cadence,
         ...(scopePaths.length ? { scope_paths: scopePaths } : {}),
+        // 'user' is written as ABSENT, not as a value: the conservative default
+        // must be what an app gets when nobody decided, on every read path.
+        ...(form.data_mode === 'agent' ? { data_mode: 'agent' } : {}),
       },
       budgets: form.usd_per_cycle ? { usd_per_cycle: Number(form.usd_per_cycle) } : {},
     };
@@ -1219,23 +1286,76 @@ export function OnboardingWizard() {
                 </select>
               </Field>
             </div>
-            <div className="sm:col-span-2">
-              <Field
-                label="Crawl scope — Target mode (optional)"
-                hint="Blank = Explore mode (whole-app crawl). Enter path prefixes (one per line or comma-separated) to CONFINE the crawl to a journey — e.g. /quote — Target mode. Applied to every crawl of this app."
-              >
-                <textarea
-                  className={cn(INPUT_CLS, 'min-h-[3.25rem] resize-y font-mono text-xs')}
-                  value={form.scope_paths}
-                  onChange={(e) => set('scope_paths', e.target.value)}
-                  placeholder="/quote"
+            <div className="sm:col-span-2 space-y-4">
+              {/* SCOPE — where the crawl walks. Radios rather than a free-text
+                  scope box: the client's complaint was being asked to identify a
+                  deep URL and then repeat its path, which the Base URL already
+                  says. Target prefills from it. */}
+              <div className="space-y-1.5" role="radiogroup" aria-label="Crawl scope">
+                <p className="text-2xs font-semibold uppercase tracking-wide text-ink-faint">
+                  Scope — where the crawl walks
+                </p>
+                <WizardRadio
+                  checked={!form.scope_paths.trim()}
+                  onSelect={() => set('scope_paths', '')}
+                  title="Explore — the whole application"
+                  note="Every page reachable from the Base URL. Use this to discover what exists."
                 />
-              </Field>
-              <p className="text-2xs text-ink-faint mt-1">
-                {form.scope_paths.trim()
-                  ? 'Target mode — the crawl is confined to the path(s) above.'
-                  : 'Explore mode — the whole app is crawled.'}
-              </p>
+                <WizardRadio
+                  checked={!!form.scope_paths.trim()}
+                  onSelect={() => set('scope_paths', entryPathOf(form.base_url))}
+                  title="Target — one section, thoroughly"
+                  note="Confined to the path below. Nothing else on the host is crawled."
+                />
+                {!!form.scope_paths.trim() && (
+                  <div className="pl-6 space-y-1">
+                    <input
+                      className={cn(INPUT_CLS, 'font-mono text-xs')}
+                      value={form.scope_paths}
+                      onChange={(e) => set('scope_paths', e.target.value)}
+                      placeholder={entryPathOf(form.base_url)}
+                      aria-label="Target path prefix"
+                    />
+                    {entryOutOfScope(form.base_url, form.scope_paths) ? (
+                      <p className="text-2xs text-amber-600 leading-snug">
+                        Your Base URL enters at{' '}
+                        <span className="font-mono">{entryPathOf(form.base_url)}</span>, outside
+                        this scope — the crawl would start out of bounds and capture nothing.
+                      </p>
+                    ) : (
+                      <p className="text-2xs text-ink-faint">
+                        Taken from your Base URL. Edit if you meant a different section.
+                      </p>
+                    )}
+                  </div>
+                )}
+                <WizardRadio
+                  checked={false}
+                  onSelect={() => undefined}
+                  disabled
+                  title="End-to-end flow — complete business journeys"
+                  note="Not available yet. Covering every decision point means driving each option and re-walking the funnel behind it — a different engine from this one, and it is being designed."
+                />
+              </div>
+
+              {/* DATA — who supplies the values. */}
+              <div className="space-y-1.5" role="radiogroup" aria-label="Test data">
+                <p className="text-2xs font-semibold uppercase tracking-wide text-ink-faint">
+                  Data — who supplies the values
+                </p>
+                <WizardRadio
+                  checked={form.data_mode === 'user'}
+                  onSelect={() => set('data_mode', 'user')}
+                  title="You provide the data"
+                  note="The crawl fills what it can from your test data and names anything it could not, so you supply only what is actually missing."
+                />
+                <WizardRadio
+                  checked={form.data_mode === 'agent'}
+                  onSelect={() => set('data_mode', 'agent')}
+                  title="Let the agent fill what it can"
+                  note="A coherent fictional person answers every field it honestly can — including the choices that decide which path a funnel takes. Every choice is recorded. One-time codes and document uploads are still asked for."
+                />
+              </div>
             </div>
           </div>
         )}
