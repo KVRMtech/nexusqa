@@ -178,7 +178,11 @@ function CrawlModeControl({ app, onSaved }: { app: ClientApp; onSaved: () => voi
     ? rawScope.filter((p): p is string => typeof p === 'string')
     : [];
   const currentData: DataMode = schedule.data_mode === 'agent' ? 'agent' : 'user';
-  const currentScope: ScopeMode = currentPaths.length ? 'target' : 'explore';
+  const storedMode = typeof schedule.crawl_mode === 'string' ? schedule.crawl_mode : '';
+  // Absent ⇒ derived from the scope, exactly as mode worked before this key
+  // existed: a confined crawl is Target, an unconfined one Explore.
+  const currentScope: ScopeMode =
+    storedMode === 'e2e' ? 'e2e' : currentPaths.length ? 'target' : 'explore';
 
   const [editing, setEditing] = useState(false);
   const [scopeMode, setScopeMode] = useState<ScopeMode>(currentScope);
@@ -217,13 +221,19 @@ function CrawlModeControl({ app, onSaved }: { app: ClientApp; onSaved: () => voi
       const next: Record<string, unknown> = { ...schedule };
       if (scopeMode === 'target' && cleanPaths.length) next.scope_paths = cleanPaths;
       else delete next.scope_paths;
+      // Only 'e2e' is stored. Explore and Target stay derivable from the scope, so
+      // an app configured before this key existed keeps behaving the same way.
+      if (scopeMode === 'e2e') next.crawl_mode = 'e2e';
+      else delete next.crawl_mode;
       if (dataMode === 'agent') next.data_mode = 'agent';
       else delete next.data_mode;   // absent = 'user' = the conservative default
       await api.updateApp(app.app_id, { schedule: next });
       toast.success(
         scopeMode === 'target'
           ? `Target — confined to ${cleanPaths.join(', ')}`
-          : 'Explore — the whole app is crawled',
+          : scopeMode === 'e2e'
+            ? 'End-to-end — each journey walked to its end'
+            : 'Explore — the whole app is crawled',
         {
           description:
             dataMode === 'agent'
@@ -251,7 +261,9 @@ function CrawlModeControl({ app, onSaved }: { app: ClientApp; onSaved: () => voi
         title="Set what the crawl walks, and who supplies the test data"
       >
         <Crosshair size={12} aria-hidden />
-        <span className="font-semibold">{currentScope === 'target' ? 'Target' : 'Explore'}</span>
+        <span className="font-semibold">
+          {currentScope === 'target' ? 'Target' : currentScope === 'e2e' ? 'End-to-end' : 'Explore'}
+        </span>
         {currentScope === 'target' && (
           <span className="font-mono text-ink-low">{currentPaths.join(' ')}</span>
         )}
@@ -302,12 +314,19 @@ function CrawlModeControl({ app, onSaved }: { app: ClientApp; onSaved: () => voi
           </div>
         )}
         <RadioRow
-          checked={false}
-          onSelect={() => undefined}
-          disabled
-          title="End-to-end flow — complete business journeys"
-          note="Not available yet. Covering every decision point means driving each option and re-walking the funnel behind it — a different engine from this one, and it is being designed."
+          checked={scopeMode === 'e2e'}
+          onSelect={() => setScopeMode('e2e')}
+          title="End-to-end flow — walk each journey to its end"
+          note="Follows a funnel all the way to its final step instead of sampling the first few, and reports which journeys actually finished."
         />
+        {scopeMode === 'e2e' && (
+          <p className="pl-6 text-2xs text-amber-600 leading-snug">
+            One path per journey. At each decision point a single option is taken, so
+            the business paths behind the other options are not visited — a different
+            premium or a different eligibility outcome would not be seen. Branch
+            coverage is the next phase.
+          </p>
+        )}
       </div>
 
       {/* dial 2 — who supplies the values */}
@@ -343,6 +362,7 @@ function CrawlModeControl({ app, onSaved }: { app: ClientApp; onSaved: () => voi
           loading={saving}
           onClick={save}
           disabled={entryOutOfScope || (scopeMode === 'target' && !cleanPaths.length)}
+          title={scopeMode === 'e2e' ? 'Walks each journey to its end; one path per journey' : undefined}
         >
           Save
         </Button>

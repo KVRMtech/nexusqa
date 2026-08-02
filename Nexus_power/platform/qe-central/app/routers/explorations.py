@@ -632,6 +632,12 @@ async def _dispatch_explorer(
         # behaviour that existed before field learning — an unset app must never be
         # silently upgraded into letting an agent choose its business paths.
         data_mode=str((row.schedule or {}).get("data_mode") or "user").strip().lower(),
+        # Absent ⇒ derived from the scope, which is exactly how mode worked before
+        # this key existed: a confined crawl is Target, an unconfined one Explore.
+        # Only an explicit "e2e" opts into the deeper walk.
+        crawl_mode=(lambda m: m if m in ("explore", "target", "e2e")
+                    else ("target" if scope_paths else "explore"))(
+            str((row.schedule or {}).get("crawl_mode") or "").strip().lower()),
     )
     # Dispatch to an available WORKER in the pool. For EACH worker we fence egress
     # into THAT worker's OWN allowlist file (fail-closed) BEFORE dispatching to it —

@@ -72,6 +72,10 @@ interface WizardForm {
    *  it honestly can. Compiled to schedule.data_mode; 'user' is written as ABSENT
    *  so an app nobody configured keeps the pre-agent behaviour. */
   data_mode: 'user' | 'agent';
+  /** SCOPE dial. 'explore' / 'target' / 'e2e'. Only 'e2e' is stored on the app;
+   *  the other two stay derivable from scope_paths, so an app configured before
+   *  this key existed keeps behaving exactly the same way. */
+  crawl_mode: 'explore' | 'target' | 'e2e';
 }
 
 /** The section a Base URL already points at — so Target confirms a scope instead
@@ -160,6 +164,7 @@ const EMPTY: WizardForm = {
   run_environment: '',
   scope_paths: '',
   data_mode: 'user',
+  crawl_mode: 'explore',
 };
 
 interface Bucket {
@@ -815,6 +820,7 @@ export function OnboardingWizard() {
         // 'user' is written as ABSENT, not as a value: the conservative default
         // must be what an app gets when nobody decided, on every read path.
         ...(form.data_mode === 'agent' ? { data_mode: 'agent' } : {}),
+        ...(form.crawl_mode === 'e2e' ? { crawl_mode: 'e2e' } : {}),
       },
       budgets: form.usd_per_cycle ? { usd_per_cycle: Number(form.usd_per_cycle) } : {},
     };
@@ -1296,18 +1302,24 @@ export function OnboardingWizard() {
                   Scope — where the crawl walks
                 </p>
                 <WizardRadio
-                  checked={!form.scope_paths.trim()}
-                  onSelect={() => set('scope_paths', '')}
+                  checked={form.crawl_mode === 'explore' && !form.scope_paths.trim()}
+                  onSelect={() => {
+                    set('crawl_mode', 'explore');
+                    set('scope_paths', '');
+                  }}
                   title="Explore — the whole application"
                   note="Every page reachable from the Base URL. Use this to discover what exists."
                 />
                 <WizardRadio
-                  checked={!!form.scope_paths.trim()}
-                  onSelect={() => set('scope_paths', entryPathOf(form.base_url))}
+                  checked={form.crawl_mode !== 'e2e' && !!form.scope_paths.trim()}
+                  onSelect={() => {
+                    set('crawl_mode', 'target');
+                    set('scope_paths', entryPathOf(form.base_url));
+                  }}
                   title="Target — one section, thoroughly"
                   note="Confined to the path below. Nothing else on the host is crawled."
                 />
-                {!!form.scope_paths.trim() && (
+                {form.crawl_mode !== 'e2e' && !!form.scope_paths.trim() && (
                   <div className="pl-6 space-y-1">
                     <input
                       className={cn(INPUT_CLS, 'font-mono text-xs')}
@@ -1330,12 +1342,21 @@ export function OnboardingWizard() {
                   </div>
                 )}
                 <WizardRadio
-                  checked={false}
-                  onSelect={() => undefined}
-                  disabled
-                  title="End-to-end flow — complete business journeys"
-                  note="Not available yet. Covering every decision point means driving each option and re-walking the funnel behind it — a different engine from this one, and it is being designed."
+                  checked={form.crawl_mode === 'e2e'}
+                  onSelect={() => {
+                    set('crawl_mode', 'e2e');
+                    set('scope_paths', '');
+                  }}
+                  title="End-to-end flow — walk each journey to its end"
+                  note="Follows a funnel all the way to its final step instead of sampling the first few, and reports which journeys actually finished."
                 />
+                {form.crawl_mode === 'e2e' && (
+                  <p className="pl-6 text-2xs text-amber-600 leading-snug">
+                    One path per journey. At each decision point a single option is taken,
+                    so the business paths behind the other options are not visited. Branch
+                    coverage is the next phase.
+                  </p>
+                )}
               </div>
 
               {/* DATA — who supplies the values. */}

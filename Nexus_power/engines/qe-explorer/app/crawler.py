@@ -44,6 +44,7 @@ from . import value_infer
 from .auth import Authenticator, AuthWindow, Credentials
 from .browser import BrowserPort, PageObservation
 from .fingerprint import state_fingerprint
+from . import flow_ledger
 from .identity_pack import derive as derive_identity
 from .forms import AnswerKey, execute_submit_phase_b, fill_form_phase_a
 from .guard import (
@@ -104,6 +105,14 @@ _FIELD_KINDS = frozenset({
 #: crawl-wide advance total; both cap the SAFETY-SENSITIVE submit-boundary probe.
 _MAX_WIZARD_STEPS = 6
 _MAX_WIZARD_ADVANCES = 24
+#: END-TO-END FLOW mode raises them, because the bounds above are a PROBE budget
+#: and this is a COVERAGE budget. Six steps is a sample of a fifteen-step quote
+#: funnel; walking six and reporting the journey as covered is the green-wash this
+#: product exists to prevent. Still bounded, and every other safety gate is
+#: untouched: the commit-word veto, the danger gate and the submit boundary decide
+#: what may be clicked, not the step count.
+_E2E_WIZARD_STEPS = 20
+_E2E_WIZARD_ADVANCES = 80
 #: ENTRY-goto retry bounds — the first navigation can race the per-dispatch
 #: egress-fence reconfigure (squid allowlist re-read); retry it briefly.
 _ENTRY_GOTO_RETRIES = 2
@@ -484,6 +493,7 @@ class Crawler:
         field_priors: Optional[dict[str, Any]] = None,
         identity_seed: str = "",
         data_mode: str = "user",
+        crawl_mode: str = "explore",
         credentials: Optional[Credentials] = None,
         allowed_hosts: Sequence[str] = (),
         max_relogins: int = 3,
@@ -518,6 +528,17 @@ class Crawler:
         # "user" = today's behaviour (a radio group is the client's choice to make);
         # "agent" = answer everything honestly answerable, recording each choice.
         self._data_mode = str(data_mode or "user").strip().lower()
+        # "explore" / "target" / "e2e". Only the step budget differs — every safety
+        # gate is identical in all three, because a deeper walk must not be a
+        # laxer one.
+        self._crawl_mode = str(crawl_mode or "explore").strip().lower()
+        self._max_wizard_steps = (_E2E_WIZARD_STEPS if self._crawl_mode == "e2e"
+                                  else _MAX_WIZARD_STEPS)
+        self._max_wizard_advances = (_E2E_WIZARD_ADVANCES if self._crawl_mode == "e2e"
+                                     else _MAX_WIZARD_ADVANCES)
+        # BUSINESS FLOWS: one entry per journey walked, carrying whether it actually
+        # REACHED THE END. Six steps of a fifteen-step funnel is not the Apply flow.
+        self._flows: list[dict[str, Any]] = []
         # Every fillable control the crawl met, filled or not — the residue ask and
         # the learning loop are both keyed on this. Values are NOT in it.
         self._field_ledger: list[dict[str, Any]] = []
@@ -705,6 +726,12 @@ class Crawler:
             # crawl met: what it is, how it was answered, whether it committed.
             # No values — this travels back to qe-central and into evidence.
             "field_ledger": field_ledger,
+            # BUSINESS FLOWS. Each journey walked, and whether it REACHED THE END.
+            # The summary states branch_coverage=False explicitly, so walking every
+            # flow once can never be read as having covered every business path.
+            "flows": self._flows[:200],
+            "flow_summary": flow_ledger.summarize(self._flows),
+            "crawl_mode": self._crawl_mode,
             "fields_needing_seed": needs_seed,
             # Per-field page context {label, url} — the grounded source for flow grouping.
             # Kept alongside the flat list (which stays for back-compat).
@@ -1056,6 +1083,25 @@ class Crawler:
                 entry_shot=(entry_png, entry_ts), first_seen_ms=first_seen,
                 displayed_values=displayed_values, network_calls=network_calls,
             )
+
+        # A single-page form that ends at a Submit IS a business journey — a
+        # one-step one. Recording only multi-step wizards made an application with a
+        # real quote form report ZERO flows, which reads as "no journeys here" when
+        # the truth is "one journey, one step long".
+        if not walked and is_form and fill is not None:
+            self._flows.append(flow_ledger.build_flow(
+                entry_fingerprint=fingerprint, entry_url=obs.url, entry_title=obs.title,
+                steps=[{"fingerprint": fingerprint, "url": obs.url, "title": obs.title,
+                        "fields_filled": fill.filled,
+                        "fields_unfilled": len(fill.unfilled_fields)}],
+                terminal=(flow_ledger.TERMINAL_SUBMIT_BOUNDARY
+                          if self._pick_submit_candidate(snapshot_controls)
+                          else flow_ledger.TERMINAL_NO_ADVANCE),
+                terminal_url=obs.url,
+                outcome_values=[v for v in (displayed_values or ())
+                                if str((v or {}).get("value_type") or "")
+                                in ("currency", "decision", "percent")],
+                max_steps=self._max_wizard_steps))
         if not walked:
             self._record_state(
                 url=obs.url, title=obs.title, controls=snapshot_controls,
@@ -1740,6 +1786,27 @@ class Crawler:
 
     # -- wizard / stepper traversal (#1) ---------------------------------------
 
+    def _pick_submit_candidate(self, controls: Sequence[dict[str, Any]]) -> bool:
+        """True when this step ends at a control the walk may not cross.
+
+        That is the difference between a journey that FINISHED at its natural
+        boundary and one that merely ran out of anything to click: reaching the
+        Submit / Apply button means the funnel was walked to its end, and the only
+        thing left is the approval a human owes. A step with no button at all is
+        also an end, but a different one, and a report that conflates them cannot
+        tell a covered journey from a dead one."""
+        for c in controls or ():
+            if str(c.get("kind") or "").strip().lower() != "button":
+                continue
+            name = str(c.get("name") or "")
+            if not name:
+                continue
+            # The commit vocabulary IS the boundary: these are exactly the labels the
+            # wizard walk refuses to advance through.
+            if _WIZARD_COMMIT_RE.search(name) or c.get("danger"):
+                return True
+        return False
+
     def _pick_wizard_advance(self, controls: Sequence[dict[str, Any]]) -> Optional[dict[str, Any]]:
         """The first non-danger advance control (Next/Continue/Proceed/Forward) to
         step the wizard, or ``None``.  Fail-closed: skips danger/disabled/nameless
@@ -1799,14 +1866,16 @@ class Crawler:
         cur_shot, cur_first = entry_shot, first_seen_ms
         cur_dv, cur_nc = displayed_values, network_calls
         depth, steps = item.depth, 0
+        flow_steps: list[dict[str, Any]] = []
 
         while True:
             trig = self._pick_wizard_advance(cur_controls)
             advance: Optional[tuple[Any, list[dict[str, Any]], str]] = None
-            if (trig is not None and steps < _MAX_WIZARD_STEPS
-                    and self._wizard_advances < _MAX_WIZARD_ADVANCES
-                    and depth < self._budget.max_depth
-                    and not (self._tracker.stop_reason() or self._cancelled)):
+            budget_left = (steps < self._max_wizard_steps
+                           and self._wizard_advances < self._max_wizard_advances
+                           and depth < self._budget.max_depth)
+            stopped = bool(self._tracker.stop_reason() or self._cancelled)
+            if trig is not None and budget_left and not stopped:
                 await self._politeness_delay()
                 observation = await self._port.click(trig)
                 self._tracker.note_request()
@@ -1832,9 +1901,38 @@ class Crawler:
                 first_seen_ms=cur_first, last_seen_ms=self._clock.now_ms(),
                 displayed_values=cur_dv, network_calls=cur_nc)
             if advance is None:
+                # WHY the walk ended decides whether this journey was covered. A
+                # submit boundary or a step with nothing to advance means the funnel
+                # was walked to its end; running out of budget means it was not, and
+                # the difference must survive into the report.
+                if stopped:
+                    terminal = flow_ledger.TERMINAL_CANCELLED
+                elif trig is None:
+                    terminal = (flow_ledger.TERMINAL_SUBMIT_BOUNDARY
+                                if self._pick_submit_candidate(cur_controls)
+                                else flow_ledger.TERMINAL_NO_ADVANCE)
+                elif not budget_left:
+                    terminal = flow_ledger.TERMINAL_BUDGET
+                else:
+                    # A trigger existed and the budget allowed it, so the click
+                    # produced no effect or landed on a state already seen.
+                    terminal = flow_ledger.TERMINAL_LOOP
+                flow_steps.append({"fingerprint": cur_fp, "url": cur_url,
+                                   "title": cur_title,
+                                   "fields_filled": 0, "fields_unfilled": 0})
+                self._flows.append(flow_ledger.build_flow(
+                    entry_fingerprint=fingerprint, entry_url=url, entry_title=title,
+                    steps=flow_steps, terminal=terminal, terminal_url=cur_url,
+                    outcome_values=[v for v in (cur_dv or ())
+                                    if str((v or {}).get("value_type") or "")
+                                    in ("currency", "decision", "percent")],
+                    max_steps=self._max_wizard_steps))
                 return True
 
             obs, new_controls, new_fp = advance
+            flow_steps.append({"fingerprint": cur_fp, "url": cur_url,
+                               "title": cur_title,
+                               "fields_filled": 0, "fields_unfilled": 0})
             self._visited_fingerprints.add(new_fp)
             self._wizard_advances += 1
             steps += 1
@@ -1852,6 +1950,10 @@ class Crawler:
                     priors=self._field_priors, data_mode=self._data_mode)
                 step_actions.extend(filled.actions)
                 self._tracker.note_action(len(filled.actions))
+                if flow_steps:
+                    flow_steps[-1]["fields_filled"] = filled.filled
+                    flow_steps[-1]["fields_unfilled"] = len(filled.unfilled_fields)
+                self._collect_ledger(filled.field_ledger, obs.url or "")
                 if filled.filled:
                     after_fill = await self._observe()
                     new_controls = build_inventory(

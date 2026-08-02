@@ -140,6 +140,11 @@ class ExploreRequest(BaseModel):
     #: and is left to the client. "agent" answers everything honestly answerable so
     #: a funnel completes unattended, recording each choice in the field ledger.
     data_mode: str = Field(default="user", max_length=16)
+    #: CRAWL MODE — "explore" / "target" / "e2e". Only the wizard STEP BUDGET
+    #: differs: e2e walks a funnel to its end rather than sampling six steps of it.
+    #: Every safety gate is identical in all three, because a deeper walk must not
+    #: be a laxer one.
+    crawl_mode: str = Field(default="explore", max_length=16)
     attestation: Optional[dict[str, Any]] = None
     #: A pre-captured Playwright ``storageState`` (cookies + origins) to START the
     #: browser context authenticated — the tier-4 escape hatch for logins the
@@ -426,6 +431,7 @@ async def _run_job(
                 # that has nothing to do with the application.
                 identity_seed=req.identity_seed or f"{req.tenant_id}::{req.target_url}",
                 data_mode=req.data_mode,
+                crawl_mode=req.crawl_mode,
             )
             job = _Job(crawler)
             jobs.activate(job)
