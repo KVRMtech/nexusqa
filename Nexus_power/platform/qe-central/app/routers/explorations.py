@@ -628,6 +628,10 @@ async def _dispatch_explorer(
         recalled_values=resolution["recalled_values"],
         field_priors=resolution["field_priors"],
         identity_seed=resolution["identity_seed"] or f"{tenant_id}::{app_id}",
+        # The operator's DATA dial, from the app row. Absent ⇒ "user", which is the
+        # behaviour that existed before field learning — an unset app must never be
+        # silently upgraded into letting an agent choose its business paths.
+        data_mode=str((row.schedule or {}).get("data_mode") or "user").strip().lower(),
     )
     # Dispatch to an available WORKER in the pool. For EACH worker we fence egress
     # into THAT worker's OWN allowlist file (fail-closed) BEFORE dispatching to it —

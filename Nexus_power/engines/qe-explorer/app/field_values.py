@@ -138,8 +138,20 @@ def _date_for(control: Mapping[str, Any], iso: str) -> str:
     return d.isoformat()
 
 
+#: DATA MODE (the operator's second dial).
+#:   "user"  — today's behaviour exactly. A radio group is a SEMANTIC CHOICE, and
+#:             choosing one invents a scenario the client never asked to test:
+#:             picking "smoker = no" silently decides which business path is
+#:             exercised, and the report would not say so.
+#:   "agent" — the agent answers everything it honestly can, so a funnel is
+#:             completed without a human. The choice it makes is recorded in the
+#:             field ledger, so the report still says which path was taken.
+DATA_MODE_USER = "user"
+DATA_MODE_AGENT = "agent"
+
+
 def value_for(semantic_type: str, control: Mapping[str, Any], identity: Identity,
-              *, kind: str = "") -> Optional[str]:
+              *, kind: str = "", data_mode: str = DATA_MODE_USER) -> Optional[str]:
     """The value to type, or ``None`` when nothing can honestly be produced.
 
     ``None`` is a real answer: for a one-time code or a password there is no value
@@ -150,6 +162,13 @@ def value_for(semantic_type: str, control: Mapping[str, Any], identity: Identity
     k = _norm(kind) or _norm(_attr(control, "kind"))
 
     if sem in S.UNGENERATABLE or sem == S.UNKNOWN:
+        return None
+
+    # A radio group is a semantic choice. In USER mode it is left alone, exactly as
+    # before — the crawl must not decide which business path gets exercised and then
+    # not say so. In AGENT mode it is answered, and the ledger records what was
+    # chosen so the report can.
+    if k == "radio" and data_mode != DATA_MODE_AGENT:
         return None
 
     # A choice control is answered by CHOOSING, whatever the semantics — but the

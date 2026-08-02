@@ -321,7 +321,8 @@ PROV_NEEDS_INPUT = "needs_input"  # nothing honest could be produced — ask the
 def resolve_field(control: Mapping[str, Any], kind: str, name: str,
                   answer_key: "AnswerKey", identity: Identity,
                   *, recalled: Optional[Mapping[str, str]] = None,
-                  priors: Optional[Mapping[str, Any]] = None) -> dict[str, Any]:
+                  priors: Optional[Mapping[str, Any]] = None,
+                  data_mode: str = field_values.DATA_MODE_USER) -> dict[str, Any]:
     """Decide what to type into one control, and record HOW it was decided.
 
     The order is fixed and fails toward asking rather than guessing:
@@ -359,8 +360,10 @@ def resolve_field(control: Mapping[str, Any], kind: str, name: str,
             entry.update(provenance=PROV_RECALLED, filled=True)
             return {"value": str(prior_value), "entry": entry}
 
-    generated = field_values.value_for(verdict["type"], control, identity, kind=kind)
-    if generated is None:
+    generated = field_values.value_for(verdict["type"], control, identity, kind=kind,
+                                       data_mode=data_mode)
+    if generated is None and not (kind in _TOGGLE_KINDS and kind == "radio"
+                                  and data_mode != field_values.DATA_MODE_AGENT):
         # Last resort: the structural default ladder, which knows control shapes the
         # semantic vocabulary does not cover. Still synthesized, still declared.
         generated = _synthesize_default(control, kind, name)
@@ -382,6 +385,7 @@ async def fill_form_phase_a(
     identity: Optional[Identity] = None,
     recalled: Optional[Mapping[str, str]] = None,
     priors: Optional[Mapping[str, Any]] = None,
+    data_mode: str = field_values.DATA_MODE_USER,
 ) -> FormFillResult:
     """Phase A: fill fillable controls from ``answer_key``, read back, STOP.
 
@@ -431,7 +435,8 @@ async def fill_form_phase_a(
             logger.info("qec.forms.skip_nameless_field kind=%s", kind)
             continue
         decision = resolve_field(control, kind, name, answer_key, identity,
-                                 recalled=recalled, priors=priors)
+                                 recalled=recalled, priors=priors,
+                                 data_mode=data_mode)
         entry, value = decision["entry"], decision["value"]
         if value is None:
             result.unfilled_fields.append(name)

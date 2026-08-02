@@ -59,6 +59,8 @@ class ExploreDispatchRequest(BaseModel):
     recalled_values: dict = Field(default_factory=dict)
     field_priors: dict = Field(default_factory=dict)
     identity_seed: str = Field(default="", max_length=200)
+    #: DATA MODE — "user" (default, byte-identical to before) or "agent".
+    data_mode: str = Field(default="user", max_length=16)
     phase: str = Field(default="explore")
     submit_approvals: list[str] = Field(default_factory=list)
     #: TARGET MODE (R3 Mode 2) — path prefixes the crawl is CONFINED to (e.g.
@@ -114,6 +116,7 @@ def _log_safe(req: ExploreDispatchRequest) -> dict:
         # a crawl asks for something it should already know.
         "recalled_count": len(req.recalled_values or {}),
         "priors_count": len(req.field_priors or {}),
+        "data_mode": req.data_mode,
         # Booleans only — never the raw routing cookies/headers/basic-auth (secret).
         "has_cookies": bool(req.cookies),
         "has_headers": bool(req.extra_http_headers),

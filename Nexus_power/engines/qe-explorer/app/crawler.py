@@ -483,6 +483,7 @@ class Crawler:
         recalled_values: Optional[dict[str, str]] = None,
         field_priors: Optional[dict[str, Any]] = None,
         identity_seed: str = "",
+        data_mode: str = "user",
         credentials: Optional[Credentials] = None,
         allowed_hosts: Sequence[str] = (),
         max_relogins: int = 3,
@@ -514,6 +515,9 @@ class Crawler:
         # postcode belonging to a different region than the one selected two steps
         # earlier, which is exactly what an application cross-validates.
         self._identity = derive_identity(identity_seed or "qec")
+        # "user" = today's behaviour (a radio group is the client's choice to make);
+        # "agent" = answer everything honestly answerable, recording each choice.
+        self._data_mode = str(data_mode or "user").strip().lower()
         # Every fillable control the crawl met, filled or not — the residue ask and
         # the learning loop are both keyed on this. Values are NOT in it.
         self._field_ledger: list[dict[str, Any]] = []
@@ -977,7 +981,7 @@ class Crawler:
                 self._port, controls, self._answer_key or AnswerKey(), self._clock,
                 phase=Phase.EXPLORE.value, state_id=fingerprint,
                 identity=self._identity, recalled=self._recalled_values,
-                priors=self._field_priors,
+                priors=self._field_priors, data_mode=self._data_mode,
             )
             actions.extend(fill.actions)
             self._tracker.note_action(len(fill.actions))
@@ -1788,7 +1792,7 @@ class Crawler:
                 self._port, refreshed, self._answer_key or AnswerKey(), self._clock,
                 phase=Phase.EXPLORE.value, state_id=fingerprint,
                 identity=self._identity, recalled=self._recalled_values,
-                priors=self._field_priors)
+                priors=self._field_priors, data_mode=self._data_mode)
 
         cur_url, cur_title, cur_controls, cur_fp = url, title, controls, fingerprint
         cur_actions = list(base_actions)
@@ -1845,7 +1849,7 @@ class Crawler:
                     self._port, new_controls, self._answer_key or AnswerKey(), self._clock,
                     phase=Phase.EXPLORE.value, state_id=new_fp,
                     identity=self._identity, recalled=self._recalled_values,
-                    priors=self._field_priors)
+                    priors=self._field_priors, data_mode=self._data_mode)
                 step_actions.extend(filled.actions)
                 self._tracker.note_action(len(filled.actions))
                 if filled.filled:

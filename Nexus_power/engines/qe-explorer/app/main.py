@@ -135,6 +135,11 @@ class ExploreRequest(BaseModel):
     #: client presents the same person every crawl — a quote that changes because
     #: the age changed between runs is a false difference, not a regression.
     identity_seed: str = Field(default="", max_length=200)
+    #: DATA MODE — the operator's dial. "user" (default) is byte-identical to the
+    #: behaviour before field learning existed: a radio group is a semantic choice
+    #: and is left to the client. "agent" answers everything honestly answerable so
+    #: a funnel completes unattended, recording each choice in the field ledger.
+    data_mode: str = Field(default="user", max_length=16)
     attestation: Optional[dict[str, Any]] = None
     #: A pre-captured Playwright ``storageState`` (cookies + origins) to START the
     #: browser context authenticated — the tier-4 escape hatch for logins the
@@ -420,6 +425,7 @@ async def _run_job(
                 # fictional person every crawl, or a re-quote differs for a reason
                 # that has nothing to do with the application.
                 identity_seed=req.identity_seed or f"{req.tenant_id}::{req.target_url}",
+                data_mode=req.data_mode,
             )
             job = _Job(crawler)
             jobs.activate(job)

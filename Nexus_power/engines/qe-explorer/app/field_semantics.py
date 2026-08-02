@@ -152,9 +152,15 @@ _TOKEN_RULES: tuple[tuple[frozenset[str], frozenset[str], str], ...] = (
     (frozenset({"date"}), frozenset(), DATE),
 )
 
+#: A name half is (a qualifier that needs the word "name" beside it, a spelling
+#: that stands alone). "Last" only means a surname next to "name" — a live crawl
+#: classified "Tobacco use in the last 12 months" as a family name because the
+#: qualifier alone was enough, and the funnel was then answered with a surname.
 _NAME_PAIR = (
-    (frozenset({"first", "given", "forename", "fname"}), GIVEN_NAME),
-    (frozenset({"last", "family", "surname", "lname"}), FAMILY_NAME),
+    (frozenset({"first", "given"}), frozenset({"forename", "fname", "firstname",
+                                               "givenname"}), GIVEN_NAME),
+    (frozenset({"last", "family"}), frozenset({"surname", "lname", "lastname",
+                                               "familyname"}), FAMILY_NAME),
 )
 
 
@@ -202,14 +208,15 @@ def classify(sig: Mapping[str, Any], *,
             if rx.search(constraints):
                 return _verdict(sem, "pattern", 0.85)
 
-    # 5a · name tokens — paired first/last names need both halves considered
-    if tokens & {"name", "names"} or any(tokens & req for req, _ in _NAME_PAIR):
-        for req, sem in _NAME_PAIR:
-            if tokens & req:
-                return _verdict(sem, "name_tokens", 0.8)
-        if tokens & {"name", "names"} and not (tokens & {"user", "company",
-                                                         "organization", "file"}):
-            return _verdict(FULL_NAME, "name_tokens", 0.75)
+    # 5a · personal names. A qualifier ("first"/"last") only names a person when
+    # the word "name" is actually beside it; standalone spellings need no partner.
+    has_name_word = bool(tokens & {"name", "names"})
+    for qualifiers, standalone, sem in _NAME_PAIR:
+        if tokens & standalone or (has_name_word and (tokens & qualifiers)):
+            return _verdict(sem, "name_tokens", 0.8)
+    if has_name_word and not (tokens & {"user", "company", "organization",
+                                        "organisation", "file", "product", "brand"}):
+        return _verdict(FULL_NAME, "name_tokens", 0.75)
 
     for req, forbidden, sem in _TOKEN_RULES:
         if not (tokens & req):

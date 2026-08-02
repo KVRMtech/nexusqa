@@ -301,3 +301,52 @@ def test_an_optional_toggle_is_left_alone_but_a_required_consent_is_cleared():
 
 def test_no_value_is_ever_produced_for_an_unknown_type():
     assert field_values.value_for(S.UNKNOWN, ctl(name="???"), IDENT) is None
+
+
+# ── found by a LIVE crawl, not by review ─────────────────────────────────────
+
+def test_a_qualifier_alone_does_not_mean_a_persons_name():
+    """FOUND LIVE. A real crawl classified "Tobacco use in the last 12 months" as a
+    family name, because the qualifier "last" was enough on its own — and the
+    underwriting question was then answered with a surname.
+
+    "Last" means a surname only next to the word "name"; spellings that stand alone
+    (surname / lname) need no partner."""
+    assert S.classify(field_signature.compute(
+        ctl(name="Tobacco use in the last 12 months")))["type"] != S.FAMILY_NAME
+    assert S.classify(field_signature.compute(
+        ctl(name="When did you last visit?")))["type"] != S.FAMILY_NAME
+    assert S.classify(field_signature.compute(
+        ctl(name="First contact date")))["type"] != S.GIVEN_NAME
+    # and the real ones still work
+    for name, want in (("Last name", S.FAMILY_NAME), ("Surname", S.FAMILY_NAME),
+                       ("lname", S.FAMILY_NAME), ("First name", S.GIVEN_NAME),
+                       ("fname", S.GIVEN_NAME), ("Full name", S.FULL_NAME)):
+        assert S.classify(field_signature.compute(ctl(name=name)))["type"] == want, name
+
+
+def test_a_radio_group_is_left_to_the_client_unless_agent_mode_is_on():
+    """FOUND LIVE. Filling radio groups by default silently changed what the crawl
+    does: picking "smoker = no" decides which business path gets exercised, and
+    nothing in the report would say so.
+
+    That is the operator's DATA dial, not a default. "user" must stay byte-identical
+    to the behaviour that existed before any of this."""
+    radio = ctl(kind="radio", name="Do you use tobacco?", options=["Yes", "No"])
+    assert field_values.value_for(S.CHOICE, radio, IDENT, kind="radio") is None
+    assert field_values.value_for(
+        S.CHOICE, radio, IDENT, kind="radio",
+        data_mode=field_values.DATA_MODE_AGENT) in ("Yes", "No")
+
+
+def test_a_dropdown_is_still_filled_in_user_mode():
+    """Selects were always filled — only radios were left alone. Gating both would
+    be a silent regression in the other direction."""
+    sel = ctl(kind="select", name="Term length", options=["Select", "10", "20"])
+    assert field_values.value_for(S.CHOICE, sel, IDENT, kind="select") == "10"
+
+
+def test_the_default_data_mode_is_the_conservative_one():
+    import inspect
+    sig = inspect.signature(field_values.value_for)
+    assert sig.parameters["data_mode"].default == field_values.DATA_MODE_USER
