@@ -97,6 +97,18 @@ def spans_journey(journey_paths: list[str], case_path_list: list[str]) -> bool:
     return jp[0] in cp and jp[-1] in cp
 
 
+def extraneous_steps(journey_paths: list[str], case_path_list: list[str]) -> int:
+    """How far a case WANDERS beyond the journey it claims to cover.
+
+    A case may span the journey and still continue into unrelated territory
+    (observed live: a quote-journey case that walked on to a 'Member Sign In'
+    click and failed there). Such a case would red-flag the journey for a
+    reason the journey never claimed, so among spanning candidates the
+    TIGHTEST fit wins — same coverage, fewest foreign pages."""
+    jp = set(p for p in journey_paths if p)
+    return sum(1 for p in case_path_list if p not in jp)
+
+
 def display_name_for(business_name: str, entry_title: str) -> str:
     name = _WS_RE.sub(" ", str(business_name or entry_title or "").strip())
     return (f"Verify {name} end to end" if name else "Verify journey end to end")[:300]
@@ -174,14 +186,18 @@ async def link_app_journeys(
             for c in scored_cases:
                 score = coverage_score(walked, c["paths"])
                 if score >= settings.journey_link_min_score:
-                    matches.append((score, spans_journey(walked, c["paths"]), c))
+                    matches.append((score, spans_journey(walked, c["paths"]),
+                                    extraneous_steps(walked, c["paths"]), c))
             if not matches:
                 continue
-            matches.sort(key=lambda m: (-int(m[1]), -m[0]))
+            # Spanning first, then highest coverage, then the TIGHTEST fit
+            # (fewest foreign pages) — a case that wanders past the journey's
+            # terminal must not red-flag a claim the journey never made.
+            matches.sort(key=lambda m: (-int(m[1]), -m[0], m[2]))
             spanning = [m for m in matches if m[1]]
-            adopted_id = spanning[0][2]["test_case_id"] if spanning else ""
+            adopted_id = spanning[0][3]["test_case_id"] if spanning else ""
 
-            for score, _spans, c in matches:
+            for score, _spans, _extra, c in matches:
                 is_adopted = c["test_case_id"] == adopted_id
                 link_id = _sid("jcase", tenant_id, journey.journey_id,
                                artifact_id, c["test_case_id"])

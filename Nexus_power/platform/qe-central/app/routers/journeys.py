@@ -428,8 +428,14 @@ async def refold_journeys(app_id: str, user: dict = Depends(_MUTATE)) -> dict:
         folded.append({"exploration_id": exploration_id, **report})
     naming = await journey_naming.name_unnamed_journeys(
         tenant_id=tenant_id, app_id=app_id)
+    # Re-derive the journey⇄case links too: an operator who re-folds expects
+    # the runnable forms to match what the graph now says.
+    async with tenant_scoped_qec_session(tenant_id) as session:
+        artifact_id = await _latest_artifact(session, tenant_id, app_id)
+    cases = await journey_case_linker.link_app_journeys(
+        tenant_id=tenant_id, app_id=app_id, artifact_id=artifact_id)
     return {"app_id": app_id, "explorations_folded": len(folded),
-            "folds": folded, "naming": naming}
+            "folds": folded, "naming": naming, "cases": cases}
 
 
 async def _dispatch_one_journey(

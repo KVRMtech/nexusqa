@@ -30,6 +30,7 @@ from app.services.journey_case_linker import (
     case_paths,
     coverage_score,
     display_name_for,
+    extraneous_steps,
     norm_path,
     spans_journey,
 )
@@ -341,3 +342,30 @@ async def _run_round_trip():
         linker.tenant_scoped_qec_session = originals[0]
         runner.tenant_scoped_qec_session = originals[1]
         await engine.dispose()
+
+
+# ── Adoption tightness (Release D-P live refinement) ─────────────────────
+
+def test_extraneous_counts_pages_outside_the_journey():
+    journey = ["/quote/start", "/quote/review"]
+    assert extraneous_steps(journey, ["/quote/start", "/quote/review"]) == 0
+    assert extraneous_steps(journey, ["/quote/start", "/quote/review", "/login"]) == 1
+    assert extraneous_steps(journey, ["/a", "/b"]) == 2
+
+
+def test_tightest_spanning_case_is_adopted(monkeypatch):
+    """Observed live: a quote-journey case that spanned the funnel but walked
+    on to a 'Member Sign In' click failed THERE — red-flagging a claim the
+    journey never made. Same coverage ⇒ the case with the fewest foreign
+    pages wins."""
+    journey = ["/quote/start", "/quote/review"]
+    wanderer = ["/quote/start", "/quote/review", "/login"]
+    tight = ["/quote/start", "/quote/review"]
+    scored = [
+        (coverage_score(journey, wanderer), spans_journey(journey, wanderer),
+         extraneous_steps(journey, wanderer), {"test_case_id": "wanderer"}),
+        (coverage_score(journey, tight), spans_journey(journey, tight),
+         extraneous_steps(journey, tight), {"test_case_id": "tight"}),
+    ]
+    scored.sort(key=lambda m: (-int(m[1]), -m[0], m[2]))
+    assert scored[0][3]["test_case_id"] == "tight"
