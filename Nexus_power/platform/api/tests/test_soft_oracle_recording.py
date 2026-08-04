@@ -128,3 +128,22 @@ def test_reporter_ships_soft_miss_annotations_into_step_metadata():
     assert "nexus-soft-oracle-miss" in src
     assert "soft_oracle_misses" in src
     assert "metadata" in src
+
+
+def test_soft_miss_hint_is_a_quoted_js_string_literal():
+    """THE GUARD for the unquoted-hint escape (Release D-P live catch):
+    ``js_str`` escapes but does NOT quote — every ``__nxSoftMiss`` call site
+    must wrap the hint in quotes itself, or the emitted spec is a TypeScript
+    syntax error ("No tests found", exit 1, zero steps executed)."""
+    import re
+
+    from app.services.script_factory import compiler
+
+    src = open(compiler.__file__.replace(".pyc", ".py"), encoding="utf-8").read()
+    for m in re.finditer(r"__nxSoftMiss\(\{_sn\}, \"\n\s*f\"(.)", src):
+        assert m.group(1) == "'", (
+            "an __nxSoftMiss hint is emitted without surrounding quotes — "
+            "js_str does not add them")
+    # And the compiled form itself: hint text always lands inside quotes.
+    assert re.search(r"__nxSoftMiss\(\{_sn\}, \"\s*\n\s*f\"'", src) or \
+        "__nxSoftMiss" not in src

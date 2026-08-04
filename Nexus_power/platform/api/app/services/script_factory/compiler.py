@@ -575,7 +575,7 @@ def _assertion_from_expected_result(observed: dict, expected_result: str = "",
         if m:
             _oc_tail = (
                 f".catch(() => __nxSoftMiss({_sn}, "
-                f"{js_str('outcome region ' + m.group(1).lower() + ' not visible (best-effort hint)')}"
+                f"'{js_str('outcome region ' + m.group(1).lower() + ' not visible (best-effort hint)')}'"
                 ")); // best-effort: prose outcome hint (non-failing, miss RECORDED)"
                 if _soft_outcome else "; // grounded: observed outcome region is shown")
             out.append(
@@ -594,7 +594,7 @@ def _assertion_from_expected_result(observed: dict, expected_result: str = "",
         if tok and tok.lower() not in already:
             _er_tail = (
                 f".catch(() => __nxSoftMiss({_sn}, "
-                f"{js_str('expected-result text ' + tok + ' not visible (best-effort hint)')}"
+                f"'{js_str('expected-result text ' + tok + ' not visible (best-effort hint)')}'"
                 ")); // best-effort: Expected-Result hint (non-failing, miss RECORDED)"
                 if _soft_outcome
                 else "; // grounded: step Expected Result, verified against the observed outcome")
