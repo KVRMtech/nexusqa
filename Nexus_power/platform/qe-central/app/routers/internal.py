@@ -328,6 +328,56 @@ async def _app_answer_key(tenant_id: str, app_id: str) -> dict:
         return {}
 
 
+@router.post("/pick-advance")
+async def pick_advance(request: Request) -> dict:
+    """Agent-assisted wizard advance: which control moves the flow forward?
+
+    Called mid-crawl in E2E mode when the deterministic regex cannot
+    identify the next-step control.  HMAC-authenticated (same shared secret
+    as the completion callback).
+
+    Three-state contract — ``{"control_index": int|null, "status":
+    "picked"|"none"|"unavailable", "signature": str}``:
+
+      * ``picked`` — index into the caller's ORIGINAL control list;
+      * ``none`` — the agent's honest "nothing here advances" (the crawler
+        may end the walk as covered);
+      * ``unavailable`` — the decision could NOT be made (LLM failure,
+        unreadable reply); the crawler must end the walk as NOT covered.
+
+    Commit-labeled, danger, disabled and nameless controls are dropped
+    server-side before the agent sees anything — a commit pick can never be
+    returned to any caller.  ``unavailable`` is still HTTP 200 (best-effort
+    contract): only a bad signature is an error status.
+    """
+    raw = await request.body()
+    signature = request.headers.get(SIGNATURE_HEADER, "")
+    if not phase1_settings.verify_signature(raw, signature):
+        raise HTTPException(status_code=401, detail="invalid or missing signature")
+
+    from ..services import advance_agent
+
+    unavailable = {"control_index": None,
+                   "status": advance_agent.STATUS_UNAVAILABLE, "signature": ""}
+    try:
+        body = json.loads(raw or b"{}")
+    except json.JSONDecodeError:
+        return unavailable
+
+    controls = body.get("controls") or []
+    if not controls:
+        return unavailable
+
+    decision = await advance_agent.pick_advance(
+        tenant_id=body.get("tenant_id", ""),
+        controls=controls,
+        page_title=body.get("page_title", ""),
+        page_url=body.get("page_url", ""),
+    )
+    return {"control_index": decision.index, "status": decision.status,
+            "signature": decision.signature}
+
+
 @router.post("/crawls/{crawl_id}/complete")
 async def complete_crawl(crawl_id: str, request: Request) -> dict:
     """Ingest a finished crawl: verify HMAC → map manifest → write substrate.
@@ -584,6 +634,80 @@ async def complete_crawl(crawl_id: str, request: Request) -> dict:
     except Exception as exc:                       # never fail a durable crawl
         learning = {"attempted": True, "error": str(exc)[:200]}
     stats_dict["field_learning"] = learning
+
+    # ── ADVANCE MEMORY (Release B P4) — harvest PROVEN oracle advances ────
+    # Only tier-3 advances the walk actually confirmed (real effect + new
+    # unseen state) carry evidence; folding them into tenant memory makes the
+    # next crawl of the same decision point free. Consent gates contribution
+    # to the shared pool; everything is best-effort after the durable write.
+    try:
+        from ..services import advance_memory
+        stats_dict["advance_memory"] = await advance_memory.harvest_completion(
+            tenant_id=tenant_id, app_id=app_id, coverage=body.coverage)
+    except Exception as exc:                       # never fail a durable crawl
+        stats_dict["advance_memory"] = {"error": str(exc)[:200]}
+
+    # ── JOURNEY GRAPH (Release C1/C2/C4/C5) ───────────────────────────────
+    # Fold flows into the graph (idempotent upserts; unwalked options become
+    # first-class ``discovered`` branch rows), name new journeys in business
+    # language, reconcile a planned branch walk's outcome (planned → walked |
+    # blocked, never silent), and — ONLY under the fail-closed double flags —
+    # schedule the next branch walks. Best-effort throughout: the manifest
+    # stays the source of truth and any crawl can be re-folded later.
+    try:
+        from ..services import branch_planner, journey_fold, journey_naming
+        walk_plan: dict = {}
+        async with tenant_scoped_qec_session(tenant_id) as session:
+            row_stats = (await session.execute(
+                select(QEExplorationRow.stats).where(
+                    QEExplorationRow.tenant_id == tenant_id,
+                    QEExplorationRow.exploration_id == exploration_id,
+                ))).scalar_one_or_none()
+            if isinstance(row_stats, dict):
+                wp = row_stats.get("walk_plan")
+                walk_plan = wp if isinstance(wp, dict) else {}
+        stats_dict["journey_fold"] = await journey_fold.fold_crawl(
+            tenant_id=tenant_id, app_id=app_id,
+            exploration_id=exploration_id, coverage=body.coverage,
+            identity_ref=str(walk_plan.get("identity_ref") or ""))
+        if walk_plan:
+            stats_dict["walk_plan"] = walk_plan
+            stats_dict["branch_reconcile"] = await branch_planner.reconcile_completion(
+                tenant_id=tenant_id, app_id=app_id, walk_plan=walk_plan,
+                terminal_reason=body.stop_reason or "completed")
+        stats_dict["journey_naming"] = await journey_naming.name_unnamed_journeys(
+            tenant_id=tenant_id, app_id=app_id)
+        # C5 AUTOWALK — the loop with explicit stop conditions: no discovered
+        # branches (plan_walks returns none), the per-cycle cap (inside
+        # plan_walks), or flags off. A planned walk dispatched here is an
+        # ordinary crawl; its own completion folds, reconciles, and decides
+        # whether anything remains.
+        flags = await branch_planner.autonomy_flags(tenant_id)
+        if flags["autowalk"] and not walk_plan:
+            from fastapi import Response as _Response
+            from .explorations import _dispatch_explorer
+            plans = await branch_planner.plan_walks(
+                tenant_id=tenant_id, app_id=app_id)
+            autowalked = []
+            for plan in plans:
+                await branch_planner.mark_planned(
+                    tenant_id=tenant_id, branch_ids=plan["branch_ids"])
+                try:
+                    dispatch = await _dispatch_explorer(
+                        tenant_id=tenant_id, app_id=app_id, request=request,
+                        response=_Response(), walk_plan=plan)
+                    autowalked.append({
+                        "journey_id": plan["journey_id"],
+                        "exploration_id": dispatch.get("exploration_id")})
+                except Exception as exc:
+                    await branch_planner.reconcile_completion(
+                        tenant_id=tenant_id, app_id=app_id, walk_plan=plan,
+                        terminal_reason="dispatch_failed")
+                    autowalked.append({"journey_id": plan["journey_id"],
+                                       "error": str(exc)[:200]})
+            stats_dict["journey_autowalk"] = autowalked
+    except Exception as exc:                       # never fail a durable crawl
+        stats_dict["journey_fold"] = {"error": str(exc)[:200]}
 
     # Promote the recorded artifact onto the app so a cycle / the portal reads it.
     await _promote_latest_artifact(tenant_id, app_id, created.artifact_id)

@@ -711,6 +711,136 @@ export class QecApiClient {
       generated_at: new Date().toISOString(),
     };
   }
+
+  // ── Journey Graph (Release C) ──
+  // Counts, never percentages; unwalked branches are first-class rows; a
+  // journey's branch_coverage is EARNED server-side, never computed here.
+
+  async listJourneys(appId: string, opts?: RequestOpts): Promise<JourneyListResponse> {
+    return this.get<JourneyListResponse>(
+      `${QEC}/apps/${encodeURIComponent(appId)}/journeys`, opts);
+  }
+
+  async getJourney(appId: string, journeyId: string, opts?: RequestOpts): Promise<JourneyDetail> {
+    return this.get<JourneyDetail>(
+      `${QEC}/apps/${encodeURIComponent(appId)}/journeys/${encodeURIComponent(journeyId)}`, opts);
+  }
+
+  async renameJourney(
+    appId: string, journeyId: string,
+    payload: { business_name: string; description?: string },
+    opts?: RequestOpts,
+  ): Promise<{ journey_id: string; business_name: string; name_source: string }> {
+    return this.patch(
+      `${QEC}/apps/${encodeURIComponent(appId)}/journeys/${encodeURIComponent(journeyId)}`,
+      payload, opts);
+  }
+
+  async refoldJourneys(appId: string, opts?: RequestOpts): Promise<{ explorations_folded: number }> {
+    return this.post(
+      `${QEC}/apps/${encodeURIComponent(appId)}/journeys/refold`, {}, opts);
+  }
+
+  async walkBranches(
+    appId: string, journeyId?: string, opts?: RequestOpts,
+  ): Promise<{ plans: number; dispatched: Array<Record<string, unknown>> }> {
+    return this.post(
+      `${QEC}/apps/${encodeURIComponent(appId)}/journeys/walk-branches`,
+      journeyId ? { journey_id: journeyId } : {}, opts);
+  }
+}
+
+// ── Journey Graph types (Release C) ─────────────────────────────────────────
+
+export interface JourneyBranchCounts {
+  walked: number;
+  discovered: number;
+  planned: number;
+  blocked: number;
+}
+
+export interface JourneySummary {
+  journey_id: string;
+  flow_id: string;
+  business_name: string;
+  name_source: 'agent' | 'operator' | 'fallback';
+  description: string;
+  entry_title: string;
+  entry_url: string;
+  deepest_steps: number;
+  last_proven_at: string | null;
+  paths_walked: number;
+  paths_completed: number;
+  branches: JourneyBranchCounts;
+  branch_coverage: boolean;
+}
+
+export interface JourneyListResponse {
+  app_id: string;
+  journeys: JourneySummary[];
+  journeys_found: number;
+  branch_coverage: boolean;
+}
+
+export interface JourneyNode {
+  fingerprint: string;
+  url: string;
+  title: string;
+  is_decision: boolean;
+  is_boundary: boolean;
+  has_outcome: boolean;
+  stale: boolean;
+  last_seen_at: string;
+}
+
+export interface JourneyEdge {
+  from_fp: string;
+  to_fp: string;
+  trigger: string;
+  advance_tier: number;
+  walk_count: number;
+  last_walked_at: string;
+}
+
+export interface JourneyBranch {
+  branch_id: string;
+  node_fp: string;
+  control_signature: string;
+  control_label: string;
+  option_label: string;
+  status: 'walked' | 'discovered' | 'planned' | 'blocked';
+  blocked_reason: string;
+  walked_in_traversal: string;
+}
+
+export interface JourneyTraversal {
+  traversal_id: string;
+  exploration_id: string;
+  terminal: string;
+  completed: boolean;
+  fully_answered: boolean;
+  path_fps: string[];
+  identity_ref: string;
+  env_ref: string;
+  outcome_values: Array<{ label: string; value: string; value_type: string }>;
+  pre_hardening: boolean;
+  walked_at: string;
+}
+
+export interface JourneyPathEnumeration {
+  enumerated: boolean;
+  path_product?: number;
+  note?: string;
+  decision_controls: number;
+}
+
+export interface JourneyDetail extends JourneySummary {
+  nodes: JourneyNode[];
+  edges: JourneyEdge[];
+  /** The branch RECORDS; `branches` (inherited) stays the counts. */
+  branch_list: JourneyBranch[];
+  traversals: JourneyTraversal[];
+  path_enumeration: JourneyPathEnumeration;
 }
 
 /** The shared singleton — import `{ api }` everywhere. */

@@ -145,6 +145,12 @@ class ExploreRequest(BaseModel):
     #: Every safety gate is identical in all three, because a deeper walk must not
     #: be a laxer one.
     crawl_mode: str = Field(default="explore", max_length=16)
+    #: BRANCH WALK (Journey Graph C4): {field signature → forced option label}.
+    #: A planned walk takes the enumerated option the default data would not.
+    #: Applies ONLY to enumerable controls and ONLY to options they themselves
+    #: offer (fail-closed; ``planned`` provenance in the field ledger) — never
+    #: free text, never a value injection, and no safety gate changes with it.
+    choice_overrides: dict[str, str] = Field(default_factory=dict)
     attestation: Optional[dict[str, Any]] = None
     #: A pre-captured Playwright ``storageState`` (cookies + origins) to START the
     #: browser context authenticated — the tier-4 escape hatch for logins the
@@ -356,6 +362,113 @@ async def explore_cancel(crawl_id: str, _: None = Depends(require_token)) -> dic
     return {"crawl_id": crawl_id, "status": "cancelling"}
 
 
+# ─── E2E advance oracle (LLM-assisted wizard advance) ─────────────────────
+
+
+#: Oracle consultation statuses — the crawler's terminal classification depends
+#: on the distinction: ``none`` (the agent honestly said nothing advances) ends
+#: a walk as covered; ``unavailable`` (the decision could not be made) ends it
+#: as NOT covered. They are never conflated.
+_ORACLE_PICKED = "picked"
+_ORACLE_NONE = "none"
+_ORACLE_UNAVAILABLE = "unavailable"
+
+
+def _make_advance_oracle(
+    http_client: httpx.AsyncClient, tenant_id: str, crawl_id: str,
+):
+    """Return an async callable the Crawler invokes when the deterministic
+    regex cannot identify a wizard-advance control.  The callable POSTs the
+    page's clickable controls to qe-central's ``/internal/pick-advance``
+    endpoint, which asks the agent which control a human would click to move
+    forward.
+
+    Contract: returns ``{"index": int | None, "status": picked|none|
+    unavailable, "signature": str}``.  ``unavailable`` covers every way the
+    decision could not be made — transport failure, non-200, timeout, an
+    unreadable body, the per-crawl call cap, or the open circuit — and the
+    crawler turns it into the honest ``oracle_unavailable`` terminal.  The
+    callable never raises and never blocks a crawl beyond its timeout.
+
+    Resilience state is per-crawl (one oracle per crawl):
+      * circuit breaker — after ``advance_oracle_breaker_threshold``
+        CONSECUTIVE unavailable outcomes, no further HTTP attempts this crawl;
+      * call cap — at ``advance_oracle_max_calls`` HTTP calls, consultations
+        end ``unavailable`` (a pathological app cannot burn unbounded tokens).
+    """
+    state = {"consecutive_failures": 0, "circuit_open": False,
+             "calls": 0, "cap_logged": False}
+    unavailable = {"index": None, "status": _ORACLE_UNAVAILABLE, "signature": ""}
+
+    async def oracle(
+        controls: Sequence[dict[str, Any]],
+        page_title: str,
+        page_url: str,
+    ) -> dict[str, Any]:
+        if state["circuit_open"]:
+            return dict(unavailable)
+        if state["calls"] >= settings.advance_oracle_max_calls:
+            if not state["cap_logged"]:
+                state["cap_logged"] = True
+                logger.warning(
+                    "qec.explorer.advance_oracle_cap_reached crawl_id=%s cap=%d",
+                    crawl_id, settings.advance_oracle_max_calls)
+            return dict(unavailable)
+        state["calls"] += 1
+        body = {
+            "tenant_id": tenant_id,
+            "controls": [
+                {"name": c.get("name", ""), "kind": c.get("kind", ""),
+                 "disabled": c.get("disabled", False),
+                 "danger": c.get("danger", False)}
+                for c in controls
+            ],
+            "page_title": page_title or "",
+            "page_url": page_url or "",
+        }
+        payload = json.dumps(body, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        signature = settings.sign_payload(payload)
+        url = settings.callback_url.rstrip("/") + "/internal/pick-advance"
+        try:
+            resp = await http_client.post(
+                url, content=payload,
+                headers={
+                    "Content-Type": "application/json",
+                    "X-QEC-Signature": signature,
+                    "X-QEC-Token": settings.explorer_token,
+                },
+                timeout=settings.advance_oracle_timeout_s,
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                status = str(data.get("status") or "")
+                idx = data.get("control_index")
+                sig = str(data.get("signature") or "")
+                if status == _ORACLE_PICKED and isinstance(idx, int):
+                    state["consecutive_failures"] = 0
+                    return {"index": idx, "status": _ORACLE_PICKED,
+                            "signature": sig}
+                if status == _ORACLE_NONE:
+                    state["consecutive_failures"] = 0
+                    return {"index": None, "status": _ORACLE_NONE,
+                            "signature": sig}
+                # Anything else — including a legacy body without ``status`` —
+                # is a decision NOT made.
+        except Exception as exc:
+            logger.warning("qec.explorer.advance_oracle_failed crawl_id=%s error=%s",
+                           crawl_id, str(exc)[:200])
+        state["consecutive_failures"] += 1
+        if (state["consecutive_failures"] >= settings.advance_oracle_breaker_threshold
+                and not state["circuit_open"]):
+            state["circuit_open"] = True
+            logger.warning(
+                "qec.explorer.advance_oracle_circuit_open crawl_id=%s failures=%d",
+                crawl_id, state["consecutive_failures"])
+        return dict(unavailable)
+
+    return oracle
+
+
 # ─── Job runner (owns the Playwright lifecycle) ──────────────────────────────
 
 
@@ -432,6 +545,11 @@ async def _run_job(
                 identity_seed=req.identity_seed or f"{req.tenant_id}::{req.target_url}",
                 data_mode=req.data_mode,
                 crawl_mode=req.crawl_mode,
+                advance_oracle=(
+                    _make_advance_oracle(app.state.http, req.tenant_id, req.crawl_id)
+                    if req.crawl_mode == "e2e" else None
+                ),
+                choice_overrides=req.choice_overrides,
             )
             job = _Job(crawler)
             jobs.activate(job)

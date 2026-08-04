@@ -13,18 +13,19 @@
  */
 import { useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { ArrowLeft, FlaskConical, KeyRound, PlayCircle, ShieldCheck, Sparkles } from 'lucide-react';
+import { ArrowLeft, FlaskConical, KeyRound, PlayCircle, Route, ShieldCheck, Sparkles } from 'lucide-react';
 
 import { api } from '../../lib/api';
 import { useAsync } from '../../lib/useAsync';
 import { EmptyState, ErrorState, Loading, Pill } from '../../components';
 import DiscoveredFlows from './DiscoveredFlows';
+import Journeys from './Journeys';
 import TestCasesPanel from '../../studio/TestCasesPanel';
 import PlaywrightExecutionPanel from '../../studio/PlaywrightExecutionPanel';
 import EvidenceReportPanel from '../../studio/EvidenceReportPanel';
 import PersonaMatrixPanel from '../../studio/PersonaMatrixPanel';
 
-type StudioTab = 'flows' | 'cases' | 'playwright' | 'evidence' | 'personas';
+type StudioTab = 'flows' | 'journeys' | 'cases' | 'playwright' | 'evidence' | 'personas';
 
 function TabButton({
   active,
@@ -105,6 +106,12 @@ export function TestStudio() {
               label="Discovered Flows"
             />
             <TabButton
+              active={tab === 'journeys'}
+              onClick={() => setTab('journeys')}
+              icon={<Route size={15} />}
+              label="Journeys"
+            />
+            <TabButton
               active={tab === 'cases'}
               onClick={() => setTab('cases')}
               icon={<FlaskConical size={15} />}
@@ -136,6 +143,8 @@ export function TestStudio() {
               of the (now light) portal. */}
           {tab === 'flows' ? (
             <DiscoveredFlows artifactId={artifactId} onOpenPlaywright={() => setTab('playwright')} />
+          ) : tab === 'journeys' ? (
+            <Journeys appId={id} />
           ) : (
             <div className="rounded-2xl bg-panel text-ink ring-1 ring-line shadow-card p-5 overflow-x-auto">
               {tab === 'cases' ? (

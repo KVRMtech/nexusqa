@@ -1,0 +1,257 @@
+"""Journey Graph (Release C) — fold idempotency, branch status law, naming
+validation, planner conflict rules, and the earnable branch_coverage.
+
+Pure-logic tests run everywhere; the DB round-trip is skipif-gated on
+``QEC_TEST_DATABASE_URL`` (house pattern).
+"""
+from __future__ import annotations
+
+import asyncio
+import os
+import uuid
+from contextlib import asynccontextmanager
+
+import pytest
+from sqlalchemy import select, text
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+from app.services import branch_planner, journey_fold, journey_naming
+from app.services.journey_fold import (
+    BRANCH_BLOCKED,
+    BRANCH_DISCOVERED,
+    BRANCH_PLANNED,
+    BRANCH_WALKED,
+    flows_of,
+    is_pre_hardening,
+    path_hash_of,
+)
+
+
+# ── Pure helpers ─────────────────────────────────────────────────────────
+
+def _flow(entry_fp="fpA", terminal="submit_boundary", completed=True,
+          steps=None, outcomes=None):
+    return {
+        "flow_id": "f" * 24, "entry_fingerprint": entry_fp,
+        "entry_url": "https://a.example/quote", "entry_title": "Get a Quote",
+        "terminal": terminal, "completed": completed, "fully_answered": True,
+        "outcome_values": outcomes or [], "steps": steps or [
+            {"fingerprint": "fpA", "url": "u1", "title": "Start",
+             "fields_filled": 2, "fields_unfilled": 0,
+             "advance": {"tier": 1, "control_name": "Continue", "oracle": False},
+             "decision_points": [
+                 {"control_signature": "sig-smoke", "control_label": "Tobacco use",
+                  "options": ["non-smoker", "smoker"], "choice": "non-smoker",
+                  "provenance": "synthesized"}]},
+            {"fingerprint": "fpB", "url": "u2", "title": "Review",
+             "fields_filled": 0, "fields_unfilled": 0},
+        ],
+    }
+
+
+def _coverage(*flows, tiers=True):
+    summary = {"flows_found": len(flows)}
+    if tiers:
+        summary["advances_by_tier"] = {}
+    return {"flows": list(flows), "flow_summary": summary}
+
+
+def test_flows_of_tolerates_malformed():
+    assert flows_of(None) == []
+    assert flows_of({"flows": ["x", 4]}) == []
+    assert len(flows_of(_coverage(_flow()))) == 1
+
+
+def test_pre_hardening_detected_by_missing_tier_rollup():
+    assert is_pre_hardening(_coverage(_flow(), tiers=False)) is True
+    assert is_pre_hardening(_coverage(_flow())) is False
+    assert is_pre_hardening(None) is True
+
+
+def test_path_hash_is_order_sensitive_and_stable():
+    a = [{"fingerprint": "f1"}, {"fingerprint": "f2"}]
+    b = [{"fingerprint": "f2"}, {"fingerprint": "f1"}]
+    assert path_hash_of(a) == path_hash_of(a)
+    assert path_hash_of(a) != path_hash_of(b)
+
+
+# ── Naming validation (C2) ───────────────────────────────────────────────
+
+def test_url_text_is_rejected_in_names():
+    assert journey_naming.looks_like_url_text("Visit https://a.example")
+    assert journey_naming.looks_like_url_text("Open /quote/start")
+    assert journey_naming.looks_like_url_text("Go to acme.com now")
+    assert not journey_naming.looks_like_url_text("Get a life insurance quote")
+
+
+def test_parse_proposal_reads_two_lines():
+    out = journey_naming.parse_proposal(
+        "NAME: Get a life insurance quote\n"
+        "DESCRIPTION: A visitor answers health questions and sees a premium.")
+    assert out == ("Get a life insurance quote",
+                   "A visitor answers health questions and sees a premium.")
+
+
+def test_parse_proposal_rejects_url_tainted_or_unreadable():
+    assert journey_naming.parse_proposal("NAME: Visit /quote/start") is None
+    assert journey_naming.parse_proposal("I think it is a quote flow") is None
+    tainted_desc = journey_naming.parse_proposal(
+        "NAME: Get a quote\nDESCRIPTION: at https://a.example/quote")
+    assert tainted_desc == ("Get a quote", "")
+
+
+def test_build_prompt_is_url_free():
+    p = journey_naming.build_prompt(
+        entry_title="Get a Quote", step_titles=["Health", "Review"],
+        outcomes=[{"label": "Monthly Premium", "value_type": "currency"}],
+        terminal="submit_boundary")
+    assert "http" not in p and "/" not in p
+    assert "Monthly Premium" in p and "submit_boundary" in p
+
+
+# ── Planner conflict rule (C4, pure part) ────────────────────────────────
+
+def test_identity_ref_is_stable_and_value_free():
+    a = branch_planner._identity_ref({"sig-a": "smoker", "sig-b": "gold"})
+    b = branch_planner._identity_ref({"sig-b": "gold", "sig-a": "smoker"})
+    assert a == b and a.startswith("synthetic+planned:")
+    assert "smoker" not in a
+
+
+# ── DB round-trip (skipif-gated) ─────────────────────────────────────────
+
+DB_URL = os.environ.get("QEC_TEST_DATABASE_URL", "")
+needs_db = pytest.mark.skipif(
+    not DB_URL,
+    reason="QEC_TEST_DATABASE_URL not set — the fold/planner round-trip needs "
+           "a disposable Postgres (QecBase tables are created in-test)",
+)
+
+
+@asynccontextmanager
+async def _scoped(factory, tenant):
+    session = factory()
+    try:
+        await session.execute(
+            text("SELECT set_config('nexus.current_tenant_id', :t, true)"),
+            {"t": tenant},
+        )
+        yield session
+        await session.commit()
+    except Exception:
+        await session.rollback()
+        raise
+    finally:
+        await session.close()
+
+
+@needs_db
+def test_fold_recall_plan_reconcile_round_trip():
+    asyncio.run(_run_round_trip())
+
+
+async def _run_round_trip():
+    from app.db.journey_models import (
+        JourneyBranchRow, JourneyEdgeRow, JourneyNodeRow, JourneyRow,
+        JourneyTraversalRow)
+    from app.db.models import QecBase
+
+    engine = create_async_engine(DB_URL)
+    async with engine.begin() as conn:
+        await conn.run_sync(QecBase.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    tenant = f"qec-jg-{uuid.uuid4().hex[:10]}"
+    app_id = "app1"
+    originals = (journey_fold.tenant_scoped_qec_session,
+                 branch_planner.tenant_scoped_qec_session)
+    try:
+        journey_fold.tenant_scoped_qec_session = (
+            lambda tid: _scoped(factory, tid))
+        branch_planner.tenant_scoped_qec_session = (
+            lambda tid: _scoped(factory, tid))
+
+        coverage = _coverage(_flow(
+            outcomes=[{"label": "Monthly Premium", "value": "$42.10",
+                       "value_type": "currency"}]))
+        r1 = await journey_fold.fold_crawl(
+            tenant_id=tenant, app_id=app_id, exploration_id="ex1",
+            coverage=coverage)
+        assert r1["journeys"] == 1 and r1["traversals"] == 1
+        assert r1["nodes"] == 2 and r1["edges"] == 1
+        assert r1["branches"] == 2  # smoker + non-smoker
+
+        # IDEMPOTENT: same crawl re-folded is a no-op.
+        r2 = await journey_fold.fold_crawl(
+            tenant_id=tenant, app_id=app_id, exploration_id="ex1",
+            coverage=coverage)
+        assert r2["traversals"] == 0 and r2["nodes"] == 0 and r2["edges"] == 0
+
+        async with _scoped(factory, tenant) as s:
+            walked = (await s.execute(select(JourneyBranchRow).where(
+                JourneyBranchRow.option_label_norm == "non-smoker"))).scalar_one()
+            other = (await s.execute(select(JourneyBranchRow).where(
+                JourneyBranchRow.option_label_norm == "smoker"))).scalar_one()
+            assert walked.status == BRANCH_WALKED
+            assert other.status == BRANCH_DISCOVERED
+            node = (await s.execute(select(JourneyNodeRow).where(
+                JourneyNodeRow.fingerprint == "fpA"))).scalar_one()
+            assert node.is_decision is True
+            terminal_node = (await s.execute(select(JourneyNodeRow).where(
+                JourneyNodeRow.fingerprint == "fpB"))).scalar_one()
+            assert terminal_node.is_boundary is True
+            assert terminal_node.has_outcome is True
+            edge = (await s.execute(select(JourneyEdgeRow))).scalar_one()
+            assert edge.trigger_label_norm == "continue"
+            assert edge.walk_count == 1  # idempotent re-fold did not bump
+
+        # PLANNER: the discovered smoker branch becomes one plan.
+        plans = await branch_planner.plan_walks(tenant_id=tenant, app_id=app_id)
+        assert len(plans) == 1
+        assert plans[0]["choice_overrides"] == {"sig-smoke": "smoker"}
+        await branch_planner.mark_planned(
+            tenant_id=tenant, branch_ids=plans[0]["branch_ids"])
+        async with _scoped(factory, tenant) as s:
+            assert (await s.execute(select(JourneyBranchRow).where(
+                JourneyBranchRow.option_label_norm == "smoker"
+            ))).scalar_one().status == BRANCH_PLANNED
+
+        # The planned walk comes back having WALKED the smoker branch:
+        walked_flow = _flow()
+        walked_flow["steps"][0]["decision_points"][0]["choice"] = "smoker"
+        r3 = await journey_fold.fold_crawl(
+            tenant_id=tenant, app_id=app_id, exploration_id="ex2",
+            coverage=_coverage(walked_flow),
+            identity_ref="synthetic+planned:abc")
+        assert r3["traversals"] == 1
+        rec = await branch_planner.reconcile_completion(
+            tenant_id=tenant, app_id=app_id,
+            walk_plan={"branch_ids": plans[0]["branch_ids"]},
+            terminal_reason="completed")
+        assert rec == {"walked": 1, "blocked": 0}
+
+        # A plan that never reaches its option ends BLOCKED with a reason.
+        async with _scoped(factory, tenant) as s:
+            s.add(JourneyBranchRow(
+                branch_id="b-unreach", tenant_id=tenant, app_id=app_id,
+                node_fp="fpA", control_signature="sig-tier",
+                control_label_norm="coverage tier",
+                option_label_norm="platinum", status=BRANCH_PLANNED))
+        rec2 = await branch_planner.reconcile_completion(
+            tenant_id=tenant, app_id=app_id,
+            walk_plan={"branch_ids": ["b-unreach"]},
+            terminal_reason="budget_exhausted")
+        assert rec2 == {"walked": 0, "blocked": 1}
+        async with _scoped(factory, tenant) as s:
+            blocked = (await s.execute(select(JourneyBranchRow).where(
+                JourneyBranchRow.branch_id == "b-unreach"))).scalar_one()
+            assert blocked.status == BRANCH_BLOCKED
+            assert "budget_exhausted" in blocked.blocked_reason
+
+        # Tenant isolation: another tenant sees nothing.
+        other_tenant = f"qec-jg-other-{uuid.uuid4().hex[:8]}"
+        assert await branch_planner.plan_walks(
+            tenant_id=other_tenant, app_id=app_id) == []
+    finally:
+        journey_fold.tenant_scoped_qec_session = originals[0]
+        branch_planner.tenant_scoped_qec_session = originals[1]
+        await engine.dispose()

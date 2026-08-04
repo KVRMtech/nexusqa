@@ -51,6 +51,7 @@ from app.routers.apps import router as apps_router
 from app.routers.explorations import router as explorations_router
 from app.routers.harness import router as harness_router
 from app.routers.internal import router as internal_router
+from app.routers.journeys import router as journeys_router
 from app.routers.scenario_gov import router as scenario_gov_router
 from app.routers.cycles import router as cycles_router
 from app.routers.cost import router as cost_router
@@ -298,6 +299,9 @@ app.add_exception_handler(Exception, unhandled_exception_handler)
 
 app.include_router(apps_router)
 app.include_router(explorations_router)
+# Release C Journey Graph — business journeys, branches (walked AND not),
+# operator rename, replay, and flags-gated branch walks. Additive.
+app.include_router(journeys_router)
 app.include_router(harness_router)
 # S4 (Phase-3) scenario governance — criticality / synthesis / coverage /
 # approval / tier-label / touch-meter (design §3.4). Additive; VKPower untouched.

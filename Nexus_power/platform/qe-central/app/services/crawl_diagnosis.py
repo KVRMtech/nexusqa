@@ -36,11 +36,16 @@ CODE_RUNNING = "RUNNING"
 CODE_QUEUED = "QUEUED"
 CODE_NONE = "NONE"
 CODE_UNCLASSIFIED = "UNCLASSIFIED"
+#: One or more journeys ended ``oracle_unavailable`` — the PLATFORM's advance
+#: service could not be reached mid-walk. Never the app's fault; the honest
+#: remedy is a re-crawl once the service is healthy.
+CODE_ADVANCE_ORACLE_UNAVAILABLE = "ADVANCE_ORACLE_UNAVAILABLE"
 
 #: Terminal codes that mean "the client should look" (a problem or an action).
 TERMINAL_ATTENTION_CODES = frozenset({
     CODE_SEEDS_NEEDED, CODE_NO_CASES, CODE_EMPTY_SUBSTRATE, CODE_LOGIN_FAILED,
     CODE_STALLED, CODE_REFUSED, CODE_FAILED, CODE_UNCLASSIFIED,
+    CODE_ADVANCE_ORACLE_UNAVAILABLE,
 })
 
 # Severity the UI can style: ok (green), info (in-progress), action (a human must
@@ -190,6 +195,30 @@ def diagnose(*, status: str | None, error: str | None = "", stats: Any = None) -
                           "The crawl completed but captured no pages.",
                           "Check the URL is reachable and public, then re-crawl.",
                           evidence={"visits": 0})
+        # Journeys that stopped because OUR advance service was unreachable are
+        # a PLATFORM failure, stated before any green: an E2E crawl whose
+        # journeys silently did not finish is exactly the green-wash this
+        # product exists to prevent. Never the app's fault.
+        flow_summary = (cov.get("flow_summary")
+                        if isinstance(cov.get("flow_summary"), Mapping) else {})
+        trunc_reasons = (flow_summary.get("truncation_reasons")
+                         if isinstance(flow_summary.get("truncation_reasons"), Mapping)
+                         else {})
+        oracle_unavail_n = _int(trunc_reasons.get("oracle_unavailable"), 0)
+        if oracle_unavail_n > 0:
+            return _build(
+                CODE_ADVANCE_ORACLE_UNAVAILABLE, SEV_ACTION,
+                "Journeys not proven — platform service was unavailable",
+                f"{oracle_unavail_n} journey walk"
+                f"{'s' if oracle_unavail_n != 1 else ''} stopped because the "
+                "platform's advance-decision service could not be reached "
+                "mid-crawl. This is a platform-side failure — not a problem "
+                "with your application — and those journeys are reported as "
+                "NOT proven complete rather than green.",
+                "Re-crawl once the platform advance service is healthy; the "
+                "journeys will be walked to their real end.",
+                evidence={"oracle_unavailable_journeys": oracle_unavail_n,
+                          "visits": visits, "generated": generated_n})
         if generated_n > 0:
             # A productive crawl reads as OK; any remaining seed fields are surfaced
             # only as an optional "go deeper" hint, never as an alarm.

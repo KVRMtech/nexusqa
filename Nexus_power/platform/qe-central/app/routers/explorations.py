@@ -469,8 +469,17 @@ def _explorer_attestation(att: dict | None) -> dict | None:
 
 async def _dispatch_explorer(
     *, tenant_id: str, app_id: str, request: Request, response: Response,
+    walk_plan: dict | None = None,
 ) -> dict:
-    """Mint a crawl, fence egress, and dispatch the contained explorer (Phase-1)."""
+    """Mint a crawl, fence egress, and dispatch the contained explorer (Phase-1).
+
+    ``walk_plan`` (Journey Graph C4) is a PLANNED BRANCH WALK: ``{journey_id,
+    branch_ids, choice_overrides {signature → option label}, identity_ref}``.
+    When present the dispatch forces ``crawl_mode='e2e'``, threads the choice
+    overrides to the explorer's fill (enumerable options only, ``planned``
+    provenance), and stamps the plan onto the pending exploration row's stats
+    so the completion fold can attribute the traversal and reconcile branch
+    statuses. Every safety gate is identical to an ordinary crawl."""
     if not phase1_settings.dispatch_enabled:
         raise HTTPException(
             status_code=503,
@@ -578,6 +587,21 @@ async def _dispatch_explorer(
     # honest, queryable record (never a silent orphan crawl). Stamp the crawl's wall
     # budget so the UI can tell a still-running crawl from a STALLED one (crashed
     # worker / lost callback) and never spin the "Crawling…" banner forever.
+    pending_stats: dict = {
+        "budget_wall_ms": int(budgets.get("max_wall_ms") or 1_800_000)}
+    if walk_plan:
+        # The plan is evidence: WHY this crawl exists, WHICH branches it was
+        # sent to walk, and AS WHOM — read back by the completion fold
+        # (traversal identity_ref) and the branch reconciler (planned →
+        # walked | blocked, never silent).
+        pending_stats["walk_plan"] = {
+            "journey_id": str(walk_plan.get("journey_id") or "")[:64],
+            "branch_ids": [str(b)[:64] for b in (walk_plan.get("branch_ids") or [])][:32],
+            "choice_overrides": {
+                str(k)[:64]: str(v)[:80]
+                for k, v in (walk_plan.get("choice_overrides") or {}).items()},
+            "identity_ref": str(walk_plan.get("identity_ref") or "")[:200],
+        }
     async with tenant_scoped_qec_session(tenant_id) as session:
         session.add(
             QEExplorationRow(
@@ -587,7 +611,7 @@ async def _dispatch_explorer(
                 status="pending",
                 extractor_version=extractor_version,
                 started_at=utc_now(),
-                stats={"budget_wall_ms": int(budgets.get("max_wall_ms") or 1_800_000)},
+                stats=pending_stats,
             )
         )
 
@@ -634,10 +658,14 @@ async def _dispatch_explorer(
         data_mode=str((row.schedule or {}).get("data_mode") or "user").strip().lower(),
         # Absent ⇒ derived from the scope, which is exactly how mode worked before
         # this key existed: a confined crawl is Target, an unconfined one Explore.
-        # Only an explicit "e2e" opts into the deeper walk.
-        crawl_mode=(lambda m: m if m in ("explore", "target", "e2e")
-                    else ("target" if scope_paths else "explore"))(
-            str((row.schedule or {}).get("crawl_mode") or "").strip().lower()),
+        # Only an explicit "e2e" opts into the deeper walk — and a planned
+        # branch walk IS an e2e walk by definition.
+        crawl_mode=("e2e" if walk_plan else
+                    (lambda m: m if m in ("explore", "target", "e2e")
+                     else ("target" if scope_paths else "explore"))(
+                        str((row.schedule or {}).get("crawl_mode") or "").strip().lower())),
+        choice_overrides=(dict((walk_plan or {}).get("choice_overrides") or {})
+                          if walk_plan else {}),
     )
     # Dispatch to an available WORKER in the pool. For EACH worker we fence egress
     # into THAT worker's OWN allowlist file (fail-closed) BEFORE dispatching to it —

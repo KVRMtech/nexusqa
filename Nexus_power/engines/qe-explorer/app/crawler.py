@@ -34,13 +34,14 @@ import heapq
 import logging
 import re
 from dataclasses import dataclass, field
-from typing import Any, Optional, Sequence
+from typing import Any, Callable, Mapping, Optional, Sequence
 from urllib.parse import urlsplit
 
 from . import danger_signals
 from . import emit
 from . import matcher
 from . import value_infer
+from . import vocab
 from .auth import Authenticator, AuthWindow, Credentials
 from .browser import BrowserPort, PageObservation
 from .fingerprint import state_fingerprint
@@ -119,19 +120,17 @@ _ENTRY_GOTO_RETRIES = 2
 _ENTRY_RETRY_DELAY_S = 2.5
 
 #: An "advance the wizard" control label (Next / Continue / Proceed / Forward) —
-#: the POSITIVE intent signal.
-_WIZARD_ADVANCE_RE = re.compile(r"\b(next|continue|proceed|forward)\b", re.I)
+#: the POSITIVE intent signal. Union-compiled from the per-language packs in
+#: :mod:`app.vocab` (the ``en`` pack is order-preserving, so the compiled
+#: pattern is byte-identical to the historical inline literal).
+_WIZARD_ADVANCE_RE = vocab.ADVANCE_RE
 #: A commit / terminal-boundary label the refuse pack does NOT universally flag
 #: (a generic "Submit"/"Confirm"/"Place order"/"Checkout"…). Its presence VETOES
 #: an advance even when the guard did not mark the control danger — the second,
 #: fail-closed gate over the guard so a wizard walk can never cross a submit.
-_WIZARD_COMMIT_RE = re.compile(
-    r"\b(submit|send|pay|paying|paid|payment|payments|buy|buying|purchase|"
-    r"purchasing|order|checkout|check\s*out|place\s*order|confirm|finish|"
-    r"complete|done|agree|accept|sign|book|reserve|schedule|activate|create|"
-    r"register|subscribe|delete|cancel|remove|apply)\b",
-    re.I,
-)
+#: Union across every language pack: a wider commit vocabulary only ever fails
+#: CLOSED (more vetoes, and a wider submit-boundary detection — never fewer).
+_WIZARD_COMMIT_RE = vocab.COMMIT_RE
 
 
 def _is_wizard_advance(name: str) -> bool:
@@ -141,6 +140,57 @@ def _is_wizard_advance(name: str) -> bool:
     if not _WIZARD_ADVANCE_RE.search(n):
         return False
     return not _WIZARD_COMMIT_RE.search(n)
+
+
+def _decision_points(field_ledger: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """The decision points a fill met on one step (Journey Graph C0).
+
+    An enumerable control (its ledger entry carries ``options``) is a fork in
+    the business flow. Each record names the fork (value-free control
+    signature + label), the enumerated option labels, WHICH option the fill
+    took (``choice`` — absent when the field went unanswered: a fork
+    discovered but not decided), and the provenance of that choice."""
+    out: list[dict[str, Any]] = []
+    for e in field_ledger or ():
+        if not isinstance(e, Mapping) or "options" not in e:
+            continue
+        dp: dict[str, Any] = {
+            "control_signature": str(e.get("signature") or ""),
+            "control_label": str(e.get("name") or "")[:120],
+            "options": [str(o)[:80] for o in (e.get("options") or ())][:24],
+            "provenance": str(e.get("provenance") or ""),
+        }
+        choice = e.get("choice")
+        if choice:
+            dp["choice"] = str(choice)[:80]
+        out.append(dp)
+    return out
+
+
+#: Oracle consultation outcomes. "The LLM said nothing advances" and "the LLM
+#: could not be asked / could not answer" are DIFFERENT facts: the first ends a
+#: journey honestly (no_advance), the second must end it as NOT covered
+#: (oracle_unavailable) — an infrastructure failure is never a covered journey.
+ORACLE_NOT_CONSULTED = "not_consulted"
+ORACLE_PICKED = "picked"
+ORACLE_NONE = "none"
+ORACLE_UNAVAILABLE = "unavailable"
+
+
+@dataclass(frozen=True)
+class AdvanceDecision:
+    """One advance decision: WHICH control (if any), WHO decided (tier), and —
+    when the agent oracle was consulted — HOW that consultation ended.
+
+    ``tier`` is the evidence: 1 = strict regex, 2 = relaxed regex, 3 = agent
+    oracle, 0 = no advance found.  ``signature`` is the oracle's value-free
+    decision-point signature (empty unless tier 3), carried into the flow step
+    so a PROVEN pick can be harvested into tenant advance memory."""
+
+    control: Optional[dict[str, Any]] = None
+    tier: int = 0
+    oracle_status: str = ORACLE_NOT_CONSULTED
+    signature: str = ""
 
 
 # ─── Budgets ─────────────────────────────────────────────────────────────────
@@ -502,6 +552,8 @@ class Crawler:
         plan: Optional[dict[str, Any]] = None,
         scope_path_prefixes: Sequence[str] = (),
         sleep: Any = asyncio.sleep,
+        advance_oracle: Optional[Callable[..., Any]] = None,
+        choice_overrides: Optional[Mapping[str, str]] = None,
     ) -> None:
         self._port = port
         self.crawl_id = crawl_id
@@ -539,6 +591,20 @@ class Crawler:
         # BUSINESS FLOWS: one entry per journey walked, carrying whether it actually
         # REACHED THE END. Six steps of a fifteen-step funnel is not the Apply flow.
         self._flows: list[dict[str, Any]] = []
+        # E2E: when regex cannot identify the advance control, ask the LLM.
+        self._advance_oracle = advance_oracle
+        # Tier-3 outcomes memoized per state fingerprint: the wizard entry check
+        # and the loop's first iteration see the SAME page, and a re-visited step
+        # must not pay a second LLM call. ``unavailable`` is deliberately NOT
+        # memoized — transient trouble may pass; the circuit breaker (in the
+        # oracle callable) owns systemic failure. Value: (picked control name or
+        # None, oracle status, decision-point signature).
+        self._oracle_memo: dict[str, tuple[Optional[str], str, str]] = {}
+        # BRANCH WALK (Journey Graph C4): {field signature → forced option
+        # label}. Applies ONLY to enumerable controls and ONLY to options they
+        # themselves offer (forms rung 0, ``planned`` provenance) — never free
+        # text, never a value injection, and no safety gate changes with it.
+        self._choice_overrides = dict(choice_overrides or {})
         # Every fillable control the crawl met, filled or not — the residue ask and
         # the learning loop are both keyed on this. Values are NOT in it.
         self._field_ledger: list[dict[str, Any]] = []
@@ -1009,6 +1075,7 @@ class Crawler:
                 phase=Phase.EXPLORE.value, state_id=fingerprint,
                 identity=self._identity, recalled=self._recalled_values,
                 priors=self._field_priors, data_mode=self._data_mode,
+                choice_overrides=self._choice_overrides,
             )
             actions.extend(fill.actions)
             self._tracker.note_action(len(fill.actions))
@@ -1076,12 +1143,16 @@ class Crawler:
         # walk OWNS the recording of this step + every step it reaches; when there
         # is no advance trigger it returns False and this state is recorded normally.
         walked = False
+        entry_pick = AdvanceDecision()
         if self._wizard_enabled and is_form and fill is not None and fill.filled:
+            entry_pick = await self._pick_advance(
+                snapshot_controls, obs.url, obs.title, fingerprint)
             walked = await self._walk_wizard(
                 item=item, url=obs.url, title=obs.title, controls=snapshot_controls,
                 fingerprint=fingerprint, base_actions=actions,
                 entry_shot=(entry_png, entry_ts), first_seen_ms=first_seen,
                 displayed_values=displayed_values, network_calls=network_calls,
+                entry_pick=entry_pick,
             )
 
         # A single-page form that ends at a Submit IS a business journey — a
@@ -1089,14 +1160,27 @@ class Crawler:
         # real quote form report ZERO flows, which reads as "no journeys here" when
         # the truth is "one journey, one step long".
         if not walked and is_form and fill is not None:
+            # The entry-level honesty rung: when the tiers found nothing AND the
+            # agent could not be reached, whether this form advances is UNKNOWN —
+            # the one-step journey must say so, never "no_advance" (covered).
+            if entry_pick.oracle_status == ORACLE_UNAVAILABLE:
+                single_terminal = flow_ledger.TERMINAL_ORACLE_UNAVAILABLE
+            elif self._pick_submit_candidate(snapshot_controls):
+                single_terminal = flow_ledger.TERMINAL_SUBMIT_BOUNDARY
+            else:
+                single_terminal = flow_ledger.TERMINAL_NO_ADVANCE
+            single_step: dict[str, Any] = {
+                "fingerprint": fingerprint, "url": obs.url, "title": obs.title,
+                "fields_filled": fill.filled,
+                "fields_unfilled": len(fill.unfilled_fields),
+            }
+            single_dps = _decision_points(fill.field_ledger)
+            if single_dps:
+                single_step["decision_points"] = single_dps
             self._flows.append(flow_ledger.build_flow(
                 entry_fingerprint=fingerprint, entry_url=obs.url, entry_title=obs.title,
-                steps=[{"fingerprint": fingerprint, "url": obs.url, "title": obs.title,
-                        "fields_filled": fill.filled,
-                        "fields_unfilled": len(fill.unfilled_fields)}],
-                terminal=(flow_ledger.TERMINAL_SUBMIT_BOUNDARY
-                          if self._pick_submit_candidate(snapshot_controls)
-                          else flow_ledger.TERMINAL_NO_ADVANCE),
+                steps=[single_step],
+                terminal=single_terminal,
                 terminal_url=obs.url,
                 outcome_values=[v for v in (displayed_values or ())
                                 if str((v or {}).get("value_type") or "")
@@ -1822,12 +1906,161 @@ class Crawler:
                 return c
         return None
 
+    def _tier3_candidates(
+        self, controls: Sequence[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """Controls the agent oracle is ALLOWED to choose between.
+
+        SAFETY-SENSITIVE (the commit boundary): the oracle picks whatever a
+        human would click to move forward — so anything a human must NOT be
+        allowed to click for us is removed BEFORE the oracle ever sees it, not
+        after. Excluded, in every case:
+
+          * danger controls (refuse-pack irreversibility — never relaxed),
+          * disabled controls,
+          * commit-word labels (``_WIZARD_COMMIT_RE``) — a Submit/Pay/Sign is
+            the submit boundary, something the walk STOPS at, never something
+            an LLM may choose (only the attested Phase-B path crosses it),
+          * operator-approved submit names (``submit_approvals`` — that path
+            owns them),
+          * nameless controls — no name means no commit signal to veto on and
+            no signal for the oracle; picking one is a blind click. Fail
+            closed.
+
+        Links stay eligible (framework apps render advances as anchors) under
+        the same name gates. This filter also bounds the prompt-injection
+        surface: page-authored control names can steer the pick only within
+        this pre-filtered set, every member of which the crawl was already
+        willing to click.
+        """
+        out: list[dict[str, Any]] = []
+        for c in controls:
+            if c.get("kind") not in ("button", "link"):
+                continue
+            if c.get("disabled") or c.get("danger"):
+                continue
+            name = str(c.get("name") or "").strip()
+            if not name or name.lower() in self._submit_approvals:
+                continue
+            if _WIZARD_COMMIT_RE.search(name):
+                continue
+            out.append(c)
+        return out
+
+    async def _pick_advance_e2e(
+        self, controls: Sequence[dict[str, Any]],
+        page_url: str = "", page_title: str = "", fingerprint: str = "",
+    ) -> AdvanceDecision:
+        """E2E-mode advance: 3-tier detection so the crawl walks flows the way
+        a real human would, regardless of button label conventions.
+
+        Tier 1 — strict regex (same as explore/target, fast + free).
+        Tier 2 — advance word present, commit-word veto IGNORED. Catches
+                 "Continue to Payment", "Proceed to Checkout", etc.
+        Tier 3 — agent oracle over :meth:`_tier3_candidates`. Catches
+                 "See My Quote", "Apply Now", "Go", or any label regex can
+                 never anticipate.
+
+        The danger gate is NEVER relaxed, and the commit boundary is
+        structurally unreachable: Tiers 1-2 veto commit words per-control and
+        Tier 3 filters them out of the candidate set entirely.
+
+        Returns an :class:`AdvanceDecision` — the control (or ``None``), the
+        tier that decided, and the oracle consultation status. The status is
+        what lets ``_walk_wizard`` end a walk as ``oracle_unavailable`` (NOT
+        covered) instead of ``no_advance`` (covered) when the agent could not
+        be reached: unknown must never be reported as finished.
+        """
+        # Tier 1: strict regex — identical to explore mode.
+        strict = self._pick_wizard_advance(controls)
+        if strict is not None:
+            return AdvanceDecision(control=strict, tier=1)
+
+        # Tier 2: the commit veto is lifted ONLY for destination-shaped labels
+        # — advance word, then a destination preposition, then the commit word
+        # strictly after it ("Continue to Payment" navigates to the payment
+        # STEP; it does not pay). A conjunction shape ("Continue & Place
+        # Order") says it commits, so it never passes here — and Tier 3
+        # filters commit labels too, so such a page ends at the boundary.
+        for c in controls:
+            if c.get("kind") != "button" or c.get("disabled") or c.get("danger"):
+                continue
+            name = str(c.get("name") or "").strip()
+            if not name or name.lower() in self._submit_approvals:
+                continue
+            if vocab.is_destination_advance(name):
+                return AdvanceDecision(control=c, tier=2)
+
+        # Tier 3: ask the agent which control advances the flow.
+        if self._advance_oracle is None:
+            return AdvanceDecision()
+        candidates = self._tier3_candidates(controls)
+        if not candidates:
+            # Everything forward was a commit/danger control — that is the
+            # submit boundary, not an oracle question.
+            return AdvanceDecision()
+
+        # Memo: same fingerprint ⇒ same inventory ⇒ same answer. One LLM call
+        # per unique stuck page per crawl.
+        if fingerprint and fingerprint in self._oracle_memo:
+            memo_name, memo_status, memo_sig = self._oracle_memo[fingerprint]
+            if memo_status == ORACLE_PICKED and memo_name:
+                for c in candidates:
+                    if str(c.get("name") or "").strip().lower() == memo_name:
+                        return AdvanceDecision(
+                            control=c, tier=3,
+                            oracle_status=ORACLE_PICKED, signature=memo_sig)
+            if memo_status == ORACLE_NONE:
+                return AdvanceDecision(
+                    oracle_status=ORACLE_NONE, signature=memo_sig)
+
+        try:
+            outcome = await self._advance_oracle(candidates, page_title, page_url)
+        except Exception:
+            outcome = None
+        if not isinstance(outcome, dict):
+            return AdvanceDecision(oracle_status=ORACLE_UNAVAILABLE)
+        status = str(outcome.get("status") or "")
+        signature = str(outcome.get("signature") or "")
+        idx = outcome.get("index")
+        if status == ORACLE_PICKED and isinstance(idx, int) and 0 <= idx < len(candidates):
+            picked = candidates[idx]
+            if fingerprint:
+                self._oracle_memo[fingerprint] = (
+                    str(picked.get("name") or "").strip().lower(),
+                    ORACLE_PICKED, signature)
+            return AdvanceDecision(
+                control=picked, tier=3,
+                oracle_status=ORACLE_PICKED, signature=signature)
+        if status == ORACLE_NONE:
+            if fingerprint:
+                self._oracle_memo[fingerprint] = (None, ORACLE_NONE, signature)
+            return AdvanceDecision(oracle_status=ORACLE_NONE, signature=signature)
+        # Transport failure, cap, open circuit, or an unreadable reply: the
+        # decision was NOT made. Never memoized, never "none".
+        return AdvanceDecision(oracle_status=ORACLE_UNAVAILABLE)
+
+    async def _pick_advance(
+        self, controls: Sequence[dict[str, Any]],
+        page_url: str = "", page_title: str = "", fingerprint: str = "",
+    ) -> AdvanceDecision:
+        """Mode-routed advance decision. Explore/target stays the strict regex
+        with no oracle state; E2E runs the 3-tier detection."""
+        if self._crawl_mode == "e2e":
+            return await self._pick_advance_e2e(
+                controls, page_url, page_title, fingerprint)
+        strict = self._pick_wizard_advance(controls)
+        if strict is not None:
+            return AdvanceDecision(control=strict, tier=1)
+        return AdvanceDecision()
+
     async def _walk_wizard(
         self, *, item: FrontierItem, url: str, title: str,
         controls: Sequence[dict[str, Any]], fingerprint: str,
         base_actions: list[emit.ActionRecord], entry_shot: tuple[bytes, int],
         first_seen_ms: int, displayed_values: Sequence[dict[str, Any]],
         network_calls: Sequence[dict[str, Any]],
+        entry_pick: Optional[AdvanceDecision] = None,
     ) -> bool:
         """Walk a multi-step wizard from a filled form step: click the advance
         control, RECORD each grounded step in place, repeat.  Returns True when it
@@ -1839,8 +2072,15 @@ class Crawler:
         deduped by state fingerprint (no loop, no entry-step re-walk), and
         FAIL-CLOSED — an advance happens only when the click has a real observed
         effect AND yields a new unseen state; a no-op/loop ends the walk.  The
-        advance control itself already passed the danger + commit-word gates."""
-        if fingerprint in self._wizard_states or self._pick_wizard_advance(controls) is None:
+        advance control passed that tier's gates: the danger gate and the
+        approved-submit-name exclusion hold in EVERY tier, Tier 1 additionally
+        vetoes commit words per-control, Tier 2 permits a commit word only as a
+        destination ("Continue to Payment" navigates; it does not pay), and
+        Tier-3 candidates are commit-filtered before the oracle sees them — so
+        no tier can hand this walk a control that crosses the submit boundary."""
+        if entry_pick is None:
+            entry_pick = await self._pick_advance(controls, url, title, fingerprint)
+        if fingerprint in self._wizard_states or entry_pick.control is None:
             return False
         self._wizard_states.add(fingerprint)
 
@@ -1854,12 +2094,20 @@ class Crawler:
         self._tracker.note_request()
         reobs = await self._observe()
         refreshed = build_inventory(reobs.raw_controls, self._refuse_pack, url=reobs.url)
+        # The re-fill's ledger is ALSO the entry step's truth: real fill counts
+        # and the decision points (forks) this step offered — Journey Graph C0.
+        cur_filled, cur_unfilled = 0, 0
+        cur_dps: list[dict[str, Any]] = []
         if any((c.get("kind") in _FILLABLE_KINDS) and not _is_password(c) for c in refreshed):
-            await fill_form_phase_a(
+            refill = await fill_form_phase_a(
                 self._port, refreshed, self._answer_key or AnswerKey(), self._clock,
                 phase=Phase.EXPLORE.value, state_id=fingerprint,
                 identity=self._identity, recalled=self._recalled_values,
-                priors=self._field_priors, data_mode=self._data_mode)
+                priors=self._field_priors, data_mode=self._data_mode,
+                choice_overrides=self._choice_overrides)
+            cur_filled = refill.filled
+            cur_unfilled = len(refill.unfilled_fields)
+            cur_dps = _decision_points(refill.field_ledger)
 
         cur_url, cur_title, cur_controls, cur_fp = url, title, controls, fingerprint
         cur_actions = list(base_actions)
@@ -1868,8 +2116,22 @@ class Crawler:
         depth, steps = item.depth, 0
         flow_steps: list[dict[str, Any]] = []
 
+        def _step_record(**extra: Any) -> dict[str, Any]:
+            """The CURRENT step's flow entry: its own fill counts and its own
+            decision points (never the next step's — the off-by-one this
+            replaces)."""
+            rec: dict[str, Any] = {
+                "fingerprint": cur_fp, "url": cur_url, "title": cur_title,
+                "fields_filled": cur_filled, "fields_unfilled": cur_unfilled,
+            }
+            if cur_dps:
+                rec["decision_points"] = cur_dps
+            rec.update(extra)
+            return rec
+
         while True:
-            trig = self._pick_wizard_advance(cur_controls)
+            pick = await self._pick_advance(cur_controls, cur_url, cur_title, cur_fp)
+            trig = pick.control
             advance: Optional[tuple[Any, list[dict[str, Any]], str]] = None
             budget_left = (steps < self._max_wizard_steps
                            and self._wizard_advances < self._max_wizard_advances
@@ -1908,18 +2170,25 @@ class Crawler:
                 if stopped:
                     terminal = flow_ledger.TERMINAL_CANCELLED
                 elif trig is None:
-                    terminal = (flow_ledger.TERMINAL_SUBMIT_BOUNDARY
-                                if self._pick_submit_candidate(cur_controls)
-                                else flow_ledger.TERMINAL_NO_ADVANCE)
+                    if pick.oracle_status == ORACLE_UNAVAILABLE:
+                        # The regex tiers found nothing and the agent could not
+                        # be reached — whether more funnel existed is UNKNOWN.
+                        # Unknown is never reported as covered; even a commit
+                        # button on this page does not upgrade the walk to a
+                        # covered boundary, because a non-commit advance may
+                        # have existed that nobody could identify.
+                        terminal = flow_ledger.TERMINAL_ORACLE_UNAVAILABLE
+                    elif self._pick_submit_candidate(cur_controls):
+                        terminal = flow_ledger.TERMINAL_SUBMIT_BOUNDARY
+                    else:
+                        terminal = flow_ledger.TERMINAL_NO_ADVANCE
                 elif not budget_left:
                     terminal = flow_ledger.TERMINAL_BUDGET
                 else:
                     # A trigger existed and the budget allowed it, so the click
                     # produced no effect or landed on a state already seen.
                     terminal = flow_ledger.TERMINAL_LOOP
-                flow_steps.append({"fingerprint": cur_fp, "url": cur_url,
-                                   "title": cur_title,
-                                   "fields_filled": 0, "fields_unfilled": 0})
+                flow_steps.append(_step_record())
                 self._flows.append(flow_ledger.build_flow(
                     entry_fingerprint=fingerprint, entry_url=url, entry_title=title,
                     steps=flow_steps, terminal=terminal, terminal_url=cur_url,
@@ -1930,9 +2199,17 @@ class Crawler:
                 return True
 
             obs, new_controls, new_fp = advance
-            flow_steps.append({"fingerprint": cur_fp, "url": cur_url,
-                               "title": cur_title,
-                               "fields_filled": 0, "fields_unfilled": 0})
+            # WHO decided this advance — per-step audit evidence (tier 3 = the
+            # agent decided; its value-free decision signature rides along so a
+            # PROVEN pick can be harvested into tenant advance memory).
+            advance_evidence: dict[str, Any] = {
+                "tier": pick.tier,
+                "control_name": str((trig or {}).get("name") or "")[:120],
+                "oracle": pick.tier == 3,
+            }
+            if pick.signature:
+                advance_evidence["signature"] = pick.signature
+            flow_steps.append(_step_record(advance=advance_evidence))
             self._visited_fingerprints.add(new_fp)
             self._wizard_advances += 1
             steps += 1
@@ -1942,17 +2219,21 @@ class Crawler:
             step_png = await self._port.screenshot_png()
             step_ts = self._clock.now_ms()
             step_actions: list[emit.ActionRecord] = []
+            # The NEW step's own truth — attached to ITS record when it is
+            # appended (advance or terminal), never to the step just left.
+            cur_filled, cur_unfilled, cur_dps = 0, 0, []
             if any((c.get("kind") in _FILLABLE_KINDS) and not _is_password(c) for c in new_controls):
                 filled = await fill_form_phase_a(
                     self._port, new_controls, self._answer_key or AnswerKey(), self._clock,
                     phase=Phase.EXPLORE.value, state_id=new_fp,
                     identity=self._identity, recalled=self._recalled_values,
-                    priors=self._field_priors, data_mode=self._data_mode)
+                    priors=self._field_priors, data_mode=self._data_mode,
+                    choice_overrides=self._choice_overrides)
                 step_actions.extend(filled.actions)
                 self._tracker.note_action(len(filled.actions))
-                if flow_steps:
-                    flow_steps[-1]["fields_filled"] = filled.filled
-                    flow_steps[-1]["fields_unfilled"] = len(filled.unfilled_fields)
+                cur_filled = filled.filled
+                cur_unfilled = len(filled.unfilled_fields)
+                cur_dps = _decision_points(filled.field_ledger)
                 self._collect_ledger(filled.field_ledger, obs.url or "")
                 if filled.filled:
                     after_fill = await self._observe()

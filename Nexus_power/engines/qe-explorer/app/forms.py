@@ -207,6 +207,35 @@ def _number_default(control: Mapping[str, Any]) -> str:
     return "1"
 
 
+#: Controls whose value is a CHOICE among enumerable options — the forks that
+#: decide which business path a funnel walks (Journey Graph decision points).
+_ENUMERABLE_KINDS = frozenset({"select", "radio", "checkbox", "toggle"})
+#: Bound the recorded enumeration (manifest size guard); inventory already
+#: clips individual labels.
+_MAX_RECORDED_OPTIONS = 24
+
+
+def normalize_option(label: Any) -> str:
+    """One normalization for every option/choice comparison: lowercased,
+    whitespace-collapsed, bounded."""
+    return re.sub(r"\s+", " ", str(label or "").strip().lower())[:80]
+
+
+def _enumerable_options(control: Mapping[str, Any], kind: str) -> list[str]:
+    """The normalized option labels a decision-point control offers.
+
+    Binary controls (checkbox / toggle) enumerate their two states; select /
+    radio enumerate their option labels (product UI text — never values)."""
+    if kind in ("checkbox", "toggle"):
+        return ["checked", "unchecked"]
+    out: list[str] = []
+    for opt in (control.get("options") or ())[:_MAX_RECORDED_OPTIONS]:
+        label = normalize_option(opt)
+        if label:
+            out.append(label)
+    return out
+
+
 def _synthesize_default(control: Mapping[str, Any], kind: str, name: str) -> Optional[str]:
     """A structurally-VALID, LOW-CONFIDENCE value for a fillable control that the
     answer key does not cover — so a client-side-validation-gated form can be advanced
@@ -316,26 +345,36 @@ PROV_PROVIDED = "provided"        # the client's answer key — explicit, highes
 PROV_RECALLED = "recalled"        # remembered from a previous crawl of THIS client
 PROV_SYNTHESIZED = "synthesized"  # generated from the crawl's fictional identity
 PROV_NEEDS_INPUT = "needs_input"  # nothing honest could be produced — ask the client
+PROV_PLANNED = "planned"          # a branch-walk plan forced this CHOICE (Journey
+                                  # Graph C4) — evidence says exactly why the walk
+                                  # took the path it took
 
 
 def resolve_field(control: Mapping[str, Any], kind: str, name: str,
                   answer_key: "AnswerKey", identity: Identity,
                   *, recalled: Optional[Mapping[str, str]] = None,
                   priors: Optional[Mapping[str, Any]] = None,
-                  data_mode: str = field_values.DATA_MODE_USER) -> dict[str, Any]:
+                  data_mode: str = field_values.DATA_MODE_USER,
+                  choice_overrides: Optional[Mapping[str, str]] = None) -> dict[str, Any]:
     """Decide what to type into one control, and record HOW it was decided.
 
     The order is fixed and fails toward asking rather than guessing:
 
+      0. a branch-walk CHOICE OVERRIDE for this field's signature — the whole
+         point of a planned walk is to take the option the default data would
+         not, so it must outrank the answer key; it applies ONLY to enumerable
+         kinds, ONLY when the forced option is among the control's own
+         enumerated options (fail-closed — never free text, never a value
+         injection), and it is declared as ``planned`` provenance;
       1. the client's answer key — an explicit instruction always wins;
       2. a value this same client supplied for this same field before;
       3. a value generated for the semantic type the field was classified as;
       4. nothing — the field joins the residue the client is asked for.
 
     Rungs 3 and 4 are the difference between a crawl that stops at the first
-    unfamiliar form and one that reaches the end of a funnel. Rung 1 staying first
-    is what stops the learning from ever overriding a client who told us the
-    answer."""
+    unfamiliar form and one that reaches the end of a funnel. Rung 1 staying
+    above the learning is what stops it from ever overriding a client who told
+    us the answer."""
     sig = field_signature.compute(control, kind=kind)
     verdict = field_semantics.classify(sig, priors=priors)
     entry = {
@@ -348,6 +387,31 @@ def resolve_field(control: Mapping[str, Any], kind: str, name: str,
         "filled": False,
         "provenance": PROV_NEEDS_INPUT,
     }
+    # DECISION POINTS (Journey Graph C0): an enumerable control is a fork in
+    # the business flow — which option is taken decides which path the funnel
+    # walks. Record the enumeration (option labels — product UI text, never
+    # user values) so the graph can name the branches nobody walked. The
+    # ``choice`` is stamped by the caller only when the fill COMMITTED.
+    if kind in _ENUMERABLE_KINDS:
+        entry["options"] = _enumerable_options(control, kind)
+
+    # Rung 0 — a planned branch walk forces WHICH enumerated option this
+    # decision point takes. Fail-closed: enumerable kinds only, and the forced
+    # option must be one the control itself offers (matched normalized, filled
+    # with the control's ORIGINAL option text).
+    if choice_overrides and kind in _ENUMERABLE_KINDS:
+        forced = normalize_option(choice_overrides.get(sig["signature"]) or "")
+        if forced:
+            if kind in ("checkbox", "toggle"):
+                if forced in ("checked", "unchecked"):
+                    entry.update(provenance=PROV_PLANNED, filled=True)
+                    return {"value": "true" if forced == "checked" else "false",
+                            "entry": entry}
+            else:
+                for opt in control.get("options") or ():
+                    if normalize_option(opt) == forced:
+                        entry.update(provenance=PROV_PLANNED, filled=True)
+                        return {"value": str(opt), "entry": entry}
 
     explicit = answer_key.resolve(name)
     if explicit is not None:
@@ -386,6 +450,7 @@ async def fill_form_phase_a(
     recalled: Optional[Mapping[str, str]] = None,
     priors: Optional[Mapping[str, Any]] = None,
     data_mode: str = field_values.DATA_MODE_USER,
+    choice_overrides: Optional[Mapping[str, str]] = None,
 ) -> FormFillResult:
     """Phase A: fill fillable controls from ``answer_key``, read back, STOP.
 
@@ -436,7 +501,8 @@ async def fill_form_phase_a(
             continue
         decision = resolve_field(control, kind, name, answer_key, identity,
                                  recalled=recalled, priors=priors,
-                                 data_mode=data_mode)
+                                 data_mode=data_mode,
+                                 choice_overrides=choice_overrides)
         entry, value = decision["entry"], decision["value"]
         if value is None:
             result.unfilled_fields.append(name)
@@ -452,6 +518,17 @@ async def fill_form_phase_a(
             result.unfilled_fields.append(name)
             result.field_ledger.append(entry)
             continue
+        # Decision point DECIDED: record WHICH option this committed fill took
+        # (the branch walked; every other recorded option is a branch that was
+        # not). Binary states normalize to their two enumerated labels.
+        if "options" in entry:
+            if kind in ("checkbox", "toggle"):
+                entry["choice"] = ("checked"
+                                   if _norm(str(value)) in ("true", "1", "yes",
+                                                            "on", "checked")
+                                   else "unchecked")
+            else:
+                entry["choice"] = normalize_option(value)
         result.actions.append(action)
         result.filled += 1
         result.field_ledger.append(entry)

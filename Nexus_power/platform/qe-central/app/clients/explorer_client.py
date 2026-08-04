@@ -63,6 +63,10 @@ class ExploreDispatchRequest(BaseModel):
     data_mode: str = Field(default="user", max_length=16)
     #: "explore" / "target" / "e2e" — the step budget, never the safety gates.
     crawl_mode: str = Field(default="explore", max_length=16)
+    #: BRANCH WALK (Journey Graph C4): {field signature → forced option label}.
+    #: Enumerable controls only, own-options only, ``planned`` provenance —
+    #: never free text, and no safety gate changes with it.
+    choice_overrides: dict[str, str] = Field(default_factory=dict)
     phase: str = Field(default="explore")
     submit_approvals: list[str] = Field(default_factory=list)
     #: TARGET MODE (R3 Mode 2) — path prefixes the crawl is CONFINED to (e.g.

@@ -100,6 +100,22 @@ class Settings(BaseSettings):
     #: per-deploy kill-switch for apps whose "Continue" is not vetted as reversible.
     wizard_enabled: bool = Field(default=True, alias="QEC_WIZARD_ENABLED")
 
+    # ── E2E advance oracle resilience (agent-assisted wizard advance) ─────
+    #: Per-call HTTP timeout for the pick-advance consultation. A stuck page is
+    #: worth seconds, not half a minute — the honest ``oracle_unavailable``
+    #: terminal makes fast failure safe.
+    advance_oracle_timeout_s: float = Field(
+        default=8.0, alias="QEC_ADVANCE_ORACLE_TIMEOUT_S")
+    #: Consecutive unavailable outcomes that open the per-crawl circuit; once
+    #: open, no further HTTP attempts are made for the remainder of the crawl.
+    advance_oracle_breaker_threshold: int = Field(
+        default=3, alias="QEC_ADVANCE_ORACLE_BREAKER_THRESHOLD")
+    #: Hard cap on oracle HTTP calls per crawl — a pathological app cannot burn
+    #: unbounded tokens. At the cap, consultations end ``unavailable`` (honest
+    #: non-completing terminal), never silently "none".
+    advance_oracle_max_calls: int = Field(
+        default=40, alias="QEC_ADVANCE_ORACLE_MAX_CALLS")
+
     # ── Security helpers (the HMAC shared secret lives here) ──────────────
 
     def token_matches(self, provided: str | None) -> bool:

@@ -73,6 +73,21 @@ class TenantProvisioningRow(QecBase):
     # Explicit purge request (offboard --purge); evidence deletion is a separate
     # gated seam — this flag NEVER triggers a delete on its own.
     purge_requested: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # OPT-IN consent: contribute this tenant's PROVEN advance-label patterns
+    # (value-free product UI text only) to the pooled cross-tenant priors.
+    # OFF by default — recall of the pool is open, contribution is gated.
+    share_advance_priors: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False,
+    )
+    # Journey Graph autonomy (Release C4/C5) — BOTH OFF by default, and each
+    # also requires its env-level switch (fail-closed): planned branch walks,
+    # and the autowalk loop that schedules them after each fold.
+    branch_walks_enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False,
+    )
+    journey_autowalk: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False,
+    )
     actor: Mapped[str] = mapped_column(String(200), nullable=False, default="")
     reason: Mapped[str] = mapped_column(Text, nullable=False, default="")
     created_at: Mapped[datetime] = mapped_column(

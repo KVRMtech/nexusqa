@@ -135,6 +135,33 @@ class Settings(BaseSettings):
         default="http://platform-api:8091", alias="PLATFORM_API_URL",
     )
 
+    # ── E2E advance-memory recall thresholds (Release B Phase 4) ─────────
+    #: A pooled advance-label prior is trusted for Tier-2.5 recall only when
+    #: proven at least this many times…
+    advance_prior_min_proofs: int = Field(
+        default=3, alias="QEC_ADVANCE_PRIOR_MIN_PROOFS")
+    #: …by at least this many distinct tenants (counted pseudonymously).
+    advance_prior_min_tenants: int = Field(
+        default=2, alias="QEC_ADVANCE_PRIOR_MIN_TENANTS")
+
+    # ── Journey Graph (Release C) ────────────────────────────────────────
+    #: Path products are enumerated exactly only up to this cap; larger
+    #: spaces are reported as "not enumerated" with per-option coverage —
+    #: never an extrapolated percentage.
+    journey_path_enum_cap: int = Field(
+        default=64, alias="QEC_JOURNEY_PATH_ENUM_CAP")
+    #: Env-level switch for planned branch walks (C4). BOTH this AND the
+    #: tenant's ``branch_walks_enabled`` flag must be on (fail-closed).
+    branch_walks_enabled: bool = Field(
+        default=False, alias="QEC_BRANCH_WALKS_ENABLED")
+    #: Env-level switch for the autowalk loop (C5). BOTH this AND the
+    #: tenant's ``journey_autowalk`` flag must be on (fail-closed).
+    journey_autowalk_enabled: bool = Field(
+        default=False, alias="QEC_JOURNEY_AUTOWALK_ENABLED")
+    #: Planned branch walks dispatched per completion cycle, at most.
+    branch_walks_per_cycle: int = Field(
+        default=4, alias="QEC_BRANCH_WALKS_PER_CYCLE")
+
     # ── Storage (must match platform-api's backend so frame assets
     #    are co-readable — design §3.1 / R-5) ────────────────────
     nexus_storage_backend: str = Field(

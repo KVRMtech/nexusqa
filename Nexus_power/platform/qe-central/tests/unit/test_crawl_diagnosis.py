@@ -213,3 +213,41 @@ def test_all_codes_are_reachable():
         cd.CODE_LOGIN_FAILED, cd.CODE_FAILED, cd.CODE_COMPLETED_OK, cd.CODE_SEEDS_NEEDED,
         cd.CODE_NO_CASES, cd.CODE_EMPTY_SUBSTRATE, cd.CODE_UNCLASSIFIED,
     }
+
+
+# ── Advance-oracle unavailable — PLATFORM fault, stated before any green ──────
+def test_oracle_unavailable_journeys_win_over_completed_ok():
+    """An E2E crawl whose journeys silently did not finish is the green-wash
+    this product exists to prevent — the diagnosis must say so even when the
+    crawl generated cases."""
+    stats = {"visits": 12,
+             "generate": {"generated": 9},
+             "coverage": {"flow_summary": {
+                 "truncation_reasons": {"oracle_unavailable": 2}}}}
+    d = _diag("completed", stats=stats)
+    assert d["code"] == cd.CODE_ADVANCE_ORACLE_UNAVAILABLE
+    assert d["severity"] == cd.SEV_ACTION
+    assert d["evidence"]["oracle_unavailable_journeys"] == 2
+
+
+def test_oracle_unavailable_blames_platform_never_the_app():
+    stats = {"visits": 3,
+             "coverage": {"flow_summary": {
+                 "truncation_reasons": {"oracle_unavailable": 1}}}}
+    d = _diag("completed", stats=stats)
+    text = (d["human"] + " " + d["remediation"]).lower()
+    assert "platform" in text
+    assert "not a problem with your application" in d["human"].lower()
+    assert "re-crawl" in text
+
+
+def test_no_oracle_unavailable_keeps_completed_ok():
+    stats = {"visits": 12,
+             "generate": {"generated": 9},
+             "coverage": {"flow_summary": {
+                 "truncation_reasons": {"budget_exhausted": 1}}}}
+    assert _diag("completed", stats=stats)["code"] == cd.CODE_COMPLETED_OK
+
+
+def test_oracle_unavailable_is_an_attention_code():
+    assert cd.CODE_ADVANCE_ORACLE_UNAVAILABLE in cd.TERMINAL_ATTENTION_CODES
