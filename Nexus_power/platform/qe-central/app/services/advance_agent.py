@@ -40,7 +40,9 @@ SYSTEM = (
     "commit the transaction are never a valid answer: if the only way "
     "forward would commit, the flow is at its boundary — reply 0.  "
     "If none of the controls advance the flow (dead end, confirmation "
-    "page, or the flow is already complete), reply 0."
+    "page, or the flow is already complete), reply 0.  "
+    "Your ENTIRE reply must be a single number — no explanation, no "
+    "preamble, no punctuation."
 )
 
 #: Consultation outcomes (the wire contract of ``/internal/pick-advance``).
@@ -204,7 +206,7 @@ async def pick_advance(
     prompt = _build_prompt([c for _, c in eligible], page_title, page_url)
     result = await platform_api.complete_llm(
         tenant_id=tenant_id, prompt=prompt, system=SYSTEM,
-        task="pick_advance", max_tokens=10, temperature=0.0,
+        task="pick_advance", max_tokens=60, temperature=0.0,
     )
     if not result.ok:
         logger.warning(
@@ -214,7 +216,11 @@ async def pick_advance(
         return AdvanceDecision(status=STATUS_UNAVAILABLE, signature=signature)
 
     reply = (result.text or "").strip()
-    match = _NUM_RE.search(reply)
+    # The LAST number wins: a model that ignores the numbers-only instruction
+    # writes preamble first and its conclusion last ("...so control 2"), and
+    # for a bare "2" first==last anyway.
+    numbers = _NUM_RE.findall(reply)
+    match = numbers[-1] if numbers else None
     if not match:
         # Digit-free replies still carry honest answers. Models answer with
         # the CONTROL'S LABEL ("See My Quote") or with an explicit "none"
@@ -238,7 +244,7 @@ async def pick_advance(
             tenant_id, reply[:80],
         )
         return AdvanceDecision(status=STATUS_UNAVAILABLE, signature=signature)
-    picked = int(match.group())
+    picked = int(match)
     if picked == 0:
         return AdvanceDecision(status=STATUS_NONE, signature=signature)
     idx = picked - 1

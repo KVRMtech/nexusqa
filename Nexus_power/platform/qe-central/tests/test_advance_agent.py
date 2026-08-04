@@ -279,3 +279,15 @@ def test_response_parsing_picks_number():
 def test_response_parsing_no_number():
     assert _NUM_RE.search("none") is None
     assert _NUM_RE.search("") is None
+
+
+def test_preamble_reply_takes_the_last_number(monkeypatch):
+    """A model that ignores the numbers-only instruction writes preamble
+    first and its conclusion last (observed live, truncated at the old
+    10-token cap) — the LAST number is the answer."""
+    _llm(monkeypatch, text="I need to analyze this page. Of the 2 controls, "
+                           "the one that advances is number 1")
+    d = _pick([{"name": "See My Quote", "kind": "button"},
+               {"name": "Back", "kind": "button"}])
+    assert d.status == STATUS_PICKED
+    assert d.index == 0
