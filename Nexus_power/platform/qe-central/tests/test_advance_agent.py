@@ -170,6 +170,15 @@ def test_unreadable_reply_is_unavailable_not_none(monkeypatch):
     assert d.status == STATUS_UNAVAILABLE
 
 
+def test_explicit_none_reply_is_honest_none(monkeypatch):
+    """Models write "None" / "None of these" despite the reply-0 instruction —
+    that is the honest answer, not an unreadable reply (observed live)."""
+    for reply in ("None", "None of these advance.", "no"):
+        _llm(monkeypatch, text=reply)
+        d = _pick([{"name": "Back", "kind": "button"}])
+        assert d.status == STATUS_NONE, reply
+
+
 def test_out_of_range_pick_is_unavailable(monkeypatch):
     _llm(monkeypatch, text="7")
     d = _pick([{"name": "See My Quote", "kind": "button"}])

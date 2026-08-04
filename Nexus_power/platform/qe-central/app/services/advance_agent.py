@@ -58,6 +58,11 @@ _COMMIT_VETO_RE = advance_vocab.COMMIT_RE
 
 _NUM_RE = re.compile(r"\d+")
 _WORD_RE = re.compile(r"[a-z]+")
+#: A digit-free reply that still EXPLICITLY says "nothing advances" — models
+#: write "None" / "None of these" despite the reply-0 instruction. That is an
+#: honest none, not an unreadable reply; conflating them turned a covered
+#: journey into oracle_unavailable (observed live on VKPower quote/start).
+_NONE_RE = re.compile(r"\b(none|no)\b", re.I)
 
 
 @dataclass(frozen=True)
@@ -207,8 +212,18 @@ async def pick_advance(
         )
         return AdvanceDecision(status=STATUS_UNAVAILABLE, signature=signature)
 
-    match = _NUM_RE.search(result.text.strip())
+    reply = (result.text or "").strip()
+    match = _NUM_RE.search(reply)
     if not match:
+        # An EXPLICIT "none" is the honest answer despite carrying no digit;
+        # anything else unreadable is a decision NOT made — and is logged,
+        # never silent (a quiet unavailable is undebuggable in production).
+        if _NONE_RE.search(reply):
+            return AdvanceDecision(status=STATUS_NONE, signature=signature)
+        logger.warning(
+            "qec.advance_agent.unreadable_reply",
+            extra={"tenant_id": tenant_id, "reply": reply[:60]},
+        )
         return AdvanceDecision(status=STATUS_UNAVAILABLE, signature=signature)
     picked = int(match.group())
     if picked == 0:
