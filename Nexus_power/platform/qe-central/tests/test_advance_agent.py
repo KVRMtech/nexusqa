@@ -179,6 +179,29 @@ def test_explicit_none_reply_is_honest_none(monkeypatch):
         assert d.status == STATUS_NONE, reply
 
 
+def test_label_reply_is_a_pick(monkeypatch):
+    """Models answer with the control's LABEL instead of its number (observed
+    live) — an exact label match is a pick, mapped to the ORIGINAL index."""
+    controls = [
+        {"name": "Pay Now", "kind": "button"},        # filtered out
+        {"name": "See My Quote", "kind": "button"},
+        {"name": "Back", "kind": "button"},
+    ]
+    for reply in ('See My Quote', '"See My Quote"', ' see  my quote '):
+        _llm(monkeypatch, text=reply)
+        d = _pick(controls)
+        assert d.status == STATUS_PICKED, reply
+        assert d.index == 1
+
+
+def test_label_match_beats_none_word_inside_the_label(monkeypatch):
+    """A label containing a none-word ("No thanks, continue") must resolve as
+    a PICK when echoed, not as an honest none."""
+    _llm(monkeypatch, text="No thanks, continue")
+    d = _pick([{"name": "No thanks, continue", "kind": "button"}])
+    assert d.status == STATUS_PICKED and d.index == 0
+
+
 def test_out_of_range_pick_is_unavailable(monkeypatch):
     _llm(monkeypatch, text="7")
     d = _pick([{"name": "See My Quote", "kind": "button"}])

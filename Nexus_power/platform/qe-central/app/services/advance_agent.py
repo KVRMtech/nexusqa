@@ -58,6 +58,7 @@ _COMMIT_VETO_RE = advance_vocab.COMMIT_RE
 
 _NUM_RE = re.compile(r"\d+")
 _WORD_RE = re.compile(r"[a-z]+")
+_WS_RE = re.compile(r"\s+")
 #: A digit-free reply that still EXPLICITLY says "nothing advances" — models
 #: write "None" / "None of these" despite the reply-0 instruction. That is an
 #: honest none, not an unreadable reply; conflating them turned a covered
@@ -215,14 +216,26 @@ async def pick_advance(
     reply = (result.text or "").strip()
     match = _NUM_RE.search(reply)
     if not match:
-        # An EXPLICIT "none" is the honest answer despite carrying no digit;
-        # anything else unreadable is a decision NOT made — and is logged,
-        # never silent (a quiet unavailable is undebuggable in production).
+        # Digit-free replies still carry honest answers. Models answer with
+        # the CONTROL'S LABEL ("See My Quote") or with an explicit "none"
+        # despite the reply-with-a-number instruction — both observed live.
+        # Order matters: a label match wins (a label may contain the word
+        # "no"), then none-words; only then is the reply truly unreadable —
+        # and that is LOGGED in the message body (formatter-proof), never
+        # silent.
+        normalized_reply = _WS_RE.sub(" ", reply.strip().strip('"\'' ).lower())
+        for original_index, c in eligible:
+            name_norm = _WS_RE.sub(
+                " ", str(c.get("name") or "").strip().lower())
+            if name_norm and normalized_reply == name_norm:
+                return AdvanceDecision(
+                    status=STATUS_PICKED, index=original_index,
+                    signature=signature)
         if _NONE_RE.search(reply):
             return AdvanceDecision(status=STATUS_NONE, signature=signature)
         logger.warning(
-            "qec.advance_agent.unreadable_reply",
-            extra={"tenant_id": tenant_id, "reply": reply[:60]},
+            "qec.advance_agent.unreadable_reply tenant=%s reply=%r",
+            tenant_id, reply[:80],
         )
         return AdvanceDecision(status=STATUS_UNAVAILABLE, signature=signature)
     picked = int(match.group())
