@@ -162,6 +162,18 @@ class Settings(BaseSettings):
     branch_walks_per_cycle: int = Field(
         default=4, alias="QEC_BRANCH_WALKS_PER_CYCLE")
 
+    # ── Runnable Journeys (Release D) ────────────────────────────────────
+    #: Minimum coverage percent for a case to LINK to a journey.
+    journey_link_min_score: int = Field(
+        default=50, alias="QEC_JOURNEY_LINK_MIN_SCORE")
+    #: Poll cadence for a journey-dispatched runner job.
+    journey_run_poll_s: float = Field(
+        default=5.0, alias="QEC_JOURNEY_RUN_POLL_S")
+    #: Ceiling on how long a journey run is polled before it is honestly
+    #: recorded ``timed_out``.
+    journey_run_timeout_s: float = Field(
+        default=900.0, alias="QEC_JOURNEY_RUN_TIMEOUT_S")
+
     # ── Storage (must match platform-api's backend so frame assets
     #    are co-readable — design §3.1 / R-5) ────────────────────
     nexus_storage_backend: str = Field(

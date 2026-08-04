@@ -164,4 +164,101 @@ async def generate(*, tenant_id: str, artifact_id: str, answer_key: dict | None 
     )
 
 
+# ─── Runnable Journeys (Release D) — case list + run dispatch + status ───────
+
+_CASES_TIMEOUT_S = 30.0
+_RUN_DISPATCH_TIMEOUT_S = 60.0
+_RUN_STATUS_TIMEOUT_S = 30.0
+
+
+async def list_test_cases(
+    *, tenant_id: str, artifact_id: str, limit: int = 200,
+) -> list[dict]:
+    """Every ACTIVE test case of an artifact (service JWT), paginated to
+    exhaustion. Each item carries ``test_case_id``, ``name``, ``type``,
+    ``step_count`` and the full ``test_case`` JSON (whose ``steps[].observed``
+    is what the journey linker matches on). Idempotent read — retried."""
+    items: list[dict] = []
+    page = 1
+    while True:
+        body = await call_with_retries(
+            lambda p=page: _call(
+                method="GET",
+                path=(f"/api/v1/test-factory/{artifact_id}/test-cases"
+                      f"?page={p}&limit={min(limit, 200)}&status=active"),
+                endpoint="test_cases", tenant_id=tenant_id,
+                timeout_s=_CASES_TIMEOUT_S,
+            ),
+            idempotent=True, op="test_cases",
+        )
+        batch = body.get("items") or []
+        items.extend(b for b in batch if isinstance(b, dict))
+        total = int(body.get("total") or 0)
+        if not batch or len(items) >= min(total, limit):
+            return items[:limit]
+        page += 1
+
+
+async def run_cases(
+    *, tenant_id: str, artifact_id: str, test_ids: list[str],
+    environment_id: str = "",
+) -> dict:
+    """Dispatch a real runner execution of ``test_ids`` (service JWT).
+
+    Returns the factory's dispatch body — ``{run_id, status: 'running', ...}``
+    on success, or a ``blocked`` body (member-data gate). NON-idempotent —
+    executed exactly once, never auto-retried; a 409 (quarantined /
+    uncertified) or 404 (no matching active cases) propagates as
+    :class:`FactoryClientError` for the caller to record honestly."""
+    body: dict = {"test_ids": [str(t) for t in test_ids if str(t).strip()]}
+    if environment_id.strip():
+        body["environment_id"] = environment_id.strip()
+    return await _call(
+        method="POST",
+        path=f"/api/v1/test-factory/{artifact_id}/playwright/run",
+        endpoint="playwright_run", tenant_id=tenant_id,
+        timeout_s=_RUN_DISPATCH_TIMEOUT_S, json_body=body,
+    )
+
+
+async def run_status(
+    *, tenant_id: str, artifact_id: str, run_id: str,
+) -> dict:
+    """The transient runner-job status for a dispatch ``run_id``.
+
+    ``status``: running → passed | failed | timed_out | error (plus blocked /
+    idle / unknown). Idempotent read — retried."""
+    return await call_with_retries(
+        lambda: _call(
+            method="GET",
+            path=f"/api/v1/test-factory/{artifact_id}/playwright/run/{run_id}",
+            endpoint="playwright_run_status", tenant_id=tenant_id,
+            timeout_s=_RUN_STATUS_TIMEOUT_S,
+        ),
+        idempotent=True, op="playwright_run_status",
+    )
+
+
+async def list_runs(
+    *, tenant_id: str, artifact_id: str, limit: int = 10,
+) -> list[dict]:
+    """Recent DURABLE ingested runs (the evidence/report keys).
+
+    Each entry's ``run_header`` carries ``run_id`` (the ingested id),
+    ``ci_run_id`` (== the dispatch run_id — the correlation key), ``status``
+    and step totals. Idempotent read — retried."""
+    body = await call_with_retries(
+        lambda: _call(
+            method="GET",
+            path=f"/api/v1/test-factory/{artifact_id}/runs?limit={int(limit)}",
+            endpoint="runs_list", tenant_id=tenant_id,
+            timeout_s=_RUN_STATUS_TIMEOUT_S,
+        ),
+        idempotent=True, op="runs_list",
+    )
+    runs = body.get("runs") if isinstance(body.get("runs"), list) else (
+        body.get("result") if isinstance(body.get("result"), list) else [])
+    return [r for r in runs if isinstance(r, dict)]
+
+
 __all__ = ["FactoryClientError", "get_rtm", "generate"]

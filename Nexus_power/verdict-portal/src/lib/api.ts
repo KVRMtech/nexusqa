@@ -748,6 +748,21 @@ export class QecApiClient {
       `${QEC}/apps/${encodeURIComponent(appId)}/journeys/walk-branches`,
       journeyId ? { journey_id: journeyId } : {}, opts);
   }
+
+  async runJourney(
+    appId: string, journeyId: string, opts?: RequestOpts,
+  ): Promise<JourneyDispatch> {
+    return this.post(
+      `${QEC}/apps/${encodeURIComponent(appId)}/journeys/${encodeURIComponent(journeyId)}/run`,
+      {}, opts);
+  }
+
+  async runAllJourneys(
+    appId: string, opts?: RequestOpts,
+  ): Promise<{ journeys: number; dispatched: number; results: JourneyDispatch[] }> {
+    return this.post(
+      `${QEC}/apps/${encodeURIComponent(appId)}/journeys/run-all`, {}, opts);
+  }
 }
 
 // ── Journey Graph types (Release C) ─────────────────────────────────────────
@@ -757,6 +772,44 @@ export interface JourneyBranchCounts {
   discovered: number;
   planned: number;
   blocked: number;
+}
+
+export interface JourneyRunnable {
+  ok: boolean;
+  reason: string;
+  test_case_id: string;
+  display_name: string;
+}
+
+export interface JourneyRunView {
+  journey_run_id: string;
+  status: 'dispatched' | 'running' | 'passed' | 'failed' | 'timed_out' | 'error' | 'blocked';
+  blocked_reason: string;
+  dispatch_run_id: string;
+  ingested_run_id: string;
+  artifact_id: string;
+  test_case_id: string;
+  env_ref: string;
+  verdict_summary: Record<string, unknown>;
+  started_at: string;
+  finished_at: string | null;
+}
+
+export interface JourneyDispatch {
+  journey_id: string;
+  business_name?: string;
+  dispatched: boolean;
+  journey_run_id?: string;
+  status?: string;
+  reason?: string;
+}
+
+export interface JourneyCaseLink {
+  test_case_id: string;
+  name: string;
+  display_name: string;
+  kind: 'linked' | 'journey_e2e';
+  coverage_score: number;
 }
 
 export interface JourneySummary {
@@ -773,12 +826,16 @@ export interface JourneySummary {
   paths_completed: number;
   branches: JourneyBranchCounts;
   branch_coverage: boolean;
+  runnable: JourneyRunnable;
+  last_run: JourneyRunView | null;
 }
 
 export interface JourneyListResponse {
   app_id: string;
+  artifact_id: string;
   journeys: JourneySummary[];
   journeys_found: number;
+  runs: { runnable: number; run_green: number; run_red: number; never_run: number };
   branch_coverage: boolean;
 }
 
@@ -835,6 +892,10 @@ export interface JourneyPathEnumeration {
 }
 
 export interface JourneyDetail extends JourneySummary {
+  artifact_id: string;
+  cases: JourneyCaseLink[];
+  /** The run ledger, newest first; `last_run` (inherited) is runs[0]. */
+  runs: JourneyRunView[];
   nodes: JourneyNode[];
   edges: JourneyEdge[];
   /** The branch RECORDS; `branches` (inherited) stays the counts. */

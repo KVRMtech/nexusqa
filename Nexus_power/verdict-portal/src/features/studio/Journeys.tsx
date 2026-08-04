@@ -14,17 +14,19 @@
  *     enumerated option walked or attributably blocked);
  *   • path products above the server cap say "not enumerated" — no claim.
  */
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
 import {
   AlertTriangle, CheckCircle2, ChevronDown, ChevronRight, CircleDashed,
-  Footprints, GitBranch, Pencil, RefreshCw, Route as RouteIcon, ShieldCheck,
+  FlaskConical, Footprints, GitBranch, Pencil, PlayCircle, RefreshCw,
+  Route as RouteIcon, ShieldCheck,
 } from 'lucide-react';
 
 import {
   api,
   type JourneyBranch,
   type JourneyDetail,
+  type JourneyRunView,
   type JourneySummary,
 } from '../../lib/api';
 import { useAsync } from '../../lib/useAsync';
@@ -63,6 +65,43 @@ function Terminal({ terminal }: { terminal: string }) {
     <span className="inline-flex items-center gap-1.5">
       <Pill tone={copy.tone} size="sm" variant="outline">{copy.label}</Pill>
       <span className="text-2xs text-ink-low font-mono">{terminal}</span>
+    </span>
+  );
+}
+
+const RUN_TONE: Record<JourneyRunView['status'], 'teal' | 'warn' | 'crit' | 'neutral'> = {
+  passed: 'teal',
+  failed: 'crit',
+  timed_out: 'crit',
+  error: 'crit',
+  blocked: 'warn',
+  running: 'neutral',
+  dispatched: 'neutral',
+};
+
+function RunProofLine({ run }: { run: JourneyRunView | null }) {
+  /** The RUN proof — a distinct fact beside the crawl proof, never merged. */
+  if (run === null) {
+    return <span className="text-2xs text-ink-low">never executed as a script</span>;
+  }
+  const v = run.verdict_summary as { passed_steps?: number; total_steps?: number };
+  return (
+    <span className="inline-flex flex-wrap items-center gap-1.5 text-2xs">
+      <span className="text-ink-low">last run:</span>
+      <Pill tone={RUN_TONE[run.status]} size="sm">{run.status.replace('_', ' ')}</Pill>
+      <span className="text-ink-low">
+        {timeAgo(run.finished_at ?? run.started_at)}
+      </span>
+      {typeof v.passed_steps === 'number' && typeof v.total_steps === 'number' && (
+        <span className="text-ink-low">{v.passed_steps}/{v.total_steps} steps</span>
+      )}
+      {run.env_ref && <span className="text-ink-low">env {run.env_ref}</span>}
+      {run.ingested_run_id && (
+        <span className="font-mono text-ink-low">
+          evidence run {run.ingested_run_id.slice(0, 10)}
+        </span>
+      )}
+      {run.blocked_reason && <span className="text-crit">{run.blocked_reason}</span>}
     </span>
   );
 }
@@ -114,6 +153,39 @@ function JourneyDetailView({ appId, journeyId }: { appId: string; journeyId: str
           <>Path space {d.path_enumeration.note} across{' '}
             {d.path_enumeration.decision_controls} decision controls — coverage is
             stated per option, never as a percentage of an uncounted space.</>
+        )}
+      </div>
+
+      {/* runnable form — the journey's script(s) and its run ledger */}
+      <div>
+        <div className="text-xs font-semibold text-ink mb-1.5 inline-flex items-center gap-1.5">
+          <FlaskConical size={13} aria-hidden /> Test cases ({d.cases.length})
+        </div>
+        <div className="space-y-1.5">
+          {d.cases.map((c) => (
+            <div key={c.test_case_id} className="rounded-lg bg-inset/60 px-3 py-2 text-2xs flex flex-wrap items-center gap-2">
+              <span className="text-ink font-medium">{c.display_name}</span>
+              {c.kind === 'journey_e2e'
+                ? <Pill tone="teal" size="sm">end-to-end</Pill>
+                : <Pill tone="neutral" size="sm" variant="outline">covers part</Pill>}
+              <span className="text-ink-low">covers {c.coverage_score}% of the walked path</span>
+              <span className="font-mono text-ink-low">{c.test_case_id.slice(0, 10)}</span>
+            </div>
+          ))}
+          {d.cases.length === 0 && (
+            <div className="text-2xs text-ink-low">
+              No cases matched this journey's walked path on the current crawl artifact.
+            </div>
+          )}
+        </div>
+        {d.runs.length > 0 && (
+          <div className="mt-2 space-y-1">
+            {d.runs.map((r) => (
+              <div key={r.journey_run_id} className="text-2xs">
+                <RunProofLine run={r} />
+              </div>
+            ))}
+          </div>
         )}
       </div>
 
@@ -242,6 +314,16 @@ export default function Journeys({ appId }: { appId: string }) {
   const [renaming, setRenaming] = useState<string | null>(null);
   const [busyAction, setBusyAction] = useState<string | null>(null);
 
+  // While any journey run is in flight, the list refreshes itself so the
+  // verdict fold-back appears without a manual reload.
+  const inFlight = (state.data?.journeys ?? []).some(
+    (j) => j.last_run && (j.last_run.status === 'running' || j.last_run.status === 'dispatched'));
+  useEffect(() => {
+    if (!inFlight) return;
+    const timer = setInterval(() => state.reload(), 5000);
+    return () => clearInterval(timer);
+  }, [inFlight, state.reload]);
+
   if (state.isLoading) return <SkeletonRows rows={4} />;
   if (state.isError) return <ErrorState error={state.error} onRetry={state.reload} />;
   const data = state.data!;
@@ -273,6 +355,19 @@ export default function Journeys({ appId }: { appId: string }) {
           )}
         </div>
         <div className="inline-flex items-center gap-2">
+          <span className="text-2xs text-ink-low mr-1">
+            {data.runs.runnable} runnable · {data.runs.run_green} green ·{' '}
+            {data.runs.run_red} red · {data.runs.never_run} never run
+          </span>
+          <Button
+            size="sm" disabled={busyAction !== null || data.runs.runnable === 0}
+            onClick={() => act('Prove all journeys', async () => {
+              const r = await api.runAllJourneys(appId);
+              toast.success(`${r.dispatched} of ${r.journeys} journey run(s) dispatched.`);
+            })}
+          >
+            <PlayCircle size={13} aria-hidden /> Prove all journeys
+          </Button>
           <Button
             size="sm" variant="secondary" disabled={busyAction !== null}
             onClick={() => act('Re-fold', async () => {
@@ -334,11 +429,43 @@ export default function Journeys({ appId }: { appId: string }) {
                     {j.paths_walked === 1 ? '' : 's'} completed
                   </span>
                   <span>{j.deepest_steps} steps at deepest</span>
-                  {j.last_proven_at && <span>last proven {timeAgo(j.last_proven_at)}</span>}
+                  {j.last_proven_at && <span>crawl-proven {timeAgo(j.last_proven_at)}</span>}
                   <BranchChips s={j} />
                 </div>
+                <div className="mt-1.5">
+                  <RunProofLine run={j.last_run} />
+                </div>
               </button>
-              <div className="px-4 pb-3">
+              <div className="px-4 pb-3 flex flex-wrap items-center gap-3">
+                {j.runnable.ok ? (
+                  <Button
+                    size="sm"
+                    disabled={busyAction !== null ||
+                      (j.last_run?.status === 'running' ||
+                       j.last_run?.status === 'dispatched')}
+                    onClick={() => act(`Run ${j.business_name}`, async () => {
+                      const r = await api.runJourney(appId, j.journey_id);
+                      toast.success(r.dispatched
+                        ? `Running "${j.business_name}" through the real runner…`
+                        : (r.reason || 'Dispatch was refused'));
+                    })}
+                  >
+                    <PlayCircle size={13} aria-hidden />
+                    {(j.last_run?.status === 'running' ||
+                      j.last_run?.status === 'dispatched')
+                      ? 'Running…' : 'Run journey'}
+                  </Button>
+                ) : (
+                  <span className="inline-flex items-center gap-1.5 text-2xs text-ink-low">
+                    <CircleDashed size={12} aria-hidden />
+                    not runnable — {j.runnable.reason}
+                  </span>
+                )}
+                {j.runnable.ok && j.runnable.display_name && (
+                  <span className="inline-flex items-center gap-1 text-2xs text-ink-low">
+                    <FlaskConical size={11} aria-hidden /> {j.runnable.display_name}
+                  </span>
+                )}
                 {renaming === j.journey_id ? (
                   <RenameForm
                     appId={appId} journey={j}

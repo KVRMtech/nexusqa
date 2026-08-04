@@ -677,6 +677,13 @@ async def complete_crawl(crawl_id: str, request: Request) -> dict:
                 terminal_reason=body.stop_reason or "completed")
         stats_dict["journey_naming"] = await journey_naming.name_unnamed_journeys(
             tenant_id=tenant_id, app_id=app_id)
+        # Runnable Journeys (Release D0/D1): re-derive the journey⇄case links
+        # for THIS crawl's artifact — the auto-generate above just refreshed
+        # the case set. Deterministic URL-path matching, no LLM.
+        from ..services import journey_case_linker
+        stats_dict["journey_cases"] = await journey_case_linker.link_app_journeys(
+            tenant_id=tenant_id, app_id=app_id,
+            artifact_id=created.artifact_id)
         # C5 AUTOWALK — the loop with explicit stop conditions: no discovered
         # branches (plan_walks returns none), the per-cycle cap (inside
         # plan_walks), or flags off. A planned walk dispatched here is an

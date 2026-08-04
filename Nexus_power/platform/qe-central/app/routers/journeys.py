@@ -34,8 +34,15 @@ from ..db.journey_models import (
     JourneyRow,
     JourneyTraversalRow,
 )
-from ..db.models import QEExplorationRow
-from ..services import branch_planner, journey_fold, journey_naming
+from ..db.journey_run_models import JourneyCaseRow, JourneyRunRow
+from ..db.models import ClientAppRow, QEExplorationRow
+from ..services import (
+    branch_planner,
+    journey_case_linker,
+    journey_fold,
+    journey_naming,
+    journey_runner,
+)
 from ..services.journey_fold import BRANCH_BLOCKED, BRANCH_DISCOVERED, BRANCH_WALKED
 
 logger = logging.getLogger(__name__)
@@ -52,6 +59,63 @@ class JourneyRename(BaseModel):
 
 class WalkBranchesIn(BaseModel):
     journey_id: Optional[str] = Field(default=None, max_length=64)
+
+
+async def _latest_artifact(session, tenant_id: str, app_id: str) -> str:
+    """The app's promoted crawl artifact — the one whose cases are current."""
+    return str((await session.execute(
+        select(ClientAppRow.latest_artifact_id).where(
+            ClientAppRow.tenant_id == tenant_id,
+            ClientAppRow.app_id == app_id,
+        ))).scalar_one_or_none() or "")
+
+
+def _run_view(run: JourneyRunRow | None) -> dict | None:
+    """The RUN-proof line — a distinct fact beside the crawl-proof, never
+    merged with it."""
+    if run is None:
+        return None
+    return {
+        "journey_run_id": run.journey_run_id,
+        "status": run.status,
+        "blocked_reason": run.blocked_reason,
+        "dispatch_run_id": run.dispatch_run_id,
+        "ingested_run_id": run.ingested_run_id,
+        "artifact_id": run.artifact_id,
+        "test_case_id": run.test_case_id,
+        "env_ref": run.env_ref,
+        "verdict_summary": dict(run.verdict_summary or {}),
+        "started_at": run.started_at.isoformat(),
+        "finished_at": (run.finished_at.isoformat()
+                        if run.finished_at else None),
+    }
+
+
+async def _runnable_view(
+    session, *, tenant_id: str, app_id: str, journey_id: str,
+    artifact_id: str, paths_completed: int,
+) -> dict:
+    """{ok, reason, test_case_id, display_name} — the honest runnability
+    verdict. A truncated journey never gets a script that pretends to cover
+    a path the crawl did not finish."""
+    if paths_completed <= 0:
+        return {"ok": False, "test_case_id": "", "display_name": "",
+                "reason": ("no completed walk yet — re-crawl to prove the "
+                           "path before it can be executed")}
+    if not artifact_id:
+        return {"ok": False, "test_case_id": "", "display_name": "",
+                "reason": "no crawl artifact promoted for this app yet"}
+    adopted = await journey_case_linker.runnable_case(
+        session, tenant_id=tenant_id, app_id=app_id,
+        journey_id=journey_id, artifact_id=artifact_id)
+    if adopted is None:
+        return {"ok": False, "test_case_id": "", "display_name": "",
+                "reason": ("no end-to-end case spans this journey's walked "
+                           "path on the current crawl artifact — re-crawl "
+                           "to regenerate its cases")}
+    return {"ok": True, "test_case_id": adopted.test_case_id,
+            "display_name": adopted.display_name or adopted.case_name,
+            "reason": ""}
 
 
 async def _journey_or_404(session, tenant_id: str, app_id: str,
@@ -142,24 +206,53 @@ def _path_enumeration(branches: list[JourneyBranchRow]) -> dict[str, Any]:
 
 @router.get("/apps/{app_id}/journeys")
 async def list_journeys(app_id: str, user: dict = Depends(require_auth)) -> dict:
-    """The app's journeys, business names first, with per-journey rollups and
-    the app-level earnable branch_coverage."""
+    """The app's journeys, business names first, with per-journey rollups,
+    the earnable branch_coverage, runnability, and the latest RUN proof
+    (counts only, never percentages)."""
     tenant_id = user["tenant_id"]
+    # Read-time safety net: a restart must not strand 'running' rows forever.
+    try:
+        await journey_runner.reconcile_stale(tenant_id=tenant_id, app_id=app_id)
+    except Exception as exc:
+        logger.warning("qec.journeys.reconcile_failed app=%s err=%s",
+                       app_id, str(exc)[:160])
     async with tenant_scoped_qec_session(tenant_id) as session:
+        artifact_id = await _latest_artifact(session, tenant_id, app_id)
         journeys = (await session.execute(
             select(JourneyRow).where(
                 JourneyRow.tenant_id == tenant_id,
                 JourneyRow.app_id == app_id,
             ).order_by(JourneyRow.created_at))).scalars().all()
         rollups = []
+        run_rollup = {"runnable": 0, "run_green": 0, "run_red": 0,
+                      "never_run": 0}
         for j in journeys:
             r = await _journey_rollup(session, tenant_id, app_id, j)
             r.pop("node_fps", None)
+            runnable = await _runnable_view(
+                session, tenant_id=tenant_id, app_id=app_id,
+                journey_id=j.journey_id, artifact_id=artifact_id,
+                paths_completed=r["paths_completed"])
+            last = await journey_runner.latest_run(
+                session, tenant_id=tenant_id, app_id=app_id,
+                journey_id=j.journey_id)
+            r["runnable"] = runnable
+            r["last_run"] = _run_view(last)
+            if runnable["ok"]:
+                run_rollup["runnable"] += 1
+            if last is None:
+                run_rollup["never_run"] += 1
+            elif last.status == "passed":
+                run_rollup["run_green"] += 1
+            elif last.status in ("failed", "timed_out", "error", "blocked"):
+                run_rollup["run_red"] += 1
             rollups.append(r)
     return {
         "app_id": app_id,
+        "artifact_id": artifact_id,
         "journeys": rollups,
         "journeys_found": len(rollups),
+        "runs": run_rollup,
         # App-level claim, earnable only: EVERY journey earned it and at
         # least one exists. One discovered branch anywhere keeps it false.
         "branch_coverage": bool(rollups) and all(
@@ -217,8 +310,43 @@ async def get_journey(app_id: str, journey_id: str,
                 JourneyTraversalRow.app_id == app_id,
                 JourneyTraversalRow.journey_id == journey_id,
             ).order_by(JourneyTraversalRow.created_at))).scalars().all()
+        # Runnable Journeys (Release D): the case links for the CURRENT
+        # artifact, the runnability verdict, and the run ledger.
+        artifact_id = await _latest_artifact(session, tenant_id, app_id)
+        case_rows = []
+        if artifact_id:
+            case_rows = (await session.execute(
+                select(JourneyCaseRow).where(
+                    JourneyCaseRow.tenant_id == tenant_id,
+                    JourneyCaseRow.app_id == app_id,
+                    JourneyCaseRow.journey_id == journey_id,
+                    JourneyCaseRow.artifact_id == artifact_id,
+                ).order_by(JourneyCaseRow.kind,  # 'journey_e2e' sorts first
+                           JourneyCaseRow.coverage_score.desc()))
+            ).scalars().all()
+        runnable = await _runnable_view(
+            session, tenant_id=tenant_id, app_id=app_id,
+            journey_id=journey_id, artifact_id=artifact_id,
+            paths_completed=rollup["paths_completed"])
+        run_rows = (await session.execute(
+            select(JourneyRunRow).where(
+                JourneyRunRow.tenant_id == tenant_id,
+                JourneyRunRow.app_id == app_id,
+                JourneyRunRow.journey_id == journey_id,
+            ).order_by(JourneyRunRow.started_at.desc())
+            .limit(10))).scalars().all()
     return {
         **rollup,
+        "artifact_id": artifact_id,
+        "cases": [{
+            "test_case_id": c.test_case_id,
+            "name": c.case_name,
+            "display_name": c.display_name or c.case_name,
+            "kind": c.kind,
+            "coverage_score": c.coverage_score,
+        } for c in case_rows],
+        "runnable": runnable,
+        "runs": [_run_view(r) for r in run_rows],
         "nodes": nodes,
         "edges": edges,
         # ``branches`` (from the rollup) stays the COUNTS; the records live
@@ -302,6 +430,99 @@ async def refold_journeys(app_id: str, user: dict = Depends(_MUTATE)) -> dict:
         tenant_id=tenant_id, app_id=app_id)
     return {"app_id": app_id, "explorations_folded": len(folded),
             "folds": folded, "naming": naming}
+
+
+async def _dispatch_one_journey(
+    session, *, tenant_id: str, app_id: str, journey: JourneyRow,
+    artifact_id: str,
+) -> dict:
+    """Shared dispatch core for run + run-all: resolve runnability, refuse
+    a double-dispatch, execute through the existing runner path."""
+    rollup = await _journey_rollup(session, tenant_id, app_id, journey)
+    runnable = await _runnable_view(
+        session, tenant_id=tenant_id, app_id=app_id,
+        journey_id=journey.journey_id, artifact_id=artifact_id,
+        paths_completed=rollup["paths_completed"])
+    if not runnable["ok"]:
+        return {"journey_id": journey.journey_id,
+                "business_name": journey.business_name,
+                "dispatched": False, "reason": runnable["reason"]}
+    in_flight = (await session.execute(
+        select(JourneyRunRow.journey_run_id).where(
+            JourneyRunRow.tenant_id == tenant_id,
+            JourneyRunRow.app_id == app_id,
+            JourneyRunRow.journey_id == journey.journey_id,
+            JourneyRunRow.status.in_(["dispatched", "running"]),
+        ).limit(1))).scalar_one_or_none()
+    if in_flight:
+        return {"journey_id": journey.journey_id,
+                "business_name": journey.business_name,
+                "dispatched": False,
+                "reason": "a run for this journey is already in flight"}
+    # v1 env note: the run executes against the artifact's own target (the
+    # same default a plain Playwright-tab run uses); the bound run-environment
+    # NAME rides along as display metadata.
+    env_ref = str(((await session.execute(
+        select(ClientAppRow.schedule).where(
+            ClientAppRow.tenant_id == tenant_id,
+            ClientAppRow.app_id == app_id,
+        ))).scalar_one_or_none() or {}).get("run_environment") or "")
+    result = await journey_runner.dispatch_journey_run(
+        tenant_id=tenant_id, app_id=app_id, journey_id=journey.journey_id,
+        artifact_id=artifact_id, test_case_id=runnable["test_case_id"],
+        env_ref=env_ref)
+    return {"journey_id": journey.journey_id,
+            "business_name": journey.business_name,
+            "dispatched": result["status"] == "running",
+            "journey_run_id": result["journey_run_id"],
+            "status": result["status"],
+            "reason": result["blocked_reason"]}
+
+
+@router.post("/apps/{app_id}/journeys/{journey_id}/run")
+async def run_journey(app_id: str, journey_id: str, response: Response,
+                      user: dict = Depends(_MUTATE)) -> dict:
+    """Execute the journey's adopted end-to-end case through the EXISTING
+    factory → runner path (heal, attribution, evidence, certificates — all
+    unchanged). The verdict folds back onto the journey as the RUN proof,
+    beside (never merged with) the crawl proof."""
+    tenant_id = user["tenant_id"]
+    async with tenant_scoped_qec_session(tenant_id) as session:
+        journey = await _journey_or_404(session, tenant_id, app_id, journey_id)
+        artifact_id = await _latest_artifact(session, tenant_id, app_id)
+        result = await _dispatch_one_journey(
+            session, tenant_id=tenant_id, app_id=app_id, journey=journey,
+            artifact_id=artifact_id)
+    if not result["dispatched"] and "in flight" in (result.get("reason") or ""):
+        raise HTTPException(status_code=409, detail=result["reason"])
+    if not result["dispatched"] and not result.get("journey_run_id"):
+        raise HTTPException(status_code=409, detail=result["reason"])
+    response.status_code = 202
+    return result
+
+
+@router.post("/apps/{app_id}/journeys/run-all")
+async def run_all_journeys(app_id: str, response: Response,
+                           user: dict = Depends(_MUTATE)) -> dict:
+    """Prove all journeys: dispatch every RUNNABLE journey's end-to-end case.
+    Per-journey honest statuses — no aggregate green."""
+    tenant_id = user["tenant_id"]
+    results = []
+    async with tenant_scoped_qec_session(tenant_id) as session:
+        artifact_id = await _latest_artifact(session, tenant_id, app_id)
+        journeys = (await session.execute(
+            select(JourneyRow).where(
+                JourneyRow.tenant_id == tenant_id,
+                JourneyRow.app_id == app_id,
+            ).order_by(JourneyRow.created_at))).scalars().all()
+        for journey in journeys:
+            results.append(await _dispatch_one_journey(
+                session, tenant_id=tenant_id, app_id=app_id,
+                journey=journey, artifact_id=artifact_id))
+    dispatched = sum(1 for r in results if r["dispatched"])
+    response.status_code = 202 if dispatched else 200
+    return {"app_id": app_id, "journeys": len(results),
+            "dispatched": dispatched, "results": results}
 
 
 @router.post("/apps/{app_id}/journeys/walk-branches")
