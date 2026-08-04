@@ -78,6 +78,9 @@ class JourneyRunRow(QecBase):
     #: dispatched | running | passed | failed | timed_out | error | blocked
     status: Mapped[str] = mapped_column(String(24), nullable=False, default="dispatched")
     blocked_reason: Mapped[str] = mapped_column(String(400), nullable=False, default="")
+    #: noVNC viewer address while the run is in flight (headed run-live path);
+    #: transient — the runner tears the session down shortly after the run.
+    live_url: Mapped[str] = mapped_column(String(500), nullable=False, default="")
     env_ref: Mapped[str] = mapped_column(String(200), nullable=False, default="")
     identity_ref: Mapped[str] = mapped_column(String(200), nullable=False, default="")
     verdict_summary: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)

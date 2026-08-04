@@ -780,7 +780,12 @@ function OracleScorecardCard({ artifactId, refreshKey }: { artifactId: string; r
   );
 }
 
-export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: string }) {
+export default function PlaywrightExecutionPanel(
+  { artifactId, journeyByCaseId }:
+  { artifactId: string;
+    /** test_id → the business journey this script proves (Release D). */
+    journeyByCaseId?: Record<string, { name: string; endToEnd: boolean }> },
+) {
   const [data, setData] = useState<Manifest | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -1689,6 +1694,18 @@ export default function PlaywrightExecutionPanel({ artifactId }: { artifactId: s
                               <div className="flex items-center gap-2.5 px-3 py-2.5">
                                 <input type="checkbox" checked={on} onChange={() => toggleScript(s.test_id)} className="h-4 w-4 accent-nexus-600 shrink-0 cursor-pointer" />
                                 <span onClick={() => toggleScript(s.test_id)} className="text-[13px] text-nexus-900 font-semibold truncate flex-1 min-w-0 cursor-pointer">{s.name}</span>
+                                {journeyByCaseId?.[s.test_id] && (
+                                  <span
+                                    className="shrink-0 inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[9px] font-bold"
+                                    style={{ background: 'rgba(13,148,136,0.14)', color: '#0f766e' }}
+                                    title={journeyByCaseId[s.test_id].endToEnd
+                                      ? `End-to-end script for the "${journeyByCaseId[s.test_id].name}" journey`
+                                      : `Covers part of the "${journeyByCaseId[s.test_id].name}" journey`}
+                                  >
+                                    {journeyByCaseId[s.test_id].name}
+                                    {journeyByCaseId[s.test_id].endToEnd ? ' · end-to-end' : ''}
+                                  </span>
+                                )}
                                 <span className="shrink-0 text-[11px] text-nexus-400 font-medium">{s.stats?.total ?? s.lines} steps</span>
                                 <span className="shrink-0 rounded px-1.5 py-0.5 text-[9px] font-semibold"
                                   style={healedActive ? { background: 'rgba(16,185,129,0.15)', color: '#047857' }

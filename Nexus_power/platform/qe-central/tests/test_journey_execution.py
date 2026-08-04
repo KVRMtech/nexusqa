@@ -157,6 +157,9 @@ def _dispatch(monkeypatch, *, run_result=None, error=None):
             raise error
         return run_result
 
+    # The default dispatch path is the WATCHABLE run-live one; the headless
+    # path is patched identically so a `live=False` caller behaves the same.
+    monkeypatch.setattr(runner.factory, "run_cases_live", fake_run_cases)
     monkeypatch.setattr(runner.factory, "run_cases", fake_run_cases)
     out = asyncio.run(runner.dispatch_journey_run(
         tenant_id="t1", app_id="app1", journey_id="j1",
@@ -369,3 +372,70 @@ def test_tightest_spanning_case_is_adopted(monkeypatch):
     ]
     scored.sort(key=lambda m: (-int(m[1]), -m[0], m[2]))
     assert scored[0][3]["test_case_id"] == "tight"
+
+
+# ── Live run window (defect 1) ───────────────────────────────────────────
+
+def test_dispatch_uses_the_live_path_and_keeps_the_viewer_url(monkeypatch):
+    """A journey run must be WATCHABLE: dispatch goes through run-live and
+    the noVNC viewer address is kept on the ledger row."""
+    store = _FakeSession()
+    monkeypatch.setattr(runner, "tenant_scoped_qec_session", _fake_scope(store))
+    monkeypatch.setattr(runner, "_spawn_poller", lambda **kw: None)
+    seen = {}
+
+    async def fake_live(**kw):
+        seen.update(kw)
+        return {"run_id": "disp-live", "status": "running",
+                "live_url": "https://vm:6080/vnc.html?token=x"}
+
+    async def fake_headless(**kw):
+        raise AssertionError("headless path must not be used by default")
+
+    monkeypatch.setattr(runner.factory, "run_cases_live", fake_live)
+    monkeypatch.setattr(runner.factory, "run_cases", fake_headless)
+    out = asyncio.run(runner.dispatch_journey_run(
+        tenant_id="t1", app_id="app1", journey_id="j1", artifact_id="art1",
+        test_case_id="case-1"))
+    assert out["live_url"].startswith("https://vm:6080")
+    assert store.added[0].live_url == out["live_url"]
+    assert seen["test_ids"] == ["case-1"]
+
+
+def test_live_progress_reports_runner_counters_while_in_flight(monkeypatch):
+    class _Row:
+        journey_run_id = "jr1"; status = "running"; live_url = "https://vm/live"
+        blocked_reason = ""; artifact_id = "art1"; dispatch_run_id = "disp-1"
+        ingested_run_id = ""
+
+    monkeypatch.setattr(runner, "tenant_scoped_qec_session",
+                        _fake_scope(_FakeSession()))
+
+    async def fake_latest(session, **kw):
+        return _Row()
+
+    async def fake_status(**kw):
+        return {"status": "running", "steps_completed": 2, "total_tests": 1,
+                "output_tail": "", "output": "running step 2"}
+
+    monkeypatch.setattr(runner, "latest_run", fake_latest)
+    monkeypatch.setattr(runner.factory, "run_status", fake_status)
+    out = asyncio.run(runner.live_progress(
+        tenant_id="t1", app_id="app1", journey_id="j1"))
+    assert out["in_flight"] is True
+    assert out["live_url"] == "https://vm/live"
+    assert out["steps_completed"] == 2
+    assert "running step 2" in out["output_tail"]
+
+
+def test_live_progress_without_a_run_is_never_run(monkeypatch):
+    monkeypatch.setattr(runner, "tenant_scoped_qec_session",
+                        _fake_scope(_FakeSession()))
+
+    async def none_latest(session, **kw):
+        return None
+
+    monkeypatch.setattr(runner, "latest_run", none_latest)
+    out = asyncio.run(runner.live_progress(
+        tenant_id="t1", app_id="app1", journey_id="j1"))
+    assert out == {"status": "never_run", "live_url": "", "in_flight": False}

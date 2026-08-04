@@ -221,6 +221,27 @@ async def run_cases(
     )
 
 
+async def run_cases_live(
+    *, tenant_id: str, artifact_id: str, test_ids: list[str],
+    environment_id: str = "",
+) -> dict:
+    """Dispatch a HEADED, WATCHABLE execution of ``test_ids`` (service JWT).
+
+    Same runner, same evidence, same heal/attribution as :func:`run_cases` —
+    it additionally returns ``live_url``, the noVNC viewer address for the
+    session, so an operator can watch the journey execute. The session is
+    transient: the runner tears it down shortly after the run ends."""
+    body: dict = {"test_ids": [str(t) for t in test_ids if str(t).strip()]}
+    if environment_id.strip():
+        body["environment_id"] = environment_id.strip()
+    return await _call(
+        method="POST",
+        path=f"/api/v1/test-factory/{artifact_id}/playwright/run-live",
+        endpoint="playwright_run_live", tenant_id=tenant_id,
+        timeout_s=_RUN_DISPATCH_TIMEOUT_S, json_body=body,
+    )
+
+
 async def run_status(
     *, tenant_id: str, artifact_id: str, run_id: str,
 ) -> dict:

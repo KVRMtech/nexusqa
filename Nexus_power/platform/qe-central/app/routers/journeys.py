@@ -80,6 +80,7 @@ def _run_view(run: JourneyRunRow | None) -> dict | None:
         "journey_run_id": run.journey_run_id,
         "status": run.status,
         "blocked_reason": run.blocked_reason,
+        "live_url": run.live_url,
         "dispatch_run_id": run.dispatch_run_id,
         "ingested_run_id": run.ingested_run_id,
         "artifact_id": run.artifact_id,
@@ -336,9 +337,41 @@ async def get_journey(app_id: str, journey_id: str,
                 JourneyRunRow.journey_id == journey_id,
             ).order_by(JourneyRunRow.started_at.desc())
             .limit(10))).scalars().all()
+    # THE JOURNEY, READ AS A JOURNEY: its longest proven walk rendered as
+    # numbered steps — the page reached, and the control that carried the
+    # walk onward. Node/edge lists are the graph; THIS is the story.
+    node_by_fp = {n["fingerprint"]: n for n in nodes}
+    edge_by_pair = {(e["from_fp"], e["to_fp"]): e for e in edges}
+    best = None
+    for t in traversal_rows:
+        if best is None or (
+            (t.completed, len(t.path_fps or [])) >
+            (best.completed, len(best.path_fps or []))
+        ):
+            best = t
+    steps: list[dict] = []
+    if best is not None:
+        fps = [str(fp) for fp in (best.path_fps or [])]
+        for i, fp in enumerate(fps):
+            node = node_by_fp.get(fp, {})
+            edge = edge_by_pair.get((fp, fps[i + 1])) if i + 1 < len(fps) else None
+            steps.append({
+                "step": i + 1,
+                "fingerprint": fp,
+                "title": node.get("title") or "",
+                "url": node.get("url") or "",
+                "is_decision": bool(node.get("is_decision")),
+                "is_boundary": bool(node.get("is_boundary")),
+                "has_outcome": bool(node.get("has_outcome")),
+                "advanced_by": (edge or {}).get("trigger") or "",
+                "advance_tier": (edge or {}).get("advance_tier") or 0,
+            })
     return {
         **rollup,
         "artifact_id": artifact_id,
+        "steps": steps,
+        "steps_terminal": (best.terminal if best is not None else ""),
+        "steps_completed_walk": bool(best.completed) if best is not None else False,
         "cases": [{
             "test_case_id": c.test_case_id,
             "name": c.case_name,
@@ -490,6 +523,7 @@ async def _dispatch_one_journey(
             "dispatched": result["status"] == "running",
             "journey_run_id": result["journey_run_id"],
             "status": result["status"],
+            "live_url": result.get("live_url", ""),
             "reason": result["blocked_reason"]}
 
 
@@ -513,6 +547,17 @@ async def run_journey(app_id: str, journey_id: str, response: Response,
         raise HTTPException(status_code=409, detail=result["reason"])
     response.status_code = 202
     return result
+
+
+@router.get("/apps/{app_id}/journeys/{journey_id}/run-progress")
+async def journey_run_progress(app_id: str, journey_id: str,
+                               user: dict = Depends(require_auth)) -> dict:
+    """Watchable progress for the journey's latest run: the live viewer
+    address while it executes, live step counters from the runner, and the
+    honest terminal status once it ends."""
+    tenant_id = user["tenant_id"]
+    return await journey_runner.live_progress(
+        tenant_id=tenant_id, app_id=app_id, journey_id=journey_id)
 
 
 @router.post("/apps/{app_id}/journeys/run-all")

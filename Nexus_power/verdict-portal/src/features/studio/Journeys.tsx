@@ -18,14 +18,15 @@ import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
 import {
   AlertTriangle, CheckCircle2, ChevronDown, ChevronRight, CircleDashed,
-  FlaskConical, Footprints, GitBranch, Pencil, PlayCircle, RefreshCw,
-  Route as RouteIcon, ShieldCheck,
+  Flag, FlaskConical, Footprints, GitBranch, Pencil, PlayCircle, Radio,
+  RefreshCw, Route as RouteIcon, ShieldCheck, Sparkles,
 } from 'lucide-react';
 
 import {
   api,
   type JourneyBranch,
   type JourneyDetail,
+  type JourneyRunProgress,
   type JourneyRunView,
   type JourneySummary,
 } from '../../lib/api';
@@ -106,6 +107,67 @@ function RunProofLine({ run }: { run: JourneyRunView | null }) {
   );
 }
 
+function LiveRunWindow({ appId, journey }: { appId: string; journey: JourneySummary }) {
+  /** The execution window: watch the journey run in the browser, with live
+   *  step counters and the runner's own output tail. Mounts only while a run
+   *  is in flight (the viewer session is torn down after the run). */
+  const [progress, setProgress] = useState<JourneyRunProgress | null>(null);
+  const status = journey.last_run?.status;
+  const active = status === 'running' || status === 'dispatched';
+
+  useEffect(() => {
+    if (!active) { setProgress(null); return; }
+    let alive = true;
+    const tick = async () => {
+      try {
+        const p = await api.journeyRunProgress(appId, journey.journey_id);
+        if (alive) setProgress(p);
+      } catch { /* transient — the next tick retries */ }
+    };
+    void tick();
+    const timer = setInterval(tick, 3000);
+    return () => { alive = false; clearInterval(timer); };
+  }, [active, appId, journey.journey_id]);
+
+  if (!active) return null;
+  const liveUrl = progress?.live_url || journey.last_run?.live_url || '';
+  return (
+    <div className="mt-3 rounded-xl ring-1 ring-line bg-inset/40 overflow-hidden">
+      <div className="flex flex-wrap items-center gap-2 px-3 py-2 border-b border-line">
+        <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-ink">
+          <Radio size={13} className="text-teal animate-pulse" aria-hidden />
+          Running “{journey.business_name}” live
+        </span>
+        {typeof progress?.steps_completed === 'number' && (
+          <span className="text-2xs text-ink-low">
+            {progress.steps_completed} step{progress.steps_completed === 1 ? '' : 's'} done
+          </span>
+        )}
+        <span className="text-2xs text-ink-low">
+          {journey.runnable.display_name}
+        </span>
+      </div>
+      {liveUrl ? (
+        <iframe
+          title={`Live run — ${journey.business_name}`}
+          src={liveUrl}
+          className="w-full border-0 bg-black"
+          style={{ height: 460 }}
+        />
+      ) : (
+        <div className="px-3 py-6 text-2xs text-ink-low">
+          Starting the browser session…
+        </div>
+      )}
+      {progress?.output_tail ? (
+        <pre className="max-h-40 overflow-auto px-3 py-2 text-[10px] leading-relaxed text-ink-low whitespace-pre-wrap">
+          {progress.output_tail.slice(-1200)}
+        </pre>
+      ) : null}
+    </div>
+  );
+}
+
 function BranchChips({ s }: { s: JourneySummary }) {
   const b = s.branches;
   return (
@@ -142,6 +204,65 @@ function JourneyDetailView({ appId, journeyId }: { appId: string; journeyId: str
 
   return (
     <div className="space-y-4 pt-3">
+      {/* THE JOURNEY, READ AS A JOURNEY — what it actually does, in order */}
+      <div>
+        <div className="text-xs font-semibold text-ink mb-1.5 inline-flex items-center gap-1.5">
+          <RouteIcon size={13} aria-hidden /> What this journey does ({d.steps.length} step
+          {d.steps.length === 1 ? '' : 's'})
+          {d.steps_completed_walk
+            ? <Pill tone="teal" size="sm">walked to the end</Pill>
+            : <Pill tone="warn" size="sm">stopped early</Pill>}
+        </div>
+        <ol className="space-y-1.5">
+          {d.steps.map((st) => (
+            <li key={st.fingerprint} className="rounded-lg bg-inset/60 px-3 py-2 text-2xs">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-teal/15 text-teal font-semibold">
+                  {st.step}
+                </span>
+                <span className="text-ink font-medium">{st.title || 'Untitled page'}</span>
+                {st.is_decision && (
+                  <Pill tone="warn" size="sm" variant="outline">
+                    <GitBranch size={10} aria-hidden /> choice here
+                  </Pill>
+                )}
+                {st.has_outcome && (
+                  <Pill tone="neutral" size="sm" variant="outline">
+                    <Sparkles size={10} aria-hidden /> shows a result
+                  </Pill>
+                )}
+                {st.is_boundary && (
+                  <Pill tone="teal" size="sm" variant="outline">
+                    <Flag size={10} aria-hidden /> submit boundary
+                  </Pill>
+                )}
+              </div>
+              <div className="mt-0.5 pl-7 text-ink-low break-all">{st.url}</div>
+              {st.advanced_by && (
+                <div className="mt-0.5 pl-7 text-ink-low">
+                  → clicked <span className="text-ink font-medium">“{st.advanced_by}”</span> to continue
+                  {st.advance_tier === 3 && (
+                    <span className="ml-1.5">
+                      <Pill tone="neutral" size="sm" variant="outline">agent decided</Pill>
+                    </span>
+                  )}
+                </div>
+              )}
+            </li>
+          ))}
+          {d.steps.length === 0 && (
+            <li className="text-2xs text-ink-low">
+              No walked path recorded yet — crawl this app in End-to-end mode.
+            </li>
+          )}
+        </ol>
+        {d.steps.length > 0 && (
+          <div className="mt-1.5 text-2xs text-ink-low">
+            The walk ended: <Terminal terminal={d.steps_terminal} />
+          </div>
+        )}
+      </div>
+
       {/* enumeration honesty block */}
       <div className="text-2xs text-ink-low">
         {d.path_enumeration.enumerated ? (
@@ -480,6 +601,9 @@ export default function Journeys({ appId }: { appId: string }) {
                     <Pencil size={11} aria-hidden /> Rename
                   </button>
                 )}
+              </div>
+              <div className="px-4 pb-3">
+                <LiveRunWindow appId={appId} journey={j} />
                 {open === j.journey_id && (
                   <JourneyDetailView appId={appId} journeyId={j.journey_id} />
                 )}

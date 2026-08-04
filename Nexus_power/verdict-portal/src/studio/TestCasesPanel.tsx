@@ -16,7 +16,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import clsx from 'clsx';
 import {
   AlertTriangle, ArrowRight, Bot, Camera, CheckCircle2, ChevronDown, Download, FileCode2, FileSpreadsheet,
-  FlaskConical, Loader2, MousePointerClick, Rocket, Send, ShieldAlert, Sparkles, Trash2, Upload, X,
+  FlaskConical, Loader2, MousePointerClick, Rocket, Route, Send, ShieldAlert, Sparkles, Trash2, Upload, X,
 } from 'lucide-react';
 import { api } from './factoryApi';
 import { useAuth } from './useStudioAuth';
@@ -212,7 +212,10 @@ function ReadinessFlow(
 }
 
 export default function TestCasesPanel(
-  { artifactId, onOpenPlaywright }: { artifactId: string; onOpenPlaywright?: () => void },
+  { artifactId, onOpenPlaywright, journeyByCaseId }:
+  { artifactId: string; onOpenPlaywright?: () => void;
+    /** test_case_id → the business journey this case proves (Release D). */
+    journeyByCaseId?: Record<string, { name: string; endToEnd: boolean }> },
 ) {
   const { user } = useAuth();
   const [summary, setSummary] = useState<any>(null);
@@ -598,6 +601,7 @@ export default function TestCasesPanel(
                   {items.map((row) => (
                     <TestCaseCard key={row.test_case_id} variant="row" row={row} accent={NAVY}
                       showDetails={showDetails} busy={busy} artifactId={artifactId}
+                      journey={journeyByCaseId?.[row.test_case_id]}
                       selected={row.test_case_id === selectedId}
                       onSelect={() => setSelectedId(row.test_case_id)}
                       onPlaywright={(id) => downloadPlaywright('', id)} onSaved={refresh} />
@@ -623,6 +627,7 @@ export default function TestCasesPanel(
             {selectedRow ? (
               <TestCaseCard key={selectedRow.test_case_id} variant="detail" row={selectedRow} accent={NAVY}
                 showDetails={showDetails} busy={busy} artifactId={artifactId}
+                journey={journeyByCaseId?.[selectedRow.test_case_id]}
                 onPlaywright={(id) => downloadPlaywright('', id)} onSaved={refresh} />
             ) : (
               <div className="rounded-2xl border border-dashed border-nexus-200 bg-white px-4 py-16 text-center">
@@ -700,9 +705,10 @@ function ValueConflictResolve(
 }
 
 function TestCaseCard(
-  { row, accent, showDetails, busy, artifactId, onPlaywright, variant = 'card', selected = false, onSelect, onSaved }:
+  { row, accent, showDetails, busy, artifactId, onPlaywright, variant = 'card', selected = false, onSelect, onSaved, journey }:
   { row: CaseRow; accent: string; showDetails: boolean; busy?: string; artifactId: string; onPlaywright?: (id: string) => void;
-    variant?: 'card' | 'row' | 'detail'; selected?: boolean; onSelect?: () => void; onSaved?: () => void },
+    variant?: 'card' | 'row' | 'detail'; selected?: boolean; onSelect?: () => void; onSaved?: () => void;
+    journey?: { name: string; endToEnd: boolean } },
 ) {
   const [open, setOpen] = useState(variant === 'detail');
   const steps = row.test_case?.steps || [];
@@ -870,6 +876,17 @@ function TestCaseCard(
           reviewCount > 0
             ? <span className="shrink-0 inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-bold" style={{ background: 'rgba(217,162,58,0.16)', color: '#92661d' }}><AlertTriangle className="h-3 w-3" /> {reviewCount} to review</span>
             : <span className="shrink-0 inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-bold" style={{ background: 'rgba(5,150,105,0.12)', color: '#047857' }}><CheckCircle2 className="h-3 w-3" /> all solid</span>
+        )}
+        {journey && (
+          <span
+            className="shrink-0 inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-bold"
+            style={{ background: 'rgba(13,148,136,0.14)', color: '#0f766e' }}
+            title={journey.endToEnd
+              ? `End-to-end script for the "${journey.name}" journey`
+              : `Covers part of the "${journey.name}" journey`}
+          >
+            <Route className="h-3 w-3" /> {journey.name}{journey.endToEnd ? ' · end-to-end' : ''}
+          </span>
         )}
         <span className="shrink-0 ml-auto text-[10px] text-nexus-400 font-semibold">{row.step_count} steps · {row.priority}</span>
       </button>

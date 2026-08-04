@@ -61,24 +61,38 @@ async def any_run_in_flight(*, tenant_id: str) -> bool:
 async def dispatch_journey_run(
     *, tenant_id: str, app_id: str, journey_id: str, artifact_id: str,
     test_case_id: str, env_ref: str = "", identity_ref: str = "",
+    live: bool = True,
 ) -> dict[str, Any]:
     """Dispatch ONE journey execution and record its ledger row.
 
-    Returns ``{journey_run_id, status, dispatch_run_id, blocked_reason}``.
-    Never raises for factory rejections — they become honest ``blocked``
-    rows (quarantined case, member-data gate, no matching active case)."""
+    ``live`` (default) uses the factory's HEADED run-live path so the
+    operator can WATCH the journey execute in the portal — same runner, same
+    evidence, same heal/attribution as a headless run, plus a noVNC viewer
+    address. Falls back to the headless path when no live session is offered.
+
+    Returns ``{journey_run_id, status, dispatch_run_id, live_url,
+    blocked_reason}``. Never raises for factory rejections — they become
+    honest ``blocked`` rows (quarantined case, member-data gate, no matching
+    active case)."""
     journey_run_id = _sid("jrun", tenant_id, journey_id, artifact_id,
                           test_case_id, utc_now().isoformat())
     dispatch_run_id = ""
+    live_url = ""
     status = "blocked"
     blocked_reason = ""
     try:
-        result = await factory.run_cases(
-            tenant_id=tenant_id, artifact_id=artifact_id,
-            test_ids=[test_case_id])
+        if live:
+            result = await factory.run_cases_live(
+                tenant_id=tenant_id, artifact_id=artifact_id,
+                test_ids=[test_case_id])
+        else:
+            result = await factory.run_cases(
+                tenant_id=tenant_id, artifact_id=artifact_id,
+                test_ids=[test_case_id])
         r_status = str(result.get("status") or "")
         if r_status == "running" and result.get("run_id"):
             dispatch_run_id = str(result["run_id"])
+            live_url = str(result.get("live_url") or "")
             status = "running"
         elif r_status == "blocked":
             blocked_reason = (
@@ -98,6 +112,7 @@ async def dispatch_journey_run(
             journey_id=journey_id, artifact_id=artifact_id,
             test_case_id=test_case_id, dispatch_run_id=dispatch_run_id,
             status=status, blocked_reason=blocked_reason,
+            live_url=live_url[:500],
             env_ref=env_ref[:200], identity_ref=identity_ref[:200]))
 
     if status == "running":
@@ -108,8 +123,53 @@ async def dispatch_journey_run(
             "qec.journey_runner.blocked tenant=%s journey=%s reason=%s",
             tenant_id, journey_id, blocked_reason)
     return {"journey_run_id": journey_run_id, "status": status,
-            "dispatch_run_id": dispatch_run_id,
+            "dispatch_run_id": dispatch_run_id, "live_url": live_url,
             "blocked_reason": blocked_reason}
+
+
+async def live_progress(
+    *, tenant_id: str, app_id: str, journey_id: str,
+) -> dict[str, Any]:
+    """Watchable progress for the journey's most recent run.
+
+    Reads the ledger row, and while the run is in flight asks the runner for
+    its live step counters. Best-effort: a poll failure returns the ledger's
+    own truth rather than an error."""
+    async with tenant_scoped_qec_session(tenant_id) as session:
+        row = await latest_run(session, tenant_id=tenant_id, app_id=app_id,
+                               journey_id=journey_id)
+        if row is None:
+            return {"status": "never_run", "live_url": "", "in_flight": False}
+        snapshot = {
+            "journey_run_id": row.journey_run_id,
+            "status": row.status,
+            "live_url": row.live_url,
+            "blocked_reason": row.blocked_reason,
+            "artifact_id": row.artifact_id,
+            "dispatch_run_id": row.dispatch_run_id,
+            "ingested_run_id": row.ingested_run_id,
+            "in_flight": row.status in _IN_FLIGHT,
+            "steps_completed": None,
+            "total_tests": None,
+            "output_tail": "",
+        }
+    if not snapshot["in_flight"] or not snapshot["dispatch_run_id"]:
+        return snapshot
+    try:
+        job = await factory.run_status(
+            tenant_id=tenant_id, artifact_id=snapshot["artifact_id"],
+            run_id=snapshot["dispatch_run_id"])
+        snapshot["steps_completed"] = job.get("steps_completed")
+        snapshot["total_tests"] = job.get("total_tests")
+        snapshot["output_tail"] = str(job.get("output") or "")[-2000:]
+        job_status = str(job.get("status") or "")
+        if job_status in _TERMINAL:
+            snapshot["status"] = job_status
+            snapshot["in_flight"] = False
+    except Exception as exc:
+        logger.warning("qec.journey_runner.progress_failed journey=%s err=%s",
+                       journey_id, str(exc)[:160])
+    return snapshot
 
 
 def _spawn_poller(*, tenant_id: str, journey_run_id: str, artifact_id: str,

@@ -757,6 +757,14 @@ export class QecApiClient {
       {}, opts);
   }
 
+  async journeyRunProgress(
+    appId: string, journeyId: string, opts?: RequestOpts,
+  ): Promise<JourneyRunProgress> {
+    return this.get<JourneyRunProgress>(
+      `${QEC}/apps/${encodeURIComponent(appId)}/journeys/${encodeURIComponent(journeyId)}/run-progress`,
+      opts);
+  }
+
   async runAllJourneys(
     appId: string, opts?: RequestOpts,
   ): Promise<{ journeys: number; queued: number; results: Array<{ journey_id: string; business_name: string; queued: boolean; reason: string }> }> {
@@ -785,6 +793,8 @@ export interface JourneyRunView {
   journey_run_id: string;
   status: 'dispatched' | 'running' | 'passed' | 'failed' | 'timed_out' | 'error' | 'blocked';
   blocked_reason: string;
+  /** noVNC viewer address while the run executes (transient). */
+  live_url: string;
   dispatch_run_id: string;
   ingested_run_id: string;
   artifact_id: string;
@@ -801,7 +811,36 @@ export interface JourneyDispatch {
   dispatched: boolean;
   journey_run_id?: string;
   status?: string;
+  live_url?: string;
   reason?: string;
+}
+
+/** Live progress for a journey's latest run — the watchable window. */
+export interface JourneyRunProgress {
+  status: string;
+  live_url: string;
+  in_flight: boolean;
+  blocked_reason?: string;
+  journey_run_id?: string;
+  artifact_id?: string;
+  dispatch_run_id?: string;
+  ingested_run_id?: string;
+  steps_completed?: number | null;
+  total_tests?: number | null;
+  output_tail?: string;
+}
+
+/** One step of the journey's proven walk — the story, not the graph. */
+export interface JourneyStep {
+  step: number;
+  fingerprint: string;
+  title: string;
+  url: string;
+  is_decision: boolean;
+  is_boundary: boolean;
+  has_outcome: boolean;
+  advanced_by: string;
+  advance_tier: number;
 }
 
 export interface JourneyCaseLink {
@@ -893,6 +932,10 @@ export interface JourneyPathEnumeration {
 
 export interface JourneyDetail extends JourneySummary {
   artifact_id: string;
+  /** The journey read as a journey: numbered steps of its best proven walk. */
+  steps: JourneyStep[];
+  steps_terminal: string;
+  steps_completed_walk: boolean;
   cases: JourneyCaseLink[];
   /** The run ledger, newest first; `last_run` (inherited) is runs[0]. */
   runs: JourneyRunView[];
