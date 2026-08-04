@@ -363,7 +363,7 @@ export default function Journeys({ appId }: { appId: string }) {
             size="sm" disabled={busyAction !== null || data.runs.runnable === 0}
             onClick={() => act('Prove all journeys', async () => {
               const r = await api.runAllJourneys(appId);
-              toast.success(`${r.dispatched} of ${r.journeys} journey run(s) dispatched.`);
+              toast.success(`${r.queued} of ${r.journeys} journey run(s) queued — the runner takes one at a time.`);
             })}
           >
             <PlayCircle size={13} aria-hidden /> Prove all journeys

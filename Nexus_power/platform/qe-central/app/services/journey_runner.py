@@ -43,6 +43,21 @@ def _sid(*parts: str) -> str:
     return hashlib.sha256("\x1f".join(parts).encode("utf-8")).hexdigest()[:64]
 
 
+async def any_run_in_flight(*, tenant_id: str) -> bool:
+    """Is ANY journey run of this tenant still executing?
+
+    The runner is SINGLE-FLIGHT (a second concurrent dispatch is refused
+    409 by nexus-runner), so a batch must queue rather than collide — an
+    'error' row that only means 'the runner was busy' is noise, not a
+    verdict about the journey."""
+    async with tenant_scoped_qec_session(tenant_id) as session:
+        return (await session.execute(
+            select(JourneyRunRow.journey_run_id).where(
+                JourneyRunRow.tenant_id == tenant_id,
+                JourneyRunRow.status.in_(sorted(_IN_FLIGHT)),
+            ).limit(1))).scalar_one_or_none() is not None
+
+
 async def dispatch_journey_run(
     *, tenant_id: str, app_id: str, journey_id: str, artifact_id: str,
     test_case_id: str, env_ref: str = "", identity_ref: str = "",

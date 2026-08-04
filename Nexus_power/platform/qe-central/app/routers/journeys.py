@@ -17,6 +17,7 @@ Honesty rules encoded here, not in prose:
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any, Optional
 
@@ -453,18 +454,25 @@ async def _dispatch_one_journey(
         return {"journey_id": journey.journey_id,
                 "business_name": journey.business_name,
                 "dispatched": False, "reason": runnable["reason"]}
+    # The runner is SINGLE-FLIGHT: a concurrent dispatch is refused 409 by
+    # nexus-runner, which would land an 'error' row that says nothing about
+    # the journey. Refuse up front with the honest reason instead.
     in_flight = (await session.execute(
-        select(JourneyRunRow.journey_run_id).where(
+        select(JourneyRunRow.journey_id).where(
             JourneyRunRow.tenant_id == tenant_id,
             JourneyRunRow.app_id == app_id,
-            JourneyRunRow.journey_id == journey.journey_id,
             JourneyRunRow.status.in_(["dispatched", "running"]),
         ).limit(1))).scalar_one_or_none()
     if in_flight:
+        same = in_flight == journey.journey_id
         return {"journey_id": journey.journey_id,
                 "business_name": journey.business_name,
                 "dispatched": False,
-                "reason": "a run for this journey is already in flight"}
+                "reason": ("a run for this journey is already in flight"
+                           if same else
+                           "another journey run is already executing — the "
+                           "runner takes one run at a time; try again when "
+                           "it finishes")}
     # v1 env note: the run executes against the artifact's own target (the
     # same default a plain Playwright-tab run uses); the bound run-environment
     # NAME rides along as display metadata.
@@ -510,10 +518,12 @@ async def run_journey(app_id: str, journey_id: str, response: Response,
 @router.post("/apps/{app_id}/journeys/run-all")
 async def run_all_journeys(app_id: str, response: Response,
                            user: dict = Depends(_MUTATE)) -> dict:
-    """Prove all journeys: dispatch every RUNNABLE journey's end-to-end case.
-    Per-journey honest statuses — no aggregate green."""
+    """Prove all journeys: run every RUNNABLE journey's end-to-end case.
+
+    The runner takes ONE run at a time, so the batch is QUEUED, not fired at
+    once — a serial worker dispatches the next journey when the previous one
+    finishes. Per-journey honest statuses; no aggregate green."""
     tenant_id = user["tenant_id"]
-    results = []
     async with tenant_scoped_qec_session(tenant_id) as session:
         artifact_id = await _latest_artifact(session, tenant_id, app_id)
         journeys = (await session.execute(
@@ -521,14 +531,44 @@ async def run_all_journeys(app_id: str, response: Response,
                 JourneyRow.tenant_id == tenant_id,
                 JourneyRow.app_id == app_id,
             ).order_by(JourneyRow.created_at))).scalars().all()
+        plan = []
         for journey in journeys:
-            results.append(await _dispatch_one_journey(
+            rollup = await _journey_rollup(session, tenant_id, app_id, journey)
+            runnable = await _runnable_view(
                 session, tenant_id=tenant_id, app_id=app_id,
-                journey=journey, artifact_id=artifact_id))
-    dispatched = sum(1 for r in results if r["dispatched"])
-    response.status_code = 202 if dispatched else 200
-    return {"app_id": app_id, "journeys": len(results),
-            "dispatched": dispatched, "results": results}
+                journey_id=journey.journey_id, artifact_id=artifact_id,
+                paths_completed=rollup["paths_completed"])
+            plan.append({"journey_id": journey.journey_id,
+                         "business_name": journey.business_name,
+                         "test_case_id": runnable["test_case_id"],
+                         "queued": runnable["ok"],
+                         "reason": runnable["reason"]})
+    queued = [p for p in plan if p["queued"]]
+    if queued:
+        asyncio.get_running_loop().create_task(_run_queue(
+            tenant_id=tenant_id, app_id=app_id, artifact_id=artifact_id,
+            plan=queued))
+    response.status_code = 202 if queued else 200
+    return {"app_id": app_id, "journeys": len(plan),
+            "queued": len(queued), "results": plan}
+
+
+async def _run_queue(*, tenant_id: str, app_id: str, artifact_id: str,
+                     plan: list[dict]) -> None:
+    """Serial batch worker: one journey run at a time (the runner is
+    single-flight), each fully polled and folded back before the next
+    starts. Never raises — a failure on one journey never strands the rest."""
+    for item in plan:
+        try:
+            while await journey_runner.any_run_in_flight(tenant_id=tenant_id):
+                await asyncio.sleep(settings.journey_run_poll_s)
+            await journey_runner.dispatch_journey_run(
+                tenant_id=tenant_id, app_id=app_id,
+                journey_id=item["journey_id"], artifact_id=artifact_id,
+                test_case_id=item["test_case_id"])
+        except Exception as exc:
+            logger.warning("qec.journeys.run_queue_failed journey=%s err=%s",
+                           item["journey_id"], str(exc)[:200])
 
 
 @router.post("/apps/{app_id}/journeys/walk-branches")

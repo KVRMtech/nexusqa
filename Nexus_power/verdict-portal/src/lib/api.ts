@@ -759,7 +759,7 @@ export class QecApiClient {
 
   async runAllJourneys(
     appId: string, opts?: RequestOpts,
-  ): Promise<{ journeys: number; dispatched: number; results: JourneyDispatch[] }> {
+  ): Promise<{ journeys: number; queued: number; results: Array<{ journey_id: string; business_name: string; queued: boolean; reason: string }> }> {
     return this.post(
       `${QEC}/apps/${encodeURIComponent(appId)}/journeys/run-all`, {}, opts);
   }
