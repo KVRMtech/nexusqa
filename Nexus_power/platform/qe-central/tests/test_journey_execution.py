@@ -477,3 +477,43 @@ def test_single_page_journey_can_never_be_spanned():
 def test_min_journey_pages_is_two():
     from app.services.journey_case_linker import MIN_JOURNEY_PAGES
     assert MIN_JOURNEY_PAGES == 2
+
+
+# ── Label-sequence matching (SPA / multi-step form defect) ───────────────
+
+def test_walks_journey_matches_on_control_labels_when_url_never_changes():
+    """VKPower's login flow walks TWO states, both at /login/ — URL matching
+    collapses them, so the controls the walk clicked are the real signal."""
+    from app.services.journey_case_linker import case_labels, walks_journey
+    journey_paths, journey_labels = ["/login"], ["continue"]
+    deep_case_paths = ["/quote/start", "/", "/login"]
+    deep_case_labels = ["universal life insurance", "member sign in",
+                        "member number", "continue"]
+    nav_case_paths, nav_case_labels = ["/", "/quote/start"], ["get a free quote"]
+    assert walks_journey(journey_paths, journey_labels,
+                         deep_case_paths, deep_case_labels)
+    assert not walks_journey(journey_paths, journey_labels,
+                             nav_case_paths, nav_case_labels)
+
+
+def test_walks_journey_requires_the_entry_page_too():
+    from app.services.journey_case_linker import walks_journey
+    assert not walks_journey(["/login"], ["continue"],
+                             ["/somewhere-else"], ["continue"])
+
+
+def test_walks_journey_requires_label_order():
+    from app.services.journey_case_linker import walks_journey
+    assert not walks_journey(["/a"], ["second", "first"],
+                             ["/a"], ["first", "second"])
+
+
+def test_case_labels_reads_observed_labels_in_order():
+    from app.services.journey_case_linker import case_labels
+    case = {"steps": [
+        {"observed": {"label": "Member Sign In"}},
+        {"observed": {"label": " Continue "}},
+        {"observed": {}},
+        {"no_observed": 1},
+    ]}
+    assert case_labels(case) == ["member sign in", "continue"]

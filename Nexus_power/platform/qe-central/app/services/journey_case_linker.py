@@ -33,7 +33,8 @@ from sqlalchemy import select
 from ..clients import factory
 from ..config import settings
 from ..db import tenant_scoped_qec_session
-from ..db.journey_models import JourneyNodeRow, JourneyRow, JourneyTraversalRow
+from ..db.journey_models import (
+    JourneyEdgeRow, JourneyNodeRow, JourneyRow, JourneyTraversalRow)
 from ..db.journey_run_models import JourneyCaseRow
 
 logger = logging.getLogger(__name__)
@@ -75,6 +76,58 @@ def case_paths(case_json: Any) -> list[str]:
             seen.add(p)
             out.append(p)
     return out
+
+
+def case_labels(case_json: Any) -> list[str]:
+    """The ordered control labels a case ACTS on (``steps[].observed.label``).
+
+    The load-bearing signal for multi-step forms and SPAs, where several
+    distinct states share ONE url (observed live: VKPower's login flow walks
+    two states, both at ``/login/``). What the user DID identifies the
+    journey; where the URL went does not."""
+    if not isinstance(case_json, dict):
+        return []
+    out: list[str] = []
+    for step in case_json.get("steps") or []:
+        if not isinstance(step, dict):
+            continue
+        observed = step.get("observed")
+        if not isinstance(observed, dict):
+            continue
+        label = normalize_option_label(str(observed.get("label") or ""))
+        if label:
+            out.append(label)
+    return out
+
+
+def normalize_option_label(text: str) -> str:
+    """One normalization for every label comparison."""
+    return _WS_RE.sub(" ", str(text or "").strip().lower())[:200]
+
+
+def walks_journey(
+    journey_paths: list[str], journey_labels: list[str],
+    case_path_list: list[str], case_label_list: list[str],
+) -> bool:
+    """Does this case WALK the journey?
+
+    The journey's ADVANCE LABELS (the controls its walk clicked, in order)
+    must appear as an ordered subsequence of the labels the case acts on,
+    AND the journey's entry page must be among the case's pages. Labels are
+    the primary key because a multi-step form advances without changing the
+    URL; the entry page keeps a label-coincidence in a different part of the
+    app from matching.
+
+    A journey that never advanced (no labels) has no path to re-prove: it
+    falls back to the page rule, which needs ``MIN_JOURNEY_PAGES``."""
+    labels = [l for l in journey_labels if l]
+    if not labels:
+        return spans_journey(journey_paths, case_path_list)
+    it = iter(case_label_list)
+    if not all(any(cl == l for cl in it) for l in labels):
+        return False
+    entry = next((p for p in journey_paths if p), "")
+    return (not entry) or entry in set(case_path_list)
 
 
 def coverage_score(journey_paths: list[str], case_path_list: list[str]) -> int:
@@ -162,6 +215,51 @@ async def journey_walked_paths(
     return paths
 
 
+async def journey_walk_signature(
+    session, *, tenant_id: str, app_id: str,
+    journey: JourneyRow | None = None, journey_id: str = "",
+) -> tuple[list[str], list[str]]:
+    """(page paths, advance labels) of the journey's most recent COMPLETED
+    walk — the two signals a case must reproduce to claim it re-proves this
+    journey. Labels come from the edges the walk traversed, in order."""
+    jid = journey.journey_id if journey is not None else journey_id
+    traversal = (await session.execute(
+        select(JourneyTraversalRow).where(
+            JourneyTraversalRow.tenant_id == tenant_id,
+            JourneyTraversalRow.app_id == app_id,
+            JourneyTraversalRow.journey_id == jid,
+            JourneyTraversalRow.completed.is_(True),
+        ).order_by(JourneyTraversalRow.created_at.desc())
+        .limit(1))).scalar_one_or_none()
+    if traversal is None:
+        return [], []
+    fps = [str(fp) for fp in (traversal.path_fps or [])]
+    paths: list[str] = []
+    for fp in fps:
+        url = (await session.execute(
+            select(JourneyNodeRow.url).where(
+                JourneyNodeRow.tenant_id == tenant_id,
+                JourneyNodeRow.app_id == app_id,
+                JourneyNodeRow.fingerprint == fp,
+            ))).scalar_one_or_none()
+        p = norm_path(url) if url else ""
+        if p and (not paths or paths[-1] != p):
+            paths.append(p)
+    labels: list[str] = []
+    for a, b in zip(fps, fps[1:]):
+        trigger = (await session.execute(
+            select(JourneyEdgeRow.trigger_label_norm).where(
+                JourneyEdgeRow.tenant_id == tenant_id,
+                JourneyEdgeRow.app_id == app_id,
+                JourneyEdgeRow.from_fp == a,
+                JourneyEdgeRow.to_fp == b,
+            ).limit(1))).scalar_one_or_none()
+        label = normalize_option_label(str(trigger or ""))
+        if label:
+            labels.append(label)
+    return paths, labels
+
+
 async def link_app_journeys(
     *, tenant_id: str, app_id: str, artifact_id: str,
 ) -> dict[str, int]:
@@ -184,7 +282,8 @@ async def link_app_journeys(
     scored_cases = [
         {"test_case_id": str(c.get("test_case_id") or ""),
          "name": str(c.get("name") or "")[:300],
-         "paths": case_paths(c.get("test_case"))}
+         "paths": case_paths(c.get("test_case")),
+         "labels": case_labels(c.get("test_case"))}
         for c in cases if str(c.get("test_case_id") or "")
     ]
 
@@ -196,7 +295,7 @@ async def link_app_journeys(
             ))).scalars().all()
         for journey in journeys:
             report["journeys"] += 1
-            walked = await journey_walked_paths(
+            walked, walk_labels = await journey_walk_signature(
                 session, tenant_id=tenant_id, app_id=app_id, journey=journey)
             if not walked:
                 continue
@@ -204,8 +303,11 @@ async def link_app_journeys(
             for c in scored_cases:
                 score = coverage_score(walked, c["paths"])
                 if score >= settings.journey_link_min_score:
-                    matches.append((score, spans_journey(walked, c["paths"]),
-                                    extraneous_steps(walked, c["paths"]), c))
+                    matches.append((
+                        score,
+                        walks_journey(walked, walk_labels, c["paths"],
+                                      c["labels"]),
+                        extraneous_steps(walked, c["paths"]), c))
             if not matches:
                 continue
             # Spanning (walks the journey's pages IN ORDER) first, then
