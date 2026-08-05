@@ -273,3 +273,46 @@ def test_credentials_from_payload():
     assert Credentials.from_payload({"username": "u"}) is None  # password required
     creds = Credentials.from_payload({"username": "u", "password": "p"})
     assert creds is not None and creds.username == "u"
+
+
+# ── Custom choice cards (client showstopper: quote funnel never opened) ──
+
+def test_radio_intent_is_always_select_never_uncheck():
+    """A product card resolved to the synthesized value '100', which is not
+    truthy — the crawl asked Playwright to UNCHECK it, so no product was ever
+    chosen and the quote funnel stayed shut. A radio is only ever selected."""
+    from app.forms import _wants_checked
+    assert _wants_checked("radio", "100") is True
+    assert _wants_checked("radio", "false") is True
+    assert _wants_checked("checkbox", "100") is True
+    assert _wants_checked("checkbox", "false") is False
+    assert _wants_checked("toggle", "off") is False
+
+
+def test_errored_toggle_fill_is_honest_residue_not_a_fill():
+    """Three product cards errored yet the step reported '3 fields filled' —
+    the walk then hunted for a Continue the app had never enabled."""
+    import asyncio
+
+    from app import emit
+    from app.browser import RawObservation
+    from app.forms import _fill_one
+
+    class _ErrPort:
+        async def set_checked(self, control, checked):
+            return RawObservation(url_before="u", url_after="u",
+                                  error_detail="action_error: Timeout 5000ms")
+
+    action = asyncio.run(_fill_one(
+        _ErrPort(), {"name": "Term Life", "kind": "radio"}, "radio", "100",
+        emit.MonotonicClock(), phase="explore", state_id="fp"))
+    assert action is None
+
+
+def test_custom_card_falls_back_to_click_when_set_checked_fails():
+    """The engine must try the native check, then CLICK — a styled card is
+    selected the way a human selects it."""
+    src = open("app/main.py", encoding="utf-8").read()
+    seg = src[src.index('elif kind == "checked":'):]
+    seg = seg[:seg.index("except Exception as exc:")]
+    assert "set_checked" in seg and "locator.click()" in seg

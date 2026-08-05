@@ -991,7 +991,20 @@ class PlaywrightBrowserPort(BrowserPort):
             elif kind == "select":
                 await locator.select_option(label=value)
             elif kind == "checked":
-                await locator.set_checked(checked)
+                # CUSTOM CHOICE CONTROLS (observed live on a real quote funnel):
+                # a product "card" carries the radio ROLE but is a styled
+                # div/label whose real input is hidden or absent, so Playwright's
+                # set_checked times out and NOTHING gets selected — the funnel
+                # then never opens and the whole journey is lost at step one.
+                # A human selects such a card by CLICKING it, so that is the
+                # honest fallback: try the native check first (it is the precise
+                # act), fall back to a click, and only then report an error.
+                try:
+                    await locator.set_checked(checked)
+                except Exception:
+                    if not checked:
+                        raise
+                    await locator.click()
         except Exception as exc:
             return RawObservation(url_before=url_before, url_after=self._safe_url(),
                                   error_detail=f"action_error: {str(exc)[:200]}")

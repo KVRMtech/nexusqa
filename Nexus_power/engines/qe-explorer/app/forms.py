@@ -62,6 +62,10 @@ FILLABLE_KINDS = frozenset({"text", "date", "select", "checkbox", "radio",
 #: Kinds that toggle a boolean/selected state (verb ``click``, value = state).
 _TOGGLE_KINDS = frozenset({"checkbox", "radio", "toggle"})
 _TRUTHY = frozenset({"true", "1", "yes", "on", "checked", "y", "selected"})
+#: Explicitly NEGATIVE intent for a checkbox/toggle. Anything else means
+#: "engage this control" — a synthesized value like "100" is an answer, not a
+#: request to switch the control OFF.
+_FALSY = frozenset({"false", "0", "no", "off", "unchecked", "n", ""})
 
 
 @dataclass(frozen=True)
@@ -163,6 +167,21 @@ def _is_password(control: Mapping[str, Any]) -> bool:
 
 def _truthy(value: str) -> bool:
     return _norm(value) in _TRUTHY
+
+
+def _wants_checked(kind: str, value: str) -> bool:
+    """Does this fill intend the control to end up SELECTED?
+
+    A RADIO is only ever meaningfully selected — a crawl never deliberately
+    un-picks one, and there is no other way to choose a product. Observed
+    live: a product card resolved to the synthesized value "100", which is
+    not in the truthy vocabulary, so the crawl asked Playwright to UNCHECK
+    the card; nothing was ever selected and the whole quote funnel stayed
+    shut. Checkboxes/toggles keep two-way intent, but only an explicitly
+    negative word turns them off."""
+    if kind == "radio":
+        return True
+    return _norm(value) not in _FALSY
 
 
 #: Select placeholder options that are not real values (never chosen as a default).
@@ -610,7 +629,15 @@ async def _fill_one(
     """Perform ONE fill, read the committed value back, build the action record."""
     control = dict(control)
     if kind in _TOGGLE_KINDS:
-        observation = await port.set_checked(control, _truthy(value))
+        observation = await port.set_checked(control, _wants_checked(kind, value))
+        # An action that ERRORED did not select anything. Recording it as a
+        # fill claims a choice the page never registered — and that lie
+        # cascades: the walk believes the form is answered, looks for a
+        # Continue the app has not enabled, finds none, and wanders off
+        # (observed live: three product cards all errored, yet the step
+        # reported "3 fields filled"). Honest residue instead.
+        if observation.error_detail:
+            return None
         recorded = observation.committed_value
         return emit.build_action_record(
             control, verb="click", value=recorded, observation=observation,
