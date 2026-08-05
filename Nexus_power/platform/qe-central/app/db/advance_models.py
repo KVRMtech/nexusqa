@@ -69,4 +69,49 @@ class AdvanceLabelPriorRow(QecBase):
         DateTime(timezone=True), nullable=False, default=_utc_now)
 
 
-__all__ = ["AdvanceMemoryRow", "AdvanceLabelPriorRow"]
+class MechanicMemoryRow(QecBase):
+    """R4: one proven control-interaction mechanic, keyed (tenant_id, control_sig).
+
+    When the explorer verifies (R0) that a specific ladder rung operates a
+    control, it writes the rung's variant name here. On the next crawl, the
+    explorer tries the proven mechanic FIRST — no ladder walk, no medic.
+
+    The key is the control's field-signature digest (value-free: name tokens +
+    kind + input_type + option shape). One mechanic per control per tenant."""
+
+    __tablename__ = "control_mechanics"
+
+    tenant_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    control_sig: Mapped[str] = mapped_column(String(64), primary_key=True)
+    mechanic: Mapped[str] = mapped_column(String(80), nullable=False)
+    app_id: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    proof_count: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    last_proven_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utc_now)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utc_now)
+
+
+class MechanicPriorRow(QecBase):
+    """R4: pooled, value-free mechanic knowledge (no tenant key BY DESIGN).
+
+    One row per (control_sig, mechanic) — the cross-tenant evidence that a
+    particular control shape is best operated with a particular mechanic.
+    Contribution is opt-in (consent-gated, OFF by default)."""
+
+    __tablename__ = "mechanic_priors"
+
+    control_sig: Mapped[str] = mapped_column(String(64), primary_key=True)
+    mechanic: Mapped[str] = mapped_column(String(80), primary_key=True)
+    proof_count: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    distinct_tenants: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    contributor_hashes: Mapped[list] = mapped_column(
+        JSONB, nullable=False, default=list)
+    last_proven_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utc_now)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utc_now)
+
+
+__all__ = ["AdvanceMemoryRow", "AdvanceLabelPriorRow",
+           "MechanicMemoryRow", "MechanicPriorRow"]

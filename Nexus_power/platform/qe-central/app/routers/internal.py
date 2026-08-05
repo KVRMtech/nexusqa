@@ -378,6 +378,117 @@ async def pick_advance(request: Request) -> dict:
             "signature": decision.signature}
 
 
+@router.post("/operate-control")
+async def operate_control(request: Request) -> dict:
+    """R3 Crawl Medic: which action might operate a stuck control?
+
+    Called mid-crawl when the deterministic ladder is exhausted and R0 still
+    reports intent-unmet.  HMAC-authenticated (same secret as pick-advance).
+
+    Contract — ``{"action": str, "status": "proposed"|"display_only"|
+    "unavailable"}``:
+
+      * ``proposed`` — the action is from the closed vocabulary and the
+        explorer should execute it through existing primitives, then R0-verify;
+      * ``display_only`` — the control is read-only, skip it honestly;
+      * ``unavailable`` — the medic could not determine an action.
+
+    Every outcome is HTTP 200 (best-effort); only a bad signature is 401.
+    """
+    raw = await request.body()
+    signature = request.headers.get(SIGNATURE_HEADER, "")
+    if not phase1_settings.verify_signature(raw, signature):
+        raise HTTPException(status_code=401, detail="invalid or missing signature")
+
+    from ..services import crawl_medic
+
+    unavailable = {"action": "", "status": crawl_medic.STATUS_UNAVAILABLE}
+    try:
+        body = json.loads(raw or b"{}")
+    except json.JSONDecodeError:
+        return unavailable
+
+    control = body.get("control") or {}
+    if not control:
+        return unavailable
+
+    decision = await crawl_medic.consult_medic(
+        tenant_id=body.get("tenant_id", ""),
+        control=control,
+        intent=body.get("intent", ""),
+        ladder_results=body.get("ladder_results", []),
+        page_context=body.get("page_context", {}),
+    )
+    return {"action": decision.action, "status": decision.status}
+
+
+@router.post("/vision-operate")
+async def vision_operate(request: Request) -> dict:
+    """R5 Vision Medic: where to click on a DOM-opaque control?
+
+    Called mid-crawl when both the deterministic ladder AND the text medic
+    are exhausted, the control is classified as DOM-opaque (canvas, unlabeled,
+    iframe), and the ``QEC_CRAWL_VISION_ENABLED`` flag is ON.
+
+    HMAC-authenticated (same secret as pick-advance / operate-control).
+    The explorer sends a page screenshot (base64 PNG) + the element's
+    bounding box + the control's shape.
+
+    Contract — ``{"action": str, "status": "proposed"|"display_only"|
+    "unavailable", "click_x": int, "click_y": int, "reason": str}``.
+    Coordinates are relative to the element bbox.
+
+    Every outcome is HTTP 200 (best-effort); only a bad signature is 401.
+    """
+    raw = await request.body()
+    signature = request.headers.get(SIGNATURE_HEADER, "")
+    if not phase1_settings.verify_signature(raw, signature):
+        raise HTTPException(status_code=401, detail="invalid or missing signature")
+
+    from ..clients import platform_api
+    from ..services import vision_medic
+
+    unavailable = {"action": "", "status": vision_medic.STATUS_UNAVAILABLE,
+                   "click_x": 0, "click_y": 0, "reason": ""}
+    try:
+        body = json.loads(raw or b"{}")
+    except json.JSONDecodeError:
+        return unavailable
+
+    control = body.get("control") or {}
+    if not control:
+        return unavailable
+
+    tenant_id = body.get("tenant_id", "")
+    screenshot_b64 = body.get("screenshot_b64", "")
+
+    async def _propose(prompt: str, image_b64: str) -> str:
+        res = await platform_api.complete_vision(
+            tenant_id=tenant_id, prompt=prompt,
+            screenshot_b64=image_b64, system=vision_medic.SYSTEM,
+            task="vision_medic",
+        )
+        if not res.ok:
+            raise RuntimeError(res.detail or "vision LLM unavailable")
+        return res.text
+
+    decision = await vision_medic.consult_vision(
+        tenant_id=tenant_id,
+        control=control,
+        screenshot_b64=screenshot_b64,
+        element_bbox=body.get("element_bbox", {}),
+        page_context=body.get("page_context", {}),
+        propose_fn=_propose,
+    )
+    return {
+        "action": decision.action,
+        "status": decision.status,
+        "click_x": decision.click_x,
+        "click_y": decision.click_y,
+        "reason": decision.reason,
+    }
+
+
 @router.post("/crawls/{crawl_id}/complete")
 async def complete_crawl(crawl_id: str, request: Request) -> dict:
     """Ingest a finished crawl: verify HMAC → map manifest → write substrate.
@@ -647,6 +758,18 @@ async def complete_crawl(crawl_id: str, request: Request) -> dict:
     except Exception as exc:                       # never fail a durable crawl
         stats_dict["advance_memory"] = {"error": str(exc)[:200]}
 
+    # ── R4 MECHANIC MEMORY — harvest PROVEN interaction mechanics ─────────
+    # A field-ledger entry with ``mechanic`` set means the explorer's R0 intent
+    # contract verified a non-native ladder rung operated the control. Folding
+    # the proven mechanic into tenant memory makes the next crawl of that
+    # control instant (skip the ladder). Same consent doctrine as advance_memory.
+    try:
+        from ..services import mechanic_memory
+        stats_dict["mechanic_memory"] = await mechanic_memory.harvest_mechanics(
+            tenant_id=tenant_id, app_id=app_id, coverage=body.coverage)
+    except Exception as exc:                       # never fail a durable crawl
+        stats_dict["mechanic_memory"] = {"error": str(exc)[:200]}
+
     # ── JOURNEY GRAPH (Release C1/C2/C4/C5) ───────────────────────────────
     # Fold flows into the graph (idempotent upserts; unwalked options become
     # first-class ``discovered`` branch rows), name new journeys in business
@@ -684,19 +807,22 @@ async def complete_crawl(crawl_id: str, request: Request) -> dict:
         stats_dict["journey_cases"] = await journey_case_linker.link_app_journeys(
             tenant_id=tenant_id, app_id=app_id,
             artifact_id=created.artifact_id)
-        # C5 AUTOWALK — the loop with explicit stop conditions: no discovered
+        # E1 AUTOWALK — the loop with explicit stop conditions: no discovered
         # branches (plan_walks returns none), the per-cycle cap (inside
-        # plan_walks), or flags off. A planned walk dispatched here is an
-        # ordinary crawl; its own completion folds, reconciles, and decides
-        # whether anything remains.
+        # plan_walks), flags off, or depth exceeded.  Branch walks that
+        # reveal NEW decision points trigger further autowalks (recursive
+        # HLQ explosion) up to ``autowalk_max_depth``.
+        walk_depth = int((walk_plan or {}).get("walk_depth") or 0)
+        max_depth = settings.autowalk_max_depth
         flags = await branch_planner.autonomy_flags(tenant_id)
-        if flags["autowalk"] and not walk_plan:
+        if flags["autowalk"] and walk_depth < max_depth:
             from fastapi import Response as _Response
             from .explorations import _dispatch_explorer
             plans = await branch_planner.plan_walks(
                 tenant_id=tenant_id, app_id=app_id)
             autowalked = []
             for plan in plans:
+                plan["walk_depth"] = walk_depth + 1
                 await branch_planner.mark_planned(
                     tenant_id=tenant_id, branch_ids=plan["branch_ids"])
                 try:
@@ -713,8 +839,66 @@ async def complete_crawl(crawl_id: str, request: Request) -> dict:
                     autowalked.append({"journey_id": plan["journey_id"],
                                        "error": str(exc)[:200]})
             stats_dict["journey_autowalk"] = autowalked
+            if walk_depth >= max_depth:
+                stats_dict["journey_autowalk_depth_capped"] = True
     except Exception as exc:                       # never fail a durable crawl
         stats_dict["journey_fold"] = {"error": str(exc)[:200]}
+
+    # ── O1 RULE AUTO-VALIDATION ─────────────────────────────────────────────
+    # After the fold, journeys still in ``captured`` status have no baseline.
+    # If the app's answer_key carries ``outcome_rule`` rules, evaluate them
+    # against each captured journey's latest completed traversal. Rules that
+    # confirm ALL applicable outcomes auto-approve the baseline — zero human
+    # touch, fully auditable (action="rule_auto_approve" in the event chain).
+    try:
+        from ..services import rule_oracle
+        from ..services.answer_key import value_oracle_contract
+        from ..services.journey_baseline import auto_validate_from_rules
+        rule_ak = await _app_answer_key(tenant_id, app_id)
+        raw_rules = rule_ak.get("rules") if rule_ak else []
+        rules = rule_oracle.normalize_rules(raw_rules)
+        if rules:
+            async with tenant_scoped_qec_session(tenant_id) as session:
+                from ..db.journey_models import JourneyRow, JourneyTraversalRow
+                captured_journeys = (await session.execute(
+                    select(JourneyRow).where(
+                        JourneyRow.tenant_id == tenant_id,
+                        JourneyRow.app_id == app_id,
+                        JourneyRow.baseline_status == "captured",
+                    ))).scalars().all()
+                rule_auto_results = []
+                for journey in captured_journeys:
+                    latest_traversal = (await session.execute(
+                        select(JourneyTraversalRow).where(
+                            JourneyTraversalRow.tenant_id == tenant_id,
+                            JourneyTraversalRow.app_id == app_id,
+                            JourneyTraversalRow.journey_id == journey.journey_id,
+                            JourneyTraversalRow.completed == True,  # noqa: E712
+                        ).order_by(JourneyTraversalRow.created_at.desc())
+                    )).scalars().first()
+                    if latest_traversal is None:
+                        continue
+                    results = rule_oracle.evaluate_rules(
+                        rules, latest_traversal.outcome_values or [])
+                    summary = rule_oracle.summarize_evaluation(results)
+                    if summary["all_applicable_pass"]:
+                        r = await auto_validate_from_rules(
+                            tenant_id=tenant_id, app_id=app_id,
+                            journey_id=journey.journey_id,
+                            traversal_id=latest_traversal.traversal_id,
+                            outcome_values=latest_traversal.outcome_values or [],
+                            rule_results=results, rule_summary=summary)
+                        rule_auto_results.append(r)
+                stats_dict["rule_auto_validation"] = {
+                    "rules_count": len(rules),
+                    "captured_journeys": len(captured_journeys),
+                    "auto_approved": len([r for r in rule_auto_results
+                                          if r.get("action") == "rule_auto_approved"]),
+                }
+        else:
+            stats_dict["rule_auto_validation"] = {"rules_count": 0}
+    except Exception as exc:
+        stats_dict["rule_auto_validation"] = {"error": str(exc)[:200]}
 
     # Promote the recorded artifact onto the app so a cycle / the portal reads it.
     await _promote_latest_artifact(tenant_id, app_id, created.artifact_id)

@@ -161,6 +161,14 @@ class Settings(BaseSettings):
     #: Planned branch walks dispatched per completion cycle, at most.
     branch_walks_per_cycle: int = Field(
         default=4, alias="QEC_BRANCH_WALKS_PER_CYCLE")
+    #: E1: maximum recursive autowalk depth. A branch walk that reveals new
+    #: branches triggers further autowalks up to this depth. 0 = fire-once
+    #: (pre-E1 behavior).
+    autowalk_max_depth: int = Field(
+        default=3, alias="QEC_AUTOWALK_MAX_DEPTH")
+    #: E2: pairwise combination walks dispatched per completion cycle.
+    pairwise_walks_per_cycle: int = Field(
+        default=8, alias="QEC_PAIRWISE_WALKS_PER_CYCLE")
 
     # ── Runnable Journeys (Release D) ────────────────────────────────────
     #: Minimum coverage percent for a case to LINK to a journey.

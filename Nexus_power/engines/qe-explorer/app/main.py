@@ -37,8 +37,10 @@ from fastapi import Depends, FastAPI, Header, HTTPException, status
 from pydantic import BaseModel, Field
 
 from . import emit
-from .browser import BrowserPort, NavResult, RawObservation
+from .browser import BrowserPort, NavResult, RawObservation, verify_intent
 from .config import settings
+from . import field_signature
+from .interaction_ladder import Rung, ladder_for
 from .crawler import Budget, Crawler, CrawlSummary, GuardContext
 from .fingerprint import interactive_signature
 from .forms import AnswerKey
@@ -171,6 +173,14 @@ class ExploreRequest(BaseModel):
     #: guard against landing on the wrong env. Carried here for when the crawl-side
     #: check lands.
     env_assertion: Optional[dict[str, Any]] = None
+    #: R4 MECHANIC MEMORY. ``{control_sig: mechanic_variant}`` — the proven
+    #: ladder rung for each control this tenant has interacted with before.
+    #: Value-free (only rung variant names); never logged.
+    proven_mechanics: dict[str, str] = Field(default_factory=dict)
+    #: POSTURE: observe-only mode for production environments.  When True, the
+    #: crawler captures pages/fields/locators/navigation but never fills a form,
+    #: never submits, and never advances a commit.
+    observe_only: bool = False
 
 
 def _config_fingerprint(req: ExploreRequest, refuse_pack_version: str) -> str:
@@ -469,6 +479,96 @@ def _make_advance_oracle(
     return oracle
 
 
+_MEDIC_PROPOSED = "proposed"
+_MEDIC_DISPLAY_ONLY = "display_only"
+_MEDIC_UNAVAILABLE = "unavailable"
+
+
+def _make_medic_oracle(
+    http_client: httpx.AsyncClient, tenant_id: str, crawl_id: str,
+):
+    """Return an async callable the crawler invokes when the deterministic
+    ladder is exhausted and R0 still reports intent-unmet.  The callable
+    POSTs the control's shape to qe-central's ``/internal/operate-control``
+    endpoint, which asks the medic agent what action to try.
+
+    Contract: returns ``{"action": str, "status": proposed|display_only|
+    unavailable}``.  Same resilience pattern as the advance oracle:
+    per-crawl circuit breaker + call cap.  The callable never raises.
+    """
+    state = {"consecutive_failures": 0, "circuit_open": False,
+             "calls": 0, "cap_logged": False}
+    unavailable = {"action": "", "status": _MEDIC_UNAVAILABLE}
+
+    async def medic(
+        control: dict[str, Any],
+        intent: str,
+        ladder_results: list[dict[str, Any]],
+        page_context: dict[str, Any],
+    ) -> dict[str, Any]:
+        if state["circuit_open"]:
+            return dict(unavailable)
+        if state["calls"] >= settings.medic_oracle_max_calls:
+            if not state["cap_logged"]:
+                state["cap_logged"] = True
+                logger.warning(
+                    "qec.explorer.medic_oracle_cap_reached crawl_id=%s cap=%d",
+                    crawl_id, settings.medic_oracle_max_calls)
+            return dict(unavailable)
+        state["calls"] += 1
+        body = {
+            "tenant_id": tenant_id,
+            "control": {
+                "name": control.get("name", ""),
+                "kind": control.get("kind", ""),
+                "role": control.get("role", ""),
+                "tag": control.get("tag", ""),
+                "css_hint": control.get("css_hint", ""),
+                "disabled": control.get("disabled", False),
+                "danger": control.get("danger", False),
+            },
+            "intent": intent,
+            "ladder_results": ladder_results[:8],
+            "page_context": page_context,
+        }
+        payload = json.dumps(body, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        signature = settings.sign_payload(payload)
+        url = settings.callback_url.rstrip("/") + "/internal/operate-control"
+        try:
+            resp = await http_client.post(
+                url, content=payload,
+                headers={
+                    "Content-Type": "application/json",
+                    "X-QEC-Signature": signature,
+                    "X-QEC-Token": settings.explorer_token,
+                },
+                timeout=settings.medic_oracle_timeout_s,
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                status = str(data.get("status") or "")
+                action = str(data.get("action") or "")
+                if status == _MEDIC_PROPOSED and action:
+                    state["consecutive_failures"] = 0
+                    return {"action": action, "status": _MEDIC_PROPOSED}
+                if status == _MEDIC_DISPLAY_ONLY:
+                    state["consecutive_failures"] = 0
+                    return {"action": "display_only", "status": _MEDIC_DISPLAY_ONLY}
+        except Exception as exc:
+            logger.warning("qec.explorer.medic_oracle_failed crawl_id=%s error=%s",
+                           crawl_id, str(exc)[:200])
+        state["consecutive_failures"] += 1
+        if (state["consecutive_failures"] >= settings.medic_oracle_breaker_threshold
+                and not state["circuit_open"]):
+            state["circuit_open"] = True
+            logger.warning(
+                "qec.explorer.medic_oracle_circuit_open crawl_id=%s failures=%d",
+                crawl_id, state["consecutive_failures"])
+        return dict(unavailable)
+
+    return medic
+
+
 # ─── Job runner (owns the Playwright lifecycle) ──────────────────────────────
 
 
@@ -522,7 +622,13 @@ async def _run_job(
                 logger.info("qec.explorer.env_cookies_set crawl_id=%s n=%d",
                             req.crawl_id, len(req.cookies))
             page = await context.new_page()
-            port = PlaywrightBrowserPort(page, context)
+            medic = (
+                _make_medic_oracle(app.state.http, req.tenant_id, req.crawl_id)
+                if req.crawl_mode == "e2e" else None
+            )
+            port = PlaywrightBrowserPort(
+                page, context, proven_mechanics=req.proven_mechanics,
+                medic_oracle=medic)
 
             crawler = Crawler(
                 port,
@@ -552,6 +658,7 @@ async def _run_job(
                 choice_overrides=req.choice_overrides,
                 e2e_wizard_steps=settings.e2e_wizard_steps,
                 e2e_wizard_advances=settings.e2e_wizard_advances,
+                observe_only=req.observe_only,
             )
             job = _Job(crawler)
             jobs.activate(job)
@@ -713,9 +820,13 @@ class PlaywrightBrowserPort(BrowserPort):
     re-bindable downstream.  (Live-crawl fidelity is verified on the VM.)
     """
 
-    def __init__(self, page: Any, context: Any) -> None:
+    def __init__(self, page: Any, context: Any, *,
+                 proven_mechanics: dict[str, str] | None = None,
+                 medic_oracle: Any = None) -> None:
         self._page = page
         self._context = context
+        self._proven_mechanics = dict(proven_mechanics or {})
+        self._medic_oracle = medic_oracle
         # API/network mining — a bounded buffer of the XHR/fetch calls the app
         # makes, filled by a passive `response` listener and drained per-visit by
         # the crawler.  Query strings are dropped + paths PII-scrubbed HERE (at
@@ -960,13 +1071,13 @@ class PlaywrightBrowserPort(BrowserPort):
         )
 
     async def fill(self, control: dict[str, Any], value: str) -> RawObservation:
-        return await self._act(control, "fill", value=value, read_back=True)
+        return await self._act_with_ladder(control, "fill", value=value, read_back=True)
 
     async def select_option(self, control: dict[str, Any], value: str) -> RawObservation:
-        return await self._act(control, "select", value=value, read_back=True)
+        return await self._act_with_ladder(control, "select", value=value, read_back=True)
 
     async def set_checked(self, control: dict[str, Any], checked: bool) -> RawObservation:
-        return await self._act(control, "checked", checked=checked, read_back=True)
+        return await self._act_with_ladder(control, "checked", checked=checked, read_back=True)
 
     async def storage_state(self) -> dict[str, Any]:
         return await self._context.storage_state()
@@ -977,10 +1088,12 @@ class PlaywrightBrowserPort(BrowserPort):
                    checked: bool = False, read_back: bool = False) -> RawObservation:
         url_before = self._safe_url()
         sig_before = await self._interactive_signature()
+        intended = value if kind != "checked" else ("true" if checked else "false")
         locator = self._locator(control)
         if locator is None:
             return RawObservation(url_before=url_before, url_after=url_before,
-                                  error_detail="locator_unresolved")
+                                  error_detail="locator_unresolved",
+                                  intended_value=intended, intent_met=False)
         try:
             if kind == "click":
                 await locator.click()
@@ -991,14 +1104,6 @@ class PlaywrightBrowserPort(BrowserPort):
             elif kind == "select":
                 await locator.select_option(label=value)
             elif kind == "checked":
-                # CUSTOM CHOICE CONTROLS (observed live on a real quote funnel):
-                # a product "card" carries the radio ROLE but is a styled
-                # div/label whose real input is hidden or absent, so Playwright's
-                # set_checked times out and NOTHING gets selected — the funnel
-                # then never opens and the whole journey is lost at step one.
-                # A human selects such a card by CLICKING it, so that is the
-                # honest fallback: try the native check first (it is the precise
-                # act), fall back to a click, and only then report an error.
                 try:
                     await locator.set_checked(checked)
                 except Exception:
@@ -1007,19 +1112,262 @@ class PlaywrightBrowserPort(BrowserPort):
                     await locator.click()
         except Exception as exc:
             return RawObservation(url_before=url_before, url_after=self._safe_url(),
-                                  error_detail=f"action_error: {str(exc)[:200]}")
+                                  error_detail=f"action_error: {str(exc)[:200]}",
+                                  intended_value=intended, intent_met=False)
         await self._settle()
         url_after = self._safe_url()
         committed = await self._read_value(locator) if read_back else None
         errors = await self.error_texts()
         dialogs = await self.dialog_flags()
         sig_after = await self._interactive_signature()
+        err = (errors[0] if errors else "")
+        met = verify_intent(
+            kind,
+            intended_value=intended,
+            intended_checked=checked,
+            committed_value=committed,
+            error_detail=err,
+            url_before=url_before,
+            url_after=url_after,
+            dom_changed=(sig_before != sig_after),
+            dialog_opened=bool(dialogs),
+        )
         return RawObservation(
             url_before=url_before, url_after=url_after, committed_value=committed,
             dialog_opened=bool(dialogs), dialog_detail=(dialogs[0] if dialogs else ""),
-            error_detail=(errors[0] if errors else ""),
+            error_detail=err,
             dom_changed=(sig_before != sig_after),
+            intended_value=intended, intent_met=met,
         )
+
+    async def _act_with_ladder(
+        self, control: dict[str, Any], kind: str, *, value: str = "",
+        checked: bool = False, read_back: bool = False,
+    ) -> RawObservation:
+        """Try the native mechanic first; if R0 says intent_met=False, walk the
+        archetype ladder until a rung verifies or the ladder is exhausted.
+
+        R4 MECHANIC MEMORY: if a proven mechanic exists for this control's
+        signature, try it FIRST — bypassing the full ladder walk.  Falls
+        through to the normal ladder if the proven mechanic fails (the app
+        may have changed since the mechanic was proven).
+
+        Returns the observation from the winning rung (with ``mechanic_used``
+        set), or the last failed observation if no rung succeeded.
+        """
+        from dataclasses import replace
+        rungs = ladder_for(kind)
+        if not rungs:
+            return await self._act(control, kind, value=value,
+                                   checked=checked, read_back=read_back)
+        # R4: try the proven mechanic FIRST (zero ladder walk when it works).
+        proven_variant = ""
+        if self._proven_mechanics:
+            sig = field_signature.compute(control, kind=kind)
+            proven_variant = self._proven_mechanics.get(sig.get("signature", ""), "")
+        if proven_variant:
+            for rung in rungs:
+                if rung.variant == proven_variant:
+                    obs = await self._run_rung(
+                        rung, control, kind, value=value, checked=checked,
+                        read_back=read_back)
+                    if obs.intent_met is not False:
+                        return replace(obs, mechanic_used=rung.variant)
+                    break
+        last_obs: RawObservation | None = None
+        ladder_tried: list[dict[str, str]] = []
+        for rung in rungs:
+            obs = await self._run_rung(
+                rung, control, kind, value=value, checked=checked,
+                read_back=read_back)
+            if obs.intent_met is not False:
+                return replace(obs, mechanic_used=rung.variant)
+            ladder_tried.append({
+                "rung": rung.variant,
+                "observation": (obs.error_detail or "intent_unmet")[:100],
+            })
+            last_obs = obs
+        # R3 MEDIC: after the deterministic ladder exhausts, ask the caged
+        # agent for a proposal.  Execute through existing primitives; R0
+        # verifies.  An unverified proposal → the control is named residue.
+        if self._medic_oracle and last_obs is not None:
+            try:
+                page_ctx = {
+                    "title": (await self._page.title()) if self._page else "",
+                    "url": self._safe_url(),
+                }
+                decision = await self._medic_oracle(
+                    control, kind, ladder_tried, page_ctx)
+                action = str(decision.get("action") or "")
+                status = str(decision.get("status") or "")
+                if status == "display_only":
+                    return replace(last_obs, mechanic_used="medic:display_only",
+                                   intent_met=None)
+                if status == "proposed" and action:
+                    medic_obs = await self._execute_medic_action(
+                        control, kind, action, value=value, checked=checked,
+                        read_back=read_back)
+                    if medic_obs is not None and medic_obs.intent_met is not False:
+                        return replace(medic_obs, mechanic_used=f"medic:{action}")
+            except Exception as exc:
+                logger.warning("qec.explorer.medic_failed control=%s error=%s",
+                               control.get("name", "?"), str(exc)[:200])
+        return replace(last_obs, mechanic_used="") if last_obs else \
+            RawObservation(error_detail="ladder_exhausted",
+                           intended_value=value, intent_met=False)
+
+    async def _execute_medic_action(
+        self, control: dict[str, Any], kind: str, action: str, *,
+        value: str = "", checked: bool = False, read_back: bool = False,
+    ) -> RawObservation | None:
+        """Execute a medic-proposed action through existing primitives.
+
+        Maps vocabulary terms to Rung objects or direct _act calls.  Returns
+        the observation (R0 verifies upstream) or None if the action is
+        unrecognizable.
+        """
+        if action == "click":
+            rung = Rung("click", "medic_click")
+            return await self._run_rung(rung, control, kind, value=value,
+                                        checked=checked, read_back=read_back)
+        if action.startswith("press:"):
+            key = action.split(":", 1)[1]
+            if key in ("Space", "Enter", "ArrowDown"):
+                rung = Rung("press", f"medic_{key.lower()}")
+                return await self._run_rung(rung, control, kind, value=value,
+                                            checked=checked, read_back=read_back)
+        if action == "open_then_pick":
+            rung = Rung("click_option", "medic_open_pick")
+            return await self._run_rung(rung, control, kind, value=value,
+                                        checked=checked, read_back=read_back)
+        return None
+
+    async def _run_rung(
+        self, rung: Rung, control: dict[str, Any], kind: str, *,
+        value: str = "", checked: bool = False, read_back: bool = False,
+    ) -> RawObservation:
+        """Execute one ladder rung through the appropriate low-level primitive."""
+        if rung.kind == kind:
+            return await self._act(control, kind, value=value,
+                                   checked=checked, read_back=read_back)
+        if rung.kind == "click":
+            obs = await self._act(control, "click", read_back=read_back)
+            return RawObservation(
+                url_before=obs.url_before, url_after=obs.url_after,
+                committed_value=obs.committed_value,
+                dialog_opened=obs.dialog_opened,
+                dialog_detail=obs.dialog_detail,
+                error_detail=obs.error_detail,
+                dom_changed=obs.dom_changed,
+                intended_value=("true" if checked else "false")
+                    if kind == "checked" else value,
+                intent_met=verify_intent(
+                    kind, intended_value=("true" if checked else "false")
+                        if kind == "checked" else value,
+                    intended_checked=checked,
+                    committed_value=obs.committed_value,
+                    error_detail=obs.error_detail,
+                    url_before=obs.url_before, url_after=obs.url_after,
+                    dom_changed=obs.dom_changed,
+                    dialog_opened=obs.dialog_opened),
+            )
+        if rung.kind == "press":
+            locator = self._locator(control)
+            if locator is None:
+                return RawObservation(error_detail="locator_unresolved",
+                                     intended_value=value, intent_met=False)
+            url_before = self._safe_url()
+            sig_before = await self._interactive_signature()
+            try:
+                await locator.focus()
+                if rung.variant == "focus_space":
+                    await self._page.keyboard.press("Space")
+                elif rung.variant == "focus_arrow":
+                    await self._page.keyboard.press("ArrowRight")
+                elif rung.variant == "type_chars":
+                    await locator.press_sequentially(value, delay=30)
+                else:
+                    await self._page.keyboard.press("Space")
+            except Exception as exc:
+                return RawObservation(
+                    url_before=url_before, url_after=self._safe_url(),
+                    error_detail=f"action_error: {str(exc)[:200]}",
+                    intended_value=value, intent_met=False)
+            await self._settle()
+            url_after = self._safe_url()
+            committed = await self._read_value(locator) if read_back else None
+            errors = await self.error_texts()
+            dialogs = await self.dialog_flags()
+            sig_after = await self._interactive_signature()
+            err = (errors[0] if errors else "")
+            intended = ("true" if checked else "false") \
+                if kind == "checked" else value
+            met = verify_intent(
+                kind, intended_value=intended, intended_checked=checked,
+                committed_value=committed, error_detail=err,
+                url_before=url_before, url_after=url_after,
+                dom_changed=(sig_before != sig_after),
+                dialog_opened=bool(dialogs))
+            return RawObservation(
+                url_before=url_before, url_after=url_after,
+                committed_value=committed,
+                dialog_opened=bool(dialogs),
+                dialog_detail=(dialogs[0] if dialogs else ""),
+                error_detail=err,
+                dom_changed=(sig_before != sig_after),
+                intended_value=intended, intent_met=met)
+        if rung.kind == "click_option":
+            return await self._select_via_open_click(
+                control, value, read_back=read_back)
+        return await self._act(control, kind, value=value,
+                               checked=checked, read_back=read_back)
+
+    async def _select_via_open_click(
+        self, control: dict[str, Any], value: str, *,
+        read_back: bool = True,
+    ) -> RawObservation:
+        """Open a custom select by clicking it, then click the matching
+        ``[role=option]`` by its label.  Dismiss with Escape on failure."""
+        url_before = self._safe_url()
+        sig_before = await self._interactive_signature()
+        locator = self._locator(control)
+        if locator is None:
+            return RawObservation(error_detail="locator_unresolved",
+                                 intended_value=value, intent_met=False)
+        try:
+            await locator.click()
+            await self._settle()
+            option = self._page.get_by_role("option", name=value).first
+            await option.click()
+        except Exception as exc:
+            try:
+                await self._page.keyboard.press("Escape")
+            except Exception:
+                pass
+            return RawObservation(
+                url_before=url_before, url_after=self._safe_url(),
+                error_detail=f"action_error: {str(exc)[:200]}",
+                intended_value=value, intent_met=False)
+        await self._settle()
+        url_after = self._safe_url()
+        committed = await self._read_value(locator) if read_back else None
+        errors = await self.error_texts()
+        dialogs = await self.dialog_flags()
+        sig_after = await self._interactive_signature()
+        err = (errors[0] if errors else "")
+        met = verify_intent(
+            "select", intended_value=value, committed_value=committed,
+            error_detail=err, url_before=url_before, url_after=url_after,
+            dom_changed=(sig_before != sig_after),
+            dialog_opened=bool(dialogs))
+        return RawObservation(
+            url_before=url_before, url_after=url_after,
+            committed_value=committed,
+            dialog_opened=bool(dialogs),
+            dialog_detail=(dialogs[0] if dialogs else ""),
+            error_detail=err,
+            dom_changed=(sig_before != sig_after),
+            intended_value=value, intent_met=met)
 
     def _locator(self, control: dict[str, Any]) -> Any:
         """Build a Playwright locator mirroring the compiler ladder (best-effort)."""
@@ -1041,10 +1389,13 @@ class PlaywrightBrowserPort(BrowserPort):
                 scope = root
         role = str(control.get("role") or "").strip()
         name = str(control.get("name") or "").strip()
+        css_hint = str((control.get("qec") or {}).get("css_hint")
+                       or control.get("css_hint") or "").strip()
         for builder in (
             (lambda: scope.get_by_role(role, name=name).first) if role and name else None,
             (lambda: scope.get_by_label(name).first) if name else None,
             (lambda: scope.get_by_text(name).first) if name else None,
+            (lambda: scope.locator(css_hint).first) if css_hint else None,
         ):
             if builder is None:
                 continue

@@ -208,10 +208,24 @@ def test_all_codes_are_reachable():
     seen.add(_diag("completed", stats={"visits": 1})["code"])
     seen.add(_diag("completed", stats={"visits": 0})["code"])
     seen.add(_diag("???", error="x")["code"])
+    # R2 codes
+    seen.add(_diag("completed", stats={
+        "visits": 5, "coverage": {
+            "flow_summary": {"intent_unmet": 3},
+            "field_ledger": [{"name": "x", "provenance": "intent_unmet"}]}})["code"])
+    seen.add(_diag("completed", stats={
+        "visits": 5, "coverage": {
+            "flows": [{"completed": False, "fields_unanswered": 2}]}})["code"])
+    seen.add(_diag("completed", stats={
+        "visits": 5, "coverage": {
+            "field_ledger": [{"name": "Plan", "provenance": "needs_input",
+                              "options": ["Gold", "Silver"]}]}})["code"])
     assert seen == {
         cd.CODE_RUNNING, cd.CODE_QUEUED, cd.CODE_NONE, cd.CODE_REFUSED, cd.CODE_STALLED,
         cd.CODE_LOGIN_FAILED, cd.CODE_FAILED, cd.CODE_COMPLETED_OK, cd.CODE_SEEDS_NEEDED,
         cd.CODE_NO_CASES, cd.CODE_EMPTY_SUBSTRATE, cd.CODE_UNCLASSIFIED,
+        cd.CODE_INTERACTION_BLOCKED, cd.CODE_WALK_BLOCKED_VALIDATION,
+        cd.CODE_DECISION_UNRESOLVED,
     }
 
 
@@ -251,3 +265,208 @@ def test_no_oracle_unavailable_keeps_completed_ok():
 
 def test_oracle_unavailable_is_an_attention_code():
     assert cd.CODE_ADVANCE_ORACLE_UNAVAILABLE in cd.TERMINAL_ATTENTION_CODES
+
+
+# ── R2 INTERACTION_BLOCKED — controls that refused to commit (R0/R1 evidence) ─
+
+
+def test_interaction_blocked_when_intent_unmet_and_no_cases():
+    stats = {"visits": 8, "generate": {"generated": 0}, "coverage": {
+        "flow_summary": {"intent_unmet": 3},
+        "field_ledger": [
+            {"name": "Coverage Type", "provenance": "intent_unmet"},
+            {"name": "Rider Option", "provenance": "intent_unmet"},
+            {"name": "Term Length", "provenance": "intent_unmet"},
+        ],
+    }}
+    d = _diag("completed", stats=stats)
+    assert d["code"] == cd.CODE_INTERACTION_BLOCKED
+    assert d["severity"] == cd.SEV_ACTION
+    assert d["evidence"]["intent_unmet"] == 3
+    assert d["evidence"]["blocked_controls"] == ["Coverage Type", "Rider Option", "Term Length"]
+    assert "Coverage Type" in d["human"]
+
+
+def test_interaction_blocked_singular_grammar():
+    stats = {"visits": 4, "coverage": {
+        "flow_summary": {"intent_unmet": 1},
+        "field_ledger": [{"name": "Plan", "provenance": "intent_unmet"}],
+    }}
+    d = _diag("completed", stats=stats)
+    assert d["code"] == cd.CODE_INTERACTION_BLOCKED
+    assert "1 control" in d["human"]
+    assert "its" in d["human"]
+
+
+def test_interaction_blocked_does_not_fire_on_productive_crawl():
+    stats = {"visits": 12, "generate": {"generated": 5}, "coverage": {
+        "flow_summary": {"intent_unmet": 2},
+        "field_ledger": [{"name": "x", "provenance": "intent_unmet"}],
+    }}
+    d = _diag("completed", stats=stats)
+    assert d["code"] == cd.CODE_COMPLETED_OK
+
+
+def test_interaction_blocked_wins_over_seeds_needed():
+    stats = {"visits": 6, "coverage": {
+        "flow_summary": {"intent_unmet": 1},
+        "field_ledger": [{"name": "Plan", "provenance": "intent_unmet"}],
+        "fields_needing_seed": ["Beneficiary"],
+    }}
+    d = _diag("completed", stats=stats)
+    assert d["code"] == cd.CODE_INTERACTION_BLOCKED
+
+
+def test_interaction_blocked_tolerates_empty_field_ledger():
+    stats = {"visits": 5, "coverage": {
+        "flow_summary": {"intent_unmet": 2},
+    }}
+    d = _diag("completed", stats=stats)
+    assert d["code"] == cd.CODE_INTERACTION_BLOCKED
+    assert "unnamed controls" in d["human"]
+
+
+def test_interaction_blocked_is_an_attention_code():
+    assert cd.CODE_INTERACTION_BLOCKED in cd.TERMINAL_ATTENTION_CODES
+
+
+# ── R2 WALK_BLOCKED_VALIDATION — journeys blocked by unfilled required fields ─
+
+
+def test_walk_blocked_validation_with_truncated_unanswered_flows():
+    stats = {"visits": 10, "generate": {"generated": 0}, "coverage": {
+        "flows": [
+            {"completed": True, "fields_unanswered": 0},
+            {"completed": False, "fields_unanswered": 3},
+            {"completed": False, "fields_unanswered": 1},
+        ],
+        "fields_needing_seed": ["SSN", "Income", "DOB", "Employer"],
+    }}
+    d = _diag("completed", stats=stats)
+    assert d["code"] == cd.CODE_WALK_BLOCKED_VALIDATION
+    assert d["severity"] == cd.SEV_ACTION
+    assert d["evidence"]["validation_blocked_flows"] == 2
+    assert d["evidence"]["total_unanswered"] == 4
+    assert d["fields"] == ["SSN", "Income", "DOB", "Employer"]
+
+
+def test_walk_blocked_singular_journey():
+    stats = {"visits": 5, "coverage": {
+        "flows": [{"completed": False, "fields_unanswered": 1}],
+    }}
+    d = _diag("completed", stats=stats)
+    assert d["code"] == cd.CODE_WALK_BLOCKED_VALIDATION
+    assert "1 journey" in d["human"]
+    assert "1 required field" in d["human"]
+
+
+def test_walk_blocked_does_not_fire_on_productive_crawl():
+    stats = {"visits": 10, "generate": {"generated": 4}, "coverage": {
+        "flows": [{"completed": False, "fields_unanswered": 2}],
+    }}
+    assert _diag("completed", stats=stats)["code"] == cd.CODE_COMPLETED_OK
+
+
+def test_walk_blocked_does_not_fire_when_all_flows_completed():
+    stats = {"visits": 8, "coverage": {
+        "flows": [
+            {"completed": True, "fields_unanswered": 0},
+            {"completed": True, "fields_unanswered": 2},
+        ],
+    }}
+    d = _diag("completed", stats=stats)
+    assert d["code"] != cd.CODE_WALK_BLOCKED_VALIDATION
+
+
+def test_interaction_blocked_wins_over_walk_blocked():
+    stats = {"visits": 8, "coverage": {
+        "flow_summary": {"intent_unmet": 2},
+        "field_ledger": [{"name": "x", "provenance": "intent_unmet"}],
+        "flows": [{"completed": False, "fields_unanswered": 3}],
+    }}
+    d = _diag("completed", stats=stats)
+    assert d["code"] == cd.CODE_INTERACTION_BLOCKED
+
+
+def test_walk_blocked_is_an_attention_code():
+    assert cd.CODE_WALK_BLOCKED_VALIDATION in cd.TERMINAL_ATTENTION_CODES
+
+
+# ── R2 DECISION_UNRESOLVED — enumerable forks with no available value ────────
+
+
+def test_decision_unresolved_with_enumerable_needs_input():
+    stats = {"visits": 6, "coverage": {
+        "field_ledger": [
+            {"name": "Coverage Level", "provenance": "needs_input",
+             "options": ["Bronze", "Silver", "Gold", "Platinum"]},
+            {"name": "Rider", "provenance": "needs_input",
+             "options": ["Accidental Death", "Waiver of Premium"]},
+        ],
+    }}
+    d = _diag("completed", stats=stats)
+    assert d["code"] == cd.CODE_DECISION_UNRESOLVED
+    assert d["severity"] == cd.SEV_ACTION
+    assert d["evidence"]["unresolved_decisions"] == 2
+    assert "Coverage Level" in d["human"]
+    assert "Rider" in d["human"]
+    assert d["fields"] == ["Coverage Level", "Rider"]
+
+
+def test_decision_unresolved_singular():
+    stats = {"visits": 5, "coverage": {
+        "field_ledger": [
+            {"name": "Plan Type", "provenance": "needs_input",
+             "options": ["Term", "Whole Life"]},
+        ],
+    }}
+    d = _diag("completed", stats=stats)
+    assert d["code"] == cd.CODE_DECISION_UNRESOLVED
+    assert "1 decision point" in d["human"]
+
+
+def test_decision_unresolved_not_for_non_enumerable_fields():
+    stats = {"visits": 5, "coverage": {
+        "field_ledger": [
+            {"name": "SSN", "provenance": "needs_input"},
+        ],
+        "fields_needing_seed": ["SSN"],
+    }}
+    d = _diag("completed", stats=stats)
+    assert d["code"] == cd.CODE_SEEDS_NEEDED
+
+
+def test_decision_unresolved_ignores_empty_options():
+    stats = {"visits": 5, "coverage": {
+        "field_ledger": [
+            {"name": "Empty", "provenance": "needs_input", "options": []},
+        ],
+    }}
+    d = _diag("completed", stats=stats)
+    assert d["code"] != cd.CODE_DECISION_UNRESOLVED
+
+
+def test_decision_unresolved_does_not_fire_on_productive_crawl():
+    stats = {"visits": 10, "generate": {"generated": 3}, "coverage": {
+        "field_ledger": [
+            {"name": "Plan", "provenance": "needs_input",
+             "options": ["A", "B"]},
+        ],
+    }}
+    assert _diag("completed", stats=stats)["code"] == cd.CODE_COMPLETED_OK
+
+
+def test_decision_unresolved_wins_over_seeds_needed():
+    stats = {"visits": 6, "coverage": {
+        "field_ledger": [
+            {"name": "Plan", "provenance": "needs_input",
+             "options": ["Term", "Whole"]},
+        ],
+        "fields_needing_seed": ["Plan"],
+    }}
+    d = _diag("completed", stats=stats)
+    assert d["code"] == cd.CODE_DECISION_UNRESOLVED
+
+
+def test_decision_unresolved_is_an_attention_code():
+    assert cd.CODE_DECISION_UNRESOLVED in cd.TERMINAL_ATTENTION_CODES

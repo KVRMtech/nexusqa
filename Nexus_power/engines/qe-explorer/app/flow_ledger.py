@@ -175,9 +175,13 @@ def summarize(flows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     # and the telemetry that grows the deterministic vocabulary over time.
     advances_by_tier: dict[str, int] = {}
     oracle_advances = 0
+    total_intent_unmet = 0
     for f in flows:
         for s in f.get("steps") or ():
-            adv = s.get("advance") if isinstance(s, Mapping) else None
+            if not isinstance(s, Mapping):
+                continue
+            total_intent_unmet += int(s.get("intent_unmet") or 0)
+            adv = s.get("advance")
             if not isinstance(adv, Mapping):
                 continue
             tier = str(int(adv.get("tier") or 0))
@@ -192,6 +196,7 @@ def summarize(flows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
         "truncation_reasons": reasons,
         "advances_by_tier": advances_by_tier,
         "oracle_advances": oracle_advances,
+        "intent_unmet": total_intent_unmet,
         "deepest_flow_steps": max((int(f.get("step_count") or 0) for f in flows), default=0),
         # THE HONESTY FLAG. One path per funnel was walked. Which option was taken
         # at each decision point was decided once, and the alternatives — a

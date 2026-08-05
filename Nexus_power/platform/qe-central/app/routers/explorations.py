@@ -633,6 +633,10 @@ async def _dispatch_explorer(
     resolution = await platform_api.fetch_field_resolution(
         tenant_id=tenant_id, artifact_id=prior_artifact_id,
     )
+    # R4 MECHANIC MEMORY — proven ladder rungs for this tenant's controls.
+    # Fail-open: no memory → full ladder walk, exactly as before.
+    from ..services import mechanic_memory
+    proven_mechanics = await mechanic_memory.recall_all(tenant_id, app_id)
     dispatch_request = ExploreDispatchRequest(
         crawl_id=crawl_id,
         tenant_id=tenant_id,
@@ -666,6 +670,8 @@ async def _dispatch_explorer(
                         str((row.schedule or {}).get("crawl_mode") or "").strip().lower())),
         choice_overrides=(dict((walk_plan or {}).get("choice_overrides") or {})
                           if walk_plan else {}),
+        proven_mechanics=proven_mechanics,
+        observe_only=bool(fences.get("observe_only")),
     )
     # Dispatch to an available WORKER in the pool. For EACH worker we fence egress
     # into THAT worker's OWN allowlist file (fail-closed) BEFORE dispatching to it —

@@ -39,10 +39,16 @@ from ..db.journey_run_models import JourneyCaseRow, JourneyRunRow
 from ..db.models import ClientAppRow, QEExplorationRow
 from ..services import (
     branch_planner,
+    journey_baseline,
     journey_case_linker,
     journey_fold,
     journey_naming,
     journey_runner,
+)
+from ..services.catalog import (
+    apply_outcome_provenance,
+    apply_provenance,
+    catalog_summary,
 )
 from ..services.journey_fold import BRANCH_BLOCKED, BRANCH_DISCOVERED, BRANCH_WALKED
 
@@ -58,8 +64,31 @@ class JourneyRename(BaseModel):
     description: str = Field(default="", max_length=200)
 
 
+class ApproveBaselineIn(BaseModel):
+    traversal_id: str = Field(min_length=1, max_length=64)
+    signature: str = Field(min_length=1, max_length=200)
+    actor: str = Field(default="", max_length=200)
+
+
+class AdjudicateDriftIn(BaseModel):
+    verdict: str = Field(min_length=1, max_length=32)
+    signature: str = Field(min_length=1, max_length=200)
+    actor: str = Field(default="", max_length=200)
+    reason: str = Field(default="", max_length=500)
+
+
 class WalkBranchesIn(BaseModel):
     journey_id: Optional[str] = Field(default=None, max_length=64)
+
+
+class NLCaseIn(BaseModel):
+    text: str = Field(min_length=3, max_length=2000)
+    journey_id: Optional[str] = None
+
+
+class PairwiseWalkIn(BaseModel):
+    journey_id: str = Field(max_length=64)
+    must_walk: Optional[list[dict[str, str]]] = None
 
 
 async def _latest_artifact(session, tenant_id: str, app_id: str) -> str:
@@ -194,6 +223,9 @@ async def _journey_rollup(session, tenant_id: str, app_id: str,
             "blocked": by_status.get(BRANCH_BLOCKED, 0),
         },
         "branch_coverage": branch_coverage,
+        "baseline_status": journey.baseline_status,
+        "baseline_approved_at": (journey.baseline_approved_at.isoformat()
+                                 if journey.baseline_approved_at else None),
         "node_fps": node_fps,
     }
 
@@ -627,6 +659,268 @@ async def _run_queue(*, tenant_id: str, app_id: str, artifact_id: str,
                            item["journey_id"], str(exc)[:200])
 
 
+@router.get("/apps/{app_id}/journeys/{journey_id}/baseline")
+async def get_baseline(app_id: str, journey_id: str,
+                       user: dict = Depends(require_auth)) -> dict:
+    """The journey's baseline state: lifecycle status, approved snapshot,
+    drift diff (if drifted), and the hash-chained approval history."""
+    tenant_id = user["tenant_id"]
+    async with tenant_scoped_qec_session(tenant_id) as session:
+        await _journey_or_404(session, tenant_id, app_id, journey_id)
+    view = await journey_baseline.baseline_view(
+        tenant_id=tenant_id, app_id=app_id, journey_id=journey_id)
+    history = await journey_baseline.approval_history(
+        tenant_id=tenant_id, journey_id=journey_id)
+    return {**view, "approval_history": history}
+
+
+@router.post("/apps/{app_id}/journeys/{journey_id}/baseline/approve")
+async def approve_baseline(app_id: str, journey_id: str,
+                           body: ApproveBaselineIn,
+                           user: dict = Depends(_MUTATE)) -> dict:
+    """Approve a traversal's captured outcomes as the journey's expected
+    baseline. Requires an e-signature. The traversal must be completed —
+    a truncated walk has no proven outcome to confirm.
+
+    Transitions: captured→approved, validated→approved (re-baseline),
+    drifted→approved (adjudication shortcut)."""
+    tenant_id = user["tenant_id"]
+    try:
+        return await journey_baseline.approve_baseline(
+            tenant_id=tenant_id, app_id=app_id, journey_id=journey_id,
+            traversal_id=body.traversal_id, signature=body.signature,
+            actor=body.actor or str(user.get("sub") or user.get("email") or ""))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post("/apps/{app_id}/journeys/{journey_id}/baseline/adjudicate")
+async def adjudicate_drift(app_id: str, journey_id: str,
+                           body: AdjudicateDriftIn,
+                           user: dict = Depends(_MUTATE)) -> dict:
+    """Adjudicate a drifted journey: the human rules the observed change
+    as ``intended_change`` (baseline moves) or ``defect`` (baseline revoked,
+    journey returns to UNVERIFIED).
+
+    Both verdicts require an e-signature for the audit chain. Never
+    auto-absorb drift; never auto-fail on it."""
+    tenant_id = user["tenant_id"]
+    try:
+        return await journey_baseline.adjudicate_drift(
+            tenant_id=tenant_id, app_id=app_id, journey_id=journey_id,
+            verdict=body.verdict, signature=body.signature,
+            actor=body.actor or str(user.get("sub") or user.get("email") or ""),
+            reason=body.reason)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.get("/apps/{app_id}/journeys/{journey_id}/catalog")
+async def get_catalog(
+    app_id: str, journey_id: str, user: dict = Depends(require_auth),
+) -> dict:
+    """E3 — The catalog: per-node control inventory with provenance badges.
+
+    Returns every page (node) in the journey with its full control
+    inventory (name, type, options, required, depends_on, semantic_type)
+    and displayed outcome locations (label, selector, value_type).
+
+    Provenance is computed at query time:
+      * ``observed`` — the crawl saw it (default)
+      * ``confirmed`` — the journey baseline has been approved/validated (O0)
+      * ``client_declared`` — a client-authored rule names this field (O1)
+    """
+    tenant_id = user["tenant_id"]
+
+    rule_fields: set[str] = set()
+    try:
+        from ..services.rule_oracle import normalize_rules
+        ak = await _app_answer_key_raw(tenant_id, app_id)
+        rules = normalize_rules(ak.get("rules") if ak else [])
+        rule_fields = {r.field for r in rules}
+    except Exception:
+        pass
+
+    async with tenant_scoped_qec_session(tenant_id) as session:
+        journey = await _journey_or_404(session, tenant_id, app_id, journey_id)
+        baseline_status = journey.baseline_status or "captured"
+
+        rollup = await _journey_rollup(session, tenant_id, app_id, journey)
+        node_fps = rollup.pop("node_fps")
+
+        catalog_nodes: list[dict] = []
+        if node_fps:
+            node_rows = (await session.execute(
+                select(JourneyNodeRow).where(
+                    JourneyNodeRow.tenant_id == tenant_id,
+                    JourneyNodeRow.app_id == app_id,
+                    JourneyNodeRow.fingerprint.in_(node_fps),
+                ))).scalars().all()
+            branch_rows = (await session.execute(
+                select(JourneyBranchRow).where(
+                    JourneyBranchRow.tenant_id == tenant_id,
+                    JourneyBranchRow.app_id == app_id,
+                    JourneyBranchRow.node_fp.in_(node_fps),
+                ))).scalars().all()
+            branches_by_fp: dict[str, list[dict]] = {}
+            for b in branch_rows:
+                branches_by_fp.setdefault(b.node_fp, []).append({
+                    "control": b.control_label_norm,
+                    "control_signature": b.control_signature,
+                    "option": b.option_label_norm,
+                    "status": b.status,
+                    "blocked_reason": b.blocked_reason or "",
+                })
+
+            for n in node_rows:
+                controls = list(n.controls_inventory or [])
+                outcomes = list(n.displayed_outcomes or [])
+                apply_provenance(controls, baseline_status, rule_fields)
+                apply_outcome_provenance(outcomes, baseline_status, rule_fields)
+                catalog_nodes.append({
+                    "fingerprint": n.fingerprint,
+                    "url": n.url,
+                    "title": n.title,
+                    "is_decision": n.is_decision,
+                    "is_boundary": n.is_boundary,
+                    "has_outcome": n.has_outcome,
+                    "controls": controls,
+                    "displayed_outcomes": outcomes,
+                    "branches": branches_by_fp.get(n.fingerprint, []),
+                })
+
+    summary = catalog_summary(catalog_nodes)
+    return {
+        "journey_id": journey_id,
+        "business_name": journey.business_name,
+        "baseline_status": baseline_status,
+        "nodes": catalog_nodes,
+        **summary,
+    }
+
+
+@router.post("/apps/{app_id}/nl-case")
+async def nl_case(
+    app_id: str, body: NLCaseIn, user: dict = Depends(require_auth),
+) -> dict:
+    """O2 — NL Case Builder: natural-language → grounded case specification.
+
+    Accepts a plain-English test-case request ("a 35-year-old female where
+    premium = $40") and returns a grounded case spec with choice_overrides,
+    fill values, and expected outcomes verified against O1 rules.
+    """
+    from ..clients import platform_api
+    from ..services.nl_case_builder import NL_SYSTEM_INSTRUCTION
+    from ..services.rule_oracle import normalize_rules as _norm_rules
+
+    tenant_id = user["tenant_id"]
+
+    rules_raw: list[dict] = []
+    try:
+        ak = await _app_answer_key_raw(tenant_id, app_id)
+        rules_raw = list(ak.get("rules") or [])
+    except Exception:
+        pass
+
+    journey_summaries: list[dict] = []
+    async with tenant_scoped_qec_session(tenant_id) as session:
+        journeys = (await session.execute(
+            select(JourneyRow).where(
+                JourneyRow.tenant_id == tenant_id,
+                JourneyRow.app_id == app_id,
+            ).order_by(JourneyRow.created_at))).scalars().all()
+
+        if body.journey_id:
+            journeys = [j for j in journeys if j.journey_id == body.journey_id]
+            if not journeys:
+                raise HTTPException(404, "journey not found")
+
+        for j in journeys:
+            rollup = await _journey_rollup(session, tenant_id, app_id, j)
+            node_fps = rollup.pop("node_fps")
+            controls: list[dict] = []
+            outcomes: list[dict] = []
+            if node_fps:
+                node_rows = (await session.execute(
+                    select(JourneyNodeRow).where(
+                        JourneyNodeRow.tenant_id == tenant_id,
+                        JourneyNodeRow.app_id == app_id,
+                        JourneyNodeRow.fingerprint.in_(node_fps),
+                    ))).scalars().all()
+                seen_c: set[str] = set()
+                seen_o: set[str] = set()
+                for n in node_rows:
+                    for c in (n.controls_inventory or []):
+                        name = str(c.get("name") or "").strip()
+                        key = name.lower()
+                        if key and key not in seen_c:
+                            seen_c.add(key)
+                            controls.append({
+                                "name": name,
+                                "type": c.get("type", ""),
+                                "options": list(c.get("options") or []),
+                                "signature": c.get("signature", ""),
+                            })
+                    for o in (n.displayed_outcomes or []):
+                        label = str(o.get("label") or "").strip()
+                        key = label.lower()
+                        if key and key not in seen_o:
+                            seen_o.add(key)
+                            outcomes.append({
+                                "label": label,
+                                "selector": o.get("selector", ""),
+                                "value_type": o.get("value_type", ""),
+                            })
+
+            journey_summaries.append({
+                "journey_id": j.journey_id,
+                "business_name": j.business_name,
+                "controls": controls,
+                "outcomes": outcomes,
+            })
+
+    if not journey_summaries:
+        raise HTTPException(404, "no journeys discovered for this app")
+
+    from ..services.nl_case_builder import (
+        assemble_case,
+        build_nl_prompt,
+        collect_vocabulary,
+        ground_nl_intent,
+        parse_nl_proposal,
+        verify_outcomes,
+    )
+
+    vocabulary = collect_vocabulary(journey_summaries)
+    prompt = build_nl_prompt(nl_text=body.text, vocabulary=vocabulary)
+    llm = await platform_api.complete_llm(
+        tenant_id=tenant_id, prompt=prompt,
+        system=NL_SYSTEM_INSTRUCTION, task="nl_case_builder",
+    )
+    proposal = parse_nl_proposal(llm.text) if llm.ok else {}
+    grounded = ground_nl_intent(proposal, vocabulary, journey_summaries)
+    verified_outcomes = verify_outcomes(
+        grounded["expected_outcomes"], rules_raw,
+    )
+    result = assemble_case(
+        nl_text=body.text, grounded=grounded,
+        verified_outcomes=verified_outcomes,
+    )
+    result["prompt"] = prompt
+    result["llm_ok"] = llm.ok
+    result["llm_error"] = "" if llm.ok else (
+        llm.detail or "LLM unavailable — author the case manually")
+    logger.info(
+        "qec.journeys.nl_case",
+        extra={"tenant_id": tenant_id, "app_id": app_id,
+               "llm_ok": llm.ok, "grounded": result.get("grounded"),
+               "ungrounded": result.get("ungrounded"),
+               "outcomes_confirmed": result.get("outcomes_confirmed"),
+               "outcomes_unverified": result.get("outcomes_unverified")},
+    )
+    return result
+
+
 @router.post("/apps/{app_id}/journeys/walk-branches")
 async def walk_branches(app_id: str, body: WalkBranchesIn, request: Request,
                         response: Response,
@@ -676,3 +970,105 @@ async def walk_branches(app_id: str, body: WalkBranchesIn, request: Request,
             })
     response.status_code = 202 if dispatched else 200
     return {"app_id": app_id, "plans": len(plans), "dispatched": dispatched}
+
+
+@router.get("/apps/{app_id}/journeys/{journey_id}/pairwise-plan")
+async def pairwise_plan_preview(
+    app_id: str, journey_id: str, user: dict = Depends(require_auth),
+) -> dict:
+    """E2 — preview the pairwise combination plan for a journey (dry-run).
+
+    Returns the pairwise covering array, factor breakdown, pair coverage
+    stats, and which combinations are already walked. No dispatches — use
+    ``walk-pairwise`` to execute."""
+    tenant_id = user["tenant_id"]
+    must_walk = await _scenarios_for_app(tenant_id, app_id)
+    plans = await branch_planner.plan_pairwise_walks(
+        tenant_id=tenant_id, app_id=app_id, journey_id=journey_id,
+        must_walk=must_walk, limit=200)
+    return {
+        "journey_id": journey_id,
+        "plans": len(plans),
+        "configurations": [
+            {"choice_overrides": p["choice_overrides"],
+             "identity_ref": p["identity_ref"],
+             "pairwise": p.get("pairwise", False)}
+            for p in plans
+        ],
+    }
+
+
+@router.post("/apps/{app_id}/journeys/walk-pairwise")
+async def walk_pairwise(
+    app_id: str, body: PairwiseWalkIn, request: Request,
+    response: Response, user: dict = Depends(_MUTATE),
+) -> dict:
+    """E2 — dispatch pairwise combination walks for a journey.
+
+    Same double-gate as ``walk-branches``: env switch + tenant flag.
+    Each combination becomes one crawl with multi-choice overrides."""
+    tenant_id = user["tenant_id"]
+    flags = await branch_planner.autonomy_flags(tenant_id)
+    if not flags["branch_walks"]:
+        raise HTTPException(
+            status_code=409,
+            detail="branch walks are disabled — enable the tenant flag "
+                   "branch_walks_enabled AND the env switch "
+                   "QEC_BRANCH_WALKS_ENABLED (both OFF by default)")
+    must_walk = body.must_walk or await _scenarios_for_app(tenant_id, app_id)
+    plans = await branch_planner.plan_pairwise_walks(
+        tenant_id=tenant_id, app_id=app_id, journey_id=body.journey_id,
+        must_walk=must_walk)
+    from .explorations import _dispatch_explorer
+    dispatched = []
+    for plan in plans:
+        await branch_planner.mark_planned(
+            tenant_id=tenant_id, branch_ids=plan["branch_ids"])
+        try:
+            result = await _dispatch_explorer(
+                tenant_id=tenant_id, app_id=app_id, request=request,
+                response=response, walk_plan=plan)
+            dispatched.append({
+                "journey_id": plan["journey_id"],
+                "choice_overrides": plan["choice_overrides"],
+                "exploration_id": result.get("exploration_id"),
+                "crawl_id": result.get("crawl_id"),
+            })
+        except HTTPException as exc:
+            await branch_planner.reconcile_completion(
+                tenant_id=tenant_id, app_id=app_id, walk_plan=plan,
+                terminal_reason=f"dispatch_failed:{exc.status_code}")
+            dispatched.append({
+                "journey_id": plan["journey_id"],
+                "choice_overrides": plan["choice_overrides"],
+                "error": str(exc.detail)[:300],
+            })
+    response.status_code = 202 if dispatched else 200
+    return {"app_id": app_id, "journey_id": body.journey_id,
+            "plans": len(plans), "dispatched": dispatched}
+
+
+async def _scenarios_for_app(tenant_id: str, app_id: str) -> list[dict[str, str]]:
+    """Read must-walk scenarios from the app's answer_key rules."""
+    try:
+        from ..services.rule_oracle import normalize_scenarios
+        ak = await _app_answer_key_raw(tenant_id, app_id)
+        return normalize_scenarios(ak.get("rules") if ak else [])
+    except Exception:
+        return []
+
+
+async def _app_answer_key_raw(tenant_id: str, app_id: str) -> dict:
+    """The app's raw answer_key (not projected through value_oracle_contract)."""
+    if not app_id:
+        return {}
+    try:
+        async with tenant_scoped_qec_session(tenant_id) as session:
+            row = (await session.execute(
+                select(ClientAppRow).where(
+                    ClientAppRow.app_id == app_id,
+                    ClientAppRow.tenant_id == tenant_id,
+                ))).scalar_one_or_none()
+            return dict(row.answer_key or {}) if row else {}
+    except Exception:
+        return {}

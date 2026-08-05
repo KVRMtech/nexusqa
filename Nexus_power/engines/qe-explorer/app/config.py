@@ -125,6 +125,12 @@ class Settings(BaseSettings):
     #: non-completing terminal), never silently "none".
     advance_oracle_max_calls: int = Field(
         default=200, alias="QEC_ADVANCE_ORACLE_MAX_CALLS")
+    medic_oracle_timeout_s: float = Field(
+        default=10.0, alias="QEC_MEDIC_ORACLE_TIMEOUT_S")
+    medic_oracle_breaker_threshold: int = Field(
+        default=3, alias="QEC_MEDIC_BREAKER_THRESHOLD")
+    medic_oracle_max_calls: int = Field(
+        default=50, alias="QEC_MEDIC_MAX_CALLS")
 
     # ── Security helpers (the HMAC shared secret lives here) ──────────────
 

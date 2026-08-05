@@ -556,6 +556,7 @@ class Crawler:
         choice_overrides: Optional[Mapping[str, str]] = None,
         e2e_wizard_steps: int = _E2E_WIZARD_STEPS,
         e2e_wizard_advances: int = _E2E_WIZARD_ADVANCES,
+        observe_only: bool = False,
     ) -> None:
         self._port = port
         self.crawl_id = crawl_id
@@ -609,6 +610,7 @@ class Crawler:
         # themselves offer (forms rung 0, ``planned`` provenance) — never free
         # text, never a value injection, and no safety gate changes with it.
         self._choice_overrides = dict(choice_overrides or {})
+        self._observe_only = bool(observe_only)
         # Every fillable control the crawl met, filled or not — the residue ask and
         # the learning loop are both keyed on this. Values are NOT in it.
         self._field_ledger: list[dict[str, Any]] = []
@@ -1065,8 +1067,11 @@ class Crawler:
 
         actions: list[emit.ActionRecord] = []
         # Phase A: fill the form (if any), read back committed values.
-        is_form = any((c.get("kind") in _FILLABLE_KINDS) and not _is_password(c)
-                      for c in controls)
+        is_form = (
+            not self._observe_only
+            and any((c.get("kind") in _FILLABLE_KINDS) and not _is_password(c)
+                    for c in controls)
+        )
         snapshot_controls = controls
         fill = None  # hoisted: Phase-B (below) reads fill.flow_candidates
         if is_form:
@@ -2100,7 +2105,7 @@ class Crawler:
         refreshed = build_inventory(reobs.raw_controls, self._refuse_pack, url=reobs.url)
         # The re-fill's ledger is ALSO the entry step's truth: real fill counts
         # and the decision points (forks) this step offered — Journey Graph C0.
-        cur_filled, cur_unfilled = 0, 0
+        cur_filled, cur_unfilled, cur_intent_unmet = 0, 0, 0
         cur_dps: list[dict[str, Any]] = []
         if any((c.get("kind") in _FILLABLE_KINDS) and not _is_password(c) for c in refreshed):
             refill = await fill_form_phase_a(
@@ -2111,6 +2116,7 @@ class Crawler:
                 choice_overrides=self._choice_overrides)
             cur_filled = refill.filled
             cur_unfilled = len(refill.unfilled_fields)
+            cur_intent_unmet = refill.intent_unmet
             cur_dps = _decision_points(refill.field_ledger)
 
         cur_url, cur_title, cur_controls, cur_fp = url, title, controls, fingerprint
@@ -2128,6 +2134,8 @@ class Crawler:
                 "fingerprint": cur_fp, "url": cur_url, "title": cur_title,
                 "fields_filled": cur_filled, "fields_unfilled": cur_unfilled,
             }
+            if cur_intent_unmet:
+                rec["intent_unmet"] = cur_intent_unmet
             if cur_dps:
                 rec["decision_points"] = cur_dps
             rec.update(extra)
@@ -2225,7 +2233,7 @@ class Crawler:
             step_actions: list[emit.ActionRecord] = []
             # The NEW step's own truth — attached to ITS record when it is
             # appended (advance or terminal), never to the step just left.
-            cur_filled, cur_unfilled, cur_dps = 0, 0, []
+            cur_filled, cur_unfilled, cur_intent_unmet, cur_dps = 0, 0, 0, []
             if any((c.get("kind") in _FILLABLE_KINDS) and not _is_password(c) for c in new_controls):
                 filled = await fill_form_phase_a(
                     self._port, new_controls, self._answer_key or AnswerKey(), self._clock,
@@ -2237,6 +2245,7 @@ class Crawler:
                 self._tracker.note_action(len(filled.actions))
                 cur_filled = filled.filled
                 cur_unfilled = len(filled.unfilled_fields)
+                cur_intent_unmet = filled.intent_unmet
                 cur_dps = _decision_points(filled.field_ledger)
                 self._collect_ledger(filled.field_ledger, obs.url or "")
                 if filled.filled:

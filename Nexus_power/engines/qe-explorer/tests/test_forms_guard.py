@@ -301,9 +301,10 @@ def test_errored_toggle_fill_is_honest_residue_not_a_fill():
     class _ErrPort:
         async def set_checked(self, control, checked):
             return RawObservation(url_before="u", url_after="u",
-                                  error_detail="action_error: Timeout 5000ms")
+                                  error_detail="action_error: Timeout 5000ms",
+                                  intent_met=False)
 
-    action = asyncio.run(_fill_one(
+    action, mechanic = asyncio.run(_fill_one(
         _ErrPort(), {"name": "Term Life", "kind": "radio"}, "radio", "100",
         emit.MonotonicClock(), phase="explore", state_id="fp"))
     assert action is None

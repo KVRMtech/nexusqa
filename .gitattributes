@@ -1,9 +1,0 @@
-# Normalize line endings: keep code LF in the repo regardless of OS checkout.
-# Prevents the CRLF churn that working on Windows otherwise introduces.
-* text=auto eol=lf
-
-*.png binary
-*.jpg binary
-*.gif binary
-*.tgz binary
-*.tar.gz binary

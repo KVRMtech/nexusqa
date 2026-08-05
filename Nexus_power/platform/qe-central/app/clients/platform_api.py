@@ -84,6 +84,49 @@ async def complete_llm(
     return LLMResult(ok=False, status_code=response.status_code, detail=detail[:300])
 
 
+async def complete_vision(
+    *, tenant_id: str, prompt: str, screenshot_b64: str, system: str = "",
+    max_tokens: int = 800, temperature: float = 0.1, task: str = "vision_medic",
+) -> LLMResult:
+    """Run ONE multimodal LLM completion (text + image).
+
+    Calls ``POST /api/v1/llm/vision`` on platform-api.  The screenshot is
+    sent as a base64-encoded PNG in the ``image`` field.  Same resilience
+    contract as ``complete_llm``: NEVER raises — ``ok=False`` on any failure.
+    """
+    if not prompt.strip() or not screenshot_b64:
+        return LLMResult(ok=False, detail="empty prompt or screenshot")
+    token = mint_service_jwt(tenant_id)
+    body = {"prompt": prompt, "system": system, "image": screenshot_b64,
+            "max_tokens": max_tokens, "temperature": temperature, "task": task}
+    try:
+        async with httpx.AsyncClient(
+            base_url=settings.platform_api_url, timeout=90.0,
+        ) as client:
+            response = await client.post(
+                "/api/v1/llm/vision", json=body,
+                headers={"Authorization": f"Bearer {token}"},
+            )
+    except Exception as exc:
+        logger.warning("qec.platform_api.vision_transport_error",
+                       extra={"tenant_id": tenant_id, "error": str(exc)[:300]})
+        return LLMResult(ok=False, detail=f"transport error: {exc}"[:300])
+    if response.status_code == 200:
+        try:
+            text = str((response.json() or {}).get("text") or "")
+        except Exception:
+            text = ""
+        return LLMResult(ok=bool(text.strip()), text=text, status_code=200)
+    detail = ""
+    try:
+        detail = str(response.json().get("detail") or "")
+    except Exception:
+        detail = response.text[:300]
+    logger.warning("qec.platform_api.vision_rejected",
+                   extra={"tenant_id": tenant_id, "status_code": response.status_code, "detail": detail[:300]})
+    return LLMResult(ok=False, status_code=response.status_code, detail=detail[:300])
+
+
 def _auth_import_path(artifact_id: str) -> str:
     return f"/api/v1/test-factory/{artifact_id}/playwright/auth/import"
 

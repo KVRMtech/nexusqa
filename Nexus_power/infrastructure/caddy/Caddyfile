@@ -23,6 +23,9 @@
 vkpowerlife.136-85-106-73.sslip.io {
     reverse_proxy localhost:8098
 }
+summitlife-admin.136-85-106-73.sslip.io {
+    reverse_proxy localhost:3002
+}
 
 https://136.85.106.73 {
     tls {

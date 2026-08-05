@@ -53,6 +53,24 @@ class JourneyRow(QecBase):
     deepest_steps: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     last_proven_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True)
+    #: O0 baseline lifecycle: captured → approved → validated → drifted.
+    #: Everything without an approved baseline wears "captured" openly.
+    baseline_status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="captured")
+    baseline_traversal_id: Mapped[str] = mapped_column(
+        String(64), nullable=False, default="")
+    baseline_outcome_hash: Mapped[str] = mapped_column(
+        String(64), nullable=False, default="")
+    baseline_snapshot: Mapped[dict | None] = mapped_column(
+        JSONB, nullable=True)
+    baseline_approved_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True)
+    baseline_approved_by: Mapped[str] = mapped_column(
+        String(200), nullable=False, default="")
+    drift_traversal_id: Mapped[str] = mapped_column(
+        String(64), nullable=False, default="")
+    drift_detected_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=_utc_now)
     updated_at: Mapped[datetime] = mapped_column(
@@ -81,6 +99,15 @@ class JourneyNodeRow(QecBase):
     is_boundary: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     #: Outcome values (currency/decision/percent) were displayed here.
     has_outcome: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    #: E3 catalog — the full control inventory observed at this node.  Each
+    #: entry: {name, type, signature, options, required, depends_on,
+    #: semantic_type}.  Merged across visits; provenance is query-time.
+    controls_inventory: Mapped[list | None] = mapped_column(
+        JSONB, nullable=True)
+    #: E3 catalog — outcome display locations observed at this node.  Each
+    #: entry: {label, selector, value_type}.
+    displayed_outcomes: Mapped[list | None] = mapped_column(
+        JSONB, nullable=True)
     #: Not observed by the app's latest fold — kept (history), marked, and
     #: excluded from active planning. Never deleted.
     stale: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)

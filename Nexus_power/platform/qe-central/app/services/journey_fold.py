@@ -37,6 +37,12 @@ from ..db.journey_models import (
     JourneyTraversalRow,
 )
 from .advance_memory import normalize_label
+from .catalog import (
+    build_ledger_by_url, build_states_index,
+    extract_controls, extract_outcomes,
+    merge_controls, merge_outcomes,
+)
+from .journey_baseline import BASELINE_CAPTURED, detect_drift
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +51,9 @@ BRANCH_WALKED = "walked"
 BRANCH_DISCOVERED = "discovered"
 BRANCH_PLANNED = "planned"
 BRANCH_BLOCKED = "blocked"
+#: E1: the branch exceeds the per-journey explosion cap. Honest, with a count
+#: of what was deferred.  Never silently truncated.
+BRANCH_DEFERRED = "deferred"
 
 #: Terminals that mean the traversal covered its journey — mirrored from the
 #: explorer's ``flow_ledger.COMPLETING_TERMINALS`` (services share no library;
@@ -92,11 +101,15 @@ async def fold_crawl(
     """
     flows = flows_of(coverage)
     report = {"flows": len(flows), "journeys": 0, "nodes": 0, "edges": 0,
-              "traversals": 0, "branches": 0}
+              "traversals": 0, "branches": 0, "drift_checks": 0}
     if not flows:
         return report
     pre_hardening = is_pre_hardening(coverage)
     now = utc_now()
+    drift_candidates: list[tuple[str, str, list]] = []
+
+    states_index = build_states_index(coverage)
+    ledger_by_url = build_ledger_by_url(coverage)
 
     async with tenant_scoped_qec_session(tenant_id) as session:
         for flow in flows:
@@ -167,6 +180,12 @@ async def fold_crawl(
                     pre_hardening=pre_hardening,
                 ))
                 report["traversals"] += 1
+                if completed and flow.get("outcome_values"):
+                    drift_candidates.append((
+                        journey.journey_id, traversal_id,
+                        [v for v in (flow.get("outcome_values") or [])
+                         if isinstance(v, Mapping)][:12],
+                    ))
 
             # ── Nodes + edges + branches ──────────────────────────────────
             for i, step in enumerate(steps):
@@ -198,6 +217,17 @@ async def fold_crawl(
                     node.has_outcome = True
                 node.stale = False
                 node.last_seen_at = now
+
+                page_state = states_index.get(fp)
+                if page_state:
+                    new_controls = extract_controls(page_state, ledger_by_url)
+                    if new_controls:
+                        node.controls_inventory = merge_controls(
+                            node.controls_inventory, new_controls)
+                    new_outcomes = extract_outcomes(page_state)
+                    if new_outcomes:
+                        node.displayed_outcomes = merge_outcomes(
+                            node.displayed_outcomes, new_outcomes)
 
                 # Edge OUT of this step (the advance that left it).
                 adv = step.get("advance")
@@ -270,10 +300,23 @@ async def fold_crawl(
                             branch.blocked_reason = ""
                             branch.last_status_at = now
 
+    for j_id, t_id, o_vals in drift_candidates:
+        try:
+            result = await detect_drift(
+                tenant_id=tenant_id, app_id=app_id, journey_id=j_id,
+                new_traversal_id=t_id, new_outcome_values=o_vals)
+            if result.get("action") in ("validated", "drifted"):
+                report["drift_checks"] += 1
+        except Exception as exc:
+            logger.warning(
+                "qec.journey_fold.drift_check_failed journey=%s err=%s",
+                j_id, str(exc)[:200])
+
     logger.warning(
         "qec.journey_fold.folded tenant=%s app=%s exploration=%s "
-        "flows=%d journeys=%d nodes=%d edges=%d traversals=%d branches=%d",
+        "flows=%d journeys=%d nodes=%d edges=%d traversals=%d branches=%d "
+        "drift_checks=%d",
         tenant_id, app_id, exploration_id, report["flows"], report["journeys"],
         report["nodes"], report["edges"], report["traversals"],
-        report["branches"])
+        report["branches"], report["drift_checks"])
     return report

@@ -24,14 +24,22 @@ import pytest
 from app.db import utc_now
 from app.security import prod_guard
 from app.security.prod_guard import (
+    CRAWLABLE_ENV_KINDS,
+    ENV_KIND_PROD,
+    ENV_KIND_PRODUCTION_TEST,
+    NON_PROD_ENV_KINDS,
+    OBSERVE_ENV_KINDS,
     ONBOARDING_ATTESTED,
     ONBOARDING_DRAFT,
     ONBOARDING_LIVE,
+    POSTURE_FULL,
+    POSTURE_OBSERVE,
     OnboardingRefused,
     assert_crawlable,
     attestation_present,
     onboarding_ready,
     onboarding_status,
+    posture_for_env_kind,
 )
 
 
@@ -177,15 +185,16 @@ def test_expired_attestation_refused():
         assert_crawlable(app, phase=prod_guard.PHASE_EXPLORE, env="production")
 
 
-def test_prod_env_kind_is_never_a_valid_crawl_target():
-    # A 'prod' attestation is attested + unexpired but is NOT a non-prod kind.
+def test_prod_env_kind_is_crawlable_in_observe_only_mode():
+    # Postures: a 'prod' attestation is now CRAWLABLE (observe-only) — the crawl
+    # captures pages/fields/locators/navigation but never fills, never submits.
     att = _attestation("prod")
     att["rules_of_engagement"] = _signed_roe()
     att["preflight"] = {"passed": True}
     app = _app(env_attestation=att)
-    assert attestation_present(app, phase=prod_guard.PHASE_EXPLORE) is False
-    with pytest.raises(OnboardingRefused):
-        assert_crawlable(app, phase=prod_guard.PHASE_EXPLORE, env="production")
+    assert onboarding_status(app) == ONBOARDING_LIVE
+    assert attestation_present(app, phase=prod_guard.PHASE_EXPLORE) is True
+    assert assert_crawlable(app, phase=prod_guard.PHASE_EXPLORE, env="production") is None
 
 
 def test_staging_is_a_valid_nonprod_explore_target():
@@ -367,7 +376,89 @@ def test_prod_override_wins_over_verbs_and_overlay():
 def test_prod_override_fail_closed_on_mislabeled_or_blank_env_kind():
     # 'production' (not the literal 'prod'), a blank kind, and unknown labels ALL
     # force allow_submit off — a mislabeled/unattested prod env can never stay mutable.
-    for kind in ["production", "PRD", "", "prod-us", "unknown", "PROD"]:
+    # Note: "PROD" uppercased IS the literal 'prod' (case-insensitive), so it routes
+    # through the OBSERVE path (allow_submit=False + observe_only=True).
+    for kind in ["production", "PRD", "", "prod-us", "unknown"]:
         eff = resolve_effective_fences(
             {"allow_submit": True}, {"allow_submit": True}, env_kind=kind)
         assert eff["allow_submit"] is False, f"env_kind={kind!r} should fail closed"
+        assert "observe_only" not in eff or eff["observe_only"] is not True, \
+            f"env_kind={kind!r} should NOT get observe_only (not a recognized prod kind)"
+
+
+# ── Postures (environment postures — production trust) ────────────────────
+
+def test_posture_for_env_kind_observe_for_prod():
+    assert posture_for_env_kind("prod") == POSTURE_OBSERVE
+    assert posture_for_env_kind("PROD") == POSTURE_OBSERVE
+    assert posture_for_env_kind("  Prod  ") == POSTURE_OBSERVE
+
+
+def test_posture_for_env_kind_full_for_nonprod():
+    for kind in ("disposable", "staging", "uat", "production_test"):
+        assert posture_for_env_kind(kind) == POSTURE_FULL, f"{kind} should be full"
+
+
+def test_posture_for_env_kind_full_for_unknown():
+    for kind in ("", "production", "PRD", "unknown", None):
+        assert posture_for_env_kind(kind) == POSTURE_FULL, f"{kind!r} should default to full"
+
+
+def test_crawlable_env_kinds_is_nonprod_union_observe():
+    assert CRAWLABLE_ENV_KINDS == NON_PROD_ENV_KINDS | OBSERVE_ENV_KINDS
+    assert ENV_KIND_PROD in CRAWLABLE_ENV_KINDS
+    assert ENV_KIND_PROD not in NON_PROD_ENV_KINDS
+    assert ENV_KIND_PROD in OBSERVE_ENV_KINDS
+
+
+def test_production_test_is_nonprod_full_posture():
+    assert ENV_KIND_PRODUCTION_TEST in NON_PROD_ENV_KINDS
+    assert ENV_KIND_PRODUCTION_TEST not in OBSERVE_ENV_KINDS
+    assert posture_for_env_kind(ENV_KIND_PRODUCTION_TEST) == POSTURE_FULL
+
+
+def test_prod_attestation_reaches_live_status():
+    att = _attestation("prod")
+    att["rules_of_engagement"] = _signed_roe()
+    att["preflight"] = {"passed": True}
+    app = _app(env_attestation=att)
+    assert onboarding_status(app) == ONBOARDING_LIVE
+    ok, reasons = onboarding_ready(app)
+    assert ok is True and reasons == []
+
+
+def test_prod_attestation_still_refuses_submit():
+    att = _attestation("prod")
+    att["rules_of_engagement"] = _signed_roe()
+    att["preflight"] = {"passed": True}
+    app = _app(env_attestation=att, fences={"allow_submit": True,
+                                            "submit_approvals": ["flow-a"]})
+    assert attestation_present(app, phase=prod_guard.PHASE_SUBMIT) is False
+    with pytest.raises(OnboardingRefused) as exc:
+        assert_crawlable(app, phase=prod_guard.PHASE_SUBMIT, env="production")
+    assert exc.value.status_code == 422
+
+
+def test_resolve_fences_prod_forces_observe_only():
+    eff = resolve_effective_fences(
+        {"allow_submit": True, "max_rps": 2.0},
+        {"allow_submit": True},
+        env_kind="prod",
+    )
+    assert eff["allow_submit"] is False
+    assert eff["observe_only"] is True
+    assert eff["max_rps"] == 2.0
+
+
+def test_resolve_fences_prod_case_insensitive():
+    for kind in ("prod", "PROD", "  Prod  "):
+        eff = resolve_effective_fences({}, {}, env_kind=kind)
+        assert eff["observe_only"] is True, f"{kind!r} should force observe_only"
+        assert eff["allow_submit"] is False, f"{kind!r} should force allow_submit off"
+
+
+def test_resolve_fences_nonprod_does_not_set_observe_only():
+    for kind in ("disposable", "staging", "uat", "production_test"):
+        eff = resolve_effective_fences({"allow_submit": True}, {}, env_kind=kind)
+        assert eff.get("observe_only") is not True, f"{kind} should not be observe-only"
+        assert eff["allow_submit"] is True, f"{kind} should allow submit"

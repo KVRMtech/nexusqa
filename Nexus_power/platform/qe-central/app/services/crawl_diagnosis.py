@@ -41,11 +41,30 @@ CODE_UNCLASSIFIED = "UNCLASSIFIED"
 #: remedy is a re-crawl once the service is healthy.
 CODE_ADVANCE_ORACLE_UNAVAILABLE = "ADVANCE_ORACLE_UNAVAILABLE"
 
+# ── R2 named-stop codes (derived from R0/R1 evidence) ───────────────────────
+#: Controls whose intent was never met after the full R1 interaction ladder —
+#: the crawl tried every available mechanic and the control still refused to
+#: commit the intended value.  Names the blocked controls so the operator
+#: knows WHAT to investigate, not just that something failed.
+CODE_INTERACTION_BLOCKED = "INTERACTION_BLOCKED"
+#: Journeys that could not advance past a step where required fields went
+#: unanswered — the form's own validation prevented the Continue/Next from
+#: working.  Distinct from SEEDS_NEEDED (which is about the RESIDUE ask):
+#: this names the journeys the validation blocked.
+CODE_WALK_BLOCKED_VALIDATION = "WALK_BLOCKED_VALIDATION"
+#: Enumerable decision points (radio groups, selects) were discovered but
+#: had no available value — the business-path forks behind each option were
+#: never explored.  More specific than SEEDS_NEEDED: it names the forks and
+#: their options, not just the field names.
+CODE_DECISION_UNRESOLVED = "DECISION_UNRESOLVED"
+
 #: Terminal codes that mean "the client should look" (a problem or an action).
 TERMINAL_ATTENTION_CODES = frozenset({
     CODE_SEEDS_NEEDED, CODE_NO_CASES, CODE_EMPTY_SUBSTRATE, CODE_LOGIN_FAILED,
     CODE_STALLED, CODE_REFUSED, CODE_FAILED, CODE_UNCLASSIFIED,
     CODE_ADVANCE_ORACLE_UNAVAILABLE,
+    CODE_INTERACTION_BLOCKED, CODE_WALK_BLOCKED_VALIDATION,
+    CODE_DECISION_UNRESOLVED,
 })
 
 # Severity the UI can style: ok (green), info (in-progress), action (a human must
@@ -219,6 +238,64 @@ def diagnose(*, status: str | None, error: str | None = "", stats: Any = None) -
                 "journeys will be walked to their real end.",
                 evidence={"oracle_unavailable_journeys": oracle_unavail_n,
                           "visits": visits, "generated": generated_n})
+        # ── R2 named stops — derived from R0/R1 evidence, non-productive only ──
+        # These fire BEFORE COMPLETED_OK so a crawl blocked by interaction or
+        # validation tells the operator WHY it produced nothing, not just that it
+        # produced nothing.  A productive crawl (generated > 0) is always OK —
+        # blocked controls deeper in the funnel are noted in evidence, not an alarm.
+        intent_unmet_n = _int(flow_summary.get("intent_unmet"), 0)
+        if intent_unmet_n > 0 and generated_n <= 0:
+            fl_raw = (cov.get("field_ledger")
+                      if isinstance(cov.get("field_ledger"), list) else [])
+            blocked = [str(e.get("name") or "")[:120] for e in fl_raw
+                       if isinstance(e, Mapping)
+                       and str(e.get("provenance") or "") == "intent_unmet"]
+            blocked_names = ", ".join(blocked[:8]) or "unnamed controls"
+            return _build(
+                CODE_INTERACTION_BLOCKED, SEV_ACTION,
+                "Controls could not be operated",
+                f"{intent_unmet_n} control"
+                f"{'s' if intent_unmet_n != 1 else ''} "
+                f"did not accept "
+                f"{'their' if intent_unmet_n != 1 else 'its'} "
+                f"intended value despite trying all available mechanics: "
+                f"{blocked_names}.",
+                "These controls may use custom widgets the crawler's "
+                "interaction ladder does not yet handle. Check the control "
+                "types and provide guidance if needed, then re-crawl.",
+                evidence={"intent_unmet": intent_unmet_n,
+                          "blocked_controls": blocked[:8],
+                          "visits": visits, "generated": generated_n})
+
+        flows_raw = (cov.get("flows")
+                     if isinstance(cov.get("flows"), list) else [])
+        validation_blocked = [
+            f for f in flows_raw
+            if isinstance(f, Mapping) and not f.get("completed")
+            and _int(f.get("fields_unanswered"), 0) > 0
+        ]
+        if validation_blocked and generated_n <= 0:
+            n_blocked = len(validation_blocked)
+            total_unanswered = sum(
+                _int(f.get("fields_unanswered"), 0)
+                for f in validation_blocked)
+            return _build(
+                CODE_WALK_BLOCKED_VALIDATION, SEV_ACTION,
+                "Journeys blocked by form validation",
+                f"{n_blocked} journey"
+                f"{'s' if n_blocked != 1 else ''} "
+                f"could not advance past a step where "
+                f"{total_unanswered} required field"
+                f"{'s' if total_unanswered != 1 else ''} "
+                f"went unanswered — the form's validation prevented progress.",
+                "Provide values for the fields the crawl could not fill "
+                "(listed in the seed residue), then re-crawl to walk the "
+                "full funnels.",
+                fields=seed_fields,
+                evidence={"validation_blocked_flows": n_blocked,
+                          "total_unanswered": total_unanswered,
+                          "visits": visits, "generated": generated_n})
+
         if generated_n > 0:
             # A productive crawl reads as OK; any remaining seed fields are surfaced
             # only as an optional "go deeper" hint, never as an alarm.
@@ -229,6 +306,37 @@ def diagnose(*, status: str | None, error: str | None = "", stats: Any = None) -
                            if seed_fields else ""),
                           fields=seed_fields,
                           evidence={"visits": visits, "generated": generated_n})
+
+        # R2: DECISION_UNRESOLVED — enumerable decision forks that had no
+        # available value.  More specific than SEEDS_NEEDED because it names the
+        # business-path options the crawl could not explore.
+        fl_raw = (cov.get("field_ledger")
+                  if isinstance(cov.get("field_ledger"), list) else [])
+        unresolved = [
+            e for e in fl_raw
+            if isinstance(e, Mapping)
+            and str(e.get("provenance") or "") == "needs_input"
+            and isinstance(e.get("options"), list) and len(e.get("options", []))
+        ]
+        if unresolved:
+            dp_names = [str(e.get("name") or "")[:120] for e in unresolved[:8]]
+            dp_display = ", ".join(dp_names) or "unnamed decision points"
+            n_dp = len(unresolved)
+            return _build(
+                CODE_DECISION_UNRESOLVED, SEV_ACTION,
+                "Decision points need answers",
+                f"{n_dp} decision point"
+                f"{'s' if n_dp != 1 else ''} "
+                f"{'were' if n_dp != 1 else 'was'} discovered but "
+                f"no value was available: {dp_display}. "
+                f"The business paths behind each option were not explored.",
+                f"Provide values for: {dp_display}. Then re-crawl — each "
+                f"option opens a different business path the crawler will walk.",
+                fields=[str(e.get("name") or "") for e in unresolved[:12]],
+                evidence={"unresolved_decisions": n_dp,
+                          "decision_names": dp_names,
+                          "visits": visits, "generated": generated_n})
+
         if seed_fields:
             names = ", ".join(seed_fields[:12])
             return _build(CODE_SEEDS_NEEDED, SEV_ACTION, "A few values needed",

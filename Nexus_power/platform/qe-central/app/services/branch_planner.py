@@ -1,11 +1,13 @@
 """Branch planner — turns the graph's unwalked branches into walk plans.
 
-A plan is the executable answer to "walk the path behind the option nobody
-chose": for ONE journey, force at most ONE not-yet-walked option per decision
-control along the journey's proven path, as a coherent constrained identity.
-Conflicting options on the same control NEVER combine into one plan (one walk
-takes one path); options on different controls of the same path DO combine
-(each forces independently).
+E1: a plan forces exactly ONE not-yet-walked option and leaves everything
+else at its default — single-variable enumeration.  Every discovered option
+becomes its own plan; the autowalk loop drives until the branch ledger has
+no ``discovered`` option left (all are walked, blocked, or deferred).
+
+Explosion control: when a journey's discovered backlog exceeds the
+``journey_path_enum_cap``, excess branches are ``deferred`` with an honest
+count — never silently truncated, never claimed as "all combinations".
 
 Priorities: journeys whose paths display outcomes first (a different premium
 IS a different business path — the highest-value proof), then the largest
@@ -15,7 +17,7 @@ Status law: ``discovered → planned`` at dispatch; the completion fold
 upgrades ``planned → walked`` when the option was genuinely taken; the
 reconciler here marks what a planned walk did NOT reach as ``blocked`` with
 its attributed reason — surfaced, never silently retried. ``walked`` never
-downgrades.
+downgrades.  ``deferred`` is honest: "option exists, exceeds cap."
 
 This module is PURE PLANNING + STATUS: it never dispatches. Dispatch
 orchestration (flags, caps, the actual crawl) lives at the router layer.
@@ -39,6 +41,7 @@ from ..db.journey_models import (
 )
 from .journey_fold import (
     BRANCH_BLOCKED,
+    BRANCH_DEFERRED,
     BRANCH_DISCOVERED,
     BRANCH_PLANNED,
     BRANCH_WALKED,
@@ -85,11 +88,17 @@ async def plan_walks(
 ) -> list[dict[str, Any]]:
     """Walk plans for this app's ``discovered`` branch backlog.
 
-    One plan per journey per call (a walk takes one path): for each decision
-    node on the journey's most recent proven path, at most one not-yet-walked
-    option per control. Returns ``[{journey_id, business_name, branch_ids,
-    choice_overrides, identity_ref}]``, highest-value first."""
+    E1: one plan per discovered option — single-variable enumeration.  Each
+    plan forces exactly one option; everything else takes its default.  Plans
+    are capped per-cycle by ``branch_walks_per_cycle``; excess discovered
+    branches beyond ``journey_path_enum_cap`` per journey are deferred with
+    an honest count.
+
+    Returns ``[{journey_id, business_name, branch_ids, choice_overrides,
+    identity_ref}]``, highest-value journeys first, then ordered by step
+    proximity to the entry."""
     cap = limit or settings.branch_walks_per_cycle
+    enum_cap = settings.journey_path_enum_cap
     plans: list[dict[str, Any]] = []
     async with tenant_scoped_qec_session(tenant_id) as session:
         journey_q = select(JourneyRow).where(
@@ -109,7 +118,7 @@ async def plan_walks(
                 ).order_by(JourneyTraversalRow.created_at.desc())
                 .limit(1))).scalar_one_or_none()
             if traversal is None:
-                continue  # nothing proven to re-walk from — a crawl comes first
+                continue
             path_fps = [str(fp) for fp in (traversal.path_fps or [])]
             if not path_fps:
                 continue
@@ -133,7 +142,9 @@ async def plan_walks(
                            path_fps))
 
         scored.sort(key=lambda t: (-t[0], -t[1]))
-        for _, _, journey, path_fps in scored[:cap]:
+        for _, _, journey, path_fps in scored:
+            if len(plans) >= cap:
+                break
             discovered = (await session.execute(
                 select(JourneyBranchRow).where(
                     JourneyBranchRow.tenant_id == tenant_id,
@@ -141,28 +152,158 @@ async def plan_walks(
                     JourneyBranchRow.node_fp.in_(path_fps),
                     JourneyBranchRow.status == BRANCH_DISCOVERED,
                 ))).scalars().all()
-            # Decision nodes closest to the entry first; ONE option per
-            # control per plan (conflicting options never combine).
             order = {fp: i for i, fp in enumerate(path_fps)}
             discovered.sort(key=lambda b: (order.get(b.node_fp, 1 << 30),
                                            b.control_signature,
                                            b.option_label_norm))
-            overrides: dict[str, str] = {}
-            branch_ids: list[str] = []
+            # E1 explosion control: defer excess beyond the cap with an
+            # honest count — never silently truncated.
+            if len(discovered) > enum_cap:
+                to_defer = discovered[enum_cap:]
+                discovered = discovered[:enum_cap]
+                for b in to_defer:
+                    if b.status == BRANCH_DISCOVERED:
+                        b.status = BRANCH_DEFERRED
+                        b.blocked_reason = (
+                            f"deferred: {len(to_defer)} options exceed the "
+                            f"per-journey enumeration cap ({enum_cap})")[:400]
+                        b.last_status_at = utc_now()
+                logger.warning(
+                    "qec.branch_planner.deferred tenant=%s journey=%s "
+                    "deferred=%d cap=%d",
+                    tenant_id, journey.journey_id, len(to_defer), enum_cap)
+
             for b in discovered:
-                if b.control_signature in overrides:
-                    continue
-                overrides[b.control_signature] = b.option_label_norm
-                branch_ids.append(b.branch_id)
-            if not overrides:
+                if len(plans) >= cap:
+                    break
+                overrides = {b.control_signature: b.option_label_norm}
+                plans.append({
+                    "journey_id": journey.journey_id,
+                    "business_name": journey.business_name,
+                    "branch_ids": [b.branch_id],
+                    "choice_overrides": overrides,
+                    "identity_ref": _identity_ref(overrides),
+                })
+    return plans
+
+
+async def plan_pairwise_walks(
+    *, tenant_id: str, app_id: str, journey_id: str,
+    must_walk: list[dict[str, str]] | None = None,
+    limit: int = 0,
+) -> list[dict[str, Any]]:
+    """E2 — pairwise combination plans for a journey's decision controls.
+
+    Groups the journey's branches by ``(control_signature)`` into factors,
+    each branch option is a level.  Generates a pairwise covering array
+    (minimum configurations covering every option-pair across any two
+    controls), seeds with must-walk client scenarios, and filters out
+    combinations already walked.
+
+    Returns plans with multi-choice ``choice_overrides`` — each plan
+    forces one specific option per decision control in the combination.
+    """
+    from .pairwise import Factor, factors_from_branches, generate_pairwise
+
+    cap = limit or settings.pairwise_walks_per_cycle
+    plans: list[dict[str, Any]] = []
+    async with tenant_scoped_qec_session(tenant_id) as session:
+        journey = (await session.execute(
+            select(JourneyRow).where(
+                JourneyRow.tenant_id == tenant_id,
+                JourneyRow.app_id == app_id,
+                JourneyRow.journey_id == journey_id,
+            ))).scalar_one_or_none()
+        if journey is None:
+            return []
+
+        traversal = (await session.execute(
+            select(JourneyTraversalRow).where(
+                JourneyTraversalRow.tenant_id == tenant_id,
+                JourneyTraversalRow.app_id == app_id,
+                JourneyTraversalRow.journey_id == journey_id,
+                JourneyTraversalRow.completed.is_(True),
+            ).order_by(JourneyTraversalRow.created_at.desc())
+            .limit(1))).scalar_one_or_none()
+        if traversal is None:
+            return []
+
+        path_fps = [str(fp) for fp in (traversal.path_fps or [])]
+        if not path_fps:
+            return []
+
+        all_branches = (await session.execute(
+            select(JourneyBranchRow).where(
+                JourneyBranchRow.tenant_id == tenant_id,
+                JourneyBranchRow.app_id == app_id,
+                JourneyBranchRow.node_fp.in_(path_fps),
+                JourneyBranchRow.status.in_([
+                    BRANCH_WALKED, BRANCH_DISCOVERED,
+                    BRANCH_PLANNED, BRANCH_BLOCKED,
+                ]),
+            ))).scalars().all()
+        if not all_branches:
+            return []
+
+        branch_dicts = [
+            {"control_signature": b.control_signature,
+             "option_label_norm": b.option_label_norm,
+             "status": b.status,
+             "branch_id": b.branch_id}
+            for b in all_branches
+        ]
+        factors = factors_from_branches(branch_dicts)
+        if len(factors) < 2:
+            return []
+
+        walked_combos: set[str] = set()
+        walked_traversals = (await session.execute(
+            select(JourneyTraversalRow).where(
+                JourneyTraversalRow.tenant_id == tenant_id,
+                JourneyTraversalRow.app_id == app_id,
+                JourneyTraversalRow.journey_id == journey_id,
+                JourneyTraversalRow.completed.is_(True),
+            ))).scalars().all()
+        for t in walked_traversals:
+            ref = t.identity_ref or ""
+            if ref:
+                walked_combos.add(ref)
+
+        result = generate_pairwise(
+            factors, must_walk=must_walk, max_configs=cap * 3)
+
+        branch_lookup: dict[tuple[str, str], str] = {}
+        for b in all_branches:
+            branch_lookup[(b.control_signature, b.option_label_norm)] = b.branch_id
+
+        for config in result.configurations:
+            if len(plans) >= cap:
+                break
+            overrides = dict(config)
+            ref = _identity_ref(overrides)
+            if ref in walked_combos:
                 continue
+            branch_ids = [
+                branch_lookup[(sig, opt)]
+                for sig, opt in overrides.items()
+                if (sig, opt) in branch_lookup
+            ]
             plans.append({
-                "journey_id": journey.journey_id,
+                "journey_id": journey_id,
                 "business_name": journey.business_name,
                 "branch_ids": branch_ids,
                 "choice_overrides": overrides,
-                "identity_ref": _identity_ref(overrides),
+                "identity_ref": ref,
+                "pairwise": True,
             })
+            walked_combos.add(ref)
+
+    logger.warning(
+        "qec.branch_planner.pairwise tenant=%s app=%s journey=%s "
+        "factors=%d total_pairs=%d covered=%d plans=%d must_walk=%d",
+        tenant_id, app_id, journey_id, len(factors),
+        result.total_pairs, result.covered_pairs,
+        len(plans), result.must_walk_count)
     return plans
 
 

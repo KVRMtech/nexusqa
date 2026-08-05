@@ -148,6 +148,8 @@ class FormFillResult:
     #: Fillable fields left EMPTY (no seed AND no safe default) — the exact set the
     #: coverage report names as "add seed for these to unlock more flows".
     unfilled_fields: list[str] = field(default_factory=list)
+    #: R0 intent contracts — fills whose intent verification returned False.
+    intent_unmet: int = 0
     #: PER-FIELD LEDGER — one entry for every fillable control the crawl met, filled
     #: or not: {name, signature, semantic_type, basis, provenance, filled, sensitive}.
     #: Never a value. This is what makes the residue ask specific ("give me these
@@ -364,6 +366,7 @@ PROV_PROVIDED = "provided"        # the client's answer key — explicit, highes
 PROV_RECALLED = "recalled"        # remembered from a previous crawl of THIS client
 PROV_SYNTHESIZED = "synthesized"  # generated from the crawl's fictional identity
 PROV_NEEDS_INPUT = "needs_input"  # nothing honest could be produced — ask the client
+PROV_INTENT_UNMET = "intent_unmet"  # R0: fill attempted but intent verification failed
 PROV_PLANNED = "planned"          # a branch-walk plan forced this CHOICE (Journey
                                   # Graph C4) — evidence says exactly why the walk
                                   # took the path it took
@@ -528,15 +531,16 @@ async def fill_form_phase_a(
             result.field_ledger.append(entry)
             continue
 
-        action = await _fill_one(port, control, kind, value, clock, phase=phase,
-                                 state_id=state_id)
+        action, mechanic = await _fill_one(port, control, kind, value, clock,
+                                             phase=phase, state_id=state_id)
         if action is None:
-            # The fill did not commit. Recording it as filled would be a claim the
-            # evidence does not support, so it becomes residue like any other.
-            entry.update(filled=False, provenance=PROV_NEEDS_INPUT)
+            entry.update(filled=False, provenance=PROV_INTENT_UNMET)
             result.unfilled_fields.append(name)
+            result.intent_unmet += 1
             result.field_ledger.append(entry)
             continue
+        if mechanic:
+            entry["mechanic"] = mechanic
         # Decision point DECIDED: record WHICH option this committed fill took
         # (the branch walked; every other recorded option is a branch that was
         # not). Binary states normalize to their two enumerated labels.
@@ -555,8 +559,8 @@ async def fill_form_phase_a(
             result.inferred += 1
             result.inferred_fields.append(name)
 
-    logger.info("qec.forms.phase_a filled=%d inferred=%d flow_candidates=%d dangerous=%d unfilled=%d",
-                result.filled, result.inferred, len(result.flow_candidates),
+    logger.info("qec.forms.phase_a filled=%d inferred=%d intent_unmet=%d flow_candidates=%d dangerous=%d unfilled=%d",
+                result.filled, result.inferred, result.intent_unmet, len(result.flow_candidates),
                 sum(1 for f in result.flow_candidates if f.danger), len(result.unfilled_fields))
     return result
 
@@ -625,52 +629,54 @@ async def _fill_one(
     *,
     phase: str,
     state_id: str,
-) -> Optional[emit.ActionRecord]:
-    """Perform ONE fill, read the committed value back, build the action record."""
+) -> tuple[Optional[emit.ActionRecord], str]:
+    """Perform ONE fill, read the committed value back, build the action record.
+
+    Returns ``(action, mechanic_used)`` — the second element is the R1 ladder
+    rung variant that R0-verified (e.g. ``click_element``), or ``""`` when the
+    native mechanic succeeded or no ladder was involved.
+    """
     control = dict(control)
     if kind in _TOGGLE_KINDS:
         observation = await port.set_checked(control, _wants_checked(kind, value))
-        # An action that ERRORED did not select anything. Recording it as a
-        # fill claims a choice the page never registered — and that lie
-        # cascades: the walk believes the form is answered, looks for a
-        # Continue the app has not enabled, finds none, and wanders off
-        # (observed live: three product cards all errored, yet the step
-        # reported "3 fields filled"). Honest residue instead.
-        if observation.error_detail:
-            return None
+        if observation.intent_met is False:
+            return None, ""
         recorded = observation.committed_value
         return emit.build_action_record(
             control, verb="click", value=recorded, observation=observation,
             phase=phase, state_id=state_id, timestamp_ms=clock.now_ms(),
-        )
+        ), observation.mechanic_used
     if kind == "select":
         observation = await port.select_option(control, value)
+        if observation.intent_met is False:
+            return None, ""
         recorded = observation.committed_value if observation.committed_value is not None else value
         return emit.build_action_record(
             control, verb="select", value=recorded, observation=observation,
             phase=phase, state_id=state_id, timestamp_ms=clock.now_ms(),
-        )
+        ), observation.mechanic_used
     if kind in ("slider", "color"):
-        # A NATIVE input[type=range|color] is Playwright-fillable with the
-        # synthesized value; a CUSTOM (non-input) slider is NOT — return None so
-        # it is recorded UNHANDLED in the coverage ledger, never a fake fill.
         if _norm(control.get("tag")) != "input":
-            return None
+            return None, ""
         observation = await port.fill(control, value)
+        if observation.intent_met is False:
+            return None, ""
         recorded = observation.committed_value if observation.committed_value is not None else value
-        if recorded is None:  # the fill did not commit — honest UNHANDLED, no dishonest action
-            return None
+        if recorded is None:
+            return None, ""
         return emit.build_action_record(
             control, verb="type", value=recorded, observation=observation,
             phase=phase, state_id=state_id, timestamp_ms=clock.now_ms(),
-        )
+        ), observation.mechanic_used
     # text / date
     observation = await port.fill(control, value)
+    if observation.intent_met is False:
+        return None, ""
     recorded = observation.committed_value if observation.committed_value is not None else value
     return emit.build_action_record(
         control, verb="type", value=recorded, observation=observation,
         phase=phase, state_id=state_id, timestamp_ms=clock.now_ms(),
-    )
+    ), observation.mechanic_used
 
 
 # ─── Phase B — the guarded submit entry point (Phase-5 scope) ────────────────

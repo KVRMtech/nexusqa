@@ -110,6 +110,18 @@ class RawObservation:
     #: signal that distinguishes a same-page ``confirmation`` from a bare
     #: ``dom_changed`` — :func:`classify_submit_after` never invents one.
     confirmation_detail: str = ""
+    #: R0 intent contract — what the action was trying to achieve (fill value,
+    #: select label, "true"/"false" for checked state).
+    intended_value: str = ""
+    #: R0 intent contract — True if the intended effect was verified, False if
+    #: definitively unmet (errored, empty read-back on non-empty intended,
+    #: checked state mismatch), None if unverifiable (no read-back, reformatted
+    #: value, hover with no visible effect).
+    intent_met: bool | None = None
+    #: R1 interaction ladder — which mechanic rung verified intent (e.g.
+    #: ``native_set_checked``, ``click_element``, ``focus_space``).  Empty when
+    #: no ladder was used or the native attempt succeeded on first try.
+    mechanic_used: str = ""
 
 
 @dataclass(frozen=True)
@@ -160,6 +172,62 @@ def classify_after(obs: RawObservation) -> AfterOutcome:
     if obs.dom_changed:
         return AfterOutcome(OUTCOME_DOM_CHANGED, "", False, False)
     return AfterOutcome(OUTCOME_NONE, "", False, False)
+
+
+# ─── R0 Intent contracts (pure verification) ───────────────────────────────
+
+_CHECKED_TRUTHY = frozenset({"true", "1", "on", "yes", "checked"})
+
+
+def verify_intent(
+    kind: str,
+    *,
+    intended_value: str = "",
+    intended_checked: bool = False,
+    committed_value: str | None = None,
+    error_detail: str = "",
+    url_before: str = "",
+    url_after: str = "",
+    dom_changed: bool = False,
+    dialog_opened: bool = False,
+) -> bool | None:
+    """Pure intent verification — did the action achieve what was intended?
+
+    Returns ``True`` when positively verified, ``False`` when definitively
+    unmet, ``None`` when unverifiable.  The split matters: a ``False`` becomes
+    honest residue (the fill is dropped); a ``None`` preserves current behaviour
+    (the fill is kept, because we cannot prove it failed).
+    """
+    if (error_detail or "").strip():
+        return False
+
+    if kind in ("fill", "select"):
+        if committed_value is None:
+            return None
+        c = (committed_value or "").strip()
+        i = (intended_value or "").strip()
+        if not c and i:
+            return False
+        if c.lower() == i.lower():
+            return True
+        return None
+
+    if kind == "checked":
+        if committed_value is None:
+            return None
+        committed_bool = committed_value.strip().lower() in _CHECKED_TRUTHY
+        return committed_bool == intended_checked
+
+    if kind == "click":
+        url_changed = bool(
+            url_before and url_after
+            and _norm_url(url_before) != _norm_url(url_after)
+        )
+        if url_changed or dom_changed or dialog_opened:
+            return True
+        return None
+
+    return None
 
 
 def classify_submit_after(obs: RawObservation) -> AfterOutcome:

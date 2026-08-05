@@ -1,8 +1,17 @@
-# VKPower Life Insurance — life-insurance proving ground for VKPower Verdict.
-# Self-contained static SPA served by nginx (same pattern as Acme/Aegis/Skyward).
-# No backend; the multi-step login ladder (member no. -> password -> PIN) and the
-# two seeded members (young-small-family / senior-large-family) live in page JS.
+# VKPower Life Insurance — Next.js static-export proving ground.
+# Multi-stage: Node builds the static site, nginx:alpine serves it.
+
+# ──── Stage 1: Build ─────────────────────────────────────────────
+FROM node:20-alpine AS builder
+WORKDIR /app
+COPY package.json package-lock.json* ./
+RUN npm ci --ignore-scripts
+COPY . .
+RUN npm run build
+
+# ──── Stage 2: Serve ─────────────────────────────────────────────
 FROM nginx:alpine
-COPY index.html /usr/share/nginx/html/index.html
+COPY nginx.conf /etc/nginx/conf.d/default.conf
+COPY --from=builder /app/out /usr/share/nginx/html
 COPY answer_key.json /usr/share/nginx/html/answer_key.json
 EXPOSE 80

@@ -85,6 +85,15 @@ class ExploreDispatchRequest(BaseModel):
     extra_http_headers: dict = Field(default_factory=dict)
     http_credentials: dict | None = None
     env_assertion: dict | None = None
+    #: R4 MECHANIC MEMORY. ``{control_sig: mechanic_variant}`` — the proven
+    #: ladder rung for each control this tenant has interacted with before.
+    #: Value-free (only rung variant names like "click_element", "focus_space"),
+    #: never logged (the mapping reveals which controls exist for this tenant).
+    proven_mechanics: dict[str, str] = Field(default_factory=dict)
+    #: POSTURE: observe-only mode for production environments.  When True the
+    #: explorer captures pages/fields/locators/navigation but never fills forms,
+    #: never submits, and never advances a commit.
+    observe_only: bool = False
 
 
 class DispatchResult(BaseModel):
@@ -122,6 +131,7 @@ def _log_safe(req: ExploreDispatchRequest) -> dict:
         # a crawl asks for something it should already know.
         "recalled_count": len(req.recalled_values or {}),
         "priors_count": len(req.field_priors or {}),
+        "mechanics_count": len(req.proven_mechanics or {}),
         "data_mode": req.data_mode,
         "crawl_mode": req.crawl_mode,
         # Booleans only — never the raw routing cookies/headers/basic-auth (secret).

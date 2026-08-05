@@ -74,10 +74,39 @@ ENV_KIND_STAGING = "staging"
 #: (that stays disposable-only) — "same capabilities as Test unless client
 #: policy restricts".
 ENV_KIND_UAT = "uat"
+#: Postures — Production Test: full-depth crawl, submit only with explicit
+#: disposable attestation (same as staging/uat). A stepping-stone between
+#: test and prod.
+ENV_KIND_PRODUCTION_TEST = "production_test"
 ENV_KIND_PROD = "prod"
-#: Even a READ-ONLY explore crawl requires a NON-PROD attestation — prod is never
-#: an attested target (a crawl can never touch a production environment).
-NON_PROD_ENV_KINDS = frozenset({ENV_KIND_DISPOSABLE, ENV_KIND_STAGING, ENV_KIND_UAT})
+
+NON_PROD_ENV_KINDS = frozenset({
+    ENV_KIND_DISPOSABLE, ENV_KIND_STAGING, ENV_KIND_UAT, ENV_KIND_PRODUCTION_TEST,
+})
+#: Environments where an OBSERVE-ONLY crawl is allowed: capture pages, fields,
+#: locators, navigation — never fill, never submit, never advance a commit.
+OBSERVE_ENV_KINDS = frozenset({ENV_KIND_PROD})
+#: ALL env_kinds that are crawlable (non-prod at full-depth, prod at observe-only).
+CRAWLABLE_ENV_KINDS = NON_PROD_ENV_KINDS | OBSERVE_ENV_KINDS
+
+# ── Posture vocabulary ────────────────────────────────────────────────────────
+POSTURE_FULL = "full"
+POSTURE_OBSERVE = "observe"
+
+
+def posture_for_env_kind(env_kind: str) -> str:
+    """The crawl posture derived from env_kind.
+
+    * ``full`` — full-depth exploration + attested submit (disposable/staging/
+      uat/production_test). The existing default.
+    * ``observe`` — observe-only: capture pages/fields/locators/navigation,
+      never fill a mutating field, never submit, never advance a commit.
+      The crawl catalogs prod; it never mutates it.
+    """
+    kind = str(env_kind or "").strip().lower()
+    if kind in OBSERVE_ENV_KINDS:
+        return POSTURE_OBSERVE
+    return POSTURE_FULL
 
 
 def resolve_effective_fences(
@@ -105,14 +134,19 @@ def resolve_effective_fences(
     env_verbs = (env_fences or {}).get("irreversible_verbs_extra") or []
     if env_verbs:  # only rewrite when the env actually contributes verbs (byte-stable)
         eff["irreversible_verbs_extra"] = sorted(set(app_verbs) | set(env_verbs))
+    kind = str(env_kind or "").strip().lower()
     # FAIL-CLOSED submit gate: allow_submit is honoured ONLY when the env is
-    # EXPLICITLY a known non-prod kind (disposable/staging). 'prod', 'production',
-    # 'PRD', an unrecognized label, or a BLANK/unset env_kind ALL force allow_submit
-    # off — a mislabeled or unattested prod env can never stay mutable (the fail-OPEN
-    # the adversarial review caught). Single-env runs never reach this resolver, so
-    # their app-level fences are unchanged.
-    if str(env_kind or "").strip().lower() not in NON_PROD_ENV_KINDS:
+    # EXPLICITLY a known non-prod kind (disposable/staging/uat/production_test).
+    # 'prod', 'production', 'PRD', an unrecognized label, or a BLANK/unset
+    # env_kind ALL force allow_submit off.
+    if kind not in NON_PROD_ENV_KINDS:
         eff["allow_submit"] = False
+    # Posture: OBSERVE-ONLY for production environments.  The crawl catalogs
+    # the app (pages, fields, locators, navigation) but never fills a form,
+    # never submits, never advances a commit.
+    if kind in OBSERVE_ENV_KINDS:
+        eff["allow_submit"] = False
+        eff["observe_only"] = True
     return eff
 
 # ── Environment gating (NEXUS_ENV; default development) ─────────────────────
@@ -374,13 +408,13 @@ def submit_approvals(app_row: Any) -> list[str]:
 def onboarding_status(app_row: Any) -> str:
     """Derive the onboarding state (``draft`` | ``attested`` | ``live``).
 
-    ``live`` = signed RoE + a valid non-prod attestation + a passed preflight;
+    ``live`` = signed RoE + a valid attestation + a passed preflight;
     ``attested`` = RoE + attestation but preflight not yet passed; else ``draft``.
     """
     now = _utcnow()
     roe = _roe_signed(app_row)
     att_ok, _kind, _reason = _attestation_status(
-        app_row, allowed_kinds=NON_PROD_ENV_KINDS, now=now,
+        app_row, allowed_kinds=CRAWLABLE_ENV_KINDS, now=now,
     )
     preflight = _preflight_passed(app_row)
     authz = _authorized_to_test(app_row)
@@ -411,7 +445,7 @@ def onboarding_ready(app_row: Any) -> tuple[bool, list[str]]:
             "(env_attestation.rules_of_engagement.signed + signed_by)"
         )
     att_ok, _kind, att_reason = _attestation_status(
-        app_row, allowed_kinds=NON_PROD_ENV_KINDS, now=now,
+        app_row, allowed_kinds=CRAWLABLE_ENV_KINDS, now=now,
     )
     if not att_ok:
         reasons.append(att_reason)
@@ -447,7 +481,7 @@ def attestation_present(app_row: Any, *, phase: str = PHASE_EXPLORE) -> bool:
         return bool(check.ok) and _submit_approved(app_row)
 
     ok, _kind, _reason = _attestation_status(
-        app_row, allowed_kinds=NON_PROD_ENV_KINDS, now=now,
+        app_row, allowed_kinds=CRAWLABLE_ENV_KINDS, now=now,
     )
     return ok
 
@@ -554,11 +588,16 @@ __all__ = [
     # phases
     "PHASE_EXPLORE", "PHASE_SUBMIT",
     # env-kind vocabulary
-    "ENV_KIND_DISPOSABLE", "ENV_KIND_STAGING", "ENV_KIND_PROD", "NON_PROD_ENV_KINDS",
+    "ENV_KIND_DISPOSABLE", "ENV_KIND_STAGING", "ENV_KIND_PRODUCTION_TEST",
+    "ENV_KIND_PROD", "NON_PROD_ENV_KINDS", "OBSERVE_ENV_KINDS", "CRAWLABLE_ENV_KINDS",
+    # postures
+    "POSTURE_FULL", "POSTURE_OBSERVE", "posture_for_env_kind",
     # env helpers
     "ENV_VAR", "DEV_ENVS", "current_env", "is_dev_env",
     # refusal
     "OnboardingRefused",
+    # fences
+    "resolve_effective_fences",
     # predicates + gate
     "onboarding_status", "onboarding_ready", "attestation_present", "assert_crawlable",
 ]

@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from app.services import branch_planner, journey_fold, journey_naming
 from app.services.journey_fold import (
     BRANCH_BLOCKED,
+    BRANCH_DEFERRED,
     BRANCH_DISCOVERED,
     BRANCH_PLANNED,
     BRANCH_WALKED,
@@ -116,6 +117,19 @@ def test_identity_ref_is_stable_and_value_free():
     b = branch_planner._identity_ref({"sig-b": "gold", "sig-a": "smoker"})
     assert a == b and a.startswith("synthetic+planned:")
     assert "smoker" not in a
+
+
+# ── E1 pure-logic tests ─────────────────────────────────────────────────
+
+def test_branch_deferred_status_exists():
+    assert BRANCH_DEFERRED == "deferred"
+    assert len(BRANCH_DEFERRED) <= 16  # fits the String(16) column
+
+
+def test_single_option_identity_ref():
+    ref = branch_planner._identity_ref({"sig-plan": "gold"})
+    assert ref.startswith("synthetic+planned:")
+    assert "gold" not in ref
 
 
 # ── DB round-trip (skipif-gated) ─────────────────────────────────────────
@@ -252,6 +266,129 @@ async def _run_round_trip():
         assert await branch_planner.plan_walks(
             tenant_id=other_tenant, app_id=app_id) == []
     finally:
+        journey_fold.tenant_scoped_qec_session = originals[0]
+        branch_planner.tenant_scoped_qec_session = originals[1]
+        await engine.dispose()
+
+
+# ── E1: systematic enumeration — one plan per option ────────────────────
+
+def _flow_9_options(entry_fp="fpX"):
+    """A single page with 9 HLQ options and a terminal."""
+    options = [f"option-{i}" for i in range(9)]
+    return {
+        "flow_id": "x" * 24, "entry_fingerprint": entry_fp,
+        "entry_url": "https://a.example/hlq", "entry_title": "Product Select",
+        "terminal": "submit_boundary", "completed": True, "fully_answered": True,
+        "outcome_values": [{"label": "Premium", "value": "$100",
+                            "value_type": "currency"}],
+        "steps": [
+            {"fingerprint": "fpX", "url": "u1", "title": "HLQ",
+             "fields_filled": 1, "fields_unfilled": 0,
+             "advance": {"tier": 1, "control_name": "Continue", "oracle": False},
+             "decision_points": [
+                 {"control_signature": "sig-hlq", "control_label": "Product",
+                  "options": options, "choice": "option-0",
+                  "provenance": "synthesized"}]},
+            {"fingerprint": "fpY", "url": "u2", "title": "Review",
+             "fields_filled": 0, "fields_unfilled": 0},
+        ],
+    }
+
+
+@needs_db
+def test_e1_nine_options_yield_separate_plans():
+    """E1: a 9-option page should yield 8 plans (one per unchosen option)."""
+    asyncio.run(_run_e1_nine_options())
+
+
+async def _run_e1_nine_options():
+    from app.db.journey_models import JourneyBranchRow
+    from app.db.models import QecBase
+
+    engine = create_async_engine(DB_URL)
+    async with engine.begin() as conn:
+        await conn.run_sync(QecBase.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    tenant = f"qec-e1-{uuid.uuid4().hex[:10]}"
+    app_id = "app-e1"
+    originals = (journey_fold.tenant_scoped_qec_session,
+                 branch_planner.tenant_scoped_qec_session)
+    try:
+        journey_fold.tenant_scoped_qec_session = (
+            lambda tid: _scoped(factory, tid))
+        branch_planner.tenant_scoped_qec_session = (
+            lambda tid: _scoped(factory, tid))
+
+        coverage = _coverage(_flow_9_options())
+        r = await journey_fold.fold_crawl(
+            tenant_id=tenant, app_id=app_id, exploration_id="ex-e1",
+            coverage=coverage)
+        assert r["branches"] == 9  # 1 walked + 8 discovered
+
+        plans = await branch_planner.plan_walks(
+            tenant_id=tenant, app_id=app_id, limit=20)
+        assert len(plans) == 8
+        overrides_set = {list(p["choice_overrides"].values())[0] for p in plans}
+        assert overrides_set == {f"option-{i}" for i in range(1, 9)}
+        for p in plans:
+            assert len(p["branch_ids"]) == 1
+            assert len(p["choice_overrides"]) == 1
+
+    finally:
+        journey_fold.tenant_scoped_qec_session = originals[0]
+        branch_planner.tenant_scoped_qec_session = originals[1]
+        await engine.dispose()
+
+
+@needs_db
+def test_e1_explosion_cap_defers_excess():
+    """E1 explosion control: branches beyond the per-journey cap are deferred."""
+    asyncio.run(_run_e1_explosion_cap())
+
+
+async def _run_e1_explosion_cap():
+    from app.config import settings
+    from app.db.journey_models import JourneyBranchRow
+    from app.db.models import QecBase
+
+    engine = create_async_engine(DB_URL)
+    async with engine.begin() as conn:
+        await conn.run_sync(QecBase.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    tenant = f"qec-e1cap-{uuid.uuid4().hex[:10]}"
+    app_id = "app-e1cap"
+    originals = (journey_fold.tenant_scoped_qec_session,
+                 branch_planner.tenant_scoped_qec_session)
+    old_cap = settings.journey_path_enum_cap
+    try:
+        journey_fold.tenant_scoped_qec_session = (
+            lambda tid: _scoped(factory, tid))
+        branch_planner.tenant_scoped_qec_session = (
+            lambda tid: _scoped(factory, tid))
+        settings.journey_path_enum_cap = 3
+
+        coverage = _coverage(_flow_9_options())
+        await journey_fold.fold_crawl(
+            tenant_id=tenant, app_id=app_id, exploration_id="ex-cap",
+            coverage=coverage)
+
+        plans = await branch_planner.plan_walks(
+            tenant_id=tenant, app_id=app_id, limit=20)
+        assert len(plans) == 3
+
+        async with _scoped(factory, tenant) as s:
+            deferred = (await s.execute(select(JourneyBranchRow).where(
+                JourneyBranchRow.tenant_id == tenant,
+                JourneyBranchRow.status == BRANCH_DEFERRED,
+            ))).scalars().all()
+            assert len(deferred) == 5  # 8 discovered - 3 capped = 5 deferred
+            for b in deferred:
+                assert "deferred" in b.blocked_reason
+                assert "cap" in b.blocked_reason
+
+    finally:
+        settings.journey_path_enum_cap = old_cap
         journey_fold.tenant_scoped_qec_session = originals[0]
         branch_planner.tenant_scoped_qec_session = originals[1]
         await engine.dispose()
