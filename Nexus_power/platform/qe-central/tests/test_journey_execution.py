@@ -66,9 +66,16 @@ def test_coverage_score_is_journey_fraction():
     assert coverage_score([], ["/x"]) == 0
 
 
-def test_spanning_requires_entry_and_terminal():
+def test_spanning_requires_walking_every_journey_page_in_order():
+    """"Re-proves this journey" means the script WALKS it: every page of the
+    journey, in the journey's order. Covering only the endpoints is a
+    different, shorter path."""
     journey = ["/quote/start", "/quote/health", "/quote/review"]
-    assert spans_journey(journey, ["/quote/start", "/quote/review"])
+    assert spans_journey(journey, journey)
+    # Extra pages between the journey's own are fine.
+    assert spans_journey(journey, ["/quote/start", "/quote/health", "/ads",
+                                   "/quote/review"])
+    assert not spans_journey(journey, ["/quote/start", "/quote/review"])
     assert not spans_journey(journey, ["/quote/start", "/quote/health"])
     assert not spans_journey(journey, ["/quote/health", "/quote/review"])
     assert not spans_journey([], ["/x"])
@@ -439,3 +446,34 @@ def test_live_progress_without_a_run_is_never_run(monkeypatch):
     out = asyncio.run(runner.live_progress(
         tenant_id="t1", app_id="app1", journey_id="j1"))
     assert out == {"status": "never_run", "live_url": "", "in_flight": False}
+
+
+# ── Ordered-subsequence adoption (founder showstopper) ───────────────────
+
+def test_span_requires_walking_the_pages_in_order():
+    """A case that touches the same pages in a DIFFERENT order is a different
+    business path. Observed live: a quote journey adopted a home→start
+    navigation case purely on set intersection."""
+    journey = ["/quote/start", "/", "/login"]
+    walks_it = ["/quote/start", "/", "/login"]
+    wrong_order = ["/", "/quote/start"]
+    assert spans_journey(journey, walks_it)
+    assert not spans_journey(journey, wrong_order)
+
+
+def test_span_allows_extra_pages_between_journey_pages():
+    journey = ["/quote/start", "/login"]
+    case = ["/quote/start", "/quote/health", "/login", "/done"]
+    assert spans_journey(journey, case)
+
+
+def test_single_page_journey_can_never_be_spanned():
+    """One page is not a journey — adopting a script for it would put a
+    business name on a claim the walk never made."""
+    assert not spans_journey(["/"], ["/", "/quote/start"])
+    assert not spans_journey(["/", "/"], ["/"])
+
+
+def test_min_journey_pages_is_two():
+    from app.services.journey_case_linker import MIN_JOURNEY_PAGES
+    assert MIN_JOURNEY_PAGES == 2

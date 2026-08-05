@@ -111,10 +111,21 @@ async def _runnable_view(
         session, tenant_id=tenant_id, app_id=app_id,
         journey_id=journey_id, artifact_id=artifact_id)
     if adopted is None:
+        # Distinguish "too shallow to be a journey" from "no script matches" —
+        # they need different remedies, and a single-page walk must never
+        # borrow a script that walks somewhere else.
+        walked = await journey_case_linker.journey_walked_paths(
+            session, tenant_id=tenant_id, app_id=app_id, journey_id=journey_id)
+        if len(set(walked)) < journey_case_linker.MIN_JOURNEY_PAGES:
+            return {"ok": False, "test_case_id": "", "display_name": "",
+                    "reason": ("this walk covered a single page, so there is "
+                               "no end-to-end path to re-prove — crawl deeper "
+                               "(raise the crawl budget or scope End-to-end "
+                               "mode at this funnel)")}
         return {"ok": False, "test_case_id": "", "display_name": "",
-                "reason": ("no end-to-end case spans this journey's walked "
-                           "path on the current crawl artifact — re-crawl "
-                           "to regenerate its cases")}
+                "reason": ("no test case walks this journey's pages in order "
+                           "on the current crawl artifact — re-crawl to "
+                           "regenerate its cases")}
     return {"ok": True, "test_case_id": adopted.test_case_id,
             "display_name": adopted.display_name or adopted.case_name,
             "reason": ""}

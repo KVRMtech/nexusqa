@@ -87,14 +87,30 @@ def coverage_score(journey_paths: list[str], case_path_list: list[str]) -> int:
     return int(round(100 * covered / len(jp)))
 
 
+#: A journey needs at least this many DISTINCT pages before an "end to end"
+#: case can be claimed for it. One page is not a journey — it is a page, and
+#: adopting a script for it would put a business name on a claim the walk
+#: never made (observed live: a single-page journey adopted a 3-step
+#: navigation case that had nothing to do with it).
+MIN_JOURNEY_PAGES = 2
+
+
 def spans_journey(journey_paths: list[str], case_path_list: list[str]) -> bool:
-    """A case SPANS a journey when it covers both the entry and the terminal
-    path — the funnel end to end, not a sample of it."""
+    """A case SPANS a journey when it WALKS the journey's pages IN ORDER.
+
+    Set intersection is not enough: a case that merely touches the same pages
+    in a different order is a different business path. The journey's page
+    sequence must appear as an ordered subsequence of the case's own page
+    sequence — that is what "this script re-proves that journey" means.
+
+    Journeys shallower than :data:`MIN_JOURNEY_PAGES` never span: a one-page
+    journey would be spanned by almost any case, which is how a quote journey
+    ended up adopting a home→start navigation script."""
     jp = [p for p in journey_paths if p]
-    if not jp:
+    if len(set(jp)) < MIN_JOURNEY_PAGES:
         return False
-    cp = set(case_path_list)
-    return jp[0] in cp and jp[-1] in cp
+    it = iter(case_path_list)
+    return all(any(cp == p for cp in it) for p in jp)
 
 
 def extraneous_steps(journey_paths: list[str], case_path_list: list[str]) -> int:
@@ -114,17 +130,19 @@ def display_name_for(business_name: str, entry_title: str) -> str:
     return (f"Verify {name} end to end" if name else "Verify journey end to end")[:300]
 
 
-async def _journey_walked_paths(
-    session, *, tenant_id: str, app_id: str, journey: JourneyRow,
+async def journey_walked_paths(
+    session, *, tenant_id: str, app_id: str,
+    journey: JourneyRow | None = None, journey_id: str = "",
 ) -> list[str]:
     """The ordered node paths of the journey's most recent COMPLETED
     traversal ([] when it never completed — such a journey is not runnable
     and links stay informational)."""
+    jid = journey.journey_id if journey is not None else journey_id
     traversal = (await session.execute(
         select(JourneyTraversalRow).where(
             JourneyTraversalRow.tenant_id == tenant_id,
             JourneyTraversalRow.app_id == app_id,
-            JourneyTraversalRow.journey_id == journey.journey_id,
+            JourneyTraversalRow.journey_id == jid,
             JourneyTraversalRow.completed.is_(True),
         ).order_by(JourneyTraversalRow.created_at.desc())
         .limit(1))).scalar_one_or_none()
@@ -178,7 +196,7 @@ async def link_app_journeys(
             ))).scalars().all()
         for journey in journeys:
             report["journeys"] += 1
-            walked = await _journey_walked_paths(
+            walked = await journey_walked_paths(
                 session, tenant_id=tenant_id, app_id=app_id, journey=journey)
             if not walked:
                 continue
@@ -190,9 +208,10 @@ async def link_app_journeys(
                                     extraneous_steps(walked, c["paths"]), c))
             if not matches:
                 continue
-            # Spanning first, then highest coverage, then the TIGHTEST fit
-            # (fewest foreign pages) — a case that wanders past the journey's
-            # terminal must not red-flag a claim the journey never made.
+            # Spanning (walks the journey's pages IN ORDER) first, then
+            # highest coverage, then the TIGHTEST fit (fewest foreign pages) —
+            # a case that wanders past the journey's terminal must not
+            # red-flag a claim the journey never made.
             matches.sort(key=lambda m: (-int(m[1]), -m[0], m[2]))
             spanning = [m for m in matches if m[1]]
             adopted_id = spanning[0][3]["test_case_id"] if spanning else ""
