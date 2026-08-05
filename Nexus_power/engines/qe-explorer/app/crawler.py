@@ -554,6 +554,8 @@ class Crawler:
         sleep: Any = asyncio.sleep,
         advance_oracle: Optional[Callable[..., Any]] = None,
         choice_overrides: Optional[Mapping[str, str]] = None,
+        e2e_wizard_steps: int = _E2E_WIZARD_STEPS,
+        e2e_wizard_advances: int = _E2E_WIZARD_ADVANCES,
     ) -> None:
         self._port = port
         self.crawl_id = crawl_id
@@ -584,9 +586,11 @@ class Crawler:
         # gate is identical in all three, because a deeper walk must not be a
         # laxer one.
         self._crawl_mode = str(crawl_mode or "explore").strip().lower()
-        self._max_wizard_steps = (_E2E_WIZARD_STEPS if self._crawl_mode == "e2e"
+        # E2E budgets are DEPLOY-CONFIGURABLE (a fifteen-step funnel needs
+        # more than a probe budget); explore/target keep the probe bounds.
+        self._max_wizard_steps = (int(e2e_wizard_steps) if self._crawl_mode == "e2e"
                                   else _MAX_WIZARD_STEPS)
-        self._max_wizard_advances = (_E2E_WIZARD_ADVANCES if self._crawl_mode == "e2e"
+        self._max_wizard_advances = (int(e2e_wizard_advances) if self._crawl_mode == "e2e"
                                      else _MAX_WIZARD_ADVANCES)
         # BUSINESS FLOWS: one entry per journey walked, carrying whether it actually
         # REACHED THE END. Six steps of a fifteen-step funnel is not the Apply flow.

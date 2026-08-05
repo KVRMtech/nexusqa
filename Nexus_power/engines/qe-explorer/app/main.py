@@ -550,6 +550,8 @@ async def _run_job(
                     if req.crawl_mode == "e2e" else None
                 ),
                 choice_overrides=req.choice_overrides,
+                e2e_wizard_steps=settings.e2e_wizard_steps,
+                e2e_wizard_advances=settings.e2e_wizard_advances,
             )
             job = _Job(crawler)
             jobs.activate(job)

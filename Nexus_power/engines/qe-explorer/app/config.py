@@ -100,6 +100,16 @@ class Settings(BaseSettings):
     #: per-deploy kill-switch for apps whose "Continue" is not vetted as reversible.
     wizard_enabled: bool = Field(default=True, alias="QEC_WIZARD_ENABLED")
 
+    # ── E2E walk depth (per wizard chain / crawl-wide) ───────────────────
+    #: How many steps ONE wizard chain may walk in End-to-end mode, and how
+    #: many advances the whole crawl may make. These bound a COVERAGE walk,
+    #: not a safety gate — the submit boundary, danger gate and commit veto
+    #: are unaffected by them. Raise for deep funnels; every safety rule is
+    #: identical at any depth.
+    e2e_wizard_steps: int = Field(default=60, alias="QEC_E2E_WIZARD_STEPS")
+    e2e_wizard_advances: int = Field(
+        default=300, alias="QEC_E2E_WIZARD_ADVANCES")
+
     # ── E2E advance oracle resilience (agent-assisted wizard advance) ─────
     #: Per-call HTTP timeout for the pick-advance consultation. A stuck page is
     #: worth seconds, not half a minute — the honest ``oracle_unavailable``
@@ -114,7 +124,7 @@ class Settings(BaseSettings):
     #: unbounded tokens. At the cap, consultations end ``unavailable`` (honest
     #: non-completing terminal), never silently "none".
     advance_oracle_max_calls: int = Field(
-        default=40, alias="QEC_ADVANCE_ORACLE_MAX_CALLS")
+        default=200, alias="QEC_ADVANCE_ORACLE_MAX_CALLS")
 
     # ── Security helpers (the HMAC shared secret lives here) ──────────────
 
