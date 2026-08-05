@@ -19,6 +19,7 @@ import {
   FlaskConical, Loader2, MousePointerClick, Rocket, Route, Send, ShieldAlert, Sparkles, Trash2, Upload, X,
 } from 'lucide-react';
 import { api } from './factoryApi';
+import { useJourneyCases, type JourneyCaseInfo } from './useJourneyCases';
 import { useAuth } from './useStudioAuth';
 import TriagePanel from './TriagePanel';
 
@@ -212,11 +213,17 @@ function ReadinessFlow(
 }
 
 export default function TestCasesPanel(
-  { artifactId, onOpenPlaywright, journeyByCaseId }:
+  { artifactId, onOpenPlaywright, appId, journeyByCaseId: journeyByCaseIdProp }:
   { artifactId: string; onOpenPlaywright?: () => void;
-    /** test_case_id → the business journey this case proves (Release D). */
-    journeyByCaseId?: Record<string, { name: string; endToEnd: boolean }> },
+    /** The QE-Central app id — lets this panel resolve business journeys. */
+    appId?: string;
+    /** Optional pre-resolved map; the panel self-fetches when absent. */
+    journeyByCaseId?: Record<string, JourneyCaseInfo> },
 ) {
+  const selfJourneyMap = useJourneyCases(appId);
+  const journeyByCaseId = (journeyByCaseIdProp && Object.keys(journeyByCaseIdProp).length)
+    ? journeyByCaseIdProp
+    : selfJourneyMap;
   const { user } = useAuth();
   const [summary, setSummary] = useState<any>(null);
   const [bySection, setBySection] = useState<Record<string, CaseRow[]>>({});
@@ -408,6 +415,18 @@ export default function TestCasesPanel(
 
   // Flatten loaded cases (capped) and keep a valid selection.
   const allRows = useMemo(() => SECTIONS.flatMap((s) => bySection[s.type] || []), [bySection]);
+  // The journeys this artifact's cases prove — the end-to-end case per journey.
+  const journeyRows = useMemo(() => {
+    const seen = new Set<string>();
+    const out: { caseId: string; caseName: string; journeyName: string }[] = [];
+    for (const row of allRows) {
+      const info = journeyByCaseId?.[row.test_case_id];
+      if (!info || !info.endToEnd || seen.has(info.journeyId)) continue;
+      seen.add(info.journeyId);
+      out.push({ caseId: row.test_case_id, caseName: row.name, journeyName: info.name });
+    }
+    return out;
+  }, [allRows, journeyByCaseId]);
   useEffect(() => {
     if (allRows.length === 0) { if (selectedId) setSelectedId(null); return; }
     if (!selectedId || !allRows.some((r) => r.test_case_id === selectedId)) {
@@ -572,6 +591,48 @@ export default function TestCasesPanel(
           reason={summary?.no_cases_reason || genReason || undefined}
         />
       ) : (
+        <>
+        {/* ── BUSINESS JOURNEYS (Release D) ────────────────────────────────
+            The journeys this app proves, and the test case that RE-PROVES
+            each one. A journey's runnable case is the same factory case
+            listed below — named here in the language the business uses, so
+            an operator can find it without decoding compiled test names. */}
+        {journeyRows.length > 0 && (
+          <div className="mb-4 rounded-xl border border-teal-200 bg-teal-50/40 px-4 py-3">
+            <div className="flex items-center gap-2 mb-2">
+              <Route className="h-4 w-4" style={{ color: '#0f766e' }} />
+              <span className="text-[13px] font-bold text-nexus-900">
+                Business journeys ({journeyRows.length})
+              </span>
+              <span className="text-[11px] text-nexus-500">
+                each journey's end-to-end test case — click to open it
+              </span>
+            </div>
+            <div className="space-y-1.5">
+              {journeyRows.map((jr) => (
+                <button
+                  key={jr.caseId}
+                  type="button"
+                  onClick={() => setSelectedId(jr.caseId)}
+                  className="w-full text-left rounded-lg bg-white px-3 py-2 ring-1 ring-teal-100 hover:ring-teal-300 transition"
+                >
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-[13px] font-semibold text-nexus-900">
+                      Verify {jr.journeyName} end to end
+                    </span>
+                    <span className="shrink-0 inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-bold"
+                      style={{ background: 'rgba(13,148,136,0.14)', color: '#0f766e' }}>
+                      journey
+                    </span>
+                    <span className="text-[11px] text-nexus-500 ml-auto">
+                      {jr.caseName}
+                    </span>
+                  </div>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
         // ── Two-pane studio: calm list (left) + sticky detail/proof (right) ──
         // minmax(0,…) tracks + min-w-0 children: a raw 1fr track has min-width:auto
         // (= min-content), so a wide/unbreakable child (a long locator/URL, a 6-col
@@ -637,6 +698,7 @@ export default function TestCasesPanel(
             )}
           </div>
         </div>
+        </>
       )}
 
       {total > 0 && (
@@ -708,7 +770,7 @@ function TestCaseCard(
   { row, accent, showDetails, busy, artifactId, onPlaywright, variant = 'card', selected = false, onSelect, onSaved, journey }:
   { row: CaseRow; accent: string; showDetails: boolean; busy?: string; artifactId: string; onPlaywright?: (id: string) => void;
     variant?: 'card' | 'row' | 'detail'; selected?: boolean; onSelect?: () => void; onSaved?: () => void;
-    journey?: { name: string; endToEnd: boolean } },
+    journey?: JourneyCaseInfo },
 ) {
   const [open, setOpen] = useState(variant === 'detail');
   const steps = row.test_case?.steps || [];

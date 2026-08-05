@@ -11,7 +11,7 @@
  * Phase-1 bridge with the operator's single portal login. No factory code and no
  * video-portal code is touched; this is additive reuse.
  */
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { ArrowLeft, FlaskConical, KeyRound, PlayCircle, Route, ShieldCheck, Sparkles } from 'lucide-react';
 
@@ -62,34 +62,6 @@ export function TestStudio() {
 
   const state = useAsync((signal) => api.getApp(id!, { signal }), [id]);
 
-  // RELEASE D — journeys are first-class citizens of the other tabs too:
-  // every case a journey proves carries its business name there, so an
-  // operator never has to guess which script belongs to which journey.
-  const [journeyByCaseId, setJourneyByCaseId] =
-    useState<Record<string, { name: string; endToEnd: boolean }>>({});
-  useEffect(() => {
-    if (!id) return;
-    let alive = true;
-    (async () => {
-      try {
-        const list = await api.listJourneys(id);
-        const map: Record<string, { name: string; endToEnd: boolean }> = {};
-        await Promise.all(list.journeys.map(async (j) => {
-          try {
-            const d = await api.getJourney(id, j.journey_id);
-            for (const c of d.cases) {
-              map[c.test_case_id] = {
-                name: j.business_name || j.entry_title,
-                endToEnd: c.kind === 'journey_e2e',
-              };
-            }
-          } catch { /* one journey's cases missing must not blank the map */ }
-        }));
-        if (alive) setJourneyByCaseId(map);
-      } catch { /* journeys are additive context — never block the studio */ }
-    })();
-    return () => { alive = false; };
-  }, [id]);
 
   if (!id) return <ErrorState title="No app selected" error="Missing app id in the route." />;
   if (state.isLoading) return <Loading label="Loading Test Studio…" />;
@@ -177,14 +149,14 @@ export function TestStudio() {
           ) : (
             <div className="rounded-2xl bg-panel text-ink ring-1 ring-line shadow-card p-5 overflow-x-auto">
               {tab === 'cases' ? (
-                <TestCasesPanel artifactId={artifactId} journeyByCaseId={journeyByCaseId}
+                <TestCasesPanel artifactId={artifactId} appId={id}
                   onOpenPlaywright={() => setTab('playwright')} />
               ) : tab === 'evidence' ? (
                 <EvidenceReportPanel artifactId={artifactId} />
               ) : tab === 'personas' ? (
                 <PersonaMatrixPanel artifactId={artifactId} />
               ) : (
-                <PlaywrightExecutionPanel artifactId={artifactId} journeyByCaseId={journeyByCaseId} />
+                <PlaywrightExecutionPanel artifactId={artifactId} appId={id} />
               )}
             </div>
           )}

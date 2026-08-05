@@ -17,6 +17,7 @@ import {
   Save, Server, ShieldAlert, ShieldCheck, SlidersHorizontal, Square, Terminal, UserRound, Video, Wand2,
 } from 'lucide-react';
 import { api } from './factoryApi';
+import { useJourneyCases } from './useJourneyCases';
 import TriagePanel from './TriagePanel';
 import AgenticSettings from './AgenticSettings';
 
@@ -781,11 +782,12 @@ function OracleScorecardCard({ artifactId, refreshKey }: { artifactId: string; r
 }
 
 export default function PlaywrightExecutionPanel(
-  { artifactId, journeyByCaseId }:
+  { artifactId, appId }:
   { artifactId: string;
-    /** test_id → the business journey this script proves (Release D). */
-    journeyByCaseId?: Record<string, { name: string; endToEnd: boolean }> },
+    /** The QE-Central app id — lets this panel name its business journeys. */
+    appId?: string },
 ) {
+  const journeyByCaseId = useJourneyCases(appId);
   const [data, setData] = useState<Manifest | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
