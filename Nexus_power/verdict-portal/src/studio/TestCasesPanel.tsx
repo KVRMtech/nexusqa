@@ -221,6 +221,7 @@ export default function TestCasesPanel(
     journeyByCaseId?: Record<string, JourneyCaseInfo> },
 ) {
   const selfJourneyMap = useJourneyCases(appId);
+  const detailRef = useRef<HTMLDivElement | null>(null);
   const journeyByCaseId = (journeyByCaseIdProp && Object.keys(journeyByCaseIdProp).length)
     ? journeyByCaseIdProp
     : selfJourneyMap;
@@ -613,13 +614,29 @@ export default function TestCasesPanel(
                 <button
                   key={jr.caseId}
                   type="button"
-                  onClick={() => setSelectedId(jr.caseId)}
-                  className="w-full text-left rounded-lg bg-white px-3 py-2 ring-1 ring-teal-100 hover:ring-teal-300 transition"
+                  onClick={() => {
+                    setSelectedId(jr.caseId);
+                    window.setTimeout(() => {
+                      detailRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                    }, 60);
+                  }}
+                  className={`w-full text-left rounded-lg px-3 py-2 ring-1 transition ${
+                    selectedId === jr.caseId
+                      ? 'bg-white ring-teal-400 shadow-sm'
+                      : 'bg-white ring-teal-100 hover:ring-teal-300'}`}
                 >
                   <div className="flex items-center gap-2 flex-wrap">
+                    <ArrowRight className={`h-3.5 w-3.5 shrink-0 transition ${
+                      selectedId === jr.caseId ? 'text-teal-600' : 'text-nexus-300'}`} />
                     <span className="text-[13px] font-semibold text-nexus-900">
                       Verify {jr.journeyName} end to end
                     </span>
+                    {selectedId === jr.caseId && (
+                      <span className="shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold"
+                        style={{ background: 'rgba(13,148,136,0.14)', color: '#0f766e' }}>
+                        open below
+                      </span>
+                    )}
                     <span className="shrink-0 inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-bold"
                       style={{ background: 'rgba(13,148,136,0.14)', color: '#0f766e' }}>
                       journey
@@ -633,10 +650,10 @@ export default function TestCasesPanel(
             </div>
           </div>
         )}
-        // ── Two-pane studio: calm list (left) + sticky detail/proof (right) ──
-        // minmax(0,…) tracks + min-w-0 children: a raw 1fr track has min-width:auto
-        // (= min-content), so a wide/unbreakable child (a long locator/URL, a 6-col
-        // evidence table) forces the track past the panel and overflows the widget.
+        {/* Two-pane studio: calm list (left) + sticky detail/proof (right).
+            minmax(0,…) tracks + min-w-0 children: a raw 1fr track has
+            min-width:auto (= min-content), so a wide/unbreakable child forces
+            the track past the panel and overflows the widget. */}
         <div className="lg:grid lg:grid-cols-[minmax(0,1fr)_minmax(0,1.25fr)] lg:gap-6 lg:items-start">
           {/* LEFT — grouped, scannable list */}
           <div className="space-y-5 min-w-0">
@@ -684,7 +701,7 @@ export default function TestCasesPanel(
           </div>
 
           {/* RIGHT — sticky detail pane (the elevated proof surface) */}
-          <div className="mt-5 lg:mt-0 lg:sticky lg:top-4 min-w-0">
+          <div ref={detailRef} className="mt-5 lg:mt-0 lg:sticky lg:top-4 min-w-0 scroll-mt-4">
             {selectedRow ? (
               <TestCaseCard key={selectedRow.test_case_id} variant="detail" row={selectedRow} accent={NAVY}
                 showDetails={showDetails} busy={busy} artifactId={artifactId}
