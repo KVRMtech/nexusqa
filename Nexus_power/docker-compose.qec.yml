@@ -123,6 +123,16 @@ services:
       # completion planning the next) and still reaches every option. Raise it
       # only alongside the worker pool.
       QEC_BRANCH_WALKS_PER_CYCLE: ${QEC_BRANCH_WALKS_PER_CYCLE:-1}
+      # STALE-CRAWL REAPER — self-gates OFF unless a tick is set, and it was
+      # never set. A crawl whose explorer died (deploy, restart, OOM, network
+      # blip) leaves its qe_explorations row non-terminal forever, the app's
+      # one-active-crawl slot stays taken, and the portal's Crawl button is
+      # disabled PERMANENTLY — recoverable only by hand-editing the database.
+      # Observed live: an explorer redeploy mid-sweep bricked the app.
+      # The reaper moves such a row to a first-class `stalled` — an honest
+      # "we do not know how this ended", never a silent success.
+      QEC_REAPER_TICK_SECONDS: ${QEC_REAPER_TICK_SECONDS:-60}
+      QEC_REAPER_GRACE_SECONDS: ${QEC_REAPER_GRACE_SECONDS:-180}
       # Depth is a runaway backstop only. The sweep ends when the branch backlog
       # is empty — an honest "nothing left to walk" — not when a counter runs
       # out. Leave unset to inherit the high default.
