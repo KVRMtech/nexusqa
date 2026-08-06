@@ -205,6 +205,38 @@ _PLACEHOLDER_OPTIONS = frozenset({
     "--", "---", "-- select --", "none", "choose one", "pick one",
 })
 
+#: An exact-phrase list does not survive contact with real applications. They do
+#: not write "select one" — they write "Select coverage amount...", "Choose your
+#: state", "-- Select term length --". Those are the SAME thing: the option whose
+#: underlying value is "", i.e. nothing chosen.
+#:
+#: Picking one satisfies the fill and then leaves the field EMPTY, so a
+#: validation-gated form never enables its Continue and the crawl stalls on a page
+#: it believes it filled. Observed live: Coverage Amount and Term Length were both
+#: set to "Select …" and the quote funnel stopped dead at step 2.
+_PLACEHOLDER_LEAD_VERBS = ("select", "choose", "pick")
+
+
+def _is_placeholder_option(label: Any, *, first: bool) -> bool:
+    """Is this the "nothing chosen yet" entry rather than a real answer?
+
+    Deliberately conservative, because a false positive silently discards a
+    legitimate answer: the leading-verb rule applies ONLY to the first option
+    (where placeholders conventionally live), so a genuine product called
+    "Choose Life Term 20" further down the list is still selectable.
+    """
+    text = _norm(label)
+    if not text or text in _PLACEHOLDER_OPTIONS:
+        return True
+    stripped = text.strip("-–—_ .·:…")
+    if not stripped:
+        return True                       # "--", "…", separators
+    if text.endswith(("...", "…")) and stripped.split()[0] in _PLACEHOLDER_LEAD_VERBS:
+        return True                       # "Select coverage amount..."
+    if first and stripped.split()[0] in _PLACEHOLDER_LEAD_VERBS:
+        return True                       # "Select a state", "-- Choose term --"
+    return False
+
 
 def _number_default(control: Mapping[str, Any]) -> str:
     """A number-input default that satisfies the control's OWN declared
@@ -291,9 +323,9 @@ def _synthesize_default(control: Mapping[str, Any], kind: str, name: str) -> Opt
     n = _norm(name)
 
     if kind == "select":
-        for opt in (control.get("options") or []):
+        for i, opt in enumerate(control.get("options") or []):
             o = str(opt).strip()
-            if o and _norm(o) not in _PLACEHOLDER_OPTIONS:
+            if o and not _is_placeholder_option(o, first=(i == 0)):
                 return o
         return None
     if kind in _TOGGLE_KINDS:

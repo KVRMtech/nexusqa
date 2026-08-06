@@ -101,3 +101,42 @@ def test_required_checkbox_is_checked_optional_and_radio_are_not():
 def test_generic_text_fallback():
     assert _syn(kind="text", name="Some Field") == "autotest"
     assert _syn(input_type="search", name="Search") == "autotest"
+
+
+# ── placeholder options: "Select coverage amount..." is NOT an answer ─────────
+
+def test_specific_placeholders_are_not_chosen_as_defaults():
+    """Regression: the quote funnel stalled at step 2 because Coverage Amount and
+    Term Length were both set to their "Select ..." option. That option's value is
+    "", so the field stayed empty, Continue stayed disabled, and the crawl
+    reported a page it believed it had filled. An exact-phrase list never matched
+    these — real apps write specific placeholders."""
+    from app.forms import _synthesize_default
+
+    for placeholder, real in (
+        ("Select coverage amount...", "$50,000"),
+        ("Select term length...", "10 Years"),
+        ("Select military status...", "Active Duty Officer"),
+        ("-- Choose your state --", "Alabama"),
+        ("Choose one", "Gold"),
+        ("…", "Bronze"),
+    ):
+        control = {"options": [placeholder, real]}
+        got = _synthesize_default(control, "select", "Some Field")
+        assert got == real, f"{placeholder!r} was chosen instead of {real!r}"
+
+
+def test_a_real_answer_that_starts_with_a_verb_is_still_selectable():
+    """Conservative by design: a false positive silently discards a legitimate
+    business path. The leading-verb rule applies only to the FIRST option, where
+    placeholders conventionally live."""
+    from app.forms import _synthesize_default
+
+    control = {"options": ["-- Select a plan --", "Choose Life Term 20", "Gold"]}
+    assert _synthesize_default(control, "select", "Plan") == "Choose Life Term 20"
+
+
+def test_an_all_placeholder_select_yields_nothing_rather_than_a_lie():
+    from app.forms import _synthesize_default
+    control = {"options": ["Select one", "--", ""]}
+    assert _synthesize_default(control, "select", "Empty") is None
