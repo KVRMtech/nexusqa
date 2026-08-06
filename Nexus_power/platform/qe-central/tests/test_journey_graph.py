@@ -675,3 +675,56 @@ def test_walk_depth_is_persisted_on_the_dispatched_plan():
     assert '"walk_depth"' in src, (
         "walk_depth MUST be persisted on the stored walk_plan or the completion "
         "handler reads 0 forever and the autowalk never terminates")
+
+
+# ── E2E means the WHOLE application, not a five-minute sample ────────────
+
+
+class _AppRow:
+    def __init__(self, schedule=None, budgets=None):
+        self.schedule = schedule or {}
+        self.budgets = budgets or {}
+
+
+def test_e2e_never_inherits_the_first_pass_ceiling():
+    """Regression: an app explicitly configured crawl_mode=e2e still got the
+    40-state / depth-4 / 5-minute interactive ceiling because it had no per-app
+    budget — and then reported a 'completed' crawl of a funnel it had seen one
+    page of. E2E is a different promise: catalogue the whole application."""
+    from app.routers.explorations import (
+        _E2E_BUDGET, _FIRST_PASS_BUDGET, _resolve_crawl_mode)
+
+    e2e = _AppRow(schedule={"crawl_mode": "e2e"})
+    assert _resolve_crawl_mode(e2e, [], None) == "e2e"
+
+    assert _E2E_BUDGET["max_states"] > _FIRST_PASS_BUDGET["max_states"] * 50
+    assert _E2E_BUDGET["max_depth"] > _FIRST_PASS_BUDGET["max_depth"] * 5
+    assert _E2E_BUDGET["max_wall_ms"] > _FIRST_PASS_BUDGET["max_wall_ms"] * 10
+
+
+def test_a_planned_branch_walk_is_always_e2e():
+    """A branch walk exists to reach a path the default data would not take;
+    running it under an explore-sized budget would strand it short of the very
+    thing it was dispatched to prove."""
+    from app.routers.explorations import _resolve_crawl_mode
+    row = _AppRow(schedule={"crawl_mode": "explore"})
+    assert _resolve_crawl_mode(row, [], {"branch_ids": ["b1"]}) == "e2e"
+
+
+def test_non_e2e_modes_keep_the_fast_first_pass():
+    """Explore/Target are the interactive 'show me tests now' flows and must NOT
+    become 4-hour crawls — the ceiling is right for them."""
+    from app.routers.explorations import _resolve_crawl_mode
+    assert _resolve_crawl_mode(_AppRow(), [], None) == "explore"
+    assert _resolve_crawl_mode(_AppRow(), ["/quote"], None) == "target"
+    assert _resolve_crawl_mode(
+        _AppRow(schedule={"crawl_mode": "target"}), [], None) == "target"
+
+
+def test_autowalk_depth_is_a_backstop_not_a_coverage_policy():
+    """The sweep must end because the branch backlog is empty, not because a
+    counter ran out. A low cap silently reports 'complete' with options unwalked."""
+    from app.config import settings
+    assert settings.autowalk_max_depth >= 100, (
+        "autowalk depth caps COVERAGE when set low — the terminator should be "
+        "plan_walks() returning nothing")

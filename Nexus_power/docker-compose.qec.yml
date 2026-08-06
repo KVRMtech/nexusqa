@@ -118,9 +118,14 @@ services:
       QEC_JOURNEY_AUTOWALK_ENABLED: ${QEC_JOURNEY_AUTOWALK_ENABLED:-true}
       # Match the EXPLORER POOL, not the backlog: the explorer is single-flight
       # per worker, so dispatching more plans than there are workers guarantees
-      # 409s for the excess. Raise this only alongside the worker pool.
+      # 409s for the excess. This is a THROUGHPUT setting, not a coverage one —
+      # with one worker the sweep is serialised (one walk per completion, each
+      # completion planning the next) and still reaches every option. Raise it
+      # only alongside the worker pool.
       QEC_BRANCH_WALKS_PER_CYCLE: ${QEC_BRANCH_WALKS_PER_CYCLE:-1}
-      QEC_AUTOWALK_MAX_DEPTH: ${QEC_AUTOWALK_MAX_DEPTH:-1}
+      # Depth is a runaway backstop only. The sweep ends when the branch backlog
+      # is empty — an honest "nothing left to walk" — not when a counter runs
+      # out. Leave unset to inherit the high default.
     volumes:
     # Shared frame volume from the main stack (eyes-engine serves from it) —
     # visual_frames assets land where eyes can read them (R-5).

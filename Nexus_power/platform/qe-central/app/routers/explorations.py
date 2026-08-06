@@ -83,6 +83,45 @@ _FIRST_PASS_BUDGET = {
     "max_requests": 1500,
 }
 
+# END-TO-END is a DIFFERENT PROMISE. When the client asks for an E2E crawl they
+# are asking for the whole application catalogued — every journey, to its end —
+# and a ceiling tuned for "show me something in five minutes" silently breaks
+# that promise. Observed live: an app explicitly configured crawl_mode=e2e still
+# inherited the 40-state / depth-4 / 5-minute first-pass ceiling because it had
+# no per-app budget, and reported a "complete" crawl of a funnel it had only
+# seen the first page of.
+#
+# These are DELIBERATELY non-binding. The real terminator for an E2E crawl is
+# the frontier running out (stop_reason=completed) or the branch backlog
+# emptying — an honest "there is nothing left to walk", not an arbitrary number.
+# They remain as a runaway backstop only, and an explicit per-app budget still
+# wins so an operator can cap a hostile or enormous site.
+#
+# NOTE what is NOT relaxed here: the refuse pack (never click Delete / Pay /
+# Cancel policy), the fail-closed egress allowlist, submit approvals, the auth
+# window, and PII redaction. Those are not coverage limits — they are what stops
+# an exhaustive crawl doing real damage to a client's real data.
+_E2E_BUDGET = {
+    "max_states": 5_000,
+    "max_depth": 50,
+    "max_wall_ms": 14_400_000,  # 4 hours
+    "max_requests": 100_000,
+}
+
+
+def _resolve_crawl_mode(row: Any, scope_paths: list, walk_plan: Any) -> str:
+    """explore | target | e2e — the ONE place the mode is decided.
+
+    A planned branch walk IS an e2e walk by definition. Otherwise the app's own
+    setting wins; absent that it degrades to the pre-mode behaviour (a confined
+    crawl is Target, an unconfined one Explore)."""
+    if walk_plan:
+        return "e2e"
+    declared = str((row.schedule or {}).get("crawl_mode") or "").strip().lower()
+    if declared in ("explore", "target", "e2e"):
+        return declared
+    return "target" if scope_paths else "explore"
+
 
 class ExplorationCreateRequest(BaseModel):
     """POST body — EXACTLY ONE of ``bundle`` (Phase-0) or ``app_id`` (Phase-1).
@@ -562,7 +601,12 @@ async def _dispatch_explorer(
         # Bound the FIRST-PASS crawl (no per-app budget configured) so tests appear
         # in minutes instead of after a 30-min deep default — the "new site looks
         # broken" complaint. An explicit per-app budget always wins.
-        budgets = dict(row.budgets or {}) or dict(_FIRST_PASS_BUDGET)
+        # E2E means "catalogue the whole application", so it must NOT inherit the
+        # interactive first-pass ceiling. An explicit per-app budget still wins
+        # over both.
+        crawl_mode = _resolve_crawl_mode(row, scope_paths, walk_plan)
+        budgets = dict(row.budgets or {}) or dict(
+            _E2E_BUDGET if crawl_mode == "e2e" else _FIRST_PASS_BUDGET)
         env_attestation = dict(row.env_attestation or {})
         # Phase-B ATTESTED SUBMIT enablement: the operator-approved flow names, from
         # the app's stored config, gated fail-closed (allow_submit + a DISPOSABLE,
@@ -675,10 +719,7 @@ async def _dispatch_explorer(
         # this key existed: a confined crawl is Target, an unconfined one Explore.
         # Only an explicit "e2e" opts into the deeper walk — and a planned
         # branch walk IS an e2e walk by definition.
-        crawl_mode=("e2e" if walk_plan else
-                    (lambda m: m if m in ("explore", "target", "e2e")
-                     else ("target" if scope_paths else "explore"))(
-                        str((row.schedule or {}).get("crawl_mode") or "").strip().lower())),
+        crawl_mode=crawl_mode,
         choice_overrides=(dict((walk_plan or {}).get("choice_overrides") or {})
                           if walk_plan else {}),
         proven_mechanics=proven_mechanics,

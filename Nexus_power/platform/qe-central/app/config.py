@@ -148,8 +148,12 @@ class Settings(BaseSettings):
     #: Path products are enumerated exactly only up to this cap; larger
     #: spaces are reported as "not enumerated" with per-option coverage —
     #: never an extrapolated percentage.
+    #: Raised well above any real question's option count (a US state picker is
+    #: 50, a coverage-amount list ~20) so an E2E crawl enumerates every answer
+    #: rather than deferring the tail. Excess beyond this is still DEFERRED with
+    #: an honest count — never silently dropped, never extrapolated.
     journey_path_enum_cap: int = Field(
-        default=64, alias="QEC_JOURNEY_PATH_ENUM_CAP")
+        default=512, alias="QEC_JOURNEY_PATH_ENUM_CAP")
     #: Env-level switch for planned branch walks (C4). BOTH this AND the
     #: tenant's ``branch_walks_enabled`` flag must be on (fail-closed).
     branch_walks_enabled: bool = Field(
@@ -164,8 +168,15 @@ class Settings(BaseSettings):
     #: E1: maximum recursive autowalk depth. A branch walk that reveals new
     #: branches triggers further autowalks up to this depth. 0 = fire-once
     #: (pre-E1 behavior).
+    #:
+    #: This is a RUNAWAY BACKSTOP, not a coverage policy. The autowalk's real
+    #: terminating condition is ``plan_walks`` returning nothing — i.e. the
+    #: branch backlog is empty and there is honestly nothing left to walk. A low
+    #: number here silently caps coverage instead: a funnel five decisions deep
+    #: would report "complete" having walked one of them. Set high enough that
+    #: the backlog, not the counter, is what ends the sweep.
     autowalk_max_depth: int = Field(
-        default=3, alias="QEC_AUTOWALK_MAX_DEPTH")
+        default=200, alias="QEC_AUTOWALK_MAX_DEPTH")
     #: E2: pairwise combination walks dispatched per completion cycle.
     pairwise_walks_per_cycle: int = Field(
         default=8, alias="QEC_PAIRWISE_WALKS_PER_CYCLE")
