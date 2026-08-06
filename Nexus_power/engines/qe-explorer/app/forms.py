@@ -301,7 +301,16 @@ def _enumerable_options(control: Mapping[str, Any], kind: str) -> list[str]:
     if kind == "radio" and control.get("group_options"):
         source = control.get("group_options")
     out: list[str] = []
-    for opt in (source or ())[:_MAX_RECORDED_OPTIONS]:
+    for i, opt in enumerate((source or ())[:_MAX_RECORDED_OPTIONS]):
+        # "Select coverage amount..." is the ABSENCE of a choice, not a business
+        # path. Enumerating it makes the planner dispatch a walk that FORCES the
+        # placeholder — Rung 0 bypasses the synthesizer, so the field is left
+        # empty, the funnel cannot advance, and the branch is then recorded
+        # `walked`: a proven-coverage claim for "nothing selected". Observed
+        # live: three such phantom branches, all marked walked, while the quote
+        # funnel stayed shut behind them.
+        if _is_placeholder_option(opt, first=(i == 0)):
+            continue
         label = normalize_option(opt)
         if label:
             out.append(label)

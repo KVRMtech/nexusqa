@@ -298,3 +298,29 @@ def test_group_id_survives_the_ledger_sanitizer():
                 "decision_points": dps}],
         terminal=flow_ledger.TERMINAL_SUBMIT_BOUNDARY, max_steps=20)
     assert f["steps"][0]["decision_points"][0]["group_id"] == _GROUP
+
+
+def test_a_placeholder_is_never_enumerated_as_a_business_path():
+    """"Select coverage amount..." is the ABSENCE of a choice.
+
+    Enumerating it makes the planner dispatch a walk that FORCES the
+    placeholder — Rung 0 bypasses the synthesizer, so the field ends up empty,
+    the funnel cannot advance, and the branch is then recorded `walked`: a
+    proven-coverage claim for "nothing selected". Observed live: three such
+    phantom branches, all marked walked, while the funnel stayed shut."""
+    control = {"options": ["Select coverage amount...", "$50,000", "$100,000"]}
+    assert _enumerable_options(control, "select") == ["$50,000", "$100,000"]
+
+    grouped = {"kind": "radio", "group_options": ["-- Choose a plan --", "Gold", "Silver"]}
+    assert _enumerable_options(grouped, "radio") == ["gold", "silver"]
+
+
+def test_enumeration_keeps_a_real_answer_that_reads_like_a_prompt():
+    """Conservative: only the FIRST option may be dropped on the verb rule, so a
+    genuine product named "Choose Life Term 20" stays a walkable path."""
+    control = {"options": ["Select a plan...", "Choose Life Term 20", "Gold"]}
+    assert _enumerable_options(control, "select") == ["choose life term 20", "gold"]
+
+
+def test_binary_toggles_are_unaffected_by_placeholder_filtering():
+    assert _enumerable_options({}, "checkbox") == ["checked", "unchecked"]
