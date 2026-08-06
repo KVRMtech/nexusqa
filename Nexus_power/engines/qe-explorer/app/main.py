@@ -1116,7 +1116,7 @@ class PlaywrightBrowserPort(BrowserPort):
                                   intended_value=intended, intent_met=False)
         await self._settle()
         url_after = self._safe_url()
-        committed = await self._read_value(locator) if read_back else None
+        committed = (await self._read_value(locator, checkable=(kind == "checked")) if read_back else None)
         errors = await self.error_texts()
         dialogs = await self.dialog_flags()
         sig_after = await self._interactive_signature()
@@ -1295,7 +1295,7 @@ class PlaywrightBrowserPort(BrowserPort):
                     intended_value=value, intent_met=False)
             await self._settle()
             url_after = self._safe_url()
-            committed = await self._read_value(locator) if read_back else None
+            committed = (await self._read_value(locator, checkable=(kind == "checked")) if read_back else None)
             errors = await self.error_texts()
             dialogs = await self.dialog_flags()
             sig_after = await self._interactive_signature()
@@ -1405,8 +1405,22 @@ class PlaywrightBrowserPort(BrowserPort):
                 continue
         return None
 
-    async def _read_value(self, locator: Any) -> Optional[str]:
-        for reader in ("input_value", "is_checked"):
+    async def _read_value(self, locator: Any, *,
+                          checkable: bool = False) -> Optional[str]:
+        """Read back what a control COMMITTED, so R0 can verify intent.
+
+        A checkbox/radio commits its CHECKEDNESS, not its value attribute.
+        ``input_value()`` does not raise on an <input type=radio> — it happily
+        returns "term-life" — so reading it first meant a genuinely selected
+        card reported "term-life" against an intended "true", never matched,
+        and was recorded intent_unmet. Observed live: the click really did
+        select the product and open the funnel, while the ledger said the field
+        was unfilled and the branch was never marked walked — the crawl kept
+        re-planning a choice it had already made.
+        """
+        readers = (("is_checked", "input_value") if checkable
+                   else ("input_value", "is_checked"))
+        for reader in readers:
             try:
                 if reader == "input_value":
                     return await locator.input_value()

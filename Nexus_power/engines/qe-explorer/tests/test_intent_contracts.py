@@ -287,3 +287,49 @@ def test_flow_summary_no_intent_unmet():
     ]
     s = flow_ledger.summarize(flows)
     assert s["intent_unmet"] == 0
+
+
+# ── R0 read-back: a radio commits its CHECKEDNESS, not its value attribute ────
+
+class _FakeRadioLocator:
+    """An <input type=radio value="term-life"> that IS checked.
+
+    The point: ``input_value()`` does NOT raise on a radio — it returns the
+    value attribute — so a reader that tries it first never falls through to
+    ``is_checked()``."""
+
+    def __init__(self, checked=True, value="term-life"):
+        self._checked, self._value = checked, value
+
+    async def input_value(self):
+        return self._value
+
+    async def is_checked(self):
+        return self._checked
+
+    async def inner_text(self):
+        return ""
+
+
+def test_checkable_read_back_reports_checkedness_not_the_value_attribute():
+    """Regression: a genuinely selected product card read back as "term-life",
+    never equalled the intended "true", and was recorded intent_unmet — so the
+    branch was never marked walked and the crawl re-planned a choice it had
+    already made, while the funnel had in fact opened."""
+    import asyncio
+
+    from app.main import PlaywrightBrowserPort
+
+    port = PlaywrightBrowserPort.__new__(PlaywrightBrowserPort)   # no browser needed
+    loc = _FakeRadioLocator()
+
+    checkable = asyncio.run(port._read_value(loc, checkable=True))
+    assert checkable == "true", "a checkbox/radio commits its checked state"
+
+    # Unchecked must be distinguishable, not just truthy.
+    assert asyncio.run(
+        port._read_value(_FakeRadioLocator(checked=False), checkable=True)
+    ) == "false"
+
+    # Non-checkable controls keep reading their value (selects, text inputs).
+    assert asyncio.run(port._read_value(loc, checkable=False)) == "term-life"
