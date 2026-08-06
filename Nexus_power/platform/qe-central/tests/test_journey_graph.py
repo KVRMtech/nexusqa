@@ -392,3 +392,118 @@ async def _run_e1_explosion_cap():
         journey_fold.tenant_scoped_qec_session = originals[0]
         branch_planner.tenant_scoped_qec_session = originals[1]
         await engine.dispose()
+
+
+def _decision_blocked_flow(entry_fp="fpBlocked"):
+    """The VKPower shape: a page whose ONLY control is an unanswered business
+    decision.  The crawl may not pick an insurance type for the client, so the
+    advance clicks Continue, the page validates and stays put, and the walk
+    ends ``loop`` / ``completed=False``.  This traversal can never become
+    completed until one of its own options is forced."""
+    return {
+        "flow_id": "d" * 24, "entry_fingerprint": entry_fp,
+        "entry_url": "https://a.example/life-insurance/quote/start/",
+        "entry_title": "Get a Quote",
+        "terminal": "loop", "completed": False, "fully_answered": False,
+        "outcome_values": [],
+        "steps": [
+            {"fingerprint": entry_fp, "url": "u1", "title": "Choose coverage",
+             "fields_filled": 0, "fields_unfilled": 3,
+             "decision_points": [
+                 {"control_signature": "sig-product",
+                  "control_label": "Insurance type",
+                  "options": ["term life", "whole life", "universal life"],
+                  "choice": "", "provenance": "needs_input"}]},
+        ],
+    }
+
+
+@needs_db
+def test_decision_blocked_traversal_still_yields_plans():
+    """A journey stopped at an unmade decision must still be plannable.
+
+    Planning only off COMPLETED traversals deadlocks the exact case branch
+    walking exists to break — the journey cannot complete until an option is
+    forced, and no option is forced until it completes.  Regression guard for
+    the VKPower quote funnel that stalled at one state."""
+    asyncio.run(_run_decision_blocked())
+
+
+async def _run_decision_blocked():
+    from app.db.journey_models import JourneyTraversalRow
+    from app.db.models import QecBase
+
+    engine = create_async_engine(DB_URL)
+    async with engine.begin() as conn:
+        await conn.run_sync(QecBase.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    tenant = f"qec-blocked-{uuid.uuid4().hex[:10]}"
+    app_id = "app-blocked"
+    originals = (journey_fold.tenant_scoped_qec_session,
+                 branch_planner.tenant_scoped_qec_session)
+    try:
+        journey_fold.tenant_scoped_qec_session = (
+            lambda tid: _scoped(factory, tid))
+        branch_planner.tenant_scoped_qec_session = (
+            lambda tid: _scoped(factory, tid))
+
+        await journey_fold.fold_crawl(
+            tenant_id=tenant, app_id=app_id, exploration_id="ex-blocked",
+            coverage=_coverage(_decision_blocked_flow()))
+
+        # The traversal really is the deadlock shape: not completed, and
+        # terminal says the funnel REFUSED to advance.
+        async with _scoped(factory, tenant) as s:
+            tr = (await s.execute(select(JourneyTraversalRow))).scalar_one()
+            assert tr.completed is False
+            assert tr.terminal == "loop"
+
+        # ...and it is still plannable: one plan per unchosen option.
+        plans = await branch_planner.plan_walks(
+            tenant_id=tenant, app_id=app_id, limit=20)
+        assert len(plans) == 3, f"deadlocked: {len(plans)} plans"
+        assert {list(p["choice_overrides"].values())[0] for p in plans} == {
+            "term life", "whole life", "universal life"}
+    finally:
+        journey_fold.tenant_scoped_qec_session = originals[0]
+        branch_planner.tenant_scoped_qec_session = originals[1]
+        await engine.dispose()
+
+
+@needs_db
+def test_broken_run_terminals_are_not_plannable():
+    """The carve-out is NARROW: a walk that was cut short (budget, cancel) or
+    whose advance was honestly UNKNOWN (oracle_unavailable) is a fragment, not
+    a finding — planning off it would launder an unknown into a claim."""
+    asyncio.run(_run_broken_terminals_excluded())
+
+
+async def _run_broken_terminals_excluded():
+    from app.db.models import QecBase
+
+    engine = create_async_engine(DB_URL)
+    async with engine.begin() as conn:
+        await conn.run_sync(QecBase.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    originals = (journey_fold.tenant_scoped_qec_session,
+                 branch_planner.tenant_scoped_qec_session)
+    try:
+        journey_fold.tenant_scoped_qec_session = (
+            lambda tid: _scoped(factory, tid))
+        branch_planner.tenant_scoped_qec_session = (
+            lambda tid: _scoped(factory, tid))
+
+        for terminal in ("budget_exhausted", "cancelled", "oracle_unavailable"):
+            tenant = f"qec-excl-{uuid.uuid4().hex[:10]}"
+            flow = _decision_blocked_flow()
+            flow["terminal"] = terminal
+            await journey_fold.fold_crawl(
+                tenant_id=tenant, app_id="app-excl",
+                exploration_id=f"ex-{terminal}", coverage=_coverage(flow))
+            plans = await branch_planner.plan_walks(
+                tenant_id=tenant, app_id="app-excl", limit=20)
+            assert plans == [], f"{terminal} must not be plannable"
+    finally:
+        journey_fold.tenant_scoped_qec_session = originals[0]
+        branch_planner.tenant_scoped_qec_session = originals[1]
+        await engine.dispose()

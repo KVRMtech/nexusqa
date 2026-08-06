@@ -13,6 +13,12 @@ Priorities: journeys whose paths display outcomes first (a different premium
 IS a different business path — the highest-value proof), then the largest
 discovered backlog.
 
+Source traversal: a COMPLETED traversal is preferred, falling back to one
+that ended decision-blocked (see ``_DECISION_BLOCKED_TERMINALS``).  Planning
+only off completed traversals deadlocks a journey stopped at an unmade
+business decision — it cannot complete until an option is forced, and no
+option is forced until it completes.
+
 Status law: ``discovered → planned`` at dispatch; the completion fold
 upgrades ``planned → walked`` when the option was genuinely taken; the
 reconciler here marks what a planned walk did NOT reach as ``blocked`` with
@@ -28,6 +34,7 @@ import hashlib
 import logging
 from typing import Any, Optional
 
+from sqlalchemy import or_ as sa_or
 from sqlalchemy import select
 
 from ..config import settings
@@ -48,6 +55,24 @@ from .journey_fold import (
 )
 
 logger = logging.getLogger(__name__)
+
+#: Traversal terminals that mean "the funnel REFUSED to advance", as opposed
+#: to "the run broke or was cut short".  A journey that stops at an unmade
+#: business decision (which insurance type? which coverage tier?) can only
+#: ever end this way: the crawl is forbidden from choosing an option itself,
+#: so it clicks Continue, the page validates and stays put, and the loop
+#: detector ends the walk — ``completed`` is False and always will be.
+#:
+#: Planning branches ONLY off completed traversals therefore deadlocks the
+#: exact case branch walking exists to break: the journey cannot complete
+#: until an option is forced, and no option is forced until the journey
+#: completes.  These two terminals are the sanctioned way out of that circle.
+#:
+#: Deliberately EXCLUDED: ``budget_exhausted`` / ``cancelled`` (the walk was
+#: cut short — its path is a fragment, not a finding) and
+#: ``oracle_unavailable`` (whether it advances is honestly UNKNOWN; planning
+#: off a guess would launder that unknown into a claim).
+_DECISION_BLOCKED_TERMINALS = frozenset({"loop", "no_advance"})
 
 
 async def autonomy_flags(tenant_id: str) -> dict[str, bool]:
@@ -109,13 +134,23 @@ async def plan_walks(
 
         scored: list[tuple[int, int, JourneyRow, list[str]]] = []
         for j in journeys:
+            # A completed traversal is always preferred; a decision-blocked one
+            # is the fallback that breaks the deadlock described on
+            # _DECISION_BLOCKED_TERMINALS.  Ordering by ``completed`` first
+            # keeps the old behaviour byte-for-byte whenever a completed
+            # traversal exists, so this only ever ADDS reachable plans.
             traversal = (await session.execute(
                 select(JourneyTraversalRow).where(
                     JourneyTraversalRow.tenant_id == tenant_id,
                     JourneyTraversalRow.app_id == app_id,
                     JourneyTraversalRow.journey_id == j.journey_id,
-                    JourneyTraversalRow.completed.is_(True),
-                ).order_by(JourneyTraversalRow.created_at.desc())
+                    sa_or(
+                        JourneyTraversalRow.completed.is_(True),
+                        JourneyTraversalRow.terminal.in_(
+                            sorted(_DECISION_BLOCKED_TERMINALS)),
+                    ),
+                ).order_by(JourneyTraversalRow.completed.desc(),
+                           JourneyTraversalRow.created_at.desc())
                 .limit(1))).scalar_one_or_none()
             if traversal is None:
                 continue
