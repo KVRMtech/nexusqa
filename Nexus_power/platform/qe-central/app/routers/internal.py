@@ -38,6 +38,7 @@ from sqlalchemy import select
 
 from ..artifacts.creator import create_crawl_artifact
 from ..clients import factory, platform_api
+from ..config import settings
 from ..services import field_agent
 from ..clients.config import SIGNATURE_HEADER, phase1_settings
 from ..clients.manifest_mapper import (
