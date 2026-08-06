@@ -637,6 +637,11 @@ async def _dispatch_explorer(
     # Fail-open: no memory → full ladder walk, exactly as before.
     from ..services import mechanic_memory
     proven_mechanics = await mechanic_memory.recall_all(tenant_id, app_id)
+    # GAP-2 fix: supplement with cross-tenant pooled priors (value-free).
+    # Tenant-specific mechanics always win on collision (setdefault).
+    pooled_mechanics = await mechanic_memory.recall_all_priors()
+    for sig, mech in pooled_mechanics.items():
+        proven_mechanics.setdefault(sig, mech)
     dispatch_request = ExploreDispatchRequest(
         crawl_id=crawl_id,
         tenant_id=tenant_id,

@@ -157,6 +157,19 @@ class FormFillResult:
     #: no way to know it already asked.
     field_ledger: list[dict[str, Any]] = field(default_factory=list)
 
+    @property
+    def has_unanswered_decisions(self) -> bool:
+        """The page has enumerable decision-point fields (GROUP_ASSEMBLE'd
+        radios or selects with options) that the fill could not resolve.
+        The advance engine should still fire so the crawler can discover
+        what lies beyond the decision, or at minimum report honestly that
+        the page is a decision gate — not a dead end."""
+        return any(
+            e.get("options") and not e.get("filled")
+            for e in self.field_ledger
+            if isinstance(e, dict)
+        )
+
 
 def _norm(text: Any) -> str:
     return " ".join(("" if text is None else str(text)).split()).lower()

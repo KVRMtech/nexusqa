@@ -170,6 +170,24 @@ class Settings(BaseSettings):
     pairwise_walks_per_cycle: int = Field(
         default=8, alias="QEC_PAIRWISE_WALKS_PER_CYCLE")
 
+    # ── R5 Vision Medic ───────────────────────────────────────────────────
+    #: Master switch for the vision-escalation pathway. OFF by default —
+    #: the deterministic ladder + text medic handle >99% of controls;
+    #: vision fires only for genuinely DOM-opaque surfaces (canvas, svg,
+    #: cross-origin iframe, unlabeled widgets). Turning this on requires
+    #: a multimodal-capable model tier on the ``vision_medic`` LLM task.
+    crawl_vision_enabled: bool = Field(
+        default=False, alias="QEC_CRAWL_VISION_ENABLED")
+    #: Per-crawl cap on vision oracle calls (each is a multimodal LLM
+    #: request — more expensive than text). The explorer's own cap
+    #: (``QEC_MEDIC_ORACLE_MAX_CALLS``) is a separate, tighter backstop.
+    vision_max_calls: int = Field(
+        default=20, alias="QEC_VISION_MAX_CALLS")
+    #: Circuit breaker threshold — consecutive vision failures before the
+    #: breaker opens and all subsequent calls return ``unavailable``.
+    vision_breaker_threshold: int = Field(
+        default=3, alias="QEC_VISION_BREAKER")
+
     # ── Runnable Journeys (Release D) ────────────────────────────────────
     #: Minimum coverage percent for a case to LINK to a journey.
     journey_link_min_score: int = Field(

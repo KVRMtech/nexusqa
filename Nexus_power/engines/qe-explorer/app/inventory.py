@@ -543,8 +543,37 @@ def build_inventory(
             rec["anchor"] = anchor
             anchored += 1
 
+    # Pass 3: GROUP_ASSEMBLE — merge sibling radio controls into logical
+    # groups.  Each radio is enriched with the accessible names of every
+    # other radio in the same frame as ``options``, so downstream logic
+    # (decision-point enumeration, fill resolution, diagnostics) sees a
+    # proper multi-option choice instead of N isolated toggles with
+    # ``options: []``.  Grouping is per-frame (all radios in the same
+    # frame belong to one group — the common case; pages with two
+    # unrelated radio groups in one frame are rare and handled honestly
+    # by the fill cascade).
+    grouped = 0
+    radio_by_frame: dict[str, list[int]] = {}
+    for idx, rec in enumerate(records):
+        if rec.get("kind") == "radio":
+            frame = rec.get("frame_selector") or ""
+            radio_by_frame.setdefault(frame, []).append(idx)
+    for frame, indices in radio_by_frame.items():
+        if len(indices) < 2:
+            continue
+        group_options = [records[i]["name"] for i in indices
+                         if records[i].get("name")]
+        if len(group_options) < 2:
+            continue
+        for i in indices:
+            records[i]["options"] = group_options
+            records[i]["_radio_group_size"] = len(indices)
+        grouped += len(indices)
+
     logger.info(
-        "qec.inventory.built controls=%d anchored=%d dangerous=%d",
+        "qec.inventory.built controls=%d anchored=%d dangerous=%d "
+        "radio_grouped=%d",
         len(records), anchored, sum(1 for r in records if r["danger"]),
+        grouped,
     )
     return records

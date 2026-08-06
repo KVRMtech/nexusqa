@@ -66,6 +66,41 @@ async def recall_all(tenant_id: str, app_id: str) -> dict[str, str]:
         return {}
 
 
+async def recall_all_priors() -> dict[str, str]:
+    """All cross-tenant pooled mechanics that clear the proof thresholds.
+
+    Called at dispatch time (alongside ``recall_all``) to supplement the
+    tenant's own mechanics with knowledge from other tenants' proven
+    interactions.  Value-free by construction — only rung variant names.
+    """
+    try:
+        async with tenant_scoped_qec_session("__system__") as session:
+            rows = (
+                await session.execute(
+                    select(MechanicPriorRow).where(
+                        MechanicPriorRow.proof_count
+                        >= settings.advance_prior_min_proofs,
+                        MechanicPriorRow.distinct_tenants
+                        >= settings.advance_prior_min_tenants,
+                    )
+                )
+            ).scalars().all()
+            if not rows:
+                return {}
+            best: dict[str, MechanicPriorRow] = {}
+            for r in rows:
+                prev = best.get(r.control_sig)
+                if prev is None or (r.proof_count, r.distinct_tenants) > (
+                    prev.proof_count, prev.distinct_tenants
+                ):
+                    best[r.control_sig] = r
+            return {sig: row.mechanic for sig, row in best.items()}
+    except Exception as exc:
+        logger.warning("qec.mechanic_memory.all_priors_failed",
+                       extra={"error": str(exc)[:200]})
+        return {}
+
+
 async def recall_priors(control_sigs: set[str]) -> dict[str, str]:
     """Cross-tenant pooled mechanics for a set of control signatures.
 

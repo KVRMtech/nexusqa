@@ -1153,7 +1153,7 @@ class Crawler:
         # is no advance trigger it returns False and this state is recorded normally.
         walked = False
         entry_pick = AdvanceDecision()
-        if self._wizard_enabled and is_form and fill is not None and fill.filled:
+        if self._wizard_enabled and is_form and fill is not None and (fill.filled or fill.has_unanswered_decisions):
             entry_pick = await self._pick_advance(
                 snapshot_controls, obs.url, obs.title, fingerprint)
             walked = await self._walk_wizard(
