@@ -361,6 +361,35 @@ async def mark_planned(*, tenant_id: str, branch_ids: list[str]) -> int:
     return changed
 
 
+async def unmark_planned(*, tenant_id: str, branch_ids: list[str]) -> int:
+    """``planned → discovered`` — the dispatch never happened, so put the option
+    back on the backlog untouched.
+
+    This is NOT the same as ``blocked``.  ``blocked`` is a finding ("this option
+    was planned, the walk ran, and it did not reach it") and it is terminal.  A
+    dispatch that was REFUSED — the single-flight explorer answering 409 busy —
+    produced no walk and therefore no finding; recording it as blocked retires an
+    option nobody ever tried.  Observed live: a 4-plan cycle against a
+    single-worker pool burned 3 options per round on back-pressure alone.
+
+    ``walked`` and ``blocked`` are never downgraded."""
+    if not branch_ids:
+        return 0
+    changed = 0
+    async with tenant_scoped_qec_session(tenant_id) as session:
+        rows = (await session.execute(
+            select(JourneyBranchRow).where(
+                JourneyBranchRow.tenant_id == tenant_id,
+                JourneyBranchRow.branch_id.in_(branch_ids),
+                JourneyBranchRow.status == BRANCH_PLANNED,
+            ))).scalars().all()
+        for b in rows:
+            b.status = BRANCH_DISCOVERED
+            b.last_status_at = utc_now()
+            changed += 1
+    return changed
+
+
 async def reconcile_completion(
     *, tenant_id: str, app_id: str, walk_plan: dict[str, Any],
     terminal_reason: str,

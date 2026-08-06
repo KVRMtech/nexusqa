@@ -116,7 +116,10 @@ services:
       # QEC_AUTOWALK_MAX_DEPTH once a live run proves the funnel opens.
       QEC_BRANCH_WALKS_ENABLED: ${QEC_BRANCH_WALKS_ENABLED:-true}
       QEC_JOURNEY_AUTOWALK_ENABLED: ${QEC_JOURNEY_AUTOWALK_ENABLED:-true}
-      QEC_BRANCH_WALKS_PER_CYCLE: ${QEC_BRANCH_WALKS_PER_CYCLE:-4}
+      # Match the EXPLORER POOL, not the backlog: the explorer is single-flight
+      # per worker, so dispatching more plans than there are workers guarantees
+      # 409s for the excess. Raise this only alongside the worker pool.
+      QEC_BRANCH_WALKS_PER_CYCLE: ${QEC_BRANCH_WALKS_PER_CYCLE:-1}
       QEC_AUTOWALK_MAX_DEPTH: ${QEC_AUTOWALK_MAX_DEPTH:-1}
     volumes:
     # Shared frame volume from the main stack (eyes-engine serves from it) —

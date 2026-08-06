@@ -601,6 +601,12 @@ async def _dispatch_explorer(
                 str(k)[:64]: str(v)[:80]
                 for k, v in (walk_plan.get("choice_overrides") or {}).items()},
             "identity_ref": str(walk_plan.get("identity_ref") or "")[:200],
+            # How deep in the autowalk cascade this crawl already is. MUST be
+            # persisted: the completion handler reads it back to decide whether
+            # to recurse, so dropping it here made every branch walk look like a
+            # fresh depth-0 crawl and the loop never terminated — observed live,
+            # re-planning every ~2.5 minutes and burning the branch backlog.
+            "walk_depth": int(walk_plan.get("walk_depth") or 0),
         }
     async with tenant_scoped_qec_session(tenant_id) as session:
         session.add(

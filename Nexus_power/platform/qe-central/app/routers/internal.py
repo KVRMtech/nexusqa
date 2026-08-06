@@ -834,6 +834,18 @@ async def complete_crawl(crawl_id: str, request: Request) -> dict:
                         "journey_id": plan["journey_id"],
                         "exploration_id": dispatch.get("exploration_id")})
                 except Exception as exc:
+                    # BUSY (409) is back-pressure, not a finding. The explorer
+                    # pool is single-flight by default, so a multi-plan cycle
+                    # WILL be refused after the first dispatch; retiring those
+                    # options as `blocked` would silently cap coverage at one
+                    # option per cycle for every app with more than one worker's
+                    # worth of work. Put them back on the backlog instead.
+                    if getattr(exc, "status_code", 0) == 409:
+                        await branch_planner.unmark_planned(
+                            tenant_id=tenant_id, branch_ids=plan["branch_ids"])
+                        autowalked.append({"journey_id": plan["journey_id"],
+                                           "requeued": "explorer_busy"})
+                        continue
                     await branch_planner.reconcile_completion(
                         tenant_id=tenant_id, app_id=app_id, walk_plan=plan,
                         terminal_reason="dispatch_failed")

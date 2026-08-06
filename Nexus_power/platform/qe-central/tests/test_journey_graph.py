@@ -593,3 +593,85 @@ async def _run_radio_group_fold():
         journey_fold.tenant_scoped_qec_session = originals[0]
         branch_planner.tenant_scoped_qec_session = originals[1]
         await engine.dispose()
+
+
+@needs_db
+def test_busy_dispatch_requeues_the_option_instead_of_retiring_it():
+    """409 back-pressure is not a finding.
+
+    ``blocked`` means "the walk ran and did not reach this option". A dispatch
+    the single-flight explorer REFUSED produced no walk at all, so retiring the
+    option would silently cap coverage at one per cycle. Observed live: a 4-plan
+    cycle burned 3 options per round on back-pressure alone."""
+    asyncio.run(_run_unmark_planned())
+
+
+async def _run_unmark_planned():
+    from app.db.journey_models import JourneyBranchRow
+    from app.db.models import QecBase
+
+    engine = create_async_engine(DB_URL)
+    async with engine.begin() as conn:
+        await conn.run_sync(QecBase.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    tenant = f"qec-busy-{uuid.uuid4().hex[:10]}"
+    app_id = "app-busy"
+    originals = (journey_fold.tenant_scoped_qec_session,
+                 branch_planner.tenant_scoped_qec_session)
+    try:
+        journey_fold.tenant_scoped_qec_session = (
+            lambda tid: _scoped(factory, tid))
+        branch_planner.tenant_scoped_qec_session = (
+            lambda tid: _scoped(factory, tid))
+
+        await journey_fold.fold_crawl(
+            tenant_id=tenant, app_id=app_id, exploration_id="ex-busy",
+            coverage=_coverage(_radio_group_flow()))
+        plans = await branch_planner.plan_walks(
+            tenant_id=tenant, app_id=app_id, limit=20)
+        assert plans, "need a plan to requeue"
+        ids = plans[0]["branch_ids"]
+
+        assert await branch_planner.mark_planned(
+            tenant_id=tenant, branch_ids=ids) == 1
+        assert await branch_planner.unmark_planned(
+            tenant_id=tenant, branch_ids=ids) == 1
+
+        async with _scoped(factory, tenant) as s:
+            row = (await s.execute(select(JourneyBranchRow).where(
+                JourneyBranchRow.tenant_id == tenant,
+                JourneyBranchRow.branch_id == ids[0]))).scalar_one()
+            assert row.status == BRANCH_DISCOVERED, "must return to the backlog"
+
+        # ...and it is offered again on the next cycle, not lost.
+        again = await branch_planner.plan_walks(
+            tenant_id=tenant, app_id=app_id, limit=20)
+        assert ids[0] in {b for p in again for b in p["branch_ids"]}
+    finally:
+        journey_fold.tenant_scoped_qec_session = originals[0]
+        branch_planner.tenant_scoped_qec_session = originals[1]
+        await engine.dispose()
+
+
+def test_walked_and_blocked_are_never_downgraded_by_requeue():
+    """The requeue must only ever undo ``planned``. A walked option is a proof
+    and a blocked one is a finding; neither may be silently reopened."""
+    import inspect
+    src = inspect.getsource(branch_planner.unmark_planned)
+    assert "BRANCH_PLANNED" in src, "requeue must filter on planned only"
+    assert "BRANCH_WALKED" not in src and "BRANCH_BLOCKED" not in src
+
+
+def test_walk_depth_is_persisted_on_the_dispatched_plan():
+    """The completion handler reads walk_depth back to decide whether to
+    recurse. Dropping it from the stored plan made every branch walk look like a
+    fresh depth-0 crawl, so the autowalk never terminated — it re-planned every
+    ~2.5 minutes and burned the branch backlog."""
+    import inspect
+
+    from app.routers import explorations
+    src = inspect.getsource(explorations._dispatch_explorer)
+    assert 'pending_stats["walk_plan"]' in src
+    assert '"walk_depth"' in src, (
+        "walk_depth MUST be persisted on the stored walk_plan or the completion "
+        "handler reads 0 forever and the autowalk never terminates")
