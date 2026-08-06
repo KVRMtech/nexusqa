@@ -73,7 +73,7 @@ from __future__ import annotations
 
 #: Stamped into the crawl manifest so a manifest can be traced to the exact
 #: injected-JS generation that produced its controls.
-INVENTORY_JS_VERSION = "inv-js-v4"
+INVENTORY_JS_VERSION = "inv-js-v5"
 
 INVENTORY_JS = r"""
 (() => {
@@ -157,6 +157,33 @@ INVENTORY_JS = r"""
     } catch (e) { return ""; }
   }
 
+  // The text an element contributes to an ACCESSIBLE NAME.
+  //
+  // MUST NOT be textContent. W3C accname — and therefore Playwright's
+  // getByRole(name=…), every AT, and the compiler's own binding rung — follows
+  // the RENDERED text, so two block children contribute "A B". textContent
+  // concatenates them with nothing and yields "AB".
+  //
+  // Observed live: a product card built as <div>Term Life Insurance</div>
+  // <div>Affordable coverage…</div> was named
+  // "Term Life InsuranceAffordable coverage…", while Playwright computed
+  // "Term Life Insurance Affordable coverage…". get_by_role(name=…) matched
+  // ZERO elements, so every fill on that card timed out and was recorded
+  // intent_unmet — the control was unusable, and any generated script binding
+  // by that name would fail the same way.
+  //
+  // innerText is the rendered form (block boundaries become newlines, which
+  // norm() collapses to spaces; inline children stay unseparated, matching
+  // accname). It is empty for hidden elements by definition, so sr-only labels
+  // fall back to textContent rather than losing their name entirely.
+  function accText(el) {
+    if (!el) return "";
+    var t = "";
+    try { t = norm(el.innerText); } catch (e) {}
+    if (!t) { try { t = norm(el.textContent); } catch (e) {} }
+    return t;
+  }
+
   // Accessible name via the design-ordered subset. Returns {name, source}.
   function accessibleName(el, doc) {
     var role = implicitRole(el);
@@ -167,7 +194,7 @@ INVENTORY_JS = r"""
       try {
         var labels = doc.querySelectorAll('label[for="' + CSS.escape(el.id) + '"]');
         if (labels && labels.length) {
-          var lt = norm(labels[0].textContent);
+          var lt = accText(labels[0]);
           if (lt) return { name: lt, source: "label-for" };
         }
       } catch (e) {}
@@ -191,13 +218,13 @@ INVENTORY_JS = r"""
     try {
       var wrap = el.closest ? el.closest("label") : null;
       if (wrap) {
-        var wt = norm(wrap.textContent);
+        var wt = accText(wrap);
         if (wt) return { name: wt, source: "wrapping-label" };
       }
     } catch (e) {}
     // 5. name-from-content (buttons / links / menuitems …)
     if (nameFromContentRole(role, tag)) {
-      var ct = norm(el.textContent);
+      var ct = accText(el);
       if (!ct) {
         var vlabel = norm(el.value);        // input[type=submit] value
         if (vlabel) ct = vlabel;
