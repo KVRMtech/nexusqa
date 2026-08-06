@@ -107,6 +107,17 @@ services:
       QEC_CRAWL_STORAGE_ROOT: /work
       # Squid allowlist file qe-central populates before each dispatch.
       QEC_EGRESS_ALLOWLIST_PATH: /qec/egress-allowlist/allowed_domains.txt
+      # ── C4/C5 planned branch walks + autowalk (Journey Graph) ─────────────
+      # A decision point (insurance type, coverage tier) is a business choice
+      # the crawl must not make unilaterally — the ONLY sanctioned way past it
+      # is a planned walk that forces one enumerated option per crawl. Both the
+      # env switch AND the tenant's own flag must be on (fail-closed).
+      # Depth starts at 1: one fan-out round, not a recursive explosion. Raise
+      # QEC_AUTOWALK_MAX_DEPTH once a live run proves the funnel opens.
+      QEC_BRANCH_WALKS_ENABLED: ${QEC_BRANCH_WALKS_ENABLED:-true}
+      QEC_JOURNEY_AUTOWALK_ENABLED: ${QEC_JOURNEY_AUTOWALK_ENABLED:-true}
+      QEC_BRANCH_WALKS_PER_CYCLE: ${QEC_BRANCH_WALKS_PER_CYCLE:-4}
+      QEC_AUTOWALK_MAX_DEPTH: ${QEC_AUTOWALK_MAX_DEPTH:-1}
     volumes:
     # Shared frame volume from the main stack (eyes-engine serves from it) —
     # visual_frames assets land where eyes can read them (R-5).
