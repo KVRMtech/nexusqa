@@ -40,6 +40,7 @@ the guard ships in the same package, so the local fallback is defensive only.
 """
 from __future__ import annotations
 
+import hashlib
 import logging
 import re
 from typing import Any, Iterable, Optional, TypedDict
@@ -152,6 +153,19 @@ class ControlRecord(TypedDict):
     roledescription: str
     value_committed: str
     frame_selector: str
+    #: The mutually-exclusive CHOICE GROUP this control answers, as DECLARED by
+    #: the DOM (radio ``name`` attribute / ``role=radiogroup`` container); "" when
+    #: the control is not part of one.  Structure only — which question, never
+    #: what was answered.
+    group_key: str
+    #: Stamped by GROUP_ASSEMBLE on every member of a group of 2+ (absent
+    #: otherwise): stable id of the question, the answers it offers, and how many
+    #: members carry it.  ``group_options`` is deliberately separate from
+    #: ``options`` so a radio's field signature does not shift when a sibling
+    #: appears or disappears.
+    group_id: str
+    group_options: list[str]
+    group_size: int
     anchor: Optional[AnchorRecord]
     danger: bool
     danger_rule_id: str
@@ -477,6 +491,9 @@ def build_control_record(
         "roledescription": _s(raw.get("roledescription")).strip(),
         "value_committed": value_committed,
         "frame_selector": frame_selector,
+        # DOM-declared choice grouping; GROUP_ASSEMBLE (pass 3) turns this into
+        # group_id/group_options once it knows the control's siblings.
+        "group_key": _s(raw.get("group_key")).strip(),
         "anchor": None,   # filled by build_inventory only on collision
         "danger": danger,
         "danger_rule_id": danger_rule_id,
@@ -543,37 +560,58 @@ def build_inventory(
             rec["anchor"] = anchor
             anchored += 1
 
-    # Pass 3: GROUP_ASSEMBLE — merge sibling radio controls into logical
-    # groups.  Each radio is enriched with the accessible names of every
-    # other radio in the same frame as ``options``, so downstream logic
-    # (decision-point enumeration, fill resolution, diagnostics) sees a
-    # proper multi-option choice instead of N isolated toggles with
-    # ``options: []``.  Grouping is per-frame (all radios in the same
-    # frame belong to one group — the common case; pages with two
-    # unrelated radio groups in one frame are rare and handled honestly
-    # by the fill cascade).
-    grouped = 0
-    radio_by_frame: dict[str, list[int]] = {}
+    # Pass 3: GROUP_ASSEMBLE — a set of mutually-exclusive radios is ONE
+    # question with N answers, not N unrelated toggles.
+    #
+    # Grouping is the DOM's own declaration, never a heuristic: native radios
+    # group by their ``name`` attribute scoped to the owning form, ARIA ones by
+    # their ``role=radiogroup`` container (see ``groupKeyOf`` in inventory_js).
+    # A page with a product picker AND a gender picker therefore yields two
+    # groups, not one — grouping merely by "same frame" would fuse unrelated
+    # questions and offer each the other's answers.
+    #
+    # Each member is stamped with:
+    #   ``group_id``      — stable identity of the QUESTION.  The decision-point
+    #                       ledger keys branches on this, so N members × N
+    #                       options collapse to one decision with N branches
+    #                       instead of an N² cross-product.
+    #   ``group_options`` — every answer the question offers, in DOM order.
+    #   ``group_size``    — how many members the question has.
+    #
+    # Deliberately NOT written to ``options``: that field feeds the field
+    # signature's option-shape bucket, and a radio's identity must not change
+    # just because a sibling appeared.  ``group_options`` is carried alongside
+    # so enumeration can see the answers without churning signatures.
+    grouped = groups_found = 0
+    by_group: dict[tuple[str, str], list[int]] = {}
     for idx, rec in enumerate(records):
-        if rec.get("kind") == "radio":
-            frame = rec.get("frame_selector") or ""
-            radio_by_frame.setdefault(frame, []).append(idx)
-    for frame, indices in radio_by_frame.items():
+        if rec.get("kind") != "radio":
+            continue
+        group_key = _s(rec.get("group_key")).strip()
+        if not group_key:
+            continue           # undeclared grouping → left exactly as before
+        by_group.setdefault((rec.get("frame_selector") or "", group_key),
+                            []).append(idx)
+
+    for (frame, group_key), indices in by_group.items():
         if len(indices) < 2:
-            continue
-        group_options = [records[i]["name"] for i in indices
-                         if records[i].get("name")]
-        if len(group_options) < 2:
-            continue
+            continue           # a lone radio is a toggle, not a question
+        options = [records[i]["name"] for i in indices if records[i].get("name")]
+        if len(options) < 2:
+            continue           # unnameable members → nothing honest to enumerate
+        group_id = hashlib.sha256(
+            f"{frame}\x1f{group_key}".encode("utf-8")).hexdigest()[:32]
         for i in indices:
-            records[i]["options"] = group_options
-            records[i]["_radio_group_size"] = len(indices)
+            records[i]["group_id"] = group_id
+            records[i]["group_options"] = options
+            records[i]["group_size"] = len(indices)
+        groups_found += 1
         grouped += len(indices)
 
     logger.info(
         "qec.inventory.built controls=%d anchored=%d dangerous=%d "
-        "radio_grouped=%d",
+        "radio_groups=%d radio_grouped=%d",
         len(records), anchored, sum(1 for r in records if r["danger"]),
-        grouped,
+        groups_found, grouped,
     )
     return records

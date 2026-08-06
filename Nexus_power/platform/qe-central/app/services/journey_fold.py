@@ -260,7 +260,15 @@ async def fold_crawl(
 
                 # Branches: every enumerated option — walked or NOT.
                 for dp in dps:
-                    sig = str(dp.get("control_signature") or "")
+                    # A radio group is ONE question answered by N elements. Every
+                    # member reports the same ``group_id``, so keying branches on
+                    # it records N branches (one per answer) rather than an N×N
+                    # cross-product of phantom decisions — and gives a planned
+                    # walk a single stable key to force a choice on. Falls back to
+                    # the control signature for genuinely single-element decision
+                    # points (selects, checkboxes) and pre-group_id evidence.
+                    sig = str(dp.get("group_id") or "") or str(
+                        dp.get("control_signature") or "")
                     label = normalize_label(str(dp.get("control_label") or ""))
                     if not sig:
                         continue

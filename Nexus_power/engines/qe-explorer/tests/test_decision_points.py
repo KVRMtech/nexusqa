@@ -220,3 +220,81 @@ def test_committed_override_fill_stamps_planned_choice_in_ledger():
     entry = next(e for e in result.field_ledger if e["name"] == "Tobacco use")
     assert entry["provenance"] == "planned"
     assert entry["choice"] == "smoker"
+
+
+# ── radio GROUPS: one question, N elements, exactly one checked ──────────────
+
+_GROUP = "g" * 32
+
+
+def _member(label: str) -> dict:
+    """One member of a declared radio group, as build_inventory stamps it."""
+    return {"name": label, "kind": "radio", "role": "radio", "tag": "input",
+            "input_type": "radio", "options": [],
+            "group_id": _GROUP,
+            "group_options": ["Term Life", "Whole Life", "Universal Life"],
+            "group_size": 3}
+
+
+def test_radio_group_enumerates_the_groups_answers_not_the_elements():
+    """A single <input type=radio> has no options of its own — without the group
+    the decision point enumerates [] and vanishes from the journey graph."""
+    entry = resolve_field(_member("Term Life"), "radio", "Term Life",
+                          AnswerKey({}), _IDENTITY)["entry"]
+    assert entry["options"] == ["term life", "whole life", "universal life"]
+    assert entry["group_id"] == _GROUP
+
+
+def test_planned_walk_checks_only_the_forced_member_of_the_group():
+    """The override is keyed by the QUESTION. The member that IS the forced
+    answer checks itself; its siblings must be left untouched, because checking
+    a second member would silently overturn the planned walk."""
+    overrides = {_GROUP: "whole life"}
+    chosen = resolve_field(_member("Whole Life"), "radio", "Whole Life",
+                           AnswerKey({}), _IDENTITY, choice_overrides=overrides)
+    assert chosen["value"] == "Whole Life"
+    assert chosen["entry"]["provenance"] == "planned"
+    assert chosen["entry"]["filled"] is True
+
+    for sibling in ("Term Life", "Universal Life"):
+        out = resolve_field(_member(sibling), "radio", sibling, AnswerKey({}),
+                            _IDENTITY, choice_overrides=overrides)
+        assert out["value"] is None, f"{sibling} must not be checked"
+        assert out["entry"]["filled"] is False
+
+
+def test_answer_key_cannot_overturn_a_planned_group_choice():
+    """A sibling must not fall through to the answer key while a walk is forcing
+    a different option — two members of one group selected is not a state the
+    DOM can even hold, and the last write would decide the business path."""
+    key = AnswerKey({"Term Life": "yes"})
+    out = resolve_field(_member("Term Life"), "radio", "Term Life", key,
+                        _IDENTITY, choice_overrides={_GROUP: "whole life"})
+    assert out["value"] is None
+
+
+def test_ungrouped_radio_keeps_the_pre_group_safety_rule():
+    """No declared group ⇒ unchanged behaviour: USER mode never picks a radio,
+    because choosing a product is a business decision, not a crawl decision."""
+    solo = {"name": "Term Life", "kind": "radio", "role": "radio",
+            "tag": "input", "input_type": "radio", "options": []}
+    out = resolve_field(solo, "radio", "Term Life", AnswerKey({}), _IDENTITY)
+    assert out["value"] is None
+    assert "group_id" not in out["entry"]
+
+
+def test_group_id_survives_the_ledger_sanitizer():
+    """Dropped here, the fold cannot tell four members of one choice from four
+    independent choices — the N×N phantom-branch bug."""
+    dps = _decision_points([
+        {"name": "Whole Life", "signature": "s1", "options": ["term life", "whole life"],
+         "provenance": "planned", "choice": "whole life", "group_id": _GROUP},
+    ])
+    assert dps[0]["group_id"] == _GROUP
+    f = flow_ledger.build_flow(
+        entry_fingerprint="fpG", entry_url="u", entry_title="Quote",
+        steps=[{"fingerprint": "f1", "url": "u1", "title": "Product",
+                "fields_filled": 1, "fields_unfilled": 0,
+                "decision_points": dps}],
+        terminal=flow_ledger.TERMINAL_SUBMIT_BOUNDARY, max_steps=20)
+    assert f["steps"][0]["decision_points"][0]["group_id"] == _GROUP

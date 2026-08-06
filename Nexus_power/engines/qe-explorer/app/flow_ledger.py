@@ -115,6 +115,13 @@ def build_flow(*, entry_fingerprint: str, entry_url: str, entry_title: str,
                     "options": [str(o)[:80] for o in (dp.get("options") or ())][:24],
                     "provenance": str(dp.get("provenance") or "")[:40],
                 }
+                # The QUESTION a radio group's members all share — value-free
+                # (a hash of the DOM's own grouping declaration). Without it the
+                # fold cannot tell four members of one choice apart from four
+                # independent choices.
+                group_id = str(dp.get("group_id") or "")[:64]
+                if group_id:
+                    rec["group_id"] = group_id
                 choice = dp.get("choice")
                 if choice:
                     rec["choice"] = str(choice)[:80]

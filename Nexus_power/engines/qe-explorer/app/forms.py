@@ -262,8 +262,14 @@ def _enumerable_options(control: Mapping[str, Any], kind: str) -> list[str]:
     radio enumerate their option labels (product UI text — never values)."""
     if kind in ("checkbox", "toggle"):
         return ["checked", "unchecked"]
+    # A radio's answers live on its GROUP, not on the element: a single
+    # <input type=radio> has no option list of its own, so without the group it
+    # enumerates as [] and the decision point vanishes from the graph.
+    source = control.get("options")
+    if kind == "radio" and control.get("group_options"):
+        source = control.get("group_options")
     out: list[str] = []
-    for opt in (control.get("options") or ())[:_MAX_RECORDED_OPTIONS]:
+    for opt in (source or ())[:_MAX_RECORDED_OPTIONS]:
         label = normalize_option(opt)
         if label:
             out.append(label)
@@ -429,14 +435,38 @@ def resolve_field(control: Mapping[str, Any], kind: str, name: str,
     # ``choice`` is stamped by the caller only when the fill COMMITTED.
     if kind in _ENUMERABLE_KINDS:
         entry["options"] = _enumerable_options(control, kind)
+        # The QUESTION this decision point belongs to. Every member of a radio
+        # group reports the same group_id, which is what lets the fold record ONE
+        # decision with N branches instead of an N×N cross-product, and what a
+        # planned walk keys its choice override on.
+        group_id = str(control.get("group_id") or "")
+        if group_id:
+            entry["group_id"] = group_id
 
     # Rung 0 — a planned branch walk forces WHICH enumerated option this
     # decision point takes. Fail-closed: enumerable kinds only, and the forced
     # option must be one the control itself offers (matched normalized, filled
     # with the control's ORIGINAL option text).
     if choice_overrides and kind in _ENUMERABLE_KINDS:
-        forced = normalize_option(choice_overrides.get(sig["signature"]) or "")
+        # A radio GROUP is one question spread across N separate elements, so its
+        # override is keyed by the group — four siblings share one question but
+        # hash to four different signatures, and no single member's signature can
+        # stand for the choice. The member that IS the forced option checks
+        # itself; the browser unchecks the rest, which is why the others return
+        # None (untouched) rather than a negative value.
+        group_id = str(control.get("group_id") or "")
+        forced = normalize_option(
+            (group_id and choice_overrides.get(group_id))
+            or choice_overrides.get(sig["signature"]) or "")
         if forced:
+            if kind == "radio" and group_id:
+                if normalize_option(name) == forced:
+                    entry.update(provenance=PROV_PLANNED, filled=True)
+                    return {"value": name, "entry": entry}
+                # A sibling of the forced option: leave it alone entirely. Falling
+                # through to the answer key here would let a second member of the
+                # same group get selected and silently overturn the planned walk.
+                return {"value": None, "entry": entry}
             if kind in ("checkbox", "toggle"):
                 if forced in ("checked", "unchecked"):
                     entry.update(provenance=PROV_PLANNED, filled=True)

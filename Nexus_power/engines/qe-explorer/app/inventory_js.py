@@ -42,6 +42,11 @@ RawControl shape (one object per visible interactive element):
     tag             lower-case tagName
     input_type      ``<input>`` type (lower-case) or ""
     options         visible option labels for a native ``<select>``
+    group_key       the mutually-exclusive CHOICE GROUP this control answers
+                    ("name:<form>:<attr>" for native radios, "grp:<container>"
+                    for ARIA radiogroup/fieldset sets, "" when ungrouped).
+                    Structure, never a value — it says WHICH QUESTION, not what
+                    anyone answered.
     required        required || aria-required
     disabled        disabled || aria-disabled
     frame_selector  ""  for the main frame, else the owning iframe selector
@@ -356,6 +361,63 @@ INVENTORY_JS = r"""
     return null;
   }
 
+  // The mutually-exclusive CHOICE GROUP a control belongs to, or "" when it is
+  // not part of one.  This is structure, never a value: it answers "which
+  // question does this answer belong to", not "what did anyone answer".
+  //
+  // HTML already defines the grouping for native radios — same ``name`` inside
+  // the same form is one group — and ARIA defines it with an ancestor
+  // ``role=radiogroup``.  Reading it here is what lets the inventory present ONE
+  // decision with N options instead of N unrelated toggles, and what lets a
+  // planned walk force exactly one option without guessing which sibling owns it.
+  //
+  // Scoped to the owning form, because two forms on a page may each use
+  // ``name="product"`` and they are NOT the same question.
+  function groupContainerKey(cur, doc) {
+    var id = attr(cur, "id");
+    if (id) return "id:" + id;
+    var al = attr(cur, "aria-label");
+    if (al) return "al:" + lc(al);
+    var lb = attr(cur, "aria-labelledby");
+    if (lb) return "lb:" + lb;
+    try {                                  // positional, stable within a page
+      var all = doc.querySelectorAll("[role=radiogroup],fieldset");
+      for (var i = 0; i < all.length; i++) { if (all[i] === cur) return "ix:" + i; }
+    } catch (e) {}
+    return "";
+  }
+
+  function groupKeyOf(el, doc) {
+    try {
+      var tag = lc(el.tagName);
+      var isNative = tag === "input" && lc(el.type || "") === "radio";
+      var isAria = lc(attr(el, "role")) === "radio";
+      if (!isNative && !isAria) return "";
+      if (isNative) {
+        var n = attr(el, "name");
+        if (n) {
+          var f = el.form;
+          var fid = f ? (attr(f, "id") || attr(f, "name") || "f") : "doc";
+          return "name:" + fid + ":" + n;
+        }
+      }
+      // No usable name attribute (ARIA card sets, nameless radios): fall back to
+      // the nearest declared grouping container.
+      var cur = parentAcross(el);
+      var hops = 0;
+      while (cur && cur.nodeType === 1 && hops < 12) {
+        var r = lc(attr(cur, "role"));
+        if (r === "radiogroup" || lc(cur.tagName) === "fieldset") {
+          var k = groupContainerKey(cur, doc);
+          if (k) return "grp:" + k;
+        }
+        cur = parentAcross(cur);
+        hops++;
+      }
+    } catch (e) {}
+    return "";                              // ungrouped → behaves exactly as before
+  }
+
   function nearestLandmark(el, doc) {
     var cur = parentAcross(el);
     var hops = 0;
@@ -402,6 +464,8 @@ INVENTORY_JS = r"""
       tag: tag,
       input_type: type,
       options: optionsOf(el),
+      // Which mutually-exclusive question this control answers ("" if none).
+      group_key: groupKeyOf(el, doc),
       required: isRequired(el),
       disabled: isDisabled(el),
       frame_selector: frameSelector || "",

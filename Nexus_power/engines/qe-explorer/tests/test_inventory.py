@@ -323,3 +323,83 @@ def test_injected_js_is_a_self_invoking_expression():
     assert js.count("{") == js.count("}")
     assert js.count("(") == js.count(")")
     assert INVENTORY_JS_VERSION == "inv-js-v4"
+
+
+# ─── GROUP_ASSEMBLE — a radio group is ONE question, not N toggles ────────────
+
+
+def _radio(name: str, group_key: str, frame: str = "") -> dict:
+    return {"role": "radio", "tag": "input", "input_type": "radio",
+            "name": name, "name_source": "wrapping-label", "options": [],
+            "group_key": group_key, "frame_selector": frame}
+
+
+def test_group_assemble_groups_by_declared_name_not_by_frame():
+    """Two unrelated radio groups on ONE page stay two questions.
+
+    Grouping merely by "same frame" would fuse a product picker with a gender
+    picker and offer each the other's answers — a planned walk would then force
+    an option the control cannot take."""
+    records = build_inventory([
+        _radio("Term Life", "name:f:product"),
+        _radio("Whole Life", "name:f:product"),
+        _radio("Male", "name:f:gender"),
+        _radio("Female", "name:f:gender"),
+    ], url="https://a.example/quote", refuse_pack=REFUSE_PACK)
+
+    groups = {}
+    for r in records:
+        groups.setdefault(r.get("group_id"), []).append(r["name"])
+    assert None not in groups, "every declared radio should be grouped"
+    assert len(groups) == 2, f"expected 2 questions, got {len(groups)}"
+    by_opts = {tuple(sorted(v)) for v in groups.values()}
+    assert by_opts == {("Term Life", "Whole Life"), ("Female", "Male")}
+
+
+def test_group_assemble_does_not_churn_the_field_signature():
+    """``options`` must stay empty: it feeds the field signature's option-shape
+    bucket, so writing group answers there would change a radio's identity the
+    moment a sibling appeared — silently invalidating every value, mechanic and
+    prior ever learned for it."""
+    records = build_inventory([
+        _radio("Term Life", "name:f:product"),
+        _radio("Whole Life", "name:f:product"),
+    ], url="https://a.example/quote", refuse_pack=REFUSE_PACK)
+    for r in records:
+        assert r["options"] == [], "group answers must NOT land in `options`"
+        assert r["group_options"] == ["Term Life", "Whole Life"]
+        assert r["group_size"] == 2
+
+
+def test_group_assemble_members_share_one_stable_group_id():
+    a = build_inventory([_radio("Term Life", "name:f:product"),
+                         _radio("Whole Life", "name:f:product")],
+                        url="https://a.example/q", refuse_pack=REFUSE_PACK)
+    b = build_inventory([_radio("Term Life", "name:f:product"),
+                         _radio("Whole Life", "name:f:product")],
+                        url="https://a.example/q", refuse_pack=REFUSE_PACK)
+    assert a[0]["group_id"] == a[1]["group_id"], "one question, one id"
+    assert a[0]["group_id"] == b[0]["group_id"], "id must be stable across crawls"
+
+
+def test_lone_radio_and_undeclared_grouping_are_left_alone():
+    """A single radio is a toggle, and a radio whose grouping the DOM never
+    declared must degrade to exactly the pre-GROUP_ASSEMBLE behaviour rather
+    than be guessed into a group."""
+    records = build_inventory([
+        _radio("Solo", "name:f:only"),
+        _radio("Undeclared A", ""),
+        _radio("Undeclared B", ""),
+    ], url="https://a.example/q", refuse_pack=REFUSE_PACK)
+    for r in records:
+        assert not r.get("group_id")
+        assert r["options"] == []
+
+
+def test_group_assemble_never_merges_across_frames():
+    records = build_inventory([
+        _radio("Term Life", "name:f:product", frame=""),
+        _radio("Whole Life", "name:f:product", frame="iframe#quote"),
+    ], url="https://a.example/q", refuse_pack=REFUSE_PACK)
+    assert all(not r.get("group_id") for r in records), (
+        "same name in two frames is two questions, and neither has a sibling")

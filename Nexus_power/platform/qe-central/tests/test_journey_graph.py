@@ -508,3 +508,88 @@ async def _run_broken_terminals_excluded():
         journey_fold.tenant_scoped_qec_session = originals[0]
         branch_planner.tenant_scoped_qec_session = originals[1]
         await engine.dispose()
+
+
+def _radio_group_flow(entry_fp="fpRG"):
+    """A 3-option radio group as the explorer reports it: THREE decision-point
+    records (one per element), all naming the same question via ``group_id``,
+    each enumerating the same three answers. Keyed naively that is 3x3 = 9
+    phantom branches; keyed on the question it is 3."""
+    opts = ["term life", "whole life", "universal life"]
+    gid = "g" * 32
+    return {
+        "flow_id": "r" * 24, "entry_fingerprint": entry_fp,
+        "entry_url": "https://a.example/quote/start/", "entry_title": "Quote",
+        "terminal": "submit_boundary", "completed": True, "fully_answered": True,
+        "outcome_values": [],
+        "steps": [
+            {"fingerprint": entry_fp, "url": "u1", "title": "Product",
+             "fields_filled": 1, "fields_unfilled": 2,
+             "advance": {"tier": 1, "control_name": "Continue", "oracle": False},
+             "decision_points": [
+                 {"control_signature": f"sig-{i}", "control_label": label,
+                  "group_id": gid, "options": opts,
+                  "provenance": "planned",
+                  **({"choice": "whole life"} if label == "whole life" else {})}
+                 for i, label in enumerate(opts)]},
+            {"fingerprint": "fpRG2", "url": "u2", "title": "Coverage",
+             "fields_filled": 0, "fields_unfilled": 0},
+        ],
+    }
+
+
+@needs_db
+def test_radio_group_folds_to_one_decision_not_a_cross_product():
+    """Regression: VKPower's 4-card product picker folded to 16 branches (4
+    elements x 4 options) instead of 4, because each member was treated as its
+    own independent decision."""
+    asyncio.run(_run_radio_group_fold())
+
+
+async def _run_radio_group_fold():
+    from app.db.journey_models import JourneyBranchRow
+    from app.db.models import QecBase
+
+    engine = create_async_engine(DB_URL)
+    async with engine.begin() as conn:
+        await conn.run_sync(QecBase.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    tenant = f"qec-rg-{uuid.uuid4().hex[:10]}"
+    app_id = "app-rg"
+    originals = (journey_fold.tenant_scoped_qec_session,
+                 branch_planner.tenant_scoped_qec_session)
+    try:
+        journey_fold.tenant_scoped_qec_session = (
+            lambda tid: _scoped(factory, tid))
+        branch_planner.tenant_scoped_qec_session = (
+            lambda tid: _scoped(factory, tid))
+
+        r = await journey_fold.fold_crawl(
+            tenant_id=tenant, app_id=app_id, exploration_id="ex-rg",
+            coverage=_coverage(_radio_group_flow()))
+        assert r["branches"] == 3, f"expected 3 branches, got {r['branches']}"
+
+        async with _scoped(factory, tenant) as s:
+            rows = (await s.execute(select(JourneyBranchRow).where(
+                JourneyBranchRow.tenant_id == tenant))).scalars().all()
+            assert len({b.control_signature for b in rows}) == 1, (
+                "three elements are ONE question")
+            assert {b.option_label_norm for b in rows} == {
+                "term life", "whole life", "universal life"}
+            walked = [b for b in rows if b.status == BRANCH_WALKED]
+            assert [b.option_label_norm for b in walked] == ["whole life"], (
+                "exactly the chosen answer is walked")
+
+        # ...and the planner offers the two answers nobody took.
+        plans = await branch_planner.plan_walks(
+            tenant_id=tenant, app_id=app_id, limit=20)
+        assert {list(p["choice_overrides"].values())[0] for p in plans} == {
+            "term life", "universal life"}
+        # The override is keyed on the QUESTION, so a walk can force it without
+        # having to guess which of the three elements owns the answer.
+        assert all(list(p["choice_overrides"].keys())[0] == "g" * 32
+                   for p in plans)
+    finally:
+        journey_fold.tenant_scoped_qec_session = originals[0]
+        branch_planner.tenant_scoped_qec_session = originals[1]
+        await engine.dispose()

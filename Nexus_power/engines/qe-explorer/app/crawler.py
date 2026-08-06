@@ -160,6 +160,12 @@ def _decision_points(field_ledger: Sequence[Mapping[str, Any]]) -> list[dict[str
             "options": [str(o)[:80] for o in (e.get("options") or ())][:24],
             "provenance": str(e.get("provenance") or ""),
         }
+        # The QUESTION, when the DOM declared one (a radio group). Every member
+        # reports the same group_id, so the fold records ONE decision with N
+        # branches instead of one phantom decision per member.
+        group_id = str(e.get("group_id") or "")
+        if group_id:
+            dp["group_id"] = group_id
         choice = e.get("choice")
         if choice:
             dp["choice"] = str(choice)[:80]
