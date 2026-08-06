@@ -454,7 +454,8 @@ async def _run_decision_blocked():
         # The traversal really is the deadlock shape: not completed, and
         # terminal says the funnel REFUSED to advance.
         async with _scoped(factory, tenant) as s:
-            tr = (await s.execute(select(JourneyTraversalRow))).scalar_one()
+            tr = (await s.execute(select(JourneyTraversalRow).where(
+                JourneyTraversalRow.tenant_id == tenant))).scalar_one()
             assert tr.completed is False
             assert tr.terminal == "loop"
 
