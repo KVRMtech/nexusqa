@@ -699,7 +699,11 @@ def test_e2e_never_inherits_the_first_pass_ceiling():
 
     assert _E2E_BUDGET["max_states"] > _FIRST_PASS_BUDGET["max_states"] * 50
     assert _E2E_BUDGET["max_depth"] > _FIRST_PASS_BUDGET["max_depth"] * 5
-    assert _E2E_BUDGET["max_wall_ms"] > _FIRST_PASS_BUDGET["max_wall_ms"] * 10
+    # The WALL is deliberately bounded rather than maximised — see
+    # test_e2e_wall_budget_is_per_crawl_and_bounds_reaper_recovery. Coverage
+    # comes from states/depth/requests and from crawls CHAINING, not from
+    # letting one crawl run for hours.
+    assert _E2E_BUDGET["max_wall_ms"] > _FIRST_PASS_BUDGET["max_wall_ms"]
 
 
 def test_a_planned_branch_walk_is_always_e2e():
@@ -728,3 +732,26 @@ def test_autowalk_depth_is_a_backstop_not_a_coverage_policy():
     assert settings.autowalk_max_depth >= 100, (
         "autowalk depth caps COVERAGE when set low — the terminator should be "
         "plan_walks() returning nothing")
+
+
+def test_e2e_wall_budget_is_per_crawl_and_bounds_reaper_recovery():
+    """max_wall_ms is PER CRAWL, not per sweep.
+
+    The stale reaper grants an in-flight crawl its whole stamped wall before
+    declaring it dead, so an over-generous wall IS the window during which a
+    crawl whose explorer died holds the app's one-active-crawl slot with the
+    Crawl button disabled. A 4h wall bricked the app for 4h; observed crawls
+    take about a minute."""
+    from app.routers.explorations import _E2E_BUDGET
+    wall_min = _E2E_BUDGET["max_wall_ms"] / 60_000
+    assert 10 <= wall_min <= 60, (
+        f"{wall_min:.0f}min per crawl: under 10 truncates a slow site, over 60 "
+        "leaves the app blocked too long when an explorer dies")
+
+
+def test_e2e_still_lifts_the_coverage_dimensions():
+    """Bounding the wall must not quietly re-cap COVERAGE — states, depth and
+    requests are what decide how much of the app is catalogued."""
+    from app.routers.explorations import _E2E_BUDGET, _FIRST_PASS_BUDGET
+    for k in ("max_states", "max_depth", "max_requests"):
+        assert _E2E_BUDGET[k] > _FIRST_PASS_BUDGET[k] * 10, k

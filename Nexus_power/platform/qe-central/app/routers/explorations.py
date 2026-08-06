@@ -101,10 +101,18 @@ _FIRST_PASS_BUDGET = {
 # Cancel policy), the fail-closed egress allowlist, submit approvals, the auth
 # window, and PII redaction. Those are not coverage limits — they are what stops
 # an exhaustive crawl doing real damage to a client's real data.
+#
+# ``max_wall_ms`` is PER CRAWL, not per sweep. An E2E sweep is long because
+# crawls CHAIN — each completion plans the next option — not because any single
+# crawl runs for hours; in practice each takes about a minute. Worse, the stale
+# reaper grants an in-flight crawl its whole stamped wall before declaring it
+# dead, so an over-generous wall is exactly how long a crawl whose explorer died
+# holds the app's one-active-crawl slot with the Crawl button disabled. 45
+# minutes is far beyond any single observed crawl and still bounds that window.
 _E2E_BUDGET = {
     "max_states": 5_000,
     "max_depth": 50,
-    "max_wall_ms": 14_400_000,  # 4 hours
+    "max_wall_ms": 2_700_000,  # 45 min PER CRAWL (the sweep chains many)
     "max_requests": 100_000,
 }
 
