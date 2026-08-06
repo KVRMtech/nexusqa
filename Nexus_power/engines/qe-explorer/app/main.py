@@ -1116,7 +1116,7 @@ class PlaywrightBrowserPort(BrowserPort):
                                   intended_value=intended, intent_met=False)
         await self._settle()
         url_after = self._safe_url()
-        committed = (await self._read_value(locator, checkable=(kind == "checked")) if read_back else None)
+        committed = (await self._read_value(locator, kind=kind) if read_back else None)
         errors = await self.error_texts()
         dialogs = await self.dialog_flags()
         sig_after = await self._interactive_signature()
@@ -1295,7 +1295,7 @@ class PlaywrightBrowserPort(BrowserPort):
                     intended_value=value, intent_met=False)
             await self._settle()
             url_after = self._safe_url()
-            committed = (await self._read_value(locator, checkable=(kind == "checked")) if read_back else None)
+            committed = (await self._read_value(locator, kind=kind) if read_back else None)
             errors = await self.error_texts()
             dialogs = await self.dialog_flags()
             sig_after = await self._interactive_signature()
@@ -1350,7 +1350,8 @@ class PlaywrightBrowserPort(BrowserPort):
                 intended_value=value, intent_met=False)
         await self._settle()
         url_after = self._safe_url()
-        committed = await self._read_value(locator) if read_back else None
+        committed = (await self._read_value(locator, kind="select")
+                     if read_back else None)
         errors = await self.error_texts()
         dialogs = await self.dialog_flags()
         sig_after = await self._interactive_signature()
@@ -1405,25 +1406,42 @@ class PlaywrightBrowserPort(BrowserPort):
                 continue
         return None
 
-    async def _read_value(self, locator: Any, *,
-                          checkable: bool = False) -> Optional[str]:
+    async def _read_value(self, locator: Any, *, kind: str = "") -> Optional[str]:
         """Read back what a control COMMITTED, so R0 can verify intent.
 
-        A checkbox/radio commits its CHECKEDNESS, not its value attribute.
-        ``input_value()`` does not raise on an <input type=radio> — it happily
-        returns "term-life" — so reading it first meant a genuinely selected
-        card reported "term-life" against an intended "true", never matched,
-        and was recorded intent_unmet. Observed live: the click really did
-        select the product and open the funnel, while the ledger said the field
-        was unfilled and the branch was never marked walked — the crawl kept
-        re-planning a choice it had already made.
+        The read must be in the SAME VOCABULARY as the intent, or a fill that
+        genuinely worked is recorded as a failure. ``input_value()`` is the
+        wrong vocabulary for two whole control families, and it does not raise
+        on either — so reading it first fails silently and looks like the app's
+        fault:
+
+        * checkbox/radio commit their CHECKEDNESS. input_value() returns the
+          value attribute ("term-life") against an intended "true".
+        * <select> commits an OPTION. We select BY LABEL ("$50,000"), but
+          input_value() returns the option's value attribute ("50000"). These
+          differ for any coded list — amounts, state codes, ids — i.e. most
+          enterprise forms. Observed live: Coverage Amount and Term Length both
+          selected correctly and were both recorded intent_unmet, so the funnel
+          stalled; the one select that DID pass was the one whose label happened
+          to equal its value.
         """
-        readers = (("is_checked", "input_value") if checkable
-                   else ("input_value", "is_checked"))
+        if kind == "checked":
+            readers = ("is_checked", "input_value")
+        elif kind == "select":
+            readers = ("selected_label", "input_value")
+        else:
+            readers = ("input_value", "is_checked")
         for reader in readers:
             try:
                 if reader == "input_value":
                     return await locator.input_value()
+                if reader == "selected_label":
+                    label = await locator.evaluate(
+                        "el => el.selectedOptions && el.selectedOptions.length"
+                        " ? el.selectedOptions[0].textContent : null")
+                    if label is None:
+                        continue
+                    return " ".join(str(label).split())
                 checked = await locator.is_checked()
                 return "true" if checked else "false"
             except Exception:

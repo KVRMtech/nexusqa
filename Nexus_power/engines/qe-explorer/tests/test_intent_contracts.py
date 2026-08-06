@@ -323,13 +323,50 @@ def test_checkable_read_back_reports_checkedness_not_the_value_attribute():
     port = PlaywrightBrowserPort.__new__(PlaywrightBrowserPort)   # no browser needed
     loc = _FakeRadioLocator()
 
-    checkable = asyncio.run(port._read_value(loc, checkable=True))
+    checkable = asyncio.run(port._read_value(loc, kind="checked"))
     assert checkable == "true", "a checkbox/radio commits its checked state"
 
     # Unchecked must be distinguishable, not just truthy.
     assert asyncio.run(
-        port._read_value(_FakeRadioLocator(checked=False), checkable=True)
+        port._read_value(_FakeRadioLocator(checked=False), kind="checked")
     ) == "false"
 
     # Non-checkable controls keep reading their value (selects, text inputs).
-    assert asyncio.run(port._read_value(loc, checkable=False)) == "term-life"
+    assert asyncio.run(port._read_value(loc, kind="fill")) == "term-life"
+
+
+class _FakeSelectLocator:
+    """A <select> whose chosen option is labelled "$50,000" but whose value
+    attribute is the code "50000" — the shape of virtually every enterprise
+    dropdown (amounts, state codes, ids)."""
+
+    async def input_value(self):
+        return "50000"
+
+    async def evaluate(self, _js):
+        return "$50,000"
+
+    async def is_checked(self):
+        raise RuntimeError("not a checkbox")
+
+    async def inner_text(self):
+        return ""
+
+
+def test_select_read_back_reports_the_option_LABEL_not_its_value_code():
+    """We select BY LABEL, so the read-back must speak labels too.
+
+    Regression: Coverage Amount and Term Length were both selected correctly and
+    both recorded intent_unmet, because the read returned the value code. The
+    only select that passed was the one whose label happened to equal its value
+    — which is exactly why this hid for so long."""
+    import asyncio
+
+    from app.main import PlaywrightBrowserPort
+
+    port = PlaywrightBrowserPort.__new__(PlaywrightBrowserPort)
+    assert asyncio.run(
+        port._read_value(_FakeSelectLocator(), kind="select")) == "$50,000"
+    # A non-select control is unaffected and still reads its value.
+    assert asyncio.run(
+        port._read_value(_FakeSelectLocator(), kind="fill")) == "50000"
