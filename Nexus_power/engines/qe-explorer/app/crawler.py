@@ -1961,7 +1961,24 @@ class Crawler:
             if c.get("kind") != "button" or c.get("disabled") or c.get("danger"):
                 continue
             name = str(c.get("name") or "").strip()
-            if not name or name.lower() in self._submit_approvals:
+            if not name:
+                continue
+            if name.lower() in self._submit_approvals:
+                # The Phase-B submit path owns this control, so the wizard must
+                # not touch it — that guard stays. But when the approved label is
+                # ALSO a generic advance word, the operator has (almost certainly
+                # unknowingly) disabled every step of the funnel: "Continue",
+                # "Next" and "Submit" are the same label on step 2 as on step 5.
+                # Observed live: an app with submit_approvals=["Continue"]
+                # recorded its five-step quote funnel as five one-step journeys,
+                # with no error anywhere. Silence is the defect; say it loudly.
+                if _is_wizard_advance(name):
+                    logger.warning(
+                        "qec.wizard.advance_shadowed_by_submit_approval name=%r "
+                        "— this label is approved for Phase-B submit AND is a "
+                        "generic advance word, so every wizard step using it is "
+                        "unwalkable. Approve the FINAL submit control only.",
+                        name[:40])
                 continue
             if _is_wizard_advance(name):
                 return c

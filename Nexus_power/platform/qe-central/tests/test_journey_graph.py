@@ -953,3 +953,44 @@ def test_crawl_id_is_persisted_so_liveness_can_be_asked_at_all():
     from app.routers import explorations
     src = inspect.getsource(explorations._dispatch_explorer)
     assert '"crawl_id": crawl_id' in src
+
+
+# ── a submit approval must not silently disable the funnel ───────────────
+
+def test_approving_a_generic_advance_label_for_submit_is_refused():
+    """Observed live: an app set submit_approvals=["Continue"], and its
+    five-step quote funnel was recorded as five ONE-STEP journeys.
+
+    The wizard skips any approved name because the Phase-B submit path owns it —
+    correct — but "Continue" is the same label on step 2 as on step 5, so every
+    step became unwalkable. No error was raised anywhere; the catalogue simply
+    described a product that does not exist. The approval is a legitimate
+    operator action; accepting it silently is the defect."""
+    import pytest as _pytest
+    from fastapi import HTTPException
+
+    from app.routers.apps import _reject_advance_shadowing_approvals
+
+    for label in ("Continue", "next", "PROCEED", "Submit "):
+        if label.strip().lower() == "submit":
+            continue  # 'submit' is a commit word, handled by the commit veto
+        with _pytest.raises(HTTPException) as exc:
+            _reject_advance_shadowing_approvals(
+                {"allow_submit": True, "submit_approvals": [label]})
+        assert exc.value.status_code == 422
+        assert "unwalkable" in str(exc.value.detail)
+
+
+def test_a_distinct_final_submit_label_is_accepted():
+    """The fix must not block the legitimate case — a real terminal control."""
+    from app.routers.apps import _reject_advance_shadowing_approvals
+    for label in ("See My Quote", "Submit Application", "Place Order"):
+        _reject_advance_shadowing_approvals(
+            {"allow_submit": True, "submit_approvals": [label]})   # no raise
+
+
+def test_absent_or_malformed_approvals_are_ignored():
+    from app.routers.apps import _reject_advance_shadowing_approvals
+    _reject_advance_shadowing_approvals({})
+    _reject_advance_shadowing_approvals({"submit_approvals": None})
+    _reject_advance_shadowing_approvals(None)

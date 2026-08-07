@@ -12,6 +12,8 @@ from __future__ import annotations
 import base64
 import json
 import logging
+from collections.abc import Mapping
+from typing import Any
 from datetime import datetime, timezone
 from urllib.parse import urlparse
 
@@ -886,6 +888,50 @@ async def get_seed_manifest(
     return manifest
 
 
+#: Generic step-advance labels. Approving one of these as a Phase-B SUBMIT
+#: control silently disables every wizard step that uses the same label — and
+#: "Continue"/"Next"/"Submit" are the same word on step 2 as on step 5.
+#:
+#: Observed live: an app configured submit_approvals=["Continue"], and its
+#: five-step quote funnel was recorded as five ONE-STEP journeys. No error was
+#: raised anywhere; the catalogue simply described a product that does not
+#: exist. The approval itself is a legitimate operator action — the defect is
+#: that it was accepted without saying what it would cost.
+_ADVANCE_SHADOW_WORDS = frozenset({
+    "continue", "next", "proceed", "forward", "go", "start", "begin", "resume",
+})
+
+
+def _reject_advance_shadowing_approvals(fences: Any) -> None:
+    """Refuse a submit approval that would make the app's funnel unwalkable.
+
+    Fail LOUD, not closed: the operator is told exactly which label collides and
+    what to approve instead (the FINAL submit control, whose label is usually
+    distinct — "See My Quote", "Place Order", "Submit Application").
+    """
+    if not isinstance(fences, Mapping):
+        return
+    approvals = fences.get("submit_approvals")
+    if not isinstance(approvals, (list, tuple)):
+        return
+    clashing = sorted({
+        str(a).strip() for a in approvals
+        if str(a).strip().lower() in _ADVANCE_SHADOW_WORDS
+    })
+    if clashing:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"submit_approvals contains generic step-advance label(s) "
+                f"{clashing}. That label also advances every earlier step of the "
+                f"flow, so approving it for submit makes the whole journey "
+                f"unwalkable and the catalogue records one-step journeys. "
+                f"Approve the FINAL submit control instead (e.g. 'See My Quote', "
+                f"'Submit Application')."
+            ),
+        )
+
+
 @router.patch("/apps/{app_id}")
 async def update_app(
     app_id: str,
@@ -920,6 +966,8 @@ async def update_app(
         for field in ("answer_key", "fences", "schedule", "budgets"):
             value = getattr(payload, field)
             if value is not None:
+                if field == "fences":
+                    _reject_advance_shadowing_approvals(value)
                 setattr(row, field, value)
         if payload.env_attestation is not None:
             # (Re-)attest binds the accountable human to the authenticated identity.
