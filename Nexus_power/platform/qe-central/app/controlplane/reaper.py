@@ -128,6 +128,48 @@ def is_stale(
     )
 
 
+async def _worker_says_dead(row: Mapping, *, now: datetime, grace_s: float) -> bool:
+    """LIVENESS: the explorer itself says it is not running this crawl.
+
+    Waiting out a crawl's whole wall budget is the wrong recovery for a process
+    that has already died. The explorer is SINGLE-FLIGHT, so a dead crawl holds
+    the slot for the entire fleet — every app's Crawl button stays disabled until
+    the row clears. Observed live: a mid-sweep deploy left one app's crawl
+    orphaned and a DIFFERENT app could not be crawled at all; with a 45-minute
+    wall that is 45 minutes of fleet-wide outage for a job that no longer exists.
+
+    Guarded three ways, because reaping a HEALTHY crawl is far worse than
+    recovering slowly:
+      * a minimum age of ``grace_s`` — a just-dispatched crawl the worker has not
+        registered yet must never be mistaken for a dead one;
+      * only a definitive ``dead`` counts (every worker reachable and none has
+        the job); ``unknown`` falls back to the existing timeout;
+      * any failure here returns False, i.e. the old behaviour exactly.
+    """
+    try:
+        anchor = _anchor(row.get("started_at"), row.get("created_at"))
+        if anchor is None:
+            return False
+        n = now if now.tzinfo else now.replace(tzinfo=timezone.utc)
+        if (n - anchor).total_seconds() < max(60.0, grace_s):
+            return False                      # too young to judge
+        crawl_id = str(_as_mapping(row.get("stats")).get("crawl_id") or "")
+        if not crawl_id:
+            return False                      # pre-liveness row: timeout only
+        from ..clients import explorer_client
+        verdict = await explorer_client.crawl_liveness(crawl_id)
+        if verdict != "dead":
+            return False
+        logger.warning(
+            "qec.reaper.worker_says_dead",
+            extra={"exploration_id": row.get("exploration_id"), "crawl_id": crawl_id},
+        )
+        return True
+    except Exception as exc:                  # never let liveness break the reaper
+        logger.warning("qec.reaper.liveness_failed", extra={"error": str(exc)[:200]})
+        return False
+
+
 def _reason_for(status: str) -> str:
     return _QUEUE_TIMEOUT_REASON if (status or "").lower() in ("queued", "claimed") else _REAP_REASON
 
@@ -179,9 +221,13 @@ async def reap_stale_explorations(now: datetime | None = None) -> int:
                     "ORDER BY updated_at ASC LIMIT 500"
                 ))).mappings().all()
                 for r in rows:
-                    if not is_stale(
-                        status=r["status"], started_at=r["started_at"], created_at=r["created_at"],
-                        stats=r["stats"], now=now, grace_s=grace_s, queue_max_wait_s=queue_max_wait_s,
+                    stale = is_stale(
+                        status=r["status"], started_at=r["started_at"],
+                        created_at=r["created_at"], stats=r["stats"], now=now,
+                        grace_s=grace_s, queue_max_wait_s=queue_max_wait_s,
+                    )
+                    if not stale and not await _worker_says_dead(
+                        r, now=now, grace_s=grace_s,
                     ):
                         continue
                     result = await conn.execute(text(

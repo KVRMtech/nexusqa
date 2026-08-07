@@ -640,7 +640,14 @@ async def _dispatch_explorer(
     # budget so the UI can tell a still-running crawl from a STALLED one (crashed
     # worker / lost callback) and never spin the "Crawling…" banner forever.
     pending_stats: dict = {
-        "budget_wall_ms": int(budgets.get("max_wall_ms") or 1_800_000)}
+        "budget_wall_ms": int(budgets.get("max_wall_ms") or 1_800_000),
+        # The worker-side job id. Persisted so the stale reaper can ASK the
+        # explorer whether this crawl is still alive instead of waiting out its
+        # whole wall budget: the explorer is single-flight, so a crawl whose
+        # worker died holds the slot for EVERY app, not just this one, and the
+        # portal's Crawl button stays disabled fleet-wide until it clears.
+        "crawl_id": crawl_id,
+    }
     if walk_plan:
         # The plan is evidence: WHY this crawl exists, WHICH branches it was
         # sent to walk, and AS WHOM — read back by the completion fold

@@ -913,3 +913,43 @@ async def _run_real_fork_not_retired():
         journey_fold.tenant_scoped_qec_session = originals[0]
         branch_planner.tenant_scoped_qec_session = originals[1]
         await engine.dispose()
+
+
+# ── liveness recovery: a dead crawl must not hold the FLEET's lock ────────
+
+
+def test_liveness_is_fail_safe_and_never_reaps_a_running_crawl():
+    """Reaping a HEALTHY crawl is far worse than recovering slowly, so the probe
+    is deliberately asymmetric: any worker reporting the job wins, and anything
+    inconclusive degrades to the old timeout."""
+    import inspect
+
+    from app.clients import explorer_client
+    src = inspect.getsource(explorer_client.crawl_liveness)
+    assert 'return "alive"' in src, "a reporting worker must win outright"
+    assert 'return "unknown" if inconclusive else "dead"' in src, (
+        "an unreachable worker must NOT be read as dead")
+
+
+def test_reaper_requires_a_minimum_age_before_trusting_liveness():
+    """A crawl the worker has not registered yet answers 404 and would look
+    dead. Without an age floor the reaper would kill crawls it just dispatched."""
+    import inspect
+
+    from app.controlplane import reaper
+    src = inspect.getsource(reaper._worker_says_dead)
+    assert "max(60.0, grace_s)" in src, "there must be an age floor"
+    assert 'verdict != "dead"' in src, "only a definitive dead may reap"
+    assert "return False" in src.split("except")[-1], (
+        "any liveness failure must fall back to the old timeout behaviour")
+
+
+def test_crawl_id_is_persisted_so_liveness_can_be_asked_at_all():
+    """The reaper probes by the worker's job id. Without it persisted there is
+    nothing to ask, and recovery falls back to waiting out the wall budget —
+    which for an E2E crawl is tens of minutes of fleet-wide outage."""
+    import inspect
+
+    from app.routers import explorations
+    src = inspect.getsource(explorations._dispatch_explorer)
+    assert '"crawl_id": crawl_id' in src

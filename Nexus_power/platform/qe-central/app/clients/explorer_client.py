@@ -15,6 +15,7 @@ payload are relayed to the explorer's in-memory use and are NEVER logged here.
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 
 import httpx
 from pydantic import BaseModel, Field
@@ -203,3 +204,55 @@ async def dispatch_crawl(
         crawl_id=request.crawl_id,
         detail="accepted",
     )
+
+
+async def crawl_liveness(crawl_id: str) -> str:
+    """Is this crawl still ALIVE on any explorer worker? ``alive``/``dead``/``unknown``.
+
+    The explorer answers 404 ``unknown crawl_id`` for a job it is not running,
+    which after a crash or restart is definitive — far better evidence than a
+    timeout. It matters because the explorer is SINGLE-FLIGHT: a crawl whose
+    worker died holds the slot for the whole fleet, and every app's Crawl button
+    stays disabled until the row clears. Waiting out the crawl's wall budget
+    means tens of minutes of fleet-wide outage for a process that is already gone.
+
+    FAIL-SAFE and deliberately asymmetric:
+      * ANY worker reporting the job  → ``alive``  (never reap something running)
+      * every worker reachable, all 404 → ``dead``
+      * ANY worker unreachable / non-404 error → ``unknown``, so a network blip
+        degrades to the existing timeout rather than killing a healthy crawl.
+    """
+    if not str(crawl_id or "").strip():
+        return "unknown"
+    token = phase1_settings.token_value()
+    if not token:
+        return "unknown"
+    try:
+        workers = list(phase1_settings.workers() or ())
+    except Exception:
+        return "unknown"
+    if not workers:
+        return "unknown"
+
+    inconclusive = False
+    for worker in workers:
+        target = (worker.get("url") if isinstance(worker, Mapping)
+                  else str(worker or ""))
+        if not target:
+            inconclusive = True
+            continue
+        try:
+            async with httpx.AsyncClient(
+                base_url=target, timeout=phase1_settings.dispatch_timeout_s,
+            ) as client:
+                resp = await client.get(f"{_EXPLORE_PATH}/{crawl_id}",
+                                        headers={TOKEN_HEADER: token})
+        except Exception:
+            inconclusive = True
+            continue
+        if resp.status_code == 404:
+            continue                      # this worker does not have it
+        if resp.status_code // 100 == 2:
+            return "alive"
+        inconclusive = True               # 5xx / auth → cannot conclude
+    return "unknown" if inconclusive else "dead"
