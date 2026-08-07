@@ -214,28 +214,11 @@ _PLACEHOLDER_OPTIONS = frozenset({
 #: validation-gated form never enables its Continue and the crawl stalls on a page
 #: it believes it filled. Observed live: Coverage Amount and Term Length were both
 #: set to "Select …" and the quote funnel stopped dead at step 2.
-_PLACEHOLDER_LEAD_VERBS = ("select", "choose", "pick")
-
-
-def _is_placeholder_option(label: Any, *, first: bool) -> bool:
-    """Is this the "nothing chosen yet" entry rather than a real answer?
-
-    Deliberately conservative, because a false positive silently discards a
-    legitimate answer: the leading-verb rule applies ONLY to the first option
-    (where placeholders conventionally live), so a genuine product called
-    "Choose Life Term 20" further down the list is still selectable.
-    """
-    text = _norm(label)
-    if not text or text in _PLACEHOLDER_OPTIONS:
-        return True
-    stripped = text.strip("-–—_ .·:…")
-    if not stripped:
-        return True                       # "--", "…", separators
-    if text.endswith(("...", "…")) and stripped.split()[0] in _PLACEHOLDER_LEAD_VERBS:
-        return True                       # "Select coverage amount..."
-    if first and stripped.split()[0] in _PLACEHOLDER_LEAD_VERBS:
-        return True                       # "Select a state", "-- Choose term --"
-    return False
+#: ONE placeholder rule for the whole crawler, owned by field_values — the
+#: lowest layer that has to choose an option. There were TWO lists; fixing
+#: only this one still left value_for() picking "Select coverage amount...",
+#: so the funnel stayed shut behind a field the ledger reported as filled.
+_is_placeholder_option = field_values.is_placeholder_option
 
 
 def _number_default(control: Mapping[str, Any]) -> str:

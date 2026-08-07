@@ -35,6 +35,39 @@ _PLACEHOLDER = frozenset({
     "--", "---", "-- select --", "none", "choose one", "pick one", "select...",
 })
 
+#: THE canonical placeholder rule. It lives here — the lowest layer that has to
+#: choose an option — and forms.py imports it, because there used to be two
+#: lists and fixing one left the other choosing "Select coverage amount...".
+#:
+#: An exact-phrase set cannot survive real applications: they write "Select
+#: coverage amount...", "Choose your state", "-- Select term length --". Those
+#: are the SAME thing — the option whose underlying value is "". Picking one
+#: leaves the field EMPTY while the fill reports success, so a validation-gated
+#: form never enables Continue and the crawl stalls on a page it believes it
+#: completed. Observed live on a quote funnel, twice, in two different modules.
+_PLACEHOLDER_LEAD_VERBS = ("select", "choose", "pick")
+
+
+def is_placeholder_option(label: Any, *, first: bool = False) -> bool:
+    """Is this the "nothing chosen yet" entry rather than a real answer?
+
+    Deliberately conservative: the leading-verb rule applies only when ``first``
+    (where placeholders conventionally live) or when the text trails off in an
+    ellipsis, so a genuine product named "Choose Life Term 20" further down a
+    list is still selectable. A false positive silently discards a real business
+    path, which is worse than occasionally keeping a placeholder.
+    """
+    text = _norm(label)
+    if not text or text in _PLACEHOLDER:
+        return True
+    stripped = text.strip("-–—_ .·:…")
+    if not stripped:
+        return True
+    lead = stripped.split()[0]
+    if text.endswith(("...", "…")) and lead in _PLACEHOLDER_LEAD_VERBS:
+        return True
+    return bool(first) and lead in _PLACEHOLDER_LEAD_VERBS
+
 
 def _norm(text: Any) -> str:
     return " ".join(("" if text is None else str(text)).split()).lower()
@@ -55,8 +88,15 @@ def _options(control: Mapping[str, Any]) -> list[str]:
     raw = control.get("options")
     if not isinstance(raw, (list, tuple)):
         return []
-    return [str(o).strip() for o in raw
-            if str(o).strip() and _norm(o) not in _PLACEHOLDER]
+    return [str(o).strip() for o in enumerate_real(raw)]
+
+
+def enumerate_real(raw: Any) -> list[str]:
+    """Every option that is a real ANSWER, in order — placeholders dropped."""
+    if not isinstance(raw, (list, tuple)):
+        return []
+    return [str(o).strip() for i, o in enumerate(raw)
+            if str(o).strip() and not is_placeholder_option(o, first=(i == 0))]
 
 
 def _pick_option(control: Mapping[str, Any], *wanted: str) -> Optional[str]:

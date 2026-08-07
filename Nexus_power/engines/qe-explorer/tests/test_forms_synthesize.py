@@ -140,3 +140,40 @@ def test_an_all_placeholder_select_yields_nothing_rather_than_a_lie():
     from app.forms import _synthesize_default
     control = {"options": ["Select one", "--", ""]}
     assert _synthesize_default(control, "select", "Empty") is None
+
+
+def test_both_option_choosers_agree_on_what_a_placeholder_is():
+    """There were TWO placeholder lists and I fixed only one.
+
+    forms._synthesize_default is a FALLBACK — field_values.value_for runs first
+    and wins. Fixing the fallback while value_for still returned "Select coverage
+    amount..." left the funnel shut behind a field the ledger reported as filled,
+    and looked exactly like the fix had not worked. They must never diverge
+    again, so they are now one function."""
+    from app import field_values, forms
+
+    assert forms._is_placeholder_option is field_values.is_placeholder_option
+
+    opts = ["Select coverage amount...", "$50,000", "$100,000"]
+    # the FALLBACK skips the placeholder...
+    assert forms._synthesize_default({"options": opts}, "select", "Coverage") == "$50,000"
+    # ...and so does the path that actually runs first.
+    assert field_values.enumerate_real(opts) == ["$50,000", "$100,000"]
+
+
+def test_value_for_never_answers_a_select_with_its_placeholder():
+    """The live regression: value_for returned the placeholder for all three
+    dropdowns on the coverage page, so the form was 'filled' and still empty."""
+    from app import field_values
+    from app.identity_pack import derive
+
+    ident = derive("qec-test")
+    for label, opts, expect in (
+        ("Coverage Amount", ["Select coverage amount...", "$50,000"], "$50,000"),
+        ("Term Length", ["Select term length...", "10 Years"], "10 Years"),
+        ("Military Affiliation", ["Select military status...", "Veteran"], "Veteran"),
+    ):
+        got = field_values.value_for(
+            "choice", {"name": label, "kind": "select", "options": opts},
+            ident, kind="select", data_mode="agent")
+        assert got == expect, f"{label}: value_for returned {got!r}"
