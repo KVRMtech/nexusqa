@@ -58,6 +58,10 @@ export default function LoginSessionPanel({ appId }: { appId: string }) {
   const [busy, setBusy] = useState('');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
+  // Set when a recording proved this app's session cannot be carried over,
+  // so the credential fields stop being an optional aside and become THE
+  // next step, open and explained.
+  const [needsCredentials, setNeedsCredentials] = useState(false);
 
   /**
    * Credentials are what let a crawl re-authenticate BY ITSELF when it meets a
@@ -170,9 +174,27 @@ export default function LoginSessionPanel({ appId }: { appId: string }) {
         ...(r.usable && r.login ? { login_recording: r.login } : {}),
         ...(r.session ? { session: r.session } : {}),
       });
-      toast.success('Login re-recorded', {
-        description: 'The next crawl starts logged in. Crawl again to cover the authenticated app.',
-      });
+      // A session with no cookies and no origins is EMPTY. Some apps keep their
+      // session in sessionStorage, which a storageState capture cannot see, so the
+      // steps are learned but nothing can carry the sign-in into a crawl. Claiming
+      // "the next crawl starts logged in" here sent the operator off to run a crawl
+      // that was silently signed out — observed on a Next.js app that reported
+      // cookies=0 origins=0 while the login itself was recorded fine.
+      const st = r.session as { cookies?: unknown[]; origins?: unknown[] } | undefined;
+      const carriesSession = !!(st?.cookies?.length || st?.origins?.length);
+      if (carriesSession) {
+        toast.success('Sign-in saved', {
+          description: 'The next crawl starts signed in.',
+        });
+      } else {
+        setNeedsCredentials(true);
+        toast.warning('Signed in, but this app’s session cannot be carried over', {
+          description: 'We learned the steps. This app keeps its sign-in somewhere a '
+            + 'saved session cannot reach, so add a username and password below and '
+            + 'the crawl will sign itself in.',
+          duration: 15000,
+        });
+      }
       appState.reload();
       exploration.reload();
     } catch (err: unknown) {
@@ -298,10 +320,14 @@ export default function LoginSessionPanel({ appId }: { appId: string }) {
               than presenting itself as an equal alternative: today a signed-in
               session eventually lapses, and only a username/password lets the
               crawl sign itself back in without anyone being asked again. */}
-          <details className="mt-3 border-t border-line pt-3">
+          <details className="mt-3 border-t border-line pt-3" open={needsCredentials}>
             <summary className="cursor-pointer text-sm text-ink-mid">
-              <span className="font-semibold text-ink">Optional:</span>{' '}
-              save a username and password so you are never asked again
+              <span className="font-semibold text-ink">
+                {needsCredentials ? 'Needed for this app:' : 'Optional:'}
+              </span>{' '}
+              {needsCredentials
+                ? 'a username and password, so crawls can sign in'
+                : 'save a username and password so you are never asked again'}
             </summary>
             <p className="mt-2 text-xs text-ink-mid">
               Signing in above lasts until this app ends the session — after that we
