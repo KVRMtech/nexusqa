@@ -638,6 +638,10 @@ async def _run_job(
                 guard_version=EXPLORER_VERSION, refuse_pack_version=pack.version,
                 config_fingerprint=config_fingerprint, guard_context=guard_ctx,
                 answer_key=answer_key, credentials=credentials,
+                # A storageState was injected into the context above. It arrives
+                # UNVERIFIED — the AUTH phase proves it still holds, so a session
+                # that has since expired can never pass as an authenticated crawl.
+                session_injected=bool(req.session),
                 allowed_hosts=req.allowed_hosts, max_relogins=settings.max_relogins,
                 submit_approvals=req.submit_approvals,
                 wizard_enabled=settings.wizard_enabled,

@@ -31,6 +31,7 @@ from app.browser import (
 from app.config import Settings
 from app.auth import Credentials
 from app.crawler import (
+    AUTH_SESSION_EXPIRED,
     STOP_AUTH_FAILED,
     STOP_COMPLETED,
     STOP_MAX_REQUESTS,
@@ -169,7 +170,7 @@ async def _no_sleep(_seconds: float) -> None:
 
 
 def _build_crawler(port, work_dir, *, budget=None, target_url="https://app.example/home",
-                   credentials=None, scope_path_prefixes=()):
+                   credentials=None, scope_path_prefixes=(), session_injected=False):
     guard_ctx = GuardContext(refuse_pack=_REFUSE_PACK)
     return Crawler(
         port,
@@ -178,6 +179,7 @@ def _build_crawler(port, work_dir, *, budget=None, target_url="https://app.examp
         explorer_version="test/1.0", guard_version="test", refuse_pack_version=_REFUSE_PACK.version,
         config_fingerprint="fp", guard_context=guard_ctx, sleep=_no_sleep,
         credentials=credentials, scope_path_prefixes=scope_path_prefixes,
+        session_injected=session_injected,
     )
 
 
@@ -526,6 +528,68 @@ def test_credentialed_crawl_login_wall_still_aborts_auth_failed():
                                  credentials=Credentials(username="u", password="p"))
         summary = asyncio.run(crawler.run())
         assert summary.stop_reason == STOP_AUTH_FAILED
+        assert summary.coverage.get("auth_incomplete") is not True
+
+
+# ─── auth: an INJECTED session that has since expired must never green-wash ────
+
+
+def test_expired_injected_session_is_flagged_not_reported_as_authenticated():
+    """A tier-4 storageState is captured once and replayed on every later crawl, so it
+    expires with nothing to announce it. Live-observed failure: the session was dead,
+    the AUTH phase was skipped (no credentials to drive), the crawl walked the logged-
+    OUT app, and coverage still said ``auth_incomplete: false`` — a PUBLIC crawl
+    presented as an authenticated one. It must now say so plainly, and still explore
+    (the public pages are real coverage)."""
+    import tempfile
+    with tempfile.TemporaryDirectory() as work:
+        login = "https://app.example/login"
+        pages = {
+            login: FakePage(login, [
+                _raw("textbox", "Email", input_type="text"),
+                _raw("textbox", "Password", input_type="password"),
+                _raw("button", "Sign in", tag="button"),
+            ], title="Login"),
+        }
+        crawler = _build_crawler(FakeBrowser(pages, login), work, target_url=login,
+                                 credentials=None, session_injected=True)
+        summary = asyncio.run(crawler.run())
+        assert summary.coverage.get("auth_incomplete") is True
+        assert summary.coverage.get("auth_reason") == AUTH_SESSION_EXPIRED
+        assert "EXPIRED" in summary.coverage.get("summary", "")
+        # Still explored — a dead session is a labelling problem, not a reason to
+        # throw away reachable public coverage.
+        assert summary.stop_reason == STOP_COMPLETED
+        assert summary.states >= 1
+
+
+def test_live_injected_session_is_not_flagged():
+    """The complement, so the check can never become "always warn": a session that
+    still authenticates lands on an app page with no password field, and the crawl is
+    reported as the authenticated crawl it is."""
+    import tempfile
+    with tempfile.TemporaryDirectory() as work:
+        pages, quote = _quote_page_no_login()
+        crawler = _build_crawler(FakeBrowser(pages, quote), work, target_url=quote,
+                                 credentials=None, session_injected=True)
+        summary = asyncio.run(crawler.run())
+        assert summary.coverage.get("auth_incomplete") is not True
+        assert "NOT COVERED" not in summary.coverage.get("summary", "")
+
+
+def test_no_session_injected_keeps_the_plain_unauthenticated_path():
+    """No session, no credentials → nothing to verify. The crawl must not pay for an
+    extra entry navigation, and must not warn about an expiry that cannot apply."""
+    import tempfile
+    with tempfile.TemporaryDirectory() as work:
+        login = "https://app.example/login"
+        pages = {
+            login: FakePage(login, [
+                _raw("textbox", "Password", input_type="password"),
+            ], title="Login"),
+        }
+        crawler = _build_crawler(FakeBrowser(pages, login), work, target_url=login)
+        summary = asyncio.run(crawler.run())
         assert summary.coverage.get("auth_incomplete") is not True
 
 

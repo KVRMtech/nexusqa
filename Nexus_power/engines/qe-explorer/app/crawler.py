@@ -42,7 +42,7 @@ from . import emit
 from . import matcher
 from . import value_infer
 from . import vocab
-from .auth import Authenticator, AuthWindow, Credentials
+from .auth import Authenticator, AuthWindow, Credentials, presents_login_wall
 from .browser import BrowserPort, PageObservation
 from .fingerprint import state_fingerprint
 from . import flow_ledger
@@ -118,6 +118,14 @@ _E2E_WIZARD_ADVANCES = 80
 #: egress-fence reconfigure (squid allowlist re-read); retry it briefly.
 _ENTRY_GOTO_RETRIES = 2
 _ENTRY_RETRY_DELAY_S = 2.5
+
+#: ``auth_incomplete`` reason: a start-authenticated session WAS injected, but the
+#: app still answers the entry with a login wall — the session has EXPIRED (or was
+#: revoked). Sessions are captured once and reused for every later crawl, so this
+#: is the STEADY STATE of any app crawled more than a session-lifetime apart, not
+#: an edge case. Detected structurally (a password field on the entry screen), so
+#: it holds for any app in any language — never a URL or copy match.
+AUTH_SESSION_EXPIRED = "session_expired"
 
 #: An "advance the wizard" control label (Next / Continue / Proceed / Forward) —
 #: the POSITIVE intent signal. Union-compiled from the per-language packs in
@@ -584,6 +592,7 @@ class Crawler:
         data_mode: str = "user",
         crawl_mode: str = "explore",
         credentials: Optional[Credentials] = None,
+        session_injected: bool = False,
         allowed_hosts: Sequence[str] = (),
         max_relogins: int = 3,
         submit_approvals: Sequence[str] = (),
@@ -654,6 +663,10 @@ class Crawler:
         # the learning loop are both keyed on this. Values are NOT in it.
         self._field_ledger: list[dict[str, Any]] = []
         self._credentials = credentials
+        # A tier-4 storageState was injected for this crawl (captcha/SSO logins the
+        # crawler cannot script). It is injected UNVERIFIED, so the AUTH phase must
+        # prove it still holds — see :meth:`_maybe_authenticate`.
+        self._session_injected = bool(session_injected)
         self._max_relogins = max_relogins
         self._sleep = sleep
 
@@ -823,12 +836,23 @@ class Crawler:
         # Honest, LOUD auth prefix: if credentials were supplied but no login form could
         # be driven, the crawl covered PUBLIC pages only — say so plainly, never imply the
         # authenticated app was covered.
-        auth_prefix = (
-            "AUTHENTICATED AREAS NOT COVERED — credentials were supplied but no login "
-            f"form was found/completed at the entry ({self._auth_incomplete_reason}); "
-            "crawled the accessible (public) pages only. "
-            if self._auth_incomplete else ""
-        )
+        if not self._auth_incomplete:
+            auth_prefix = ""
+        elif self._auth_incomplete_reason == AUTH_SESSION_EXPIRED:
+            # Different cause, different remediation: nobody needs to check the
+            # credentials — the stored SESSION died and must be re-recorded.
+            auth_prefix = (
+                "AUTHENTICATED AREAS NOT COVERED — the stored login session has "
+                "EXPIRED (the app answered the entry with a login wall); crawled the "
+                "accessible (public) pages only. Re-record the login to restore "
+                "authenticated coverage. "
+            )
+        else:
+            auth_prefix = (
+                "AUTHENTICATED AREAS NOT COVERED — credentials were supplied but no login "
+                f"form was found/completed at the entry ({self._auth_incomplete_reason}); "
+                "crawled the accessible (public) pages only. "
+            )
         return {
             "forms_found": self._forms_found,
             "forms_submitted": self._forms_submitted,
@@ -958,7 +982,7 @@ class Crawler:
         verified (an honest hard stop — the authenticated app is unreachable).
         """
         if not self._credentials:
-            return self.target_url
+            return await self._verify_injected_session()
 
         self._guard.phase = Phase.AUTH
         self._guard.login_host = self._target_host
@@ -1012,6 +1036,43 @@ class Crawler:
                 result.reason,
             )
             return await self._port.current_url()
+        return await self._port.current_url()
+
+    async def _verify_injected_session(self) -> Optional[str]:
+        """Prove an injected storageState still authenticates us — or say so LOUDLY.
+
+        A tier-4 session is captured ONCE (a hand-recorded login) and replayed on
+        every later crawl, so it expires on the app's own schedule with nothing to
+        announce it. Before this check, a dead session produced the worst outcome
+        available: the AUTH phase was skipped entirely (no credentials to drive),
+        the crawl walked the logged-OUT app, and coverage reported
+        ``auth_incomplete: false`` — a PUBLIC crawl presented as an authenticated
+        one. Observed live: a crawl reached only ``/`` → ``/login/`` and still
+        reported clean.
+
+        We still explore after a failed check: the public pages are real, reachable
+        coverage and throwing them away helps nobody. What changes is the LABEL —
+        the crawl says plainly that the authenticated app was not covered.
+        """
+        if not self._session_injected:
+            return self.target_url
+        nav = await self._goto_entry(self.target_url)
+        if not nav.ok:
+            self._stop_reason = STOP_AUTH_FAILED
+            logger.warning("qec.crawler.auth_entry_unreachable error=%s",
+                           (nav.error or "")[:200])
+            return None
+        obs = await self._observe()
+        controls = build_inventory(obs.raw_controls, self._refuse_pack, url=obs.url)
+        if presents_login_wall(controls):
+            self._auth_incomplete = True
+            self._auth_incomplete_reason = AUTH_SESSION_EXPIRED
+            logger.warning(
+                "qec.crawler.session_expired crawl_id=%s — a start-authenticated "
+                "session was injected but the app still presents a login wall; "
+                "exploring UNAUTHENTICATED (authenticated areas NOT covered). "
+                "The stored login must be re-recorded.", self.crawl_id,
+            )
         return await self._port.current_url()
 
     # -- EXPLORE phase ---------------------------------------------------------
