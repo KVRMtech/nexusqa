@@ -151,6 +151,21 @@ def _links_to_site_root(control: Mapping[str, Any]) -> bool:
     return path.rstrip("/") == ""
 
 
+def _candidate_sig(candidates: Sequence[Mapping[str, Any]]) -> str:
+    """A stable signature of the controls that could ACTUALLY be advanced on.
+
+    The oracle's "nothing advances here" is only reusable while the page keeps
+    offering the same actionable set. A page fingerprint does not capture this:
+    filling a form changes no DOM structure, so the fingerprint is identical
+    before and after — while a disabled Continue quietly becomes a live one.
+    Keying a negative verdict on the fingerprint alone therefore froze the page
+    as unadvanceable forever. Names are product UI text, never values.
+    """
+    return "|".join(sorted(
+        str(c.get("name") or "").strip().lower()
+        for c in (candidates or ()) if str(c.get("name") or "").strip()))
+
+
 def _is_wizard_advance(name: str) -> bool:
     """True for a Next/Continue/Proceed/Forward control that carries NO commit /
     terminal word — the fail-closed advance gate (any commit signal vetoes)."""
@@ -2074,7 +2089,14 @@ class Crawler:
                         return AdvanceDecision(
                             control=c, tier=3,
                             oracle_status=ORACLE_PICKED, signature=memo_sig)
-            if memo_status == ORACLE_NONE:
+            # A NEGATIVE answer is only reusable while the page offers the SAME
+            # actionable controls. A wizard step's Continue is disabled until its
+            # form is filled, so the first visit legitimately has no advance —
+            # replaying that against a later, FILLED visit made the page
+            # permanently unadvanceable. Observed on the VKPower quote funnel:
+            # coverage/ and personal/ answered oracle=none on every later visit
+            # and each was recorded as its own one-step "journey".
+            if memo_status == ORACLE_NONE and memo_sig == _candidate_sig(candidates):
                 return AdvanceDecision(
                     oracle_status=ORACLE_NONE, signature=memo_sig)
 
@@ -2097,8 +2119,23 @@ class Crawler:
                 control=picked, tier=3,
                 oracle_status=ORACLE_PICKED, signature=signature)
         if status == ORACLE_NONE:
+            # Memoized against the ACTIONABLE CANDIDATE SET, not the fingerprint
+            # alone: "nothing advances here" stays true only while the page keeps
+            # offering the same enabled controls. "Nothing advances here" is only true of
+            # the page AS IT WAS. A wizard step's Continue is disabled until its
+            # form is filled, so the FIRST visit legitimately has no advance —
+            # and caching that answer against the fingerprint makes the page
+            # permanently unadvanceable, including on the very next visit when
+            # the form IS filled and Continue is live. Observed on the VKPower
+            # quote funnel: coverage/ and personal/ returned oracle=none on every
+            # later visit and each was recorded as its own one-step "journey".
+            #
+            # A POSITIVE pick is still memoized above: it stays true for the same
+            # state and is what the memo exists to save. A negative is cheap to
+            # re-ask and is exactly the answer that goes stale.
             if fingerprint:
-                self._oracle_memo[fingerprint] = (None, ORACLE_NONE, signature)
+                self._oracle_memo[fingerprint] = (
+                    None, ORACLE_NONE, _candidate_sig(candidates))
             return AdvanceDecision(oracle_status=ORACLE_NONE, signature=signature)
         # Transport failure, cap, open circuit, or an unreadable reply: the
         # decision was NOT made. Never memoized, never "none".

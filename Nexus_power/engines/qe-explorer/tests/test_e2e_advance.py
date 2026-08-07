@@ -368,3 +368,37 @@ def test_a_link_advance_survives_when_it_goes_somewhere_real():
     controls = [{"kind": "link", "name": "Next step",
                  "qec": {"href": "https://app.example/quote/step-2"}}]
     assert [x["name"] for x in c._tier3_candidates(controls)] == ["Next step"]
+
+
+def test_a_none_verdict_does_not_freeze_a_page_that_becomes_advanceable(tmp_path):
+    """Regression: coverage/ and personal/ became permanently unadvanceable.
+
+    A wizard step's Continue is DISABLED until its form is filled, so the first
+    visit legitimately has no advance. That verdict was memoized against the page
+    fingerprint — which does not change when a form is filled, because filling
+    alters no DOM structure. Every later visit replayed "nothing advances here"
+    even though Continue was by then live, and each page was recorded as its own
+    one-step journey instead of a step in the funnel."""
+    oracle = _scripted_oracle([
+        {"index": None, "status": ORACLE_NONE, "signature": "sig"},
+        {"index": 0, "status": ORACLE_PICKED, "signature": "sig2"},
+    ])
+    c = _build(tmp_path, oracle=oracle)
+    # first visit: the form is unfilled, so Continue is disabled and absent
+    d1 = _pick(c, [_btn("Back")], fp="fpA")
+    assert d1.oracle_status == ORACLE_NONE
+    # same page AFTER the fill — same fingerprint, but Continue is now live
+    d2 = _pick(c, [_btn("Back"), _btn("See My Quote")], fp="fpA")
+    assert d2.oracle_status == ORACLE_PICKED, "the stale NONE must not be replayed"
+    assert len(oracle.calls) == 2
+
+
+def test_the_none_memo_still_saves_a_call_on_a_genuinely_identical_page(tmp_path):
+    """The cost control it exists for is preserved: same page, same actionable
+    controls, no second consultation."""
+    oracle = _scripted_oracle([{"index": None, "status": ORACLE_NONE, "signature": "sig"}])
+    c = _build(tmp_path, oracle=oracle)
+    _pick(c, [_btn("Back")], fp="fpA")
+    d2 = _pick(c, [_btn("Back")], fp="fpA")
+    assert d2.oracle_status == ORACLE_NONE
+    assert len(oracle.calls) == 1
