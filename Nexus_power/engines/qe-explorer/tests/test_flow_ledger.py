@@ -197,12 +197,19 @@ def test_filled_fields_plus_a_refused_advance_raises_the_tripwire():
     assert f["fields_filled_total"] == 2
 
 
-def test_no_advance_after_filling_also_trips():
+def test_reaching_the_end_of_a_funnel_is_not_a_contradiction():
+    """no_advance means "nothing here could advance it", which at the END of a
+    funnel is correct completion. A review page that displays a premium and
+    offers no next step is what success looks like — firing the tripwire there
+    flagged the very journey it exists to protect, and a tripwire that cries
+    wolf on success is one nobody reads."""
     f = FL.build_flow(
-        entry_fingerprint="fpA", entry_url="u", entry_title="Coverage",
+        entry_fingerprint="fpA", entry_url="u", entry_title="Review",
         steps=[_step(filled=1)], terminal=FL.TERMINAL_NO_ADVANCE,
+        outcome_values=[{"label": "Monthly Premium", "text": "$4.24",
+                         "value_type": "currency"}],
         max_steps=20)
-    assert f["advance_contradicts_fills"] is True
+    assert f["advance_contradicts_fills"] is False
 
 
 def test_a_page_we_never_filled_is_not_suspicious():

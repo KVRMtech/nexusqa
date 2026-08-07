@@ -55,10 +55,15 @@ TERMINAL_ORACLE_UNAVAILABLE = "oracle_unavailable"
 #: caller to override that.
 COMPLETING_TERMINALS = frozenset({TERMINAL_SUBMIT_BOUNDARY, TERMINAL_NO_ADVANCE})
 
-#: The app REFUSED to move on. ``loop`` is the page not changing at all;
-#: ``no_advance`` is nothing left that could advance it. Both are legitimate on
-#: an unfilled page — and deeply suspicious on a page we just claimed to fill.
-_ADVANCE_REFUSED_TERMINALS = frozenset({TERMINAL_LOOP, TERMINAL_NO_ADVANCE})
+#: The app REFUSED to move on: the page did not change at all.
+#:
+#: ``no_advance`` is deliberately NOT here. It means "nothing on this page could
+#: advance it", which at the END of a funnel is correct completion, not a
+#: contradiction — a review page that displays a premium and offers no next step
+#: is exactly what success looks like. Including it fired the tripwire on the
+#: very journey it was built to protect, and a tripwire that cries wolf on
+#: success is one nobody reads.
+_ADVANCE_REFUSED_TERMINALS = frozenset({TERMINAL_LOOP})
 
 
 def flow_id_for(entry_fingerprint: str) -> str:
