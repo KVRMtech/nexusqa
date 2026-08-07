@@ -1969,11 +1969,20 @@ class Crawler:
         # DOES yield a pickable "Continue" (button, enabled, not danger), so what
         # the crawl actually holds here differs from what the page shows — and
         # only the crawl can say how. Names are product UI text, never values.
+        # Every input to this loop checks out when replayed offline, and it still
+        # finds nothing live. submit_approvals is the last unverified one: a name
+        # listed there is SKIPPED here on purpose (the attested Phase-B submit
+        # path owns it), so an app that approved "Continue" for submit would make
+        # every wizard step in the funnel unadvanceable.
         logger.info(
-            "qec.wizard.no_tier1 candidates=%s",
-            [f"{c.get('kind')}:{str(c.get('name') or '')[:24]}"
+            "qec.wizard.no_tier1 approvals=%s verdicts=%s",
+            sorted(self._submit_approvals),
+            [f"{str(c.get('name') or '')[:20]}"
+             f":btn={c.get('kind') == 'button'}"
              f":dis={bool(c.get('disabled'))}:dang={bool(c.get('danger'))}"
-             for c in (controls or ())][:12])
+             f":appr={str(c.get('name') or '').strip().lower() in self._submit_approvals}"
+             f":adv={_is_wizard_advance(str(c.get('name') or '').strip())}"
+             for c in (controls or ()) if c.get("kind") == "button"][:8])
         return None
 
     def _tier3_candidates(
