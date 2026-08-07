@@ -337,3 +337,34 @@ def test_advance_decision_defaults_are_no_advance():
     d = AdvanceDecision()
     assert d.control is None and d.tier == 0
     assert d.oracle_status == ORACLE_NOT_CONSULTED and d.signature == ""
+
+
+def test_the_site_logo_is_not_an_advance_candidate():
+    """Regression: the walk out of the quote page chose the header logo
+    "V VKPower Life Insurance" over "Continue", navigated to the homepage and
+    came back — the funnel was recorded as a `loop`.
+
+    Nothing in the LABEL says it is chrome; the href does. Only the path is
+    inspected, because a brand name is unguessable and localised."""
+    from app.crawler import Crawler
+
+    c = Crawler.__new__(Crawler)
+    c._submit_approvals = set()
+    controls = [
+        {"kind": "link", "name": "V VKPower Life Insurance", "qec": {"href": "https://app.example/"}},
+        {"kind": "button", "name": "Continue"},
+        {"kind": "link", "name": "Next step", "qec": {"href": "https://app.example/quote/2"}},
+    ]
+    got = [x["name"] for x in c._tier3_candidates(controls)]
+    assert got == ["Continue", "Next step"], got
+
+
+def test_a_link_advance_survives_when_it_goes_somewhere_real():
+    """Framework apps render advances as anchors — those must stay eligible."""
+    from app.crawler import Crawler
+
+    c = Crawler.__new__(Crawler)
+    c._submit_approvals = set()
+    controls = [{"kind": "link", "name": "Next step",
+                 "qec": {"href": "https://app.example/quote/step-2"}}]
+    assert [x["name"] for x in c._tier3_candidates(controls)] == ["Next step"]

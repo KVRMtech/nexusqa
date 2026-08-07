@@ -133,6 +133,24 @@ _WIZARD_ADVANCE_RE = vocab.ADVANCE_RE
 _WIZARD_COMMIT_RE = vocab.COMMIT_RE
 
 
+def _links_to_site_root(control: Mapping[str, Any]) -> bool:
+    """Does this anchor point at the site ROOT (the header logo / home link)?
+
+    Value-free and structural: only the URL PATH is inspected, never the label,
+    because a brand name is unguessable and localised. "/" and "" are home;
+    everything deeper is a real destination the funnel may legitimately use.
+    """
+    href = str((control.get("qec") or {}).get("href")
+               or control.get("href") or "").strip()
+    if not href:
+        return False
+    try:
+        path = urlsplit(href).path or "/"
+    except Exception:
+        return False
+    return path.rstrip("/") == ""
+
+
 def _is_wizard_advance(name: str) -> bool:
     """True for a Next/Continue/Proceed/Forward control that carries NO commit /
     terminal word — the fail-closed advance gate (any commit signal vetoes)."""
@@ -1958,6 +1976,15 @@ class Crawler:
             if not name or name.lower() in self._submit_approvals:
                 continue
             if _WIZARD_COMMIT_RE.search(name):
+                continue
+            # SITE CHROME IS NOT A FUNNEL STEP. A link to the site ROOT is the
+            # header logo / "home" affordance; taking it always leaves the flow.
+            # Nothing in its LABEL says so — observed live, the oracle weighed
+            # "V VKPower Life Insurance" against "Continue" on the quote page,
+            # chose the logo, navigated to the homepage and came back, and the
+            # funnel was recorded as a `loop`. Links otherwise stay eligible,
+            # because framework apps really do render an advance as an anchor.
+            if c.get("kind") == "link" and _links_to_site_root(c):
                 continue
             out.append(c)
         return out
