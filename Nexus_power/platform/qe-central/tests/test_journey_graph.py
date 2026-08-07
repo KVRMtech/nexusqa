@@ -326,14 +326,35 @@ async def _run_e1_nine_options():
             coverage=coverage)
         assert r["branches"] == 9  # 1 walked + 8 discovered
 
+        # PROBE FIRST. One option is already walked, so the planner adds only
+        # enough representatives to reach branch_probe_k and then waits for
+        # evidence — queueing all 8 up front is what let a 23-option state
+        # picker run for hours before anyone knew it changed nothing.
         plans = await branch_planner.plan_walks(
             tenant_id=tenant, app_id=app_id, limit=20)
-        assert len(plans) == 8
-        overrides_set = {list(p["choice_overrides"].values())[0] for p in plans}
-        assert overrides_set == {f"option-{i}" for i in range(1, 9)}
+        assert 1 <= len(plans) <= settings.branch_probe_k, len(plans)
         for p in plans:
             assert len(p["branch_ids"]) == 1
             assert len(p["choice_overrides"]) == 1
+
+        # ...and the cap LIFTS once the representatives are shown to fork, so a
+        # genuine business decision is still enumerated in full. Nothing is
+        # retired here (the walks produced different outcomes), so every
+        # remaining option must come back plannable.
+        async with _scoped(factory, tenant) as s:
+            probes = (await s.execute(select(JourneyBranchRow).where(
+                JourneyBranchRow.tenant_id == tenant,
+                JourneyBranchRow.status == BRANCH_DISCOVERED,
+            ).limit(settings.branch_probe_k))).scalars().all()
+            for i, b in enumerate(probes):
+                b.status = BRANCH_WALKED
+                b.walked_in_traversal = f"trav-distinct-{i}"
+
+        plans2 = await branch_planner.plan_walks(
+            tenant_id=tenant, app_id=app_id, limit=20)
+        walked_opts = {"option-0"} | {b.option_label_norm for b in probes}
+        assert {list(p["choice_overrides"].values())[0] for p in plans2} == (
+            {f"option-{i}" for i in range(9)} - walked_opts)
 
     finally:
         journey_fold.tenant_scoped_qec_session = originals[0]
@@ -462,8 +483,11 @@ async def _run_decision_blocked():
         # ...and it is still plannable: one plan per unchosen option.
         plans = await branch_planner.plan_walks(
             tenant_id=tenant, app_id=app_id, limit=20)
-        assert len(plans) == 3, f"deadlocked: {len(plans)} plans"
-        assert {list(p["choice_overrides"].values())[0] for p in plans} == {
+        # Probe-limited on the first cycle (see branch_probe_k); the point of
+        # this test is that it is plannable AT ALL, not how many at once.
+        assert plans, "deadlocked: no plans"
+        assert len(plans) <= settings.branch_probe_k
+        assert {list(p["choice_overrides"].values())[0] for p in plans} <= {
             "term life", "whole life", "universal life"}
     finally:
         journey_fold.tenant_scoped_qec_session = originals[0]
