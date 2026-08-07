@@ -2307,6 +2307,19 @@ class Crawler:
                     cur_actions.append(action)
                     walk_seen.add(new_fp)
                     advance = (obs, new_controls, new_fp)
+                # WALK TRACE. Six rounds of reasoning about why a five-page funnel
+                # records as two-step fragments have each disproved the previous
+                # theory. This states, per step, exactly which of the three
+                # advance conditions failed — an unchanged page (outcome), a
+                # no-op click (same fingerprint), or a state this journey already
+                # visited — instead of collapsing all three into "loop".
+                else:
+                    logger.info(
+                        "qec.wizard.step_stalled url=%s clicked=%r outcome=%r "
+                        "same_fp=%s already_in_walk=%s",
+                        cur_url, str((trig or {}).get("name") or "")[:30],
+                        outcome or "(none)", new_fp == cur_fp,
+                        new_fp in walk_seen)
 
             # record the CURRENT step (its fills + the onward advance click if any).
             self._record_state(
