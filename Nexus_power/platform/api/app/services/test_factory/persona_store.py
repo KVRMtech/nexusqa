@@ -19,7 +19,9 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
+from typing import Any
 
 from sqlalchemy import (
     Boolean, DateTime, Integer, LargeBinary, String, Text, and_, func, select, update,
@@ -1289,4 +1291,40 @@ async def find_recipes_by_domain(session: AsyncSession, *, tenant_id: str,
     return [{"recipe_id": r.recipe_id, "artifact_id": r.artifact_id,
              "app_id": r.app_id, "version": r.version, "slots": r.slots,
              "login_type_key": r.login_type_key, "login_domain": r.login_domain,
+             # WHERE this app signs in. A recorded login already knows — its first
+             # `goto` is the sign-in page — but the path was not returned, so a
+             # caller wanting to OPEN the sign-in had to fall back to the app's
+             # base URL, which for most apps is a landing or quote page. Steps
+             # themselves stay out of this payload: they carry the whole
+             # choreography, and callers of a domain lookup need the address, not
+             # the recipe.
+             "login_path": _first_goto_path(r.steps),
              "verified_at": _iso(r.verified_at)} for r in rows]
+
+
+def _first_goto_path(steps: Any) -> str:
+    """The path of a recipe's first ``goto`` step — its sign-in page — or ``""``.
+
+    Tolerant of every shape a stored recipe can have: absent, not a list, entries
+    that are not dicts, an absolute URL instead of a path. Never raises; a recipe
+    whose address cannot be read simply does not offer one.
+    """
+    if not isinstance(steps, (list, tuple)):
+        return ""
+    for step in steps:
+        if not isinstance(step, Mapping):
+            continue
+        if str(step.get("action") or "").strip().lower() != "goto":
+            continue
+        path = str(step.get("path") or step.get("url") or "").strip()
+        if path.startswith("/"):
+            return path[:400]
+        if path.startswith("http"):
+            try:
+                from urllib.parse import urlsplit
+
+                parts = urlsplit(path)
+                return (parts.path or "/")[:400]
+            except Exception:
+                return ""
+    return ""
