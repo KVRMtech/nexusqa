@@ -202,6 +202,22 @@ async def name_unnamed_journeys(*, tenant_id: str, app_id: str) -> dict[str, int
                                 JourneyEdgeRow.app_id == app_id,
                                 JourneyEdgeRow.from_fp.in_(path),
                             ).distinct())).scalars().all() if t]
+                # GROUNDING FLOOR. With no decisions, no outcomes and a title
+                # every page shares, there is nothing to name this journey FROM —
+                # and the model will still answer, because it always answers.
+                # That is how a sign-in came to be catalogued as "Get Life
+                # Insurance Quote": the app is a life insurer, so the only guess
+                # available was the wrong one. A journey we cannot ground keeps
+                # its honest fallback name until a later crawl gives it a
+                # decision or an outcome to be named by. An invented name in an
+                # evidence product is worse than a dull one.
+                distinct_titles = {t.strip().lower() for t in step_titles if t.strip()}
+                if not decisions and not outcomes and len(distinct_titles) < 2:
+                    logger.info(
+                        "qec.journey_naming.ungrounded journey=%s — no decisions, "
+                        "no outcomes, one distinct title; keeping fallback name",
+                        journey.journey_id)
+                    continue
                 proposal = await propose_name(
                     tenant_id=tenant_id, entry_title=journey.entry_title,
                     step_titles=step_titles, outcomes=outcomes,

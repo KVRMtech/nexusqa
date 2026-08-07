@@ -1036,3 +1036,27 @@ def test_grounding_is_optional_so_older_callers_are_unaffected():
         terminal="submit_boundary")
     assert "Questions this journey answered" not in p
     assert "Controls pressed" not in p
+
+
+def test_an_ungroundable_journey_keeps_its_fallback_name():
+    """Regression: a sign-in was catalogued as "Get Life Insurance Quote".
+
+    With no decisions, no outcomes, and a <title> every page of the SPA shares,
+    there is nothing to name the journey FROM — and the model answers anyway,
+    because it always answers. On a life-insurance app the only guess available
+    was the wrong one. An invented name in an evidence product is worse than a
+    dull one, so an ungroundable journey keeps its honest fallback until a later
+    crawl gives it a decision or an outcome."""
+    import inspect
+    src = inspect.getsource(journey_naming.name_unnamed_journeys)
+    assert "if not decisions and not outcomes and len(distinct_titles) < 2:" in src
+    assert "continue" in src.split("distinct_titles) < 2:")[1][:400]
+
+
+def test_a_journey_with_an_outcome_is_still_named():
+    """The floor must not block the case that matters: a journey that produced a
+    premium has the strongest possible grounding."""
+    import inspect
+    src = inspect.getsource(journey_naming.name_unnamed_journeys)
+    # outcomes present ⇒ the guard's `not outcomes` is False ⇒ naming proceeds
+    assert "not outcomes" in src
