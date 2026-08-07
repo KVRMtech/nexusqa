@@ -994,3 +994,45 @@ def test_absent_or_malformed_approvals_are_ignored():
     _reject_advance_shadowing_approvals({})
     _reject_advance_shadowing_approvals({"submit_approvals": None})
     _reject_advance_shadowing_approvals(None)
+
+
+# ── naming needs signal that titles alone cannot give ────────────────────
+
+def test_the_prompt_carries_the_questions_and_controls_of_the_journey():
+    """Regression: every page of the VKPower SPA carries the SAME <title>, so
+    the login journey and the quote journey produced byte-identical prompts and
+    the model named the LOGIN flow "Get Life Insurance Quote". That was the only
+    guess the input allowed — the input was starved, not the model wrong."""
+    login = journey_naming.build_prompt(
+        entry_title="VKPower Life Insurance",
+        step_titles=["VKPower Life Insurance", "VKPower Life Insurance"],
+        outcomes=[], terminal="submit_boundary",
+        decisions=[], triggers=["sign in without pin", "continue"])
+    quote = journey_naming.build_prompt(
+        entry_title="VKPower Life Insurance",
+        step_titles=["VKPower Life Insurance", "VKPower Life Insurance"],
+        outcomes=[{"label": "Estimated Monthly Premium", "value_type": "currency"}],
+        terminal="submit_boundary",
+        decisions=["coverage amount", "term length"], triggers=["continue"])
+
+    assert login != quote, "the two journeys must no longer look identical"
+    assert "sign in without pin" in login
+    assert "coverage amount" in quote and "Estimated Monthly Premium" in quote
+
+
+def test_the_prompt_stays_url_free():
+    """F1/F2 doctrine: no URL may enter the prompt, including via the new
+    grounding — labels are product UI text, not addresses."""
+    p = journey_naming.build_prompt(
+        entry_title="Quote", step_titles=["Health"], outcomes=[],
+        terminal="submit_boundary",
+        decisions=["coverage amount"], triggers=["continue"])
+    assert "http" not in p and "://" not in p
+
+
+def test_grounding_is_optional_so_older_callers_are_unaffected():
+    p = journey_naming.build_prompt(
+        entry_title="Quote", step_titles=["Health"], outcomes=[],
+        terminal="submit_boundary")
+    assert "Questions this journey answered" not in p
+    assert "Controls pressed" not in p

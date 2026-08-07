@@ -22,7 +22,13 @@ from sqlalchemy import select
 
 from ..clients import platform_api
 from ..db import tenant_scoped_qec_session, utc_now
-from ..db.journey_models import JourneyNodeRow, JourneyRow, JourneyTraversalRow
+from ..db.journey_models import (
+    JourneyBranchRow,
+    JourneyEdgeRow,
+    JourneyNodeRow,
+    JourneyRow,
+    JourneyTraversalRow,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -78,13 +84,34 @@ def parse_proposal(text: str) -> Optional[tuple[str, str]]:
 def build_prompt(
     *, entry_title: str, step_titles: list[str],
     outcomes: list[dict[str, Any]], terminal: str,
+    decisions: list[str] | None = None,
+    triggers: list[str] | None = None,
 ) -> str:
-    """SHAPE ONLY — titles, outcome labels/types, terminal kind. NO URLs."""
+    """SHAPE ONLY — titles, the questions asked, the controls pressed, outcome
+    labels/types, terminal kind. NO URLs, NO values.
+
+    ``decisions`` and ``triggers`` exist because titles alone name nothing on a
+    single-page app: every page of the VKPower funnel carries the SAME
+    ``<title>``, so the login journey and the quote journey presented the model
+    with byte-identical prompts and it named the login flow "Get Life Insurance
+    Quote" — the only guess the input allowed. The questions a journey asked
+    ("Coverage Amount", "Term Length") and the controls it pressed ("Sign in
+    without PIN") are what actually tell those two apart, and both are product
+    UI text of exactly the kind already carried on options and labels.
+    """
     lines = [f"Entry page: {str(entry_title or '')[:200]}"]
     if step_titles:
         lines.append("Steps walked, in order:")
         for t in step_titles[:20]:
             lines.append(f"  - {str(t or '')[:200]}")
+    if decisions:
+        lines.append("Questions this journey answered:")
+        for d in decisions[:12]:
+            lines.append(f"  - {str(d or '')[:120]}")
+    if triggers:
+        lines.append("Controls pressed to move forward:")
+        for t in triggers[:12]:
+            lines.append(f"  - {str(t or '')[:120]}")
     if outcomes:
         lines.append("Outcomes the funnel displayed:")
         for o in outcomes[:8]:
@@ -98,10 +125,13 @@ def build_prompt(
 async def propose_name(
     *, tenant_id: str, entry_title: str, step_titles: list[str],
     outcomes: list[dict[str, Any]], terminal: str,
+    decisions: list[str] | None = None,
+    triggers: list[str] | None = None,
 ) -> Optional[tuple[str, str]]:
     """One agent proposal, validated — or ``None`` (caller keeps fallback)."""
     prompt = build_prompt(entry_title=entry_title, step_titles=step_titles,
-                          outcomes=outcomes, terminal=terminal)
+                          outcomes=outcomes, terminal=terminal,
+                          decisions=decisions, triggers=triggers)
     result = await platform_api.complete_llm(
         tenant_id=tenant_id, prompt=prompt, system=SYSTEM,
         task="name_journey", max_tokens=80, temperature=0.0,
@@ -152,10 +182,30 @@ async def name_unnamed_journeys(*, tenant_id: str, app_id: str) -> dict[str, int
                             ))).scalar_one_or_none()
                         if title:
                             step_titles.append(title)
+                # What actually distinguishes one journey from another on a
+                # single-page app: the questions it answered and the controls it
+                # pressed. Product UI text only — never a value, never a URL.
+                decisions: list[str] = []
+                triggers: list[str] = []
+                if traversal is not None:
+                    path = [str(fp) for fp in (traversal.path_fps or [])][:20]
+                    if path:
+                        decisions = [d for d in (await session.execute(
+                            select(JourneyBranchRow.control_label_norm).where(
+                                JourneyBranchRow.tenant_id == tenant_id,
+                                JourneyBranchRow.app_id == app_id,
+                                JourneyBranchRow.node_fp.in_(path),
+                            ).distinct())).scalars().all() if d]
+                        triggers = [t for t in (await session.execute(
+                            select(JourneyEdgeRow.trigger_label_norm).where(
+                                JourneyEdgeRow.tenant_id == tenant_id,
+                                JourneyEdgeRow.app_id == app_id,
+                                JourneyEdgeRow.from_fp.in_(path),
+                            ).distinct())).scalars().all() if t]
                 proposal = await propose_name(
                     tenant_id=tenant_id, entry_title=journey.entry_title,
                     step_titles=step_titles, outcomes=outcomes,
-                    terminal=terminal)
+                    terminal=terminal, decisions=decisions, triggers=triggers)
                 if proposal is None:
                     failed += 1
                     continue
