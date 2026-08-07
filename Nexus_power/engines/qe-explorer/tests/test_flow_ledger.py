@@ -235,3 +235,36 @@ def test_summary_rolls_the_contradiction_up_for_fleet_monitoring():
         max_steps=20)
     s = FL.summarize([bad, good])
     assert s["advance_contradicts_fills"] == 1
+
+
+def test_the_outcome_value_survives_the_fold():
+    """Regression: the crawl captured "Estimated Monthly Premium = $9.26" on the
+    review page and the journey recorded a premium of "".
+
+    The displayed-value contract is {label, selector, TEXT}; build_flow read only
+    ``value``, so every outcome folded to empty. A journey without its outcome is
+    a walk, not evidence — and the premium is the whole point of a quote funnel."""
+    f = FL.build_flow(
+        entry_fingerprint="fpQ", entry_url="u", entry_title="Quote",
+        steps=[_step(filled=3)],
+        outcome_values=[
+            {"label": "Estimated Monthly Premium", "selector": "#prem",
+             "text": "$9.26", "value_type": "currency"},
+            {"label": "Coverage Amount", "selector": "#cov",
+             "text": "$50,000", "value_type": "currency"},
+        ],
+        terminal=FL.TERMINAL_SUBMIT_BOUNDARY, max_steps=20)
+    got = {o["label"]: o["value"] for o in f["outcome_values"]}
+    assert got == {"Estimated Monthly Premium": "$9.26",
+                   "Coverage Amount": "$50,000"}
+
+
+def test_an_explicit_value_key_still_wins():
+    """Producers that already speak {label, value} are unaffected."""
+    f = FL.build_flow(
+        entry_fingerprint="fpQ", entry_url="u", entry_title="Quote",
+        steps=[_step(filled=1)],
+        outcome_values=[{"label": "Premium", "value": "$1.00",
+                         "text": "ignored", "value_type": "currency"}],
+        terminal=FL.TERMINAL_SUBMIT_BOUNDARY, max_steps=20)
+    assert f["outcome_values"][0]["value"] == "$1.00"

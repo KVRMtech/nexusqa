@@ -137,9 +137,15 @@ def build_flow(*, entry_fingerprint: str, entry_url: str, entry_title: str,
     # An outcome the funnel produced — a premium, an eligibility decision. This is
     # what makes a flow worth having walked, and (in the next phase) what decides
     # whether a different choice produced a genuinely different business path.
+    # The producer of these nodes is ``_displayed_values``, whose contract is
+    # {label, selector, TEXT} — the rendered value lives in ``text``. Reading only
+    # ``value`` silently emptied every outcome: the crawl captured "Estimated
+    # Monthly Premium = $9.26" on the page and the journey then recorded a
+    # premium of "". A journey without its outcome is a walk, not evidence —
+    # proving the funnel runs is worth far less than proving what it produced.
     outcomes = [
         {"label": str(v.get("label") or "")[:120],
-         "value": str(v.get("value") or "")[:200],
+         "value": str(v.get("value") or v.get("text") or "")[:200],
          "value_type": str(v.get("value_type") or "")}
         for v in (outcome_values or ())
     ][:12]
