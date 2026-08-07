@@ -52,6 +52,35 @@ export default function LoginSessionPanel({ appId }: { appId: string }) {
 
   const [liveUrl, setLiveUrl] = useState('');
   const [busy, setBusy] = useState('');
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+
+  /**
+   * Credentials are what let a crawl re-authenticate BY ITSELF when it meets a
+   * sign-in wall part-way through a journey (public quote → authenticated apply).
+   * A recorded session cannot do that — it is a snapshot that expires. Until now
+   * they could only be set at onboarding, so an app whose session died could not
+   * be repaired without re-registering it and stranding its catalogue.
+   */
+  const saveCredentials = async () => {
+    if (!app) return;
+    setBusy('creds');
+    try {
+      await api.replaceLoginRecording(app.app_id, { username, password });
+      setUsername(''); setPassword('');
+      toast.success('Credentials saved', {
+        description: 'Crawls can now sign in on their own when a journey crosses a login.',
+      });
+      appState.reload();
+    } catch (err: unknown) {
+      const e = err as { response?: { data?: { detail?: string } }; message?: string };
+      toast.error('Could not save credentials', {
+        description: e?.response?.data?.detail || e?.message || 'Unknown error.',
+      });
+    } finally {
+      setBusy('');
+    }
+  };
 
   const start = async () => {
     if (!app) return;
@@ -198,6 +227,45 @@ export default function LoginSessionPanel({ appId }: { appId: string }) {
               A crawl is running — wait for it to finish.
             </span>
           )}
+
+          <div className="mt-4 border-t border-line pt-3">
+            <p className="text-sm font-semibold text-ink">Sign-in credentials</p>
+            <p className="mt-1 text-xs text-ink-mid">
+              A recorded session expires; credentials do not. With these stored, a
+              crawl signs itself back in whenever a journey crosses a login wall —
+              no operator, no re-recording. Encrypted at rest and never shown again.
+            </p>
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <input
+                className="w-56 rounded-md bg-panel-2 px-2 py-1.5 text-sm text-ink ring-1 ring-line-strong"
+                placeholder="Username or email"
+                autoComplete="off"
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+              />
+              <input
+                className="w-56 rounded-md bg-panel-2 px-2 py-1.5 text-sm text-ink ring-1 ring-line-strong"
+                placeholder="Password"
+                type="password"
+                autoComplete="new-password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+              />
+              <Button
+                variant="secondary"
+                loading={busy === 'creds'}
+                disabled={!username || !password}
+                onClick={saveCredentials}
+              >
+                Save credentials
+              </Button>
+            </div>
+            {app?.has_credentials && (
+              <p className="mt-2 text-xs text-ink-faint">
+                Credentials are already stored for this app. Saving replaces them.
+              </p>
+            )}
+          </div>
         </div>
       )}
     </Panel>

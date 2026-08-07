@@ -1053,6 +1053,14 @@ class LoginRecordingIn(BaseModel):
 
     login_recording: dict | None = None
     session: dict | None = None
+    # The credentials the crawler RE-DRIVES the login with when it meets an auth
+    # wall mid-journey. A captured session cannot do this: it is a snapshot that
+    # expires, whereas a username/password re-authenticates forever with no human.
+    # Settable ONLY here and at onboarding — an app that lost its session had no
+    # way to be given credentials without being re-registered, which stranded its
+    # whole catalogue under a new app_id.
+    username: str | None = Field(default=None, max_length=400)
+    password: str | None = Field(default=None, max_length=400)
 
 
 @router.post("/apps/{app_id}/login-recording")
@@ -1075,10 +1083,18 @@ async def replace_login_recording(
     silently destroy a stored username/password every time somebody refreshed a
     session. Only the ``session`` key is touched.
     """
-    if payload.login_recording is None and payload.session is None:
+    username = (payload.username or "").strip()
+    password = payload.password or ""
+    if (payload.login_recording is None and payload.session is None
+            and not username and not password):
         raise HTTPException(
             status_code=422,
-            detail="send login_recording, session, or both — nothing to record",
+            detail="send login_recording, session, credentials, or any combination — nothing to record",
+        )
+    if bool(username) != bool(password):
+        raise HTTPException(
+            status_code=422,
+            detail="a username needs a password (and vice versa) — a half credential cannot log in",
         )
 
     recording = _sanitised_login_recording(payload.login_recording)
@@ -1097,9 +1113,12 @@ async def replace_login_recording(
         if row.status == "deleted":
             raise HTTPException(status_code=409, detail="app is deleted")
 
-        if payload.session is not None:
+        if payload.session is not None or username:
             creds = await _decrypt_credentials_for_merge(request, tenant_id, row)
-            creds["session"] = payload.session
+            if payload.session is not None:
+                creds["session"] = payload.session
+            if username:
+                creds["username"], creds["password"] = username, password
             row.creds_blob = await _encrypt_credentials(
                 request, tenant_id, app_id, creds,
             )
@@ -1116,6 +1135,8 @@ async def replace_login_recording(
             "actor": user.get("sub", ""),
             "steps": len(recording.get("steps") or ()),
             "session_refreshed": payload.session is not None,
+            # The flag, never the value.
+            "credentials_set": bool(username),
         },
     )
     return result

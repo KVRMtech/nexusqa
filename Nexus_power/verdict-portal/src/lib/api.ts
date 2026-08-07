@@ -260,7 +260,15 @@ export class QecApiClient {
    */
   replaceLoginRecording(
     appId: string,
-    payload: { login_recording?: unknown; session?: unknown },
+    payload: {
+      login_recording?: unknown;
+      session?: unknown;
+      /** Credentials let a crawl re-authenticate BY ITSELF mid-journey; a captured
+       *  session cannot, because it expires. Merged server-side, never replacing
+       *  the rest of the blob. */
+      username?: string;
+      password?: string;
+    },
     opts?: RequestOpts,
   ): Promise<ClientApp> {
     if (this.mock) return this.mocked(() => mock.mockGetApp(appId) as ClientApp, opts?.signal);
