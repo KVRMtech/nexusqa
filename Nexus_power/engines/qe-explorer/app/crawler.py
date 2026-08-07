@@ -843,9 +843,9 @@ class Crawler:
             # credentials — the stored SESSION died and must be re-recorded.
             auth_prefix = (
                 "AUTHENTICATED AREAS NOT COVERED — the stored login session has "
-                "EXPIRED (the app answered the entry with a login wall); crawled the "
-                "accessible (public) pages only. Re-record the login to restore "
-                "authenticated coverage. "
+                "EXPIRED (the app still presented a login wall while holding it); "
+                "crawled the accessible (public) pages only. Re-record the login to "
+                "restore authenticated coverage. "
             )
         else:
             auth_prefix = (

@@ -87,9 +87,14 @@ $cmds += "; echo ''; echo 'Container status:'; docker ps --format 'table {{.Name
 # Step 3: SSH and deploy
 Write-Host "`n[2/3] SSHing to $VM_NAME and deploying..." -ForegroundColor Blue
 
+# Same stderr trap as the push: git-pull progress and docker build output both go
+# to stderr, and under 'Stop' PowerShell 5.1 kills a deploy that is working.
+$ErrorActionPreference = "Continue"
 & gcloud compute ssh "$VM_USER@$VM_NAME" --zone="$VM_ZONE" --project="$VM_PROJECT" --command="$cmds"
+$sshExit = $LASTEXITCODE
+$ErrorActionPreference = "Stop"
 
-if ($LASTEXITCODE -ne 0) {
+if ($sshExit -ne 0) {
     Write-Host "VM deploy failed." -ForegroundColor Red
     exit 1
 }
