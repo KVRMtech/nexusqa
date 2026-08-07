@@ -644,7 +644,16 @@ async def _run_job(
                         if (window.location.origin !== origin) return;
                         try {
                             for (const [k, v] of Object.entries(entries)) {
-                                sessionStorage.setItem(k, v);
+                                // SEED ONLY, never overwrite. This runs before EVERY
+                                // navigation, and sessionStorage survives them, so
+                                // re-setting would clobber whatever the app wrote
+                                // since — a rotated token would be replaced by the
+                                // stale recorded one and the session would die
+                                // mid-crawl, silently. A key the app already holds
+                                // is the app's business.
+                                if (sessionStorage.getItem(k) === null) {
+                                    sessionStorage.setItem(k, v);
+                                }
                             }
                         } catch (e) { /* storage blocked — nothing we can do */ }
                     })(%s)""" % json.dumps({"origin": _origin, "entries": _values}),
