@@ -402,3 +402,25 @@ def test_the_none_memo_still_saves_a_call_on_a_genuinely_identical_page(tmp_path
     d2 = _pick(c, [_btn("Back")], fp="fpA")
     assert d2.oracle_status == ORACLE_NONE
     assert len(oracle.calls) == 1
+
+
+def test_a_new_state_is_an_advance_even_when_the_click_reports_no_effect():
+    """Regression: an SPA wizard that advances by re-rendering IN PLACE trips
+    none of the click-time outcome signals (no navigation, no dialog), so the
+    classifier reported 'none' while the page had demonstrably become the next
+    step. Observed live:
+
+        clicked='Continue' outcome='none' same_fp=False already_in_walk=False
+
+    The fingerprint had changed and the state was unvisited, and the walk still
+    refused — recording a five-page funnel as two-step fragments. The
+    fingerprint is computed from a FRESH observation after the click, so it is
+    the stronger evidence; the outcome is corroboration, not the gate."""
+    import inspect
+
+    from app.crawler import Crawler
+    src = inspect.getsource(Crawler._walk_wizard)
+    assert "if new_fp != cur_fp and new_fp not in walk_seen:" in src, (
+        "a changed, unvisited fingerprint must be sufficient")
+    assert 'outcome not in ("", "none") and new_fp != cur_fp' not in src, (
+        "the click-time outcome must no longer veto a real state change")

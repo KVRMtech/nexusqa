@@ -2302,8 +2302,26 @@ class Crawler:
                 new_fp = state_fingerprint(obs.url, new_controls, obs.dialog_flags)
                 # a GENUINE advance: an observable effect AND a state this WALK
                 # has not already been through (see ``walk_seen``).
-                if (outcome not in ("", "none") and new_fp != cur_fp
-                        and new_fp not in walk_seen):
+                # A NEW STATE IS ITSELF THE EVIDENCE.
+                #
+                # The click-time outcome classifier only sees navigation, DOM
+                # mutation on the clicked node, or a dialog. An SPA wizard that
+                # advances by re-rendering in place trips none of those, so it
+                # reports 'none' while the page has demonstrably become the next
+                # step. Requiring it vetoed real advances: observed live on the
+                # VKPower funnel —
+                #     clicked='Continue' outcome='none' same_fp=False
+                #                        already_in_walk=False
+                # — the fingerprint had changed and the state was unvisited, and
+                # the walk still refused, recording a five-page funnel as
+                # two-step fragments.
+                #
+                # The fingerprint is the stronger signal: it is computed from a
+                # FRESH observation taken after the click (url + controls +
+                # dialogs), not from the click event. A fingerprint this journey
+                # has not seen IS a step forward. The outcome is kept as
+                # corroboration in the action record, never as the gate.
+                if new_fp != cur_fp and new_fp not in walk_seen:
                     cur_actions.append(action)
                     walk_seen.add(new_fp)
                     advance = (obs, new_controls, new_fp)
