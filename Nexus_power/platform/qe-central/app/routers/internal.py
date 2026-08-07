@@ -815,6 +815,13 @@ async def complete_crawl(crawl_id: str, request: Request) -> dict:
         # HLQ explosion) up to ``autowalk_max_depth``.
         walk_depth = int((walk_plan or {}).get("walk_depth") or 0)
         max_depth = settings.autowalk_max_depth
+        # Retire the options of any decision that has now been SHOWN to be a data
+        # variation rather than a business fork, BEFORE planning the next cycle —
+        # otherwise the planner keeps queueing US states and height values that
+        # cannot exercise new behaviour, and the sweep never converges.
+        stats_dict["branch_equivalence"] = (
+            await branch_planner.classify_equivalent_options(
+                tenant_id=tenant_id, app_id=app_id))
         flags = await branch_planner.autonomy_flags(tenant_id)
         if flags["autowalk"] and walk_depth < max_depth:
             from fastapi import Response as _Response

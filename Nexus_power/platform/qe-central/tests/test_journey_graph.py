@@ -755,3 +755,131 @@ def test_e2e_still_lifts_the_coverage_dimensions():
     from app.routers.explorations import _E2E_BUDGET, _FIRST_PASS_BUDGET
     for k in ("max_states", "max_depth", "max_requests"):
         assert _E2E_BUDGET[k] > _FIRST_PASS_BUDGET[k] * 10, k
+
+
+# ── equivalence classes: a data variation is not a business path ─────────
+
+
+def _variation_flow(entry_fp="fpV", option="alabama", premium="$42.10"):
+    """One walk of a many-option decision (a US state picker). Every option
+    produces the SAME page path and the SAME premium — it varies data, it does
+    not fork the business."""
+    return {
+        "flow_id": ("v" + option)[:24].ljust(24, "x"),
+        "entry_fingerprint": entry_fp,
+        "entry_url": "https://a.example/quote/personal/", "entry_title": "Personal",
+        "terminal": "submit_boundary", "completed": True, "fully_answered": True,
+        "outcome_values": [{"label": "Monthly Premium", "value": premium,
+                            "value_type": "currency"}],
+        "steps": [
+            {"fingerprint": entry_fp, "url": "u1", "title": "Personal",
+             "fields_filled": 1, "fields_unfilled": 0,
+             "advance": {"tier": 1, "control_name": "Continue", "oracle": False},
+             "decision_points": [
+                 {"control_signature": "sig-state", "control_label": "State",
+                  "options": ["alabama", "alaska", "arizona", "arkansas"],
+                  "choice": option, "provenance": "planned"}]},
+            {"fingerprint": "fpV2", "url": "u2", "title": "Review",
+             "fields_filled": 0, "fields_unfilled": 0},
+        ],
+    }
+
+
+@needs_db
+def test_options_that_change_nothing_are_retired_as_equivalent():
+    """Regression: one 5-page form produced 113 branches — 23 US states, 13
+    height-in-inches — each walked as its own crawl while holding a fleet-wide
+    lock, then reported as 113 'proven business paths' where there are six."""
+    asyncio.run(_run_equivalence())
+
+
+async def _run_equivalence():
+    from app.db.journey_models import JourneyBranchRow
+    from app.db.models import QecBase
+    from app.services.journey_fold import BRANCH_EQUIVALENT
+
+    engine = create_async_engine(DB_URL)
+    async with engine.begin() as conn:
+        await conn.run_sync(QecBase.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    tenant = f"qec-eq-{uuid.uuid4().hex[:10]}"
+    app_id = "app-eq"
+    originals = (journey_fold.tenant_scoped_qec_session,
+                 branch_planner.tenant_scoped_qec_session)
+    try:
+        journey_fold.tenant_scoped_qec_session = lambda t: _scoped(factory, t)
+        branch_planner.tenant_scoped_qec_session = lambda t: _scoped(factory, t)
+
+        # two representatives walked, both identical in path AND premium
+        for i, opt in enumerate(("alabama", "alaska")):
+            await journey_fold.fold_crawl(
+                tenant_id=tenant, app_id=app_id, exploration_id=f"ex-{i}",
+                coverage=_coverage(_variation_flow(option=opt)))
+
+        res = await branch_planner.classify_equivalent_options(
+            tenant_id=tenant, app_id=app_id)
+        assert res["retired"] >= 1, res
+
+        async with _scoped(factory, tenant) as s:
+            rows = (await s.execute(select(JourneyBranchRow).where(
+                JourneyBranchRow.tenant_id == tenant))).scalars().all()
+            walked = [b for b in rows if b.status == BRANCH_WALKED]
+            equiv = [b for b in rows if b.status == BRANCH_EQUIVALENT]
+            assert len(walked) == 2, [b.option_label_norm for b in walked]
+            assert {b.option_label_norm for b in equiv} == {"arizona", "arkansas"}
+            # honest, never silent
+            assert all("equivalent" in b.blocked_reason for b in equiv)
+
+        # ...and the planner stops queueing them
+        plans = await branch_planner.plan_walks(
+            tenant_id=tenant, app_id=app_id, limit=20)
+        assert plans == [], plans
+    finally:
+        journey_fold.tenant_scoped_qec_session = originals[0]
+        branch_planner.tenant_scoped_qec_session = originals[1]
+        await engine.dispose()
+
+
+@needs_db
+def test_a_decision_that_really_forks_keeps_every_option_walkable():
+    """The cap must LIFT when the representatives disagree. "Term Life vs Whole
+    Life" produces a different premium, so every remaining product stays a real
+    business path — pruning it would silently delete coverage."""
+    asyncio.run(_run_real_fork_not_retired())
+
+
+async def _run_real_fork_not_retired():
+    from app.db.journey_models import JourneyBranchRow
+    from app.db.models import QecBase
+    from app.services.journey_fold import BRANCH_EQUIVALENT
+
+    engine = create_async_engine(DB_URL)
+    async with engine.begin() as conn:
+        await conn.run_sync(QecBase.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    tenant = f"qec-fork-{uuid.uuid4().hex[:10]}"
+    app_id = "app-fork"
+    originals = (journey_fold.tenant_scoped_qec_session,
+                 branch_planner.tenant_scoped_qec_session)
+    try:
+        journey_fold.tenant_scoped_qec_session = lambda t: _scoped(factory, t)
+        branch_planner.tenant_scoped_qec_session = lambda t: _scoped(factory, t)
+
+        # same decision, DIFFERENT premium per option → a genuine fork
+        for i, (opt, prem) in enumerate((("alabama", "$42.10"),
+                                         ("alaska", "$99.99"))):
+            await journey_fold.fold_crawl(
+                tenant_id=tenant, app_id=app_id, exploration_id=f"ex-{i}",
+                coverage=_coverage(_variation_flow(option=opt, premium=prem)))
+
+        res = await branch_planner.classify_equivalent_options(
+            tenant_id=tenant, app_id=app_id)
+        assert res["retired"] == 0, res
+        async with _scoped(factory, tenant) as s:
+            rows = (await s.execute(select(JourneyBranchRow).where(
+                JourneyBranchRow.tenant_id == tenant))).scalars().all()
+            assert not [b for b in rows if b.status == BRANCH_EQUIVALENT]
+    finally:
+        journey_fold.tenant_scoped_qec_session = originals[0]
+        branch_planner.tenant_scoped_qec_session = originals[1]
+        await engine.dispose()

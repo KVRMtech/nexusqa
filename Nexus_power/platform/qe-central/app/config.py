@@ -165,6 +165,17 @@ class Settings(BaseSettings):
     #: Planned branch walks dispatched per completion cycle, at most.
     branch_walks_per_cycle: int = Field(
         default=4, alias="QEC_BRANCH_WALKS_PER_CYCLE")
+    #: How many options of ONE decision are walked before asking whether that
+    #: decision forks the business at all.
+    #:
+    #: "Term Life vs Whole Life" is a business path — different product,
+    #: different premium. "Alabama vs Alaska" is the same journey with different
+    #: data. Enumerating the second kind turned one 5-page form into 113
+    #: branches (23 US states, 13 height-in-inches), each its own crawl, and the
+    #: sweep never converged. Two representatives is enough to ask the question;
+    #: if they produce different paths or different outcomes the cap lifts and
+    #: the decision is enumerated in full.
+    branch_probe_k: int = Field(default=2, alias="QEC_BRANCH_PROBE_K")
     #: E1: maximum recursive autowalk depth. A branch walk that reveals new
     #: branches triggers further autowalks up to this depth. 0 = fire-once
     #: (pre-E1 behavior).

@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+from collections.abc import Mapping
 from typing import Any, Optional
 
 from sqlalchemy import or_ as sa_or
@@ -48,6 +49,7 @@ from ..db.journey_models import (
 )
 from .journey_fold import (
     BRANCH_BLOCKED,
+    BRANCH_EQUIVALENT,
     BRANCH_DEFERRED,
     BRANCH_DISCOVERED,
     BRANCH_PLANNED,
@@ -208,9 +210,29 @@ async def plan_walks(
                     "deferred=%d cap=%d",
                     tenant_id, journey.journey_id, len(to_defer), enum_cap)
 
+            # PROBE BUDGET. Until a decision has been shown to fork the business,
+            # plan only a couple of its options. A 23-option state picker and a
+            # 13-option height picker are data variations, and queueing every
+            # value before any evidence exists is what made the sweep unbounded.
+            # Once the representatives come back DIFFERENT, the cap lifts and the
+            # decision is enumerated properly.
+            probe_k = max(2, int(settings.branch_probe_k))
+            planned_per_decision: dict[str, int] = {}
             for b in discovered:
+                already = sum(
+                    1 for x in (await session.execute(
+                        select(JourneyBranchRow.status).where(
+                            JourneyBranchRow.tenant_id == tenant_id,
+                            JourneyBranchRow.app_id == app_id,
+                            JourneyBranchRow.control_signature == b.control_signature,
+                        ))).scalars().all()
+                    if x in (BRANCH_WALKED, BRANCH_PLANNED))
+                if already + planned_per_decision.get(b.control_signature, 0) >= probe_k:
+                    continue          # enough representatives in flight already
                 if len(plans) >= cap:
                     break
+                planned_per_decision[b.control_signature] = (
+                    planned_per_decision.get(b.control_signature, 0) + 1)
                 overrides = {b.control_signature: b.option_label_norm}
                 plans.append({
                     "journey_id": journey.journey_id,
@@ -359,6 +381,94 @@ async def mark_planned(*, tenant_id: str, branch_ids: list[str]) -> int:
             b.last_status_at = utc_now()
             changed += 1
     return changed
+
+
+def _outcome_shape(outcome_values: Any) -> tuple:
+    """What a journey PRODUCED, compared by shape and value.
+
+    A different premium IS a different business path — that is the whole test
+    for whether a decision forks the business or merely varies its data.
+    """
+    if not isinstance(outcome_values, (list, tuple)):
+        return ()
+    out = []
+    for v in outcome_values:
+        if not isinstance(v, Mapping):
+            continue
+        out.append((str(v.get("label") or "").strip().lower(),
+                    str(v.get("value") or "").strip().lower(),
+                    str(v.get("value_type") or "").strip().lower()))
+    return tuple(sorted(out))
+
+
+async def classify_equivalent_options(*, tenant_id: str, app_id: str) -> dict[str, int]:
+    """Retire the options of a decision that is a DATA VARIATION, not a fork.
+
+    For each decision with at least ``branch_probe_k`` walked options: if every
+    walked representative produced the SAME path AND the SAME outcome, the
+    decision does not fork the business — the remaining options are marked
+    ``equivalent`` with an honest count instead of being enumerated.
+
+    This is measured, never guessed. Options are retired only AFTER real walks
+    disagreed about nothing; a decision whose representatives produced different
+    paths or different premiums keeps every one of its options walkable.
+
+    Without it "exhaustive" means the cartesian product of every dropdown on
+    every page: 23 US states and 13 height-in-inches each became their own crawl,
+    the sweep never converged, and one application held a fleet-wide lock for
+    hours. Best-effort — a failure here only means less pruning, never a wrong
+    coverage claim."""
+    probe_k = max(2, int(settings.branch_probe_k))
+    retired = decisions = 0
+    try:
+        async with tenant_scoped_qec_session(tenant_id) as session:
+            rows = (await session.execute(
+                select(JourneyBranchRow).where(
+                    JourneyBranchRow.tenant_id == tenant_id,
+                    JourneyBranchRow.app_id == app_id,
+                ))).scalars().all()
+            by_decision: dict[str, list[JourneyBranchRow]] = {}
+            for b in rows:
+                by_decision.setdefault(b.control_signature, []).append(b)
+
+            for sig, branches in by_decision.items():
+                walked = [b for b in branches if b.status == BRANCH_WALKED
+                          and b.walked_in_traversal]
+                pending = [b for b in branches if b.status == BRANCH_DISCOVERED]
+                if len(walked) < probe_k or not pending:
+                    continue
+                trav_ids = sorted({b.walked_in_traversal for b in walked})
+                travs = (await session.execute(
+                    select(JourneyTraversalRow).where(
+                        JourneyTraversalRow.tenant_id == tenant_id,
+                        JourneyTraversalRow.app_id == app_id,
+                        JourneyTraversalRow.traversal_id.in_(trav_ids),
+                    ))).scalars().all()
+                if len(travs) < probe_k:
+                    continue          # cannot compare what we cannot read
+                fingerprints = {
+                    (t.path_hash, _outcome_shape(t.outcome_values)) for t in travs}
+                if len(fingerprints) != 1:
+                    continue          # the options genuinely fork — keep walking
+                note = (f"equivalent: {len(walked)} option(s) of this decision were "
+                        f"walked and produced the same path and the same outcome, "
+                        f"so this option exercises no new business behaviour")[:400]
+                for b in pending:
+                    b.status = BRANCH_EQUIVALENT
+                    b.blocked_reason = note
+                    b.last_status_at = utc_now()
+                    retired += 1
+                decisions += 1
+    except Exception as exc:
+        logger.warning("qec.branch_planner.equivalence_failed",
+                       extra={"tenant_id": tenant_id, "app_id": app_id,
+                              "error": str(exc)[:200]})
+        return {"decisions": 0, "retired": 0}
+    if retired:
+        logger.warning(
+            "qec.branch_planner.equivalent decisions=%d retired=%d tenant=%s app=%s",
+            decisions, retired, tenant_id, app_id)
+    return {"decisions": decisions, "retired": retired}
 
 
 async def unmark_planned(*, tenant_id: str, branch_ids: list[str]) -> int:

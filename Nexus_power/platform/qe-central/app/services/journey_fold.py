@@ -54,6 +54,21 @@ BRANCH_BLOCKED = "blocked"
 #: E1: the branch exceeds the per-journey explosion cap. Honest, with a count
 #: of what was deferred.  Never silently truncated.
 BRANCH_DEFERRED = "deferred"
+#: This option belongs to a DATA VARIATION, not a business fork: other options of
+#: the same decision were walked and produced the SAME path and the SAME outcome,
+#: so walking this one would prove nothing new.
+#:
+#: "Term Life vs Whole Life" is a business path — different product, different
+#: premium logic. "Alabama vs Alaska" is the same journey with different data.
+#: Enumerating the second kind is what turned one 5-page form into 113 branches
+#: (23 US states, 13 height-in-inches), each its own crawl, holding a global
+#: single-flight lock for hours — and then reporting 113 "proven business paths"
+#: where there are about six.
+#:
+#: EARNED, never assumed: an option is only equivalent once representatives have
+#: actually been walked and compared. The count is surfaced so a reader sees
+#: "1 of 23 walked, 22 equivalent" rather than a silent truncation.
+BRANCH_EQUIVALENT = "equivalent"
 
 #: Terminals that mean the traversal covered its journey — mirrored from the
 #: explorer's ``flow_ledger.COMPLETING_TERMINALS`` (services share no library;
