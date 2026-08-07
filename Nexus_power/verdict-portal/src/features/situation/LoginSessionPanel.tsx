@@ -48,7 +48,11 @@ export default function LoginSessionPanel({ appId }: { appId: string }) {
     && coverage?.auth_reason === 'session_expired';
   const stepCount = (app?.login_recording?.steps as unknown[] | undefined)?.length ?? 0;
 
-  const health: Health = sessionExpired ? 'expired' : stepCount > 0 ? 'recorded' : 'none';
+  // `recorded` means this app can sign itself in — by stored credentials or by a
+  // recorded login. `expired` outranks both: a crawl PROVED it could not sign in.
+  const health: Health = sessionExpired
+    ? 'expired'
+    : (app?.has_credentials || stepCount > 0) ? 'recorded' : 'none';
 
   const [liveUrl, setLiveUrl] = useState('');
   const [busy, setBusy] = useState('');
@@ -154,97 +158,96 @@ export default function LoginSessionPanel({ appId }: { appId: string }) {
     await factoryApi.cancelRecording().catch(() => {});
   };
 
-  const HEAD: Record<Health, { pill: string; tone: 'crit' | 'good' | 'neutral'; icon: JSX.Element }> = {
-    expired: { pill: 'Session expired', tone: 'crit', icon: <ShieldAlert size={16} className="text-crit" /> },
-    recorded: { pill: `${stepCount} step${stepCount === 1 ? '' : 's'} recorded`, tone: 'good', icon: <ShieldCheck size={16} className="text-good" /> },
-    none: { pill: 'No login recorded', tone: 'neutral', icon: <KeyRound size={16} className="text-ink-mid" /> },
+  /**
+   * The panel states an operator can be in, and for each one the SINGLE next
+   * action. An earlier version offered "record a login" and "add credentials"
+   * side by side with no guidance, which left the operator to work out which
+   * mechanism their app needed — a choice they have no basis to make and which
+   * we can make for them. Sign-in details are the default because they do not
+   * expire; recording is the exception for logins nobody can type.
+   */
+  const STATE: Record<Health, {
+    pill: string; tone: 'crit' | 'good' | 'neutral'; icon: JSX.Element;
+    headline: string; detail: string;
+  }> = {
+    expired: {
+      pill: 'Sign-in broken', tone: 'crit',
+      icon: <ShieldAlert size={16} className="text-crit" />,
+      headline: 'The last crawl could not sign in, so it only covered public pages.',
+      detail: 'This app signs in with a recorded session, and that session has expired. '
+        + 'Add the sign-in details below and it will not happen again — unlike a recorded '
+        + 'session, they do not expire.',
+    },
+    recorded: {
+      pill: 'Signs in', tone: 'good',
+      icon: <ShieldCheck size={16} className="text-good" />,
+      headline: 'This app can sign itself in. Nothing to do.',
+      detail: 'Come back here if the sign-in itself changes — a new password, or a '
+        + 'different login screen.',
+    },
+    none: {
+      pill: 'Not set up', tone: 'neutral',
+      icon: <KeyRound size={16} className="text-ink-mid" />,
+      headline: 'Crawls of this app run signed out, so anything behind the sign-in is not tested.',
+      detail: 'Add the sign-in details a tester would use. The crawl then signs in by '
+        + 'itself, including part-way through a journey.',
+    },
   };
-  const head = HEAD[health];
+  const st = STATE[health];
 
   return (
     <Panel tone="elevated">
       <SectionHead
-        title="Login session"
-        subtitle="the recorded login that gets a crawl past the sign-in wall"
-        icon={head.icon}
-        right={<Pill tone={head.tone} size="sm">{head.pill}</Pill>}
+        title="Signing in"
+        subtitle="how a crawl gets past this app's sign-in screen"
+        icon={st.icon}
+        right={<Pill tone={st.tone} size="sm">{st.pill}</Pill>}
       />
 
-      {health === 'expired' && (
-        <p className="mt-3 text-sm text-ink">
-          <span className="font-semibold text-crit">
-            The last crawl did not cover the authenticated app.
-          </span>{' '}
-          The stored session was replayed but the application still presented a
-          sign-in wall, so the crawl explored the public pages only. Re-record the
-          login to restore authenticated coverage.
-        </p>
-      )}
-      {health === 'none' && (
-        <p className="mt-3 text-sm text-ink-mid">
-          Crawls of this app run signed out. Record a login once and every later
-          crawl starts authenticated.
-        </p>
-      )}
-      {health === 'recorded' && (
-        <p className="mt-3 text-sm text-ink-mid">
-          The last crawl reached the authenticated app. Re-record if the login
-          itself changed, or after a credential rotation.
-        </p>
-      )}
+      <p className="mt-3 text-sm font-semibold text-ink">{st.headline}</p>
+      <p className="mt-1 text-sm text-ink-mid">{st.detail}</p>
 
       {liveUrl ? (
-        <div className="mt-3 space-y-2">
+        <div className="mt-4 space-y-2">
+          <p className="text-sm font-semibold text-ink">Sign in below, then press Save.</p>
           <iframe
             src={liveUrl}
-            title="Log in to record the login"
+            title="Sign in to record the login"
             className="h-[460px] w-full rounded-lg ring-1 ring-line-strong"
           />
           <p className="text-xs text-ink-mid">
-            Log in as you normally would, then press Save. We record which fields
-            you fill and which controls you press — never the values you type.
+            If this opens already signed in, sign out first — there is no login to
+            learn otherwise. We record which boxes you fill and which buttons you
+            press, never what you type.
           </p>
           <div className="flex gap-2">
             <Button variant="primary" loading={busy === 'save'} onClick={save}>
-              Save recording
+              Save
             </Button>
             <Button variant="ghost" onClick={abort}>Cancel</Button>
           </div>
         </div>
       ) : (
-        <div className="mt-3">
-          <Button
-            variant={health === 'expired' ? 'primary' : 'secondary'}
-            icon={<Video size={14} />}
-            loading={busy === 'start'}
-            disabled={crawlActive}
-            onClick={start}
-          >
-            {health === 'none' ? 'Record login' : 'Re-record login'}
-          </Button>
-          {crawlActive && (
-            <span className="ml-2 text-xs text-ink-mid">
-              A crawl is running — wait for it to finish.
-            </span>
-          )}
-
-          <div className="mt-4 border-t border-line pt-3">
-            <p className="text-sm font-semibold text-ink">Sign-in credentials</p>
+        <>
+          {/* STEP 1 — what almost every app needs. */}
+          <div className="mt-4 rounded-lg bg-panel-2 p-3 ring-1 ring-line-strong">
+            <p className="text-sm font-semibold text-ink">
+              {health === 'recorded' ? 'Update the sign-in details' : 'Enter the sign-in details'}
+            </p>
             <p className="mt-1 text-xs text-ink-mid">
-              A recorded session expires; credentials do not. With these stored, a
-              crawl signs itself back in whenever a journey crosses a login wall —
-              no operator, no re-recording. Encrypted at rest and never shown again.
+              The username and password a tester uses on this app. Stored encrypted,
+              never shown again, and never written into a test or a report.
             </p>
             <div className="mt-2 flex flex-wrap items-center gap-2">
               <input
-                className="w-56 rounded-md bg-panel-2 px-2 py-1.5 text-sm text-ink ring-1 ring-line-strong"
+                className="w-56 rounded-md bg-panel px-2 py-1.5 text-sm text-ink ring-1 ring-line-strong"
                 placeholder="Username or email"
                 autoComplete="off"
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
               />
               <input
-                className="w-56 rounded-md bg-panel-2 px-2 py-1.5 text-sm text-ink ring-1 ring-line-strong"
+                className="w-56 rounded-md bg-panel px-2 py-1.5 text-sm text-ink ring-1 ring-line-strong"
                 placeholder="Password"
                 type="password"
                 autoComplete="new-password"
@@ -252,21 +255,42 @@ export default function LoginSessionPanel({ appId }: { appId: string }) {
                 onChange={(e) => setPassword(e.target.value)}
               />
               <Button
-                variant="secondary"
+                variant="primary"
                 loading={busy === 'creds'}
                 disabled={!username || !password}
                 onClick={saveCredentials}
               >
-                Save credentials
+                Save and use this
               </Button>
             </div>
-            {app?.has_credentials && (
-              <p className="mt-2 text-xs text-ink-faint">
-                Credentials are already stored for this app. Saving replaces them.
-              </p>
-            )}
           </div>
-        </div>
+
+          {/* STEP 2 — the exception, deliberately quieter. */}
+          <div className="mt-3 border-t border-line pt-3">
+            <p className="text-sm text-ink-mid">
+              <span className="font-semibold text-ink">Can't sign in with just a username and password?</span>{' '}
+              If this app sends a one-time code, redirects to a company sign-on page,
+              or shows a "prove you're human" check, sign in once by hand and we will
+              learn the steps.
+            </p>
+            <div className="mt-2">
+              <Button
+                variant="secondary"
+                icon={<Video size={14} />}
+                loading={busy === 'start'}
+                disabled={crawlActive}
+                onClick={start}
+              >
+                Sign in by hand instead
+              </Button>
+              {crawlActive && (
+                <span className="ml-2 text-xs text-ink-mid">
+                  A crawl is running — wait for it to finish.
+                </span>
+              )}
+            </div>
+          </div>
+        </>
       )}
     </Panel>
   );
