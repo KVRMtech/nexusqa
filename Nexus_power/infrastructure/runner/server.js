@@ -291,6 +291,30 @@ async function startCapture(url, launchArgs, recorderOpts) {
 async function saveCapture() {
   if (!capture || !capture.context) throw new Error('no active capture session');
   const state = await capture.context.storageState();
+  // storageState() carries cookies and localStorage ONLY — sessionStorage is
+  // omitted by design. Apps that keep their sign-in there therefore recorded a
+  // login perfectly and handed back an EMPTY session, and the crawl then ran
+  // signed out. Observed live on a Next.js app: cookies=0 origins=0 while the
+  // login itself was captured fine.
+  //
+  // Namespaced so it cannot collide with Playwright's own schema; the consumer
+  // strips it before handing the state back to Playwright and replays it through
+  // an init script instead. Best-effort: a page that forbids the read, or a
+  // context already closing, costs us nothing that we had before.
+  try {
+    const origin = await capture.page.evaluate(() => window.location.origin);
+    const entries = await capture.page.evaluate(() => {
+      const out = {};
+      for (let i = 0; i < sessionStorage.length; i += 1) {
+        const k = sessionStorage.key(i);
+        if (k) out[k] = sessionStorage.getItem(k);
+      }
+      return out;
+    });
+    if (entries && Object.keys(entries).length) {
+      state.__nx_session_storage = [{ origin: origin, entries: entries }];
+    }
+  } catch (e) { /* no sessionStorage to carry — the cookie session still stands */ }
   // Snapshot the login choreography BEFORE stopCapture() closes the browser —
   // page.url() is unreadable once the context is gone. Never fatal: losing the
   // observation must never cost the operator their captured session.

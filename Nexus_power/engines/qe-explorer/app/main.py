@@ -600,9 +600,23 @@ async def _run_job(
             # a crawl can proceed past a login the crawler cannot script. A bad/
             # empty session is ignored (a normal cold crawl), never a hard failure.
             _ctx_kwargs: dict[str, Any] = {"service_workers": "block", "ignore_https_errors": False}
-            if isinstance(req.session, dict) and (req.session.get("cookies") or req.session.get("origins")):
-                _ctx_kwargs["storage_state"] = req.session
-                logger.info("qec.explorer.session_injected crawl_id=%s", req.crawl_id)
+            # sessionStorage is NOT part of Playwright's storageState, so a captured
+            # session carries it under our own namespaced key. It must be stripped
+            # before the state reaches Playwright (an unknown key is a schema error)
+            # and replayed through an init script instead — see below.
+            _session_storage: list = []
+            if isinstance(req.session, dict):
+                _session = {k: v for k, v in req.session.items()
+                            if k != "__nx_session_storage"}
+                _raw_ss = req.session.get("__nx_session_storage")
+                _session_storage = list(_raw_ss) if isinstance(_raw_ss, list) else []
+                # An app that keeps its whole sign-in in sessionStorage has NO
+                # cookies and NO origins, so requiring them dropped exactly the
+                # sessions this exists to carry.
+                if _session.get("cookies") or _session.get("origins") or _session_storage:
+                    _ctx_kwargs["storage_state"] = _session
+                    logger.info("qec.explorer.session_injected crawl_id=%s session_storage_origins=%d",
+                                req.crawl_id, len(_session_storage))
             # Multi-env crawl bindings (empty ⇒ byte-identical to today).
             if req.extra_http_headers:
                 _ctx_kwargs["extra_http_headers"] = dict(req.extra_http_headers)
@@ -613,6 +627,28 @@ async def _run_job(
                 }
             context = await browser.new_context(**_ctx_kwargs)
             context.set_default_timeout(_ACTION_TIMEOUT_MS)
+            # Replay sessionStorage. Playwright can restore cookies and localStorage
+            # from a storageState but has no equivalent for sessionStorage, so it is
+            # written by an init script that runs before any page script on the
+            # matching origin — which is what makes "record the login once" work for
+            # an app that keeps its sign-in there.
+            for _entry in _session_storage:
+                if not isinstance(_entry, dict):
+                    continue
+                _origin = str(_entry.get("origin") or "")
+                _values = _entry.get("entries")
+                if not _origin or not isinstance(_values, dict) or not _values:
+                    continue
+                await context.add_init_script(
+                    """(({origin, entries}) => {
+                        if (window.location.origin !== origin) return;
+                        try {
+                            for (const [k, v] of Object.entries(entries)) {
+                                sessionStorage.setItem(k, v);
+                            }
+                        } catch (e) { /* storage blocked — nothing we can do */ }
+                    })(%s)""" % json.dumps({"origin": _origin, "entries": _values}),
+                )
             if req.cookies:  # routing cookies (Gloo/canary) — cookies are a method call
                 # FAIL-CLOSED: if the env routing cookie can't be set, the crawl must
                 # NOT proceed cookieless — that would land on the DEFAULT env (often

@@ -461,7 +461,13 @@ async def _resolve_session(credentials: dict | None) -> dict | None:
     if not isinstance(credentials, dict):
         return None
     static = credentials.get("session")
-    if isinstance(static, dict) and (static.get("cookies") or static.get("origins")):
+    # `__nx_session_storage` counts as substance: an app that keeps its whole
+    # sign-in in sessionStorage has no cookies and no origins, so requiring them
+    # discarded exactly the sessions a recording exists to carry.
+    if isinstance(static, dict) and (
+        static.get("cookies") or static.get("origins")
+        or static.get("__nx_session_storage")
+    ):
         return static
     hook = str(credentials.get("auth_hook") or "").strip()
     if not hook:
