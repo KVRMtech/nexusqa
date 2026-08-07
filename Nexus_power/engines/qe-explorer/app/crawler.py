@@ -1950,6 +1950,15 @@ class Crawler:
                 continue
             if _is_wizard_advance(name):
                 return c
+        # DIAGNOSTIC: no advance found. An offline reproduction of the same page
+        # DOES yield a pickable "Continue" (button, enabled, not danger), so what
+        # the crawl actually holds here differs from what the page shows — and
+        # only the crawl can say how. Names are product UI text, never values.
+        logger.info(
+            "qec.wizard.no_tier1 candidates=%s",
+            [f"{c.get('kind')}:{str(c.get('name') or '')[:24]}"
+             f":dis={bool(c.get('disabled'))}:dang={bool(c.get('danger'))}"
+             for c in (controls or ())][:12])
         return None
 
     def _tier3_candidates(
