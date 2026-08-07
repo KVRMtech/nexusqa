@@ -326,21 +326,6 @@ def match_login_controls(
     return LoginControls(username=dict(username), password=dict(password), submit=dict(submit))
 
 
-def presents_login_wall(controls: Sequence[Mapping[str, Any]]) -> bool:
-    """True when this screen is asking someone to log in.
-
-    Grounded on the ONE structural fact that means "login" in every application,
-    language and framework: a live password input. Deliberately NOT keyed on the
-    URL, the page title or any copy — those differ per app and per locale, and the
-    caller (session-expiry detection) runs against every client app we crawl.
-
-    Weaker than :func:`match_login_controls`, and that is the point: a session-
-    expiry check must fire even when the username field or the submit button
-    cannot be grounded (a second-factor screen, an SSO bounce, a split login).
-    """
-    return _match_password_control(controls) is not None
-
-
 def match_otp_control(
     controls: Sequence[Mapping[str, Any]], otp_hints: Sequence[str] = DEFAULT_OTP_HINTS,
 ) -> Optional[Mapping[str, Any]]:

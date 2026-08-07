@@ -42,7 +42,7 @@ from . import emit
 from . import matcher
 from . import value_infer
 from . import vocab
-from .auth import Authenticator, AuthWindow, Credentials, presents_login_wall
+from .auth import Authenticator, AuthWindow, Credentials, match_login_controls
 from .browser import BrowserPort, PageObservation
 from .fingerprint import state_fingerprint
 from . import flow_ledger
@@ -982,7 +982,10 @@ class Crawler:
         verified (an honest hard stop — the authenticated app is unreachable).
         """
         if not self._credentials:
-            return await self._verify_injected_session()
+            # An injected session needs no login driven — but it DOES need proving.
+            # That happens in _note_login_wall_while_authenticated, which sees every
+            # recorded state (the entry included) and so costs no extra navigation.
+            return self.target_url
 
         self._guard.phase = Phase.AUTH
         self._guard.login_host = self._target_host
@@ -1038,42 +1041,39 @@ class Crawler:
             return await self._port.current_url()
         return await self._port.current_url()
 
-    async def _verify_injected_session(self) -> Optional[str]:
-        """Prove an injected storageState still authenticates us — or say so LOUDLY.
+    def _note_login_wall_while_authenticated(
+        self, controls: Sequence[dict[str, Any]],
+    ) -> None:
+        """Flag a dead session that only reveals itself DEEPER than the entry.
 
-        A tier-4 session is captured ONCE (a hand-recorded login) and replayed on
-        every later crawl, so it expires on the app's own schedule with nothing to
-        announce it. Before this check, a dead session produced the worst outcome
-        available: the AUTH phase was skipped entirely (no credentials to drive),
-        the crawl walked the logged-OUT app, and coverage reported
-        ``auth_incomplete: false`` — a PUBLIC crawl presented as an authenticated
-        one. Observed live: a crawl reached only ``/`` → ``/login/`` and still
-        reported clean.
+        Most applications put a PUBLIC page at the root and protect the rest, so
+        the entry check in :meth:`_verify_injected_session` sees a marketing page
+        and learns nothing — live-observed: the entry was ``/``, and the login wall
+        only appeared two states later at ``/login/``. Any explored state that
+        presents a full login form, while we are holding a session that was
+        supposed to make login unnecessary, means authenticated coverage was NOT
+        achieved.
 
-        We still explore after a failed check: the public pages are real, reachable
-        coverage and throwing them away helps nobody. What changes is the LABEL —
-        the crawl says plainly that the authenticated app was not covered.
+        Deliberately STRICTER than the entry check (username + password + submit,
+        not a bare password input) because it runs against every state of every
+        crawl: a change-password or payment form must never be read as a login
+        wall. Only ever SETS the flag — a crawl that already knows its auth is
+        incomplete is not re-diagnosed, and the flag never downgrades to clean.
         """
-        if not self._session_injected:
-            return self.target_url
-        nav = await self._goto_entry(self.target_url)
-        if not nav.ok:
-            self._stop_reason = STOP_AUTH_FAILED
-            logger.warning("qec.crawler.auth_entry_unreachable error=%s",
-                           (nav.error or "")[:200])
-            return None
-        obs = await self._observe()
-        controls = build_inventory(obs.raw_controls, self._refuse_pack, url=obs.url)
-        if presents_login_wall(controls):
-            self._auth_incomplete = True
-            self._auth_incomplete_reason = AUTH_SESSION_EXPIRED
-            logger.warning(
-                "qec.crawler.session_expired crawl_id=%s — a start-authenticated "
-                "session was injected but the app still presents a login wall; "
-                "exploring UNAUTHENTICATED (authenticated areas NOT covered). "
-                "The stored login must be re-recorded.", self.crawl_id,
-            )
-        return await self._port.current_url()
+        if not self._session_injected or self._auth_incomplete:
+            return
+        if self._guard.phase == Phase.AUTH:
+            return  # the credentialed login flow is legitimately at a login form
+        if match_login_controls(controls) is None:
+            return
+        self._auth_incomplete = True
+        self._auth_incomplete_reason = AUTH_SESSION_EXPIRED
+        logger.warning(
+            "qec.crawler.session_expired crawl_id=%s — a start-authenticated session "
+            "was injected but the app still presents a login wall; the crawl covered "
+            "PUBLIC pages only (authenticated areas NOT covered). Re-record the login.",
+            self.crawl_id,
+        )
 
     # -- EXPLORE phase ---------------------------------------------------------
 
@@ -2518,6 +2518,7 @@ class Crawler:
         network_calls: Sequence[dict[str, Any]] = (),
     ) -> None:
         """Assemble + emit ONE ``page_state`` record with monotonic indices."""
+        self._note_login_wall_while_authenticated(controls)
         seq = self._next_seq
         self._next_seq += 1
         parts = urlsplit(url or "")

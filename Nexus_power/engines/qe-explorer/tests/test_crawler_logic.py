@@ -563,6 +563,51 @@ def test_expired_injected_session_is_flagged_not_reported_as_authenticated():
         assert summary.states >= 1
 
 
+def test_expired_session_is_caught_when_the_login_wall_is_deeper_than_the_entry():
+    """The shape that defeated an entry-only check, live-observed: the app puts a
+    PUBLIC marketing page at the root and protects the rest, so the entry sees no
+    password field and learns nothing — the login wall only appears two states later.
+    The crawl must still refuse to report itself as authenticated."""
+    import tempfile
+    with tempfile.TemporaryDirectory() as work:
+        root, login = "https://app.example/", "https://app.example/login"
+        pages = {
+            root: FakePage(root, [
+                _raw("link", "Member Sign In"),
+            ], title="Home", click_targets={"Member Sign In": login}),
+            login: FakePage(login, [
+                _raw("textbox", "Email", input_type="text"),
+                _raw("textbox", "Password", input_type="password"),
+                _raw("button", "Sign in", tag="button"),
+            ], title="Login"),
+        }
+        crawler = _build_crawler(FakeBrowser(pages, root), work, target_url=root,
+                                 credentials=None, session_injected=True)
+        summary = asyncio.run(crawler.run())
+        assert summary.coverage.get("auth_incomplete") is True
+        assert summary.coverage.get("auth_reason") == AUTH_SESSION_EXPIRED
+
+
+def test_a_password_field_that_is_not_a_login_wall_does_not_flag():
+    """The roaming check runs against EVERY state of every crawl, so it must not
+    read any password input as a login wall. A change-password form (no username
+    field) is the common false positive and must stay clean."""
+    import tempfile
+    with tempfile.TemporaryDirectory() as work:
+        page = "https://app.example/settings"
+        pages = {
+            page: FakePage(page, [
+                _raw("textbox", "New password", input_type="password"),
+                _raw("textbox", "Confirm password", input_type="password"),
+                _raw("button", "Save", tag="button"),
+            ], title="Settings"),
+        }
+        crawler = _build_crawler(FakeBrowser(pages, page), work, target_url=page,
+                                 credentials=None, session_injected=True)
+        summary = asyncio.run(crawler.run())
+        assert summary.coverage.get("auth_incomplete") is not True
+
+
 def test_live_injected_session_is_not_flagged():
     """The complement, so the check can never become "always warn": a session that
     still authenticates lands on an app page with no password field, and the crawl is
