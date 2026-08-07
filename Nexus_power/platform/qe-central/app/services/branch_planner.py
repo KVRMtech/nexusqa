@@ -219,16 +219,25 @@ async def plan_walks(
             probe_k = max(2, int(settings.branch_probe_k))
             planned_per_decision: dict[str, int] = {}
             for b in discovered:
-                already = sum(
-                    1 for x in (await session.execute(
-                        select(JourneyBranchRow.status).where(
-                            JourneyBranchRow.tenant_id == tenant_id,
-                            JourneyBranchRow.app_id == app_id,
-                            JourneyBranchRow.control_signature == b.control_signature,
-                        ))).scalars().all()
-                    if x in (BRANCH_WALKED, BRANCH_PLANNED))
-                if already + planned_per_decision.get(b.control_signature, 0) >= probe_k:
-                    continue          # enough representatives in flight already
+                statuses = (await session.execute(
+                    select(JourneyBranchRow.status).where(
+                        JourneyBranchRow.tenant_id == tenant_id,
+                        JourneyBranchRow.app_id == app_id,
+                        JourneyBranchRow.control_signature == b.control_signature,
+                    ))).scalars().all()
+                walked_n = sum(1 for x in statuses if x == BRANCH_WALKED)
+                inflight = (sum(1 for x in statuses if x == BRANCH_PLANNED)
+                            + planned_per_decision.get(b.control_signature, 0))
+                # The cap applies ONLY while the decision is unproven. Once
+                # probe_k options have actually been walked, one of two things is
+                # true: the classifier found them identical and retired the rest
+                # as `equivalent` (so they are not in `discovered` at all), or
+                # they genuinely forked — in which case every remaining option is
+                # a real business path and MUST be enumerated. A permanent cap
+                # would silently delete coverage, which is the one failure this
+                # whole rule exists to prevent.
+                if walked_n < probe_k and (walked_n + inflight) >= probe_k:
+                    continue          # enough representatives in flight; await evidence
                 if len(plans) >= cap:
                     break
                 planned_per_decision[b.control_signature] = (
