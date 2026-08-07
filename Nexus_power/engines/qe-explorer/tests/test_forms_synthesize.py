@@ -177,3 +177,27 @@ def test_value_for_never_answers_a_select_with_its_placeholder():
             "choice", {"name": label, "kind": "select", "options": opts},
             ident, kind="select", data_mode="agent")
         assert got == expect, f"{label}: value_for returned {got!r}"
+
+
+def test_a_first_option_that_trails_off_is_a_placeholder_even_without_a_verb():
+    """"Feet..." / "Inches..." are the same "nothing chosen yet" entry wearing
+    the field's own name instead of a select/choose verb.
+
+    Observed live: the health step's height dropdowns were answered "Feet..."
+    and "Inches...", leaving both empty, and the funnel stopped one page short
+    of the quote."""
+    from app import field_values
+
+    assert field_values.is_placeholder_option("Feet...", first=True) is True
+    assert field_values.is_placeholder_option("Inches...", first=True) is True
+    assert field_values.enumerate_real(["Feet...", "4", "5", "6"]) == ["4", "5", "6"]
+
+
+def test_a_later_option_that_trails_off_is_still_a_real_answer():
+    """Restricted to the first option on purpose: an answer further down a list
+    that happens to trail off ("Other...") is a real business path, and dropping
+    it would silently remove coverage."""
+    from app import field_values
+    assert field_values.is_placeholder_option("Other...", first=False) is False
+    assert field_values.enumerate_real(
+        ["Select one", "Gold", "Other..."]) == ["Gold", "Other..."]

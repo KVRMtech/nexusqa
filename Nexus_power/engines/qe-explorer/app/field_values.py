@@ -64,7 +64,16 @@ def is_placeholder_option(label: Any, *, first: bool = False) -> bool:
     if not stripped:
         return True
     lead = stripped.split()[0]
-    if text.endswith(("...", "…")) and lead in _PLACEHOLDER_LEAD_VERBS:
+    trails_off = text.endswith(("...", "…"))
+    if trails_off and lead in _PLACEHOLDER_LEAD_VERBS:
+        return True
+    # A FIRST option that trails off — "Feet...", "Inches...", "Year..." — is the
+    # same "nothing chosen yet" entry wearing the field's own name instead of a
+    # verb. Observed live: the health step's height dropdowns were answered
+    # "Feet..." / "Inches...", so the field stayed empty and the funnel stopped
+    # one page short of the quote. A real answer almost never trails off, and
+    # restricting this to the first option keeps it safe.
+    if first and trails_off:
         return True
     return bool(first) and lead in _PLACEHOLDER_LEAD_VERBS
 
