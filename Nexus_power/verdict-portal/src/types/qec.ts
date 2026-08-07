@@ -189,6 +189,13 @@ export interface ExplorationCoverage {
   fields_needing_seed: string[];
   submit_candidates: string[];
   summary?: string;
+  /** TRUE when the crawl could not cover the authenticated app. Never inferred
+   *  from a missing field — a crawl that does not set this WAS authenticated
+   *  (or never needed to be). */
+  auth_incomplete?: boolean;
+  /** Why. `session_expired` = a stored login session was injected but the app
+   *  still presented a login wall; the repair is re-recording the login. */
+  auth_reason?: string;
 }
 
 export interface ClientApp {
@@ -225,6 +232,10 @@ export interface ClientApp {
    * view show "Crawling…" on load — server truth, not ephemeral client state — so a
    * long crawl never leaves an empty Test Studio looking broken/completed.
    */
+  /** The login choreography recorded for this app: steps + slot NAMES, never a
+   *  credential value (routers/apps.py `_sanitised_login_recording`). Returned by
+   *  `_public_view`; a non-empty `steps` means a login has been recorded. */
+  login_recording?: Record<string, unknown> | null;
   crawl?: AppCrawlStatus;
   /**
    * CLIENT-SIDE ENRICHMENT (not on the app row): the app's suite tier

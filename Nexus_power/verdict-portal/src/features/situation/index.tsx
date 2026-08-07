@@ -52,6 +52,7 @@ import VerdictLedger from '../ledger';
 import HonestyFeed from '../honesty';
 import SeedManifestPanel from './SeedManifestPanel';
 import CoveragePanel from './CoveragePanel';
+import LoginSessionPanel from './LoginSessionPanel';
 
 const BAND_TONE: Record<CriticalityBand, 'crit' | 'warn' | 'teal' | 'neutral'> = {
   P0: 'crit',
@@ -1009,6 +1010,10 @@ export function AppSituation() {
       <SeedManifestPanel appId={id} />
       {/* Coverage Ledger — the measured "did we miss anything?" honesty spine. */}
       <CoveragePanel appId={id} />
+      {/* Login session — a recorded login expires on the APP's schedule, and a dead
+          one silently turns an authenticated crawl into a public one. Surfaced here
+          with the repair attached, so it never needs re-registering the app. */}
+      <LoginSessionPanel appId={id} />
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 items-start">
         <div className="space-y-4">
           <AttestationCard appId={id} />

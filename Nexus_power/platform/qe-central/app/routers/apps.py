@@ -254,6 +254,44 @@ async def _encrypt_credentials(
     return blob.to_bytes()
 
 
+async def _decrypt_credentials_for_merge(
+    request: Request, tenant_id: str, row: ClientAppRow,
+) -> dict:
+    """The app's current credentials, so a partial update can MERGE onto them.
+
+    Fail-closed on every unhappy path. Returning ``{}`` when a blob exists but
+    cannot be read would re-encrypt an app's credentials as "just the new session"
+    and destroy a working username/password — so an unreadable blob is a 503, not
+    an empty dict. No blob at all is the one honest ``{}``.
+    """
+    if not row.creds_blob:
+        return {}
+    envelope = getattr(request.app.state, "envelope_service", None)
+    if envelope is None:
+        raise HTTPException(
+            status_code=503,
+            detail="encryption unavailable — cannot merge into existing credentials",
+        )
+    from nexus_sdk.security.envelope import EnvelopeBlob
+
+    try:
+        blob = EnvelopeBlob.from_bytes(row.creds_blob)
+        plaintext = await envelope.decrypt(
+            tenant_id, blob, expected_aad=row.app_id.encode("utf-8"),
+        )
+        creds = json.loads(plaintext)
+    except Exception as exc:
+        logger.error(
+            "qec.apps.creds_decrypt_failed",
+            extra={"app_id": row.app_id, "error": str(exc)[:200]},
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="could not read the app's existing credentials — refusing to overwrite them",
+        )
+    return creds if isinstance(creds, dict) else {}
+
+
 async def _seal_webhook_secret(
     request: Request, tenant_id: str, app_id: str, repo_binding: dict | None,
 ) -> dict:
@@ -1000,6 +1038,85 @@ async def update_app(
     logger.info(
         "qec.apps.updated",
         extra={"tenant_id": tenant_id, "app_id": app_id, "actor": user.get("sub", "")},
+    )
+    return result
+
+
+class LoginRecordingIn(BaseModel):
+    """A login re-recorded for an app that already exists.
+
+    Same two halves the onboarding wizard produces: the ``session`` that gets a
+    CRAWL past the login, and the ``login_recording`` choreography that becomes a
+    run-side recipe. Either may be sent alone — a recording with no usable session
+    is still worth keeping, and a session refresh needs no new choreography.
+    """
+
+    login_recording: dict | None = None
+    session: dict | None = None
+
+
+@router.post("/apps/{app_id}/login-recording")
+async def replace_login_recording(
+    app_id: str,
+    payload: LoginRecordingIn,
+    request: Request,
+    user: dict = Depends(_MUTATE),
+) -> dict:
+    """Re-record the login for an EXISTING app.
+
+    Sessions expire on the application's own schedule, so every app eventually
+    needs its login re-recorded. Until this existed the recorder lived only in the
+    onboarding wizard, and the only way to restore authenticated crawling was to
+    register the app again — which strands its catalogue under a new app_id and
+    does not scale past a handful of applications.
+
+    MERGES into the credential blob rather than replacing it. ``PATCH /apps`` sets
+    ``credentials`` wholesale (a deliberate rotation), so reusing it here would
+    silently destroy a stored username/password every time somebody refreshed a
+    session. Only the ``session`` key is touched.
+    """
+    if payload.login_recording is None and payload.session is None:
+        raise HTTPException(
+            status_code=422,
+            detail="send login_recording, session, or both — nothing to record",
+        )
+
+    recording = _sanitised_login_recording(payload.login_recording)
+    if payload.login_recording is not None and not recording:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "the recording carries no steps — log in inside the recorder "
+                "before saving, or send only the session"
+            ),
+        )
+
+    tenant_id = user["tenant_id"]
+    async with tenant_scoped_qec_session(tenant_id) as session:
+        row = await _require_app(session, tenant_id, app_id)
+        if row.status == "deleted":
+            raise HTTPException(status_code=409, detail="app is deleted")
+
+        if payload.session is not None:
+            creds = await _decrypt_credentials_for_merge(request, tenant_id, row)
+            creds["session"] = payload.session
+            row.creds_blob = await _encrypt_credentials(
+                request, tenant_id, app_id, creds,
+            )
+        if recording:
+            row.login_recording = recording
+        row.updated_at = utc_now()
+        await session.flush()
+        result = _public_view(row)
+
+    logger.info(
+        "qec.apps.login_recording_replaced",
+        extra={
+            "tenant_id": tenant_id, "app_id": app_id,
+            "actor": user.get("sub", ""),
+            "steps": len(recording.get("steps") or ()),
+            "session_refreshed": payload.session is not None,
+        },
     )
     return result
 

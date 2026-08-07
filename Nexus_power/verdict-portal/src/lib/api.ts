@@ -249,6 +249,26 @@ export class QecApiClient {
     return this.patch<ClientApp>(`${QEC}/apps/${encodeURIComponent(appId)}`, payload, opts);
   }
 
+  /**
+   * Re-record the login for an app that already exists.
+   *
+   * A recorded session expires on the application's own schedule, and when it
+   * does the crawl walks the logged-OUT app. This is the repair. Deliberately NOT
+   * `updateApp({ credentials })`: PATCH replaces the credential blob wholesale, so
+   * sending just a session would destroy a stored username/password. The dedicated
+   * endpoint merges only the `session` key.
+   */
+  replaceLoginRecording(
+    appId: string,
+    payload: { login_recording?: unknown; session?: unknown },
+    opts?: RequestOpts,
+  ): Promise<ClientApp> {
+    if (this.mock) return this.mocked(() => mock.mockGetApp(appId) as ClientApp, opts?.signal);
+    return this.post<ClientApp>(
+      `${QEC}/apps/${encodeURIComponent(appId)}/login-recording`, payload, opts,
+    );
+  }
+
   deleteApp(appId: string, opts?: RequestOpts): Promise<DeleteAppResponse> {
     if (this.mock)
       return this.mocked(() => ({ app_id: appId, status: 'deleted' as const, credentials_zeroed: true }), opts?.signal);
