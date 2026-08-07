@@ -1219,6 +1219,8 @@ class Crawler:
         # e-sign); stopping here would catalogue two fragments and never the flow
         # the business actually sells.
         obs, controls = await self._cross_auth_wall(obs, controls, item.url)
+        # Every state, form or not — see _note_boundary_controls.
+        self._note_boundary_controls(controls)
         fingerprint = state_fingerprint(obs.url, controls, obs.dialog_flags)
 
         if item.parent_fingerprint:
@@ -2083,6 +2085,32 @@ class Crawler:
             if _WIZARD_COMMIT_RE.search(name) or c.get("danger"):
                 return True
         return False
+
+    def _note_boundary_controls(self, controls: Sequence[dict[str, Any]]) -> None:
+        """Record the commit-boundary controls this state offers.
+
+        Submit candidates used to be collected ONLY from a form fill, so a page
+        with no input fields contributed none. That is exactly the shape of the
+        page where a business journey actually forks: a quote summary whose whole
+        content is "here is your price — Apply Now / Start Over / Back to
+        Dashboard". Live-observed on the VKPower funnel — the walk ended
+        `no_advance`, `Apply Now` never appeared in `submit_candidates`, and no
+        branch was ever recorded, so the catalogue held no continuation at all and
+        the operator had nothing to approve.
+
+        Recording only. Nothing here decides to click anything; the walk's commit
+        veto and the Phase-B approval path are untouched.
+        """
+        for c in controls:
+            if c.get("kind") not in ("button", "link") or c.get("disabled"):
+                continue
+            name = str(c.get("name") or "").strip()
+            # Danger controls are the refuse pack's call and are never offered as
+            # something to approve — "Start Over" wipes the quote.
+            if not name or c.get("danger"):
+                continue
+            if _WIZARD_COMMIT_RE.search(name):
+                self._submit_candidates.append(name)
 
     def _pick_wizard_advance(self, controls: Sequence[dict[str, Any]]) -> Optional[dict[str, Any]]:
         """The first non-danger advance control (Next/Continue/Proceed/Forward) to

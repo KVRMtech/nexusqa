@@ -587,6 +587,35 @@ class _WallThenThrough(FakeBrowser):
         return super()._page()
 
 
+def test_a_formless_decision_page_still_records_its_boundary_controls():
+    """The quote-summary shape: no input fields, just "here is your price" and the
+    choices that fork the business journey. Submit candidates were collected ONLY
+    from a form fill, so this page contributed none — live-observed on the VKPower
+    funnel, where `Apply Now` never appeared in submit_candidates and the operator
+    had nothing to approve.
+
+    A DESTRUCTIVE control must stay out even when its label is a commit word:
+    offering it for approval would be offering to destroy data. "Delete Application"
+    is the test for that — "delete" is BOTH a commit word and a refuse-pack
+    irreversible verb, so only the danger gate can keep it out."""
+    import tempfile
+    with tempfile.TemporaryDirectory() as work:
+        review = "https://app.example/quote/review"
+        pages = {
+            review: FakePage(review, [
+                _raw("button", "Apply Now", tag="button"),
+                _raw("button", "Delete Application", tag="button"),
+                _raw("link", "Back to Dashboard"),
+            ], title="Your Quote Summary"),
+        }
+        crawler = _build_crawler(FakeBrowser(pages, review), work, target_url=review)
+        summary = asyncio.run(crawler.run())
+        candidates = summary.coverage.get("submit_candidates") or []
+        assert "Apply Now" in candidates, candidates
+        assert "Delete Application" not in candidates, (
+            "a destructive control is never offered for approval")
+
+
 def test_an_auth_wall_mid_journey_is_crossed_not_treated_as_the_end():
     """The client's actual complaint, and the fleet-wide one: a business journey
     that crosses an auth boundary (public quote → authenticated apply) must stay ONE
