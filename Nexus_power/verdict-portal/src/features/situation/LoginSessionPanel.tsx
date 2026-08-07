@@ -86,13 +86,45 @@ export default function LoginSessionPanel({ appId }: { appId: string }) {
     }
   };
 
+  /**
+   * Where to open the recorder.
+   *
+   * The app's Base URL is where the PRODUCT starts, which is almost never where
+   * signing in happens — for a quote funnel it is the quote page. Opening there
+   * made operators hunt for the sign-in themselves, and reasonably read the
+   * recorder as broken when their quote page appeared.
+   *
+   * A login already recorded for this domain knows the answer: its first `goto`
+   * step IS the sign-in path. Best-effort in every direction — no recipe, an
+   * unparseable one, or a lookup failure all fall back to the Base URL, which is
+   * exactly the old behaviour. Finding the sign-in must never block recording it.
+   */
+  const recorderStartUrl = async (): Promise<string> => {
+    if (!app) return '';
+    try {
+      const origin = new URL(app.base_url).origin;
+      const res = await factoryApi.reuseCheck({ domain: new URL(app.base_url).hostname });
+      for (const recipe of (res?.recipes || res?.library || []) as Array<Record<string, unknown>>) {
+        const direct = String(recipe?.login_path || '');
+        const fromSteps = ((recipe?.steps || []) as Array<Record<string, unknown>>)
+          .find((s) => String(s?.action || '') === 'goto');
+        const path = direct || String(fromSteps?.path || '');
+        if (path.startsWith('/')) return origin + path;
+      }
+    } catch {
+      /* fall through to the Base URL */
+    }
+    return app.base_url;
+  };
+
   const start = async () => {
     if (!app) return;
     setBusy('start');
     try {
+      const startUrl = await recorderStartUrl();
       let r;
       try {
-        r = await factoryApi.startRecording(app.base_url);
+        r = await factoryApi.startRecording(startUrl);
       } catch (first: unknown) {
         // The recorder browser is single-occupancy. A 409 means an earlier
         // recording was left open — a double-click, or a tab closed mid-way.
@@ -100,7 +132,7 @@ export default function LoginSessionPanel({ appId }: { appId: string }) {
         const e = first as { response?: { status?: number } };
         if (e?.response?.status !== 409) throw first;
         await factoryApi.cancelRecording().catch(() => {});
-        r = await factoryApi.startRecording(app.base_url);
+        r = await factoryApi.startRecording(startUrl);
       }
       if (!r?.live_url) throw new Error('the recorder did not return a live view');
       setLiveUrl(r.live_url);
@@ -210,9 +242,9 @@ export default function LoginSessionPanel({ appId }: { appId: string }) {
         <div className="mt-4 space-y-2">
           <p className="text-sm font-semibold text-ink">Sign in below, then press Save.</p>
           <p className="text-xs text-ink-mid">
-            It opens on this app's start page, which is usually not the sign-in
-            page — click through to Sign In yourself, exactly as a person would.
-            That path is part of what we learn.
+            If this is not the sign-in page, click through to it as a person
+            would — that path is part of what we learn. If it opens already signed
+            in, sign out first; there is no login to learn otherwise.
           </p>
           <iframe
             src={liveUrl}
@@ -220,9 +252,8 @@ export default function LoginSessionPanel({ appId }: { appId: string }) {
             className="h-[460px] w-full rounded-lg ring-1 ring-line-strong"
           />
           <p className="text-xs text-ink-mid">
-            If this opens already signed in, sign out first — there is no login to
-            learn otherwise. We record which boxes you fill and which buttons you
-            press, never what you type.
+            We record which boxes you fill and which buttons you press, never what
+            you type.
           </p>
           <div className="flex gap-2">
             <Button variant="primary" loading={busy === 'save'} onClick={save}>
@@ -239,10 +270,11 @@ export default function LoginSessionPanel({ appId }: { appId: string }) {
           <div className="mt-4 rounded-lg bg-panel-2 p-3 ring-1 ring-line-strong">
             <p className="text-sm font-semibold text-ink">Sign in once, here</p>
             <p className="mt-1 text-xs text-ink-mid">
-              A browser opens on this app's start page. Click through to its sign-in
-              page and sign in exactly as you normally would — including any code
-              sent to you — then press Save. We watch which boxes you fill and which
-              buttons you press, never what you type.
+              A browser opens on this app's sign-in page — or on its start page, if
+              we have not seen this app's sign-in before. Sign in exactly as you
+              normally would, including any code sent to you, then press Save. We
+              watch which boxes you fill and which buttons you press, never what you
+              type.
             </p>
             <div className="mt-2">
               <Button
