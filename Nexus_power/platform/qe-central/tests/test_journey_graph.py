@@ -15,6 +15,7 @@ import pytest
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+from app.config import settings
 from app.services import branch_planner, journey_fold, journey_naming
 from app.services.journey_fold import (
     BRANCH_BLOCKED,
