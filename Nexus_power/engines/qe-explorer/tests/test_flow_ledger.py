@@ -171,3 +171,67 @@ def test_a_one_step_journey_that_reaches_submit_counts_as_covered():
     f = FL.build_flow(entry_fingerprint="one", entry_url="/quote", entry_title="Quote",
                       steps=steps(1), terminal=FL.TERMINAL_SUBMIT_BOUNDARY, max_steps=20)
     assert f["completed"] is True and f["step_count"] == 1
+
+
+# ── self-contradiction tripwire ──────────────────────────────────────────────
+
+def _step(fp="f1", filled=0, unfilled=0):
+    return {"fingerprint": fp, "url": "u", "title": "t",
+            "fields_filled": filled, "fields_unfilled": unfilled}
+
+
+def test_filled_fields_plus_a_refused_advance_raises_the_tripwire():
+    """We claim to have filled the form; the app refuses to move. Both cannot be
+    comfortable — either the app is blocked (a finding) or a fill was recorded
+    successful while the control never took the value (a defect).
+
+    This is the cheapest check on our own honesty: no LLM, no app knowledge,
+    true everywhere. An entire class of defects hid behind "filled" — a locator
+    matching nothing, a read-back in the wrong vocabulary, a placeholder taken
+    as an answer — and every one of them would have raised THIS flag on the
+    first crawl of the first application."""
+    f = FL.build_flow(
+        entry_fingerprint="fpA", entry_url="u", entry_title="Coverage",
+        steps=[_step(filled=2)], terminal=FL.TERMINAL_LOOP, max_steps=20)
+    assert f["advance_contradicts_fills"] is True
+    assert f["fields_filled_total"] == 2
+
+
+def test_no_advance_after_filling_also_trips():
+    f = FL.build_flow(
+        entry_fingerprint="fpA", entry_url="u", entry_title="Coverage",
+        steps=[_step(filled=1)], terminal=FL.TERMINAL_NO_ADVANCE,
+        max_steps=20)
+    assert f["advance_contradicts_fills"] is True
+
+
+def test_a_page_we_never_filled_is_not_suspicious():
+    """A funnel stopped at an unanswered decision is EXPECTED to loop. Flagging
+    that would bury the real signal in noise."""
+    f = FL.build_flow(
+        entry_fingerprint="fpA", entry_url="u", entry_title="Product",
+        steps=[_step(filled=0, unfilled=4)], terminal=FL.TERMINAL_LOOP,
+        max_steps=20)
+    assert f["advance_contradicts_fills"] is False
+
+
+def test_a_flow_that_reached_the_submit_boundary_is_not_suspicious():
+    f = FL.build_flow(
+        entry_fingerprint="fpA", entry_url="u", entry_title="Review",
+        steps=[_step(filled=3)], terminal=FL.TERMINAL_SUBMIT_BOUNDARY,
+        max_steps=20)
+    assert f["advance_contradicts_fills"] is False
+
+
+def test_summary_rolls_the_contradiction_up_for_fleet_monitoring():
+    """Across 1000 applications this count is how a systemic fill defect is
+    found ONCE instead of rediscovered per app."""
+    bad = FL.build_flow(
+        entry_fingerprint="fpA", entry_url="u", entry_title="Coverage",
+        steps=[_step(filled=2)], terminal=FL.TERMINAL_LOOP, max_steps=20)
+    good = FL.build_flow(
+        entry_fingerprint="fpB", entry_url="u", entry_title="Review",
+        steps=[_step(filled=3)], terminal=FL.TERMINAL_SUBMIT_BOUNDARY,
+        max_steps=20)
+    s = FL.summarize([bad, good])
+    assert s["advance_contradicts_fills"] == 1

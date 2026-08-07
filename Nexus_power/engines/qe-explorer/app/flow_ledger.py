@@ -55,6 +55,11 @@ TERMINAL_ORACLE_UNAVAILABLE = "oracle_unavailable"
 #: caller to override that.
 COMPLETING_TERMINALS = frozenset({TERMINAL_SUBMIT_BOUNDARY, TERMINAL_NO_ADVANCE})
 
+#: The app REFUSED to move on. ``loop`` is the page not changing at all;
+#: ``no_advance`` is nothing left that could advance it. Both are legitimate on
+#: an unfilled page — and deeply suspicious on a page we just claimed to fill.
+_ADVANCE_REFUSED_TERMINALS = frozenset({TERMINAL_LOOP, TERMINAL_NO_ADVANCE})
+
 
 def flow_id_for(entry_fingerprint: str) -> str:
     """A flow is identified by where it STARTS.
@@ -140,6 +145,25 @@ def build_flow(*, entry_fingerprint: str, entry_url: str, entry_title: str,
     ][:12]
 
     unfilled = sum(s["fields_unfilled"] for s in step_list)
+    # ── SELF-CONTRADICTION TRIPWIRE ───────────────────────────────────────────
+    # We claim to have filled N fields, and then the app refused to move. Those
+    # two statements cannot both be comfortable. Either the app is genuinely
+    # blocked (a real finding worth surfacing) or — far more often — a fill was
+    # recorded as successful while the control never took the value, and the
+    # crawl went on to click a Continue that was still disabled.
+    #
+    # This is the cheapest possible check on our own honesty: no LLM, no app
+    # knowledge, true for every application. It exists because a whole class of
+    # defects hid behind "filled" for an entire debugging session — a locator
+    # matching nothing, a read-back in the wrong vocabulary, a placeholder
+    # accepted as an answer. Each of those was silent; every one would have
+    # raised THIS flag on the first crawl of the first app.
+    #
+    # It deliberately does NOT decide who lied. It records the contradiction and
+    # names the steps, so one crawl is a lead and a fleet-wide count is a
+    # systemic bug found once instead of a thousand times.
+    filled_total = sum(s["fields_filled"] for s in step_list)
+    contradicted = bool(filled_total) and term in _ADVANCE_REFUSED_TERMINALS
     return {
         "flow_id": flow_id_for(entry_fingerprint),
         "entry_fingerprint": entry_fingerprint,
@@ -159,6 +183,11 @@ def build_flow(*, entry_fingerprint: str, entry_url: str, entry_title: str,
         # Recorded so a truncated flow can say what it hit rather than only that it
         # stopped — "6 of a 6-step budget" is actionable; "stopped" is not.
         "step_budget": int(max_steps or 0),
+        #: TRIPWIRE: this flow filled fields and STILL could not advance. Either
+        #: the app is blocked (a finding) or a fill lied (a defect). Never a
+        #: healthy outcome, and never silent.
+        "advance_contradicts_fills": contradicted,
+        "fields_filled_total": filled_total,
     }
 
 
@@ -204,6 +233,14 @@ def summarize(flows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
         "advances_by_tier": advances_by_tier,
         "oracle_advances": oracle_advances,
         "intent_unmet": total_intent_unmet,
+        # SELF-CONTRADICTION ROLLUP. How many journeys claimed to fill fields and
+        # were then refused an advance. On ONE crawl this is a lead; across a
+        # fleet it is how a systemic fill defect is found ONCE rather than
+        # rediscovered per application. Non-zero always deserves a look — it
+        # means the crawl and the application disagree about whether a form was
+        # completed, and only one of them can be right.
+        "advance_contradicts_fills": sum(
+            1 for f in flows if f.get("advance_contradicts_fills")),
         "deepest_flow_steps": max((int(f.get("step_count") or 0) for f in flows), default=0),
         # THE HONESTY FLAG. One path per funnel was walked. Which option was taken
         # at each decision point was decided once, and the alternatives — a
