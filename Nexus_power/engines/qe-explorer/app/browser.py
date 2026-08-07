@@ -179,6 +179,24 @@ def classify_after(obs: RawObservation) -> AfterOutcome:
 _CHECKED_TRUTHY = frozenset({"true", "1", "on", "yes", "checked"})
 
 
+#: Verbs a "nothing chosen yet" option opens with. Kept local (and deliberately
+#: narrow) so this module stays import-free of the fill layer; forms.py owns the
+#: richer rule used to CHOOSE an option, this one only has to recognise that a
+#: control is still unset after we tried to set it.
+_UNSET_LEAD_VERBS = ("select", "choose", "pick")
+
+
+def _reads_as_unset(committed: str) -> bool:
+    """Does this committed label mean "no option is chosen"?"""
+    text = " ".join(str(committed or "").split()).lower()
+    if not text:
+        return True
+    stripped = text.strip("-–—_ .·:…")
+    if not stripped:
+        return True
+    return stripped.split()[0] in _UNSET_LEAD_VERBS
+
+
 def verify_intent(
     kind: str,
     *,
@@ -210,6 +228,14 @@ def verify_intent(
             return False
         if c.lower() == i.lower():
             return True
+        # A select still sitting on its "Select term length..." entry did NOT
+        # take the value — that option's value is "", so the field is unset. It
+        # is provably unmet, not merely unverifiable, and calling it unverifiable
+        # KEEPS the fill: the crawl then believes the form is complete, clicks a
+        # Continue that is still disabled, and loops. Observed live — the quote
+        # funnel stalled at step 2 while reporting both selects filled.
+        if kind == "select" and i and _reads_as_unset(c):
+            return False
         return None
 
     if kind == "checked":

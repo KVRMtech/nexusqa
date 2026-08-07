@@ -370,3 +370,49 @@ def test_select_read_back_reports_the_option_LABEL_not_its_value_code():
     # A non-select control is unaffected and still reads its value.
     assert asyncio.run(
         port._read_value(_FakeSelectLocator(), kind="fill")) == "50000"
+
+
+# ── a select still on its placeholder did NOT take the value ─────────────────
+
+def test_select_left_on_its_placeholder_is_definitively_unmet():
+    """Regression: the quote funnel stalled at step 2 while REPORTING both
+    dropdowns filled.
+
+    We asked for "10 Years"; the control still read "Select term length...",
+    whose value is "". That mismatch returned None ("unverifiable"), which KEEPS
+    the fill — so the crawl believed the form was complete, clicked a Continue
+    that was still disabled, and looped. It is provably unmet, not unknown."""
+    from app.browser import verify_intent
+
+    assert verify_intent("select", intended_value="10 Years",
+                         committed_value="Select term length...") is False
+    assert verify_intent("select", intended_value="$50,000",
+                         committed_value="Select coverage amount...") is False
+    assert verify_intent("select", intended_value="Gold",
+                         committed_value="-- Choose a plan --") is False
+
+
+def test_a_select_that_took_the_value_is_still_verified():
+    from app.browser import verify_intent
+    assert verify_intent("select", intended_value="10 Years",
+                         committed_value="10 Years") is True
+    assert verify_intent("select", intended_value="10 years",
+                         committed_value="10 Years") is True
+
+
+def test_an_unrecognised_committed_label_stays_UNVERIFIABLE_not_failed():
+    """Only 'still unset' is promoted to a definitive failure. An app that
+    rewrites the label it committed is genuinely unknown, and must keep the
+    pre-existing benefit of the doubt rather than silently dropping a good fill."""
+    from app.browser import verify_intent
+    assert verify_intent("select", intended_value="10 Years",
+                         committed_value="Ten Years (term)") is None
+
+
+def test_free_text_fills_are_unaffected_by_the_select_rule():
+    from app.browser import verify_intent
+    assert verify_intent("fill", intended_value="Selective Insurance",
+                         committed_value="Selective Insurance") is True
+    # a text field whose value reads like a prompt is NOT promoted to failure
+    assert verify_intent("fill", intended_value="Ada",
+                         committed_value="Select one") is None
