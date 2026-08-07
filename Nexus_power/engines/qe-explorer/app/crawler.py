@@ -1180,6 +1180,9 @@ class Crawler:
         if self._wizard_enabled and is_form and fill is not None and (fill.filled or fill.has_unanswered_decisions):
             entry_pick = await self._pick_advance(
                 snapshot_controls, obs.url, obs.title, fingerprint)
+            logger.info("qec.wizard.gate_open url=%s filled=%d pick=%r",
+                        obs.url, fill.filled,
+                        str((entry_pick.control or {}).get("name") or "")[:40])
             walked = await self._walk_wizard(
                 item=item, url=obs.url, title=obs.title, controls=snapshot_controls,
                 fingerprint=fingerprint, base_actions=actions,
@@ -1187,6 +1190,16 @@ class Crawler:
                 displayed_values=displayed_values, network_calls=network_calls,
                 entry_pick=entry_pick,
             )
+        elif is_form:
+            # DIAGNOSTIC ONLY — never changes behaviour. A FORM the wizard never
+            # even looked at: on a revisit the fields are already populated, so
+            # filled==0 and nothing reads as an unanswered decision. The gate
+            # closes and the page is recorded as its own one-step "journey"
+            # instead of joining the walk that runs through it.
+            logger.info("qec.wizard.gate_closed url=%s filled=%s decisions=%s",
+                        obs.url,
+                        getattr(fill, "filled", None) if fill else None,
+                        getattr(fill, "has_unanswered_decisions", None) if fill else None)
 
         # A single-page form that ends at a Submit IS a business journey — a
         # one-step one. Recording only multi-step wizards made an application with a
@@ -2122,7 +2135,19 @@ class Crawler:
         no tier can hand this walk a control that crosses the submit boundary."""
         if entry_pick is None:
             entry_pick = await self._pick_advance(controls, url, title, fingerprint)
-        if fingerprint in self._wizard_states or entry_pick.control is None:
+        # DIAGNOSTIC: a walk that declines leaves the page recorded as a
+        # single-page flow, so a five-page funnel becomes five one-step
+        # "journeys". WHICH gate declined is the difference between a dedup
+        # (the page was already walked) and a page we could not advance at all,
+        # and those need opposite fixes. Value-free: reason + url only.
+        if fingerprint in self._wizard_states:
+            logger.info("qec.wizard.declined reason=already_walked url=%s", url)
+            return False
+        if entry_pick.control is None:
+            logger.info("qec.wizard.declined reason=no_advance_control url=%s "
+                        "tier=%s oracle=%s controls=%d",
+                        url, entry_pick.tier, entry_pick.oracle_status,
+                        len(controls or ()))
             return False
         self._wizard_states.add(fingerprint)
 
