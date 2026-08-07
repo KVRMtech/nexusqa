@@ -2126,6 +2126,14 @@ class Crawler:
             cur_dps = _decision_points(refill.field_ledger)
 
         cur_url, cur_title, cur_controls, cur_fp = url, title, controls, fingerprint
+        # THIS WALK's own path. Loop protection has to mean "I have already been
+        # here IN THIS JOURNEY" — not "the crawler has seen this page at some
+        # point". The crawler's outer loop visits every funnel page as a state in
+        # its own right, so testing against the global set meant a walk could
+        # never advance THROUGH a page that had been seen, and a five-page quote
+        # funnel was recorded as a chain of two-step fragments terminating in
+        # `loop`. The journey was walked; the evidence just never said so.
+        walk_seen: set[str] = {fingerprint}
         cur_actions = list(base_actions)
         cur_shot, cur_first = entry_shot, first_seen_ms
         cur_dv, cur_nc = displayed_values, network_calls
@@ -2168,10 +2176,12 @@ class Crawler:
                 obs = await self._observe()
                 new_controls = build_inventory(obs.raw_controls, self._refuse_pack, url=obs.url)
                 new_fp = state_fingerprint(obs.url, new_controls, obs.dialog_flags)
-                # a GENUINE advance: an observable effect AND a NEW unseen state.
+                # a GENUINE advance: an observable effect AND a state this WALK
+                # has not already been through (see ``walk_seen``).
                 if (outcome not in ("", "none") and new_fp != cur_fp
-                        and new_fp not in self._visited_fingerprints):
+                        and new_fp not in walk_seen):
                     cur_actions.append(action)
+                    walk_seen.add(new_fp)
                     advance = (obs, new_controls, new_fp)
 
             # record the CURRENT step (its fills + the onward advance click if any).

@@ -1189,3 +1189,25 @@ def test_manifest_records_mirror_exploration_bundle_schema():
     shot_fields = _dc_fields(emit.ScreenshotRecord)
     assert {"frame_index", "timestamp_ms"}.issubset(shot_fields)
     assert "path" in shot_fields
+
+
+def test_walk_loop_protection_is_scoped_to_the_walk_not_the_crawler():
+    """Regression: a five-page quote funnel was recorded as a chain of two-step
+    fragments terminating in `loop`.
+
+    The advance guard tested the CRAWLER-GLOBAL visited set, so once the outer
+    loop had seen /quote/coverage/ as a state in its own right, no wizard walk
+    could ever advance THROUGH it. The journey was walked end to end; the
+    evidence just never said so, and a 2-step fragment is not a business journey.
+
+    Loop protection must mean "I have already been here IN THIS JOURNEY"."""
+    import inspect
+
+    from app.crawler import Crawler
+    src = inspect.getsource(Crawler._walk_wizard)
+    assert "walk_seen: set[str] = {fingerprint}" in src, (
+        "the walk must track its OWN path")
+    assert "new_fp not in walk_seen" in src, (
+        "the advance guard must test the walk's path")
+    assert "new_fp not in self._visited_fingerprints" not in src, (
+        "the crawler-global set must not gate a journey's own advance")
