@@ -9099,6 +9099,18 @@ async def draft_recording_start(
         raise HTTPException(403, "Recording a login requires an editor, manager or admin role.")
     try:
         res = await runner_client.auth_capture_start(body.url.strip())
+    except httpx.HTTPStatusError as exc:
+        # PRESERVE the runner's own status. Collapsing everything into 502 turned
+        # "the recorder is busy" (409, which the UI recovers from by closing the
+        # stale capture and retrying) into "the recorder is unreachable — try
+        # again shortly", which is both wrong and unactionable: retrying a BUSY
+        # recorder never clears it. Live-observed as a recorder that looked dead
+        # for as long as one abandoned capture stayed open.
+        if exc.response is not None and exc.response.status_code == 409:
+            raise HTTPException(
+                status_code=409,
+                detail="runner busy — a run or capture is already in progress")
+        raise HTTPException(status_code=502, detail=f"runner error: {exc}")
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"runner error: {exc}")
     pw = (res or {}).get("vnc_password", "") if isinstance(res, dict) else ""
