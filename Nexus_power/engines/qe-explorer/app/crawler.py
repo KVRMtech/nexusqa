@@ -667,6 +667,11 @@ class Crawler:
         # crawler cannot script). It is injected UNVERIFIED, so the AUTH phase must
         # prove it still holds — see :meth:`_maybe_authenticate`.
         self._session_injected = bool(session_injected)
+        # AUTH IS A CAPABILITY, NOT A PHASE. Held for the whole crawl so a login
+        # wall met mid-journey is answered and WALKED THROUGH, rather than ending
+        # the journey there. Built in _maybe_authenticate; None when the operator
+        # gave us nothing to log in with.
+        self._authenticator: Optional[Authenticator] = None
         self._max_relogins = max_relogins
         self._sleep = sleep
 
@@ -1003,6 +1008,8 @@ class Crawler:
             self._port, self._credentials, self._clock, self._refuse_pack,
             self._guard.auth_window, max_relogins=self._max_relogins,
         )
+        # Kept for the whole crawl — see _cross_auth_wall.
+        self._authenticator = authenticator
         result = await authenticator.login(login_obs)
         self._tracker.note_action(len(result.actions))
         self._storage_state = result.storage_state
@@ -1040,6 +1047,62 @@ class Crawler:
             )
             return await self._port.current_url()
         return await self._port.current_url()
+
+    async def _cross_auth_wall(
+        self, obs: PageObservation, controls: list[dict[str, Any]], url: str,
+    ) -> tuple[PageObservation, list[dict[str, Any]]]:
+        """Meet a login wall mid-journey, answer it, and CARRY ON.
+
+        Authentication was modelled as a PHASE: log in once at the entry, then
+        explore forever. Every real business journey that crosses an auth boundary
+        broke on that assumption — the crawl reached the wall and stopped, so the
+        catalogue held a public fragment and an authenticated fragment but never
+        the end-to-end flow. ``Authenticator.relogin`` was built for exactly this
+        and had never been called from anywhere.
+
+        Bounded by the authenticator's own re-login budget, so a login that cannot
+        be satisfied costs a fixed number of attempts per crawl rather than looping.
+        Returns the observation + inventory to actually record: the post-login page
+        when we got through, and the wall itself (honestly) when we did not.
+        """
+        if self._authenticator is None or match_login_controls(controls) is None:
+            return obs, controls
+
+        prior_phase = self._guard.phase
+        self._guard.phase = Phase.AUTH          # the guard permits a login only here
+        try:
+            result = await self._authenticator.relogin()
+        except Exception as exc:                # never let a login attempt kill the crawl
+            logger.warning("qec.crawler.relogin_error error=%s", str(exc)[:200])
+            return obs, controls
+        finally:
+            self._guard.phase = prior_phase
+
+        self._tracker.note_action(len(result.actions))
+        if not result.success:
+            logger.warning(
+                "qec.crawler.relogin_failed reason=%s — the journey stops at this "
+                "auth wall; the authenticated continuation is NOT covered.",
+                result.reason,
+            )
+            return obs, controls
+
+        if result.storage_state:
+            self._storage_state = result.storage_state
+        # Return to where the journey was heading. Login usually lands on a
+        # dashboard, so without this the crawl resumes somewhere else entirely and
+        # the step that provoked the wall is never taken.
+        nav = await self._port.goto(url)
+        self._tracker.note_request()
+        if not nav.ok:
+            logger.info("qec.crawler.relogin_return_failed error=%s", (nav.error or "")[:120])
+            return obs, controls
+        fresh = await self._observe()
+        logger.info(
+            "qec.crawler.auth_wall_crossed url_scope=%s — journey continues authenticated",
+            _host_of(fresh.url),
+        )
+        return fresh, build_inventory(fresh.raw_controls, self._refuse_pack, url=fresh.url)
 
     def _note_login_wall_while_authenticated(
         self, controls: Sequence[dict[str, Any]],
@@ -1151,6 +1214,11 @@ class Crawler:
                         item.depth, (obs.url or "")[:120])
             return
         controls = build_inventory(obs.raw_controls, self._refuse_pack, url=obs.url)
+        # An auth wall is a STEP IN THE JOURNEY, not the end of it. Real business
+        # journeys cross one all the time (public quote → authenticated apply →
+        # e-sign); stopping here would catalogue two fragments and never the flow
+        # the business actually sells.
+        obs, controls = await self._cross_auth_wall(obs, controls, item.url)
         fingerprint = state_fingerprint(obs.url, controls, obs.dialog_flags)
 
         if item.parent_fingerprint:

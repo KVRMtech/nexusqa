@@ -563,6 +563,85 @@ def test_expired_injected_session_is_flagged_not_reported_as_authenticated():
         assert summary.states >= 1
 
 
+class _WallThenThrough(FakeBrowser):
+    """A page that answers with a login wall until a login is driven through it.
+
+    The shape of every quote→apply funnel: `/apply` is public-facing but gated, so
+    the first visit is a sign-in screen and the visit after authenticating is the
+    real application form."""
+
+    def __init__(self, pages, start_url, gated_url):
+        super().__init__(pages, start_url)
+        self._gated_url = gated_url
+        self.authenticated = False
+
+    async def click(self, *a, **kw):
+        # Pressing the login submit is what flips the gate.
+        if not self.authenticated and self._current == self._gated_url:
+            self.authenticated = True
+        return await super().click(*a, **kw)
+
+    def _page(self):
+        if self._current == self._gated_url and self.authenticated:
+            return self._pages['__through__']
+        return super()._page()
+
+
+def test_an_auth_wall_mid_journey_is_crossed_not_treated_as_the_end():
+    """The client's actual complaint, and the fleet-wide one: a business journey
+    that crosses an auth boundary (public quote → authenticated apply) must stay ONE
+    journey. Authentication was a one-shot phase, so the crawl hit the wall and
+    stopped — cataloguing a public fragment and never the flow the business sells.
+    `Authenticator.relogin` existed for this and was never called from anywhere."""
+    import tempfile
+    with tempfile.TemporaryDirectory() as work:
+        apply_url = "https://app.example/portal/apply"
+        pages = {
+            apply_url: FakePage(apply_url, [
+                _raw("textbox", "Email", input_type="text"),
+                _raw("textbox", "Password", input_type="password"),
+                _raw("button", "Sign in", tag="button"),
+            ], title="Sign in", click_targets={"Sign in": apply_url}),
+            "__through__": FakePage(apply_url, [
+                _raw("textbox", "Beneficiary name", input_type="text"),
+                _raw("button", "Submit Application", tag="button"),
+            ], title="Your application"),
+        }
+        port = _WallThenThrough(pages, apply_url, apply_url)
+        crawler = _build_crawler(port, work, target_url=apply_url,
+                                 credentials=Credentials(username="u", password="p"))
+        summary = asyncio.run(crawler.run())
+
+        # The journey reached the AUTHENTICATED page, not the wall.
+        assert port.authenticated
+        states = [r for r in read_records(work, "c1") if r["type"] == "page_state"]
+        titles = [s.get("title") for s in states]
+        assert "Your application" in titles, titles
+        # And the crawl does not label itself as having missed the authenticated app.
+        assert summary.coverage.get("auth_incomplete") is not True
+
+
+def test_no_credentials_means_the_wall_is_reported_not_silently_walked_past():
+    """The complement: with nothing to log in with there is no crossing to attempt,
+    and the crawl must say the authenticated app was not covered rather than
+    quietly cataloguing the sign-in page as the journey's end."""
+    import tempfile
+    with tempfile.TemporaryDirectory() as work:
+        apply_url = "https://app.example/portal/apply"
+        pages = {
+            apply_url: FakePage(apply_url, [
+                _raw("textbox", "Email", input_type="text"),
+                _raw("textbox", "Password", input_type="password"),
+                _raw("button", "Sign in", tag="button"),
+            ], title="Sign in"),
+        }
+        crawler = _build_crawler(FakeBrowser(pages, apply_url), work, target_url=apply_url,
+                                 credentials=None, session_injected=True)
+        summary = asyncio.run(crawler.run())
+        assert summary.coverage.get("auth_incomplete") is True
+        assert summary.coverage.get("auth_reason") == AUTH_SESSION_EXPIRED
+
+
 def test_expired_session_is_caught_when_the_login_wall_is_deeper_than_the_entry():
     """The shape that defeated an entry-only check, live-observed: the app puts a
     PUBLIC marketing page at the root and protects the rest, so the entry sees no
