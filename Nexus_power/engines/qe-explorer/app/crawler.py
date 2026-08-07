@@ -1243,9 +1243,12 @@ class Crawler:
                 steps=[single_step],
                 terminal=single_terminal,
                 terminal_url=obs.url,
-                outcome_values=[v for v in (displayed_values or ())
-                                if str((v or {}).get("value_type") or "")
-                                in ("currency", "decision", "percent")],
+                # Same normalisation as the wizard walk: value_type exists
+                # only after the value-oracle inference.
+                outcome_values=[
+                    v for v in _displayed_values(displayed_values or ())
+                    if str(v.get("value_type") or "")
+                    in ("currency", "decision", "percent")],
                 max_steps=self._max_wizard_steps))
         if not walked:
             self._record_state(
@@ -2375,9 +2378,17 @@ class Crawler:
                 self._flows.append(flow_ledger.build_flow(
                     entry_fingerprint=fingerprint, entry_url=url, entry_title=title,
                     steps=flow_steps, terminal=terminal, terminal_url=cur_url,
-                    outcome_values=[v for v in (cur_dv or ())
-                                    if str((v or {}).get("value_type") or "")
-                                    in ("currency", "decision", "percent")],
+                    # NORMALISE FIRST. collect_displayed_values returns the raw
+                    # {label, selector, text} nodes; ``value_type`` is added by
+                    # the value-oracle inference in _displayed_values. Filtering
+                    # the raw list on a key it does not carry matched NOTHING, so
+                    # a journey that walked to a displayed premium recorded no
+                    # outcome at all — the funnel was proven and the proof was
+                    # thrown away one line before it was stored.
+                    outcome_values=[
+                        v for v in _displayed_values(cur_dv or ())
+                        if str(v.get("value_type") or "")
+                        in ("currency", "decision", "percent")],
                     max_steps=self._max_wizard_steps))
                 return True
 

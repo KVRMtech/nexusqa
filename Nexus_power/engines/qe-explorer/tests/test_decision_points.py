@@ -324,3 +324,26 @@ def test_enumeration_keeps_a_real_answer_that_reads_like_a_prompt():
 
 def test_binary_toggles_are_unaffected_by_placeholder_filtering():
     assert _enumerable_options({}, "checkbox") == ["checked", "unchecked"]
+
+
+def test_outcome_values_are_normalised_before_being_filtered():
+    """Regression: a journey walked all the way to a displayed premium and
+    recorded NO outcome.
+
+    collect_displayed_values returns raw {label, selector, text}; ``value_type``
+    is added by the value-oracle inference in _displayed_values. The flow builder
+    filtered the RAW list on value_type, which it does not carry, so every
+    outcome was dropped — the funnel was proven and the proof was discarded one
+    line before it was stored."""
+    import inspect
+
+    from app.crawler import Crawler, _displayed_values
+
+    # the inference really is what supplies value_type
+    typed = _displayed_values([
+        {"label": "Estimated Monthly Premium", "selector": "#p", "text": "$9.26"}])
+    assert typed and typed[0].get("value_type") == "currency", typed
+
+    src = inspect.getsource(Crawler._walk_wizard)
+    assert "_displayed_values(cur_dv or ())" in src, (
+        "the walk must normalise before selecting outcomes")
