@@ -209,6 +209,11 @@ export default function LoginSessionPanel({ appId }: { appId: string }) {
       {liveUrl ? (
         <div className="mt-4 space-y-2">
           <p className="text-sm font-semibold text-ink">Sign in below, then press Save.</p>
+          <p className="text-xs text-ink-mid">
+            It opens on this app's start page, which is usually not the sign-in
+            page — click through to Sign In yourself, exactly as a person would.
+            That path is part of what we learn.
+          </p>
           <iframe
             src={liveUrl}
             title="Sign in to record the login"
@@ -234,9 +239,10 @@ export default function LoginSessionPanel({ appId }: { appId: string }) {
           <div className="mt-4 rounded-lg bg-panel-2 p-3 ring-1 ring-line-strong">
             <p className="text-sm font-semibold text-ink">Sign in once, here</p>
             <p className="mt-1 text-xs text-ink-mid">
-              A browser opens on this page. Sign in exactly as you normally would —
-              including any code sent to you — and press Save. We watch which boxes
-              you fill and which buttons you press, never what you type.
+              A browser opens on this app's start page. Click through to its sign-in
+              page and sign in exactly as you normally would — including any code
+              sent to you — then press Save. We watch which boxes you fill and which
+              buttons you press, never what you type.
             </p>
             <div className="mt-2">
               <Button
