@@ -2485,6 +2485,21 @@ class Crawler:
             if vocab.is_destination_advance(name):
                 return AdvanceDecision(control=c, tier=2)
 
+        # DIAGNOSTIC (temporary): reaching Tier 3 means tiers 1-2 found no advance —
+        # the walk is STUCK. Dump the FULL control inventory so a page whose forward
+        # action is a non-standard widget (a questionnaire of clickable option-cards,
+        # a custom radio, a shadow-DOM control) becomes legible: what is on the page,
+        # what kind, what role, what is disabled. Value-free (names are product UI
+        # text). Remove once the lifestyle-style questionnaire capture is built.
+        logger.warning(
+            "qec.wizard.stuck_inventory url=%s n=%d controls=%s",
+            (page_url or "")[:120], len(controls),
+            [{"name": str(c.get("name") or "")[:44], "kind": c.get("kind"),
+              "role": c.get("role"), "it": c.get("input_type"),
+              "disabled": bool(c.get("disabled")), "danger": bool(c.get("danger"))}
+             for c in controls][:50],
+        )
+
         # Tier 3: ask the agent which control advances the flow.
         if self._advance_oracle is None:
             return AdvanceDecision()
