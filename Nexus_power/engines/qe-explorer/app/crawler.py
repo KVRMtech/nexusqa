@@ -30,6 +30,7 @@ so it is unit-testable with a scripted fake (``tests/test_crawler_logic.py``).
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import heapq
 import logging
 import re
@@ -212,6 +213,82 @@ def _decision_points(field_ledger: Sequence[Mapping[str, Any]]) -> list[dict[str
             dp["choice"] = str(choice)[:80]
         out.append(dp)
     return out
+
+
+#: Next-action fork classes (Journey Graph). A terminal decision page (a quote
+#: summary, an order confirmation) offers a choice between NEXT-ACTION controls,
+#: not a form field. Each option is classified so the fold knows which is the
+#: forward business path (walkable, subject to Phase-B approval) and which are
+#: surfaced-but-not-walked. Value-free: derived from the refuse pack (danger) and
+#: the language-pack commit vocabulary, never from hardcoded labels.
+NEXT_ACTION_FORWARD = "forward"           # a commit-word action (Apply Now, Place Order)
+NEXT_ACTION_DESTRUCTIVE = "destructive"   # refuse-pack danger (Start Over, Delete)
+NEXT_ACTION_NAVIGATIONAL = "navigational"  # leaves the funnel (Back to Dashboard, Home)
+
+
+def _next_action_decisions(
+    controls: Sequence[Mapping[str, Any]], fingerprint: str,
+) -> list[dict[str, Any]]:
+    """A next-action fork: the mutually-exclusive things a decision page offers.
+
+    A page whose whole content is a choice between action BUTTONS — a quote
+    summary's "Apply Now / Start Over / Back to Dashboard" — is a business fork,
+    but it carries no fillable field, so :func:`_decision_points` (which reads the
+    form ledger) never sees it and the fork was lost. This produces the decision
+    point directly from the controls so the fold turns it into one branch per
+    option, exactly as it does for a ``<select>``.
+
+    SCOPED to avoid turning every nav bar into a fork:
+      * options are BUTTONS (an action) or a site-ROOT link (a real "leave"); a
+        plain in-page nav link is chrome, not a decision, and is excluded;
+      * a fork is emitted ONLY when at least one option is a FORWARD commit action
+        AND there are ≥2 options — i.e. the page presents a "proceed" and an
+        alternative. An ordinary content page (nav bar, no commit action) emits
+        nothing.
+
+    Value-free throughout: labels are product UI text (as selects/radios already
+    are), classification uses the refuse-pack ``danger`` flag + the commit
+    vocabulary + the structural site-root check — no hardcoded strings, so it
+    generalises to any app in any language.
+    """
+    options: list[str] = []
+    classes: dict[str, str] = {}
+    for c in controls or ():
+        if c.get("disabled"):
+            continue
+        kind = c.get("kind")
+        name = str(c.get("name") or "").strip()
+        if not name:
+            continue
+        is_button = kind == "button"
+        is_root_link = kind == "link" and _links_to_site_root(c)
+        if not (is_button or is_root_link):
+            continue  # in-page nav links are chrome, not a decision
+        if c.get("danger"):
+            cls = NEXT_ACTION_DESTRUCTIVE
+        elif _WIZARD_COMMIT_RE.search(name):
+            cls = NEXT_ACTION_FORWARD
+        else:
+            cls = NEXT_ACTION_NAVIGATIONAL
+        if name in classes:
+            continue  # de-dup by label (first classification wins)
+        options.append(name)
+        classes[name] = cls
+    if len(options) < 2 or not any(v == NEXT_ACTION_FORWARD for v in classes.values()):
+        return []
+    # A value-free, crawl-stable signature: the SET of option labels on this node.
+    # Sorting makes it order-independent; binding to the node fingerprint keeps two
+    # different pages' identical button sets distinct. Never a value, only labels.
+    digest = hashlib.sha256(
+        ("\x1f".join(sorted(n.lower() for n in options)) + "@" + (fingerprint or "")).encode("utf-8")
+    ).hexdigest()[:32]
+    return [{
+        "control_signature": f"nextaction:{digest}",
+        "control_label": "Next action",
+        "options": options[:24],
+        "provenance": "next_action",
+        "option_classes": {n: classes[n] for n in options[:24]},
+    }]
 
 
 #: Oracle consultation outcomes. "The LLM said nothing advances" and "the LLM
@@ -1398,6 +1475,30 @@ class Crawler:
                     if str(v.get("value_type") or "")
                     in ("currency", "decision", "percent")],
                 max_steps=self._max_wizard_steps))
+        # A NON-form page that is a next-action fork (a quote summary: Apply Now /
+        # Start Over / Back to Dashboard) is a one-step business flow with a
+        # 3-branch decision. Without this the fork lived only in the flat
+        # submit_candidates coverage list and never became journey branches.
+        elif not walked and not is_form:
+            nd = _next_action_decisions(snapshot_controls, fingerprint)
+            if nd:
+                self._flows.append(flow_ledger.build_flow(
+                    entry_fingerprint=fingerprint, entry_url=obs.url,
+                    entry_title=obs.title,
+                    steps=[{
+                        "fingerprint": fingerprint, "url": obs.url,
+                        "title": obs.title, "fields_filled": 0,
+                        "fields_unfilled": 0, "decision_points": nd,
+                    }],
+                    # A forward option always exists (the emitter requires it), so
+                    # this page IS the submit boundary of its flow.
+                    terminal=flow_ledger.TERMINAL_SUBMIT_BOUNDARY,
+                    terminal_url=obs.url,
+                    outcome_values=[
+                        v for v in _displayed_values(displayed_values or ())
+                        if str(v.get("value_type") or "")
+                        in ("currency", "decision", "percent")],
+                    max_steps=self._max_wizard_steps))
         if not walked:
             self._record_state(
                 url=obs.url, title=obs.title, controls=snapshot_controls,

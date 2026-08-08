@@ -135,6 +135,13 @@ def build_flow(*, entry_fingerprint: str, entry_url: str, entry_title: str,
                 choice = dp.get("choice")
                 if choice:
                     rec["choice"] = str(choice)[:80]
+                # A next-action fork classifies each option (forward / destructive
+                # / navigational) so the fold knows which branch is walkable and
+                # which is surfaced-but-blocked. Value-free (labels + class names).
+                oc = dp.get("option_classes")
+                if isinstance(oc, Mapping):
+                    rec["option_classes"] = {
+                        str(k)[:80]: str(v)[:20] for k, v in list(oc.items())[:24]}
                 cleaned.append(rec)
             if cleaned:
                 entry["decision_points"] = cleaned

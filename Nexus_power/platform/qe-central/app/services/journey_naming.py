@@ -196,6 +196,22 @@ async def name_unnamed_journeys(*, tenant_id: str, app_id: str) -> dict[str, int
                                 JourneyBranchRow.app_id == app_id,
                                 JourneyBranchRow.node_fp.in_(path),
                             ).distinct())).scalars().all() if d]
+                        # The OPTION this journey actually took, not just the
+                        # question. A next-action fork's three branches share one
+                        # control label ("next action"), so without the option
+                        # label the namer cannot tell apply from start-over from
+                        # back — the exact ambiguity the grounding floor guards
+                        # against. Only WALKED options (the path this journey took).
+                        chosen = [o for o in (await session.execute(
+                            select(JourneyBranchRow.option_label_norm).where(
+                                JourneyBranchRow.tenant_id == tenant_id,
+                                JourneyBranchRow.app_id == app_id,
+                                JourneyBranchRow.node_fp.in_(path),
+                                JourneyBranchRow.status == "walked",
+                            ).distinct())).scalars().all() if o]
+                        for o in chosen:
+                            if o not in decisions:
+                                decisions.append(o)
                         triggers = [t for t in (await session.execute(
                             select(JourneyEdgeRow.trigger_label_norm).where(
                                 JourneyEdgeRow.tenant_id == tenant_id,

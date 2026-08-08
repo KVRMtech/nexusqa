@@ -161,6 +161,79 @@ async def _scoped(factory, tenant):
 
 
 @needs_db
+def test_next_action_fork_classifies_branches_and_blocks_the_unsafe_ones():
+    asyncio.run(_run_next_action_classification())
+
+
+async def _run_next_action_classification():
+    """A next-action fork (Apply Now / Start Over / Back to Dashboard) folds into
+    three branches, each classified: the forward option is DISCOVERED (walkable
+    under Phase-B approval), the destructive and navigational options are BLOCKED
+    with a reason — so branch_planner (which only plans discovered branches) never
+    queues a walk that clicks 'Start Over' and wipes the quote."""
+    from app.db.journey_models import JourneyBranchRow
+    from app.db.models import QecBase
+
+    engine = create_async_engine(DB_URL)
+    async with engine.begin() as conn:
+        await conn.run_sync(QecBase.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    tenant = f"qec-na-{uuid.uuid4().hex[:10]}"
+    app_id = "na-app"
+    originals = (journey_fold.tenant_scoped_qec_session,
+                 branch_planner.tenant_scoped_qec_session)
+    try:
+        journey_fold.tenant_scoped_qec_session = lambda tid: _scoped(factory, tid)
+        branch_planner.tenant_scoped_qec_session = lambda tid: _scoped(factory, tid)
+
+        flow = {
+            "flow_id": "n" * 24, "entry_fingerprint": "review",
+            "entry_url": "https://a.example/quote/review", "entry_title": "Review",
+            "terminal": "submit_boundary", "completed": True, "fully_answered": True,
+            "outcome_values": [{"label": "Monthly Premium", "value": "$4.68",
+                                "value_type": "currency"}],
+            "steps": [{
+                "fingerprint": "review", "url": "u1", "title": "Your Quote Summary",
+                "fields_filled": 0, "fields_unfilled": 0,
+                "decision_points": [{
+                    "control_signature": "nextaction:abc",
+                    "control_label": "Next action",
+                    "options": ["Apply Now", "Start Over", "Back to Dashboard"],
+                    "provenance": "next_action",
+                    "option_classes": {
+                        "Apply Now": "forward",
+                        "Start Over": "destructive",
+                        "Back to Dashboard": "navigational",
+                    },
+                }],
+            }],
+        }
+        r = await journey_fold.fold_crawl(
+            tenant_id=tenant, app_id=app_id, exploration_id="ex-na",
+            coverage=_coverage(flow))
+        assert r["branches"] == 3
+
+        async with _scoped(factory, tenant) as s:
+            by = {b.option_label_norm: b for b in (await s.execute(
+                select(JourneyBranchRow))).scalars().all()}
+            assert by["apply now"].status == BRANCH_DISCOVERED
+            assert by["start over"].status == BRANCH_BLOCKED
+            assert "destructive" in by["start over"].blocked_reason
+            assert by["back to dashboard"].status == BRANCH_BLOCKED
+            assert "navigational" in by["back to dashboard"].blocked_reason
+
+        # The planner plans ONLY the forward branch — never Start Over / Back.
+        plans = await branch_planner.plan_walks(tenant_id=tenant, app_id=app_id)
+        planned_opts = {v for p in plans for v in p["choice_overrides"].values()}
+        assert "start over" not in planned_opts
+        assert "back to dashboard" not in planned_opts
+    finally:
+        journey_fold.tenant_scoped_qec_session = originals[0]
+        branch_planner.tenant_scoped_qec_session = originals[1]
+        await engine.dispose()
+
+
+@needs_db
 def test_fold_recall_plan_reconcile_round_trip():
     asyncio.run(_run_round_trip())
 

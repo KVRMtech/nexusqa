@@ -288,10 +288,27 @@ async def fold_crawl(
                     if not sig:
                         continue
                     choice = normalize_label(str(dp.get("choice") or ""))
+                    # A next-action fork classifies each option. A destructive
+                    # ("Start Over" wipes the quote) or navigational ("Back to
+                    # Dashboard" leaves the funnel) option must be surfaced in the
+                    # catalogue but NEVER queued for a walk — branch_planner only
+                    # plans `discovered` branches, so blocking them here is what
+                    # keeps the planner from clicking "Start Over". Absent (a field
+                    # decision) → behave exactly as before.
+                    raw_classes = dp.get("option_classes")
+                    option_classes = raw_classes if isinstance(raw_classes, dict) else {}
                     for opt in dp.get("options") or []:
                         opt_norm = normalize_label(str(opt))
                         if not opt_norm:
                             continue
+                        cls = str(option_classes.get(opt) or "").strip().lower()
+                        blocked_reason = ""
+                        if cls == "destructive":
+                            blocked_reason = ("destructive next-action (irreversible) "
+                                              "— surfaced, not walked")
+                        elif cls == "navigational":
+                            blocked_reason = ("navigational next-action — exits the "
+                                              "funnel, surfaced not walked")
                         branch = (await session.execute(
                             select(JourneyBranchRow).where(
                                 JourneyBranchRow.tenant_id == tenant_id,
@@ -302,6 +319,12 @@ async def fold_crawl(
                             ))).scalar_one_or_none()
                         walked_now = bool(choice) and opt_norm == choice
                         if branch is None:
+                            if walked_now:
+                                init_status = BRANCH_WALKED
+                            elif blocked_reason:
+                                init_status = BRANCH_BLOCKED
+                            else:
+                                init_status = BRANCH_DISCOVERED
                             session.add(JourneyBranchRow(
                                 branch_id=_sid("branch", tenant_id, app_id, fp,
                                                sig, opt_norm),
@@ -309,8 +332,9 @@ async def fold_crawl(
                                 control_signature=sig,
                                 control_label_norm=label,
                                 option_label_norm=opt_norm,
-                                status=(BRANCH_WALKED if walked_now
-                                        else BRANCH_DISCOVERED),
+                                status=init_status,
+                                blocked_reason=(blocked_reason
+                                                if init_status == BRANCH_BLOCKED else ""),
                                 walked_in_traversal=(traversal_id
                                                      if walked_now else ""),
                                 last_status_at=now))

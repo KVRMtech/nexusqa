@@ -32,6 +32,9 @@ from app.config import Settings
 from app.auth import Credentials
 from app.crawler import (
     AUTH_SESSION_EXPIRED,
+    NEXT_ACTION_DESTRUCTIVE,
+    NEXT_ACTION_FORWARD,
+    NEXT_ACTION_NAVIGATIONAL,
     STOP_AUTH_FAILED,
     STOP_COMPLETED,
     STOP_MAX_REQUESTS,
@@ -43,6 +46,7 @@ from app.crawler import (
     Frontier,
     FrontierItem,
     GuardContext,
+    _next_action_decisions,
 )
 from app.emit import REC_PAGE_STATE, read_records
 from app.guard import load_refuse_pack
@@ -1308,3 +1312,81 @@ def test_walk_loop_protection_is_scoped_to_the_walk_not_the_crawler():
         "the advance guard must test the walk's path")
     assert "new_fp not in self._visited_fingerprints" not in src, (
         "the crawler-global set must not gate a journey's own advance")
+
+
+# ─── next-action decision fork (Journey Graph: a quote-summary is a 3-way fork) ─
+
+
+def _na(name, kind="button", **over):
+    """A minimal INVENTORIED control for _next_action_decisions."""
+    c = {"kind": kind, "name": name, "danger": False, "disabled": False}
+    c.update(over)
+    return c
+
+
+def test_next_action_fork_emits_one_classified_decision():
+    """The VKPower quote-summary shape: Apply Now / Start Over / Back to Dashboard
+    become ONE decision point with three classified options, while the top-nav
+    chrome (in-page links) is excluded so it does not explode into branches."""
+    controls = [
+        _na("Apply Now"),
+        _na("Start Over", danger=True),
+        _na("Back to Dashboard"),
+        _na("Dashboard", kind="link", href="/portal/dashboard"),   # nav chrome
+        _na("Sign out", kind="link", href="/logout"),              # nav chrome
+    ]
+    dps = _next_action_decisions(controls, "fp1")
+    assert len(dps) == 1
+    dp = dps[0]
+    assert set(dp["options"]) == {"Apply Now", "Start Over", "Back to Dashboard"}
+    assert dp["option_classes"]["Apply Now"] == NEXT_ACTION_FORWARD
+    assert dp["option_classes"]["Start Over"] == NEXT_ACTION_DESTRUCTIVE
+    assert dp["option_classes"]["Back to Dashboard"] == NEXT_ACTION_NAVIGATIONAL
+    assert dp["control_signature"].startswith("nextaction:")
+    assert dp["provenance"] == "next_action"
+
+
+def test_next_action_excludes_plain_nav_pages():
+    """A content page with only in-page nav links and no action is NOT a fork —
+    this is the branch-explosion guard: every page has a nav bar."""
+    controls = [
+        _na("Home", kind="link", href="/"),
+        _na("About", kind="link", href="/about"),
+        _na("Contact", kind="link", href="/contact"),
+    ]
+    assert _next_action_decisions(controls, "fp") == []
+
+
+def test_next_action_needs_at_least_two_options():
+    """A lone forward action is a linear step, not a decision."""
+    assert _next_action_decisions([_na("Apply Now")], "fp") == []
+
+
+def test_next_action_needs_a_forward_option():
+    """Buttons with no commit/forward action are not a business fork."""
+    assert _next_action_decisions([_na("Back"), _na("Help")], "fp") == []
+
+
+def test_next_action_includes_a_site_root_link_as_navigational():
+    """A home/site-root link IS a real 'leave the funnel' option and is kept."""
+    dps = _next_action_decisions([_na("Apply Now"), _na("Home", kind="link", href="/")], "fp")
+    assert len(dps) == 1
+    assert set(dps[0]["options"]) == {"Apply Now", "Home"}
+    assert dps[0]["option_classes"]["Home"] == NEXT_ACTION_NAVIGATIONAL
+
+
+def test_next_action_ignores_disabled_controls():
+    """A disabled Start Over leaves only Apply Now -> <2 options -> no fork."""
+    controls = [_na("Apply Now"), _na("Start Over", danger=True, disabled=True)]
+    assert _next_action_decisions(controls, "fp") == []
+
+
+def test_next_action_signature_is_stable_and_node_bound():
+    """Value-free, order-independent, and bound to the node — so a re-crawl does
+    not mint duplicate branch rows and two pages' identical button sets stay
+    distinct."""
+    a = [_na("Apply Now"), _na("Start Over", danger=True)]
+    s1 = _next_action_decisions(a, "fpA")[0]["control_signature"]
+    s2 = _next_action_decisions(list(reversed(a)), "fpA")[0]["control_signature"]
+    s3 = _next_action_decisions(a, "fpB")[0]["control_signature"]
+    assert s1 == s2 and s1 != s3

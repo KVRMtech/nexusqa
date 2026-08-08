@@ -275,3 +275,33 @@ def test_an_explicit_value_key_still_wins():
                          "text": "ignored", "value_type": "currency"}],
         terminal=FL.TERMINAL_SUBMIT_BOUNDARY, max_steps=20)
     assert f["outcome_values"][0]["value"] == "$1.00"
+
+
+def test_build_flow_preserves_next_action_option_classes():
+    """The sanitizer whitelists decision_point keys, so option_classes (the
+    forward/destructive/navigational classification of a next-action fork) must be
+    explicitly carried or the fold cannot tell which branch is walkable."""
+    step = {
+        "fingerprint": "review", "url": "/quote/review", "title": "Review",
+        "fields_filled": 0, "fields_unfilled": 0,
+        "decision_points": [{
+            "control_signature": "nextaction:abc",
+            "control_label": "Next action",
+            "options": ["Apply Now", "Start Over", "Back to Dashboard"],
+            "provenance": "next_action",
+            "option_classes": {
+                "Apply Now": "forward",
+                "Start Over": "destructive",
+                "Back to Dashboard": "navigational",
+            },
+        }],
+    }
+    built = FL.build_flow(entry_fingerprint="review", entry_url="/quote/review",
+                          entry_title="Review", steps=[step],
+                          terminal=FL.TERMINAL_SUBMIT_BOUNDARY, max_steps=20)
+    dp = built["steps"][0]["decision_points"][0]
+    assert dp["option_classes"] == {
+        "Apply Now": "forward",
+        "Start Over": "destructive",
+        "Back to Dashboard": "navigational",
+    }
