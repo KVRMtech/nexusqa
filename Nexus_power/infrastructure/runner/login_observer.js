@@ -145,16 +145,52 @@ function attachLoginObserver(target, opts) {
   // state. Values ARE secrets (this is where such apps keep the session), so they
   // travel the same encrypted path as a storageState and never enter the manifest.
   const sessionStorageByOrigin = new Map();
+
+  const rememberSession = (origin, entries) => {
+    if (!origin || !entries || typeof entries !== 'object') return;
+    if (!Object.keys(entries).length) return;
+    // Bound memory: a page may put megabytes in sessionStorage, and a capture
+    // must not be able to exhaust the runner.
+    if (sessionStorageByOrigin.size >= 20 && !sessionStorageByOrigin.has(origin)) return;
+    sessionStorageByOrigin.set(origin, entries);
+  };
+
+  // POLLED FROM NODE, not reported from the page.
+  //
+  // The first attempt had the page report its own sessionStorage on `pagehide`.
+  // It captured NOTHING, every time: `exposeBinding` is asynchronous, and by the
+  // time the call would land the page being unloaded is already gone. Reporting at
+  // teardown cannot work. Reading from here, while the page is alive, does — and
+  // the last successful read before a navigation IS the state of the origin the
+  // tab is leaving, which is the whole difficulty with a federated login.
+  const READ_SESSION_STORAGE = `(() => {
+    try {
+      const out = {};
+      for (let i = 0; i < sessionStorage.length; i += 1) {
+        const k = sessionStorage.key(i);
+        if (k) out[k] = sessionStorage.getItem(k);
+      }
+      return { origin: window.location.origin, entries: out };
+    } catch (e) { return null; }
+  })()`;
+
+  async function pollSessionStorage() {
+    let pages = [];
+    try { pages = ctx.pages ? ctx.pages() : []; } catch (e) { return; }
+    for (const pg of pages) {
+      try {
+        const snap = await pg.evaluate(READ_SESSION_STORAGE);
+        if (snap) rememberSession(snap.origin, snap.entries);
+      } catch (e) { /* mid-navigation, closed, or blocked — the next tick retries */ }
+    }
+  }
+  const pollTimer = setInterval(() => { pollSessionStorage().catch(() => {}); }, 700);
+  if (pollTimer.unref) pollTimer.unref();
+  // Kept as a best-effort supplement to the poll: when a binding call DOES land
+  // before teardown it carries a write the poll could have missed. Never relied on.
   const pStore = ctx.exposeBinding('__nxSessionStore', (_src, snap) => {
     try {
-      const origin = String((snap || {}).origin || '');
-      const entries = (snap || {}).entries;
-      if (!origin || !entries || typeof entries !== 'object') return;
-      if (!Object.keys(entries).length) return;
-      // Bound memory: a page is free to put megabytes in sessionStorage, and a
-      // capture must not be able to exhaust the runner.
-      if (sessionStorageByOrigin.size >= 20 && !sessionStorageByOrigin.has(origin)) return;
-      sessionStorageByOrigin.set(origin, entries);
+      rememberSession(String((snap || {}).origin || ''), (snap || {}).entries);
     } catch (e) { /* never break the capture */ }
   }).catch(() => {});
 
@@ -360,7 +396,14 @@ function attachLoginObserver(target, opts) {
     return out;
   }
 
-  return { events, ready, snapshot, sessionStorage: sessionStorage_ };
+  /** Stop polling. The capture owns the browser; leaving a timer alive against a
+   *  closed context would log a failed evaluate every tick for the life of the
+   *  process. */
+  function stop() {
+    try { clearInterval(pollTimer); } catch (e) { /* already gone */ }
+  }
+
+  return { events, ready, snapshot, sessionStorage: sessionStorage_, pollSessionStorage, stop };
 }
 
 module.exports = { attachLoginObserver };

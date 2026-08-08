@@ -236,6 +236,11 @@ async function stopCapture() {
   const c = capture; capture = null;
   if (c) {
     if (c.timer) { try { clearTimeout(c.timer); } catch (e) { /* noop */ } }
+    // Stop the sessionStorage poll BEFORE closing the browser, or it spends the
+    // rest of the process failing an evaluate against a dead context every tick.
+    if (c.loginObserver && c.loginObserver.stop) {
+      try { c.loginObserver.stop(); } catch (e) { /* noop */ }
+    }
     try { if (c.browser) await c.browser.close(); } catch (e) { /* noop */ }
   }
   teardownCaptureDisplay();
