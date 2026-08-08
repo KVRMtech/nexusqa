@@ -1357,9 +1357,32 @@ def test_next_action_excludes_plain_nav_pages():
     assert _next_action_decisions(controls, "fp") == []
 
 
-def test_next_action_needs_at_least_two_options():
-    """A lone forward action is a linear step, not a decision."""
-    assert _next_action_decisions([_na("Apply Now")], "fp") == []
+def test_next_action_emits_for_a_lone_forward_action():
+    """A page whose only groundable action is a forward commit ("Apply Now") is a
+    business flow, recorded as one walkable branch — the reliable deliverable when
+    the alternatives are plain links indistinguishable from nav chrome."""
+    dps = _next_action_decisions([_na("Apply Now")], "fp")
+    assert len(dps) == 1
+    assert dps[0]["options"] == ["Apply Now"]
+    assert dps[0]["option_classes"]["Apply Now"] == NEXT_ACTION_FORWARD
+
+
+def test_next_action_emits_lone_forward_link_among_nav_chrome():
+    """The ACTUAL live VKPower shape: Apply Now / Start Over / Back to Dashboard are
+    all <a> links, and only Apply Now carries a commit signal. Start Over and Back
+    are plain links, structurally identical to the navbar's Beneficiaries link, so
+    they are correctly NOT invented as branches — only the grounded forward action
+    is recorded."""
+    controls = [
+        _na("Apply Now", kind="link", href="/portal/apply"),
+        _na("Start Over", kind="link", href="/quote/start"),
+        _na("Back to Dashboard", kind="link", href="/portal/dashboard"),
+        _na("Beneficiaries", kind="link", href="/portal/beneficiaries"),
+    ]
+    dps = _next_action_decisions(controls, "fp")
+    assert len(dps) == 1
+    assert dps[0]["options"] == ["Apply Now"]
+    assert dps[0]["option_classes"]["Apply Now"] == NEXT_ACTION_FORWARD
 
 
 def test_next_action_needs_a_forward_option():
@@ -1376,8 +1399,20 @@ def test_next_action_includes_a_site_root_link_as_navigational():
 
 
 def test_next_action_ignores_disabled_controls():
-    """A disabled Start Over leaves only Apply Now -> <2 options -> no fork."""
-    controls = [_na("Apply Now"), _na("Start Over", danger=True, disabled=True)]
+    """A disabled control is not an available action and is excluded from the
+    fork; the enabled forward action still stands."""
+    controls = [_na("Apply Now"),
+                _na("Print Summary", disabled=True),
+                _na("Save Draft", danger=True, disabled=True)]
+    dps = _next_action_decisions(controls, "fp")
+    assert len(dps) == 1
+    assert dps[0]["options"] == ["Apply Now"]
+
+
+def test_next_action_disabled_forward_yields_no_node():
+    """If the only forward action is disabled, there is no groundable business
+    action, so nothing is emitted."""
+    controls = [_na("Apply Now", disabled=True), _na("Back", kind="link", href="/x")]
     assert _next_action_decisions(controls, "fp") == []
 
 
@@ -1407,3 +1442,21 @@ def test_next_action_excludes_sign_in_and_sign_out_chrome():
     assert len(dps) == 1
     assert set(dps[0]["options"]) == {"Apply Now", "Start Over"}
     assert "Sign out" not in dps[0]["options"]
+
+
+def test_next_action_captures_action_links_not_just_buttons():
+    """SPA apps render actions as anchors — a Next.js 'Apply Now' is an <a>, not a
+    <button>. A commit or danger LINK is an action and is captured; a plain nav
+    link (even one that is not site-root) stays out as chrome. This is the live
+    VKPower shape that a buttons-only scoping missed entirely."""
+    controls = [
+        _na("Apply Now", kind="link", href="/portal/apply"),                 # commit link -> forward
+        _na("Start Over", kind="link", href="/quote/start", danger=True),    # danger link -> destructive
+        _na("Back to Dashboard", kind="link", href="/portal/dashboard"),     # plain nav link -> excluded
+        _na("Beneficiaries", kind="link", href="/portal/beneficiaries"),     # nav chrome -> excluded
+    ]
+    dps = _next_action_decisions(controls, "fp")
+    assert len(dps) == 1
+    assert set(dps[0]["options"]) == {"Apply Now", "Start Over"}
+    assert dps[0]["option_classes"]["Apply Now"] == NEXT_ACTION_FORWARD
+    assert dps[0]["option_classes"]["Start Over"] == NEXT_ACTION_DESTRUCTIVE

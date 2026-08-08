@@ -246,17 +246,26 @@ def _next_action_decisions(
     option, exactly as it does for a ``<select>``.
 
     SCOPED to avoid turning every nav bar into a fork:
-      * options are BUTTONS (an action) or a site-ROOT link (a real "leave"); a
-        plain in-page nav link is chrome, not a decision, and is excluded;
-      * a fork is emitted ONLY when at least one option is a FORWARD commit action
-        AND there are ≥2 options — i.e. the page presents a "proceed" and an
-        alternative. An ordinary content page (nav bar, no commit action) emits
-        nothing.
+      * a BUTTON is always an action and is kept; a LINK is kept only when it
+        carries an action signal — a commit word, a danger flag, or the site root —
+        so a plain in-page nav link (Dashboard, Beneficiaries) stays out as chrome;
+      * a session control (sign/log in|out) is excluded — it is auth chrome;
+      * the node is emitted ONLY when at least one option is a FORWARD commit
+        action (Apply Now, Place Order, Submit Application). A page with no forward
+        action emits nothing.
 
-    Value-free throughout: labels are product UI text (as selects/radios already
-    are), classification uses the refuse-pack ``danger`` flag + the commit
-    vocabulary + the structural site-root check — no hardcoded strings, so it
-    generalises to any app in any language.
+    The forward action is the reliable, value-free signal (the same commit
+    vocabulary the submit boundary already uses). A single forward option is
+    enough — a quote summary whose only groundable action is "Apply Now" is a
+    business flow ("apply"), recorded as one walkable branch. Non-forward
+    alternatives on the SAME page (a plain "Start Over"/"Back" link with no commit
+    or danger signal) are structurally indistinguishable from nav chrome in a flat
+    control list, so they are NOT invented as branches — recording only what can be
+    grounded, never a guess.
+
+    Value-free throughout: classification uses the refuse-pack ``danger`` flag +
+    the commit vocabulary + the structural site-root check — no hardcoded strings,
+    so it generalises to any app in any language.
     """
     options: list[str] = []
     classes: dict[str, str] = {}
@@ -265,25 +274,33 @@ def _next_action_decisions(
             continue
         kind = c.get("kind")
         name = str(c.get("name") or "").strip()
-        if not name:
+        if not name or kind not in ("button", "link"):
             continue
-        is_button = kind == "button"
-        is_root_link = kind == "link" and _links_to_site_root(c)
-        if not (is_button or is_root_link):
-            continue  # in-page nav links are chrome, not a decision
         if _AUTH_SESSION_RE.search(name):
             continue  # a sign-in / sign-out control is session chrome, never a fork option
+        # Classify — and let the class ALSO decide inclusion, because SPA apps
+        # render their action controls as anchors (a Next.js "Apply Now" is an
+        # <a>, not a <button>). A BUTTON is always an action, so it is kept whatever
+        # it says. A LINK is kept only when it carries an action signal — a commit
+        # word (Apply Now), a danger flag (Start Over), or the site root (Home) —
+        # so a plain in-page nav link (Dashboard, Beneficiaries, Back to Dashboard)
+        # stays out as chrome. That signal is what separates an action-link from a
+        # navbar-link without any per-app labels.
         if c.get("danger"):
             cls = NEXT_ACTION_DESTRUCTIVE
         elif _WIZARD_COMMIT_RE.search(name):
             cls = NEXT_ACTION_FORWARD
-        else:
+        elif kind == "link" and _links_to_site_root(c):
             cls = NEXT_ACTION_NAVIGATIONAL
+        elif kind == "button":
+            cls = NEXT_ACTION_NAVIGATIONAL   # a plain action button (e.g. "Back")
+        else:
+            continue  # a plain in-page nav link — chrome, not a decision
         if name in classes:
             continue  # de-dup by label (first classification wins)
         options.append(name)
         classes[name] = cls
-    if len(options) < 2 or not any(v == NEXT_ACTION_FORWARD for v in classes.values()):
+    if not any(v == NEXT_ACTION_FORWARD for v in classes.values()):
         return []
     # A value-free, crawl-stable signature: the SET of option labels on this node.
     # Sorting makes it order-independent; binding to the node fingerprint keeps two
