@@ -824,6 +824,7 @@ async def execute_submit_phase_b(
     sequence_index: int = 0,
     answer_key: Optional[AnswerKey] = None,
     fill_controls: Sequence[Mapping[str, Any]] = (),
+    renavigate: bool = True,
 ) -> SubmitResult:
     """Phase-5 submit entry point: REFUSE unless attestation + approval permit,
     else re-drive the approved flow, submit, and capture the confirmation.
@@ -868,19 +869,25 @@ async def execute_submit_phase_b(
 
     # ── Authorised: re-drive the approved flow on the attested disposable env ─
     first_seen = clock.now_ms()
-    nav = await port.goto(url)
-    if not getattr(nav, "ok", True):
-        logger.warning("qec.forms.submit_form_unreachable url=%s", (url or "")[:200])
-        return SubmitResult(submitted=False, decision=decision,
-                            reason=REASON_FORM_UNREACHABLE)
-
-    if answer_key is not None and fill_controls:
-        # Re-establish the approved form state.  Fills are client-side until the
-        # submit POST, which the guard has already authorised for this flow.
-        await fill_form_phase_a(
-            port, fill_controls, answer_key, clock,
-            phase=Phase.SUBMIT.value, state_id=state_id,
-        )
+    # renavigate=True (a single-page form): go back to the form URL and re-fill so
+    # the submit acts on a populated form. renavigate=False (a wizard TERMINAL, e.g.
+    # a quote summary reached by walking start→coverage→personal→…): the page state
+    # was BUILT UP by the walk and lives in the SPA context — re-navigating to the
+    # summary URL would discard the in-progress quote (and with it the very button
+    # we mean to click), so we submit IN PLACE on the page the walk already reached.
+    if renavigate:
+        nav = await port.goto(url)
+        if not getattr(nav, "ok", True):
+            logger.warning("qec.forms.submit_form_unreachable url=%s", (url or "")[:200])
+            return SubmitResult(submitted=False, decision=decision,
+                                reason=REASON_FORM_UNREACHABLE)
+        if answer_key is not None and fill_controls:
+            # Re-establish the approved form state.  Fills are client-side until the
+            # submit POST, which the guard has already authorised for this flow.
+            await fill_form_phase_a(
+                port, fill_controls, answer_key, clock,
+                phase=Phase.SUBMIT.value, state_id=state_id,
+            )
 
     # ── Submit + observe the grounded terminal outcome ───────────────────────
     observation = await port.click(control)

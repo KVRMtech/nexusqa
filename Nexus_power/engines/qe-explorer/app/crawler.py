@@ -1539,6 +1539,14 @@ class Crawler:
         # the frontier so the deeper flow is crawled. Default-OFF (self._submit_enabled).
         if self._submit_enabled and is_form and fill is not None:
             await self._maybe_submit_phase_b(item, snapshot_controls, fill, fingerprint)
+        elif self._submit_enabled and not is_form and not walked:
+            # A formless decision page reached directly — a quote summary whose only
+            # action is "Apply Now". No fill produced a candidate, so the form path
+            # above never sees it; cross the approved forward action here so the
+            # crawl continues past it into the application funnel.
+            await self._maybe_submit_next_action(
+                controls=snapshot_controls, url=obs.url, fingerprint=fingerprint,
+                depth=item.depth)
 
     async def _discover(
         self, item: FrontierItem, controls: Sequence[dict[str, Any]], is_form: bool,
@@ -2153,9 +2161,6 @@ class Crawler:
                 continue
             if getattr(fc, "danger", False) and not self._submit_approve_all:
                 continue
-            flow_key = f"{fingerprint}::{name.lower()}"
-            if flow_key in self._submitted_flows:
-                continue
             # The candidate carries the exact submit control it was recorded from; fall
             # back to a name match in the snapshot if it is somehow absent.
             control = getattr(fc, "control", None)
@@ -2168,50 +2173,104 @@ class Crawler:
                 )
             if not control:
                 continue
-            self._submitted_flows.add(flow_key)
-            seq = self._next_seq
-            self._next_seq += 1
-            prev_phase = self._guard.phase
-            prev_approved = self._guard.submit_flow_approved
-            # Flip the shared guard to SUBMIT so the network route handler authorises the
-            # approved submit POST; restore EXPLORE no matter what (fail-closed default).
-            # Open a FRESH bounded window per submit so the burst budget can't accrue
-            # across flows.
-            self._guard.phase = Phase.SUBMIT
-            self._guard.submit_flow_approved = True
-            self._guard.submit_window.open(self._clock.now_ms())
-            try:
-                result = await execute_submit_phase_b(
-                    self._port, control, item.url, self._emitter, self._clock,
-                    refuse_pack=self._refuse_pack,
-                    is_login_domain=False,
-                    attestation=self._guard.attestation,
-                    submit_flow_approved=True,
-                    now_ms=self._clock.now_ms(),
-                    state_id=fingerprint,
-                    sequence_index=seq,
-                    answer_key=self._answer_key,
-                    fill_controls=controls,
-                )
-            finally:
-                self._guard.phase = prev_phase
-                self._guard.submit_flow_approved = prev_approved
-            if result.submitted:
-                self._forms_submitted += 1
-                self._tracker.note_action()
-            ps = result.page_state
-            dest = (getattr(ps, "location", "") or "").strip() if ps else ""
-            # Honour max_depth for submit-derived states too (mirrors _discover's
-            # depth gate) so an attested submit chain cannot crawl past the budget.
-            if (result.confirmed and result.outcome == "navigation" and dest
-                    and item.depth < self._budget.max_depth and self._in_scope(dest)):
-                self._frontier.push(
-                    FrontierItem(url=dest, depth=item.depth + 1,
-                                 discovered_via=f"submit:{name}",
-                                 parent_fingerprint=fingerprint),
-                    key=_url_key(dest),
-                )
-            return  # one submit per state — avoid combinatorial explosion
+            if await self._execute_approved_submit(
+                    name=name, control=control, url=item.url, fingerprint=fingerprint,
+                    depth=item.depth, fill_controls=controls, renavigate=True):
+                return  # one submit per state — avoid combinatorial explosion
+
+    async def _execute_approved_submit(
+        self, *, name: str, control: dict[str, Any], url: str, fingerprint: str,
+        depth: int, fill_controls: Sequence[dict[str, Any]] = (),
+        renavigate: bool = True,
+    ) -> bool:
+        """Click ONE approved submit control through the SUBMIT guard, record it, and
+        push the post-submit page onto the frontier so the flow BEYOND it is crawled.
+
+        Returns False when this control was already submitted at this state (dedup),
+        else True. Shared by the form path (:meth:`_maybe_submit_phase_b`) and the
+        next-action path (:meth:`_maybe_submit_next_action`).
+
+        ``renavigate=False`` submits IN PLACE — a wizard TERMINAL (a quote summary
+        whose state the walk built up) would lose that state on a re-navigation.
+        Either way :func:`execute_submit_phase_b` re-runs ``gate_submit`` (attestation
+        + approval + non-irreversible unless the disposable blanket allows it), so the
+        guard is never bypassed."""
+        flow_key = f"{fingerprint}::{name.lower()}"
+        if flow_key in self._submitted_flows:
+            return False
+        self._submitted_flows.add(flow_key)
+        seq = self._next_seq
+        self._next_seq += 1
+        prev_phase = self._guard.phase
+        prev_approved = self._guard.submit_flow_approved
+        # Flip the shared guard to SUBMIT so the network route handler authorises the
+        # approved submit POST; restore EXPLORE no matter what (fail-closed default).
+        # Open a FRESH bounded window per submit so the burst budget can't accrue.
+        self._guard.phase = Phase.SUBMIT
+        self._guard.submit_flow_approved = True
+        self._guard.submit_window.open(self._clock.now_ms())
+        try:
+            result = await execute_submit_phase_b(
+                self._port, control, url, self._emitter, self._clock,
+                refuse_pack=self._refuse_pack, is_login_domain=False,
+                attestation=self._guard.attestation, submit_flow_approved=True,
+                now_ms=self._clock.now_ms(), state_id=fingerprint,
+                sequence_index=seq, answer_key=self._answer_key,
+                fill_controls=fill_controls, renavigate=renavigate,
+            )
+        finally:
+            self._guard.phase = prev_phase
+            self._guard.submit_flow_approved = prev_approved
+        if result.submitted:
+            self._forms_submitted += 1
+            self._tracker.note_action()
+        ps = result.page_state
+        dest = (getattr(ps, "location", "") or "").strip() if ps else ""
+        # Honour max_depth for submit-derived states too (mirrors _discover's depth
+        # gate) so an attested submit chain cannot crawl past the budget.
+        if (result.confirmed and result.outcome == "navigation" and dest
+                and depth < self._budget.max_depth and self._in_scope(dest)):
+            self._frontier.push(
+                FrontierItem(url=dest, depth=depth + 1,
+                             discovered_via=f"submit:{name}",
+                             parent_fingerprint=fingerprint),
+                key=_url_key(dest),
+            )
+        return True
+
+    async def _maybe_submit_next_action(
+        self, *, controls: Sequence[dict[str, Any]], url: str, fingerprint: str,
+        depth: int,
+    ) -> None:
+        """Cross an approved FORWARD next-action control (Apply Now) on a page with
+        no fillable form — a quote summary is exactly this shape.
+
+        The form-submit path only ever sees controls a FILL produced, so a formless
+        decision page never crossed its own boundary and the crawl stopped at
+        'Apply Now'. This carries it PAST — click Apply Now, land on /portal/apply,
+        and the pushed frontier page is then crawled/walked as the continuation
+        (the application → e-sign funnel). Same triple gate as any submit: a
+        disposable attestation + approval + the refuse pack, re-checked inside
+        execute_submit_phase_b — a non-disposable env stays at the boundary exactly
+        as before (self._submit_enabled is False without approvals + attestation)."""
+        if not self._submit_enabled:
+            return
+        for c in controls:
+            if c.get("kind") not in ("button", "link") or c.get("disabled"):
+                continue
+            name = str(c.get("name") or "").strip()
+            if not name or _AUTH_SESSION_RE.search(name):
+                continue
+            if not _WIZARD_COMMIT_RE.search(name):
+                continue  # only a FORWARD commit action crosses a boundary here
+            if c.get("danger") and not self._submit_approve_all:
+                continue
+            if not self._submit_approved(name):
+                continue
+            if await self._execute_approved_submit(
+                    name=name, control=dict(c), url=url, fingerprint=fingerprint,
+                    depth=depth, renavigate=False):
+                return  # one crossing per state
 
     # -- wizard / stepper traversal (#1) ---------------------------------------
 
@@ -2726,6 +2785,18 @@ class Crawler:
                         if str(v.get("value_type") or "")
                         in ("currency", "decision", "percent")],
                     max_steps=self._max_wizard_steps))
+                # CROSS the boundary. The walk reached a submit boundary (a quote
+                # summary with "Apply Now") and recorded it; now, on a disposable
+                # attested env, click the approved forward action IN PLACE (the
+                # summary's state was built by this walk — never re-navigate) and
+                # push the resulting page (/portal/apply) so the application → e-sign
+                # funnel is crawled as the continuation. Gated exactly as any submit;
+                # a non-disposable env leaves self._submit_enabled False and stops at
+                # the boundary as before.
+                if terminal == flow_ledger.TERMINAL_SUBMIT_BOUNDARY:
+                    await self._maybe_submit_next_action(
+                        controls=cur_controls, url=cur_url, fingerprint=cur_fp,
+                        depth=item.depth)
                 return True
 
             obs, new_controls, new_fp = advance

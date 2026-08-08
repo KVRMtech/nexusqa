@@ -224,3 +224,58 @@ def test_submit_respects_max_depth(tmp_path, monkeypatch):
                                         _fill("Continue"), "fp"))
     assert c._forms_submitted == 1
     assert c._frontier.pop() is None
+
+
+# ── next-action crossing (Apply Now on a formless quote summary) ────────────────
+
+def test_next_action_forward_is_crossed_in_place_and_enqueued(tmp_path, monkeypatch):
+    """A quote summary's 'Apply Now' has no form fields, so the form-submit path
+    never sees it. The next-action path crosses it IN PLACE (renavigate=False — the
+    walk-built summary state must not be discarded) and enqueues the resulting page
+    so the application → e-sign funnel is crawled as the continuation."""
+    c = _build(tmp_path, approvals=["*"], attestation={"env_kind": "disposable"})
+    seen = {}
+
+    async def fake_submit(port, control, url, emitter, clock, **kw):
+        seen["control_name"] = control.get("name")
+        seen["renavigate"] = kw.get("renavigate")
+        seen["approved"] = kw.get("submit_flow_approved")
+        ps = types.SimpleNamespace(location="https://app.example/portal/apply")
+        return SubmitResult(submitted=True, decision=None, confirmed=True,
+                            outcome="navigation", page_state=ps)
+
+    monkeypatch.setattr(crawler_mod, "execute_submit_phase_b", fake_submit)
+    controls = [
+        {"name": "Apply Now", "kind": "link"},       # forward commit -> crossed
+        {"name": "Start Over", "kind": "button"},    # not a commit word -> skipped
+        {"name": "Sign out", "kind": "link"},        # auth chrome -> skipped
+    ]
+    asyncio.run(c._maybe_submit_next_action(
+        controls=controls, url="https://app.example/quote/review",
+        fingerprint="fpR", depth=0))
+
+    assert seen["control_name"] == "Apply Now"
+    assert seen["renavigate"] is False               # crossed IN PLACE, never re-navigated
+    assert seen["approved"] is True
+    assert c._forms_submitted == 1
+    popped = c._frontier.pop()
+    assert popped is not None and popped.url == "https://app.example/portal/apply"
+    assert popped.discovered_via == "submit:Apply Now"
+
+
+def test_next_action_not_crossed_when_submit_disabled(tmp_path, monkeypatch):
+    """No attestation/approvals → submit disabled → the boundary is never crossed;
+    the crawl stops at 'Apply Now' exactly as before."""
+    c = _build(tmp_path)          # no approvals, no attestation
+    calls = {"n": 0}
+
+    async def fake_submit(*a, **k):
+        calls["n"] += 1
+        return SubmitResult(submitted=True, decision=None)
+
+    monkeypatch.setattr(crawler_mod, "execute_submit_phase_b", fake_submit)
+    asyncio.run(c._maybe_submit_next_action(
+        controls=[{"name": "Apply Now", "kind": "link"}],
+        url="https://app.example/quote/review", fingerprint="fpR", depth=0))
+    assert calls["n"] == 0
+    assert c._frontier.pop() is None
