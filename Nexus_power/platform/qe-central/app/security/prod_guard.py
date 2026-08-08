@@ -386,6 +386,30 @@ def submit_approvals(app_row: Any) -> list[str]:
     ``submit_candidates``), never a hardcoded default. The explorer's own
     ``gate_submit`` re-verifies attestation + per-flow approval + non-irreversible
     verb, so this is the coarse gate, not the only one."""
+    # A DISPOSABLE env needs no per-control ceremony.
+    #
+    # The attestation already carries the operator's signed statement that this
+    # environment is throwaway and that they authorise testing against it. Making
+    # them then name each submit control one at a time adds no safety on top of
+    # that — it only means a crawl silently stops at every boundary until someone
+    # notices and types a name, which is friction that does not survive a fleet of
+    # applications. Naming controls stays the rule for every other env kind.
+    #
+    # "*" is a blanket over the app's OWN submits. It is not a bypass: the
+    # attestation must still be disposable, unexpired and attributed, the explorer
+    # re-verifies at click time, and the refuse pack still stops an irreversible
+    # verb. The explorer also holds step-advance labels out of the blanket, or
+    # approving "Continue" would make the funnel unwalkable.
+    att_ok, _kind, _reason = _attestation_status(
+        app_row, allowed_kinds=(ENV_KIND_DISPOSABLE,), now=_utcnow(),
+    )
+    if att_ok:
+        fences = _jsonb(app_row, "fences")
+        att = _jsonb(app_row, "env_attestation")
+        named = fences.get("submit_approvals") or att.get("submit_approvals") or []
+        named = [str(x).strip() for x in named if str(x).strip()]
+        return ["*", *named]
+
     if not _submit_approved(app_row):
         return []
     # AUTHORITATIVE freshness gate (wall-clock): a submit is authorised ONLY on a

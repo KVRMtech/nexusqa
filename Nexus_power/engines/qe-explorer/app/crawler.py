@@ -740,6 +740,11 @@ class Crawler:
         # attestation is present — a crawl without both stops at the Phase-A boundary,
         # byte-identical to before. execute_submit_phase_b re-verifies the guard.
         self._submit_approvals = {s.strip().lower() for s in submit_approvals if str(s).strip()}
+        # "*" — every submit this app offers is approved. Set by qe-central for an
+        # env the operator attested DISPOSABLE: naming each control one at a time is
+        # the right ceremony for a live system and pure friction for a throwaway one,
+        # which is what the attestation already says this is.
+        self._submit_approve_all = "*" in self._submit_approvals
         self._submit_enabled = bool(self._submit_approvals) and self._guard.attestation is not None
         self._forms_submitted = 0
         self._submitted_flows: set[str] = set()    # dedup key = f"{fingerprint}::{name}"
@@ -2013,7 +2018,13 @@ class Crawler:
         non-navigating or unconfirmed submit is recorded honestly and adds no frontier."""
         for fc in getattr(fill, "flow_candidates", ()):
             name = (getattr(fc, "name", "") or "").strip()
-            if not name or getattr(fc, "danger", False) or name.lower() not in self._submit_approvals:
+            # On a DISPOSABLE env the blanket covers danger controls too: the guard
+            # behind this now allows an irreversible verb there, so skipping them
+            # here would keep the old refusal alive one layer up and the operator
+            # would see no submit at all with no reason given.
+            if not name or not self._submit_approved(name):
+                continue
+            if getattr(fc, "danger", False) and not self._submit_approve_all:
                 continue
             flow_key = f"{fingerprint}::{name.lower()}"
             if flow_key in self._submitted_flows:
@@ -2097,6 +2108,26 @@ class Crawler:
             if _WIZARD_COMMIT_RE.search(name) or c.get("danger"):
                 return True
         return False
+
+    def _submit_approved(self, name: str) -> bool:
+        """Is this submit control approved to be pressed?
+
+        Either named explicitly by the operator, or covered by the DISPOSABLE-env
+        blanket ("*").
+
+        The blanket deliberately still refuses a step-ADVANCE label. `Continue` is a
+        submit candidate on a wizard step AND the control that walks the funnel, and
+        an approved name is owned by the Phase-B path — so approving it stops the
+        walk dead and the catalogue records one-step journeys. That is the exact
+        outcome `_reject_advance_shadowing_approvals` refuses to let an operator
+        configure by hand, and a blanket must not reintroduce it by the back door.
+        """
+        n = name.strip().lower()
+        if not n:
+            return False
+        if n in self._submit_approvals:
+            return True
+        return self._submit_approve_all and not _WIZARD_ADVANCE_RE.search(n)
 
     def _note_boundary_controls(self, controls: Sequence[dict[str, Any]]) -> None:
         """Record the commit-boundary controls this state offers.

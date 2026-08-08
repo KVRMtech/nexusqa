@@ -623,12 +623,24 @@ def classify_request(
                           "critical",
                           f"{normalized_method} refused in SUBMIT — the flow is "
                           f"not human-approved")
+        # An IRREVERSIBLE verb is allowed here, and recorded.
+        #
+        # Reaching this line already required a valid, unexpired, attributed
+        # DISPOSABLE-env attestation — the operator's signed statement that this
+        # target is throwaway. On a throwaway environment there is nothing for a
+        # delete or a purchase to ruin, and refusing them meant the product could
+        # never prove the flows a business most needs proven: the checkout, the
+        # cancellation, the submitted application.
+        #
+        # It is still WRITTEN DOWN. The verdict carries the verb, so evidence shows
+        # exactly which irreversible action was taken and under whose attestation —
+        # removing the block must not also remove the record.
         verb = classify_action_verb(action_button_name, url, refuse_pack)
         if verb.irreversible:
-            return _block(verb.rule_id, EVENT_REFUSED_VERB_GET, verb.severity,
-                          f"{normalized_method} refused in SUBMIT even under "
-                          f"attestation+approval — irreversible verb: "
-                          f"{verb.reason}")
+            return _allow(GuardRule.SUBMIT_MUTATION_OK,
+                          f"{normalized_method} allowed in SUBMIT on a DISPOSABLE "
+                          f"env under attestation+approval — irreversible verb "
+                          f"CROSSED and recorded: {verb.reason}")
         return _allow(GuardRule.SUBMIT_MUTATION_OK,
                       f"{normalized_method} allowed in SUBMIT (attested, "
                       f"approved, not an irreversible verb)")
