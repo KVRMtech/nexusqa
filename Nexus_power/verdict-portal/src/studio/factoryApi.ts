@@ -777,6 +777,19 @@ class FactoryApiClient {
     return data;
   }
 
+  /** BULK: provision many members at once — one member per row, each with its
+   *  envelope-encrypted card for an environment. The recorded login is reused as
+   *  a value-free recipe; each row supplies that member's slot values. Ciphertext
+   *  only; the server never echoes a secret back. Returns {imported, errors, requested}. */
+  async bulkImportCredentials(
+    artifactId: string,
+    cards: Array<{ persona_name: string; environment_id: string; slot_values: Record<string, string> }>,
+  ): Promise<any> {
+    const { data } = await this.client.post(
+      `/v1/test-factory/${artifactId}/credentials/bulk-import`, { cards });
+    return data;
+  }
+
   /** Environments + governance (posture, production flag, health). */
   async listEnvironments(artifactId: string): Promise<any> {
     const { data } = await this.client.get(`/v1/test-factory/${artifactId}/environments`);

@@ -303,6 +303,44 @@ export default function PersonaMatrixPanel({ artifactId }: { artifactId: string 
     } catch (ex) { fail(ex); } finally { setBusy(''); }
   };
 
+  // ── Bulk add members: paste a table, provision many at once ─────────────────
+  // The recorded login is reused as a value-free recipe; each row supplies one
+  // member's slot values. Same encryption + card-contract as a single card — the
+  // server enforces it per row, so a column-mapping mistake is rejected, not
+  // silently stored as a card that skips the login.
+  const [bulkEnv, setBulkEnv] = useState('');
+  const [bulkText, setBulkText] = useState('');
+  const [bulkResult, setBulkResult] = useState<
+    { imported: number; requested: number; errors: Array<{ index?: number; persona_name?: string; error?: string }> } | null
+  >(null);
+  const bulkColumns = ['Member name', ...loginFields.map((f) => f.label)];
+
+  const bulkImport = async () => {
+    if (!bulkEnv.trim()) { setErr('choose the environment these members belong to'); return; }
+    if (!loginFields.length) { setErr('record a login first — a card fills the recorded login fields'); return; }
+    const rows: Array<{ persona_name: string; environment_id: string; slot_values: Record<string, string> }> = [];
+    for (const raw of bulkText.split(/\r?\n/)) {
+      const line = raw.trim();
+      if (!line) continue;
+      const cells = line.split(/\t|,/).map((c) => c.trim());
+      // Tolerate an optional header row (a first cell of "member name"/"name").
+      const head = cells[0].toLowerCase().replace(/\s+/g, '');
+      if (head === 'membername' || head === 'name') continue;
+      if (!cells[0]) continue;
+      const slot_values: Record<string, string> = {};
+      loginFields.forEach((f, i) => { slot_values[f.name] = cells[i + 1] || ''; });
+      rows.push({ persona_name: cells[0], environment_id: bulkEnv.trim(), slot_values });
+    }
+    if (!rows.length) { setErr('paste at least one member row'); return; }
+    setBusy('bulk'); setErr(''); setBulkResult(null);
+    try {
+      const r = await api.bulkImportCredentials(artifactId, rows);
+      setBulkResult({ imported: r.imported || 0, requested: r.requested || rows.length, errors: r.errors || [] });
+      if ((r.imported || 0) > 0) { say(`${r.imported} member card(s) provisioned (encrypted).`); setBulkText(''); await load(); }
+      if ((r.errors || []).length) setErr(`${r.errors.length} row(s) were rejected — see the list below.`);
+    } catch (ex) { fail(ex); } finally { setBusy(''); }
+  };
+
   const cardKey = (c: Card) => `${c.persona_id}::${c.environment_id}`;
 
   /** Prove a card by actually logging in with it — the only thing that may set
@@ -606,6 +644,47 @@ export default function PersonaMatrixPanel({ artifactId }: { artifactId: string 
                   </button>
                 </div>
               )}
+
+              {/* ── Bulk add members ─────────────────────────────────────────── */}
+              <div className="mt-3 border-t border-nexus-100 pt-3">
+                <p className="text-xs font-semibold text-nexus-700">Add many members at once</p>
+                <p className="mt-0.5 text-[10px] text-nexus-500">
+                  One member per line (tab- or comma-separated), columns in this order:{' '}
+                  <span className="font-mono text-nexus-700">{bulkColumns.join(' · ')}</span>.
+                  The recorded login is reused — each row just supplies that member’s values.
+                  A header row is optional.
+                </p>
+                <div className="mt-1.5 flex items-center gap-2">
+                  <input className={`${INPUT} w-28`} placeholder="env id (uat)" value={bulkEnv}
+                    onChange={(e) => setBulkEnv(e.target.value)} list="env-ids" />
+                  <span className="text-[10px] text-nexus-400">environment for every row</span>
+                </div>
+                <textarea
+                  className={`${INPUT} mt-1.5 h-24 w-full font-mono text-[11px]`}
+                  spellCheck={false}
+                  placeholder={bulkColumns.join('\t')}
+                  value={bulkText}
+                  onChange={(e) => setBulkText(e.target.value)} />
+                <div className="mt-1.5 flex items-center gap-2">
+                  <button onClick={bulkImport} disabled={busy === 'bulk'}
+                    className={`${BTN} ring-nexus-200 text-nexus-700 bg-nexus-50 hover:bg-nexus-100`}>
+                    {busy === 'bulk' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Lock className="h-3.5 w-3.5" />} Import members
+                  </button>
+                  {bulkResult && (
+                    <span className="text-[10px] text-nexus-500">
+                      {bulkResult.imported}/{bulkResult.requested} imported
+                      {bulkResult.errors.length ? `, ${bulkResult.errors.length} rejected` : ''}
+                    </span>
+                  )}
+                </div>
+                {bulkResult && bulkResult.errors.length > 0 && (
+                  <ul className="mt-1 max-h-24 overflow-auto text-[10px] text-red-600">
+                    {bulkResult.errors.slice(0, 20).map((e, i) => (
+                      <li key={i}>row {(e.index ?? i) + 1} ({e.persona_name || '?'}): {e.error}</li>
+                    ))}
+                  </ul>
+                )}
+              </div>
             </>
           )}
           <p className="text-[10px] text-nexus-400">Values are envelope-encrypted on save and never returned — this panel can set a card, never read one.</p>
