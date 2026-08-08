@@ -40,6 +40,8 @@ from __future__ import annotations
 
 from urllib.parse import urlsplit
 
+from nexus_sdk.session import session_has_substance
+
 from . import login_observation
 from . import login_recorder
 
@@ -92,12 +94,10 @@ def derive_draft(*, observation_snapshot: dict | None,
     }
     # Kept apart from `environment` on purpose: one describes where to go, the
     # other IS an authenticated session.
-    # `__nx_session_storage` counts: an app that keeps its sign-in in
-    # sessionStorage yields no cookies and no origins, and requiring them made a
-    # perfectly good recording report an empty session.
-    session = storage_state if isinstance(storage_state, dict) and (
-        storage_state.get("cookies") or storage_state.get("origins")
-        or storage_state.get("__nx_session_storage")) else None
+    # Canonical substance rule (nexus_sdk.session): counts __nx_session_storage,
+    # so a sessionStorage-only login is not reported as an empty session. Pure, so
+    # the module's "no DB, no I/O" contract holds.
+    session = storage_state if session_has_substance(storage_state) else None
 
     if observation.get("unusable"):
         return {"login": None, "environment": environment, "session": session,

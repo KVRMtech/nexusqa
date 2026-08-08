@@ -180,11 +180,12 @@ export default function LoginSessionPanel({ appId }: { appId: string }) {
       // "the next crawl starts logged in" here sent the operator off to run a crawl
       // that was silently signed out — observed on a Next.js app that reported
       // cookies=0 origins=0 while the login itself was recorded fine.
-      // Counting only cookies-and-origins is the bug this check was written to
-      // catch, repeated. An app that keeps its sign-in in sessionStorage has
-      // neither, and its session rides `__nx_session_storage` — so the very
-      // sessions the capture exists to carry were reported as "cannot be carried
-      // over" while sitting safely in the encrypted blob.
+      // Mirrors nexus_sdk.session.session_has_substance (the Python canonical).
+      // Kept as a local because TypeScript cannot import the Python helper — a
+      // grep for `session_has_substance` / `__nx_session_storage` surfaces every
+      // copy. Counting only cookies-and-origins is the bug this check exists to
+      // catch: an app that keeps its sign-in in sessionStorage has neither, and
+      // its session rides `__nx_session_storage`.
       const st = r.session as {
         cookies?: unknown[]; origins?: unknown[]; __nx_session_storage?: unknown[];
       } | undefined;

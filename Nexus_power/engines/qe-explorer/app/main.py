@@ -610,8 +610,13 @@ async def _run_job(
                             if k != "__nx_session_storage"}
                 _raw_ss = req.session.get("__nx_session_storage")
                 _session_storage = list(_raw_ss) if isinstance(_raw_ss, list) else []
-                # An app that keeps its whole sign-in in sessionStorage has NO
-                # cookies and NO origins, so requiring them dropped exactly the
+                # Substance rule — mirrors nexus_sdk.session.session_has_substance
+                # (the quarantined explorer deliberately does NOT install the SDK,
+                # so this stays vendored). NOTE it runs on POST-split data:
+                # __nx_session_storage has already been lifted into _session_storage,
+                # so the equivalent third term is `or _session_storage`, NOT a lookup
+                # on _session. An app that keeps its whole sign-in in sessionStorage
+                # has no cookies and no origins — dropping it here dropped exactly the
                 # sessions this exists to carry.
                 if _session.get("cookies") or _session.get("origins") or _session_storage:
                     _ctx_kwargs["storage_state"] = _session

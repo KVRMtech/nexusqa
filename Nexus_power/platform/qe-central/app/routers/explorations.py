@@ -56,6 +56,7 @@ from ..services.crawl_diagnosis import diagnose as diagnose_crawl
 from ..services.exploration_planner import build_exploration_plan
 from ..substrate.schema import CRAWL_ID_PATTERN, ExplorationBundle, RefusalError
 from ..substrate.writer import write_exploration
+from nexus_sdk.session import session_has_substance
 
 logger = logging.getLogger(__name__)
 
@@ -461,13 +462,7 @@ async def _resolve_session(credentials: dict | None) -> dict | None:
     if not isinstance(credentials, dict):
         return None
     static = credentials.get("session")
-    # `__nx_session_storage` counts as substance: an app that keeps its whole
-    # sign-in in sessionStorage has no cookies and no origins, so requiring them
-    # discarded exactly the sessions a recording exists to carry.
-    if isinstance(static, dict) and (
-        static.get("cookies") or static.get("origins")
-        or static.get("__nx_session_storage")
-    ):
+    if session_has_substance(static):
         return static
     hook = str(credentials.get("auth_hook") or "").strip()
     if not hook:
@@ -485,7 +480,10 @@ async def _resolve_session(credentials: dict | None) -> dict | None:
             resp = await client.get(hook)
         if resp.status_code == 200 and len(resp.content) <= _MAX_SESSION_BYTES:
             data = resp.json()
-            if isinstance(data, dict) and (data.get("cookies") or data.get("origins")):
+            # Canonical substance rule — this branch previously omitted
+            # __nx_session_storage and so discarded a freshly hook-fetched
+            # sessionStorage-only session (the same bug fixed elsewhere).
+            if session_has_substance(data):
                 logger.info("qec.explorations.auth_hook_session_resolved")
                 return data
         logger.warning("qec.explorations.auth_hook_unusable status=%s", resp.status_code)
