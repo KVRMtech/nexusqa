@@ -1230,8 +1230,6 @@ class Crawler:
         # e-sign); stopping here would catalogue two fragments and never the flow
         # the business actually sells.
         obs, controls = await self._cross_auth_wall(obs, controls, item.url)
-        # Every state, form or not — see _note_boundary_controls.
-        self._note_boundary_controls(controls)
         # Requested vs landed is what separates "the app sent us to sign in" from
         # "the crawl followed a link to the sign-in page".
         self._note_login_wall_while_authenticated(controls, item.url, obs.url)
@@ -2628,6 +2626,13 @@ class Crawler:
         network_calls: Sequence[dict[str, Any]] = (),
     ) -> None:
         """Assemble + emit ONE ``page_state`` record with monotonic indices."""
+        # EVERY recorded state, whichever path reached it. Hung off _expand alone,
+        # this missed every page the WIZARD WALK reaches — which is precisely where
+        # a funnel ends. Live-observed: the quote-summary page rendered `Apply Now`,
+        # `Start Over` and `Back to Dashboard` (confirmed in the crawl's own
+        # screenshot) and contributed no boundary control at all, while the same fix
+        # captured `Add Beneficiary` on a page reached by ordinary navigation.
+        self._note_boundary_controls(controls)
         seq = self._next_seq
         self._next_seq += 1
         parts = urlsplit(url or "")
