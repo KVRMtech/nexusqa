@@ -172,12 +172,16 @@ def test_phase_b_refuses_without_approval():
     assert d.allow is False and d.rule_id == GuardRule.SUBMIT_NOT_APPROVED
 
 
-def test_phase_b_refuses_irreversible_even_when_attested_and_approved():
+def test_phase_b_crosses_irreversible_when_attested_and_approved():
+    # Founder/client direction: no submission limits on a Test/disposable env.
+    # Past the disposable attestation + approval gate, an irreversible verb is
+    # allowed and recorded (the reason names it) rather than refused.
     d = gate_submit(_delete_control(), "https://app.example/apply",
                     refuse_pack=_REFUSE_PACK, is_login_domain=True,
                     attestation=_valid_attestation(), submit_flow_approved=True,
                     now_ms=1000)
-    assert d.allow is False and d.rule_id.startswith("rp.verb.")
+    assert d.allow is True and d.rule_id == GuardRule.SUBMIT_MUTATION_OK
+    assert "irreversible verb" in (d.reason or "").lower()
 
 
 def test_phase_b_allows_only_with_attestation_approval_and_safe_verb():

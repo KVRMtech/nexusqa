@@ -40,20 +40,25 @@ def _app(*, env_attestation: dict | None = None, fences: dict | None = None) -> 
 
 # ── prod_guard.submit_approvals — fail-closed, from real config ─────────────────
 
-def test_explore_only_app_has_no_approvals():
-    assert prod_guard.submit_approvals(_app(env_attestation=_disposable_att())) == []
+def test_disposable_env_gets_the_blanket_with_no_fences():
+    # Founder/client direction: a Test/disposable env has NO submission limits.
+    # A valid disposable attestation ALONE grants the blanket "*"; naming each
+    # control one at a time is no longer required.
+    assert prod_guard.submit_approvals(_app(env_attestation=_disposable_att())) == ["*"]
 
 
-def test_disposable_allow_submit_app_returns_the_operator_list():
+def test_disposable_blanket_appends_the_operator_named_list():
     app = _app(env_attestation=_disposable_att(),
-               fences={"allow_submit": True, "submit_approvals": ["Continue", "Get a Quote"]})
-    assert prod_guard.submit_approvals(app) == ["Continue", "Get a Quote"]
+               fences={"allow_submit": True, "submit_approvals": ["Get a Quote", "Submit application"]})
+    assert prod_guard.submit_approvals(app) == ["*", "Get a Quote", "Submit application"]
 
 
-def test_allow_submit_false_yields_no_approvals():
+def test_disposable_blanket_ignores_the_allow_submit_toggle():
+    # allow_submit is a live-env ceremony; on a disposable env the attestation
+    # already authorises submission, so the toggle no longer gates it.
     app = _app(env_attestation=_disposable_att(),
-               fences={"allow_submit": False, "submit_approvals": ["Continue"]})
-    assert prod_guard.submit_approvals(app) == []
+               fences={"allow_submit": False, "submit_approvals": ["Place order"]})
+    assert prod_guard.submit_approvals(app) == ["*", "Place order"]
 
 
 def test_staging_env_never_gets_approvals_even_with_allow_submit():
@@ -72,7 +77,7 @@ def test_approvals_fall_back_to_env_attestation_list():
     att = _disposable_att()
     att["submit_approvals"] = ["Submit application"]
     app = _app(env_attestation=att, fences={"allow_submit": True})
-    assert prod_guard.submit_approvals(app) == ["Submit application"]
+    assert prod_guard.submit_approvals(app) == ["*", "Submit application"]
 
 
 # ── _explorer_attestation — STRICT shape, verbatim values ───────────────────────

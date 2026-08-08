@@ -201,17 +201,19 @@ def test_submit_refuses_without_approval_and_never_touches_app():
     assert events and events[0]["rule_id"] == GuardRule.SUBMIT_NOT_APPROVED
 
 
-def test_submit_refuses_irreversible_verb_even_when_attested_and_approved():
+def test_irreversible_verb_is_crossed_and_recorded_when_attested_and_approved():
+    # Founder/client direction: a Test/disposable env has NO submission limits.
+    # An irreversible verb, under a submit-capable (disposable) attestation +
+    # flow approval, is now CROSSED and clicked rather than refused — and the
+    # decision reason records that it was an irreversible verb, so evidence still
+    # shows exactly what was done.
     port = FakeSubmitPort(click_obs=_nav_obs())
     result, records = _run(port, _delete_control(),
                            attestation=_valid_attestation(), submit_flow_approved=True)
-    assert result.submitted is False and result.confirmed is False
-    assert result.decision.rule_id.startswith("rp.verb.")
-    # Attested + approved is NOT enough for an irreversible verb — no click.
-    assert port.goto_urls == [] and port.clicked == []
-    events = [r for r in records if r["type"] == "guard_event"]
-    assert events and events[0]["phase"] == "submit"
-    assert events[0]["rule_id"].startswith("rp.verb.")
+    assert result.submitted is True and result.confirmed is True
+    assert result.decision.rule_id == GuardRule.SUBMIT_MUTATION_OK
+    assert "irreversible verb" in (result.decision.reason or "").lower()
+    assert port.clicked and port.clicked != []
 
 
 # ─── The happy path: submit + confirmation + baseline ───────────────────────

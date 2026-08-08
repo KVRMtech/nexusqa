@@ -418,13 +418,19 @@ class TestSubmitPhase:
         assert d.allow is False
         assert d.rule_id == GuardRule.SUBMIT_NOT_APPROVED
 
-    def test_refusal_on_irreversible_verb_even_when_attested_and_approved(self, pack):
+    def test_irreversible_verb_crossed_and_recorded_when_attested_and_approved(self, pack):
+        # Founder/client direction: a Test/disposable environment has NO
+        # submission limits. Reaching this gate already required a submit-capable
+        # (disposable) attestation + flow approval, so an irreversible verb is
+        # CROSSED rather than refused — and the reason string records that it was
+        # an irreversible verb, so evidence still shows exactly what was done.
         d = classify_request("POST", "https://app.example.com/policy/bind",
                              Phase.SUBMIT, pack, True, "Bind coverage",
                              attestation=_valid_attestation(),
                              submit_flow_approved=True, now_ms=1_000)
-        assert d.allow is False
-        assert d.rule_id == "rp.verb.bind"
+        assert d.allow is True
+        assert d.rule_id == GuardRule.SUBMIT_MUTATION_OK
+        assert "irreversible verb" in (d.reason or "").lower()
 
     def test_benign_mutation_allowed_when_attested_and_approved(self, pack):
         d = classify_request("POST", "https://app.example.com/quote/save",
