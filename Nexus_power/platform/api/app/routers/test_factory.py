@@ -9162,11 +9162,19 @@ async def draft_recording_save(user: dict = Depends(get_current_user)):
     # the diagnostic was blind to the mechanism that had just carried the session.
     _ss = (state or {}).get("__nx_session_storage") if isinstance(state, dict) else None
     _ss_origins = [str((e or {}).get("origin") or "") for e in (_ss or [])][:20]
+    # KEY NAMES only, never values — the same policy as cookie_names above. Without
+    # them "we carried a session" and "we carried some UI state" look identical, and
+    # a crawl that still meets a login wall is unexplainable from the outside.
+    _ss_keys: list[str] = []
+    for _e in (_ss or []):
+        _ss_keys.extend(list(((_e or {}).get("entries") or {}).keys()))
+    _ss_keys = _ss_keys[:25]
     _logger.warning(
         "recordings.save state_type=%s cookies=%d origins=%d localStorage_keys=%d "
-        "sessionStorage_origins=%d (%s) cookie_names=%s events=%d login=%s",
+        "sessionStorage_origins=%d (%s) sessionStorage_keys=%s cookie_names=%s "
+        "events=%d login=%s",
         type(state).__name__, len(_cookies or []), len(_origins or []), _ls,
-        len(_ss or []), ",".join(_ss_origins) or "-",
+        len(_ss or []), ",".join(_ss_origins) or "-", ",".join(_ss_keys) or "-",
         ",".join(_names) or "-", len((snapshot or {}).get("events") or []),
         bool(draft.get("login")))
 
@@ -9177,6 +9185,7 @@ async def draft_recording_save(user: dict = Depends(get_current_user)):
         "origins": len(_origins or []),
         "local_storage_keys": _ls,
         "session_storage_origins": _ss_origins,
+        "session_storage_keys": _ss_keys,
         "cookie_names": _names,
         "reason": ("" if draft.get("session")
                    else "runner_returned_no_state" if not isinstance(state, dict)
