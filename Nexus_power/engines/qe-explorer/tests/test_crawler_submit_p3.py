@@ -279,3 +279,35 @@ def test_next_action_not_crossed_when_submit_disabled(tmp_path, monkeypatch):
         url="https://app.example/quote/review", fingerprint="fpR", depth=0))
     assert calls["n"] == 0
     assert c._frontier.pop() is None
+
+
+# ── danger forward control (an application's "Continue to Underwriting Decision") ─
+
+def test_danger_forward_control_is_crossed_on_disposable_blanket(tmp_path):
+    """"Continue to Underwriting Decision" is refuse-pack DANGER (rp.verb.underwrite)
+    yet is the real next step toward e-sign. Tiers 1-2 skip danger and the oracle
+    excludes it, so on a disposable blanket env the walk must return it as a
+    submit_control (crossed via the submit path) rather than passing it over for a
+    nav link. This is what carries the application funnel past /apply/lifestyle."""
+    c = _build(tmp_path, approvals=["*"], attestation={"env_kind": "disposable"})
+    controls = [
+        {"name": "Get a Quote", "kind": "link", "danger": False},                 # nav chrome
+        {"name": "Continue to Underwriting Decision", "kind": "button", "danger": True},
+        {"name": "Back", "kind": "button", "danger": False},                      # not forward
+        {"name": "Sign out", "kind": "button", "danger": True},                   # auth chrome
+    ]
+    dec = asyncio.run(c._pick_advance_e2e(
+        controls, "https://app.example/apply/lifestyle", "Lifestyle", "fpL"))
+    assert dec.submit_control is not None
+    assert dec.submit_control["name"] == "Continue to Underwriting Decision"
+    assert dec.control is None       # crossed, not clicked as a plain advance
+
+
+def test_danger_forward_control_not_crossed_without_blanket(tmp_path):
+    """Without the disposable blanket a danger forward control is left alone —
+    production stays at the boundary exactly as before."""
+    c = _build(tmp_path, approvals=["some flow"], attestation={"env_kind": "disposable"})
+    assert c._submit_approve_all is False       # no "*"
+    controls = [{"name": "Continue to Underwriting Decision", "kind": "button", "danger": True}]
+    dec = asyncio.run(c._pick_advance_e2e(controls, "u", "t", "fp"))
+    assert dec.submit_control is None

@@ -341,6 +341,13 @@ class AdvanceDecision:
     tier: int = 0
     oracle_status: str = ORACLE_NOT_CONSULTED
     signature: str = ""
+    #: A forward control the normal advance tiers had to skip because it is
+    #: refuse-pack DANGER (an application's "Continue to Underwriting Decision" —
+    #: "underwrite" is irreversible), but which IS the real next step. On a
+    #: disposable-blanket env the walk crosses it through the SUBMIT path instead
+    #: of clicking it as a plain advance (which the network guard would block).
+    #: None on every ordinary step — non-danger advances are handled by tiers 1-3.
+    submit_control: Optional[dict[str, Any]] = None
 
 
 # ─── Budgets ─────────────────────────────────────────────────────────────────
@@ -2485,6 +2492,29 @@ class Crawler:
             if vocab.is_destination_advance(name):
                 return AdvanceDecision(control=c, tier=2)
 
+        # DANGER FORWARD (disposable blanket only): tiers 1-2 skip refuse-pack
+        # danger controls, but an application's forward step can BE one —
+        # "Continue to Underwriting Decision" is danger via rp.verb.underwrite, yet
+        # it is the real next page toward e-sign. On a disposable env where submit
+        # is blanket-approved, cross it through the SUBMIT path (a plain advance
+        # click would be blocked by the network guard in EXPLORE phase). Returned as
+        # submit_control so the walk crosses rather than clicks. Only a forward-shaped
+        # (commit/advance) danger control qualifies — never "Back", never a nav link,
+        # never a sign-out — so the walk cannot be sent sideways. This runs BEFORE
+        # the oracle precisely so a real forward step is never passed over for a nav
+        # link the oracle might otherwise pick.
+        if self._submit_enabled and self._submit_approve_all:
+            for c in controls:
+                if c.get("kind") not in ("button", "link") or c.get("disabled"):
+                    continue
+                if not c.get("danger"):
+                    continue
+                name = str(c.get("name") or "").strip()
+                if not name or _AUTH_SESSION_RE.search(name):
+                    continue
+                if _WIZARD_COMMIT_RE.search(name) or _WIZARD_ADVANCE_RE.search(name):
+                    return AdvanceDecision(submit_control=dict(c))
+
         # DIAGNOSTIC (temporary): reaching Tier 3 means tiers 1-2 found no advance —
         # the walk is STUCK. Dump the FULL control inventory so a page whose forward
         # action is a non-standard widget (a questionnaire of clickable option-cards,
@@ -2694,6 +2724,28 @@ class Crawler:
 
         while True:
             pick = await self._pick_advance(cur_controls, cur_url, cur_title, cur_fp)
+            if pick.submit_control is not None:
+                # A danger forward step the advance tiers had to skip (e.g.
+                # "Continue to Underwriting Decision"). Record THIS page as a crossed
+                # submit boundary, then cross it through the submit path so the
+                # application funnel continues toward e-sign. The crossing pushes the
+                # next page onto the frontier; the walk ends here and the outer loop
+                # picks the continuation up.
+                flow_steps.append(_step_record())
+                self._flows.append(flow_ledger.build_flow(
+                    entry_fingerprint=fingerprint, entry_url=url, entry_title=title,
+                    steps=flow_steps, terminal=flow_ledger.TERMINAL_SUBMIT_BOUNDARY,
+                    terminal_url=cur_url,
+                    outcome_values=[
+                        v for v in _displayed_values(cur_dv or ())
+                        if str(v.get("value_type") or "")
+                        in ("currency", "decision", "percent")],
+                    max_steps=self._max_wizard_steps))
+                await self._execute_approved_submit(
+                    name=str(pick.submit_control.get("name") or "").strip(),
+                    control=pick.submit_control, url=cur_url, fingerprint=cur_fp,
+                    depth=item.depth, renavigate=False)
+                return True
             trig = pick.control
             advance: Optional[tuple[Any, list[dict[str, Any]], str]] = None
             budget_left = (steps < self._max_wizard_steps
