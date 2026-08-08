@@ -133,7 +133,56 @@ function attachLoginObserver(target, opts) {
     } catch (e) { /* ignore */ }
   }).catch(() => {});
 
+  // ── sessionStorage, PER ORIGIN. ─────────────────────────────────────────────
+  // Unlike cookies and localStorage, sessionStorage is scoped to (tab, origin)
+  // and is readable ONLY from a page currently on that origin. A federated login
+  // walks app → identity provider → app, so by the time the capture is saved the
+  // tab has long left the IdP and a read-at-save can never see what was stored
+  // there. Reading it as the page is LEAVING each origin is the only moment the
+  // data exists and is reachable — no navigating back, nothing destructive.
+  //
+  // Keyed by origin, last write wins: an origin visited twice reports its latest
+  // state. Values ARE secrets (this is where such apps keep the session), so they
+  // travel the same encrypted path as a storageState and never enter the manifest.
+  const sessionStorageByOrigin = new Map();
+  const pStore = ctx.exposeBinding('__nxSessionStore', (_src, snap) => {
+    try {
+      const origin = String((snap || {}).origin || '');
+      const entries = (snap || {}).entries;
+      if (!origin || !entries || typeof entries !== 'object') return;
+      if (!Object.keys(entries).length) return;
+      // Bound memory: a page is free to put megabytes in sessionStorage, and a
+      // capture must not be able to exhaust the runner.
+      if (sessionStorageByOrigin.size >= 20 && !sessionStorageByOrigin.has(origin)) return;
+      sessionStorageByOrigin.set(origin, entries);
+    } catch (e) { /* never break the capture */ }
+  }).catch(() => {});
+
   const pInit = ctx.addInitScript(() => {
+    // Report this origin's sessionStorage while the page can still read it.
+    const snapSession = () => {
+      try {
+        if (!window.__nxSessionStore || !window.sessionStorage) return;
+        const out = {};
+        for (let i = 0; i < sessionStorage.length; i += 1) {
+          const k = sessionStorage.key(i);
+          if (k) out[k] = sessionStorage.getItem(k);
+        }
+        if (Object.keys(out).length) {
+          window.__nxSessionStore({ origin: window.location.origin, entries: out });
+        }
+      } catch (e) { /* storage blocked / partitioned — nothing to carry */ }
+    };
+    // `pagehide` is the last moment a departing origin is readable. Also snapshot
+    // when the tab is hidden, which is what a closing SSO popup gives us instead.
+    window.addEventListener('pagehide', snapSession, true);
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'hidden') snapSession();
+    }, true);
+    // And shortly after load: a token written during sign-in on THIS origin is
+    // then already captured even if the operator saves without navigating again.
+    setTimeout(snapSession, 1500);
+
     const fire = () => { try { window.__nxLoginNav && window.__nxLoginNav(location.href); } catch (e) {} };
     for (const m of ['pushState', 'replaceState']) {
       const orig = history[m];
@@ -279,7 +328,7 @@ function attachLoginObserver(target, opts) {
 
   // Resolves once bindings + in-page hooks are registered — await BEFORE the first
   // navigation so the login page itself is instrumented.
-  const ready = Promise.all([pNav, pField, pClick, pInit]);
+  const ready = Promise.all([pNav, pField, pClick, pStore, pInit]);
 
   function snapshot() {
     // The landing page is wherever the login FINISHED — with an SSO popup that is
@@ -299,7 +348,19 @@ function attachLoginObserver(target, opts) {
     };
   }
 
-  return { events, ready, snapshot };
+  /** Every origin's sessionStorage seen during the capture, newest per origin.
+   *  Kept OUT of `snapshot()` on purpose: that is the login choreography, which is
+   *  stored in a plaintext column and travels into evidence. These are secrets and
+   *  ride the encrypted session path instead. */
+  function sessionStorage_() {
+    const out = [];
+    for (const [origin, entries] of sessionStorageByOrigin.entries()) {
+      out.push({ origin: origin, entries: entries });
+    }
+    return out;
+  }
+
+  return { events, ready, snapshot, sessionStorage: sessionStorage_ };
 }
 
 module.exports = { attachLoginObserver };

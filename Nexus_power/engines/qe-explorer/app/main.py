@@ -627,37 +627,49 @@ async def _run_job(
                 }
             context = await browser.new_context(**_ctx_kwargs)
             context.set_default_timeout(_ACTION_TIMEOUT_MS)
-            # Replay sessionStorage. Playwright can restore cookies and localStorage
-            # from a storageState but has no equivalent for sessionStorage, so it is
-            # written by an init script that runs before any page script on the
-            # matching origin — which is what makes "record the login once" work for
-            # an app that keeps its sign-in there.
-            for _entry in _session_storage:
-                if not isinstance(_entry, dict):
-                    continue
-                _origin = str(_entry.get("origin") or "")
-                _values = _entry.get("entries")
-                if not _origin or not isinstance(_values, dict) or not _values:
-                    continue
+            # Replay sessionStorage, for EVERY origin the recorded login walked
+            # through. Playwright restores cookies and localStorage from a state but
+            # has no equivalent for sessionStorage, so it is written by an init
+            # script that runs before any page script. ONE script holding a map,
+            # rather than one per origin: a federated login can touch several, and N
+            # scripts would each run on every navigation of every page.
+            _ss_map = [
+                {"origin": str(e.get("origin") or ""), "entries": e.get("entries")}
+                for e in _session_storage
+                if isinstance(e, dict) and str(e.get("origin") or "")
+                and isinstance(e.get("entries"), dict) and e.get("entries")
+            ]
+            # Bound what we inject: this is attacker-influenced only in the sense
+            # that the app under test wrote it, but a multi-megabyte init script
+            # would be paid on every navigation of the crawl.
+            if _ss_map and len(json.dumps(_ss_map)) <= 512 * 1024:
                 await context.add_init_script(
-                    """(({origin, entries}) => {
-                        if (window.location.origin !== origin) return;
+                    """((byOrigin) => {
                         try {
-                            for (const [k, v] of Object.entries(entries)) {
-                                // SEED ONLY, never overwrite. This runs before EVERY
-                                // navigation, and sessionStorage survives them, so
-                                // re-setting would clobber whatever the app wrote
-                                // since — a rotated token would be replaced by the
-                                // stale recorded one and the session would die
-                                // mid-crawl, silently. A key the app already holds
-                                // is the app's business.
-                                if (sessionStorage.getItem(k) === null) {
-                                    sessionStorage.setItem(k, v);
+                            const here = window.location.origin;
+                            for (const rec of byOrigin) {
+                                if (rec.origin !== here) continue;
+                                for (const [k, v] of Object.entries(rec.entries)) {
+                                    // SEED ONLY, never overwrite. This runs before
+                                    // EVERY navigation and sessionStorage survives
+                                    // them, so re-setting would clobber whatever the
+                                    // app wrote since — a rotated token replaced by
+                                    // the stale recorded one, and the session dies
+                                    // mid-crawl, silently. A key the app already
+                                    // holds is the app's business.
+                                    if (sessionStorage.getItem(k) === null) {
+                                        sessionStorage.setItem(k, v);
+                                    }
                                 }
                             }
-                        } catch (e) { /* storage blocked — nothing we can do */ }
-                    })(%s)""" % json.dumps({"origin": _origin, "entries": _values}),
+                        } catch (e) { /* storage blocked/partitioned — carry on */ }
+                    })(%s)""" % json.dumps(_ss_map),
                 )
+            elif _ss_map:
+                logger.warning(
+                    "qec.explorer.session_storage_too_large crawl_id=%s origins=%d — "
+                    "not replayed; the crawl may run signed out",
+                    req.crawl_id, len(_ss_map))
             if req.cookies:  # routing cookies (Gloo/canary) — cookies are a method call
                 # FAIL-CLOSED: if the env routing cookie can't be set, the crawl must
                 # NOT proceed cookieless — that would land on the DEFAULT env (often

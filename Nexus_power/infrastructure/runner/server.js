@@ -301,18 +301,34 @@ async function saveCapture() {
   // strips it before handing the state back to Playwright and replays it through
   // an init script instead. Best-effort: a page that forbids the read, or a
   // context already closing, costs us nothing that we had before.
+  // The observer collected one entry per ORIGIN the login walked through, each
+  // read as that page was leaving — the only moment a departed origin (an SSO
+  // identity provider) is still readable. Merge in a live read of every page
+  // still open, which covers the final origin, whose `pagehide` has not fired.
   try {
-    const origin = await capture.page.evaluate(() => window.location.origin);
-    const entries = await capture.page.evaluate(() => {
-      const out = {};
-      for (let i = 0; i < sessionStorage.length; i += 1) {
-        const k = sessionStorage.key(i);
-        if (k) out[k] = sessionStorage.getItem(k);
-      }
-      return out;
-    });
-    if (entries && Object.keys(entries).length) {
-      state.__nx_session_storage = [{ origin: origin, entries: entries }];
+    const byOrigin = new Map();
+    const obs = capture.loginObserver;
+    for (const e of (obs && obs.sessionStorage ? obs.sessionStorage() : [])) {
+      if (e && e.origin) byOrigin.set(e.origin, e.entries);
+    }
+    for (const pg of (capture.context.pages() || [])) {
+      try {
+        const live = await pg.evaluate(() => {
+          const out = {};
+          for (let i = 0; i < sessionStorage.length; i += 1) {
+            const k = sessionStorage.key(i);
+            if (k) out[k] = sessionStorage.getItem(k);
+          }
+          return { origin: window.location.origin, entries: out };
+        });
+        if (live && live.origin && live.entries && Object.keys(live.entries).length) {
+          byOrigin.set(live.origin, live.entries);   // live beats a departure read
+        }
+      } catch (e) { /* a closed or cross-origin-blocked page — skip it */ }
+    }
+    if (byOrigin.size) {
+      state.__nx_session_storage = Array.from(byOrigin.entries())
+        .map(([origin, entries]) => ({ origin: origin, entries: entries }));
     }
   } catch (e) { /* no sessionStorage to carry — the cookie session still stands */ }
   // Snapshot the login choreography BEFORE stopCapture() closes the browser —
