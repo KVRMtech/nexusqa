@@ -180,8 +180,17 @@ export default function LoginSessionPanel({ appId }: { appId: string }) {
       // "the next crawl starts logged in" here sent the operator off to run a crawl
       // that was silently signed out — observed on a Next.js app that reported
       // cookies=0 origins=0 while the login itself was recorded fine.
-      const st = r.session as { cookies?: unknown[]; origins?: unknown[] } | undefined;
-      const carriesSession = !!(st?.cookies?.length || st?.origins?.length);
+      // Counting only cookies-and-origins is the bug this check was written to
+      // catch, repeated. An app that keeps its sign-in in sessionStorage has
+      // neither, and its session rides `__nx_session_storage` — so the very
+      // sessions the capture exists to carry were reported as "cannot be carried
+      // over" while sitting safely in the encrypted blob.
+      const st = r.session as {
+        cookies?: unknown[]; origins?: unknown[]; __nx_session_storage?: unknown[];
+      } | undefined;
+      const carriesSession = !!(
+        st?.cookies?.length || st?.origins?.length || st?.__nx_session_storage?.length
+      );
       if (carriesSession) {
         toast.success('Sign-in saved', {
           description: 'The next crawl starts signed in.',

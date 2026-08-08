@@ -9157,10 +9157,16 @@ async def draft_recording_save(user: dict = Depends(get_current_user)):
     _origins = (state or {}).get("origins") if isinstance(state, dict) else None
     _names = [str((c or {}).get("name") or "") for c in (_cookies or [])][:25]
     _ls = sum(len((o or {}).get("localStorage") or []) for o in (_origins or []))
+    # sessionStorage is carried separately (Playwright's storageState omits it),
+    # and leaving it out of this line made a WORKING capture read as an empty one —
+    # the diagnostic was blind to the mechanism that had just carried the session.
+    _ss = (state or {}).get("__nx_session_storage") if isinstance(state, dict) else None
+    _ss_origins = [str((e or {}).get("origin") or "") for e in (_ss or [])][:20]
     _logger.warning(
         "recordings.save state_type=%s cookies=%d origins=%d localStorage_keys=%d "
-        "cookie_names=%s events=%d login=%s",
+        "sessionStorage_origins=%d (%s) cookie_names=%s events=%d login=%s",
         type(state).__name__, len(_cookies or []), len(_origins or []), _ls,
+        len(_ss or []), ",".join(_ss_origins) or "-",
         ",".join(_names) or "-", len((snapshot or {}).get("events") or []),
         bool(draft.get("login")))
 
@@ -9170,6 +9176,7 @@ async def draft_recording_save(user: dict = Depends(get_current_user)):
         "cookies": len(_cookies or []),
         "origins": len(_origins or []),
         "local_storage_keys": _ls,
+        "session_storage_origins": _ss_origins,
         "cookie_names": _names,
         "reason": ("" if draft.get("session")
                    else "runner_returned_no_state" if not isinstance(state, dict)
