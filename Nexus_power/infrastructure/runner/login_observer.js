@@ -184,7 +184,12 @@ function attachLoginObserver(target, opts) {
       } catch (e) { /* mid-navigation, closed, or blocked — the next tick retries */ }
     }
   }
-  const pollTimer = setInterval(() => { pollSessionStorage().catch(() => {}); }, 700);
+  // 300ms, not a second: an origin that lives for less than one tick is missed,
+  // and a federated chain can bounce through a transit hop quickly. A capture is
+  // single-occupancy and capped at 10 minutes, so the cost of a tighter tick is
+  // nothing next to silently losing the session. Sub-tick origins remain a known
+  // limit of polling — they are transit hops, which do not hold the final token.
+  const pollTimer = setInterval(() => { pollSessionStorage().catch(() => {}); }, 300);
   if (pollTimer.unref) pollTimer.unref();
   // Kept as a best-effort supplement to the poll: when a binding call DOES land
   // before teardown it carries a write the poll could have missed. Never relied on.
