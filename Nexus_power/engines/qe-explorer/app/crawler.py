@@ -225,6 +225,13 @@ NEXT_ACTION_FORWARD = "forward"           # a commit-word action (Apply Now, Pla
 NEXT_ACTION_DESTRUCTIVE = "destructive"   # refuse-pack danger (Start Over, Delete)
 NEXT_ACTION_NAVIGATIONAL = "navigational"  # leaves the funnel (Back to Dashboard, Home)
 
+#: A SESSION control (sign/log in|out|on) is authentication chrome present on
+#: every authenticated page — never a business next-action. It is excluded from a
+#: next-action fork entirely, because the commit vocabulary matches "sign" in
+#: "Sign out", which would otherwise make logging out a walkable "forward" branch
+#: on every page. Generic session vocabulary, not app labels.
+_AUTH_SESSION_RE = re.compile(r"\b(sign|log)\s*(in|out|on)\b", re.IGNORECASE)
+
 
 def _next_action_decisions(
     controls: Sequence[Mapping[str, Any]], fingerprint: str,
@@ -264,6 +271,8 @@ def _next_action_decisions(
         is_root_link = kind == "link" and _links_to_site_root(c)
         if not (is_button or is_root_link):
             continue  # in-page nav links are chrome, not a decision
+        if _AUTH_SESSION_RE.search(name):
+            continue  # a sign-in / sign-out control is session chrome, never a fork option
         if c.get("danger"):
             cls = NEXT_ACTION_DESTRUCTIVE
         elif _WIZARD_COMMIT_RE.search(name):
@@ -2578,8 +2587,17 @@ class Crawler:
             }
             if cur_intent_unmet:
                 rec["intent_unmet"] = cur_intent_unmet
-            if cur_dps:
-                rec["decision_points"] = cur_dps
+            # A next-action fork on THIS step (the quote-summary terminal:
+            # Apply Now / Start Over / Back to Dashboard). Merged for every step,
+            # but the emitter returns [] unless the page presents a forward commit
+            # action + an alternative — so ordinary wizard steps (whose only button
+            # is an advance-word Continue) contribute nothing. This is what records
+            # the fork when the summary is the walk's TERMINAL, which the standalone
+            # _expand path never reaches (the walk consumes the page).
+            dps = list(cur_dps)
+            dps.extend(_next_action_decisions(cur_controls, cur_fp))
+            if dps:
+                rec["decision_points"] = dps
             rec.update(extra)
             return rec
 

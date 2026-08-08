@@ -1390,3 +1390,20 @@ def test_next_action_signature_is_stable_and_node_bound():
     s2 = _next_action_decisions(list(reversed(a)), "fpA")[0]["control_signature"]
     s3 = _next_action_decisions(a, "fpB")[0]["control_signature"]
     assert s1 == s2 and s1 != s3
+
+
+def test_next_action_excludes_sign_in_and_sign_out_chrome():
+    """Session controls (sign in / sign out) are authentication chrome, present on
+    every authenticated page. The commit word 'sign' matches 'Sign out', so without
+    this guard logging out would become a walkable 'forward' branch on every page."""
+    controls = [
+        _na("Apply Now"),
+        _na("Start Over", danger=True),
+        _na("Sign out"),                    # commit-word false positive — must be excluded
+        _na("Member Sign In"),              # ditto
+        _na("Verify & Sign In"),            # ditto
+    ]
+    dps = _next_action_decisions(controls, "fp")
+    assert len(dps) == 1
+    assert set(dps[0]["options"]) == {"Apply Now", "Start Over"}
+    assert "Sign out" not in dps[0]["options"]
