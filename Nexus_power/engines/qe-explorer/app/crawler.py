@@ -1105,7 +1105,8 @@ class Crawler:
         return fresh, build_inventory(fresh.raw_controls, self._refuse_pack, url=fresh.url)
 
     def _note_login_wall_while_authenticated(
-        self, controls: Sequence[dict[str, Any]],
+        self, controls: Sequence[dict[str, Any]], requested_url: str = "",
+        landed_url: str = "",
     ) -> None:
         """Flag a dead session that only reveals itself DEEPER than the entry.
 
@@ -1128,6 +1129,16 @@ class Crawler:
         if self._guard.phase == Phase.AUTH:
             return  # the credentialed login flow is legitimately at a login form
         if match_login_controls(controls) is None:
+            return
+        # A login PAGE is not a dead session. Most apps keep /login reachable, and a
+        # crawl that follows links will visit it while perfectly signed in — this
+        # fired on a crawl that was at that moment inside /portal/dashboard/ and
+        # /portal/beneficiaries/, and reported the authenticated app as NOT covered.
+        # The unambiguous evidence is being REDIRECTED to a login wall: we asked for
+        # one page and the app answered with another that demands a sign-in.
+        if not requested_url or not landed_url:
+            return
+        if _url_key(requested_url) == _url_key(landed_url):
             return
         self._auth_incomplete = True
         self._auth_incomplete_reason = AUTH_SESSION_EXPIRED
@@ -1221,6 +1232,9 @@ class Crawler:
         obs, controls = await self._cross_auth_wall(obs, controls, item.url)
         # Every state, form or not — see _note_boundary_controls.
         self._note_boundary_controls(controls)
+        # Requested vs landed is what separates "the app sent us to sign in" from
+        # "the crawl followed a link to the sign-in page".
+        self._note_login_wall_while_authenticated(controls, item.url, obs.url)
         fingerprint = state_fingerprint(obs.url, controls, obs.dialog_flags)
 
         if item.parent_fingerprint:
@@ -2614,7 +2628,6 @@ class Crawler:
         network_calls: Sequence[dict[str, Any]] = (),
     ) -> None:
         """Assemble + emit ONE ``page_state`` record with monotonic indices."""
-        self._note_login_wall_while_authenticated(controls)
         seq = self._next_seq
         self._next_seq += 1
         parts = urlsplit(url or "")
