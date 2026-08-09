@@ -852,6 +852,56 @@ async def get_app_catalog_diff(
     return await catalog_store.diff_latest_versions(tenant_id, app_id)
 
 
+class RegisterPersonaIn(BaseModel):
+    """A persona = a name + declared answers ({question_id|name: option})."""
+    name: str
+    answers: dict[str, Any] = Field(default_factory=dict)
+
+
+@router.post("/apps/{app_id}/personas")
+async def register_persona(
+    app_id: str, body: RegisterPersonaIn, user: dict = Depends(require_auth),
+) -> dict:
+    """P3 — register a persona and its declared answers for an app (stored in
+    qe-central; no cross-service value egress)."""
+    tenant_id = user["tenant_id"]
+    return await persona_journeys.register_persona(
+        tenant_id=tenant_id, app_id=app_id, name=body.name, answers=body.answers)
+
+
+@router.get("/apps/{app_id}/personas")
+async def list_personas(
+    app_id: str, user: dict = Depends(require_auth),
+) -> dict:
+    """P3 — the app's personas + each one's latest projected journey."""
+    tenant_id = user["tenant_id"]
+    return await persona_journeys.list_personas(tenant_id=tenant_id, app_id=app_id)
+
+
+@router.post("/apps/{app_id}/personas/generate")
+async def generate_all_persona_journeys(
+    app_id: str, user: dict = Depends(require_auth),
+) -> dict:
+    """P3 — the 20-persona generation: project + persist EVERY stored persona's
+    journey from the ONE Master Catalog (no duplication)."""
+    tenant_id = user["tenant_id"]
+    return await persona_journeys.generate_all_journeys(
+        tenant_id=tenant_id, app_id=app_id)
+
+
+@router.post("/apps/{app_id}/personas/{persona_id}/journey")
+async def generate_persona_journey(
+    app_id: str, persona_id: str, user: dict = Depends(require_auth),
+) -> dict:
+    """P3 — project + persist one stored persona's journey."""
+    tenant_id = user["tenant_id"]
+    try:
+        return await persona_journeys.generate_persona_journey(
+            tenant_id=tenant_id, app_id=app_id, persona_id=persona_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
 @router.post("/apps/{app_id}/nl-case")
 async def nl_case(
     app_id: str, body: NLCaseIn, user: dict = Depends(require_auth),

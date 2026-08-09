@@ -293,6 +293,10 @@ class PersonaRow(QecBase):
     app_id: Mapped[str] = mapped_column(String(64), nullable=False)
     name: Mapped[str] = mapped_column(String(200), nullable=False, default="")
     source_ref: Mapped[str] = mapped_column(String(200), nullable=False, default="")
+    #: P3 (qec_014): the persona's declared answers ({question_id|name: option})
+    #: — decision-level option labels the projector consumes. Values stay in the
+    #: tenant; no cross-service egress.
+    answers: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=_utc_now)
 
