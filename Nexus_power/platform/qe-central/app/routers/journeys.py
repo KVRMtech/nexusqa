@@ -39,6 +39,7 @@ from ..db.journey_run_models import JourneyCaseRow, JourneyRunRow
 from ..db.models import ClientAppRow, QEExplorationRow
 from ..services import (
     branch_planner,
+    catalog_store,
     journey_baseline,
     journey_case_linker,
     journey_fold,
@@ -797,6 +798,37 @@ async def get_catalog(
         "nodes": catalog_nodes,
         **summary,
     }
+
+
+@router.get("/apps/{app_id}/catalog")
+async def get_app_master_catalog(
+    app_id: str, user: dict = Depends(require_auth),
+) -> dict:
+    """P2 — the app-scoped Master Catalog: every question the application has,
+    deduped by a stable ``question_id`` across every journey and node (so the 400
+    questions live once, not per journey). Each row carries the pages it was seen
+    on, answer type, required, options, validation, and expected next page.
+
+    Aggregated live from the journey graph — a re-crawl refreshes it.
+    """
+    tenant_id = user["tenant_id"]
+    master = await catalog_store.build_app_master_catalog(tenant_id, app_id)
+    return {"app_id": app_id, **master}
+
+
+@router.get("/apps/{app_id}/catalog/diff")
+async def get_app_catalog_diff(
+    app_id: str, user: dict = Depends(require_auth),
+) -> dict:
+    """P6 — catalog regression: what changed between the two most recent crawls.
+
+    Diffs the two latest ``catalog_versions`` snapshots by stable ``question_id``
+    — added / removed / changed questions, each change labelled (renamed,
+    options_changed, validation_changed, required_changed, rule_changed,
+    moved_next_page). With fewer than two versions there is nothing to diff yet.
+    """
+    tenant_id = user["tenant_id"]
+    return await catalog_store.diff_latest_versions(tenant_id, app_id)
 
 
 @router.post("/apps/{app_id}/nl-case")

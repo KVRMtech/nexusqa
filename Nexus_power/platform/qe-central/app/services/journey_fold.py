@@ -42,6 +42,7 @@ from .catalog import (
     extract_controls, extract_outcomes,
     merge_controls, merge_outcomes,
 )
+from .catalog_store import persist_catalog_version
 from .journey_baseline import BASELINE_CAPTURED, detect_drift
 
 logger = logging.getLogger(__name__)
@@ -386,6 +387,18 @@ async def fold_crawl(
             logger.warning(
                 "qec.journey_fold.drift_check_failed journey=%s err=%s",
                 j_id, str(exc)[:200])
+
+    # P2/P6: refresh the durable Master Catalog + snapshot a version for
+    # regression diffing (keyed by this crawl's exploration id). Best-effort —
+    # a catalog failure must never break the fold.
+    try:
+        cat_report = await persist_catalog_version(
+            tenant_id=tenant_id, app_id=app_id, artifact_id=exploration_id)
+        report["catalog_questions"] = cat_report.get("questions_upserted", 0)
+    except Exception as exc:
+        logger.warning(
+            "qec.journey_fold.catalog_persist_failed tenant=%s app=%s err=%s",
+            tenant_id, app_id, str(exc)[:200])
 
     logger.warning(
         "qec.journey_fold.folded tenant=%s app=%s exploration=%s "
