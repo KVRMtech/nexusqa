@@ -2364,7 +2364,10 @@ class Crawler:
                 self._answered_questions.add(sig)
                 continue
             self._answered_questions.add(sig)
-            logger.warning(
+            # Structured fleet telemetry (was WARNING — too noisy at 1000-app
+            # scale; the event is normal, not a warning). Keyed so questionnaire
+            # coverage is measurable per app without log-level spam.
+            logger.info(
                 "qec.questionnaire.answered url=%s groups=%d ordinal=%d choice=%s "
                 "match_index=%s", (url or "")[:80], len(groups), ordinal,
                 str(chosen.get("name") or "")[:20], chosen.get("match_index"))

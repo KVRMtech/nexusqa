@@ -7,6 +7,7 @@
 
 param(
     [switch]$PushOnly,
+    [switch]$RebuildBase,
     [Parameter(ValueFromRemainingArguments)]
     [string[]]$Services
 )
@@ -63,10 +64,26 @@ if ($PushOnly) {
 }
 
 # Step 2: Build VM command
-$cmds = "set -e; cd $VM_SRC && git pull"
+# Capture the pre-pull SHA so we can tell whether nexus-base:dev needs a rebuild:
+# qe-central is built FROM nexus-base:dev, so a change under sdk/nexus-sdk or the
+# base Dockerfile does NOT reach it until the base image itself is rebuilt.
+$cmds = "set -e; cd $VM_SRC; " + 'NX_BEFORE=$(git rev-parse HEAD); git pull; NX_AFTER=$(git rev-parse HEAD)'
 
 $qecBuild  = @($Services | Where-Object { $_ -in @("qe-central","qe-explorer") })
 $mainBuild = @($Services | Where-Object { $_ -eq "platform-api" })
+
+# Rebuild the base image before qe-central when the SDK / base Dockerfile changed
+# in the pulled range (or -RebuildBase forced it). Guarded so a normal deploy
+# never pays for it; qe-explorer uses its own Playwright image, not the base.
+if ($qecBuild -contains "qe-central") {
+    if ($RebuildBase) {
+        $baseGuard = "true"
+    } else {
+        $baseGuard = "git -C $VM_SRC diff --name-only " + '$NX_BEFORE $NX_AFTER | grep -qE ''^Nexus_power/(sdk/nexus-sdk/|infrastructure/docker/Dockerfile\.base$)'''
+    }
+    $cmds += "; cd $VM_SRC/Nexus_power"
+    $cmds += "; if $baseGuard; then echo '>> nexus-base:dev: SDK/base changed - rebuilding'; docker build -f infrastructure/docker/Dockerfile.base -t nexus-base:dev . ; else echo '>> nexus-base:dev: no rebuild needed'; fi"
+}
 
 if ($qecBuild.Count -gt 0) {
     $svcList = $qecBuild -join " "

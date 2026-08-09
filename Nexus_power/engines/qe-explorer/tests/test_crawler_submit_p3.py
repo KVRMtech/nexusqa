@@ -368,3 +368,67 @@ def test_answer_questionnaire_never_treats_a_danger_button_as_an_answer(tmp_path
     ]
     assert asyncio.run(c._answer_questionnaire(controls, "u", "fp")) == []
     assert c._port.clicks == []
+
+
+# ── P0 lock-in tests: pin the DOM-order grouping so it can't silently regress ────
+
+def test_answer_questionnaire_scales_to_many_questions(tmp_path):
+    """The live-proven case: 17 identical Yes/No pairs group into 17 distinct
+    questions, answered one per call, in order, then exhaust. Locks the ordinal
+    grouping at fleet scale — a regression that merged or dropped questions would
+    change this count."""
+    c = _build(tmp_path, approvals=["*"], attestation={"env_kind": "disposable"})
+    c._port = _RecordingPort()
+    controls: list[dict] = []
+    for _ in range(17):
+        controls.append({"name": "Yes", "kind": "button"})
+        controls.append({"name": "No", "kind": "button"})
+    answered = []
+    for _ in range(17):
+        dp = asyncio.run(c._answer_questionnaire(controls, "u", "fp"))
+        assert len(dp) == 1
+        answered.append(dp[0]["control_label"])
+    assert asyncio.run(c._answer_questionnaire(controls, "u", "fp")) == []
+    assert answered == ["Question %d" % k for k in range(1, 18)]
+    assert c._port.clicks == ["No"] * 17
+
+
+def test_answer_questionnaire_groups_three_option_questions(tmp_path):
+    """A question can have >2 options (Never/Sometimes/Often). A new question
+    begins only when a label REPEATS, so three-option groups are one question
+    each; the negative hint ('never') is still preferred."""
+    c = _build(tmp_path, approvals=["*"], attestation={"env_kind": "disposable"})
+    c._port = _RecordingPort()
+    controls = [
+        {"name": "Never", "kind": "button"}, {"name": "Sometimes", "kind": "button"},
+        {"name": "Often", "kind": "button"},
+        {"name": "Never", "kind": "button"}, {"name": "Sometimes", "kind": "button"},
+        {"name": "Often", "kind": "button"},
+    ]
+    dp1 = asyncio.run(c._answer_questionnaire(controls, "u", "fp"))
+    assert len(dp1) == 1 and dp1[0]["choice"] == "Never"
+    assert dp1[0]["options"] == ["Never", "Sometimes", "Often"]
+    dp2 = asyncio.run(c._answer_questionnaire(controls, "u", "fp"))
+    assert len(dp2) == 1 and dp2[0]["control_label"] == "Question 2"
+    assert asyncio.run(c._answer_questionnaire(controls, "u", "fp")) == []
+    assert c._port.clicks == ["Never", "Never"]
+
+
+def test_answer_questionnaire_excludes_auth_chrome_between_questions(tmp_path):
+    """A repeated 'Sign out' is auth chrome (matches the auth regex), never an
+    answer, and does not split or invent a question — only the real Yes/No pairs
+    are questions. (Options must repeat page-wide to count, so two questions.)"""
+    c = _build(tmp_path, approvals=["*"], attestation={"env_kind": "disposable"})
+    c._port = _RecordingPort()
+    controls = [
+        {"name": "Sign out", "kind": "button"},                              # top chrome
+        {"name": "Yes", "kind": "button"}, {"name": "No", "kind": "button"},  # Q1
+        {"name": "Yes", "kind": "button"}, {"name": "No", "kind": "button"},  # Q2
+        {"name": "Sign out", "kind": "button"},                              # bottom chrome
+    ]
+    dp1 = asyncio.run(c._answer_questionnaire(controls, "u", "fp"))
+    assert len(dp1) == 1 and dp1[0]["options"] == ["Yes", "No"]
+    dp2 = asyncio.run(c._answer_questionnaire(controls, "u", "fp"))
+    assert len(dp2) == 1 and dp2[0]["control_label"] == "Question 2"
+    assert asyncio.run(c._answer_questionnaire(controls, "u", "fp")) == []
+    assert c._port.clicks == ["No", "No"]        # 'Sign out' never clicked

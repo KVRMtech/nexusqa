@@ -170,6 +170,33 @@ jobs:
           NEXUS_JWT_SECRET: ci-test-jwt-secret-not-for-prod
         run: bash ci/run_platform_api_tests.sh
 
+  # ── qe-central suite (journey graph, fold, branch planner, catalog, coverage,
+  #    persona/answer-key contracts, harness) — 1400+ tests the root
+  #    `testpaths = tests` never collected, so they were ungated in CI. Verified
+  #    green with no external services (DB/redis-dependent tests self-skip). This
+  #    gate is BLOCKING so a qe-central regression cannot merge unnoticed. ──
+  qe-central-tests:
+    runs-on: ubuntu-latest
+    needs: [lint, compile]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          pip install -e sdk/nexus-sdk/
+          ( cd platform/qe-central && pip install -r requirements.txt )
+          pip install pytest pytest-asyncio
+
+      - name: qe-central test suite
+        env:
+          NEXUS_SECRET_KEY: ci-test-secret-key-not-for-prod
+          NEXUS_JWT_SECRET: ci-test-jwt-secret-not-for-prod
+        run: pytest platform/qe-central/tests -q
+
   # ── Docker Build (smoke test) ───────────────────────────────
   docker-build:
     runs-on: ubuntu-latest
