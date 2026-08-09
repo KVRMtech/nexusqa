@@ -239,6 +239,12 @@ _AUTH_SESSION_RE = re.compile(r"\b(sign|log)\s*(in|out|on)\b", re.IGNORECASE)
 #: is recorded as the journey's decision either way.
 _NEGATIVE_OPTION_HINTS = frozenset({"no", "none", "n/a", "na", "decline", "never", "false"})
 
+#: value_infer types kept on a walked flow's terminal as business outcomes. P4
+#: adds ``reference`` so a policy number / confirmation reference captured at the
+#: tail (policy issue) is kept as evidence — value_infer already classifies those
+#: as ``reference``. Value-free: a type label, never the value itself.
+_BOUNDARY_OUTCOME_TYPES = ("currency", "decision", "percent", "reference")
+
 
 def _next_action_decisions(
     controls: Sequence[Mapping[str, Any]], fingerprint: str,
@@ -1517,7 +1523,7 @@ class Crawler:
                 outcome_values=[
                     v for v in _displayed_values(displayed_values or ())
                     if str(v.get("value_type") or "")
-                    in ("currency", "decision", "percent")],
+                    in _BOUNDARY_OUTCOME_TYPES],
                 max_steps=self._max_wizard_steps))
         # A NON-form page that is a next-action fork (a quote summary: Apply Now /
         # Start Over / Back to Dashboard) is a one-step business flow with a
@@ -1541,7 +1547,7 @@ class Crawler:
                     outcome_values=[
                         v for v in _displayed_values(displayed_values or ())
                         if str(v.get("value_type") or "")
-                        in ("currency", "decision", "percent")],
+                        in _BOUNDARY_OUTCOME_TYPES],
                     max_steps=self._max_wizard_steps))
         if not walked:
             self._record_state(
@@ -2863,7 +2869,7 @@ class Crawler:
                     outcome_values=[
                         v for v in _displayed_values(cur_dv or ())
                         if str(v.get("value_type") or "")
-                        in ("currency", "decision", "percent")],
+                        in _BOUNDARY_OUTCOME_TYPES],
                     max_steps=self._max_wizard_steps))
                 await self._execute_approved_submit(
                     name=str(pick.submit_control.get("name") or "").strip(),
@@ -2974,7 +2980,7 @@ class Crawler:
                     outcome_values=[
                         v for v in _displayed_values(cur_dv or ())
                         if str(v.get("value_type") or "")
-                        in ("currency", "decision", "percent")],
+                        in _BOUNDARY_OUTCOME_TYPES],
                     max_steps=self._max_wizard_steps))
                 # CROSS the boundary. The walk reached a submit boundary (a quote
                 # summary with "Apply Now") and recorded it; now, on a disposable

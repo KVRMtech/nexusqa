@@ -459,3 +459,17 @@ def test_answer_questionnaire_honors_a_forced_option_for_branch_walks(tmp_path):
     dp2 = asyncio.run(c._answer_questionnaire(controls, "u", "fp"))
     assert dp2[0]["choice"] == "No"                           # Q2 unforced → negative
     assert c._port.clicks == ["Yes", "No"]
+
+
+# ── P4: the tail keeps a policy-number / confirmation reference as evidence ──────
+
+def test_boundary_outcome_types_capture_policy_reference_not_noise():
+    """P4: a walked flow's terminal keeps `reference` outcomes (a policy number /
+    confirmation proves issuance) alongside currency/decision/percent — but NOT
+    low-signal noise (other/number/date), which would dilute the evidence."""
+    from app.crawler import _BOUNDARY_OUTCOME_TYPES
+    assert "reference" in _BOUNDARY_OUTCOME_TYPES
+    assert {"currency", "decision", "percent"} <= set(_BOUNDARY_OUTCOME_TYPES)
+    assert "other" not in _BOUNDARY_OUTCOME_TYPES
+    assert "number" not in _BOUNDARY_OUTCOME_TYPES
+    assert "date" not in _BOUNDARY_OUTCOME_TYPES
