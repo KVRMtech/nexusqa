@@ -18,9 +18,69 @@ import re
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from .catalog import question_id_for
+
 
 def _norm(v: Any) -> str:
     return re.sub(r"[\s_\-]+", " ", str(v or "").strip().lower()).strip()
+
+
+def rules_from_branches(
+    branches: Sequence[Mapping[str, Any]],
+    questions: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    """Turn P1 branch rows (each carrying ``reveals``) into projector rules.
+
+    The reconciler that closes the P1→P3 loop. A branch row is a trigger question
+    (its ``control_signature``) answered with an ``option_label_norm`` that
+    revealed some controls. This maps:
+      * the TRIGGER to a catalog ``question_id`` via ``question_id_for`` on its
+        signature — the same id the catalog gives that questionnaire question;
+      * each REVEAL identity (``kind:name``) to a CHILD catalog ``question_id`` by
+        matching its name against the catalog.
+
+    Reveals that match no named catalog question (e.g. a bare ``button:yes`` that
+    carries no distinct question identity) are dropped — honestly, not faked. A
+    rule is emitted only when the trigger and at least one child both resolve.
+
+    Returns ``[{question_id, option, reveals_question_ids}]`` — the exact shape
+    ``project_traversal`` consumes.
+    """
+    by_name: dict[str, str] = {}
+    for q in questions:
+        if isinstance(q, Mapping):
+            qid = str(q.get("question_id") or "")
+            if qid:
+                by_name.setdefault(_norm(q.get("name")), qid)
+
+    rules: list[dict[str, Any]] = []
+    for b in branches:
+        if not isinstance(b, Mapping):
+            continue
+        reveals = b.get("reveals")
+        if not isinstance(reveals, (list, tuple)) or not reveals:
+            continue
+        sig = str(b.get("control_signature") or "")
+        label = str(b.get("control_label_norm") or b.get("control_label") or "")
+        if not sig and not label:
+            continue
+        trigger_qid = question_id_for({"signature": sig, "name": label})
+        option = str(b.get("option_label_norm") or b.get("option") or "")
+        kids: list[str] = []
+        seen: set[str] = set()
+        for r in reveals:
+            name = str(r).split(":", 1)[-1]        # "kind:name" → name
+            kid = by_name.get(_norm(name))
+            if kid and kid != trigger_qid and kid not in seen:
+                seen.add(kid)
+                kids.append(kid)
+        if trigger_qid and kids:
+            rules.append({
+                "question_id": trigger_qid,
+                "option": option,
+                "reveals_question_ids": kids,
+            })
+    return rules
 
 
 def project_traversal(

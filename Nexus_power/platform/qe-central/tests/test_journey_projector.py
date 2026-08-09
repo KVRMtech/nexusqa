@@ -63,3 +63,48 @@ def test_projector_never_invents_an_answer():
     out = project_traversal(_QUESTIONS, _RULES, {})
     assert out["executed"] == []          # nothing answered → nothing executed
     assert out["visible"] == ["q1", "q4"]  # only base questions are on the path
+
+
+def test_rules_from_branches_links_trigger_to_named_children_only():
+    from app.services.catalog import question_id_for
+    from app.services.journey_projector import rules_from_branches
+    child_qid = question_id_for({"name": "cigarettes per day"})
+    questions = [
+        {"question_id": question_id_for({"signature": "q:tobacco", "name": "tobacco use"}),
+         "name": "tobacco use"},
+        {"question_id": child_qid, "name": "Cigarettes Per Day"},
+    ]
+    branches = [{
+        "control_signature": "q:tobacco", "control_label_norm": "tobacco use",
+        "option_label_norm": "yes",
+        "reveals": ["input:cigarettes per day", "button:yes"],  # button:yes has no named question
+    }]
+    rules = rules_from_branches(branches, questions)
+    assert len(rules) == 1
+    assert rules[0]["question_id"] == question_id_for(
+        {"signature": "q:tobacco", "name": "tobacco use"})
+    assert rules[0]["option"] == "yes"
+    assert rules[0]["reveals_question_ids"] == [child_qid]   # only the named child
+
+
+def test_end_to_end_branches_to_persona_journey():
+    from app.services import catalog
+    from app.services.catalog import question_id_for
+    from app.services.journey_projector import project_traversal, rules_from_branches
+    nodes = [{"node_fp": "n1", "title": "Health", "controls": [
+        {"name": "Cigarettes Per Day", "signature": "sig-cig", "type": "number"}]}]
+    branches = [
+        {"node_fp": "n1", "control_signature": "q:tobacco",
+         "control_label_norm": "tobacco use", "option_label_norm": "yes",
+         "reveals": ["input:cigarettes per day"]},
+        {"node_fp": "n1", "control_signature": "q:tobacco",
+         "control_label_norm": "tobacco use", "option_label_norm": "no"},
+    ]
+    master = catalog.build_master_catalog(nodes, branches=branches)
+    rules = rules_from_branches(branches, master["questions"])
+    trig = question_id_for({"signature": "q:tobacco", "name": "tobacco use"})
+    child = question_id_for({"signature": "sig-cig", "name": "Cigarettes Per Day"})
+    smoker = project_traversal(master["questions"], rules, {trig: "yes"})
+    assert child in smoker["activated"]           # tobacco=yes → cigarettes activates
+    healthy = project_traversal(master["questions"], rules, {trig: "no"})
+    assert child in healthy["skipped"]            # tobacco=no → cigarettes skipped

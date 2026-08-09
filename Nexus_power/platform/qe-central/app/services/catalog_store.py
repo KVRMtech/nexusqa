@@ -26,6 +26,7 @@ from ..db import tenant_scoped_qec_session, utc_now
 from ..db.journey_models import (
     CatalogQuestionRow,
     CatalogVersionRow,
+    JourneyBranchRow,
     JourneyEdgeRow,
     JourneyNodeRow,
 )
@@ -40,10 +41,11 @@ def _sid(*parts: str) -> str:
     return hashlib.sha256("\x1f".join(parts).encode("utf-8")).hexdigest()[:64]
 
 
-async def _load_nodes_and_edges(
+async def _load_graph(
     session: Any, tenant_id: str, app_id: str
-) -> tuple[list[dict], list[dict]]:
-    """Every node (with its control inventory) and edge for the app."""
+) -> tuple[list[dict], list[dict], list[dict]]:
+    """Every node (with its control inventory), edge, and branch for the app —
+    branches carry the questionnaire questions the Master Catalog folds in."""
     node_rows = (await session.execute(
         select(JourneyNodeRow).where(
             JourneyNodeRow.tenant_id == tenant_id,
@@ -54,6 +56,11 @@ async def _load_nodes_and_edges(
             JourneyEdgeRow.tenant_id == tenant_id,
             JourneyEdgeRow.app_id == app_id,
         ))).scalars().all()
+    branch_rows = (await session.execute(
+        select(JourneyBranchRow).where(
+            JourneyBranchRow.tenant_id == tenant_id,
+            JourneyBranchRow.app_id == app_id,
+        ))).scalars().all()
     nodes = [{
         "node_fp": n.fingerprint,
         "url": n.url,
@@ -61,7 +68,13 @@ async def _load_nodes_and_edges(
         "controls_inventory": list(n.controls_inventory or []),
     } for n in node_rows]
     edges = [{"from_fp": e.from_fp, "to_fp": e.to_fp} for e in edge_rows]
-    return nodes, edges
+    branches = [{
+        "node_fp": b.node_fp,
+        "control_signature": b.control_signature,
+        "control_label_norm": b.control_label_norm,
+        "option_label_norm": b.option_label_norm,
+    } for b in branch_rows]
+    return nodes, edges, branches
 
 
 async def build_app_master_catalog(tenant_id: str, app_id: str) -> dict[str, Any]:
@@ -71,8 +84,8 @@ async def build_app_master_catalog(tenant_id: str, app_id: str) -> dict[str, Any
     across every journey/node, so the 400 questions appear once.
     """
     async with tenant_scoped_qec_session(tenant_id) as session:
-        nodes, edges = await _load_nodes_and_edges(session, tenant_id, app_id)
-    return build_master_catalog(nodes, edges=edges)
+        nodes, edges, branches = await _load_graph(session, tenant_id, app_id)
+    return build_master_catalog(nodes, edges=edges, branches=branches)
 
 
 async def persist_catalog_version(
@@ -86,8 +99,8 @@ async def persist_catalog_version(
     """
     now = utc_now()
     async with tenant_scoped_qec_session(tenant_id) as session:
-        nodes, edges = await _load_nodes_and_edges(session, tenant_id, app_id)
-        master = build_master_catalog(nodes, edges=edges)
+        nodes, edges, branches = await _load_graph(session, tenant_id, app_id)
+        master = build_master_catalog(nodes, edges=edges, branches=branches)
         questions = master.get("questions") or []
 
         upserted = 0

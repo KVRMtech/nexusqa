@@ -172,6 +172,7 @@ def extract_controls(
 def build_master_catalog(
     nodes: Sequence[Mapping[str, Any]],
     edges: Sequence[Mapping[str, Any]] | None = None,
+    branches: Sequence[Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Aggregate per-node control inventories into ONE app-scoped Master Catalog.
 
@@ -181,12 +182,19 @@ def build_master_catalog(
     journeys is one row, not two, so the 400 questions are never duplicated per
     journey. Each row records every page it was seen on and keeps the richest
     metadata observed. ``expected_next_page`` is filled from the journey edges when
-    available. Pure: a DB reader loads the nodes/edges and calls this.
+    available. Pure: a DB reader loads the nodes/edges/branches and calls this.
 
     ``nodes`` items: ``{node_fp|fingerprint, url, title, controls|controls_inventory}``.
     ``edges`` items: ``{from_fp, to_fp}`` (highest-priority next page per node).
+    ``branches`` items: ``{node_fp, control_signature, control_label_norm,
+    option_label_norm}`` — questionnaire questions (bare Yes/No etc.) live as
+    branch rows, not form fields, so they are folded in here too. Their
+    ``question_id`` is derived from the control SIGNATURE, the same id space the
+    persona projector's trigger→child rules use — so P1 branch rules join the
+    catalog cleanly.
     """
     next_by_node: dict[str, str] = {}
+    page_by_fp: dict[str, str] = {}
     for e in (edges or []):
         if not isinstance(e, Mapping):
             continue
@@ -200,6 +208,8 @@ def build_master_catalog(
             continue
         node_fp = str(node.get("node_fp") or node.get("fingerprint") or "")
         page = str(node.get("title") or node.get("url") or node_fp or "")[:200]
+        if node_fp:
+            page_by_fp[node_fp] = page
         controls = node.get("controls")
         if controls is None:
             controls = node.get("controls_inventory")
@@ -239,6 +249,42 @@ def build_master_catalog(
                         row["validation"] = dict(c["validation"])
             if page and page not in row["pages"]:
                 row["pages"].append(page)
+
+    # Fold in questionnaire questions (branch rows): a question per distinct
+    # control signature, its options accumulated across its branch rows. Keyed by
+    # ``question_id_for({"signature": ...})`` so the projector's rules join here.
+    for b in (branches or []):
+        if not isinstance(b, Mapping):
+            continue
+        sig = str(b.get("control_signature") or "")
+        label = str(b.get("control_label_norm") or b.get("control_label") or "")
+        if not sig and not label:
+            continue
+        qid = question_id_for({"signature": sig, "name": label})
+        opt = str(b.get("option_label_norm") or b.get("option") or "")
+        node_fp = str(b.get("node_fp") or "")
+        row = by_qid.get(qid)
+        if row is None:
+            row = {
+                "question_id": qid,
+                "name": label[:200],
+                "type": "choice",
+                "options": [],
+                "required": False,
+                "semantic_type": "",
+                "provenance": PROVENANCE_OBSERVED,
+                "pages": [],
+                "source": "branch",
+            }
+            nxt = next_by_node.get(node_fp)
+            if nxt:
+                row["expected_next_page"] = nxt
+            by_qid[qid] = row
+        if opt and opt not in row["options"]:
+            row["options"].append(opt)
+        page = page_by_fp.get(node_fp) or node_fp
+        if page and page not in row["pages"]:
+            row["pages"].append(page)
 
     questions = sorted(
         by_qid.values(), key=lambda r: (r.get("name") or "", r["question_id"]))

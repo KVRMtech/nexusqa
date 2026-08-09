@@ -80,3 +80,20 @@ def test_snapshot_hash_is_stable_and_changes_on_change():
     s2 = catalog.snapshot_catalog(m2)
     assert s2["snapshot_hash"] != s1["snapshot_hash"]      # an added option changes the hash
     assert s2["question_count"] == 1
+
+
+def test_master_catalog_folds_in_questionnaire_questions_from_branches():
+    from app.services.catalog import question_id_for
+    nodes = [{"node_fp": "n1", "title": "Health", "controls": []}]
+    branches = [
+        {"node_fp": "n1", "control_signature": "q:tobacco",
+         "control_label_norm": "tobacco use", "option_label_norm": "yes"},
+        {"node_fp": "n1", "control_signature": "q:tobacco",
+         "control_label_norm": "tobacco use", "option_label_norm": "no"},
+    ]
+    cat = catalog.build_master_catalog(nodes, branches=branches)
+    qid = question_id_for({"signature": "q:tobacco", "name": "tobacco use"})
+    q = {x["question_id"]: x for x in cat["questions"]}[qid]
+    assert q["name"] == "tobacco use" and q["type"] == "choice"
+    assert set(q["options"]) == {"yes", "no"}       # both branch options accumulated
+    assert q["source"] == "branch" and q["pages"] == ["Health"]
