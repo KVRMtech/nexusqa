@@ -181,6 +181,48 @@ def _s(value: Any) -> str:
     return "" if value is None else str(value)
 
 
+#: How trustworthy a control's accessible name is, graded by WHICH name rung
+#: produced it (U0). This is the escalate-to-vision signal: a visibly-interactive
+#: page whose controls are mostly low/none confidence is DOM-opaque (canvas /
+#: unlabelled custom widgets) and should be perceived visually (U2).
+_NAME_CONFIDENCE = {
+    "label-for": "high",        # explicit programmatic label association
+    "aria-labelledby": "high",
+    "aria-label": "high",
+    "wrapping-label": "medium",  # structural label / element text
+    "content": "medium",
+    "title": "low",             # tooltip / placeholder — best-effort only
+    "placeholder": "low",
+}
+
+
+def name_confidence_for(name_source: Any, name: Any) -> str:
+    """Grade the accessible name's trustworthiness: high | medium | low | none.
+
+    ``none`` when there is no name at all; otherwise by the rung in
+    ``name_source``. Pure and value-free — the rung is UI shape, never a value.
+    """
+    if not str(name or "").strip():
+        return "none"
+    return _NAME_CONFIDENCE.get(str(name_source or "").strip(), "none")
+
+
+def name_confidence_summary(controls: Iterable[Any]) -> dict[str, int]:
+    """Per-page rollup of name confidence (U0 telemetry, U2 escalation signal).
+
+    Counts controls by confidence tier. When a visibly-interactive page yields
+    mostly low/none-confidence controls (or too few), the walk escalates to the
+    vision Perceiver (U2). Pure.
+    """
+    tiers = {"high": 0, "medium": 0, "low": 0, "none": 0}
+    for c in controls:
+        if not isinstance(c, dict):
+            continue
+        conf = str((c.get("qec") or {}).get("name_confidence") or "none")
+        tiers[conf if conf in tiers else "none"] += 1
+    return tiers
+
+
 def _norm(text: Any) -> str:
     """Whitespace-collapsed, lower-cased — the identity used for collisions."""
     return " ".join(_s(text).split()).lower()
@@ -519,6 +561,9 @@ def build_control_record(
             # aria-expanded — marks a CLICK-to-open dropdown/disclosure toggle the
             # crawler clicks to reveal hidden menu items; diagnostics-only.
             "expanded": _s(raw.get("expanded")).strip(),
+            # U0 — accessible-name confidence (high|medium|low|none), graded by the
+            # name rung. The escalate-to-vision signal for DOM-opaque pages.
+            "name_confidence": name_confidence_for(raw.get("name_source"), name),
         },
     }
     return record
