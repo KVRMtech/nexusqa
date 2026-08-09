@@ -98,3 +98,19 @@ def test_synthesize_vision_outcomes_shape():
         [{"label": "Monthly Premium", "text": "$42.10"}, {"label": "", "text": ""}])
     assert got == [{"label": "Monthly Premium", "selector": "", "text": "$42.10",
                     "source": "vision"}]
+
+
+# ── U1: route opaque surfaces (enterable frame vs vision) ────────────────────────
+
+def test_route_opaque_surfaces():
+    from app.perception import route_opaque_surfaces
+    surfaces = [
+        {"kind": "cross_origin_iframe", "label": "js.stripe.com"},
+        {"kind": "canvas", "label": "chart region"},
+        {"kind": "closed_shadow", "label": "x-widget"},
+        {"kind": "unknown", "label": "?"},
+        "junk",
+    ]
+    routed = route_opaque_surfaces(surfaces)
+    assert [s["label"] for s in routed["enter_frames"]] == ["js.stripe.com"]
+    assert {s["label"] for s in routed["vision"]} == {"chart region", "x-widget"}

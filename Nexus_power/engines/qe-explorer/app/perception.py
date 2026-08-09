@@ -145,6 +145,31 @@ def synthesize_vision_controls(
     return out
 
 
+def route_opaque_surfaces(
+    surfaces: Iterable[Mapping[str, Any]],
+) -> dict[str, list[dict[str, Any]]]:
+    """Route each detected opaque surface to its handler (U1/U2).
+
+    ``OPAQUE_JS`` emits ``{kind, label, reason}`` for the surfaces the DOM walker
+    cannot read. A **cross-origin iframe** is ENTERABLE — Playwright's
+    ``frame_locator`` crosses origins, so the walk re-observes INSIDE it (vendor
+    payment / e-sign / captcha). A **canvas** or **closed-shadow** surface has no
+    DOM to enter → the vision Perceiver (U2). Returns
+    ``{enter_frames: [...], vision: [...]}``. Pure.
+    """
+    enter: list[dict[str, Any]] = []
+    vision: list[dict[str, Any]] = []
+    for s in surfaces:
+        if not isinstance(s, Mapping):
+            continue
+        kind = str(s.get("kind") or "").strip().lower()
+        if kind == "cross_origin_iframe":
+            enter.append(dict(s))
+        elif kind in ("canvas", "closed_shadow"):
+            vision.append(dict(s))
+    return {"enter_frames": enter, "vision": vision}
+
+
 def synthesize_vision_outcomes(
     values: Iterable[Mapping[str, Any]],
 ) -> list[dict[str, Any]]:
