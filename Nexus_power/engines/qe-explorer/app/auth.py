@@ -175,15 +175,46 @@ class Credentials:
     delivery_hints: tuple[str, ...] = DEFAULT_DELIVERY_HINTS
     mfa: Optional[MfaConfig] = None
 
+    #: U6 — a login is not always username+password. Accept the primary
+    #: IDENTIFIER under any of these keys (member#+PIN, email-first, policy_no…),
+    #: and the SECRET under any of these. Value-free: keys, never values.
+    _IDENTIFIER_KEYS = ("username", "user", "userid", "user_id", "login", "email",
+                        "member_number", "member", "member_id", "policy_no",
+                        "policy_number", "subscriber_id")
+    _SECRET_KEYS = ("password", "pass", "pin", "passcode", "secret", "security_code")
+
     @classmethod
     def from_payload(cls, payload: Optional[Mapping[str, Any]]) -> "Optional[Credentials]":
-        """Build from the explore-request ``credentials`` object, or ``None``."""
+        """Build from the explore-request ``credentials`` object, or ``None``.
+
+        U6 — passwordless / alternate-identifier logins: falls back to identifier
+        and secret aliases, and allows an EMPTY secret when an MFA block or an
+        explicit ``passwordless`` flag is present (OTP-first / magic-link). Refuses
+        only when there is no identifier at all. A bare ``{username, password}``
+        still logs in exactly as before.
+        """
         if not payload:
             return None
         username = str(payload.get("username") or "")
         password = str(payload.get("password") or "")
-        if not username or not password:
-            return None
+        if not username:
+            for k in cls._IDENTIFIER_KEYS:
+                v = str(payload.get(k) or "").strip()
+                if v:
+                    username = v
+                    break
+        if not password:
+            for k in cls._SECRET_KEYS:
+                v = str(payload.get(k) or "")
+                if v:
+                    password = v
+                    break
+        mfa = MfaConfig.from_payload(payload.get("mfa"))
+        passwordless = bool(payload.get("passwordless"))
+        if not username:
+            return None                       # no identifier → cannot log in
+        if not password and not (mfa or passwordless):
+            return None                       # a secret is required unless MFA/passwordless
         uh = tuple(str(h).strip().lower() for h in (payload.get("username_hints") or ()) if str(h).strip())
         sh = tuple(str(h).strip().lower() for h in (payload.get("submit_hints") or ()) if str(h).strip())
         oh = tuple(str(h).strip().lower() for h in (payload.get("otp_hints") or ()) if str(h).strip())
@@ -195,7 +226,7 @@ class Credentials:
             submit_hints=sh or DEFAULT_SUBMIT_HINTS,
             otp_hints=oh or DEFAULT_OTP_HINTS,
             delivery_hints=dh or DEFAULT_DELIVERY_HINTS,
-            mfa=MfaConfig.from_payload(payload.get("mfa")),
+            mfa=mfa,
         )
 
 

@@ -360,3 +360,36 @@ def test_uncommitted_username_fill_is_not_recorded_and_not_a_secret_submit():
     valueless_fills = [d for d in dicts
                        if d.get("verb") in ("type", "select") and d.get("value") in (None, "")]
     assert valueless_fills == []                 # the refusal-causing record never exists
+
+
+# ─── U6: passwordless / alternate-identifier logins ─────────────────────────────
+
+def test_credentials_passwordless_member_pin():
+    c = Credentials.from_payload({"member_number": "1234567", "pin": "4321"})
+    assert c is not None and c.username == "1234567" and c.password == "4321"
+
+
+def test_credentials_email_identifier_and_secret_aliases():
+    c = Credentials.from_payload({"email": "a@b.test", "passcode": "9999"})
+    assert c.username == "a@b.test" and c.password == "9999"
+
+
+def test_credentials_mfa_allows_empty_secret():
+    c = Credentials.from_payload({"username": "u", "mfa": {"otp": "123456"}})
+    assert c is not None and c.password == "" and c.mfa is not None
+
+
+def test_credentials_passwordless_flag_allows_empty_secret():
+    c = Credentials.from_payload({"member": "m1", "passwordless": True})
+    assert c is not None and c.password == ""
+
+
+def test_credentials_identifier_without_secret_or_mfa_is_refused():
+    assert Credentials.from_payload({"username": "u"}) is None
+    assert Credentials.from_payload({"member_number": "1"}) is None
+
+
+def test_credentials_no_identifier_is_refused():
+    assert Credentials.from_payload({"password": "p"}) is None
+    assert Credentials.from_payload({}) is None
+    assert Credentials.from_payload(None) is None
