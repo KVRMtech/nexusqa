@@ -1244,6 +1244,83 @@ class PlaywrightBrowserPort(BrowserPort):
             intent_met=met,
         )
 
+    async def _gesture_observe(self, do) -> RawObservation:
+        """Run a gesture coroutine ``do`` inside the same observe wrapper as
+        ``click_at`` (url + interactive-signature before/after) so every gesture
+        (U3) yields a grounded RawObservation + coarse R0 verdict. The precise
+        gesture read-back (drag order / canvas ink / slider value) is applied by
+        the caller via ``gesture_verify`` with the extra captured signals."""
+        url_before = self._safe_url()
+        sig_before = await self._interactive_signature()
+        try:
+            await do()
+        except Exception as exc:
+            return RawObservation(url_before=url_before, url_after=self._safe_url(),
+                                  error_detail=f"action_error: {str(exc)[:200]}",
+                                  intent_met=False)
+        await self._settle()
+        url_after = self._safe_url()
+        errors = await self.error_texts()
+        dialogs = await self.dialog_flags()
+        sig_after = await self._interactive_signature()
+        err = (errors[0] if errors else "")
+        met = verify_intent(
+            "click", intended_value="", intended_checked=False, committed_value=None,
+            error_detail=err, url_before=url_before, url_after=url_after,
+            dom_changed=(sig_before != sig_after), dialog_opened=bool(dialogs))
+        return RawObservation(
+            url_before=url_before, url_after=url_after,
+            dialog_opened=bool(dialogs), dialog_detail=(dialogs[0] if dialogs else ""),
+            error_detail=err, dom_changed=(sig_before != sig_after), intent_met=met)
+
+    async def drag(self, path) -> RawObservation:
+        pts = []
+        for p in (path or []):
+            try:
+                pts.append((int(p[0]), int(p[1])))
+            except (TypeError, ValueError, IndexError):
+                continue
+
+        async def _do():
+            if len(pts) < 2:
+                raise ValueError("drag needs >= 2 points")
+            await self._page.mouse.move(pts[0][0], pts[0][1])
+            await self._page.mouse.down()
+            for x, y in pts[1:]:
+                await self._page.mouse.move(x, y)
+            await self._page.mouse.up()
+
+        return await self._gesture_observe(_do)
+
+    async def draw_stroke(self, points) -> RawObservation:
+        # A signature stroke is the same mouse down/move/up choreography as a drag.
+        return await self.drag(points)
+
+    async def press_keys(self, keys) -> RawObservation:
+        seq = [str(k) for k in (keys or []) if str(k)]
+
+        async def _do():
+            for k in seq:
+                await self._page.keyboard.press(k)
+
+        return await self._gesture_observe(_do)
+
+    async def scroll_until(self, control: dict[str, Any],
+                           max_steps: int = 10) -> RawObservation:
+        loc = self._locator(control)
+
+        async def _do():
+            for _ in range(max(1, int(max_steps))):
+                try:
+                    if loc is not None and await loc.is_visible():
+                        return
+                except Exception:
+                    pass
+                await self._page.mouse.wheel(0, 600)
+                await self._settle()
+
+        return await self._gesture_observe(_do)
+
     async def _act_with_ladder(
         self, control: dict[str, Any], kind: str, *, value: str = "",
         checked: bool = False, read_back: bool = False,

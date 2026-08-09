@@ -369,6 +369,28 @@ class BrowserPort(Protocol):
         """Hover ``control`` (reveal a menu / fly-out / tooltip) and observe."""
         ...
 
+    async def drag(self, path: Sequence[Sequence[int]]) -> RawObservation:
+        """Drag along absolute page points — mouse down at the first, move through
+        the rest, up at the last (reorder / sortable / kanban). OPTIONAL + best-
+        effort (reached via ``getattr``); R0 governs proven credit."""
+        ...
+
+    async def draw_stroke(self, points: Sequence[Sequence[int]]) -> RawObservation:
+        """Draw a stroke (signature pad) — the same mouse choreography as
+        :meth:`drag`, over a canvas. OPTIONAL + best-effort."""
+        ...
+
+    async def press_keys(self, keys: Sequence[str]) -> RawObservation:
+        """Press a sequence of keys (combobox type-ahead, date-grid arrows).
+        OPTIONAL + best-effort."""
+        ...
+
+    async def scroll_until(self, control: Mapping[str, Any],
+                           max_steps: int = 10) -> RawObservation:
+        """Wheel-scroll (bounded) until ``control`` is visible — virtualized /
+        infinite-scroll lists. OPTIONAL + best-effort; a no-op is valid."""
+        ...
+
     async def set_input_files(self, control: Mapping[str, Any],
                               paths: Sequence[str]) -> RawObservation:
         """Attach ``paths`` to a file-input ``control`` (Phase-A: choose the file,
