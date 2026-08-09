@@ -711,6 +711,13 @@ async def _dispatch_explorer(
     pooled_mechanics = await mechanic_memory.recall_all_priors()
     for sig, mech in pooled_mechanics.items():
         proven_mechanics.setdefault(sig, mech)
+    # U2 — vision autonomy for this tenant (fail-closed double-gate: env
+    # QEC_CRAWL_VISION_ENABLED AND the tenant's vision_enabled flag). Default OFF.
+    try:
+        from ..services import branch_planner as _bp
+        _vision_enabled = bool((await _bp.autonomy_flags(tenant_id)).get("vision"))
+    except Exception:
+        _vision_enabled = False
     dispatch_request = ExploreDispatchRequest(
         crawl_id=crawl_id,
         tenant_id=tenant_id,
@@ -739,6 +746,7 @@ async def _dispatch_explorer(
         # Only an explicit "e2e" opts into the deeper walk — and a planned
         # branch walk IS an e2e walk by definition.
         crawl_mode=crawl_mode,
+        vision_enabled=_vision_enabled,
         choice_overrides=(dict((walk_plan or {}).get("choice_overrides") or {})
                           if walk_plan else {}),
         proven_mechanics=proven_mechanics,

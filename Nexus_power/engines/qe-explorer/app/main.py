@@ -147,6 +147,9 @@ class ExploreRequest(BaseModel):
     #: Every safety gate is identical in all three, because a deeper walk must not
     #: be a laxer one.
     crawl_mode: str = Field(default="explore", max_length=16)
+    #: U2 — per-tenant vision autonomy, set by qe-central's autonomy_flags["vision"]
+    #: (env flag AND tenant flag, fail-closed). Default OFF: no vision call is made.
+    vision_enabled: bool = Field(default=False)
     #: BRANCH WALK (Journey Graph C4): {field signature → forced option label}.
     #: A planned walk takes the enumerated option the default data would not.
     #: Applies ONLY to enumerable controls and ONLY to options they themselves
@@ -787,6 +790,13 @@ async def _run_job(
                 advance_oracle=(
                     _make_advance_oracle(app.state.http, req.tenant_id, req.crawl_id)
                     if req.crawl_mode == "e2e" else None
+                ),
+                # U2 vision Perceiver — only when the tenant has vision enabled
+                # (qe-central's double-gate). Default OFF → None → the walk hook is a
+                # no-op, and DOM-opaque pages are named but not perceived.
+                vision_oracle=(
+                    _make_vision_oracle(app.state.http, req.tenant_id, req.crawl_id)
+                    if req.vision_enabled else None
                 ),
                 choice_overrides=req.choice_overrides,
                 e2e_wizard_steps=settings.e2e_wizard_steps,

@@ -30,6 +30,7 @@ so it is unit-testable with a scripted fake (``tests/test_crawler_logic.py``).
 from __future__ import annotations
 
 import asyncio
+import base64
 import hashlib
 import heapq
 import logging
@@ -41,6 +42,7 @@ from urllib.parse import urlsplit
 from . import danger_signals
 from . import emit
 from . import matcher
+from . import perception
 from . import value_infer
 from . import vocab
 from .auth import Authenticator, AuthWindow, Credentials, match_login_controls
@@ -724,6 +726,7 @@ class Crawler:
         scope_path_prefixes: Sequence[str] = (),
         sleep: Any = asyncio.sleep,
         advance_oracle: Optional[Callable[..., Any]] = None,
+        vision_oracle: Optional[Callable[..., Any]] = None,
         choice_overrides: Optional[Mapping[str, str]] = None,
         e2e_wizard_steps: int = _E2E_WIZARD_STEPS,
         e2e_wizard_advances: int = _E2E_WIZARD_ADVANCES,
@@ -769,6 +772,7 @@ class Crawler:
         self._flows: list[dict[str, Any]] = []
         # E2E: when regex cannot identify the advance control, ask the LLM.
         self._advance_oracle = advance_oracle
+        self._vision_oracle = vision_oracle
         # Tier-3 outcomes memoized per state fingerprint: the wizard entry check
         # and the loop's first iteration see the SAME page, and a re-visited step
         # must not pay a second LLM call. ``unavailable`` is deliberately NOT
@@ -1458,6 +1462,37 @@ class Crawler:
         if collect_opaque is not None:
             try:
                 self._opaque_surfaces.extend(await collect_opaque())
+            except Exception:
+                pass
+        # VISION PERCEIVER (U2): a DOM-opaque page (canvas / Flutter Web) yields
+        # controls the DOM can't read. When vision is enabled (per-tenant, default
+        # OFF) AND the page is opaque + sparse, perceive its controls + displayed
+        # outcomes from a screenshot and attach them to the OPAQUE ledger as
+        # vision-sourced evidence (capture_mode=vision, unverified). Gated + best-
+        # effort: a no-op without the oracle or on a normal page. This records what
+        # vision SAW; it does NOT act on it (coordinate action + R0 is the next
+        # increment) — so nothing unverified enters the proven catalog.
+        if self._vision_oracle is not None and perception.should_perceive(
+                snapshot_controls, self._opaque_surfaces):
+            try:
+                shot = await self._port.screenshot_png()
+                b64 = base64.b64encode(shot).decode("ascii") if shot else ""
+                pv = await self._vision_oracle(b64, {"url": obs.url})
+                pv_controls = pv.get("controls") or []
+                if pv_controls:
+                    self._opaque_surfaces.append({
+                        "kind": "vision_perceived",
+                        "label": "%d controls perceived by vision" % len(pv_controls),
+                        "reason": ("DOM-opaque page; vision enumerated its controls "
+                                   "(unverified — not yet acted on)"),
+                        "capture_mode": "vision",
+                        "controls": pv_controls[:24],
+                        "displayed_values": (pv.get("displayed_values") or [])[:12],
+                    })
+                    logger.info(
+                        "qec.vision.perceived url=%s controls=%d values=%d",
+                        (obs.url or "")[:80], len(pv_controls),
+                        len(pv.get("displayed_values") or []))
             except Exception:
                 pass
         # WIZARD/STEPPER (#1): on a FILLED form state, advance a non-danger

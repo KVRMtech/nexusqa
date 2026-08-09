@@ -64,6 +64,9 @@ class ExploreDispatchRequest(BaseModel):
     data_mode: str = Field(default="user", max_length=16)
     #: "explore" / "target" / "e2e" — the step budget, never the safety gates.
     crawl_mode: str = Field(default="explore", max_length=16)
+    #: U2 — per-tenant vision autonomy (autonomy_flags["vision"] = env AND tenant,
+    #: fail-closed). Default OFF: the explorer makes no vision call.
+    vision_enabled: bool = Field(default=False)
     #: BRANCH WALK (Journey Graph C4): {field signature → forced option label}.
     #: Enumerable controls only, own-options only, ``planned`` provenance —
     #: never free text, and no safety gate changes with it.
