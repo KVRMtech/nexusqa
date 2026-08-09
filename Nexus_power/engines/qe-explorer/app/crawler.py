@@ -2364,6 +2364,10 @@ class Crawler:
                 self._answered_questions.add(sig)
                 continue
             self._answered_questions.add(sig)
+            logger.warning(
+                "qec.questionnaire.answered url=%s groups=%d ordinal=%d choice=%s "
+                "match_index=%s", (url or "")[:80], len(groups), ordinal,
+                str(chosen.get("name") or "")[:20], chosen.get("match_index"))
             return [{
                 "control_signature": sig,
                 "control_label": "Question %d" % (ordinal + 1),
