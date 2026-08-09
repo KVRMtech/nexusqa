@@ -93,11 +93,14 @@ def test_autonomy_pct_clamps_touches_to_governed():
 
 # ── Vocabulary + validation ───────────────────────────────────────────────
 
-def test_touch_type_vocabulary_is_the_nine():
+def test_touch_type_vocabulary_is_closed():
+    # The nine governance touches + the two P5 fallback-ladder touches (a human
+    # recorded a hard widget once, or had to resolve one). Closed set: an unknown
+    # touch type is rejected (see test_validate_touch_type_rejects_unknown).
     assert TOUCH_TYPES == {
         "scenario_approve", "invariant_author", "gap_adjudicate", "waiver_create",
         "credential_provision", "answer_key_edit", "heal_approve", "case_review",
-        "defect_confirm",
+        "defect_confirm", "widget_record", "widget_resolve",
     }
 
 

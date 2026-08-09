@@ -62,10 +62,16 @@ TOUCH_ANSWER_KEY_EDIT = "answer_key_edit"
 TOUCH_HEAL_APPROVE = "heal_approve"
 TOUCH_CASE_REVIEW = "case_review"
 TOUCH_DEFECT_CONFIRM = "defect_confirm"
+#: P5 fallback ladder — a human recorded a hard widget once (record-once rung),
+#: or a human had to resolve a decision the ladder could neither automate nor
+#: record. Counted so per-app coverage reports how much needed a person.
+TOUCH_WIDGET_RECORD = "widget_record"
+TOUCH_WIDGET_RESOLVE = "widget_resolve"
 TOUCH_TYPES = frozenset({
     TOUCH_SCENARIO_APPROVE, TOUCH_INVARIANT_AUTHOR, TOUCH_GAP_ADJUDICATE,
     TOUCH_WAIVER_CREATE, TOUCH_CREDENTIAL_PROVISION, TOUCH_ANSWER_KEY_EDIT,
     TOUCH_HEAL_APPROVE, TOUCH_CASE_REVIEW, TOUCH_DEFECT_CONFIRM,
+    TOUCH_WIDGET_RECORD, TOUCH_WIDGET_RESOLVE,
 })
 
 # ── Sources ────────────────────────────────────────────────────────────────
