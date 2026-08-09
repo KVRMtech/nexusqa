@@ -356,6 +356,15 @@ class BrowserPort(Protocol):
         """Click ``control`` and return the measured raw observation."""
         ...
 
+    async def click_at(self, x: int, y: int) -> RawObservation:
+        """Click at absolute page coordinates ``(x, y)`` — the coordinate rung for
+        DOM-opaque surfaces (canvas / Flutter Web), where a vision proposal supplies
+        the point instead of a locator. OPTIONAL + best-effort: the walk reaches it
+        via ``getattr``, so a fake/older adapter that omits it degrades to no
+        coordinate action. R0 (``verify_intent``) still governs whether the click is
+        counted as proven."""
+        ...
+
     async def hover(self, control: Mapping[str, Any]) -> RawObservation:
         """Hover ``control`` (reveal a menu / fly-out / tooltip) and observe."""
         ...

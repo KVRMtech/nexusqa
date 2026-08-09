@@ -313,8 +313,117 @@ async def consult_vision(
     return proposal
 
 
+# ── page Perceiver (U2/G2): enumerate controls + outcomes from a screenshot ─────
+
+_PERCEIVE_SYSTEM = (
+    "You are a UI perception engine. You receive a SCREENSHOT of a page whose "
+    "controls the DOM could not read (canvas / Flutter Web / WebGL). Enumerate the "
+    "INTERACTIVE controls you can see, and any DISPLAYED OUTCOME values (a total, a "
+    "decision, a reference/policy number). Reply with STRICT JSON only:\n"
+    '{"controls":[{"label":"...","role":"button|textbox|checkbox|link",'
+    '"bbox":[x,y,w,h],"click_x":<int>,"click_y":<int>}],'
+    '"displayed_values":[{"label":"...","text":"..."}]}\n'
+    "Coordinates are PAGE pixels. Do NOT invent controls you cannot see; an empty "
+    "list is a valid, honest answer."
+)
+
+
+def build_perceive_prompt(page_context: dict) -> str:
+    ctx = page_context or {}
+    hint = str(ctx.get("url") or "")[:200]
+    return _PERCEIVE_SYSTEM + ("\nPage: " + hint if hint else "")
+
+
+def _coerce_int(v: Any) -> Any:
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def parse_perceived(raw: Any) -> dict:
+    """Tolerantly parse the VLM page-perception → ``{controls, displayed_values}``.
+
+    Clamps/validates each entry; a missing click point defaults to the bbox
+    center; malformed output → empties. Never raises.
+    """
+    if isinstance(raw, dict):
+        obj: Any = dict(raw)
+    else:
+        text = str(raw or "").strip()
+        if text.startswith("```"):
+            text = re.sub(r"^```[a-zA-Z]*\n?|\n?```$", "", text).strip()
+        try:
+            obj = json.loads(text)
+        except Exception:
+            m = re.search(r"\{.*\}", text, re.DOTALL)
+            try:
+                obj = json.loads(m.group(0)) if m else {}
+            except Exception:
+                obj = {}
+    if not isinstance(obj, dict):
+        obj = {}
+
+    controls: list[dict] = []
+    for c in (obj.get("controls") or [])[:64]:
+        if not isinstance(c, dict):
+            continue
+        label = str(c.get("label") or "").strip()[:160]
+        role = str(c.get("role") or "button").strip().lower()[:40]
+        raw_bbox = c.get("bbox") or [0, 0, 0, 0]
+        try:
+            bbox = [int(raw_bbox[0]), int(raw_bbox[1]), int(raw_bbox[2]), int(raw_bbox[3])]
+        except (TypeError, ValueError, IndexError):
+            bbox = [0, 0, 0, 0]
+        cx, cy = _coerce_int(c.get("click_x")), _coerce_int(c.get("click_y"))
+        if cx is None:
+            cx = bbox[0] + bbox[2] // 2
+        if cy is None:
+            cy = bbox[1] + bbox[3] // 2
+        if not label and bbox == [0, 0, 0, 0]:
+            continue
+        controls.append({"label": label, "role": role, "bbox": bbox,
+                         "click_x": cx, "click_y": cy})
+
+    values: list[dict] = []
+    for v in (obj.get("displayed_values") or [])[:32]:
+        if not isinstance(v, dict):
+            continue
+        label = str(v.get("label") or "").strip()[:160]
+        text = str(v.get("text") or v.get("value") or "").strip()[:200]
+        if label or text:
+            values.append({"label": label, "text": text})
+
+    return {"controls": controls, "displayed_values": values}
+
+
+async def perceive_controls(
+    *, tenant_id: str, screenshot_b64: str, page_context: dict | None = None,
+    propose_fn=None,
+) -> dict:
+    """The page Perceiver (U2): enumerate the interactive controls + displayed
+    outcome values on a DOM-opaque page from its screenshot. Returns
+    ``{controls, displayed_values}``. Same injectable-``propose_fn`` design as
+    ``consult_vision`` (unit-testable with a fake). Never raises; honest
+    degradation → empty lists.
+    """
+    if not screenshot_b64 or propose_fn is None:
+        return {"controls": [], "displayed_values": []}
+    prompt = build_perceive_prompt(page_context or {})
+    try:
+        raw = await propose_fn(prompt, screenshot_b64)
+    except Exception as exc:
+        logger.warning("qec.vision_medic.perceive_failed tenant=%s error=%s",
+                       tenant_id, str(exc)[:200])
+        return {"controls": [], "displayed_values": []}
+    return parse_perceived(raw)
+
+
 __all__ = [
     "SYSTEM",
+    "perceive_controls",
+    "parse_perceived",
+    "build_perceive_prompt",
     "STATUS_PROPOSED",
     "STATUS_DISPLAY_ONLY",
     "STATUS_UNAVAILABLE",

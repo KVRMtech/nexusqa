@@ -170,6 +170,32 @@ def route_opaque_surfaces(
     return {"enter_frames": enter, "vision": vision}
 
 
+def should_perceive(
+    controls: Iterable[Mapping[str, Any]],
+    opaque_surfaces: Iterable[Mapping[str, Any]],
+    *,
+    min_named: int = 2,
+) -> bool:
+    """U2 escalation decision (pure): escalate to the vision Perceiver when the page
+    is DOM-opaque — a vision-target opaque surface (canvas / closed shadow) is
+    present AND the DOM explains too little (at most ``min_named`` well-named
+    interactive controls). Cross-origin iframes route to frame-entry, not vision, so
+    they don't trigger this. False when the DOM already explains the page (never
+    waste a vision call on a normal page).
+    """
+    routed = route_opaque_surfaces(opaque_surfaces or [])
+    if not routed["vision"]:
+        return False
+    well_named = 0
+    for c in controls or []:
+        if not isinstance(c, Mapping):
+            continue
+        conf = str((c.get("qec") or {}).get("name_confidence") or "none")
+        if conf in ("high", "medium"):
+            well_named += 1
+    return well_named <= min_named
+
+
 def synthesize_vision_outcomes(
     values: Iterable[Mapping[str, Any]],
 ) -> list[dict[str, Any]]:

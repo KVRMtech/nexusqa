@@ -1206,6 +1206,44 @@ class PlaywrightBrowserPort(BrowserPort):
             intended_value=intended, intent_met=met,
         )
 
+    async def click_at(self, x: int, y: int) -> RawObservation:
+        """Coordinate rung (U2/U3) — click absolute page ``(x, y)`` via
+        ``page.mouse``, for a vision-proposed point on a DOM-opaque surface. Mirrors
+        the ``_act`` observe pattern (url + interactive-signature before/after) so a
+        coordinate action produces the SAME grounded ``RawObservation`` and R0
+        verdict: a click that changes nothing is honestly ``intent_met=False``."""
+        url_before = self._safe_url()
+        sig_before = await self._interactive_signature()
+        try:
+            xi, yi = int(x), int(y)
+        except (TypeError, ValueError):
+            return RawObservation(url_before=url_before, url_after=url_before,
+                                  error_detail="bad_coordinates", intent_met=False)
+        try:
+            await self._page.mouse.click(xi, yi)
+        except Exception as exc:
+            return RawObservation(url_before=url_before, url_after=self._safe_url(),
+                                  error_detail=f"action_error: {str(exc)[:200]}",
+                                  intent_met=False)
+        await self._settle()
+        url_after = self._safe_url()
+        errors = await self.error_texts()
+        dialogs = await self.dialog_flags()
+        sig_after = await self._interactive_signature()
+        err = (errors[0] if errors else "")
+        met = verify_intent(
+            "click",
+            intended_value="", intended_checked=False, committed_value=None,
+            error_detail=err, url_before=url_before, url_after=url_after,
+            dom_changed=(sig_before != sig_after), dialog_opened=bool(dialogs),
+        )
+        return RawObservation(
+            url_before=url_before, url_after=url_after,
+            dialog_opened=bool(dialogs), dialog_detail=(dialogs[0] if dialogs else ""),
+            error_detail=err, dom_changed=(sig_before != sig_after),
+            intent_met=met,
+        )
+
     async def _act_with_ladder(
         self, control: dict[str, Any], kind: str, *, value: str = "",
         checked: bool = False, read_back: bool = False,

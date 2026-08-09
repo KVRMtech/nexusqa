@@ -114,3 +114,17 @@ def test_route_opaque_surfaces():
     routed = route_opaque_surfaces(surfaces)
     assert [s["label"] for s in routed["enter_frames"]] == ["js.stripe.com"]
     assert {s["label"] for s in routed["vision"]} == {"chart region", "x-widget"}
+
+
+# ── U2: escalation decision ──────────────────────────────────────────────────────
+
+def test_should_perceive_escalates_only_on_opaque_surface_and_sparse_dom():
+    from app.perception import should_perceive
+    canvas = [{"kind": "canvas", "label": "chart"}]
+    frame = [{"kind": "cross_origin_iframe", "label": "stripe"}]
+    sparse = [{"qec": {"name_confidence": "none"}}]
+    rich = [{"qec": {"name_confidence": "high"}} for _ in range(5)]
+    assert should_perceive(sparse, canvas) is True    # opaque canvas + sparse DOM
+    assert should_perceive(rich, canvas) is False     # DOM explains the page → skip
+    assert should_perceive(sparse, frame) is False    # frame → entry, not vision
+    assert should_perceive(sparse, []) is False       # no opaque surface

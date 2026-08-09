@@ -490,6 +490,54 @@ async def vision_operate(request: Request) -> dict:
     }
 
 
+@router.post("/perceive-controls")
+async def perceive_controls_endpoint(request: Request) -> dict:
+    """U2 Perceiver: enumerate the interactive controls + displayed outcome values
+    on a DOM-opaque page (canvas / Flutter Web) from its SCREENSHOT.
+
+    Called mid-crawl when the DOM inventory is sparse on a visibly-interactive
+    page. HMAC-authenticated (same secret as vision-operate) AND flag-gated: returns
+    empty unless ``QEC_CRAWL_VISION_ENABLED`` is on — the server-side enforcement
+    the map flagged as missing on vision-operate. Every outcome is HTTP 200
+    (best-effort); only a bad signature is 401.
+
+    Contract — ``{"controls": [...], "displayed_values": [...]}``.
+    """
+    raw = await request.body()
+    signature = request.headers.get(SIGNATURE_HEADER, "")
+    if not phase1_settings.verify_signature(raw, signature):
+        raise HTTPException(status_code=401, detail="invalid or missing signature")
+
+    empty = {"controls": [], "displayed_values": []}
+    if not getattr(settings, "crawl_vision_enabled", False):
+        return {**empty, "reason": "vision disabled"}
+
+    from ..clients import platform_api
+    from ..services import vision_medic
+
+    try:
+        body = json.loads(raw or b"{}")
+    except json.JSONDecodeError:
+        return empty
+
+    tenant_id = body.get("tenant_id", "")
+    screenshot_b64 = body.get("screenshot_b64", "")
+
+    async def _propose(prompt: str, image_b64: str) -> str:
+        res = await platform_api.complete_vision(
+            tenant_id=tenant_id, prompt=prompt,
+            screenshot_b64=image_b64, system=vision_medic.SYSTEM,
+            task="vision_perceive",
+        )
+        if not res.ok:
+            raise RuntimeError(res.detail or "vision LLM unavailable")
+        return res.text
+
+    return await vision_medic.perceive_controls(
+        tenant_id=tenant_id, screenshot_b64=screenshot_b64,
+        page_context=body.get("page_context", {}), propose_fn=_propose)
+
+
 @router.post("/crawls/{crawl_id}/complete")
 async def complete_crawl(crawl_id: str, request: Request) -> dict:
     """Ingest a finished crawl: verify HMAC → map manifest → write substrate.
