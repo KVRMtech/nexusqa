@@ -88,6 +88,23 @@ async def build_app_master_catalog(tenant_id: str, app_id: str) -> dict[str, Any
     return build_master_catalog(nodes, edges=edges, branches=branches)
 
 
+async def load_catalog_and_rules(
+    tenant_id: str, app_id: str
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """The Master Catalog + the trigger→child rules built from branch reveals.
+
+    The pair the persona journey projector needs: ``build_master_catalog`` (with
+    questionnaire questions folded in) and ``rules_from_branches`` over the same
+    branch rows, in one id space.
+    """
+    from .journey_projector import rules_from_branches
+    async with tenant_scoped_qec_session(tenant_id) as session:
+        nodes, edges, branches = await _load_graph(session, tenant_id, app_id)
+    master = build_master_catalog(nodes, edges=edges, branches=branches)
+    rules = rules_from_branches(branches, master["questions"])
+    return master, rules
+
+
 async def persist_catalog_version(
     tenant_id: str, app_id: str, artifact_id: str
 ) -> dict[str, Any]:

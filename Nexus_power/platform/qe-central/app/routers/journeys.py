@@ -45,6 +45,7 @@ from ..services import (
     journey_fold,
     journey_naming,
     journey_runner,
+    persona_journeys,
 )
 from ..services.catalog import (
     apply_outcome_provenance,
@@ -814,6 +815,26 @@ async def get_app_master_catalog(
     tenant_id = user["tenant_id"]
     master = await catalog_store.build_app_master_catalog(tenant_id, app_id)
     return {"app_id": app_id, **master}
+
+
+class ProjectJourneyIn(BaseModel):
+    """Answers keyed by question_id OR accessible name → value."""
+    answers: dict[str, Any] = Field(default_factory=dict)
+
+
+@router.post("/apps/{app_id}/catalog/project")
+async def project_persona_journey(
+    app_id: str, body: ProjectJourneyIn, user: dict = Depends(require_auth),
+) -> dict:
+    """P3 — Generation mode: the concrete journey a set of answers yields.
+
+    Given the app's ONE Master Catalog + the P1 trigger→child rules, projects
+    which questions are executed, dynamically activated, and skipped for these
+    answers — analytically, no crawl. Answers may be keyed by question_id or by
+    accessible name; unknown keys are dropped, never guessed onto a question.
+    """
+    tenant_id = user["tenant_id"]
+    return await persona_journeys.project_app_journey(tenant_id, app_id, body.answers)
 
 
 @router.get("/apps/{app_id}/catalog/diff")
