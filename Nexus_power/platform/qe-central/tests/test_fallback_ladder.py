@@ -64,3 +64,31 @@ def test_coverage_by_rung_is_honest_no_average():
     assert rollup["resolved"] == 3         # the human one is unresolved
     assert rollup["needs_human"] == 2      # record_once + human
     assert rollup["unresolved"] == 1
+
+
+# ── U5: wire capture-mode → ladder rung, per-control ledger ──────────────────────
+
+def test_rung_for_capture_maps_capture_modes():
+    assert FL.rung_for_capture("dom", None)["rung"] == FL.RUNG_DETERMINISTIC
+    assert FL.rung_for_capture("vision", True)["rung"] == FL.RUNG_AGENTIC
+    assert FL.rung_for_capture("vision", False)["rung"] == FL.RUNG_HUMAN   # unverified descends
+    assert FL.rung_for_capture("record_once", None)["rung"] == FL.RUNG_RECORD_ONCE
+    assert FL.rung_for_capture("some-canvas-thing", None)["rung"] == FL.RUNG_HUMAN
+
+
+def test_coverage_for_controls_builds_an_honest_ledger():
+    controls = [
+        {"qec": {"capture_mode": "dom"}},
+        {"qec": {"capture_mode": "vision"}, "verified": True},
+        {"qec": {"capture_mode": "vision"}, "verified": False},   # descends to human
+        {"capture_mode": "record_once"},                          # top-level capture_mode
+        {"qec": {"capture_mode": "canvas-thing"}},                # unknown → human
+        "junk",                                                   # skipped
+    ]
+    cov = FL.coverage_for_controls(controls)
+    assert cov["total"] == 5
+    assert cov["by_rung"] == {"deterministic": 1, "agentic": 1,
+                              "record_once": 1, "human": 2}
+    assert cov["resolved"] == 3
+    assert cov["needs_human"] == 3
+    assert cov["unresolved"] == 2

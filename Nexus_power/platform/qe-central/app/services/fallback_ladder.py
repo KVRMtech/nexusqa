@@ -88,6 +88,43 @@ def resolve_rung(
     }
 
 
+def rung_for_capture(capture_mode: Any, verified: Any) -> dict[str, Any]:
+    """Map a control's capture mode + whether its action verified into a ladder
+    decision (U5) — the seam that wires the built ladder to real crawl data.
+
+      * ``dom`` (a11y / deterministic)     → deterministic rung (grounded);
+      * ``vision`` / ``agentic``           → agentic rung, counted only if verified;
+      * ``record_once`` / ``macro``        → record-once rung;
+      * anything else / unresolved         → human rung.
+    """
+    cm = str(capture_mode or "dom").strip().lower()
+    if cm in ("dom", "deterministic", "a11y", ""):
+        return resolve_rung(deterministic={"resolved": True})
+    if cm in ("vision", "agentic"):
+        return resolve_rung(agentic={"resolved": True, "verified": bool(verified)})
+    if cm in ("record_once", "macro", "recorded"):
+        return resolve_rung(record_once_available=True)
+    return resolve_rung()
+
+
+def coverage_for_controls(controls: list[Mapping[str, Any]]) -> dict[str, Any]:
+    """Per-control rung ledger + honest rollup for a set of controls (U5).
+
+    Each control carries its capture mode (``qec.capture_mode`` — ``dom`` for the
+    a11y path, ``vision`` for the Perceiver, ``record_once`` for a macro) and a
+    ``verified`` flag (did its action prove out). Returns
+    ``coverage_by_rung`` — how many controls each rung handled and how many still
+    need a human, no averaged number.
+    """
+    decisions = []
+    for c in controls:
+        if not isinstance(c, Mapping):
+            continue
+        cap = (c.get("qec") or {}).get("capture_mode") if isinstance(c.get("qec"), Mapping) else c.get("capture_mode")
+        decisions.append(rung_for_capture(cap, c.get("verified")))
+    return coverage_by_rung(decisions)
+
+
 def coverage_by_rung(decisions: list[Mapping[str, Any]]) -> dict[str, Any]:
     """Roll up ladder decisions into an honest per-app coverage report.
 
