@@ -18,6 +18,7 @@ from app.auth import (
     Credentials,
     MfaConfig,
     match_delivery_control,
+    match_login_controls,
     match_otp_control,
     totp_code,
 )
@@ -393,3 +394,26 @@ def test_credentials_no_identifier_is_refused():
     assert Credentials.from_payload({"password": "p"}) is None
     assert Credentials.from_payload({}) is None
     assert Credentials.from_payload(None) is None
+
+
+# ─── U6: passwordless member#+PIN matched on a single screen ────────────────────
+
+def test_match_login_controls_accepts_pin_as_secret_when_no_password_field():
+    controls = _inv([_user("Member Number"),
+                     _raw("textbox", "PIN", input_type="text"),
+                     _btn("Sign in")])
+    lc = match_login_controls(controls)
+    assert lc is not None
+    assert "member" in lc.username["name"].lower()
+    assert "pin" in lc.password["name"].lower()      # PIN serves as the secret
+
+
+def test_match_login_controls_real_password_still_wins():
+    lc = match_login_controls(_inv([_user(), _pass(), _btn("Sign in")]))
+    assert lc is not None and lc.password["name"].lower() == "password"
+
+
+def test_match_login_controls_none_without_password_or_pin():
+    # an identifier + Continue only (no secret on this screen) → not a single-screen
+    # login match; the multi-screen Authenticator.login handles that path.
+    assert match_login_controls(_inv([_user("Member Number"), _btn("Continue")])) is None

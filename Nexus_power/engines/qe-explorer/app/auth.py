@@ -284,6 +284,25 @@ def _match_password_control(controls: Sequence[Mapping[str, Any]]) -> Optional[M
     return next((c for c in controls if _is_password(c)), None)
 
 
+#: Secret-hint field names for a PIN / passcode that is NOT input_type=password —
+#: the secret on a passwordless member#+PIN login (U6). Value-free (names only).
+_SECRET_HINTS = ("pin", "passcode", "security code", "secret",
+                 "personal identification", "access code")
+
+
+def _match_secret_control(controls: Sequence[Mapping[str, Any]]) -> Optional[Mapping[str, Any]]:
+    """A PIN / passcode field to serve as the secret when a screen has NO password
+    input (U6 — passwordless member#+PIN). A text-like field whose accessible name
+    is a secret hint. Never a real password input (that path is handled above)."""
+    for c in controls:
+        if _is_password(c):
+            continue
+        if (_norm(c.get("kind")) in _TEXT_LIKE_KINDS
+                and _name_matches_any(str(c.get("name")), _SECRET_HINTS)):
+            return dict(c)
+    return None
+
+
 def _text_fields(controls: Sequence[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
     return [
         c for c in controls
@@ -346,6 +365,10 @@ def match_login_controls(
     driven by :meth:`Authenticator.login`.
     """
     password = _match_password_control(controls)
+    if password is None:
+        # U6 — passwordless member#+PIN: a PIN/passcode text field serves as the
+        # secret when the screen has no input_type=password control.
+        password = _match_secret_control(controls)
     if password is None:
         return None
     username = _match_username_control(controls, username_hints, password=password)
