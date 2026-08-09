@@ -154,6 +154,12 @@ _CONTROL_KINDS = frozenset(
     {"text", "date", "select", "link", "toggle", "button", "checkbox", "radio"}
 )
 
+#: G1 (any-UI): at or below this many interactive controls a page is "DOM-sparse"
+#: — the DOM cannot distinguish its screens. Only then is a supplied perceptual
+#: hash mixed into the fingerprint, so a normal (rich-DOM) page's cosmetic repaint
+#: can never fragment its state.
+_SPARSE_DOM_MAX = 2
+
 
 def _norm(text: Any) -> str:
     return " ".join(("" if text is None else str(text)).split()).lower()
@@ -205,6 +211,8 @@ def state_fingerprint(
     url: str,
     controls: Iterable[Mapping[str, Any]],
     dialog_flags: Any = (),
+    *,
+    perceptual_hash: str = "",
 ) -> str:
     """A sha256 hex identifying a page STATE (design §3.2 fingerprint contract).
 
@@ -221,10 +229,20 @@ def state_fingerprint(
         identically; a cosmetic text change does not move it; a new required
         field / opened dialog / enabled-state change does.
     """
+    sig = interactive_signature(controls)
     payload = {
         "url": url_template(url),
-        "controls": interactive_signature(controls),
+        "controls": sig,
         "dialogs": _normalise_flags(dialog_flags),
     }
+    # G1 (any-UI): a DOM-opaque page (canvas / Flutter Web) changes screens with
+    # the same URL and a (near-)empty DOM, so the two signals above collapse every
+    # screen into ONE state — vision clicks would "work" while the journey graph
+    # and catalog become garbage. When the walk supplies a COARSE perceptual hash
+    # of the screenshot AND the DOM is sparse, mix it in so each rendered screen is
+    # a distinct node. Absent hash (every DOM caller today) → byte-identical output.
+    ph = str(perceptual_hash or "").strip()
+    if ph and len(sig) <= _SPARSE_DOM_MAX:
+        payload["phash"] = ph
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
