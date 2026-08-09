@@ -21,6 +21,8 @@ inputs produce empty results, never crash.
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import re
 from collections.abc import Mapping, Sequence
@@ -34,9 +36,25 @@ PROVENANCE_CLIENT_DECLARED = "client_declared"
 
 _CONFIRMED_STATUSES = frozenset({"approved", "validated"})
 
+#: HTML constraint attributes that are pure validation shape (never user values).
+_VALIDATION_KEYS = ("pattern", "minlength", "maxlength", "min", "max", "step")
+
 
 def _normalize_name(name: str) -> str:
     return re.sub(r"[\s_\-]+", " ", str(name or "").strip().lower()).strip()
+
+
+def question_id_for(control: Mapping[str, Any]) -> str:
+    """Stable, value-free question id (P2, Δ2).
+
+    Prefers the control SIGNATURE — stable across crawls, so a re-crawl (which
+    mints a fresh ``artifact_id``) still maps to the same catalog question and can
+    be diffed against the last version. Falls back to the normalized accessible
+    name when a control carries no signature. Never contains a user value.
+    """
+    basis = str(control.get("signature") or "").strip() or _normalize_name(
+        str(control.get("name") or ""))
+    return "q_" + hashlib.sha1(basis.encode("utf-8")).hexdigest()[:16]
 
 
 def extract_controls(
@@ -97,6 +115,15 @@ def extract_controls(
         if depends_on:
             entry["depends_on"] = str(depends_on)
 
+        # Validation shape (P2) — HTML constraint attributes, never user values.
+        validation = {}
+        for vk in _VALIDATION_KEYS:
+            vv = sig_data.get(vk)
+            if vv not in (None, ""):
+                validation[vk] = str(vv)[:80]
+        if validation:
+            entry["validation"] = validation
+
         if isinstance(ledger_match, Mapping):
             sig = str(ledger_match.get("signature") or "")
             if sig:
@@ -109,6 +136,7 @@ def extract_controls(
                     str(o) for o in ledger_match["options"]
                     if str(o).strip()]
 
+        entry["question_id"] = question_id_for(entry)
         controls.append(entry)
 
     for norm_name, ledger_entry in ledger_by_name.items():
@@ -135,9 +163,117 @@ def extract_controls(
         sem = str(ledger_entry.get("semantic_type") or "")
         if sem:
             entry["semantic_type"] = sem
+        entry["question_id"] = question_id_for(entry)
         controls.append(entry)
 
     return controls
+
+
+def build_master_catalog(
+    nodes: Sequence[Mapping[str, Any]],
+    edges: Sequence[Mapping[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Aggregate per-node control inventories into ONE app-scoped Master Catalog.
+
+    The per-node/per-journey catalog answers "what is on this page"; the Master
+    Catalog answers "what questions does this APPLICATION have", deduped by stable
+    ``question_id`` across every journey and node (Δ2) — the same question on two
+    journeys is one row, not two, so the 400 questions are never duplicated per
+    journey. Each row records every page it was seen on and keeps the richest
+    metadata observed. ``expected_next_page`` is filled from the journey edges when
+    available. Pure: a DB reader loads the nodes/edges and calls this.
+
+    ``nodes`` items: ``{node_fp|fingerprint, url, title, controls|controls_inventory}``.
+    ``edges`` items: ``{from_fp, to_fp}`` (highest-priority next page per node).
+    """
+    next_by_node: dict[str, str] = {}
+    for e in (edges or []):
+        if not isinstance(e, Mapping):
+            continue
+        frm, to = str(e.get("from_fp") or ""), str(e.get("to_fp") or "")
+        if frm and to and frm not in next_by_node:
+            next_by_node[frm] = to
+
+    by_qid: dict[str, dict[str, Any]] = {}
+    for node in nodes:
+        if not isinstance(node, Mapping):
+            continue
+        node_fp = str(node.get("node_fp") or node.get("fingerprint") or "")
+        page = str(node.get("title") or node.get("url") or node_fp or "")[:200]
+        controls = node.get("controls")
+        if controls is None:
+            controls = node.get("controls_inventory")
+        if not isinstance(controls, Sequence) or isinstance(controls, (str, bytes)):
+            continue
+        for c in controls:
+            if not isinstance(c, Mapping):
+                continue
+            qid = str(c.get("question_id") or "") or question_id_for(c)
+            row = by_qid.get(qid)
+            if row is None:
+                row = {
+                    "question_id": qid,
+                    "name": str(c.get("name") or "")[:200],
+                    "type": str(c.get("type") or "text"),
+                    "options": [str(o) for o in (c.get("options") or [])][:48],
+                    "required": bool(c.get("required")),
+                    "semantic_type": str(c.get("semantic_type") or ""),
+                    "provenance": str(c.get("provenance") or PROVENANCE_OBSERVED),
+                    "pages": [],
+                }
+                val = c.get("validation")
+                if isinstance(val, Mapping) and val:
+                    row["validation"] = dict(val)
+                nxt = next_by_node.get(node_fp)
+                if nxt:
+                    row["expected_next_page"] = nxt
+                by_qid[qid] = row
+            else:
+                # Keep the richest observation: required is sticky-True, fill in
+                # options/validation if this sighting has them and the row didn't.
+                row["required"] = row["required"] or bool(c.get("required"))
+                if not row["options"] and c.get("options"):
+                    row["options"] = [str(o) for o in c["options"]][:48]
+                if "validation" not in row and isinstance(c.get("validation"), Mapping):
+                    if c["validation"]:
+                        row["validation"] = dict(c["validation"])
+            if page and page not in row["pages"]:
+                row["pages"].append(page)
+
+    questions = sorted(
+        by_qid.values(), key=lambda r: (r.get("name") or "", r["question_id"]))
+    summary = {
+        "question_count": len(questions),
+        "required_count": sum(1 for q in questions if q.get("required")),
+        "with_options": sum(1 for q in questions if q.get("options")),
+        "pages": sorted({p for q in questions for p in q.get("pages", [])}),
+    }
+    return {"questions": questions, "summary": summary}
+
+
+def snapshot_catalog(master: Mapping[str, Any], artifact_id: str = "") -> dict[str, Any]:
+    """A deterministic, hashable snapshot of a Master Catalog for versioning (P2)
+    and regression diffing (P6).
+
+    The hash is over each question's SHAPE — id, name, type, required, options,
+    validation, business rule, expected next page — so a re-crawl that changed a
+    question (new option, moved branch, tightened validation) produces a different
+    hash, while a re-crawl that changed nothing reproduces it exactly.
+    """
+    questions = list(master.get("questions") or [])
+    canon = json.dumps(
+        [[q.get("question_id"), q.get("name"),
+          q.get("answer_type") or q.get("type") or "text",
+          bool(q.get("required")), sorted(str(o) for o in (q.get("options") or [])),
+          q.get("validation") or {}, q.get("business_rule") or "",
+          q.get("expected_next_page") or ""] for q in questions],
+        sort_keys=True, separators=(",", ":"))
+    return {
+        "artifact_id": artifact_id,
+        "question_count": len(questions),
+        "snapshot_hash": hashlib.sha256(canon.encode("utf-8")).hexdigest()[:32],
+        "questions": questions,
+    }
 
 
 def extract_outcomes(

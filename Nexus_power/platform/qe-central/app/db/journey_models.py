@@ -221,7 +221,69 @@ class JourneyBranchRow(QecBase):
     )
 
 
+class CatalogQuestionRow(QecBase):
+    """One question in the app-scoped Master Catalog (qec_012, P2).
+
+    Deduped by the stable value-free ``question_id`` across every journey/node —
+    the 400 questions live once, not per journey. Holds question TEXT (``name``,
+    ``business_rule``) so the table is RLS-forced in the migration."""
+
+    __tablename__ = "catalog_questions"
+
+    cq_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    app_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    question_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    name: Mapped[str] = mapped_column(String(300), nullable=False, default="")
+    answer_type: Mapped[str] = mapped_column(String(40), nullable=False, default="text")
+    required: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    options: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    validation: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    business_rule: Mapped[str] = mapped_column(String(500), nullable=False, default="")
+    expected_next_page: Mapped[str] = mapped_column(String(200), nullable=False, default="")
+    semantic_type: Mapped[str] = mapped_column(String(80), nullable=False, default="")
+    provenance: Mapped[str] = mapped_column(String(24), nullable=False, default="observed")
+    pages: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    first_seen_artifact: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    last_seen_artifact: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    first_seen_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utc_now)
+    last_seen_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utc_now)
+
+    __table_args__ = (
+        Index("uq_catalog_questions_identity", "tenant_id", "app_id",
+              "question_id", unique=True),
+    )
+
+
+class CatalogVersionRow(QecBase):
+    """A Master Catalog snapshot per crawl (qec_012, P2) — what P6 diffs.
+
+    A re-crawl mints a new ``artifact_id``; snapshotting the deduped catalog per
+    artifact lets a later crawl diff by stable ``question_id`` to flag an added
+    question, a moved branch, or a broken rule."""
+
+    __tablename__ = "catalog_versions"
+
+    version_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    app_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    artifact_id: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    snapshot_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    question_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    snapshot: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utc_now)
+
+    __table_args__ = (
+        Index("uq_catalog_versions_identity", "tenant_id", "app_id",
+              "artifact_id", unique=True),
+    )
+
+
 __all__ = [
     "JourneyRow", "JourneyNodeRow", "JourneyEdgeRow",
     "JourneyTraversalRow", "JourneyBranchRow",
+    "CatalogQuestionRow", "CatalogVersionRow",
 ]
