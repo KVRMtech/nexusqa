@@ -73,6 +73,33 @@ Every new capability is additive and behind existing gates; no guardrail weakene
 1. **CI wiring is worth confirming.** `.github/workflows/ci.yml` lives under `Nexus_power/`, but the git root is `nexusqa/`. If the pushed GitHub repo is rooted at `nexusqa`, GitHub Actions won't trigger this workflow at all (it looks for `.github` at the repo root). This affects the **entire** pre-existing CI, not just the `qe-central-tests` job I added — worth a look.
 2. **Repo-wide lint/format debt (pre-existing).** There is no repo-wide ruff config (only one scoped to `sdk/nexus-sdk`), and existing untouched files don't satisfy bare `ruff format`/`ruff check` defaults. My new code matches the repo's hand-formatted style and introduces **zero** pyflakes (`F`) issues; the format/import-order flags are a pre-existing whole-repo condition, not a regression.
 
+## Wiring session addendum (routes + the P1→P2→P3 join)
+
+After the initial P0–P6 cores, the **catalog pillar was wired end-to-end** and the
+three pillars were **joined**. qe-central now **1439 passed / 69 skipped**.
+
+- **Catalog pillar live** (`catalog_store.py`): `persist_catalog_version` runs at
+  the end of every fold (best-effort) → durable `catalog_questions` + a
+  `catalog_versions` snapshot. Routes: **`GET /apps/{id}/catalog`** (the app-scoped
+  Master Catalog), **`GET /apps/{id}/catalog/diff`** (P6 regression between the two
+  latest crawls). DB-gated round-trip test.
+- **P1→P2→P3 join** (the flagged modeling gap, now decided + resolved):
+  questionnaire questions are folded into the Master Catalog with a `question_id`
+  derived from their control signature — the **same id space** the projector's
+  rules use. `journey_projector.rules_from_branches` reconciles branch reveals
+  (`kind:name`) to child question ids by name; unresolvable bare-button reveals are
+  dropped honestly, not faked.
+- **Journey generation** (`persona_journeys.py`): **`POST /apps/{id}/catalog/project`**
+  — supply answers (by question_id or name), get the concrete journey (executed /
+  activated / skipped). Proven in tests: tobacco=Yes activates the cigarettes
+  question, healthy skips it — analytically, no crawl.
+
+**Still pending (unchanged):** the platform-api→qe-central persona answer-sheet
+bridge (to auto-drive the projector from stored personas), persisting projected
+journeys to `persona_journeys`, the P4 tail (payment/eSign/PDF), the P5 vision
+Perceiver, and **all live proof**. Still **not pushed / not deployed**; migrations
+`qec_011–013` **not applied to any DB**.
+
 ## Recommended next steps (watched session)
 1. Review the branch, then a **watched deploy** (`.\scripts\deploy.ps1` — it will rebuild the base if needed) to a disposable env.
 2. Apply `qec_011`–`qec_013` to the qe-central DB.
