@@ -28,16 +28,27 @@ shadow → **vision**. **PENDING LIVE:** `OPAQUE_JS` emitting a `frame_selector`
 cross-origin iframes + the walk dispatching a frame-scoped re-observe (injected JS +
 VM).
 
-### U2 — vision Perceiver + pixel-evidence · ✅ PURE CORE DONE + TESTED · ⏳ WIRING PENDING
-The evidence layer that keeps canvas journeys real: **G1** `state_fingerprint`
-mixes a perceptual hash only when the DOM is sparse (canvas screens become distinct
-nodes; rich-DOM pages byte-identical to before); `perception.average_hash` /
-`perceptual_hash_png`; **G3** `vision_control_signature` (jitter-tolerant, so
-question_ids don't churn); **G2/G3** `synthesize_vision_controls` /
-`synthesize_vision_outcomes` (Perceiver output → walk shapes, outcomes carried as
-proof). 11 tests. **PENDING LIVE:** `_make_vision_oracle` (clone `_make_medic_oracle`),
-`/internal/perceive-controls`, `BrowserPort.click_at`, and enforcing the vision
-flag/tenant gate in `vision_operate` (VM + HTTP).
+### U2 — vision Perceiver + pixel-evidence · ✅ CORE + WIRING DONE + TESTED · ⏳ ORACLE+WALK-HOOK PENDING
+The evidence layer + the server/decision wiring:
+- **Pixel-evidence core (tested):** **G1** `state_fingerprint` mixes a perceptual
+  hash only when the DOM is sparse; `average_hash`/`perceptual_hash_png`; **G3**
+  `vision_control_signature` (jitter-tolerant); **G2/G3** `synthesize_vision_controls`
+  /`synthesize_vision_outcomes`.
+- **Perceiver + endpoint (tested):** `vision_medic.perceive_controls` (screenshot →
+  `controls[]` + `displayed_values[]`, injectable `propose_fn`; 6 tests) and
+  **`POST /internal/perceive-controls`** — HMAC + the vision **flag gate** the map
+  flagged as missing on vision-operate (3 route tests).
+- **Escalation + primitive:** `perception.should_perceive` (perceive only on a
+  vision-target opaque surface + sparse DOM; tested); `BrowserPort.click_at` +
+  `PlaywrightBrowserPort.click_at` (coordinate rung via `page.mouse`, mirrors `_act`
+  so R0 still governs — production, VM-only).
+- **Double-gate (tested):** `qec_015` `tenant_provisioning.vision_enabled` +
+  `autonomy_flags["vision"] = env AND tenant`, fail-closed.
+
+**PENDING LIVE (VM only):** `_make_vision_oracle` (clone `_make_medic_oracle`) + the
+vision rung in `_act_with_ladder` + the crawler walk hook that runs
+`should_perceive → perceive_controls → synthesize_vision_controls → feed the walk →
+click_at → R0`. Every seam is mapped; only the Playwright/live run remains.
 
 ### U3 — widget drivers + verification oracle · ✅ CRUX DONE + TESTED · ⏳ PRIMITIVES PENDING
 The load-bearing part (Δ2): `gesture_verify` gives each gesture a pure read-back —
