@@ -282,8 +282,56 @@ class CatalogVersionRow(QecBase):
     )
 
 
+class PersonaRow(QecBase):
+    """A declared answer profile (qec_013, P3) — references the platform-api
+    ``tp_personas`` row. RLS-forced (persona names can carry business context)."""
+
+    __tablename__ = "personas"
+
+    persona_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    app_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    name: Mapped[str] = mapped_column(String(200), nullable=False, default="")
+    source_ref: Mapped[str] = mapped_column(String(200), nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utc_now)
+
+    __table_args__ = (
+        Index("uq_personas_identity", "tenant_id", "app_id", "persona_id",
+              unique=True),
+    )
+
+
+class PersonaJourneyRow(QecBase):
+    """One persona's projected (and optionally proven) journey over the Master
+    Catalog (qec_013, P3). ``provenance`` is ``inferred`` until a verifying
+    traversal confirms it, then ``live_confirmed`` — never green-washed."""
+
+    __tablename__ = "persona_journeys"
+
+    persona_journey_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    app_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    persona_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    journey_id: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    path_hash: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    executed: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    activated: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    skipped: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    provenance: Mapped[str] = mapped_column(String(24), nullable=False, default="inferred")
+    verified_traversal_id: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utc_now)
+
+    __table_args__ = (
+        Index("uq_persona_journeys_identity", "tenant_id", "app_id",
+              "persona_id", "journey_id", unique=True),
+    )
+
+
 __all__ = [
     "JourneyRow", "JourneyNodeRow", "JourneyEdgeRow",
     "JourneyTraversalRow", "JourneyBranchRow",
     "CatalogQuestionRow", "CatalogVersionRow",
+    "PersonaRow", "PersonaJourneyRow",
 ]
