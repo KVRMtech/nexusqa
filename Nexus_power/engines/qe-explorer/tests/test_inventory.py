@@ -403,3 +403,24 @@ def test_group_assemble_never_merges_across_frames():
     ], url="https://a.example/q", refuse_pack=REFUSE_PACK)
     assert all(not r.get("group_id") for r in records), (
         "same name in two frames is two questions, and neither has a sibling")
+
+
+def test_identical_controls_get_a_dom_ordinal_for_positional_targeting():
+    """17 identical bare "Yes" buttons (a questionnaire) carry no landmark, so no
+    anchor — but each gets a match_index (its DOM order) so the locator can target
+    get_by_role('button', name='Yes').nth(k). A control unique on the page gets no
+    ordinal (None)."""
+    raw = [
+        _raw(role="button", name="Yes", kind="button"),
+        _raw(role="button", name="No", kind="button"),
+        _raw(role="button", name="Yes", kind="button"),
+        _raw(role="button", name="No", kind="button"),
+        _raw(role="button", name="Continue", kind="button"),   # unique
+    ]
+    recs = build_inventory(raw, REFUSE_PACK)
+    yes = [r for r in recs if r["name"] == "Yes"]
+    no = [r for r in recs if r["name"] == "No"]
+    assert [r["match_index"] for r in yes] == [0, 1]      # DOM order
+    assert [r["match_index"] for r in no] == [0, 1]
+    cont = next(r for r in recs if r["name"] == "Continue")
+    assert cont["match_index"] is None                    # unique -> no ordinal, no anchor

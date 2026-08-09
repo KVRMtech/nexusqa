@@ -232,6 +232,13 @@ NEXT_ACTION_NAVIGATIONAL = "navigational"  # leaves the funnel (Back to Dashboar
 #: on every page. Generic session vocabulary, not app labels.
 _AUTH_SESSION_RE = re.compile(r"\b(sign|log)\s*(in|out|on)\b", re.IGNORECASE)
 
+#: When answering a questionnaire to reach the end of a flow, prefer a
+#: negative/decline answer: "Yes" on a health/lifestyle question typically reveals
+#: follow-up questions, so choosing "No" keeps the walk short and reaches the
+#: submit. A representative pass, not a claim about a real applicant — the choice
+#: is recorded as the journey's decision either way.
+_NEGATIVE_OPTION_HINTS = frozenset({"no", "none", "n/a", "na", "decline", "never", "false"})
+
 
 def _next_action_decisions(
     controls: Sequence[Mapping[str, Any]], fingerprint: str,
@@ -858,6 +865,10 @@ class Crawler:
         self._submit_enabled = bool(self._submit_approvals) and self._guard.attestation is not None
         self._forms_submitted = 0
         self._submitted_flows: set[str] = set()    # dedup key = f"{fingerprint}::{name}"
+        # Questions answered on a bare-button questionnaire this crawl (by a stable
+        # per-question signature), so a re-observe of the same page — which looks
+        # identical because the buttons carry no selected-state — does not re-answer.
+        self._answered_questions: set[str] = set()
         # Wizard/stepper traversal (#1): advance non-danger Next/Continue on filled
         # form states to record deeper steps (the SPA quote-wizard case). Bounded +
         # fingerprint-deduped + fail-closed (danger OR commit-word vetoes). ON by
@@ -2279,6 +2290,89 @@ class Crawler:
                     depth=depth, renavigate=False):
                 return  # one crossing per state
 
+    async def _answer_questionnaire(
+        self, controls: Sequence[dict[str, Any]], url: str, fingerprint: str,
+    ) -> list[dict[str, Any]]:
+        """Answer ONE unanswered question of a bare-button questionnaire.
+
+        A lifestyle/health page renders each question as a pair of plain <button>s
+        ("Yes"/"No") — not form fields, so the fill never sees them, and not a
+        dropdown, so the decision-point path never sees them either. The gated
+        "Continue" stays validation-locked until each is answered, which is where
+        the application funnel dead-ends. This clicks one option so the walk can
+        proceed to underwriting → e-sign, and records the choice as a decision point
+        so the answered question becomes a branch in the catalogue.
+
+        ONE question per call: the walk re-observes and calls again, so every click
+        lands on a FRESH ``match_index`` (the only handle on identical bare buttons)
+        rather than a stale ordinal from a page that re-rendered under it.
+
+        An option is a button whose accessible name REPEATS on the page (one per
+        question), enabled, non-danger, not a commit/advance action, not auth chrome
+        — so a lone "Continue"/"Back"/"Sign out" is never mistaken for an answer.
+        """
+        from collections import Counter
+        label_counts = Counter(
+            str(c.get("name") or "").strip().lower() for c in controls
+            if c.get("kind") == "button" and not c.get("disabled"))
+
+        def _is_option(c: Mapping[str, Any]) -> bool:
+            n = str(c.get("name") or "").strip()
+            if c.get("kind") != "button" or c.get("disabled") or c.get("danger"):
+                return False
+            if not n or _AUTH_SESSION_RE.search(n):
+                return False
+            if _WIZARD_COMMIT_RE.search(n) or _WIZARD_ADVANCE_RE.search(n):
+                return False
+            return label_counts.get(n.lower(), 0) >= 2
+
+        # Group by DOM order: a new question begins when a label repeats.
+        groups: list[list[dict[str, Any]]] = []
+        cur: list[dict[str, Any]] = []
+        cur_labels: set[str] = set()
+        for c in controls:
+            if not _is_option(c):
+                continue
+            nl = str(c.get("name") or "").strip().lower()
+            if nl in cur_labels:
+                groups.append(cur)
+                cur, cur_labels = [], set()
+            cur.append(dict(c))
+            cur_labels.add(nl)
+        if cur:
+            groups.append(cur)
+
+        for ordinal, group in enumerate(groups):
+            opts = [str(c.get("name") or "").strip() for c in group]
+            sig = "q:" + hashlib.sha256(
+                ("%d|%s" % (ordinal, "|".join(sorted(o.lower() for o in opts))))
+                .encode("utf-8")).hexdigest()[:24]
+            if sig in self._answered_questions:
+                continue
+            # Prefer a negative/decline answer — it minimises the follow-up
+            # questions a "Yes" tends to reveal, so the walk reaches the end.
+            chosen = next(
+                (c for c in group
+                 if str(c.get("name") or "").strip().lower() in _NEGATIVE_OPTION_HINTS),
+                group[0])
+            try:
+                await self._port.click(chosen)
+                self._tracker.note_action()
+            except Exception as exc:  # a failing click must not loop forever
+                logger.info("qec.questionnaire.click_failed q=%d error=%s",
+                            ordinal, str(exc)[:120])
+                self._answered_questions.add(sig)
+                continue
+            self._answered_questions.add(sig)
+            return [{
+                "control_signature": sig,
+                "control_label": "Question %d" % (ordinal + 1),
+                "options": opts[:12],
+                "provenance": "questionnaire",
+                "choice": str(chosen.get("name") or "").strip()[:80],
+            }]
+        return []
+
     # -- wizard / stepper traversal (#1) ---------------------------------------
 
     def _pick_submit_candidate(self, controls: Sequence[dict[str, Any]]) -> bool:
@@ -2491,26 +2585,6 @@ class Crawler:
                 continue
             if vocab.is_destination_advance(name):
                 return AdvanceDecision(control=c, tier=2)
-
-        # DIAGNOSTIC (temporary): reaching here means tiers 1-2 found no advance —
-        # the walk is STUCK. Dump the control inventory WITH toggle/group state
-        # (pressed / aria_checked / group_key / testid) so a questionnaire rendered
-        # as custom buttons (a "Yes"/"No" answer set) becomes legible: which buttons
-        # are answers, how they group, and which is selected. Runs BEFORE the
-        # danger-forward crossing precisely so it still fires on a page like
-        # /apply/lifestyle. Value-free. Remove once questionnaire capture is built.
-        logger.warning(
-            "qec.wizard.stuck_inventory url=%s n=%d controls=%s",
-            (page_url or "")[:120], len(controls),
-            [{"name": str(c.get("name") or "")[:30], "kind": c.get("kind"),
-              # anchor/landmark decide whether an identical bare button can be
-              # targeted at all: a per-question container name is the only handle.
-              "anchor": str((c.get("anchor") or {}).get("label") or "")[:40],
-              "landmark": str((c.get("landmark") or {}).get("name") or "")[:40],
-              "group": str(c.get("group_key") or "")[:16],
-              "dis": bool(c.get("disabled")), "dng": bool(c.get("danger"))}
-             for c in controls][:50],
-        )
 
         # DANGER FORWARD (disposable blanket only): tiers 1-2 skip refuse-pack
         # danger controls, but an application's forward step can BE one —
@@ -2728,6 +2802,22 @@ class Crawler:
             return rec
 
         while True:
+            # Answer a bare-button questionnaire BEFORE deciding the advance: the
+            # gated "Continue" only unlocks once the questions are answered, so
+            # without this the walk dead-ends on a page like /apply/lifestyle. One
+            # question per pass; re-observe so the next click uses a fresh ordinal.
+            # A no-op on any page without a repeated-option questionnaire (returns
+            # []), so it never touches ordinary steps.
+            if self._submit_enabled:
+                q_dps = await self._answer_questionnaire(cur_controls, cur_url, cur_fp)
+                if q_dps:
+                    cur_dps = list(cur_dps) + q_dps   # record the question on this step
+                    obs_q = await self._observe()
+                    cur_controls = build_inventory(
+                        obs_q.raw_controls, self._refuse_pack, url=obs_q.url)
+                    cur_url = obs_q.url
+                    cur_fp = state_fingerprint(obs_q.url, cur_controls, obs_q.dialog_flags)
+                    continue
             pick = await self._pick_advance(cur_controls, cur_url, cur_title, cur_fp)
             if pick.submit_control is not None:
                 # A danger forward step the advance tiers had to skip (e.g.

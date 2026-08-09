@@ -311,3 +311,60 @@ def test_danger_forward_control_not_crossed_without_blanket(tmp_path):
     controls = [{"name": "Continue to Underwriting Decision", "kind": "button", "danger": True}]
     dec = asyncio.run(c._pick_advance_e2e(controls, "u", "t", "fp"))
     assert dec.submit_control is None
+
+
+# ── questionnaire answering (bare Yes/No buttons on /apply/lifestyle) ────────────
+
+class _RecordingPort(_DummyPort):
+    def __init__(self):
+        self.clicks = []
+    async def click(self, control):
+        self.clicks.append(str(control.get("name") or ""))
+        return RawObservation(url_before="u", url_after="u")
+
+
+def test_answer_questionnaire_answers_one_question_per_call_preferring_no(tmp_path):
+    c = _build(tmp_path, approvals=["*"], attestation={"env_kind": "disposable"})
+    c._port = _RecordingPort()
+    controls = [
+        {"name": "Yes", "kind": "button"}, {"name": "No", "kind": "button"},   # Q1
+        {"name": "Yes", "kind": "button"}, {"name": "No", "kind": "button"},   # Q2
+        {"name": "Continue to Underwriting Decision", "kind": "button", "danger": True},
+        {"name": "Back", "kind": "button"},
+    ]
+    dp1 = asyncio.run(c._answer_questionnaire(controls, "u", "fp"))
+    assert len(dp1) == 1 and dp1[0]["choice"] == "No"        # prefers the negative answer
+    assert dp1[0]["options"] == ["Yes", "No"] and dp1[0]["provenance"] == "questionnaire"
+    assert c._port.clicks == ["No"]
+
+    dp2 = asyncio.run(c._answer_questionnaire(controls, "u", "fp"))
+    assert len(dp2) == 1 and dp2[0]["control_label"] == "Question 2"
+    assert c._port.clicks == ["No", "No"]                    # second question answered
+
+    dp3 = asyncio.run(c._answer_questionnaire(controls, "u", "fp"))
+    assert dp3 == []                                          # nothing left to answer
+
+
+def test_answer_questionnaire_ignores_a_page_with_no_repeated_options(tmp_path):
+    c = _build(tmp_path, approvals=["*"], attestation={"env_kind": "disposable"})
+    c._port = _RecordingPort()
+    # A normal page: unique action buttons, no repeated Yes/No answer set.
+    controls = [
+        {"name": "Continue", "kind": "button"},
+        {"name": "Back", "kind": "button"},
+        {"name": "Add Beneficiary", "kind": "button"},
+    ]
+    assert asyncio.run(c._answer_questionnaire(controls, "u", "fp")) == []
+    assert c._port.clicks == []
+
+
+def test_answer_questionnaire_never_treats_a_danger_button_as_an_answer(tmp_path):
+    c = _build(tmp_path, approvals=["*"], attestation={"env_kind": "disposable"})
+    c._port = _RecordingPort()
+    # Repeated but DANGER ("Remove" ×2) — a destructive control is never an answer.
+    controls = [
+        {"name": "Remove", "kind": "button", "danger": True},
+        {"name": "Remove", "kind": "button", "danger": True},
+    ]
+    assert asyncio.run(c._answer_questionnaire(controls, "u", "fp")) == []
+    assert c._port.clicks == []

@@ -167,6 +167,7 @@ class ControlRecord(TypedDict):
     group_options: list[str]
     group_size: int
     anchor: Optional[AnchorRecord]
+    match_index: Optional[int]
     danger: bool
     danger_rule_id: str
     danger_severity: str
@@ -495,6 +496,7 @@ def build_control_record(
         # group_id/group_options once it knows the control's siblings.
         "group_key": _s(raw.get("group_key")).strip(),
         "anchor": None,   # filled by build_inventory only on collision
+        "match_index": None,  # DOM ordinal among identical controls (collision only)
         "danger": danger,
         "danger_rule_id": danger_rule_id,
         "danger_severity": danger_severity,
@@ -552,9 +554,21 @@ def build_inventory(
         counts[key] = counts.get(key, 0) + 1
 
     anchored = 0
+    ordinal_in_key: dict[tuple[str, str, str], int] = {}
     for raw, rec in zip(raws, records):
-        if counts.get(_collision_key(rec), 0) < 2:
+        key = _collision_key(rec)
+        if counts.get(key, 0) < 2:
             continue
+        # POSITIONAL FALLBACK. A set of identical controls (same frame/role/name)
+        # with no distinguishing landmark cannot be ANCHORED — but it can still be
+        # targeted by ORDER: the k-th such control in DOM order. Stamp that ordinal
+        # so the locator resolves get_by_role(...).nth(k) instead of always .first.
+        # This is the ONLY handle on a bare-button questionnaire (17 identical "Yes"
+        # buttons, one per question, no aria/landmark/testid). The inventory walks
+        # the DOM in order, so the k-th record here IS the k-th DOM match.
+        idx = ordinal_in_key.get(key, 0)
+        rec["match_index"] = idx
+        ordinal_in_key[key] = idx + 1
         anchor = _anchor_from_landmark(raw.get("landmark"))
         if anchor is not None:
             rec["anchor"] = anchor

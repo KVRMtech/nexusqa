@@ -1458,9 +1458,24 @@ class PlaywrightBrowserPort(BrowserPort):
         name = str(control.get("name") or "").strip()
         css_hint = str((control.get("qec") or {}).get("css_hint")
                        or control.get("css_hint") or "").strip()
+        # POSITIONAL targeting: when a control is one of several IDENTICAL ones
+        # (same role+name) and has no anchor to scope by, target it by its DOM
+        # ORDINAL — get_by_role(role, name).nth(k) — instead of always .first.
+        # This is the only way to click a specific button in a bare-button
+        # questionnaire (17 identical "Yes"/"No"). A present anchor already scopes
+        # the search, so nth is used only when no anchor label narrowed the scope.
+        mi = control.get("match_index")
+        nth = mi if (isinstance(mi, int) and mi >= 0
+                     and not (anchor and anchor.get("label"))) else None
+
+        def _role_name_loc() -> Any:
+            base = scope.get_by_role(role, name=name)
+            return base.nth(nth) if nth is not None else base.first
+
         for builder in (
-            (lambda: scope.get_by_role(role, name=name).first) if role and name else None,
+            _role_name_loc if role and name else None,
             (lambda: scope.get_by_label(name).first) if name else None,
+            (lambda: scope.get_by_text(name).nth(nth)) if name and nth is not None else
             (lambda: scope.get_by_text(name).first) if name else None,
             (lambda: scope.locator(css_hint).first) if css_hint else None,
         ):
