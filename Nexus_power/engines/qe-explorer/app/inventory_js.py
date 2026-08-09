@@ -73,7 +73,7 @@ from __future__ import annotations
 
 #: Stamped into the crawl manifest so a manifest can be traced to the exact
 #: injected-JS generation that produced its controls.
-INVENTORY_JS_VERSION = "inv-js-v5"
+INVENTORY_JS_VERSION = "inv-js-v6"
 
 INVENTORY_JS = r"""
 (() => {
@@ -502,6 +502,13 @@ INVENTORY_JS = r"""
       href: hrefOf(el),
       haspopup: lc(attr(el, "aria-haspopup")),
       expanded: lc(attr(el, "aria-expanded")),
+      // Toggle-button selection state. A custom questionnaire renders each answer
+      // as a <button> (not a radio), and marks the chosen one with aria-pressed /
+      // aria-checked — the ONLY signal that a button IS an answer and whether it is
+      // the selected one. Without it a "Yes"/"No" answer button is indistinguishable
+      // from a plain action button.
+      pressed: lc(attr(el, "aria-pressed")),
+      aria_checked: lc(attr(el, "aria-checked")),
       // Declared value constraints (number/range/date inputs). The DOM's OWN
       // truth — the default synthesizer uses them so an auto-filled value can
       // never violate the app's min/max/step validation (a constraint-blind
