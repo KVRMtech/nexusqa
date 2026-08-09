@@ -273,3 +273,48 @@ def group_into_flows(
         "primary_flow": primary_key,
         "missing_primary": missing_primary,
     }
+
+
+def block_cause_for_missing_primary(
+    *,
+    has_credentials: bool,
+    login_flow_present: bool,
+    coverage: dict | None,
+) -> dict | None:
+    """Why an onboarded ENTRY flow wasn't captured: a benign non-reach vs an AUTH block.
+
+    ``group_into_flows`` sets ``missing_primary`` purely on "the entry page wasn't in the
+    captured routes" — it cannot see WHY. The seed-manifest layer knows two more things:
+    the crawl's own coverage (does it report an auth block / an expired session?) and
+    whether the app has stored credentials at all. Combine them into an honest cause so
+    the app UI never tells a user to "just re-crawl" a login the crawl can never pass.
+
+    Returns the annotation to merge onto ``missing_primary`` (a machine ``blocked`` code,
+    a human ``reason`` and a ``remediation``), or ``None`` for a benign non-reach — which
+    the caller leaves as the ordinary "didn't reach it — re-crawl" message.
+
+    Precedence: the crawler's explicit ``coverage.auth_blocked`` (authoritative) or an
+    ``auth_incomplete`` + ``session_expired`` session death; else a conservative fallback
+    — the app has NO credentials AND the crawl saw a login flow — so the truth still
+    surfaces on crawls recorded before the crawler flag shipped. Never fires when
+    credentials exist and the crawl reported no auth trouble (a real budget/depth miss).
+    """
+    cov = coverage if isinstance(coverage, dict) else {}
+    crawler_blocked = bool(cov.get("auth_blocked"))
+    session_expired = (
+        bool(cov.get("auth_incomplete"))
+        and str(cov.get("auth_reason") or "") == "session_expired"
+    )
+    if not (crawler_blocked or session_expired or (not has_credentials and login_flow_present)):
+        return None
+    if session_expired:
+        return {
+            "blocked": "auth_session_expired",
+            "reason": "Blocked: the stored login session has expired.",
+            "remediation": "Re-record the login, then re-crawl.",
+        }
+    return {
+        "blocked": "auth_no_credentials",
+        "reason": "Blocked: this app is behind a login and has no credentials attached.",
+        "remediation": "Record a login or attach a member card to this app, then re-crawl.",
+    }

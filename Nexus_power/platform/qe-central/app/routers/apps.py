@@ -38,7 +38,7 @@ from ..services.data_agent import (
     propose_dispositions,
 )
 from ..services.pii_egress_guard import guard_inventory as pii_guard_inventory
-from ..services.flow_grouping import group_into_flows
+from ..services.flow_grouping import block_cause_for_missing_primary, group_into_flows
 from ..services.seed_manifest import build_seed_manifest, library_keys_from_answer_key
 from ..services.brief_compiler import (
     BRIEF_SYSTEM_INSTRUCTION, build_prompt, ground_and_assemble, parse_proposal,
@@ -847,6 +847,15 @@ async def get_seed_manifest(
             .order_by(QEExplorationRow.created_at.desc())
             .limit(10)
         )).scalars().all()
+        # The NEWEST crawl's own account of whether it was BLOCKED at a login (no
+        # credentials / expired session) vs merely didn't reach the entry — captured
+        # once (rows are created_at desc) so the manifest reports the truthful
+        # remediation instead of a blanket "re-crawl".
+        _newest_cov: dict = {}
+        if exps:
+            _nstats = exps[0].stats if isinstance(exps[0].stats, dict) else {}
+            _newest_cov = (_nstats.get("coverage")
+                           if isinstance(_nstats.get("coverage"), dict) else {})
         # Union across recent crawls: "fields needing seed" is a stable property of the
         # app's forms, so a shallow re-crawl (that only reached login) must not hide what
         # a deeper earlier crawl found (a transfer's From Account / Payee). Deduped,
@@ -920,6 +929,21 @@ async def get_seed_manifest(
     )
     manifest.update(grouping)
     manifest["has_credentials"] = has_credentials
+    # HONEST "why wasn't the entry captured": tell a benign non-reach (budget/depth —
+    # "re-crawl") apart from an AUTH BLOCK (the entry is behind a login the crawl could
+    # not pass — re-crawling alone loops forever). Prefer the crawler's explicit signal
+    # (coverage.auth_blocked); fall back to "no credentials AND a login flow was seen"
+    # so the truth still surfaces on crawls recorded before that flag shipped. Never
+    # marks a block when credentials exist and the crawl reported no auth trouble.
+    mp = manifest.get("missing_primary")
+    if isinstance(mp, dict):
+        block = block_cause_for_missing_primary(
+            has_credentials=has_credentials,
+            login_flow_present=manifest.get("auth") is not None,
+            coverage=_newest_cov,
+        )
+        if block:
+            mp.update(block)
     mode = mode if mode in ("recommended", "full") else "recommended"
     manifest["mode"] = mode
     manifest["items"] = manifest["full"] if mode == "full" else manifest["recommended"]

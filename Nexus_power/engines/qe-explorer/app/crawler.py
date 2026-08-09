@@ -71,6 +71,12 @@ STOP_MAX_REQUESTS = "budget_max_requests"
 STOP_MAX_WALL_MS = "budget_max_wall_ms"
 STOP_CANCELLED = "cancelled"
 STOP_AUTH_FAILED = "auth_failed"
+#: Entry is gated behind a login wall, but the crawl was given NO credentials and
+#: NO session — nothing to authenticate with. Stop HONESTLY at the sign-in instead
+#: of filling synthetic data into a login form for the whole wall-clock budget (the
+#: loop that used to surface, dishonestly, as ``budget_max_wall_ms``). Detected
+#: structurally: the entry REDIRECTS to a screen presenting a full login form.
+STOP_AUTH_REQUIRED = "auth_required_no_credentials"
 STOP_ERROR = "error"
 
 #: Value-bearing kinds that make a state a "form" (buttons are then submit
@@ -129,6 +135,13 @@ _ENTRY_RETRY_DELAY_S = 2.5
 #: an edge case. Detected structurally (a password field on the entry screen), so
 #: it holds for any app in any language — never a URL or copy match.
 AUTH_SESSION_EXPIRED = "session_expired"
+
+#: ``auth_blocked`` reason: the entry sits behind a login wall and NEITHER
+#: credentials NOR a session were supplied — the crawl had no way to sign in, so it
+#: stopped at the wall (``STOP_AUTH_REQUIRED``). Distinct from AUTH_SESSION_EXPIRED
+#: (a session was injected but died) and from the credentials-supplied-but-no-form
+#: case: the remediation is "record a login / attach credentials", never "re-record".
+AUTH_NO_CREDENTIALS = "no_credentials"
 
 #: An "advance the wizard" control label (Next / Continue / Proceed / Forward) —
 #: the POSITIVE intent signal. Union-compiled from the per-language packs in
@@ -839,6 +852,15 @@ class Crawler:
         # areas were NOT covered (never a silent, green-washed "success").
         self._auth_incomplete = False
         self._auth_incomplete_reason = ""
+        # Set when the entry is behind a login wall and NO credentials/session were
+        # supplied — an honest hard STOP (STOP_AUTH_REQUIRED), not partial coverage.
+        # Surfaced as coverage.auth_blocked so the app UI says "behind a login, no
+        # credentials — record a login" instead of "didn't reach it — re-crawl".
+        self._auth_blocked_reason = ""
+        # An honest terminal condition raised mid-expand (currently: the no-credentials
+        # login-wall block). The explore loop checks it and stops WITHOUT treating the
+        # stop as cancellation or budget exhaustion.
+        self._hard_stop = False
         # Destinations we have already GROUNDED a nav click to (across all states), so
         # a nav bar repeated on every page grounds each unique route ONCE — the cost of
         # direct-nav grounding stays ~O(unique navs), not O(states × links).
@@ -977,7 +999,17 @@ class Crawler:
         # Honest, LOUD auth prefix: if credentials were supplied but no login form could
         # be driven, the crawl covered PUBLIC pages only — say so plainly, never imply the
         # authenticated app was covered.
-        if not self._auth_incomplete:
+        if self._auth_blocked_reason == AUTH_NO_CREDENTIALS:
+            # Gated entry + NO credentials/session supplied → the crawl stopped at the
+            # sign-in without exploring. Name the correct remediation (record a login /
+            # attach credentials); never the credentials-supplied wording below.
+            auth_prefix = (
+                "AUTHENTICATED AREAS NOT COVERED — the entry is behind a login wall and "
+                "NO credentials or session were supplied; the crawl stopped at the "
+                "sign-in without exploring. Record a login or attach a member card, "
+                "then re-crawl. "
+            )
+        elif not self._auth_incomplete:
             auth_prefix = ""
         elif self._auth_incomplete_reason == AUTH_SESSION_EXPIRED:
             # Different cause, different remediation: nobody needs to check the
@@ -1021,6 +1053,12 @@ class Crawler:
             # Surfaced as first-class coverage so the operator is never misled.
             "auth_incomplete": self._auth_incomplete,
             "auth_reason": self._auth_incomplete_reason,
+            # Entry gated + NO credentials/session supplied → the crawl STOPPED at the
+            # login wall (STOP_AUTH_REQUIRED). Distinct from auth_incomplete (partial,
+            # unauthenticated coverage): this is a hard block the app UI reports as
+            # "behind a login, no credentials" so re-crawling alone is never advised.
+            "auth_blocked": bool(self._auth_blocked_reason),
+            "auth_blocked_reason": self._auth_blocked_reason,
             "summary": (
                 auth_prefix
                 + f"{self._forms_found} form(s) found; "
@@ -1126,6 +1164,10 @@ class Crawler:
             # An injected session needs no login driven — but it DOES need proving.
             # That happens in _note_login_wall_while_authenticated, which sees every
             # recorded state (the entry included) and so costs no extra navigation.
+            # No credentials AND no session? A GATED entry (a redirect to a login wall)
+            # is caught in the EXPLORE loop by _note_login_wall_without_credentials — on
+            # the entry's own navigation, so it costs no extra goto and honest-stops
+            # instead of filling the login form and looping it.
             return self.target_url
 
         self._guard.phase = Phase.AUTH
@@ -1285,6 +1327,72 @@ class Crawler:
             self.crawl_id,
         )
 
+    def _note_login_wall_without_credentials(
+        self, controls: Sequence[dict[str, Any]], requested_url: str = "",
+        landed_url: str = "",
+    ) -> bool:
+        """Detect a GATED entry when the crawl holds NO way to authenticate.
+
+        Sibling of :meth:`_note_login_wall_while_authenticated` for the opposite case:
+        NO credentials AND no injected session. The same unambiguous, language-agnostic
+        signal — the app REDIRECTED our request (requested != landed) to a screen
+        presenting a FULL login form (username + secret + submit) — means the target is
+        behind a sign-in the crawl cannot pass. Returns True when it fires, so the
+        caller records the wall as evidence and STOPS honestly, and the crawl never
+        fills synthetic data into a login form and loops it (the client's "still
+        running" crawl that read out as budget_max_wall_ms).
+
+        Conservative by construction (no false positive on a public app): a bare
+        "Sign in" LINK is not a full form; a page that lands where we asked is not a
+        redirect; a content-rich page that merely EMBEDS a login widget is not a
+        dedicated wall (checked below); and an app that HAS credentials or an injected
+        session is handled by the paths above — none of those trip this. SCOPE: a
+        DEDICATED SINGLE-SCREEN login wall. Multi-step / username-first walls (email →
+        Next → password) are not matched here and fall back to existing behaviour — a
+        known gap, not a false claim.
+        """
+        if self._credentials or self._session_injected:
+            return False
+        if self._auth_blocked_reason:
+            return False
+        if self._guard.phase == Phase.AUTH:
+            return False
+        if not requested_url or not landed_url:
+            return False
+        if _url_key(requested_url) == _url_key(landed_url):
+            return False
+        login = match_login_controls(controls)
+        if login is None:
+            return False
+        # Only a DEDICATED sign-in screen is a WALL. A content-rich page that merely
+        # embeds a sign-in widget (a marketing home with a login box beside a public
+        # quote funnel) is NOT — stopping there would discard real public coverage. A
+        # dedicated login has essentially only the login form: no substantial OTHER
+        # fillable input beyond the matched identifier + its secret. Count EVERY form-
+        # field kind (text/date/select/checkbox/radio/toggle) so a radio- or checkbox-
+        # driven public funnel is not mislabeled; exclude the identifier AND the secret
+        # by identity (the secret may be a PIN text field, so `_is_password` alone is not
+        # enough). Allow ONE extra — a "remember me" checkbox is normal on a real login.
+        skip = {
+            str(login.username.get("name") or "").strip().lower(),
+            str(login.password.get("name") or "").strip().lower(),
+        }
+        other_inputs = [
+            c for c in controls
+            if str(c.get("kind") or "") in _FILLABLE_KINDS
+            and not _is_password(c)
+            and str(c.get("name") or "").strip().lower() not in skip
+        ]
+        if len(other_inputs) > 1:
+            return False
+        self._auth_blocked_reason = AUTH_NO_CREDENTIALS
+        logger.warning(
+            "qec.crawler.auth_required_no_credentials crawl_id=%s requested=%s "
+            "landed=%s — the entry redirected to a dedicated login wall and neither "
+            "credentials nor a session were supplied; stopping honestly (authenticated "
+            "areas NOT covered).", self.crawl_id, requested_url, landed_url)
+        return True
+
     # -- EXPLORE phase ---------------------------------------------------------
 
     async def _explore_loop(self) -> None:
@@ -1292,6 +1400,8 @@ class Crawler:
             if self._cancelled:
                 self._stop_reason = STOP_CANCELLED
                 return
+            if self._hard_stop:
+                return  # an honest terminal set mid-expand (e.g. a no-credentials login wall)
             reason = self._tracker.stop_reason()
             if reason:
                 self._stop_reason = reason
@@ -1369,6 +1479,27 @@ class Crawler:
         # Requested vs landed is what separates "the app sent us to sign in" from
         # "the crawl followed a link to the sign-in page".
         self._note_login_wall_while_authenticated(controls, item.url, obs.url)
+        # No credentials AND no session, and the app REDIRECTED the ENTRY to a dedicated
+        # login wall → nothing to sign in with. Record the wall as evidence and STOP
+        # honestly, rather than filling synthetic data into the login form and looping it
+        # until the wall-clock budget expires (the client's "still running" crawl). Scoped
+        # to the ENTRY: a DEEPER gated sub-area (a public site whose /account redirects to
+        # /login) must NOT abort the crawl or relabel the public pages already covered — it
+        # is skipped like any other unreachable state and the crawl carries on.
+        is_entry = item.depth == 0 and not item.parent_fingerprint
+        if is_entry and self._note_login_wall_without_credentials(controls, item.url, obs.url):
+            wall_fp = state_fingerprint(obs.url, controls, obs.dialog_flags)
+            if wall_fp not in self._visited_fingerprints:
+                self._visited_fingerprints.add(wall_fp)
+                self._record_state(
+                    url=obs.url, title=obs.title, controls=controls, fingerprint=wall_fp,
+                    actions=[],
+                    screenshots=[(await self._port.screenshot_png(), self._clock.now_ms())],
+                    last_seen_ms=self._clock.now_ms(),
+                )
+            self._stop_reason = STOP_AUTH_REQUIRED
+            self._hard_stop = True
+            return
         fingerprint = state_fingerprint(obs.url, controls, obs.dialog_flags)
 
         if item.parent_fingerprint:

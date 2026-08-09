@@ -196,6 +196,11 @@ export interface ExplorationCoverage {
   /** Why. `session_expired` = a stored login session was injected but the app
    *  still presented a login wall; the repair is re-recording the login. */
   auth_reason?: string;
+  /** TRUE when the entry sat behind a login wall and NO credentials/session were
+   *  supplied — a hard STOP at the sign-in (never partial coverage). The app UI
+   *  uses this to say "behind a login, no credentials — record a login". */
+  auth_blocked?: boolean;
+  auth_blocked_reason?: string;
 }
 
 export interface ClientApp {
@@ -302,6 +307,11 @@ export interface MissingPrimary {
   key: string;
   name: string;
   reason: string;
+  /** Set when the entry wasn't captured because the crawl was BLOCKED at a login
+   *  (not a benign budget/depth non-reach). Drives the honest banner + remediation;
+   *  absent ⇒ the ordinary "didn't reach it — re-crawl" case. */
+  blocked?: 'auth_no_credentials' | 'auth_session_expired' | null;
+  remediation?: string;
 }
 
 export type CoverageDisposition = 'FULLY' | 'PARTIAL' | 'UNHANDLED' | 'OPAQUE';

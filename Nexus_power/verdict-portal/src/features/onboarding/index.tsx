@@ -937,22 +937,39 @@ export function OnboardingWizard() {
               <div className="sm:col-span-2 rounded-lg ring-1 ring-emerald-200 bg-emerald-50 px-3 py-2 text-2xs text-emerald-900">
                 {reuse.action === 'reuse' ? (
                   <>
-                    <span className="font-semibold">This login is already recorded.</span>{' '}
-                    Someone on your team recorded a login for <span className="font-mono">{reuse.domain}</span>
+                    <span className="font-semibold">A login recipe already exists for{' '}
+                    <span className="font-mono">{reuse.domain}</span>.</span>{' '}
+                    A teammate recorded the <span className="font-semibold">steps</span> to sign in
                     {(reuse.recipes?.[0]?.slots?.length ?? 0) > 0 && (
-                      <> — it asks for <span className="font-semibold">
+                      <> — it fills <span className="font-semibold">
                         {reuse.recipes[0].slots.map((sl: any) => sl.name).join(', ')}
                       </span></>
-                    )}. You don't need to record it again; just add this member's credentials after onboarding.
+                    )}. That saves re-recording the choreography, but a recipe holds{' '}
+                    <span className="font-semibold">no credentials</span> — recording captures field
+                    names, never the values you type. To actually sign in you still need to supply
+                    them: fill <span className="font-semibold">Login username / password</span> below
+                    now, or use <span className="font-semibold">Record the login &amp; environment</span>{' '}
+                    below to re-record it here and capture a session. You can also attach a login to this
+                    app later from its <span className="font-semibold">Signing in</span> panel — but the
+                    crawl stays logged out until credentials exist.
                   </>
                 ) : (
                   <>
                     <span className="font-semibold">
-                      {reuse.recipes?.length ?? reuse.options?.length ?? 0} logins are already recorded for{' '}
+                      {reuse.recipes?.length ?? reuse.options?.length ?? 0} login recipes already exist for{' '}
                       <span className="font-mono">{reuse.domain}</span>.
                     </span>{' '}
-                    They are genuinely different (a public login and a member portal are not the same),
-                    so pick the right one in Members &amp; Environments after onboarding rather than re-recording.
+                    These are recorded <span className="font-semibold">steps</span>, not credentials — a
+                    public login and a member portal sign in differently, so more than one shape was
+                    captured. Reusing one saves re-recording the steps, but{' '}
+                    <span className="font-semibold">every recipe still needs a member&apos;s credentials
+                    to sign in</span>. Supply them now: fill{' '}
+                    <span className="font-semibold">Login username / password</span> below, or use{' '}
+                    <span className="font-semibold">Record the login &amp; environment</span> below to
+                    record the right flow here and capture a session. You can also attach a login to this
+                    app later from its <span className="font-semibold">Signing in</span> panel — but the
+                    crawl stays logged out until credentials exist, so don&apos;t skip this expecting
+                    it&apos;s already done.
                   </>
                 )}
               </div>

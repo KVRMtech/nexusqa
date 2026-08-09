@@ -642,7 +642,9 @@ async def complete_crawl(crawl_id: str, request: Request) -> dict:
     _nfields = len(_cov.get("fields_inferred") or []) + len(_cov.get("fields_needing_seed") or [])
     # Login-blocked, OR captured nothing at all (no forms AND no fields) — never a rich
     # capture. A merely form-less content page (0 forms but has fields/content) is NOT guarded.
-    _degraded = (body.stop_reason or "").strip().lower() == "auth_failed" or (_forms == 0 and _nfields == 0)
+    _degraded = (body.stop_reason or "").strip().lower() in (
+        "auth_failed", "auth_required_no_credentials",
+    ) or (_forms == 0 and _nfields == 0)
     if _degraded and prior_artifact_id:
         await _mark(
             tenant_id, exploration_id, status="completed",

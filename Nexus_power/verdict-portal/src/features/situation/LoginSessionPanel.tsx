@@ -25,6 +25,25 @@ import type { ClientApp, ExplorationCoverage } from '../../types/qec';
 
 type Health = 'expired' | 'recorded' | 'none';
 
+/** Entry-path tokens that typically sit behind a sign-in. A cheap boost signal
+ *  only — it merely ESCALATES the "no login attached" copy; the recommended action
+ *  (sign in once) is harmless if the app turns out to be public. */
+// Generic gated-area path tokens only — NEVER domain-specific ones (a login-detection
+// heuristic must work on ANY app, not just insurance). It only softly HINTS before a
+// crawl; coverage evidence always overrides it.
+const LOGIN_PATH_TOKENS = [
+  '/portal', '/account', '/member', '/dashboard',
+  '/profile', '/settings', '/secure', '/my',
+];
+function pathLikelyBehindLogin(baseUrl?: string): boolean {
+  try {
+    const p = new URL(baseUrl || '').pathname.toLowerCase();
+    return LOGIN_PATH_TOKENS.some((t) => p === t || p.startsWith(`${t}/`));
+  } catch {
+    return false;
+  }
+}
+
 export default function LoginSessionPanel({ appId }: { appId: string }) {
   const appState = useAsync((signal) => api.getApp(appId, { signal }), [appId]);
   const app = appState.data;
@@ -53,6 +72,17 @@ export default function LoginSessionPanel({ appId }: { appId: string }) {
   const health: Health = sessionExpired
     ? 'expired'
     : (app?.has_credentials || stepCount > 0) ? 'recorded' : 'none';
+
+  // Distinguish EVIDENCE from a HINT. The crawl's own coverage is authoritative: it
+  // reported it was blocked / could not cover the authenticated app (auth_blocked /
+  // auth_incomplete). A SUCCESSFUL crawl that covered forms and reported no auth trouble
+  // PROVES the entry is reachable public content — never claim it is gated then. The
+  // entry PATH is only a HINT (a nudge before any crawl exists), never proof.
+  const coverageSaysBlocked =
+    coverage?.auth_blocked === true || coverage?.auth_incomplete === true;
+  const coverageSaysPublic =
+    !!coverage && !coverageSaysBlocked && (coverage.forms_found ?? 0) > 0;
+  const pathHint = pathLikelyBehindLogin(app?.base_url) && !coverageSaysPublic;
 
   const [liveUrl, setLiveUrl] = useState('');
   const [busy, setBusy] = useState('');
@@ -257,18 +287,44 @@ export default function LoginSessionPanel({ appId }: { appId: string }) {
     },
   };
   const st = STATE[health];
+  const entryPath = (() => {
+    try { return new URL(app?.base_url || '').pathname; } catch { return ''; }
+  })();
+  // Two honest escalations of the passive 'none' state — never a claim the code cannot
+  // back. EVIDENCE (the crawl reported it was blocked at the sign-in) → a definitive,
+  // crit-tone "Login required". HINT only (the entry PATH looks gated but no crawl has
+  // proven it) → a tentative nudge in the neutral tone, never asserted as fact.
+  let view = st;
+  if (health === 'none' && coverageSaysBlocked) {
+    view = {
+      pill: 'Login required',
+      tone: 'crit' as const,
+      icon: <ShieldAlert size={16} className="text-crit" />,
+      headline: entryPath
+        ? `The last crawl was blocked at this app's sign-in (${entryPath}) — it never reached anything behind the login.`
+        : `The last crawl was blocked at this app's sign-in — it never reached anything behind the login.`,
+      detail: st.detail,
+    };
+  } else if (health === 'none' && pathHint) {
+    view = {
+      ...st,
+      headline: entryPath
+        ? `This entry path (${entryPath}) looks like it may sit behind a sign-in. If it does, sign in once below so crawls don't stop at the login page.`
+        : `This entry may sit behind a sign-in. If it does, sign in once below so crawls don't stop at the login page.`,
+    };
+  }
 
   return (
     <Panel tone="elevated">
       <SectionHead
         title="Signing in"
         subtitle="how a crawl gets past this app's sign-in screen"
-        icon={st.icon}
-        right={<Pill tone={st.tone} size="sm">{st.pill}</Pill>}
+        icon={view.icon}
+        right={<Pill tone={view.tone} size="sm">{view.pill}</Pill>}
       />
 
-      <p className="mt-3 text-sm font-semibold text-ink">{st.headline}</p>
-      <p className="mt-1 text-sm text-ink-mid">{st.detail}</p>
+      <p className="mt-3 text-sm font-semibold text-ink">{view.headline}</p>
+      <p className="mt-1 text-sm text-ink-mid">{view.detail}</p>
 
       {liveUrl ? (
         <div className="mt-4 space-y-2">

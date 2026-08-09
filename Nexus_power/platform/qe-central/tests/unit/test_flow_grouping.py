@@ -5,7 +5,11 @@ transfer and loan fields with identical copy. These lock in: auth is split off (
 satisfied by stored creds), the PRIMARY flow is the onboarded one, and progress reflects
 already-provided values. Grouping degrades to one honest bucket when nothing matches.
 """
-from app.services.flow_grouping import _flow_from_url, group_into_flows
+from app.services.flow_grouping import (
+    _flow_from_url,
+    block_cause_for_missing_primary,
+    group_into_flows,
+)
 
 # Mirrors the real bb03329f manifest (labels + dispositions).
 ITEMS = [
@@ -191,3 +195,49 @@ def test_non_domain_app_degrades_to_one_honest_bucket():
     assert len(g["flows"]) == 1
     assert g["flows"][0]["key"] == "other" and g["flows"][0]["name"] == "Fields to provide"
     assert g["auth"] is None
+
+
+# ─── block_cause_for_missing_primary — auth block vs benign non-reach ────────────
+# The honest "why wasn't the entry captured": an auth block (behind a login the crawl
+# can't pass — re-crawling loops forever) must never wear the benign "re-crawl" copy.
+
+def test_block_cause_none_for_benign_non_reach_with_credentials():
+    # Credentials exist and the crawl reported no auth trouble → a real budget/depth
+    # miss. The banner stays "didn't reach it — re-crawl" (block is None).
+    assert block_cause_for_missing_primary(
+        has_credentials=True, login_flow_present=True, coverage={}) is None
+    assert block_cause_for_missing_primary(
+        has_credentials=True, login_flow_present=False, coverage=None) is None
+
+
+def test_block_cause_crawler_flag_is_authoritative():
+    # The crawler's explicit signal wins even when the app happens to have credentials.
+    b = block_cause_for_missing_primary(
+        has_credentials=True, login_flow_present=False,
+        coverage={"auth_blocked": True, "auth_blocked_reason": "no_credentials"})
+    assert b["blocked"] == "auth_no_credentials"
+    assert "record a login" in b["remediation"].lower()
+    assert b["reason"].lower().startswith("blocked")
+
+
+def test_block_cause_session_expired_is_its_own_code():
+    b = block_cause_for_missing_primary(
+        has_credentials=True, login_flow_present=False,
+        coverage={"auth_incomplete": True, "auth_reason": "session_expired"})
+    assert b["blocked"] == "auth_session_expired"
+    assert "re-record" in b["remediation"].lower()
+
+
+def test_block_cause_heuristic_fallback_no_credentials_and_login_seen():
+    # No crawler flag (an older crawl), but the app has NO credentials AND a login flow
+    # was seen → the truth still surfaces as an auth-no-credentials block.
+    b = block_cause_for_missing_primary(
+        has_credentials=False, login_flow_present=True, coverage={})
+    assert b["blocked"] == "auth_no_credentials"
+
+
+def test_block_cause_no_false_block_when_no_login_flow_seen():
+    # No credentials but NO login flow observed (a genuinely public app the crawl just
+    # didn't finish) → never fabricate an auth block.
+    assert block_cause_for_missing_primary(
+        has_credentials=False, login_flow_present=False, coverage={}) is None

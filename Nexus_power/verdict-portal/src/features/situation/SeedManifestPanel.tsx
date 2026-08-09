@@ -237,19 +237,39 @@ export default function SeedManifestPanel({ appId, onSeeded }: { appId: string; 
           </div>
         )}
 
-        {/* ── Honest "entry flow not captured yet" banner ── */}
-        {m.missing_primary && (
-          <div className="mt-4 flex items-start gap-2.5 rounded-lg ring-1 ring-amber-500/40 bg-amber-500/[0.06] px-3 py-2.5">
-            <AlertTriangle size={14} className="text-amber-500 shrink-0 mt-0.5" aria-hidden />
-            <p className="text-2xs text-ink leading-relaxed">
-              <span className="font-semibold">We haven’t captured your {m.missing_primary.name} form
-              yet.</span>{' '}
-              The crawl didn’t reach it on this run, so it isn’t shown below — the flows here are the
-              other pages it did capture. Re-crawl to reach and inventory your{' '}
-              {m.missing_primary.name} form.
-            </p>
-          </div>
-        )}
+        {/* ── Honest "entry flow not captured yet" banner ── two causes: a benign
+            non-reach (budget/depth → re-crawl) vs an AUTH BLOCK (behind a login the
+            crawl couldn't pass → re-crawling alone loops forever; record a login). ── */}
+        {m.missing_primary && (() => {
+          const mp = m.missing_primary!;
+          const blocked = typeof mp.blocked === 'string' && mp.blocked.startsWith('auth');
+          return (
+            <div className={`mt-4 flex items-start gap-2.5 rounded-lg ring-1 px-3 py-2.5 ${
+              blocked ? 'ring-crit/40 bg-crit/[0.06]' : 'ring-amber-500/40 bg-amber-500/[0.06]'
+            }`}>
+              {blocked
+                ? <Lock size={14} className="text-crit shrink-0 mt-0.5" aria-hidden />
+                : <AlertTriangle size={14} className="text-amber-500 shrink-0 mt-0.5" aria-hidden />}
+              {blocked ? (
+                <p className="text-2xs text-ink leading-relaxed">
+                  <span className="font-semibold">Blocked: your {mp.name} form is behind a sign-in.</span>{' '}
+                  {mp.blocked === 'auth_session_expired'
+                    ? 'The crawl held a login session but the app still demanded a sign-in — the session has expired, so this form was never reached.'
+                    : 'The crawl had no credentials, so it stopped at the sign-in wall and never reached this form — re-crawling alone will not help.'}{' '}
+                  {mp.remediation ?? 'Record a login or attach a member card, then re-crawl.'}
+                </p>
+              ) : (
+                <p className="text-2xs text-ink leading-relaxed">
+                  <span className="font-semibold">We haven’t captured your {mp.name} form
+                  yet.</span>{' '}
+                  The crawl didn’t reach it on this run, so it isn’t shown below — the flows here are the
+                  other pages it did capture. Re-crawl to reach and inventory your{' '}
+                  {mp.name} form.
+                </p>
+              )}
+            </div>
+          );
+        })()}
 
         {/* ── Flows — primary first, others collapsed ── */}
         <div className="mt-3 space-y-2.5">
