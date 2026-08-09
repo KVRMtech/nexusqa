@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 import tempfile
 import types
 
@@ -432,3 +433,29 @@ def test_answer_questionnaire_excludes_auth_chrome_between_questions(tmp_path):
     assert len(dp2) == 1 and dp2[0]["control_label"] == "Question 2"
     assert asyncio.run(c._answer_questionnaire(controls, "u", "fp")) == []
     assert c._port.clicks == ["No", "No"]        # 'Sign out' never clicked
+
+
+def _qsig(ordinal, opts):
+    """Replicate _answer_questionnaire's question signature so a test can force it."""
+    return "q:" + hashlib.sha256(
+        ("%d|%s" % (ordinal, "|".join(sorted(o.lower() for o in opts))))
+        .encode("utf-8")).hexdigest()[:24]
+
+
+def test_answer_questionnaire_honors_a_forced_option_for_branch_walks(tmp_path):
+    """P1: a planned branch walk forces the 'Yes' side via choice_overrides keyed
+    by the question signature — so a re-crawl can enumerate what 'Yes' reveals.
+    Unforced questions keep the negative-preference default."""
+    c = _build(tmp_path, approvals=["*"], attestation={"env_kind": "disposable"})
+    c._port = _RecordingPort()
+    controls = [
+        {"name": "Yes", "kind": "button"}, {"name": "No", "kind": "button"},   # Q1
+        {"name": "Yes", "kind": "button"}, {"name": "No", "kind": "button"},   # Q2
+    ]
+    c._choice_overrides = {_qsig(0, ["Yes", "No"]): "yes"}    # force Q1 = Yes
+    dp1 = asyncio.run(c._answer_questionnaire(controls, "u", "fp"))
+    assert dp1[0]["choice"] == "Yes"                          # forced, not the default
+    assert c._port.clicks == ["Yes"]
+    dp2 = asyncio.run(c._answer_questionnaire(controls, "u", "fp"))
+    assert dp2[0]["choice"] == "No"                           # Q2 unforced → negative
+    assert c._port.clicks == ["Yes", "No"]

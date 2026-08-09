@@ -24,13 +24,47 @@ Pure + deterministic: no clock, no I/O.
 from __future__ import annotations
 
 import hashlib
+from collections import Counter
 from typing import Any, Iterable, Mapping, Sequence
 
 __all__ = [
     "TERMINAL_SUBMIT_BOUNDARY", "TERMINAL_NO_ADVANCE", "TERMINAL_BUDGET",
     "TERMINAL_LOOP", "TERMINAL_CANCELLED", "TERMINAL_ORACLE_UNAVAILABLE",
     "COMPLETING_TERMINALS", "flow_id_for", "build_flow", "summarize",
+    "activated_signatures",
 ]
+
+
+def activated_signatures(
+    before: Iterable[Mapping[str, Any]],
+    after: Iterable[Mapping[str, Any]],
+) -> list[str]:
+    """Value-free identities of controls ``after`` an answer that were not there
+    (or not as many) ``before`` it.
+
+    This is the trigger→child signal (Journey Graph P1): answering an option can
+    REVEAL follow-up questions (a "Yes" to a health question shows its detail
+    block). Diffing the inventory just before an answer against the inventory just
+    after it names exactly what that answer activated — no page-fork, using the
+    re-observe the walk already performs.
+
+    Multiplicity matters: revealing ANOTHER "Yes/No" question adds controls whose
+    accessible name already existed, so a set-diff would miss it. We compare COUNTS
+    and report any identity whose count rose — a new field, or one more instance of
+    an existing label. Identity is ``kind:accessible-name`` — UI shape, like every
+    other label in the graph; no user value ever enters it.
+    """
+    def _key(c: Mapping[str, Any]) -> str:
+        name = str(c.get("name") or "").strip().lower()
+        kind = str(c.get("kind") or "").strip().lower()
+        return ("%s:%s" % (kind, name))[:80] if name else ""
+
+    b = Counter(_key(c) for c in before if isinstance(c, Mapping))
+    b.pop("", None)
+    a = Counter(_key(c) for c in after if isinstance(c, Mapping))
+    a.pop("", None)
+    revealed = [k for k in a if a[k] > b.get(k, 0)]   # Counter preserves order
+    return revealed[:64]
 
 #: The walk stopped at a control it may not cross without an approval — the end of
 #: the journey as far as a non-mutating crawl is concerned. The funnel WAS covered.
@@ -142,6 +176,15 @@ def build_flow(*, entry_fingerprint: str, entry_url: str, entry_title: str,
                 if isinstance(oc, Mapping):
                     rec["option_classes"] = {
                         str(k)[:80]: str(v)[:20] for k, v in list(oc.items())[:24]}
+                # What walking the taken option ACTIVATED (trigger→child, P1) —
+                # value-free control identities diffed from the re-observe. Present
+                # only when a discovery walk recorded it; the fold stores it on the
+                # walked branch so "Yes reveals these, No does not" becomes a rule.
+                rv = dp.get("reveals")
+                if isinstance(rv, Sequence) and not isinstance(rv, (str, bytes)):
+                    revs = [str(x)[:80] for x in list(rv)[:64] if x]
+                    if revs:
+                        rec["reveals"] = revs
                 cleaned.append(rec)
             if cleaned:
                 entry["decision_points"] = cleaned

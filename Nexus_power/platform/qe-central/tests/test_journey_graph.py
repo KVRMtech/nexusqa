@@ -1133,3 +1133,69 @@ def test_a_journey_with_an_outcome_is_still_named():
     src = inspect.getsource(journey_naming.name_unnamed_journeys)
     # outcomes present ⇒ the guard's `not outcomes` is False ⇒ naming proceeds
     assert "not outcomes" in src
+
+
+# ── P1: trigger→child reveals (merge_reveals pure + fold persistence) ─────────────
+
+def test_merge_reveals_unions_across_crawls_order_preserving():
+    from app.services.journey_fold import merge_reveals
+    assert merge_reveals(None, ["a", "b"]) == ["a", "b"]
+    assert merge_reveals(["a", "b"], ["b", "c"]) == ["a", "b", "c"]   # dedup, order kept
+    assert merge_reveals(["a"], None) == ["a"]
+    assert merge_reveals("not-a-list", ["x"]) == ["x"]                # bad input tolerated
+    assert merge_reveals([], []) == []
+
+
+@needs_db
+def test_fold_records_what_the_walked_option_revealed():
+    asyncio.run(_run_reveals_fold())
+
+
+async def _run_reveals_fold():
+    """A questionnaire answer of "Yes" that reveals a detail block stores those
+    control identities on the WALKED branch row; the un-walked "No" carries none.
+    This is the trigger→child rule (Q=Yes → these follow-ups)."""
+    from app.db.journey_models import JourneyBranchRow
+    from app.db.models import QecBase
+
+    engine = create_async_engine(DB_URL)
+    async with engine.begin() as conn:
+        await conn.run_sync(QecBase.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    tenant = f"qec-rev-{uuid.uuid4().hex[:10]}"
+    app_id = "rev-app"
+    original = journey_fold.tenant_scoped_qec_session
+    try:
+        journey_fold.tenant_scoped_qec_session = lambda tid: _scoped(factory, tid)
+        flow = {
+            "flow_id": "v" * 24, "entry_fingerprint": "health",
+            "entry_url": "https://a.example/apply/health", "entry_title": "Health",
+            "terminal": "submit_boundary", "completed": True, "fully_answered": True,
+            "outcome_values": [],
+            "steps": [{
+                "fingerprint": "health", "url": "u1", "title": "Health Questions",
+                "fields_filled": 0, "fields_unfilled": 0,
+                "decision_points": [{
+                    "control_signature": "q:tobacco", "control_label": "Question 1",
+                    "options": ["Yes", "No"], "choice": "Yes",
+                    "provenance": "questionnaire",
+                    "reveals": ["button:yes", "button:no", "input:cigarettes per day"],
+                }],
+            }],
+        }
+        r = await journey_fold.fold_crawl(
+            tenant_id=tenant, app_id=app_id, exploration_id="ex-rev",
+            coverage=_coverage(flow))
+        assert r["branches"] == 2
+
+        async with _scoped(factory, tenant) as s:
+            by = {b.option_label_norm: b for b in (await s.execute(
+                select(JourneyBranchRow))).scalars().all()}
+            assert by["yes"].status == BRANCH_WALKED
+            assert by["yes"].reveals == [
+                "button:yes", "button:no", "input:cigarettes per day"]
+            assert by["no"].status == BRANCH_DISCOVERED
+            assert not by["no"].reveals        # the un-walked option reveals nothing
+    finally:
+        journey_fold.tenant_scoped_qec_session = original
+        await engine.dispose()

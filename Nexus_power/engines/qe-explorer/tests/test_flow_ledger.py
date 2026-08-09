@@ -305,3 +305,41 @@ def test_build_flow_preserves_next_action_option_classes():
         "Start Over": "destructive",
         "Back to Dashboard": "navigational",
     }
+
+
+# ── P1: activated_signatures (trigger→child) + reveals passthrough ───────────────
+
+def test_activated_signatures_detects_a_brand_new_control():
+    before = [{"kind": "button", "name": "Yes"}, {"kind": "button", "name": "No"}]
+    after = before + [{"kind": "input", "name": "Details"}]
+    assert FL.activated_signatures(before, after) == ["input:details"]
+
+
+def test_activated_signatures_detects_a_revealed_same_label_question():
+    # Answering Yes reveals ANOTHER Yes/No question — same labels, higher count.
+    before = [{"kind": "button", "name": "Yes"}, {"kind": "button", "name": "No"}]
+    after = before + [{"kind": "button", "name": "Yes"}, {"kind": "button", "name": "No"}]
+    revealed = FL.activated_signatures(before, after)
+    assert "button:yes" in revealed and "button:no" in revealed
+
+
+def test_activated_signatures_empty_when_nothing_new():
+    ctrls = [{"kind": "button", "name": "Yes"}, {"kind": "button", "name": "No"}]
+    assert FL.activated_signatures(ctrls, ctrls) == []
+
+
+def test_reveals_are_carried_through_the_decision_point_sanitizer():
+    step = {
+        "fingerprint": "s0", "url": "/apply/health", "title": "Health",
+        "fields_filled": 0, "fields_unfilled": 0,
+        "decision_points": [{
+            "control_signature": "q:abc", "control_label": "Question 1",
+            "options": ["Yes", "No"], "provenance": "questionnaire",
+            "choice": "Yes", "reveals": ["button:yes", "button:no", "input:details"],
+        }],
+    }
+    f = FL.build_flow(entry_fingerprint="e", entry_url="/apply", entry_title="Apply",
+                      steps=[step], terminal=FL.TERMINAL_SUBMIT_BOUNDARY, max_steps=20)
+    dp = f["steps"][0]["decision_points"][0]
+    assert dp["reveals"] == ["button:yes", "button:no", "input:details"]
+    assert dp["choice"] == "Yes"

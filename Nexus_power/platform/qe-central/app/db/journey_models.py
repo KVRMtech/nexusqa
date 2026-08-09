@@ -203,6 +203,12 @@ class JourneyBranchRow(QecBase):
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="discovered")
     blocked_reason: Mapped[str] = mapped_column(String(400), nullable=False, default="")
     walked_in_traversal: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    #: P1 trigger→child (qec_011): value-free control identities (``kind:name``)
+    #: this option ACTIVATED when walked — a "Yes" that reveals a detail block
+    #: stores them, a "No" that reveals nothing stores none. Merged (union) across
+    #: crawls so the Yes-side and No-side reveals both accumulate. Null until a
+    #: discovery walk records it.
+    reveals: Mapped[list | None] = mapped_column(JSONB, nullable=True)
     last_status_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=_utc_now)
     created_at: Mapped[datetime] = mapped_column(

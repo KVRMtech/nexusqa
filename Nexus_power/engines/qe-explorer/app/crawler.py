@@ -2349,12 +2349,25 @@ class Crawler:
                 .encode("utf-8")).hexdigest()[:24]
             if sig in self._answered_questions:
                 continue
-            # Prefer a negative/decline answer — it minimises the follow-up
-            # questions a "Yes" tends to reveal, so the walk reaches the end.
-            chosen = next(
-                (c for c in group
-                 if str(c.get("name") or "").strip().lower() in _NEGATIVE_OPTION_HINTS),
-                group[0])
+            # A planned branch walk forces a specific answer (Journey Graph P1):
+            # branch_planner keys choice_overrides by the question's own signature
+            # → option label, so a re-crawl can walk the "Yes" side to enumerate
+            # what it reveals. Naturally gated — overrides are populated only for
+            # planned walks, so a normal crawl keeps the negative-preference below.
+            forced = self._choice_overrides.get(sig) if self._choice_overrides else None
+            chosen = None
+            if forced:
+                fnorm = str(forced).strip().lower()
+                chosen = next(
+                    (c for c in group
+                     if str(c.get("name") or "").strip().lower() == fnorm), None)
+            if chosen is None:
+                # Prefer a negative/decline answer — it minimises the follow-up
+                # questions a "Yes" tends to reveal, so the walk reaches the end.
+                chosen = next(
+                    (c for c in group
+                     if str(c.get("name") or "").strip().lower() in _NEGATIVE_OPTION_HINTS),
+                    group[0])
             try:
                 await self._port.click(chosen)
                 self._tracker.note_action()
@@ -2816,14 +2829,23 @@ class Crawler:
             # A no-op on any page without a repeated-option questionnaire (returns
             # []), so it never touches ordinary steps.
             if self._submit_enabled:
+                pre_q_controls = cur_controls    # snapshot for the trigger→child diff
                 q_dps = await self._answer_questionnaire(cur_controls, cur_url, cur_fp)
                 if q_dps:
-                    cur_dps = list(cur_dps) + q_dps   # record the question on this step
                     obs_q = await self._observe()
                     cur_controls = build_inventory(
                         obs_q.raw_controls, self._refuse_pack, url=obs_q.url)
                     cur_url = obs_q.url
                     cur_fp = state_fingerprint(obs_q.url, cur_controls, obs_q.dialog_flags)
+                    # Record what THIS answer activated (trigger→child, P1): the
+                    # controls that appeared after the click but were absent before
+                    # it. Attached to the question just answered so the fold stores
+                    # it on the walked branch — "Yes reveals these, No does not".
+                    revealed = flow_ledger.activated_signatures(
+                        pre_q_controls, cur_controls)
+                    if revealed:
+                        q_dps[-1]["reveals"] = revealed
+                    cur_dps = list(cur_dps) + q_dps   # record the question on this step
                     continue
             pick = await self._pick_advance(cur_controls, cur_url, cur_title, cur_fp)
             if pick.submit_control is not None:

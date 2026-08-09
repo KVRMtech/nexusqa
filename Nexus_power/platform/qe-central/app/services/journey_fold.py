@@ -51,6 +51,23 @@ BRANCH_WALKED = "walked"
 BRANCH_DISCOVERED = "discovered"
 BRANCH_PLANNED = "planned"
 BRANCH_BLOCKED = "blocked"
+
+
+def merge_reveals(existing: Any, new: Any) -> list[str]:
+    """Union of value-free trigger→child reveal identities (P1), order-preserving.
+
+    Called when the WALKED option of a decision point recorded what it activated.
+    Merges across crawls so a base crawl's "No" reveals and a planned re-crawl's
+    "Yes" reveals both accumulate on their own branch rows. Idempotent + capped.
+    """
+    out = list(existing) if isinstance(existing, (list, tuple)) else []
+    seen = set(out)
+    for x in (new or ()):
+        s = str(x)[:80]
+        if s and s not in seen:
+            seen.add(s)
+            out.append(s)
+    return out[:128]
 #: E1: the branch exceeds the per-journey explosion cap. Honest, with a count
 #: of what was deferred.  Never silently truncated.
 BRANCH_DEFERRED = "deferred"
@@ -297,6 +314,12 @@ async def fold_crawl(
                     # decision) → behave exactly as before.
                     raw_classes = dp.get("option_classes")
                     option_classes = raw_classes if isinstance(raw_classes, dict) else {}
+                    # P1 trigger→child: what the WALKED option activated. Only the
+                    # taken option (choice) carries reveals — it attaches below to
+                    # that option's branch row.
+                    dp_reveals = dp.get("reveals")
+                    if not isinstance(dp_reveals, (list, tuple)):
+                        dp_reveals = None
                     for opt in dp.get("options") or []:
                         opt_norm = normalize_label(str(opt))
                         if not opt_norm:
@@ -325,7 +348,7 @@ async def fold_crawl(
                                 init_status = BRANCH_BLOCKED
                             else:
                                 init_status = BRANCH_DISCOVERED
-                            session.add(JourneyBranchRow(
+                            branch = JourneyBranchRow(
                                 branch_id=_sid("branch", tenant_id, app_id, fp,
                                                sig, opt_norm),
                                 tenant_id=tenant_id, app_id=app_id, node_fp=fp,
@@ -337,7 +360,8 @@ async def fold_crawl(
                                                 if init_status == BRANCH_BLOCKED else ""),
                                 walked_in_traversal=(traversal_id
                                                      if walked_now else ""),
-                                last_status_at=now))
+                                last_status_at=now)
+                            session.add(branch)
                             report["branches"] += 1
                         elif walked_now and branch.status != BRANCH_WALKED:
                             # walked WINS — planned/blocked/discovered all
@@ -346,6 +370,10 @@ async def fold_crawl(
                             branch.walked_in_traversal = traversal_id
                             branch.blocked_reason = ""
                             branch.last_status_at = now
+                        # P1: accumulate what the walked option revealed (union
+                        # across crawls). Only the taken option carries reveals.
+                        if walked_now and dp_reveals and branch is not None:
+                            branch.reveals = merge_reveals(branch.reveals, dp_reveals)
 
     for j_id, t_id, o_vals in drift_candidates:
         try:
