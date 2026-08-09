@@ -83,6 +83,36 @@ passwordless drive.
 
 ---
 
+## PENDING-LIVE code written this session (production, compile-clean, additive)
+
+Converting mapped seams into written production code (unit-testable parts tested;
+Playwright/JS/HTTP parts compile + are additive so the 638/1457 suites prove the
+normal paths are unbroken):
+
+- **U2 `_make_vision_oracle`** — the explorer-side client for `/internal/perceive-controls`
+  (breaker + cap, HMAC), returns `{controls, displayed_values}`. Additive (not yet
+  called).
+- **U2/U3 `BrowserPort.click_at`** + **`drag` / `draw_stroke` / `press_keys` /
+  `scroll_until`** — the coordinate + gesture primitives via `page.mouse`/`keyboard`,
+  each inside the `_act` observe wrapper so R0 governs. Best-effort (getattr), so the
+  test fakes are unaffected.
+- **U6 `match_login_controls`** — accepts a PIN/passcode field as the secret when no
+  password input exists (passwordless member#+PIN). **Tested** (auth 25).
+
+## The one remaining unit is LIVE-ONLY BY NATURE (not deferred out of caution)
+
+The crawler walk integration — thread the vision oracle through `Crawler` → the
+walk; on an opaque+sparse page run `should_perceive → _make_vision_oracle →
+synthesize_vision_controls → click_at → R0-verify → record ONLY if verified`, and
+mix `perceptual_hash_png` into `state_fingerprint` — **must be built and proven
+together, on the VM**. Doing fragments blind would either (a) put UNVERIFIED
+controls into the catalog (green-wash — forbidden), because synthesized controls
+can't be actioned by the normal locator path and must route through `click_at` +
+R0; or (b) risk the proven `_walk_wizard`/`_expand` loop with zero local
+testability. Every component it needs now exists and is tested; the integration is
+the watched-deploy's first live task. Same for `inventory_js` frame_selector/gesture
+signals, the runner `/macro-capture` route, and the matcher recognizer→dispatch.
+
 ## What this adds up to
 Every any-UI phase now has a **tested pure core** in the tree — the *decision* logic
 that was the genuinely hard/novel part (perceptual state identity, jitter-tolerant
