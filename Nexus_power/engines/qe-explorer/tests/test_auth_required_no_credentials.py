@@ -250,3 +250,75 @@ def test_dedicated_login_with_a_remember_me_checkbox_still_stops(tmp_path):
     summary = asyncio.run(_build_crawler(port, tmp_path, target_url=_GATED).run())
     assert summary.stop_reason == STOP_AUTH_REQUIRED
     assert summary.coverage["auth_blocked"] is True
+
+
+def test_username_first_wall_stops_at_the_password_screen(tmp_path):
+    """Multi-step / username-first wall (email → Next → password, the Okta/Microsoft/
+    Google style): the crawl fills the identifier step and ADVANCES, meets the password
+    screen it cannot pass, and STOPS honestly — never looping the login screens to the
+    wall-clock budget. Closes the documented multi-step gap for 1000+ app shapes."""
+    screen1 = "https://app.example/login"
+    screen2 = "https://app.example/login/password"
+    pages = {
+        screen1: {"controls": [_user(), _btn("Next")],
+                  "nav": {"Next": screen2}, "title": "Sign in"},
+        screen2: {"controls": [_pass(), _btn("Sign in")], "title": "Password"},
+    }
+    port = FakeBrowser(pages, _GATED, redirects={_GATED: screen1})
+    summary = asyncio.run(_build_crawler(port, tmp_path, target_url=_GATED).run())
+    assert summary.stop_reason == STOP_AUTH_REQUIRED
+    assert summary.coverage["auth_blocked"] is True
+
+
+def test_public_email_first_funnel_is_not_stopped(tmp_path):
+    """A PUBLIC email-first funnel (email → Continue → age/coverage, NO password) must
+    NOT be stopped — a SECRET field is the ONLY proof of a login, and a public funnel
+    has none. The identifier step is walked and the funnel is explored (the false-
+    positive guard for the multi-step detection)."""
+    step1 = "https://app.example/quote/start"
+    step2 = "https://app.example/quote/details"
+    pages = {
+        step1: {"controls": [_user("Email"), _btn("Continue")],
+                "nav": {"Continue": step2}, "title": "Start"},
+        step2: {"controls": [
+            _raw("textbox", "Age", input_type="text"),
+            _raw("combobox", "Coverage", tag="select", kind="select",
+                 options=["100k", "250k"]),
+            _btn("Get quote"),
+        ], "title": "Details"},
+    }
+    port = FakeBrowser(pages, _GATED, redirects={_GATED: step1})
+    summary = asyncio.run(_build_crawler(port, tmp_path, target_url=_GATED).run())
+    assert summary.stop_reason != STOP_AUTH_REQUIRED
+    assert not summary.coverage["auth_blocked"]
+
+
+def test_public_signup_entry_is_not_stopped(tmp_path):
+    """A PUBLIC registration page (email + password + 'Create account') reached via an
+    entry redirect is NOT a login wall — a signup asks for a password but is public. The
+    crawl must explore it, never hard-stop and drop the public funnel. (Review HIGH #1.)"""
+    signup = "https://app.example/signup"
+    pages = {signup: {"controls": [_user(), _pass(), _btn("Create account")], "title": "Sign up"}}
+    port = FakeBrowser(pages, _GATED, redirects={_GATED: signup})
+    summary = asyncio.run(_build_crawler(port, tmp_path, target_url=_GATED).run())
+    assert summary.stop_reason != STOP_AUTH_REQUIRED
+    assert not summary.coverage["auth_blocked"]
+
+
+def test_member_number_first_wall_stops(tmp_path):
+    """A member-portal username-first wall (Member Number → Continue → PIN) — a common
+    US life-insurance shape — is detected: the identifier step is recognised (broadened
+    hints), walked, and the crawl STOPS at the PIN it cannot pass. (Review HIGH #2.)"""
+    screen1 = "https://app.example/login"
+    screen2 = "https://app.example/login/pin"
+    pages = {
+        screen1: {"controls": [_raw("textbox", "Member Number", input_type="text"),
+                               _btn("Continue")],
+                  "nav": {"Continue": screen2}, "title": "Member sign in"},
+        screen2: {"controls": [_raw("textbox", "PIN", input_type="text"),
+                               _btn("Sign in")], "title": "PIN"},
+    }
+    port = FakeBrowser(pages, _GATED, redirects={_GATED: screen1})
+    summary = asyncio.run(_build_crawler(port, tmp_path, target_url=_GATED).run())
+    assert summary.stop_reason == STOP_AUTH_REQUIRED
+    assert summary.coverage["auth_blocked"] is True

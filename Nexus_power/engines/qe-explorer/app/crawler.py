@@ -45,7 +45,15 @@ from . import matcher
 from . import perception
 from . import value_infer
 from . import vocab
-from .auth import Authenticator, AuthWindow, Credentials, match_login_controls
+from .auth import (
+    Authenticator,
+    AuthWindow,
+    Credentials,
+    looks_like_signup,
+    match_identifier_step,
+    match_login_controls,
+    match_secret_field,
+)
 from .browser import BrowserPort, PageObservation
 from .fingerprint import state_fingerprint
 from . import flow_ledger
@@ -861,6 +869,13 @@ class Crawler:
         # login-wall block). The explore loop checks it and stops WITHOUT treating the
         # stop as cancellation or budget exhaustion.
         self._hard_stop = False
+        # NO-CREDENTIALS AUTH-WALL tracking — single-screen AND multi-step / username-
+        # first. `_auth_flow_active`: we are inside the gated ENTRY login flow (anchored
+        # at a redirected entry that landed on a dedicated auth step). `_captured_public`:
+        # the crawl has recorded genuine public content, so any later login page is a
+        # deeper gated sub-area to SKIP, never the entry wall to abort on.
+        self._auth_flow_active = False
+        self._captured_public = False
         # Destinations we have already GROUNDED a nav click to (across all states), so
         # a nav bar repeated on every page grounds each unique route ONCE — the cost of
         # direct-nav grounding stays ~O(unique navs), not O(states × links).
@@ -1327,71 +1342,144 @@ class Crawler:
             self.crawl_id,
         )
 
-    def _note_login_wall_without_credentials(
-        self, controls: Sequence[dict[str, Any]], requested_url: str = "",
-        landed_url: str = "",
-    ) -> bool:
-        """Detect a GATED entry when the crawl holds NO way to authenticate.
+    def _is_dedicated_auth_step(self, controls: Sequence[dict[str, Any]]) -> bool:
+        """Is this page a DEDICATED login STEP — a full login form, a username-first
+        identifier step, or a secret (password/PIN) screen — and NOT content-rich?
 
-        Sibling of :meth:`_note_login_wall_while_authenticated` for the opposite case:
-        NO credentials AND no injected session. The same unambiguous, language-agnostic
-        signal — the app REDIRECTED our request (requested != landed) to a screen
-        presenting a FULL login form (username + secret + submit) — means the target is
-        behind a sign-in the crawl cannot pass. Returns True when it fires, so the
-        caller records the wall as evidence and STOPS honestly, and the crawl never
-        fills synthetic data into a login form and loops it (the client's "still
-        running" crawl that read out as budget_max_wall_ms).
-
-        Conservative by construction (no false positive on a public app): a bare
-        "Sign in" LINK is not a full form; a page that lands where we asked is not a
-        redirect; a content-rich page that merely EMBEDS a login widget is not a
-        dedicated wall (checked below); and an app that HAS credentials or an injected
-        session is handled by the paths above — none of those trip this. SCOPE: a
-        DEDICATED SINGLE-SCREEN login wall. Multi-step / username-first walls (email →
-        Next → password) are not matched here and fall back to existing behaviour — a
-        known gap, not a false claim.
+        A page that merely EMBEDS a login widget beside real business content (a
+        marketing home with a sign-in box next to a public quote funnel), or a public
+        multi-step funnel, is NOT a dedicated step: it carries substantial OTHER
+        business inputs. Counting every form-field kind (excluding the matched
+        identifier + secret by identity) keeps this generic — a radio/checkbox-driven
+        funnel is not mislabeled, and a real login carrying a lone "remember me" still
+        qualifies. Language-agnostic: only control SHAPES, never URL/copy.
         """
-        if self._credentials or self._session_injected:
-            return False
-        if self._auth_blocked_reason:
-            return False
-        if self._guard.phase == Phase.AUTH:
-            return False
-        if not requested_url or not landed_url:
-            return False
-        if _url_key(requested_url) == _url_key(landed_url):
-            return False
         login = match_login_controls(controls)
-        if login is None:
+        identifier = match_identifier_step(controls)
+        secret = match_secret_field(controls)
+        if login is None and identifier is None and secret is None:
             return False
-        # Only a DEDICATED sign-in screen is a WALL. A content-rich page that merely
-        # embeds a sign-in widget (a marketing home with a login box beside a public
-        # quote funnel) is NOT — stopping there would discard real public coverage. A
-        # dedicated login has essentially only the login form: no substantial OTHER
-        # fillable input beyond the matched identifier + its secret. Count EVERY form-
-        # field kind (text/date/select/checkbox/radio/toggle) so a radio- or checkbox-
-        # driven public funnel is not mislabeled; exclude the identifier AND the secret
-        # by identity (the secret may be a PIN text field, so `_is_password` alone is not
-        # enough). Allow ONE extra — a "remember me" checkbox is normal on a real login.
-        skip = {
-            str(login.username.get("name") or "").strip().lower(),
-            str(login.password.get("name") or "").strip().lower(),
-        }
+        skip = {""}
+        if login is not None:
+            skip.add(str(login.username.get("name") or "").strip().lower())
+            skip.add(str(login.password.get("name") or "").strip().lower())
+        if identifier is not None:
+            skip.add(str(identifier.get("name") or "").strip().lower())
+        if secret is not None:
+            skip.add(str(secret.get("name") or "").strip().lower())
         other_inputs = [
             c for c in controls
             if str(c.get("kind") or "") in _FILLABLE_KINDS
             and not _is_password(c)
             and str(c.get("name") or "").strip().lower() not in skip
         ]
-        if len(other_inputs) > 1:
+        return len(other_inputs) <= 1
+
+    def _has_public_content(self, controls: Sequence[dict[str, Any]]) -> bool:
+        """Genuine public content, not a bare auth step: ≥2 fillable business inputs, or
+        ≥3 interactive controls (fields / links / buttons). A lone identifier or secret
+        plus an advance button is NOT content — leaving such a page UNLATCHED avoids
+        green-washing a gated app we merely failed to recognise as an auth step.
+        """
+        business = sum(
+            1 for c in controls
+            if str(c.get("kind") or "") in _FILLABLE_KINDS and not _is_password(c))
+        interactive = sum(
+            1 for c in controls
+            if str(c.get("kind") or "") in _FILLABLE_KINDS
+            or str(c.get("kind") or "") in ("link", "button"))
+        return business >= 2 or interactive >= 3
+
+    def _classify_no_cred_auth(
+        self, controls: Sequence[dict[str, Any]], item: FrontierItem,
+        requested_url: str, landed_url: str,
+    ) -> str:
+        """For a crawl with NO credentials/session: is this state a login WALL it cannot
+        pass? Handles single-screen AND multi-step / username-first walls (email → Next
+        → password) generically, on any app in any language.
+
+        Returns ``'stop'`` (a SECRET we cannot pass, still inside the gated entry login
+        flow → honest hard stop), ``'continue'`` (a username-first identifier step — let
+        the crawl fill it and advance so the next screen's secret is reached), or ``''``
+        (not a wall → normal behaviour).
+
+        The SECRET field is the proof of a login (no public form asks for a password);
+        the gated flow is anchored at a REDIRECTED entry landing on a dedicated auth
+        step; once genuine PUBLIC content is captured the entry was not gated, so a
+        deeper login page is a sub-area to SKIP, never the entry wall to abort on.
+        """
+        if self._credentials or self._session_injected:
+            return ""
+        if self._captured_public:
+            return ""
+        dedicated = self._is_dedicated_auth_step(controls)
+        if not self._auth_flow_active:
+            is_entry = item.depth == 0 and not item.parent_fingerprint
+            redirected = _url_key(requested_url) != _url_key(landed_url)
+            if is_entry and redirected and dedicated:
+                self._auth_flow_active = True
+            else:
+                # Genuine public CONTENT (not a bare, unrecognised auth step) marks the
+                # app public so no later login page can abort the crawl. A minimal page we
+                # could not classify is left UNLATCHED — never green-washed as public.
+                if not dedicated and self._has_public_content(controls):
+                    self._captured_public = True
+                return ""
+        if not dedicated:
+            # The gated flow led to real public content → it was not a login wall (or we
+            # are past it) — stop treating this crawl as gated.
+            self._captured_public = True
+            self._auth_flow_active = False
+            return ""
+        if match_secret_field(controls) is not None:
+            if looks_like_signup(controls):
+                # A public REGISTRATION page, not a login wall — explore it; the flow was
+                # not gated after all (never drop a public signup funnel).
+                self._captured_public = True
+                self._auth_flow_active = False
+                return ""
+            self._auth_blocked_reason = AUTH_NO_CREDENTIALS
+            logger.warning(
+                "qec.crawler.auth_required_no_credentials crawl_id=%s landed=%s — the "
+                "entry is behind a login wall (a secret field, no credentials or session "
+                "supplied); stopping honestly (authenticated areas NOT covered).",
+                self.crawl_id, landed_url)
+            return "stop"
+        return "continue"
+
+    def _wizard_auth_gate(self, controls: Sequence[dict[str, Any]]) -> bool:
+        """The ``_walk_wizard`` counterpart of :meth:`_classify_no_cred_auth` for a crawl
+        with no credentials/session.
+
+        Returns True when a SECRET step (password/PIN) inside the gated entry login flow
+        must STOP the crawl — a username-first wall whose password sits on a step the
+        outer ``_expand`` classifier never re-sees (the walk advances through it inline).
+        Also CLEARS the gated-flow state when the walk instead reaches genuine public
+        content, so a public multi-step funnel — which has no secret — is neither stopped
+        nor leaves a later page mislabeled a wall.
+        """
+        if self._credentials or self._session_injected:
             return False
-        self._auth_blocked_reason = AUTH_NO_CREDENTIALS
-        logger.warning(
-            "qec.crawler.auth_required_no_credentials crawl_id=%s requested=%s "
-            "landed=%s — the entry redirected to a dedicated login wall and neither "
-            "credentials nor a session were supplied; stopping honestly (authenticated "
-            "areas NOT covered).", self.crawl_id, requested_url, landed_url)
-        return True
+        if self._captured_public or not self._auth_flow_active:
+            return False
+        if match_secret_field(controls) is not None:
+            if looks_like_signup(controls):
+                # A public REGISTRATION page reached in the walk — not a login wall.
+                self._captured_public = True
+                self._auth_flow_active = False
+                return False
+            self._auth_blocked_reason = AUTH_NO_CREDENTIALS
+            logger.warning(
+                "qec.crawler.auth_required_no_credentials crawl_id=%s — a multi-step "
+                "login wall reached a secret step with no credentials; stopping honestly "
+                "(authenticated areas NOT covered).", self.crawl_id)
+            return True
+        if not self._is_dedicated_auth_step(controls):
+            # The walk reached genuine public content → not a login wall. Clear the gated
+            # flow so no later page can be mislabeled or wrongly aborted.
+            self._captured_public = True
+            self._auth_flow_active = False
+        return False
 
     # -- EXPLORE phase ---------------------------------------------------------
 
@@ -1479,15 +1567,14 @@ class Crawler:
         # Requested vs landed is what separates "the app sent us to sign in" from
         # "the crawl followed a link to the sign-in page".
         self._note_login_wall_while_authenticated(controls, item.url, obs.url)
-        # No credentials AND no session, and the app REDIRECTED the ENTRY to a dedicated
-        # login wall → nothing to sign in with. Record the wall as evidence and STOP
-        # honestly, rather than filling synthetic data into the login form and looping it
-        # until the wall-clock budget expires (the client's "still running" crawl). Scoped
-        # to the ENTRY: a DEEPER gated sub-area (a public site whose /account redirects to
-        # /login) must NOT abort the crawl or relabel the public pages already covered — it
-        # is skipped like any other unreachable state and the crawl carries on.
-        is_entry = item.depth == 0 and not item.parent_fingerprint
-        if is_entry and self._note_login_wall_without_credentials(controls, item.url, obs.url):
+        # Honest login-wall handling for a NO-credentials crawl — single-screen AND
+        # multi-step / username-first (email → Next → password). Stop at the SECRET we
+        # cannot pass, BEFORE filling it and looping to the wall-clock budget (the
+        # client's "still running" crawl). A genuinely public app — or a DEEPER gated
+        # sub-area once public content is covered — is never aborted (see
+        # _classify_no_cred_auth). A username-first wall walked INLINE by _walk_wizard is
+        # caught there by _secret_wall_reached; this call establishes the gated flow.
+        if self._classify_no_cred_auth(controls, item, item.url, obs.url) == "stop":
             wall_fp = state_fingerprint(obs.url, controls, obs.dialog_flags)
             if wall_fp not in self._visited_fingerprints:
                 self._visited_fingerprints.add(wall_fp)
@@ -2994,6 +3081,19 @@ class Crawler:
             return rec
 
         while True:
+            # NO-CREDENTIALS multi-step login wall: this wizard step presents a SECRET
+            # (password/PIN) we cannot fill, still inside the gated entry login flow →
+            # STOP honestly before submitting synthetic data and looping. The walk owns
+            # recording, so record this step and end (the explore loop sees _hard_stop).
+            if self._wizard_auth_gate(cur_controls):
+                self._record_state(
+                    url=cur_url, title=cur_title, controls=cur_controls, fingerprint=cur_fp,
+                    actions=cur_actions, screenshots=[cur_shot],
+                    first_seen_ms=cur_first, last_seen_ms=self._clock.now_ms(),
+                    displayed_values=cur_dv, network_calls=cur_nc)
+                self._stop_reason = STOP_AUTH_REQUIRED
+                self._hard_stop = True
+                return True
             # Answer a bare-button questionnaire BEFORE deciding the advance: the
             # gated "Continue" only unlocks once the questions are answered, so
             # without this the walk dead-ends on a page like /apply/lifestyle. One

@@ -47,12 +47,28 @@ DEFAULT_USERNAME_HINTS: tuple[str, ...] = (
     "username", "user name", "user id", "userid", "email", "e-mail",
     "login", "account", "member id", "user",
 )
+#: BROADER identifier hints for RECOGNISING a username-first STEP-1 across member /
+#: policy / customer portals (the beachhead) WITHOUT broadening the login username
+#: matcher itself (match_login_controls keeps DEFAULT_USERNAME_HINTS). Value-free stems.
+IDENTIFIER_STEP_HINTS: tuple[str, ...] = DEFAULT_USERNAME_HINTS + (
+    "member", "membership", "member number", "member no", "policy", "policy number",
+    "policy no", "customer", "customer id", "customer number", "subscriber",
+    "account number", "national id", "ssn", "social security", "phone", "mobile",
+)
 #: Default accessible-name hints for the SUBMIT control.  Includes "continue" /
 #: "next" so a MULTI-STEP login (username page → password page) and an MFA step
 #: (enter code → verify) are advanced by the same matcher.
 DEFAULT_SUBMIT_HINTS: tuple[str, ...] = (
     "sign in", "signin", "log in", "login", "log on", "logon",
     "continue", "submit", "next", "go", "enter", "verify", "confirm",
+)
+#: REGISTRATION-verb hints. A page carrying one of these (or two password fields) is a
+#: public SIGN-UP page, NOT a login wall — a credential-less crawl must explore it, never
+#: stop. Kept distinct from the login submit verbs above.
+DEFAULT_SIGNUP_HINTS: tuple[str, ...] = (
+    "create account", "create an account", "create your account", "create profile",
+    "sign up", "signup", "register", "registration", "join now", "enroll",
+    "get started", "new account", "open account", "open an account",
 )
 #: Accessible-name hints for a ONE-TIME-CODE / OTP field (MFA second factor).  A
 #: field matching these that is NOT a password is filled with the computed code.
@@ -378,6 +394,63 @@ def match_login_controls(
     if submit is None:
         return None
     return LoginControls(username=dict(username), password=dict(password), submit=dict(submit))
+
+
+def match_secret_field(
+    controls: Sequence[Mapping[str, Any]],
+) -> Optional[Mapping[str, Any]]:
+    """The screen's SECRET control — a password input, or a PIN/passcode text field
+    (U6) — or ``None`` when the screen presents no secret.
+
+    A secret is the unambiguous, language-agnostic proof that a screen is a login STEP:
+    no public business form asks for a password or PIN. A credential-less crawl that
+    reaches one has hit a wall it cannot pass, whether the login is single-screen or the
+    password sits on a later screen of a username-first flow.
+    """
+    return _match_password_control(controls) or _match_secret_control(controls)
+
+
+def looks_like_signup(controls: Sequence[Mapping[str, Any]]) -> bool:
+    """Is this a public REGISTRATION page rather than a login? A signup page legitimately
+    asks for a password but is PUBLIC — a credential-less crawl must explore it, never
+    stop and mislabel it a login wall. Language-agnostic shapes: a create/register-verb
+    submit button, or TWO password fields (password + confirm).
+    """
+    for c in controls:
+        if _norm(c.get("kind")) == "button" and _name_matches_any(
+                str(c.get("name")), DEFAULT_SIGNUP_HINTS):
+            return True
+    return sum(1 for c in controls if _is_password(c)) >= 2
+
+
+def match_identifier_step(
+    controls: Sequence[Mapping[str, Any]],
+    *,
+    username_hints: Sequence[str] = IDENTIFIER_STEP_HINTS,
+    submit_hints: Sequence[str] = DEFAULT_SUBMIT_HINTS,
+) -> Optional[Mapping[str, Any]]:
+    """A username-first STEP-1 login screen — a HINT-MATCHED identifier field
+    (email / username / member#) plus an advance/submit control, and NO secret on this
+    screen (the password comes on a later screen). Returns the identifier control, or
+    ``None``.
+
+    The identifier MUST be hint-matched (never a bare "search" box), so a public
+    single-field form is not mistaken for a login step. Lets a credential-less crawl
+    recognise the first step of a multi-step wall and walk to the secret to stop
+    honestly, instead of filling synthetic data and looping.
+    """
+    if match_secret_field(controls) is not None:
+        return None
+    identifier = next(
+        (c for c in _text_fields(controls)
+         if _name_matches_any(str(c.get("name")), username_hints)),
+        None,
+    )
+    if identifier is None:
+        return None
+    if _match_submit_control(controls, submit_hints) is None:
+        return None
+    return dict(identifier)
 
 
 def match_otp_control(
