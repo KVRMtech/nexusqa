@@ -2502,10 +2502,12 @@ class Crawler:
         logger.warning(
             "qec.wizard.stuck_inventory url=%s n=%d controls=%s",
             (page_url or "")[:120], len(controls),
-            [{"name": str(c.get("name") or "")[:36], "kind": c.get("kind"),
-              "role": c.get("role"), "pressed": c.get("pressed"),
-              "checked": c.get("aria_checked"), "group": str(c.get("group_key") or "")[:20],
-              "testid": str(c.get("testid") or "")[:24], "css": str(c.get("css_hint") or "")[:28],
+            [{"name": str(c.get("name") or "")[:30], "kind": c.get("kind"),
+              # anchor/landmark decide whether an identical bare button can be
+              # targeted at all: a per-question container name is the only handle.
+              "anchor": str((c.get("anchor") or {}).get("label") or "")[:40],
+              "landmark": str((c.get("landmark") or {}).get("name") or "")[:40],
+              "group": str(c.get("group_key") or "")[:16],
               "dis": bool(c.get("disabled")), "dng": bool(c.get("danger"))}
              for c in controls][:50],
         )
