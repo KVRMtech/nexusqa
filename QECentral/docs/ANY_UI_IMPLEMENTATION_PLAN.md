@@ -10,6 +10,12 @@ ladders (perceive: a11y tree → shadow/frame → vision → record-once → hum
 semantic → positional → coordinate → gesture → recorded macro), with a rung for
 every control and **coverage reported by rung** so a "covered" claim is always earned.
 
+**Scope (stated, not implied — G5):** "any UI" = anything a Chromium page renders —
+HTML/SPA/WASM/Flutter Web/canvas/WebGL/embedded vendor frames/Electron-style web
+content. **Native** mobile/desktop (iOS, Android, WPF) is OUT of this engine's
+scope; if the product wants it, that is a separate initiative with an Appium-class
+driver. Stating the boundary is part of the honest claim.
+
 ---
 
 ## 0. How to read this plan (and the big surprise)
@@ -129,33 +135,58 @@ low-confidence; closed shadow still opaque. **Guardrails.** In-frame mutation st
 under `classify_request` phase gate. **DoD.** A control inside a cross-origin vendor
 iframe appears in the inventory and is actionable. **Depends on.** U0.
 
-### U2 — wire the vision Perceiver (join the dead-ended path)  ·  size L
-**Objective.** Give the explorer eyes: drive DOM-opaque surfaces (canvas / Flutter
-Web / WebGL / PDF) that `OPAQUE_JS` already **detects** but nothing **drives**.
-**Changes.** (a) **Per-element operate** — `main.py` clone `_make_medic_oracle`
-(487) as `_make_vision_oracle`: capture the element **bounding box** (`locator
+### U2 — vision Perceiver + the pixel-evidence layer  ·  size XL
+**Objective.** Give the explorer eyes **and keep the evidence real**: drive
+DOM-opaque surfaces (canvas / Flutter Web / WebGL / PDF) that `OPAQUE_JS` already
+**detects** but nothing **drives** — while preserving state identity (G1), outcome
+capture (G2), and stable catalog identity (G3) on those surfaces. Without G1–G3 a
+canvas app produces garbage journeys, no evidence, and a churning catalog — so they
+are in-phase, not follow-ups.
+**Changes.**
+(a) **Per-element operate** — `main.py` clone `_make_medic_oracle` (487) as
+`_make_vision_oracle`: capture the element **bounding box** (`locator
 .bounding_box()`) + a **cropped** screenshot (fixing the bbox-relative vs full_page
 mismatch), POST `/internal/vision-operate`, translate the returned bbox-relative
 `click_x/y` to a page coordinate, execute via a new `click_at`, **R0-verify**. Wire
 onto `PlaywrightBrowserPort.__init__` (891) beside `medic_oracle`; add the vision
-rung in `_act_with_ladder` (1209) *after* the text medic. (b) **Page Perceiver** —
-new `vision_medic` fn + `/internal/perceive-controls` returning `controls[]` with
-bboxes; hook at `crawler._expand` opaque block (1455-1462) and the `_walk_wizard`
-sparse-controls point (2895): when `build_inventory` is sparse AND `collect_opaque`
-says canvas/cross-origin, perceive → synthesize coordinate-addressable control
-records → feed the **same** `build_inventory→fill` path → R0-verify each.
+rung in `_act_with_ladder` (1209) *after* the text medic.
+(b) **Page Perceiver** — new `vision_medic` fn + `/internal/perceive-controls`
+returning `controls[]` with bboxes; hook at `crawler._expand` opaque block
+(1455-1462) and the `_walk_wizard` sparse-controls point (2895): when
+`build_inventory` is sparse AND `collect_opaque` says canvas/cross-origin,
+perceive → synthesize coordinate-addressable control records → feed the **same**
+`build_inventory→fill` path → R0-verify each.
+(c) **G1 — state identity on pixel UIs.** `fingerprint.state_fingerprint` keys the
+walk AND the journey nodes; a canvas app changes screens with the same URL and a
+near-empty DOM, collapsing every screen into one node. When the DOM is sparse, mix
+a **coarse perceptual hash** of the screenshot (downscaled, pure, explorer-side)
+into the fingerprint; add **pixel-stability settle** for canvas (DOM quiescence
+never fires on repaints).
+(d) **G2 — evidence reading.** The Perceiver contract also returns
+`displayed_values[]` (label / text / `value_infer` type), provenance-tagged
+vision, feeding the same outcome-capture path — so a canvas journey carries its
+premium/decision/policy-number proof, not just navigation.
+(e) **G3 — stable identity.** Vision control signature = normalized perceived
+label + role + **coarse bbox grid bucket** (jitter-tolerant), feeding
+`question_id_for`; vision-sourced catalog rows carry provenance so `catalog_diff`
+damps expected OCR wobble instead of crying wolf every re-crawl.
 **Flag.** `QEC_CRAWL_VISION_ENABLED` (exists) AND a **new** `TenantProvisioningRow
 .vision_enabled` (migration) — ANDed in `autonomy_flags`. `vision_operate` must
 **enforce** this gate (today HMAC-only). Explorer-side breaker + max-calls in
 `_make_vision_oracle`. Reconcile the 10-vs-20 default.
 **Tests.** oracle factory (scripted fake vision), bbox→page-coord translation,
-Perceiver synthesizes control records, R0 gates every vision action, breaker trips.
+Perceiver synthesizes control records, R0 gates every vision action, breaker trips;
+G1: fingerprint mixes the hash only when sparse + two distinct canvas screens get
+distinct fingerprints; G2: displayed_values parsed + typed; G3: signature stable
+across jittered bboxes/labels.
 **Guardrails (Δ3).** Coordinate clicks refused in AUTH/SUBMIT unless URL passes the
 irreversible check; only run under `classify_request` containment.
 **Coverage.** Vision actions tagged `G_INFERRED` until R0-confirmed, then
 `G_LIVE_CONFIRMED`; recorded via the U5 ladder.
-**DoD.** A Flutter-Web / canvas page is catalogued and a control on it is clicked +
-verified. **Depends on.** U0; the server-side vision path already exists.
+**DoD.** A Flutter-Web / canvas page yields **distinct journey nodes per screen**,
+a **captured outcome value**, **stable question_ids** across two perceives, and a
+control on it **clicked + verified**. **Depends on.** U0; the server-side vision
+path already exists.
 
 ### U3 — universal widget interaction (gesture/keyboard + the verification oracle)  ·  size XL
 **Objective.** Operate the hard widget classes — and, the load-bearing part (Δ2),
@@ -173,14 +204,21 @@ widget. (d) **The verification oracle (the crux)** — extend `browser.verify_in
 (200) with read-backs for gesture outcomes: a drag proven by DOM order change, a
 draw proven by a canvas non-empty / pixel-delta check, a slider by
 `aria-valuenow`/value, a combobox by committed option. Where no read-back exists →
-honest `intent_met=None`, `G_INFERRED`, descend.
+honest `intent_met=None`, `G_INFERRED`, descend. (e) **Replay compile (G4)** — a
+vision/gesture step must compile into the generated, runnable journey step:
+prefer a semantic locator when one exists, else the **recorded bbox + `click_at`
+with a drift guard**, else re-perceive at run time / a recorded macro (U4). Each
+generated step carries its **rung** on the script-fidelity scorecard, so a client
+sees which steps are DOM-proven vs vision-replayed.
 **Flag.** `QEC_WIDGET_DRIVERS_ENABLED` + per-widget sub-flags — ship one widget class
 at a time. **Tests.** each recognizer; each driver through the scripted fake; each
-verify_intent gesture read-back (proven vs unverifiable). **Guardrails.** every rung
-already R0-gated; gestures inherit the coordinate-safety posture.
+verify_intent gesture read-back (proven vs unverifiable); a vision step compiles to
+a replayable step carrying its rung. **Guardrails.** every rung already R0-gated;
+gestures inherit the coordinate-safety posture.
 **Coverage.** a widget is PROVEN only when its read-back fires; else `G_INFERRED`.
 **DoD.** signature pad drawn + verified (feeds the built `esign` recognizer); a
-drag-reorder proven by order change. **Depends on.** U2 (coordinates); incremental.
+drag-reorder proven by order change; a vision step replays through the runner.
+**Depends on.** U2 (coordinates); incremental.
 
 ### U4 — generalize record-once from login to ANY widget/flow  ·  size M
 **Objective.** For anything vision/gesture can't ground, a human demonstrates it
@@ -193,7 +231,8 @@ domain-agnostic **`recipe_from_observed_macro`** (drop `_verify_document_steps` 
 `_assert_home_step` / `login_type_key`). Add runner `/macro-capture/start|save`
 (clone `/auth-capture`) + a replay path reusing the recipe interpreter. Unresolved →
 `TOUCH_WIDGET_RECORD` (built) → replays; still-unresolved → `TOUCH_WIDGET_RESOLVE`
-human, counted.
+human, counted. Recorded macros are also the **runtime fallback for vision steps**
+that cannot re-ground at run time (G4).
 **Flag.** `QEC_MACRO_RECORD_ENABLED`. **Tests.** a recorded non-login macro replays;
 CAPTCHA routes to the human rung, never auto-solved. **DoD.** an operator records a
 widget once → the crawl replays it. **Depends on.** the record-once login stack (exists).
@@ -233,8 +272,11 @@ U0 ─► U1 ─► U2 ─► U3 (widget-by-widget) ─► U5
                       └── U4 (parallel) ──┘
 U6 folds in anytime after U0
 ```
-- **Critical path to "drives a canvas/Flutter app":** U0 → U2. Because the vision
-  server-side already exists, **U2 is mostly wiring** — the fastest high-impact win.
+- **Critical path to "drives a canvas/Flutter app":** U0 → U2. The vision server
+  side already exists, so the operate wiring is fast — but U2 also carries the
+  **pixel-evidence layer** (G1 state identity, G2 outcome reading, G3 stable
+  identity): a canvas app without those produces garbage journeys and a churning
+  catalog. Ship the wiring first; **U2 is not DONE without G1–G3.**
 - **The load-bearing phase is U3's verification oracle (Δ2).** Until gesture/coordinate
   actions have read-backs, any-UI coverage on those surfaces is honestly `G_INFERRED`,
   not PROVEN. Invest there — it's what makes "any UI" a *proof*, not a *click-through*.
