@@ -569,6 +569,73 @@ def _make_medic_oracle(
     return medic
 
 
+def _make_vision_oracle(
+    http_client: httpx.AsyncClient, tenant_id: str, crawl_id: str,
+):
+    """Return an async callable the crawler invokes on a DOM-opaque page (when
+    ``perception.should_perceive`` is true): POST the page SCREENSHOT to
+    qe-central's ``/internal/perceive-controls`` (U2), which asks the vision LLM to
+    enumerate the interactive controls + displayed outcome values it can see.
+
+    Contract: ``perceive(screenshot_b64, page_context) -> {"controls": [...],
+    "displayed_values": [...]}``. Same resilience as the medic oracle — per-crawl
+    circuit breaker + call cap (reuses the medic caps; no separate config). Never
+    raises; empties on any failure. The server side enforces the vision flag, so a
+    disabled tenant gets empties here.
+    """
+    state = {"consecutive_failures": 0, "circuit_open": False,
+             "calls": 0, "cap_logged": False}
+    empty = {"controls": [], "displayed_values": []}
+
+    async def perceive(screenshot_b64: str, page_context: dict[str, Any]) -> dict[str, Any]:
+        if state["circuit_open"] or not screenshot_b64:
+            return dict(empty)
+        if state["calls"] >= settings.medic_oracle_max_calls:
+            if not state["cap_logged"]:
+                state["cap_logged"] = True
+                logger.warning(
+                    "qec.explorer.vision_oracle_cap_reached crawl_id=%s cap=%d",
+                    crawl_id, settings.medic_oracle_max_calls)
+            return dict(empty)
+        state["calls"] += 1
+        body = {"tenant_id": tenant_id, "screenshot_b64": screenshot_b64,
+                "page_context": page_context or {}}
+        payload = json.dumps(body, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        signature = settings.sign_payload(payload)
+        url = settings.callback_url.rstrip("/") + "/internal/perceive-controls"
+        try:
+            resp = await http_client.post(
+                url, content=payload,
+                headers={
+                    "Content-Type": "application/json",
+                    "X-QEC-Signature": signature,
+                    "X-QEC-Token": settings.explorer_token,
+                },
+                timeout=settings.medic_oracle_timeout_s,
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                controls = data.get("controls")
+                if isinstance(controls, list):
+                    state["consecutive_failures"] = 0
+                    values = data.get("displayed_values")
+                    return {"controls": controls,
+                            "displayed_values": values if isinstance(values, list) else []}
+        except Exception as exc:
+            logger.warning("qec.explorer.vision_oracle_failed crawl_id=%s error=%s",
+                           crawl_id, str(exc)[:200])
+        state["consecutive_failures"] += 1
+        if (state["consecutive_failures"] >= settings.medic_oracle_breaker_threshold
+                and not state["circuit_open"]):
+            state["circuit_open"] = True
+            logger.warning(
+                "qec.explorer.vision_oracle_circuit_open crawl_id=%s failures=%d",
+                crawl_id, state["consecutive_failures"])
+        return dict(empty)
+
+    return perceive
+
+
 # ─── Job runner (owns the Playwright lifecycle) ──────────────────────────────
 
 
