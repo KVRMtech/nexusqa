@@ -80,16 +80,18 @@ _DECISION_BLOCKED_TERMINALS = frozenset({"loop", "no_advance"})
 async def autonomy_flags(tenant_id: str) -> dict[str, bool]:
     """The tenant's autonomy posture, FAIL-CLOSED: each capability needs BOTH
     its env-level switch AND the tenant's explicit flag."""
-    tenant_branch = tenant_autowalk = False
+    tenant_branch = tenant_autowalk = tenant_vision = False
     try:
         async with tenant_scoped_qec_session(tenant_id) as session:
             row = (await session.execute(
                 select(TenantProvisioningRow.branch_walks_enabled,
-                       TenantProvisioningRow.journey_autowalk).where(
+                       TenantProvisioningRow.journey_autowalk,
+                       TenantProvisioningRow.vision_enabled).where(
                     TenantProvisioningRow.tenant_id == tenant_id,
                 ))).one_or_none()
             if row is not None:
-                tenant_branch, tenant_autowalk = bool(row[0]), bool(row[1])
+                tenant_branch, tenant_autowalk, tenant_vision = (
+                    bool(row[0]), bool(row[1]), bool(row[2]))
     except Exception as exc:
         logger.warning("qec.branch_planner.flags_read_failed",
                        extra={"tenant_id": tenant_id, "error": str(exc)[:200]})
@@ -97,6 +99,8 @@ async def autonomy_flags(tenant_id: str) -> dict[str, bool]:
         "branch_walks": settings.branch_walks_enabled and tenant_branch,
         "autowalk": (settings.journey_autowalk_enabled and tenant_autowalk
                      and settings.branch_walks_enabled and tenant_branch),
+        # U2 — vision double-gate: env flag AND tenant flag, fail-closed.
+        "vision": settings.crawl_vision_enabled and tenant_vision,
     }
 
 

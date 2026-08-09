@@ -88,6 +88,11 @@ class TenantProvisioningRow(QecBase):
     journey_autowalk: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False,
     )
+    #: U2 — per-tenant vision autonomy (double-gate with QEC_CRAWL_VISION_ENABLED),
+    #: fail-closed. The vision Perceiver / coordinate rung acts only when BOTH are on.
+    vision_enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False,
+    )
     actor: Mapped[str] = mapped_column(String(200), nullable=False, default="")
     reason: Mapped[str] = mapped_column(Text, nullable=False, default="")
     created_at: Mapped[datetime] = mapped_column(
