@@ -109,20 +109,22 @@ async def _run_persona_gen():
 
         # A cigarettes field + a tobacco questionnaire question that reveals it.
         async with _scoped(factory, tenant) as s:
+            # ids are PKs — scope by tenant so reruns on a persistent DB don't collide.
             s.add(JourneyNodeRow(
-                node_id="n1", tenant_id=tenant, app_id=app_id, fingerprint="fp1",
-                url="u", title="Health", controls_inventory=[
+                node_id=f"n1-{tenant}", tenant_id=tenant, app_id=app_id,
+                fingerprint="fp1", url="u", title="Health", controls_inventory=[
                     {"name": "Cigarettes Per Day", "signature": "sig-cig",
                      "type": "number", "question_id": child}]))
             s.add(JourneyBranchRow(
-                branch_id="b-yes", tenant_id=tenant, app_id=app_id, node_fp="fp1",
-                control_signature="q:tobacco", control_label_norm="tobacco use",
-                option_label_norm="yes", status="walked",
-                reveals=["input:cigarettes per day"]))
+                branch_id=f"b-yes-{tenant}", tenant_id=tenant, app_id=app_id,
+                node_fp="fp1", control_signature="q:tobacco",
+                control_label_norm="tobacco use", option_label_norm="yes",
+                status="walked", reveals=["input:cigarettes per day"]))
             s.add(JourneyBranchRow(
-                branch_id="b-no", tenant_id=tenant, app_id=app_id, node_fp="fp1",
-                control_signature="q:tobacco", control_label_norm="tobacco use",
-                option_label_norm="no", status="discovered"))
+                branch_id=f"b-no-{tenant}", tenant_id=tenant, app_id=app_id,
+                node_fp="fp1", control_signature="q:tobacco",
+                control_label_norm="tobacco use", option_label_norm="no",
+                status="discovered"))
 
         await persona_journeys.register_persona(
             tenant_id=tenant, app_id=app_id, name="Tobacco",

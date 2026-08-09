@@ -42,9 +42,11 @@ async def _scoped(factory, tenant):
 async def _add_node(factory, tenant, app_id, fp, controls, url="u", title="P"):
     from app.db.journey_models import JourneyNodeRow
     async with _scoped(factory, tenant) as s:
+        # node_id must be globally unique (PK) — scope by tenant so reruns on a
+        # persistent DB don't collide (production uses _sid(tenant, app, fp)).
         s.add(JourneyNodeRow(
-            node_id=f"n-{fp}", tenant_id=tenant, app_id=app_id, fingerprint=fp,
-            url=url, title=title, controls_inventory=controls))
+            node_id=f"n-{tenant}-{fp}", tenant_id=tenant, app_id=app_id,
+            fingerprint=fp, url=url, title=title, controls_inventory=controls))
 
 
 @needs_db

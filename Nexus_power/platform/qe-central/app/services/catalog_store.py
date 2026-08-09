@@ -73,6 +73,9 @@ async def _load_graph(
         "control_signature": b.control_signature,
         "control_label_norm": b.control_label_norm,
         "option_label_norm": b.option_label_norm,
+        # reveals is what makes a branch a trigger→child RULE — without it
+        # rules_from_branches produces nothing and no journey ever branches.
+        "reveals": list(b.reveals or []),
     } for b in branch_rows]
     return nodes, edges, branches
 
