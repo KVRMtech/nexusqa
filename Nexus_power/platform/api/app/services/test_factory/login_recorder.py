@@ -18,6 +18,9 @@ DB, no I/O; the crawler supplies the observation, this returns the recipe to sav
 """
 from __future__ import annotations
 
+import hashlib
+import json
+
 from . import persona_store
 from . import login_fingerprint
 
@@ -122,4 +125,38 @@ def recipe_from_observed_login(observation: dict) -> dict:
     return {"steps": steps, "slots": slots, "login_type_key": key}
 
 
-__all__ = ["recipe_from_observed_login"]
+def _macro_key(name: object, steps: list) -> str:
+    """Stable, value-free id for a recorded macro — its human name + step SHAPE
+    (actions + slot/name/path, never values). Lets a macro be stored + looked up."""
+    shape = [[str(s.get("action") or ""),
+              str(s.get("slot") or s.get("name") or s.get("path") or "")]
+             for s in steps if isinstance(s, dict)]
+    basis = str(name or "") + "|" + json.dumps(shape, sort_keys=True, separators=(",", ":"))
+    return "macro:" + hashlib.sha1(basis.encode("utf-8")).hexdigest()[:16]
+
+
+def recipe_from_observed_macro(observation: dict) -> dict:
+    """Build a domain-agnostic REPLAYABLE MACRO from an observed interaction — the
+    record-once mechanism generalized beyond login (U4).
+
+    Unlike :func:`recipe_from_observed_login` this has NO login-shaped tail
+    (verify-documents / Home assertion / login_type_key): a macro is ANY widget or
+    flow a human demonstrated once (a signature pad, an exotic date grid, a vendor
+    checkout). It reuses the SAME generic sequence→steps builder, so the interpreter
+    replays it exactly as performed; every filled slot is a ``secret`` card slot so
+    a missing value can never green-wash a run.
+
+    ``observation`` shape:
+      - ``start_path``:  where the macro begins (path); ``login_path`` accepted too
+      - ``sequence``:    ``[{action: fill|click, slot?/label?/name?/role?}]`` in order
+      - ``name``?:       a human label for the macro
+    Returns ``{steps, slots, macro_key}``.
+    """
+    obs = observation or {}
+    start_path = str(obs.get("start_path") or obs.get("login_path") or "/")
+    sequence = list(obs.get("sequence") or [])
+    steps, slots = _recipe_from_sequence(start_path, sequence, list(obs.get("fields") or []))
+    return {"steps": steps, "slots": slots, "macro_key": _macro_key(obs.get("name"), steps)}
+
+
+__all__ = ["recipe_from_observed_login", "recipe_from_observed_macro"]
