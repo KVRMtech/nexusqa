@@ -254,6 +254,63 @@ U6 folds in anytime after U0
 | Domain leak into a mechanism | all | Ladders stay value-free; `refuse_pack.yaml` insurance lexicon is data, auditable. |
 
 ---
+
+## 7. Product-goal gap review — what interaction alone misses
+
+Adversarial self-review against the product goal (*prove every business journey →
+replayable catalog → evidence, at 1000-app scale*): the U-phases above are the
+**interaction** layer. The product is an **evidence** product. Clicking a canvas
+app is worthless if we cannot identify its states, read its outcomes, and replay
+the proof. Five gaps, now folded into the phases:
+
+**G1 — State identity on pixel-only UIs (→ U2, prerequisite).** The entire walk and
+journey graph key on `fingerprint.state_fingerprint(url, controls, dialog_flags)`,
+and nodes key on that fingerprint. A canvas/Flutter app changes screens with the
+SAME url and a near-empty DOM → every screen collapses into ONE node (or loop
+detection misfires) — vision clicks would "work" while the journey graph and
+catalog become garbage. Fix: when the DOM is sparse, mix a **coarse perceptual
+hash** of the screenshot (downscaled, pure, explorer-side) into the fingerprint;
+and add **pixel-stability settle** for canvas (DOM-quiescence never fires on
+repaints — reuse the `perceptual_diff` idea, $0). *U2's DoD now requires: a canvas
+app yields DISTINCT journey nodes per screen.*
+
+**G2 — Evidence reading on opaque surfaces (→ U2).** Proof, not navigation:
+`collect_displayed_values` is DOM-based, so a canvas app's premium / decision /
+policy-number outcomes are invisible → journeys complete with NO outcome values —
+"a walk, not evidence" by the flow-ledger's own doctrine. Fix: the Perceiver
+contract returns `displayed_values[]` (label/text/`value_infer` type) alongside
+`controls[]`; provenance-tagged vision so the oracle stack treats them honestly.
+*U2's DoD now requires: an outcome value captured from a canvas page.*
+
+**G3 — Stable identity for vision-perceived controls (→ U2, feeds P2).** The
+Master Catalog's `question_id_for` needs a stable signature; vision controls have
+none, and OCR'd labels jitter → question_ids churn → `catalog_diff` noise on every
+re-crawl (a regression engine that cries wolf is dead at fleet scale). Fix: vision
+control signature = normalized perceived label + role + **coarse bbox grid bucket**
+(jitter-tolerant), and vision-sourced catalog rows carry provenance so diff can
+damp expected wobble.
+
+**G4 — Replayability of vision/gesture steps (→ U3/U4).** The product ships
+runnable journeys / owned Playwright. A coordinate step must compile to something
+replayable: (1) a semantic locator when one exists, else (2) the recorded bbox +
+`click_at` with a drift guard, else (3) re-perceive at run time (the runner needs
+the vision capability) or a recorded macro (U4). The generated script's fidelity
+scorecard must carry each step's **rung**, so a client sees which steps are
+DOM-proven vs vision-replayed. Without this, any-UI crawling produces catalogs the
+runner cannot prove again — breaking replayable-proof, the category claim.
+
+**G5 — Scope honesty: web-delivered UIs.** "Any UI technology" here means anything
+a Chromium page renders — HTML/SPA/WASM/Flutter Web/canvas/WebGL/embedded vendor
+frames/Electron-style web content. **Native** mobile/desktop apps (iOS, Android,
+WPF) are OUT of this engine's scope — a different driver (Appium-class) and a
+separate initiative if the product wants it. Stating the boundary is part of the
+honest claim; implying it silently is how green-wash starts.
+
+*Carry-forward confirmations:* multi-tab (`window.open`) flows during a crawl
+(record-once handles the SSO second tab; the crawl-side path needs confirming);
+the heal story for vision steps (re-perceive as the heal action).
+
+---
 *Grounded in code map wf_23147280-aeb. Sizes (S/M/L/XL) are directional effort. Every
 `file::function` reference was read; anything unconfirmed is flagged "UNKNOWN /
 confirm during implementation" in the maps.*
