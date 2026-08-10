@@ -4,7 +4,10 @@ WORKDIR /app
 
 FROM base AS deps
 COPY package.json package-lock.json ./
-RUN npm ci
+# `npm ci` requires the lockfile to be in exact sync with package.json and fails the
+# whole build when it drifts. Fall back to `npm install` so a proving-ground app still
+# builds — the same pattern verdict-portal/Dockerfile uses.
+RUN npm ci 2>/dev/null || npm install
 
 FROM base AS builder
 WORKDIR /app
