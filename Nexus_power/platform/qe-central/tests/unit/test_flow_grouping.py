@@ -243,6 +243,19 @@ def test_block_cause_session_only_app_is_told_to_add_credentials_not_re_record()
     assert b["remediation"].lower().startswith("add a username and password")
 
 
+def test_block_cause_verified_login_that_does_not_persist_names_neither_remedy():
+    # The crawl SIGNED IN (login_verified) and the app still demanded a sign-in on the
+    # next page load. Both usual remedies are already proven correct, so the advice must
+    # name NEITHER re-recording nor new credentials — it must explain the app's own
+    # behaviour instead.
+    b = block_cause_for_missing_primary(
+        has_credentials=True, login_flow_present=True, can_sign_in=True,
+        coverage={"auth_incomplete": True, "auth_reason": "not_persisted"})
+    assert b["blocked"] == "auth_not_persisted"
+    assert "signed in successfully" in b["reason"].lower()
+    assert "will not change it" in b["remediation"].lower()
+
+
 def test_block_cause_heuristic_fallback_no_credentials_and_login_seen():
     # No crawler flag (an older crawl), but the app has NO credentials AND a login flow
     # was seen → the truth still surfaces as an auth-no-credentials block.

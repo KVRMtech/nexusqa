@@ -151,6 +151,13 @@ AUTH_SESSION_EXPIRED = "session_expired"
 #: case: the remediation is "record a login / attach credentials", never "re-record".
 AUTH_NO_CREDENTIALS = "no_credentials"
 
+#: ``auth_incomplete`` reason: the crawl HELD a verified login — it signed in
+#: successfully — and the app still answered a fresh page load with its sign-in screen.
+#: The app keeps the signed-in user in CLIENT-SIDE state rather than a cookie, so every
+#: navigation drops it. Neither re-recording nor new credentials can fix that (both were
+#: already proven to work), which is why it must never wear the session_expired advice.
+AUTH_NOT_PERSISTED = "not_persisted"
+
 #: An "advance the wizard" control label (Next / Continue / Proceed / Forward) —
 #: the POSITIVE intent signal. Union-compiled from the per-language packs in
 #: :mod:`app.vocab` (the ``en`` pack is order-preserving, so the compiled
@@ -865,6 +872,11 @@ class Crawler:
         # Surfaced as coverage.auth_blocked so the app UI says "behind a login, no
         # credentials — record a login" instead of "didn't reach it — re-crawl".
         self._auth_blocked_reason = ""
+        # A login was DRIVEN and verified at least once this crawl. It makes
+        # "the session expired — re-record" an impossible diagnosis: signing in
+        # demonstrably works, so a wall we keep meeting is the app failing to PERSIST
+        # the login, not a stale recording.
+        self._login_verified = False
         # An honest terminal condition raised mid-expand (currently: the no-credentials
         # login-wall block). The explore loop checks it and stops WITHOUT treating the
         # stop as cancellation or budget exhaustion.
@@ -1026,6 +1038,16 @@ class Crawler:
             )
         elif not self._auth_incomplete:
             auth_prefix = ""
+        elif self._auth_incomplete_reason == AUTH_NOT_PERSISTED:
+            # Signing in WORKS; the app just will not keep it. Naming re-recording or
+            # new credentials here would send the operator after two things that are
+            # already proven correct.
+            auth_prefix = (
+                "AUTHENTICATED AREAS NOT COVERED — the crawl SIGNED IN successfully, but "
+                "this app drops the sign-in on every page load (it keeps the signed-in "
+                "user in the page, not in a cookie), so pages behind the login could not "
+                "be reached. Re-recording and new credentials will not change this. "
+            )
         elif self._auth_incomplete_reason == AUTH_SESSION_EXPIRED and not self._credentials:
             # A session was injected and REJECTED, and there is no username/password to
             # fall back on. "Re-record" is a loop that cannot end here: the next
@@ -1251,6 +1273,9 @@ class Crawler:
                 result.reason,
             )
             return await self._port.current_url()
+        # A DRIVEN, verified login. Recorded so a wall met later can never be
+        # mis-diagnosed as "the session expired — re-record it".
+        self._login_verified = True
         return await self._port.current_url()
 
     async def _cross_auth_wall(
@@ -1294,6 +1319,7 @@ class Crawler:
 
         if result.storage_state:
             self._storage_state = result.storage_state
+        self._login_verified = True
         # Return to where the journey was heading. Login usually lands on a
         # dashboard, so without this the crawl resumes somewhere else entirely and
         # the step that provoked the wall is never taken.
@@ -1303,11 +1329,43 @@ class Crawler:
             logger.info("qec.crawler.relogin_return_failed error=%s", (nav.error or "")[:120])
             return obs, controls
         fresh = await self._observe()
+        fresh_controls = build_inventory(fresh.raw_controls, self._refuse_pack, url=fresh.url)
+        # AUTH THAT DOES NOT SURVIVE A PAGE LOAD. A growing class of apps (SPAs that
+        # keep the signed-in user in client-side state rather than a cookie) drop the
+        # login on every fresh navigation — so the goto above THROWS AWAY the login we
+        # just completed, and the crawl re-lands on the wall no matter how many times it
+        # signs in. Live: a carrier-admin app logged in verified THREE times and never
+        # left /portal/sign-in. Detect it structurally — we hold a VERIFIED login and the
+        # requested page still answers with a login form — then continue IN PLACE from
+        # where the login landed instead of navigating cold again. Bounded by the
+        # authenticator's own re-login budget, and honestly reported either way.
+        if match_login_controls(fresh_controls) is not None:
+            self._auth_incomplete = True
+            self._auth_incomplete_reason = AUTH_NOT_PERSISTED
+            logger.warning(
+                "qec.crawler.auth_not_persisted crawl_id=%s url_scope=%s — the login "
+                "verified but this app drops it on a fresh page load (its session lives "
+                "in the page, not a cookie); continuing IN PLACE from the signed-in "
+                "state.", self.crawl_id, _host_of(fresh.url))
+            try:
+                again = await self._authenticator.relogin()
+            except Exception as exc:
+                logger.warning("qec.crawler.relogin_error error=%s", str(exc)[:200])
+                return fresh, fresh_controls
+            self._tracker.note_action(len(again.actions))
+            if not again.success:
+                return fresh, fresh_controls
+            in_place = await self._observe()
+            logger.info(
+                "qec.crawler.auth_continued_in_place url_scope=%s — journey continues "
+                "from the signed-in page", _host_of(in_place.url))
+            return in_place, build_inventory(
+                in_place.raw_controls, self._refuse_pack, url=in_place.url)
         logger.info(
             "qec.crawler.auth_wall_crossed url_scope=%s — journey continues authenticated",
             _host_of(fresh.url),
         )
-        return fresh, build_inventory(fresh.raw_controls, self._refuse_pack, url=fresh.url)
+        return fresh, fresh_controls
 
     def _note_login_wall_while_authenticated(
         self, controls: Sequence[dict[str, Any]], requested_url: str = "",
@@ -1346,6 +1404,17 @@ class Crawler:
         if _url_key(requested_url) == _url_key(landed_url):
             return
         self._auth_incomplete = True
+        if self._login_verified:
+            # We SIGNED IN successfully this crawl, so "the session expired, re-record
+            # it" is provably the wrong diagnosis: the app simply does not keep a login
+            # across page loads. Report that instead of sending the operator round a
+            # re-recording loop that cannot end.
+            self._auth_incomplete_reason = AUTH_NOT_PERSISTED
+            logger.warning(
+                "qec.crawler.auth_not_persisted crawl_id=%s — a verified login still "
+                "meets a sign-in wall; this app drops the login on a fresh page load.",
+                self.crawl_id)
+            return
         self._auth_incomplete_reason = AUTH_SESSION_EXPIRED
         logger.warning(
             "qec.crawler.session_expired crawl_id=%s — a start-authenticated session "

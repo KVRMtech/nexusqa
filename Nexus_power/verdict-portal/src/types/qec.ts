@@ -322,7 +322,8 @@ export interface MissingPrimary {
   /** Set when the entry wasn't captured because the crawl was BLOCKED at a login
    *  (not a benign budget/depth non-reach). Drives the honest banner + remediation;
    *  absent ⇒ the ordinary "didn't reach it — re-crawl" case. */
-  blocked?: 'auth_no_credentials' | 'auth_session_expired' | 'auth_session_unusable' | null;
+  blocked?: 'auth_no_credentials' | 'auth_session_expired' | 'auth_session_unusable'
+    | 'auth_not_persisted' | null;
   remediation?: string;
 }
 

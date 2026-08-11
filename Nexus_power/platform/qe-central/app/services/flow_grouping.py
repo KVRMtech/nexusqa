@@ -306,8 +306,26 @@ def block_cause_for_missing_primary(
         bool(cov.get("auth_incomplete"))
         and str(cov.get("auth_reason") or "") == "session_expired"
     )
-    if not (crawler_blocked or session_expired or (not has_credentials and login_flow_present)):
+    # A VERIFIED login that the app refuses to keep across page loads is its own block —
+    # it carries neither auth_blocked nor session_expired, so it must be admitted here or
+    # it would fall through and be reported as an ordinary "didn't reach it — re-crawl".
+    not_persisted = (bool(cov.get("auth_incomplete"))
+                     and str(cov.get("auth_reason") or "") == "not_persisted")
+    if not (crawler_blocked or session_expired or not_persisted
+            or (not has_credentials and login_flow_present)):
         return None
+    if not_persisted:
+        # The crawl SIGNED IN and the app still demanded a sign-in on the next page
+        # load. Both of the usual remedies are already proven correct here, so naming
+        # either would send the operator after nothing.
+        return {
+            "blocked": "auth_not_persisted",
+            "reason": ("Blocked: the crawl signed in successfully, but this app drops "
+                       "the sign-in on every page load."),
+            "remediation": ("This app keeps the signed-in user in the page rather than "
+                            "a cookie, so pages behind the login cannot be reached yet. "
+                            "Re-recording and new credentials will not change it."),
+        }
     if session_expired:
         if not can_sign_in:
             # The app holds ONLY a recorded session. Telling the operator to "re-record"
