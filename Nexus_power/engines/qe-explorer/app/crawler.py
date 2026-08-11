@@ -1278,6 +1278,62 @@ class Crawler:
         self._login_verified = True
         return await self._port.current_url()
 
+    def _raise_relogin_budget(self) -> None:
+        """Let an app that needs a login PER PAGE actually be crawled.
+
+        ``max_relogins`` defaults to 3 because a re-login normally means an expired
+        session — a rare event. On an app that drops the login on every page load it is
+        the per-navigation cost, so the budget runs out after two pages and the crawl
+        stops finding anything. Sized to the state budget (plus headroom for discovery
+        resets), and applied ONLY once such an app has been positively identified.
+        """
+        auth = self._authenticator
+        if auth is None:
+            return
+        needed = max(int(self._budget.max_states) * 3, 60)
+        if getattr(auth, "_max_relogins", 0) >= needed:
+            return
+        auth._max_relogins = needed
+        logger.info("qec.crawler.relogin_budget_raised to=%d — this app signs in per "
+                    "page load", needed)
+
+    async def _goto_keeping_login(self, url: str) -> None:
+        """Re-navigate, and RE-ESTABLISH the login if this app drops it on a page load.
+
+        The crawl reloads a URL in several places — expanding the frontier, resetting the
+        page between discovery clicks, re-establishing a wizard step. On an app that
+        keeps the signed-in user in client-side state, EVERY one of those logs it out, so
+        fixing only the auth-wall path left discovery running logged-out: it clicked 41
+        times, found nothing to add, and the crawl reported 4 states and no journeys.
+        This makes every reload survivable, so the rest of the crawler keeps working
+        exactly as written.
+
+        A no-op for the ordinary (cookie) case — it costs one observation only on an app
+        already proven not to persist its login.
+        """
+        await self._port.goto(url)
+        self._tracker.note_request()
+        if self._auth_incomplete_reason != AUTH_NOT_PERSISTED or self._authenticator is None:
+            return
+        obs = await self._observe()
+        controls = build_inventory(obs.raw_controls, self._refuse_pack, url=obs.url)
+        if match_login_controls(controls) is None:
+            return                                  # still signed in — nothing to repair
+        prior_phase = self._guard.phase
+        self._guard.phase = Phase.AUTH              # the guard permits a login only here
+        try:
+            result = await self._authenticator.relogin()
+        except Exception as exc:
+            logger.warning("qec.crawler.relogin_error error=%s", str(exc)[:200])
+            return
+        finally:
+            self._guard.phase = prior_phase
+        self._tracker.note_action(len(result.actions))
+        if result.success:
+            self._login_verified = True
+            logger.info("qec.crawler.login_restored_after_reload url_scope=%s",
+                        _host_of(url))
+
     async def _reach_in_app(
         self, controls: list[dict[str, Any]], url: str, discovered_via: str,
     ) -> Optional[tuple[PageObservation, list[dict[str, Any]]]]:
@@ -1304,6 +1360,11 @@ class Crawler:
             wanted_labels.add(_norm_label(tail[-1].replace("-", " ").replace("_", " ")))
         wanted_labels.discard("")
         if not wanted_labels:
+            # Nothing to click TOWARDS — the entry (a bare root URL) has no discovering
+            # label and no path segment. Silence here cost a whole debugging round: the
+            # crawl looked like the fix had not shipped. Say which of the three reasons
+            # it was, always.
+            logger.info("qec.crawler.reach_in_app_skipped reason=no_label url=%s", url[:120])
             return None
 
         for control in controls:
@@ -1330,6 +1391,8 @@ class Crawler:
                 "so the login survived and the link is PROVEN",
                 _host_of(reached.url), str(control.get("name") or "")[:40])
             return reached, reached_controls
+        logger.info("qec.crawler.reach_in_app_skipped reason=no_matching_control "
+                    "wanted=%s url=%s", sorted(wanted_labels)[:4], url[:120])
         return None
 
     async def _cross_auth_wall(
@@ -1397,6 +1460,11 @@ class Crawler:
         if match_login_controls(fresh_controls) is not None:
             self._auth_incomplete = True
             self._auth_incomplete_reason = AUTH_NOT_PERSISTED
+            # A login PER PAGE is this app's normal cost, so the default budget of 3 —
+            # sized for the occasional expired session — is exhausted after two pages and
+            # the crawl silently gives up. Scale it to the states we are allowed to
+            # visit; every other safety gate is untouched.
+            self._raise_relogin_budget()
             logger.warning(
                 "qec.crawler.auth_not_persisted crawl_id=%s url_scope=%s — the login "
                 "verified but this app drops it on a fresh page load (its session lives "
@@ -2035,8 +2103,7 @@ class Crawler:
             # navigation — lazy reset preserves per-probe grounding at a fraction of
             # the page loads.
             if needs_reset:
-                await self._port.goto(item.url)
-                self._tracker.note_request()
+                await self._goto_keeping_login(item.url)
                 needs_reset = False
             observation = await self._port.click(control)
             self._tracker.note_request()
@@ -2122,8 +2189,9 @@ class Crawler:
             # discovered it; a grounded click just isn't available there).
             self._grounded_navs.add(key)
             await self._politeness_delay()
-            await self._port.goto(item.url)  # reset — a real nav leaves the page
-            self._tracker.note_request()
+            # reset — a real nav leaves the page (login re-established if this app
+            # drops it on a reload, else byte-identical to a plain goto)
+            await self._goto_keeping_login(item.url)
             try:
                 obs = await self._port.click(control)
             except Exception:
@@ -2281,7 +2349,7 @@ class Crawler:
             if self._tracker.stop_reason() or self._cancelled:
                 break
             await self._politeness_delay()
-            await self._port.goto(item.url)  # open from the clean recorded state
+            await self._goto_keeping_login(item.url)  # open from the clean recorded state
             self._tracker.note_request()
             # OPEN the menu the way its shape requires: a HOVER fly-out (haspopup)
             # opens on hover — clicking it might navigate away; a CLICK dropdown
@@ -3165,8 +3233,7 @@ class Crawler:
         # the wizard page must not silently defeat the walk). The re-fill's action
         # records are redundant with base_actions (the canonical Phase-A fills) and are
         # DISCARDED — the recorded step keeps its original snapshot + fill actions.
-        await self._port.goto(item.url)
-        self._tracker.note_request()
+        await self._goto_keeping_login(item.url)
         reobs = await self._observe()
         refreshed = build_inventory(reobs.raw_controls, self._refuse_pack, url=reobs.url)
         # The re-fill's ledger is ALSO the entry step's truth: real fill counts

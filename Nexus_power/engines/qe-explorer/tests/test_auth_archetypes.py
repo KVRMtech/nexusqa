@@ -229,3 +229,43 @@ def test_in_memory_auth_reaches_the_DEEP_page_it_was_asked_for(tmp_path):
     seen = {str(s.get("url_path") or "") for s in states}
     assert "/reports" in seen, (
         f"never reached the requested deep page; only saw {sorted(seen)}")
+
+
+def test_in_memory_auth_from_a_ROOT_entry_still_discovers_pages(tmp_path):
+    """THE LIVE SCENARIO the first fix missed.
+
+    The app is onboarded at a bare ROOT url — no discovering label, no path segment — so
+    the click-to-reach path cannot fire for the entry. The crawl must still get in, land
+    on the signed-in page, and DISCOVER the app from there. Live, this returned 4 states
+    and zero journeys because every discovery reset reloaded the page and silently logged
+    the crawl out; the reloads now re-establish the login, so discovery works.
+    """
+    from app.emit import REC_PAGE_STATE, read_records
+
+    port = InMemoryAuthBrowser("https://app.example/login", "https://app.example/dashboard")
+    asyncio.run(_crawler(port, tmp_path, target_url="https://app.example/").run())
+
+    states = [r for r in read_records(str(tmp_path), "c1") if r["type"] == REC_PAGE_STATE]
+    seen = {str(s.get("url_path") or "") for s in states}
+    # It must get PAST the sign-in screen — anything else is the live failure repeating.
+    assert seen - {"/login", "/"}, f"never got past the sign-in; only saw {sorted(seen)}"
+    assert "/dashboard" in seen, f"never recorded the signed-in page; saw {sorted(seen)}"
+
+
+def test_a_cookie_app_is_untouched_by_the_not_persisted_handling(tmp_path):
+    """REGRESSION GUARD: the login-preserving reload and the raised re-login budget must
+    do NOTHING on an ordinary cookie app — they are gated on an app positively identified
+    as dropping its login."""
+    from test_auth_required_no_credentials import FakeBrowser, _btn as _b, _user as _u, _pass as _p
+
+    pages = {
+        "https://app.example/home": {"controls": [_raw("link", "Pricing", tag="a")],
+                                     "title": "Home"},
+    }
+    port = FakeBrowser(pages, "https://app.example/home")
+    summary = asyncio.run(
+        _crawler(port, tmp_path, target_url="https://app.example/home",
+                 credentials=None).run())
+    # No auth trouble invented on an app that never presented a login at all.
+    assert not summary.coverage.get("auth_incomplete")
+    assert summary.coverage.get("auth_reason") in ("", None)
