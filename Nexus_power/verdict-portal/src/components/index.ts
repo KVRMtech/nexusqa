@@ -41,3 +41,6 @@ export {
   ErrorState,
 } from './states';
 export type { LoadingProps, EmptyStateProps, ErrorStateProps } from './states';
+
+export { LoginSlotFields, slotName, isSecretSlot } from './LoginSlotFields';
+export type { LoginSlot, LoginSlotFieldsProps } from './LoginSlotFields';

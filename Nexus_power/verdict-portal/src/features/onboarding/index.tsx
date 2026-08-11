@@ -29,7 +29,7 @@ import type { LucideIcon } from 'lucide-react';
 
 import { api, QecApiError } from '../../lib/api';
 import { cn } from '../../lib/format';
-import { Button, Panel, Seal } from '../../components';
+import { Button, LoginSlotFields, Panel, Seal } from '../../components';
 import type { AppCreatePayload, EnvKind, EnvProfileCreatePayload } from '../../types/qec';
 
 interface WizardForm {
@@ -640,6 +640,10 @@ export function OnboardingWizard() {
   const [recBusy, setRecBusy] = useState('');
   const [recorded, setRecorded] = useState<any>(null);
   const [recErr, setRecErr] = useState('');
+  // The values for the slots the RECORDING observed. A recording never captures what
+  // you type, so without these it can only replay one session — these are what let
+  // every FUTURE crawl sign itself in.
+  const [slotValues, setSlotValues] = useState<Record<string, string>>({});
 
   const startRecording = async () => {
     const url = form.base_url.trim();
@@ -803,6 +807,10 @@ export function OnboardingWizard() {
       // when the first crawl mints an artifact — recipes are artifact-scoped, and
       // no artifact exists yet at this point.
       ...(recorded?.usable && recorded.login ? { login_recording: recorded.login } : {}),
+      // The values for the slots that recording OBSERVED — mapped server-side onto
+      // {username, password, mfa} so ONE recording signs every future crawl in.
+      ...(Object.values(slotValues).some((v) => String(v || '').trim())
+        ? { slot_values: slotValues } : {}),
       repo_binding: { provider: form.repo_provider, project: form.repo_project, webhook_secret: form.webhook_secret },
       answer_key: { fill, notes: form.seed_notes, outcomes: answers },
       env_attestation: {
@@ -824,7 +832,7 @@ export function OnboardingWizard() {
       },
       budgets: form.usd_per_cycle ? { usd_per_cycle: Number(form.usd_per_cycle) } : {},
     };
-  }, [form, recorded]);   // `recorded` matters: a saved recording changes the payload
+  }, [form, recorded, slotValues]);   // a saved recording + its slot values change the payload
 
   const submit = async () => {
     if (!canProceedAccess) {
@@ -1089,16 +1097,27 @@ export function OnboardingWizard() {
                       ? 'A session was captured, so the FIRST crawl starts logged in. A session is a snapshot — it expires, and some apps cannot restore one at all.'
                       : 'No session was captured, so the crawl will start logged out.'}
                   </div>
-                  {/* A recording captures the STEPS and a session, never the values
-                      typed — so it alone cannot sign a later crawl in. Saying so here
-                      (instead of after a crawl fails) is the difference between one
-                      clear choice and a loop of re-recordings that never works. */}
-                  {!form.username && (
-                    <div className="mt-1.5 text-ink">
-                      <span className="font-semibold">To keep every future crawl signed in,
-                      also fill Login username / password above.</span>{' '}
-                      A recording never captures what you type, so without them the crawl
-                      can only replay this one session.
+                  {/* COMPLETE THE RECORDING. It watched exactly which fields this login
+                      needs but never what you typed, so it can replay only this one
+                      session. Filling the observed slots here is what makes every FUTURE
+                      crawl sign itself in — and it is the only place an MFA code can be
+                      captured for a login that asks for one. */}
+                  {(recorded.login?.slots?.length || recorded.login?.slot_names?.length) > 0 && (
+                    <div className="mt-3 border-t border-line pt-2.5">
+                      <p className="text-2xs text-ink mb-2">
+                        <span className="font-semibold">Keep every future crawl signed in.</span>{' '}
+                        This sign-in asks for the fields below. We never captured what you
+                        typed, so enter them once here — they are encrypted at rest and
+                        never shown again. Leave blank to rely on this one session only.
+                      </p>
+                      <LoginSlotFields
+                        slots={recorded.login.slots?.length
+                          ? recorded.login.slots
+                          : recorded.login.slot_names}
+                        values={slotValues}
+                        onChange={setSlotValues}
+                        inputClassName={INPUT_CLS}
+                      />
                     </div>
                   )}
                   {(recorded.environment?.cookies || []).length > 0 && (

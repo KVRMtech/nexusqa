@@ -39,6 +39,7 @@ from ..services.data_agent import (
 )
 from ..services.pii_egress_guard import guard_inventory as pii_guard_inventory
 from ..services.flow_grouping import block_cause_for_missing_primary, group_into_flows
+from ..services.login_slots import credentials_from_slot_values
 from ..services.seed_manifest import build_seed_manifest, library_keys_from_answer_key
 from ..services.brief_compiler import (
     BRIEF_SYSTEM_INSTRUCTION, build_prompt, ground_and_assemble, parse_proposal,
@@ -141,6 +142,11 @@ class AppCreate(BaseModel):
     # `credentials.session` and is encrypted. Held on the app until the first crawl
     # mints an artifact, then materialised into a real recipe.
     login_recording: dict | None = None
+    #: Values for the slots the recording OBSERVED ({slot name -> value}), mapped onto
+    #: ``credentials`` by ``services/login_slots``. Lets ONE recording produce a login
+    #: every future crawl can replay, instead of a session that expires. Merged UNDER
+    #: any explicit ``credentials`` (an explicit field always wins).
+    slot_values: dict[str, str] | None = None
     answer_key: dict = Field(default_factory=dict)
     env_attestation: dict = Field(default_factory=dict)
     fences: dict = Field(default_factory=dict)
@@ -521,10 +527,24 @@ async def create_app(
 
     app_id = new_id()
 
+    # A RECORDING now carries the values for the slots it observed, so one recording
+    # yields a login every future crawl can replay. Explicit `credentials` always win —
+    # the slot values only fill what the operator did not type directly.
+    credentials = dict(payload.credentials or {})
+    if payload.slot_values:
+        derived = credentials_from_slot_values(
+            (payload.login_recording or {}).get("slots")
+            or (payload.login_recording or {}).get("slot_names"),
+            payload.slot_values,
+        )
+        for key, value in derived.items():
+            if not credentials.get(key):
+                credentials[key] = value
+
     creds_blob: bytes | None = None
-    if payload.credentials:
+    if credentials:
         creds_blob = await _encrypt_credentials(
-            request, tenant_id, app_id, payload.credentials,
+            request, tenant_id, app_id, credentials,
         )
     repo_binding = await _prepare_repo_binding(request, tenant_id, app_id, payload.repo_binding)
 
@@ -1142,6 +1162,13 @@ class LoginRecordingIn(BaseModel):
     # whole catalogue under a new app_id.
     username: str | None = Field(default=None, max_length=400)
     password: str | None = Field(default=None, max_length=400)
+    #: The values for the slots the RECORDING observed this app ask for
+    #: (``{slot name -> value}``). Recording is value-free by construction, so without
+    #: these a recording can only replay a session — a snapshot that expires and that
+    #: some apps never restore. Mapped onto {username, password, mfa} by
+    #: ``services/login_slots`` using the recipe's own slots, so a member#+PIN login and
+    #: a 3-slot MFA login both work with no app-specific knowledge.
+    slot_values: dict[str, str] | None = None
 
 
 @router.post("/apps/{app_id}/login-recording")
@@ -1166,8 +1193,20 @@ async def replace_login_recording(
     """
     username = (payload.username or "").strip()
     password = payload.password or ""
+    # Values captured for the slots the recording OBSERVED. They map onto the same
+    # {username, password, mfa} shape as the typed fields, so "record once" finally
+    # yields a login every FUTURE crawl can replay — not just this one session.
+    slot_creds: dict = {}
+    if payload.slot_values:
+        slot_creds = credentials_from_slot_values(
+            (payload.login_recording or {}).get("slots")
+            or (payload.login_recording or {}).get("slot_names"),
+            payload.slot_values,
+        )
+        username = username or str(slot_creds.get("username") or "").strip()
+        password = password or str(slot_creds.get("password") or "")
     if (payload.login_recording is None and payload.session is None
-            and not username and not password):
+            and not username and not password and not payload.slot_values):
         raise HTTPException(
             status_code=422,
             detail="send login_recording, session, credentials, or any combination — nothing to record",
@@ -1194,12 +1233,35 @@ async def replace_login_recording(
         if row.status == "deleted":
             raise HTTPException(status_code=409, detail="app is deleted")
 
-        if payload.session is not None or username:
+        # Slot values can arrive WITHOUT a fresh recording (filling in the login this
+        # app already recorded) — map them against the recipe stored on the row.
+        if payload.slot_values and not username:
+            slot_creds = credentials_from_slot_values(
+                (row.login_recording or {}).get("slots")
+                or (row.login_recording or {}).get("slot_names"),
+                payload.slot_values,
+            )
+            username = str(slot_creds.get("username") or "").strip()
+            password = str(slot_creds.get("password") or "")
+            if bool(username) != bool(password):
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        "fill both the identifier and the secret this login asks for — "
+                        "a half credential cannot sign in"
+                    ),
+                )
+
+        if payload.session is not None or username or slot_creds.get("mfa"):
             creds = await _decrypt_credentials_for_merge(request, tenant_id, row)
             if payload.session is not None:
                 creds["session"] = payload.session
             if username:
                 creds["username"], creds["password"] = username, password
+            # A second factor the crawl can COMPUTE — without it an MFA login stalls on
+            # the code screen no matter how correct the username and password are.
+            if slot_creds.get("mfa"):
+                creds["mfa"] = slot_creds["mfa"]
             row.creds_blob = await _encrypt_credentials(
                 request, tenant_id, app_id, creds,
             )

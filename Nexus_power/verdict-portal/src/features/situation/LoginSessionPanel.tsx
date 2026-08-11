@@ -17,7 +17,8 @@ import { useState } from 'react';
 import { KeyRound, ShieldAlert, ShieldCheck, Video } from 'lucide-react';
 import { toast } from 'sonner';
 
-import { Button, Panel, Pill, SectionHead } from '../../components';
+import { Button, LoginSlotFields, Panel, Pill, SectionHead } from '../../components';
+import type { LoginSlot } from '../../components';
 import { api } from '../../lib/api';
 import factoryApi from '../../studio/factoryApi';
 import { useAsync } from '../../lib/useAsync';
@@ -106,6 +107,37 @@ export default function LoginSessionPanel({ appId }: { appId: string }) {
   // so the credential fields stop being an optional aside and become THE
   // next step, open and explained.
   const [needsCredentials, setNeedsCredentials] = useState(false);
+
+  // The fields this app's RECORDING watched the login ask for. A recording never
+  // captures what you type, so filling these once is what turns it from "one session"
+  // into a login every FUTURE crawl replays — and it is the only place a login that
+  // asks for an MFA code can be completed.
+  const recipe = (app?.login_recording ?? {}) as { slots?: unknown[]; slot_names?: unknown[] };
+  const recipeSlots = (
+    recipe.slots?.length ? recipe.slots : recipe.slot_names ?? []
+  ) as LoginSlot[];
+  const [slotValues, setSlotValues] = useState<Record<string, string>>({});
+  const slotFilled = Object.values(slotValues).some((v) => String(v || '').trim());
+
+  const saveSlotValues = async () => {
+    if (!app) return;
+    setBusy('slots');
+    try {
+      await api.replaceLoginRecording(app.app_id, { slot_values: slotValues });
+      setSlotValues({});
+      toast.success('Sign-in details saved', {
+        description: 'Every future crawl now signs itself in — no session to expire.',
+      });
+      appState.reload();
+    } catch (err: unknown) {
+      const e = err as { response?: { data?: { detail?: string } }; message?: string };
+      toast.error('Could not save sign-in details', {
+        description: e?.response?.data?.detail || e?.message || 'Unknown error.',
+      });
+    } finally {
+      setBusy('');
+    }
+  };
 
   /**
    * Credentials are what let a crawl re-authenticate BY ITSELF when it meets a
@@ -417,6 +449,40 @@ export default function LoginSessionPanel({ appId }: { appId: string }) {
               than presenting itself as an equal alternative: today a signed-in
               session eventually lapses, and only a username/password lets the
               crawl sign itself back in without anyone being asked again. */}
+          {/* COMPLETE THE RECORDING — the fix for "record once" meaning one crawl. The
+              recording already knows WHICH fields this login needs; supplying their
+              values makes every future crawl sign itself in, and is the only way to give
+              a login that asks for an MFA code what it needs. */}
+          {recipeSlots.length > 0 && !canSignIn && (
+            <div className="mt-3 rounded-lg ring-1 ring-teal/40 bg-teal/[0.06] p-3">
+              <p className="text-sm font-semibold text-ink">Complete the recorded sign-in</p>
+              <p className="mt-1 text-xs text-ink-mid">
+                The recording watched this app ask for the fields below, but never what
+                you typed. Enter them once and every future crawl signs itself in —
+                nothing to expire, and no need to record again. Stored encrypted, never
+                shown again, and never written into a test or a report.
+              </p>
+              <div className="mt-2">
+                <LoginSlotFields
+                  slots={recipeSlots}
+                  values={slotValues}
+                  onChange={setSlotValues}
+                  inputClassName="w-full rounded-md bg-panel px-2 py-1.5 text-sm text-ink ring-1 ring-line-strong"
+                />
+              </div>
+              <div className="mt-2.5">
+                <Button
+                  variant="primary"
+                  loading={busy === 'slots'}
+                  disabled={!slotFilled}
+                  onClick={saveSlotValues}
+                >
+                  Save sign-in details
+                </Button>
+              </div>
+            </div>
+          )}
+
           <details className="mt-3 border-t border-line pt-3" open={needsCredentials}>
             <summary className="cursor-pointer text-sm text-ink-mid">
               <span className="font-semibold text-ink">

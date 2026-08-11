@@ -268,6 +268,11 @@ export class QecApiClient {
        *  the rest of the blob. */
       username?: string;
       password?: string;
+      /** Values for the slots the RECORDING observed this app ask for
+       *  ({slot name -> value}). Recording never captures what you type, so these are
+       *  what turn one recording into a login every FUTURE crawl replays. Mapped
+       *  server-side onto {username, password, mfa} from the recipe's own slots. */
+      slot_values?: Record<string, string>;
     },
     opts?: RequestOpts,
   ): Promise<ClientApp> {

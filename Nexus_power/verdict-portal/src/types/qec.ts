@@ -407,6 +407,10 @@ export interface AppCreatePayload {
    *  `credentials.session`. Held on the app until the first crawl mints an
    *  artifact, then materialised into a replayable recipe. */
   login_recording?: Record<string, unknown> | null;
+  /** Values for the slots that recording OBSERVED ({slot name -> value}). Mapped
+   *  server-side onto {username, password, mfa} so ONE recording yields a login every
+   *  future crawl replays — not just a session that expires. */
+  slot_values?: Record<string, string>;
   answer_key?: Record<string, unknown>;
   env_attestation?: EnvAttestation;
   fences?: Fences;
