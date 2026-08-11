@@ -187,23 +187,38 @@ def test_in_memory_auth_still_signs_in_rather_than_giving_up(tmp_path):
     assert port.logins >= 2, "the crawl signed in once and then gave up"
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "KNOWN GAP (open): in-place continuation restores the login for the page the crawl "
-    "is ON, but every NEXT frontier item is reached with a cold goto, which drops an "
-    "in-memory login again — so content behind the login is still not captured. The fix "
-    "is to navigate an auth-not-persisted app by CLICKING in-app links from the "
-    "signed-in page (as a user does) instead of re-navigating, and to refresh the "
-    "re-login budget per navigation. strict=True so this FAILS the moment it is fixed "
-    "and cannot be silently forgotten."))
 def test_in_memory_auth_reaches_the_signed_in_page(tmp_path):
     """The point of continuing IN PLACE: content that only exists behind the login must
-    actually be observed, not just reported about."""
+    actually be OBSERVED, not merely reported about."""
     from app.emit import REC_PAGE_STATE, read_records
 
     port = InMemoryAuthBrowser("https://app.example/login", "https://app.example/dashboard")
     asyncio.run(_crawler(port, tmp_path, target_url="https://app.example/dashboard").run())
 
     states = [r for r in read_records(str(tmp_path), "c1") if r["type"] == REC_PAGE_STATE]
-    seen = {str(s.get("url") or "") for s in states}
-    assert any("dashboard" in u for u in seen), (
+    seen = {str(s.get("url_path") or "") for s in states}
+    assert "/dashboard" in seen, (
         f"never recorded the signed-in page; only saw {sorted(seen)}")
+
+
+@pytest.mark.xfail(strict=True, reason=(
+    "KNOWN GAP (open): on an auth-not-persisted app the crawl reaches the POST-LOGIN "
+    "LANDING page and captures it, but never the DEEP page it actually asked for — a "
+    "cold goto to /reports drops the in-memory login, and the re-login that repairs it "
+    "lands on /dashboard instead. So every deep route collapses onto the landing page, "
+    "which is why an app onboarded at a deep entry still reports its form uncaptured. "
+    "Fix: after continuing in place, reach the requested route from INSIDE the "
+    "signed-in page (click its in-app link / SPA navigation) rather than re-navigating "
+    "cold. strict=True so this FAILS the moment it is fixed and cannot be forgotten."))
+def test_in_memory_auth_reaches_the_DEEP_page_it_was_asked_for(tmp_path):
+    """The live failure this pins: an admin app onboarded at a deep route reported
+    'never reached this form' even though the crawl signed in successfully."""
+    from app.emit import REC_PAGE_STATE, read_records
+
+    port = InMemoryAuthBrowser("https://app.example/login", "https://app.example/dashboard")
+    asyncio.run(_crawler(port, tmp_path, target_url="https://app.example/reports").run())
+
+    states = [r for r in read_records(str(tmp_path), "c1") if r["type"] == REC_PAGE_STATE]
+    seen = {str(s.get("url_path") or "") for s in states}
+    assert "/reports" in seen, (
+        f"never reached the requested deep page; only saw {sorted(seen)}")
