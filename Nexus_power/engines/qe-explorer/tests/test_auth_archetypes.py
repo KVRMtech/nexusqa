@@ -80,8 +80,10 @@ class InMemoryAuthBrowser(BrowserPort):
     and then immediately navigated cold, throwing the login away each time.
     """
 
-    def __init__(self, login_url: str, dashboard_url: str) -> None:
+    def __init__(self, login_url: str, dashboard_url: str,
+                 reports_url: str = "https://app.example/reports") -> None:
         self._login, self._dash = login_url, dashboard_url
+        self._reports = reports_url
         self._cur = login_url
         self._signed_in = False          # lives in the "page", not a cookie
         self.logins = 0
@@ -99,10 +101,13 @@ class InMemoryAuthBrowser(BrowserPort):
         return "Dashboard" if self._signed_in else "Sign in"
 
     async def collect_controls(self):
+        if self._cur == self._reports:
+            return [dict(_raw("link", "Back", tag="a"))]
         if self._signed_in:
+            # A real signed-in page offers in-app links — the way a person moves
+            # around, and the only way this app's login survives.
             return [dict(c) for c in (
-                _raw("link", "Policies", tag="a"), _raw("link", "Claims", tag="a"),
-                _btn("New application"),
+                _raw("link", "Reports", tag="a"), _raw("link", "Claims", tag="a"),
             )]
         return [dict(c) for c in (_user(), _pass(), _btn("Sign in"))]
 
@@ -117,11 +122,17 @@ class InMemoryAuthBrowser(BrowserPort):
 
     async def click(self, control):
         before = self._cur
-        if not self._signed_in and str(control.get("name") or "") == "Sign in":
+        name = str(control.get("name") or "")
+        if not self._signed_in and name == "Sign in":
             self._signed_in = True       # in-memory only
             self._cur = self._dash
             self.logins += 1
             return RawObservation(url_before=before, url_after=self._dash)
+        # IN-APP navigation: the page changes route WITHOUT a reload, so the in-memory
+        # login survives — exactly why a human never gets logged out and the crawler did.
+        if self._signed_in and name == "Reports":
+            self._cur = self._reports
+            return RawObservation(url_before=before, url_after=self._reports)
         return RawObservation(url_before=before, url_after=before)
 
     async def fill(self, control, value):
@@ -201,18 +212,14 @@ def test_in_memory_auth_reaches_the_signed_in_page(tmp_path):
         f"never recorded the signed-in page; only saw {sorted(seen)}")
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "KNOWN GAP (open): on an auth-not-persisted app the crawl reaches the POST-LOGIN "
-    "LANDING page and captures it, but never the DEEP page it actually asked for — a "
-    "cold goto to /reports drops the in-memory login, and the re-login that repairs it "
-    "lands on /dashboard instead. So every deep route collapses onto the landing page, "
-    "which is why an app onboarded at a deep entry still reports its form uncaptured. "
-    "Fix: after continuing in place, reach the requested route from INSIDE the "
-    "signed-in page (click its in-app link / SPA navigation) rather than re-navigating "
-    "cold. strict=True so this FAILS the moment it is fixed and cannot be forgotten."))
 def test_in_memory_auth_reaches_the_DEEP_page_it_was_asked_for(tmp_path):
     """The live failure this pins: an admin app onboarded at a deep route reported
-    'never reached this form' even though the crawl signed in successfully."""
+    'never reached this form' even though the crawl signed in successfully.
+
+    FIXED by ``_reach_in_app``: the requested route is reached by CLICKING its in-app
+    link from the signed-in page, so the in-memory login survives — and the navigation
+    is PROVEN at the same time, which is what turns captured pages into a coherent,
+    runnable journey instead of "0 of 3 navigations proved"."""
     from app.emit import REC_PAGE_STATE, read_records
 
     port = InMemoryAuthBrowser("https://app.example/login", "https://app.example/dashboard")

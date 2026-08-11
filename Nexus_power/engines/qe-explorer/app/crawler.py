@@ -1278,8 +1278,63 @@ class Crawler:
         self._login_verified = True
         return await self._port.current_url()
 
+    async def _reach_in_app(
+        self, controls: list[dict[str, Any]], url: str, discovered_via: str,
+    ) -> Optional[tuple[PageObservation, list[dict[str, Any]]]]:
+        """From the page we are ON, reach ``url`` by CLICKING its in-app link.
+
+        A crawl normally reaches each state by navigating to its URL — the equivalent of
+        opening a fresh tab. An app that keeps the signed-in user in client-side state is
+        logged OUT by exactly that, so the requested page is never reached, the link
+        between two pages is never PROVEN, and with no proven navigation there is no
+        coherent journey and therefore no runnable test. Moving the way a person does —
+        clicking the link on the page already open — keeps the login alive and grounds
+        the navigation at the same time.
+
+        Generic: the control is found by the label this route was DISCOVERED through,
+        else by a link whose accessible name matches the route's own last path segment
+        ("/new-application" ↔ "New application"). No app-specific knowledge, no URL
+        pattern matching. Returns the reached observation, or ``None`` to let the caller
+        fall back to ordinary navigation.
+        """
+        want = _url_key(url)
+        wanted_labels = {_norm_label(discovered_via)} if discovered_via else set()
+        tail = [p for p in urlsplit(url).path.split("/") if p]
+        if tail:
+            wanted_labels.add(_norm_label(tail[-1].replace("-", " ").replace("_", " ")))
+        wanted_labels.discard("")
+        if not wanted_labels:
+            return None
+
+        for control in controls:
+            if str(control.get("kind") or "") not in _ACTUATOR_KINDS:
+                continue
+            if control.get("danger"):
+                continue
+            if _norm_label(str(control.get("name") or "")) not in wanted_labels:
+                continue
+            try:
+                await self._port.click(control)
+            except Exception:
+                return None
+            self._tracker.note_action()
+            reached = await self._observe()
+            if _url_key(reached.url) != want:
+                return None
+            reached_controls = build_inventory(
+                reached.raw_controls, self._refuse_pack, url=reached.url)
+            if match_login_controls(reached_controls) is not None:
+                return None      # the click bounced us back to the wall
+            logger.info(
+                "qec.crawler.reached_in_app url_scope=%s via=%r — navigated by clicking, "
+                "so the login survived and the link is PROVEN",
+                _host_of(reached.url), str(control.get("name") or "")[:40])
+            return reached, reached_controls
+        return None
+
     async def _cross_auth_wall(
         self, obs: PageObservation, controls: list[dict[str, Any]], url: str,
+        discovered_via: str = "",
     ) -> tuple[PageObservation, list[dict[str, Any]]]:
         """Meet a login wall mid-journey, answer it, and CARRY ON.
 
@@ -1356,11 +1411,18 @@ class Crawler:
             if not again.success:
                 return fresh, fresh_controls
             in_place = await self._observe()
+            in_place_controls = build_inventory(
+                in_place.raw_controls, self._refuse_pack, url=in_place.url)
+            # Now reach the page we were ASKED for the way a person would — by clicking
+            # its link from here. Re-navigating would log us straight back out, which is
+            # why every deep route used to collapse onto this landing page.
+            hop = await self._reach_in_app(in_place_controls, url, discovered_via)
+            if hop is not None:
+                return hop
             logger.info(
                 "qec.crawler.auth_continued_in_place url_scope=%s — journey continues "
                 "from the signed-in page", _host_of(in_place.url))
-            return in_place, build_inventory(
-                in_place.raw_controls, self._refuse_pack, url=in_place.url)
+            return in_place, in_place_controls
         logger.info(
             "qec.crawler.auth_wall_crossed url_scope=%s — journey continues authenticated",
             _host_of(fresh.url),
@@ -1644,7 +1706,8 @@ class Crawler:
         # journeys cross one all the time (public quote → authenticated apply →
         # e-sign); stopping here would catalogue two fragments and never the flow
         # the business actually sells.
-        obs, controls = await self._cross_auth_wall(obs, controls, item.url)
+        obs, controls = await self._cross_auth_wall(
+            obs, controls, item.url, item.discovered_via)
         # Requested vs landed is what separates "the app sent us to sign in" from
         # "the crawl followed a link to the sign-in page".
         self._note_login_wall_while_authenticated(controls, item.url, obs.url)
@@ -3682,6 +3745,13 @@ def _url_key(url: str) -> str:
 
 def _host_of(url: str) -> str:
     return (urlsplit(url or "").hostname or "").lower()
+
+
+def _norm_label(text: Any) -> str:
+    """Accessible-name / route-segment comparison key: case- and space-insensitive.
+    Lets ``/new-application`` match a link reading "New application" without any
+    app-specific knowledge."""
+    return " ".join(("" if text is None else str(text)).split()).strip().lower()
 
 
 def _attestation_dict(attestation: Any) -> Optional[dict[str, Any]]:
