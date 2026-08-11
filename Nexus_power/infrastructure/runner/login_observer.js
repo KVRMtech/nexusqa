@@ -76,6 +76,44 @@ function attachLoginObserver(target, opts) {
     }, e));
   };
 
+  // ── Credential VALUES — a SEPARATE channel from `events`. ────────────────────
+  // Recording used to capture only THAT a field was filled, so a recording could
+  // replay nothing but a session: a snapshot that expires, and that an app whose
+  // login lives in client-side state can never restore. "Record once" therefore
+  // meant "one crawl", and re-recording produced the same dead session. Capturing
+  // what the operator signs in with is what makes one recording sign EVERY future
+  // crawl in — the same secret the product already stores encrypted when it is
+  // typed at onboarding, captured more reliably (it also catches password-manager
+  // and autofill logins, which fire no input event at all).
+  //
+  // Deliberately NOT in `events`: that log is snapshotted, shipped and persisted as
+  // the choreography. Values live here, are returned only to the save path, and are
+  // envelope-encrypted the moment they land on an app.
+  //
+  // LAST WRITE WINS, keyed by the field's identifiers: `input` fires per keystroke,
+  // so the first event holds "P" and only the last holds the real secret. The
+  // pre-submit sweep re-reports every field, so the final state always wins.
+  const values = new Map();
+  const valueKey = (f) => [f.name || '', f.id || '', f.type || '', f.label || '',
+                           f.autocomplete || ''].join('|');
+
+  const pValue = ctx.exposeBinding('__nxLoginValue', (_src, f) => {
+    try {
+      const field = f || {};
+      const value = String(field.value == null ? '' : field.value);
+      if (!value) return;
+      if (values.size >= 40 && !values.has(valueKey(field))) return;  // bound memory
+      values.set(valueKey(field), {
+        name: String(field.name || '').slice(0, 200),
+        id: String(field.id || '').slice(0, 200),
+        label: String(field.label || '').slice(0, 300),
+        type: String(field.type || '').toLowerCase().slice(0, 40),
+        autocomplete: String(field.autocomplete || '').slice(0, 100),
+        value: value.slice(0, 400),
+      });
+    } catch (e) { /* never break the capture */ }
+  }).catch(() => {});
+
   // ── Navigations (full page). SPA route changes arrive via __nxLoginNav below. ──
   const wirePage = (p) => {
     try {
@@ -245,7 +283,9 @@ function attachLoginObserver(target, opts) {
       } catch (e) { return ''; }
     };
 
-    // A committed field. We read el.value ONLY to test emptiness, never to send it.
+    // A committed field. The CHOREOGRAPHY carries identifiers only (de-duped, one
+    // event per field); the VALUE rides the separate __nxLoginValue channel, which is
+    // NOT de-duped so the final keystroke wins over the first.
     const seenFields = new Set();
     // Controls that are NOT credential slots. A "Remember me" checkbox always
     // reports value "on", so without this every login would record a phantom
@@ -262,6 +302,19 @@ function attachLoginObserver(target, opts) {
         if (NOT_A_SLOT.has(type) || type.indexOf('select') === 0) return;
         const filled = !!(el.value && String(el.value).length);
         if (!filled) return;
+        // The value the crawl will REPLAY. Reported on EVERY change/input and on the
+        // pre-submit sweep (so autofill and password managers are caught too); the
+        // Node side keeps the last one per field, which is the completed secret.
+        try {
+          window.__nxLoginValue && window.__nxLoginValue({
+            name: el.name || '',
+            id: el.id || '',
+            label: labelFor(el),
+            type: type,
+            autocomplete: el.getAttribute && (el.getAttribute('autocomplete') || ''),
+            value: String(el.value),
+          });
+        } catch (e) {}
         // De-dupe: `input` fires per keystroke and `change` again on blur; one
         // event per field is what the choreography needs. Keyed on every
         // identifier we ship, so two label-only fields do not collide.
@@ -369,7 +422,7 @@ function attachLoginObserver(target, opts) {
 
   // Resolves once bindings + in-page hooks are registered — await BEFORE the first
   // navigation so the login page itself is instrumented.
-  const ready = Promise.all([pNav, pField, pClick, pStore, pInit]);
+  const ready = Promise.all([pNav, pField, pValue, pClick, pStore, pInit]);
 
   function snapshot() {
     // The landing page is wherever the login FINISHED — with an SSO popup that is
@@ -408,7 +461,13 @@ function attachLoginObserver(target, opts) {
     try { clearInterval(pollTimer); } catch (e) { /* already gone */ }
   }
 
-  return { events, ready, snapshot, sessionStorage: sessionStorage_, pollSessionStorage, stop };
+  /** The credential values observed, most-recent per field. SECRET: returned only to
+   *  the save path, which maps them onto the recipe's slots and hands them straight to
+   *  envelope encryption. Never logged, never merged into `events`, never echoed. */
+  const credentialValues = () => Array.from(values.values());
+
+  return { events, ready, snapshot, credentialValues,
+           sessionStorage: sessionStorage_, pollSessionStorage, stop };
 }
 
 module.exports = { attachLoginObserver };

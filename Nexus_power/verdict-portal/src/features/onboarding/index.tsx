@@ -686,6 +686,13 @@ export function OnboardingWizard() {
       const r = await factoryApi.saveRecording();
       setRecLive('');
       setRecorded(r);
+      // RECORD ONCE, SIGNED IN FOREVER. The recorder observed the sign-in values just
+      // used, so they are filled in for you — no retyping, and an MFA code is captured
+      // like any other field. Shown (not hidden) so you can see exactly what will be
+      // stored, and correct it before it is.
+      if (r?.slot_values && typeof r.slot_values === 'object') {
+        setSlotValues((prev) => ({ ...prev, ...r.slot_values }));
+      }
       if (!r?.usable) {
         setRecErr(r?.reason === 'no_credential_fields_observed'
           ? 'No login fields were filled, so only the environment was captured.'
@@ -1080,7 +1087,10 @@ export function OnboardingWizard() {
                   <iframe src={recLive} title="Log in to record the login"
                     className="w-full h-[420px] rounded-md ring-1 ring-line bg-panel" />
                   <p className="text-2xs text-ink-low mt-2">
-                    We record WHICH fields you fill and WHICH controls you press — never the values you type.
+                    We record which fields you fill and which controls you press, and the
+                    sign-in details you enter — encrypted at rest, shown back to you once
+                    before saving, and never written into a test or a report. That is what
+                    lets every future crawl sign itself in.
                     Save as soon as you reach the logged-in page.
                   </p>
                 </div>
@@ -1105,10 +1115,15 @@ export function OnboardingWizard() {
                   {(recorded.login?.slots?.length || recorded.login?.slot_names?.length) > 0 && (
                     <div className="mt-3 border-t border-line pt-2.5">
                       <p className="text-2xs text-ink mb-2">
-                        <span className="font-semibold">Keep every future crawl signed in.</span>{' '}
-                        This sign-in asks for the fields below. We never captured what you
-                        typed, so enter them once here — they are encrypted at rest and
-                        never shown again. Leave blank to rely on this one session only.
+                        <span className="font-semibold">
+                          {Object.values(slotValues).some((v) => String(v || '').trim())
+                            ? 'Captured — every future crawl signs itself in.'
+                            : 'Keep every future crawl signed in.'}
+                        </span>{' '}
+                        These are the fields this sign-in asked for. What you entered in
+                        the recorder is filled in below — check it, correct it if needed,
+                        and it is stored encrypted. Clear them to rely on this one session
+                        only.
                       </p>
                       <LoginSlotFields
                         slots={recorded.login.slots?.length

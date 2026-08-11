@@ -125,3 +125,45 @@ def derive_draft(*, observation_snapshot: dict | None,
         "usable": True,
         "reason": "",
     }
+
+
+def match_slot_values(login: dict | None, observed_values) -> dict:
+    """Match the sign-in VALUES the runner observed onto the recipe's slot names.
+
+    A recording captures the choreography and a session; without the values it can
+    replay only that session — a snapshot that expires, and that an app whose login
+    lives in client-side state can never restore. So "record once" meant one crawl, and
+    re-recording produced the same dead session. Matching the values the operator just
+    used onto the slots the recording named is what lets ONE recording sign every future
+    crawl in.
+
+    Each observed entry carries the field's identifiers (``name``/``id``/``label``) and
+    its ``value``; a slot's name IS one of those identifiers (the recipe picks the
+    most-stable one), so matching on any of them is exact and needs no app-specific
+    knowledge — it holds for email+password, member#+PIN and multi-step MFA alike.
+
+    SECRET: the returned mapping is handed straight to envelope encryption. Never log
+    it, never store it on the recipe (a recipe is value-free by contract).
+    """
+    slots = (login or {}).get("slots") or []
+    names = [str((s or {}).get("name") or "").strip() for s in slots]
+    names = [n for n in names if n]
+    if not names or not observed_values:
+        return {}
+
+    out: dict = {}
+    for entry in observed_values:
+        if not isinstance(entry, dict):
+            continue
+        value = str(entry.get("value") or "")
+        if not value:
+            continue
+        # Every identifier this field could have been named by, most stable first —
+        # the same order the recipe resolves a slot name from.
+        for ident in (entry.get("name"), entry.get("id"), entry.get("label"),
+                      entry.get("autocomplete")):
+            key = str(ident or "").strip()
+            if key and key in names:
+                out[key] = value        # last observation wins: the completed value
+                break
+    return out

@@ -9147,6 +9147,15 @@ async def draft_recording_save(user: dict = Depends(get_current_user)):
         observation_snapshot=snapshot,
         storage_state=state,
         start_url=str((snapshot or {}).get("start_url") or ""))
+    # The sign-in VALUES just used, matched to the slots this recording named. They are
+    # what turn ONE recording into a login every FUTURE crawl replays instead of a
+    # session that expires. Returned to the caller, which hands them to qe-central for
+    # envelope encryption — never persisted here, and never logged (the diagnostic
+    # below counts them, and never shows one).
+    _slot_values = draft_recording.match_slot_values(
+        draft.get("login") or {}, (res or {}).get("login_values") or [])
+    if _slot_values:
+        draft["slot_values"] = _slot_values
 
     # Shape-only diagnostics. "No session was captured" is otherwise unfalsifiable
     # from the outside: it could mean the runner returned nothing, or a state with

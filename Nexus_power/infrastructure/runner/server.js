@@ -343,8 +343,19 @@ async function saveCapture() {
   try {
     if (capture.loginObserver) observation = capture.loginObserver.snapshot();
   } catch (e) { observation = null; }
+  // The SIGN-IN VALUES the operator just used. Without them a recording can replay
+  // only a session — a snapshot that expires, and that an app whose login lives in
+  // client-side state can never restore — so "record once" meant one crawl. These
+  // travel ONLY on this save path (never the live /auth-capture/observation preview),
+  // are never logged, and are envelope-encrypted the moment they land on an app.
+  let credentialValues = [];
+  try {
+    if (capture.loginObserver && capture.loginObserver.credentialValues) {
+      credentialValues = capture.loginObserver.credentialValues();
+    }
+  } catch (e) { credentialValues = []; }
   await stopCapture();
-  return { state, observation };
+  return { state, observation, credentialValues };
 }
 
 const server = http.createServer((req, res) => {
@@ -439,7 +450,11 @@ const server = http.createServer((req, res) => {
       try {
         const saved = await saveCapture();
         send(200, { status: 'saved', storage_state: saved.state,
-                    login_observation: saved.observation });
+                    login_observation: saved.observation,
+                    // The sign-in values just used — what turns ONE recording into a
+                    // login every future crawl replays. Consumed by the recording
+                    // endpoint, mapped onto the recipe's slots, and encrypted at rest.
+                    login_values: saved.credentialValues || [] });
       } catch (e) {
         send(400, { status: 'error', error: String((e && e.message) || e) });
       } finally {
