@@ -1026,6 +1026,18 @@ class Crawler:
             )
         elif not self._auth_incomplete:
             auth_prefix = ""
+        elif self._auth_incomplete_reason == AUTH_SESSION_EXPIRED and not self._credentials:
+            # A session was injected and REJECTED, and there is no username/password to
+            # fall back on. "Re-record" is a loop that cannot end here: the next
+            # recording captures another session, and an app whose login lives in
+            # client-side state can never restore one. Name the durable fix instead.
+            auth_prefix = (
+                "AUTHENTICATED AREAS NOT COVERED — the app rejected the stored login "
+                "session and NO username/password is configured, so the crawl could not "
+                "sign in; crawled the accessible (public) pages only. Add a username and "
+                "password so the crawl signs itself in — recording again captures "
+                "another session that can fail the same way. "
+            )
         elif self._auth_incomplete_reason == AUTH_SESSION_EXPIRED:
             # Different cause, different remediation: nobody needs to check the
             # credentials — the stored SESSION died and must be re-recorded.

@@ -255,7 +255,9 @@ export default function SeedManifestPanel({ appId, onSeeded }: { appId: string; 
                   <span className="font-semibold">Blocked: your {mp.name} form is behind a sign-in.</span>{' '}
                   {mp.blocked === 'auth_session_expired'
                     ? 'The crawl held a login session but the app still demanded a sign-in — the session has expired, so this form was never reached.'
-                    : 'The crawl had no credentials, so it stopped at the sign-in wall and never reached this form — re-crawling alone will not help.'}{' '}
+                    : mp.blocked === 'auth_session_unusable'
+                      ? 'This app has only a recorded session and the app would not accept it, so the crawl never got past the sign-in. Recording again captures another session that can fail the same way.'
+                      : 'The crawl had no credentials, so it stopped at the sign-in wall and never reached this form — re-crawling alone will not help.'}{' '}
                   {mp.remediation ?? 'Record a login or attach a member card, then re-crawl.'}
                 </p>
               ) : (

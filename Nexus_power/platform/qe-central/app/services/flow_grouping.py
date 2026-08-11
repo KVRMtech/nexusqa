@@ -280,6 +280,7 @@ def block_cause_for_missing_primary(
     has_credentials: bool,
     login_flow_present: bool,
     coverage: dict | None,
+    can_sign_in: bool = True,
 ) -> dict | None:
     """Why an onboarded ENTRY flow wasn't captured: a benign non-reach vs an AUTH block.
 
@@ -308,6 +309,20 @@ def block_cause_for_missing_primary(
     if not (crawler_blocked or session_expired or (not has_credentials and login_flow_present)):
         return None
     if session_expired:
+        if not can_sign_in:
+            # The app holds ONLY a recorded session. Telling the operator to "re-record"
+            # sends them round a loop that cannot end: the next recording captures
+            # another session, and an app whose login lives in client-side state can
+            # never restore one. The durable fix is a username + password the crawl
+            # REPLAYS, so say that instead.
+            return {
+                "blocked": "auth_session_unusable",
+                "reason": ("Blocked: this app has only a recorded session, and the app "
+                           "would not accept it."),
+                "remediation": ("Add a username and password so the crawl signs itself "
+                                "in — re-recording captures another session that can "
+                                "fail the same way."),
+            }
         return {
             "blocked": "auth_session_expired",
             "reason": "Blocked: the stored login session has expired.",

@@ -218,7 +218,19 @@ export interface ClientApp {
   latest_artifact_id: string;
   baseline_fingerprint_id: string;
   status: AppStatus;
+  /** A credential BLOB exists. NOT proof the app can sign itself in — a blob holding
+   *  only a recorded session satisfies it too. Prefer `can_sign_in` below. */
   has_credentials: boolean;
+  /** TRUE when the crawl can sign ITSELF in on every future run — a stored
+   *  username+password or an auth hook it REPLAYS (routers/apps.py
+   *  `_auth_capabilities`). Durable. Absent on older payloads. */
+  can_sign_in?: boolean;
+  /** A recorded SESSION exists. A snapshot: it expires, and an app whose login lives
+   *  in client-side state cannot restore one at all — so this alone never guarantees
+   *  an authenticated crawl. */
+  has_session?: boolean;
+  /** A second factor the crawl can compute (TOTP seed / fixed test code). */
+  has_mfa?: boolean;
   /** Crawl-gate status (routers/apps.py:_public_view). draft/attested/live. */
   onboarding_status?: OnboardingStatus;
   /** True when the app is fully gated open for a crawl (all reasons cleared). */
@@ -310,7 +322,7 @@ export interface MissingPrimary {
   /** Set when the entry wasn't captured because the crawl was BLOCKED at a login
    *  (not a benign budget/depth non-reach). Drives the honest banner + remediation;
    *  absent ⇒ the ordinary "didn't reach it — re-crawl" case. */
-  blocked?: 'auth_no_credentials' | 'auth_session_expired' | null;
+  blocked?: 'auth_no_credentials' | 'auth_session_expired' | 'auth_session_unusable' | null;
   remediation?: string;
 }
 

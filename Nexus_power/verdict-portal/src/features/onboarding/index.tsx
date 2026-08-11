@@ -1086,9 +1086,21 @@ export function OnboardingWizard() {
                   {recorded.login?.home_path && <> → <span className="font-mono">{recorded.login.home_path}</span></>}
                   <div className="mt-1 text-ink-mid">
                     {recorded.session
-                      ? 'This crawl will start already logged in, and other members can replay these steps with their own credentials.'
+                      ? 'A session was captured, so the FIRST crawl starts logged in. A session is a snapshot — it expires, and some apps cannot restore one at all.'
                       : 'No session was captured, so the crawl will start logged out.'}
                   </div>
+                  {/* A recording captures the STEPS and a session, never the values
+                      typed — so it alone cannot sign a later crawl in. Saying so here
+                      (instead of after a crawl fails) is the difference between one
+                      clear choice and a loop of re-recordings that never works. */}
+                  {!form.username && (
+                    <div className="mt-1.5 text-ink">
+                      <span className="font-semibold">To keep every future crawl signed in,
+                      also fill Login username / password above.</span>{' '}
+                      A recording never captures what you type, so without them the crawl
+                      can only replay this one session.
+                    </div>
+                  )}
                   {(recorded.environment?.cookies || []).length > 0 && (
                     <div className="mt-1 text-ink-mid">
                       routing cookies: <span className="font-mono">

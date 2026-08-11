@@ -577,7 +577,13 @@ def test_a_session_redirected_to_a_login_wall_is_reported_expired():
         summary = asyncio.run(crawler.run())
         assert summary.coverage.get("auth_incomplete") is True
         assert summary.coverage.get("auth_reason") == AUTH_SESSION_EXPIRED
-        assert "EXPIRED" in summary.coverage.get("summary", "")
+        summary_text = summary.coverage.get("summary", "")
+        assert "AUTHENTICATED AREAS NOT COVERED" in summary_text
+        # NO username/password is stored here, so the remediation must be the DURABLE
+        # one. Telling this operator to "re-record" is a loop that cannot end: the next
+        # recording captures another session, and an app whose login lives in
+        # client-side state can never restore one.
+        assert "username and password" in summary_text
         assert summary.stop_reason == STOP_COMPLETED     # still explores what it can
 
 

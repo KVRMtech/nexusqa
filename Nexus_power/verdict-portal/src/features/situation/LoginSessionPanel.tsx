@@ -23,7 +23,12 @@ import factoryApi from '../../studio/factoryApi';
 import { useAsync } from '../../lib/useAsync';
 import type { ClientApp, ExplorationCoverage } from '../../types/qec';
 
-type Health = 'expired' | 'recorded' | 'none';
+/** `session_only` is the state that used to masquerade as `recorded`: a login was
+ *  recorded, so a SESSION exists, but no username/password the crawl can replay. It
+ *  works until the session dies — and for an app whose login lives in client-side
+ *  state it never works at all. It is called out so the operator sees the real choice
+ *  (recording = one crawl, credentials = every crawl) instead of "nothing to do". */
+type Health = 'expired' | 'recorded' | 'session_only' | 'none';
 
 /** Entry-path tokens that typically sit behind a sign-in. A cheap boost signal
  *  only — it merely ESCALATES the "no login attached" copy; the recommended action
@@ -67,11 +72,20 @@ export default function LoginSessionPanel({ appId }: { appId: string }) {
     && coverage?.auth_reason === 'session_expired';
   const stepCount = (app?.login_recording?.steps as unknown[] | undefined)?.length ?? 0;
 
-  // `recorded` means this app can sign itself in — by stored credentials or by a
-  // recorded login. `expired` outranks both: a crawl PROVED it could not sign in.
+  // Can the crawl sign ITSELF in (a username+password / auth hook it replays), or does
+  // it only hold a recorded session? `has_credentials` cannot answer that — it is true
+  // for a blob holding nothing but a session, which is why this panel used to promise
+  // "this app can sign itself in, nothing to do" for an app that never could. Fall back
+  // to the old flag only when the server is older than `can_sign_in`.
+  const canSignIn = app?.can_sign_in ?? app?.has_credentials ?? false;
+  const hasSession = app?.has_session ?? stepCount > 0;
+
+  // `expired` outranks everything: a crawl PROVED it could not sign in.
   const health: Health = sessionExpired
     ? 'expired'
-    : (app?.has_credentials || stepCount > 0) ? 'recorded' : 'none';
+    : canSignIn
+      ? 'recorded'
+      : (hasSession || stepCount > 0) ? 'session_only' : 'none';
 
   // Distinguish EVIDENCE from a HINT. The crawl's own coverage is authoritative: it
   // reported it was blocked / could not cover the authenticated app (auth_blocked /
@@ -261,15 +275,22 @@ export default function LoginSessionPanel({ appId }: { appId: string }) {
    * expire; recording is the exception for logins nobody can type.
    */
   const STATE: Record<Health, {
-    pill: string; tone: 'crit' | 'good' | 'neutral'; icon: JSX.Element;
+    pill: string; tone: 'crit' | 'good' | 'warn' | 'neutral'; icon: JSX.Element;
     headline: string; detail: string;
   }> = {
     expired: {
       pill: 'Sign-in broken', tone: 'crit',
       icon: <ShieldAlert size={16} className="text-crit" />,
       headline: 'The last crawl could not sign in, so it only covered public pages.',
-      detail: 'The app has ended the session you signed in with. Sign in once more '
-        + 'below and crawling resumes where it left off.',
+      // The remediation DEPENDS on what is stored. With no username/password, "record
+      // again" is a loop that cannot end — the next recording captures another session,
+      // and some apps can never restore one. Say the durable fix instead.
+      detail: canSignIn
+        ? 'The app has ended the session you signed in with. Sign in once more '
+          + 'below and crawling resumes where it left off.'
+        : 'This app has only a recorded session, and the app would not accept it. '
+          + 'Add a username and password below so the crawl signs itself in — '
+          + 'recording again just captures another session that can fail the same way.',
     },
     recorded: {
       pill: 'Signs in', tone: 'good',
@@ -277,6 +298,16 @@ export default function LoginSessionPanel({ appId }: { appId: string }) {
       headline: 'This app can sign itself in. Nothing to do.',
       detail: 'Come back here if the sign-in itself changes — a new password, or a '
         + 'different login screen.',
+    },
+    // A login WAS recorded, so a session exists — but nothing the crawl can replay.
+    // Honest, and states the choice plainly rather than implying it is handled.
+    session_only: {
+      pill: 'Session only', tone: 'warn',
+      icon: <ShieldAlert size={16} className="text-warn" />,
+      headline: 'This app has a recorded session, but nothing it can sign in with on its own.',
+      detail: 'A recording captures the steps and a session — never what you type — so '
+        + 'the session is a snapshot: it expires, and some apps cannot restore one at '
+        + 'all. Add a username and password below and every future crawl signs itself in.',
     },
     none: {
       pill: 'Not set up', tone: 'neutral',

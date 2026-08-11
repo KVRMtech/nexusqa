@@ -223,9 +223,24 @@ def test_block_cause_crawler_flag_is_authoritative():
 def test_block_cause_session_expired_is_its_own_code():
     b = block_cause_for_missing_primary(
         has_credentials=True, login_flow_present=False,
-        coverage={"auth_incomplete": True, "auth_reason": "session_expired"})
+        coverage={"auth_incomplete": True, "auth_reason": "session_expired"},
+        can_sign_in=True)
     assert b["blocked"] == "auth_session_expired"
     assert "re-record" in b["remediation"].lower()
+
+
+def test_block_cause_session_only_app_is_told_to_add_credentials_not_re_record():
+    # THE LOOP DEFECT: an app holding ONLY a recorded session (can_sign_in=False) whose
+    # session the app rejects must NOT be told to "re-record" — the next recording
+    # captures another session that fails identically. It must be told the durable fix.
+    b = block_cause_for_missing_primary(
+        has_credentials=True, login_flow_present=False,
+        coverage={"auth_incomplete": True, "auth_reason": "session_expired"},
+        can_sign_in=False)
+    assert b["blocked"] == "auth_session_unusable"
+    # It must LEAD with the durable fix; re-recording may only be named as the thing
+    # that will NOT work (never as the instruction).
+    assert b["remediation"].lower().startswith("add a username and password")
 
 
 def test_block_cause_heuristic_fallback_no_credentials_and_login_seen():

@@ -644,13 +644,64 @@ async def _latest_crawl(session, app_id: str) -> dict:
     }
 
 
+async def _auth_capabilities(request: Request, tenant_id: str, row: ClientAppRow) -> dict:
+    """What this app can ACTUALLY do to authenticate — non-secret booleans only.
+
+    ``has_credentials`` is only "a credential blob exists", and a blob holding nothing
+    but a recorded SESSION satisfied it — so an app that cannot sign itself in reported
+    the same flag as one that can, and the UI told the operator "this app can sign
+    itself in, nothing to do" while every crawl walked the logged-out product. These
+    three flags separate the two, so the product can state the truth and offer the real
+    choice:
+
+      * ``can_sign_in``  — a username+password (or an auth hook) the crawl can REPLAY.
+        Durable: it works on every future crawl.
+      * ``has_session``  — a recorded session. A snapshot: it expires, and an app whose
+        login lives in client-side state cannot restore it at all.
+      * ``has_mfa``      — a second factor the crawl can compute.
+
+    Fail-SAFE: any decryption problem yields all-False rather than an error, and the
+    caller degrades to the old flag — a credential page must never 500.
+    """
+    caps = {"can_sign_in": False, "has_session": False, "has_mfa": False}
+    if not row.creds_blob:
+        return caps
+    envelope = getattr(request.app.state, "envelope_service", None)
+    if envelope is None:
+        return caps
+    try:
+        from nexus_sdk.security.envelope import EnvelopeBlob
+
+        blob = EnvelopeBlob.from_bytes(row.creds_blob)
+        plaintext = await envelope.decrypt(
+            tenant_id, blob, expected_aad=row.app_id.encode("utf-8"),
+        )
+        creds = json.loads(plaintext)
+    except Exception:
+        return caps
+    if not isinstance(creds, dict):
+        return caps
+    username = str(creds.get("username") or "").strip()
+    password = str(creds.get("password") or "")
+    auth_hook = str(creds.get("auth_hook") or "").strip()
+    caps["can_sign_in"] = bool((username and password) or auth_hook)
+    caps["has_session"] = bool(creds.get("session"))
+    caps["has_mfa"] = bool(creds.get("mfa"))
+    return caps
+
+
 @router.get("/apps/{app_id}")
-async def get_app(app_id: str, user: dict = Depends(require_auth)) -> dict:
+async def get_app(
+    app_id: str, request: Request, user: dict = Depends(require_auth),
+) -> dict:
     """Fetch one app (404 when absent or foreign-tenant — RLS + WHERE)."""
     tenant_id = user["tenant_id"]
     async with tenant_scoped_qec_session(tenant_id) as session:
         row = await _require_app(session, tenant_id, app_id)
         view = _public_view(row)
+        # The TRUTH about how this app authenticates (see _auth_capabilities): whether
+        # it can sign ITSELF in, versus merely holding a session that may not replay.
+        view.update(await _auth_capabilities(request, tenant_id, row))
         # Live crawl status so the UI shows "Crawling…" instead of an empty Studio.
         view["crawl"] = await _latest_crawl(session, app_id)
         return view
@@ -820,6 +871,7 @@ async def data_agent_save(
 @router.get("/apps/{app_id}/seed-manifest")
 async def get_seed_manifest(
     app_id: str,
+    request: Request,
     mode: str = "recommended",
     user: dict = Depends(require_auth),
 ) -> dict:
@@ -837,6 +889,10 @@ async def get_seed_manifest(
         artifact_id = row.latest_artifact_id or ""
         base_url = row.base_url or ""
         has_credentials = row.creds_blob is not None
+        # Can the crawl sign ITSELF in (username+password / auth hook), or does it only
+        # hold a session? Decides whether the honest remediation is "re-record" or
+        # "add a username and password" — see block_cause_for_missing_primary.
+        _caps = await _auth_capabilities(request, tenant_id, row)
         # The crawler's own account of what blocked deeper coverage — a richer source
         # than form_snapshot_signals (which may only hold the entry/login page). Merged
         # into the manifest so deep-form fields (a transfer's From Account / Payee behind
@@ -941,6 +997,7 @@ async def get_seed_manifest(
             has_credentials=has_credentials,
             login_flow_present=manifest.get("auth") is not None,
             coverage=_newest_cov,
+            can_sign_in=bool(_caps.get("can_sign_in")),
         )
         if block:
             mp.update(block)
