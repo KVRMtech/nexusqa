@@ -2269,6 +2269,14 @@ class Crawler:
             # reset — a real nav leaves the page (login re-established if this app
             # drops it on a reload, else byte-identical to a plain goto)
             await self._goto_keeping_login(item.url)
+            # The URL we are ACTUALLY standing on. Not necessarily ``item.url``:
+            # on an app that drops its login per page load the reset above signs
+            # back in and can land elsewhere, and comparing against the wrong
+            # baseline would either miss a real navigation or invent one.
+            try:
+                before_url = await self._port.current_url()
+            except Exception:
+                before_url = item.url
             try:
                 obs = await self._port.click(control)
             except Exception:
@@ -2280,8 +2288,46 @@ class Crawler:
                 timestamp_ms=self._clock.now_ms(),
             )
             self._tracker.note_action()
+            arrived = ""
             if action.after and action.after.get("navigated"):
                 arrived = obs.url_after
+            else:
+                # SPA pushState — THE REASON A CRAWL CAPTURES PAGES AND STILL
+                # CANNOT BUILD AN END-TO-END TEST.
+                #
+                # The click-time classifier only recognises a browser navigation
+                # event, a DOM mutation on the clicked node, or a dialog. A
+                # framework app changes route by pushState and re-renders in
+                # place, so it trips none of them — the click reports nothing
+                # while the app has demonstrably moved to another route.
+                #
+                # href-follow still DISCOVERED those routes, so their pages were
+                # crawled and catalogued; what was never recorded was a PROVEN
+                # [click → navigation] edge between them. Live on an admin
+                # console: 16 pages captured, "PROVED only 0 of the 15
+                # navigations", and therefore no coherent E2E — every page known,
+                # no way to say how a user gets from one to the next.
+                #
+                # The live URL is the stronger signal, and it is read from the
+                # page AFTER the click rather than taken from the click event. A
+                # different route really was reached by really clicking this
+                # control, which is exactly what a grounded edge asserts. Same
+                # lesson the wizard walk already learned: the new state IS the
+                # evidence, and the click-time outcome is corroboration.
+                try:
+                    live = await self._port.current_url()
+                except Exception:
+                    live = ""
+                if live and _url_key(live) != _url_key(before_url):
+                    arrived = live
+                    # Say HOW it was detected, so a grounded edge is auditable
+                    # and a soft-navigated one is never silently indistinguishable
+                    # from a hard browser navigation.
+                    after = dict(action.after or {})
+                    after.update(navigated=True, outcome="navigation",
+                                 navigation_kind="pushstate")
+                    action.after = after
+            if arrived:
                 action.to_state = _url_key(arrived)
                 self._grounded_navs.add(key)
                 self._grounded_navs.add(_url_key(arrived))
