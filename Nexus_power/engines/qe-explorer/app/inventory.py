@@ -142,6 +142,10 @@ class ControlRecord(TypedDict):
     tag: str
     input_type: str
     options: list[str]
+    #: How many options the control offers in the page. Greater than
+    #: ``len(options)`` only when the read was clipped — the honest marker that
+    #: the captured enumeration is a PREFIX, not the answer set.
+    options_total: int
     required: bool
     disabled: bool
     #: Declared value constraints (number/range/date inputs); "" when undeclared.
@@ -230,6 +234,24 @@ def _norm(text: Any) -> str:
 
 def _clip(text: str, limit: int) -> str:
     return text if len(text) <= limit else text[:limit]
+
+
+def _as_int(value: Any) -> int:
+    """A non-negative int from page-supplied JSON (0 for anything unreadable).
+
+    Page-authored data is never trusted to be well-formed: a missing field, a
+    string, a float or a negative all collapse to 0, and the caller floors the
+    result at the captured length so the count can never claim FEWER options than
+    were actually read.
+    """
+    if isinstance(value, bool):
+        return 0
+    if isinstance(value, int):
+        return max(value, 0)
+    try:
+        return max(int(float(str(value).strip())), 0)
+    except (TypeError, ValueError):
+        return 0
 
 
 def _as_bool(value: Any) -> bool:
@@ -521,6 +543,12 @@ def build_control_record(
         "tag": tag,
         "input_type": input_type,
         "options": options,
+        # How many options the control ACTUALLY offers, as counted in the page.
+        # Equal to len(options) unless the injected-JS ceiling clipped the read.
+        # Carried so a CLIPPED enumeration can never be catalogued as the complete
+        # set of answers to a question: "247 offered, 300 captured" is a fact a
+        # consumer can act on; a silently-shortened list is a fabrication.
+        "options_total": max(_as_int(raw.get("options_total")), len(options)),
         "required": _as_bool(raw.get("required")),
         "disabled": _as_bool(raw.get("disabled")),
         # Declared value constraints (number/range/date inputs) — the DOM's own

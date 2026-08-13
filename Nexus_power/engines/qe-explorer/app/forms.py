@@ -36,7 +36,7 @@ import re
 import tempfile
 from dataclasses import asdict, dataclass, field
 from datetime import date
-from typing import Any, Mapping, Optional, Sequence
+from typing import Any, Mapping, MutableMapping, Optional, Sequence
 from urllib.parse import urlsplit
 
 from . import emit
@@ -406,6 +406,7 @@ def _slider_default(control: Mapping[str, Any]) -> str:
 #: that rested on the client's own data — and a reader cannot tell the difference
 #: unless we say so.
 PROV_PROVIDED = "provided"        # the client's answer key — explicit, highest trust
+PROV_JOURNEY = "journey"          # answered earlier in THIS crawl (see below)
 PROV_RECALLED = "recalled"        # remembered from a previous crawl of THIS client
 PROV_SYNTHESIZED = "synthesized"  # generated from the crawl's fictional identity
 PROV_NEEDS_INPUT = "needs_input"  # nothing honest could be produced — ask the client
@@ -418,6 +419,7 @@ PROV_PLANNED = "planned"          # a branch-walk plan forced this CHOICE (Journ
 def resolve_field(control: Mapping[str, Any], kind: str, name: str,
                   answer_key: "AnswerKey", identity: Identity,
                   *, recalled: Optional[Mapping[str, str]] = None,
+                  journey_values: Optional[Mapping[str, str]] = None,
                   priors: Optional[Mapping[str, Any]] = None,
                   data_mode: str = field_values.DATA_MODE_USER,
                   choice_overrides: Optional[Mapping[str, str]] = None) -> dict[str, Any]:
@@ -432,14 +434,23 @@ def resolve_field(control: Mapping[str, Any], kind: str, name: str,
          enumerated options (fail-closed — never free text, never a value
          injection), and it is declared as ``planned`` provenance;
       1. the client's answer key — an explicit instruction always wins;
-      2. a value this same client supplied for this same field before;
-      3. a value generated for the semantic type the field was classified as;
-      4. nothing — the field joins the residue the client is asked for.
+      2. a value THIS journey already answered for this same field — a funnel
+         that asks twice must be answered twice the same way, or the application
+         rejects its own steps on cross-validation;
+      3. a value this same client supplied for this same field before;
+      4. a value generated for the semantic type the field was classified as;
+      5. nothing — the field joins the residue the client is asked for.
 
-    Rungs 3 and 4 are the difference between a crawl that stops at the first
+    Rungs 4 and 5 are the difference between a crawl that stops at the first
     unfamiliar form and one that reaches the end of a funnel. Rung 1 staying
     above the learning is what stops it from ever overriding a client who told
-    us the answer."""
+    us the answer.
+
+    EVERY rung stamps ``provenance``. That is what keeps autonomy and honesty
+    separable: the crawl may answer as much as it honestly can, and a reader can
+    still see exactly which values were the client's and which were invented, so
+    a journey completed on synthesized data is never mistaken for one proven on
+    the client's own."""
     sig = field_signature.compute(control, kind=kind)
     verdict = field_semantics.classify(sig, priors=priors)
     entry = {
@@ -507,6 +518,24 @@ def resolve_field(control: Mapping[str, Any], kind: str, name: str,
         entry.update(provenance=PROV_PROVIDED, filled=True)
         return {"value": explicit, "entry": entry}
 
+    # Rung 1.5 — A VALUE THIS JOURNEY ALREADY DISCOVERED.
+    #
+    # A business journey asks the same thing more than once: an email on the
+    # contact step and again on the confirmation step, a policy number captured on
+    # one screen and required on the next. Re-deriving each sighting independently
+    # produced a different answer each time, and an application that
+    # cross-validates its own steps rejects that — so the funnel dead-ended on a
+    # validation error the app was right to raise.
+    #
+    # Above `recalled` because THIS journey's answer is the current truth: a value
+    # remembered from a crawl last month must not overwrite one this journey has
+    # already committed two steps ago and is being validated against.
+    if journey_values:
+        seen_value = journey_values.get(sig["signature"])
+        if seen_value not in (None, ""):
+            entry.update(provenance=PROV_JOURNEY, filled=True)
+            return {"value": str(seen_value), "entry": entry}
+
     if recalled:
         prior_value = recalled.get(sig["signature"])
         if prior_value not in (None, ""):
@@ -537,6 +566,12 @@ async def fill_form_phase_a(
     state_id: str = "",
     identity: Optional[Identity] = None,
     recalled: Optional[Mapping[str, str]] = None,
+    #: {signature: value} for values THIS journey has already committed. Read as
+    #: resolver rung 2 and WRITTEN BACK as each fill commits, so a funnel that
+    #: asks the same question on step 1 and step 4 answers it the same way both
+    #: times. In-process for the life of one crawl; never emitted, never logged,
+    #: never persisted — the same discipline as ``recalled``.
+    journey_values: Optional[MutableMapping[str, str]] = None,
     priors: Optional[Mapping[str, Any]] = None,
     data_mode: str = field_values.DATA_MODE_USER,
     choice_overrides: Optional[Mapping[str, str]] = None,
@@ -589,8 +624,8 @@ async def fill_form_phase_a(
             logger.info("qec.forms.skip_nameless_field kind=%s", kind)
             continue
         decision = resolve_field(control, kind, name, answer_key, identity,
-                                 recalled=recalled, priors=priors,
-                                 data_mode=data_mode,
+                                 recalled=recalled, journey_values=journey_values,
+                                 priors=priors, data_mode=data_mode,
                                  choice_overrides=choice_overrides)
         entry, value = decision["entry"], decision["value"]
         if value is None:
@@ -622,6 +657,16 @@ async def fill_form_phase_a(
         result.actions.append(action)
         result.filled += 1
         result.field_ledger.append(entry)
+        # REMEMBER IT FOR THE REST OF THE JOURNEY. Only a value the browser
+        # actually took is worth remembering (a failed fill is recorded above and
+        # never reaches here), and only a free-text one: re-imposing a CHOICE
+        # would silently overrule the branch walk, whose whole purpose is to take
+        # a different option on a later pass through the same question.
+        if (journey_values is not None and "options" not in entry
+                and not entry.get("sensitive")):
+            sig = str(entry.get("signature") or "")
+            if sig:
+                journey_values.setdefault(sig, str(value))
         if entry["provenance"] != PROV_PROVIDED:
             result.inferred += 1
             result.inferred_fields.append(name)

@@ -169,6 +169,48 @@ def extract_controls(
     return controls
 
 
+#: Ceiling on the answers stored per catalogued question. Sized for the
+#: enumerations business forms actually ask — 50 US states, ~250 countries, a
+#: 100-year date-of-birth range. The previous 48 clipped the states themselves,
+#: and the clip was silent: the catalogue simply held a shorter list, so every
+#: case generated from it claimed to cover a question it only partly knew.
+#: Bounded on purpose — one pathological control must not dominate a snapshot.
+MAX_CATALOG_OPTIONS = 300
+
+
+def _catalog_options(control: Mapping[str, Any]) -> list[str]:
+    """The answer labels to store for one question, deduped and bounded."""
+    out: list[str] = []
+    seen: set[str] = set()
+    for o in (control.get("options") or []):
+        label = str(o).strip()
+        if not label or label in seen:
+            continue
+        seen.add(label)
+        out.append(label)
+        if len(out) >= MAX_CATALOG_OPTIONS:
+            break
+    return out
+
+
+def _options_total(control: Mapping[str, Any]) -> int:
+    """How many answers the question OFFERS, as observed in the page.
+
+    Floored at the number actually stored so the catalogue can never claim fewer
+    answers than it holds, and carried separately from the list so a clipped
+    enumeration stays visible as clipped. A question whose stored options are a
+    PREFIX is still a useful catalogue row; a prefix that PRESENTS as the whole
+    answer set is a fabrication, and the difference is this number.
+    """
+    stored = len(_catalog_options(control))
+    raw = control.get("options_total")
+    try:
+        declared = int(raw) if raw is not None and not isinstance(raw, bool) else 0
+    except (TypeError, ValueError):
+        declared = 0
+    return max(declared, stored, len(control.get("options") or []))
+
+
 def build_master_catalog(
     nodes: Sequence[Mapping[str, Any]],
     edges: Sequence[Mapping[str, Any]] | None = None,
@@ -225,7 +267,11 @@ def build_master_catalog(
                     "question_id": qid,
                     "name": str(c.get("name") or "")[:200],
                     "type": str(c.get("type") or "text"),
-                    "options": [str(o) for o in (c.get("options") or [])][:48],
+                    "options": _catalog_options(c),
+                    # How many answers the question OFFERS. Differs from
+                    # len(options) only when a read was clipped, and that
+                    # difference is exactly what a consumer must be able to see.
+                    "options_total": _options_total(c),
                     "required": bool(c.get("required")),
                     "semantic_type": str(c.get("semantic_type") or ""),
                     "provenance": str(c.get("provenance") or PROVENANCE_OBSERVED),
@@ -242,8 +288,17 @@ def build_master_catalog(
                 # Keep the richest observation: required is sticky-True, fill in
                 # options/validation if this sighting has them and the row didn't.
                 row["required"] = row["required"] or bool(c.get("required"))
-                if not row["options"] and c.get("options"):
-                    row["options"] = [str(o) for o in c["options"]][:48]
+                # RICHEST WINS. The same question is met on several pages and one
+                # sighting may be more complete than another — a dependent
+                # dropdown is empty until its driver is answered, so the first
+                # sighting of "County" can legitimately offer nothing while a
+                # later one offers forty. Keeping the first observation meant the
+                # catalogue held the emptiest view of every dependent question.
+                incoming = _catalog_options(c)
+                if len(incoming) > len(row["options"]):
+                    row["options"] = incoming
+                row["options_total"] = max(
+                    int(row.get("options_total") or 0), _options_total(c))
                 if "validation" not in row and isinstance(c.get("validation"), Mapping):
                     if c["validation"]:
                         row["validation"] = dict(c["validation"])

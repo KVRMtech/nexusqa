@@ -110,10 +110,23 @@ _MAX_NETWORK_CALLS = 100
 #: per dropdown. Read-only (open → read labels → dismiss), bounded, state-restoring.
 _MAX_OPTION_PROBES = 8
 _MAX_PROBED_OPTIONS = 40
+#: FULL-TRAVERSAL bounds. On an attested test environment the catalogue's job is
+#: to hold every answer a question offers — "which state do you live in?" has
+#: fifty-one, not forty. A dense underwriting form carries far more than eight
+#: dropdowns, so the per-state probe ceiling rises with it. Still bounded, and any
+#: list that still gets clipped is marked ``options_truncated`` rather than
+#: silently shortened.
+_FULL_OPTION_PROBES = 40
+_FULL_PROBED_OPTIONS = 300
 #: ACT-THEN-DIFF bounds — driver acts committed per state to reveal DEPENDENT options and
 #: CONDITIONALLY-REVEALED fields. EXPLORE-phase, no submit; a committed choice/toggle is a
 #: valid filled-form state to snapshot.
 _MAX_DEP_PROBES = 8
+#: FULL-TRAVERSAL dependency budget. Each act answers "which questions change when
+#: this one is answered?" — the DEPENDENCY half of the catalogue, and the half a
+#: generated negative/boundary case needs in order to be about a real rule rather
+#: than a guess. Eight acts covers a probe; a real application form asks more.
+_FULL_DEP_PROBES = 24
 #: Value-bearing control kinds (a form FIELD, not a button/link) — a newly-appeared one
 #: after a driver act is a conditionally-revealed field.
 _FIELD_KINDS = frozenset({
@@ -131,6 +144,25 @@ _MAX_WIZARD_ADVANCES = 24
 #: what may be clicked, not the step count.
 _E2E_WIZARD_STEPS = 20
 _E2E_WIZARD_ADVANCES = 80
+
+#: TRAVERSAL POSTURE — how far a business journey may be WALKED. Set by qe-central
+#: from the environment attestation the operator signed (``prod_guard.
+#: traversal_posture``); mirrored here as plain strings because the explorer shares
+#: no code with qe-central.
+#:
+#: This dial decides how the crawl IDENTIFIES the forward control and how deep it
+#: may walk — never what it is ALLOWED to click. The refuse-pack danger gate, the
+#: commit boundary and the disposable-attestation submit tier are unchanged in
+#: every posture and are re-checked at click time.
+TRAVERSAL_FULL = "full"
+#: The environment is attested non-prod: walk each journey to its end and catalogue
+#: it. A funnel sampled six steps deep and reported as covered is green-wash.
+TRAVERSAL_PROBE = "probe"
+#: Fail-closed default — no signed statement about this environment, so sample it.
+#: Byte-identical to the behaviour before the posture existed.
+TRAVERSAL_OBSERVE = "observe"
+#: Production: catalogue only (paired with ``observe_only``).
+TRAVERSAL_POSTURES = (TRAVERSAL_FULL, TRAVERSAL_PROBE, TRAVERSAL_OBSERVE)
 #: ENTRY-goto retry bounds — the first navigation can race the per-dispatch
 #: egress-fence reconfigure (squid allowlist re-read); retry it briefly.
 _ENTRY_GOTO_RETRIES = 2
@@ -744,6 +776,7 @@ class Crawler:
         identity_seed: str = "",
         data_mode: str = "user",
         crawl_mode: str = "explore",
+        traversal: str = TRAVERSAL_PROBE,
         credentials: Optional[Credentials] = None,
         session_injected: bool = False,
         allowed_hosts: Sequence[str] = (),
@@ -777,6 +810,17 @@ class Crawler:
         # one crawl — it is never logged, never emitted into the manifest, and never
         # crosses a process boundary. `field_priors` is pooled and value-free.
         self._recalled_values = dict(recalled_values or {})
+        # JOURNEY MEMORY — {signature: value} for questions THIS crawl has already
+        # answered. A funnel asks the same thing more than once (an email on the
+        # contact step and again on the confirmation step; a policy number
+        # captured on one screen and required on the next), and re-deriving each
+        # sighting independently produced a different answer each time — which the
+        # application then rejected on its own cross-validation, dead-ending the
+        # walk on a validation error it was right to raise.
+        #
+        # Same discipline as ``recalled_values``: in-process for the life of one
+        # crawl, never logged, never emitted, never persisted.
+        self._journey_values: dict[str, str] = {}
         self._field_priors = dict(field_priors or {})
         # ONE person for the whole crawl: regenerating per form would produce a
         # postcode belonging to a different region than the one selected two steps
@@ -789,12 +833,38 @@ class Crawler:
         # gate is identical in all three, because a deeper walk must not be a
         # laxer one.
         self._crawl_mode = str(crawl_mode or "explore").strip().lower()
+        # TRAVERSAL POSTURE — how far a business journey may be WALKED. Derived by
+        # qe-central from the env attestation the operator signed, so a test
+        # environment needs no second dial. Unknown values fail closed to "probe".
+        # This is not a safety dial: what may be CLICKED is decided by the refuse
+        # pack, the danger gate and the disposable-attestation submit tier, none of
+        # which read this value.
+        self._traversal = str(traversal or TRAVERSAL_PROBE).strip().lower()
+        if self._traversal not in TRAVERSAL_POSTURES:
+            self._traversal = TRAVERSAL_PROBE
+        # A JOURNEY-COMPLETION crawl: walk each funnel to its end and catalogue it,
+        # rather than sampling a probe's worth of it. True for an attested non-prod
+        # environment, or for an explicitly requested e2e crawl (which is what "e2e"
+        # has always meant).
+        self._full_traversal = (self._traversal == TRAVERSAL_FULL
+                                or self._crawl_mode == "e2e")
         # E2E budgets are DEPLOY-CONFIGURABLE (a fifteen-step funnel needs
-        # more than a probe budget); explore/target keep the probe bounds.
-        self._max_wizard_steps = (int(e2e_wizard_steps) if self._crawl_mode == "e2e"
+        # more than a probe budget); a probe-posture crawl keeps the probe bounds.
+        self._max_wizard_steps = (int(e2e_wizard_steps) if self._full_traversal
                                   else _MAX_WIZARD_STEPS)
-        self._max_wizard_advances = (int(e2e_wizard_advances) if self._crawl_mode == "e2e"
+        self._max_wizard_advances = (int(e2e_wizard_advances) if self._full_traversal
                                      else _MAX_WIZARD_ADVANCES)
+        # CATALOGUE COMPLETENESS bounds. A probe samples the shape of a form; a
+        # full-traversal crawl has to hold every answer each question offers,
+        # because that enumeration IS the test data for the positive, negative and
+        # boundary cases generated from it. Bounded in both postures — what changes
+        # is whether the bound is sized for a sample or for a real answer set.
+        self._max_option_probes = (_FULL_OPTION_PROBES if self._full_traversal
+                                   else _MAX_OPTION_PROBES)
+        self._max_probed_options = (_FULL_PROBED_OPTIONS if self._full_traversal
+                                    else _MAX_PROBED_OPTIONS)
+        self._max_dep_probes = (_FULL_DEP_PROBES if self._full_traversal
+                                else _MAX_DEP_PROBES)
         # BUSINESS FLOWS: one entry per journey walked, carrying whether it actually
         # REACHED THE END. Six steps of a fifteen-step funnel is not the Apply flow.
         self._flows: list[dict[str, Any]] = []
@@ -1089,6 +1159,12 @@ class Crawler:
             "flows": self._flows[:200],
             "flow_summary": flow_ledger.summarize(self._flows),
             "crawl_mode": self._crawl_mode,
+            # TRAVERSAL POSTURE this crawl actually ran under. Recorded because it
+            # decides whether a funnel was walked to its end or SAMPLED: "6 steps,
+            # terminal=budget" means something entirely different under `probe` than
+            # under `full`, and a reader who cannot tell them apart will read a
+            # sample as coverage.
+            "traversal": self._traversal,
             "fields_needing_seed": needs_seed,
             # Per-field page context {label, url} — the grounded source for flow grouping.
             # Kept alongside the flat list (which stays for back-compat).
@@ -1831,6 +1907,7 @@ class Crawler:
                 self._port, controls, self._answer_key or AnswerKey(), self._clock,
                 phase=Phase.EXPLORE.value, state_id=fingerprint,
                 identity=self._identity, recalled=self._recalled_values,
+                journey_values=self._journey_values,
                 priors=self._field_priors, data_mode=self._data_mode,
                 choice_overrides=self._choice_overrides,
             )
@@ -2443,7 +2520,7 @@ class Crawler:
             return
         probed = 0
         for c in controls:
-            if probed >= _MAX_OPTION_PROBES:
+            if probed >= self._max_option_probes:
                 break
             # The matcher registry decides which controls need the open-probe (a custom choice
             # whose options only appear on open) — new widgets plug in via a matcher rule.
@@ -2469,12 +2546,33 @@ class Crawler:
                 if press is not None:
                     await press("Escape")  # restore: dismiss the opened listbox
                 if opts:
-                    c["options"] = opts[:_MAX_PROBED_OPTIONS]
-                    if isinstance(c.get("qec"), dict):
-                        c["qec"]["options"] = c["options"]
+                    self._set_options(c, opts)
                     probed += 1
             except Exception:
                 continue
+
+    def _set_options(self, control: dict[str, Any], options: Sequence[str]) -> None:
+        """Write a READ option list onto a control, bounded and HONESTLY marked.
+
+        The enumeration a question offers is not decoration — it is the answer set
+        a generated positive/negative/boundary case is built from, so a list that
+        was clipped must never be indistinguishable from one that was complete.
+        Records ``options_total`` (what the page actually offers) and, when the
+        bound bit, ``options_truncated`` — so a consumer can say "247 offered, 300
+        captured" instead of presenting a prefix as the set of valid answers.
+        """
+        opts = list(options or ())
+        total = len(opts)
+        kept = opts[:self._max_probed_options]
+        control["options"] = kept
+        control["options_total"] = max(total, int(control.get("options_total") or 0))
+        if total > len(kept):
+            control["options_truncated"] = True
+            logger.info(
+                "qec.catalog.options_truncated control=%r offered=%d captured=%d",
+                str(control.get("name") or "")[:40], total, len(kept))
+        if isinstance(control.get("qec"), dict):
+            control["qec"]["options"] = kept
 
     async def _commit_act(self, control: dict[str, Any]) -> bool:
         """Perform ONE grounded, non-submitting act on a driver control so a dependent
@@ -2573,7 +2671,7 @@ class Crawler:
         }
         acted = 0
         for d in drivers:
-            if acted >= _MAX_DEP_PROBES:
+            if acted >= self._max_dep_probes:
                 break
             if not await self._commit_act(d):
                 continue
@@ -2597,7 +2695,7 @@ class Crawler:
                 nm = str(r.get("name") or "")
                 if r.get("options") and nm in empty_by_name:
                     tgt = empty_by_name.pop(nm)
-                    tgt["options"] = list(r.get("options") or [])[:_MAX_PROBED_OPTIONS]
+                    self._set_options(tgt, list(r.get("options") or []))
                     tgt["depends_on"] = driver_label
                     if isinstance(tgt.get("qec"), dict):
                         tgt["qec"]["options"] = tgt["options"]
@@ -3175,9 +3273,27 @@ class Crawler:
         self, controls: Sequence[dict[str, Any]],
         page_url: str = "", page_title: str = "", fingerprint: str = "",
     ) -> AdvanceDecision:
-        """Mode-routed advance decision. Explore/target stays the strict regex
-        with no oracle state; E2E runs the 3-tier detection."""
-        if self._crawl_mode == "e2e":
+        """POSTURE-routed advance decision.
+
+        A journey-completion crawl (an attested non-prod environment, or an
+        explicit e2e request) runs the full 3-tier detection; a probe keeps the
+        strict regex and no oracle state.
+
+        WHY THE POSTURE AND NOT THE MODE. Tier 1 recognises a forward control only
+        when its label carries a generic advance word, so an application whose
+        steps read "Save and Return", "Review Application" or "See My Quote" had
+        no advance at all and every journey was recorded one step deep — live, six
+        flows on a carrier admin app, all ``steps: 1``. Button wording is not
+        something a test tool gets to standardise across a thousand applications;
+        identifying the forward control is the tool's job, and on an environment
+        the operator has attested it should use every means it has.
+
+        The commit boundary is NOT relaxed by this: tiers 1-2 veto commit words
+        per-control (tier 2 admits one only in destination position — "Continue to
+        Payment" navigates, it does not pay), and tier 3's candidate set is
+        commit-filtered before the oracle sees it. Crossing a real submit remains
+        the separately-gated, disposable-attested path."""
+        if self._full_traversal:
             return await self._pick_advance_e2e(
                 controls, page_url, page_title, fingerprint)
         strict = self._pick_wizard_advance(controls)
@@ -3245,6 +3361,7 @@ class Crawler:
                 self._port, refreshed, self._answer_key or AnswerKey(), self._clock,
                 phase=Phase.EXPLORE.value, state_id=fingerprint,
                 identity=self._identity, recalled=self._recalled_values,
+                journey_values=self._journey_values,
                 priors=self._field_priors, data_mode=self._data_mode,
                 choice_overrides=self._choice_overrides)
             cur_filled = refill.filled
@@ -3311,7 +3428,16 @@ class Crawler:
             # question per pass; re-observe so the next click uses a fresh ordinal.
             # A no-op on any page without a repeated-option questionnaire (returns
             # []), so it never touches ordinary steps.
-            if self._submit_enabled:
+            # Gated on TRAVERSAL, not on submit. Answering a health/lifestyle
+            # question is a FILL — it commits nothing and crosses no boundary (the
+            # option filter below excludes every commit, advance, danger and auth
+            # control, and an EXPLORE-phase mutating request is blocked by the
+            # network guard regardless). Requiring submit rights to answer a
+            # question meant an app whose "Continue" is validation-locked behind a
+            # questionnaire dead-ended on that page and recorded a one-step journey,
+            # even on an environment attested for full traversal. Never in
+            # observe-only: production is catalogued, never interacted with.
+            if (self._submit_enabled or self._full_traversal) and not self._observe_only:
                 pre_q_controls = cur_controls    # snapshot for the trigger→child diff
                 q_dps = await self._answer_questionnaire(cur_controls, cur_url, cur_fp)
                 if q_dps:
@@ -3502,6 +3628,7 @@ class Crawler:
                     self._port, new_controls, self._answer_key or AnswerKey(), self._clock,
                     phase=Phase.EXPLORE.value, state_id=new_fp,
                     identity=self._identity, recalled=self._recalled_values,
+                    journey_values=self._journey_values,
                     priors=self._field_priors, data_mode=self._data_mode,
                     choice_overrides=self._choice_overrides)
                 step_actions.extend(filled.actions)

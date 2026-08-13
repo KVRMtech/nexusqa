@@ -322,7 +322,12 @@ def test_injected_js_is_a_self_invoking_expression():
     # Balanced braces is a cheap syntactic guard for a non-executed string.
     assert js.count("{") == js.count("}")
     assert js.count("(") == js.count(")")
-    assert INVENTORY_JS_VERSION == "inv-js-v6"
+    # v7: option capture sized for COMPLETENESS (MAX_OPTIONS 60 → 300) and
+    # ``options_total`` added, so a clipped enumeration is marked rather than
+    # silently shortened. The version is stamped into every manifest, so a
+    # deliberate bump here is what lets a manifest be traced to the JS that
+    # produced its controls.
+    assert INVENTORY_JS_VERSION == "inv-js-v7"
 
 
 # ─── GROUP_ASSEMBLE — a radio group is ONE question, not N toggles ────────────

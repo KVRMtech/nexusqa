@@ -64,6 +64,11 @@ class ExploreDispatchRequest(BaseModel):
     data_mode: str = Field(default="user", max_length=16)
     #: "explore" / "target" / "e2e" — the step budget, never the safety gates.
     crawl_mode: str = Field(default="explore", max_length=16)
+    #: TRAVERSAL POSTURE — "full" | "probe" | "observe" (prod_guard.traversal_posture).
+    #: How far a business journey may be WALKED, derived from the attestation the
+    #: operator already signed. "probe" is the fail-closed default and is
+    #: byte-identical to the behaviour before this field existed.
+    traversal: str = Field(default="probe", max_length=16)
     #: U2 — per-tenant vision autonomy (autonomy_flags["vision"] = env AND tenant,
     #: fail-closed). Default OFF: the explorer makes no vision call.
     vision_enabled: bool = Field(default=False)
@@ -138,6 +143,7 @@ def _log_safe(req: ExploreDispatchRequest) -> dict:
         "mechanics_count": len(req.proven_mechanics or {}),
         "data_mode": req.data_mode,
         "crawl_mode": req.crawl_mode,
+        "traversal": req.traversal,
         # Booleans only — never the raw routing cookies/headers/basic-auth (secret).
         "has_cookies": bool(req.cookies),
         "has_headers": bool(req.extra_http_headers),

@@ -93,6 +93,58 @@ CRAWLABLE_ENV_KINDS = NON_PROD_ENV_KINDS | OBSERVE_ENV_KINDS
 POSTURE_FULL = "full"
 POSTURE_OBSERVE = "observe"
 
+# ── Traversal posture — HOW FAR a crawl may walk a business journey ──────────
+#: The product's scope is TEST-environment autonomous discovery. On an attested
+#: non-prod environment the crawl's job is to walk each business journey from
+#: start to finish and CATALOGUE it — every screen, question, control, option and
+#: rule. A funnel sampled six steps deep and reported as "covered" is the exact
+#: green-wash this product exists to prevent, and a funnel that stops because a
+#: button happens to read "Continue" is worse: it is a restriction with no safety
+#: value at all on an environment the operator has attested is throwaway.
+#:
+#: This is a TRAVERSAL dial, never a SAFETY dial. It decides how the crawl
+#: IDENTIFIES the forward control and how deep it may walk. It grants nothing:
+#: the refuse pack, the danger gate and the disposable-attestation submit tier are
+#: all unchanged and are re-checked at click time inside the explorer.
+TRAVERSAL_FULL = "full"
+#: Walk each journey to its natural end: every advance tier available, journey-
+#: completion step budgets, option/dependency capture to completeness.
+TRAVERSAL_PROBE = "probe"
+#: Today's bounded sample — strict-regex advance only, probe-sized step budgets.
+#: The posture for an app WITHOUT a valid non-prod attestation: we have no signed
+#: statement about what this environment is, so we sample rather than drive it.
+TRAVERSAL_OBSERVE = "observe"
+#: Production: catalogue only. Never fill, never advance, never submit.
+TRAVERSAL_POSTURES = (TRAVERSAL_FULL, TRAVERSAL_PROBE, TRAVERSAL_OBSERVE)
+
+
+def traversal_posture(app_row: Any) -> str:
+    """How far this app's crawl may walk a business journey (pure).
+
+    * ``observe`` — ``env_kind`` is a production kind. Catalogue only; unchanged.
+    * ``full``    — a VALID, attributed, unexpired attestation of a NON-PROD kind
+      (disposable / staging / uat / production_test). The operator has stated on
+      the record what this environment is, so the crawl walks each journey to its
+      end instead of sampling it.
+    * ``probe``   — everything else, including a missing, unattributed, expired or
+      unrecognised attestation. Fail-closed: no signed statement about the
+      environment means no deep drive of it.
+
+    SAFETY IS NOT ON THIS DIAL. ``full`` widens how the forward control is
+    IDENTIFIED and how many steps may be walked; it never widens what may be
+    CLICKED. The refuse-pack danger gate is untouched, and crossing a real submit
+    still requires the disposable-env attestation via :func:`submit_approvals`,
+    re-verified at click time by the explorer's own ``gate_submit``.
+    """
+    att = _jsonb(app_row, "env_attestation")
+    kind = str(att.get("env_kind") or "").strip().lower()
+    if kind in OBSERVE_ENV_KINDS:
+        return TRAVERSAL_OBSERVE
+    ok, _kind, _reason = _attestation_status(
+        app_row, allowed_kinds=frozenset(NON_PROD_ENV_KINDS), now=_utcnow(),
+    )
+    return TRAVERSAL_FULL if ok else TRAVERSAL_PROBE
+
 
 def posture_for_env_kind(env_kind: str) -> str:
     """The crawl posture derived from env_kind.
@@ -616,6 +668,9 @@ __all__ = [
     "ENV_KIND_PROD", "NON_PROD_ENV_KINDS", "OBSERVE_ENV_KINDS", "CRAWLABLE_ENV_KINDS",
     # postures
     "POSTURE_FULL", "POSTURE_OBSERVE", "posture_for_env_kind",
+    # traversal posture (how far a journey may be walked)
+    "TRAVERSAL_FULL", "TRAVERSAL_PROBE", "TRAVERSAL_OBSERVE", "TRAVERSAL_POSTURES",
+    "traversal_posture",
     # env helpers
     "ENV_VAR", "DEV_ENVS", "current_env", "is_dev_env",
     # refusal

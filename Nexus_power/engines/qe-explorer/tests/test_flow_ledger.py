@@ -134,14 +134,34 @@ def test_the_outcome_a_funnel_produced_is_kept():
 _CRAWLER = open("app/crawler.py", encoding="utf-8").read()
 
 
-def test_end_to_end_mode_only_changes_the_step_budget():
+def _code_only(source: str) -> str:
+    """``source`` with comments stripped, so a tripwire tests CODE not PROSE.
+
+    These guards assert that a safety word does not appear in a region of the
+    crawler. Scanning raw source conflates the two: a comment that EXPLAINS the
+    separation ("this is not the danger gate") reads to the guard exactly like
+    code that violates it. That made the guards both noisy and weak — noisy
+    because documenting the invariant broke them, weak because they could be
+    satisfied by deleting an explanation.
+    """
+    out = []
+    for line in source.splitlines():
+        code = line.split("#", 1)[0] if "#" in line else line
+        if code.strip():
+            out.append(code)
+    return "\n".join(out)
+
+
+def test_the_step_budget_never_changes_what_may_be_clicked():
     """A deeper walk must not be a laxer one. The commit-word veto, the danger gate
-    and the submit boundary decide what may be clicked - not the step count."""
+    and the submit boundary decide what may be clicked - not the step count, and
+    not the traversal posture that sizes it."""
     assert "_E2E_WIZARD_STEPS" in _CRAWLER and "_E2E_WIZARD_ADVANCES" in _CRAWLER
     seg = _CRAWLER[_CRAWLER.index("self._crawl_mode = "):]
     seg = seg[:seg.index("self._flows")]
+    seg = _code_only(seg)
     for gate in ("submit_approvals", "danger", "_WIZARD_COMMIT_RE", "attestation"):
-        assert gate not in seg, "%s must not depend on the crawl mode" % gate
+        assert gate not in seg, "%s must not depend on the walk DEPTH" % gate
 
 
 def test_the_deeper_budget_is_still_bounded():
@@ -150,10 +170,31 @@ def test_the_deeper_budget_is_still_bounded():
     assert 6 < n <= 40 and 24 < a <= 200
 
 
-def test_a_mode_nobody_set_gets_the_shallow_budget():
-    seg = _CRAWLER[_CRAWLER.index("self._max_wizard_steps"):][:400]
-    assert 'if self._crawl_mode == "e2e"' in seg
+def test_an_app_nobody_attested_gets_the_shallow_budget():
+    """Walk depth is chosen by ONE expression, and its fallback is the probe
+    budget. Depth is owned by the traversal posture (derived from the signed env
+    attestation) rather than by ``crawl_mode``, which is a SCOPE dial: an app
+    onboarded with the default scope was silently getting a sampled walk of every
+    funnel it found. ``_full_traversal`` still honours an explicit ``e2e`` mode,
+    so an app already configured that way is not demoted.
+
+    The behavioural pins live in ``tests/test_traversal_posture.py``; this one
+    keeps the fallback from being inverted by a future edit."""
+    seg = _code_only(_CRAWLER[_CRAWLER.index("self._max_wizard_steps"):][:400])
+    assert "if self._full_traversal" in seg
     assert "_MAX_WIZARD_STEPS" in seg
+
+
+def test_full_traversal_is_a_depth_decision_with_no_safety_inputs():
+    """``_full_traversal`` is what widens the walk, so what FEEDS it is
+    safety-relevant: it must be a function of the declared posture and the scope
+    mode only. If an attestation or approval ever appears in this expression,
+    depth and permission have been fused into one dial."""
+    seg = _code_only(
+        _CRAWLER[_CRAWLER.index("self._full_traversal = "):][:300])
+    expr = seg[:seg.index(")") + 1]
+    for gate in ("submit", "danger", "attestation", "approv"):
+        assert gate not in expr, f"{gate} must not decide walk DEPTH"
 
 
 def test_a_single_page_form_is_still_a_journey():

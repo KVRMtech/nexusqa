@@ -41,7 +41,7 @@ from .browser import BrowserPort, NavResult, RawObservation, verify_intent
 from .config import settings
 from . import field_signature
 from .interaction_ladder import Rung, ladder_for
-from .crawler import Budget, Crawler, CrawlSummary, GuardContext
+from .crawler import TRAVERSAL_FULL, Budget, Crawler, CrawlSummary, GuardContext
 from .fingerprint import interactive_signature
 from .forms import AnswerKey
 from .auth import AuthWindow, Credentials
@@ -147,6 +147,18 @@ class ExploreRequest(BaseModel):
     #: Every safety gate is identical in all three, because a deeper walk must not
     #: be a laxer one.
     crawl_mode: str = Field(default="explore", max_length=16)
+    #: TRAVERSAL POSTURE — "full" | "probe" | "observe", derived by qe-central from
+    #: the env attestation the operator signed (``prod_guard.traversal_posture``).
+    #: HOW FAR a business journey may be walked — never WHAT may be clicked.
+    #:   ``full``    the environment is attested non-prod: identify the forward
+    #:               control with every available tier and walk each journey to its
+    #:               end, so the catalogue holds whole journeys instead of samples.
+    #:   ``probe``   fail-closed default; byte-identical to the behaviour before
+    #:               this field existed (strict-regex advance, probe step budgets).
+    #:   ``observe`` production: catalogue only.
+    #: The refuse-pack danger gate and the disposable-attestation submit tier are
+    #: unchanged and re-checked at click time regardless of this value.
+    traversal: str = Field(default="probe", max_length=16)
     #: U2 — per-tenant vision autonomy, set by qe-central's autonomy_flags["vision"]
     #: (env flag AND tenant flag, fail-closed). Default OFF: no vision call is made.
     vision_enabled: bool = Field(default=False)
@@ -754,9 +766,18 @@ async def _run_job(
                 logger.info("qec.explorer.env_cookies_set crawl_id=%s n=%d",
                             req.crawl_id, len(req.cookies))
             page = await context.new_page()
+            # A JOURNEY-COMPLETION crawl — an attested non-prod environment, or an
+            # explicit e2e request. The agent-backed oracles (advance + medic) are
+            # what let the crawl identify a forward control whose label no regex
+            # can anticipate, which is the difference between cataloguing a whole
+            # journey and cataloguing its first page. Mirrors Crawler._full_traversal.
+            full_traversal = (
+                str(req.traversal or "").strip().lower() == TRAVERSAL_FULL
+                or req.crawl_mode == "e2e"
+            )
             medic = (
                 _make_medic_oracle(app.state.http, req.tenant_id, req.crawl_id)
-                if req.crawl_mode == "e2e" else None
+                if full_traversal else None
             )
             port = PlaywrightBrowserPort(
                 page, context, proven_mechanics=req.proven_mechanics,
@@ -787,9 +808,10 @@ async def _run_job(
                 identity_seed=req.identity_seed or f"{req.tenant_id}::{req.target_url}",
                 data_mode=req.data_mode,
                 crawl_mode=req.crawl_mode,
+                traversal=req.traversal,
                 advance_oracle=(
                     _make_advance_oracle(app.state.http, req.tenant_id, req.crawl_id)
-                    if req.crawl_mode == "e2e" else None
+                    if full_traversal else None
                 ),
                 # U2 vision Perceiver — only when the tenant has vision enabled
                 # (qe-central's double-gate). Default OFF → None → the walk hook is a

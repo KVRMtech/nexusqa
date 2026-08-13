@@ -73,7 +73,7 @@ from __future__ import annotations
 
 #: Stamped into the crawl manifest so a manifest can be traced to the exact
 #: injected-JS generation that produced its controls.
-INVENTORY_JS_VERSION = "inv-js-v6"
+INVENTORY_JS_VERSION = "inv-js-v7"
 
 INVENTORY_JS = r"""
 (() => {
@@ -88,7 +88,13 @@ INVENTORY_JS = r"""
 
   var MAX_NAME = 500;
   var MAX_OPTION = 200;
-  var MAX_OPTIONS = 60;
+  // Option-list ceiling. Sized for COMPLETENESS of the enumerations a business
+  // form actually asks: 50 US states, ~250 countries, a 100-year date-of-birth
+  // range. The previous 60 silently truncated every one of those but the states,
+  // and a catalogue that holds the first 60 of 250 countries is not a catalogue
+  // of that question — it is a prefix presented as the whole. Still bounded: an
+  // unbounded read would let one pathological <select> dominate the manifest.
+  var MAX_OPTIONS = 300;
   var MAX_LANDMARK = 80;
   var MAX_VALUE = 1000;
 
@@ -260,15 +266,26 @@ INVENTORY_JS = r"""
   // WHEN that listbox is present in the DOM (incl. display:none). A widget that builds its
   // options only on open yields [] here — the crawler's open-probe handles that case.
   function optionsOf(el) {
+    return optionsAndTotalOf(el).list;
+  }
+
+  // {list, total} — the captured labels AND how many the control actually offers.
+  // The two differ only when MAX_OPTIONS clipped the read, and that difference is
+  // the whole point: a consumer can then say "247 options, first 300 captured"
+  // instead of presenting a clipped list as the complete set of answers.
+  function optionsAndTotalOf(el) {
     var out = [];
+    var total = 0;
     try {
       if (lc(el.tagName) === "select") {
         var opts = el.options || [];
-        for (var i = 0; i < opts.length && out.length < MAX_OPTIONS; i++) {
+        for (var i = 0; i < opts.length; i++) {
           var t = norm(opts[i].textContent) || norm(opts[i].value);
-          if (t) out.push(clip(t, MAX_OPTION));
+          if (!t) continue;
+          total++;
+          if (out.length < MAX_OPTIONS) out.push(clip(t, MAX_OPTION));
         }
-        return out;
+        return { list: out, total: total };
       }
       var role = lc(attr(el, "role"));
       var isChoice = role === "combobox" || role === "listbox" || !!norm(attr(el, "aria-haspopup"));
@@ -276,14 +293,16 @@ INVENTORY_JS = r"""
         var lb = resolveListbox(el);
         if (lb) {
           var nodes = lb.querySelectorAll ? lb.querySelectorAll('[role="option"]') : [];
-          for (var j = 0; j < nodes.length && out.length < MAX_OPTIONS; j++) {
+          for (var j = 0; j < nodes.length; j++) {
             var ot = norm(nodes[j].textContent);
-            if (ot) out.push(clip(ot, MAX_OPTION));
+            if (!ot) continue;
+            total++;
+            if (out.length < MAX_OPTIONS) out.push(clip(ot, MAX_OPTION));
           }
         }
       }
     } catch (e) {}
-    return out;
+    return { list: out, total: total };
   }
 
   function valueCommitted(el) {
@@ -482,6 +501,7 @@ INVENTORY_JS = r"""
     var tag = lc(el.tagName);
     var type = lc(el.type || "");
     var best = an.source === "title" || an.source === "placeholder";
+    var opt = optionsAndTotalOf(el);
     return {
       role: role,
       name: clip(an.name, MAX_NAME),
@@ -490,7 +510,12 @@ INVENTORY_JS = r"""
       kind: role || tag,               // naive; app.inventory refines
       tag: tag,
       input_type: type,
-      options: optionsOf(el),
+      options: opt.list,
+      // How many options the control ACTUALLY offers. Equal to options.length
+      // unless MAX_OPTIONS clipped the read — the honest signal that the captured
+      // list is a prefix, so a truncated enumeration is never catalogued as the
+      // complete set of answers to the question.
+      options_total: opt.total,
       // Which mutually-exclusive question this control answers ("" if none).
       group_key: groupKeyOf(el, doc),
       required: isRequired(el),

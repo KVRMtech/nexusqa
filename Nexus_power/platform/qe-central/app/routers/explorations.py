@@ -625,6 +625,30 @@ async def _dispatch_explorer(
         # unexpired attestation + a non-empty per-flow list). [] for an explore-only
         # app → the crawl stays at the Phase-A boundary, exactly as before.
         submit_approvals = prod_guard.submit_approvals(row)
+        # TRAVERSAL POSTURE — how far this crawl may walk a business journey.
+        # Derived from the attestation the operator already signed, so a test
+        # environment does not need a second dial set by hand. Never a safety
+        # dial: the refuse pack, the danger gate and the disposable-only submit
+        # tier are unchanged and re-checked at click time by the explorer.
+        traversal = prod_guard.traversal_posture(row)
+        # DATA MODE — who answers a question the client never answered for us.
+        #
+        # "user" leaves every semantic CHOICE (a radio group, a select) unanswered
+        # and files it as residue for a human to supply, after which the crawl has
+        # to be RUN AGAIN. On an attested test environment that default is
+        # backwards: it turns a missing value — the most ordinary thing a crawl
+        # meets — into a stop-and-ask-and-restart cycle, which is not what an
+        # agentic platform should do with a form it can honestly answer.
+        #
+        # So an attested test environment answers by default. An operator who has
+        # explicitly chosen "user" still gets "user"; nothing is overridden, and a
+        # posture the operator never attested is untouched. Honesty is preserved
+        # by PROVENANCE, not by refusing to answer: every generated value is
+        # recorded as synthesized in the field ledger, so a journey completed with
+        # invented data is a valid traversal and a clearly-labelled one.
+        declared_data_mode = str((row.schedule or {}).get("data_mode") or "").strip().lower()
+        data_mode = declared_data_mode or (
+            "agent" if traversal == prod_guard.TRAVERSAL_FULL else "user")
 
     credentials = await _decrypt_credentials(request, tenant_id, row)
     # Tier-4: resolve a start-authenticated session (static client session or a
@@ -740,12 +764,13 @@ async def _dispatch_explorer(
         # The operator's DATA dial, from the app row. Absent ⇒ "user", which is the
         # behaviour that existed before field learning — an unset app must never be
         # silently upgraded into letting an agent choose its business paths.
-        data_mode=str((row.schedule or {}).get("data_mode") or "user").strip().lower(),
+        data_mode=data_mode,
         # Absent ⇒ derived from the scope, which is exactly how mode worked before
         # this key existed: a confined crawl is Target, an unconfined one Explore.
         # Only an explicit "e2e" opts into the deeper walk — and a planned
         # branch walk IS an e2e walk by definition.
         crawl_mode=crawl_mode,
+        traversal=traversal,
         vision_enabled=_vision_enabled,
         choice_overrides=(dict((walk_plan or {}).get("choice_overrides") or {})
                           if walk_plan else {}),
