@@ -962,6 +962,16 @@ class Crawler:
         # a nav bar repeated on every page grounds each unique route ONCE — the cost of
         # direct-nav grounding stays ~O(unique navs), not O(states × links).
         self._grounded_navs: set[str] = set()
+        # Grounded [click → navigation] records produced by :meth:`_reach_in_app`
+        # while crossing an auth wall, drained by :meth:`_expand` into the state
+        # they reached. They cannot be returned directly: the click happens before
+        # the destination state exists, and the landing page it happens FROM is
+        # never recorded as a state of its own.
+        self._pending_reach_actions: list[emit.ActionRecord] = []
+        # The state id stamped on those records. Set to the destination's
+        # fingerprint by _expand once known, so the action belongs to a state that
+        # actually exists in the manifest rather than to a phantom one.
+        self._pending_reach_state_id: str = ""
         # Coverage accounting (crawl-once/run-many legibility): what the crawl found
         # vs could actually fill/advance, so the shallow-vs-full gap is visible and the
         # human's remediation is a NAMED, targeted seed request — never blind guessing.
@@ -1451,7 +1461,7 @@ class Crawler:
             if _norm_label(str(control.get("name") or "")) not in wanted_labels:
                 continue
             try:
-                await self._port.click(control)
+                click_obs = await self._port.click(control)
             except Exception:
                 return None
             self._tracker.note_action()
@@ -1462,10 +1472,38 @@ class Crawler:
                 reached.raw_controls, self._refuse_pack, url=reached.url)
             if match_login_controls(reached_controls) is not None:
                 return None      # the click bounced us back to the wall
+            # RECORD THE PROOF, do not merely claim it.
+            #
+            # This method used to log "the link is PROVEN" and then discard both the
+            # click observation and any action record. Nothing downstream ever saw
+            # the navigation, so the generator counted it as an UNPROVEN page-jump
+            # and refused to build an end-to-end test — live, "PROVED only 0 of the
+            # 15 navigations" on an app whose every route was in fact reached by
+            # clicking. A log line asserting evidence that was never recorded is the
+            # exact failure this product exists to prevent, in our own instrument.
+            #
+            # The generator's bar (test_factory _navigation_backbone) is an action
+            # carrying a real navigation outcome; that is what is built here.
+            action = emit.build_action_record(
+                dict(control), verb="click", value=None, observation=click_obs,
+                phase=Phase.EXPLORE.value, state_id=self._pending_reach_state_id,
+                timestamp_ms=self._clock.now_ms())
+            if not (action.after or {}).get("navigated"):
+                # A framework app routes by pushState, so the click event reports
+                # nothing while the route demonstrably changed — and we have already
+                # PROVEN it changed, because the observation above matched the route
+                # we asked for. Same lesson as _ground_nav_links.
+                after = dict(action.after or {})
+                after.update(navigated=True, outcome="navigation",
+                             navigation_kind="pushstate")
+                action.after = after
+            action.to_state = _url_key(reached.url)
+            self._pending_reach_actions.append(action)
             logger.info(
                 "qec.crawler.reached_in_app url_scope=%s via=%r — navigated by clicking, "
-                "so the login survived and the link is PROVEN",
-                _host_of(reached.url), str(control.get("name") or "")[:40])
+                "so the login survived and the link is PROVEN (recorded, to_state=%s)",
+                _host_of(reached.url), str(control.get("name") or "")[:40],
+                action.to_state)
             return reached, reached_controls
         logger.info("qec.crawler.reach_in_app_skipped reason=no_matching_control "
                     "wanted=%s url=%s", sorted(wanted_labels)[:4], url[:120])
@@ -1890,6 +1928,18 @@ class Crawler:
         entry_ts = self._clock.now_ms()
 
         actions: list[emit.ActionRecord] = []
+        # A grounded [click → navigation] that REACHED this state (an auth-wall
+        # crossing that clicked its way here rather than re-navigating). Stamped
+        # with this state's id now that it exists, so the proof is attached to a
+        # real state instead of being logged and dropped — which is what left the
+        # generator counting every navigation on this app as unproven.
+        if self._pending_reach_actions:
+            for pending in self._pending_reach_actions:
+                pending.state_id = fingerprint
+            actions.extend(self._pending_reach_actions)
+            logger.info("qec.crawler.reach_proof_recorded count=%d state=%s",
+                        len(self._pending_reach_actions), fingerprint[:12])
+            self._pending_reach_actions = []
         # Phase A: fill the form (if any), read back committed values.
         is_form = (
             not self._observe_only
