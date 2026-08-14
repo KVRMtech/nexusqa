@@ -553,6 +553,35 @@ async def perceive_controls_endpoint(request: Request) -> dict:
         page_context=body.get("page_context", {}), propose_fn=_propose)
 
 
+async def _autowalk_convergence(tenant_id: str, app_id: str) -> dict:
+    """Has this app's sweep stopped learning? (see :mod:`services.convergence`)
+
+    Reads the app's recent COMPLETED crawls and asks whether the last few each
+    produced nothing beyond what was already known. Best-effort by construction:
+    a failure here must never brake a sweep that is genuinely making progress, so
+    an unreadable history returns not-stuck and the loop proceeds as before.
+    """
+    from ..services import convergence
+
+    try:
+        async with tenant_scoped_qec_session(tenant_id) as session:
+            rows = (await session.execute(
+                select(QEExplorationRow)
+                .where(
+                    QEExplorationRow.tenant_id == tenant_id,
+                    QEExplorationRow.app_id == app_id,
+                    QEExplorationRow.status == "completed",
+                )
+                .order_by(QEExplorationRow.created_at.desc())
+                .limit(convergence.DEFAULT_LOOKBACK)
+            )).scalars().all()
+        return convergence.assess([r.stats for r in rows])
+    except Exception as exc:                      # never brake on our own error
+        logger.warning("qec.internal.convergence_check_failed app=%s err=%s",
+                       app_id, str(exc)[:200])
+        return {"stuck": False, "barren_streak": 0, "reason": "", "best": {}}
+
+
 @router.post("/crawls/{crawl_id}/complete")
 async def complete_crawl(crawl_id: str, request: Request) -> dict:
     """Ingest a finished crawl: verify HMAC → map manifest → write substrate.
@@ -888,7 +917,19 @@ async def complete_crawl(crawl_id: str, request: Request) -> dict:
             await branch_planner.classify_equivalent_options(
                 tenant_id=tenant_id, app_id=app_id))
         flags = await branch_planner.autonomy_flags(tenant_id)
-        if flags["autowalk"] and walk_depth < max_depth:
+        # CONVERGENCE BRAKE. Live: four apps accounted for 450 of 563 crawls in
+        # 18 days — one was crawled 203 times, almost all producing no new pages
+        # and no new tests, and the sweep planned the next cycle every time. That
+        # saturated the single-flight explorer, so REAL client crawls were refused
+        # with "explorer busy" while the fleet re-discovered what it already knew.
+        # An autonomous loop with no brake is not autonomy, it is a spin.
+        stuck = await _autowalk_convergence(tenant_id, app_id)
+        if stuck["stuck"]:
+            stats_dict["journey_autowalk_stuck"] = stuck
+            logger.warning(
+                "qec.internal.autowalk_braked tenant=%s app=%s streak=%d — %s",
+                tenant_id, app_id, stuck["barren_streak"], stuck["reason"])
+        if flags["autowalk"] and walk_depth < max_depth and not stuck["stuck"]:
             from fastapi import Response as _Response
             from .explorations import _dispatch_explorer
             plans = await branch_planner.plan_walks(

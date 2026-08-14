@@ -197,6 +197,37 @@ async def _mark(
         row.updated_at = utc_now()
 
 
+def _posture_shortfall_cause(env_attestation: dict, traversal: str) -> str:
+    """WHY the posture fell short — the specific, actionable sentence.
+
+    "attestation expired 2026-07-12" is fixable in thirty seconds; "traversal is
+    probe" sends an operator into the code. The refusal is only worth issuing if
+    it names the cause.
+    """
+    att = env_attestation if isinstance(env_attestation, dict) else {}
+    kind = str(att.get("env_kind") or "").strip().lower()
+    attested_by = str(att.get("attested_by") or "").strip()
+    expires_raw = att.get("expires_at")
+
+    if traversal == prod_guard.TRAVERSAL_OBSERVE:
+        return ("The environment is attested as production, which is catalogued "
+                "read-only and never driven.")
+    if not att or not kind:
+        return "This app carries no environment attestation."
+    if not attested_by:
+        return ("The environment attestation names no attester, so it is not a "
+                "claim anyone has taken responsibility for.")
+    expires = prod_guard._parse_iso_utc(expires_raw)
+    if expires is None:
+        return (f"The environment attestation has no readable expiry "
+                f"({expires_raw!r}).")
+    if expires <= prod_guard._utcnow():
+        return (f"The environment attestation EXPIRED on "
+                f"{expires.date().isoformat()}.")
+    return (f"The attested env_kind {kind!r} is not one of the non-production "
+            f"kinds that permit a full-traversal crawl.")
+
+
 async def _mark_if_status(
     tenant_id: str, exploration_id: str, *, expect: str, status: str,
 ) -> str:
@@ -678,6 +709,46 @@ async def _dispatch_explorer(
         declared_data_mode = str((row.schedule or {}).get("data_mode") or "").strip().lower()
         data_mode = declared_data_mode or (
             "agent" if traversal == prod_guard.TRAVERSAL_FULL else "user")
+
+        # E2E DOES NOT SILENTLY DEGRADE.
+        #
+        # Posture is derived from the attestation, so an expired or downgraded
+        # one resolves traversal full → probe. Everything downstream then
+        # quietly follows: agent data-fill turns off, the wizard budget drops to
+        # a six-step probe, and the deeper advance tiers never run — while the
+        # crawl still reports "completed" and the operator, who explicitly asked
+        # for END-TO-END, has no way to see they were given a shallow walk.
+        #
+        # That is the silent-degradation failure this product exists to refuse.
+        # A ten-second refusal naming the cause is worth more than a 45-minute
+        # crawl that answers a question nobody asked. The operator can re-attest
+        # and re-run; they cannot un-believe a green "completed".
+        #
+        # Scoped to an EXPLICIT e2e request: a planned branch walk (which forces
+        # e2e by definition) and an app that never asked for it are untouched.
+        if (crawl_mode == "e2e" and not walk_plan
+                and traversal != prod_guard.TRAVERSAL_FULL):
+            cause = _posture_shortfall_cause(env_attestation, traversal)
+            logger.warning(
+                "qec.explorations.e2e_refused_degraded tenant=%s app=%s "
+                "traversal=%s cause=%s", tenant_id, app_id, traversal, cause)
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "refused": True,
+                    "reason": "e2e_posture_unavailable",
+                    "requested": {"crawl_mode": "e2e", "traversal": "full"},
+                    "actual": {"traversal": traversal},
+                    "message": (
+                        f"End-to-end was requested but this app resolves to "
+                        f"'{traversal}' traversal, which walks a sampled probe "
+                        f"rather than whole journeys and disables agent "
+                        f"data-fill. {cause} Re-attest the environment and run "
+                        f"again — running now would report 'completed' for a "
+                        f"crawl that never attempted what you asked for."
+                    ),
+                },
+            )
 
     credentials = await _decrypt_credentials(request, tenant_id, row)
     # Tier-4: resolve a start-authenticated session (static client session or a
