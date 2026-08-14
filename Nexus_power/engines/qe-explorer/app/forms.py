@@ -553,6 +553,25 @@ def resolve_field(control: Mapping[str, Any], kind: str, name: str,
         entry.update(provenance=PROV_SYNTHESIZED, filled=True)
         return {"value": generated, "entry": entry}
 
+    # Rung 4.5 — AN ENUMERATION WE CANNOT READ YET IS NOT AN UNANSWERABLE ONE.
+    #
+    # A modern component library (Radix, shadcn, MUI, Headless UI) builds its
+    # listbox in a portal on open, so the inventory sees ``options: []`` and every
+    # rung above correctly refuses to invent a value for an enumeration it cannot
+    # read. The widget can still be ANSWERED — by opening it and taking a real
+    # option — and the fill does exactly that, recording the label actually
+    # committed. Deferring the choice to fill time is the opposite of inventing
+    # one: the answer comes from the application, not from us.
+    #
+    # Agent mode only: in user mode a semantic choice is the client's to make,
+    # and that contract is unchanged.
+    if (kind in _ENUMERABLE_KINDS and not entry.get("options")
+            and kind not in _TOGGLE_KINDS
+            and data_mode == field_values.DATA_MODE_AGENT
+            and _is_open_choice(control)):
+        entry.update(provenance=PROV_SYNTHESIZED, filled=True)
+        return {"value": CHOICE_OPEN_AND_PICK, "entry": entry}
+
     return {"value": None, "entry": entry}
 
 
@@ -643,17 +662,31 @@ async def fill_form_phase_a(
             continue
         if mechanic:
             entry["mechanic"] = mechanic
+        # WHAT THE FORM ACTUALLY HOLDS, not what we asked it to hold. The two
+        # differ whenever the widget decided: an open-and-pick choice is resolved
+        # from the options the widget itself offered, so the requested value can
+        # be a sentinel that means "take a real one". Recording the request would
+        # put a value in the ledger that the form never contained.
+        committed = value
+        if action.value is not None and str(action.value).strip():
+            committed = str(action.value)
         # Decision point DECIDED: record WHICH option this committed fill took
         # (the branch walked; every other recorded option is a branch that was
         # not). Binary states normalize to their two enumerated labels.
         if "options" in entry:
             if kind in ("checkbox", "toggle"):
                 entry["choice"] = ("checked"
-                                   if _norm(str(value)) in ("true", "1", "yes",
-                                                            "on", "checked")
+                                   if _norm(str(committed)) in ("true", "1", "yes",
+                                                                "on", "checked")
                                    else "unchecked")
             else:
-                entry["choice"] = normalize_option(value)
+                entry["choice"] = normalize_option(committed)
+                # The enumeration the widget revealed when it was opened — the
+                # options the static inventory could not see. Without this the
+                # catalogue keeps an empty answer set for exactly the questions
+                # whose answers were hardest to get.
+                if not entry.get("options") and entry["choice"]:
+                    entry["options"] = [entry["choice"]]
         result.actions.append(action)
         result.filled += 1
         result.field_ledger.append(entry)
@@ -666,7 +699,7 @@ async def fill_form_phase_a(
                 and not entry.get("sensitive")):
             sig = str(entry.get("signature") or "")
             if sig:
-                journey_values.setdefault(sig, str(value))
+                journey_values.setdefault(sig, str(committed))
         if entry["provenance"] != PROV_PROVIDED:
             result.inferred += 1
             result.inferred_fields.append(name)
@@ -732,6 +765,146 @@ async def _upload_seed(
     )
 
 
+#: Sentinel value for an enumerable control whose options are NOT in the DOM
+#: until the widget is opened (Radix / shadcn / MUI / Headless UI — every modern
+#: component library builds its listbox in a portal on open). The resolver cannot
+#: choose from an enumeration it cannot read, but the FILL can: open the widget,
+#: take a real option from it, and record the one actually committed.
+CHOICE_OPEN_AND_PICK = "\x00qec:open-and-pick"
+
+
+def _is_open_choice(control: Mapping[str, Any]) -> bool:
+    """A choice widget whose options exist only while it is open.
+
+    Requires an EXPLICIT non-``select`` tag — a Radix/shadcn trigger is a
+    ``<button>``, so the tag is the positive evidence that the browser's
+    ``selectOption`` primitive cannot drive this control. A control with no tag
+    recorded is NOT assumed custom: treating unknown as custom routed ordinary
+    selects into the open-pick path and broke fills that had always worked
+    (caught by the existing decision-point tests). Unknown keeps the native path;
+    only a declared custom widget is opened.
+    """
+    tag = _norm(control.get("tag"))
+    return bool(tag) and tag != "select"
+
+
+def _reads_back_as(
+    controls: Sequence[Mapping[str, Any]], label: str,
+) -> bool:
+    """Did the widget actually COMMIT ``label``? Verified from a fresh read.
+
+    Two conditions, both required and both fail-closed:
+      * the popup CLOSED (no ``role=option`` remains) — a still-open listbox
+        means the click landed on nothing;
+      * some non-option control now DISPLAYS the chosen label, as its committed
+        value or its accessible name (a Radix trigger's name becomes the
+        selection).
+
+    Without this a "fill" would be a click we hoped worked, and the field ledger
+    would claim a choice the form never took — the form then fails validation and
+    the crawl blames the app.
+    """
+    want = normalize_option(label)
+    if not want:
+        return False
+    for c in controls:
+        if str(c.get("role") or "").strip().lower() == "option":
+            return False                      # still open ⇒ nothing committed
+    for c in controls:
+        if normalize_option(c.get("value_committed") or "") == want:
+            return True
+        if normalize_option(c.get("name") or "") == want:
+            return True
+    return False
+
+
+async def _fill_open_choice(
+    port: BrowserPort,
+    control: Mapping[str, Any],
+    value: str,
+    clock: emit.MonotonicClock,
+    *,
+    phase: str,
+    state_id: str,
+) -> tuple[Optional[emit.ActionRecord], str]:
+    """Fill a choice widget by OPENING it, picking a real option, and verifying.
+
+    THE DEFECT THIS CLOSES. A shadcn/Radix ``<Select>`` renders as a button whose
+    options live in a portal that does not exist until it is opened, so the
+    inventory captured ``options: []`` and the resolver — correctly refusing to
+    invent a value for an enumeration it could not read — left the field empty.
+    Live on the Summit Life application wizard: six of seven step-1 fields were
+    filled, ``Gender`` was not, the page's own ``canAdvance()`` requires it, so
+    ``Continue`` rendered ``disabled`` and the walk skipped it. Every downstream
+    number followed: ``advances_by_tier: {}``, one step deep, no journey.
+
+    The walk was honest and the resolver was honest; the gap was that nobody
+    ever opened the widget. Fleet-wide payoff: this shape is the default in every
+    modern component library, so the same gap exists on most React apps built in
+    the last three years.
+
+    Fails CLOSED at every step — an unopenable widget, an empty listbox, or a
+    selection that does not read back returns ``None``, which the caller records
+    as ``intent_unmet``. A field the crawl could not fill is a finding; a field
+    it claims to have filled and did not is a lie that fails later, elsewhere.
+    """
+    collect = getattr(port, "collect_controls", None)
+    if collect is None:
+        return None, ""
+    press = getattr(port, "press_key", None)
+
+    async def _dismiss() -> None:
+        if press is not None:
+            try:
+                await press("Escape")
+            except Exception:
+                pass
+
+    try:
+        await port.click(dict(control))
+        revealed = await collect()
+    except Exception:
+        await _dismiss()
+        return None, ""
+
+    options = [
+        r for r in (revealed or ())
+        if str(r.get("role") or "").strip().lower() == "option"
+        and str(r.get("name") or "").strip()
+        and not r.get("disabled")
+    ]
+    if not options:
+        await _dismiss()
+        return None, ""
+
+    # Honour a requested option when the widget offers it; otherwise take the
+    # first real one. Either way the RECORDED value is the label committed, never
+    # the request — the ledger must say what the form actually holds.
+    want = "" if value == CHOICE_OPEN_AND_PICK else normalize_option(value)
+    chosen = next(
+        (o for o in options if normalize_option(o.get("name")) == want), None
+    ) or options[0]
+    label = str(chosen.get("name") or "").strip()
+
+    try:
+        observation = await port.click(dict(chosen))
+        after = await collect()
+    except Exception:
+        await _dismiss()
+        return None, ""
+
+    if not _reads_back_as(after or (), label):
+        await _dismiss()
+        logger.info("qec.forms.open_choice_unverified control=%r picked=%r",
+                    str(control.get("name") or "")[:40], label[:40])
+        return None, ""
+
+    return emit.build_action_record(
+        dict(control), verb="select", value=label, observation=observation,
+        phase=phase, state_id=state_id, timestamp_ms=clock.now_ms(),
+    ), "open_pick"
+
+
 async def _fill_one(
     port: BrowserPort,
     control: Mapping[str, Any],
@@ -759,6 +932,14 @@ async def _fill_one(
             phase=phase, state_id=state_id, timestamp_ms=clock.now_ms(),
         ), observation.mechanic_used
     if kind == "select":
+        # A widget whose options live in a portal (Radix/shadcn/MUI) cannot be
+        # filled by the browser's select primitive — it is not a <select>. Open
+        # it, take a real option, verify the read-back.
+        if _is_open_choice(control):
+            return await _fill_open_choice(
+                port, control, value, clock, phase=phase, state_id=state_id)
+        if value == CHOICE_OPEN_AND_PICK:
+            return None, ""     # sentinel is meaningless to a native select
         observation = await port.select_option(control, value)
         if observation.intent_met is False:
             return None, ""
