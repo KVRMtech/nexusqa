@@ -58,7 +58,8 @@ from .browser import BrowserPort, PageObservation
 from .fingerprint import state_fingerprint
 from . import flow_ledger
 from .identity_pack import derive as derive_identity
-from .forms import AnswerKey, execute_submit_phase_b, fill_form_phase_a
+from .forms import (AnswerKey, PROV_UNBLOCK, execute_submit_phase_b,
+                    fill_form_phase_a)
 from .guard import (
     EVENT_BLOCKED_METHOD,
     MUTATING_METHODS,
@@ -2229,7 +2230,14 @@ class Crawler:
         # and the one page that most needed an explanation produced none. The
         # blockage is a fact about the page whether or not we then try to walk it.
         if is_form and fill is not None:
-            self._note_advance_blocked(snapshot_controls, obs.url, fill)
+            blocked_label = self._note_advance_blocked(
+                snapshot_controls, obs.url, fill)
+            # DESCRIBING THE BLOCK IS NOT ANSWERING IT. The app has just stated,
+            # by disabling its own forward control, exactly what it is waiting
+            # for — so try to satisfy it before recording a human ask.
+            if blocked_label:
+                snapshot_controls = await self._answer_to_unblock(
+                    snapshot_controls, blocked_label, obs.url or "", fill)
         if self._wizard_enabled and is_form and fill is not None and (fill.filled or fill.has_unanswered_decisions):
             entry_pick = await self._pick_advance(
                 snapshot_controls, obs.url, obs.title, fingerprint)
@@ -3290,8 +3298,11 @@ class Crawler:
 
     def _note_advance_blocked(
         self, controls: Sequence[dict[str, Any]], url: str, fill: Any,
-    ) -> None:
+    ) -> str:
         """A funnel that stops WITH a forward control present — say why, by name.
+
+        Returns the blocked control's label ("" when nothing forward is blocked),
+        so the caller can try to ANSWER the block rather than only describe it.
 
         THE COST OF NOT DOING THIS. A Radix ``Gender`` select was never filled
         (its options are not in the DOM until it is opened), the application's own
@@ -3318,7 +3329,7 @@ class Crawler:
                 blocked_label = name
                 break
         if not blocked_label:
-            return                     # no forward control at all — a real terminal
+            return ""                  # no forward control at all — a real terminal
 
         missing = [str(n) for n in getattr(fill, "unfilled_fields", ()) or ()][:12]
         record = {
@@ -3345,6 +3356,135 @@ class Crawler:
             "qec.wizard.advance_blocked url=%s label=%r missing=%s — the app "
             "disabled its own forward control because these fields are unfilled",
             url[:120], blocked_label[:40], missing[:6])
+        return blocked_label
+
+    async def _answer_to_unblock(
+        self, controls: Sequence[dict[str, Any]], blocked_label: str,
+        url: str, fill: Any,
+    ) -> Sequence[dict[str, Any]]:
+        """The app disabled its own forward control. ANSWER A QUESTION THE FILL
+        DECLINED, AND ASK THE APP AGAIN.
+
+        THE HOLE THIS CLOSES, and why no amount of DOM reading could close it.
+        A "choose at least one of these" question CANNOT BE EXPRESSED IN HTML.
+        ``required`` on a checkbox means *that one box* must be checked, which is
+        never what a multi-select question means, so every framework puts the
+        rule in script instead — a zod ``.min(1)``, an Angular validator, a hand
+        written ``canAdvance()``. The constraint is therefore invisible to any
+        crawler that only reads markup, and the fill correctly declined to answer
+        eight optional-looking checkboxes on a step whose Continue was disabled
+        precisely because none of them were answered. The walk stopped one step
+        short of the end of the application and named eight fields for a human to
+        supply — a human doing, by hand, the thing this product exists to do.
+
+        THE EXPERIMENT. We do not infer the rule; we TEST it. Answer one declined
+        question, re-read the page, and let the application render its own
+        verdict on the forward control. That verdict is evidence of a kind no
+        static read can produce, and it is worth more than the unblocked walk:
+        "at least one Health Condition must be selected before Continue" is
+        exactly the tacit business rule the catalogue is for, and the app just
+        proved it. Recorded as such, with ``PROV_UNBLOCK`` on the field.
+
+        WHICH QUESTION. The member that ASSERTS THE LEAST — "None", "N/A" — else
+        DOM order. Checking "Type 2 Diabetes" would answer the question just as
+        well and fabricate a medical history for a synthetic person on an
+        insurance application. Both unblock the walk; only one invents nothing.
+
+        BOUNDED AND REVERSIBLE. Exactly one attempt per blocked step: if
+        answering one question does not clear the validation, the block is about
+        something else and a second guess would be a search rather than an
+        experiment. A failed attempt is UNDONE, so a change that bought nothing
+        never reaches the recorded form snapshot.
+
+        Test environments only (product scope) and a form control, never an
+        actuator — the same class of act as typing into a text field, which this
+        crawler already does everywhere. Value-free: labels are product UI text.
+        """
+        declined = {_norm_label(n)
+                    for n in getattr(fill, "unfilled_fields", ()) or ()}
+        if not declined:
+            return controls
+        candidates: list[dict[str, Any]] = []
+        for c in controls:
+            if c.get("kind") not in ("checkbox", "toggle"):
+                continue
+            if c.get("disabled") or c.get("danger"):
+                continue
+            name = str(c.get("name") or "").strip()
+            if not name or _norm_label(name) not in declined:
+                continue
+            # Already on: answering it again would change nothing and the app has
+            # plainly not accepted it as sufficient.
+            if str(c.get("value_committed") or "").strip().lower() == "true":
+                continue
+            candidates.append(c)
+        if not candidates:
+            return controls              # nothing declined is answerable this way
+
+        pick = next(
+            (c for c in candidates
+             if vocab.NEGATIVE_OPTION_RE.match(str(c.get("name") or "").strip())),
+            candidates[0])
+        pick_name = str(pick.get("name") or "").strip()
+        try:
+            observation = await self._port.set_checked(pick, True)
+            if observation.intent_met is False:
+                logger.warning(
+                    "qec.wizard.unblock_fill_failed url=%s field=%r — the control "
+                    "did not take the answer; block stands", url[:120],
+                    pick_name[:40])
+                return controls
+            reobs = await self._observe()
+            refreshed = build_inventory(reobs.raw_controls, self._refuse_pack,
+                                        url=reobs.url)
+            cleared = any(
+                str(c.get("name") or "").strip() == blocked_label
+                and not c.get("disabled")
+                for c in refreshed
+                if c.get("kind") in ("button", "link"))
+            if not cleared:
+                # Bought nothing — put the page back the way the app had it.
+                await self._port.set_checked(pick, False)
+                logger.warning(
+                    "qec.wizard.unblock_declined url=%s field=%r advance=%r — "
+                    "answering it did not enable the forward control, so the "
+                    "block is about something else; change reverted",
+                    url[:120], pick_name[:40], blocked_label[:40])
+                return controls
+        except Exception as exc:                       # never fail the crawl for this
+            logger.warning("qec.wizard.unblock_error url=%s field=%r err=%s",
+                           url[:120], pick_name[:40], exc)
+            return controls
+
+        # THE APP CONFIRMED IT. Record the rule, correct the residue, and re-provenance
+        # the field — it is answered, and answered by the strongest evidence there is.
+        for b in self._advance_blocked:
+            if b.get("url") == url[:300] and b.get("label") == blocked_label[:120]:
+                b["resolved_by_agent"] = pick_name[:120]
+                b["business_rule"] = (
+                    "%s requires an answer to %r before it is enabled "
+                    "(proven: the app enabled it when the agent answered)"
+                    % (blocked_label[:60], pick_name[:60]))
+                b["missing_fields"] = [m for m in (b.get("missing_fields") or ())
+                                       if _norm_label(m) != _norm_label(pick_name)]
+        self._fields_unfilled = [n for n in self._fields_unfilled
+                                 if _norm_label(n) != _norm_label(pick_name)]
+        self._fields_seed_detail = [
+            d for d in self._fields_seed_detail
+            if not (_norm_label(d.get("label")) == _norm_label(pick_name)
+                    and d.get("url") == url)]
+        for row in self._field_ledger:
+            if _norm_label(row.get("label") or row.get("name")) == _norm_label(pick_name):
+                row["provenance"] = PROV_UNBLOCK
+                row["filled"] = True
+                if "options" in row:
+                    row["choice"] = "checked"
+        logger.warning(
+            "qec.wizard.unblocked url=%s field=%r advance=%r — the app enabled "
+            "its own forward control once the agent answered; BUSINESS RULE "
+            "discovered: %r is gated on that question",
+            url[:120], pick_name[:40], blocked_label[:40], blocked_label[:40])
+        return refreshed
 
     def _note_boundary_controls(self, controls: Sequence[dict[str, Any]]) -> None:
         """Record the commit-boundary controls this state offers.

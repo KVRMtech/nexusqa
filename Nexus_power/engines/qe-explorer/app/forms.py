@@ -419,6 +419,13 @@ PROV_GROUP_SIBLING = "group_sibling"
 PROV_PLANNED = "planned"          # a branch-walk plan forced this CHOICE (Journey
                                   # Graph C4) — evidence says exactly why the walk
                                   # took the path it took
+#: Answered NOT from a value source but from the APPLICATION'S OWN VERDICT: the
+#: fill declined this control, the app disabled its forward control, the agent
+#: answered it, and the app then enabled that control. The provenance is the
+#: strongest of the lot — the application itself confirmed the answer was the
+#: one it was waiting for — and it is the only provenance that carries a
+#: DISCOVERED BUSINESS RULE rather than a supplied or generated value.
+PROV_UNBLOCK = "answered_to_unblock"
 
 
 def resolve_field(control: Mapping[str, Any], kind: str, name: str,

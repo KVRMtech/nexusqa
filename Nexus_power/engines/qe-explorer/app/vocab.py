@@ -43,6 +43,43 @@ LANGUAGE_PACKS: dict[str, dict[str, list[str]]] = {
 }
 
 
+#: Per-language packs for an option label that asserts the ABSENCE of a
+#: condition — "None", "N/A", "None of the above".
+#:
+#: Deliberately OUTSIDE ``LANGUAGE_PACKS``: that table is mirrored byte-for-byte
+#: in qe-central and pinned by parity tests in both suites, and this vocabulary
+#: has no counterpart there. Adding a key to it would break the pin for no gain.
+#:
+#: WHY THE PRODUCT NEEDS IT. A multi-select question is answered by choosing,
+#: and the member that asserts nothing is the only one true of a SYNTHETIC
+#: identity: checking "Type 2 Diabetes" on an insurance application fabricates a
+#: medical history the crawl has no grounds for, while "None" answers the same
+#: question and invents nothing. Preferring it is the least-assertive answer,
+#: not a guess about the app.
+NEGATIVE_OPTION_PACKS: dict[str, list[str]] = {
+    "en": [
+        r"none\s*of\s*(?:the\s*)?(?:above|these)",
+        r"none", r"no", r"n/?a", r"not\s*applicable", r"neither", r"nothing",
+        r"no\s+known\b.*", r"decline\s*to\s*(?:answer|state)",
+        r"prefer\s*not\s*to\s*(?:say|answer)",
+    ],
+}
+
+
+def compile_negative_option_re() -> re.Pattern[str]:
+    """FULL-STRING match — an option is negative only when the WHOLE label says
+    so. A substring rule would read "None" inside "Nonexistent condition" and
+    "no" inside "Nodule", turning a positive disclosure into a denial: exactly
+    the class of error that puts a value in the ledger the form never held."""
+    alts: list[str] = []
+    for pack in NEGATIVE_OPTION_PACKS.values():
+        alts.extend(pack)
+    return re.compile(r"^(?:" + "|".join(alts) + r")$", re.I)
+
+
+NEGATIVE_OPTION_RE = compile_negative_option_re()
+
+
 def _union(kind: str) -> list[str]:
     """All alternatives of ``kind`` across every pack, order-preserving and
     de-duplicated (first pack wins the position — 'en' stays byte-stable)."""
