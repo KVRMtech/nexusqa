@@ -393,7 +393,7 @@ async def fold_crawl(
     # a catalog failure must never break the fold.
     try:
         cat_report = await persist_catalog_version(
-            tenant_id=tenant_id, app_id=app_id, artifact_id=exploration_id)
+            tenant_id=tenant_id, app_id=app_id, crawl_ref=exploration_id)
         report["catalog_questions"] = cat_report.get("questions_upserted", 0)
     except Exception as exc:
         logger.warning(

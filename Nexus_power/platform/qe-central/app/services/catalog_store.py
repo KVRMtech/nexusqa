@@ -30,7 +30,7 @@ from ..db.journey_models import (
     JourneyEdgeRow,
     JourneyNodeRow,
 )
-from .catalog import build_master_catalog, snapshot_catalog
+from .catalog import MAX_CATALOG_OPTIONS, build_master_catalog, snapshot_catalog
 from .catalog_diff import diff_catalogs
 
 logger = logging.getLogger(__name__)
@@ -109,13 +109,26 @@ async def load_catalog_and_rules(
 
 
 async def persist_catalog_version(
-    tenant_id: str, app_id: str, artifact_id: str
+    tenant_id: str, app_id: str, crawl_ref: str
 ) -> dict[str, Any]:
     """Upsert ``catalog_questions`` and snapshot a ``catalog_versions`` row.
 
     Called once at the end of a fold so the Master Catalog is durable and a later
     crawl can diff against this version. Idempotent per (tenant, app, question_id)
-    and (tenant, app, artifact_id). Returns a small report.
+    and (tenant, app, crawl_ref). Returns a small report.
+
+    ``crawl_ref`` IS THE EXPLORATION ID, not an ``canonical_artifacts.artifact_id``.
+    One catalog version per CRAWL is the intended grain — every crawl of an app
+    reuses one artifact (the dedup key deliberately excludes crawl_id so versions
+    accumulate there), so keying catalog versions by artifact would collapse every
+    crawl of an app onto a single row and there would be nothing to diff. The
+    parameter was previously named ``artifact_id`` while receiving an exploration
+    id, and the columns it writes still carry the older names
+    (``first_seen_artifact`` / ``last_seen_artifact`` / ``catalog_versions.
+    artifact_id``) because live rows hold those values; renaming the columns is a
+    migration, and a name is not worth rewriting durable data over. What matters
+    is that nothing JOINS these against ``canonical_artifacts`` — they are crawl
+    references, and are surfaced as ``crawl_ref`` by :func:`diff_latest_versions`.
     """
     now = utc_now()
     async with tenant_scoped_qec_session(tenant_id) as session:
@@ -143,15 +156,15 @@ async def persist_catalog_version(
                     name=str(q.get("name") or "")[:300],
                     answer_type=str(q.get("type") or q.get("answer_type") or "text")[:40],
                     required=bool(q.get("required")),
-                    options=[str(o) for o in (q.get("options") or [])][:48],
+                    options=[str(o) for o in (q.get("options") or [])][:MAX_CATALOG_OPTIONS],
                     validation=validation,
                     business_rule=str(q.get("business_rule") or "")[:500],
                     expected_next_page=str(q.get("expected_next_page") or "")[:200],
                     semantic_type=str(q.get("semantic_type") or "")[:80],
                     provenance=str(q.get("provenance") or "observed")[:24],
                     pages=pages,
-                    first_seen_artifact=artifact_id[:64],
-                    last_seen_artifact=artifact_id[:64],
+                    first_seen_artifact=crawl_ref[:64],
+                    last_seen_artifact=crawl_ref[:64],
                     first_seen_at=now, last_seen_at=now,
                 ))
                 upserted += 1
@@ -169,20 +182,20 @@ async def persist_catalog_version(
                     if p not in merged_pages:
                         merged_pages.append(p)
                 row.pages = merged_pages[:64]
-                row.last_seen_artifact = artifact_id[:64]
+                row.last_seen_artifact = crawl_ref[:64]
                 row.last_seen_at = now
 
-        snap = snapshot_catalog(master, artifact_id=artifact_id)
+        snap = snapshot_catalog(master, artifact_id=crawl_ref)
         version = (await session.execute(
             select(CatalogVersionRow).where(
                 CatalogVersionRow.tenant_id == tenant_id,
                 CatalogVersionRow.app_id == app_id,
-                CatalogVersionRow.artifact_id == artifact_id,
+                CatalogVersionRow.artifact_id == crawl_ref,
             ))).scalar_one_or_none()
         if version is None:
             session.add(CatalogVersionRow(
-                version_id=_sid("catver", tenant_id, app_id, artifact_id),
-                tenant_id=tenant_id, app_id=app_id, artifact_id=artifact_id[:64],
+                version_id=_sid("catver", tenant_id, app_id, crawl_ref),
+                tenant_id=tenant_id, app_id=app_id, artifact_id=crawl_ref[:64],
                 snapshot_hash=snap["snapshot_hash"],
                 question_count=snap["question_count"],
                 snapshot=snap, created_at=now,
@@ -217,9 +230,16 @@ async def diff_latest_versions(
     newer, older = rows[0], rows[1]
     diff = diff_catalogs(older.snapshot or {}, newer.snapshot or {})
     return {
-        "from": {"artifact_id": older.artifact_id, "hash": older.snapshot_hash,
+        # ``crawl_ref`` is what the column actually holds (an exploration id).
+        # It was reported as ``artifact_id``, so a consumer joining it against
+        # canonical_artifacts would match nothing and quietly show an empty diff.
+        # ``artifact_id`` is kept alongside for one release so existing readers
+        # do not break on the rename.
+        "from": {"crawl_ref": older.artifact_id, "artifact_id": older.artifact_id,
+                 "hash": older.snapshot_hash,
                  "question_count": older.question_count},
-        "to": {"artifact_id": newer.artifact_id, "hash": newer.snapshot_hash,
+        "to": {"crawl_ref": newer.artifact_id, "artifact_id": newer.artifact_id,
+               "hash": newer.snapshot_hash,
                "question_count": newer.question_count},
         "diff": diff,
     }

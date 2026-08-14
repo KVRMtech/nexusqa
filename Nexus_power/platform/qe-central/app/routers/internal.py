@@ -431,7 +431,17 @@ async def vision_operate(request: Request) -> dict:
     are exhausted, the control is classified as DOM-opaque (canvas, unlabeled,
     iframe), and the ``QEC_CRAWL_VISION_ENABLED`` flag is ON.
 
-    HMAC-authenticated (same secret as pick-advance / operate-control).
+    HMAC-authenticated (same secret as pick-advance / operate-control) AND
+    server-side flag-gated. The flag was previously enforced ONLY at dispatch
+    time — qe-central decided per crawl whether to hand the explorer a vision
+    oracle — so this endpoint honoured a decision made by its CALLER and would
+    answer any correctly-signed request even with vision switched off on the
+    server. The signature proves WHO is asking, never WHAT they are permitted
+    to spend: an explorer built from a stale image, or a crawl dispatched
+    before the flag was turned off, kept billing vision calls that the operator
+    had disabled. ``perceive-controls`` already gated here for exactly this
+    reason; this closes the asymmetry it named.
+
     The explorer sends a page screenshot (base64 PNG) + the element's
     bounding box + the control's shape.
 
@@ -451,6 +461,11 @@ async def vision_operate(request: Request) -> dict:
 
     unavailable = {"action": "", "status": vision_medic.STATUS_UNAVAILABLE,
                    "click_x": 0, "click_y": 0, "reason": ""}
+    if not getattr(settings, "crawl_vision_enabled", False):
+        # Fail CLOSED and say so — an unavailable medic is a documented outcome
+        # the crawler already handles (it falls back to the deterministic
+        # ladder), never an error and never a silent empty.
+        return {**unavailable, "reason": "vision disabled"}
     try:
         body = json.loads(raw or b"{}")
     except json.JSONDecodeError:

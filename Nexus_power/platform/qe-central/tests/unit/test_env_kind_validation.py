@@ -9,11 +9,34 @@ import pytest
 from fastapi import HTTPException
 
 from app.routers.apps import _ENV_KINDS, _validated_env_kind
-from app.security.prod_guard import NON_PROD_ENV_KINDS, resolve_effective_fences
+from app.security.prod_guard import (
+    CRAWLABLE_ENV_KINDS,
+    ENV_KIND_PRODUCTION_TEST,
+    NON_PROD_ENV_KINDS,
+    resolve_effective_fences,
+)
 
 
-def test_vocabulary_includes_uat_and_all_kinds():
-    assert _ENV_KINDS == {"prod", "staging", "uat", "disposable"}
+def test_the_writable_vocabulary_IS_the_enforceable_one():
+    """THE INVARIANT, not a copy of the list.
+
+    This test previously pinned a hand-written literal, and the two vocabularies
+    drifted underneath it: ``production_test`` was a first-class crawlable kind
+    in prod_guard while the write path 422-rejected it, so a posture the
+    enforcer fully understood could never be STORED. Pinning the literal is what
+    let that pass — the copy was self-consistent and wrong.
+
+    What must hold is the RELATIONSHIP: anything the enforcer can act on must be
+    storable, and nothing else.
+    """
+    assert _ENV_KINDS == frozenset(CRAWLABLE_ENV_KINDS)
+
+
+def test_production_test_is_storable_now_that_it_is_enforceable():
+    """The concrete case the divergence blocked."""
+    assert ENV_KIND_PRODUCTION_TEST in _ENV_KINDS
+    att = {"env_kind": ENV_KIND_PRODUCTION_TEST}
+    assert _validated_env_kind(att) is att
 
 
 def test_unknown_kind_is_422_at_write_time():

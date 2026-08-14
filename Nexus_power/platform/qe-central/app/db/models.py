@@ -147,8 +147,16 @@ class ClientAppEnvironmentRow(QecBase):
 class QEExplorationRow(QecBase):
     """One substrate-write attempt (design §3.1 ``qe_explorations``).
 
-    ``status`` ∈ pending | writing | completed | failed | refused —
-    refusal is FIRST-CLASS, never a silently-empty artifact.
+    ``status`` ∈ pending | dispatched | writing | running | completed | failed |
+    refused | stalled — refusal is FIRST-CLASS, never a silently-empty artifact,
+    and ``stalled`` is what the reaper writes for a crawl whose worker died or
+    whose completion callback was lost (it is a terminal state, not a guess:
+    the row is failed with a named reason).
+
+    ``dispatched`` is set once a worker has accepted the crawl; ``running`` is
+    reserved for the in-flight signal. The full set is enumerated here because
+    four separate ACTIVE-status sets key off it, and a value missing from this
+    docstring is how one of them silently drifts.
     """
 
     __tablename__ = "qe_explorations"

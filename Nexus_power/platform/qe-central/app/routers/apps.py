@@ -24,11 +24,15 @@ from sqlalchemy.exc import IntegrityError
 
 from ..auth import require_auth, require_role
 from ..clients import platform_api, repo_intel
-from ..controlplane.scheduling.admission import ADMISSION
+from ..controlplane.reaper import (
+    grace_seconds as reaper_grace_seconds,
+    queue_max_wait_seconds as reaper_queue_max_wait_seconds,
+    stale_after_seconds as reaper_stale_after_seconds,
+)
 from ..db import new_id, row_to_dict, tenant_scoped_qec_session, utc_now
-from ..db.controlplane_models import AppFingerprintRow
 from ..db.models import ClientAppEnvironmentRow, ClientAppRow, QEExplorationRow
 from ..fleet import quota
+from ..security import prod_guard
 from ..services.crawl_diagnosis import diagnose as diagnose_crawl
 from ..services.data_agent import (
     LLM_SYSTEM as DATA_AGENT_SYSTEM,
@@ -65,8 +69,16 @@ _SETTABLE_STATUSES = frozenset({"active", "paused"})
 
 # Attestable environment kinds; only 'disposable' may host the mutating submit
 # tier. 'uat' (R2) postures as staging: crawlable, never submit-tier.
-_ENV_KINDS = frozenset({"prod", "staging", "uat", "disposable"})
-_SUBMIT_ENV_KIND = "disposable"
+#
+# SOURCED FROM THE ENFORCER, never re-typed. This set and prod_guard's had
+# drifted: 'production_test' was a first-class crawlable kind in
+# prod_guard.NON_PROD_ENV_KINDS while this literal 422-rejected it at write
+# time, so a posture the enforcement layer fully understood could not be
+# STORED — enforceable but unreachable. Deriving the vocabulary from the module
+# that enforces it makes that class of divergence impossible rather than fixed
+# once.
+_ENV_KINDS = frozenset(prod_guard.CRAWLABLE_ENV_KINDS)
+_SUBMIT_ENV_KIND = prod_guard.ENV_KIND_DISPOSABLE
 
 
 def _validated_env_kind(att: dict | None) -> dict | None:
@@ -548,6 +560,13 @@ async def create_app(
         )
     repo_binding = await _prepare_repo_binding(request, tenant_id, app_id, payload.repo_binding)
 
+    # Validate fences at CREATE, not only on PATCH. The advance-shadowing guard
+    # was reachable only through the update path, so an app could be ONBOARDED
+    # with fences.submit_approvals=["Continue"] and every wizard step in its
+    # funnel was unwalkable from its very first crawl — the exact outcome this
+    # guard exists to prevent an operator configuring by hand, arrived at by
+    # skipping the door it guards. Same refusal, same message, both paths.
+    _reject_advance_shadowing_approvals(payload.fences)
     row = ClientAppRow(
         app_id=app_id,
         tenant_id=tenant_id,
@@ -633,8 +652,16 @@ async def _latest_crawl(session, app_id: str) -> dict:
     stalled = False
     if active and exp.started_at is not None:
         try:
-            wall_ms = int(stats.get("budget_wall_ms") or 0)
-            stale_after_s = (wall_ms / 1000.0 if wall_ms > 0 else 1_800.0) + 180.0
+            # ONE definition of staleness, shared with the reaper. This arithmetic
+            # was duplicated here, so the banner and the reaper could disagree about
+            # whether the same crawl was stalled — and only one of them would be
+            # updated when the rule changed. reaper.stale_after_seconds is pure and
+            # already covers the queue states this valve never modelled.
+            stale_after_s = reaper_stale_after_seconds(
+                status, stats,
+                grace_s=reaper_grace_seconds(),
+                queue_max_wait_s=reaper_queue_max_wait_seconds(),
+            )
             started = exp.started_at
             if started.tzinfo is None:  # defensive: treat a naive stamp as UTC
                 started = started.replace(tzinfo=timezone.utc)
@@ -1287,16 +1314,25 @@ async def replace_login_recording(
 
 @router.delete("/apps/{app_id}")
 async def delete_app(app_id: str, user: dict = Depends(require_role("admin"))) -> dict:
-    """Soft-delete: zero the credential ciphertext + mark status='deleted'.
+    """Soft-delete: zero the credential ciphertext + the login recipe, and mark
+    status='deleted'.
 
     Mirrors the repo_connections revoke discipline (ciphertext zeroed, row
     retained for audit).  Admin-only — destructive-adjacent.
+
+    ``login_recording`` is cleared alongside ``creds_blob``. It holds no
+    credential VALUES (only steps, slot names and reuse keys), which is why it
+    was originally left behind — but it is still a map of how to sign in to the
+    client's system, and a deleted app has no business retaining one. Zeroing
+    only the ciphertext left the shape of the login readable on a row the
+    operator believes they deleted.
     """
     tenant_id = user["tenant_id"]
     async with tenant_scoped_qec_session(tenant_id) as session:
         row = await _require_app(session, tenant_id, app_id)
         connection_id = str((row.repo_binding or {}).get("connection_id") or "").strip()
         row.creds_blob = None
+        row.login_recording = {}
         row.status = "deleted"
         row.updated_at = utc_now()
 
@@ -1531,6 +1567,9 @@ async def create_environment(
     if base_url:
         base_url = _validated_base_url(base_url)
     env_assertion = _validated_env_assertion(payload.env_assertion)
+    # An ENV PROFILE's fences overlay the app's at resolve time, so an approval
+    # seeded here shadows the funnel exactly as one seeded on the app would.
+    _reject_advance_shadowing_approvals(payload.fences)
     async with tenant_scoped_qec_session(tenant_id) as session:
         await _require_app(session, tenant_id, app_id)   # 404 if app absent/foreign
         row = ClientAppEnvironmentRow(
@@ -1621,6 +1660,7 @@ async def update_environment(
         if payload.data_overrides is not None:
             row.data_overrides = dict(payload.data_overrides)
         if payload.fences is not None:
+            _reject_advance_shadowing_approvals(payload.fences)
             row.fences = dict(payload.fences)
         if payload.env_attestation is not None:
             row.env_attestation = dict(_validated_env_kind(payload.env_attestation) or {})

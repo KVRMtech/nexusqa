@@ -82,6 +82,21 @@ def _as_mapping(v: Any) -> Mapping:
     return v if isinstance(v, Mapping) else {}
 
 
+def grace_seconds() -> float:
+    """The post-crawl grace buffer (substrate write + generation), env-overridable.
+
+    Public so the READ-TIME stall valve (``routers/apps._latest_crawl``) resolves
+    staleness from the same configuration the reaper acts on — the two had
+    independent copies of this arithmetic and could disagree about whether the
+    same crawl was stalled."""
+    return _env_float(ENV_REAPER_GRACE, _DEFAULT_GRACE_S)
+
+
+def queue_max_wait_seconds() -> float:
+    """The Phase-2 queue max wait before a queued crawl is failed (env-overridable)."""
+    return _env_float(ENV_QUEUE_MAX_WAIT, _DEFAULT_QUEUE_MAX_WAIT_S)
+
+
 def stale_after_seconds(status: str, stats: Any, *, grace_s: float, queue_max_wait_s: float) -> float:
     """PURE: how long a row in ``status`` may sit before it is considered stale.
 
@@ -203,8 +218,8 @@ async def reap_stale_explorations(now: datetime | None = None) -> int:
     completion callback is never clobbered; one tenant's failure never stops the rest.
     """
     now = now or utc_now()
-    grace_s = _env_float(ENV_REAPER_GRACE, _DEFAULT_GRACE_S)
-    queue_max_wait_s = _env_float(ENV_QUEUE_MAX_WAIT, _DEFAULT_QUEUE_MAX_WAIT_S)
+    grace_s = grace_seconds()
+    queue_max_wait_s = queue_max_wait_seconds()
     reaped = 0
     for tenant in await _tenant_ids():
         try:

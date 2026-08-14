@@ -33,6 +33,7 @@ import json
 import logging
 import socket
 import uuid
+from typing import Any
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
@@ -194,6 +195,34 @@ async def _mark(
         for key, value in fields.items():
             setattr(row, key, value)
         row.updated_at = utc_now()
+
+
+async def _mark_if_status(
+    tenant_id: str, exploration_id: str, *, expect: str, status: str,
+) -> str:
+    """Compare-and-set the exploration status; return the status now in the row.
+
+    Used for the dispatch transition, where an unconditional write could race a
+    fast crawl's completion callback and regress a finished crawl to an earlier
+    state. Only advances the row when it is still ``expect``; otherwise reports
+    what it actually holds, so the caller never claims a state the crawl left.
+    """
+    async with tenant_scoped_qec_session(tenant_id) as session:
+        row = (
+            await session.execute(
+                select(QEExplorationRow).where(
+                    QEExplorationRow.exploration_id == exploration_id,
+                    QEExplorationRow.tenant_id == tenant_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if row is None:  # pragma: no cover — row created moments earlier
+            return status
+        if (row.status or "") == expect:
+            row.status = status
+            row.updated_at = utc_now()
+            return status
+        return row.status or status
 
 
 # ─── Phase-0: inline bundle write ────────────────────────────────────────────
@@ -811,18 +840,32 @@ async def _dispatch_explorer(
             detail=detail,
         )
 
+    # PERSIST the status this response reports. 'dispatched' was returned in the
+    # body and never written, so the row said 'pending' while the API said
+    # 'dispatched' — four ACTIVE-status sets carried the value defensively for a
+    # state that could not occur, and an operator reading the row saw a crawl
+    # still queued when a worker had accepted it.
+    #
+    # Compare-and-set on 'pending': a fast crawl can call back /complete before
+    # this line runs, and an unconditional write would regress a finished crawl
+    # to 'dispatched' — inventing a state the crawl had already left.
+    status = await _mark_if_status(
+        tenant_id, exploration_id, expect="pending", status="dispatched",
+    )
     response.status_code = 202
     logger.info(
         "qec.explorations.dispatched",
         extra={"exploration_id": exploration_id, "tenant_id": tenant_id,
-               "app_id": app_id, "crawl_id": crawl_id},
+               "app_id": app_id, "crawl_id": crawl_id, "status": status},
     )
     return {
         "exploration_id": exploration_id,
         "app_id": app_id,
         "crawl_id": crawl_id,
         "extractor_version": extractor_version,
-        "status": "dispatched",
+        # The row's ACTUAL status — 'dispatched' normally, or whatever the crawl
+        # has already advanced to if it beat us here.
+        "status": status,
         "accepted": result.accepted,
     }
 
