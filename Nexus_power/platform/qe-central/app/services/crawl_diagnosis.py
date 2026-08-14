@@ -23,6 +23,8 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
+from .assist_classifier import fill_headline, summarize_fill
+
 # ── Diagnosis codes — stable strings the portal keys its UI on ────────────────
 CODE_COMPLETED_OK = "COMPLETED_OK"
 CODE_SEEDS_NEEDED = "SEEDS_NEEDED"
@@ -296,16 +298,42 @@ def diagnose(*, status: str | None, error: str | None = "", stats: Any = None) -
                           "total_unanswered": total_unanswered,
                           "visits": visits, "generated": generated_n})
 
+        # WHAT THE AGENT ANSWERED, and why anything is left. Computed once and
+        # reused by the messages below, so a crawl never reports what it NEEDS
+        # without first reporting what it DID.
+        fill = summarize_fill(cov)
+        assist_names = [a["name"] for a in fill["needs_assistance"] if a.get("name")]
+
         if generated_n > 0:
-            # A productive crawl reads as OK; any remaining seed fields are surfaced
-            # only as an optional "go deeper" hint, never as an alarm.
+            # A productive crawl reads as OK. It leads with the fields the agent
+            # populated itself, because that is the larger and more
+            # decision-relevant number — the old copy led with the ask, which read
+            # as though the crawl had achieved nothing.
+            #
+            # Nothing here asks for a re-crawl: the pages are already catalogued,
+            # so a value supplied now is applied to what the crawl already knows.
+            # A DATA gap must never force a DISCOVERY restart.
+            # Prefer the classified list; fall back to the crawler's own residue
+            # when no field ledger reached us (an older manifest, or a crawl that
+            # recorded seeds without per-field rows). Losing the hint entirely
+            # would be a regression — a value the operator could supply today
+            # would simply stop being mentioned.
+            remedy_names = assist_names or seed_fields
+            remedy = ""
+            if remedy_names:
+                remedy = (f"Supply {', '.join(remedy_names[:12])} to reach the flows "
+                          f"behind them — the pages are already catalogued.")
             return _build(CODE_COMPLETED_OK, SEV_OK, "Ready",
                           f"The crawl completed and generated {generated_n} test case"
-                          f"{'s' if generated_n != 1 else ''}.",
-                          (f"Provide values for {', '.join(seed_fields[:12])} to reach deeper flows."
-                           if seed_fields else ""),
-                          fields=seed_fields,
-                          evidence={"visits": visits, "generated": generated_n})
+                          f"{'s' if generated_n != 1 else ''}. "
+                          + fill_headline(fill),
+                          remedy,
+                          fields=assist_names or seed_fields,
+                          evidence={"visits": visits, "generated": generated_n,
+                                    "auto_filled": fill["auto_filled"],
+                                    "fill_provenance": fill["provenance"],
+                                    "needs_assistance": fill["needs_assistance"],
+                                    "agent_gaps": fill["agent_gaps"]})
 
         # R2: DECISION_UNRESOLVED — enumerable decision forks that had no
         # available value.  More specific than SEEDS_NEEDED because it names the
@@ -338,12 +366,21 @@ def diagnose(*, status: str | None, error: str | None = "", stats: Any = None) -
                           "visits": visits, "generated": generated_n})
 
         if seed_fields:
-            names = ", ".join(seed_fields[:12])
+            # Say what was populated BEFORE what is missing, name only what a
+            # person genuinely has to supply, and never demand a re-crawl — a data
+            # gap must not force a discovery restart of pages already catalogued.
+            names = ", ".join(assist_names[:12]) or ", ".join(seed_fields[:12])
             return _build(CODE_SEEDS_NEEDED, SEV_ACTION, "A few values needed",
-                          f"The crawl explored the app but needs real values to go deeper: {names}.",
-                          f"Provide values for: {names}. Then re-crawl to reach the flows behind them.",
-                          fields=seed_fields,
-                          evidence={"visits": visits})
+                          fill_headline(fill)
+                          + f" The flows behind {names} were not reached.",
+                          f"Supply {names} — the pages are already catalogued, so the "
+                          f"values are applied to what the crawl already found.",
+                          fields=assist_names or seed_fields,
+                          evidence={"visits": visits,
+                                    "auto_filled": fill["auto_filled"],
+                                    "fill_provenance": fill["provenance"],
+                                    "needs_assistance": fill["needs_assistance"],
+                                    "agent_gaps": fill["agent_gaps"]})
         return _build(CODE_NO_CASES, SEV_WARN, "No test cases yet",
                       no_cases_reason or "The crawl completed but did not produce runnable test cases.",
                       "Review the discovered flows; a seeded or deeper crawl may be needed.",
