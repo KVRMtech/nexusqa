@@ -8,11 +8,17 @@
 param(
     [switch]$PushOnly,
     [switch]$RebuildBase,
-    # A2 — run the golden crawl gate after deploying, and FAIL the deploy on a
+    # A2 - run the golden crawl gate after deploying, and FAIL the deploy on a
     # funnel regression. Opt-in while it beds in; see scripts/golden_crawl_gate.sh.
     [switch]$Gate,
+    # NAMED ONLY. Adding this as a plain [string] made it the first POSITIONAL
+    # parameter, so `deploy.ps1 qe-central qe-explorer` bound 'qe-central' to it
+    # and deployed only ONE service - silently, with the banner cheerfully
+    # reporting the reduced list. Explicit Position on $Services below is what
+    # keeps positional binding where it has always been.
+    [Parameter(Mandatory = $false)]
     [string]$GoldenAppId = "",
-    [Parameter(ValueFromRemainingArguments)]
+    [Parameter(Position = 0, ValueFromRemainingArguments)]
     [string[]]$Services
 )
 
