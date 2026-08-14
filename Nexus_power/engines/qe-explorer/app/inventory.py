@@ -530,8 +530,33 @@ def build_control_record(
         role=role, tag=tag, input_type=input_type,
         options=options, value=value_committed,
     )
+    # A URL-SCOPED REFUSE RULE MATCHES WHERE A CONTROL GOES, NOT WHERE IT SITS.
+    #
+    # The PAGE url was passed here, so a rule with applies_to: [url_path] fired
+    # for EVERY actuator rendered on a matching page. Reproduced exactly:
+    # rp.verb.underwrite matches \bunderwriting\b, so on
+    # /underwriting/new-business/new-application every single control came back
+    # danger=critical — the Back button, the user avatar, the notification bell
+    # labelled "3", the wizard's own step tabs, and Continue itself (20 of 35
+    # controls on one page).
+    #
+    # That is not a safety property, it is a blind spot: every advance tier skips
+    # danger controls, so the funnel became unwalkable, AND _tier3_candidates
+    # emptied — which is why the agent oracle recorded zero consultations
+    # fleet-wide. One over-broad rule produced both symptoms.
+    #
+    # A control's DESTINATION is its own href; a button has none, so a url rule
+    # simply does not apply to it and its LABEL remains the only signal — which
+    # is what button_name is for, and still catches "Submit to Underwriting".
+    # Nothing is weakened: a link TO a dangerous route is still matched on that
+    # route, nameless actuators are already unclassifiable, the EXPLORE-phase
+    # network guard still blocks every mutation, and the submit tier still
+    # requires attestation plus approval.
+    control_dest = _s(raw.get("href")).strip()
+    if control_dest.startswith(("javascript:", "#", "mailto:", "tel:")):
+        control_dest = ""
     danger, danger_rule_id, danger_severity = classify_control_danger(
-        name, kind, role, refuse_pack, url,
+        name, kind, role, refuse_pack, control_dest,
     )
 
     record: ControlRecord = {

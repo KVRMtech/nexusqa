@@ -1028,6 +1028,9 @@ class Crawler:
         # field whose absence stopped the walk, so a one-step journey explains
         # itself instead of being investigated.
         self._advance_blocked: list[dict[str, Any]] = []
+        # Per-button verdicts from the most recent tier-1 miss, carried so the
+        # DECLINE line can state why it declined. Kept in memory only.
+        self._last_advance_verdicts: list[str] = []
         # Phase-B attested submit (crawl-once/run-many depth): default-OFF. Fires ONLY
         # when the operator supplied a per-flow submit-approval list AND a disposable-env
         # attestation is present — a crawl without both stops at the Phase-A boundary,
@@ -3408,15 +3411,41 @@ class Crawler:
         # listed there is SKIPPED here on purpose (the attested Phase-B submit
         # path owns it), so an app that approved "Continue" for submit would make
         # every wizard step in the funnel unadvanceable.
+        # DIAGNOSTIC ORDERING: NEAR-MISSES FIRST, ALWAYS.
+        #
+        # This printed the first 8 buttons in DOM order, and page chrome fills
+        # that window — a notification bell, an avatar, a couple of nameless
+        # icons. The one control anyone needs to see is the advance-shaped one,
+        # and on a real page it sits at the BOTTOM of the form, so it was
+        # truncated away every single time. Two investigation round-trips were
+        # spent concluding "Continue was never captured" when the log had simply
+        # never shown it.
+        #
+        # Now: every control whose label looks like an advance is listed FIRST
+        # and never truncated away, because that is the set whose verdict
+        # explains the decline. Chrome fills whatever room is left.
+        buttons = [c for c in (controls or ()) if c.get("kind") == "button"]
+
+        def _verdict(c: dict[str, Any]) -> str:
+            n = str(c.get("name") or "").strip()
+            return (f"{n[:24] or '(nameless)'}"
+                    f":btn={c.get('kind') == 'button'}"
+                    f":dis={bool(c.get('disabled'))}:dang={bool(c.get('danger'))}"
+                    f":appr={n.lower() in self._submit_approvals}"
+                    f":adv={_is_wizard_advance(n)}")
+
+        def _advance_shaped(c: dict[str, Any]) -> bool:
+            return bool(_WIZARD_ADVANCE_RE.search(str(c.get("name") or "")))
+
+        near = [c for c in buttons if _advance_shaped(c)]
+        rest = [c for c in buttons if not _advance_shaped(c)]
+        self._last_advance_verdicts = (
+            [_verdict(c) for c in near] + [_verdict(c) for c in rest][:6])
         logger.info(
-            "qec.wizard.no_tier1 approvals=%s verdicts=%s",
-            sorted(self._submit_approvals),
-            [f"{str(c.get('name') or '')[:20]}"
-             f":btn={c.get('kind') == 'button'}"
-             f":dis={bool(c.get('disabled'))}:dang={bool(c.get('danger'))}"
-             f":appr={str(c.get('name') or '').strip().lower() in self._submit_approvals}"
-             f":adv={_is_wizard_advance(str(c.get('name') or '').strip())}"
-             for c in (controls or ()) if c.get("kind") == "button"][:8])
+            "qec.wizard.no_tier1 approvals=%s buttons=%d advance_shaped=%d "
+            "verdicts=%s",
+            sorted(self._submit_approvals), len(buttons), len(near),
+            self._last_advance_verdicts)
         return None
 
     def _tier3_candidates(
@@ -3674,10 +3703,15 @@ class Crawler:
             logger.info("qec.wizard.declined reason=already_walked url=%s", url)
             return False
         if entry_pick.control is None:
+            # The verdicts ride on the SAME line as the decline. They were a
+            # separate log record, so every grep for the decline lost the
+            # explanation and every grep for the verdicts lost the page — the
+            # two facts that only mean something together.
             logger.info("qec.wizard.declined reason=no_advance_control url=%s "
-                        "tier=%s oracle=%s controls=%d",
+                        "tier=%s oracle=%s controls=%d verdicts=%s",
                         url, entry_pick.tier, entry_pick.oracle_status,
-                        len(controls or ()))
+                        len(controls or ()),
+                        getattr(self, "_last_advance_verdicts", []))
             return False
         self._wizard_states.add(fingerprint)
 
