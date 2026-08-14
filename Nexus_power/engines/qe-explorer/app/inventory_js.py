@@ -331,7 +331,17 @@ INVENTORY_JS = r"""
       if (role === "combobox" || pop === "listbox" || pop === "menu") {
         // A PLACEHOLDER IS NOT A VALUE. Radix marks the un-selected trigger
         // with data-placeholder; reading its text would record "Select" as the
-        // committed answer, which is worse than recording nothing.
+        // committed answer, which is worse than recording nothing — the form
+        // would look filled while the app still considers it empty.
+        //
+        // KNOWN GAP (v9). This marker is RADIX-SPECIFIC. An un-selected MUI or
+        // Headless UI trigger carries no data-placeholder, so its rendered
+        // "Select…" text WILL be recorded as a committed value on those stacks.
+        // Deliberately not fixed from theory: the correct signal differs per
+        // library and guessing it is how the last three attempts at this widget
+        // went wrong. Read the un-selected DOM of whichever library a client app
+        // actually uses, then add its marker here. Until then the gap is a
+        // known, written-down limitation rather than a silent wrong value.
         if (el.hasAttribute("data-placeholder")) return "";
         return clip(norm(el.textContent), MAX_VALUE);
       }

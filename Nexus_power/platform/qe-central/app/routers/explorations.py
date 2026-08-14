@@ -33,6 +33,7 @@ import json
 import logging
 import socket
 import uuid
+from datetime import timedelta, timezone
 from typing import Any
 from urllib.parse import urlparse
 
@@ -195,6 +196,50 @@ async def _mark(
         for key, value in fields.items():
             setattr(row, key, value)
         row.updated_at = utc_now()
+
+
+@router.get("/fleet/crawl-funnel")
+async def fleet_crawl_funnel(
+    days: int = 14, user: dict = Depends(require_auth),
+) -> dict:
+    """C4 — WHERE CRAWLS DIE, aggregated across the tenant's fleet.
+
+    Every crawl already writes a precise diagnosis; nothing ever aggregated them,
+    so a fleet-wide collapse (weekly yield 86% -> 16%, four apps consuming 80% of
+    capacity, 270 crawls generating nothing) surfaced as a founder escalation two
+    months later instead of as a number that moved.
+
+    Pure aggregation: every field read here was written by the crawl that
+    produced it. A telemetry layer that derives its own numbers can disagree with
+    the evidence, and then nobody trusts either.
+
+    ``worst_stage`` is the measure-first loop in one field — rather than arguing
+    about priorities, read which stage drops the most and fix that one.
+    """
+    from ..services import fleet_funnel
+
+    window = max(1, min(int(days or 14), 90))
+    tenant_id = user["tenant_id"]
+    async with tenant_scoped_qec_session(tenant_id) as session:
+        rows = (await session.execute(
+            select(QEExplorationRow)
+            .where(QEExplorationRow.tenant_id == tenant_id)
+            .order_by(QEExplorationRow.created_at.desc())
+            .limit(2000)
+        )).scalars().all()
+
+    cutoff = utc_now() - timedelta(days=window)
+    recent = [
+        {"app_id": r.app_id, "status": r.status, "stats": r.stats}
+        for r in rows
+        if r.created_at is not None and (
+            r.created_at if r.created_at.tzinfo else r.created_at.replace(tzinfo=timezone.utc)
+        ) >= cutoff
+    ]
+    summary = fleet_funnel.summarize(recent)
+    summary["window_days"] = window
+    summary["worst_stage"] = fleet_funnel.worst_stage(summary)
+    return summary
 
 
 def _posture_shortfall_cause(env_attestation: dict, traversal: str) -> str:
