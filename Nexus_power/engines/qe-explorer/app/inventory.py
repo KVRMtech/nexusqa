@@ -695,24 +695,36 @@ def build_inventory(
     # just because a sibling appeared.  ``group_options`` is carried alongside
     # so enumeration can see the answers without churning signatures.
     grouped = groups_found = 0
-    by_group: dict[tuple[str, str], list[int]] = {}
+    by_group: dict[tuple[str, str, str], list[int]] = {}
     for idx, rec in enumerate(records):
-        if rec.get("kind") != "radio":
+        # Radio OR checkbox: a mutually-exclusive choice and a multi-select are
+        # both ONE question. Only DECLARED groupings reach here at all (see
+        # groupKeyOf), so a lone consent checkbox never acquires a group.
+        if rec.get("kind") not in ("radio", "checkbox"):
             continue
         group_key = _s(rec.get("group_key")).strip()
         if not group_key:
             continue           # undeclared grouping → left exactly as before
-        by_group.setdefault((rec.get("frame_selector") or "", group_key),
-                            []).append(idx)
+        # Kind is part of the key: a <fieldset> holding both radios and
+        # checkboxes yields ONE container key, and merging those into a single
+        # question would enumerate answers that belong to different questions.
+        by_group.setdefault(
+            (rec.get("frame_selector") or "", group_key, str(rec.get("kind"))),
+            []).append(idx)
 
-    for (frame, group_key), indices in by_group.items():
+    for (frame, group_key, kind), indices in by_group.items():
         if len(indices) < 2:
             continue           # a lone radio is a toggle, not a question
         options = [records[i]["name"] for i in indices if records[i].get("name")]
         if len(options) < 2:
             continue           # unnameable members → nothing honest to enumerate
-        group_id = hashlib.sha256(
-            f"{frame}\x1f{group_key}".encode("utf-8")).hexdigest()[:32]
+        # Radio group_ids keep their historical hash input EXACTLY — they key
+        # remembered branch-walk overrides across crawls, and re-hashing them
+        # would silently orphan every plan a previous crawl recorded. Checkboxes
+        # are new and take their own namespace.
+        seed = (f"{frame}\x1f{group_key}" if kind == "radio"
+                else f"{frame}\x1f{group_key}\x1f{kind}")
+        group_id = hashlib.sha256(seed.encode("utf-8")).hexdigest()[:32]
         for i in indices:
             records[i]["group_id"] = group_id
             records[i]["group_options"] = options

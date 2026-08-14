@@ -486,10 +486,22 @@ INVENTORY_JS = r"""
   function groupKeyOf(el, doc) {
     try {
       var tag = lc(el.tagName);
-      var isNative = tag === "input" && lc(el.type || "") === "radio";
-      var isAria = lc(attr(el, "role")) === "radio";
-      if (!isNative && !isAria) return "";
-      if (isNative) {
+      var it = lc(el.type || "");
+      var role = lc(attr(el, "role"));
+      var isRadio = (tag === "input" && it === "radio") || role === "radio";
+      // A CHECKBOX GROUP IS A QUESTION TOO. "Health Conditions — pick at least
+      // one of eight" is ONE question, and recording it as eight independent
+      // yes/no questions describes a form the application does not have.
+      //
+      // Grouped ONLY on a DECLARED signal — a shared name attribute (the
+      // classic name="conditions[]" array every server-side framework renders)
+      // or an explicit fieldset / role=group. Never on mere proximity: a
+      // "Remember me" sitting beside a "Subscribe to newsletter" is two
+      // questions, and merging them would answer one and silently drop the
+      // other from the residue. An undeclared group stays exactly as it was.
+      var isCheck = (tag === "input" && it === "checkbox") || role === "checkbox";
+      if (!isRadio && !isCheck) return "";
+      if (tag === "input") {
         var n = attr(el, "name");
         if (n) {
           var f = el.form;
@@ -503,7 +515,8 @@ INVENTORY_JS = r"""
       var hops = 0;
       while (cur && cur.nodeType === 1 && hops < 12) {
         var r = lc(attr(cur, "role"));
-        if (r === "radiogroup" || lc(cur.tagName) === "fieldset") {
+        if (r === "radiogroup" || lc(cur.tagName) === "fieldset"
+            || (isCheck && r === "group")) {
           var k = groupContainerKey(cur, doc);
           if (k) return "grp:" + k;
         }

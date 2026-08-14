@@ -200,6 +200,20 @@ def _wants_checked(kind: str, value: str) -> bool:
     return _norm(value) not in _FALSY
 
 
+def _wants_checked_control(control: Mapping[str, Any], kind: str, value: str) -> bool:
+    """As above, but aware that the control belongs to a GROUP.
+
+    A grouped checkbox is a MEMBER of one question, and a member is only ever
+    filled when it IS the answer — so the fill always means "select this". The
+    literal-word rule below it would read a member labelled "No" or "None" as a
+    request to switch the control OFF, leaving the question unanswered while the
+    ledger recorded an answer: the group's only negative option is exactly the
+    one it would fail to select, and it is the option we prefer."""
+    if str(control.get("group_id") or ""):
+        return True
+    return _wants_checked(kind, value)
+
+
 #: Select placeholder options that are not real values (never chosen as a default).
 _PLACEHOLDER_OPTIONS = frozenset({
     "", "select", "choose", "please select", "select one", "select an option",
@@ -322,7 +336,12 @@ def _synthesize_default(control: Mapping[str, Any], kind: str, name: str) -> Opt
                 return o
         return None
     if kind in _TOGGLE_KINDS:
-        if kind != "radio" and bool(control.get("required")):
+        # A GROUPED member is never auto-checked on its own account: "required"
+        # on one member of a multi-select is a statement about that box, and
+        # honouring it per-member would check every required box in the group.
+        # Which member answers the question is the group's decision, made above.
+        if (kind != "radio" and bool(control.get("required"))
+                and not str(control.get("group_id") or "")):
             return "true"
         return None
 
@@ -506,7 +525,10 @@ def resolve_field(control: Mapping[str, Any], kind: str, name: str,
             (group_id and choice_overrides.get(group_id))
             or choice_overrides.get(sig["signature"]) or "")
         if forced:
-            if kind == "radio" and group_id:
+            # A grouped checkbox is overridden by OPTION LABEL like a radio;
+            # only an ungrouped one takes a bare checked/unchecked state.
+            if (kind in ("radio", "checkbox") and group_id
+                    and forced not in ("checked", "unchecked")):
                 if normalize_option(name) == forced:
                     entry.update(provenance=PROV_PLANNED, filled=True)
                     return {"value": name, "entry": entry}
@@ -575,7 +597,12 @@ def resolve_field(control: Mapping[str, Any], kind: str, name: str,
         # answered group, so they never inflate the residue the client is asked
         # for. Mirrors the branch-walk override path, which already did this.
         group_id = str(control.get("group_id") or "")
-        if kind == "radio" and group_id and _norm(name) != _norm(str(generated)):
+        # Checkbox groups take the same rule as radios. The browser does NOT
+        # enforce exclusivity here, so filling each member in turn would check
+        # every box: on a health-conditions question that means answering "all
+        # of them", inventing a medical history for a synthetic applicant out of
+        # nothing but the order the fill happened to iterate in.
+        if kind in ("radio", "checkbox") and group_id and _norm(name) != _norm(str(generated)):
             entry.update(provenance=PROV_GROUP_SIBLING, filled=False)
             return {"value": None, "entry": entry}
         entry.update(provenance=PROV_SYNTHESIZED, filled=True)
@@ -1014,7 +1041,8 @@ async def _fill_one(
     """
     control = dict(control)
     if kind in _TOGGLE_KINDS:
-        observation = await port.set_checked(control, _wants_checked(kind, value))
+        observation = await port.set_checked(
+            control, _wants_checked_control(control, kind, value))
         if observation.intent_met is False:
             return None, ""
         recorded = observation.committed_value

@@ -22,6 +22,7 @@ from datetime import date, datetime, timedelta
 from typing import Any, Mapping, Optional
 
 from . import field_semantics as S
+from . import vocab
 from .identity_pack import Identity
 
 __all__ = ["value_for", "PROVENANCE_SYNTHESIZED"]
@@ -111,7 +112,19 @@ def _options(control: Mapping[str, Any]) -> list[str]:
     """
     raw = control.get("options")
     if not isinstance(raw, (list, tuple)) or not raw:
+        # GROUP MEMBERS ARE REAL CONTROLS, AND A REAL CONTROL IS NEVER A
+        # PLACEHOLDER. The placeholder filter answers a question about a
+        # DROPDOWN — is this first entry a prompt ("Select…", "None") or an
+        # answer? — and a set of checkboxes or radios has no prompt among them
+        # by construction. Applying it here deleted the member labelled "None"
+        # from a health-conditions question: the group's only negative answer,
+        # and the one the fill prefers precisely because it asserts nothing. The
+        # question was then answered with the first POSITIVE option instead,
+        # disclosing a condition on the applicant's behalf.
         raw = control.get("group_options")
+        if not isinstance(raw, (list, tuple)):
+            return []
+        return [str(o).strip() for o in raw if str(o).strip()]
     if not isinstance(raw, (list, tuple)):
         return []
     return [str(o).strip() for o in enumerate_real(raw)]
@@ -234,7 +247,11 @@ def value_for(semantic_type: str, control: Mapping[str, Any], identity: Identity
     # before — the crawl must not decide which business path gets exercised and then
     # not say so. In AGENT mode it is answered, and the ledger records what was
     # chosen so the report can.
-    if k == "radio" and data_mode != DATA_MODE_AGENT:
+    # A GROUPED checkbox is a multi-select question, so it is the client's
+    # decision in user mode for exactly the same reason a radio group is.
+    # An ungrouped one is still a lone boolean and keeps its old behaviour.
+    if ((k == "radio" or (k == "checkbox" and control.get("group_id")))
+            and data_mode != DATA_MODE_AGENT):
         return None
 
     # A choice control is answered by CHOOSING, whatever the semantics — but the
@@ -250,6 +267,16 @@ def value_for(semantic_type: str, control: Mapping[str, Any], identity: Identity
             return _pick_option(control, identity.card_expiry.split("/")[0])
         if sem == S.DOB:
             return _pick_option(control, identity.date_of_birth[:4])
+        if k == "checkbox" and control.get("group_id"):
+            # A MULTI-SELECT is answered with the member that asserts the LEAST
+            # — the same rule the advance-unblock experiment applies, for the
+            # same reason: every member answers the question equally well, and
+            # only the negative one invents nothing about a synthetic person.
+            # DOM order is not a safe proxy: an app that lists "None" last would
+            # otherwise have a condition disclosed on its behalf.
+            for opt in _options(control):
+                if vocab.NEGATIVE_OPTION_RE.match(str(opt).strip()):
+                    return opt
         picked = _pick_option(control)
         if picked is not None:
             return picked
