@@ -37,7 +37,7 @@ import logging
 import re
 from dataclasses import dataclass, field
 from typing import Any, Callable, Mapping, Optional, Sequence
-from urllib.parse import urlsplit
+from urllib.parse import urljoin, urlsplit
 
 from . import danger_signals
 from . import emit
@@ -167,6 +167,10 @@ TRAVERSAL_POSTURES = (TRAVERSAL_FULL, TRAVERSAL_PROBE, TRAVERSAL_OBSERVE)
 #: egress-fence reconfigure (squid allowlist re-read); retry it briefly.
 _ENTRY_GOTO_RETRIES = 2
 _ENTRY_RETRY_DELAY_S = 2.5
+#: In-app hops :meth:`Crawler._reach_in_app` may take toward a deep route — one
+#: ancestor-section click per hop. Three covers section → subsection → page on a
+#: real admin IA; anything deeper is honestly skipped, never wandered.
+_REACH_MAX_HOPS = 3
 
 #: ``auth_incomplete`` reason: a start-authenticated session WAS injected, but the
 #: app still answers the entry with a login wall — the session has EXPIRED (or was
@@ -631,6 +635,26 @@ class Frontier:
             return None
         return heapq.heappop(self._heap)[-1]
 
+    def release(self, key: str) -> bool:
+        """Un-spend a reach key whose popped item never actually REACHED its URL.
+
+        Push-time dedup marks a key used forever — correct for a visited page,
+        wrong for one the expansion never observed. Live: the operator-onboarded
+        entry (`/underwriting/new-business/new-application`) was popped first, the
+        app's per-page-load logout landed the crawl on the dashboard instead, and
+        the entry's key stayed spent — so when the queue page later surfaced a
+        real clickable path to that route, it could never be enqueued again. The
+        one page the client explicitly asked for became permanently unreachable
+        at t=0.
+
+        Only ever called for an item already POPPED (never one still queued), so
+        releasing cannot double-queue. The caller bounds it to once per key.
+        """
+        if key in self._enqueued_keys:
+            self._enqueued_keys.discard(key)
+            return True
+        return False
+
     def __len__(self) -> int:
         return len(self._heap)
 
@@ -976,6 +1000,10 @@ class Crawler:
         # reached the next state. Held until _expand knows the destination's
         # fingerprint, then emitted as a real state→state edge.
         self._pending_reach_edge: Optional[tuple[str, str]] = None
+        # Reach keys released back to the frontier after an expansion landed
+        # somewhere other than its requested URL — once per key, so a genuine
+        # redirect gets one retry and can never loop.
+        self._rearmed_keys: set[str] = set()
         # Coverage accounting (crawl-once/run-many legibility): what the crawl found
         # vs could actually fill/advance, so the shallow-vs-full gap is visible and the
         # human's remediation is a NAMED, targeted seed request — never blind guessing.
@@ -1423,6 +1451,28 @@ class Crawler:
             self._login_verified = True
             logger.info("qec.crawler.login_restored_after_reload url_scope=%s",
                         _host_of(url))
+            # THE LOGIN IS RESTORED, NOT THE LOCATION. Relogin lands wherever the
+            # app sends a fresh sign-in (its dashboard), while every caller of this
+            # method is about to act on ``url`` — so before this, a wizard
+            # re-establish refilled the DASHBOARD, discovery resets clicked from
+            # the wrong page, and a Phase-B renavigation submitted into a login
+            # wall (recorded live as five sign-in "pages" inside the stitched
+            # journey). Reach the requested page the way a person would — by
+            # clicking — which is also the only way that keeps this login alive.
+            try:
+                landed = await self._port.current_url()
+            except Exception:
+                return
+            if _url_key(landed) == _url_key(url):
+                return
+            obs2 = await self._observe()
+            controls2 = build_inventory(obs2.raw_controls, self._refuse_pack,
+                                        url=obs2.url)
+            hop = await self._reach_in_app(controls2, url, "")
+            if hop is None:
+                logger.info(
+                    "qec.crawler.reload_reach_failed requested=%s landed=%s — "
+                    "callers proceed from the landing page", url[:120], landed[:120])
 
     async def _reach_in_app(
         self, controls: list[dict[str, Any]], url: str, discovered_via: str,
@@ -1437,95 +1487,146 @@ class Crawler:
         clicking the link on the page already open — keeps the login alive and grounds
         the navigation at the same time.
 
-        Generic: the control is found by the label this route was DISCOVERED through,
-        else by a link whose accessible name matches the route's own last path segment
-        ("/new-application" ↔ "New application"). No app-specific knowledge, no URL
-        pattern matching. Returns the reached observation, or ``None`` to let the caller
-        fall back to ordinary navigation.
+        Generic, and MULTI-HOP: the target control is found by the label this route
+        was DISCOVERED through, by a link whose accessible name CONTAINS the
+        route's own last path segment ("/new-application" ↔ "+ New Application"),
+        or by a control whose HREF resolves to the target — the strongest signal,
+        and the only one that works on a NAMELESS link. When the target is not on
+        the current page, the walk climbs the target's OWN path: a deep route's
+        in-app entrance lives on its section pages ("/underwriting/new-business/
+        new-application" is entered from the New Business queue), so an ancestor
+        segment's control is clicked and the search repeats there — live, the
+        single-hop version stood on the dashboard, found no "new application"
+        link (it was one section away), and the one page the operator onboarded
+        was never entered. Bounded by :data:`_REACH_MAX_HOPS`, loop-guarded, and
+        every failure names its reason. No app-specific knowledge anywhere.
+        Returns the reached observation, or ``None`` to let the caller fall back.
         """
         want = _url_key(url)
-        wanted_labels = {_norm_label(discovered_via)} if discovered_via else set()
-        tail = [p for p in urlsplit(url).path.split("/") if p]
-        if tail:
-            wanted_labels.add(_norm_label(tail[-1].replace("-", " ").replace("_", " ")))
-        wanted_labels.discard("")
-        if not wanted_labels:
-            # Nothing to click TOWARDS — the entry (a bare root URL) has no discovering
-            # label and no path segment. Silence here cost a whole debugging round: the
-            # crawl looked like the fix had not shipped. Say which of the three reasons
-            # it was, always.
+        target_labels = _reach_target_labels(url, discovered_via)
+        ancestors = _reach_ancestors(url)
+        if not target_labels and not ancestors:
+            # Nothing to click TOWARDS — a bare root URL has no discovering label
+            # and no path segment. Silence here cost a whole debugging round; say
+            # which reason it was, always.
             logger.info("qec.crawler.reach_in_app_skipped reason=no_label url=%s", url[:120])
             return None
 
-        for control in controls:
-            if str(control.get("kind") or "") not in _ACTUATOR_KINDS:
-                continue
-            if control.get("danger"):
-                continue
-            if _norm_label(str(control.get("name") or "")) not in wanted_labels:
-                continue
-            # The state we are clicking FROM. A navigation is a transition between
-            # two states, so an edge needs a real source — recording the action
-            # against the destination alone gives from == to, which can never read
-            # as a navigation no matter how the action is labelled.
+        # The refuse pack flags apply/enroll-shaped LABELS as danger — which is a
+        # wizard's entrance ("+ New Application") to the letter. On a disposable-
+        # attested env with the blanket approval, crossing a forward danger
+        # control is already this crawler's precedent (_pick_advance_e2e); reach
+        # gets the same, and ONLY toward the route being reached. The EXPLORE
+        # network guard stays the hard wall against real mutation either way.
+        allow_danger = self._submit_enabled and self._submit_approve_all
+        cur_controls: list[dict[str, Any]] = list(controls)
+        pages_walked: set[str] = set()
+        for hop in range(_REACH_MAX_HOPS + 1):
             try:
-                from_url = await self._port.current_url()
+                cur_url = await self._port.current_url()
             except Exception:
-                from_url = ""
-            from_fp = state_fingerprint(from_url, controls, ()) if from_url else ""
+                cur_url = ""
+            pages_walked.add(_url_key(cur_url))
+            control = _reach_pick(cur_controls, target_key=want,
+                                  labels=target_labels, base_url=cur_url or url,
+                                  allow_danger=allow_danger)
+            is_target = control is not None
+            if control is None:
+                # Climb toward the target through its OWN ancestry, deepest
+                # section first — never a page we already walked this reach.
+                for a_key, a_labels in ancestors:
+                    if a_key in pages_walked:
+                        continue
+                    control = _reach_pick(cur_controls, target_key=a_key,
+                                          labels=a_labels, base_url=cur_url or url,
+                                          allow_danger=allow_danger)
+                    if control is not None:
+                        break
+            if control is not None and control.get("danger"):
+                logger.info(
+                    "qec.crawler.reach_danger_crossed name=%r — an apply-shaped label "
+                    "on the route the operator onboarded; permitted by the disposable-"
+                    "attested blanket, auditable here.",
+                    str(control.get("name") or "")[:60])
+            if control is None:
+                logger.info(
+                    "qec.crawler.reach_in_app_skipped reason=no_matching_control "
+                    "wanted=%s hop=%d url=%s",
+                    sorted(target_labels)[:4], hop, url[:120])
+                return None
+
+            # The state we are clicking FROM. A navigation is a transition between
+            # two states, so an edge needs a real source.
+            from_fp = state_fingerprint(cur_url, cur_controls, ()) if cur_url else ""
             try:
                 click_obs = await self._port.click(control)
             except Exception:
+                logger.info("qec.crawler.reach_in_app_skipped reason=click_failed "
+                            "hop=%d url=%s", hop, url[:120])
                 return None
             self._tracker.note_action()
             reached = await self._observe()
-            if _url_key(reached.url) != want:
-                return None
+            reached_key = _url_key(reached.url)
             reached_controls = build_inventory(
                 reached.raw_controls, self._refuse_pack, url=reached.url)
             if match_login_controls(reached_controls) is not None:
+                logger.info("qec.crawler.reach_in_app_skipped reason=bounced_to_wall "
+                            "hop=%d url=%s", hop, url[:120])
                 return None      # the click bounced us back to the wall
-            # RECORD THE PROOF, do not merely claim it.
-            #
-            # This method used to log "the link is PROVEN" and then discard both the
-            # click observation and any action record. Nothing downstream ever saw
-            # the navigation, so the generator counted it as an UNPROVEN page-jump
-            # and refused to build an end-to-end test — live, "PROVED only 0 of the
-            # 15 navigations" on an app whose every route was in fact reached by
-            # clicking. A log line asserting evidence that was never recorded is the
-            # exact failure this product exists to prevent, in our own instrument.
-            #
-            # The generator's bar (test_factory _navigation_backbone) is an action
-            # carrying a real navigation outcome; that is what is built here.
-            action = emit.build_action_record(
-                dict(control), verb="click", value=None, observation=click_obs,
-                phase=Phase.EXPLORE.value, state_id=self._pending_reach_state_id,
-                timestamp_ms=self._clock.now_ms())
-            if not (action.after or {}).get("navigated"):
-                # A framework app routes by pushState, so the click event reports
-                # nothing while the route demonstrably changed — and we have already
-                # PROVEN it changed, because the observation above matched the route
-                # we asked for. Same lesson as _ground_nav_links.
+
+            if is_target:
+                if reached_key != want:
+                    # The control CLAIMED the target (label/href) and landed
+                    # elsewhere — a redirect or a guard. Honest fail, never a
+                    # pretend arrival.
+                    logger.info(
+                        "qec.crawler.reach_in_app_skipped reason=landed_elsewhere "
+                        "wanted=%s landed=%s", url[:120], reached.url[:120])
+                    return None
+                # RECORD THE PROOF, do not merely claim it. The generator's bar
+                # (test_factory _navigation_backbone → _grounded_commit_sequence)
+                # is an action whose ``after`` carries outcome=navigation AND the
+                # DESTINATION in ``detail`` — detail is what lets the generator
+                # match the click to the page it reached instead of guessing from
+                # adjacency. The click event itself reports nothing on a pushState
+                # app, so the outcome is asserted from the route we just PROVED we
+                # landed on, and labelled as such.
+                action = emit.build_action_record(
+                    dict(control), verb="click", value=None, observation=click_obs,
+                    phase=Phase.EXPLORE.value, state_id=self._pending_reach_state_id,
+                    timestamp_ms=self._clock.now_ms())
                 after = dict(action.after or {})
-                after.update(navigated=True, outcome="navigation",
-                             navigation_kind="pushstate")
+                if not after.get("navigated"):
+                    after.update(navigated=True, outcome="navigation",
+                                 navigation_kind="pushstate")
+                if not str(after.get("detail") or "").strip():
+                    after["detail"] = reached.url[:500]
                 action.after = after
-            action.to_state = _url_key(reached.url)
-            self._pending_reach_actions.append(action)
-            # The EDGE is what makes it a navigation. An action records that a
-            # control was clicked; the journey graph is built from state-to-state
-            # edges, and without one the click is just an interaction that happened
-            # to be followed by a page. Deferred like the action because the
-            # destination's fingerprint does not exist until _expand computes it.
-            self._pending_reach_edge = (from_fp, str(control.get("name") or "")[:120])
-            logger.info(
-                "qec.crawler.reached_in_app url_scope=%s via=%r — navigated by clicking, "
-                "so the login survived and the link is PROVEN (recorded, to_state=%s)",
-                _host_of(reached.url), str(control.get("name") or "")[:40],
-                action.to_state)
-            return reached, reached_controls
-        logger.info("qec.crawler.reach_in_app_skipped reason=no_matching_control "
-                    "wanted=%s url=%s", sorted(wanted_labels)[:4], url[:120])
+                action.to_state = reached_key
+                # One pending proof per destination: resets re-reach the same
+                # route many times, and stacking identical proofs onto the next
+                # recorded state is noise, not more evidence.
+                if all(a.to_state != reached_key for a in self._pending_reach_actions):
+                    self._pending_reach_actions.append(action)
+                self._pending_reach_edge = (from_fp, str(control.get("name") or "")[:120])
+                logger.info(
+                    "qec.crawler.reached_in_app url_scope=%s via=%r hops=%d — navigated "
+                    "by clicking, so the login survived and the link is PROVEN "
+                    "(recorded, to_state=%s)",
+                    _host_of(reached.url), str(control.get("name") or "")[:40],
+                    hop, action.to_state)
+                return reached, reached_controls
+
+            # An ANCESTOR hop. A page this reach has already walked ends it —
+            # clicking in circles is how a crawl burns its budget silently.
+            if reached_key in pages_walked:
+                logger.info("qec.crawler.reach_in_app_skipped reason=hop_loop "
+                            "url=%s", url[:120])
+                return None
+            cur_controls = reached_controls
+
+        logger.info("qec.crawler.reach_in_app_skipped reason=hop_budget "
+                    "hops=%d url=%s", _REACH_MAX_HOPS, url[:120])
         return None
 
     async def _cross_auth_wall(
@@ -1933,6 +2034,25 @@ class Crawler:
             self._hard_stop = True
             return
         fingerprint = state_fingerprint(obs.url, controls, obs.dialog_flags)
+
+        # AN ITEM IS ONLY SPENT WHEN ITS URL WAS ACTUALLY OBSERVED. The frontier's
+        # push-time dedup marked this item's key used the moment it was queued —
+        # but on an app that drops its login per page load, the goto above lands on
+        # the sign-in/landing page instead, and the expansion records THAT. The
+        # requested route was never seen, yet its key stayed spent, so a real
+        # click-path to it discovered later could never re-enqueue it. Live: the
+        # operator-onboarded wizard entry became permanently unreachable at t=0.
+        # Released ONCE per key (bounded — an app that genuinely redirects a route
+        # gets one retry, never a loop).
+        landed_key = _url_key(obs.url)
+        item_key = _url_key(item.url)
+        if landed_key != item_key and item_key not in self._rearmed_keys:
+            self._rearmed_keys.add(item_key)
+            if self._frontier.release(item_key):
+                logger.info(
+                    "qec.crawler.entry_rearmed requested=%s landed=%s — the route "
+                    "was not reached; its key is released so a discovered in-app "
+                    "path can enqueue it again", item.url[:120], obs.url[:120])
 
         if item.parent_fingerprint:
             self._emitter.emit_edge(from_state=item.parent_fingerprint,
@@ -2929,6 +3049,15 @@ class Crawler:
                 now_ms=self._clock.now_ms(), state_id=fingerprint,
                 sequence_index=seq, answer_key=self._answer_key,
                 fill_controls=fill_controls, renavigate=renavigate,
+                # The renavigation must KEEP THE LOGIN. Phase-B's own goto is raw —
+                # on an app that drops its login per page load it lands on the
+                # SIGN-IN WALL, so the submit fired into a login form (recorded
+                # live: nine submits, outcome=error, five sign-in "pages" stitched
+                # into the journey where business pages belonged). The injected
+                # navigator re-signs-in and CLICKS back to the requested page; the
+                # re-fill then acts on the real form. Cookie apps see the same goto
+                # they always did.
+                navigate=self._goto_keeping_login,
             )
         finally:
             self._guard.phase = prev_phase
@@ -4064,6 +4193,108 @@ def _url_key(url: str) -> str:
 
 def _host_of(url: str) -> str:
     return (urlsplit(url or "").hostname or "").lower()
+
+
+def _segment_label(segment: str) -> str:
+    """A URL path segment as the accessible-name it would render as:
+    ``new-business`` → ``new business``. Value-free and language-agnostic."""
+    return _norm_label(str(segment or "").replace("-", " ").replace("_", " "))
+
+
+def _reach_label_match(name: Any, wanted: set[str]) -> bool:
+    """Does a control's accessible name answer to one of the wanted labels?
+
+    CONTAINMENT, not equality. Real navigation labels decorate the route word —
+    the ``/new-business`` section renders as "New Business Queue", the
+    ``/new-application`` entry as "+ New Application" — so exact matching missed
+    every one of them (live: the wizard the operator onboarded was never entered
+    because "new application" != "+ new application"). Containment in either
+    direction, with a length floor so a two-letter segment can never match half
+    the page.
+    """
+    label = _norm_label(name)
+    if not label:
+        return False
+    for want in wanted:
+        if not want:
+            continue
+        if len(want) < 4 or len(label) < 4:
+            if label == want:
+                return True
+        elif want in label or label in want:
+            return True
+    return False
+
+
+def _reach_target_labels(url: str, discovered_via: str) -> set[str]:
+    """The labels a control leading to ``url`` would plausibly carry: the label
+    the route was DISCOVERED through, and its own last path segment."""
+    labels = {_norm_label(discovered_via)} if discovered_via else set()
+    tail = [p for p in urlsplit(url).path.split("/") if p]
+    if tail:
+        labels.add(_segment_label(tail[-1]))
+    labels.discard("")
+    return labels
+
+
+def _reach_ancestors(url: str) -> list[tuple[str, set[str]]]:
+    """``[(url_key, labels)]`` for the target's ANCESTOR section pages, deepest
+    first. A deep route's in-app entrance lives on its section pages —
+    ``/underwriting/new-business/new-application`` is entered from the New
+    Business queue — so the climb follows the route's own path, never a guess."""
+    parts = urlsplit(url)
+    segs = [p for p in (parts.path or "").split("/") if p]
+    out: list[tuple[str, set[str]]] = []
+    for i in range(len(segs) - 1, 0, -1):
+        a_url = f"{parts.scheme}://{parts.netloc}/" + "/".join(segs[:i])
+        labels = {_segment_label(segs[i - 1])} - {""}
+        if labels:
+            out.append((_url_key(a_url), labels))
+    return out
+
+
+def _reach_href_key(control: Mapping[str, Any], base_url: str) -> str:
+    """The url-key a control's HREF resolves to, or ``""``. The strongest reach
+    signal — a link's href says where it goes regardless of its label, which is
+    the only signal a NAMELESS link offers (this app renders several)."""
+    href = str((control.get("qec") or {}).get("href")
+               or control.get("href") or "").strip()
+    if not href or href.startswith(("javascript:", "#", "mailto:", "tel:")):
+        return ""
+    try:
+        return _url_key(urljoin(base_url or href, href))
+    except Exception:
+        return ""
+
+
+def _reach_pick(
+    controls: Sequence[Mapping[str, Any]], *, target_key: str,
+    labels: set[str], base_url: str, allow_danger: bool = False,
+) -> Optional[dict[str, Any]]:
+    """The control to click toward a destination: an HREF resolving to it wins
+    (works even nameless), else the first containment label match.
+
+    Danger controls are skipped by default — the reach must not be the thing
+    that clicks Delete. ``allow_danger`` relaxes ONLY the pick, and only the
+    crawler sets it, only under the disposable-attested blanket: the refuse
+    pack's verb vocabulary flags "+ New Application" (rp.verb.apply) exactly
+    like a mutating Apply — live, the crawler stood on the queue page holding
+    the wizard's entrance and refused it, so the one page the operator onboarded
+    stayed unentered. Clicking toward the operator's own route on an env they
+    attested disposable follows the same precedent as the danger-forward
+    crossing in ``_pick_advance_e2e``; the fail-closed EXPLORE network guard
+    remains the hard wall against any actual mutation."""
+    by_label: Optional[dict[str, Any]] = None
+    for c in controls:
+        if str(c.get("kind") or "") not in _ACTUATOR_KINDS:
+            continue
+        if c.get("danger") and not allow_danger:
+            continue
+        if target_key and _reach_href_key(c, base_url) == target_key:
+            return dict(c)
+        if by_label is None and _reach_label_match(c.get("name"), labels):
+            by_label = dict(c)
+    return by_label
 
 
 def _norm_label(text: Any) -> str:

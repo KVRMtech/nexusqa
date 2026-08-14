@@ -36,7 +36,7 @@ import re
 import tempfile
 from dataclasses import asdict, dataclass, field
 from datetime import date
-from typing import Any, Mapping, MutableMapping, Optional, Sequence
+from typing import Any, Callable, Mapping, MutableMapping, Optional, Sequence
 from urllib.parse import urlsplit
 
 from . import emit
@@ -870,6 +870,7 @@ async def execute_submit_phase_b(
     answer_key: Optional[AnswerKey] = None,
     fill_controls: Sequence[Mapping[str, Any]] = (),
     renavigate: bool = True,
+    navigate: Optional[Callable[[str], Any]] = None,
 ) -> SubmitResult:
     """Phase-5 submit entry point: REFUSE unless attestation + approval permit,
     else re-drive the approved flow, submit, and capture the confirmation.
@@ -921,11 +922,18 @@ async def execute_submit_phase_b(
     # summary URL would discard the in-progress quote (and with it the very button
     # we mean to click), so we submit IN PLACE on the page the walk already reached.
     if renavigate:
-        nav = await port.goto(url)
-        if not getattr(nav, "ok", True):
-            logger.warning("qec.forms.submit_form_unreachable url=%s", (url or "")[:200])
-            return SubmitResult(submitted=False, decision=decision,
-                                reason=REASON_FORM_UNREACHABLE)
+        # ``navigate`` (when injected) is the caller's login-keeping renavigation:
+        # a raw goto logs an app with client-side sessions OUT, so the submit fired
+        # into the sign-in wall it landed on. The injected navigator owns its own
+        # failure handling; the raw-goto default keeps today's unreachable check.
+        if navigate is not None:
+            await navigate(url)
+        else:
+            nav = await port.goto(url)
+            if not getattr(nav, "ok", True):
+                logger.warning("qec.forms.submit_form_unreachable url=%s", (url or "")[:200])
+                return SubmitResult(submitted=False, decision=decision,
+                                    reason=REASON_FORM_UNREACHABLE)
         if answer_key is not None and fill_controls:
             # Re-establish the approved form state.  Fills are client-side until the
             # submit POST, which the guard has already authorised for this flow.
