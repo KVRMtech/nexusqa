@@ -331,7 +331,11 @@ def test_injected_js_is_a_self_invoking_expression():
     # form_snapshot and made an automated fill impossible to verify.
     # The version is stamped into every manifest, so a deliberate bump here is
     # what lets a manifest be traced to the JS that produced its controls.
-    assert INVENTORY_JS_VERSION == "inv-js-v8"
+    # v9: a CUSTOM toggle (<button role="radio"|"checkbox"|"switch">) reports its
+    # aria-checked/aria-pressed state as value_committed — the same hole v8 closed
+    # for choice triggers, one widget class on, and answered from the W3C ARIA
+    # specification rather than from any one library's markup.
+    assert INVENTORY_JS_VERSION == "inv-js-v9"
 
 
 # ─── GROUP_ASSEMBLE — a radio group is ONE question, not N toggles ────────────

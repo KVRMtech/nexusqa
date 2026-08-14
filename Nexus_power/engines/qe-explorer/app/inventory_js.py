@@ -73,7 +73,7 @@ from __future__ import annotations
 
 #: Stamped into the crawl manifest so a manifest can be traced to the exact
 #: injected-JS generation that produced its controls.
-INVENTORY_JS_VERSION = "inv-js-v8"
+INVENTORY_JS_VERSION = "inv-js-v9"
 
 INVENTORY_JS = r"""
 (() => {
@@ -328,6 +328,28 @@ INVENTORY_JS = r"""
       // fill impossible to verify, so every correct selection was discarded.
       var role = lc(attr(el, "role"));
       var pop = lc(attr(el, "aria-haspopup"));
+      // A CUSTOM TOGGLE holds its state in ARIA, not in a value property. A
+      // <button role="radio"> or role="checkbox" is not a form element, so every
+      // branch above returns "" — the same hole v8 closed for choice triggers,
+      // one widget class on. aria-checked / aria-pressed is the W3C-standard
+      // answer here, so this reads a specification rather than guessing at any
+      // one component library's markup.
+      //
+      // Mirrors the native branch exactly ("true"/"false"), so a custom toggle
+      // and an <input type=checkbox> are indistinguishable downstream — which is
+      // the point: the fill, the snapshot and the catalogue should not care which
+      // one an application happened to use.
+      var ariaState = lc(attr(el, "aria-checked")) || lc(attr(el, "aria-pressed"));
+      if (role === "radio" || role === "checkbox" || role === "switch" ||
+          role === "menuitemcheckbox" || role === "menuitemradio" ||
+          (ariaState && (ariaState === "true" || ariaState === "false"))) {
+        if (ariaState === "true") return "true";
+        if (ariaState === "false") return "false";
+        // "mixed" (a tri-state checkbox) is a real ARIA value and is neither;
+        // reporting it as either would be a fabricated answer.
+        if (ariaState === "mixed") return "mixed";
+        return "";
+      }
       if (role === "combobox" || pop === "listbox" || pop === "menu") {
         // A PLACEHOLDER IS NOT A VALUE. Radix marks the un-selected trigger
         // with data-placeholder; reading its text would record "Select" as the
