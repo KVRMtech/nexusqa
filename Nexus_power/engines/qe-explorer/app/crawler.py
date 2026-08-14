@@ -972,6 +972,10 @@ class Crawler:
         # fingerprint by _expand once known, so the action belongs to a state that
         # actually exists in the manifest rather than to a phantom one.
         self._pending_reach_state_id: str = ""
+        # (source_fingerprint, link_label) for the grounded navigation edge that
+        # reached the next state. Held until _expand knows the destination's
+        # fingerprint, then emitted as a real state→state edge.
+        self._pending_reach_edge: Optional[tuple[str, str]] = None
         # Coverage accounting (crawl-once/run-many legibility): what the crawl found
         # vs could actually fill/advance, so the shallow-vs-full gap is visible and the
         # human's remediation is a NAMED, targeted seed request — never blind guessing.
@@ -1460,6 +1464,15 @@ class Crawler:
                 continue
             if _norm_label(str(control.get("name") or "")) not in wanted_labels:
                 continue
+            # The state we are clicking FROM. A navigation is a transition between
+            # two states, so an edge needs a real source — recording the action
+            # against the destination alone gives from == to, which can never read
+            # as a navigation no matter how the action is labelled.
+            try:
+                from_url = await self._port.current_url()
+            except Exception:
+                from_url = ""
+            from_fp = state_fingerprint(from_url, controls, ()) if from_url else ""
             try:
                 click_obs = await self._port.click(control)
             except Exception:
@@ -1499,6 +1512,12 @@ class Crawler:
                 action.after = after
             action.to_state = _url_key(reached.url)
             self._pending_reach_actions.append(action)
+            # The EDGE is what makes it a navigation. An action records that a
+            # control was clicked; the journey graph is built from state-to-state
+            # edges, and without one the click is just an interaction that happened
+            # to be followed by a page. Deferred like the action because the
+            # destination's fingerprint does not exist until _expand computes it.
+            self._pending_reach_edge = (from_fp, str(control.get("name") or "")[:120])
             logger.info(
                 "qec.crawler.reached_in_app url_scope=%s via=%r — navigated by clicking, "
                 "so the login survived and the link is PROVEN (recorded, to_state=%s)",
@@ -1940,6 +1959,16 @@ class Crawler:
             logger.info("qec.crawler.reach_proof_recorded count=%d state=%s",
                         len(self._pending_reach_actions), fingerprint[:12])
             self._pending_reach_actions = []
+        if self._pending_reach_edge:
+            src, label = self._pending_reach_edge
+            self._pending_reach_edge = None
+            # A self-edge is not a navigation. Emitting one would put a transition
+            # into the graph that goes nowhere, which is worse than none at all.
+            if src and src != fingerprint:
+                self._emitter.emit_edge(from_state=src, to_state=fingerprint,
+                                        verb="navigate", target_label=label)
+                logger.info("qec.crawler.reach_edge_emitted from=%s to=%s via=%r",
+                            src[:12], fingerprint[:12], label[:40])
         # Phase A: fill the form (if any), read back committed values.
         is_form = (
             not self._observe_only

@@ -183,6 +183,30 @@ def test_landing_somewhere_else_records_no_proof(tmp_path):
     assert crawler._pending_reach_actions == []
 
 
+def test_a_grounded_navigation_EDGE_is_staged_not_just_an_action(tmp_path):
+    """An action says a control was clicked. The journey graph is built from
+    state-to-state EDGES, so without one the click is only an interaction that
+    happened to be followed by a page — which is how eight recorded proofs still
+    produced "PROVED 0 of 15"."""
+    port = ClickToReachBrowser()
+    crawler = _crawler(port, tmp_path)
+    _reach(crawler, port)
+
+    assert crawler._pending_reach_edge is not None, (
+        "the navigation was recorded as an action but no edge — nothing joins the "
+        "two states, so no journey can be built from it")
+    source_fp, label = crawler._pending_reach_edge
+    assert source_fp, "an edge needs a real source state, not an empty one"
+    assert "Reported Claims" in label
+
+
+def test_a_failed_hop_stages_no_edge(tmp_path):
+    port = ClickToReachBrowser(lands_elsewhere=True)
+    crawler = _crawler(port, tmp_path)
+    assert _reach(crawler, port) is None
+    assert crawler._pending_reach_edge is None
+
+
 def test_no_matching_link_records_nothing(tmp_path):
     port = ClickToReachBrowser()
     crawler = _crawler(port, tmp_path)
