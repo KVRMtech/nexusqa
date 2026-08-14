@@ -58,23 +58,42 @@ def _option(name: str) -> dict:
 
 class RadixSelectPort:
     """A portal-rendered select: options exist only while it is open, and the
-    trigger's accessible name becomes the selection once one is picked."""
+    trigger's accessible name becomes the selection once one is picked.
+
+    ``settle_reads`` models the LIVE behaviour that broke the first version: the
+    listbox animates closed and React re-renders asynchronously, so the first N
+    reads after the click still show the popup open.
+
+    ``combined_label`` models the other real variant — some libraries render the
+    trigger as "Claim Type Death Claim" rather than replacing the label outright.
+    """
 
     def __init__(self, *, options=("Male", "Female", "Other"),
-                 commits: bool = True, opens: bool = True) -> None:
+                 commits: bool = True, opens: bool = True,
+                 settle_reads: int = 0, combined_label: bool = False) -> None:
         self._options = list(options)
         self.commits = commits
         self.opens = opens
+        self.settle_reads = settle_reads
+        self.combined_label = combined_label
         self.open = False
         self.selected = ""
         self.escapes = 0
+        self.reads_after_pick = 0
 
     async def collect_controls(self):
         trigger = dict(GENDER)
         if self.selected:
-            # Radix: the trigger renders the selection as its own label.
-            trigger = {**trigger, "name": self.selected,
-                       "value_committed": self.selected}
+            shown = (f"Gender {self.selected}" if self.combined_label
+                     else self.selected)
+            trigger = {**trigger, "name": shown,
+                       "value_committed": "" if self.combined_label
+                       else self.selected}
+        if self.selected:
+            self.reads_after_pick += 1
+            # The popup is still closing for the first ``settle_reads`` reads.
+            if self.reads_after_pick <= self.settle_reads:
+                return [trigger] + [_option(o) for o in self._options]
         if self.open:
             return [trigger] + [_option(o) for o in self._options]
         return [trigger]
@@ -166,6 +185,55 @@ def test_an_explicit_answer_key_value_still_wins_and_is_honoured():
         data_mode=DATA_MODE_AGENT))
     assert port.selected == "Other"
     assert result.field_ledger[0]["provenance"] == "provided"
+
+
+# ── the two live failure modes ─────────────────────────────────────────────
+
+def test_a_widget_that_animates_closed_is_still_verified():
+    """THE LIVE FAILURE OF THE FIRST VERSION. Six selections were correctly
+    opened, read and picked — "Claim Type" → "Death Claim" — and every one was
+    discarded as unverified because the read ran before the popup had finished
+    closing. The selection had succeeded; the verification was simply early."""
+    port = RadixSelectPort(options=("Male", "Female"), settle_reads=2)
+    result = _fill(port)
+
+    assert result.filled == 1, "a settling widget still reads back as a failure"
+    assert result.field_ledger[0]["provenance"] == "synthesized"
+    assert port.reads_after_pick > 1, "the read was never retried"
+
+
+def test_a_trigger_that_keeps_its_label_alongside_the_value_is_verified():
+    """Some libraries render "Claim Type Death Claim" rather than replacing the
+    label. Equality rejects that; anchored CONTAINMENT accepts it — and stays
+    safe because it is anchored to the same control, not to the whole page."""
+    port = RadixSelectPort(options=("Male", "Female"), combined_label=True)
+    result = _fill(port)
+    assert result.filled == 1
+    assert result.field_ledger[0]["choice"] == "male"
+
+
+def test_containment_does_not_match_an_unrelated_control_on_the_page():
+    """THE RISK CONTAINMENT INTRODUCES, closed. Another control merely containing
+    the picked word must not be read as this widget's committed value — only the
+    same trigger (anchored by testid/css, or by still wearing its own label)
+    counts."""
+    from app.forms import _reads_back_as
+
+    control = {"name": "Gender", "testid": "", "css_hint": ""}
+    others = [
+        {"name": "Male patients report", "value_committed": ""},   # prose
+        {"name": "Gender", "value_committed": ""},                  # unchanged
+    ]
+    assert _reads_back_as(others, control, "Male") is False
+
+
+def test_a_popup_that_never_closes_is_still_a_failure():
+    """The settle budget must not become a way to wait until an unverifiable
+    result is accepted. A widget that stays open past the budget failed."""
+    port = RadixSelectPort(options=("Male",), settle_reads=99)
+    result = _fill(port)
+    assert result.filled == 0
+    assert result.field_ledger[0]["provenance"] == "intent_unmet"
 
 
 # ── honesty: an unverifiable fill is not a fill ────────────────────────────

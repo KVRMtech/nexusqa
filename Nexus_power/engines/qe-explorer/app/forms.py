@@ -29,6 +29,7 @@ request — the guard aborts every mutation outside AUTH/SUBMIT (§3.2 doctrine)
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import logging
 import os
@@ -788,17 +789,34 @@ def _is_open_choice(control: Mapping[str, Any]) -> bool:
     return bool(tag) and tag != "select"
 
 
+#: Settle budget for a portal widget's close+re-render. A Radix/shadcn listbox
+#: ANIMATES closed (~150ms) and React re-renders asynchronously, so a read taken
+#: the instant after the click still sees the open popup and reads back as a
+#: failure. Live: six selections were correctly opened, read and picked — "Claim
+#: Type" → "Death Claim" — and every one was discarded as unverified because the
+#: verification ran before the DOM had caught up. Bounded and cheap: the first
+#: read usually succeeds, and only a genuinely slow widget pays.
+_OPEN_CHOICE_SETTLE_TRIES = 4
+_OPEN_CHOICE_SETTLE_S = 0.2
+
+
 def _reads_back_as(
-    controls: Sequence[Mapping[str, Any]], label: str,
+    controls: Sequence[Mapping[str, Any]], control: Mapping[str, Any], label: str,
 ) -> bool:
     """Did the widget actually COMMIT ``label``? Verified from a fresh read.
 
     Two conditions, both required and both fail-closed:
       * the popup CLOSED (no ``role=option`` remains) — a still-open listbox
         means the click landed on nothing;
-      * some non-option control now DISPLAYS the chosen label, as its committed
-        value or its accessible name (a Radix trigger's name becomes the
-        selection).
+      * the widget now DISPLAYS the chosen label.
+
+    The display check is ANCHORED to the same control where the DOM lets us
+    (``testid`` / ``css_hint`` survive the re-render), and accepts CONTAINMENT of
+    the label in its accessible name: a Radix trigger's name becomes the
+    selection, but component libraries variously render it as "Death Claim" or
+    "Claim Type Death Claim", and an equality test rejects the second. Anchored
+    containment is safe precisely because it is anchored — an unanchored
+    containment test would match the label appearing anywhere on the page.
 
     Without this a "fill" would be a click we hoped worked, and the field ledger
     would claim a choice the form never took — the form then fails validation and
@@ -810,10 +828,27 @@ def _reads_back_as(
     for c in controls:
         if str(c.get("role") or "").strip().lower() == "option":
             return False                      # still open ⇒ nothing committed
+
+    testid = str(control.get("testid") or "").strip()
+    css = str(control.get("css_hint") or "").strip()
+    original = normalize_option(control.get("name") or "")
     for c in controls:
-        if normalize_option(c.get("value_committed") or "") == want:
+        committed = normalize_option(c.get("value_committed") or "")
+        name = normalize_option(c.get("name") or "")
+        anchored = bool(
+            (testid and str(c.get("testid") or "").strip() == testid)
+            or (css and str(c.get("css_hint") or "").strip() == css)
+        )
+        if anchored and (committed == want or want in name):
             return True
-        if normalize_option(c.get("name") or "") == want:
+        # The SAME trigger, still wearing its own label with the selection
+        # appended ("Gender" → "Gender Male"). Anchored by that original label,
+        # so it cannot match some other control that merely contains the word —
+        # which an unanchored containment test would.
+        if (original and name != original and name.startswith(original)
+                and want in name):
+            return True
+        if committed == want or name == want:
             return True
     return False
 
@@ -888,15 +923,38 @@ async def _fill_open_choice(
 
     try:
         observation = await port.click(dict(chosen))
-        after = await collect()
     except Exception:
         await _dismiss()
         return None, ""
 
-    if not _reads_back_as(after or (), label):
+    # LET THE WIDGET SETTLE. The popup animates closed and React re-renders
+    # asynchronously, so the first read can still show the open listbox — which
+    # reads back as failure for a selection that in fact succeeded.
+    verified = False
+    after: Sequence[Mapping[str, Any]] = ()
+    for attempt in range(_OPEN_CHOICE_SETTLE_TRIES):
+        try:
+            after = await collect() or ()
+        except Exception:
+            break
+        if _reads_back_as(after, control, label):
+            verified = True
+            break
+        if attempt + 1 < _OPEN_CHOICE_SETTLE_TRIES:
+            await asyncio.sleep(_OPEN_CHOICE_SETTLE_S)
+
+    if not verified:
         await _dismiss()
-        logger.info("qec.forms.open_choice_unverified control=%r picked=%r",
-                    str(control.get("name") or "")[:40], label[:40])
+        # Say WHICH half failed — a still-open popup and a committed-but-unread
+        # value need opposite fixes, and collapsing them into "unverified" cost a
+        # whole crawl to tell apart.
+        still_open = any(
+            str(c.get("role") or "").strip().lower() == "option" for c in after)
+        logger.info(
+            "qec.forms.open_choice_unverified control=%r picked=%r "
+            "still_open=%s tries=%d",
+            str(control.get("name") or "")[:40], label[:40], still_open,
+            _OPEN_CHOICE_SETTLE_TRIES)
         return None, ""
 
     return emit.build_action_record(
