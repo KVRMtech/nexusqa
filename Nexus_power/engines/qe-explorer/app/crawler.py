@@ -1032,6 +1032,10 @@ class Crawler:
         # Per-button verdicts from the most recent tier-1 miss, carried so the
         # DECLINE line can state why it declined. Kept in memory only.
         self._last_advance_verdicts: list[str] = []
+        #: The question the last unblock experiment answered ("" when it did not
+        #: run or did not succeed) — read by the walk to correct the step's own
+        #: fill counts and decision points.
+        self._last_unblock_field: str = ""
         # Phase-B attested submit (crawl-once/run-many depth): default-OFF. Fires ONLY
         # when the operator supplied a per-flow submit-approval list AND a disposable-env
         # attestation is present — a crawl without both stops at the Phase-A boundary,
@@ -3400,6 +3404,7 @@ class Crawler:
         actuator — the same class of act as typing into a text field, which this
         crawler already does everywhere. Value-free: labels are product UI text.
         """
+        self._last_unblock_field = ""
         declined = {_norm_label(n)
                     for n in getattr(fill, "unfilled_fields", ()) or ()}
         if not declined:
@@ -3473,12 +3478,23 @@ class Crawler:
             d for d in self._fields_seed_detail
             if not (_norm_label(d.get("label")) == _norm_label(pick_name)
                     and d.get("url") == url)]
-        for row in self._field_ledger:
-            if _norm_label(row.get("label") or row.get("name")) == _norm_label(pick_name):
+        # BOTH ledgers: the crawl-wide one the residue is built from, and the
+        # fill's own, which the CURRENT step's decision points are derived from.
+        # Updating only the first leaves the step reporting `needs_input` for a
+        # question the application has just confirmed we answered.
+        for ledger in (self._field_ledger, getattr(fill, "field_ledger", None) or ()):
+            for row in ledger:
+                if _norm_label(row.get("label") or row.get("name")) != _norm_label(pick_name):
+                    continue
                 row["provenance"] = PROV_UNBLOCK
                 row["filled"] = True
                 if "options" in row:
                     row["choice"] = "checked"
+        unfilled = getattr(fill, "unfilled_fields", None)
+        if isinstance(unfilled, list):
+            unfilled[:] = [n for n in unfilled
+                           if _norm_label(n) != _norm_label(pick_name)]
+        self._last_unblock_field = pick_name
         logger.warning(
             "qec.wizard.unblocked url=%s field=%r advance=%r — the app enabled "
             "its own forward control once the agent answered; BUSINESS RULE "
@@ -3880,6 +3896,23 @@ class Crawler:
             cur_unfilled = len(refill.unfilled_fields)
             cur_intent_unmet = refill.intent_unmet
             cur_dps = _decision_points(refill.field_ledger)
+            # The walk re-navigates and re-fills its ENTRY step from scratch, so
+            # an unblock the outer form path already won has been undone by the
+            # time we get here. Without this the walk cannot even start on a step
+            # whose forward control the app gates on an undeclared question.
+            entry_blocked = self._note_advance_blocked(refreshed, reobs.url or "", refill)
+            if entry_blocked:
+                refreshed = list(await self._answer_to_unblock(
+                    refreshed, entry_blocked, reobs.url or "", refill))
+                if self._last_unblock_field:
+                    cur_filled += 1
+                    cur_unfilled = max(0, cur_unfilled - 1)
+                    cur_dps = _decision_points(refill.field_ledger)
+                    # The page genuinely changed, so the snapshot taken before
+                    # the answer is now stale — and it is the one the loop reads
+                    # its first advance from. Only on success: an unchanged page
+                    # keeps the caller's snapshot exactly as before.
+                    controls = refreshed
 
         cur_url, cur_title, cur_controls, cur_fp = url, title, controls, fingerprint
         # THIS WALK's own path. Loop protection has to mean "I have already been
@@ -4154,6 +4187,24 @@ class Crawler:
                     after_fill = await self._observe()
                     new_controls = build_inventory(
                         after_fill.raw_controls, self._refuse_pack, url=after_fill.url)
+                # THE APP'S OWN VERDICT, AT EVERY STEP OF THE WALK. Step 4 of a
+                # five-step application is only ever reached from inside this
+                # loop, so the hook on the outer form path could never see the
+                # block that actually ends the journey — the outer path sees
+                # step 1 and nothing after it. This is where a wizard dies, so
+                # this is where the question has to be asked.
+                blocked = self._note_advance_blocked(
+                    new_controls, obs.url or "", filled)
+                if blocked:
+                    new_controls = list(await self._answer_to_unblock(
+                        new_controls, blocked, obs.url or "", filled))
+                    if self._last_unblock_field:
+                        # The step's own record must reflect the answer, or it
+                        # reports a question as unanswered that the application
+                        # confirmed we answered.
+                        cur_filled += 1
+                        cur_unfilled = max(0, cur_unfilled - 1)
+                        cur_dps = _decision_points(filled.field_ledger)
             cur_url, cur_title, cur_controls, cur_fp = obs.url, obs.title, new_controls, new_fp
             cur_actions = step_actions
             cur_shot, cur_first = (step_png, step_ts), step_first

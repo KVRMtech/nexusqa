@@ -175,6 +175,42 @@ async def test_an_answered_question_stops_being_asked_of_a_human(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_the_steps_own_ledger_is_corrected_not_only_the_crawls(monkeypatch):
+    """The crawl-wide ledger feeds the residue; the FILL's own ledger feeds this
+    step's decision points. Updating only the first leaves the step reporting
+    `needs_input` for a question the application just confirmed we answered."""
+    monkeypatch.setattr("app.crawler.build_inventory",
+                        lambda raw, pack, url="": list(raw))
+    me = _crawler(_Port(), unblocks=True)
+    fill = SimpleNamespace(
+        unfilled_fields=list(CONDITIONS),
+        field_ledger=[{"label": n, "provenance": "needs_input", "filled": False,
+                       "options": ["checked", "unchecked"]} for n in CONDITIONS])
+
+    await Crawler._answer_to_unblock(me, _controls(), "Continue",
+                                     "https://app/x", fill)
+
+    row = [r for r in fill.field_ledger if r["label"] == "None"][0]
+    assert row["provenance"] == PROV_UNBLOCK and row["filled"] is True
+    assert "None" not in fill.unfilled_fields
+    assert len(fill.unfilled_fields) == len(CONDITIONS) - 1
+    assert me._last_unblock_field == "None"
+
+
+def test_the_walk_asks_at_every_step_not_only_the_first():
+    """Step 4 of a five-step application is only ever reached from INSIDE the
+    walk loop. A hook on the outer form path alone sees step 1 and nothing after
+    it — so it would never see the block that actually ends the journey, which is
+    the entire failure this capability exists to fix."""
+    import inspect
+    src = inspect.getsource(Crawler._walk_wizard)
+    assert src.count("_answer_to_unblock") >= 2, (
+        "the walk must ask on its entry step AND on every step it reaches")
+    assert "_last_unblock_field" in src, (
+        "an answered question must correct the step's own counts")
+
+
+@pytest.mark.asyncio
 async def test_a_failed_experiment_is_undone(monkeypatch):
     """If answering did not enable the control, the block was about something
     else. Leaving the box checked would put a change into the recorded snapshot
