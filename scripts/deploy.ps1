@@ -148,9 +148,19 @@ if ($Gate) {
     & gcloud compute ssh "$VM_USER@$VM_NAME" --zone="$VM_ZONE" --project="$VM_PROJECT" --command="$gateCmd"
     $gateExit = $LASTEXITCODE
     $ErrorActionPreference = "Stop"
-    if ($gateExit -ne 0) {
+    # Exit 3 is the gate's VERDICT that the funnel regressed. Any other non-zero
+    # code means it never reached a verdict - a dropped SSH connection, a crawl
+    # that could not be dispatched, a run that timed out. Announcing those as a
+    # regression is a false alarm, and a gate that cries wolf gets switched off.
+    if ($gateExit -eq 3) {
         Write-Host "`nGOLDEN CRAWL GATE FAILED - the funnel regressed on this deploy." -ForegroundColor Red
         Write-Host "Roll back or fix before shipping anything else." -ForegroundColor Red
+        exit 1
+    }
+    if ($gateExit -ne 0) {
+        Write-Host "`nGOLDEN CRAWL GATE DID NOT COMPLETE (exit $gateExit)." -ForegroundColor Yellow
+        Write-Host "This is NOT a regression verdict - the crawl or the connection failed." -ForegroundColor Yellow
+        Write-Host "The deploy itself succeeded. Re-run the gate before trusting this build." -ForegroundColor Yellow
         exit 1
     }
     Write-Host "`nGolden crawl gate PASSED - no funnel regression." -ForegroundColor Green

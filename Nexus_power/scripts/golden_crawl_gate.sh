@@ -256,7 +256,13 @@ fi
 say ""
 if [ "$fail" -eq 0 ]; then
   say "GATE PASSED — no funnel regression (exploration $EXPL)"
-else
-  say "GATE FAILED — the funnel went backwards. Roll back or fix before shipping."
+  exit 0
 fi
-exit $fail
+say "GATE FAILED — the funnel went backwards. Roll back or fix before shipping."
+# A DISTINCT CODE FOR "THE FUNNEL REGRESSED", so a caller can tell a VERDICT
+# from a FAILURE TO REACH ONE. Sharing exit 1 with "could not dispatch" and
+# "crawl never finished" meant a dropped SSH connection was announced as a
+# funnel regression — observed live, on a deploy whose funnel had in fact just
+# reached its best result ever. A gate that cries wolf gets switched off, and
+# then it is not a gate.
+exit 3
