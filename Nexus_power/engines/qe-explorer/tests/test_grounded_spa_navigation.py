@@ -174,7 +174,10 @@ def test_the_soft_navigation_is_labelled_as_such(tmp_path):
     port = SpaNavBrowser(soft=True)
     action = _ground(_crawler(port, tmp_path), port)[0]
     assert action.after.get("navigated") is True
-    assert action.after.get("navigation_kind") == "pushstate"
+    assert action.after.get("navigation_kind") is None, (
+        "the label must NEVER ride inside after — AfterBundle forbids extras and "
+        "the writer refused a whole live crawl over exactly this key")
+    assert action.qec.get("navigation_kind") == "pushstate"
 
 
 def test_a_hard_navigation_is_unchanged(tmp_path):
@@ -183,7 +186,7 @@ def test_a_hard_navigation_is_unchanged(tmp_path):
     port = SpaNavBrowser(soft=False)
     action = _ground(_crawler(port, tmp_path), port)[0]
     assert action.to_state and "/claims/reported" in str(action.to_state)
-    assert action.after.get("navigation_kind") != "pushstate"
+    assert action.qec.get("navigation_kind") != "pushstate"
 
 
 # ── the honesty rule: never invent an edge ──────────────────────────────────

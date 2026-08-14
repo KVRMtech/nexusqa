@@ -1597,8 +1597,11 @@ class Crawler:
                     timestamp_ms=self._clock.now_ms())
                 after = dict(action.after or {})
                 if not after.get("navigated"):
-                    after.update(navigated=True, outcome="navigation",
-                                 navigation_kind="pushstate")
+                    after.update(navigated=True, outcome="navigation")
+                    # Strict contract: the label goes in qec, never in after
+                    # (AfterBundle forbids extras — refused a whole crawl live).
+                    action.qec = dict(action.qec or {})
+                    action.qec["navigation_kind"] = "pushstate"
                 if not str(after.get("detail") or "").strip():
                     after["detail"] = reached.url[:500]
                 action.after = after
@@ -2523,9 +2526,16 @@ class Crawler:
                     # and a soft-navigated one is never silently indistinguishable
                     # from a hard browser navigation.
                     after = dict(action.after or {})
-                    after.update(navigated=True, outcome="navigation",
-                                 navigation_kind="pushstate")
+                    after.update(navigated=True, outcome="navigation")
                     action.after = after
+                    # The HOW-detected label rides in ``qec`` — the open
+                    # diagnostics dict — never inside ``after``: AfterBundle is a
+                    # strict mirrored contract (extra='forbid'), and a foreign key
+                    # there makes the writer refuse the whole crawl. Proven live:
+                    # one soft-classified click, "Extra inputs are not permitted",
+                    # 35 minutes of evidence refused.
+                    action.qec = dict(action.qec or {})
+                    action.qec["navigation_kind"] = "pushstate"
             if arrived:
                 action.to_state = _url_key(arrived)
                 self._grounded_navs.add(key)

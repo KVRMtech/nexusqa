@@ -153,10 +153,14 @@ def test_the_action_carries_a_navigation_outcome(tmp_path):
     crawler = _crawler(port, tmp_path)
     _reach(crawler, port)
 
-    after = crawler._pending_reach_actions[0].after or {}
+    action = crawler._pending_reach_actions[0]
+    after = action.after or {}
     assert after.get("navigated") is True
     assert after.get("outcome") == "navigation"
-    assert after.get("navigation_kind") == "pushstate"
+    assert set(after) <= {"outcome", "detail", "navigated"}, (
+        "after is a STRICT mirrored contract (AfterBundle, extra=forbid); a "
+        "foreign key here makes the writer refuse the whole crawl — proven live")
+    assert action.qec.get("navigation_kind") == "pushstate"
 
 
 def test_the_click_that_was_actually_performed_is_the_one_recorded(tmp_path):
