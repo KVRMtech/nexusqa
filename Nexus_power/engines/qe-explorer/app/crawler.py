@@ -3463,6 +3463,14 @@ class Crawler:
 
         # THE APP CONFIRMED IT. Record the rule, correct the residue, and re-provenance
         # the field — it is answered, and answered by the strongest evidence there is.
+        # THE RESIDUE'S CLAIM IS NOW DISPROVEN FOR ALL OF THEM. That list means
+        # "the fields whose absence STOPPED THE FUNNEL", and the funnel is no
+        # longer stopped — the app enabled its forward control with the other
+        # controls exactly as they were. Dropping only the answered one would
+        # leave seven fields on an operator's to-do list under a heading the
+        # application itself has just contradicted. The record keeps its
+        # missing_fields as evidence of the page as it stood.
+        released: set[str] = {_norm_label(pick_name)}
         for b in self._advance_blocked:
             if b.get("url") == url[:300] and b.get("label") == blocked_label[:120]:
                 b["resolved_by_agent"] = pick_name[:120]
@@ -3470,13 +3478,13 @@ class Crawler:
                     "%s requires an answer to %r before it is enabled "
                     "(proven: the app enabled it when the agent answered)"
                     % (blocked_label[:60], pick_name[:60]))
-                b["missing_fields"] = [m for m in (b.get("missing_fields") or ())
-                                       if _norm_label(m) != _norm_label(pick_name)]
+                released.update(_norm_label(m)
+                                for m in (b.get("missing_fields") or ()))
         self._fields_unfilled = [n for n in self._fields_unfilled
-                                 if _norm_label(n) != _norm_label(pick_name)]
+                                 if _norm_label(n) not in released]
         self._fields_seed_detail = [
             d for d in self._fields_seed_detail
-            if not (_norm_label(d.get("label")) == _norm_label(pick_name)
+            if not (_norm_label(d.get("label")) in released
                     and d.get("url") == url)]
         # BOTH ledgers: the crawl-wide one the residue is built from, and the
         # fill's own, which the CURRENT step's decision points are derived from.

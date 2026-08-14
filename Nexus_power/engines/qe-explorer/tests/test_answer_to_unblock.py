@@ -164,14 +164,19 @@ async def test_an_answered_question_stops_being_asked_of_a_human(monkeypatch):
     await Crawler._answer_to_unblock(me, _controls(), "Continue",
                                      "https://app/x", fill)
 
-    assert "None" not in me._fields_unfilled
-    assert not [d for d in me._fields_seed_detail if d["label"] == "None"]
-    assert "None" not in me._advance_blocked[0]["missing_fields"]
     answered = [r for r in me._field_ledger if r["label"] == "None"][0]
     assert answered["provenance"] == PROV_UNBLOCK and answered["filled"] is True
     assert answered["choice"] == "checked"
-    # The others were NOT answered and must still be asked for.
-    assert "Asthma" in me._fields_unfilled
+    # THE WHOLE BLOCK IS RELEASED, not just the answered member. That list means
+    # "the fields whose absence STOPPED THE FUNNEL", and the funnel is no longer
+    # stopped — the app enabled its forward control with the other controls
+    # exactly as they were. Dropping only the answered one would leave five
+    # fields on an operator's to-do list under a heading the application itself
+    # has just contradicted.
+    assert me._fields_unfilled == []
+    assert me._fields_seed_detail == []
+    # The record still carries them, as evidence of the page as it stood.
+    assert me._advance_blocked[0]["missing_fields"] == CONDITIONS
 
 
 @pytest.mark.asyncio
