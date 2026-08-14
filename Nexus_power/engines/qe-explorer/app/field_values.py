@@ -94,7 +94,24 @@ def _attr(control: Mapping[str, Any], *keys: str) -> str:
 
 
 def _options(control: Mapping[str, Any]) -> list[str]:
+    """The answers a control offers — from ``options`` OR ``group_options``.
+
+    A RADIO GROUP KEEPS ITS ENUMERATION SOMEWHERE ELSE. GROUP_ASSEMBLE writes the
+    question's answers to ``group_options`` and deliberately NOT to ``options``,
+    so that a radio's field signature does not shift when a sibling appears. This
+    function read only ``options``, so a grouped radio looked like a control with
+    no answers at all and agent mode returned None for it — the one mode whose
+    entire purpose is to answer a semantic choice could never answer the most
+    common semantic choice there is.
+
+    Fleet-wide, not app-specific: every native radio group on every application
+    was unanswerable. Live consequence on a five-step application wizard: the
+    Coverage step filled 3 of 5 fields, the app's own validation kept Continue
+    disabled, and the walk stopped two steps short of the end.
+    """
     raw = control.get("options")
+    if not isinstance(raw, (list, tuple)) or not raw:
+        raw = control.get("group_options")
     if not isinstance(raw, (list, tuple)):
         return []
     return [str(o).strip() for o in enumerate_real(raw)]

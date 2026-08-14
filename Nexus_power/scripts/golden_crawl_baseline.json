@@ -1,10 +1,20 @@
 {
-  "auto_filled": 24,
-  "deepest_flow": 1,
-  "flows": 8,
+  "_rebaselined": {
+    "exploration": "9bb06cb1-e861-49a2-ad65-9b712efd9784",
+    "lowered": {
+      "flows": [8, 7],
+      "pages": [24, 20],
+      "submitted": [11, 9],
+      "tests": [12, 9]
+    },
+    "reason": "The previous floors were seeded from a BROKEN funnel. Before the danger-scope fix the crawler could not advance the wizard, so it recorded each step as an unrelated one-step flow and re-submitted the same form repeatedly - 11 submits for a form that is submitted once. Walking the funnel properly consolidates those fragments into one 3-deep journey, which necessarily lowers the page, flow, submit and test counts while strictly improving the result. Verified before lowering: seq 1 captured the Applicant step (Gender, names, DOB, SSN, email, phone) and seq 2 captured Address & Employment (street, city, state, ZIP, occupation, employer, income) - seven fields that had NEVER been captured before. deepest_flow 1->3 and wizard_advances 0->2 are the same change seen from the other side. Left as floors so a future regression below the consolidated numbers still fails."
+  },
+  "auto_filled": 29,
+  "deepest_flow": 3,
+  "flows": 7,
   "forms": 7,
-  "pages": 24,
-  "submitted": 11,
-  "tests": 12,
-  "wizard_advances": 0
+  "pages": 20,
+  "submitted": 9,
+  "tests": 9,
+  "wizard_advances": 2
 }

@@ -412,6 +412,10 @@ PROV_RECALLED = "recalled"        # remembered from a previous crawl of THIS cli
 PROV_SYNTHESIZED = "synthesized"  # generated from the crawl's fictional identity
 PROV_NEEDS_INPUT = "needs_input"  # nothing honest could be produced — ask the client
 PROV_INTENT_UNMET = "intent_unmet"  # R0: fill attempted but intent verification failed
+#: A radio-group member that is NOT the chosen answer. Not a gap and not a
+#: failure — the question WAS answered, by its sibling — so it must never reach
+#: the residue the client is asked to supply.
+PROV_GROUP_SIBLING = "group_sibling"
 PROV_PLANNED = "planned"          # a branch-walk plan forced this CHOICE (Journey
                                   # Graph C4) — evidence says exactly why the walk
                                   # took the path it took
@@ -551,6 +555,22 @@ def resolve_field(control: Mapping[str, Any], kind: str, name: str,
         # semantic vocabulary does not cover. Still synthesized, still declared.
         generated = _synthesize_default(control, kind, name)
     if generated is not None:
+        # ONE QUESTION, ONE ANSWER. Every member of a radio group resolves to the
+        # SAME chosen option, so filling each in turn checks them one after
+        # another and the browser unchecks the previous — the LAST member wins,
+        # whichever option was actually chosen. The form ends up validly
+        # answered, and the ledger records the option we picked rather than the
+        # one now selected: a recorded choice that contradicts the DOM, which is
+        # the failure this product exists to prevent.
+        #
+        # Only the member that IS the answer is filled; its siblings are left
+        # untouched (the browser owns exclusivity) and marked as belonging to an
+        # answered group, so they never inflate the residue the client is asked
+        # for. Mirrors the branch-walk override path, which already did this.
+        group_id = str(control.get("group_id") or "")
+        if kind == "radio" and group_id and _norm(name) != _norm(str(generated)):
+            entry.update(provenance=PROV_GROUP_SIBLING, filled=False)
+            return {"value": None, "entry": entry}
         entry.update(provenance=PROV_SYNTHESIZED, filled=True)
         return {"value": generated, "entry": entry}
 
@@ -649,7 +669,13 @@ async def fill_form_phase_a(
                                  choice_overrides=choice_overrides)
         entry, value = decision["entry"], decision["value"]
         if value is None:
-            result.unfilled_fields.append(name)
+            # A radio-group SIBLING is not a gap: its question was answered by
+            # the member that IS the answer, and the browser owns exclusivity.
+            # Counting it as unfilled would put a value we already chose into the
+            # residue the client is asked to supply — asking someone for an
+            # answer we have.
+            if entry.get("provenance") != PROV_GROUP_SIBLING:
+                result.unfilled_fields.append(name)
             result.field_ledger.append(entry)
             continue
 

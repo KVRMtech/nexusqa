@@ -39,10 +39,29 @@ set -u
 
 APP_ID="${1:-}"
 UPDATE_BASELINE=0
-[ "${2:-}" = "--update-baseline" ] && UPDATE_BASELINE=1
+REBASELINE_REASON=""
+case "${2:-}" in
+  --update-baseline) UPDATE_BASELINE=1 ;;
+  # THE THIRD STATE. A metric can legitimately FALL when the funnel gets better:
+  # consolidating duplicated one-step fragments into one real journey lowers the
+  # page, flow and submit counts while strictly improving the result. With only
+  # "fail" and "silently raise the floor" available, the operator's options were
+  # to ignore a red gate or to rubber-stamp it — and the second converts a
+  # regression detector into a formality on its first disagreement.
+  #
+  # Lowering a floor therefore requires a WRITTEN REASON, recorded in the
+  # baseline next to the value it lowered. A floor can still only move down when
+  # a human says why, and the why is reviewable in git forever after.
+  --rebaseline)
+    REBASELINE_REASON="${3:-}"
+    if [ -z "$REBASELINE_REASON" ]; then
+      echo "--rebaseline requires a reason: $0 <app_id> --rebaseline \"why\"" >&2
+      exit 2
+    fi ;;
+esac
 
 if [ -z "$APP_ID" ]; then
-  echo "usage: $0 <app_id> [--update-baseline]" >&2
+  echo "usage: $0 <app_id> [--update-baseline | --rebaseline \"reason\"]" >&2
   exit 2
 fi
 
@@ -192,7 +211,9 @@ check deepest_flow    "$DEEPEST"
 check wizard_advances "$ADVANCES"
 check tests           "$GENERATED"
 
-# ── 6. Update the floor ────────────────────────────────────────────────────
+# ── 6. Move the floor ──────────────────────────────────────────────────────
+# --update-baseline RAISES only, and only on a clean run: today's proven reality
+# becomes tomorrow's floor. --rebaseline may also LOWER, and records why.
 if [ "$UPDATE_BASELINE" -eq 1 ] && [ "$fail" -eq 0 ]; then
   python3 -c "
 import json
@@ -205,7 +226,30 @@ for k, v in cur.items():
     b[k] = max(int(b.get(k, 0)), int(v))
 json.dump(b, open('$BASELINE','w'), indent=2, sort_keys=True)
 open('$BASELINE','a').write('\n')
-print('baseline updated — COMMIT scripts/golden_crawl_baseline.json')
+print('baseline RAISED — commit scripts/golden_crawl_baseline.json')
+"
+elif [ -n "$REBASELINE_REASON" ]; then
+  python3 -c "
+import json, sys
+try: b=json.load(open('$BASELINE'))
+except Exception: b={}
+cur = dict(pages=$VISITS, forms=$FORMS, auto_filled=$AUTOFILL,
+           submitted=$SUBMITTED, flows=$FLOWS, deepest_flow=$DEEPEST,
+           wizard_advances=$ADVANCES, tests=$GENERATED)
+lowered = {k: [int(b.get(k, 0)), int(v)] for k, v in cur.items()
+           if int(v) < int(b.get(k, 0))}
+b.update({k: int(v) for k, v in cur.items()})
+# The justification lives WITH the numbers it justifies, so a future reader
+# cannot see a lowered floor without also seeing why it was lowered.
+b['_rebaselined'] = {
+    'reason': '''$REBASELINE_REASON'''[:500],
+    'exploration': '$EXPL',
+    'lowered': lowered,
+}
+json.dump(b, open('$BASELINE','w'), indent=2, sort_keys=True)
+open('$BASELINE','a').write('\n')
+print('baseline RE-BASELINED (lowered: %s)' % (sorted(lowered) or 'none'))
+print('reason recorded — commit scripts/golden_crawl_baseline.json')
 "
 fi
 
