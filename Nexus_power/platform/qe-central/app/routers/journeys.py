@@ -39,6 +39,7 @@ from ..db.journey_run_models import JourneyCaseRow, JourneyRunRow
 from ..db.models import ClientAppRow, QEExplorationRow
 from ..services import (
     branch_planner,
+    catalog_scenarios,
     catalog_store,
     journey_baseline,
     journey_case_linker,
@@ -815,6 +816,28 @@ async def get_app_master_catalog(
     tenant_id = user["tenant_id"]
     master = await catalog_store.build_app_master_catalog(tenant_id, app_id)
     return {"app_id": app_id, **master}
+
+
+@router.get("/apps/{app_id}/catalog/scenarios")
+async def get_app_catalog_scenarios(
+    app_id: str, user: dict = Depends(require_auth),
+) -> dict:
+    """P5 — the positive / negative / boundary scenarios the catalogue JUSTIFIES.
+
+    Derived analytically from the Master Catalog above: a required question must
+    reject empty, a declared range must accept its edges and reject beyond them, a
+    choice must accept the answers it offers. No crawl, no LLM.
+
+    Every scenario carries the ``basis`` — the observed rule it came from — so an
+    assertion can be traced back to the page fact that justifies it. A question
+    that declared nothing testable yields nothing, and the summary reports that
+    shortfall (``questions_without_rules``) rather than padding the count: a
+    catalogue that produces few scenarios is telling you the application asserts
+    little about itself, which is a finding worth seeing.
+    """
+    tenant_id = user["tenant_id"]
+    master = await catalog_store.build_app_master_catalog(tenant_id, app_id)
+    return {"app_id": app_id, **catalog_scenarios.derive_catalog_scenarios(master)}
 
 
 class ProjectJourneyIn(BaseModel):
