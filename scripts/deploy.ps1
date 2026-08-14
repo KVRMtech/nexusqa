@@ -1,4 +1,4 @@
-# NexusQA one-command deploy
+﻿# NexusQA one-command deploy
 # Usage:
 #   .\scripts\deploy.ps1                        # deploy all 3 services
 #   .\scripts\deploy.ps1 qe-central             # deploy only qe-central
@@ -123,10 +123,10 @@ if ($sshExit -ne 0) {
 Write-Host "`n[3/3] Deploy complete! Services restarted: $($Services -join ', ')" -ForegroundColor Green
 Write-Host "Portal: https://136.85.106.73" -ForegroundColor Green
 
-# ── A2: prove the deploy with one real crawl ────────────────────────────────
+# -- A2: prove the deploy with one real crawl --------------------------------
 # A green test suite says the code does what its author believed; only a real
 # crawl says the funnel still works. On 2026-08-14 seven deploys shipped and
-# THREE broke something visible only in a live crawl — each found by a human
+# THREE broke something visible only in a live crawl - each found by a human
 # 35 minutes at a time. Opt-in for now (-Gate) so it can be trialled without
 # blocking anyone; make it unconditional once it has run green a few times.
 if ($Gate) {
@@ -136,14 +136,16 @@ if ($Gate) {
     }
     Write-Host "`n[4/4] Golden crawl gate (this runs a REAL crawl; ~5-40 min)..." -ForegroundColor Blue
     $ErrorActionPreference = "Continue"
-    & gcloud compute ssh "$VM_USER@$VM_NAME" --zone="$VM_ZONE" --project="$VM_PROJECT" `
-        --command="cd $VM_SRC/Nexus_power && bash scripts/golden_crawl_gate.sh $GoldenAppId"
+    # No backtick continuation here: a single trailing space after one turns the
+    # whole block into a parse error, which is exactly how this shipped broken.
+    $gateCmd = "cd $VM_SRC/Nexus_power && bash scripts/golden_crawl_gate.sh $GoldenAppId"
+    & gcloud compute ssh "$VM_USER@$VM_NAME" --zone="$VM_ZONE" --project="$VM_PROJECT" --command="$gateCmd"
     $gateExit = $LASTEXITCODE
     $ErrorActionPreference = "Stop"
     if ($gateExit -ne 0) {
-        Write-Host "`nGOLDEN CRAWL GATE FAILED — the funnel regressed on this deploy." -ForegroundColor Red
+        Write-Host "`nGOLDEN CRAWL GATE FAILED - the funnel regressed on this deploy." -ForegroundColor Red
         Write-Host "Roll back or fix before shipping anything else." -ForegroundColor Red
         exit 1
     }
-    Write-Host "`nGolden crawl gate PASSED — no funnel regression." -ForegroundColor Green
+    Write-Host "`nGolden crawl gate PASSED - no funnel regression." -ForegroundColor Green
 }
