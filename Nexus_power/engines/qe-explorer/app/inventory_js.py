@@ -73,7 +73,7 @@ from __future__ import annotations
 
 #: Stamped into the crawl manifest so a manifest can be traced to the exact
 #: injected-JS generation that produced its controls.
-INVENTORY_JS_VERSION = "inv-js-v7"
+INVENTORY_JS_VERSION = "inv-js-v8"
 
 INVENTORY_JS = r"""
 (() => {
@@ -317,6 +317,24 @@ INVENTORY_JS = r"""
         return clip(el.value == null ? "" : el.value, MAX_VALUE);
       }
       if (el.isContentEditable) return clip(norm(el.textContent), MAX_VALUE);
+      // A CUSTOM CHOICE TRIGGER holds its value as rendered TEXT, not as a
+      // value property — it is a <button>, so every branch above returns "".
+      // Radix/shadcn, MUI and Headless UI all render the selection inside the
+      // trigger, and the accessible NAME is not it: shadcn labels the trigger
+      // with a <FormLabel>, so the name stays "Gender" while the content
+      // becomes "Male". Nothing captured reflected the selection at all, which
+      // (a) made a filled form read back as empty — the form_snapshot said
+      // Gender:"" even when a human had chosen one — and (b) made an automated
+      // fill impossible to verify, so every correct selection was discarded.
+      var role = lc(attr(el, "role"));
+      var pop = lc(attr(el, "aria-haspopup"));
+      if (role === "combobox" || pop === "listbox" || pop === "menu") {
+        // A PLACEHOLDER IS NOT A VALUE. Radix marks the un-selected trigger
+        // with data-placeholder; reading its text would record "Select" as the
+        // committed answer, which is worse than recording nothing.
+        if (el.hasAttribute("data-placeholder")) return "";
+        return clip(norm(el.textContent), MAX_VALUE);
+      }
       return "";
     } catch (e) { return ""; }
   }

@@ -324,10 +324,14 @@ def test_injected_js_is_a_self_invoking_expression():
     assert js.count("(") == js.count(")")
     # v7: option capture sized for COMPLETENESS (MAX_OPTIONS 60 → 300) and
     # ``options_total`` added, so a clipped enumeration is marked rather than
-    # silently shortened. The version is stamped into every manifest, so a
-    # deliberate bump here is what lets a manifest be traced to the JS that
-    # produced its controls.
-    assert INVENTORY_JS_VERSION == "inv-js-v7"
+    # silently shortened.
+    # v8: a custom choice TRIGGER reports its rendered text as value_committed
+    # (it is a <button>, so every prior branch returned "") — a filled shadcn/
+    # Radix select used to read back as empty, which both lied in the
+    # form_snapshot and made an automated fill impossible to verify.
+    # The version is stamped into every manifest, so a deliberate bump here is
+    # what lets a manifest be traced to the JS that produced its controls.
+    assert INVENTORY_JS_VERSION == "inv-js-v8"
 
 
 # ─── GROUP_ASSEMBLE — a radio group is ONE question, not N toggles ────────────

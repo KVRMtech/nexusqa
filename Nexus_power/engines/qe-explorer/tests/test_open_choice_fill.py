@@ -70,12 +70,14 @@ class RadixSelectPort:
 
     def __init__(self, *, options=("Male", "Female", "Other"),
                  commits: bool = True, opens: bool = True,
-                 settle_reads: int = 0, combined_label: bool = False) -> None:
+                 settle_reads: int = 0, combined_label: bool = False,
+                 label_wins: bool = False) -> None:
         self._options = list(options)
         self.commits = commits
         self.opens = opens
         self.settle_reads = settle_reads
         self.combined_label = combined_label
+        self.label_wins = label_wins
         self.open = False
         self.selected = ""
         self.escapes = 0
@@ -84,11 +86,21 @@ class RadixSelectPort:
     async def collect_controls(self):
         trigger = dict(GENDER)
         if self.selected:
-            shown = (f"Gender {self.selected}" if self.combined_label
-                     else self.selected)
-            trigger = {**trigger, "name": shown,
-                       "value_committed": "" if self.combined_label
-                       else self.selected}
+            if self.combined_label:
+                # Variant: the trigger appends the value to its own label.
+                trigger = {**trigger, "name": f"Gender {self.selected}",
+                           "value_committed": ""}
+            elif self.label_wins:
+                # THE LIVE SHADCN SHAPE, read from the app's own source: the
+                # trigger is a <button> labelled by <FormLabel>, so its
+                # accessible NAME stays "Gender" after selection and the chosen
+                # text is its CONTENT. inv-js v8 reports that content as
+                # value_committed; before it, nothing captured reflected the
+                # selection at all.
+                trigger = {**trigger, "value_committed": self.selected}
+            else:
+                trigger = {**trigger, "name": self.selected,
+                           "value_committed": self.selected}
         if self.selected:
             self.reads_after_pick += 1
             # The popup is still closing for the first ``settle_reads`` reads.
@@ -210,6 +222,37 @@ def test_a_trigger_that_keeps_its_label_alongside_the_value_is_verified():
     result = _fill(port)
     assert result.filled == 1
     assert result.field_ledger[0]["choice"] == "male"
+
+
+def test_the_LIVE_shadcn_shape_verifies(tmp_path=None):
+    """THE REAL WIDGET, read from the application's own source:
+
+        <FormLabel>Gender</FormLabel>
+        <SelectTrigger><SelectValue placeholder="Select" /></SelectTrigger>
+        <SelectItem value="male">Male</SelectItem>
+
+    The trigger is a <button> labelled by FormLabel, so its accessible NAME
+    stays "Gender" after a selection and the chosen text is its CONTENT — while
+    value_committed was "" because a <button> is not a value-bearing element.
+    NOTHING captured reflected the selection, which is why every correct pick
+    was discarded as unverified. inv-js v8 reports the trigger's text as its
+    committed value; this pins the whole chain against that shape.
+    """
+    port = RadixSelectPort(options=("Male", "Female"), label_wins=True)
+    result = _fill(port)
+
+    assert result.filled == 1, (
+        "the live shadcn shape still reads back as unverified")
+    assert result.field_ledger[0]["choice"] == "male"
+    assert result.actions[0].value == "Male"
+
+
+def test_a_placeholder_is_never_recorded_as_the_committed_value():
+    """Radix marks an unselected trigger with data-placeholder. Reading its text
+    would record "Select" as the answer — worse than recording nothing, because
+    the form would then look filled while the app still considers it empty."""
+    js = __import__("app.inventory_js", fromlist=["INVENTORY_JS"]).INVENTORY_JS
+    assert 'hasAttribute("data-placeholder")' in js
 
 
 def test_containment_does_not_match_an_unrelated_control_on_the_page():

@@ -130,6 +130,25 @@ def test_a_disabled_advance_with_nothing_missing_is_still_recorded(tmp_path):
     assert c._advance_blocked[0]["missing_fields"] == []
 
 
+def test_it_fires_on_a_form_the_walk_never_engages(tmp_path):
+    """THE MISS IN THE FIRST VERSION. It was gated behind the wizard walk's own
+    precondition (``fill.filled or has_unanswered_decisions``), so on the page it
+    was built for — where every field is a portal-rendered choice and the fill
+    committed NOTHING — the gate stayed shut and the one page that most needed an
+    explanation produced none. A blockage is a fact about the page whether or not
+    we then try to walk it."""
+    import inspect
+
+    from app.crawler import Crawler
+
+    src = inspect.getsource(Crawler._expand)
+    call = src.index("_note_advance_blocked")
+    gate = src.index("self._wizard_enabled and is_form")
+    assert call < gate, (
+        "the legibility record is still gated behind the walk's precondition, "
+        "so it cannot fire on a form the walk declines to engage")
+
+
 def test_the_same_block_is_recorded_once(tmp_path):
     """A wizard page is re-visited; one blockage is one finding."""
     c = _crawler(tmp_path)

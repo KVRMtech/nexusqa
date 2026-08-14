@@ -2219,14 +2219,20 @@ class Crawler:
         # is no advance trigger it returns False and this state is recorded normally.
         walked = False
         entry_pick = AdvanceDecision()
+        # LEGIBILITY RUNS ON EVERY FORM, not only on the ones the walk engages.
+        # Gated behind the walk's own precondition, this never fired on the page
+        # it was built for: the fill committed NOTHING there (every field was a
+        # portal-rendered choice), so `fill.filled` was 0, the gate stayed shut,
+        # and the one page that most needed an explanation produced none. The
+        # blockage is a fact about the page whether or not we then try to walk it.
+        if is_form and fill is not None:
+            self._note_advance_blocked(snapshot_controls, obs.url, fill)
         if self._wizard_enabled and is_form and fill is not None and (fill.filled or fill.has_unanswered_decisions):
             entry_pick = await self._pick_advance(
                 snapshot_controls, obs.url, obs.title, fingerprint)
             logger.info("qec.wizard.gate_open url=%s filled=%d pick=%r",
                         obs.url, fill.filled,
                         str((entry_pick.control or {}).get("name") or "")[:40])
-            if entry_pick.control is None and entry_pick.submit_control is None:
-                self._note_advance_blocked(snapshot_controls, obs.url, fill)
             walked = await self._walk_wizard(
                 item=item, url=obs.url, title=obs.title, controls=snapshot_controls,
                 fingerprint=fingerprint, base_actions=actions,
