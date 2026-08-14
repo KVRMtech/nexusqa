@@ -776,6 +776,37 @@ async def _dispatch_explorer(
         # portal's Crawl button stays disabled fleet-wide until it clears.
         "crawl_id": crawl_id,
     }
+    # B2 — WHAT WAS ASKED FOR vs WHAT WILL ACTUALLY RUN, recorded at dispatch.
+    # B1 refuses the worst case (an explicit e2e that cannot run at full
+    # posture), but softer downgrades remain legitimate and must still be
+    # visible: an app that never asked for e2e still resolves a posture and a
+    # data mode, and a client reading "completed" has no way to know the crawl
+    # sampled rather than walked. Absent when nothing was downgraded, so its
+    # PRESENCE is the signal — a consumer never has to interpret an empty value.
+    degraded: dict[str, Any] = {}
+    if traversal != prod_guard.TRAVERSAL_FULL:
+        degraded["traversal"] = {
+            "requested": "full" if crawl_mode == "e2e" else "(app default)",
+            "actual": traversal,
+            "cause": _posture_shortfall_cause(env_attestation, traversal),
+        }
+    if data_mode != "agent":
+        degraded["data_mode"] = {
+            "requested": declared_data_mode or "(unset)",
+            "actual": data_mode,
+            "cause": (
+                "an operator set data_mode=user, so semantic choices are left "
+                "for a human to answer"
+                if declared_data_mode == "user" else
+                "agent fill is enabled only on an attested non-production "
+                "environment"
+            ),
+        }
+    if degraded:
+        pending_stats["degraded"] = degraded
+        logger.warning(
+            "qec.explorations.degraded tenant=%s app=%s degraded=%s",
+            tenant_id, app_id, sorted(degraded.keys()))
     if walk_plan:
         # The plan is evidence: WHY this crawl exists, WHICH branches it was
         # sent to walk, and AS WHOM — read back by the completion fold

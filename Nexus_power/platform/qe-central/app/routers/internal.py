@@ -1045,13 +1045,40 @@ async def complete_crawl(crawl_id: str, request: Request) -> dict:
             tenant_id=tenant_id, artifact_id=created.artifact_id,
             answer_key=answer_key or None,
         )
+        n = int(summary.get("generated") or 0)
+        reason = str(summary.get("no_cases_reason") or "").strip()
+        # THREE DISTINCT OUTCOMES, never one blurred one. 270 crawls recorded
+        # generated: 0 with an EMPTY reason — a factory call that returned
+        # nothing and was absorbed, indistinguishable on the row from an honest
+        # "this crawl had no coherent flow to build from". They need opposite
+        # responses: one is our bug, the other is a finding about the app.
+        if n > 0:
+            outcome = "generated"
+        elif reason:
+            outcome = "no_cases"          # honest, explained
+        else:
+            outcome = "unexplained"       # zero tests and nobody said why
         generate_result = {
             "attempted": True, "ok": bool(summary.get("success")),
-            "generated": summary.get("generated"),
-            "no_cases_reason": summary.get("no_cases_reason") or "",
+            "outcome": outcome,
+            "generated": n,
+            "no_cases_reason": reason,
         }
+        if outcome == "unexplained":
+            generate_result["ok"] = False
+            generate_result["no_cases_reason"] = (
+                "the generator returned no test cases and no reason — this is a "
+                "gap in the generator, not a finding about your application"
+            )
+            logger.warning(
+                "qec.internal.generate_unexplained",
+                extra={"exploration_id": exploration_id,
+                       "artifact_id": created.artifact_id,
+                       "summary_keys": sorted(summary.keys())[:12]},
+            )
     except Exception as exc:  # never fail the callback over generation
-        generate_result = {"attempted": True, "ok": False, "error": str(exc)[:300]}
+        generate_result = {"attempted": True, "ok": False, "outcome": "error",
+                           "error": str(exc)[:300]}
         logger.warning(
             "qec.internal.autogenerate_failed",
             extra={"exploration_id": exploration_id, "artifact_id": created.artifact_id,

@@ -1023,6 +1023,11 @@ class Crawler:
         # ledger as UNHANDLED (on the roadmap), never a silent skip. {label, kind}.
         self._unhandled_controls: list[dict[str, str]] = []
         self._submit_candidates: list[str] = []    # a submit found but not clicked (Phase-A boundary)
+        # Funnels that stopped WITH a forward control present but DISABLED by the
+        # app's own validation: [{url, label, reason, missing_fields}]. Names the
+        # field whose absence stopped the walk, so a one-step journey explains
+        # itself instead of being investigated.
+        self._advance_blocked: list[dict[str, Any]] = []
         # Phase-B attested submit (crawl-once/run-many depth): default-OFF. Fires ONLY
         # when the operator supplied a per-flow submit-approval list AND a disposable-env
         # attestation is present — a crawl without both stops at the Phase-A boundary,
@@ -1216,6 +1221,9 @@ class Crawler:
             # Interactive controls the matcher has no primitive for → the ledger's UNHANDLED rows.
             "unhandled_controls": unhandled_controls,
             "submit_candidates": submits,
+            # Why a funnel stopped one step in, named. A walk that declines is
+            # honest but silent; this is the sentence that makes it actionable.
+            "advance_blocked": self._advance_blocked[:40],
             # Auth was requested but no login form could be driven → PUBLIC-only crawl.
             # Surfaced as first-class coverage so the operator is never misled.
             "auth_incomplete": self._auth_incomplete,
@@ -2217,6 +2225,8 @@ class Crawler:
             logger.info("qec.wizard.gate_open url=%s filled=%d pick=%r",
                         obs.url, fill.filled,
                         str((entry_pick.control or {}).get("name") or "")[:40])
+            if entry_pick.control is None and entry_pick.submit_control is None:
+                self._note_advance_blocked(snapshot_controls, obs.url, fill)
             walked = await self._walk_wizard(
                 item=item, url=obs.url, title=obs.title, controls=snapshot_controls,
                 fingerprint=fingerprint, base_actions=actions,
@@ -3268,6 +3278,64 @@ class Crawler:
         if n in self._submit_approvals:
             return True
         return self._submit_approve_all and not _WIZARD_ADVANCE_RE.search(n)
+
+    def _note_advance_blocked(
+        self, controls: Sequence[dict[str, Any]], url: str, fill: Any,
+    ) -> None:
+        """A funnel that stops WITH a forward control present — say why, by name.
+
+        THE COST OF NOT DOING THIS. A Radix ``Gender`` select was never filled
+        (its options are not in the DOM until it is opened), the application's own
+        validation therefore disabled ``Continue``, and the walk — correctly —
+        skipped a disabled control. Every downstream number was accurate and none
+        of them said which field was missing. It took five crawls, a manifest
+        query, and a read of the app's own source to name a field the crawl had
+        in its hand the whole time.
+
+        Recorded as a first-class finding on the coverage ledger, and the missing
+        fields are pushed into the seed residue so the operator's remediation is
+        "supply Gender" rather than "the crawl went one step deep".
+
+        Value-free: control labels are product UI text, never user data.
+        """
+        blocked_label = ""
+        for c in controls:
+            if c.get("kind") not in ("button", "link"):
+                continue
+            name = str(c.get("name") or "").strip()
+            if not name or not _WIZARD_ADVANCE_RE.search(name):
+                continue
+            if c.get("disabled"):
+                blocked_label = name
+                break
+        if not blocked_label:
+            return                     # no forward control at all — a real terminal
+
+        missing = [str(n) for n in getattr(fill, "unfilled_fields", ()) or ()][:12]
+        record = {
+            "url": url[:300],
+            "label": blocked_label[:120],
+            # The app itself disabled it, which is a STATEMENT about its own
+            # validation — not a crawler limitation and never the app's fault.
+            "reason": "advance_disabled_by_app_validation",
+            "missing_fields": missing,
+        }
+        if not any(b.get("url") == record["url"] and b.get("label") == record["label"]
+                   for b in self._advance_blocked):
+            self._advance_blocked.append(record)
+        # The residue ask must name these too — they are precisely the fields
+        # whose absence stopped the funnel, which makes them the highest-value
+        # thing anyone could supply.
+        for name in missing:
+            if not any(d.get("label") == name and d.get("url") == url
+                       for d in self._fields_seed_detail):
+                self._fields_seed_detail.append({"label": name, "url": url})
+            if name not in self._fields_unfilled:
+                self._fields_unfilled.append(name)
+        logger.warning(
+            "qec.wizard.advance_blocked url=%s label=%r missing=%s — the app "
+            "disabled its own forward control because these fields are unfilled",
+            url[:120], blocked_label[:40], missing[:6])
 
     def _note_boundary_controls(self, controls: Sequence[dict[str, Any]]) -> None:
         """Record the commit-boundary controls this state offers.
