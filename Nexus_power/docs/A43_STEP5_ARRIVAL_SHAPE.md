@@ -47,17 +47,36 @@ That is the fork A4.3's approval must attach to.
 Application`. The one control that ends the journey the product most wants to
 prove is missing from the list an attested Phase-B submit would draw from.
 
-That is the first thing to fix, and it is a fleet capability, not a Summit
-patch: a boundary control reached *inside the walk* (rather than on a page the
-outer crawl expanded) is not reaching `_note_boundary_controls`. Same shape as
-the `_note_advance_blocked` defect — a hook wired to the outer path only, blind
-to everything the walk reaches.
+**CORRECTION — the first reading of this was wrong, and the wrong version is
+kept here because it is the more tempting one.** I recorded this as "a hook
+wired to the outer path only, blind to what the walk reaches", by analogy with
+the `_note_advance_blocked` defect. Reading `_note_boundary_controls` shows
+otherwise:
+
+```python
+if not name or c.get("danger"):
+    continue          # danger controls are skipped BY DESIGN
+```
+
+`Submit Application` is not missing because it was never seen. It is **excluded
+deliberately**: "submit" matches an irreversible verb, the control is
+danger-flagged, and a danger control is never offered as a submit candidate.
+`Record FNOL` and `Calculate Premium` are on the list precisely because they are
+*not* flagged. The mechanism is working as written.
+
+An analogy to a defect fixed last week is not evidence. Program rule ③ applies
+to diagnosis as much as to fixes.
 
 ## Spec for A4.3, written against the above
 
-* Capture the walk-terminal boundary control so `Submit Application` appears as
-  a submit candidate (fleet fix; gate assertion: the golden app's terminal
-  control is a submit candidate).
+This changes what A4.3 is. It is **not** a capture fix. The terminal control is
+seen and correctly refused; what is missing is the route from "refused
+irreversible verb" to "approved, attested, crossed exactly once".
+
+* Surface the walk-terminal DANGER control as an *approvable* boundary — a
+  distinct list from `submit_candidates`, which must keep meaning "safe to
+  cross without approval". Merging them would turn an approval gate into a
+  list of things the crawl already does.
 * Cross it exactly once, through the attested Phase-B path, on approval.
 * Record the post-submit page as the journey's **outcome milestone** — the
   evidence is the transition and the resulting page, since step 5 commits no
