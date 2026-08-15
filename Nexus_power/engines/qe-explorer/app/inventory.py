@@ -77,6 +77,14 @@ _FORM_SIGNAL_TYPE_BY_KIND = {
     "toggle": "toggle", "date": "date", "text": "text",
 }
 
+#: HTML constraint attributes carried on a form signal — the rule the
+#: APPLICATION declared about its own field, never a value. Mirrors
+#: ``_VALIDATION_KEYS`` in qe-central ``app/services/catalog.py``, which reads
+#: exactly these keys off ``form_snapshot_signals[label]`` to build a catalogue
+#: question's ``validation``. The services share no library: change both or
+#: neither, or the catalogue silently loses the rule again.
+_VALIDATION_KEYS = ("pattern", "minlength", "maxlength", "min", "max", "step")
+
 #: Landmark ARIA role → the ``anchor.kind`` the compiler's ``_ANCHOR_ROLE``
 #: understands (compiler.py:216-225).  A landmark not in this map degrades to
 #: the text-based ``block`` scope (compiler.py:264-278), which the compiler
@@ -359,6 +367,20 @@ def form_signal_for(record: ControlRecord) -> Optional[dict[str, Any]]:
     dep = record.get("depends_on")
     if dep:
         sig["depends_on"] = str(dep)
+    # THE RULE THE APPLICATION DECLARED ABOUT ITSELF, carried to the one place
+    # that reads it. The browser extractor has always captured min/max/step, the
+    # control record has always held them, and this function — the boundary
+    # qe-central reads validation from — dropped every one of them. Live, that
+    # left `validation` NULL on all 24 catalogued questions including a Face
+    # Amount input declaring step=10000: the clearest boundary rule on the form,
+    # and no boundary scenario could be derived from it because the catalogue
+    # never learned it. A question with no declared rule justifies no negative
+    # and no boundary case, so this silence cost the scenario deriver its input
+    # on every text and number field in the fleet.
+    for key in _VALIDATION_KEYS:
+        val = _s(record.get(key)).strip()
+        if val:
+            sig[key] = val[:80]
     return sig
 
 
@@ -582,6 +604,9 @@ def build_control_record(
         "min": _s(raw.get("min")).strip(),
         "max": _s(raw.get("max")).strip(),
         "step": _s(raw.get("step")).strip(),
+        "pattern": _s(raw.get("pattern")).strip(),
+        "minlength": _s(raw.get("minlength")).strip(),
+        "maxlength": _s(raw.get("maxlength")).strip(),
         # Drag-and-drop signal → matcher names it UNHANDLED (blind spot, ledgered).
         "draggable": _as_bool(raw.get("draggable")),
         "roledescription": _s(raw.get("roledescription")).strip(),

@@ -151,6 +151,11 @@ class FormFillResult:
     unfilled_fields: list[str] = field(default_factory=list)
     #: R0 intent contracts — fills whose intent verification returned False.
     intent_unmet: int = 0
+    #: Portal-rendered choice widgets that were opened, picked, and then would
+    #: NOT read their answer back. A distinct failure class from a fill that was
+    #: refused: the answer may well be in the form while the evidence says it is
+    #: not, which is the one direction this product must never report loosely.
+    open_choice_unverified: int = 0
     #: PER-FIELD LEDGER — one entry for every fillable control the crawl met, filled
     #: or not: {name, signature, semantic_type, basis, provenance, filled, sensitive}.
     #: Never a value. This is what makes the residue ask specific ("give me these
@@ -446,6 +451,12 @@ PROV_PLANNED = "planned"          # a branch-walk plan forced this CHOICE (Journ
 #: DISCOVERED BUSINESS RULE rather than a supplied or generated value.
 PROV_UNBLOCK = "answered_to_unblock"
 
+#: Returned as the ``mechanic`` when a portal-rendered choice was opened and
+#: picked but would not read its answer back. Carried on the existing
+#: (action, mechanic) channel so the caller can COUNT the class rather than
+#: only log it — a metric the gate can hold at zero, which a log never was.
+MECHANIC_OPEN_CHOICE_UNVERIFIED = "open_choice_unverified"
+
 
 def resolve_field(control: Mapping[str, Any], kind: str, name: str,
                   answer_key: "AnswerKey", identity: Identity,
@@ -719,6 +730,11 @@ async def fill_form_phase_a(
             entry.update(filled=False, provenance=PROV_INTENT_UNMET)
             result.unfilled_fields.append(name)
             result.intent_unmet += 1
+            # A CHOICE WIDGET THAT WOULD NOT CONFIRM ITS OWN ANSWER is its own
+            # failure class, and it was only ever a log line — invisible to the
+            # gate, so the fix that took it from 6 to 0 could regress unnoticed.
+            if mechanic == MECHANIC_OPEN_CHOICE_UNVERIFIED:
+                result.open_choice_unverified += 1
             result.field_ledger.append(entry)
             continue
         if mechanic:
@@ -1015,7 +1031,7 @@ async def _fill_open_choice(
             "still_open=%s tries=%d",
             str(control.get("name") or "")[:40], label[:40], still_open,
             _OPEN_CHOICE_SETTLE_TRIES)
-        return None, ""
+        return None, MECHANIC_OPEN_CHOICE_UNVERIFIED
 
     return emit.build_action_record(
         dict(control), verb="select", value=label, observation=observation,

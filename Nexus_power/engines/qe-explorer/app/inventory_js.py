@@ -604,6 +604,13 @@ INVENTORY_JS = r"""
       min: attr(el, "min") || "",
       max: attr(el, "max") || "",
       step: attr(el, "step") || "",
+      // THE REST OF THE RULE THE APPLICATION DECLARED ABOUT ITSELF. A catalogue
+      // question with no validation justifies no negative and no boundary case,
+      // so a crawl that reads only min/max/step leaves the scenario deriver
+      // nothing to work with on every text field in the fleet.
+      pattern: attr(el, "pattern") || "",
+      minlength: attr(el, "minlength") || "",
+      maxlength: attr(el, "maxlength") || "",
       // Drag-and-drop signal (HTML5 draggable / ARIA grab-drop) — no interaction
       // primitive yet, so the matcher names it UNHANDLED for the coverage ledger
       // rather than silently skipping it.

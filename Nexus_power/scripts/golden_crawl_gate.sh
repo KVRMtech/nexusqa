@@ -177,6 +177,39 @@ else
   say "OK    auth: not blocked"
 fi
 
+# A CHOICE WIDGET THAT WOULD NOT CONFIRM ITS OWN ANSWER. Fixed from 6 to 0 by
+# the open-and-pick read-back work; it was only ever a log line, so the fix
+# could regress with nothing to notice. Zero is the floor, not a best-ever.
+OPEN_UNVERIFIED=$(psql_qec "SELECT COALESCE((stats->'coverage'->>'open_choice_unverified')::int, 0) FROM qe_explorations WHERE exploration_id='$EXPL';" | tr -d ' ')
+if [ "${OPEN_UNVERIFIED:-0}" -gt 0 ]; then
+  say "FAIL  open_choice_unverified: $OPEN_UNVERIFIED — a choice was picked and would not read back"
+  fail=1
+else
+  say "OK    open_choice_unverified: 0"
+fi
+
+# HOW MUCH OF A PAGE THE CRAWL REFUSED TO TOUCH. An over-broad refuse rule does
+# not fail — it flags ordinary controls dangerous, the walk skips them, and the
+# funnel narrows for a reason no number reports. Live, a URL-scoped `underwrite`
+# rule matched against the PAGE url took 20 of 35 hub controls critical and the
+# wizard was never entered. Half a page refused is a rule bug, not a safe app.
+DANGER_PCT=$(psql_qec "
+  SELECT COALESCE(MAX((s->>'danger_controls')::numeric * 100 /
+                      NULLIF((s->>'controls_total')::numeric, 0)), 0)::int
+  FROM qe_explorations e, jsonb_array_elements(e.stats->'coverage'->'states') s
+  WHERE e.exploration_id='$EXPL' AND (s->>'controls_total')::int >= 8;" | tr -d ' ')
+if [ "${DANGER_PCT:-0}" -ge 50 ]; then
+  say "FAIL  danger ratio: ${DANGER_PCT}% of one page's controls refused (>=50%) — suspect an over-broad refuse rule"
+  fail=1
+else
+  say "OK    danger ratio: max ${DANGER_PCT:-0}% per page"
+fi
+
+# TIER-3 LIVENESS. `configured` says the mechanism is wired; an all-tier-1 crawl
+# and a crawl with a dead oracle are otherwise indistinguishable.
+ORACLE=$(psql_qec "SELECT COALESCE(stats->'coverage'->'advance_oracle'->>'state','') FROM qe_explorations WHERE exploration_id='$EXPL';" | tr -d ' ')
+say "INFO  advance_oracle: ${ORACLE:-<unrecorded>}"
+
 # ── 5. The ratchet ─────────────────────────────────────────────────────────
 best_of() { python3 -c "
 import json,sys

@@ -58,7 +58,9 @@ def test_a_state_is_recorded_under_the_fingerprint_the_graph_uses():
     assert len(out) == 1
     assert out[0]["ax_fingerprint"] == "fp1"
     assert out[0]["location"] == "https://app/apply"
-    assert set(out[0]) == set(CONTRACT_KEYS)
+    # Superset, not equality: qe-central reads these and ignores the rest, so
+    # the crawl may carry more (danger counts) without breaking the contract.
+    assert set(CONTRACT_KEYS) <= set(out[0])
 
 
 def test_the_questions_are_carried_not_the_answers():
@@ -94,13 +96,48 @@ def test_a_poorer_later_sighting_never_erodes_what_was_seen():
     assert set(Crawler._state_signals(me)[0]["form_snapshot_signals"]) == {"A", "B", "C"}
 
 
-def test_a_state_that_asked_nothing_is_not_recorded():
-    """A page with no form fields contributes no questions. Recording it would
-    put empty rows in a report whose job is to say what the app asks."""
+def test_a_state_with_neither_questions_nor_controls_is_not_recorded():
     me = _me()
     Crawler._note_state_signals(me, "fp1", "https://app/x", {})
     Crawler._note_state_signals(me, "", "https://app/x", _signals("A"))
     assert Crawler._state_signals(me) == []
+
+
+def test_a_page_that_asks_nothing_can_still_refuse_everything():
+    """The page that most needed the danger ratio — a hub whose only controls
+    are links — has no form fields at all. Gating on questions alone would skip
+    exactly the page where an over-broad refuse rule does its damage."""
+    me = _me()
+    Crawler._note_state_signals(
+        me, "hub", "https://app/underwriting", {},
+        [{"name": "New Application", "danger": ""},
+         {"name": "Bind Coverage", "danger": "critical"}])
+    out = Crawler._state_signals(me)
+    assert len(out) == 1
+    assert out[0]["controls_total"] == 2 and out[0]["danger_controls"] == 1
+
+
+def test_the_danger_ratio_is_recorded_per_state():
+    """A refuse rule that matches too widely does not fail — it quietly flags
+    ordinary controls as dangerous, the walk skips them, and the funnel narrows
+    for a reason no number reports. Live, a URL-scoped `underwrite` rule matched
+    against the PAGE url took 20 of 35 hub controls critical, the wizard was
+    never entered, and it cost an investigation. As a ratio it is an assertion."""
+    me = _me()
+    Crawler._note_state_signals(
+        me, "fp1", "https://app/x", _signals("A"),
+        [{"danger": "critical"}, {"danger": ""}, {"danger": ""}, {"danger": ""}])
+    got = Crawler._state_signals(me)[0]
+    assert got["controls_total"] == 4 and got["danger_controls"] == 1
+
+
+def test_a_crawl_with_no_control_list_still_records_its_questions():
+    """Back-compat: controls is optional, and a caller that omits it must not
+    lose the states index it was already contributing."""
+    me = _me()
+    Crawler._note_state_signals(me, "fp1", "https://app/x", _signals("A"))
+    got = Crawler._state_signals(me)[0]
+    assert got["controls_total"] == 0 and got["danger_controls"] == 0
 
 
 def test_the_index_is_bounded():
@@ -139,5 +176,49 @@ def test_every_recorded_state_is_offered_to_the_index():
     """Hooked to the single point where a page_state is emitted, so a state that
     reaches the manifest cannot fail to reach the catalogue."""
     src = inspect.getsource(Crawler._record_state)
-    assert "_note_state_signals(fingerprint, url, form_signals)" in src
+    assert "_note_state_signals(fingerprint, url, form_signals, controls)" in src
     assert src.index("_note_state_signals") < src.index("emit.PageStateRecord")
+
+
+# ─── the declared rule reaches the catalogue (Track 1.3) ─────────────────────
+
+def test_a_declared_constraint_reaches_the_form_signal():
+    """THE BOUNDARY SCENARIO'S ONLY INPUT. The browser extractor has always
+    captured min/max/step, the control record has always held them, and
+    form_signal_for — the boundary qe-central reads validation from — dropped
+    every one. Live that left `validation` NULL on all 24 catalogued questions,
+    including a Face Amount input declaring step=10000: the clearest boundary
+    rule on the form, and no boundary case could be derived because the
+    catalogue never learned it."""
+    from app.inventory import form_signal_for
+    sig = form_signal_for({
+        "kind": "text", "options": [], "required": True,
+        "min": "10000", "max": "5000000", "step": "10000",
+        "pattern": r"\d+", "minlength": "1", "maxlength": "9",
+    })
+    assert sig["min"] == "10000" and sig["max"] == "5000000"
+    assert sig["step"] == "10000" and sig["pattern"] == r"\d+"
+    assert sig["minlength"] == "1" and sig["maxlength"] == "9"
+
+
+def test_an_undeclared_constraint_is_absent_not_empty():
+    """An empty string is a claim that the app declared a blank rule. qe-central
+    treats any non-empty value as a rule, so silence must stay silent."""
+    from app.inventory import form_signal_for
+    sig = form_signal_for({"kind": "text", "options": [], "required": False,
+                           "min": "", "max": "", "step": ""})
+    assert not any(k in sig for k in ("min", "max", "step", "pattern"))
+
+
+def test_the_validation_contract_matches_the_consumer():
+    """Mirrored across services that share no library — the same pin the advance
+    vocabulary carries. A rename on either side silently loses the rule."""
+    from app.inventory import _VALIDATION_KEYS
+    assert _VALIDATION_KEYS == ("pattern", "minlength", "maxlength",
+                                "min", "max", "step")
+
+
+def test_the_extractor_captures_every_key_the_contract_names():
+    from app.inventory_js import INVENTORY_JS
+    for key in ("pattern", "minlength", "maxlength", "min", "max", "step"):
+        assert f'{key}: attr(el, "{key}")' in INVENTORY_JS, key

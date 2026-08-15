@@ -1043,6 +1043,14 @@ class Crawler:
         #: questions each state asked, which is what turns a walked journey into
         #: a catalogue. See _note_state_signals.
         self._states: dict[str, dict[str, Any]] = {}
+        #: Choice widgets opened, picked, and unable to confirm the answer back.
+        self._open_choice_unverified: int = 0
+        #: Tier-3 consultation telemetry — see the oracle call site.
+        self._oracle_consults: int = 0
+        self._oracle_errors: int = 0
+        self._oracle_unavailable: int = 0
+        self._oracle_latency_ms: int = 0
+        self._oracle_picks: int = 0
         #: The question the last unblock experiment answered ("" when it did not
         #: run or did not succeed) — read by the walk to correct the step's own
         #: fill counts and decision points.
@@ -1104,6 +1112,7 @@ class Crawler:
 
     def _note_state_signals(
         self, fingerprint: str, url: str, signals: Mapping[str, Any],
+        controls: Sequence[Mapping[str, Any]] = (),
     ) -> None:
         """Remember WHAT THIS STATE ASKED, keyed by the fingerprint the journey
         graph uses.
@@ -1135,19 +1144,37 @@ class Crawler:
         sighting would hold the emptiest view of exactly the questions whose
         enumeration is hardest to get.
         """
-        if not fingerprint or not isinstance(signals, Mapping) or not signals:
+        if not fingerprint:
+            return
+        if not isinstance(signals, Mapping):
+            signals = {}
+        # A page that asks nothing can still REFUSE everything, and the page that
+        # most needed the danger ratio — a hub whose only controls are links —
+        # has no form fields at all. Recorded when it has questions OR controls.
+        if not signals and not controls:
             return
         prev = self._states.get(fingerprint)
         if prev is not None and len(prev.get("form_snapshot_signals") or {}) >= len(signals):
             return
         if prev is None and len(self._states) >= _MAX_COVERAGE_STATES:
             return                      # bounded: coverage is a report, not a mirror
+        # HOW MUCH OF THIS PAGE THE CRAWL REFUSED TO TOUCH. A refuse rule that
+        # matches too widely does not fail — it quietly flags ordinary controls
+        # as dangerous, the walk skips them, and the funnel narrows for a reason
+        # no number reports. That is exactly what happened when a URL-scoped
+        # `underwrite` rule was matched against the PAGE's url instead of the
+        # control's destination: 20 of 35 controls on the hub went critical, the
+        # wizard was never entered, and it cost an investigation to find. As a
+        # recorded ratio it is a gate assertion instead.
+        danger = sum(1 for c in controls if isinstance(c, Mapping) and c.get("danger"))
         self._states[fingerprint] = {
             "ax_fingerprint": fingerprint,
             "location": (url or "")[:2000],
             "form_snapshot_signals": {
                 str(k)[:300]: v for k, v in list(signals.items())[:_MAX_STATE_FIELDS]
             },
+            "controls_total": len(controls),
+            "danger_controls": danger,
         }
 
     def _state_signals(self) -> list[dict[str, Any]]:
@@ -1302,6 +1329,23 @@ class Crawler:
             # every text, date and number field in every application is missing
             # from the catalogue the client is shown.
             "states": self._state_signals(),
+            # A choice widget that would not confirm its own answer. Was a log
+            # line only, so the fix that took it from 6 to 0 could regress with
+            # nothing to notice — now a number the gate holds at zero.
+            "open_choice_unverified": self._open_choice_unverified,
+            # TIER-3 LIVENESS + TELEMETRY (Track 3.1/3.3). `configured` says the
+            # mechanism was WIRED; the counts say whether it was ever asked and
+            # what it answered. Without this, "is tier-3 alive" is an inference
+            # from an absence — the question the all-tier-1 advance counts left
+            # permanently open.
+            "advance_oracle": {
+                "state": "configured" if self._advance_oracle is not None else "none",
+                "consults": self._oracle_consults,
+                "picks": self._oracle_picks,
+                "unavailable": self._oracle_unavailable,
+                "errors": self._oracle_errors,
+                "latency_ms_total": self._oracle_latency_ms,
+            },
             # Auth was requested but no login form could be driven → PUBLIC-only crawl.
             # Surfaced as first-class coverage so the operator is never misled.
             "auth_incomplete": self._auth_incomplete,
@@ -1402,6 +1446,17 @@ class Crawler:
                     "actions=%d screenshots=%d guard_blocks=%d",
                     self.crawl_id, self._stop_reason, summary.states,
                     summary.actions, summary.screenshots, summary.guard_blocks)
+        # TIER-3 LIVENESS, ONE GREPPABLE LINE (Track 3.1). An all-tier-1 crawl
+        # and a crawl whose oracle was never wired produce identical advance
+        # counts, so "is tier-3 alive" was an inference from an absence. It is
+        # now a fact printed on every crawl whether or not the oracle was used.
+        logger.warning(
+            "qec.oracle.liveness crawl_id=%s advance_oracle=%s consults=%d "
+            "picks=%d unavailable=%d errors=%d",
+            self.crawl_id,
+            "configured" if self._advance_oracle is not None else "none",
+            self._oracle_consults, self._oracle_picks,
+            self._oracle_unavailable, self._oracle_errors)
         return summary
 
     # -- AUTH phase ------------------------------------------------------------
@@ -2202,6 +2257,7 @@ class Crawler:
             actions.extend(fill.actions)
             self._tracker.note_action(len(fill.actions))
             self._fields_inferred.extend(fill.inferred_fields)
+            self._open_choice_unverified += fill.open_choice_unverified
             self._fields_unfilled.extend(fill.unfilled_fields)
             # Tag each unfilled field with the page it appeared on (grounds flow grouping).
             self._fields_seed_detail.extend(
@@ -3829,11 +3885,23 @@ class Crawler:
                 return AdvanceDecision(
                     oracle_status=ORACLE_NONE, signature=memo_sig)
 
+        # TIER-3 CONSULTATION TELEMETRY (Track 3.3). Tier 3 is the mechanism that
+        # makes "any label convention" true, and it had never been observed
+        # working: a crawl whose advances were all tier-1 is indistinguishable
+        # from a crawl whose oracle was dead. An oracle outage must show up as a
+        # number, not as mysterious one-step journeys.
+        self._oracle_consults += 1
+        started = self._clock.now_ms()
         try:
             outcome = await self._advance_oracle(candidates, page_title, page_url)
-        except Exception:
+        except Exception as exc:
             outcome = None
+            self._oracle_errors += 1
+            logger.warning("qec.oracle.consult_failed url=%s err=%s",
+                           (page_url or "")[:120], exc)
+        self._oracle_latency_ms += max(0, self._clock.now_ms() - started)
         if not isinstance(outcome, dict):
+            self._oracle_unavailable += 1
             return AdvanceDecision(oracle_status=ORACLE_UNAVAILABLE)
         status = str(outcome.get("status") or "")
         signature = str(outcome.get("signature") or "")
@@ -3844,6 +3912,11 @@ class Crawler:
                 self._oracle_memo[fingerprint] = (
                     str(picked.get("name") or "").strip().lower(),
                     ORACLE_PICKED, signature)
+            self._oracle_picks += 1
+            logger.warning(
+                "qec.oracle.picked url=%s control=%r — TIER 3 CHOSE A CONTROL "
+                "no label rule could reach", (page_url or "")[:120],
+                str(picked.get("name") or "")[:60])
             return AdvanceDecision(
                 control=picked, tier=3,
                 oracle_status=ORACLE_PICKED, signature=signature)
@@ -3973,6 +4046,7 @@ class Crawler:
             cur_filled = refill.filled
             cur_unfilled = len(refill.unfilled_fields)
             cur_intent_unmet = refill.intent_unmet
+            self._open_choice_unverified += refill.open_choice_unverified
             cur_dps = _decision_points(refill.field_ledger)
             # The walk re-navigates and re-fills its ENTRY step from scratch, so
             # an unblock the outer form path already won has been undone by the
@@ -4259,6 +4333,7 @@ class Crawler:
                 cur_filled = filled.filled
                 cur_unfilled = len(filled.unfilled_fields)
                 cur_intent_unmet = filled.intent_unmet
+                self._open_choice_unverified += filled.open_choice_unverified
                 cur_dps = _decision_points(filled.field_ledger)
                 self._collect_ledger(filled.field_ledger, obs.url or "")
                 if filled.filled:
@@ -4343,7 +4418,7 @@ class Crawler:
             action.state_id = fingerprint
             ordered_actions.append(_action_to_dict(action))
 
-        self._note_state_signals(fingerprint, url, form_signals)
+        self._note_state_signals(fingerprint, url, form_signals, controls)
         record = emit.PageStateRecord(
             sequence_index=seq,
             location=url[:2000],
