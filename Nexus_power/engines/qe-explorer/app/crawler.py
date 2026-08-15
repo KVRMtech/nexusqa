@@ -200,6 +200,13 @@ AUTH_NOT_PERSISTED = "not_persisted"
 #: :mod:`app.vocab` (the ``en`` pack is order-preserving, so the compiled
 #: pattern is byte-identical to the historical inline literal).
 _WIZARD_ADVANCE_RE = vocab.ADVANCE_RE
+
+#: Bounds on the coverage states index. A crawl of a large application must not
+#: turn its report into a second copy of the manifest — these are generous
+#: enough for any funnel worth cataloguing and hard enough to keep the stats
+#: column a report.
+_MAX_COVERAGE_STATES = 400
+_MAX_STATE_FIELDS = 200
 #: A commit / terminal-boundary label the refuse pack does NOT universally flag
 #: (a generic "Submit"/"Confirm"/"Place order"/"Checkout"…). Its presence VETOES
 #: an advance even when the guard did not mark the control danger — the second,
@@ -1032,6 +1039,10 @@ class Crawler:
         # Per-button verdicts from the most recent tier-1 miss, carried so the
         # DECLINE line can state why it declined. Kept in memory only.
         self._last_advance_verdicts: list[str] = []
+        #: {fingerprint: {ax_fingerprint, location, form_snapshot_signals}} — the
+        #: questions each state asked, which is what turns a walked journey into
+        #: a catalogue. See _note_state_signals.
+        self._states: dict[str, dict[str, Any]] = {}
         #: The question the last unblock experiment answered ("" when it did not
         #: run or did not succeed) — read by the walk to correct the step's own
         #: fill counts and decision points.
@@ -1090,6 +1101,58 @@ class Crawler:
             row = dict(entry)
             row["url"] = url
             self._field_ledger.append(row)
+
+    def _note_state_signals(
+        self, fingerprint: str, url: str, signals: Mapping[str, Any],
+    ) -> None:
+        """Remember WHAT THIS STATE ASKED, keyed by the fingerprint the journey
+        graph uses.
+
+        THE HOLE THIS FILLS, and it is a producer that was never written rather
+        than a consumer that broke. qe-central folds a crawl by looking each
+        journey step's fingerprint up in ``build_states_index(coverage)``, which
+        reads ``coverage.states``. Nothing has ever emitted that key. The index
+        was therefore ``{}`` on every crawl of every application, so
+        ``journey_nodes.controls_inventory`` was never written, and the Master
+        Catalog could only be fed by journey BRANCHES — which carry choices.
+
+        Live consequence, measured on a five-step insurance application whose
+        walk completed end to end: 24 catalogued questions, every one of them a
+        choice (gender, product, premium mode, tobacco use, the health
+        conditions), and not one text, date or number field. ``faceAmount`` — a
+        number input declaring ``step=10000``, the clearest boundary rule on the
+        form — was absent, so no boundary scenario could be derived from it. The
+        walk was fine; the catalogue it fed was starved.
+
+        VALUE-FREE BY CONSTRUCTION. Only ``form_snapshot_signals`` is carried:
+        the label, the control type, the options offered, whether it is required.
+        The sibling ``form_snapshot`` — label to committed VALUE — is deliberately
+        NOT carried. Shapes cross the boundary; answers never do.
+
+        Richest sighting wins. The same state is recorded more than once (a
+        wizard step is met on entry and again mid-walk), and a dependent question
+        offers nothing until its driver is answered — so keeping the first
+        sighting would hold the emptiest view of exactly the questions whose
+        enumeration is hardest to get.
+        """
+        if not fingerprint or not isinstance(signals, Mapping) or not signals:
+            return
+        prev = self._states.get(fingerprint)
+        if prev is not None and len(prev.get("form_snapshot_signals") or {}) >= len(signals):
+            return
+        if prev is None and len(self._states) >= _MAX_COVERAGE_STATES:
+            return                      # bounded: coverage is a report, not a mirror
+        self._states[fingerprint] = {
+            "ax_fingerprint": fingerprint,
+            "location": (url or "")[:2000],
+            "form_snapshot_signals": {
+                str(k)[:300]: v for k, v in list(signals.items())[:_MAX_STATE_FIELDS]
+            },
+        }
+
+    def _state_signals(self) -> list[dict[str, Any]]:
+        """The states index as coverage carries it, in first-sighting order."""
+        return list(self._states.values())
 
     def _build_coverage(self) -> dict[str, Any]:
         """The crawl's coverage account (deduped, first-appearance order): what was
@@ -1232,6 +1295,13 @@ class Crawler:
             # Why a funnel stopped one step in, named. A walk that declines is
             # honest but silent; this is the sentence that makes it actionable.
             "advance_blocked": self._advance_blocked[:40],
+            # THE QUESTIONS EACH STATE ASKED — the producer side of a contract
+            # qe-central has always read and nothing has ever written. See
+            # _note_state_signals: without this the Master Catalog can only ever
+            # hold the questions that arrive as journey BRANCHES (choices), and
+            # every text, date and number field in every application is missing
+            # from the catalogue the client is shown.
+            "states": self._state_signals(),
             # Auth was requested but no login form could be driven → PUBLIC-only crawl.
             # Surfaced as first-class coverage so the operator is never misled.
             "auth_incomplete": self._auth_incomplete,
@@ -4273,6 +4343,7 @@ class Crawler:
             action.state_id = fingerprint
             ordered_actions.append(_action_to_dict(action))
 
+        self._note_state_signals(fingerprint, url, form_signals)
         record = emit.PageStateRecord(
             sequence_index=seq,
             location=url[:2000],

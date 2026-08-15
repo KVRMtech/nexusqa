@@ -139,12 +139,39 @@ def test_a_poorer_later_sighting_never_erodes_the_catalogue():
 
 
 def test_every_page_the_question_appears_on_is_still_recorded():
-    """REGRESSION GUARD: the richest-wins merge must not disturb page tracking."""
+    """REGRESSION GUARD: the richest-wins merge must not disturb page tracking.
+
+    Page identity is now the URL. A title cannot identify a page: a single-page
+    application serves every step of a wizard under ONE <title>, and live that
+    collapsed all 24 catalogued questions of a five-step application onto the
+    single page "Summit Life Carrier Administration".
+    """
     cat = build_master_catalog([
         _node("n1", [_q("State", [])], title="Personal"),
         _node("n2", [_q("State", _STATES)], title="Address"),
     ])
-    assert sorted(_only(cat)["pages"]) == ["Address", "Personal"]
+    assert sorted(_only(cat)["pages"]) == ["/n1", "/n2"]
+
+
+def test_one_url_carrying_several_states_still_names_each_one():
+    """AN SPA WIZARD IS EXACTLY THIS SHAPE — five steps, one URL, one title. If
+    the label were the URL alone, the five steps would collapse the same way the
+    title collapsed them, and "which questions does step 4 ask" would stay
+    unanswerable. The state fingerprint disambiguates, and only where it must."""
+    cat = build_master_catalog([
+        {"node_fp": "fp_step1", "title": "Apply", "url": "/apply",
+         "controls": [_q("Gender", ["Male", "Female"])]},
+        {"node_fp": "fp_step4", "title": "Apply", "url": "/apply",
+         "controls": [_q("Asthma", [])]},
+    ])
+    pages = sorted(p for q in cat["questions"] for p in q["pages"])
+    assert pages == ["/apply#fp_step1", "/apply#fp_step4"]
+
+
+def test_an_ordinary_page_keeps_a_clean_label():
+    """Disambiguation is a cost paid only where a URL is genuinely ambiguous."""
+    cat = build_master_catalog([_node("n1", [_q("State", _STATES)])])
+    assert _only(cat)["pages"] == ["/n1"]
 
 
 def test_required_stays_sticky_true_across_sightings():

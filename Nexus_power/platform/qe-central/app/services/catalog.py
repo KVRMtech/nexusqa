@@ -244,12 +244,34 @@ def build_master_catalog(
         if frm and to and frm not in next_by_node:
             next_by_node[frm] = to
 
+    # PAGE IDENTITY IS THE URL, NOT THE TITLE. A single-page application serves
+    # every step of a wizard under ONE <title>, so a title-first label collapsed
+    # every question in the application onto one "page": live, all 24 catalogued
+    # questions read as ["Summit Life Carrier Administration"]. The catalogue
+    # could not say which step a question belonged to — the first thing anyone
+    # asks of it — and "questions per step" was unrepresentable.
+    #
+    # Where one URL genuinely carries several distinct states (an SPA wizard is
+    # exactly that), the state fingerprint disambiguates. Only where it must:
+    # an ordinary page keeps a clean, legible URL as its label.
+    url_counts: dict[str, int] = {}
+    for node in nodes:
+        if isinstance(node, Mapping):
+            u = str(node.get("url") or "")
+            if u:
+                url_counts[u] = url_counts.get(u, 0) + 1
+
     by_qid: dict[str, dict[str, Any]] = {}
     for node in nodes:
         if not isinstance(node, Mapping):
             continue
         node_fp = str(node.get("node_fp") or node.get("fingerprint") or "")
-        page = str(node.get("title") or node.get("url") or node_fp or "")[:200]
+        url = str(node.get("url") or "")
+        if url:
+            page = (url[:200] if url_counts.get(url, 0) < 2
+                    else f"{url[:180]}#{node_fp[:12]}")
+        else:
+            page = str(node.get("title") or node_fp or "")[:200]
         if node_fp:
             page_by_fp[node_fp] = page
         controls = node.get("controls")
