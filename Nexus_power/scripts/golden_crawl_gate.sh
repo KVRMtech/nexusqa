@@ -293,6 +293,15 @@ ORACLE=$(psql_qec "SELECT COALESCE(stats->'coverage'->'advance_oracle'->>'state'
 say "INFO  advance_oracle: ${ORACLE:-<unrecorded>}"
 
 # ── 5. The ratchet ─────────────────────────────────────────────────────────
+GAPS=""
+#: A floor may sit unmet while the capability that feeds it is still being
+#: built — but not forever, and not silently. After this many gate runs, or this
+#: many days since it was first seen unmet, an unenforced floor fails the gate:
+#: either the capability landed and the floor should hold, or it did not, and
+#: that is the news.
+GAP_MAX_RUNS="${GOLDEN_GAP_MAX_RUNS:-3}"
+GAP_MAX_DAYS="${GOLDEN_GAP_MAX_DAYS:-7}"
+
 best_of() { python3 -c "
 import json,sys
 try: b=json.load(open('$BASELINE'))
@@ -309,7 +318,11 @@ check() {  # metric  current
   elif [ "$cur" -gt "$best" ]; then
     printf 'RISE  %-18s %s  (was %s — new floor)\n' "$name" "$cur" "$best"
   elif [ "$best" -eq 0 ]; then
-    printf 'GAP   %-18s %s  (never yet achieved — enforced once it works)\n' "$name" "$cur"
+    # NOT A PASS. A floor nobody has ever met is unenforced, and an unenforced
+    # floor that reads as green is how "confirmed 0" sat behind a PASSING gate
+    # while nine submits fired and the application confirmed none of them.
+    printf 'GAP   %-18s %s  (NOT YET ENFORCED — never achieved)\n' "$name" "$cur"
+    GAPS="$GAPS $name"
   else
     printf 'OK    %-18s %s  (holds at %s)\n' "$name" "$cur" "$best"
   fi
@@ -373,6 +386,60 @@ print('reason recorded — commit scripts/golden_crawl_baseline.json')
 fi
 
 say ""
+
+# -- 6. UNENFORCED FLOORS ARE NOT PASSES (Step 3) ---------------------------
+# Rule 1: a GAP prints as NOT YET ENFORCED and never counts as green.
+# Rule 2: a GAP self-enforces the moment a crawl carries its data -- that is the
+#         existing RISE branch, since any value above a zero floor raises it.
+# Rule 3: a floor still unmet after GAP_MAX_RUNS runs or GAP_MAX_DAYS days turns
+#         the gate RED. Live case: forms_confirmed sat at 0 behind a PASSING
+#         gate while nine submits fired and the application confirmed none.
+if [ -n "$GAPS" ]; then
+  say ""
+  say "--- unenforced floors ---"
+fi
+GAP_VERDICT=$(python3 - "$BASELINE" "$GAP_MAX_RUNS" "$GAP_MAX_DAYS" $GAPS <<'PYGAP'
+import json, sys, datetime
+path, max_runs, max_days = sys.argv[1], int(sys.argv[2]), int(sys.argv[3])
+current = set(sys.argv[4:])
+try:
+    b = json.load(open(path))
+except Exception:
+    b = {}
+gaps = b.get("_gaps") or {}
+today = datetime.date.today()
+# A floor that stopped being a gap has been MET -- drop its history entirely,
+# so a capability that lands and later regresses is judged by the ratchet
+# (which knows its best-ever) and never by a stale unmet-since date.
+for name in list(gaps):
+    if name not in current:
+        gaps.pop(name, None)
+overdue = []
+for name in sorted(current):
+    rec = gaps.get(name) or {"runs": 0, "since": today.isoformat()}
+    rec["runs"] = int(rec.get("runs", 0)) + 1
+    gaps[name] = rec
+    try:
+        age = (today - datetime.date.fromisoformat(rec["since"])).days
+    except Exception:
+        age = 0
+    if rec["runs"] > max_runs or age > max_days:
+        overdue.append("%s unmet for %d runs / %d days" % (name, rec["runs"], age))
+    else:
+        sys.stderr.write("INFO  %-18s unenforced, run %d of %d\n"
+                         % (name, rec["runs"], max_runs))
+b["_gaps"] = gaps
+json.dump(b, open(path, "w"), indent=2)
+sys.stdout.write("|".join(overdue))
+PYGAP
+)
+if [ -n "$GAP_VERDICT" ]; then
+  say "FAIL  a floor that has never been met is overdue:"
+  printf '%s\n' "$GAP_VERDICT" | tr '|' '\n' | sed 's/^/        /'
+  say "      Either the capability landed and the floor should hold, or it did not."
+  fail=1
+fi
+
 if [ "$fail" -eq 0 ]; then
   say "GATE PASSED — no funnel regression (exploration $EXPL)"
   exit 0
