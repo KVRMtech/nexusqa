@@ -194,6 +194,7 @@ read_metrics() {
       COALESCE((stats->'generate'->>'generated')::int, 0),
       COALESCE((stats->'coverage'->>'forms_found')::int, 0),
       COALESCE((stats->'coverage'->>'forms_submitted')::int, 0),
+      COALESCE((stats->'coverage'->>'forms_confirmed')::int, 0),
       COALESCE(jsonb_array_length(stats->'coverage'->'fields_inferred'), 0),
       COALESCE((stats->'coverage'->'flow_summary'->>'flows_found')::int, 0),
       COALESCE((stats->'coverage'->'flow_summary'->>'deepest_flow_steps')::int, 0),
@@ -204,7 +205,8 @@ read_metrics() {
 }
 set -- $(read_metrics)
 VISITS="${1:-0}"; GENERATED="${2:-0}"; FORMS="${3:-0}"; SUBMITTED="${4:-0}"
-AUTOFILL="${5:-0}"; FLOWS="${6:-0}"; DEEPEST="${7:-0}"; ADVANCES="${8:-0}"
+CONFIRMED="${5:-0}"; AUTOFILL="${6:-0}"; FLOWS="${7:-0}"; DEEPEST="${8:-0}"
+ADVANCES="${9:-0}"
 
 # Posture + auth are pass/fail facts, not counts.
 TRAVERSAL=$(psql_qec "SELECT COALESCE(stats->'coverage'->>'traversal','') FROM qe_explorations WHERE exploration_id='$EXPL';" | tr -d ' ')
@@ -213,7 +215,7 @@ AUTH_BLOCKED=$(psql_qec "SELECT COALESCE(stats->'coverage'->>'auth_blocked','fal
 say ""
 say "--- funnel ---"
 printf '  %-22s %s\n' traversal "$TRAVERSAL" pages "$VISITS" forms "$FORMS" \
-  auto_filled "$AUTOFILL" submitted "$SUBMITTED" flows "$FLOWS" \
+  auto_filled "$AUTOFILL" submitted "$SUBMITTED" confirmed "$CONFIRMED" flows "$FLOWS" \
   deepest_flow "$DEEPEST" wizard_advances "$ADVANCES" tests "$GENERATED"
 
 fail=0
@@ -319,6 +321,9 @@ check pages           "$VISITS"
 check forms           "$FORMS"
 check auto_filled     "$AUTOFILL"
 check selects_filled    "$SELECTS"
+# A SUBMIT THAT FIRED IS NOT A SUBMIT THAT WORKED. Ratcheting attempts alone
+# scores nine errored submits exactly like nine completed transactions.
+check forms_confirmed   "$CONFIRMED"
 check submitted       "$SUBMITTED"
 check flows           "$FLOWS"
 check deepest_flow    "$DEEPEST"

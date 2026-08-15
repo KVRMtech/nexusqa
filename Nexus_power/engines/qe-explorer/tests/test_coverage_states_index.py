@@ -222,3 +222,32 @@ def test_the_extractor_captures_every_key_the_contract_names():
     from app.inventory_js import INVENTORY_JS
     for key in ("pattern", "minlength", "maxlength", "min", "max", "step"):
         assert f'{key}: attr(el, "{key}")' in INVENTORY_JS, key
+
+
+# ─── a submit that fired is not a submit that worked ─────────────────────────
+
+def test_confirmed_is_tracked_separately_from_submitted():
+    """`submitted` is set whatever the application answered; `confirmed` is the
+    separate fact that it answered with a navigation or a success. The crawl
+    computed the distinction and dropped it, so nine submits that all errored
+    scored exactly like nine completed business transactions — in the counter,
+    in the gate floor, and in the weekly yield. This is the one boundary where
+    the product claims something HAPPENED, so it is the last place a count may
+    be generous."""
+    import inspect
+    from app.crawler import Crawler
+    src = inspect.getsource(Crawler)
+    assert "self._forms_confirmed += 1" in src
+    assert 'getattr(result, "confirmed", False)' in src
+    cov = inspect.getsource(Crawler._build_coverage)
+    assert '"forms_confirmed": self._forms_confirmed' in cov
+    assert '"forms_submitted": self._forms_submitted' in cov
+
+
+def test_a_submit_result_still_carries_both_facts():
+    """Both must survive: an attempted-but-unconfirmed submit is real evidence
+    (the app was reached and refused), not something to hide by counting only
+    successes."""
+    from app.forms import SubmitResult
+    fields = SubmitResult.__dataclass_fields__
+    assert "submitted" in fields and "confirmed" in fields

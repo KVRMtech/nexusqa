@@ -1070,6 +1070,9 @@ class Crawler:
         self._submit_approve_all = "*" in self._submit_approvals
         self._submit_enabled = bool(self._submit_approvals) and self._guard.attestation is not None
         self._forms_submitted = 0
+        #: Submits the APPLICATION confirmed (navigation or success), a subset
+        #: of _forms_submitted. See the increment site.
+        self._forms_confirmed = 0
         self._submitted_flows: set[str] = set()    # dedup key = f"{fingerprint}::{name}"
         # Questions answered on a bare-button questionnaire this crawl (by a stable
         # per-question signature), so a re-observe of the same page — which looks
@@ -1318,6 +1321,9 @@ class Crawler:
         return {
             "forms_found": self._forms_found,
             "forms_submitted": self._forms_submitted,
+            # Of those, the ones the APP confirmed. Ratcheted separately: a
+            # floor on attempts cannot tell a working funnel from a broken one.
+            "forms_confirmed": self._forms_confirmed,
             "fields_inferred": inferred,
             # PER-FIELD LEDGER (field learning). One entry per distinct field the
             # crawl met: what it is, how it was answered, whether it committed.
@@ -3261,6 +3267,16 @@ class Crawler:
         if result.submitted:
             self._forms_submitted += 1
             self._tracker.note_action()
+        # A SUBMIT THAT FIRED IS NOT A SUBMIT THAT WORKED. `submitted` is set
+        # whatever the outcome; `confirmed` is the separate fact that the
+        # application answered with a navigation or a success confirmation. The
+        # crawl computed that distinction and then dropped it, so nine submits
+        # that all errored scored exactly the same as nine completed business
+        # transactions — in the counter, in the gate floor, and in the weekly
+        # yield. This is the one boundary where the product claims something
+        # HAPPENED, so it is the last place a count may be generous.
+        if getattr(result, "confirmed", False):
+            self._forms_confirmed += 1
         ps = result.page_state
         dest = (getattr(ps, "location", "") or "").strip() if ps else ""
         # Honour max_depth for submit-derived states too (mirrors _discover's depth
