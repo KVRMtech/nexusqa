@@ -139,32 +139,46 @@ def extract_controls(
         entry["question_id"] = question_id_for(entry)
         controls.append(entry)
 
-    for norm_name, ledger_entry in ledger_by_name.items():
-        if norm_name in seen_names:
-            continue
-        seen_names.add(norm_name)
-        name = str(ledger_entry.get("name") or "").strip()
-        if not name:
-            continue
-        options = ledger_entry.get("options")
-        if not isinstance(options, list):
-            options = []
-        options = [str(o) for o in options if str(o).strip()]
+    # THE LEDGER FALLBACK IS KEYED BY URL, AND AN SPA SERVES MANY STATES FROM
+    # ONE. It exists to catch a field the snapshot missed; on a five-step wizard
+    # living at a single URL it instead attributed all five steps' fields to
+    # every step. Live that listed most catalogue questions TWICE — once from
+    # the state's own signals and once from the shared ledger, under two
+    # different question_ids because one basis is the signature and the other
+    # the name — and every fallback row claimed type "text" because a ledger
+    # entry carries no control type. A client reading that catalogue sees each
+    # question duplicated and half of them mistyped.
+    #
+    # A state that produced signals has already described itself. Only a state
+    # with NO signals at all (the snapshot genuinely captured nothing) still
+    # needs the ledger to speak for it.
+    if not controls:
+        for norm_name, ledger_entry in ledger_by_name.items():
+            if norm_name in seen_names:
+                continue
+            seen_names.add(norm_name)
+            name = str(ledger_entry.get("name") or "").strip()
+            if not name:
+                continue
+            options = ledger_entry.get("options")
+            if not isinstance(options, list):
+                options = []
+            options = [str(o) for o in options if str(o).strip()]
 
-        entry = {
-            "name": name,
-            "type": "text",
-            "options": options,
-            "required": False,
-        }
-        sig = str(ledger_entry.get("signature") or "")
-        if sig:
-            entry["signature"] = sig
-        sem = str(ledger_entry.get("semantic_type") or "")
-        if sem:
-            entry["semantic_type"] = sem
-        entry["question_id"] = question_id_for(entry)
-        controls.append(entry)
+            entry = {
+                "name": name,
+                "type": "text",
+                "options": options,
+                "required": False,
+            }
+            sig = str(ledger_entry.get("signature") or "")
+            if sig:
+                entry["signature"] = sig
+            sem = str(ledger_entry.get("semantic_type") or "")
+            if sem:
+                entry["semantic_type"] = sem
+            entry["question_id"] = question_id_for(entry)
+            controls.append(entry)
 
     return controls
 
