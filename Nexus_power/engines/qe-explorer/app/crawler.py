@@ -207,6 +207,7 @@ _WIZARD_ADVANCE_RE = vocab.ADVANCE_RE
 #: column a report.
 _MAX_COVERAGE_STATES = 400
 _MAX_STATE_FIELDS = 200
+_MAX_DANGER_NAMES = 40
 #: A commit / terminal-boundary label the refuse pack does NOT universally flag
 #: (a generic "Submit"/"Confirm"/"Place order"/"Checkout"…). Its presence VETOES
 #: an advance even when the guard did not mark the control danger — the second,
@@ -1045,6 +1046,8 @@ class Crawler:
         self._states: dict[str, dict[str, Any]] = {}
         #: Choice widgets opened, picked, and unable to confirm the answer back.
         self._open_choice_unverified: int = 0
+        #: Committed fills by control kind — see _note_fills_by_kind.
+        self._filled_by_kind: dict[str, int] = {}
         #: Tier-3 consultation telemetry — see the oracle call site.
         self._oracle_consults: int = 0
         self._oracle_errors: int = 0
@@ -1166,6 +1169,10 @@ class Crawler:
         # control's destination: 20 of 35 controls on the hub went critical, the
         # wizard was never entered, and it cost an investigation to find. As a
         # recorded ratio it is a gate assertion instead.
+        danger_names = [str(c.get("name") or "").strip()[:120]
+                        for c in controls
+                        if isinstance(c, Mapping) and c.get("danger")
+                        and str(c.get("name") or "").strip()]
         danger = sum(1 for c in controls if isinstance(c, Mapping) and c.get("danger"))
         self._states[fingerprint] = {
             "ax_fingerprint": fingerprint,
@@ -1175,7 +1182,25 @@ class Crawler:
             },
             "controls_total": len(controls),
             "danger_controls": danger,
+            # WHICH controls were refused, not just how many. A ratio catches a
+            # rule that went broad; only the names catch a rule that took out
+            # the ONE control a funnel depends on — live, `New Application`,
+            # the single door into the wizard. Product UI text, never user data.
+            "danger_names": danger_names[:_MAX_DANGER_NAMES],
         }
+
+    def _note_fills_by_kind(self, counts: Mapping[str, int]) -> None:
+        """Roll one page's committed fills into the crawl-wide count.
+
+        ``auto_filled`` cannot distinguish five answered DROPDOWNS from five
+        answered text boxes, and the dropdown is the widget class that keeps
+        breaking — a portal-rendered choice reads back empty, the fill is
+        discarded, and the total barely moves because text fields carried it.
+        The one number a gate most needs to hold was the one it could not see.
+        """
+        for kind, n in (counts or {}).items():
+            k = str(kind)
+            self._filled_by_kind[k] = self._filled_by_kind.get(k, 0) + int(n)
 
     def _state_signals(self) -> list[dict[str, Any]]:
         """The states index as coverage carries it, in first-sighting order."""
@@ -1333,6 +1358,9 @@ class Crawler:
             # line only, so the fix that took it from 6 to 0 could regress with
             # nothing to notice — now a number the gate holds at zero.
             "open_choice_unverified": self._open_choice_unverified,
+            # Committed fills per control kind — lets a gate hold "the five
+            # dropdowns were answered" instead of only "29 fields were".
+            "filled_by_kind": dict(self._filled_by_kind),
             # TIER-3 LIVENESS + TELEMETRY (Track 3.1/3.3). `configured` says the
             # mechanism was WIRED; the counts say whether it was ever asked and
             # what it answered. Without this, "is tier-3 alive" is an inference
@@ -2258,6 +2286,7 @@ class Crawler:
             self._tracker.note_action(len(fill.actions))
             self._fields_inferred.extend(fill.inferred_fields)
             self._open_choice_unverified += fill.open_choice_unverified
+            self._note_fills_by_kind(fill.filled_by_kind)
             self._fields_unfilled.extend(fill.unfilled_fields)
             # Tag each unfilled field with the page it appeared on (grounds flow grouping).
             self._fields_seed_detail.extend(
@@ -4047,6 +4076,7 @@ class Crawler:
             cur_unfilled = len(refill.unfilled_fields)
             cur_intent_unmet = refill.intent_unmet
             self._open_choice_unverified += refill.open_choice_unverified
+            self._note_fills_by_kind(refill.filled_by_kind)
             cur_dps = _decision_points(refill.field_ledger)
             # The walk re-navigates and re-fills its ENTRY step from scratch, so
             # an unblock the outer form path already won has been undone by the
@@ -4334,6 +4364,7 @@ class Crawler:
                 cur_unfilled = len(filled.unfilled_fields)
                 cur_intent_unmet = filled.intent_unmet
                 self._open_choice_unverified += filled.open_choice_unverified
+                self._note_fills_by_kind(filled.filled_by_kind)
                 cur_dps = _decision_points(filled.field_ledger)
                 self._collect_ledger(filled.field_ledger, obs.url or "")
                 if filled.filled:

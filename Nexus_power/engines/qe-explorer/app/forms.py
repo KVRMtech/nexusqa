@@ -151,6 +151,11 @@ class FormFillResult:
     unfilled_fields: list[str] = field(default_factory=list)
     #: R0 intent contracts — fills whose intent verification returned False.
     intent_unmet: int = 0
+    #: Fills that COMMITTED, counted by control kind. "auto_filled" alone cannot
+    #: say whether the five dropdowns on a page were answered or five text boxes
+    #: were — and a dropdown is the widget class that keeps breaking, so the one
+    #: number the gate most needs was the one it could not see.
+    filled_by_kind: dict[str, int] = field(default_factory=dict)
     #: Portal-rendered choice widgets that were opened, picked, and then would
     #: NOT read their answer back. A distinct failure class from a fill that was
     #: refused: the answer may well be in the form while the evidence says it is
@@ -766,6 +771,7 @@ async def fill_form_phase_a(
                     entry["options"] = [entry["choice"]]
         result.actions.append(action)
         result.filled += 1
+        result.filled_by_kind[kind] = result.filled_by_kind.get(kind, 0) + 1
         result.field_ledger.append(entry)
         # REMEMBER IT FOR THE REST OF THE JOURNEY. Only a value the browser
         # actually took is worth remembering (a failed fill is recorded above and

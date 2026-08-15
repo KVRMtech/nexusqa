@@ -40,8 +40,20 @@ set -u
 APP_ID="${1:-}"
 UPDATE_BASELINE=0
 REBASELINE_REASON=""
+REUSE_EXPL=""
 case "${2:-}" in
   --update-baseline) UPDATE_BASELINE=1 ;;
+  # EVALUATE A CRAWL THAT ALREADY RAN. The assertions are pure functions of a
+  # recorded exploration, so re-running them should not cost another 20-minute
+  # crawl. This is what makes the CANARY cheap enough to be routine: raise a
+  # floor above the observed value, re-evaluate the same evidence, and watch the
+  # gate go red — a real end-to-end assertion run, no deploy, no re-crawl.
+  --exploration)
+    REUSE_EXPL="${3:-}"
+    if [ -z "$REUSE_EXPL" ]; then
+      echo "--exploration requires an exploration id" >&2
+      exit 2
+    fi ;;
   # THE THIRD STATE. A metric can legitimately FALL when the funnel gets better:
   # consolidating duplicated one-step fragments into one real journey lowers the
   # page, flow and submit counts while strictly improving the result. With only
@@ -61,7 +73,7 @@ case "${2:-}" in
 esac
 
 if [ -z "$APP_ID" ]; then
-  echo "usage: $0 <app_id> [--update-baseline | --rebaseline \"reason\"]" >&2
+  echo "usage: $0 <app_id> [--update-baseline | --rebaseline \"reason\" | --exploration <id>]" >&2
   exit 2
 fi
 
@@ -69,16 +81,60 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 BASELINE="$HERE/golden_crawl_baseline.json"
 QEC=nexus-qe-central
 PG=nexus-postgres
+#: The control that is the ENTRANCE to this app's deepest funnel. Per-app by
+#: nature — the gate is an app's contract — and overridable so a matrix row
+#: names its own door rather than inheriting Summit's.
+GATE_ENTRY_CONTROL="${GATE_ENTRY_CONTROL:-New Application}"
 POLL_SECONDS="${GOLDEN_POLL_SECONDS:-60}"
 MAX_POLLS="${GOLDEN_MAX_POLLS:-55}"
 
 say() { printf '%s\n' "$*"; }
 psql_qec() { docker exec "$PG" psql -U nexus -d qecentral -A -t -c "$1" 2>/dev/null | tr -d '\r'; }
 
-# ── 1. Dispatch a real crawl ────────────────────────────────────────────────
+# ── 0. HOST HEALTH (Track 0.4) ──────────────────────────────────────────────
+# A crawl on an unhealthy host produces a CONFUSING result, not an obviously
+# broken one: a full disk truncates evidence, a dead container refuses dispatch
+# in a way that reads like an app problem, and hundreds of exited containers
+# quietly eat the loop device table. Failing fast here costs 2 seconds and saves
+# the investigation that a half-degraded crawl always triggers.
 say "=== GOLDEN CRAWL GATE ==="
 say "app: $APP_ID"
 
+host_health() {
+  local bad=0
+  local disk zombies
+  disk=$(df --output=pcent / 2>/dev/null | tail -1 | tr -dc '0-9')
+  if [ "${disk:-0}" -ge 90 ]; then
+    say "FAIL  host: disk ${disk}% full — evidence capture will truncate silently"
+    bad=1
+  else
+    say "OK    host: disk ${disk:-?}% used"
+  fi
+  zombies=$(docker ps -q -f status=exited 2>/dev/null | wc -l | tr -d ' ')
+  if [ "${zombies:-0}" -ge 100 ]; then
+    say "FAIL  host: $zombies exited containers — prune before trusting a crawl"
+    bad=1
+  else
+    say "OK    host: $zombies exited containers"
+  fi
+  for c in "$QEC" "$PG" nexus-qe-explorer; do
+    if [ "$(docker inspect -f '{{.State.Running}}' "$c" 2>/dev/null)" != "true" ]; then
+      say "FAIL  host: container $c is not running"
+      bad=1
+    fi
+  done
+  return $bad
+}
+if ! host_health; then
+  say ""
+  say "GATE ABORTED — the HOST is unhealthy. This is not a verdict on the build."
+  exit 1
+fi
+
+if [ -n "$REUSE_EXPL" ]; then
+  EXPL="$REUSE_EXPL"
+  say "exploration: $EXPL  (re-evaluating a recorded crawl — no dispatch)"
+else
 DISPATCH=$(docker exec "$QEC" python -c "
 import os, json, time, urllib.request, jwt, sys
 sec = os.environ['NEXUS_JWT_SECRET']
@@ -126,6 +182,7 @@ if [ "$STATUS" != "completed" ]; then
   say "FAIL — crawl did not reach a terminal state within the budget"
   exit 1
 fi
+fi   # end: dispatch-and-wait (skipped by --exploration)
 
 # ── 3. Read the funnel ──────────────────────────────────────────────────────
 # Every metric below is already recorded by the crawl; nothing here recomputes
@@ -205,6 +262,29 @@ else
   say "OK    danger ratio: max ${DANGER_PCT:-0}% per page"
 fi
 
+# THE DROPDOWNS WERE ANSWERED, not merely "29 fields were". A portal-rendered
+# choice reads back empty, its fill is discarded, and the total barely moves
+# because text fields carried it — so auto_filled alone cannot see the widget
+# class that keeps breaking. Ratcheted like any other floor.
+SELECTS=$(psql_qec "SELECT COALESCE((stats->'coverage'->'filled_by_kind'->>'select')::int, 0) FROM qe_explorations WHERE exploration_id='$EXPL';" | tr -d ' ')
+
+# THE ONE DOOR INTO THE FUNNEL. A danger RATIO catches a refuse rule that went
+# broad; only the NAMES catch a rule that took out the single control a funnel
+# depends on. Live, a URL-scoped `underwrite` rule flagged `New Application` -
+# the only entrance to the five-step wizard - and the walk simply stopped, with
+# every other number looking reasonable.
+GUARDED=$(psql_qec "
+  SELECT count(*) FROM qe_explorations e,
+       jsonb_array_elements(e.stats->'coverage'->'states') st,
+       jsonb_array_elements_text(st->'danger_names') nm
+  WHERE e.exploration_id='$EXPL' AND lower(nm) = lower('$GATE_ENTRY_CONTROL');" | tr -d ' ')
+if [ "${GUARDED:-0}" -gt 0 ]; then
+  say "FAIL  entry control: '$GATE_ENTRY_CONTROL' is danger-flagged — the funnel's own door is refused"
+  fail=1
+else
+  say "OK    entry control: '$GATE_ENTRY_CONTROL' not danger-flagged"
+fi
+
 # TIER-3 LIVENESS. `configured` says the mechanism is wired; an all-tier-1 crawl
 # and a crawl with a dead oracle are otherwise indistinguishable.
 ORACLE=$(psql_qec "SELECT COALESCE(stats->'coverage'->'advance_oracle'->>'state','') FROM qe_explorations WHERE exploration_id='$EXPL';" | tr -d ' ')
@@ -238,6 +318,7 @@ say "--- ratchet (fails only on regression below the best ever seen) ---"
 check pages           "$VISITS"
 check forms           "$FORMS"
 check auto_filled     "$AUTOFILL"
+check selects_filled    "$SELECTS"
 check submitted       "$SUBMITTED"
 check flows           "$FLOWS"
 check deepest_flow    "$DEEPEST"
