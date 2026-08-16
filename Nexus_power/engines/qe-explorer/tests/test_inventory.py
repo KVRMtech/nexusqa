@@ -335,7 +335,26 @@ def test_injected_js_is_a_self_invoking_expression():
     # aria-checked/aria-pressed state as value_committed — the same hole v8 closed
     # for choice triggers, one widget class on, and answered from the W3C ARIA
     # specification rather than from any one library's markup.
-    assert INVENTORY_JS_VERSION == "inv-js-v9"
+    # v10 (M0.x capture completeness) — four capture defects, each proven by a
+    # previously-failing browser test in tests/browser:
+    #   * autocomplete/inputmode/placeholder/id are now EMITTED. The classifier
+    #     ranks autocomplete first at confidence 0.98 and read all four; capture
+    #     emitted none, so its strongest rung was unreachable code on every
+    #     crawled control.
+    #   * shadow-root names resolve against the root that OWNS the element. The
+    #     walker forwarded the outer document, so label[for]/aria-labelledby
+    #     inside a shadow root resolved against the wrong root — a control came
+    #     back either unnamed or, worse, named by a same-id element outside it.
+    #   * idText() computes RENDERED text via accText(), like every sibling name
+    #     rung already did; textContent concatenated block children into a name
+    #     no locator can bind.
+    #   * frame selectors are escaped (CSS.escape for the id, CSS string escaping
+    #     for attribute values), so an emitted selector resolves the same way
+    #     page.frameLocator() resolves it.
+    # MAX_OPTIONS also moved to a Python constant interpolated into the JS, so
+    # the walker, the refiner and the catalogue cannot drift to three ceilings
+    # again.
+    assert INVENTORY_JS_VERSION == "inv-js-v10"
 
 
 # ─── GROUP_ASSEMBLE — a radio group is ONE question, not N toggles ────────────

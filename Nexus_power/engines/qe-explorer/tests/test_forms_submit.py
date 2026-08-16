@@ -87,9 +87,17 @@ def _fill_controls():
     return build_inventory(raw, _REFUSE_PACK, url=FORM_URL)
 
 
-def _valid_attestation(now_ms=1000):
+def _valid_attestation(now_ms=None):
+    # M0.5 T-SEC-08: ``expires_at_ms`` is EPOCH millis and freshness is checked
+    # against the wall clock. The old default (1000 + 100000) was a monotonic-
+    # style number that only ever looked fresh because the comparison itself was
+    # broken; a live attestation has to be built from the same clock that judges
+    # it.
+    import time as _t
+
+    base = int(_t.time() * 1000) if now_ms is None else int(now_ms)
     return Attestation(attested_by="qa-lead", env_kind="disposable",
-                       reset_procedure="db reset", expires_at_ms=now_ms + 100000)
+                       reset_procedure="db reset", expires_at_ms=base + 100000)
 
 
 class FakeSubmitPort:

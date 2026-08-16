@@ -12,6 +12,10 @@ import tempfile
 import types
 
 from app import crawler as crawler_mod
+# M0.3/T-DE-11: the Phase-B submit moved into app.submit, so the seam to
+# patch is that module's binding of execute_submit_phase_b, not the
+# crawler's. Same function, same call site — new home.
+from app import submit as submit_mod
 from app import emit
 from app.browser import RawObservation
 from app.config import Settings
@@ -78,7 +82,7 @@ def test_approved_flow_is_driven_and_post_submit_page_enqueued(tmp_path, monkeyp
         return SubmitResult(submitted=True, decision=None, confirmed=True,
                             outcome="navigation", page_state=ps)
 
-    monkeypatch.setattr(crawler_mod, "execute_submit_phase_b", fake_submit)
+    monkeypatch.setattr(submit_mod, "execute_submit_phase_b", fake_submit)
     item = FrontierItem(url="https://app.example/form", depth=0)
     asyncio.run(c._maybe_submit_phase_b(item, [{"name": "Continue", "kind": "button"}],
                                         _fill("Continue"), "fp1"))
@@ -102,7 +106,7 @@ def test_unapproved_flow_is_not_submitted(tmp_path, monkeypatch):
         calls["n"] += 1
         return SubmitResult(submitted=True, decision=None)
 
-    monkeypatch.setattr(crawler_mod, "execute_submit_phase_b", fake_submit)
+    monkeypatch.setattr(submit_mod, "execute_submit_phase_b", fake_submit)
     item = FrontierItem(url="u", depth=0)
     asyncio.run(c._maybe_submit_phase_b(item, [{"name": "Delete", "kind": "button"}],
                                         _fill("Delete"), "fp"))
@@ -118,7 +122,7 @@ def test_danger_candidate_is_never_submitted(tmp_path, monkeypatch):
         calls["n"] += 1
         return SubmitResult(submitted=True, decision=None)
 
-    monkeypatch.setattr(crawler_mod, "execute_submit_phase_b", fake_submit)
+    monkeypatch.setattr(submit_mod, "execute_submit_phase_b", fake_submit)
     item = FrontierItem(url="u", depth=0)
     asyncio.run(c._maybe_submit_phase_b(item, [{"name": "Continue", "kind": "button"}],
                                         _fill("Continue", danger=True), "fp"))
@@ -133,7 +137,7 @@ def test_unconfirmed_submit_adds_no_frontier(tmp_path, monkeypatch):
         # submit ran (counts) but no positive terminal outcome → no deeper crawl.
         return SubmitResult(submitted=True, decision=None, confirmed=False, outcome="none")
 
-    monkeypatch.setattr(crawler_mod, "execute_submit_phase_b", fake_submit)
+    monkeypatch.setattr(submit_mod, "execute_submit_phase_b", fake_submit)
     item = FrontierItem(url="u", depth=0)
     asyncio.run(c._maybe_submit_phase_b(item, [{"name": "Continue", "kind": "button"}],
                                         _fill("Continue"), "fp"))
@@ -218,7 +222,7 @@ def test_submit_respects_max_depth(tmp_path, monkeypatch):
         return SubmitResult(submitted=True, decision=None, confirmed=True,
                             outcome="navigation", page_state=ps)
 
-    monkeypatch.setattr(crawler_mod, "execute_submit_phase_b", fake_submit)
+    monkeypatch.setattr(submit_mod, "execute_submit_phase_b", fake_submit)
     # An item AT max_depth still submits, but must NOT enqueue a deeper state.
     item = FrontierItem(url="https://app.example/form", depth=c._budget.max_depth)
     asyncio.run(c._maybe_submit_phase_b(item, [{"name": "Continue", "kind": "button"}],
@@ -245,7 +249,7 @@ def test_next_action_forward_is_crossed_in_place_and_enqueued(tmp_path, monkeypa
         return SubmitResult(submitted=True, decision=None, confirmed=True,
                             outcome="navigation", page_state=ps)
 
-    monkeypatch.setattr(crawler_mod, "execute_submit_phase_b", fake_submit)
+    monkeypatch.setattr(submit_mod, "execute_submit_phase_b", fake_submit)
     controls = [
         {"name": "Apply Now", "kind": "link"},       # forward commit -> crossed
         {"name": "Start Over", "kind": "button"},    # not a commit word -> skipped
@@ -274,7 +278,7 @@ def test_next_action_not_crossed_when_submit_disabled(tmp_path, monkeypatch):
         calls["n"] += 1
         return SubmitResult(submitted=True, decision=None)
 
-    monkeypatch.setattr(crawler_mod, "execute_submit_phase_b", fake_submit)
+    monkeypatch.setattr(submit_mod, "execute_submit_phase_b", fake_submit)
     asyncio.run(c._maybe_submit_next_action(
         controls=[{"name": "Apply Now", "kind": "link"}],
         url="https://app.example/quote/review", fingerprint="fpR", depth=0))

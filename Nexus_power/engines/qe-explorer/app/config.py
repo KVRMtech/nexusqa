@@ -21,6 +21,9 @@ from pathlib import Path
 from pydantic import Field
 from pydantic_settings import BaseSettings
 
+from . import hmac_auth
+from .hmac_auth import KeyRing
+
 # The refuse pack ships INSIDE the package so the container always has a valid
 # fail-closed default; ``REFUSE_PACK_PATH`` may point elsewhere for overrides.
 _PACKAGE_DIR = Path(__file__).resolve().parent
@@ -58,8 +61,23 @@ class Settings(BaseSettings):
     # ── Per-fleet HMAC shared secret (RUNNER_TOKEN pattern) ───
     #: Authenticates inbound /api/v1/explore (X-QEC-Token) AND signs the
     #: completion callback body. Fail-closed: an empty secret can NEVER match.
-    explorer_token: str = Field(
-        default="dev-explorer-token-change-me", alias="QEC_EXPLORER_TOKEN",
+    #: NO DEFAULT (M0.5 T-SEC-01): a shipped development secret means a fresh
+    #: deployment authenticates with a value that is in this repository. Empty ⇒
+    #: fail-closed — ``token_matches`` never matches and signing raises, so the
+    #: explorer refuses every caller rather than trusting a known credential.
+    explorer_token: str = Field(default="", alias="QEC_EXPLORER_TOKEN")
+    #: ROTATION SEAM (T-SEC-11) — the PREVIOUS fleet secret, accepted for
+    #: verification until ``explorer_token_previous_expires_at`` (epoch SECONDS).
+    explorer_token_previous: str = Field(
+        default="", alias="QEC_EXPLORER_TOKEN_PREVIOUS",
+    )
+    explorer_token_previous_expires_at: float = Field(
+        default=0.0, alias="QEC_EXPLORER_TOKEN_PREVIOUS_EXPIRES_AT",
+    )
+    #: Allowed clock skew (seconds, both directions) on a signed payload.
+    hmac_skew_seconds: float = Field(
+        default=float(hmac_auth.DEFAULT_SKEW_SECONDS),
+        alias="QEC_HMAC_SKEW_SECONDS",
     )
 
     # ── Network isolation (design §1.1) ───────────────────────
@@ -134,28 +152,48 @@ class Settings(BaseSettings):
 
     # ── Security helpers (the HMAC shared secret lives here) ──────────────
 
+    def keyring(self) -> KeyRing:
+        """The keys this explorer will accept/sign with (current + overlap)."""
+        return KeyRing(
+            current=self.explorer_token or "",
+            previous=self.explorer_token_previous or "",
+            previous_expires_at=float(self.explorer_token_previous_expires_at or 0.0),
+        )
+
     def token_matches(self, provided: str | None) -> bool:
         """Constant-time comparison of an inbound token against the secret.
 
         Fail-closed: an empty configured secret OR an empty provided token can
         NEVER match, so a mis-provisioned deployment refuses every caller
         rather than authenticating with a blank credential.
+
+        ROTATION (T-SEC-11): the PREVIOUS secret is also accepted while its
+        overlap window is open, so a qe-central that has not yet been restarted
+        with the new key is not locked out mid-rotation.
         """
+        import time as _time
+
         configured = (self.explorer_token or "").strip()
         candidate = (provided or "").strip()
         if not configured or not candidate:
             return False
-        return hmac.compare_digest(configured, candidate)
+        if hmac.compare_digest(configured, candidate):
+            return True
+        previous = (self.explorer_token_previous or "").strip()
+        if previous and _time.time() <= float(self.explorer_token_previous_expires_at or 0.0):
+            return hmac.compare_digest(previous, candidate)
+        return False
 
-    def sign_payload(self, payload: bytes) -> str:
-        """Hex HMAC-SHA256 of ``payload`` under the shared secret.
+    def sign_payload(self, payload: bytes, *, scope: str = "") -> str:
+        """The v2 ``X-QEC-Signature`` envelope for ``payload`` (key id +
+        timestamp + single-use nonce + body hash + scope).
 
-        Used to sign the completion callback body so qe-central can verify the
-        callback originated from a trusted explorer (design §3.2 completion
-        callback is "HMAC-signed").
+        MIRRORS qe-central's ``Phase1Settings.sign_payload`` byte-for-byte (both
+        delegate to the duplicated :mod:`hmac_auth`).  ``scope`` binds the
+        signature to one logical operation so a captured signature cannot
+        authenticate a call about a different crawl.
         """
-        secret = (self.explorer_token or "").encode("utf-8")
-        return hmac.new(secret, payload or b"", hashlib.sha256).hexdigest()
+        return hmac_auth.sign(payload, keyring=self.keyring(), scope=scope)
 
     def budget_defaults(self) -> dict:
         """The crawl-budget dict in the manifest ``crawl_meta.budgets`` vocab.

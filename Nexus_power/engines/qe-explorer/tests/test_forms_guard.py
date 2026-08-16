@@ -152,9 +152,17 @@ def _delete_control():
                            _REFUSE_PACK, url="https://app.example/apply")[0]
 
 
-def _valid_attestation(now_ms=1000):
+def _valid_attestation(now_ms=None):
+    # M0.5 T-SEC-08: ``expires_at_ms`` is EPOCH millis and freshness is checked
+    # against the wall clock. The old default (1000 + 100000) was a monotonic-
+    # style number that only ever looked fresh because the comparison itself was
+    # broken; a live attestation has to be built from the same clock that judges
+    # it.
+    import time as _t
+
+    base = int(_t.time() * 1000) if now_ms is None else int(now_ms)
     return Attestation(attested_by="qa-lead", env_kind="disposable",
-                       reset_procedure="db reset", expires_at_ms=now_ms + 100000)
+                       reset_procedure="db reset", expires_at_ms=base + 100000)
 
 
 def test_phase_b_refuses_without_attestation():
@@ -317,7 +325,9 @@ def test_errored_toggle_fill_is_honest_residue_not_a_fill():
 def test_custom_card_falls_back_to_click_when_set_checked_fails():
     """The engine must try the native check, then CLICK — a styled card is
     selected the way a human selects it."""
-    src = open("app/main.py", encoding="utf-8").read()
+    # M0.3/T-DE-05: the Playwright adapter was lifted out of app/main.py into
+    # app/playwright_port.py. Same code, new home — the assertion is unchanged.
+    src = open("app/playwright_port.py", encoding="utf-8").read()
     seg = src[src.index('elif kind == "checked":'):]
     seg = seg[:seg.index("except Exception as exc:")]
     assert "set_checked" in seg and "locator.click()" in seg

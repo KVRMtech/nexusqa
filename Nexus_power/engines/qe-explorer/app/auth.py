@@ -861,3 +861,30 @@ class Authenticator:
             dialog_flags=await self._port.dialog_flags(),
             error_texts=await self._port.error_texts(),
         )
+
+
+# ─── Crawl-level auth outcome vocabulary (M0.3 / T-DE-07) ────────────────────
+# Moved here from crawler.py so app.coverage can render the operator-facing
+# remediation for each outcome without importing the crawler.  These name WHY
+# a crawl's authentication was incomplete or blocked; each maps to a DIFFERENT
+# instruction, and confusing them sends the operator after the wrong artefact.
+
+#: revoked). Sessions are captured once and reused for every later crawl, so this
+#: is the STEADY STATE of any app crawled more than a session-lifetime apart, not
+#: an edge case. Detected structurally (a password field on the entry screen), so
+#: it holds for any app in any language — never a URL or copy match.
+AUTH_SESSION_EXPIRED = "session_expired"
+
+#: ``auth_blocked`` reason: the entry sits behind a login wall and NEITHER
+#: credentials NOR a session were supplied — the crawl had no way to sign in, so it
+#: stopped at the wall (``STOP_AUTH_REQUIRED``). Distinct from AUTH_SESSION_EXPIRED
+#: (a session was injected but died) and from the credentials-supplied-but-no-form
+#: case: the remediation is "record a login / attach credentials", never "re-record".
+AUTH_NO_CREDENTIALS = "no_credentials"
+
+#: ``auth_incomplete`` reason: the crawl HELD a verified login — it signed in
+#: successfully — and the app still answered a fresh page load with its sign-in screen.
+#: The app keeps the signed-in user in CLIENT-SIDE state rather than a cookie, so every
+#: navigation drops it. Neither re-recording nor new credentials can fix that (both were
+#: already proven to work), which is why it must never wear the session_expired advice.
+AUTH_NOT_PERSISTED = "not_persisted"

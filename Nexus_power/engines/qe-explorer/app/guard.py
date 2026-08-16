@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 from dataclasses import dataclass
 from enum import Enum
 from functools import lru_cache
@@ -256,6 +257,12 @@ def load_refuse_pack(path: str) -> RefusePack:
 
 # ─── Attestation (the SUBMIT-phase gate, design §3.5 env_attestation) ──────
 
+#: 2001-09-09T01:46:40Z in epoch millis.  Any "now" below this is not a
+#: wall-clock reading — it is a monotonic since-start value, a zeroed clock, or
+#: seconds mistaken for milliseconds.  Freshness REFUSES rather than compares
+#: across clock domains (M0.5 SI-08).
+_MIN_PLAUSIBLE_EPOCH_MS = 1_000_000_000_000
+
 
 class Attestation(BaseModel):
     """A client env attestation gating the SUBMIT phase (design §3.5).
@@ -269,22 +276,49 @@ class Attestation(BaseModel):
     attested_by: str = ""
     env_kind: str = ""            # prod | staging | disposable
     reset_procedure: str = ""
+    #: EPOCH milliseconds (UTC).  ONE canonical representation for every
+    #: persisted/protocol timestamp in this system — qe-central converts the
+    #: stored ISO ``expires_at`` to epoch millis at dispatch, and this field is
+    #: compared ONLY against a wall-clock epoch reading.
     expires_at_ms: int | None = None
 
-    def is_submit_capable(self, now_ms: int | None = None) -> bool:
-        """True only for a disposable, attributed, time-bounded, unexpired env.
+    def is_submit_capable(self, now_epoch_ms: int | None = None) -> bool:
+        """True only for a disposable, attributed, time-bounded, UNEXPIRED env.
 
-        ``now_ms`` MUST be supplied to verify freshness; without it (or without
-        an ``expires_at_ms``) the attestation is treated as unverifiable and
-        rejected — an attested submit is never granted on faith.
+        M0.5 T-SEC-08 — THE CLOCK-DOMAIN FIX.
+        =====================================
+        This used to be called as ``is_submit_capable(crawler.now_ms())``, and
+        ``crawler.now_ms()`` is :class:`emit.MonotonicClock` — MILLISECONDS
+        SINCE CRAWL START, a number in the thousands.  ``expires_at_ms`` is
+        epoch milliseconds, a number near 1.7e12.  So ``now_ms <
+        expires_at_ms`` was true for roughly the next fifty thousand years:
+        the freshness gate could not expire an attestation, and a submit
+        authorised by an attestation that lapsed months ago still crossed.
+
+        The two clocks now cannot meet.  A monotonic clock measures DURATION
+        (the auth/submit windows still use it, correctly); freshness against a
+        persisted deadline is wall-clock only, read HERE rather than accepted
+        from a caller.  Passing an argument at all is optional and exists for
+        deterministic tests; a value that is not plausibly an epoch reading is
+        REFUSED rather than compared.
         """
         if not (self.attested_by or "").strip():
             return False
         if (self.env_kind or "").strip().lower() != "disposable":
             return False
-        if self.expires_at_ms is None or now_ms is None:
+        if self.expires_at_ms is None:
             return False
-        return int(now_ms) < int(self.expires_at_ms)
+        now = int(time.time() * 1000) if now_epoch_ms is None else int(now_epoch_ms)
+        if now < _MIN_PLAUSIBLE_EPOCH_MS:
+            # A monotonic (since-start) reading, a zeroed clock, or a caller
+            # confusing the two domains. Fail CLOSED and say so — silently
+            # treating it as "very early, therefore fresh" is the bug above.
+            logger.error(
+                "qec.guard.attestation_clock_domain_error now_ms=%d — refusing "
+                "the submit (freshness needs an epoch-ms reading, not a "
+                "monotonic one)", now)
+            return False
+        return now < int(self.expires_at_ms)
 
 
 # ─── Decision + classification result types ────────────────────────────────
@@ -613,7 +647,11 @@ def classify_request(
             return _allow(GuardRule.SUBMIT_READ_OK,
                           f"{normalized_method} allowed in SUBMIT (read-only)")
         # Mutating request — three independent gates, each a distinct refusal.
-        if attestation is None or not attestation.is_submit_capable(now_ms):
+        # NOT ``now_ms``: that is the crawl's MONOTONIC clock (ms since start),
+        # used correctly above for the auth/submit WINDOWS. Attestation
+        # freshness is a wall-clock question and is read from the wall clock
+        # inside is_submit_capable (T-SEC-08).
+        if attestation is None or not attestation.is_submit_capable():
             return _block(GuardRule.SUBMIT_NO_ATTESTATION, EVENT_BLOCKED_METHOD,
                           "critical",
                           f"{normalized_method} refused in SUBMIT — no valid "

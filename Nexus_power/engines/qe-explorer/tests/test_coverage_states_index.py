@@ -33,6 +33,21 @@ from types import SimpleNamespace
 import pytest
 
 from app.crawler import Crawler, _MAX_COVERAGE_STATES, _MAX_STATE_FIELDS
+from app.coverage import CoverageLedger
+from app.state_identity import StateRecorder
+
+
+def _note_state_signals(host, *args):
+    """M0.3/T-DE-06: the states index moved from ``Crawler`` into
+    :class:`app.state_identity.StateRecorder`.  Same code, same assertions —
+    but the unit no longer needs a Crawler to exercise it, which is the
+    testability the extraction was for."""
+    StateRecorder(host).note_state_signals(*args)
+
+
+def _state_signals(host):
+    """Companion to :func:`_note_state_signals` — same move, same reason."""
+    return StateRecorder(host).state_signals()
 
 
 #: The keys qe-central's build_states_index / extract_controls read. Mirrored
@@ -53,8 +68,8 @@ def test_a_state_is_recorded_under_the_fingerprint_the_graph_uses():
     """The journey graph keys nodes by fingerprint and looks them up by it. Any
     other key and the fold finds nothing — which is the failure being fixed."""
     me = _me()
-    Crawler._note_state_signals(me, "fp1", "https://app/apply", _signals("Email"))
-    out = Crawler._state_signals(me)
+    _note_state_signals(me, "fp1", "https://app/apply", _signals("Email"))
+    out = _state_signals(me)
     assert len(out) == 1
     assert out[0]["ax_fingerprint"] == "fp1"
     assert out[0]["location"] == "https://app/apply"
@@ -68,10 +83,10 @@ def test_the_questions_are_carried_not_the_answers():
     its sibling ``form_snapshot`` is label→COMMITTED VALUE and must never cross
     this boundary. Shapes leave the tenant; answers never do."""
     me = _me()
-    Crawler._note_state_signals(
+    _note_state_signals(
         me, "fp1", "https://app/apply",
         {"Email": {"type": "text", "required": True, "options": []}})
-    blob = repr(Crawler._state_signals(me))
+    blob = repr(_state_signals(me))
     assert "form_snapshot_signals" in blob
     assert "form_snapshot\"" not in blob and "'form_snapshot'" not in blob
     assert "qa.autotest@example.com" not in blob
@@ -82,25 +97,25 @@ def test_the_richest_sighting_of_a_state_wins():
     offers nothing until its driver is answered. Keeping the first sighting holds
     the emptiest view of exactly the questions hardest to enumerate."""
     me = _me()
-    Crawler._note_state_signals(me, "fp1", "https://app/x", _signals("A"))
-    Crawler._note_state_signals(me, "fp1", "https://app/x", _signals("A", "B", "C"))
-    out = Crawler._state_signals(me)
+    _note_state_signals(me, "fp1", "https://app/x", _signals("A"))
+    _note_state_signals(me, "fp1", "https://app/x", _signals("A", "B", "C"))
+    out = _state_signals(me)
     assert len(out) == 1
     assert set(out[0]["form_snapshot_signals"]) == {"A", "B", "C"}
 
 
 def test_a_poorer_later_sighting_never_erodes_what_was_seen():
     me = _me()
-    Crawler._note_state_signals(me, "fp1", "https://app/x", _signals("A", "B", "C"))
-    Crawler._note_state_signals(me, "fp1", "https://app/x", _signals("A"))
-    assert set(Crawler._state_signals(me)[0]["form_snapshot_signals"]) == {"A", "B", "C"}
+    _note_state_signals(me, "fp1", "https://app/x", _signals("A", "B", "C"))
+    _note_state_signals(me, "fp1", "https://app/x", _signals("A"))
+    assert set(_state_signals(me)[0]["form_snapshot_signals"]) == {"A", "B", "C"}
 
 
 def test_a_state_with_neither_questions_nor_controls_is_not_recorded():
     me = _me()
-    Crawler._note_state_signals(me, "fp1", "https://app/x", {})
-    Crawler._note_state_signals(me, "", "https://app/x", _signals("A"))
-    assert Crawler._state_signals(me) == []
+    _note_state_signals(me, "fp1", "https://app/x", {})
+    _note_state_signals(me, "", "https://app/x", _signals("A"))
+    assert _state_signals(me) == []
 
 
 def test_a_page_that_asks_nothing_can_still_refuse_everything():
@@ -108,11 +123,11 @@ def test_a_page_that_asks_nothing_can_still_refuse_everything():
     are links — has no form fields at all. Gating on questions alone would skip
     exactly the page where an over-broad refuse rule does its damage."""
     me = _me()
-    Crawler._note_state_signals(
+    _note_state_signals(
         me, "hub", "https://app/underwriting", {},
         [{"name": "New Application", "danger": ""},
          {"name": "Bind Coverage", "danger": "critical"}])
-    out = Crawler._state_signals(me)
+    out = _state_signals(me)
     assert len(out) == 1
     assert out[0]["controls_total"] == 2 and out[0]["danger_controls"] == 1
 
@@ -124,10 +139,10 @@ def test_the_danger_ratio_is_recorded_per_state():
     against the PAGE url took 20 of 35 hub controls critical, the wizard was
     never entered, and it cost an investigation. As a ratio it is an assertion."""
     me = _me()
-    Crawler._note_state_signals(
+    _note_state_signals(
         me, "fp1", "https://app/x", _signals("A"),
         [{"danger": "critical"}, {"danger": ""}, {"danger": ""}, {"danger": ""}])
-    got = Crawler._state_signals(me)[0]
+    got = _state_signals(me)[0]
     assert got["controls_total"] == 4 and got["danger_controls"] == 1
 
 
@@ -135,8 +150,8 @@ def test_a_crawl_with_no_control_list_still_records_its_questions():
     """Back-compat: controls is optional, and a caller that omits it must not
     lose the states index it was already contributing."""
     me = _me()
-    Crawler._note_state_signals(me, "fp1", "https://app/x", _signals("A"))
-    got = Crawler._state_signals(me)[0]
+    _note_state_signals(me, "fp1", "https://app/x", _signals("A"))
+    got = _state_signals(me)[0]
     assert got["controls_total"] == 0 and got["danger_controls"] == 0
 
 
@@ -145,13 +160,13 @@ def test_the_index_is_bounded():
     application must not turn the stats column into an evidence store."""
     me = _me()
     for i in range(_MAX_COVERAGE_STATES + 25):
-        Crawler._note_state_signals(me, f"fp{i}", "https://app/x", _signals("A"))
-    assert len(Crawler._state_signals(me)) == _MAX_COVERAGE_STATES
+        _note_state_signals(me, f"fp{i}", "https://app/x", _signals("A"))
+    assert len(_state_signals(me)) == _MAX_COVERAGE_STATES
 
     wide = _me()
-    Crawler._note_state_signals(
+    _note_state_signals(
         wide, "fp1", "https://app/x", _signals(*[f"f{i}" for i in range(_MAX_STATE_FIELDS + 50)]))
-    assert len(Crawler._state_signals(wide)[0]["form_snapshot_signals"]) == _MAX_STATE_FIELDS
+    assert len(_state_signals(wide)[0]["form_snapshot_signals"]) == _MAX_STATE_FIELDS
 
 
 def test_a_bounded_index_still_improves_the_states_it_holds():
@@ -159,25 +174,31 @@ def test_a_bounded_index_still_improves_the_states_it_holds():
     sighting of a state we are keeping is still the better record of it."""
     me = _me()
     for i in range(_MAX_COVERAGE_STATES):
-        Crawler._note_state_signals(me, f"fp{i}", "https://app/x", _signals("A"))
-    Crawler._note_state_signals(me, "fp0", "https://app/x", _signals("A", "B"))
-    kept = [s for s in Crawler._state_signals(me) if s["ax_fingerprint"] == "fp0"][0]
+        _note_state_signals(me, f"fp{i}", "https://app/x", _signals("A"))
+    _note_state_signals(me, "fp0", "https://app/x", _signals("A", "B"))
+    kept = [s for s in _state_signals(me) if s["ax_fingerprint"] == "fp0"][0]
     assert set(kept["form_snapshot_signals"]) == {"A", "B"}
 
 
 def test_coverage_publishes_the_key_the_fold_reads():
     """The whole defect in one assertion: the consumer read `coverage.states`
     and no crawl ever wrote it."""
-    src = inspect.getsource(Crawler._build_coverage)
-    assert '"states": self._state_signals()' in src
+    # M0.3/T-DE-07: the account moved into CoverageLedger.build. Same wiring,
+    # same guarantee — the key the fold reads is still published from the
+    # states-index producer rather than from anywhere else.
+    src = inspect.getsource(CoverageLedger.build)
+    assert '"states": c._state_signals()' in src
 
 
 def test_every_recorded_state_is_offered_to_the_index():
     """Hooked to the single point where a page_state is emitted, so a state that
     reaches the manifest cannot fail to reach the catalogue."""
-    src = inspect.getsource(Crawler._record_state)
-    assert "_note_state_signals(fingerprint, url, form_signals, controls)" in src
-    assert src.index("_note_state_signals") < src.index("emit.PageStateRecord")
+    # M0.3/T-DE-06: the emit point moved into StateRecorder.record_state. The
+    # invariant is unchanged — the index is still fed from the SAME single place
+    # a page_state is built, and still strictly before the record is assembled.
+    src = inspect.getsource(StateRecorder.record_state)
+    assert "note_state_signals(fingerprint, url, form_signals, controls)" in src
+    assert src.index("note_state_signals") < src.index("emit.PageStateRecord")
 
 
 # ─── the declared rule reaches the catalogue (Track 1.3) ─────────────────────
@@ -235,13 +256,16 @@ def test_confirmed_is_tracked_separately_from_submitted():
     the product claims something HAPPENED, so it is the last place a count may
     be generous."""
     import inspect
-    from app.crawler import Crawler
-    src = inspect.getsource(Crawler)
+    # M0.3/T-DE-11: the submit path moved into app.submit.SubmitMixin. The
+    # guarantee is unchanged — only the APPLICATION's own confirmation may
+    # increment forms_confirmed, and it is still read off the submit result.
+    from app.submit import SubmitMixin
+    src = inspect.getsource(SubmitMixin)
     assert "self._forms_confirmed += 1" in src
     assert 'getattr(result, "confirmed", False)' in src
-    cov = inspect.getsource(Crawler._build_coverage)
-    assert '"forms_confirmed": self._forms_confirmed' in cov
-    assert '"forms_submitted": self._forms_submitted' in cov
+    cov = inspect.getsource(CoverageLedger.build)  # M0.3/T-DE-07
+    assert '"forms_confirmed": c._forms_confirmed' in cov
+    assert '"forms_submitted": c._forms_submitted' in cov
 
 
 def test_a_submit_result_still_carries_both_facts():

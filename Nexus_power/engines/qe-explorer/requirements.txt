@@ -13,6 +13,10 @@ pydantic==2.10.3
 pydantic-settings==2.6.1
 PyYAML==6.0.2
 structlog==24.4.0
+# M0.6 observability — the /metrics exposition + the crawl-lifecycle metric
+# families (app/metrics.py). Import-guarded on the app side, so a checkout
+# without it still runs; the container always has it.
+prometheus-client==0.21.1
 # The playwright browsers are baked into the base image (/ms-playwright), but the
 # playwright PYTHON package is not exposed to the app interpreter in this build —
 # pin it explicitly (matching the base's browser version) so the crawler can

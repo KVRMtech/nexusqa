@@ -28,64 +28,30 @@ import hashlib
 import json
 import logging
 import time
+from collections import OrderedDict
 from contextlib import asynccontextmanager
 from typing import Any, Optional, Sequence
-from urllib.parse import urlsplit
 
 import httpx
 from fastapi import Depends, FastAPI, Header, HTTPException, status
 from pydantic import BaseModel, Field
 
-from . import emit
-from .browser import BrowserPort, NavResult, RawObservation, verify_intent
+from . import crawl_context, metrics
 from .config import settings
-from . import field_signature
-from .interaction_ladder import Rung, ladder_for
+from .crawl_context import CrawlTokenUsage
 from .crawler import TRAVERSAL_FULL, Budget, Crawler, CrawlSummary, GuardContext
-from .fingerprint import interactive_signature
 from .forms import AnswerKey
 from .auth import AuthWindow, Credentials
 from .guard import Attestation, RefusePack, load_refuse_pack
-from .inventory_js import DISPLAYED_VALUES_JS, INVENTORY_JS, INVENTORY_JS_VERSION, OPAQUE_JS
+from .inventory_js import INVENTORY_JS_VERSION
+from .playwright_port import (_ACTION_TIMEOUT_MS, _LAUNCH_ARGS,
+                              PlaywrightBrowserPort)
 
 logging.basicConfig(level=getattr(logging, settings.log_level.upper(), logging.INFO))
 logger = logging.getLogger("qe-explorer")
 
 EXPLORER_VERSION = f"qe-explorer/1.0+{INVENTORY_JS_VERSION}"
 
-# Playwright launch args: --no-sandbox is required for Chromium in an
-# unprivileged container (mirrors Dockerfile.runner:28).
-_LAUNCH_ARGS = ["--no-sandbox", "--disable-dev-shm-usage"]
-_SETTLE_MS = 1500          # post-action network-settle budget (best-effort)
-_ACTION_TIMEOUT_MS = 5000  # per-locator action timeout
-# Hydration gate: after networkidle, poll a cheap DOM-quiescence signature until it
-# is stable for N consecutive reads, so a slow-hydrating SPA (controls mounted after
-# networkidle) is never inventoried half-rendered. Bounded + best-effort.
-_STABILIZE_MS = 12000      # max hydration-stabilization budget beyond networkidle
-                           # (heavy client-rendered SPAs mount controls late)
-_STABLE_POLL_MS = 220      # interval between quiescence probes
-_STABLE_READS = 2          # consecutive equal reads that count as settled
-# A page whose visible-interactive count is below this has NOT rendered yet — a
-# client-rendered SPA shell before its framework paints. A stable-EMPTY signature
-# must NOT satisfy the hydration gate, else the crawler inventories a blank shell
-# (0 forms) and misses the client-rendered login/form.
-_MIN_INTERACTIVE = 2
-# Viewport materialization (lazy-load / virtual-scroll) — bounded step-scroll.
-_MATERIALIZE_STEPS = 8
-# Adaptive backoff on an explicit server rate-limit (429), then ONE retry.
-_DEFAULT_BACKOFF_MS = 2000
-_MAX_BACKOFF_MS = 15000
-
-#: Cheap page-quiescence signature: visible-interactive count : readyState :
-#: scrollHeight. Stable across two reads ⇒ the DOM has stopped mounting controls.
-_QUIESCENCE_JS = (
-    "(()=>{try{var e=document.querySelectorAll("
-    "'a[href],button,input,select,textarea,[role],[tabindex]');"
-    "var n=0;for(var i=0;i<e.length;i++){var el=e[i];"
-    "if(el.offsetParent!==null||(el.getClientRects&&el.getClientRects().length))n++;}"
-    "return n+':'+document.readyState+':'+Math.round("
-    "document.body?document.body.scrollHeight:0);}catch(x){return 'err';}})()"
-)
 
 
 # ─── Request model (design §3.2 POST /api/v1/explore) ────────────────────────
@@ -195,7 +161,57 @@ class ExploreRequest(BaseModel):
     #: POSTURE: observe-only mode for production environments.  When True, the
     #: crawler captures pages/fields/locators/navigation but never fills a form,
     #: never submits, and never advances a commit.
+    #:
+    #: This is a FLOOR, not the decision: :func:`resolve_observe_only` raises it
+    #: to True whenever ``env_kind`` is not an attested DISPOSABLE environment,
+    #: so a manipulated or bypassed qe-central cannot dispatch a mutating crawl
+    #: at a non-disposable target by simply sending False (M0.5 T-SEC-05).
     observe_only: bool = False
+    #: The environment kind qe-central resolved for this crawl (``disposable`` |
+    #: ``staging`` | ``uat`` | ``production_test`` | ``prod``).  EMPTY means "not
+    #: stated", which is treated exactly like production: fail-closed.
+    env_kind: str = Field(default="", max_length=32)
+
+
+#: The ONLY env_kind on which a crawl may type, fill, submit or advance a commit.
+#: Every other value — including an absent, unrecognised or blank one — is
+#: observation-only.  This mirrors the submit doctrine already enforced by
+#: ``guard.Attestation.is_submit_capable`` and extends it to FILL, which was the
+#: hole: a staging/prod crawl could not submit, but could still type into a
+#: real application's forms.
+MUTABLE_ENV_KIND = "disposable"
+
+
+def resolve_observe_only(req: "ExploreRequest",
+                         attestation: Optional[Attestation]) -> bool:
+    """The AUTHORITATIVE observe-only decision, made inside crawl execution.
+
+    M0.5 T-SEC-05.  The previous design derived this in qe-central's
+    configuration-resolution path and shipped the answer here as a boolean, so
+    the invariant held only as long as that one caller behaved.  Now the crawl
+    process decides for itself, from the attestation it was actually handed:
+
+      * an explicit ``observe_only=True`` is always honoured (a floor);
+      * otherwise mutation is permitted ONLY when the resolved ``env_kind`` is
+        ``disposable``;
+      * an absent/blank/unknown ``env_kind`` resolves to observe-only.
+
+    ``req.env_kind`` and the attestation's own ``env_kind`` must AGREE — if the
+    dispatch claims ``disposable`` but the signed attestation says otherwise,
+    the attestation wins and the crawl is observation-only.
+    """
+    if bool(req.observe_only):
+        return True
+    declared = str(getattr(req, "env_kind", "") or "").strip().lower()
+    attested = str(getattr(attestation, "env_kind", "") or "").strip().lower()
+    if attested and attested != declared:
+        # The signed statement is the authority; a dispatch that disagrees with
+        # it is exactly the manipulation this gate exists to survive.
+        logger.warning(
+            "qec.explorer.env_kind_mismatch declared=%r attested=%r — "
+            "using the attestation", declared, attested)
+        declared = attested
+    return declared != MUTABLE_ENV_KIND
 
 
 def _config_fingerprint(req: ExploreRequest, refuse_pack_version: str) -> str:
@@ -227,49 +243,194 @@ class _Job:
         self.error: str = ""
 
 
+# ── Explicit job lifecycle (M0.5 T-SEC-09) ───────────────────────────────────
+# A job used to have no terminal state: ``finish`` cleared the active slot but
+# left the job in ``_by_id`` forever, so N sequential crawls grew the map
+# without bound AND a completed crawl stayed indistinguishable from a live one
+# in every lookup that authorises an operation.
+JOB_CREATED = "created"      # slot reserved; browser not built yet
+JOB_RUNNING = "running"      # crawler live
+JOB_FINISHED = "finished"    # terminal — evicted from active lookup
+
+#: How many FINISHED crawls keep a readable summary.  Bounded on purpose: the
+#: status endpoint must still answer for a crawl that just ended, but terminal
+#: state must never accumulate across a fleet's lifetime.
+_FINISHED_RETAIN = 32
+
+
 class JobManager:
     """At most ONE active crawl per explorer container (409 otherwise).
 
-    A crawl is ``pending`` from accept until its browser+crawler are built, then
-    ``active`` until it finishes.  The accept gate (:meth:`accept`) checks and
-    marks pending atomically (FastAPI handlers run single-threaded on the loop,
-    so there is no await between check and mark) — the authoritative single-flight.
+    A crawl is ``created`` from :meth:`reserve` until its browser+crawler are
+    built, then ``running`` until it finishes, then ``finished`` — at which
+    point it is EVICTED from the active map into a small bounded terminal
+    ring.  The reservation gate checks and marks atomically (FastAPI handlers
+    run single-threaded on the loop, so there is no await between check and
+    mark) — the authoritative single-flight.
+
+    OWNERSHIP (M0.5 T-SEC-03/T-SEC-07): every reservation records the tenant
+    that made it.  A later ``explore``/``status``/``cancel`` for that crawl id
+    must come from the SAME tenant, so one tenant can neither drive nor observe
+    another tenant's job on a shared worker.
     """
 
     def __init__(self) -> None:
         self._active: Optional[_Job] = None
         self._pending: set[str] = set()
         self._by_id: dict[str, _Job] = {}
+        #: crawl_id → owning tenant, for every non-terminal crawl.
+        self._owner: dict[str, str] = {}
+        #: crawl_id → lifecycle state, for every non-terminal crawl.
+        self._state: dict[str, str] = {}
+        #: bounded terminal ring: crawl_id → (tenant_id, public summary/error).
+        self._finished: "OrderedDict[str, tuple[str, dict]]" = OrderedDict()
 
     @property
     def busy(self) -> bool:
         return self._active is not None or bool(self._pending)
 
-    def accept(self, crawl_id: str) -> None:
-        """Atomically reserve the single-flight slot, or 409 if busy."""
+    @property
+    def active_count(self) -> int:
+        """Number of crawls in a NON-terminal state (the leak canary)."""
+        return len(self._by_id) + len(self._pending)
+
+    # ── reservation ──────────────────────────────────────────────────────
+
+    def reserve(self, crawl_id: str, tenant_id: str) -> None:
+        """Atomically claim the single-flight slot for ``tenant_id``, or 409.
+
+        This is the ONLY place the slot is taken.  qe-central calls it BEFORE it
+        writes this worker's egress allowlist, so a worker that is busy with
+        another tenant's crawl refuses here and its fence is never touched
+        (T-SEC-03).
+        """
         if self.busy:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT,
                                 detail="explorer busy — a crawl is already running")
+        if not str(tenant_id or "").strip():
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                                detail="reservation requires a tenant_id")
         self._pending.add(crawl_id)
+        self._owner[crawl_id] = str(tenant_id)
+        self._state[crawl_id] = JOB_CREATED
+
+    def accept(self, crawl_id: str, tenant_id: str) -> None:
+        """Claim the slot for a dispatch, honouring an existing reservation.
+
+        When ``crawl_id`` is already reserved BY THIS TENANT the slot is already
+        held and this is a no-op; a reservation held by ANOTHER tenant, or a
+        busy worker with no matching reservation, is a 409/403.
+        """
+        holder = self._owner.get(crawl_id)
+        if holder is not None:
+            if holder != str(tenant_id):
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="crawl_id is reserved by another tenant",
+                )
+            return
+        self.reserve(crawl_id, tenant_id)
+
+    def release(self, crawl_id: str, tenant_id: str) -> None:
+        """Give an unused reservation back (dispatch aborted before it started).
+
+        Only the OWNER may release, and only while the crawl has not started —
+        otherwise a second tenant could free a running crawl's slot and race in.
+        """
+        holder = self._owner.get(crawl_id)
+        if holder is None:
+            return
+        if holder != str(tenant_id):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
+                                detail="crawl is owned by another tenant")
+        if self._state.get(crawl_id) == JOB_RUNNING:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT,
+                                detail="crawl is running — cancel it instead")
+        self._pending.discard(crawl_id)
+        self._owner.pop(crawl_id, None)
+        self._state.pop(crawl_id, None)
+
+    def owner(self, crawl_id: str) -> str:
+        """The tenant that owns ``crawl_id`` (active or recently finished)."""
+        if crawl_id in self._owner:
+            return self._owner[crawl_id]
+        entry = self._finished.get(crawl_id)
+        return entry[0] if entry else ""
+
+    def assert_owner(self, crawl_id: str, tenant_id: str) -> None:
+        """403 unless ``tenant_id`` owns ``crawl_id``.
+
+        An UNKNOWN crawl id is deliberately NOT distinguished from one owned by
+        somebody else at the call sites (they 404 uniformly), so this never
+        becomes an existence oracle.
+        """
+        holder = self.owner(crawl_id)
+        if holder and holder != str(tenant_id):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
+                                detail="crawl belongs to another tenant")
+
+    # ── lifecycle ────────────────────────────────────────────────────────
 
     def activate(self, job: _Job) -> None:
+        crawl_id = job.crawler.crawl_id
         self._active = job
-        self._by_id[job.crawler.crawl_id] = job
-        self._pending.discard(job.crawler.crawl_id)
+        self._by_id[crawl_id] = job
+        self._pending.discard(crawl_id)
+        self._state[crawl_id] = JOB_RUNNING
 
     def is_pending(self, crawl_id: str) -> bool:
         return crawl_id in self._pending
 
+    def state(self, crawl_id: str) -> str:
+        if crawl_id in self._state:
+            return self._state[crawl_id]
+        return JOB_FINISHED if crawl_id in self._finished else ""
+
     def get(self, crawl_id: str) -> Optional[_Job]:
         return self._by_id.get(crawl_id)
 
+    def finished_view(self, crawl_id: str) -> Optional[dict]:
+        entry = self._finished.get(crawl_id)
+        return dict(entry[1]) if entry else None
+
     def finish(self, crawl_id: str, job: Optional[_Job]) -> None:
+        """Terminalise a crawl: free the slot AND EVICT it from active lookup.
+
+        The job's final progress is copied into a bounded terminal ring so
+        ``GET /api/v1/explore/{id}`` still answers, then every active-state map
+        drops the id.  Without the eviction, ``_by_id`` grew by one per crawl
+        forever and a finished job could still be resolved — and authorised —
+        as if it were live.
+        """
+        tenant_id = self._owner.get(crawl_id, "")
+        terminal: dict = {"crawl_id": crawl_id, "running": False,
+                          "lifecycle": JOB_FINISHED}
+        if job is not None:
+            try:
+                terminal.update(job.crawler.progress())
+            except Exception:  # pragma: no cover — never fail terminalisation
+                pass
+            terminal["running"] = False
+            terminal["lifecycle"] = JOB_FINISHED
+            if job.summary is not None:
+                terminal["summary"] = _summary_public(job.summary)
+            if job.error:
+                terminal["error"] = job.error
+
         self._pending.discard(crawl_id)
+        self._by_id.pop(crawl_id, None)
+        self._owner.pop(crawl_id, None)
+        self._state.pop(crawl_id, None)
         if job is not None and self._active is job:
             self._active = None
-        elif job is None and self._active is None:
+        elif job is None and not self._by_id:
             # a crawl that never activated still frees the slot.
             self._active = None
+
+        self._finished[crawl_id] = (tenant_id, terminal)
+        self._finished.move_to_end(crawl_id)
+        while len(self._finished) > _FINISHED_RETAIN:
+            self._finished.popitem(last=False)
 
 
 # ─── Lifespan ────────────────────────────────────────────────────────────────
@@ -283,17 +444,35 @@ async def lifespan(app: FastAPI):
     app.state.refuse_pack = refuse_pack
     app.state.jobs = JobManager()
     app.state.http = httpx.AsyncClient(timeout=30.0)
+    # Publish build identity the moment the process is scrapeable, so a
+    # freshly-started explorer with no crawl yet still exports a series — the
+    # difference between "alive and idle" and "down" must never be an absence.
+    metrics.set_build_info(version=EXPLORER_VERSION,
+                           refuse_pack_version=refuse_pack.version)
     logger.info("qec.explorer.started version=%s refuse_pack=%s port=%d",
                 EXPLORER_VERSION, refuse_pack.version, settings.port)
+    crawl_context.emit(crawl_context.EV_EXPLORER_STARTED,
+                       version=EXPLORER_VERSION,
+                       refuse_pack_version=refuse_pack.version,
+                       port=settings.port)
     try:
         yield
     finally:
         await app.state.http.aclose()
         logger.info("qec.explorer.stopped")
+        crawl_context.emit(crawl_context.EV_EXPLORER_STOPPED,
+                           version=EXPLORER_VERSION)
 
 
 app = FastAPI(title="QE-Central Contained Explorer", version=EXPLORER_VERSION,
               lifespan=lifespan)
+
+# Prometheus exposition (M0.6 / T-OB-01). Mounted OUTSIDE /api/* and without the
+# X-QEC-Token dependency — a scraper holds no token, and the payload carries no
+# crawl id, URL, credential or prompt, so it has the same public posture as
+# /health. Rendering reads pre-aggregated counters only: no crawl computation,
+# and it stays responsive while a crawl is running.
+app.include_router(metrics.build_metrics_router())
 
 
 # ─── Auth dependency ─────────────────────────────────────────────────────────
@@ -302,6 +481,10 @@ app = FastAPI(title="QE-Central Contained Explorer", version=EXPLORER_VERSION,
 async def require_token(x_qec_token: str = Header(default="")) -> None:
     """Constant-time X-QEC-Token check (fail-closed on empty secret/token)."""
     if not settings.token_matches(x_qec_token):
+        # A rejected dispatch is still a dispatch ATTEMPT — counting it here is
+        # what makes "qe-central is calling with the wrong fleet token" visible
+        # as a dispatch-funnel gap instead of a silent absence of crawls.
+        metrics.record_dispatch(outcome="unauthorized")
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,
                             detail="invalid or missing X-QEC-Token")
 
@@ -345,7 +528,25 @@ async def explore(req: ExploreRequest, _: None = Depends(require_token)) -> dict
     # Atomically reserve the single-flight slot (409 if busy). The Crawler is
     # built inside the task (it needs the live port); the reservation bridges the
     # gap so a second request cannot slip in before the browser is ready.
-    jobs.accept(req.crawl_id)
+    #
+    # The 409 is the WORKER-CONTENTION signal qe-central sees as a failed
+    # dispatch, so it is counted on the way out rather than inferred from the
+    # absence of a crawl.
+    try:
+        jobs.accept(req.crawl_id, req.tenant_id)
+    except HTTPException as exc:
+        metrics.record_dispatch(
+            outcome="busy_409" if exc.status_code == status.HTTP_409_CONFLICT
+            else "rejected")
+        crawl_context.emit(
+            crawl_context.EV_CRAWL_REFUSED,
+            reason="single_flight_busy" if exc.status_code == 409 else "rejected",
+            status_code=exc.status_code,
+            refused_crawl_id=crawl_context.sanitize_id(req.crawl_id),
+        )
+        raise
+
+    metrics.record_dispatch(outcome="accepted")
 
     fingerprint = _config_fingerprint(req, pack.version)
     asyncio.create_task(_run_job(
@@ -357,16 +558,76 @@ async def explore(req: ExploreRequest, _: None = Depends(require_token)) -> dict
             "explorer_version": EXPLORER_VERSION, "config_fingerprint": fingerprint}
 
 
-@app.get("/api/v1/explore/{crawl_id}")
-async def explore_status(crawl_id: str, _: None = Depends(require_token)) -> dict[str, Any]:
-    """Progress / final summary for a crawl."""
+class ReserveRequest(BaseModel):
+    """Claim the single-flight slot BEFORE the caller fences this worker's egress.
+
+    M0.5 T-SEC-03.  The old order was: write the worker's squid allowlist, then
+    POST /explore and find out it was busy.  That let tenant B rewrite the fence
+    of a worker running tenant A's crawl — B's dispatch failed, but A's browser
+    was left pointing at B's allowlist.  Reservation-first makes the fence write
+    unreachable unless the slot is actually held by the caller.
+    """
+
+    crawl_id: str = Field(min_length=1, max_length=36)
+    tenant_id: str = Field(min_length=1, max_length=64)
+
+
+@app.post("/api/v1/reserve", status_code=status.HTTP_200_OK)
+async def reserve_worker(
+    req: ReserveRequest, _: None = Depends(require_token),
+) -> dict[str, Any]:
+    """Atomically claim this worker for ``(crawl_id, tenant_id)``, or 409."""
     jobs: JobManager = app.state.jobs
+    jobs.reserve(req.crawl_id, req.tenant_id)
+    logger.info("qec.explorer.reserved crawl_id=%s tenant_id=%s",
+                req.crawl_id, req.tenant_id)
+    return {"crawl_id": req.crawl_id, "status": "reserved",
+            "explorer_version": EXPLORER_VERSION}
+
+
+@app.post("/api/v1/reserve/{crawl_id}/release", status_code=status.HTTP_200_OK)
+async def release_worker(
+    crawl_id: str, req: ReserveRequest, _: None = Depends(require_token),
+) -> dict[str, Any]:
+    """Return an UNUSED reservation (the dispatch aborted before it started).
+
+    Owner-only, and refused once the crawl is running — otherwise a second
+    tenant could free a live crawl's slot and race into it.
+    """
+    jobs: JobManager = app.state.jobs
+    jobs.release(crawl_id, req.tenant_id)
+    return {"crawl_id": crawl_id, "status": "released"}
+
+
+@app.get("/api/v1/explore/{crawl_id}")
+async def explore_status(
+    crawl_id: str,
+    tenant_id: str = "",
+    _: None = Depends(require_token),
+) -> dict[str, Any]:
+    """Progress / final summary for a crawl (owner-scoped).
+
+    ``tenant_id`` is REQUIRED and must match the tenant that reserved the crawl:
+    a shared fleet token proves the caller is qe-central, never WHICH tenant it
+    is acting for, so without this check any tenant could read another tenant's
+    live crawl progress (page urls, control names) off a shared worker.
+    """
+    jobs: JobManager = app.state.jobs
+    if not tenant_id.strip():
+        raise HTTPException(status_code=400, detail="tenant_id is required")
+    jobs.assert_owner(crawl_id, tenant_id)
+
     job = jobs.get(crawl_id)
     if job is None:
         if jobs.is_pending(crawl_id):
-            return {"crawl_id": crawl_id, "running": True, "phase": "starting"}
+            return {"crawl_id": crawl_id, "running": True, "phase": "starting",
+                    "lifecycle": JOB_CREATED}
+        terminal = jobs.finished_view(crawl_id)
+        if terminal is not None:
+            return terminal
         raise HTTPException(status_code=404, detail="unknown crawl_id")
     progress = job.crawler.progress()
+    progress["lifecycle"] = jobs.state(crawl_id) or JOB_RUNNING
     if job.summary is not None:
         progress["summary"] = _summary_public(job.summary)
     if job.error:
@@ -375,10 +636,18 @@ async def explore_status(crawl_id: str, _: None = Depends(require_token)) -> dic
 
 
 @app.post("/api/v1/explore/{crawl_id}/cancel")
-async def explore_cancel(crawl_id: str, _: None = Depends(require_token)) -> dict[str, Any]:
+async def explore_cancel(
+    crawl_id: str,
+    tenant_id: str = "",
+    _: None = Depends(require_token),
+) -> dict[str, Any]:
     """Request a graceful stop; the manifest is flushed and the partial crawl
-    reported with ``stop_reason='cancelled'``."""
+    reported with ``stop_reason='cancelled'``.  Owner-scoped: one tenant can
+    never cancel another tenant's crawl on a shared worker."""
     jobs: JobManager = app.state.jobs
+    if not tenant_id.strip():
+        raise HTTPException(status_code=400, detail="tenant_id is required")
+    jobs.assert_owner(crawl_id, tenant_id)
     job = jobs.get(crawl_id)
     if job is None:
         raise HTTPException(status_code=404, detail="unknown crawl_id")
@@ -399,8 +668,80 @@ _ORACLE_NONE = "none"
 _ORACLE_UNAVAILABLE = "unavailable"
 
 
+class _CrawlTelemetry:
+    """Per-crawl observability accumulator, shared by the crawl's oracles.
+
+    Exists because the ORACLE-PARTICIPATION verdict cannot be read off any one
+    oracle closure: three oracles may be wired, each keeps its own resilience
+    state, and the terminal record needs one honest answer to "did the oracle
+    take part?".
+
+    ``oracle_calls`` counts consultations that REACHED THE WIRE.  A consultation
+    short-circuited by the open circuit breaker or the per-crawl call cap is
+    counted in Prometheus (so the resilience state is visible) but deliberately
+    NOT here: a crawl whose every consultation was refused by its own breaker
+    made zero oracle calls, and letting the short-circuits mark it ``used``
+    would hide precisely the failure this milestone exists to expose.
+    """
+
+    def __init__(self, crawl_id: str) -> None:
+        self.oracle_configured = False
+        self.oracle_calls = 0
+        self.tokens = CrawlTokenUsage(crawl_id=crawl_id)
+
+    def note_call(self) -> None:
+        self.oracle_calls += 1
+
+    def note_usage(self, body: Any) -> None:
+        """Fold any provider-reported token usage on an oracle reply into the
+        crawl's spend record.  Silent when the body carries none — the usage is
+        recorded when the provider reports it and never estimated."""
+        try:
+            if not isinstance(body, dict):
+                return
+            usage = crawl_context.usage_from_response(body.get("usage") or body)
+            if usage["prompt_tokens"] is None and usage["completion_tokens"] is None:
+                return
+            self.tokens.record(**usage)
+            metrics.record_llm_usage(
+                provider=usage["provider"], model=usage["model"],
+                outcome="success",
+                prompt_tokens=usage["prompt_tokens"] or 0,
+                completion_tokens=usage["completion_tokens"] or 0,
+                cache_read_tokens=usage["cache_read_tokens"] or 0,
+                cache_creation_tokens=usage["cache_creation_tokens"] or 0,
+            )
+            crawl_context.emit(
+                crawl_context.EV_LLM_COMPLETED,
+                provider=usage["provider"], model=usage["model"],
+                prompt_tokens=usage["prompt_tokens"] or 0,
+                completion_tokens=usage["completion_tokens"] or 0,
+            )
+        except Exception:  # telemetry must never break an oracle consultation
+            logger.debug("qec.explorer.usage_capture_failed", exc_info=True)
+
+
+def _note_oracle_outcome(
+    oracle: str, outcome: str, started: float, *, failure_reason: str = "",
+) -> None:
+    """Record ONE completed oracle consultation: outcome, latency, failure class.
+
+    Called from every terminating branch of every oracle so an ``unavailable``
+    is instrumented exactly as thoroughly as a ``picked`` — an oracle whose
+    calls all fail must show up as failures, not as an absence of calls.
+    """
+    elapsed = max(0.0, time.monotonic() - started)
+    metrics.record_oracle_call(oracle=oracle, outcome=outcome,
+                               duration_seconds=elapsed,
+                               failure_reason=failure_reason)
+    crawl_context.emit(crawl_context.EV_ORACLE_COMPLETED, oracle=oracle,
+                       outcome=outcome, duration_ms=int(elapsed * 1000),
+                       failure_reason=failure_reason)
+
+
 def _make_advance_oracle(
     http_client: httpx.AsyncClient, tenant_id: str, crawl_id: str,
+    telemetry: Optional[_CrawlTelemetry] = None,
 ):
     """Return an async callable the Crawler invokes when the deterministic
     regex cannot identify a wizard-advance control.  The callable POSTs the
@@ -431,6 +772,8 @@ def _make_advance_oracle(
         page_url: str,
     ) -> dict[str, Any]:
         if state["circuit_open"]:
+            metrics.record_oracle_call(oracle="advance", outcome="circuit_open",
+                                       failure_reason="circuit_open")
             return dict(unavailable)
         if state["calls"] >= settings.advance_oracle_max_calls:
             if not state["cap_logged"]:
@@ -438,9 +781,21 @@ def _make_advance_oracle(
                 logger.warning(
                     "qec.explorer.advance_oracle_cap_reached crawl_id=%s cap=%d",
                     crawl_id, settings.advance_oracle_max_calls)
+            metrics.record_oracle_call(oracle="advance", outcome="cap_reached",
+                                       failure_reason="cap_reached")
             return dict(unavailable)
         state["calls"] += 1
+        if telemetry is not None:
+            telemetry.note_call()
+        started = time.monotonic()
+        crawl_context.emit(crawl_context.EV_ORACLE_CALLED, oracle="advance",
+                           controls=len(controls))
         body = {
+            # M0.5 T-SEC-07: the crawl id is the SERVER-VERIFIABLE identity.
+            # qe-central resolves the owning tenant from it and refuses when the
+            # body's tenant_id disagrees, so the body can no longer name whose
+            # data this consultation is about.
+            "crawl_id": crawl_id,
             "tenant_id": tenant_id,
             "controls": [
                 {"name": c.get("name", ""), "kind": c.get("kind", ""),
@@ -452,16 +807,22 @@ def _make_advance_oracle(
             "page_url": page_url or "",
         }
         payload = json.dumps(body, sort_keys=True, separators=(",", ":")).encode("utf-8")
-        signature = settings.sign_payload(payload)
         url = settings.callback_url.rstrip("/") + "/internal/pick-advance"
+        failure_reason = "bad_body"
         try:
+            # Signing INSIDE the guarded block: with no fleet secret configured
+            # (T-SEC-01 removed the shipped default) this raises, and an
+            # unsignable consultation must degrade to the honest `unavailable`
+            # the crawler already handles — never crash a running crawl.
+            signature = settings.sign_payload(
+                payload, scope=f"pick-advance:{crawl_id}")
             resp = await http_client.post(
                 url, content=payload,
-                headers={
+                headers=crawl_context.crawl_headers({
                     "Content-Type": "application/json",
                     "X-QEC-Signature": signature,
                     "X-QEC-Token": settings.explorer_token,
-                },
+                }),
                 timeout=settings.advance_oracle_timeout_s,
             )
             if resp.status_code == 200:
@@ -469,19 +830,33 @@ def _make_advance_oracle(
                 status = str(data.get("status") or "")
                 idx = data.get("control_index")
                 sig = str(data.get("signature") or "")
+                # Token usage travels back on the oracle reply so the crawl that
+                # SPENT the tokens is the crawl they are attributed to — captured
+                # before the status branch, because a `none` verdict costs the
+                # same tokens a `picked` one does.
+                if telemetry is not None:
+                    telemetry.note_usage(data)
                 if status == _ORACLE_PICKED and isinstance(idx, int):
                     state["consecutive_failures"] = 0
+                    _note_oracle_outcome("advance", _ORACLE_PICKED, started)
                     return {"index": idx, "status": _ORACLE_PICKED,
                             "signature": sig}
                 if status == _ORACLE_NONE:
                     state["consecutive_failures"] = 0
+                    _note_oracle_outcome("advance", _ORACLE_NONE, started)
                     return {"index": None, "status": _ORACLE_NONE,
                             "signature": sig}
                 # Anything else — including a legacy body without ``status`` —
                 # is a decision NOT made.
+            else:
+                failure_reason = "http_error"
         except Exception as exc:
+            failure_reason = (
+                "timeout" if isinstance(exc, httpx.TimeoutException) else "transport")
             logger.warning("qec.explorer.advance_oracle_failed crawl_id=%s error=%s",
                            crawl_id, str(exc)[:200])
+        _note_oracle_outcome("advance", _ORACLE_UNAVAILABLE, started,
+                             failure_reason=failure_reason)
         state["consecutive_failures"] += 1
         if (state["consecutive_failures"] >= settings.advance_oracle_breaker_threshold
                 and not state["circuit_open"]):
@@ -501,6 +876,7 @@ _MEDIC_UNAVAILABLE = "unavailable"
 
 def _make_medic_oracle(
     http_client: httpx.AsyncClient, tenant_id: str, crawl_id: str,
+    telemetry: Optional[_CrawlTelemetry] = None,
 ):
     """Return an async callable the crawler invokes when the deterministic
     ladder is exhausted and R0 still reports intent-unmet.  The callable
@@ -522,6 +898,8 @@ def _make_medic_oracle(
         page_context: dict[str, Any],
     ) -> dict[str, Any]:
         if state["circuit_open"]:
+            metrics.record_oracle_call(oracle="medic", outcome="circuit_open",
+                                       failure_reason="circuit_open")
             return dict(unavailable)
         if state["calls"] >= settings.medic_oracle_max_calls:
             if not state["cap_logged"]:
@@ -529,9 +907,16 @@ def _make_medic_oracle(
                 logger.warning(
                     "qec.explorer.medic_oracle_cap_reached crawl_id=%s cap=%d",
                     crawl_id, settings.medic_oracle_max_calls)
+            metrics.record_oracle_call(oracle="medic", outcome="cap_reached",
+                                       failure_reason="cap_reached")
             return dict(unavailable)
         state["calls"] += 1
+        if telemetry is not None:
+            telemetry.note_call()
+        started = time.monotonic()
+        crawl_context.emit(crawl_context.EV_ORACLE_CALLED, oracle="medic")
         body = {
+            "crawl_id": crawl_id,          # T-SEC-07 server-verifiable identity
             "tenant_id": tenant_id,
             "control": {
                 "name": control.get("name", ""),
@@ -547,31 +932,43 @@ def _make_medic_oracle(
             "page_context": page_context,
         }
         payload = json.dumps(body, sort_keys=True, separators=(",", ":")).encode("utf-8")
-        signature = settings.sign_payload(payload)
         url = settings.callback_url.rstrip("/") + "/internal/operate-control"
+        failure_reason = "bad_body"
         try:
+            signature = settings.sign_payload(
+                payload, scope=f"operate-control:{crawl_id}")
             resp = await http_client.post(
                 url, content=payload,
-                headers={
+                headers=crawl_context.crawl_headers({
                     "Content-Type": "application/json",
                     "X-QEC-Signature": signature,
                     "X-QEC-Token": settings.explorer_token,
-                },
+                }),
                 timeout=settings.medic_oracle_timeout_s,
             )
             if resp.status_code == 200:
                 data = resp.json()
                 status = str(data.get("status") or "")
                 action = str(data.get("action") or "")
+                if telemetry is not None:
+                    telemetry.note_usage(data)
                 if status == _MEDIC_PROPOSED and action:
                     state["consecutive_failures"] = 0
+                    _note_oracle_outcome("medic", _MEDIC_PROPOSED, started)
                     return {"action": action, "status": _MEDIC_PROPOSED}
                 if status == _MEDIC_DISPLAY_ONLY:
                     state["consecutive_failures"] = 0
+                    _note_oracle_outcome("medic", _MEDIC_DISPLAY_ONLY, started)
                     return {"action": "display_only", "status": _MEDIC_DISPLAY_ONLY}
+            else:
+                failure_reason = "http_error"
         except Exception as exc:
+            failure_reason = (
+                "timeout" if isinstance(exc, httpx.TimeoutException) else "transport")
             logger.warning("qec.explorer.medic_oracle_failed crawl_id=%s error=%s",
                            crawl_id, str(exc)[:200])
+        _note_oracle_outcome("medic", _MEDIC_UNAVAILABLE, started,
+                             failure_reason=failure_reason)
         state["consecutive_failures"] += 1
         if (state["consecutive_failures"] >= settings.medic_oracle_breaker_threshold
                 and not state["circuit_open"]):
@@ -586,6 +983,7 @@ def _make_medic_oracle(
 
 def _make_vision_oracle(
     http_client: httpx.AsyncClient, tenant_id: str, crawl_id: str,
+    telemetry: Optional[_CrawlTelemetry] = None,
 ):
     """Return an async callable the crawler invokes on a DOM-opaque page (when
     ``perception.should_perceive`` is true): POST the page SCREENSHOT to
@@ -604,6 +1002,9 @@ def _make_vision_oracle(
 
     async def perceive(screenshot_b64: str, page_context: dict[str, Any]) -> dict[str, Any]:
         if state["circuit_open"] or not screenshot_b64:
+            if state["circuit_open"]:
+                metrics.record_oracle_call(oracle="vision", outcome="circuit_open",
+                                           failure_reason="circuit_open")
             return dict(empty)
         if state["calls"] >= settings.medic_oracle_max_calls:
             if not state["cap_logged"]:
@@ -611,34 +1012,53 @@ def _make_vision_oracle(
                 logger.warning(
                     "qec.explorer.vision_oracle_cap_reached crawl_id=%s cap=%d",
                     crawl_id, settings.medic_oracle_max_calls)
+            metrics.record_oracle_call(oracle="vision", outcome="cap_reached",
+                                       failure_reason="cap_reached")
             return dict(empty)
         state["calls"] += 1
-        body = {"tenant_id": tenant_id, "screenshot_b64": screenshot_b64,
+        if telemetry is not None:
+            telemetry.note_call()
+        started = time.monotonic()
+        crawl_context.emit(crawl_context.EV_ORACLE_CALLED, oracle="vision")
+        body = {"crawl_id": crawl_id,      # T-SEC-07 server-verifiable identity
+                "tenant_id": tenant_id, "screenshot_b64": screenshot_b64,
                 "page_context": page_context or {}}
         payload = json.dumps(body, sort_keys=True, separators=(",", ":")).encode("utf-8")
-        signature = settings.sign_payload(payload)
         url = settings.callback_url.rstrip("/") + "/internal/perceive-controls"
+        failure_reason = "bad_body"
         try:
+            signature = settings.sign_payload(
+                payload, scope=f"perceive-controls:{crawl_id}")
             resp = await http_client.post(
                 url, content=payload,
-                headers={
+                headers=crawl_context.crawl_headers({
                     "Content-Type": "application/json",
                     "X-QEC-Signature": signature,
                     "X-QEC-Token": settings.explorer_token,
-                },
+                }),
                 timeout=settings.medic_oracle_timeout_s,
             )
             if resp.status_code == 200:
                 data = resp.json()
                 controls = data.get("controls")
+                if telemetry is not None:
+                    telemetry.note_usage(data)
                 if isinstance(controls, list):
                     state["consecutive_failures"] = 0
                     values = data.get("displayed_values")
+                    _note_oracle_outcome(
+                        "vision", "perceived" if controls else "empty", started)
                     return {"controls": controls,
                             "displayed_values": values if isinstance(values, list) else []}
+            else:
+                failure_reason = "http_error"
         except Exception as exc:
+            failure_reason = (
+                "timeout" if isinstance(exc, httpx.TimeoutException) else "transport")
             logger.warning("qec.explorer.vision_oracle_failed crawl_id=%s error=%s",
                            crawl_id, str(exc)[:200])
+        _note_oracle_outcome("vision", "unavailable", started,
+                             failure_reason=failure_reason)
         state["consecutive_failures"] += 1
         if (state["consecutive_failures"] >= settings.medic_oracle_breaker_threshold
                 and not state["circuit_open"]):
@@ -663,13 +1083,41 @@ async def _run_job(
 
     A single ``try/finally`` guarantees the browser is torn down and the
     single-flight slot released even on failure — a crashed crawl never wedges
-    the container.
+    the container.  The SAME ``finally`` emits the terminal telemetry, so the
+    metrics are structurally incapable of being success-only: a crawl that threw
+    during browser launch, was cancelled, or timed out on its wall budget all
+    leave through the same instrumented exit.
     """
     from playwright.async_api import async_playwright  # lazy: browser-only dep
 
     job: Optional[_Job] = None
     summary: Optional[CrawlSummary] = None
     error = ""
+    # Bind the crawl identity ONCE, at the top of the task. Every log line and
+    # lifecycle event emitted from here on — including ones raised deep inside
+    # the crawler or an oracle callback — carries it without being threaded
+    # through call signatures, so correlation is propagated, never reconstructed.
+    crawl_context.bind_crawl(crawl_id=req.crawl_id, tenant_id=req.tenant_id)
+    # M0.5 T-SEC-05 — the AUTHORITATIVE observe-only decision, made HERE, in the
+    # crawl execution path, from the attestation this process was handed. It can
+    # only ever RAISE the caller's floor: a dispatch that says False against a
+    # non-disposable environment is overruled before a browser exists.
+    observe_only = resolve_observe_only(req, guard_ctx.attestation)
+    if observe_only and not req.observe_only:
+        logger.warning(
+            "qec.explorer.observe_only_forced crawl_id=%s env_kind=%r — "
+            "mutation (fill/submit/advance) is disabled for a non-disposable "
+            "environment", req.crawl_id, req.env_kind or "(unstated)")
+    telemetry = _CrawlTelemetry(req.crawl_id)
+    started_at = time.monotonic()
+    metrics.record_crawl_started(crawl_mode=req.crawl_mode,
+                                 traversal=req.traversal)
+    crawl_context.emit(crawl_context.EV_CRAWL_STARTED,
+                       crawl_mode=req.crawl_mode, traversal=req.traversal,
+                       observe_only=observe_only,
+                       vision_enabled=req.vision_enabled,
+                       max_depth_budget=budget.max_depth,
+                       max_states_budget=budget.max_states)
     try:
         async with async_playwright() as pw:
             browser = await pw.chromium.launch(
@@ -776,9 +1224,17 @@ async def _run_job(
                 or req.crawl_mode == "e2e"
             )
             medic = (
-                _make_medic_oracle(app.state.http, req.tenant_id, req.crawl_id)
+                _make_medic_oracle(app.state.http, req.tenant_id, req.crawl_id,
+                                   telemetry)
                 if full_traversal else None
             )
+            # ORACLE PARTICIPATION is decided by what was WIRED, recorded before
+            # a single consultation happens. Reading it off the oracles after the
+            # crawl could not tell "no oracle was ever wired" (legitimate) from
+            # "one was wired and never answered" (the silent failure) — which is
+            # the whole distinction the no-oracle signal exists to draw.
+            telemetry.oracle_configured = bool(
+                full_traversal or req.vision_enabled)
             port = PlaywrightBrowserPort(
                 page, context, proven_mechanics=req.proven_mechanics,
                 medic_oracle=medic)
@@ -810,20 +1266,23 @@ async def _run_job(
                 crawl_mode=req.crawl_mode,
                 traversal=req.traversal,
                 advance_oracle=(
-                    _make_advance_oracle(app.state.http, req.tenant_id, req.crawl_id)
+                    _make_advance_oracle(app.state.http, req.tenant_id,
+                                         req.crawl_id, telemetry)
                     if full_traversal else None
                 ),
                 # U2 vision Perceiver — only when the tenant has vision enabled
                 # (qe-central's double-gate). Default OFF → None → the walk hook is a
                 # no-op, and DOM-opaque pages are named but not perceived.
                 vision_oracle=(
-                    _make_vision_oracle(app.state.http, req.tenant_id, req.crawl_id)
+                    _make_vision_oracle(app.state.http, req.tenant_id,
+                                        req.crawl_id, telemetry)
                     if req.vision_enabled else None
                 ),
                 choice_overrides=req.choice_overrides,
                 e2e_wizard_steps=settings.e2e_wizard_steps,
                 e2e_wizard_advances=settings.e2e_wizard_advances,
-                observe_only=req.observe_only,
+                # NOT req.observe_only — the resolved decision (T-SEC-05).
+                observe_only=observe_only,
             )
             job = _Job(crawler)
             jobs.activate(job)
@@ -845,8 +1304,90 @@ async def _run_job(
             job.error = error
     finally:
         jobs.finish(req.crawl_id, job)
+        # TERMINAL TELEMETRY — in the finally, so no crawl outcome can skip it.
+        _record_crawl_terminal(
+            req=req, summary=summary, error=error, job=job,
+            telemetry=telemetry,
+            duration_seconds=max(0.0, time.monotonic() - started_at),
+        )
 
-    await _fire_callback(req, summary, error)
+    await _fire_callback(req, summary, error, telemetry)
+
+
+def _record_crawl_terminal(
+    *, req: ExploreRequest, summary: Optional[CrawlSummary], error: str,
+    job: Optional[_Job], telemetry: _CrawlTelemetry, duration_seconds: float,
+) -> None:
+    """Emit the metrics + structured event for a crawl reaching a terminal state.
+
+    Reached from ``_run_job``'s ``finally``, so it runs for a completed crawl, a
+    cancelled one, a wall-budget timeout, an exception inside the crawl loop AND
+    a failure before the crawler ever existed.  That last case is why the
+    fallback stop reason is ``"error"`` rather than ``""``: a crawl that died
+    during browser launch has no summary, and letting it fall through
+    uninstrumented is how a container that fails every launch looks identical to
+    one that is merely idle.
+    """
+    stop_reason = summary.stop_reason if summary else "error"
+    failed = bool(error) or summary is None
+    # Classify the FAILURE, never the message. A crawl that never reached the
+    # crawler failed at setup; one that has a summary failed inside the loop.
+    failure_kind = ""
+    if failed:
+        failure_kind = "crawl_exception" if job is not None else "browser_launch"
+
+    # Depth from the SUMMARY first — it is the authoritative record of the run.
+    # The live crawler is the fallback for the paths that produce no summary (an
+    # exception mid-loop), which is precisely when the depth reached is most
+    # worth knowing.
+    max_depth = None
+    if summary is not None:
+        max_depth = getattr(summary, "max_depth_reached", None)
+    if max_depth is None and job is not None:
+        max_depth = getattr(job.crawler, "max_depth_reached", None)
+
+    metrics.record_crawl_terminal(
+        stop_reason=stop_reason,
+        duration_seconds=duration_seconds,
+        max_depth=max_depth,
+        states=summary.states if summary else 0,
+        guard_blocks=summary.guard_blocks if summary else 0,
+        oracle_configured=telemetry.oracle_configured,
+        oracle_calls=telemetry.oracle_calls,
+        failed=failed,
+        failure_kind=failure_kind,
+    )
+
+    event = crawl_context.EV_CRAWL_FAILED if failed else crawl_context.EV_CRAWL_TERMINAL
+    if stop_reason == "cancelled":
+        event = crawl_context.EV_CRAWL_CANCELLED
+    crawl_context.emit(
+        event,
+        stop_reason=stop_reason,
+        terminal_reason=metrics.terminal_reason_for(stop_reason),
+        oracle_state=metrics.oracle_state_for(
+            oracle_configured=telemetry.oracle_configured,
+            oracle_calls=telemetry.oracle_calls),
+        oracle_calls=telemetry.oracle_calls,
+        oracle_configured=telemetry.oracle_configured,
+        duration_ms=int(duration_seconds * 1000),
+        max_depth=max_depth if max_depth is not None else -1,
+        states=summary.states if summary else 0,
+        actions=summary.actions if summary else 0,
+        guard_blocks=summary.guard_blocks if summary else 0,
+        failure_kind=failure_kind,
+        # The exception MESSAGE belongs in the log, never in a label — this is
+        # the high-cardinality half of the Prometheus/log split.
+        error=error[:_MAX_LOGGED_ERROR_LEN] if error else "",
+    )
+    # The per-crawl spend record — the answer to "which crawl spent these
+    # tokens?", which Prometheus deliberately cannot give.
+    telemetry.tokens.emit_summary()
+
+
+#: Errors are diagnostic text, kept short enough that a pathological exception
+#: cannot dominate the log stream.
+_MAX_LOGGED_ERROR_LEN = 300
 
 
 def _make_route_handler(crawler: Crawler):
@@ -880,7 +1421,8 @@ def _make_route_handler(crawler: Crawler):
 
 
 async def _fire_callback(req: ExploreRequest, summary: Optional[CrawlSummary],
-                         error: str) -> None:
+                         error: str,
+                         telemetry: Optional["_CrawlTelemetry"] = None) -> None:
     """POST the HMAC-signed completion callback to qe-central (best-effort).
 
     The body carries the manifest path (on the shared volume) + the in-memory
@@ -909,10 +1451,32 @@ async def _fire_callback(req: ExploreRequest, summary: Optional[CrawlSummary],
         "storage_state": summary.storage_state if summary else None,
         "coverage": summary.coverage if summary else None,
     }
+    # M0.6 — the per-crawl telemetry record travels back with the callback so
+    # qe-central holds the exact spend and oracle participation for THIS crawl.
+    # This is the non-Prometheus half of the split: the crawl id belongs here,
+    # in a record keyed by it, not on a time-series label.
+    if telemetry is not None:
+        body["telemetry"] = {
+            "oracle_configured": telemetry.oracle_configured,
+            "oracle_calls": telemetry.oracle_calls,
+            "oracle_state": metrics.oracle_state_for(
+                oracle_configured=telemetry.oracle_configured,
+                oracle_calls=telemetry.oracle_calls),
+            "terminal_reason": metrics.terminal_reason_for(
+                summary.stop_reason if summary else "error"),
+            "tokens": telemetry.tokens.as_dict(),
+        }
     payload = json.dumps(body, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    signature = settings.sign_payload(payload)
+    # Scope-bound (T-SEC-06): the signature authenticates a completion for THIS
+    # crawl. A captured envelope cannot be re-pointed at another crawl id, and
+    # its single-use nonce makes even a verbatim replay of this one fail.
     url = settings.callback_url.rstrip("/") + settings.callback_path(req.crawl_id)
     try:
+        # Signing inside the guard: with no fleet secret configured this raises,
+        # and an unsignable callback must be reported honestly — the durable
+        # manifest is the source of truth either way — rather than propagate out
+        # of a job that has already finished its work.
+        signature = settings.sign_payload(payload, scope=f"complete:{req.crawl_id}")
         client: httpx.AsyncClient = app.state.http
         resp = await client.post(
             url, content=payload,
@@ -936,6 +1500,9 @@ def _summary_public(summary: CrawlSummary) -> dict[str, Any]:
         "screenshots": summary.screenshots, "guard_blocks": summary.guard_blocks,
         "manifest_path": summary.manifest_path, "detail": summary.detail,
         "storage_state_captured": summary.storage_state is not None,
+        # How FAR the crawl got — the depth the operator asks for by name, and
+        # the same number the depth histogram observes.
+        "max_depth_reached": summary.max_depth_reached,
     }
 
 
@@ -947,874 +1514,6 @@ def _attestation(payload: Optional[dict[str, Any]]) -> Optional[Attestation]:
     except Exception as exc:
         logger.warning("qec.explorer.bad_attestation error=%s", str(exc)[:200])
         return None
-
-
-def _retry_after_ms(resp: Any) -> int:
-    """Backoff for a 429 — the ``Retry-After`` seconds header when present (clamped),
-    else a default."""
-    try:
-        ra = str((resp.headers or {}).get("retry-after", "")).strip()
-        if ra.isdigit():
-            return int(ra) * 1000
-    except Exception:
-        pass
-    return _DEFAULT_BACKOFF_MS
-
-
-def _safe_headers(obj: Any) -> dict[str, str]:
-    """The cheap SYNC ``headers`` dict of a Playwright request/response (keys are
-    lowercased by Playwright), or ``{}`` — never awaits, never raises."""
-    try:
-        return {str(k).lower(): str(v) for k, v in dict(obj.headers or {}).items()}
-    except Exception:
-        return {}
-
-
-# ─── The Playwright BrowserPort adapter (the only Playwright code) ───────────
-
-
-class PlaywrightBrowserPort(BrowserPort):
-    """Concrete :class:`BrowserPort` over a Playwright page/context.
-
-    Every method is DEFENSIVE: a Playwright failure is surfaced as an honest
-    observation (``NavResult.ok=False``, an empty inventory, an ``error`` after)
-    rather than raised into the pure state machine.  Locators are built to
-    resolve the SAME way the frozen compiler's ladder does — getByRole/getByLabel
-    on the accessible NAME, scoped by an ``_ANCHOR_ROLE`` landmark and by the
-    ``frame_selector`` frameLocator chain — so recorded evidence is faithfully
-    re-bindable downstream.  (Live-crawl fidelity is verified on the VM.)
-    """
-
-    def __init__(self, page: Any, context: Any, *,
-                 proven_mechanics: dict[str, str] | None = None,
-                 medic_oracle: Any = None) -> None:
-        self._page = page
-        self._context = context
-        self._proven_mechanics = dict(proven_mechanics or {})
-        self._medic_oracle = medic_oracle
-        # API/network mining — a bounded buffer of the XHR/fetch calls the app
-        # makes, filled by a passive `response` listener and drained per-visit by
-        # the crawler.  Query strings are dropped + paths PII-scrubbed HERE (at
-        # source) so raw PII never lingers in the buffer.
-        self._net_buffer: list[dict[str, Any]] = []
-        try:
-            self._page.on("response", self._on_response)
-        except Exception:  # a fake/None page (defensive) — no network evidence.
-            logger.warning("qec.explorer.network_listener_unavailable")
-        try:  # (D) real-time transports — WebSocket opens are a distinct surface.
-            self._page.on("websocket", self._on_websocket)
-        except Exception:
-            logger.warning("qec.explorer.websocket_listener_unavailable")
-
-    #: Resource types worth recording as API evidence (the app's real surface);
-    #: document/stylesheet/image/font/script/media are chrome, not API calls.
-    #: ``eventsource`` (Server-Sent Events) joins xhr/fetch — a real-time stream is
-    #: as much the app's API surface as a poll (D).
-    _NET_RESOURCE_TYPES = frozenset({"xhr", "fetch", "eventsource"})
-    #: Hard cap on the between-drain buffer so a runaway SPA cannot grow it without
-    #: bound (the crawler applies its own per-state cap on drain).
-    _NET_BUFFER_MAX = 500
-
-    def _record_net(self, entry: dict[str, Any]) -> None:
-        if len(self._net_buffer) < self._NET_BUFFER_MAX:
-            self._net_buffer.append(entry)
-
-    def _on_response(self, response: Any) -> None:
-        """Passive `response` listener — record ONE XHR/fetch/SSE call's shape.
-
-        Sync + fully defensive (a listener exception must never surface into the
-        page): reads only cheap sync properties (never awaits a body), drops the
-        query string, and PII-scrubs the path before buffering."""
-        try:
-            request = response.request
-            rtype = (getattr(request, "resource_type", "") or "")
-            resp_headers = _safe_headers(response)
-            resp_mime = resp_headers.get("content-type", "").split(";", 1)[0]
-            # capture xhr/fetch/eventsource, OR anything whose response is an SSE
-            # stream regardless of how Chromium labelled the resource type.
-            if rtype not in self._NET_RESOURCE_TYPES and resp_mime != "text/event-stream":
-                return
-            parts = urlsplit(str(getattr(response, "url", "") or ""))
-            if (parts.scheme or "").lower() not in ("http", "https"):
-                return
-            url = emit.scrub_value(f"{parts.scheme}://{parts.netloc}{parts.path}").value
-            req_headers = _safe_headers(request)
-            is_sse = (resp_mime == "text/event-stream" or rtype == "eventsource")
-            self._record_net({
-                "method": str(getattr(request, "method", "") or "").upper(),
-                "url": url,
-                "has_query": bool(parts.query),
-                "status": str(getattr(response, "status", "") or ""),
-                "resource_type": "sse" if is_sse else rtype,
-                "request_mime": req_headers.get("content-type", "").split(";", 1)[0],
-                "response_mime": resp_mime,
-                "response_bytes": resp_headers.get("content-length", ""),
-                "timestamp_ms": int(time.monotonic() * 1000),
-            })
-        except Exception:  # never let a listener crash affect the page
-            pass
-
-    def _on_websocket(self, ws: Any) -> None:
-        """Passive `websocket` listener (D) — record the WS OPEN as one evidence
-        entry (endpoint + scheme). Frame PAYLOADS are deliberately NOT captured
-        (a socket carries live user/session data — the same PII posture as the
-        query-drop for HTTP); the app's real-time endpoint is the evidence."""
-        try:
-            parts = urlsplit(str(getattr(ws, "url", "") or ""))
-            if (parts.scheme or "").lower() not in ("ws", "wss", "http", "https"):
-                return
-            url = emit.scrub_value(f"{parts.scheme}://{parts.netloc}{parts.path}").value
-            self._record_net({
-                "method": "WS",
-                "url": url,
-                "has_query": bool(parts.query),
-                "status": "101",                      # WS upgrade
-                "resource_type": "websocket",
-                "request_mime": "",
-                "response_mime": "",
-                "response_bytes": "",
-                "timestamp_ms": int(time.monotonic() * 1000),
-            })
-        except Exception:
-            pass
-
-    async def drain_network(self) -> list[dict[str, Any]]:
-        """Return + CLEAR the network calls buffered since the last drain."""
-        drained = self._net_buffer
-        self._net_buffer = []
-        return drained
-
-    async def goto(self, url: str) -> NavResult:
-        try:
-            resp = await self._page.goto(url, wait_until="domcontentloaded")
-            # Adaptive backoff on an explicit server rate-limit (429), then ONE retry
-            # — a throttled response would otherwise record a wrong-outcome state.
-            if resp is not None and getattr(resp, "status", 0) == 429:
-                await asyncio.sleep(min(_retry_after_ms(resp), _MAX_BACKOFF_MS) / 1000.0)
-                try:
-                    resp = await self._page.goto(url, wait_until="domcontentloaded")
-                except Exception:
-                    pass
-            # SPA hash routers commonly render the current route only on the
-            # 'hashchange' event; a FRESH document load with the hash already set
-            # can render the default/landing route instead of the requested one
-            # (so a direct #/route load — and every hash-route frontier goto —
-            # would silently observe the wrong state). Nudge the router to
-            # evaluate location.hash so the requested route actually mounts.
-            if "#/" in (url or "") or "#!" in (url or ""):
-                try:
-                    await self._page.evaluate(
-                        "window.dispatchEvent(new HashChangeEvent('hashchange', "
-                        "{newURL: location.href, oldURL: location.href}))"
-                    )
-                except Exception:
-                    pass
-            await self._settle()
-            return NavResult(url=self._page.url, ok=True,
-                             status=resp.status if resp else 0)
-        except Exception as exc:
-            return NavResult(url=self._safe_url(), ok=False, error=str(exc)[:300])
-
-    async def current_url(self) -> str:
-        return self._safe_url()
-
-    async def title(self) -> str:
-        try:
-            return await self._page.title()
-        except Exception:
-            return ""
-
-    async def collect_controls(self) -> list[dict[str, Any]]:
-        try:
-            result = await self._page.evaluate(INVENTORY_JS)
-            return list(result or [])
-        except Exception as exc:
-            logger.warning("qec.explorer.inventory_failed error=%s", str(exc)[:200])
-            return []
-
-    async def collect_opaque(self) -> list[dict[str, Any]]:
-        """OPAQUE surfaces the DOM walker cannot read ``[{kind, label, reason}]`` — a
-        cross-origin embed, a canvas app, a closed shadow host. Best-effort: ``[]`` on any
-        failure so a detection hiccup never breaks the crawl."""
-        try:
-            result = await self._page.evaluate(OPAQUE_JS)
-            return list(result or [])
-        except Exception as exc:
-            logger.warning("qec.explorer.opaque_failed error=%s", str(exc)[:200])
-            return []
-
-    async def collect_displayed_values(self) -> list[dict[str, Any]]:
-        """ANSWERS P1.B — rendered value nodes ``[{label, selector, text}]`` (a
-        premium/total/decline shown as text). Best-effort: ``[]`` on any failure so
-        a capture hiccup never breaks the crawl (the value oracle then just needs a
-        client source_hint)."""
-        try:
-            result = await self._page.evaluate(DISPLAYED_VALUES_JS)
-            return list(result or [])
-        except Exception as exc:
-            logger.warning("qec.explorer.displayed_values_failed error=%s", str(exc)[:200])
-            return []
-
-    async def dialog_flags(self) -> list[str]:
-        flags: list[str] = []
-        try:
-            count = await self._page.get_by_role("dialog").count()
-            for i in range(count):
-                node = self._page.get_by_role("dialog").nth(i)
-                if await node.is_visible():
-                    label = (await node.get_attribute("aria-label")) or ""
-                    flags.append(f"dialog:{label.strip().lower()[:60]}" if label else "dialog:open")
-        except Exception:
-            pass
-        return flags
-
-    async def error_texts(self) -> list[str]:
-        texts: list[str] = []
-        for selector in ('[role="alert"]', '[aria-live="assertive"]'):
-            try:
-                loc = self._page.locator(selector)
-                count = await loc.count()
-                for i in range(min(count, 5)):
-                    node = loc.nth(i)
-                    if await node.is_visible():
-                        txt = (await node.inner_text()).strip()
-                        if txt:
-                            texts.append(txt[:300])
-            except Exception:
-                continue
-        return texts
-
-    async def screenshot_png(self) -> bytes:
-        try:
-            return await self._page.screenshot(full_page=True, type="png")
-        except Exception as exc:
-            logger.warning("qec.explorer.screenshot_failed error=%s", str(exc)[:200])
-            return b""
-
-    async def click(self, control: dict[str, Any]) -> RawObservation:
-        return await self._act(control, "click")
-
-    async def hover(self, control: dict[str, Any]) -> RawObservation:
-        """Hover ``control`` (reveals menus/fly-outs/tooltips) and observe."""
-        return await self._act(control, "hover")
-
-    async def press_key(self, key: str) -> None:
-        """Press a global key (e.g. Escape to dismiss an opened dropdown/overlay so the
-        page is restored before the next read). Best-effort — never raises into the
-        state machine."""
-        try:
-            await self._page.keyboard.press(key)
-            await self._settle()
-        except Exception:
-            pass
-
-    async def set_input_files(self, control: dict[str, Any],
-                              paths: Sequence[str]) -> RawObservation:
-        """Attach ``paths`` to a file-input ``control`` (Phase-A: choose the file,
-        never submit) and read back the chosen filename."""
-        url_before = self._safe_url()
-        sig_before = await self._interactive_signature()
-        locator = self._locator(control)
-        if locator is None:
-            return RawObservation(url_before=url_before, url_after=url_before,
-                                  error_detail="locator_unresolved")
-        try:
-            await locator.set_input_files(list(paths))
-        except Exception as exc:
-            return RawObservation(url_before=url_before, url_after=self._safe_url(),
-                                  error_detail=f"upload_error: {str(exc)[:200]}")
-        await self._settle()
-        committed = None
-        try:
-            committed = await locator.input_value()  # the chosen file name
-        except Exception:
-            pass
-        sig_after = await self._interactive_signature()
-        return RawObservation(
-            url_before=url_before, url_after=self._safe_url(),
-            committed_value=committed, dom_changed=(sig_before != sig_after),
-        )
-
-    async def fill(self, control: dict[str, Any], value: str) -> RawObservation:
-        return await self._act_with_ladder(control, "fill", value=value, read_back=True)
-
-    async def select_option(self, control: dict[str, Any], value: str) -> RawObservation:
-        return await self._act_with_ladder(control, "select", value=value, read_back=True)
-
-    async def set_checked(self, control: dict[str, Any], checked: bool) -> RawObservation:
-        return await self._act_with_ladder(control, "checked", checked=checked, read_back=True)
-
-    async def storage_state(self) -> dict[str, Any]:
-        return await self._context.storage_state()
-
-    # -- internals -------------------------------------------------------------
-
-    async def _act(self, control: dict[str, Any], kind: str, *, value: str = "",
-                   checked: bool = False, read_back: bool = False) -> RawObservation:
-        url_before = self._safe_url()
-        sig_before = await self._interactive_signature()
-        intended = value if kind != "checked" else ("true" if checked else "false")
-        locator = self._locator(control)
-        if locator is None:
-            return RawObservation(url_before=url_before, url_after=url_before,
-                                  error_detail="locator_unresolved",
-                                  intended_value=intended, intent_met=False)
-        try:
-            if kind == "click":
-                await locator.click()
-            elif kind == "hover":
-                await locator.hover()
-            elif kind == "fill":
-                await locator.fill(value)
-            elif kind == "select":
-                await locator.select_option(label=value)
-            elif kind == "checked":
-                try:
-                    await locator.set_checked(checked)
-                except Exception:
-                    if not checked:
-                        raise
-                    await locator.click()
-        except Exception as exc:
-            return RawObservation(url_before=url_before, url_after=self._safe_url(),
-                                  error_detail=f"action_error: {str(exc)[:200]}",
-                                  intended_value=intended, intent_met=False)
-        await self._settle()
-        url_after = self._safe_url()
-        committed = (await self._read_value(locator, kind=kind) if read_back else None)
-        errors = await self.error_texts()
-        dialogs = await self.dialog_flags()
-        sig_after = await self._interactive_signature()
-        err = (errors[0] if errors else "")
-        met = verify_intent(
-            kind,
-            intended_value=intended,
-            intended_checked=checked,
-            committed_value=committed,
-            error_detail=err,
-            url_before=url_before,
-            url_after=url_after,
-            dom_changed=(sig_before != sig_after),
-            dialog_opened=bool(dialogs),
-        )
-        return RawObservation(
-            url_before=url_before, url_after=url_after, committed_value=committed,
-            dialog_opened=bool(dialogs), dialog_detail=(dialogs[0] if dialogs else ""),
-            error_detail=err,
-            dom_changed=(sig_before != sig_after),
-            intended_value=intended, intent_met=met,
-        )
-
-    async def click_at(self, x: int, y: int) -> RawObservation:
-        """Coordinate rung (U2/U3) — click absolute page ``(x, y)`` via
-        ``page.mouse``, for a vision-proposed point on a DOM-opaque surface. Mirrors
-        the ``_act`` observe pattern (url + interactive-signature before/after) so a
-        coordinate action produces the SAME grounded ``RawObservation`` and R0
-        verdict: a click that changes nothing is honestly ``intent_met=False``."""
-        url_before = self._safe_url()
-        sig_before = await self._interactive_signature()
-        try:
-            xi, yi = int(x), int(y)
-        except (TypeError, ValueError):
-            return RawObservation(url_before=url_before, url_after=url_before,
-                                  error_detail="bad_coordinates", intent_met=False)
-        try:
-            await self._page.mouse.click(xi, yi)
-        except Exception as exc:
-            return RawObservation(url_before=url_before, url_after=self._safe_url(),
-                                  error_detail=f"action_error: {str(exc)[:200]}",
-                                  intent_met=False)
-        await self._settle()
-        url_after = self._safe_url()
-        errors = await self.error_texts()
-        dialogs = await self.dialog_flags()
-        sig_after = await self._interactive_signature()
-        err = (errors[0] if errors else "")
-        met = verify_intent(
-            "click",
-            intended_value="", intended_checked=False, committed_value=None,
-            error_detail=err, url_before=url_before, url_after=url_after,
-            dom_changed=(sig_before != sig_after), dialog_opened=bool(dialogs),
-        )
-        return RawObservation(
-            url_before=url_before, url_after=url_after,
-            dialog_opened=bool(dialogs), dialog_detail=(dialogs[0] if dialogs else ""),
-            error_detail=err, dom_changed=(sig_before != sig_after),
-            intent_met=met,
-        )
-
-    async def _gesture_observe(self, do) -> RawObservation:
-        """Run a gesture coroutine ``do`` inside the same observe wrapper as
-        ``click_at`` (url + interactive-signature before/after) so every gesture
-        (U3) yields a grounded RawObservation + coarse R0 verdict. The precise
-        gesture read-back (drag order / canvas ink / slider value) is applied by
-        the caller via ``gesture_verify`` with the extra captured signals."""
-        url_before = self._safe_url()
-        sig_before = await self._interactive_signature()
-        try:
-            await do()
-        except Exception as exc:
-            return RawObservation(url_before=url_before, url_after=self._safe_url(),
-                                  error_detail=f"action_error: {str(exc)[:200]}",
-                                  intent_met=False)
-        await self._settle()
-        url_after = self._safe_url()
-        errors = await self.error_texts()
-        dialogs = await self.dialog_flags()
-        sig_after = await self._interactive_signature()
-        err = (errors[0] if errors else "")
-        met = verify_intent(
-            "click", intended_value="", intended_checked=False, committed_value=None,
-            error_detail=err, url_before=url_before, url_after=url_after,
-            dom_changed=(sig_before != sig_after), dialog_opened=bool(dialogs))
-        return RawObservation(
-            url_before=url_before, url_after=url_after,
-            dialog_opened=bool(dialogs), dialog_detail=(dialogs[0] if dialogs else ""),
-            error_detail=err, dom_changed=(sig_before != sig_after), intent_met=met)
-
-    async def drag(self, path) -> RawObservation:
-        pts = []
-        for p in (path or []):
-            try:
-                pts.append((int(p[0]), int(p[1])))
-            except (TypeError, ValueError, IndexError):
-                continue
-
-        async def _do():
-            if len(pts) < 2:
-                raise ValueError("drag needs >= 2 points")
-            await self._page.mouse.move(pts[0][0], pts[0][1])
-            await self._page.mouse.down()
-            for x, y in pts[1:]:
-                await self._page.mouse.move(x, y)
-            await self._page.mouse.up()
-
-        return await self._gesture_observe(_do)
-
-    async def draw_stroke(self, points) -> RawObservation:
-        # A signature stroke is the same mouse down/move/up choreography as a drag.
-        return await self.drag(points)
-
-    async def press_keys(self, keys) -> RawObservation:
-        seq = [str(k) for k in (keys or []) if str(k)]
-
-        async def _do():
-            for k in seq:
-                await self._page.keyboard.press(k)
-
-        return await self._gesture_observe(_do)
-
-    async def scroll_until(self, control: dict[str, Any],
-                           max_steps: int = 10) -> RawObservation:
-        loc = self._locator(control)
-
-        async def _do():
-            for _ in range(max(1, int(max_steps))):
-                try:
-                    if loc is not None and await loc.is_visible():
-                        return
-                except Exception:
-                    pass
-                await self._page.mouse.wheel(0, 600)
-                await self._settle()
-
-        return await self._gesture_observe(_do)
-
-    async def _act_with_ladder(
-        self, control: dict[str, Any], kind: str, *, value: str = "",
-        checked: bool = False, read_back: bool = False,
-    ) -> RawObservation:
-        """Try the native mechanic first; if R0 says intent_met=False, walk the
-        archetype ladder until a rung verifies or the ladder is exhausted.
-
-        R4 MECHANIC MEMORY: if a proven mechanic exists for this control's
-        signature, try it FIRST — bypassing the full ladder walk.  Falls
-        through to the normal ladder if the proven mechanic fails (the app
-        may have changed since the mechanic was proven).
-
-        Returns the observation from the winning rung (with ``mechanic_used``
-        set), or the last failed observation if no rung succeeded.
-        """
-        from dataclasses import replace
-        rungs = ladder_for(kind)
-        if not rungs:
-            return await self._act(control, kind, value=value,
-                                   checked=checked, read_back=read_back)
-        # R4: try the proven mechanic FIRST (zero ladder walk when it works).
-        proven_variant = ""
-        if self._proven_mechanics:
-            sig = field_signature.compute(control, kind=kind)
-            proven_variant = self._proven_mechanics.get(sig.get("signature", ""), "")
-        if proven_variant:
-            for rung in rungs:
-                if rung.variant == proven_variant:
-                    obs = await self._run_rung(
-                        rung, control, kind, value=value, checked=checked,
-                        read_back=read_back)
-                    if obs.intent_met is not False:
-                        return replace(obs, mechanic_used=rung.variant)
-                    break
-        last_obs: RawObservation | None = None
-        ladder_tried: list[dict[str, str]] = []
-        for rung in rungs:
-            obs = await self._run_rung(
-                rung, control, kind, value=value, checked=checked,
-                read_back=read_back)
-            if obs.intent_met is not False:
-                return replace(obs, mechanic_used=rung.variant)
-            ladder_tried.append({
-                "rung": rung.variant,
-                "observation": (obs.error_detail or "intent_unmet")[:100],
-            })
-            last_obs = obs
-        # R3 MEDIC: after the deterministic ladder exhausts, ask the caged
-        # agent for a proposal.  Execute through existing primitives; R0
-        # verifies.  An unverified proposal → the control is named residue.
-        if self._medic_oracle and last_obs is not None:
-            try:
-                page_ctx = {
-                    "title": (await self._page.title()) if self._page else "",
-                    "url": self._safe_url(),
-                }
-                decision = await self._medic_oracle(
-                    control, kind, ladder_tried, page_ctx)
-                action = str(decision.get("action") or "")
-                status = str(decision.get("status") or "")
-                if status == "display_only":
-                    return replace(last_obs, mechanic_used="medic:display_only",
-                                   intent_met=None)
-                if status == "proposed" and action:
-                    medic_obs = await self._execute_medic_action(
-                        control, kind, action, value=value, checked=checked,
-                        read_back=read_back)
-                    if medic_obs is not None and medic_obs.intent_met is not False:
-                        return replace(medic_obs, mechanic_used=f"medic:{action}")
-            except Exception as exc:
-                logger.warning("qec.explorer.medic_failed control=%s error=%s",
-                               control.get("name", "?"), str(exc)[:200])
-        return replace(last_obs, mechanic_used="") if last_obs else \
-            RawObservation(error_detail="ladder_exhausted",
-                           intended_value=value, intent_met=False)
-
-    async def _execute_medic_action(
-        self, control: dict[str, Any], kind: str, action: str, *,
-        value: str = "", checked: bool = False, read_back: bool = False,
-    ) -> RawObservation | None:
-        """Execute a medic-proposed action through existing primitives.
-
-        Maps vocabulary terms to Rung objects or direct _act calls.  Returns
-        the observation (R0 verifies upstream) or None if the action is
-        unrecognizable.
-        """
-        if action == "click":
-            rung = Rung("click", "medic_click")
-            return await self._run_rung(rung, control, kind, value=value,
-                                        checked=checked, read_back=read_back)
-        if action.startswith("press:"):
-            key = action.split(":", 1)[1]
-            if key in ("Space", "Enter", "ArrowDown"):
-                rung = Rung("press", f"medic_{key.lower()}")
-                return await self._run_rung(rung, control, kind, value=value,
-                                            checked=checked, read_back=read_back)
-        if action == "open_then_pick":
-            rung = Rung("click_option", "medic_open_pick")
-            return await self._run_rung(rung, control, kind, value=value,
-                                        checked=checked, read_back=read_back)
-        return None
-
-    async def _run_rung(
-        self, rung: Rung, control: dict[str, Any], kind: str, *,
-        value: str = "", checked: bool = False, read_back: bool = False,
-    ) -> RawObservation:
-        """Execute one ladder rung through the appropriate low-level primitive."""
-        if rung.kind == kind:
-            return await self._act(control, kind, value=value,
-                                   checked=checked, read_back=read_back)
-        if rung.kind == "click":
-            obs = await self._act(control, "click", read_back=read_back)
-            return RawObservation(
-                url_before=obs.url_before, url_after=obs.url_after,
-                committed_value=obs.committed_value,
-                dialog_opened=obs.dialog_opened,
-                dialog_detail=obs.dialog_detail,
-                error_detail=obs.error_detail,
-                dom_changed=obs.dom_changed,
-                intended_value=("true" if checked else "false")
-                    if kind == "checked" else value,
-                intent_met=verify_intent(
-                    kind, intended_value=("true" if checked else "false")
-                        if kind == "checked" else value,
-                    intended_checked=checked,
-                    committed_value=obs.committed_value,
-                    error_detail=obs.error_detail,
-                    url_before=obs.url_before, url_after=obs.url_after,
-                    dom_changed=obs.dom_changed,
-                    dialog_opened=obs.dialog_opened),
-            )
-        if rung.kind == "press":
-            locator = self._locator(control)
-            if locator is None:
-                return RawObservation(error_detail="locator_unresolved",
-                                     intended_value=value, intent_met=False)
-            url_before = self._safe_url()
-            sig_before = await self._interactive_signature()
-            try:
-                await locator.focus()
-                if rung.variant == "focus_space":
-                    await self._page.keyboard.press("Space")
-                elif rung.variant == "focus_arrow":
-                    await self._page.keyboard.press("ArrowRight")
-                elif rung.variant == "type_chars":
-                    await locator.press_sequentially(value, delay=30)
-                else:
-                    await self._page.keyboard.press("Space")
-            except Exception as exc:
-                return RawObservation(
-                    url_before=url_before, url_after=self._safe_url(),
-                    error_detail=f"action_error: {str(exc)[:200]}",
-                    intended_value=value, intent_met=False)
-            await self._settle()
-            url_after = self._safe_url()
-            committed = (await self._read_value(locator, kind=kind) if read_back else None)
-            errors = await self.error_texts()
-            dialogs = await self.dialog_flags()
-            sig_after = await self._interactive_signature()
-            err = (errors[0] if errors else "")
-            intended = ("true" if checked else "false") \
-                if kind == "checked" else value
-            met = verify_intent(
-                kind, intended_value=intended, intended_checked=checked,
-                committed_value=committed, error_detail=err,
-                url_before=url_before, url_after=url_after,
-                dom_changed=(sig_before != sig_after),
-                dialog_opened=bool(dialogs))
-            return RawObservation(
-                url_before=url_before, url_after=url_after,
-                committed_value=committed,
-                dialog_opened=bool(dialogs),
-                dialog_detail=(dialogs[0] if dialogs else ""),
-                error_detail=err,
-                dom_changed=(sig_before != sig_after),
-                intended_value=intended, intent_met=met)
-        if rung.kind == "click_option":
-            return await self._select_via_open_click(
-                control, value, read_back=read_back)
-        return await self._act(control, kind, value=value,
-                               checked=checked, read_back=read_back)
-
-    async def _select_via_open_click(
-        self, control: dict[str, Any], value: str, *,
-        read_back: bool = True,
-    ) -> RawObservation:
-        """Open a custom select by clicking it, then click the matching
-        ``[role=option]`` by its label.  Dismiss with Escape on failure."""
-        url_before = self._safe_url()
-        sig_before = await self._interactive_signature()
-        locator = self._locator(control)
-        if locator is None:
-            return RawObservation(error_detail="locator_unresolved",
-                                 intended_value=value, intent_met=False)
-        try:
-            await locator.click()
-            await self._settle()
-            option = self._page.get_by_role("option", name=value).first
-            await option.click()
-        except Exception as exc:
-            try:
-                await self._page.keyboard.press("Escape")
-            except Exception:
-                pass
-            return RawObservation(
-                url_before=url_before, url_after=self._safe_url(),
-                error_detail=f"action_error: {str(exc)[:200]}",
-                intended_value=value, intent_met=False)
-        await self._settle()
-        url_after = self._safe_url()
-        committed = (await self._read_value(locator, kind="select")
-                     if read_back else None)
-        errors = await self.error_texts()
-        dialogs = await self.dialog_flags()
-        sig_after = await self._interactive_signature()
-        err = (errors[0] if errors else "")
-        met = verify_intent(
-            "select", intended_value=value, committed_value=committed,
-            error_detail=err, url_before=url_before, url_after=url_after,
-            dom_changed=(sig_before != sig_after),
-            dialog_opened=bool(dialogs))
-        return RawObservation(
-            url_before=url_before, url_after=url_after,
-            committed_value=committed,
-            dialog_opened=bool(dialogs),
-            dialog_detail=(dialogs[0] if dialogs else ""),
-            error_detail=err,
-            dom_changed=(sig_before != sig_after),
-            intended_value=value, intent_met=met)
-
-    def _locator(self, control: dict[str, Any]) -> Any:
-        """Build a Playwright locator mirroring the compiler ladder (best-effort)."""
-        root = self._page
-        for seg in (control.get("frame_selector") or "").split(" >>> "):
-            seg = seg.strip()
-            if seg:
-                try:
-                    root = root.frame_locator(seg)
-                except Exception:
-                    return None
-        anchor = control.get("anchor")
-        scope = root
-        if anchor and anchor.get("label"):
-            try:
-                scope = root.get_by_role(anchor["kind"]).filter(
-                    has_text=anchor["label"]).first
-            except Exception:
-                scope = root
-        role = str(control.get("role") or "").strip()
-        name = str(control.get("name") or "").strip()
-        css_hint = str((control.get("qec") or {}).get("css_hint")
-                       or control.get("css_hint") or "").strip()
-        # POSITIONAL targeting: when a control is one of several IDENTICAL ones
-        # (same role+name) and has no anchor to scope by, target it by its DOM
-        # ORDINAL — get_by_role(role, name).nth(k) — instead of always .first.
-        # This is the only way to click a specific button in a bare-button
-        # questionnaire (17 identical "Yes"/"No"). A present anchor already scopes
-        # the search, so nth is used only when no anchor label narrowed the scope.
-        mi = control.get("match_index")
-        nth = mi if (isinstance(mi, int) and mi >= 0
-                     and not (anchor and anchor.get("label"))) else None
-
-        def _role_name_loc() -> Any:
-            base = scope.get_by_role(role, name=name)
-            return base.nth(nth) if nth is not None else base.first
-
-        for builder in (
-            _role_name_loc if role and name else None,
-            (lambda: scope.get_by_label(name).first) if name else None,
-            (lambda: scope.get_by_text(name).nth(nth)) if name and nth is not None else
-            (lambda: scope.get_by_text(name).first) if name else None,
-            (lambda: scope.locator(css_hint).first) if css_hint else None,
-        ):
-            if builder is None:
-                continue
-            try:
-                return builder()
-            except Exception:
-                continue
-        return None
-
-    async def _read_value(self, locator: Any, *, kind: str = "") -> Optional[str]:
-        """Read back what a control COMMITTED, so R0 can verify intent.
-
-        The read must be in the SAME VOCABULARY as the intent, or a fill that
-        genuinely worked is recorded as a failure. ``input_value()`` is the
-        wrong vocabulary for two whole control families, and it does not raise
-        on either — so reading it first fails silently and looks like the app's
-        fault:
-
-        * checkbox/radio commit their CHECKEDNESS. input_value() returns the
-          value attribute ("term-life") against an intended "true".
-        * <select> commits an OPTION. We select BY LABEL ("$50,000"), but
-          input_value() returns the option's value attribute ("50000"). These
-          differ for any coded list — amounts, state codes, ids — i.e. most
-          enterprise forms. Observed live: Coverage Amount and Term Length both
-          selected correctly and were both recorded intent_unmet, so the funnel
-          stalled; the one select that DID pass was the one whose label happened
-          to equal its value.
-        """
-        if kind == "checked":
-            readers = ("is_checked", "input_value")
-        elif kind == "select":
-            readers = ("selected_label", "input_value")
-        else:
-            readers = ("input_value", "is_checked")
-        for reader in readers:
-            try:
-                if reader == "input_value":
-                    return await locator.input_value()
-                if reader == "selected_label":
-                    label = await locator.evaluate(
-                        "el => el.selectedOptions && el.selectedOptions.length"
-                        " ? el.selectedOptions[0].textContent : null")
-                    if label is None:
-                        continue
-                    return " ".join(str(label).split())
-                checked = await locator.is_checked()
-                return "true" if checked else "false"
-            except Exception:
-                continue
-        try:
-            return (await locator.inner_text()).strip()
-        except Exception:
-            return None
-
-    async def _interactive_signature(self) -> tuple:
-        try:
-            controls = await self.collect_controls()
-            return tuple(tuple(t) for t in interactive_signature(controls))
-        except Exception:
-            return ()
-
-    async def _settle(self) -> None:
-        # 1. best-effort network quiesce.
-        try:
-            await self._page.wait_for_load_state("networkidle", timeout=_SETTLE_MS)
-        except Exception:
-            pass  # settle is best-effort — a busy SPA never blocks the recorder
-        # 2. HYDRATION gate: poll a cheap DOM-quiescence signature until it is stable
-        #    for _STABLE_READS consecutive reads (controls that mount after networkidle
-        #    would otherwise be inventoried in a half-rendered state → wrong fingerprint
-        #    + missed controls). Bounded by _STABILIZE_MS; never blocks.
-        try:
-            last = None
-            stable = 0
-            for _ in range(max(1, _STABILIZE_MS // _STABLE_POLL_MS)):
-                sig = await self._page.evaluate(_QUIESCENCE_JS)
-                # Empty-shell guard: a signature with too few interactive controls is an
-                # un-rendered SPA shell — never let a stable-EMPTY page satisfy the gate,
-                # or a client-rendered login/form is missed (0 forms). Keep polling until
-                # real content mounts, or the bounded budget expires.
-                try:
-                    _interactive = int(str(sig).split(":", 1)[0])
-                except Exception:
-                    _interactive = _MIN_INTERACTIVE  # unparseable ⇒ allow settle
-                if sig == last and _interactive >= _MIN_INTERACTIVE:
-                    stable += 1
-                    if stable >= _STABLE_READS:
-                        break
-                else:
-                    stable = 0
-                    last = sig
-                await asyncio.sleep(_STABLE_POLL_MS / 1000.0)
-        except Exception:
-            pass
-
-    async def materialize(self) -> None:
-        """Bounded viewport progression: step-scroll to the bottom to trigger
-        lazy / IntersectionObserver content and materialize additional
-        virtual-scroll rows, re-settling after each step. READ-ONLY (no mutation)
-        and best-effort. Cheap on static pages: seeded with the current height, it
-        stops after ONE scroll when nothing new mounts (inventory + full-page
-        screenshots are scroll-independent, so there is no scroll-back cost)."""
-        try:
-            prev_h = await self._page.evaluate(
-                "document.body?document.body.scrollHeight:0"
-            )
-            for _ in range(_MATERIALIZE_STEPS):
-                h = await self._page.evaluate(
-                    "(()=>{var h=document.body?document.body.scrollHeight:0;"
-                    "window.scrollTo(0,h);return h;})()"
-                )
-                await self._settle()
-                if h <= prev_h:
-                    break  # no new content materialized → stop
-                prev_h = h
-        except Exception:
-            pass
-
-    def _safe_url(self) -> str:
-        try:
-            return self._page.url or ""
-        except Exception:
-            return ""
 
 
 # ─── Entrypoint (container CMD is `python -m app.main`) ──────────────────────

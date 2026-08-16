@@ -41,7 +41,16 @@ RawControl shape (one object per visible interactive element):
     kind            NAIVE kind hint (the Python refiner is authoritative)
     tag             lower-case tagName
     input_type      ``<input>`` type (lower-case) or ""
-    options         visible option labels for a native ``<select>``
+    autocomplete    the W3C autocomplete token(s) the app declared, lower-cased.
+                    THE STRONGEST semantic signal there is — see the classifier
+                    contract below.
+    inputmode       the inputmode keyword, lower-cased. A weaker declaration of
+                    the same kind.
+    placeholder     the placeholder attribute, VERBATIM (human-authored text)
+    id              the id attribute, VERBATIM (case-sensitive; it has to
+                    round-trip through getElementById and CSS.escape)
+    options         visible option labels for a native ``<select>``, up to
+                    :data:`MAX_OPTIONS`
     group_key       the mutually-exclusive CHOICE GROUP this control answers
                     ("name:<form>:<attr>" for native radios, "grp:<container>"
                     for ARIA radiogroup/fieldset sets, "" when ungrouped).
@@ -62,18 +71,71 @@ RawControl shape (one object per visible interactive element):
                     whose menu items are hidden until it is clicked), "" otherwise
     landmark        {role, name} of the nearest landmark ancestor (anchor seed)
 
+THE CAPTURE COMPLETENESS CONTRACT (M0.x)
+========================================
+
+The goal is not to capture every DOM property.  It is to capture everything the
+downstream classifier and crawler contractually depend on — because a field this
+walker omits is not a field a later layer can recover.  Each of these is here
+because a NAMED consumer reads it:
+
+  *identity*        ``id``, ``role``, ``tag``, ``name`` — the control, and the
+                    thing the compiler binds by.
+  *classification*  ``autocomplete``, ``inputmode``, ``placeholder``.
+                    :func:`app.field_semantics.classify` ranks ``autocomplete``
+                    FIRST, at confidence 0.98, because it is the application's
+                    own W3C-standard statement of what the field is for — right
+                    far more often than any reading of a label.  ``placeholder``
+                    and ``id`` are :func:`app.field_signature.compute`'s token
+                    fallbacks for a control with NO accessible name.  All four
+                    were read by those consumers and emitted by nothing, so rung
+                    1 was unreachable code on every crawled control.
+  *accessibility*   ``name_source``, ``best_effort``, and the aria attributes the
+                    name ladder consumes.  A name is computed the way W3C accname
+                    computes it (RENDERED text, via ``accText``) on EVERY rung,
+                    including the ``aria-labelledby`` id-reference rung — a name
+                    computed any other way is a name no locator can bind.
+  *structure*       ``frame_selector`` (escaped, so it resolves the same way
+                    ``page.frameLocator()`` resolves it) and shadow-root context.
+  *enumerations*    ``options`` plus ``options_total``, bounded by ONE ceiling
+                    (:data:`MAX_OPTIONS`) shared with the refiner and the
+                    catalogue.  ``options_total`` is what keeps a clipped read
+                    from being catalogued as a complete answer set.
+  *declared rules*  ``required``, ``disabled``, ``min``/``max``/``step``,
+                    ``pattern``, ``minlength``/``maxlength`` — what the app said
+                    about its own field, which is what a boundary or negative
+                    scenario is derived from.
+
 The walker recurses OPEN shadow roots (same frame, no selector change — the
-compiler's getByRole/getByLabel pierce open shadow DOM automatically) and
-SAME-ORIGIN iframes (cross-origin ``contentDocument`` access throws and is
-skipped honestly).  It is NOT executed locally; it is unit-tested indirectly
-by hand-authored ``RawControl`` fixtures fed to :func:`app.inventory.
-build_inventory`.
+compiler's getByRole/getByLabel pierce open shadow DOM automatically), resolving
+names against the shadow root that OWNS the element, since an id reference does
+not cross a shadow boundary; and SAME-ORIGIN iframes (cross-origin
+``contentDocument`` access throws and is skipped honestly).
+
+It is executed for real against fixture pages in ``tests/browser`` — both in
+jsdom and in Chromium through the production ``PlaywrightBrowserPort`` — and the
+capture contract above is enforced there by ``test_capture_contract.py``.
 """
 from __future__ import annotations
 
 #: Stamped into the crawl manifest so a manifest can be traced to the exact
 #: injected-JS generation that produced its controls.
-INVENTORY_JS_VERSION = "inv-js-v9"
+INVENTORY_JS_VERSION = "inv-js-v10"
+
+#: THE OPTION CEILING. One number, for the whole pipeline.
+#:
+#: It lives in Python and is interpolated into the JavaScript below so that the
+#: walker, the refiner (:data:`app.inventory.MAX_OPTIONS`) and the catalogue
+#: (``MAX_CATALOG_OPTIONS`` in qe-central) cannot drift apart. They did: the
+#: walker captured 300, the refiner kept 60 and the catalogue's update path kept
+#: 48, so a 250-country question arrived downstream as its first 48 answers.
+#:
+#: Sized for COMPLETENESS of the enumerations a business form actually asks:
+#: 50 US states, ~250 countries, a 100-year date-of-birth range. Still bounded —
+#: an unbounded read would let one pathological ``<select>`` dominate the
+#: manifest — and when it does clip, ``options_total`` reports the true size so a
+#: prefix is never presented as the whole answer set.
+MAX_OPTIONS = 300
 
 INVENTORY_JS = r"""
 (() => {
@@ -88,13 +150,10 @@ INVENTORY_JS = r"""
 
   var MAX_NAME = 500;
   var MAX_OPTION = 200;
-  // Option-list ceiling. Sized for COMPLETENESS of the enumerations a business
-  // form actually asks: 50 US states, ~250 countries, a 100-year date-of-birth
-  // range. The previous 60 silently truncated every one of those but the states,
-  // and a catalogue that holds the first 60 of 250 countries is not a catalogue
-  // of that question — it is a prefix presented as the whole. Still bounded: an
-  // unbounded read would let one pathological <select> dominate the manifest.
-  var MAX_OPTIONS = 300;
+  // THE option ceiling — interpolated from app.inventory_js.MAX_OPTIONS so this
+  // layer cannot drift from the refiner and the catalogue. See that constant for
+  // why the number is what it is.
+  var MAX_OPTIONS = __MAX_OPTIONS__;
   var MAX_LANDMARK = 80;
   var MAX_VALUE = 1000;
 
@@ -110,6 +169,61 @@ INVENTORY_JS = r"""
     try { return el.getAttribute(name) || ""; } catch (e) { return ""; }
   }
 
+  // Climb out of a node, crossing an OPEN shadow boundary to the host. A node
+  // directly under a shadow root has parentElement === null (its parentNode is
+  // the ShadowRoot, not an Element), so a plain parentElement walk would stop
+  // there and miss a display:none HOST.
+  function parentOrHost(node) {
+    var p = node.parentElement;
+    if (p) return p;
+    var r = node.parentNode;
+    if (r && r.nodeType === 11 && r.host) return r.host;   // ShadowRoot
+    return null;
+  }
+
+  // ANCESTOR-AWARE hiding.
+  //
+  // `display` is not an inherited property, so getComputedStyle(child).display
+  // for a control inside a display:none parent returns the CHILD's own display
+  // ("inline-block", …), not "none". Checking only the element therefore
+  // reported every control inside a collapsed accordion, an inactive wizard
+  // step, a closed <details> and a hidden modal as visible — they were
+  // catalogued as present controls the crawler would then try to fill or click.
+  // Confirmed in real Chromium, not inferred.
+  //
+  // The signal a browser normally uses is LAYOUT (offsetParent === null /
+  // getClientRects().length === 0). Deliberately not used: jsdom has no layout
+  // engine and returns zeros for everything, so a layout gate would make the
+  // jsdom lane capture NOTHING and silently pass as "no controls found". This
+  // walks the STYLE tree instead — which both engines model identically — so
+  // the two lanes stay comparable.
+  function hiddenByAncestor(el) {
+    var view = (el.ownerDocument && el.ownerDocument.defaultView) || window;
+    var node = parentOrHost(el);
+    var hops = 0;
+    while (node && hops < 200) {
+      if (node.hasAttribute("hidden")) return true;
+      if (lc(attr(node, "aria-hidden")) === "true") return true;
+      // A closed <details> renders nothing but its <summary>.
+      if (node.tagName === "DETAILS" && !node.hasAttribute("open")) {
+        var inSummary = false;
+        var p = el;
+        while (p && p !== node) {
+          if (p.tagName === "SUMMARY") { inSummary = true; break; }
+          p = parentOrHost(p);
+        }
+        if (!inSummary) return true;
+      }
+      try {
+        var st = view.getComputedStyle(node);
+        if (st && st.display === "none") return true;
+      } catch (e) {}
+      node = parentOrHost(node);
+      hops++;
+    }
+    return false;
+  }
+
   function isVisible(el) {
     try {
       if (!el || el.nodeType !== 1) return false;
@@ -117,9 +231,11 @@ INVENTORY_JS = r"""
       if (lc(attr(el, "aria-hidden")) === "true") return false;
       if (el.tagName === "INPUT" && lc(el.type) === "hidden") return false;
       var st = (el.ownerDocument.defaultView || window).getComputedStyle(el);
-      if (!st) return true;
-      if (st.display === "none" || st.visibility === "hidden") return false;
-      if (parseFloat(st.opacity || "1") === 0) return false;
+      if (st) {
+        if (st.display === "none" || st.visibility === "hidden") return false;
+        if (parseFloat(st.opacity || "1") === 0) return false;
+      }
+      if (hiddenByAncestor(el)) return false;
       return true;
     } catch (e) { return true; }
   }
@@ -155,11 +271,20 @@ INVENTORY_JS = r"""
            role === "radio" || role === "switch";
   }
 
+  // The text an id-referenced element contributes to an accessible name.
+  //
+  // MUST go through accText(), for exactly the reason accText() documents below:
+  // W3C accname follows the RENDERED text, so two block children contribute
+  // "A B". This read used norm(textContent) and produced "AB" — a name no
+  // locator can match — while the sibling label[for] and wrapping-label rungs
+  // twelve lines down had already been converted to accText(). aria-labelledby
+  // pointing at a title+body pair is the standard markup for a questionnaire
+  // question, so the rung that was left behind is the one business forms use
+  // most.
   function idText(doc, id) {
     if (!id) return "";
     try {
-      var t = doc.getElementById(id);
-      return t ? norm(t.textContent) : "";
+      return accText(doc.getElementById(id));
     } catch (e) { return ""; }
   }
 
@@ -265,9 +390,12 @@ INVENTORY_JS = r"""
   // <option>s; a custom ARIA combobox reads [role=option] LABELS from the listbox it owns,
   // WHEN that listbox is present in the DOM (incl. display:none). A widget that builds its
   // options only on open yields [] here — the crawler's open-probe handles that case.
-  function optionsOf(el) {
-    return optionsAndTotalOf(el).list;
-  }
+  //
+  // (A one-line `optionsOf(el)` wrapper returning just `.list` used to sit here. Nothing
+  // ever called it — `describe()` reads optionsAndTotalOf directly, because it needs the
+  // total as well as the list — so it was dead code that read as a second option path and
+  // permanently capped achievable coverage. Removed; the contract it documented lives on
+  // the function that implements it, immediately below.)
 
   // {list, total} — the captured labels AND how many the control actually offers.
   // The two differ only when MAX_OPTIONS clipped the read, and that difference is
@@ -469,16 +597,51 @@ INVENTORY_JS = r"""
   //
   // Scoped to the owning form, because two forms on a page may each use
   // ``name="product"`` and they are NOT the same question.
+  // A stable discriminator for the ROOT a group container lives in.
+  //
+  // "" for the main document, so every light-DOM group key stays BYTE-IDENTICAL
+  // to what it has always been. That is not cosmetic: group_id hashes key the
+  // remembered branch-walk overrides a previous crawl recorded, and re-hashing
+  // them would silently orphan every plan (see app/inventory.py pass 3).
+  //
+  // For a shadow root it is the host chain. Without it, container keys are only
+  // unique WITHIN a root — two unlabelled radiogroups in two different shadow
+  // roots both key "ix:0" and merge into one question offering the other's
+  // answers, and an id-keyed container collides with an identically-id'd one
+  // outside the root, which is the very thing shadow encapsulation exists to
+  // allow.
+  function rootKey(node) {
+    var out = "", cur = node, hops = 0;
+    try {
+      while (cur && cur.host && hops < 8) {
+        var h = cur.host;
+        var seg = lc(h.tagName) + (h.id ? "#" + h.id : "");
+        var p = h.parentElement;
+        if (p && p.children) {
+          for (var i = 0; i < p.children.length; i++) {
+            if (p.children[i] === h) { seg += ":" + i; break; }
+          }
+        }
+        out = out ? (seg + ">" + out) : seg;
+        cur = h.getRootNode ? h.getRootNode() : null;
+        hops++;
+      }
+    } catch (e) {}
+    return out;
+  }
+
   function groupContainerKey(cur, doc) {
+    var rk = rootKey(doc);
+    var pre = rk ? (rk + "|") : "";
     var id = attr(cur, "id");
-    if (id) return "id:" + id;
+    if (id) return pre + "id:" + id;
     var al = attr(cur, "aria-label");
-    if (al) return "al:" + lc(al);
+    if (al) return pre + "al:" + lc(al);
     var lb = attr(cur, "aria-labelledby");
-    if (lb) return "lb:" + lb;
-    try {                                  // positional, stable within a page
+    if (lb) return pre + "lb:" + lb;
+    try {                                  // positional, stable within a root
       var all = doc.querySelectorAll("[role=radiogroup],fieldset");
-      for (var i = 0; i < all.length; i++) { if (all[i] === cur) return "ix:" + i; }
+      for (var i = 0; i < all.length; i++) { if (all[i] === cur) return pre + "ix:" + i; }
     } catch (e) {}
     return "";
   }
@@ -543,15 +706,39 @@ INVENTORY_JS = r"""
 
   // ---- iframe selector (mirrors compiler.py:1005-1011) ---------------------
 
+  // An IDENTIFIER in selector position — an id following '#'. CSS.escape is the
+  // standard answer, and the label[for] lookup above already uses it; this
+  // recipe simply never did. Unescaped, id="pay.frame" yields `iframe#pay.frame`,
+  // which is VALID CSS that means something else entirely ("id=pay AND
+  // class=frame") — so it fails silently, matching nothing, while the manifest
+  // records every control in that frame as captured.
+  function cssIdent(s) {
+    try { return CSS.escape(s); }
+    catch (e) { return ("" + s).replace(/([^a-zA-Z0-9_-])/g, "\\$1"); }
+  }
+
+  // A STRING in attribute-value position. Inside a quoted CSS string only the
+  // quote itself and the backslash need escaping — spaces, brackets,
+  // apostrophes and punctuation are all already legal there, so a title like
+  // `customer's [account]` needs no mangling. A literal newline is not legal and
+  // takes the CSS \A escape. Unescaped, name='quote"frame' yielded
+  // `iframe[name="quote"frame"]`, which is not parseable CSS at all.
+  function cssStr(s) {
+    return ("" + (s == null ? "" : s))
+      .replace(/\\/g, "\\\\")
+      .replace(/"/g, "\\\"")
+      .replace(/\n/g, "\\A ");
+  }
+
   function frameSelectorFor(iframeEl, index) {
     try {
-      if (iframeEl.id) return 'iframe#' + iframeEl.id;
+      if (iframeEl.id) return 'iframe#' + cssIdent(iframeEl.id);
       var nm = attr(iframeEl, "name");
-      if (nm) return 'iframe[name="' + nm + '"]';
+      if (nm) return 'iframe[name="' + cssStr(nm) + '"]';
       var title = attr(iframeEl, "title");
-      if (title) return 'iframe[title="' + title + '"]';
+      if (title) return 'iframe[title="' + cssStr(title) + '"]';
       var src = attr(iframeEl, "src");
-      if (src) return 'iframe[src="' + src + '"]';
+      if (src) return 'iframe[src="' + cssStr(src) + '"]';
     } catch (e) {}
     return "iframe >> nth=" + index;
   }
@@ -573,6 +760,26 @@ INVENTORY_JS = r"""
       kind: role || tag,               // naive; app.inventory refines
       tag: tag,
       input_type: type,
+      // ---- WHAT THE APPLICATION DECLARED THIS FIELD IS FOR --------------------
+      // The deterministic classifier (app/field_semantics.py) ranks `autocomplete`
+      // FIRST, above every reading of a label, because it is a W3C-standard
+      // vocabulary: when an app sets it, the app has NAMED the field's semantics
+      // itself. That rung was unreachable — capture never emitted the attribute,
+      // so classify() could only ever fall through to the weakest name-token rung
+      // and a field labelled "Field A7" classified to nothing at all.
+      //
+      // Enumerated keyword attributes are case-insensitive per spec, so they are
+      // normalised here the same way `role` and `aria-haspopup` already are.
+      autocomplete: lc(attr(el, "autocomplete")),
+      inputmode: lc(attr(el, "inputmode")),
+      // `placeholder` and `id` are the classifier's fallbacks for a control with
+      // NO accessible name: field_signature.compute() tokenises the placeholder,
+      // then the id, before giving up. Both were dead code. `placeholder` is
+      // human-authored text and `id` is a case-sensitive identifier (it has to
+      // round-trip through getElementById and CSS.escape), so both are preserved
+      // VERBATIM rather than normalised.
+      placeholder: clip(attr(el, "placeholder"), MAX_NAME),
+      id: clip(attr(el, "id"), MAX_NAME),
       options: opt.list,
       // How many options the control ACTUALLY offers. Equal to options.length
       // unless MAX_OPTIONS clipped the read — the honest signal that the captured
@@ -640,12 +847,27 @@ INVENTORY_JS = r"""
       try { sink.push(describe(el, doc, frameSelector)); } catch (e) {}
     }
     // open shadow roots (same frame → no selector change)
+    //
+    // The shadow root is passed as its OWN resolution root, not the outer
+    // document. An id reference does not cross a shadow boundary: `label[for]`
+    // and `aria-labelledby` are resolved against the node's root, which is how a
+    // browser, an assistive technology and Playwright's getByRole all resolve
+    // them. Forwarding `doc` here ran those lookups against the host document,
+    // where the shadow-scoped ids do not exist — so every labelled control in a
+    // shadow root came back name:"" and, because the compiler binds by accessible
+    // name only, was dropped from the generated script entirely. A shadow-DOM
+    // design system (Lightning, Vaadin, any lit app) presented as a page with no
+    // fillable fields.
+    //
+    // ShadowRoot implements getElementById and querySelectorAll, so it is a
+    // drop-in root here — and scoping to it is also what keeps an identically-id'd
+    // element OUTSIDE the shadow root from being picked up by mistake.
     var all;
     try { all = root.querySelectorAll("*"); } catch (e) { all = []; }
     for (var j = 0; j < all.length; j++) {
       var host = all[j];
       if (host.shadowRoot) {
-        walk(host.shadowRoot, doc, frameSelector, sink, seenDocs);
+        walk(host.shadowRoot, host.shadowRoot, frameSelector, sink, seenDocs);
       }
     }
     // same-origin iframes (cross-origin access throws → skip honestly)
@@ -669,7 +891,7 @@ INVENTORY_JS = r"""
   walk(document, document, "", out, seen);
   return out;
 })()
-"""
+""".replace("__MAX_OPTIONS__", str(MAX_OPTIONS))
 
 
 #: OPAQUE-SURFACE detector — positively FINDS the surfaces the DOM walker cannot read, so a
@@ -738,12 +960,32 @@ DISPLAYED_VALUES_JS = r"""
   function norm(s){return ((""+(s==null?"":s)).replace(/\s+/g," ")).trim();}
   function clip(s,n){s=""+(s==null?"":s);return s.length>n?s.slice(0,n):s;}
   function attr(el,n){try{return el.getAttribute(n)||"";}catch(e){return "";}}
+  // Same ancestor-aware hiding as the inventory walker (see the long note on
+  // hiddenByAncestor there). `display` is not inherited, so without this a
+  // displayed VALUE was read out of a collapsed accordion or a closed <details>
+  // and reported as on-screen — a value the user cannot actually see.
+  function parentOrHost(n){var p=n.parentElement;if(p)return p;
+    var r=n.parentNode;if(r&&r.nodeType===11&&r.host)return r.host;return null;}
+  function hiddenByAncestor(el){
+    var view=(el.ownerDocument&&el.ownerDocument.defaultView)||window;
+    var node=parentOrHost(el),hops=0;
+    while(node&&hops<200){
+      if(node.hasAttribute("hidden"))return true;
+      if(((node.getAttribute("aria-hidden")||"")+"").toLowerCase()==="true")return true;
+      if(node.tagName==="DETAILS"&&!node.hasAttribute("open")){
+        var inSum=false,p=el;
+        while(p&&p!==node){if(p.tagName==="SUMMARY"){inSum=true;break;}p=parentOrHost(p);}
+        if(!inSum)return true;}
+      try{var s=view.getComputedStyle(node);if(s&&s.display==="none")return true;}catch(e){}
+      node=parentOrHost(node);hops++;}
+    return false;}
   function isVisible(el){try{if(!el||el.nodeType!==1)return false;
     if(el.hasAttribute("hidden"))return false;
     var st=(el.ownerDocument.defaultView||window).getComputedStyle(el);
-    if(!st)return true;
-    if(st.display==="none"||st.visibility==="hidden")return false;
-    if(parseFloat(st.opacity||"1")===0)return false;return true;}catch(e){return true;}}
+    if(st){
+      if(st.display==="none"||st.visibility==="hidden")return false;
+      if(parseFloat(st.opacity||"1")===0)return false;}
+    if(hiddenByAncestor(el))return false;return true;}catch(e){return true;}}
   // A value-looking string: currency, a 2-decimal amount, a thousands-grouped int, or a percent.
   var VALUE_RX = /[$€£]\s?\d[\d,]*(?:\.\d+)?|\b\d[\d,]*\.\d{2}\b|\b\d{1,3}(?:,\d{3})+\b|\b\d+(?:\.\d+)?\s?%/;
   // The element's OWN direct text (not descendants) so a whole container never matches.

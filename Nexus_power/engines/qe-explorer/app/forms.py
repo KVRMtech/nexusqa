@@ -1291,8 +1291,10 @@ async def execute_submit_phase_b(
         try:
             raw_dv = list(await _collect_dv() or [])
             # normalize + PII-scrub + #2 candidate-classify via the SAME pipeline the
-            # crawler uses (lazy import: forms is imported BY crawler — avoid the cycle).
-            from .crawler import _displayed_values as _normalize_displayed_values
+            # crawler uses.  M0.3/T-DE-06: this helper moved to state_identity,
+            # so both modules import it DOWNWARD and the old crawler<->forms
+            # cycle (previously dodged by importing lazily) no longer exists.
+            from .state_identity import _displayed_values as _normalize_displayed_values
             displayed_values = _normalize_displayed_values(raw_dv)
         except Exception:  # never fail a submit over a best-effort capture
             logger.warning("qec.forms.submit_displayed_values_failed", exc_info=True)

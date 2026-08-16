@@ -31,9 +31,10 @@ from app.crawler import (
     ORACLE_PICKED,
     ORACLE_UNAVAILABLE,
 )
+from subsystem_source import crawler_subsystem_source
 from app.guard import load_refuse_pack
 
-_CRAWLER_SRC = open("app/crawler.py", encoding="utf-8").read()
+_CRAWLER_SRC = crawler_subsystem_source()  # M0.3: subsystem, not one file
 _REFUSE_PACK = load_refuse_pack(Settings().refuse_pack_path)
 
 

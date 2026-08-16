@@ -30,6 +30,7 @@ import base64
 from app.browser import BrowserPort, NavResult, RawObservation
 from app.config import Settings
 from app.crawler import Budget, Crawler, GuardContext
+from subsystem_source import crawler_subsystem_source
 from app.guard import load_refuse_pack
 
 PNG_1x1 = base64.b64decode(
@@ -234,7 +235,7 @@ def test_no_code_path_claims_PROVEN_without_recording_an_action():
     record nearby. Crude on purpose: it fails loudly when a new claim appears
     without its evidence, which is the moment to think about it.
     """
-    source = open("app/crawler.py", encoding="utf-8").read()
+    source = crawler_subsystem_source()  # M0.3: subsystem, not one file
 
     def _statement(start: int) -> str:
         """Just this log call — a multi-line message, and nothing after it.

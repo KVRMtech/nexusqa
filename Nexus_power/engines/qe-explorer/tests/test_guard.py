@@ -51,12 +51,23 @@ def pack() -> RefusePack:
     return load_refuse_pack(_PACK_PATH)
 
 
-def _valid_attestation(now_ms: int = 1_000, ttl_ms: int = 10_000) -> Attestation:
+def _now_epoch_ms() -> int:
+    """Wall-clock epoch millis — the ONE clock domain a persisted deadline lives
+    in (M0.5 T-SEC-08).  The old fixture built expiries from small monotonic-ish
+    numbers (1_000 + ttl), which is exactly the domain confusion that made every
+    attestation look fresh forever."""
+    import time as _t
+
+    return int(_t.time() * 1000)
+
+
+def _valid_attestation(now_ms: int | None = None, ttl_ms: int = 10_000) -> Attestation:
+    base = _now_epoch_ms() if now_ms is None else int(now_ms)
     return Attestation(
         attested_by="qa@client.example",
         env_kind="disposable",
         reset_procedure="nightly db reset",
-        expires_at_ms=now_ms + ttl_ms,
+        expires_at_ms=base + ttl_ms,
     )
 
 
@@ -454,29 +465,48 @@ class TestSubmitPhase:
 
 class TestAttestation:
     def test_valid_disposable_unexpired_is_capable(self):
-        assert _valid_attestation(now_ms=1_000, ttl_ms=5_000).is_submit_capable(1_000) is True
+        base = _now_epoch_ms()
+        assert _valid_attestation(now_ms=base, ttl_ms=5_000).is_submit_capable(base) is True
 
     def test_expired_is_not_capable(self):
-        att = _valid_attestation(now_ms=1_000, ttl_ms=5_000)  # expires at 6_000
-        assert att.is_submit_capable(6_000) is False
-        assert att.is_submit_capable(9_999) is False
+        base = _now_epoch_ms()
+        att = _valid_attestation(now_ms=base, ttl_ms=5_000)  # expires at base+5s
+        assert att.is_submit_capable(base + 6_000) is False
+        assert att.is_submit_capable(base + 9_999) is False
 
     def test_non_disposable_env_is_not_capable(self):
+        base = _now_epoch_ms()
         for env in ("prod", "staging", "", "PRODUCTION"):
-            att = Attestation(attested_by="x", env_kind=env, expires_at_ms=10_000)
-            assert att.is_submit_capable(1_000) is False
+            att = Attestation(attested_by="x", env_kind=env, expires_at_ms=base + 10_000)
+            assert att.is_submit_capable(base) is False
 
     def test_missing_attested_by_is_not_capable(self):
-        att = Attestation(attested_by="", env_kind="disposable", expires_at_ms=10_000)
-        assert att.is_submit_capable(1_000) is False
+        base = _now_epoch_ms()
+        att = Attestation(attested_by="", env_kind="disposable", expires_at_ms=base + 10_000)
+        assert att.is_submit_capable(base) is False
 
     def test_missing_expiry_is_not_capable(self):
+        base = _now_epoch_ms()
         att = Attestation(attested_by="x", env_kind="disposable", expires_at_ms=None)
-        assert att.is_submit_capable(1_000) is False
+        assert att.is_submit_capable(base) is False
 
-    def test_missing_now_ms_is_not_capable(self):
-        # Freshness is unverifiable without a clock → refuse.
-        assert _valid_attestation().is_submit_capable(None) is False
+    def test_omitted_now_reads_the_wall_clock(self):
+        # M0.5 T-SEC-08: freshness no longer depends on a caller supplying a
+        # clock (the old contract, which the crawler satisfied with a MONOTONIC
+        # reading). Omitting it reads the wall clock, so a live attestation
+        # passes and a lapsed one does not — with no argument either way.
+        assert _valid_attestation().is_submit_capable() is True
+        lapsed = Attestation(attested_by="x", env_kind="disposable",
+                             expires_at_ms=_now_epoch_ms() - 1)
+        assert lapsed.is_submit_capable() is False
+
+    def test_monotonic_reading_is_refused_not_compared(self):
+        # The exact defect: ms-since-crawl-start compared against an epoch
+        # deadline is true for ~50_000 years. A value that cannot be an epoch
+        # reading is now REFUSED rather than silently treated as "very fresh".
+        att = _valid_attestation()
+        for monotonic_ms in (0, 1_000, 5_000, 1_800_000):
+            assert att.is_submit_capable(monotonic_ms) is False
 
 
 # ─── 7. Fail-closed on unknown / malformed input ────────────────────────────
@@ -580,13 +610,24 @@ class TestConfigHelpers:
         assert s.token_matches("") is False
         assert s.token_matches("anything") is False
 
-    def test_sign_payload_is_stable_and_secret_dependent(self):
+    def test_sign_payload_is_v2_and_secret_dependent(self):
+        # M0.5 T-SEC-06: a signature is deliberately NO LONGER deterministic —
+        # each envelope carries its own single-use nonce and timestamp, which is
+        # precisely what makes a captured callback un-replayable. What must stay
+        # stable is the KEY IDENTITY, and it must differ per secret.
         a = Settings(explorer_token="k1")
         b = Settings(explorer_token="k2")
         sig1 = a.sign_payload(b"hello")
-        assert sig1 == a.sign_payload(b"hello")           # deterministic
-        assert sig1 != b.sign_payload(b"hello")           # secret-dependent
-        assert re.fullmatch(r"[0-9a-f]{64}", sig1)        # hex sha256
+        sig2 = a.sign_payload(b"hello")
+        assert sig1 != sig2                               # fresh nonce each time
+        envelope = re.fullmatch(
+            r"v2;kid=([0-9a-f]{16});ts=(\d+);nonce=([0-9a-f]{32});sig=([0-9a-f]{64})",
+            sig1)
+        assert envelope is not None
+        kid_a = envelope.group(1)
+        assert re.match(rf"v2;kid={kid_a};", sig2)        # same key, same kid
+        kid_b = re.match(r"v2;kid=([0-9a-f]{16});", b.sign_payload(b"hello")).group(1)
+        assert kid_a != kid_b                             # secret-dependent
 
     def test_budget_defaults_shape(self):
         b = Settings().budget_defaults()

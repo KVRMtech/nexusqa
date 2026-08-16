@@ -45,6 +45,8 @@ import logging
 import re
 from typing import Any, Iterable, Optional, TypedDict
 
+from .inventory_js import MAX_OPTIONS
+
 logger = logging.getLogger(__name__)
 
 # ─── Vocabularies (pinned to the verified compiler contract) ──────────────────
@@ -120,7 +122,17 @@ _INPUT_BUTTON_TYPES = frozenset({"submit", "button", "reset", "image"})
 _MAX_NAME = 500
 _MAX_ANCHOR = 500
 _MAX_OPTION = 200
-_MAX_OPTIONS = 60
+
+#: THE option ceiling, imported rather than restated.
+#:
+#: This layer used to carry its own ``60`` and silently re-truncated what the
+#: walker had been raised to 300 specifically to preserve: a 250-country question
+#: reached ``form_snapshot_signals`` — the thing the catalogue and the scenario
+#: deriver actually read — as its first 60 answers. The enumeration a control
+#: offers IS the test data for every positive, negative and boundary case derived
+#: from that question, so a prefix presented as the whole answer set is a
+#: fabricated one. There is now one number, and it lives in :mod:`app.inventory_js`.
+_MAX_OPTIONS = MAX_OPTIONS
 
 
 # ─── Record shape ─────────────────────────────────────────────────────────────
@@ -149,6 +161,22 @@ class ControlRecord(TypedDict):
     kind: str
     tag: str
     input_type: str
+    #: WHAT THE APPLICATION DECLARED THIS FIELD IS FOR. ``autocomplete`` is a
+    #: W3C-standard vocabulary and is the STRONGEST signal the classifier has —
+    #: :func:`app.field_semantics.classify` weights it first, above every reading
+    #: of a label. ``inputmode`` is a weaker declaration of the same kind.
+    autocomplete: str
+    inputmode: str
+    #: The classifier's fallbacks for a control with NO accessible name:
+    #: :func:`app.field_signature.compute` tokenises the placeholder, then the id.
+    placeholder: str
+    id: str
+    #: Declared validation (the app's own rule about its own field); "" when
+    #: undeclared. Read by :func:`form_signal_for` into the catalogue's
+    #: ``validation`` block.
+    pattern: str
+    minlength: str
+    maxlength: str
     options: list[str]
     #: How many options the control offers in the page. Greater than
     #: ``len(options)`` only when the read was clipped — the honest marker that
@@ -589,6 +617,28 @@ def build_control_record(
         "kind": kind,
         "tag": tag,
         "input_type": input_type,
+        # THE APPLICATION'S OWN DECLARATION OF WHAT THIS FIELD IS FOR, carried to
+        # the classifier that ranks it above everything else. The walker emits
+        # these; this layer used to drop them, which left
+        # field_semantics.classify() rung 1 (confidence 0.98, the app's own W3C
+        # words) unreachable on every crawled control, and left the placeholder/id
+        # token fallbacks for nameless fields as dead code. Normalised in the
+        # walker for the enumerated keywords; id/placeholder stay verbatim.
+        #
+        # ONE-TIME CONSEQUENCE, deliberate: `autocomplete` and `inputmode` are
+        # part of the field-signature hash material (field_signature.compute).
+        # They have always been read there and have always arrived empty, so a
+        # control that DECLARES either now hashes differently than it did before
+        # this change. Learned priors and proven mechanics stored against the old
+        # hash simply stop matching for those fields — they do not mis-match, and
+        # both consumers fail open (classify falls through to its own rungs, the
+        # ladder walks in full). SIGNATURE_VERSION is deliberately NOT bumped:
+        # every control that declares neither attribute keeps its signature, so
+        # the churn is confined to the fields that are now better characterised.
+        "autocomplete": _s(raw.get("autocomplete")).strip(),
+        "inputmode": _s(raw.get("inputmode")).strip(),
+        "placeholder": _s(raw.get("placeholder")),
+        "id": _s(raw.get("id")).strip(),
         "options": options,
         # How many options the control ACTUALLY offers, as counted in the page.
         # Equal to len(options) unless the injected-JS ceiling clipped the read.

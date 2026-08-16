@@ -13,6 +13,7 @@ deliberately no way for a caller to assert it directly.
 import inspect
 import re
 
+from subsystem_source import crawler_subsystem_source
 from app import flow_ledger as FL
 
 
@@ -131,7 +132,7 @@ def test_the_outcome_a_funnel_produced_is_kept():
     assert f["outcome_values"][0]["value_type"] == "currency"
 
 
-_CRAWLER = open("app/crawler.py", encoding="utf-8").read()
+_CRAWLER = crawler_subsystem_source()  # M0.3: subsystem, not one file
 
 
 def _code_only(source: str) -> str:
@@ -180,8 +181,13 @@ def test_an_app_nobody_attested_gets_the_shallow_budget():
 
     The behavioural pins live in ``tests/test_traversal_posture.py``; this one
     keeps the fallback from being inverted by a future edit."""
-    seg = _code_only(_CRAWLER[_CRAWLER.index("self._max_wizard_steps"):][:400])
-    assert "if self._full_traversal" in seg
+    # M0.3/T-DE-14: the derivation moved into TraversalBudget.for_posture, so
+    # the crawl's two budget systems sit together. The pin is unchanged — ONE
+    # expression chooses depth, and its fallback is still the probe budget.
+    seg = _code_only(_CRAWLER[_CRAWLER.index("def for_posture"):][:2200])
+    assert "if full_traversal:" in seg
+    assert "max_wizard_steps=_MAX_WIZARD_STEPS" in seg, (
+        "the fallback branch must still be the PROBE budget")
     assert "_MAX_WIZARD_STEPS" in seg
 
 

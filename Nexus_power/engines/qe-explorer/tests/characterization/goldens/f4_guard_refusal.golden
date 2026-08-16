@@ -1,0 +1,173 @@
+{"attestation":null,"budgets":{"max_actions_per_state":30,"max_depth":6,"max_requests":5000,"max_states":200,"max_wall_ms":1800000,"rate_per_s":0},"config_fingerprint":"char-fp","crawl_id":"char-crawl","explorer_version":"char/1.0","frame_count":0,"guard_version":"char","refuse_pack_version":"refuse-pack-v1","stop_reason":"","target_url":"https://app.char/settings","type":"crawl_meta"}
+{"actions":[{"after":{"detail":"","navigated":false,"outcome":"value_committed"},"anchor":null,"phase":"explore","qec":{"css_hint":"","expanded":"","frame_selector":"","haspopup":"","href":"","input_type":"text","name_confidence":"medium","options":[],"role":"textbox","testid":""},"screenshot_after":"","state_id":"2bae738648e4480d61f6a7d763c3f8fabcb06293736a05666d92deedc0939b44","subaction_index":0,"target_kind":"text_field","target_label":"Display Name","timestamp_ms":5,"to_state":"","url_changed":false,"value":"Mariam Ashcombe","verb":"type"},{"after":{"detail":"https://app.char/settings/profile","navigated":true,"outcome":"navigation"},"anchor":null,"phase":"explore","qec":{"css_hint":"","expanded":"","frame_selector":"","haspopup":"","href":"/settings/profile","input_type":"","name_confidence":"medium","options":[],"role":"link","testid":""},"screenshot_after":"","state_id":"2bae738648e4480d61f6a7d763c3f8fabcb06293736a05666d92deedc0939b44","subaction_index":1,"target_kind":"link","target_label":"Back Home","timestamp_ms":7,"to_state":"app.char/settings/profile","url_changed":true,"value":null,"verb":"click"}],"ax_fingerprint":"2bae738648e4480d61f6a7d763c3f8fabcb06293736a05666d92deedc0939b44","canonical_host":"app.char","displayed_values":[],"first_seen_ms":3,"form_snapshot":{"Display Name":""},"form_snapshot_signals":{"Display Name":{"options":[],"required":false,"type":"text"}},"last_seen_ms":8,"location":"https://app.char/settings","network_calls":[],"screenshots":[{"frame_index":0,"path":"frame_00000.png","timestamp_ms":4}],"sequence_index":0,"state_id":"2bae738648e4480d61f6a7d763c3f8fabcb06293736a05666d92deedc0939b44","title":"Account Settings","type":"page_state","url_host":"app.char","url_path":"/settings","url_query":""}
+{"from_state":"2bae738648e4480d61f6a7d763c3f8fabcb06293736a05666d92deedc0939b44","target_label":"Back Home","timestamp_ms":10,"to_state":"b3acfd427631c987bdd642e78f1993d1df5b294d4ea9bac2b484cecb53a50a11","type":"edge","verb":"navigate"}
+{"actions":[{"after":{"detail":"","navigated":false,"outcome":"value_committed"},"anchor":null,"phase":"explore","qec":{"css_hint":"","expanded":"","frame_selector":"","haspopup":"","href":"","input_type":"text","name_confidence":"medium","options":[],"role":"textbox","testid":""},"screenshot_after":"","state_id":"b3acfd427631c987bdd642e78f1993d1df5b294d4ea9bac2b484cecb53a50a11","subaction_index":0,"target_kind":"text_field","target_label":"Nickname","timestamp_ms":13,"to_state":"","url_changed":false,"value":"autotest","verb":"type"}],"ax_fingerprint":"b3acfd427631c987bdd642e78f1993d1df5b294d4ea9bac2b484cecb53a50a11","canonical_host":"app.char","displayed_values":[],"first_seen_ms":11,"form_snapshot":{"Nickname":""},"form_snapshot_signals":{"Nickname":{"options":[],"required":false,"type":"text"}},"last_seen_ms":14,"location":"https://app.char/settings/profile","network_calls":[],"screenshots":[{"frame_index":1,"path":"frame_00001.png","timestamp_ms":12}],"sequence_index":1,"state_id":"b3acfd427631c987bdd642e78f1993d1df5b294d4ea9bac2b484cecb53a50a11","title":"Profile","type":"page_state","url_host":"app.char","url_path":"/settings/profile","url_query":""}
+{"attestation":null,"budgets":{"max_actions_per_state":30,"max_depth":6,"max_requests":5000,"max_states":200,"max_wall_ms":1800000,"rate_per_s":0},"config_fingerprint":"char-fp","crawl_id":"char-crawl","explorer_version":"char/1.0","frame_count":2,"guard_blocks":0,"guard_version":"char","refuse_pack_version":"refuse-pack-v1","stats":{"actions":3,"elapsed_ms":15,"requests":4,"states":2},"stop_reason":"completed","target_url":"https://app.char/settings","type":"crawl_meta"}
+
+===SUMMARY===
+{
+  "actions": 3,
+  "coverage": {
+    "advance_blocked": [],
+    "advance_oracle": {
+      "consults": 0,
+      "errors": 0,
+      "latency_ms_total": 0,
+      "picks": 0,
+      "state": "configured",
+      "unavailable": 0
+    },
+    "auth_blocked": false,
+    "auth_blocked_reason": "",
+    "auth_incomplete": false,
+    "auth_reason": "",
+    "crawl_mode": "explore",
+    "field_ledger": [
+      {
+        "basis": "name_tokens",
+        "confidence": 0.75,
+        "filled": true,
+        "name": "Display Name",
+        "provenance": "synthesized",
+        "semantic_type": "full_name",
+        "sensitive": true,
+        "signature": "8cf3ef70a88dad1782ad56635eb63431",
+        "url": "https://app.char/settings"
+      },
+      {
+        "basis": "structural",
+        "confidence": 0.4,
+        "filled": true,
+        "name": "Nickname",
+        "provenance": "synthesized",
+        "semantic_type": "free_text",
+        "sensitive": false,
+        "signature": "cd5baf0962fae425667f41e873da0070",
+        "url": "https://app.char/settings/profile"
+      }
+    ],
+    "fields_inferred": [
+      "Display Name",
+      "Nickname"
+    ],
+    "fields_needing_seed": [],
+    "fields_needing_seed_detail": [],
+    "filled_by_kind": {
+      "text": 2
+    },
+    "flow_summary": {
+      "advance_contradicts_fills": 0,
+      "advances_by_tier": {},
+      "branch_coverage": false,
+      "branch_coverage_note": "One path per journey. At each decision point a single option was taken, so business paths behind the other options were not visited.",
+      "deepest_flow_steps": 1,
+      "flows_completed": 2,
+      "flows_found": 2,
+      "flows_fully_answered": 2,
+      "flows_truncated": 0,
+      "intent_unmet": 0,
+      "oracle_advances": 0,
+      "truncation_reasons": {}
+    },
+    "flows": [
+      {
+        "advance_contradicts_fills": false,
+        "completed": true,
+        "entry_fingerprint": "2bae738648e4480d61f6a7d763c3f8fabcb06293736a05666d92deedc0939b44",
+        "entry_title": "Account Settings",
+        "entry_url": "https://app.char/settings",
+        "fields_filled_total": 1,
+        "fields_unanswered": 0,
+        "flow_id": "d2a44fb1d8e66e0549a2e915",
+        "fully_answered": true,
+        "outcome_values": [],
+        "step_budget": 6,
+        "step_count": 1,
+        "steps": [
+          {
+            "fields_filled": 1,
+            "fields_unfilled": 0,
+            "fingerprint": "2bae738648e4480d61f6a7d763c3f8fabcb06293736a05666d92deedc0939b44",
+            "title": "Account Settings",
+            "url": "https://app.char/settings"
+          }
+        ],
+        "terminal": "submit_boundary",
+        "terminal_url": "https://app.char/settings"
+      },
+      {
+        "advance_contradicts_fills": false,
+        "completed": true,
+        "entry_fingerprint": "b3acfd427631c987bdd642e78f1993d1df5b294d4ea9bac2b484cecb53a50a11",
+        "entry_title": "Profile",
+        "entry_url": "https://app.char/settings/profile",
+        "fields_filled_total": 1,
+        "fields_unanswered": 0,
+        "flow_id": "d344606b19228cee8fb87f86",
+        "fully_answered": true,
+        "outcome_values": [],
+        "step_budget": 6,
+        "step_count": 1,
+        "steps": [
+          {
+            "fields_filled": 1,
+            "fields_unfilled": 0,
+            "fingerprint": "b3acfd427631c987bdd642e78f1993d1df5b294d4ea9bac2b484cecb53a50a11",
+            "title": "Profile",
+            "url": "https://app.char/settings/profile"
+          }
+        ],
+        "terminal": "no_advance",
+        "terminal_url": "https://app.char/settings/profile"
+      }
+    ],
+    "forms_confirmed": 0,
+    "forms_found": 2,
+    "forms_submitted": 0,
+    "opaque_surfaces": [],
+    "open_choice_unverified": 0,
+    "states": [
+      {
+        "ax_fingerprint": "2bae738648e4480d61f6a7d763c3f8fabcb06293736a05666d92deedc0939b44",
+        "controls_total": 4,
+        "danger_controls": 1,
+        "danger_names": [
+          "Delete Account"
+        ],
+        "form_snapshot_signals": {
+          "Display Name": {
+            "options": [],
+            "required": false,
+            "type": "text"
+          }
+        },
+        "location": "https://app.char/settings"
+      },
+      {
+        "ax_fingerprint": "b3acfd427631c987bdd642e78f1993d1df5b294d4ea9bac2b484cecb53a50a11",
+        "controls_total": 1,
+        "danger_controls": 0,
+        "danger_names": [],
+        "form_snapshot_signals": {
+          "Nickname": {
+            "options": [],
+            "required": false,
+            "type": "text"
+          }
+        },
+        "location": "https://app.char/settings/profile"
+      }
+    ],
+    "submit_candidates": [
+      "Cancel Subscription"
+    ],
+    "summary": "2 form(s) found; 2 field(s) auto-filled with a default; 0 field(s) need a real seed; 0 submit(s) exercised (Phase-B), 1 at the submit boundary.",
+    "traversal": "probe",
+    "unhandled_controls": []
+  },
+  "detail": "",
+  "guard_blocks": 0,
+  "screenshots": 2,
+  "states": 2,
+  "stop_reason": "completed"
+}
