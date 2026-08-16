@@ -13,6 +13,7 @@ coverage and ignored submit_candidates, so the submit never reached the classifi
 The product asked for an approval it gave no way to grant.
 """
 from datetime import date
+from pathlib import Path
 
 from app.services.dispositions import APPROVE, FieldSignal, classify_manifest
 
@@ -58,15 +59,29 @@ def test_an_approval_is_never_prefilled_as_a_value():
 
 
 # ── the wiring: coverage -> manifest -> classifier ───────────────────────────
+# These three read the SOURCE, so they need a path that does not depend on the
+# caller's working directory. They previously used a bare relative
+# `open("app/routers/apps.py")`, which resolves only when pytest is invoked from
+# platform/qe-central — CI invokes it as `pytest platform/qe-central/tests` from
+# the repository root, so all three raised FileNotFoundError and the qe-central
+# gate was red for a reason that had nothing to do with the behaviour under test.
+_SERVICE_ROOT = Path(__file__).resolve().parents[1]
+
+
+def _source(relative_path: str) -> str:
+    path = _SERVICE_ROOT / relative_path
+    assert path.exists(), f"expected source file is missing: {path}"
+    return path.read_text(encoding="utf-8")
+
 
 def test_the_route_reads_submit_candidates_out_of_the_crawl_coverage():
-    src = open("app/routers/apps.py", encoding="utf-8").read()
+    src = _source("app/routers/apps.py")
     assert '_cov.get("submit_candidates")' in src
     assert "submit_candidates=submit_candidates," in src
 
 
 def test_the_manifest_passes_them_to_the_classifier():
-    src = open("app/services/seed_manifest.py", encoding="utf-8").read()
+    src = _source("app/services/seed_manifest.py")
     assert "submit_candidates: Iterable[str] = ()" in src
     assert "submit_labels=submit_labels," in src
     # …and adds the control as a signal so it appears even when the field inventory
@@ -75,5 +90,5 @@ def test_the_manifest_passes_them_to_the_classifier():
 
 
 def test_a_duplicate_submit_is_not_added_twice():
-    src = open("app/services/seed_manifest.py", encoding="utf-8").read()
+    src = _source("app/services/seed_manifest.py")
     assert "if normalize_label(lbl) not in have:" in src

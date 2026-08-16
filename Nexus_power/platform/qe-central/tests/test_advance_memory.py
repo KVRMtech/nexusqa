@@ -192,6 +192,17 @@ async def _run_round_trip():
     factory = async_sessionmaker(engine, expire_on_commit=False)
     consenting = f"qec-adv-yes-{uuid.uuid4().hex[:8]}"
     private = f"qec-adv-no-{uuid.uuid4().hex[:8]}"
+    # The LABEL has to be unique per run too, not just the tenant ids.
+    # advance_label_priors is the federated pool: deliberately CROSS-TENANT and
+    # deliberately tenant-column-free, keyed by label_norm alone. With a fixed
+    # "See My Quote" every run contributed to the SAME prior row, so
+    # distinct_tenants counted every past run and the == 1 assertion below
+    # failed the second time this test met the same database. A unique label
+    # gives each run its own pool row — which is also the only isolation
+    # available on a table that has no tenant to scope by.
+    sfx = uuid.uuid4().hex[:8]
+    control_name, label_norm = f"See My Quote {sfx}", f"see my quote {sfx}"
+    signature = f"sig-rt-{sfx}"
     original = advance_memory.tenant_scoped_qec_session
     try:
         advance_memory.tenant_scoped_qec_session = (
@@ -203,16 +214,16 @@ async def _run_round_trip():
                 tenant_id=private, share_advance_priors=False))
 
         coverage = _coverage([
-            {"advance": {"tier": 3, "control_name": "See My Quote",
-                         "oracle": True, "signature": "sig-rt"}},
+            {"advance": {"tier": 3, "control_name": control_name,
+                         "oracle": True, "signature": signature}},
         ])
         out = await advance_memory.harvest_completion(
             tenant_id=consenting, app_id="app1", coverage=coverage)
         assert out == {"proven": 1, "remembered": 1, "contributed": 1}
 
         # Tenant-private recall answers; the other tenant sees nothing.
-        assert await advance_memory.recall(consenting, "sig-rt") == "see my quote"
-        assert await advance_memory.recall(private, "sig-rt") is None
+        assert await advance_memory.recall(consenting, signature) == label_norm
+        assert await advance_memory.recall(private, signature) is None
 
         # Re-proof reinforces (proof_count grows, no duplicate rows).
         await advance_memory.harvest_completion(
@@ -228,7 +239,7 @@ async def _run_round_trip():
             tenant_id=private, app_id="app2", coverage=coverage)
         async with _scoped(factory, private) as s:
             prior = (await s.execute(select(AdvanceLabelPriorRow).where(
-                AdvanceLabelPriorRow.label_norm == "see my quote"))).scalar_one()
+                AdvanceLabelPriorRow.label_norm == label_norm))).scalar_one()
             assert prior.distinct_tenants == 1
             assert contributor_hash(private) not in prior.contributor_hashes
             assert consenting not in str(prior.contributor_hashes)

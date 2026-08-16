@@ -248,6 +248,14 @@ async def _run_round_trip():
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     tenant = f"qec-jrun-{uuid.uuid4().hex[:10]}"
     app_id = "app1"
+    # Every PRIMARY KEY this test seeds must be unique per run. The literals
+    # below ("j1", "t1", "n-fpA", "jr1") collided with themselves the second
+    # time this test met the same database — a UniqueViolation on
+    # journey_nodes_pkey. Harmless in CI, which gets a fresh service container
+    # per job, but it makes any local re-run fail for a reason that has nothing
+    # to do with the behaviour under test.
+    sfx = uuid.uuid4().hex[:8]
+    jid, tid, jrid = f"j1-{sfx}", f"t1-{sfx}", f"jr1-{sfx}"
     originals = (linker.tenant_scoped_qec_session,
                  runner.tenant_scoped_qec_session)
     try:
@@ -257,7 +265,7 @@ async def _run_round_trip():
         # Seed a completed journey: start → health → review.
         async with _scoped(session_factory, tenant) as s:
             s.add(JourneyRow(
-                journey_id="j1", tenant_id=tenant, app_id=app_id,
+                journey_id=jid, tenant_id=tenant, app_id=app_id,
                 entry_fingerprint="fpA", flow_id="f" * 24,
                 entry_url="https://a.example/quote/start",
                 entry_title="Quote", business_name="Get Life Insurance Quote",
@@ -266,11 +274,11 @@ async def _run_round_trip():
                             ("fpB", "https://a.example/quote/health"),
                             ("fpC", "https://a.example/quote/review")):
                 s.add(JourneyNodeRow(
-                    node_id=f"n-{fp}", tenant_id=tenant, app_id=app_id,
+                    node_id=f"n-{fp}-{sfx}", tenant_id=tenant, app_id=app_id,
                     fingerprint=fp, url=url, title=fp))
             s.add(JourneyTraversalRow(
-                traversal_id="t1", tenant_id=tenant, app_id=app_id,
-                journey_id="j1", exploration_id="ex1",
+                traversal_id=tid, tenant_id=tenant, app_id=app_id,
+                journey_id=jid, exploration_id=f"ex1-{sfx}",
                 terminal="submit_boundary", completed=True,
                 path_fps=["fpA", "fpB", "fpC"], path_hash="h1"))
 
@@ -305,8 +313,10 @@ async def _run_round_trip():
 
         async with _scoped(session_factory, tenant) as s:
             span = (await s.execute(select(JourneyCaseRow).where(
+                JourneyCaseRow.tenant_id == tenant,
                 JourneyCaseRow.test_case_id == "case-span"))).scalar_one()
             sample = (await s.execute(select(JourneyCaseRow).where(
+                JourneyCaseRow.tenant_id == tenant,
                 JourneyCaseRow.test_case_id == "case-sample"))).scalar_one()
             assert span.kind == KIND_JOURNEY_E2E
             assert span.coverage_score == 100
@@ -314,15 +324,15 @@ async def _run_round_trip():
                 "Verify Get Life Insurance Quote end to end"
             assert sample.kind == KIND_LINKED and sample.coverage_score == 67
             adopted = await linker.runnable_case(
-                s, tenant_id=tenant, app_id=app_id, journey_id="j1",
+                s, tenant_id=tenant, app_id=app_id, journey_id=jid,
                 artifact_id="art1")
             assert adopted is not None and adopted.test_case_id == "case-span"
 
         # Runner fold-back: terminal passed + ingested id via ci_run_id.
         async with _scoped(session_factory, tenant) as s:
             s.add(JourneyRunRow(
-                journey_run_id="jr1", tenant_id=tenant, app_id=app_id,
-                journey_id="j1", artifact_id="art1", test_case_id="case-span",
+                journey_run_id=jrid, tenant_id=tenant, app_id=app_id,
+                journey_id=jid, artifact_id="art1", test_case_id="case-span",
                 dispatch_run_id="disp-9", status="running"))
 
         async def fake_list_runs(**kw):
@@ -335,7 +345,7 @@ async def _run_round_trip():
         runner.factory.list_runs = fake_list_runs
         try:
             await runner._fold_back(
-                tenant_id=tenant, journey_run_id="jr1", artifact_id="art1",
+                tenant_id=tenant, journey_run_id=jrid, artifact_id="art1",
                 dispatch_run_id="disp-9", status="passed",
                 job={"exit_code": 0, "steps_completed": 8, "total_tests": 1})
         finally:
@@ -343,7 +353,7 @@ async def _run_round_trip():
 
         async with _scoped(session_factory, tenant) as s:
             row = (await s.execute(select(JourneyRunRow).where(
-                JourneyRunRow.journey_run_id == "jr1"))).scalar_one()
+                JourneyRunRow.journey_run_id == jrid))).scalar_one()
             assert row.status == "passed"
             assert row.ingested_run_id == "ingest-9"
             assert row.verdict_summary["passed_steps"] == 8

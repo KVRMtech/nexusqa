@@ -521,6 +521,13 @@ def test_real_redis_shared_mutex_and_fail_closed():  # pragma: no cover - live o
             snap = await r1.snapshot()
             assert set(snap.keys()) >= {"global_running", "host_buckets"}
         finally:
-            await client.aclose()
+            # `aclose()` only exists from redis-py 5.0.1; `close()` is the older
+            # spelling and still works after it. requirements.txt pins
+            # `redis>=5,<6`, which spans both, so this must not assume either —
+            # on 5.0.0 the hard `aclose()` raised AttributeError and failed the
+            # test. It went unnoticed because the test is gated on a real Redis
+            # that no CI job provided until the M0.x database job.
+            closer = getattr(client, "aclose", None) or client.close
+            await closer()
 
     run(body())

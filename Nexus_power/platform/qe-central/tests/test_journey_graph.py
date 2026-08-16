@@ -274,21 +274,34 @@ async def _run_round_trip():
             coverage=coverage)
         assert r2["traversals"] == 0 and r2["nodes"] == 0 and r2["edges"] == 0
 
+        # EVERY read-back below filters on tenant_id explicitly. These tests run
+        # against QEC_TEST_DATABASE_URL, which is the SUPERUSER DSN — and a
+        # superuser BYPASSES row-level security, so the `_scoped` session's
+        # tenant GUC does not filter anything here. Without an explicit
+        # predicate, `scalar_one()` sees every OTHER journey test's rows too and
+        # raises MultipleResultsFound. That went unnoticed for as long as these
+        # tests skipped for want of a database; the M0.x database job is what
+        # made them run, side by side, against one schema.
         async with _scoped(factory, tenant) as s:
             walked = (await s.execute(select(JourneyBranchRow).where(
+                JourneyBranchRow.tenant_id == tenant,
                 JourneyBranchRow.option_label_norm == "non-smoker"))).scalar_one()
             other = (await s.execute(select(JourneyBranchRow).where(
+                JourneyBranchRow.tenant_id == tenant,
                 JourneyBranchRow.option_label_norm == "smoker"))).scalar_one()
             assert walked.status == BRANCH_WALKED
             assert other.status == BRANCH_DISCOVERED
             node = (await s.execute(select(JourneyNodeRow).where(
+                JourneyNodeRow.tenant_id == tenant,
                 JourneyNodeRow.fingerprint == "fpA"))).scalar_one()
             assert node.is_decision is True
             terminal_node = (await s.execute(select(JourneyNodeRow).where(
+                JourneyNodeRow.tenant_id == tenant,
                 JourneyNodeRow.fingerprint == "fpB"))).scalar_one()
             assert terminal_node.is_boundary is True
             assert terminal_node.has_outcome is True
-            edge = (await s.execute(select(JourneyEdgeRow))).scalar_one()
+            edge = (await s.execute(select(JourneyEdgeRow).where(
+                JourneyEdgeRow.tenant_id == tenant))).scalar_one()
             assert edge.trigger_label_norm == "continue"
             assert edge.walk_count == 1  # idempotent re-fold did not bump
 
@@ -300,6 +313,7 @@ async def _run_round_trip():
             tenant_id=tenant, branch_ids=plans[0]["branch_ids"])
         async with _scoped(factory, tenant) as s:
             assert (await s.execute(select(JourneyBranchRow).where(
+                JourneyBranchRow.tenant_id == tenant,
                 JourneyBranchRow.option_label_norm == "smoker"
             ))).scalar_one().status == BRANCH_PLANNED
 
@@ -318,20 +332,25 @@ async def _run_round_trip():
         assert rec == {"walked": 1, "blocked": 0}
 
         # A plan that never reaches its option ends BLOCKED with a reason.
+        # branch_id is the PRIMARY KEY, so it must be unique per run: the old
+        # fixed "b-unreach" literal collided with itself the second time this
+        # test ran against a database that was not thrown away in between.
+        unreachable_id = f"b-unreach-{uuid.uuid4().hex[:8]}"
         async with _scoped(factory, tenant) as s:
             s.add(JourneyBranchRow(
-                branch_id="b-unreach", tenant_id=tenant, app_id=app_id,
+                branch_id=unreachable_id, tenant_id=tenant, app_id=app_id,
                 node_fp="fpA", control_signature="sig-tier",
                 control_label_norm="coverage tier",
                 option_label_norm="platinum", status=BRANCH_PLANNED))
         rec2 = await branch_planner.reconcile_completion(
             tenant_id=tenant, app_id=app_id,
-            walk_plan={"branch_ids": ["b-unreach"]},
+            walk_plan={"branch_ids": [unreachable_id]},
             terminal_reason="budget_exhausted")
         assert rec2 == {"walked": 0, "blocked": 1}
         async with _scoped(factory, tenant) as s:
             blocked = (await s.execute(select(JourneyBranchRow).where(
-                JourneyBranchRow.branch_id == "b-unreach"))).scalar_one()
+                JourneyBranchRow.tenant_id == tenant,
+                JourneyBranchRow.branch_id == unreachable_id))).scalar_one()
             assert blocked.status == BRANCH_BLOCKED
             assert "budget_exhausted" in blocked.blocked_reason
 

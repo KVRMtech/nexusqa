@@ -186,6 +186,10 @@ class QEExplorationRow(QecBase):
     __table_args__ = (
         Index("ix_qe_explorations_tenant_app", "tenant_id", "app_id"),
         Index("ix_qe_explorations_tenant_artifact", "tenant_id", "artifact_id"),
+        # The reaper's scan index (qec_017): status IN (...) ORDER BY updated_at.
+        # status first (the IN predicate), updated_at second (the sort) so the
+        # LIMIT 500 stops early instead of sorting the whole relation.
+        Index("ix_qe_explorations_status_updated", "status", "updated_at"),
     )
 
 

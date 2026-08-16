@@ -1,10 +1,11 @@
-"""QE-Central — the qec_001 migration produces EXACTLY the designed schema.
+"""QE-Central — the migration chain produces the designed schema.
 
 Complements test_rls_isolation.py (which proves the policies *behave*): this
 test proves the migration *shipped* — against a live ``qecentral`` DB at alembic
-head it asserts the exact 22-table surface (qec_001 + the qec_002 Phase-7
-``tenant_provisioning`` table), the ``tenant_isolation`` policy +
-ENABLE/FORCE row security on every one of them, and the invariant-critical
+head it asserts the design-critical table surface (qec_001 + the qec_002 Phase-7
+``tenant_provisioning`` table + qec_003 ``app_environments``), the
+``tenant_isolation`` policy + ENABLE/FORCE row security on every one of them,
+and the invariant-critical
 unique indexes/constraints (the one-active-cycle partial index, the audit-ingest
 dedupe index, the idempotent-universe identity index, the change-event and
 seed-manifest uniqueness).  A missing table, a dropped policy, or a lost partial
@@ -15,39 +16,72 @@ The expectations are declared INDEPENDENTLY (not imported from the migration) so
 that editing the migration's table list cannot silently move this goalpost — a
 change to the schema must be a deliberate change here too.
 
+M0.x correction — this file had rotted into a test that could never pass. It
+asserted ``head == 'qec_003'`` and an EXACT set of 23 tables. Thirteen revisions
+later the head is qec_017 and the schema carries 38 tables, so the moment a real
+Postgres was wired into CI this test would have failed on both counts. It had
+never actually run against a database. Two changes fix that permanently:
+
+  * the expected head is DERIVED from the migration chain (``alembic heads``),
+    never hardcoded — the pin is what went stale, not the assertion;
+  * ``_CORE_TABLES`` is now a REQUIRED-SUBSET, not an exact set. It still names
+    the design-critical tables independently of the migration, so deleting one
+    fails here, but a new table in a new revision no longer breaks an unrelated
+    test. Exact, self-maintaining coverage of the full table surface belongs to
+    the gates that derive it from the schema: ``test_rls_coverage_complete.py``
+    (every tenant table is isolated) and ``test_schema_drift.py`` (every table is
+    modelled or declared).
+
 Gated on ``QEC_TEST_QEC_DATABASE_URL`` (the qecentral DB at head).  These are
 catalog reads only, so they run through either a privileged or the least-priv
 ``qec`` role.
 """
 from __future__ import annotations
 
-import asyncio
-import os
-
-import pytest
+from _dbgate import ENV_QEC_DB, QEC_DB_URL, db_gate, require_db, run
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy.pool import NullPool
 
-DB_URL = os.environ.get("QEC_TEST_QEC_DATABASE_URL", "")
+DB_URL = QEC_DB_URL
 
-needs_db = pytest.mark.skipif(
-    not DB_URL,
-    reason=(
-        "QEC_TEST_QEC_DATABASE_URL not set — the migration/schema assertions need "
-        "a disposable qecentral DB at alembic head"
-    ),
+needs_db = db_gate(
+    QEC_DB_URL, ENV_QEC_DB,
+    "the migration/schema assertions need a disposable qecentral DB at alembic head",
 )
 
 
-def run(coro):
-    return asyncio.run(coro)
+def _expected_head() -> str:
+    """The chain head, read from the migration files themselves.
+
+    A revision is head when no other revision names it as ``down_revision``.
+    Computed from the files rather than hardcoded, because a hardcoded head is
+    precisely the defect this rewrite is correcting.
+    """
+    import pathlib
+    import re
+
+    versions = pathlib.Path(__file__).resolve().parents[2] / "alembic_qec" / "versions"
+    revisions, parents = set(), set()
+    for path in versions.glob("qec_*.py"):
+        source = path.read_text(encoding="utf-8")
+        rev = re.search(r'^revision:\s*str\s*=\s*"([^"]+)"', source, re.M)
+        down = re.search(r'^down_revision:.*?=\s*"([^"]+)"', source, re.M)
+        if rev:
+            revisions.add(rev.group(1))
+        if down:
+            parents.add(down.group(1))
+    heads = revisions - parents
+    assert len(heads) == 1, (
+        f"the qec migration chain does not have exactly one head: {sorted(heads)}"
+    )
+    return heads.pop()
 
 
-# The complete, authoritative list of the 22 QE-Central-owned tables (design
-# R-7 + Phase-7 fleet).  Declared here so a schema change is a deliberate edit in
-# BOTH the migration and this test.
-_EXPECTED_TABLES = {
+# The design-critical QE-Central-owned tables (design R-7 + Phase-7 fleet),
+# declared here independently of the migration.  This is a REQUIRED SUBSET: every
+# one of these must exist, and later revisions are free to add more.
+_CORE_TABLES = {
     # S1 — core service
     "client_apps", "qe_explorations", "qe_harness_runs",
     # S4 — scenario governance
@@ -135,20 +169,24 @@ async def _fetch():
 @needs_db
 class TestMigrationAppliesCleanly:
     def test_schema_matches_the_design(self):
+        require_db(QEC_DB_URL, ENV_QEC_DB)
         head, tables, rls, policies, indexes, constraints = run(_fetch())
 
-        # ── alembic is exactly at the qec_003 head (… → qec_002 → qec_003) ──
-        assert head == "qec_003", f"qecentral alembic head is {head!r}, expected 'qec_003'"
+        # ── alembic is at the chain head, whatever the chain currently says ──
+        expected_head = _expected_head()
+        assert head == expected_head, (
+            f"qecentral alembic head is {head!r}, but the migration chain's head "
+            f"is {expected_head!r} — the database is not fully migrated"
+        )
 
-        # ── EXACTLY the 23 designed tables (no more, no fewer) ──────────────
-        assert tables == _EXPECTED_TABLES, {
-            "missing": sorted(_EXPECTED_TABLES - tables),
-            "unexpected": sorted(tables - _EXPECTED_TABLES),
-        }
-        assert len(_EXPECTED_TABLES) == 23
+        # ── every design-critical table is present (later ones may be added) ─
+        missing = sorted(_CORE_TABLES - tables)
+        assert not missing, (
+            f"design-critical table(s) absent from the migrated schema: {missing}"
+        )
 
         # ── every table: RLS enabled + FORCEd + a tenant_isolation policy ───
-        for table in _EXPECTED_TABLES:
+        for table in _CORE_TABLES:
             enabled, forced = rls.get(table, (None, None))
             assert enabled is True, f"{table}: ROW LEVEL SECURITY not enabled"
             assert forced is True, f"{table}: FORCE ROW LEVEL SECURITY not set"

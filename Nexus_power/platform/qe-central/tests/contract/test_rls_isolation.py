@@ -16,8 +16,18 @@ For each representative table it proves, end to end:
      (the USING clause hides them);
   3. an ``INSERT`` carrying ``tenant_id = A`` while GUC = B is REJECTED by the
      ``WITH CHECK`` clause (a row can never be smuggled into another tenant);
-  4. ``relforcerowsecurity`` AND ``relrowsecurity`` are both on (owner-included
-     enforcement — the property that makes 1-3 hold even for the table owner).
+  4. under GUC = B, an ``UPDATE`` of A's row affects ZERO rows and A's row is
+     afterwards byte-unchanged (M0.x §11 — cross-tenant modify blocked);
+  5. under GUC = B, a ``DELETE`` of A's row affects ZERO rows and A's row still
+     exists (M0.x §11 — cross-tenant delete blocked);
+  6. ``relforcerowsecurity`` AND ``relrowsecurity`` are both on (owner-included
+     enforcement — the property that makes 1-5 hold even for the table owner).
+
+On 4 and 5 the expected outcome is a SILENT zero-row result, not an error: the
+``USING`` clause removes A's rows from B's view of the table before the UPDATE or
+DELETE ever matches them. "No exception was raised" is therefore NOT evidence of
+anything here — the assertions are on the affected row count AND on the row's
+surviving state, checked back through tenant A.
 
 Gating (both DISPOSABLE Postgres, at alembic head):
 
@@ -139,6 +149,45 @@ async def _scoped_write(engine, tenant: str, sql: str, params: dict) -> None:
             raise
 
 
+async def _attempt_dml(engine, tenant: str, sql: str, params: dict) -> tuple[str, int]:
+    """Attempt a DML statement under ``tenant``'s GUC. Return (outcome, rowcount).
+
+    Two outcomes both count as "tenant B was stopped", for different reasons, and
+    the caller must be able to tell them apart:
+
+    ``("executed", n)``
+        The role was allowed to run the statement and RLS silently matched ``n``
+        rows. The isolation evidence is ``n == 0`` — NOT the absence of an
+        exception, because RLS never raises on a cross-tenant UPDATE/DELETE; it
+        just removes the rows from the actor's view first.
+
+    ``("denied", 0)``
+        The GRANT itself forbids the operation, so the statement never reached
+        the policy. This is the ``qec_substrate`` posture: it holds SELECT and
+        INSERT on the substrate tables and nothing else, deliberately, so an
+        UPDATE or DELETE raises ``InsufficientPrivilege``. That is a STRONGER
+        guarantee than the row-level one — the role cannot perform the operation
+        against ANY tenant, its own included — and it must not be reported as an
+        isolation failure. The caller still re-reads the row as tenant A
+        afterwards, so "denied" is never taken on trust.
+
+    Any other exception propagates: a unique violation or a syntax error must
+    never be mistaken for either form of protection.
+    """
+    async with engine.connect() as conn:
+        trans = await conn.begin()
+        try:
+            await conn.execute(text(_GUC), {"t": tenant})
+            result = await conn.execute(text(sql), params)
+            await trans.commit()
+            return "executed", (result.rowcount or 0)
+        except Exception as exc:
+            await trans.rollback()
+            if "permission denied" in str(exc).lower():
+                return "denied", 0
+            raise
+
+
 def _insert_sql(table: str, pk_col: str, extra_cols: dict) -> str:
     cols = [pk_col, "tenant_id", *extra_cols.keys()]
     placeholders = ", ".join(f":{c}" for c in cols)
@@ -223,7 +272,47 @@ async def _prove_isolation(
     )
     assert leaked == 0, f"{table}: a WITH-CHECK-rejected row still persisted"
 
-    # (4) The structural guarantee: FORCE + ENABLE row security are both on.
+    # (4) Tenant B cannot MODIFY tenant A's row. The attack is the nastiest
+    #     shape — re-stamping A's row as B's, i.e. STEALING it.
+    outcome, updated = await _attempt_dml(
+        engine, tenant_b,
+        f"UPDATE {table} SET tenant_id = :b WHERE {pk_col} = :pk",
+        {"b": tenant_b, "pk": pk_a},
+    )
+    if outcome == "executed":
+        assert updated == 0, (
+            f"{table}: tenant B's UPDATE touched {updated} of tenant A's rows — "
+            f"CROSS-TENANT MODIFY BREACH"
+        )
+    still_a = await _scoped_scalar(
+        engine, tenant_a,
+        f"SELECT count(*) FROM {table} WHERE {pk_col} = :pk AND tenant_id = :a",
+        {"pk": pk_a, "a": tenant_a},
+    )
+    assert still_a == 1, (
+        f"{table}: after tenant B's UPDATE attempt ({outcome}), tenant A's row is "
+        f"no longer intact and owned by A (found {still_a} rows, expected 1)"
+    )
+
+    # (5) Tenant B cannot DELETE tenant A's row.
+    outcome, deleted = await _attempt_dml(
+        engine, tenant_b, f"DELETE FROM {table} WHERE {pk_col} = :pk", {"pk": pk_a},
+    )
+    if outcome == "executed":
+        assert deleted == 0, (
+            f"{table}: tenant B's DELETE removed {deleted} of tenant A's rows — "
+            f"CROSS-TENANT DELETE BREACH"
+        )
+    survives = await _scoped_scalar(
+        engine, tenant_a,
+        f"SELECT count(*) FROM {table} WHERE {pk_col} = :pk", {"pk": pk_a},
+    )
+    assert survives == 1, (
+        f"{table}: tenant A's row did not survive tenant B's DELETE attempt "
+        f"({outcome})"
+    )
+
+    # (6) The structural guarantee: FORCE + ENABLE row security are both on.
     forced = await _scoped_scalar(
         engine, tenant_a,
         "SELECT relforcerowsecurity FROM pg_class WHERE relname = :t", {"t": table},
