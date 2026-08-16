@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import logging
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from ..clients import platform_api
 
@@ -80,6 +80,10 @@ class MedicDecision:
     """
     status: str
     action: str = ""
+    #: Provider-REPORTED token usage for the LLM call this decision cost, or an
+    #: empty dict when it cost none.  Relayed to the explorer so the tokens are
+    #: attributed to the CRAWL that spent them (M0.6 / T-OB-03).
+    usage: dict = field(default_factory=dict)
 
 
 def _build_prompt(
@@ -173,11 +177,21 @@ async def consult_medic(
             tenant_id=tenant_id, prompt=prompt, system=SYSTEM,
             task="crawl_medic", max_tokens=30, temperature=0.0,
         )
+        # Read the telemetry field DEFENSIVELY — usage is an enrichment on the
+        # client's result, not part of the decision contract, so a result object
+        # without it still yields a decision.
+        _usage = getattr(result, "usage", None)
+        usage = (_usage.as_dict()
+                 if _usage is not None and getattr(_usage, "reported", False)
+                 else {})
         if not result.ok:
             logger.warning("qec.crawl_medic.llm_failed tenant=%s detail=%s",
                            tenant_id, result.detail[:200])
-            return MedicDecision(status=STATUS_UNAVAILABLE)
-        return _parse_reply(result.text)
+            # A failed consultation that the provider billed for is still spend.
+            return MedicDecision(status=STATUS_UNAVAILABLE, usage=usage)
+        decision = _parse_reply(result.text)
+        return MedicDecision(status=decision.status, action=decision.action,
+                             usage=usage)
     except Exception as exc:
         logger.warning("qec.crawl_medic.consult_failed tenant=%s error=%s",
                        tenant_id, str(exc)[:200])

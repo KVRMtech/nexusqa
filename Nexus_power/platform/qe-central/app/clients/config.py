@@ -22,15 +22,28 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import logging
 
 from pydantic import Field
 from pydantic_settings import BaseSettings
 
+from ..security import hmac_auth
+from ..security.hmac_auth import KeyRing, NonceStore, SignatureError
+
+logger = logging.getLogger(__name__)
+
 #: The header carrying the shared secret on dispatch (explorer verifies it via
 #: its own ``settings.token_matches``).
 TOKEN_HEADER = "X-QEC-Token"
-#: The header carrying the hex HMAC-SHA256 of the raw callback body.
+#: The header carrying the v2 signature envelope over the raw callback body
+#: (``v2;kid=…;ts=…;nonce=…;sig=…`` — see :mod:`app.security.hmac_auth`).
 SIGNATURE_HEADER = "X-QEC-Signature"
+
+#: Process-wide single-use nonce store for inbound explorer callbacks (T-SEC-06).
+#: One store for the whole service: a nonce is single-use across EVERY internal
+#: endpoint, so a signature captured from ``/pick-advance`` cannot be replayed at
+#: ``/complete``.
+CALLBACK_NONCES = NonceStore()
 
 
 class Phase1Settings(BaseSettings):
@@ -49,6 +62,24 @@ class Phase1Settings(BaseSettings):
     #: Per-fleet HMAC shared secret (RUNNER_TOKEN pattern). Empty ⇒ fail-closed:
     #: dispatch and callback verification both refuse.
     explorer_token: str = Field(default="", alias="QEC_EXPLORER_TOKEN")
+    #: ROTATION SEAM (T-SEC-11). The PREVIOUS fleet secret, still accepted for
+    #: verification until ``explorer_token_previous_expires_at`` (epoch SECONDS)
+    #: passes. Empty ⇒ no overlap window (today's single-key posture). A half-set
+    #: rotation fails CLOSED: an absent/unparseable deadline retires the old key
+    #: immediately rather than honouring it forever.
+    explorer_token_previous: str = Field(
+        default="", alias="QEC_EXPLORER_TOKEN_PREVIOUS",
+    )
+    explorer_token_previous_expires_at: float = Field(
+        default=0.0, alias="QEC_EXPLORER_TOKEN_PREVIOUS_EXPIRES_AT",
+    )
+    #: Allowed clock skew (seconds, both directions) on a callback timestamp.
+    #: Also the nonce-retention window — outside it the timestamp check already
+    #: rejects, so forgetting a nonce past this bound cannot enable a replay.
+    hmac_skew_seconds: float = Field(
+        default=float(hmac_auth.DEFAULT_SKEW_SECONDS),
+        alias="QEC_HMAC_SKEW_SECONDS",
+    )
     #: Master switch for Phase-1 explorer dispatch. Default OFF keeps the
     #: Phase-0 inline-bundle path as the only active write path until an
     #: operator explicitly enables live crawling.
@@ -113,28 +144,61 @@ class Phase1Settings(BaseSettings):
 
     # ── HMAC helpers (MIRROR of the explorer sign contract) ───────────────
 
-    def sign_payload(self, payload: bytes) -> str:
-        """Hex HMAC-SHA256 of ``payload`` under the shared secret.
+    def keyring(self) -> KeyRing:
+        """The keys this fleet will ACCEPT right now (current + overlap)."""
+        return KeyRing(
+            current=self.explorer_token or "",
+            previous=self.explorer_token_previous or "",
+            previous_expires_at=float(self.explorer_token_previous_expires_at or 0.0),
+        )
 
-        BYTE-FOR-BYTE identical to the explorer's ``Settings.sign_payload``:
-        the key is the RAW (un-stripped) ``explorer_token`` UTF-8 bytes.
+    def sign_payload(self, payload: bytes, *, scope: str = "") -> str:
+        """The v2 ``X-QEC-Signature`` envelope for ``payload``.
+
+        MIRRORS the explorer's ``Settings.sign_payload`` byte-for-byte (both
+        delegate to the duplicated :mod:`hmac_auth` module); a divergence would
+        reject every genuine callback.  ``scope`` binds the signature to one
+        logical operation so a signature for crawl A cannot authenticate a call
+        about crawl B.
         """
-        secret = (self.explorer_token or "").encode("utf-8")
-        return hmac.new(secret, payload or b"", hashlib.sha256).hexdigest()
+        return hmac_auth.sign(payload, keyring=self.keyring(), scope=scope)
 
-    def verify_signature(self, payload: bytes, provided: str | None) -> bool:
-        """Constant-time verify of a callback body signature (fail-closed).
+    def verify_callback(
+        self, payload: bytes, provided: str | None, *, scope: str = "",
+        now: float | None = None,
+    ) -> dict:
+        """Verify an inbound callback signature; RAISE ``SignatureError`` if not.
 
-        Returns ``False`` when the secret is unset or the header is absent, so
-        an unsigned/mis-provisioned callback is never trusted.
+        Enforces, fail-closed and in this order: known key id → timestamp within
+        skew (past AND future) → nonce unused → signature over the body hash +
+        scope → nonce consumed.  An unsigned, stale, replayed, re-scoped or
+        wrong-key callback is never trusted.
         """
         if not (self.explorer_token or "").strip():
+            raise SignatureError("no_verification_key")
+        return hmac_auth.verify(
+            payload, provided or "", keyring=self.keyring(),
+            nonces=CALLBACK_NONCES, scope=scope,
+            skew_seconds=float(self.hmac_skew_seconds), now=now,
+        )
+
+    def verify_signature(
+        self, payload: bytes, provided: str | None, *, scope: str = "",
+    ) -> bool:
+        """Boolean form of :meth:`verify_callback` (fail-closed).
+
+        Returns ``False`` — never raises — for every rejection category, and
+        logs the CATEGORY (never the key, nonce or body) so an operator can tell
+        a replay from a clock-skew problem from a retired key.
+        """
+        try:
+            self.verify_callback(payload, provided, scope=scope)
+            return True
+        except SignatureError as exc:
+            logger.warning(
+                "qec.hmac.callback_rejected reason=%s scope=%s", exc.reason, scope,
+            )
             return False
-        candidate = (provided or "").strip()
-        if not candidate:
-            return False
-        expected = self.sign_payload(payload)
-        return hmac.compare_digest(expected, candidate)
 
     def token_value(self) -> str:
         """The ``X-QEC-Token`` value to send on dispatch (stripped)."""

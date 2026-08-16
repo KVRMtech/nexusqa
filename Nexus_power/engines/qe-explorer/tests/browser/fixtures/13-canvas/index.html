@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Fixture 13 — canvas surfaces</title>
+<style>
+  canvas { display: block; border: 1px solid #ccc; }
+  #premium-chart { width: 640px; height: 360px; }
+  #signature-pad { width: 400px; height: 160px; }
+  #sparkline     { width: 120px; height: 24px; }
+</style>
+</head>
+<body>
+  <main>
+    <h1>Illustration</h1>
+
+    <!-- SUBJECT A: a LARGE canvas-rendered chart. 640x360 = 230,400 px, well
+         over the 40,000 px gate, so it is a named opaque surface. It carries an
+         aria-label, which is the only human-readable thing about it. -->
+    <canvas id="premium-chart" width="640" height="360"
+            aria-label="Premium projection chart"></canvas>
+
+    <!-- SUBJECT B: a signature pad. Also over the gate, but with NO aria-label,
+         so the ledger falls back to the generic "canvas region" label. Its
+         reachable action is a drawn stroke, not a click - the walker cannot
+         express that, which is exactly why it must be ledgered rather than
+         silently skipped. -->
+    <canvas id="signature-pad" width="400" height="160"></canvas>
+
+    <!-- SUBJECT C: a small decorative sparkline, 120x24 = 2,880 px, UNDER the
+         gate. It is not an interactive surface and must NOT be ledgered - a
+         ledger full of decorative chrome is as useless as an empty one. -->
+    <canvas id="sparkline" width="120" height="24"></canvas>
+
+    <!-- SUBJECT D: real DOM controls on the same page. A page containing an
+         opaque surface is not an opaque page: everything readable must still be
+         read. This is the assertion that stops "there is a canvas" from
+         becoming an excuse for capturing nothing. -->
+    <label for="illustration-age">Issue Age</label>
+    <input id="illustration-age" name="issue_age" type="number" min="18" max="85" value="35">
+
+    <button type="button" id="recalculate">Recalculate Illustration</button>
+
+    <!-- SUBJECT E: a rendered VALUE node beside the chart. Not an interactive
+         control, so INVENTORY_JS must not capture it - DISPLAYED_VALUES_JS is
+         the snippet that grounds it for the value oracle. -->
+    <dl>
+      <dt>Annual Premium</dt>
+      <dd id="annual-premium">$1,284.00</dd>
+      <dt>Total Paid at 65</dt>
+      <dd id="total-paid">$38,520.00</dd>
+    </dl>
+
+    <!-- ═══ HOW A DISPLAYED VALUE GETS ITS LABEL ══════════════════════════
+         A rendered figure is only useful to a value oracle if something says
+         WHAT it is. Applications express that in at least six different ways and
+         labelOf() tries them in order. Each subject below is one rung, so a rung
+         that silently stopped working would show up here rather than as an
+         oracle that quietly lost its grounding.
+
+         The <dt>/<dd> pairs above are rung 2. These are the rest. -->
+    <section id="value-rungs">
+
+      <!-- RUNG 1: aria-label wins outright. -->
+      <p aria-label="Monthly Premium">$107.00</p>
+
+      <!-- RUNG 3: aria-labelledby → another element's text. -->
+      <span id="cash-value-label">Cash Value at 20 Years</span>
+      <p aria-labelledby="cash-value-label">$14,905.00</p>
+
+      <!-- RUNG 4: the PREVIOUS SIBLING carries the label. The commonest
+           layout there is, and the one with no semantic markup at all. -->
+      <div>
+        <span>Death Benefit</span>
+        <span class="amount">$500,000.00</span>
+      </div>
+
+      <!-- RUNG 5: no sibling label - the label sits on the PARENT's previous
+           sibling, one level out. -->
+      <div>Surrender Charge</div>
+      <div><div class="amount-only">$1,250.00</div></div>
+
+      <!-- RUNG 6: no sibling text anywhere; the parent CONTAINS a labelled
+           element, found by class rather than by position. -->
+      <div>
+        <span class="muted">Policy Fee</span>
+        <div><b>$7.50</b></div>
+      </div>
+
+      <!-- RUNG 7: nothing to go on. The value is still captured - it is real and
+           on screen - but its label is honestly "". A guessed label is worse
+           than none, because the oracle would ground an expectation on it. -->
+      <p>$99.99</p>
+    </section>
+
+    <!-- RUNG 6 PROPER. The block above labelled "rung 6" is actually resolved by
+         rung 5 (the parent's previous sibling), which is why the querySelector
+         fallback stayed unexecuted until this was added. Here the value is the
+         FIRST child of its parent and the label comes AFTER it, so neither
+         sibling scan can reach it and only the class lookup can. -->
+    <div id="rung6-wrap">
+      <div><b>$12.00</b><span class="label">Rider Charge</span></div>
+    </div>
+
+    <!-- RUNG 5, SCAN CONTINUING. The parent's immediate previous sibling is
+         itself a figure, so it is rejected and the scan must step back one more
+         before finding prose. Proves the loop iterates rather than checking
+         exactly one element. -->
+    <div id="scan-wrap">
+      <div>Policy Loan Balance</div>
+      <div>$3,000.00</div>
+      <div><em>$450.25</em></div>
+    </div>
+
+    <!-- RUNG 8: genuinely bare. First child of a fresh container, no label of
+         any kind anywhere a scan can reach. This is the case whose ONLY correct
+         answer is an empty label. -->
+    <div id="bare-wrap"><span>$42.00</span></div>
+
+    <!-- A value inside a COLLAPSED <details>. The browser renders nothing but
+         the summary, so this figure is not on screen and must not be captured -
+         grounding an oracle on a number nobody can see is the same error as
+         grounding it on someone else's label. -->
+    <details id="hidden-values">
+      <summary>Illustration detail <span class="fee">$0.99</span></summary>
+      <p>$777.00</p>
+    </details>
+  </main>
+</body>
+</html>

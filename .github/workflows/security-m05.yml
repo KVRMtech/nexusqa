@@ -1,0 +1,201 @@
+name: M0.5 Security Gate
+
+# THE M0.5 SECURITY GATE (T-SEC-10 / §20).
+#
+# One workflow, deliberately SEPARATE from `ci.yml`, for two reasons:
+#   * it must run and be readable INDEPENDENTLY of the application suite — a
+#     security regression should be legible as "the security gate went red", not
+#     buried in a 1600-test run;
+#   * it must be able to fail the build on its own, so it can be made a required
+#     check without also requiring every other lane.
+#
+# It fails if ANY of the following is true, which is exactly the list in the
+# M0.5 brief §20:
+#   * a security test fails
+#   * a known default JWT secret is accepted            (R1)
+#   * anonymous /internal access succeeds               (R2)
+#   * cross-tenant access succeeds                      (R3)
+#   * the egress worker race succeeds                   (R4)
+#   * an unsafe allowed_hosts value is accepted         (R5)
+#   * production mutation succeeds                      (R6)
+#   * an HMAC replay succeeds                           (R7)
+#   * a stale attestation succeeds                      (R8)
+#   * finished jobs remain indefinitely                 (T-SEC-09)
+#   * an LLM/screenshot path bypasses PII scanning      (T-SEC-12)
+#
+# Each of those is an executable test, not a manual check.
+
+on:
+  push:
+    branches: [main, develop, "feat/**", "fix/**"]
+  pull_request:
+    branches: [main, develop]
+  workflow_dispatch:
+
+concurrency:
+  group: security-m05-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: Nexus_power
+
+jobs:
+  # ── qe-central: R1, R2, R3, R4 (caller half), R5, R6, R7, R8, rotation, PII ──
+  qec-security:
+    name: qe-central security suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          pip install -e sdk/nexus-sdk/
+          ( cd platform/qe-central && pip install -r requirements.txt )
+          pip install pytest pytest-asyncio
+
+      # NOTE what is NOT set here: no NEXUS_JWT_SECRET override that would make
+      # R1 pass by accident. The suite states its own secrets per-scenario, and
+      # the conftest's test default is itself one of the values R1 proves is
+      # refused outside a local environment.
+      - name: Red-team suite (R1-R8, rotation, PII egress)
+        run: pytest platform/qe-central/tests/security -q --tb=short -p no:cacheprovider
+
+  # ── qe-explorer: R4 (worker half, concurrent), R6 (enforcement), T-SEC-09 ──
+  #
+  #  Python 3.10 — NOT 3.11 — because the shipped container is
+  #  mcr.microsoft.com/playwright/python:v1.48.0-jammy, which is CPython 3.10.
+  #  A security gate must prove the interpreter that actually runs in production.
+  explorer-security:
+    name: qe-explorer security suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: Nexus_power/engines/qe-explorer
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: pip
+          cache-dependency-path: Nexus_power/engines/qe-explorer/requirements.txt
+
+      - name: Install service dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install pytest pytest-asyncio
+
+      - name: Red-team suite (worker race, job eviction, forced observation)
+        run: pytest tests/security -q --tb=short -p no:cacheprovider
+
+  # ── Configuration assertions that need no interpreter ────────────────────
+  #  A shipped secret default is a vulnerability in a FILE. Checking it here as
+  #  well as in the Python suite means the gate still catches it if the suite is
+  #  ever skipped for an unrelated reason.
+  shipped-config:
+    name: no shipped secrets
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Reject a default value for any signing secret
+        run: |
+          set -euo pipefail
+          # Strip comments: the compose file deliberately NAMES the removed
+          # values so a reader understands the change, and a comment can never
+          # be substituted into a container's environment.
+          body="$(grep -v '^[[:space:]]*#' docker-compose.qec.yml)"
+
+          fail() { echo "SECURITY GATE: $1" >&2; exit 1; }
+
+          echo "$body" | grep -q 'test-secret-do-not-use-in-production' \
+            && fail "the development JWT secret is still shipped in docker-compose.qec.yml"
+          echo "$body" | grep -q 'dev-explorer-token-change-me' \
+            && fail "the development fleet token is still shipped in docker-compose.qec.yml"
+          echo "$body" | grep -q '\${NEXUS_JWT_SECRET:-' \
+            && fail "NEXUS_JWT_SECRET has a default-substitution form; it must use :? so an unset value stops the deploy"
+          echo "$body" | grep -q '\${QEC_EXPLORER_TOKEN:-' \
+            && fail "QEC_EXPLORER_TOKEN has a default-substitution form; it must use :? so an unset value stops the deploy"
+          echo "$body" | grep -q '"8093:8093"' \
+            && fail "qe-central publishes 8093 on all interfaces; bind it to loopback"
+
+          echo "$body" | grep -q '\${NEXUS_JWT_SECRET:?' \
+            || fail "NEXUS_JWT_SECRET must use the :? required-variable form"
+          echo "$body" | grep -q '\${QEC_EXPLORER_TOKEN:?' \
+            || fail "QEC_EXPLORER_TOKEN must use the :? required-variable form"
+
+          echo "shipped configuration carries no default signing secrets"
+
+      - name: The deploy must carry the production environment
+        working-directory: .
+        run: |
+          set -euo pipefail
+          fail() { echo "SECURITY GATE: $1" >&2; exit 1; }
+
+          # `NEXUS_ENV: ${NEXUS_ENV:-development}` in compose plus a deploy that
+          # passes no --env-file means the serving fleet boots as DEVELOPMENT —
+          # which disarms the boot gate, permits a known development JWT secret,
+          # and honours the prod_guard onboarding bypass. One unset variable,
+          # three controls off. Every compose build/up in the deploy must carry
+          # the env file, and the rollback must carry it too.
+          while IFS= read -r line; do
+            case "$line" in
+              *--env-file*) ;;
+              *) fail "deploy.ps1 compose call without --env-file: $line" ;;
+            esac
+          done < <(grep -E 'docker compose.*(build|up -d)' scripts/deploy.ps1 || true)
+
+          grep -q 'ENV_FILE = "\.env\.production"' scripts/deploy.ps1 \
+            || fail "deploy.ps1 does not pin .env.production"
+          grep -q 'NEXUS_ENV=(staging|production)' scripts/deploy.ps1 \
+            || fail "deploy.ps1 does not assert a deployed NEXUS_ENV"
+          grep -q 'ENV_FILE="\${ENV_FILE:-\.env\.production}"' \
+            Nexus_power/scripts/gate_rollback.sh \
+            || fail "gate_rollback.sh would restore the fleet without the production env"
+
+          echo "the deploy and the rollback both carry the production environment"
+
+      - name: The two HMAC implementations must not drift
+        run: |
+          set -euo pipefail
+          a=$(sha256sum platform/qe-central/app/security/hmac_auth.py | cut -d' ' -f1)
+          b=$(sha256sum engines/qe-explorer/app/hmac_auth.py | cut -d' ' -f1)
+          if [ "$a" != "$b" ]; then
+            echo "SECURITY GATE: the qe-central and qe-explorer copies of hmac_auth.py have diverged." >&2
+            echo "They must stay byte-identical or every genuine callback is rejected." >&2
+            diff -u platform/qe-central/app/security/hmac_auth.py \
+                    engines/qe-explorer/app/hmac_auth.py || true
+            exit 1
+          fi
+          echo "hmac_auth.py is byte-identical across both services"
+
+  # ── The gate itself: one required check that summarises the three above ──
+  m05-gate:
+    name: M0.5 security gate
+    runs-on: ubuntu-latest
+    needs: [qec-security, explorer-security, shipped-config]
+    if: always()
+    steps:
+      - name: Fail the build if any security lane went red
+        run: |
+          set -euo pipefail
+          qec='${{ needs.qec-security.result }}'
+          explorer='${{ needs.explorer-security.result }}'
+          config='${{ needs.shipped-config.result }}'
+          echo "qe-central security suite : $qec"
+          echo "qe-explorer security suite: $explorer"
+          echo "shipped configuration     : $config"
+          for r in "$qec" "$explorer" "$config"; do
+            if [ "$r" != "success" ]; then
+              echo "NO-GO - the M0.5 security gate did not pass." >&2
+              exit 1
+            fi
+          done
+          echo "GO - M0.5 security gate passed"

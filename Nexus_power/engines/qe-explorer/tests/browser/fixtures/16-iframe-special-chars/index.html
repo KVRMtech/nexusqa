@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Fixture 16 — iframe selectors with CSS metacharacters</title>
+<style> iframe { display: block; width: 420px; height: 110px; border: 1px solid #ddd; } </style>
+</head>
+<body>
+  <main>
+    <h1>Embedded steps</h1>
+
+    <label for="host-ref">Host Reference</label>
+    <input id="host-ref" name="host_ref" type="text">
+
+    <!-- The anti-overfit variation for BUG-IFRAME-SELECTOR. Fixture 03 covers a
+         dot in an id and a double quote in a name. These four widen the
+         character set to everything a real title attribute contains: quotes,
+         apostrophes, brackets, parentheses, backslashes and spaces.
+
+         Selector precedence in frameSelectorFor() is id > name > title > src, so
+         (a) and (b) carry NO id and NO name in order to exercise the title
+         branch, which had never been escaped at all. -->
+
+    <!-- (a) apostrophe + brackets + double quote + spaces, via TITLE. -->
+    <iframe title='customer&apos;s [account] "primary"' src="child-a.html"></iframe>
+
+    <!-- (b) backslash + parentheses, via TITLE. A backslash is the CSS escape
+         character itself, so an unescaped one silently eats the next
+         character. -->
+    <iframe title="back\slash and (parens)" src="child-b.html"></iframe>
+
+    <!-- (c) brackets and a dot in an ID — the identifier branch, which needs
+         CSS.escape rather than string escaping. Unescaped this parses as
+         "#step[2]" plus a class, matching nothing. -->
+    <iframe id="step[2].section" src="child-c.html"></iframe>
+
+    <!-- (d) quotes + backslash + spaces in a NAME — the attribute-value
+         branch. -->
+    <iframe name='a b "c" \d' src="child-d.html"></iframe>
+  </main>
+</body>
+</html>

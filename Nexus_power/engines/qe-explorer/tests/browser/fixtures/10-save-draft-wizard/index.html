@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Fixture 10 — save-draft wizard step</title></head>
+<body>
+  <main>
+    <nav aria-label="Progress">
+      <ol>
+        <li>Applicant</li>
+        <li aria-current="step">Coverage</li>
+        <li>Review</li>
+      </ol>
+    </nav>
+
+    <form id="coverage-form">
+      <fieldset>
+        <legend>Coverage</legend>
+
+        <label for="face-amount">Face Amount</label>
+        <input id="face-amount" name="face_amount" type="number"
+               min="25000" max="2000000" step="1000" required value="250000">
+
+        <label for="term">Term</label>
+        <select id="term" name="term" required>
+          <option value="">Select term length</option>
+          <option value="10">10 years</option>
+          <option value="20" selected>20 years</option>
+        </select>
+
+        <label for="notes">Notes</label>
+        <textarea id="notes" name="notes" maxlength="500"
+                  placeholder="Anything the underwriter should know"></textarea>
+
+        <!-- A RICH-TEXT field: contenteditable, not a form element. Its role is
+             textbox only because implicitRole() consults el.isContentEditable,
+             and its committed value is its rendered text because there is no
+             .value property to read. Both are Playwright-lane assertions -
+             jsdom implements neither isContentEditable nor innerText. -->
+        <span id="disclosure-label">Underwriter Disclosure</span>
+        <div id="disclosure" contenteditable="true"
+             aria-labelledby="disclosure-label">Reviewed on intake.</div>
+      </fieldset>
+
+      <!-- THE FOUR ACTUATORS. A wizard step's control bar is where the crawl's
+           traversal decision is made, and each of these means something
+           different to it:
+
+             Back        - reverses the walk (loses the step)
+             Save Draft  - a NON-ADVANCING mutation: it writes server state but
+                           does not move the funnel forward. A walk that treats
+                           it as an advance records a step that never happened.
+             Continue    - the advance. This is the label the funnel depends on.
+             Cancel Application - IRREVERSIBLE. The refuse pack must classify it
+                           a never-click leaf; clicking it destroys the very
+                           journey the crawl is trying to walk. -->
+      <div>
+        <button type="button" id="back-btn">Back</button>
+        <button type="button" id="save-draft-btn">Save Draft</button>
+        <button type="submit" id="continue-btn">Continue</button>
+        <button type="button" id="cancel-btn">Cancel Application</button>
+      </div>
+    </form>
+  </main>
+</body>
+</html>

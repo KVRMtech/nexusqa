@@ -101,7 +101,6 @@ class TestPersonaResponseShape:
 
     def test_metadata_excluded_from_list_response(self):
         from app.routers.personas import _persona_to_response
-        from unittest.mock import MagicMock
 
         mock_row = MagicMock()
         mock_row.__dict__ = {
@@ -352,7 +351,7 @@ class TestBrainPersonaDraftGeneration:
             os.path.dirname(__file__), "..", "..", "engines", "brain-engine", "main.py"
         )
         brain_path = os.path.normpath(brain_path)
-        with open(brain_path, "r") as f:
+        with open(brain_path, "r", encoding="utf-8") as f:
             source = f.read()
 
         # Small-model path: max_gen_tokens capped at 1536
@@ -374,7 +373,7 @@ class TestBrainPersonaDraftGeneration:
             os.path.dirname(__file__), "..", "..", "engines", "brain-engine", "main.py"
         )
         brain_path = os.path.normpath(brain_path)
-        with open(brain_path, "r") as f:
+        with open(brain_path, "r", encoding="utf-8") as f:
             source = f.read()
 
         assert "json_mode=True" in source, (
@@ -388,7 +387,7 @@ class TestBrainPersonaDraftGeneration:
             os.path.dirname(__file__), "..", "..", "engines", "brain-engine", "main.py"
         )
         brain_path = os.path.normpath(brain_path)
-        with open(brain_path, "r") as f:
+        with open(brain_path, "r", encoding="utf-8") as f:
             # Read only header (first 40 lines)
             header = "".join(f.readlines()[:40])
 
@@ -403,7 +402,7 @@ class TestBrainPersonaDraftGeneration:
             os.path.dirname(__file__), "..", "..", "engines", "brain-engine", "main.py"
         )
         brain_path = os.path.normpath(brain_path)
-        with open(brain_path, "r") as f:
+        with open(brain_path, "r", encoding="utf-8") as f:
             source = f.read()
 
         assert "_repair_truncated_json" in source, (
@@ -496,7 +495,7 @@ class TestTimeoutChainConsistency:
             "infrastructure", "docker", "nginx-client.conf",
         )
         nginx_path = os.path.normpath(nginx_path)
-        with open(nginx_path, "r") as f:
+        with open(nginx_path, "r", encoding="utf-8") as f:
             content = f.read()
         assert "proxy_read_timeout 900s" in content
 
@@ -508,7 +507,7 @@ class TestTimeoutChainConsistency:
             "sdk", "nexus-sdk", "nexus_sdk", "llm", "providers", "__init__.py",
         )
         provider_path = os.path.normpath(provider_path)
-        with open(provider_path, "r") as f:
+        with open(provider_path, "r", encoding="utf-8") as f:
             content = f.read()
         assert "keep_alive" in content, (
             "Ollama provider must send keep_alive to prevent model eviction"

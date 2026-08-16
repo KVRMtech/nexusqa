@@ -23,11 +23,21 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import time
 import types
 import uuid
 from dataclasses import dataclass, field
 from typing import Any
+
+# Resolved from THIS FILE, not from one machine. These tests hard-coded
+# r"c:/Users/harik/nexusqa/Nexus_power/engines/ears-engine" — an absolute path
+# on another developer's laptop — so the import failed everywhere else with
+# ModuleNotFoundError: No module named 'app.workflow_handlers'.
+_EARS_ENGINE_ROOT = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+    "engines", "ears-engine",
+)
 
 import pytest
 
@@ -241,10 +251,7 @@ async def test_full_pipeline_happy_path(tmp_path):
     # Import inside the test so the import error message is informative
     # if the file is broken — keeps the test discoverable.
     import sys
-    sys.path.insert(
-        0,
-        r"c:/Users/harik/nexusqa/Nexus_power/engines/ears-engine",
-    )
+    sys.path.insert(0, _EARS_ENGINE_ROOT)
     from app.workflow_handlers import EarsWorkflowHandlers
 
     engine = _StubEarsEngine(tmp_path)
@@ -315,10 +322,7 @@ async def test_whisper_segments_stay_in_artifact_store(tmp_path):
     store and the checkpoint key is small enough to survive any sane
     workflow_state JSON column."""
     import sys
-    sys.path.insert(
-        0,
-        r"c:/Users/harik/nexusqa/Nexus_power/engines/ears-engine",
-    )
+    sys.path.insert(0, _EARS_ENGINE_ROOT)
     from app.workflow_handlers import EarsWorkflowHandlers
 
     engine = _StubEarsEngine(tmp_path)
@@ -366,10 +370,7 @@ async def test_align_failure_leaves_checkpoint_intact(tmp_path):
     (which downstream retries can rely on) is unchanged. The handler
     must not mutate or destroy the input checkpoint."""
     import sys
-    sys.path.insert(
-        0,
-        r"c:/Users/harik/nexusqa/Nexus_power/engines/ears-engine",
-    )
+    sys.path.insert(0, _EARS_ENGINE_ROOT)
     from app.workflow_handlers import EarsWorkflowHandlers
 
     engine = _StubEarsEngine(tmp_path)
@@ -408,10 +409,7 @@ async def test_diarize_missing_processed_audio_is_fatal(tmp_path):
     state will fail the same way. fatal=True signals the orchestrator
     to skip retries."""
     import sys
-    sys.path.insert(
-        0,
-        r"c:/Users/harik/nexusqa/Nexus_power/engines/ears-engine",
-    )
+    sys.path.insert(0, _EARS_ENGINE_ROOT)
     from app.workflow_handlers import EarsWorkflowHandlers
 
     engine = _StubEarsEngine(tmp_path)

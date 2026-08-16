@@ -23,6 +23,12 @@ AUDIENCE = "vkpower-verdict"
 #: local dev and the test suite are never gated.
 DEPLOYED_ENVS = frozenset({"staging", "production"})
 
+#: The ONLY environments in which a KNOWN development JWT secret may still
+#: authenticate a request (M0.5 T-SEC-01).  Note the asymmetry with
+#: :data:`DEPLOYED_ENVS`: an UNKNOWN ``NEXUS_ENV`` value is NOT local, so a
+#: typo'd or unset environment fails CLOSED rather than inheriting dev leniency.
+LOCAL_ENVS = frozenset({"development", "test", "dev", "local"})
+
 #: The development KEK provider (no KMS envelope); fatal in a deployed env.
 DEV_KEK_PROVIDER = "local"
 
@@ -36,7 +42,51 @@ DEV_DEFAULT_JWT_SECRETS = frozenset({
     "unit-test-secret-qe-central",
     "change-me",
     "changeme",
+    "secret",
+    "password",
+    "nexus",
+    "nexus-dev",
 })
+
+#: Minimum length for an explicitly-configured JWT secret in a DEPLOYED
+#: environment.  A 12-character secret is brute-forceable offline against a
+#: captured HS256 token; the boot gate refuses one rather than pretending the
+#: deployment is authenticated.
+MIN_DEPLOYED_JWT_SECRET_LENGTH = 32
+
+
+def jwt_secret_usable(secret: str, nexus_env: str) -> tuple[bool, str]:
+    """Can ``secret`` authenticate a request in ``nexus_env``? (pure)
+
+    M0.5 T-SEC-01 — the REQUEST-TIME half of the JWT gate.  The boot validator
+    already refuses to START a deployed process wearing a dev default, but a
+    boot gate is not an authentication gate: it does not run for an in-process
+    test app, it does not re-run when configuration changes, and it says nothing
+    about ``development``, which is what a fresh deployment actually runs as.
+
+    Returns ``(usable, reason)``.  ``reason`` is a stable, log-safe category and
+    NEVER contains the secret.
+
+      * UNSET/empty                    → unusable in EVERY environment.  A fresh
+        deployment that never configured a secret cannot authenticate anyone,
+        rather than falling back to a value that ships in this repository.
+      * a KNOWN development default    → usable ONLY in an explicitly local
+        environment (:data:`LOCAL_ENVS`); rejected in staging/production AND in
+        any unrecognised ``NEXUS_ENV``.
+      * too short for a deployed env   → unusable there.
+      * anything else                  → usable.
+    """
+    value = (secret or "").strip()
+    env = (nexus_env or "").strip().lower()
+    if not value:
+        return False, "jwt_secret_unconfigured"
+    if value in DEV_DEFAULT_JWT_SECRETS:
+        if env in LOCAL_ENVS:
+            return True, ""
+        return False, "jwt_secret_is_development_default"
+    if env in DEPLOYED_ENVS and len(value) < MIN_DEPLOYED_JWT_SECRET_LENGTH:
+        return False, "jwt_secret_too_short_for_deployment"
+    return True, ""
 
 #: ``QEC_EXPLORER_TOKEN`` values that are empty or the known development default.
 DEV_DEFAULT_EXPLORER_TOKENS = frozenset({
@@ -103,9 +153,13 @@ class Settings(BaseSettings):
     )
 
     # ── JWT (shared secret with platform-api; HS256) ──────────
-    nexus_jwt_secret: str = Field(
-        default="dev-jwt-secret-change-me", alias="NEXUS_JWT_SECRET",
-    )
+    #: NO DEFAULT (M0.5 T-SEC-01).  It used to default to
+    #: ``dev-jwt-secret-change-me`` and the shipped compose passed
+    #: ``test-secret-do-not-use-in-production`` — so a fresh deployment
+    #: authenticated ``{"role": "admin"}`` tokens signed with a secret printed in
+    #: this repository.  Empty now means AUTHENTICATION IS IMPOSSIBLE: every
+    #: request is refused until an operator configures a real secret.
+    nexus_jwt_secret: str = Field(default="", alias="NEXUS_JWT_SECRET")
     jwt_algorithm: str = "HS256"
     # TTL for minted service tokens (mint_service_jwt).
     service_token_ttl_seconds: int = Field(

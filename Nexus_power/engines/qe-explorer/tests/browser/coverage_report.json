@@ -1,0 +1,61 @@
+{
+  "DISPLAYED_VALUES_JS": {
+    "blocks": {
+      "covered": 72,
+      "pct": 75.79,
+      "total": 95
+    },
+    "functions": {
+      "covered": 11,
+      "pct": 100.0,
+      "total": 11
+    },
+    "lines": {
+      "covered": 87,
+      "pct": 100.0,
+      "total": 87
+    },
+    "snippet": "DISPLAYED_VALUES_JS",
+    "uncovered_line_numbers": []
+  },
+  "INVENTORY_JS": {
+    "blocks": {
+      "covered": 290,
+      "pct": 79.89,
+      "total": 363
+    },
+    "functions": {
+      "covered": 34,
+      "pct": 100.0,
+      "total": 34
+    },
+    "lines": {
+      "covered": 714,
+      "pct": 99.86,
+      "total": 715
+    },
+    "snippet": "INVENTORY_JS",
+    "uncovered_line_numbers": [
+      506
+    ]
+  },
+  "OPAQUE_JS": {
+    "blocks": {
+      "covered": 24,
+      "pct": 57.14,
+      "total": 42
+    },
+    "functions": {
+      "covered": 4,
+      "pct": 100.0,
+      "total": 4
+    },
+    "lines": {
+      "covered": 40,
+      "pct": 100.0,
+      "total": 40
+    },
+    "snippet": "OPAQUE_JS",
+    "uncovered_line_numbers": []
+  }
+}

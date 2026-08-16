@@ -26,7 +26,7 @@ from datetime import datetime, timedelta, timezone
 
 import jwt as pyjwt
 
-from .config import settings
+from .config import jwt_secret_usable, settings
 
 SERVICE_SUBJECT = "svc-qe-central"
 SERVICE_EMAIL = "qe-central@service"
@@ -54,6 +54,17 @@ def mint_service_jwt(tenant_id: str, *, audience: str | None = None) -> str:
     tid = str(tenant_id or "").strip()
     if not tid:
         raise ValueError("tenant_id is required to mint a service token")
+
+    # M0.5 T-SEC-01 — never MINT under a secret that could not VERIFY.  Minting
+    # with an unconfigured or known-development secret would hand out a
+    # credential this service will refuse and platform-api might not, which is
+    # the worst of both: broken here, forged-signable there.
+    usable, reason = jwt_secret_usable(settings.nexus_jwt_secret, settings.nexus_env)
+    if not usable:
+        raise ValueError(
+            f"refusing to mint a service token: {reason} "
+            "(configure NEXUS_JWT_SECRET with a strong random value)"
+        )
 
     now = datetime.now(timezone.utc)
     claims = {

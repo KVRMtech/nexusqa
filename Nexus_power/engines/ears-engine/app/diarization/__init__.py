@@ -128,6 +128,12 @@ class SpeakerDiarizer:
                     "diarizer.pyannote_bundle_invalid",
                     reason=bundle_reason,
                 )
+                # Keep WHY. The reason was logged and then dropped, so the
+                # engine reported startup_reason="stub" — an operator asking why
+                # diarization is stubbed got the symptom instead of the cause
+                # ("bundle directory missing"), which is the whole point of the
+                # field. load_model() only overwrites this on success.
+                self._startup_reason = bundle_reason
                 return False
 
         has_local = self._has_local_model_artifacts()
@@ -301,6 +307,20 @@ class SpeakerDiarizer:
         audio_input = self._build_pyannote_input(audio_path)
         diarization = self._pyannote_pipeline(audio_input, **params)
 
+        # pyannote 3.1 pipelines may return the Annotation directly OR wrap it
+        # (``result.speaker_diarization``). Calling ``.itertracks`` on the
+        # wrapper raises AttributeError and loses the whole diarization, so
+        # unwrap when the direct interface is absent.
+        if not hasattr(diarization, "itertracks"):
+            inner = getattr(diarization, "speaker_diarization", None)
+            if inner is None or not hasattr(inner, "itertracks"):
+                raise TypeError(
+                    "pyannote pipeline returned "
+                    f"{type(diarization).__name__}, which exposes neither "
+                    "itertracks() nor a speaker_diarization annotation"
+                )
+            diarization = inner
+
         segments = []
         for turn, _, speaker in diarization.itertracks(yield_label=True):
             segments.append({
@@ -317,8 +337,27 @@ class SpeakerDiarizer:
         )
         return segments
 
-    def _build_pyannote_input(self, audio_path: str) -> dict:
-        """Pre-load audio as waveform dict to bypass torchcodec."""
+    def _build_pyannote_input(self, audio_path: str):
+        """Pre-load audio as a waveform dict to bypass torchcodec.
+
+        Falls back to handing pyannote the PATH if the pre-load fails. The
+        pre-load is an optimisation (it avoids a torchcodec dependency); pyannote
+        can open the file itself. Without this guard a soundfile/torch error —
+        an unusual codec, a truncated upload — propagated out of
+        ``_diarize_pyannote`` and failed the whole diarization for a step that
+        was only ever meant to save it some work.
+        """
+        try:
+            return self._preload_waveform(audio_path)
+        except Exception as exc:
+            logger.warning(
+                "diarizer.waveform_preload_failed",
+                error=str(exc),
+                fallback="audio_path",
+            )
+            return audio_path
+
+    def _preload_waveform(self, audio_path: str) -> dict:
         import soundfile as sf
         import torch
 

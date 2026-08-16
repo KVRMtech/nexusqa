@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Fixture 06 — custom ARIA listbox</title>
+<style> [role="listbox"][hidden], .closed { display: none; } </style>
+</head>
+<body>
+  <main>
+    <h1>Coverage options</h1>
+
+    <!-- SUBJECT A: a custom combobox that OWNS its listbox by aria-controls.
+         The listbox is present in the DOM but display:none (closed), which is
+         the case optionsAndTotalOf() is built to read WITHOUT opening anything.
+         value_committed comes from the trigger's rendered text, because a
+         <button> has no .value. -->
+    <span id="term-label">Term Length</span>
+    <button type="button" id="term-trigger" role="combobox"
+            aria-haspopup="listbox" aria-expanded="false"
+            aria-controls="term-listbox" aria-labelledby="term-label">20 years</button>
+    <ul id="term-listbox" role="listbox" class="closed" aria-label="Term Length options">
+      <li role="option">10 years</li>
+      <li role="option">15 years</li>
+      <li role="option">20 years</li>
+      <li role="option">30 years</li>
+    </ul>
+
+    <!-- SUBJECT B: an UNSELECTED Radix-style trigger. data-placeholder marks it
+         as "nothing chosen yet", so value_committed must be "" - recording the
+         placeholder text "Select a rider" as the committed answer would make an
+         empty form read as filled. -->
+    <span id="rider-label">Optional Rider</span>
+    <button type="button" id="rider-trigger" role="combobox"
+            aria-haspopup="listbox" aria-expanded="false"
+            aria-controls="rider-listbox" aria-labelledby="rider-label"
+            data-placeholder="">Select a rider</button>
+    <ul id="rider-listbox" role="listbox" class="closed" aria-label="Rider options">
+      <li role="option">Waiver of Premium</li>
+      <li role="option">Accidental Death</li>
+      <li role="option">Child Term</li>
+    </ul>
+
+    <!-- SUBJECT C: a listbox reached by DESCENDANT lookup rather than by
+         aria-controls (the resolveListbox() fallback branch). -->
+    <div id="payment-mode" role="combobox" aria-haspopup="listbox"
+         aria-label="Payment Mode" tabindex="0">
+      <ul role="listbox" class="closed">
+        <li role="option">Monthly</li>
+        <li role="option">Quarterly</li>
+        <li role="option">Annual</li>
+      </ul>
+    </div>
+
+    <!-- SUBJECT D: a widget that builds its options only on open - the honest
+         empty case. options must be [] and options_total 0, never invented. -->
+    <button type="button" id="lazy-trigger" role="combobox"
+            aria-haspopup="listbox" aria-expanded="false"
+            aria-label="Beneficiary Relationship">Choose</button>
+  </main>
+</body>
+</html>

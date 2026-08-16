@@ -1,0 +1,196 @@
+[
+  {
+    "attestation": null,
+    "budgets": {
+      "max_actions_per_state": 30,
+      "max_depth": 6,
+      "max_requests": 200,
+      "max_states": 1,
+      "max_wall_ms": 1800000,
+      "rate_per_s": 1.0
+    },
+    "config_fingerprint": "characterization-fixed",
+    "crawl_id": "<normalized:crawl_id>",
+    "explorer_version": "qe-explorer/1.0+inv-js-v10",
+    "frame_count": 0,
+    "guard_version": "qe-explorer/1.0+inv-js-v10",
+    "refuse_pack_version": "refuse-pack-v1",
+    "stop_reason": "",
+    "target_url": "http://127.0.0.1:<port>/18-select-edge-cases/index.html",
+    "type": "crawl_meta"
+  },
+  {
+    "actions": [],
+    "ax_fingerprint": "<hash>",
+    "canonical_host": "127.0.0.1",
+    "displayed_values": [],
+    "first_seen_ms": "<normalized:first_seen_ms>",
+    "form_snapshot": {
+      "Disabled Control": "x",
+      "Duplicate Labels": "a",
+      "Empty Enumeration": "",
+      "Long Labels": "l1",
+      "Selected Near The End": "opt060",
+      "Single Answer": "only",
+      "Some Disabled Options": "ok1"
+    },
+    "form_snapshot_signals": {
+      "Disabled Control": {
+        "options": [
+          "Locked Choice"
+        ],
+        "required": false,
+        "type": "select"
+      },
+      "Duplicate Labels": {
+        "options": [
+          "Other",
+          "Other",
+          "Other",
+          "None"
+        ],
+        "required": false,
+        "type": "select"
+      },
+      "Empty Enumeration": {
+        "options": [],
+        "required": false,
+        "type": "select"
+      },
+      "Long Labels": {
+        "options": [
+          "Coverage tier extremely-long-descriptive-suffix extremely-long-descriptive-suffix extremely-long-descriptive-suffix extremely-long-descriptive-suffix extremely-long-descriptive-suffix extremely-long-d",
+          "Short"
+        ],
+        "required": false,
+        "type": "select"
+      },
+      "Selected Near The End": {
+        "options": [
+          "Option 001",
+          "Option 002",
+          "Option 003",
+          "Option 004",
+          "Option 005",
+          "Option 006",
+          "Option 007",
+          "Option 008",
+          "Option 009",
+          "Option 010",
+          "Option 011",
+          "Option 012",
+          "Option 013",
+          "Option 014",
+          "Option 015",
+          "Option 016",
+          "Option 017",
+          "Option 018",
+          "Option 019",
+          "Option 020",
+          "Option 021",
+          "Option 022",
+          "Option 023",
+          "Option 024",
+          "Option 025",
+          "Option 026",
+          "Option 027",
+          "Option 028",
+          "Option 029",
+          "Option 030",
+          "Option 031",
+          "Option 032",
+          "Option 033",
+          "Option 034",
+          "Option 035",
+          "Option 036",
+          "Option 037",
+          "Option 038",
+          "Option 039",
+          "Option 040",
+          "Option 041",
+          "Option 042",
+          "Option 043",
+          "Option 044",
+          "Option 045",
+          "Option 046",
+          "Option 047",
+          "Option 048",
+          "Option 049",
+          "Option 050",
+          "Option 051",
+          "Option 052",
+          "Option 053",
+          "Option 054",
+          "Option 055",
+          "Option 056",
+          "Option 057",
+          "Option 058",
+          "Option 059",
+          "Option 060"
+        ],
+        "required": false,
+        "type": "select"
+      },
+      "Single Answer": {
+        "options": [
+          "Only Choice"
+        ],
+        "required": false,
+        "type": "select"
+      },
+      "Some Disabled Options": {
+        "options": [
+          "Available One",
+          "Sold Out",
+          "Available Two"
+        ],
+        "required": false,
+        "type": "select"
+      }
+    },
+    "last_seen_ms": "<normalized:last_seen_ms>",
+    "location": "http://127.0.0.1:<port>/18-select-edge-cases/index.html",
+    "network_calls": [],
+    "screenshots": [
+      {
+        "frame_index": 0,
+        "path": "<normalized:path>",
+        "timestamp_ms": "<normalized:timestamp_ms>"
+      }
+    ],
+    "sequence_index": 0,
+    "state_id": "<normalized:state_id>",
+    "title": "Fixture 18 — native select edge cases",
+    "type": "page_state",
+    "url_host": "127.0.0.1",
+    "url_path": "/18-select-edge-cases/index.html",
+    "url_query": ""
+  },
+  {
+    "attestation": null,
+    "budgets": {
+      "max_actions_per_state": 30,
+      "max_depth": 6,
+      "max_requests": 200,
+      "max_states": 1,
+      "max_wall_ms": 1800000,
+      "rate_per_s": 1.0
+    },
+    "config_fingerprint": "characterization-fixed",
+    "crawl_id": "<normalized:crawl_id>",
+    "explorer_version": "qe-explorer/1.0+inv-js-v10",
+    "frame_count": 1,
+    "guard_blocks": 0,
+    "guard_version": "qe-explorer/1.0+inv-js-v10",
+    "refuse_pack_version": "refuse-pack-v1",
+    "stats": {
+      "actions": 5,
+      "elapsed_ms": "<normalized:elapsed_ms>",
+      "requests": 1,
+      "states": 1
+    },
+    "stop_reason": "budget_max_states",
+    "target_url": "http://127.0.0.1:<port>/18-select-edge-cases/index.html",
+    "type": "crawl_meta"
+  }
+]

@@ -43,9 +43,23 @@ def engine():
 
 class TestLoadBuiltins:
 
-    def test_load_all_returns_four(self):
-        chains = load_all_builtin_chains()
-        assert len(chains) == 4
+    def test_load_all_returns_every_builtin_chain(self):
+        """The four original chains must still load, alongside the later ones.
+
+        Was `assert len(chains) == 4`. A bare count is a pin on the product's
+        SIZE, which grows for good reasons (six chains have since been added),
+        so it broke without anything being wrong. What actually matters is that
+        no builtin chain silently disappears — asserted by name.
+        """
+        by_id = {c.chain_id: c for c in load_all_builtin_chains()}
+        original_four = {
+            "nexus.qa-testing",
+            "nexus.compliance-audit",
+            "nexus.knowledge-capture",
+            "nexus.regression-suite",
+        }
+        assert original_four <= set(by_id), f"missing: {sorted(original_four - set(by_id))}"
+        assert len(by_id) >= len(original_four)
 
     def test_all_have_unique_ids(self):
         chains = load_all_builtin_chains()
@@ -69,34 +83,74 @@ class TestQATestingChain:
         errors = ChainRegistry.validate_chain(chain)
         assert errors == [], f"Validation errors: {errors}"
 
-    def test_has_11_stages(self):
+    def test_stage_inventory(self):
+        """Pin the stage IDs, not the count.
+
+        The chain was restructured: raw-media ingestion (transcription /
+        visual_analysis / security scanning) moved out to
+        `nexus.canonical-processing`, and this chain now STARTS from the
+        canonical artifact. Naming the stages says what the pipeline is; a
+        count of 11 only said how long it was.
+        """
         chain = build_qa_testing_chain()
-        assert len(chain.stages) == 11
+        assert [s.stage_id for s in chain.stages] == [
+            "fetch_artifact",
+            "document_ingestion",
+            "rule_extraction",
+            "test_generation",
+            "test_data_generation",
+            "knowledge_storage",
+            "test_execution",
+            "report_generation",
+            "notification",
+        ]
 
     def test_dag_buildable(self, engine):
         chain = build_qa_testing_chain()
         plan = engine._build_execution_plan(chain.stages)
         assert len(plan) >= 3  # At least 3 levels
 
-    def test_uses_all_10_engines(self):
+    def test_uses_the_qa_engines(self):
         chain = build_qa_testing_chain()
-        engines_used = {s.engine for s in chain.stages}
-        expected = {"shield", "ears", "eyes", "heart", "backbone",
-                    "nerves", "legs", "hands", "spine", "mouth"}
-        assert engines_used == expected
+        assert {s.engine for s in chain.stages} == {
+            "spine", "heart", "hands", "backbone", "legs", "mouth", "nerves",
+        }
+
+    def test_every_engine_is_exercised_by_some_builtin_chain(self):
+        """The real coverage claim, relocated to where it is now true.
+
+        This assertion used to live on qa-testing alone and demanded all ten
+        engines there. After the decomposition, ears/eyes/shield belong to
+        `nexus.canonical-processing` and `nexus.compliance-audit`. Asserting the
+        UNION keeps the guarantee that no engine is orphaned — which is what the
+        original test was really protecting — without freezing one chain's shape.
+        """
+        union = {
+            s.engine
+            for chain in load_all_builtin_chains()
+            for s in chain.stages
+            if getattr(s, "engine", "")
+        }
+        for engine_name in ("shield", "ears", "eyes", "heart", "backbone",
+                            "nerves", "legs", "hands", "spine", "mouth"):
+            assert engine_name in union, f"{engine_name} is not used by any builtin chain"
 
     def test_chain_id(self):
         chain = build_qa_testing_chain()
         assert chain.chain_id == "nexus.qa-testing"
 
-    def test_first_level_is_parallel(self, engine):
+    def test_first_level_starts_from_the_canonical_artifact(self, engine):
+        """Level 0 is the artifact fetch.
+
+        Previously asserted transcription / visual_analysis / document_ingestion
+        ran in parallel here; those stages moved to `nexus.canonical-processing`
+        when raw-media handling was split out, so this chain's entry point is now
+        the fetch of the artifact that pipeline produced.
+        """
         chain = build_qa_testing_chain()
         plan = engine._build_execution_plan(chain.stages)
-        level0_ids = {s.stage_id for s in plan[0]}
-        # transcription, visual_analysis, document_ingestion should be in level 0
-        assert "transcription" in level0_ids
-        assert "visual_analysis" in level0_ids
-        assert "document_ingestion" in level0_ids
+        # Still genuinely parallel — two independent roots share level 0.
+        assert {s.stage_id for s in plan[0]} == {"fetch_artifact", "document_ingestion"}
 
 
 class TestComplianceAuditChain:
@@ -127,9 +181,13 @@ class TestKnowledgeCaptureChain:
         errors = ChainRegistry.validate_chain(chain)
         assert errors == [], f"Validation errors: {errors}"
 
-    def test_has_5_stages(self):
+    def test_stage_inventory(self):
+        """Same restructure as qa-testing: raw-media ingestion moved out to
+        `nexus.canonical-processing`, so this chain starts from the artifact."""
         chain = build_knowledge_capture_chain()
-        assert len(chain.stages) == 5
+        assert [s.stage_id for s in chain.stages] == [
+            "fetch_artifact", "rule_extraction", "knowledge_storage",
+        ]
 
     def test_dag_buildable(self, engine):
         chain = build_knowledge_capture_chain()

@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import logging
 import time
+from ._step_fields import expected_text
 
 logger = logging.getLogger(__name__)
 
@@ -62,7 +63,7 @@ class APIExecutor:
                         StepExecutionDetail(
                             step_number=step.step_number,
                             action=step.action,
-                            expected=step.expected_output or "",
+                            expected=expected_text(step),
                             actual=json.dumps(result),
                             status=ExecutionStatus.PASSED,
                             duration_ms=(time.monotonic() - step_start) * 1000,
@@ -74,7 +75,7 @@ class APIExecutor:
                         StepExecutionDetail(
                             step_number=step.step_number,
                             action=step.action,
-                            expected=step.expected_output or "",
+                            expected=expected_text(step),
                             actual=str(exc),
                             status=ExecutionStatus.FAILED,
                             error_message=str(exc),

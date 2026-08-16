@@ -739,7 +739,17 @@ _GT_ALLOWED_KINDS = {
 _GT_MAX_BATCH = 1000
 
 
-class GroundTruthEventIn(BaseModel):
+# NOTE: distinct from the lenient ``GroundTruthEventIn`` above, which serves the
+# sibling /ground-truth route. Both classes were once literally named
+# ``GroundTruthEventIn``; because this module runs under
+# ``from __future__ import annotations``, Pydantic resolves the string
+# annotation ``list[GroundTruthEventIn]`` LAZILY against the module namespace —
+# so by resolution time BOTH bodies pointed at this stricter second class. The
+# legacy /ground-truth route therefore 422'd every payload missing
+# ``sequence_index`` and silently dropped url_host/url_path/url_query, which its
+# own model declares. Keeping the names distinct is what makes each route bind
+# the model it was written against.
+class GroundTruthRecorderEventIn(BaseModel):
     sequence_index: int = Field(..., ge=0, le=1_000_000)
     timestamp_ms: int = Field(..., ge=0)
     kind: str = Field(..., min_length=1, max_length=40)
@@ -753,7 +763,7 @@ class GroundTruthEventIn(BaseModel):
 
 
 class GroundTruthBatchIn(BaseModel):
-    events: list[GroundTruthEventIn] = Field(..., min_length=1, max_length=_GT_MAX_BATCH)
+    events: list[GroundTruthRecorderEventIn] = Field(..., min_length=1, max_length=_GT_MAX_BATCH)
 
 
 @router.post("/api/v1/artifacts/{artifact_id}/ground-truth/events")

@@ -1,0 +1,154 @@
+{
+  "purpose": "Prove group_key answers 'which QUESTION does this control belong to' - scoped to the owning form for native radios, to the declared container for ARIA card sets - and stays empty when no grouping was DECLARED.",
+  "targeted_defect": "None (regression guard). Pins groupKeyOf()/groupContainerKey() including the form-scoping rule (two forms may both use name='product' and they are NOT the same question) and the declared-signal-only rule for checkbox groups.",
+  "lanes": [
+    "jsdom",
+    "playwright"
+  ],
+  "snippet": "INVENTORY_JS",
+  "min_controls": 18,
+  "expect_controls": [
+    {
+      "where": {
+        "name": "Term 10"
+      },
+      "fields": {
+        "role": "radio",
+        "group_key": "name:term-form:product",
+        "value_committed": "false"
+      }
+    },
+    {
+      "where": {
+        "name": "Term 20"
+      },
+      "fields": {
+        "role": "radio",
+        "group_key": "name:term-form:product",
+        "value_committed": "true"
+      }
+    },
+    {
+      "where": {
+        "name": "Whole Life"
+      },
+      "fields": {
+        "role": "radio",
+        "group_key": "name:whole-form:product"
+      }
+    },
+    {
+      "where": {
+        "name": "Universal Life"
+      },
+      "fields": {
+        "role": "radio",
+        "group_key": "name:whole-form:product"
+      }
+    },
+    {
+      "where": {
+        "name": "Bronze"
+      },
+      "fields": {
+        "role": "radio",
+        "group_key": "grp:id:plan-group",
+        "value_committed": "false",
+        "aria_checked": "false"
+      }
+    },
+    {
+      "where": {
+        "name": "Silver"
+      },
+      "fields": {
+        "role": "radio",
+        "group_key": "grp:id:plan-group",
+        "value_committed": "true",
+        "aria_checked": "true"
+      }
+    },
+    {
+      "where": {
+        "name": "Gold"
+      },
+      "fields": {
+        "role": "radio",
+        "group_key": "grp:id:plan-group"
+      }
+    },
+    {
+      "where": {
+        "name": "Diabetes"
+      },
+      "fields": {
+        "role": "checkbox",
+        "group_key": "name:conditions-form:conditions[]"
+      }
+    },
+    {
+      "where": {
+        "name": "None of these"
+      },
+      "fields": {
+        "role": "checkbox",
+        "group_key": "name:conditions-form:conditions[]",
+        "value_committed": "true"
+      }
+    },
+    {
+      "where": {
+        "css_hint": "input#remember"
+      },
+      "fields": {
+        "role": "checkbox",
+        "group_key": "name:doc:remember"
+      }
+    },
+    {
+      "where": {
+        "css_hint": "input#newsletter"
+      },
+      "fields": {
+        "role": "checkbox",
+        "group_key": "name:doc:newsletter"
+      }
+    },
+    {
+      "where": {
+        "css_hint": "div#tier-basic"
+      },
+      "fields": {
+        "name": "Basic",
+        "role": "radio",
+        "group_key": "grp:id:tier-group"
+      },
+      "why": "the radiogroup is four levels up - found only by walking, not by checking the parent"
+    },
+    {
+      "where": {
+        "css_hint": "div#tier-plus"
+      },
+      "fields": {
+        "name": "Plus",
+        "role": "radio",
+        "group_key": "grp:id:tier-group"
+      }
+    },
+    {
+      "where": {
+        "css_hint": "div#orphan-choice"
+      },
+      "fields": {
+        "name": "Standalone option",
+        "role": "radio",
+        "group_key": ""
+      },
+      "why": "no name attribute and no declared grouping ancestor - ungrouped is the only honest answer"
+    }
+  ],
+  "group_key_partition": {
+    "why": "The set of DISTINCT group_keys is the set of questions the page asks. Asserting the partition catches a collapse (two questions merged) and a shatter (one question split) that a per-control assertion alone would miss. Subject G contributes NO key, so the partition also proves that an undeclared group is left undeclared rather than invented.",
+    "expect_distinct_nonempty": 7
+  }
+}

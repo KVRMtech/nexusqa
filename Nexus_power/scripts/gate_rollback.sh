@@ -98,6 +98,28 @@ if ! git -C "$SRC" checkout -q "$GREEN"; then
 fi
 
 # ── 4. Rebuild + swap every service, in rollback order ──────────────────────
+#
+# M0.5: the rollback must carry the SAME environment the deploy did. Without
+# --env-file the compose defaults apply, and since M0.5 removed the shipped
+# NEXUS_JWT_SECRET / QEC_EXPLORER_TOKEN defaults, an env-less rollback either
+# refuses to start or (worse, if a stray .env exists) restores the fleet as
+# NEXUS_ENV=development with the safety spine inert. A rollback that silently
+# downgrades security is not a rollback.
+#
+# Resolved, never assumed: if the file is absent we still attempt the restore on
+# compose defaults — during an incident a degraded restore beats no restore —
+# but it is REPORTED loudly, never silent.
+ENV_FILE="${ENV_FILE:-.env.production}"
+ENV_ARGS=""
+if [ -f "$NEXUS_DIR/$ENV_FILE" ]; then
+  ENV_ARGS="--env-file $ENV_FILE"
+  say ">> rollback env: $ENV_FILE ($(grep -E '^NEXUS_ENV=' "$NEXUS_DIR/$ENV_FILE" || echo 'NEXUS_ENV unset'))"
+else
+  say ">> WARNING: $ENV_FILE not found - restoring on compose defaults."
+  say ">> The restored fleet may refuse to boot (no signing secret) or come up"
+  say ">> as NEXUS_ENV=development with the safety spine INERT. Verify /health."
+fi
+
 RESTORED=""
 FAILED=""
 while IFS=$'\t' read -r SVC COMPOSE; do
@@ -108,15 +130,15 @@ while IFS=$'\t' read -r SVC COMPOSE; do
   # if that commit predates the service, `config --services` will not list it and
   # rebuilding is impossible. That is a real, reportable failure — not something
   # to skip quietly.
-  if ! (cd "$NEXUS_DIR" && docker compose -f "$COMPOSE" config --services 2>/dev/null \
+  if ! (cd "$NEXUS_DIR" && docker compose $ENV_ARGS -f "$COMPOSE" config --services 2>/dev/null \
         | grep -qx "$SVC"); then
     say "   FAIL $SVC is not defined in $COMPOSE at $GREEN"
     FAILED="$FAILED $SVC"
     continue
   fi
   if (cd "$NEXUS_DIR" \
-      && docker compose -f "$COMPOSE" build "$SVC" \
-      && docker compose -f "$COMPOSE" up -d --force-recreate "$SVC"); then
+      && docker compose $ENV_ARGS -f "$COMPOSE" build "$SVC" \
+      && docker compose $ENV_ARGS -f "$COMPOSE" up -d --force-recreate "$SVC"); then
     say "   OK   $SVC restored"
     RESTORED="$RESTORED $SVC"
   else

@@ -1,0 +1,106 @@
+{
+  "purpose": "Prove a wizard step's fields carry the DECLARED validation constraints (min/max/step/required/maxlength/placeholder) and that its four actuators are all captured distinctly by accessible name, so the traversal layer can tell an advance from a non-advancing mutation from an irreversible action.",
+  "targeted_defect": "None (regression guard). Pins the constraint block added for the scenario deriver - a catalogue question with no validation justifies no negative and no boundary case, so a walker that drops min/max/pattern/maxlength leaves the deriver nothing to work with on every field in the fleet.",
+  "lanes": [
+    "jsdom",
+    "playwright"
+  ],
+  "snippet": "INVENTORY_JS",
+  "min_controls": 8,
+  "expect_controls": [
+    {
+      "where": {
+        "css_hint": "input#face-amount"
+      },
+      "fields": {
+        "name": "Face Amount",
+        "name_source": "label-for",
+        "role": "spinbutton",
+        "input_type": "number",
+        "required": true,
+        "min": "25000",
+        "max": "2000000",
+        "step": "1000",
+        "value_committed": "250000"
+      }
+    },
+    {
+      "where": {
+        "css_hint": "select#term"
+      },
+      "fields": {
+        "name": "Term",
+        "role": "combobox",
+        "required": true,
+        "value_committed": "20",
+        "options_total": 3
+      }
+    },
+    {
+      "where": {
+        "css_hint": "textarea#notes"
+      },
+      "fields": {
+        "name": "Notes",
+        "name_source": "label-for",
+        "role": "textbox",
+        "maxlength": "500",
+        "best_effort": false,
+        "value_committed": ""
+      }
+    },
+    {
+      "where": {
+        "css_hint": "div#disclosure"
+      },
+      "lanes": [
+        "playwright"
+      ],
+      "lane_note": "jsdom implements neither isContentEditable nor innerText, so both the role and the committed value would come back wrong for reasons that have nothing to do with the walker.",
+      "fields": {
+        "name": "Underwriter Disclosure",
+        "name_source": "aria-labelledby",
+        "role": "textbox",
+        "tag": "div",
+        "value_committed": "Reviewed on intake."
+      }
+    },
+    {
+      "where": {
+        "css_hint": "button#back-btn"
+      },
+      "fields": {
+        "name": "Back",
+        "role": "button",
+        "name_source": "content"
+      }
+    },
+    {
+      "where": {
+        "css_hint": "button#save-draft-btn"
+      },
+      "fields": {
+        "name": "Save Draft",
+        "role": "button"
+      }
+    },
+    {
+      "where": {
+        "css_hint": "button#continue-btn"
+      },
+      "fields": {
+        "name": "Continue",
+        "role": "button"
+      }
+    },
+    {
+      "where": {
+        "css_hint": "button#cancel-btn"
+      },
+      "fields": {
+        "name": "Cancel Application",
+        "role": "button"
+      }
+    }
+  ]
+}

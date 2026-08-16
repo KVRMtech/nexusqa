@@ -132,6 +132,17 @@ def _mint_jwt(
     tid = str(tenant_id or "").strip()
     if not tid:
         raise ValueError("tenant_id is required to mint a principal token")
+    # M0.5 T-SEC-01 — a tenant's BOOTSTRAP admin credential is the highest-value
+    # token this service issues. Never mint one under an unconfigured or known
+    # development secret: it would be forgeable by anyone holding this repo.
+    from ..config import jwt_secret_usable
+
+    usable, reason = jwt_secret_usable(settings.nexus_jwt_secret, settings.nexus_env)
+    if not usable:
+        raise ValueError(
+            f"refusing to mint a principal token: {reason} "
+            "(configure NEXUS_JWT_SECRET with a strong random value)"
+        )
     now = datetime.now(timezone.utc)
     expires_at = now + timedelta(seconds=max(1, int(ttl_seconds)))
     claims: dict = {

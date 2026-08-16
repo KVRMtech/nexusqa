@@ -1,0 +1,172 @@
+{
+  "purpose": "Prove the walker reads DISABLED from both the native property and aria-disabled, reads CHECKED state faithfully, and treats hidden/aria-hidden/display:none/input[type=hidden] as invisible so a dead control is never offered to the crawler.",
+  "targeted_defect": "None (regression guard). Pins isDisabled()/isVisible(). A control the walker reports enabled but the browser refuses to click produces an action that times out and is recorded as an honest-looking 'none' outcome - the crawl then loops on a gate it cannot see.",
+  "lanes": [
+    "jsdom",
+    "playwright"
+  ],
+  "snippet": "INVENTORY_JS",
+  "min_controls": 13,
+  "expect_controls": [
+    {
+      "where": {
+        "css_hint": "input#agree-terms"
+      },
+      "fields": {
+        "name": "I agree to the terms",
+        "name_source": "wrapping-label",
+        "role": "checkbox",
+        "value_committed": "false",
+        "disabled": false
+      }
+    },
+    {
+      "where": {
+        "css_hint": "button#submit-native"
+      },
+      "fields": {
+        "name": "Submit Application",
+        "role": "button",
+        "disabled": true
+      }
+    },
+    {
+      "where": {
+        "css_hint": "div#submit-aria"
+      },
+      "fields": {
+        "name": "Submit With E-Sign",
+        "role": "button",
+        "disabled": true
+      }
+    },
+    {
+      "where": {
+        "css_hint": "input#agree-esign"
+      },
+      "fields": {
+        "role": "checkbox",
+        "value_committed": "true"
+      }
+    },
+    {
+      "where": {
+        "css_hint": "button#continue-enabled"
+      },
+      "fields": {
+        "name": "Continue",
+        "role": "button",
+        "disabled": false
+      }
+    },
+    {
+      "where": {
+        "css_hint": "input#promo"
+      },
+      "fields": {
+        "name": "Promotional Code",
+        "name_source": "label-for",
+        "best_effort": false
+      }
+    },
+    {
+      "where": {
+        "css_hint": "summary#disclosures-summary"
+      },
+      "fields": {
+        "role": "button",
+        "tag": "summary"
+      }
+    },
+    {
+      "where": {
+        "css_hint": "button#summary-help"
+      },
+      "fields": {
+        "name": "What is this?",
+        "role": "button"
+      },
+      "why": "inside the <summary> of a COLLAPSED <details> - the browser renders it, so the walker must too"
+    },
+    {
+      "where": {
+        "css_hint": "input#open-field"
+      },
+      "fields": {
+        "name": "Secondary Beneficiary",
+        "name_source": "label-for"
+      },
+      "why": "inside an OPEN <details> - reachable"
+    },
+    {
+      "where": {
+        "css_hint": "input#submit-claim"
+      },
+      "fields": {
+        "name": "Submit Claim",
+        "name_source": "content",
+        "role": "button",
+        "input_type": "submit"
+      },
+      "why": "a void element with no text content - the name can only come from @value"
+    },
+    {
+      "where": {
+        "css_hint": "div#all-conditions"
+      },
+      "fields": {
+        "name": "All health conditions",
+        "role": "checkbox",
+        "aria_checked": "mixed",
+        "value_committed": "mixed"
+      },
+      "why": "tri-state: neither true nor false, and never fabricated into one"
+    },
+    {
+      "where": {
+        "css_hint": "div#paperless"
+      },
+      "fields": {
+        "name": "Paperless delivery",
+        "role": "switch",
+        "value_committed": ""
+      },
+      "why": "a toggle that declares no state - honest empty, never invented"
+    }
+  ],
+  "forbid_controls": [
+    {
+      "where": {
+        "css_hint": "button#hidden-attr"
+      }
+    },
+    {
+      "where": {
+        "css_hint": "button#hidden-aria"
+      }
+    },
+    {
+      "where": {
+        "css_hint": "button#hidden-style"
+      }
+    },
+    {
+      "where": {
+        "css_hint": "input#hidden-input"
+      }
+    },
+    {
+      "where": {
+        "css_hint": "input#closed-field"
+      },
+      "why": "in the BODY of a collapsed <details> - the browser renders nothing there"
+    },
+    {
+      "where": {
+        "css_hint": "button#closed-btn"
+      },
+      "why": "same; offering it would guarantee an action timeout"
+    }
+  ],
+  "lane_note": "The display:none subject is asserted in BOTH lanes: it is set via an inline style attribute, which jsdom's getComputedStyle does resolve. Stylesheet-driven visibility is Playwright-only and is not relied on here."
+}

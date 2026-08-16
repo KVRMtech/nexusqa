@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import os
 import re
 import subprocess
@@ -41,6 +42,14 @@ from app.processor import DocumentProcessor
 from app.parsers import pdf as pdf_mod, word as word_mod, powerpoint as pptx_mod
 from app.parsers.csv_parser import CSVParser
 from app.parsers.text import TextParser
+
+# Module-level logger. Eight call sites below already wrote ``logger.warning(…)``
+# while the module only ever built loggers inline via a function-local
+# ``import logging`` — so each of those lines raised NameError instead of
+# logging, and because every one of them sits inside an ``except`` handler it
+# replaced the real error with a NameError. Binding the name once here is the
+# fix the call sites always assumed.
+logger = logging.getLogger("spine")
 
 
 # ─── Configuration ─────────────────────────────────────────────

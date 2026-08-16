@@ -1,0 +1,107 @@
+[
+  {
+    "attestation": null,
+    "budgets": {
+      "max_actions_per_state": 30,
+      "max_depth": 6,
+      "max_requests": 200,
+      "max_states": 1,
+      "max_wall_ms": 1800000,
+      "rate_per_s": 1.0
+    },
+    "config_fingerprint": "characterization-fixed",
+    "crawl_id": "<normalized:crawl_id>",
+    "explorer_version": "qe-explorer/1.0+inv-js-v10",
+    "frame_count": 0,
+    "guard_version": "qe-explorer/1.0+inv-js-v10",
+    "refuse_pack_version": "refuse-pack-v1",
+    "stop_reason": "",
+    "target_url": "http://127.0.0.1:<port>/16-iframe-special-chars/index.html",
+    "type": "crawl_meta"
+  },
+  {
+    "actions": [],
+    "ax_fingerprint": "<hash>",
+    "canonical_host": "127.0.0.1",
+    "displayed_values": [],
+    "first_seen_ms": "<normalized:first_seen_ms>",
+    "form_snapshot": {
+      "Field A": "",
+      "Field B": "",
+      "Field C": "",
+      "Field D": "",
+      "Host Reference": ""
+    },
+    "form_snapshot_signals": {
+      "Field A": {
+        "options": [],
+        "required": false,
+        "type": "text"
+      },
+      "Field B": {
+        "options": [],
+        "required": false,
+        "type": "text"
+      },
+      "Field C": {
+        "options": [],
+        "required": false,
+        "type": "text"
+      },
+      "Field D": {
+        "options": [],
+        "required": false,
+        "type": "text"
+      },
+      "Host Reference": {
+        "options": [],
+        "required": false,
+        "type": "text"
+      }
+    },
+    "last_seen_ms": "<normalized:last_seen_ms>",
+    "location": "http://127.0.0.1:<port>/16-iframe-special-chars/index.html",
+    "network_calls": [],
+    "screenshots": [
+      {
+        "frame_index": 0,
+        "path": "<normalized:path>",
+        "timestamp_ms": "<normalized:timestamp_ms>"
+      }
+    ],
+    "sequence_index": 0,
+    "state_id": "<normalized:state_id>",
+    "title": "Fixture 16 — iframe selectors with CSS metacharacters",
+    "type": "page_state",
+    "url_host": "127.0.0.1",
+    "url_path": "/16-iframe-special-chars/index.html",
+    "url_query": ""
+  },
+  {
+    "attestation": null,
+    "budgets": {
+      "max_actions_per_state": 30,
+      "max_depth": 6,
+      "max_requests": 200,
+      "max_states": 1,
+      "max_wall_ms": 1800000,
+      "rate_per_s": 1.0
+    },
+    "config_fingerprint": "characterization-fixed",
+    "crawl_id": "<normalized:crawl_id>",
+    "explorer_version": "qe-explorer/1.0+inv-js-v10",
+    "frame_count": 1,
+    "guard_blocks": 0,
+    "guard_version": "qe-explorer/1.0+inv-js-v10",
+    "refuse_pack_version": "refuse-pack-v1",
+    "stats": {
+      "actions": 0,
+      "elapsed_ms": "<normalized:elapsed_ms>",
+      "requests": 1,
+      "states": 1
+    },
+    "stop_reason": "budget_max_states",
+    "target_url": "http://127.0.0.1:<port>/16-iframe-special-chars/index.html",
+    "type": "crawl_meta"
+  }
+]

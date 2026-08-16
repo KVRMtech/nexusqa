@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Fixture 18 — native select edge cases</title></head>
+<body>
+  <main>
+    <h1>Plan selection</h1>
+
+    <!-- 0 options. Must capture as an empty answer set, never as "not a select". -->
+    <label for="empty">Empty Enumeration</label>
+    <select id="empty" name="empty"></select>
+
+    <!-- 1 option. -->
+    <label for="single">Single Answer</label>
+    <select id="single" name="single">
+      <option value="only">Only Choice</option>
+    </select>
+
+    <!-- SELECTED NEAR THE END. value_committed must be the LAST option's value,
+         not the first - reading el.value must not degrade to "first option". -->
+    <label for="late-selected">Selected Near The End</label>
+    <select id="late-selected" name="late_selected">
+      <option value="opt001">Option 001</option>
+      <option value="opt002">Option 002</option>
+      <option value="opt003">Option 003</option>
+      <option value="opt004">Option 004</option>
+      <option value="opt005">Option 005</option>
+      <option value="opt006">Option 006</option>
+      <option value="opt007">Option 007</option>
+      <option value="opt008">Option 008</option>
+      <option value="opt009">Option 009</option>
+      <option value="opt010">Option 010</option>
+      <option value="opt011">Option 011</option>
+      <option value="opt012">Option 012</option>
+      <option value="opt013">Option 013</option>
+      <option value="opt014">Option 014</option>
+      <option value="opt015">Option 015</option>
+      <option value="opt016">Option 016</option>
+      <option value="opt017">Option 017</option>
+      <option value="opt018">Option 018</option>
+      <option value="opt019">Option 019</option>
+      <option value="opt020">Option 020</option>
+      <option value="opt021">Option 021</option>
+      <option value="opt022">Option 022</option>
+      <option value="opt023">Option 023</option>
+      <option value="opt024">Option 024</option>
+      <option value="opt025">Option 025</option>
+      <option value="opt026">Option 026</option>
+      <option value="opt027">Option 027</option>
+      <option value="opt028">Option 028</option>
+      <option value="opt029">Option 029</option>
+      <option value="opt030">Option 030</option>
+      <option value="opt031">Option 031</option>
+      <option value="opt032">Option 032</option>
+      <option value="opt033">Option 033</option>
+      <option value="opt034">Option 034</option>
+      <option value="opt035">Option 035</option>
+      <option value="opt036">Option 036</option>
+      <option value="opt037">Option 037</option>
+      <option value="opt038">Option 038</option>
+      <option value="opt039">Option 039</option>
+      <option value="opt040">Option 040</option>
+      <option value="opt041">Option 041</option>
+      <option value="opt042">Option 042</option>
+      <option value="opt043">Option 043</option>
+      <option value="opt044">Option 044</option>
+      <option value="opt045">Option 045</option>
+      <option value="opt046">Option 046</option>
+      <option value="opt047">Option 047</option>
+      <option value="opt048">Option 048</option>
+      <option value="opt049">Option 049</option>
+      <option value="opt050">Option 050</option>
+      <option value="opt051">Option 051</option>
+      <option value="opt052">Option 052</option>
+      <option value="opt053">Option 053</option>
+      <option value="opt054">Option 054</option>
+      <option value="opt055">Option 055</option>
+      <option value="opt056">Option 056</option>
+      <option value="opt057">Option 057</option>
+      <option value="opt058">Option 058</option>
+      <option value="opt059">Option 059</option>
+      <option value="opt060" selected>Option 060</option>
+    </select>
+
+    <!-- DUPLICATE LABELS. Three distinct answers that happen to render the same
+         text. De-duplicating them would misreport how many answers the question
+         offers, so options_total must be 4 and all four must be captured. -->
+    <label for="duplicates">Duplicate Labels</label>
+    <select id="duplicates" name="duplicates">
+      <option value="a">Other</option>
+      <option value="b">Other</option>
+      <option value="c">Other</option>
+      <option value="d">None</option>
+    </select>
+
+    <!-- LONG LABEL. Clipped to MAX_OPTION (200), deterministically, from the
+         front - a truncated label is still identifiable; an arbitrary slice is not. -->
+    <label for="long-labels">Long Labels</label>
+    <select id="long-labels" name="long_labels">
+      <option value="l1">Coverage tier extremely-long-descriptive-suffix extremely-long-descriptive-suffix extremely-long-descriptive-suffix extremely-long-descriptive-suffix extremely-long-descriptive-suffix extremely-long-descriptive-suffix extremely-long-descriptive-suffix extremely-long-descriptive-suffix extremely-long-descriptive-suffix extremely-long-descriptive-suffix extremely-long-descriptive-suffix extremely-long-descriptive-suffix </option>
+      <option value="l2">Short</option>
+    </select>
+
+    <!-- DISABLED OPTIONS. A disabled option is still an answer the question
+         LISTS - it must be captured, or the enumeration under-reports the form.
+         The disabled SELECT is a separate signal, carried on the control. -->
+    <label for="with-disabled">Some Disabled Options</label>
+    <select id="with-disabled" name="with_disabled">
+      <option value="ok1">Available One</option>
+      <option value="no1" disabled>Sold Out</option>
+      <option value="ok2">Available Two</option>
+    </select>
+
+    <label for="disabled-select">Disabled Control</label>
+    <select id="disabled-select" name="disabled_select" disabled>
+      <option value="x">Locked Choice</option>
+    </select>
+  </main>
+</body>
+</html>

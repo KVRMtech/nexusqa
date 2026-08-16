@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Fixture 17 — group keys across shadow roots</title></head>
+<body>
+  <main>
+    <h1>Health questionnaire</h1>
+
+    <!-- Two INDEPENDENT questions, each rendered by its own instance of the
+         same component. Neither radiogroup carries an id, an aria-label or an
+         aria-labelledby, and neither set of radios carries a name attribute -
+         so both fall all the way through to the POSITIONAL container key.
+
+         Scoping name resolution to the owning shadow root (the CAP-02 fix) also
+         scopes that positional lookup, so both containers index as 0 within
+         their own root. Without a root discriminator they collide, and two
+         questions collapse into one that offers the other's answers.
+
+         An ARIA card set with no name attribute is exactly how a design-system
+         questionnaire is built, so this is the shape that would hit it. -->
+    <question-card id="q-tobacco"></question-card>
+    <question-card id="q-alcohol"></question-card>
+  </main>
+
+  <script>
+    class QuestionCard extends HTMLElement {
+      connectedCallback() {
+        const q = this.id === "q-tobacco"
+          ? { label: "Tobacco", a: "Tobacco Yes", b: "Tobacco No" }
+          : { label: "Alcohol", a: "Alcohol Yes", b: "Alcohol No" };
+        const root = this.attachShadow({ mode: "open" });
+        // No id / aria-label / aria-labelledby on the radiogroup, and no name
+        // attribute on the radios: the last-resort positional key is the only
+        // handle either question has.
+        root.innerHTML = [
+          '<div role="radiogroup">',
+          '  <span>' + q.label + '</span>',
+          '  <div role="radio" tabindex="0" aria-checked="false">' + q.a + '</div>',
+          '  <div role="radio" tabindex="0" aria-checked="false">' + q.b + '</div>',
+          '</div>'
+        ].join("");
+      }
+    }
+    customElements.define("question-card", QuestionCard);
+  </script>
+</body>
+</html>

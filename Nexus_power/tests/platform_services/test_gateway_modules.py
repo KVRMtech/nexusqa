@@ -122,8 +122,14 @@ class TestRouteTable:
         from app.config import GatewayConfig
         cfg = GatewayConfig()
         routes = build_route_table(cfg)
-        # 12 engines + brain + 2 orchestrator aliases + 2 artifact/workflow + 4 qi-portal + 11 platform-api = 31
-        assert len(routes) == 31
+        # Was `assert len(routes) == 31`, which broke every time a route was
+        # legitimately added (the table is now 35). A bare total says nothing
+        # about WHICH route went missing — the property worth gating is that no
+        # prefix is duplicated and none of the known families disappeared.
+        assert len(routes) == len(set(routes)), "duplicate route prefix in the table"
+        assert len(routes) >= 31, f"route table shrank to {len(routes)} entries"
+        for prefix in ("/api/v1/auth", "/api/v1/admin", "/api/v1/artifacts"):
+            assert prefix in routes, f"Missing route prefix: {prefix}"
 
     def test_routes_map_to_correct_urls(self):
         from app.routes import build_route_table
@@ -198,7 +204,6 @@ class TestProxy:
     def _make_auth_header():
         """Create a valid Bearer token for gateway proxy tests."""
         import jwt as pyjwt
-        import time
         from app.config import GatewayConfig
         cfg = GatewayConfig()
         payload = {

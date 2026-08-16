@@ -18,7 +18,7 @@ import logging
 from fastapi import Depends, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
-from .config import settings
+from .config import jwt_secret_usable, settings
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +26,32 @@ _bearer = HTTPBearer(auto_error=False)
 
 # Public routes that skip auth (health checks, docs) — platform-api parity.
 PUBLIC_PATHS = frozenset({"/", "/health", "/docs", "/openapi.json", "/redoc"})
+
+
+def assert_signing_key_usable() -> str:
+    """Return the active JWT secret, or REFUSE the request (M0.5 T-SEC-01).
+
+    The gate that makes a fresh deployment un-authenticatable.  It runs on
+    EVERY token validation — not once at boot — so it also covers an in-process
+    app, a re-read configuration, and the ``development`` environment a fresh
+    ``docker compose up`` actually runs as.
+
+    A 401 (not a 500) is deliberate: from the caller's side the credential is
+    simply not accepted.  The SERVER-side log carries the category so an
+    operator sees immediately that the deployment is unconfigured rather than
+    that clients are sending bad tokens.
+    """
+    secret = settings.nexus_jwt_secret
+    usable, reason = jwt_secret_usable(secret, settings.nexus_env)
+    if usable:
+        return secret
+    logger.critical(
+        "qe_central.auth.refused_unsafe_signing_key reason=%s env=%s "
+        "(configure NEXUS_JWT_SECRET with a strong random value — a known "
+        "development secret can never authenticate here)",
+        reason, settings.nexus_env,
+    )
+    raise HTTPException(status_code=401, detail="Authentication is not configured")
 
 
 def _accept_missing_aud(
@@ -86,7 +112,9 @@ def _decode_token(token: str) -> dict:
     import jwt as pyjwt
     from jwt import InvalidAudienceError, MissingRequiredClaimError
 
-    secret = settings.nexus_jwt_secret
+    # T-SEC-01: refuse BEFORE any signature check, so a forged admin token
+    # signed with a known development secret is never even evaluated.
+    secret = assert_signing_key_usable()
     algorithms = [settings.jwt_algorithm]
     audience = (settings.qec_jwt_audience or "").strip()
 
@@ -192,6 +220,93 @@ def require_role(*roles: str):
         return user
 
     return _dep
+
+
+#: The internal explorer seam.  Not under ``/api/*``, so the JWT middleware
+#: never covered it — see :func:`internal_auth_middleware`.
+INTERNAL_PREFIX = "/internal"
+
+
+def _audit(event: str, request: Request, **fields) -> None:
+    """Structured security-audit line for a REJECTION (M0.5 §19).
+
+    Carries event type, endpoint, method, correlation id and a reason category.
+    NEVER carries a token, a signature, a secret, or an Authorization header —
+    only whether one was PRESENT.
+    """
+    correlation = (
+        request.headers.get("x-request-id")
+        or getattr(request.state, "correlation_id", "")
+        or ""
+    )
+    logger.warning(
+        "qe_central.security.%s endpoint=%s method=%s correlation_id=%s %s",
+        event,
+        request.url.path,
+        request.method,
+        correlation,
+        " ".join(f"{k}={v}" for k, v in sorted(fields.items())),
+    )
+
+
+async def internal_auth_middleware(request: Request, call_next):
+    """Fail-closed authentication for every ``/internal/*`` route (T-SEC-02).
+
+    THE HOLE THIS CLOSES
+    ====================
+    ``jwt_auth_middleware`` gates ``/api/*`` only, and the internal router was
+    deliberately mounted OUTSIDE that prefix because the explorer holds no JWT.
+    Authentication was therefore left entirely to each handler's own HMAC check
+    — so any route that forgot it, or any future route added to that router, was
+    anonymously reachable, and the container published port 8093 to the host.
+
+    Now the PREFIX itself is authenticated: a request without a valid per-fleet
+    ``X-QEC-Token`` never reaches a handler.  This is a real credential check at
+    the application boundary, not a network-placement assumption — the port
+    binding (loopback-only in compose) is defence in depth, not the control.
+
+    The signed-body HMAC check inside each handler remains the SECOND factor: the
+    token proves the caller is in the fleet, the signature proves the body is
+    intact, fresh, un-replayed and scoped to this crawl.
+    """
+    path = request.url.path.rstrip("/")
+    if not (path == INTERNAL_PREFIX or path.startswith(INTERNAL_PREFIX + "/")):
+        return await call_next(request)
+
+    from fastapi.responses import JSONResponse
+
+    from .clients.config import phase1_settings
+
+    provided = request.headers.get("x-qec-token", "")
+    configured = (phase1_settings.explorer_token or "").strip()
+    ok = False
+    if configured and provided.strip():
+        import hmac as _hmac
+
+        ok = _hmac.compare_digest(configured, provided.strip())
+        if not ok:
+            previous = (phase1_settings.explorer_token_previous or "").strip()
+            if previous:
+                import time as _time
+
+                if _time.time() <= float(
+                    phase1_settings.explorer_token_previous_expires_at or 0.0
+                ):
+                    ok = _hmac.compare_digest(previous, provided.strip())
+    if not ok:
+        _audit(
+            "internal_api_unauthenticated",
+            request,
+            reason=("fleet_token_unconfigured" if not configured
+                    else "missing_fleet_token" if not provided.strip()
+                    else "invalid_fleet_token"),
+            token_present=bool(provided.strip()),
+        )
+        return JSONResponse(
+            status_code=401,
+            content={"detail": "invalid or missing X-QEC-Token"},
+        )
+    return await call_next(request)
 
 
 async def jwt_auth_middleware(request: Request, call_next):

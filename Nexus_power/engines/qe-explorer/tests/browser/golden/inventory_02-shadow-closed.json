@@ -1,0 +1,41 @@
+[
+  {
+    "aria_checked": "",
+    "autocomplete": "",
+    "best_effort": false,
+    "css_hint": "input#zip",
+    "disabled": false,
+    "draggable": false,
+    "expanded": "",
+    "frame_selector": "",
+    "group_key": "",
+    "haspopup": "",
+    "href": "",
+    "id": "zip",
+    "input_type": "text",
+    "inputmode": "",
+    "kind": "textbox",
+    "landmark": {
+      "name": "",
+      "role": ""
+    },
+    "max": "",
+    "maxlength": "",
+    "min": "",
+    "minlength": "",
+    "name": "ZIP Code",
+    "name_source": "label-for",
+    "options": [],
+    "options_total": 0,
+    "pattern": "",
+    "placeholder": "",
+    "pressed": "",
+    "required": false,
+    "role": "textbox",
+    "roledescription": "",
+    "step": "",
+    "tag": "input",
+    "testid": "",
+    "value_committed": ""
+  }
+]

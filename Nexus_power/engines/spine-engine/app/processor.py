@@ -189,7 +189,13 @@ class DocumentProcessor:
                             document_id=document_id,
                             session_id=session_id,
                             page_number=page_num,
-                            confidence=Confidence.HIGH,
+                            # `Confidence` is a MODEL (score/reason), not an enum —
+                            # `Confidence.HIGH` raised AttributeError and broke every
+                            # chunking call. Page-located chunks keep the higher score
+                            # because the parser gave them a real page anchor.
+                            confidence=Confidence(
+                                score=0.9, reason="page-anchored chunk from a parsed document",
+                            ),
                         ),
                     ))
         else:
@@ -203,7 +209,11 @@ class DocumentProcessor:
                     source=SourceReference(
                         document_id=document_id,
                         session_id=session_id,
-                        confidence=Confidence.MEDIUM,
+                        # Same fix as the page-anchored branch above. Lower score:
+                        # this chunk came from flat text with no page anchor.
+                        confidence=Confidence(
+                            score=0.6, reason="chunk from unpaginated text",
+                        ),
                     ),
                 ))
 

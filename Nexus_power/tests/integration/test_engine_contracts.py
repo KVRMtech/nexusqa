@@ -29,6 +29,11 @@ from app.workflows.engine import EngineURLResolver
 KNOWN_ENGINES = {
     "shield", "ears", "eyes", "heart", "backbone",
     "nerves", "legs", "hands", "spine", "mouth",
+    # `brain` was missing here while being a real, shipped engine
+    # (engines/brain-engine/, routed by the gateway at /api/v1/brain and used by
+    # nexus.canonical-processing + nexus.contradiction-detection). The omission
+    # made this contract reject a legitimate chain rather than catch a typo.
+    "brain",
 }
 
 VALID_PATH_PREFIXES = {"$workflow", "$stages", "$temp"}

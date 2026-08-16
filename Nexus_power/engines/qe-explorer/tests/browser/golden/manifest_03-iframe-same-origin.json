@@ -1,0 +1,155 @@
+[
+  {
+    "attestation": null,
+    "budgets": {
+      "max_actions_per_state": 30,
+      "max_depth": 6,
+      "max_requests": 200,
+      "max_states": 1,
+      "max_wall_ms": 1800000,
+      "rate_per_s": 1.0
+    },
+    "config_fingerprint": "characterization-fixed",
+    "crawl_id": "<normalized:crawl_id>",
+    "explorer_version": "qe-explorer/1.0+inv-js-v10",
+    "frame_count": 0,
+    "guard_version": "qe-explorer/1.0+inv-js-v10",
+    "refuse_pack_version": "refuse-pack-v1",
+    "stop_reason": "",
+    "target_url": "http://127.0.0.1:<port>/03-iframe-same-origin/index.html",
+    "type": "crawl_meta"
+  },
+  {
+    "actions": [
+      {
+        "after": {
+          "detail": "",
+          "navigated": false,
+          "outcome": "none"
+        },
+        "anchor": null,
+        "phase": "explore",
+        "qec": {
+          "css_hint": "button",
+          "expanded": "",
+          "frame_selector": "iframe#billing",
+          "haspopup": "",
+          "href": "",
+          "input_type": "button",
+          "name_confidence": "medium",
+          "options": [],
+          "role": "button",
+          "testid": ""
+        },
+        "screenshot_after": "<normalized:screenshot_after>",
+        "state_id": "<normalized:state_id>",
+        "subaction_index": 0,
+        "target_kind": "button",
+        "target_label": "Save Billing",
+        "timestamp_ms": "<normalized:timestamp_ms>",
+        "to_state": "<normalized:to_state>",
+        "url_changed": false,
+        "value": null,
+        "verb": "click"
+      }
+    ],
+    "ax_fingerprint": "<hash>",
+    "canonical_host": "127.0.0.1",
+    "displayed_values": [],
+    "first_seen_ms": "<normalized:first_seen_ms>",
+    "form_snapshot": {
+      "Beneficiary Name": "",
+      "Billing ZIP": "",
+      "I consent to the disclosure": "false",
+      "Name On Card": "",
+      "Order Reference": "",
+      "Referral Code": "",
+      "Term Length": ""
+    },
+    "form_snapshot_signals": {
+      "Beneficiary Name": {
+        "options": [],
+        "required": false,
+        "type": "text"
+      },
+      "Billing ZIP": {
+        "options": [],
+        "required": true,
+        "type": "text"
+      },
+      "I consent to the disclosure": {
+        "options": [],
+        "required": false,
+        "type": "checkbox"
+      },
+      "Name On Card": {
+        "options": [],
+        "required": false,
+        "type": "text"
+      },
+      "Order Reference": {
+        "options": [],
+        "required": false,
+        "type": "text"
+      },
+      "Referral Code": {
+        "options": [],
+        "required": false,
+        "type": "text"
+      },
+      "Term Length": {
+        "options": [
+          "Select term length",
+          "10 years",
+          "20 years"
+        ],
+        "required": false,
+        "type": "select"
+      }
+    },
+    "last_seen_ms": "<normalized:last_seen_ms>",
+    "location": "http://127.0.0.1:<port>/03-iframe-same-origin/index.html",
+    "network_calls": [],
+    "screenshots": [
+      {
+        "frame_index": 0,
+        "path": "<normalized:path>",
+        "timestamp_ms": "<normalized:timestamp_ms>"
+      }
+    ],
+    "sequence_index": 0,
+    "state_id": "<normalized:state_id>",
+    "title": "Fixture 03 — same-origin iframes",
+    "type": "page_state",
+    "url_host": "127.0.0.1",
+    "url_path": "/03-iframe-same-origin/index.html",
+    "url_query": ""
+  },
+  {
+    "attestation": null,
+    "budgets": {
+      "max_actions_per_state": 30,
+      "max_depth": 6,
+      "max_requests": 200,
+      "max_states": 1,
+      "max_wall_ms": 1800000,
+      "rate_per_s": 1.0
+    },
+    "config_fingerprint": "characterization-fixed",
+    "crawl_id": "<normalized:crawl_id>",
+    "explorer_version": "qe-explorer/1.0+inv-js-v10",
+    "frame_count": 1,
+    "guard_blocks": 0,
+    "guard_version": "qe-explorer/1.0+inv-js-v10",
+    "refuse_pack_version": "refuse-pack-v1",
+    "stats": {
+      "actions": 3,
+      "elapsed_ms": "<normalized:elapsed_ms>",
+      "requests": 3,
+      "states": 1
+    },
+    "stop_reason": "budget_max_states",
+    "target_url": "http://127.0.0.1:<port>/03-iframe-same-origin/index.html",
+    "type": "crawl_meta"
+  }
+]

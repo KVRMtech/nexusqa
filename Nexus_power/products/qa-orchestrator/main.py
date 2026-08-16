@@ -162,7 +162,6 @@ async def cancel_session(
     session.pipeline_stage = PipelineStage.FAILED
     session.error = "Cancelled by user"
     await store.save_session(session)
-    from app.pipeline import _log_timeline
     await _log_timeline(store, session_id, "pipeline_cancelled", "Pipeline cancelled by user")
     return {"session_id": session_id, "status": "cancelled"}
 
@@ -212,7 +211,6 @@ async def upload_audio(
     session.pipeline_stage = PipelineStage.TRANSCRIBING
     await store.save_session(session)
 
-    from app.pipeline import _log_timeline
     await _log_timeline(store, session_id, "audio_uploaded", f"Audio uploaded: {audio.filename}")
 
     return {"job_id": session.audio_job_id, "status": "transcribing"}
@@ -248,7 +246,6 @@ async def upload_video(
     session.pipeline_stage = PipelineStage.VISUAL_ANALYZING
     await store.save_session(session)
 
-    from app.pipeline import _log_timeline
     await _log_timeline(store, session_id, "video_uploaded", f"Screen recording uploaded: {video.filename}")
 
     return {"job_id": session.video_job_id, "status": "analyzing"}
@@ -288,7 +285,6 @@ async def upload_document(
     sdata.setdefault("documents", []).append(result)
     await store.save_data(session_id, sdata)
 
-    from app.pipeline import _log_timeline
     await _log_timeline(store, session_id, "document_uploaded", f"Document ingested: {document.filename}")
 
     return {"status": "ingested", "document": result}
@@ -336,7 +332,6 @@ async def generate_session_report(
     data.setdefault("reports", []).append(result)
     await store.save_data(session_id, data)
 
-    from app.pipeline import _log_timeline
     await _log_timeline(store, session_id, "report_generated", f"Report generated: {report_type}")
 
     return result

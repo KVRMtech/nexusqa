@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Fixture 03 — same-origin iframes</title>
+<style> iframe { display: block; width: 480px; height: 140px; border: 1px solid #ddd; } </style>
+</head>
+<body>
+  <main>
+    <h1>Checkout</h1>
+
+    <label for="order-ref">Order Reference</label>
+    <input id="order-ref" name="order_ref" type="text">
+
+    <!-- (a) THE CLEAN CASE. A plain id - `iframe#billing` is a valid selector
+         that page.frameLocator() resolves to exactly this frame. -->
+    <iframe id="billing" src="child-billing.html" title="Billing details"></iframe>
+
+    <!-- (b) AN ID CONTAINING A CSS METACHARACTER. `iframe#pay.frame` parses as
+         "an element with id=pay and class=frame" - a DIFFERENT selector that
+         matches nothing here. It must be escaped to `iframe#pay\.frame`. -->
+    <iframe id="pay.frame" src="child-payment.html" title="Payment details"></iframe>
+
+    <!-- (c) A NAME CONTAINING A DOUBLE QUOTE. Interpolated raw, this yields
+         `iframe[name="quote"frame"]`, which is not parseable CSS at all. -->
+    <iframe name='quote"frame' src="child-quote.html" title="Quote summary"></iframe>
+
+    <!-- (d) TITLE ONLY - the third rung of frameSelectorFor(). No id, no name,
+         so the recipe falls through to the title attribute. Also unescaped. -->
+    <iframe title="Beneficiary details" src="child-beneficiary.html"></iframe>
+
+    <!-- (e) SRC ONLY - the fourth rung. No id, no name, no title. -->
+    <iframe src="child-consent.html"></iframe>
+
+    <!-- (f) NOTHING TO GO ON - the positional `iframe >> nth=N` fallback, the
+         last rung and the only one that is inherently order-dependent.
+         No id, no name, no title, no src. Populated by script into its
+         about:blank document, which keeps it same-origin and behaves
+         identically in jsdom and Chromium (srcdoc does not - jsdom leaves a
+         srcdoc frame empty, which would have made this rung silently untested
+         in one lane). -->
+    <iframe></iframe>
+  </main>
+
+  <script>
+    // Fill the attribute-less frame. Runs at parse time on an about:blank
+    // document that is already available, so there is nothing to wait for.
+    (function () {
+      var frames = document.querySelectorAll("iframe");
+      var last = frames[frames.length - 1];
+      var d = last.contentDocument;
+      d.open();
+      d.write('<!doctype html><html><body>'
+            + '<label for="referral">Referral Code</label>'
+            + '<input id="referral" name="referral" type="text">'
+            + '</body></html>');
+      d.close();
+    })();
+  </script>
+</body>
+</html>

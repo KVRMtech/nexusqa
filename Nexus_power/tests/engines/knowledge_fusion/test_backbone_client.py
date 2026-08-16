@@ -6,6 +6,8 @@ No network IO; no real Backbone process required.
 
 from __future__ import annotations
 
+import json
+
 import httpx
 import jwt
 import pytest
@@ -34,8 +36,13 @@ async def test_store_transcript_segment_posts_and_returns_node_id() -> None:
         seen_requests.append(request)
         assert request.url.path == "/api/v1/backbone/nodes"
         _expect_token(request, "tenant-1")
-        body = request.read()
-        assert b"\"node_type\":\"TranscriptSegment\"" in body
+        # Assert on the PAYLOAD, not on its byte formatting. The previous
+        # `b'"node_type":"TranscriptSegment"' in body` also pinned json.dumps'
+        # separators, so it broke the moment the client stopped emitting compact
+        # JSON — a serialisation detail no caller depends on.
+        body = json.loads(request.read())
+        assert body["node_type"] == "TranscriptSegment"
+        assert body["tenant_id"] == "tenant-1"
         return httpx.Response(
             200,
             json={

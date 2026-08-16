@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Fixture 09 - 20 questions, identical control fingerprint</title></head>
+<body>
+  <main>
+    <h1>Health questionnaire</h1>
+
+    <!-- 20 questions. EVERY control on this page has the same accessible name
+         ("Yes" or "No"), the same role (radio), the same tag and the same input
+         type - 40 controls whose (role, name) fingerprint collapses to just two
+         values. The ONLY thing that tells them apart is group_key.
+
+         This is the adversarial case for any "dedupe by role+name" logic: get it
+         wrong and a 20-question questionnaire is catalogued as one Yes/No
+         question, and 19 of the application's questions vanish from the manifest
+         while the crawl reports the form fully covered. -->
+      <fieldset id="q01">
+        <legend>Have you used tobacco in the last 12 months?</legend>
+        <label><input type="radio" name="q01" value="yes"> Yes</label>
+        <label><input type="radio" name="q01" value="no"> No</label>
+      </fieldset>
+      <fieldset id="q02">
+        <legend>Have you been hospitalised in the last 5 years?</legend>
+        <label><input type="radio" name="q02" value="yes"> Yes</label>
+        <label><input type="radio" name="q02" value="no"> No</label>
+      </fieldset>
+      <fieldset id="q03">
+        <legend>Do you have a diagnosis of diabetes?</legend>
+        <label><input type="radio" name="q03" value="yes"> Yes</label>
+        <label><input type="radio" name="q03" value="no"> No</label>
+      </fieldset>
+      <fieldset id="q04">
+        <legend>Have you been prescribed medication for blood pressure?</legend>
+        <label><input type="radio" name="q04" value="yes"> Yes</label>
+        <label><input type="radio" name="q04" value="no"> No</label>
+      </fieldset>
+      <fieldset id="q05">
+        <legend>Have you ever been declined life insurance?</legend>
+        <label><input type="radio" name="q05" value="yes"> Yes</label>
+        <label><input type="radio" name="q05" value="no"> No</label>
+      </fieldset>
+      <fieldset id="q06">
+        <legend>Do you engage in scuba diving?</legend>
+        <label><input type="radio" name="q06" value="yes"> Yes</label>
+        <label><input type="radio" name="q06" value="no"> No</label>
+      </fieldset>
+      <fieldset id="q07">
+        <legend>Do you engage in private aviation?</legend>
+        <label><input type="radio" name="q07" value="yes"> Yes</label>
+        <label><input type="radio" name="q07" value="no"> No</label>
+      </fieldset>
+      <fieldset id="q08">
+        <legend>Have you travelled outside the country in the last 12 months?</legend>
+        <label><input type="radio" name="q08" value="yes"> Yes</label>
+        <label><input type="radio" name="q08" value="no"> No</label>
+      </fieldset>
+      <fieldset id="q09">
+        <legend>Do you have a family history of heart disease?</legend>
+        <label><input type="radio" name="q09" value="yes"> Yes</label>
+        <label><input type="radio" name="q09" value="no"> No</label>
+      </fieldset>
+      <fieldset id="q10">
+        <legend>Have you had a surgical procedure in the last 2 years?</legend>
+        <label><input type="radio" name="q10" value="yes"> Yes</label>
+        <label><input type="radio" name="q10" value="no"> No</label>
+      </fieldset>
+      <fieldset id="q11">
+        <legend>Do you currently use recreational drugs?</legend>
+        <label><input type="radio" name="q11" value="yes"> Yes</label>
+        <label><input type="radio" name="q11" value="no"> No</label>
+      </fieldset>
+      <fieldset id="q12">
+        <legend>Have you consumed more than 14 units of alcohol per week?</legend>
+        <label><input type="radio" name="q12" value="yes"> Yes</label>
+        <label><input type="radio" name="q12" value="no"> No</label>
+      </fieldset>
+      <fieldset id="q13">
+        <legend>Have you been treated for a mental health condition?</legend>
+        <label><input type="radio" name="q13" value="yes"> Yes</label>
+        <label><input type="radio" name="q13" value="no"> No</label>
+      </fieldset>
+      <fieldset id="q14">
+        <legend>Do you have a diagnosis of cancer?</legend>
+        <label><input type="radio" name="q14" value="yes"> Yes</label>
+        <label><input type="radio" name="q14" value="no"> No</label>
+      </fieldset>
+      <fieldset id="q15">
+        <legend>Have you had a stroke or heart attack?</legend>
+        <label><input type="radio" name="q15" value="yes"> Yes</label>
+        <label><input type="radio" name="q15" value="no"> No</label>
+      </fieldset>
+      <fieldset id="q16">
+        <legend>Are you currently pregnant?</legend>
+        <label><input type="radio" name="q16" value="yes"> Yes</label>
+        <label><input type="radio" name="q16" value="no"> No</label>
+      </fieldset>
+      <fieldset id="q17">
+        <legend>Do you hold a commercial driving licence?</legend>
+        <label><input type="radio" name="q17" value="yes"> Yes</label>
+        <label><input type="radio" name="q17" value="no"> No</label>
+      </fieldset>
+      <fieldset id="q18">
+        <legend>Have you had a moving violation in the last 3 years?</legend>
+        <label><input type="radio" name="q18" value="yes"> Yes</label>
+        <label><input type="radio" name="q18" value="no"> No</label>
+      </fieldset>
+      <fieldset id="q19">
+        <legend>Do you participate in motorsport?</legend>
+        <label><input type="radio" name="q19" value="yes"> Yes</label>
+        <label><input type="radio" name="q19" value="no"> No</label>
+      </fieldset>
+      <fieldset id="q20">
+        <legend>Have you been advised to have a medical test not yet completed?</legend>
+        <label><input type="radio" name="q20" value="yes"> Yes</label>
+        <label><input type="radio" name="q20" value="no"> No</label>
+      </fieldset>
+
+    <button type="submit">Continue</button>
+  </main>
+</body>
+</html>

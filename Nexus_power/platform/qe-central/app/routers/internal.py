@@ -3,9 +3,14 @@
 ``POST /internal/crawls/{crawl_id}/complete`` is the HMAC-authenticated seam the
 contained explorer calls when a crawl finishes.  It:
 
-  1. verifies the HMAC-SHA256 signature over the RAW body (``X-QEC-Signature``)
-     against the shared ``QEC_EXPLORER_TOKEN`` — fail-closed: an unsigned or
-     mis-provisioned callback is rejected (401), never trusted;
+  1. verifies the v2 signature envelope (``X-QEC-Signature``) over the RAW body:
+     a KNOWN key id, a timestamp inside the skew window, a SINGLE-USE nonce, and
+     a scope bound to THIS crawl — fail-closed, so an unsigned, stale, replayed,
+     re-pointed or wrong-key callback is rejected (401), never trusted
+     (M0.5 T-SEC-06/T-SEC-11; see ``app/security/hmac_auth.py``);
+  1b. resolves the crawl id to its OWNING tenant server-side, so the body's
+     ``tenant_id``/``exploration_id`` are claims to be checked, never authority
+     (M0.5 T-SEC-07);
   2. locates the pending ``qe_explorations`` row (tenant-scoped, RLS);
   3. reads the staged ``manifest.jsonl`` from the shared crawl volume (path
      DERIVED from the validated crawl_id — a client path is never trusted) and
@@ -21,8 +26,16 @@ contained explorer calls when a crawl finishes.  It:
      empty artifact.
 
 This router lives OUTSIDE the ``/api/*`` prefix so the JWT middleware does not
-apply (the explorer holds no JWT — only the HMAC token); authentication is the
-HMAC verification below.
+apply (the explorer holds no JWT — only the fleet token).  Authentication is in
+TWO layers, and both are required:
+
+  * ``app.auth.internal_auth_middleware`` gates the whole ``/internal`` PREFIX on
+    the per-fleet ``X-QEC-Token``, so an anonymous request never reaches a
+    handler — including a handler added later that forgets to check anything
+    (M0.5 T-SEC-02);
+  * each handler below then verifies the signed, fresh, single-use, crawl-scoped
+    body envelope.  The token proves WHO is calling; the signature proves WHAT
+    they are calling about.
 """
 from __future__ import annotations
 
@@ -87,6 +100,47 @@ class CompletionCallback(BaseModel):
     #: submit_candidates. Carried on the exploration ``stats`` so the app UI can
     #: turn "why so shallow?" into a NAMED, seed-this-field remediation list.
     coverage: dict | None = None
+
+
+class _UsageAccumulator:
+    """Sum provider-reported token usage across the calls one request makes.
+
+    The vision endpoints reach the model through a ``propose_fn`` closure that
+    returns text, so the usage on the client's result would otherwise be dropped
+    at the closure boundary — the same shape of leak T-OB-03 fixed one level up.
+    A vision_medic implementation may retry internally, so this ADDS rather than
+    overwrites, and it records on every attempt including the failing one.
+    """
+
+    def __init__(self) -> None:
+        self.calls = 0
+        self.prompt_tokens = 0
+        self.completion_tokens = 0
+        self.provider = ""
+        self.model = ""
+
+    def add(self, result) -> None:
+        usage = getattr(result, "usage", None)
+        if usage is None or not getattr(usage, "reported", False):
+            return
+        self.calls += 1
+        self.prompt_tokens += int(usage.prompt_tokens or 0)
+        self.completion_tokens += int(usage.completion_tokens or 0)
+        self.provider = self.provider or usage.provider
+        self.model = self.model or usage.model
+
+    def as_dict(self) -> dict:
+        """The relay shape, or ``{}`` when nothing was reported — never zeros
+        that would read as a free call."""
+        if not self.calls:
+            return {}
+        return {
+            "prompt_tokens": self.prompt_tokens,
+            "completion_tokens": self.completion_tokens,
+            "total_tokens": self.prompt_tokens + self.completion_tokens,
+            "provider": self.provider, "model": self.model,
+            "calls": self.calls,
+        }
 
 
 def _extractor_version(crawl_id: str) -> str:
@@ -329,6 +383,149 @@ async def _app_answer_key(tenant_id: str, app_id: str) -> dict:
         return {}
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# M0.5 T-SEC-07 — tenant + crawl binding for the internal seam
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# THE HOLE
+# ========
+# Every mid-crawl endpoint below read ``tenant_id`` straight out of the request
+# BODY and handed it to a service that then queried, spent LLM budget against,
+# and returned data for that tenant.  A correctly-signed caller could therefore
+# name ANY tenant it liked: the signature proved membership of the fleet, never
+# whose crawl this was.  ``/complete`` had the same shape — it located the
+# exploration by (exploration_id, body.tenant_id).
+#
+# THE FIX
+# =======
+# The crawl id is the identity.  ``_bind_crawl`` resolves it SERVER-SIDE, under
+# the claimed tenant's RLS scope, and returns the row's OWN tenant/exploration/
+# app.  Because the lookup runs inside the tenant GUC, a row that comes back is
+# PROOF that this crawl belongs to that tenant — a mismatched claim finds
+# nothing and is refused.  Everything downstream then uses the values off the
+# ROW, never the ones off the body.
+#
+# The signature is scope-bound to the same crawl id, so a captured envelope for
+# crawl A cannot be replayed against crawl B either.
+
+
+class CrawlBinding:
+    """The server's own answer to "whose crawl is this?"."""
+
+    __slots__ = ("tenant_id", "exploration_id", "app_id", "status")
+
+    def __init__(self, tenant_id: str, exploration_id: str, app_id: str,
+                 status: str) -> None:
+        self.tenant_id = tenant_id
+        self.exploration_id = exploration_id
+        self.app_id = app_id
+        self.status = status
+
+
+async def _bind_crawl(crawl_id: str, claimed_tenant: str) -> CrawlBinding | None:
+    """Resolve ``crawl_id`` to its OWNING tenant, or ``None``.
+
+    The lookup runs in ``claimed_tenant``'s RLS scope on purpose: a row that is
+    returned is proof the claim is true, and a false claim simply finds nothing.
+    That makes the check a real server-side binding rather than a comparison
+    against another attacker-supplied value.
+    """
+    crawl_id = str(crawl_id or "").strip()
+    claimed = str(claimed_tenant or "").strip()
+    if not crawl_id or not claimed or not CRAWL_ID_PATTERN.match(crawl_id):
+        return None
+    try:
+        async with tenant_scoped_qec_session(claimed) as session:
+            row = (await session.execute(
+                select(QEExplorationRow).where(
+                    QEExplorationRow.tenant_id == claimed,
+                    QEExplorationRow.extractor_version
+                    == f"{EXTRACTOR_VERSION_PREFIX}{crawl_id}",
+                ).limit(1)
+            )).scalar_one_or_none()
+    except Exception as exc:  # a lookup failure must never fail OPEN
+        logger.error("qec.internal.crawl_binding_error crawl_id=%s error=%s",
+                     crawl_id, str(exc)[:200])
+        return None
+    if row is None:
+        return None
+    return CrawlBinding(
+        tenant_id=row.tenant_id, exploration_id=row.exploration_id,
+        app_id=row.app_id or "", status=row.status or "",
+    )
+
+
+def _audit_refusal(endpoint: str, *, reason: str, **fields) -> None:
+    """Structured audit for an internal-seam refusal (M0.5 §19).
+
+    Records WHAT was refused and WHY, with the ids needed to correlate.  Never
+    a token, a signature, a nonce or a body.
+    """
+    logger.warning(
+        "qec.security.internal_refused endpoint=%s reason=%s %s",
+        endpoint, reason,
+        " ".join(f"{k}={v}" for k, v in sorted(fields.items())),
+    )
+
+
+async def _authenticate_internal(
+    request: Request, endpoint: str,
+) -> tuple[dict, CrawlBinding]:
+    """Verify signature + resolve the crawl binding, or RAISE.
+
+    ONE function for every mid-crawl endpoint, so a new endpoint cannot be added
+    with a weaker check by accident:
+
+      1. the v2 signature verifies over THIS body, under a live key, within the
+         clock-skew window, with a nonce that has not been used, and scoped to
+         ``{endpoint}:{crawl_id}``;
+      2. ``crawl_id`` resolves — server-side, under the claimed tenant's RLS
+         scope — to a real exploration owned by that tenant;
+      3. the body's ``tenant_id`` matches the ROW's tenant.
+
+    Returns ``(body, binding)``.  Callers use ``binding.tenant_id`` — the body's
+    value is never authoritative again.
+    """
+    raw = await request.body()
+    signature = request.headers.get(SIGNATURE_HEADER, "")
+
+    try:
+        body = json.loads(raw or b"{}")
+    except json.JSONDecodeError:
+        body = {}
+    if not isinstance(body, dict):
+        body = {}
+    crawl_id = str(body.get("crawl_id") or "").strip()
+
+    # The scope is derived from the BODY's crawl id, and the signature covers
+    # the body — so a caller cannot rewrite the crawl id without invalidating
+    # its own signature, and cannot reuse a signature made for another crawl.
+    if not phase1_settings.verify_signature(
+        raw, signature, scope=f"{endpoint}:{crawl_id}",
+    ):
+        _audit_refusal(endpoint, reason="bad_or_replayed_signature",
+                       crawl_id=crawl_id or "(absent)",
+                       has_signature=bool(signature))
+        raise HTTPException(status_code=401, detail="invalid or missing signature")
+
+    if not crawl_id:
+        _audit_refusal(endpoint, reason="missing_crawl_id")
+        raise HTTPException(status_code=400, detail="crawl_id is required")
+
+    claimed_tenant = str(body.get("tenant_id") or "").strip()
+    binding = await _bind_crawl(crawl_id, claimed_tenant)
+    if binding is None:
+        _audit_refusal(endpoint, reason="crawl_not_owned_by_claimed_tenant",
+                       crawl_id=crawl_id, claimed_tenant=claimed_tenant or "(absent)")
+        # Deliberately indistinguishable from "no such crawl": this must not
+        # become an oracle for which crawl ids exist in other tenants.
+        raise HTTPException(status_code=404, detail="unknown crawl")
+    if binding.tenant_id != claimed_tenant:  # pragma: no cover — RLS guarantees it
+        _audit_refusal(endpoint, reason="tenant_mismatch", crawl_id=crawl_id)
+        raise HTTPException(status_code=403, detail="crawl belongs to another tenant")
+    return body, binding
+
+
 @router.post("/pick-advance")
 async def pick_advance(request: Request) -> dict:
     """Agent-assisted wizard advance: which control moves the flow forward?
@@ -351,32 +548,30 @@ async def pick_advance(request: Request) -> dict:
     returned to any caller.  ``unavailable`` is still HTTP 200 (best-effort
     contract): only a bad signature is an error status.
     """
-    raw = await request.body()
-    signature = request.headers.get(SIGNATURE_HEADER, "")
-    if not phase1_settings.verify_signature(raw, signature):
-        raise HTTPException(status_code=401, detail="invalid or missing signature")
+    body, binding = await _authenticate_internal(request, "pick-advance")
 
     from ..services import advance_agent
 
     unavailable = {"control_index": None,
                    "status": advance_agent.STATUS_UNAVAILABLE, "signature": ""}
-    try:
-        body = json.loads(raw or b"{}")
-    except json.JSONDecodeError:
-        return unavailable
 
     controls = body.get("controls") or []
     if not controls:
         return unavailable
 
     decision = await advance_agent.pick_advance(
-        tenant_id=body.get("tenant_id", ""),
+        # binding.tenant_id — the SERVER's answer, not the body's claim.
+        tenant_id=binding.tenant_id,
         controls=controls,
         page_title=body.get("page_title", ""),
         page_url=body.get("page_url", ""),
     )
+    # ``usage`` relays the provider-REPORTED token cost of this consultation back
+    # to the explorer, which folds it into the crawl's spend record (M0.6 /
+    # T-OB-03). Empty when the decision cost no LLM call (a recall hit) or the
+    # provider reported nothing — never an estimate.
     return {"control_index": decision.index, "status": decision.status,
-            "signature": decision.signature}
+            "signature": decision.signature, "usage": decision.usage}
 
 
 @router.post("/operate-control")
@@ -396,31 +591,27 @@ async def operate_control(request: Request) -> dict:
 
     Every outcome is HTTP 200 (best-effort); only a bad signature is 401.
     """
-    raw = await request.body()
-    signature = request.headers.get(SIGNATURE_HEADER, "")
-    if not phase1_settings.verify_signature(raw, signature):
-        raise HTTPException(status_code=401, detail="invalid or missing signature")
+    body, binding = await _authenticate_internal(request, "operate-control")
 
     from ..services import crawl_medic
 
     unavailable = {"action": "", "status": crawl_medic.STATUS_UNAVAILABLE}
-    try:
-        body = json.loads(raw or b"{}")
-    except json.JSONDecodeError:
-        return unavailable
 
     control = body.get("control") or {}
     if not control:
         return unavailable
 
     decision = await crawl_medic.consult_medic(
-        tenant_id=body.get("tenant_id", ""),
+        tenant_id=binding.tenant_id,
         control=control,
         intent=body.get("intent", ""),
         ladder_results=body.get("ladder_results", []),
         page_context=body.get("page_context", {}),
     )
-    return {"action": decision.action, "status": decision.status}
+    # ``usage`` relays this consultation's provider-reported token cost so the
+    # explorer attributes it to the crawl that spent it (M0.6 / T-OB-03).
+    return {"action": decision.action, "status": decision.status,
+            "usage": decision.usage}
 
 
 @router.post("/vision-operate")
@@ -451,10 +642,7 @@ async def vision_operate(request: Request) -> dict:
 
     Every outcome is HTTP 200 (best-effort); only a bad signature is 401.
     """
-    raw = await request.body()
-    signature = request.headers.get(SIGNATURE_HEADER, "")
-    if not phase1_settings.verify_signature(raw, signature):
-        raise HTTPException(status_code=401, detail="invalid or missing signature")
+    body, binding = await _authenticate_internal(request, "vision-operate")
 
     from ..clients import platform_api
     from ..services import vision_medic
@@ -466,17 +654,19 @@ async def vision_operate(request: Request) -> dict:
         # the crawler already handles (it falls back to the deterministic
         # ladder), never an error and never a silent empty.
         return {**unavailable, "reason": "vision disabled"}
-    try:
-        body = json.loads(raw or b"{}")
-    except json.JSONDecodeError:
-        return unavailable
 
     control = body.get("control") or {}
     if not control:
         return unavailable
 
-    tenant_id = body.get("tenant_id", "")
+    tenant_id = binding.tenant_id
     screenshot_b64 = body.get("screenshot_b64", "")
+
+    # The propose closure returns only text, so the call's token cost is
+    # captured HERE, in a holder the closure writes on EVERY attempt — including
+    # the one that then raises, because a vision call the provider billed for is
+    # spend whether or not it produced a usable answer (M0.6 / T-OB-03).
+    spend = _UsageAccumulator()
 
     async def _propose(prompt: str, image_b64: str) -> str:
         res = await platform_api.complete_vision(
@@ -484,6 +674,7 @@ async def vision_operate(request: Request) -> dict:
             screenshot_b64=image_b64, system=vision_medic.SYSTEM,
             task="vision_medic",
         )
+        spend.add(res)
         if not res.ok:
             raise RuntimeError(res.detail or "vision LLM unavailable")
         return res.text
@@ -502,6 +693,7 @@ async def vision_operate(request: Request) -> dict:
         "click_x": decision.click_x,
         "click_y": decision.click_y,
         "reason": decision.reason,
+        "usage": spend.as_dict(),
     }
 
 
@@ -518,10 +710,7 @@ async def perceive_controls_endpoint(request: Request) -> dict:
 
     Contract — ``{"controls": [...], "displayed_values": [...]}``.
     """
-    raw = await request.body()
-    signature = request.headers.get(SIGNATURE_HEADER, "")
-    if not phase1_settings.verify_signature(raw, signature):
-        raise HTTPException(status_code=401, detail="invalid or missing signature")
+    body, binding = await _authenticate_internal(request, "perceive-controls")
 
     empty = {"controls": [], "displayed_values": []}
     if not getattr(settings, "crawl_vision_enabled", False):
@@ -530,13 +719,10 @@ async def perceive_controls_endpoint(request: Request) -> dict:
     from ..clients import platform_api
     from ..services import vision_medic
 
-    try:
-        body = json.loads(raw or b"{}")
-    except json.JSONDecodeError:
-        return empty
-
-    tenant_id = body.get("tenant_id", "")
+    tenant_id = binding.tenant_id
     screenshot_b64 = body.get("screenshot_b64", "")
+
+    spend = _UsageAccumulator()
 
     async def _propose(prompt: str, image_b64: str) -> str:
         res = await platform_api.complete_vision(
@@ -544,13 +730,15 @@ async def perceive_controls_endpoint(request: Request) -> dict:
             screenshot_b64=image_b64, system=vision_medic.SYSTEM,
             task="vision_perceive",
         )
+        spend.add(res)
         if not res.ok:
             raise RuntimeError(res.detail or "vision LLM unavailable")
         return res.text
 
-    return await vision_medic.perceive_controls(
+    perceived = await vision_medic.perceive_controls(
         tenant_id=tenant_id, screenshot_b64=screenshot_b64,
         page_context=body.get("page_context", {}), propose_fn=_propose)
+    return {**(perceived or {}), "usage": spend.as_dict()}
 
 
 async def _autowalk_convergence(tenant_id: str, app_id: str) -> dict:
@@ -591,14 +779,21 @@ async def complete_crawl(crawl_id: str, request: Request) -> dict:
     exploration; 422 on a refused (dishonest) manifest; 500 on infrastructure
     failure.  Every outcome is persisted on the ``qe_explorations`` row.
     """
-    # ── 1) HMAC over the RAW body (fail-closed) ───────────────────────────
+    # ── 1) SIGNATURE: authentic, fresh, un-replayed, and bound to THIS crawl ─
+    # M0.5 T-SEC-06.  The old check was HMAC(body) alone: it proved the sender
+    # held the fleet secret and nothing else, so a captured ``/complete`` body +
+    # signature could be POSTed again indefinitely (re-running the substrate
+    # write, the auto-generate and the autowalk cascade), and a signature made
+    # for one crawl authenticated a call about any other. The v2 envelope adds a
+    # key id, a timestamp inside a skew window, a single-use nonce, and a scope
+    # bound to this crawl id.
     raw = await request.body()
     signature = request.headers.get(SIGNATURE_HEADER, "")
-    if not phase1_settings.verify_signature(raw, signature):
-        logger.warning(
-            "qec.internal.bad_signature",
-            extra={"crawl_id": crawl_id, "has_sig": bool(signature)},
-        )
+    if not phase1_settings.verify_signature(
+        raw, signature, scope=f"complete:{crawl_id}",
+    ):
+        _audit_refusal("complete", reason="bad_stale_or_replayed_signature",
+                       crawl_id=crawl_id, has_signature=bool(signature))
         raise HTTPException(status_code=401, detail="invalid or missing callback signature")
 
     # ── 2) Parse + cross-check the identifiers ────────────────────────────
@@ -611,8 +806,25 @@ async def complete_crawl(crawl_id: str, request: Request) -> dict:
     if not CRAWL_ID_PATTERN.match(crawl_id):
         raise HTTPException(status_code=400, detail="invalid crawl_id")
 
-    tenant_id = body.tenant_id
-    exploration_id = body.exploration_id
+    # ── 2b) SERVER-SIDE CRAWL BINDING (T-SEC-07) ──────────────────────────
+    # The body's tenant_id and exploration_id are CLAIMS. Resolve the crawl id
+    # to its owning row first; every value used from here on comes off that row.
+    binding = await _bind_crawl(crawl_id, body.tenant_id)
+    if binding is None:
+        _audit_refusal("complete", reason="crawl_not_owned_by_claimed_tenant",
+                       crawl_id=crawl_id,
+                       claimed_tenant=body.tenant_id or "(absent)")
+        raise HTTPException(status_code=404, detail="exploration not found")
+    if binding.exploration_id != body.exploration_id:
+        _audit_refusal("complete", reason="exploration_crawl_mismatch",
+                       crawl_id=crawl_id, tenant=binding.tenant_id)
+        raise HTTPException(
+            status_code=409,
+            detail="exploration_id does not belong to this crawl",
+        )
+
+    tenant_id = binding.tenant_id          # server-derived, never the body's
+    exploration_id = binding.exploration_id
 
     # ── 3) Locate the pending exploration (tenant-scoped, RLS) ────────────
     async with tenant_scoped_qec_session(tenant_id) as session:

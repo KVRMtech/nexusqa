@@ -1,0 +1,195 @@
+[
+  {
+    "attestation": null,
+    "budgets": {
+      "max_actions_per_state": 30,
+      "max_depth": 6,
+      "max_requests": 200,
+      "max_states": 1,
+      "max_wall_ms": 1800000,
+      "rate_per_s": 1.0
+    },
+    "config_fingerprint": "characterization-fixed",
+    "crawl_id": "<normalized:crawl_id>",
+    "explorer_version": "qe-explorer/1.0+inv-js-v10",
+    "frame_count": 0,
+    "guard_version": "qe-explorer/1.0+inv-js-v10",
+    "refuse_pack_version": "refuse-pack-v1",
+    "stop_reason": "",
+    "target_url": "http://127.0.0.1:<port>/14-capture-attributes/index.html",
+    "type": "crawl_meta"
+  },
+  {
+    "actions": [
+      {
+        "after": {
+          "detail": "",
+          "navigated": false,
+          "outcome": "none"
+        },
+        "anchor": null,
+        "phase": "explore",
+        "qec": {
+          "css_hint": "button#go",
+          "expanded": "",
+          "frame_selector": "",
+          "haspopup": "",
+          "href": "",
+          "input_type": "submit",
+          "name_confidence": "medium",
+          "options": [],
+          "role": "button",
+          "testid": ""
+        },
+        "screenshot_after": "<normalized:screenshot_after>",
+        "state_id": "<normalized:state_id>",
+        "subaction_index": 0,
+        "target_kind": "button",
+        "target_label": "Continue",
+        "timestamp_ms": "<normalized:timestamp_ms>",
+        "to_state": "<normalized:to_state>",
+        "url_changed": false,
+        "value": null,
+        "verb": "click"
+      }
+    ],
+    "ax_fingerprint": "<hash>",
+    "canonical_host": "127.0.0.1",
+    "displayed_values": [],
+    "first_seen_ms": "<normalized:first_seen_ms>",
+    "form_snapshot": {
+      "Address": "",
+      "Amount": "",
+      "Card": "",
+      "Contact": "",
+      "Country": "",
+      "Email address": "",
+      "Field A7": "",
+      "Nickname": "",
+      "Password": "",
+      "Postcode": "",
+      "Reference": "",
+      "Search term": "",
+      "Social Security Number": ""
+    },
+    "form_snapshot_signals": {
+      "Address": {
+        "options": [],
+        "required": false,
+        "type": "text"
+      },
+      "Amount": {
+        "max": "1000000",
+        "min": "0",
+        "options": [],
+        "required": false,
+        "step": "0.01",
+        "type": "text"
+      },
+      "Card": {
+        "maxlength": "19",
+        "options": [],
+        "required": false,
+        "type": "text"
+      },
+      "Contact": {
+        "options": [],
+        "required": false,
+        "type": "text"
+      },
+      "Country": {
+        "options": [
+          "Select",
+          "United States",
+          "Canada"
+        ],
+        "required": false,
+        "type": "select"
+      },
+      "Email address": {
+        "options": [],
+        "required": false,
+        "type": "text"
+      },
+      "Field A7": {
+        "options": [],
+        "required": false,
+        "type": "text"
+      },
+      "Nickname": {
+        "options": [],
+        "required": false,
+        "type": "text"
+      },
+      "Password": {
+        "options": [],
+        "required": false,
+        "type": "password"
+      },
+      "Postcode": {
+        "options": [],
+        "required": false,
+        "type": "text"
+      },
+      "Reference": {
+        "options": [],
+        "required": false,
+        "type": "text"
+      },
+      "Search term": {
+        "options": [],
+        "required": false,
+        "type": "text"
+      },
+      "Social Security Number": {
+        "options": [],
+        "required": false,
+        "type": "text"
+      }
+    },
+    "last_seen_ms": "<normalized:last_seen_ms>",
+    "location": "http://127.0.0.1:<port>/14-capture-attributes/index.html",
+    "network_calls": [],
+    "screenshots": [
+      {
+        "frame_index": 0,
+        "path": "<normalized:path>",
+        "timestamp_ms": "<normalized:timestamp_ms>"
+      }
+    ],
+    "sequence_index": 0,
+    "state_id": "<normalized:state_id>",
+    "title": "Fixture 14 — classifier attributes",
+    "type": "page_state",
+    "url_host": "127.0.0.1",
+    "url_path": "/14-capture-attributes/index.html",
+    "url_query": ""
+  },
+  {
+    "attestation": null,
+    "budgets": {
+      "max_actions_per_state": 30,
+      "max_depth": 6,
+      "max_requests": 200,
+      "max_states": 1,
+      "max_wall_ms": 1800000,
+      "rate_per_s": 1.0
+    },
+    "config_fingerprint": "characterization-fixed",
+    "crawl_id": "<normalized:crawl_id>",
+    "explorer_version": "qe-explorer/1.0+inv-js-v10",
+    "frame_count": 1,
+    "guard_blocks": 0,
+    "guard_version": "qe-explorer/1.0+inv-js-v10",
+    "refuse_pack_version": "refuse-pack-v1",
+    "stats": {
+      "actions": 2,
+      "elapsed_ms": "<normalized:elapsed_ms>",
+      "requests": 3,
+      "states": 1
+    },
+    "stop_reason": "budget_max_states",
+    "target_url": "http://127.0.0.1:<port>/14-capture-attributes/index.html",
+    "type": "crawl_meta"
+  }
+]

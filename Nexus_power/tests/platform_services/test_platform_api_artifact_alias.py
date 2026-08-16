@@ -59,8 +59,11 @@ async def test_list_session_artifacts_resolves_spine_alias_when_db_empty():
         with patch("httpx.AsyncClient", return_value=_FakeClient(response)):
             result = await artifacts_router.list_session_artifacts(
                 session_id="new-session",
-                tenant_id="tenant-1",
                 request=request,
+                # tenant_id is no longer a caller-supplied parameter: the route
+                # derives it from the authenticated user, so a caller can no
+                # longer name the tenant it wants to read.
+                user={"tenant_id": "tenant-1"},
             )
 
     assert result == [{
@@ -93,8 +96,11 @@ async def test_list_session_artifacts_ignores_spine_alias_for_other_tenant():
         with patch("httpx.AsyncClient", return_value=_FakeClient(response)):
             result = await artifacts_router.list_session_artifacts(
                 session_id="new-session",
-                tenant_id="tenant-1",
                 request=request,
+                # tenant_id is no longer a caller-supplied parameter: the route
+                # derives it from the authenticated user, so a caller can no
+                # longer name the tenant it wants to read.
+                user={"tenant_id": "tenant-1"},
             )
 
     assert result == []

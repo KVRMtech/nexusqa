@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Fixture 01 — open shadow root</title></head>
+<body>
+  <main>
+    <h1>Policy verification</h1>
+
+    <!-- Light-DOM control: the CONTROL GROUP. Its name resolves through the
+         ordinary label[for] rung and MUST keep working — it is what proves the
+         shadow assertions below are about the shadow boundary and not about a
+         generally broken walker. -->
+    <label for="policy-number">Policy Number</label>
+    <input id="policy-number" name="policy_number" type="text">
+
+    <!-- The subject: an open shadow root holding a labelled input, an
+         aria-labelledby input, and a button named from content. -->
+    <verify-panel id="panel"></verify-panel>
+  </main>
+
+  <script>
+    class VerifyPanel extends HTMLElement {
+      connectedCallback() {
+        const root = this.attachShadow({ mode: "open" });
+        root.innerHTML = [
+          // (a) label[for] INSIDE the shadow root — resolvable only against the
+          //     shadow root, never against the outer document.
+          '<label for="pin">Security PIN</label>',
+          '<input id="pin" name="pin" type="text" required>',
+          // (b) aria-labelledby INSIDE the shadow root — same scoping rule.
+          '<span id="dob-label">Date of Birth</span>',
+          '<input id="dob" name="dob" type="date" aria-labelledby="dob-label">',
+          // (c) name-from-content — needs no document lookup, so it is the
+          //     control that proves the walker DOES descend into the shadow root.
+          '<button type="button" id="verify-btn">Verify Identity</button>'
+        ].join("");
+      }
+    }
+    customElements.define("verify-panel", VerifyPanel);
+  </script>
+</body>
+</html>

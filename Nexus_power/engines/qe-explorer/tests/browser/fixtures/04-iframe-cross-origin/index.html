@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Fixture 04 — cross-origin iframe</title>
+<style> iframe { display: block; width: 420px; height: 180px; border: 1px solid #ddd; } </style>
+</head>
+<body>
+  <main>
+    <h1>Payment</h1>
+
+    <!-- Readable, same-origin control group. -->
+    <label for="amount-due">Amount Due</label>
+    <input id="amount-due" name="amount_due" type="text" value="129.00" readonly>
+
+    <!-- The subject. __ALT_ORIGIN__ is substituted by the fixture server with a
+         SECOND http origin (a different port on 127.0.0.1), which makes this a
+         genuine cross-origin embed: contentDocument access throws a SecurityError,
+         exactly as a Stripe Elements / reCAPTCHA / Plaid Link frame does.
+
+         The correct behaviour is to capture NOTHING from it (no fabricated
+         controls) and to NAME it in the opaque ledger so the blind spot is
+         visible to an operator instead of reading as clean coverage. -->
+    <iframe id="card-entry" title="Card entry"
+            src="__ALT_ORIGIN__/04-iframe-cross-origin/child-card.html"></iframe>
+  </main>
+</body>
+</html>

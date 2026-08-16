@@ -100,6 +100,8 @@ METRIC_SUBSTRATE_ROWS = "qec_substrate_rows_written"
 METRIC_HARNESS_OUTCOMES = "qec_harness_outcomes"
 METRIC_COST_UNITS = "qec_cost_units"
 METRIC_QUOTA_DECISIONS = "qec_quota_decisions"
+METRIC_LLM_CALLS = "qec_llm_calls"
+METRIC_LLM_TOKENS = "qec_llm_tokens"
 
 #: The metric families a healthy ``/metrics`` scrape MUST expose (test contract).
 EXPECTED_METRIC_NAMES = frozenset({
@@ -114,7 +116,23 @@ EXPECTED_METRIC_NAMES = frozenset({
     METRIC_HARNESS_OUTCOMES,
     METRIC_COST_UNITS,
     METRIC_QUOTA_DECISIONS,
+    METRIC_LLM_CALLS,
+    METRIC_LLM_TOKENS,
 })
+
+#: Bounded LLM-call outcomes.  ``error_with_usage`` is deliberate: a provider
+#: that billed a request it then failed must stay in the spend account.
+LLM_OUTCOMES = frozenset({"success", "error", "error_with_usage", "timeout", "other"})
+#: Logical LLM endpoints this service calls (never a URL).
+LLM_ENDPOINTS = frozenset({"complete", "vision", "other"})
+#: Token kinds. ``prompt``+``completion`` are the total; ``cache_*`` are a
+#: separate provider accounting dimension and are never folded into it.
+LLM_TOKEN_KINDS = ("prompt", "completion", "cache_read", "cache_creation")
+#: Hard ceiling on distinct values admitted for provider/model before every
+#: further value folds to ``other`` — the cardinality backstop for the two
+#: labels whose value space is bounded by config rather than by an allowlist.
+MAX_LLM_LABEL_VALUES = 50
+_SEEN_LLM_LABELS: dict = {}
 
 
 # ── Histogram buckets (code-level constants; seconds) ───────────────────────
@@ -208,6 +226,21 @@ def _build_metrics() -> None:
         METRIC_QUOTA_DECISIONS,
         "Per-tenant quota decisions, by resource and outcome (allowed|denied).",
         ["resource", "decision"],
+        registry=reg,
+    )
+
+    m[METRIC_LLM_CALLS] = Counter(
+        METRIC_LLM_CALLS,
+        "LLM calls relayed through platform-api, by logical endpoint, provider, "
+        "model and bounded outcome.",
+        ["endpoint", "provider", "model", "outcome"],
+        registry=reg,
+    )
+    m[METRIC_LLM_TOKENS] = Counter(
+        METRIC_LLM_TOKENS,
+        "Provider-REPORTED tokens consumed. kind=prompt|completion sum to the "
+        "total; cache_* are reported separately and are NOT part of that sum.",
+        ["provider", "model", "kind"],
         registry=reg,
     )
 
@@ -383,6 +416,58 @@ def record_quota_decision(*, resource: str, allowed: bool) -> None:
     _M[METRIC_QUOTA_DECISIONS].labels(resource=_lbl(resource), decision=decision).inc()
 
 
+def _bounded_llm_label(key: str, value) -> str:
+    """Admit ``value`` as a provider/model label while ``key`` stays bounded.
+
+    ``provider`` and ``model`` come from deployment config, so their real value
+    space is a handful of strings — but a provider that started reporting a
+    per-request model id would otherwise mint one series per request.  The first
+    :data:`MAX_LLM_LABEL_VALUES` distinct values are admitted; every later
+    arrival folds into ``other``.
+    """
+    raw = str(value).strip().lower() if value is not None else ""
+    if not raw:
+        return "unknown"
+    cleaned = "".join(c if (c.isalnum() or c in "._:-") else "_" for c in raw)[:64]
+    if not cleaned:
+        return "unknown"
+    seen = _SEEN_LLM_LABELS.setdefault(key, set())
+    if cleaned in seen:
+        return cleaned
+    if len(seen) >= MAX_LLM_LABEL_VALUES:
+        return "other"
+    seen.add(cleaned)
+    return cleaned
+
+
+@_never_raises
+def record_llm_call(
+    *, endpoint: str, provider: str = "", model: str = "",
+    outcome: str = "success", prompt_tokens: int = 0, completion_tokens: int = 0,
+    cache_read_tokens: int = 0, cache_creation_tokens: int = 0,
+) -> None:
+    """Count one LLM call and its provider-REPORTED token usage.
+
+    Aggregate only — no ``tenant_id``, no ``crawl_id``, no prompt.  Per-call
+    attribution lives in the structured log (correlated by request id), which is
+    where an unbounded key belongs.
+    """
+    ep = endpoint if endpoint in LLM_ENDPOINTS else "other"
+    out = outcome if outcome in LLM_OUTCOMES else "other"
+    prov = _bounded_llm_label("provider", provider)
+    mdl = _bounded_llm_label("model", model)
+    _M[METRIC_LLM_CALLS].labels(
+        endpoint=ep, provider=prov, model=mdl, outcome=out).inc()
+    for kind, amount in zip(
+        LLM_TOKEN_KINDS,
+        (prompt_tokens, completion_tokens, cache_read_tokens, cache_creation_tokens),
+    ):
+        n = int(amount or 0)
+        if n > 0:
+            _M[METRIC_LLM_TOKENS].labels(
+                provider=prov, model=mdl, kind=kind).inc(n)
+
+
 # ── The /metrics exposition route (provider — main.py is NOT edited here) ────
 
 def build_metrics_router():
@@ -432,6 +517,8 @@ __all__ = [
     "METRIC_HARNESS_OUTCOMES",
     "METRIC_COST_UNITS",
     "METRIC_QUOTA_DECISIONS",
+    "METRIC_LLM_CALLS",
+    "METRIC_LLM_TOKENS",
     "EXPECTED_METRIC_NAMES",
     # recording helpers
     "record_cycle_started",

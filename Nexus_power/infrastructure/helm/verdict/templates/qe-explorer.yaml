@@ -74,6 +74,13 @@ spec:
               value: {{ $egress | quote }}
             - name: WORK_DIR
               value: "/work"
+            # M0.6 observability — the crawl-lifecycle exposition (app/metrics.py).
+            # Both knobs are honoured at import time; metrics ON by default, and
+            # setting metricsEnabled=false makes every record_* a hard no-op.
+            - name: QEC_EXPLORER_METRICS_ENABLED
+              value: {{ ternary "1" "0" .Values.env.metricsEnabled | quote }}
+            - name: QEC_EXPLORER_METRICS_PATH
+              value: {{ .Values.env.explorerMetricsPath | default .Values.env.metricsPath | quote }}
             # Per-fleet HMAC token — the ONLY authority the explorer carries.
             - name: QEC_EXPLORER_TOKEN
               valueFrom:

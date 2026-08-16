@@ -172,7 +172,8 @@ async def _worker_says_dead(row: Mapping, *, now: datetime, grace_s: float) -> b
         if not crawl_id:
             return False                      # pre-liveness row: timeout only
         from ..clients import explorer_client
-        verdict = await explorer_client.crawl_liveness(crawl_id)
+        verdict = await explorer_client.crawl_liveness(
+            crawl_id, str(row.get("tenant_id") or ""))
         if verdict != "dead":
             return False
         logger.warning(

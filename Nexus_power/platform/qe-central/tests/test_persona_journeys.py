@@ -16,10 +16,18 @@ from app.services.catalog import question_id_for
 from app.services.journey_projector import rules_from_branches
 from app.services.persona_journeys import project_from_catalog
 
-DB_URL = os.environ.get("QEC_TEST_DATABASE_URL", "")
+# The QECENTRAL DSN, not the substrate one. Both databases contain a table
+# called `personas` and they are UNRELATED: qecentral's is the QE-Central
+# persona (tenant_id, app_id, answers), while nexus's is VKPower's AI persona
+# (slug, system_prompt, capabilities). Pointed at nexus, this test's
+# `create_all` found a `personas` already present, skipped it (checkfirst), and
+# every query then failed with `column personas.app_id does not exist` — the
+# test was asserting against another product's table. It only ever surfaced
+# once CI grew a real Postgres, because without a DSN the whole module skipped.
+DB_URL = os.environ.get("QEC_TEST_QEC_DATABASE_URL", "")
 needs_db = pytest.mark.skipif(
     not DB_URL,
-    reason="QEC_TEST_DATABASE_URL not set — the persona generation round-trip needs "
+    reason="QEC_TEST_QEC_DATABASE_URL not set — the persona generation round-trip needs "
            "a disposable Postgres (QecBase tables are created in-test)")
 
 

@@ -172,7 +172,12 @@ async def persist_catalog_version(
                 # Keep the richest: required sticky, fill options/validation, merge pages.
                 row.required = bool(row.required) or bool(q.get("required"))
                 if not row.options and q.get("options"):
-                    row.options = [str(o) for o in q["options"]][:48]
+                    # The SAME ceiling the insert path uses. This was a bare 48,
+                    # so a question first seen without options and filled in on a
+                    # later crawl kept 48 answers while the identical question
+                    # inserted with options kept 300 — the same question, two
+                    # different answer sets, decided by which crawl saw it first.
+                    row.options = [str(o) for o in q["options"]][:MAX_CATALOG_OPTIONS]
                 if row.validation is None and validation:
                     row.validation = validation
                 if q.get("expected_next_page"):

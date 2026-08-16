@@ -1,0 +1,25 @@
+{
+  "purpose": "Prove a CROSS-ORIGIN iframe is skipped honestly - contentDocument throws, the walker catches, captures nothing, and does not crash the rest of the page's capture - while OPAQUE_JS names the embed so the blind spot is a ledger row rather than silence.",
+  "targeted_defect": "None (regression guard). Pins the fail-honest branch at inventory_js.py:657 and the cross_origin_iframe detector at :692-698. A future change that swallowed the whole walk on a SecurityError would lose the main-frame controls too.",
+  "lanes": ["playwright"],
+  "lane_note": "Playwright only: jsdom has no true cross-origin isolation, so a second origin cannot be simulated faithfully. Running this in jsdom would prove nothing about the branch under test.",
+  "snippet": "INVENTORY_JS",
+  "min_controls": 1,
+  "expect_controls": [
+    {
+      "where": {"css_hint": "input#amount-due"},
+      "fields": {"name": "Amount Due", "name_source": "label-for", "value_committed": "129.00"}
+    }
+  ],
+  "forbid_controls": [
+    {"where": {"name": "Card Number"}},
+    {"where": {"name": "CVC"}},
+    {"where": {"name": "Pay Now"}}
+  ],
+  "opaque": {
+    "lanes": ["playwright"],
+    "expect": [
+      {"kind": "cross_origin_iframe"}
+    ]
+  }
+}

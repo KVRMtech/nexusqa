@@ -1,0 +1,254 @@
+name: Browser Test Harness (M0.2)
+
+# The verification foundation for every Capture, Crawl, Inventory and Manifest
+# change. Three jobs, deliberately separated so a failure names its own cause:
+#
+#   jsdom          — the production capture JS executed in a JS engine (fast)
+#   browser        — the same JS executed in real Chromium through the PRODUCTION
+#                    injection path, plus characterization goldens and coverage
+#   proving-ground — real proving-ground applications crawled end to end
+#
+# Nothing here mocks a crawl. A proving-ground job that cannot reach an
+# application FAILS; it never reports a mocked success.
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - "Nexus_power/engines/qe-explorer/**"
+      - "Nexus_power/proving-grounds/**"
+      - ".github/workflows/browser-harness.yml"
+  pull_request:
+    paths:
+      - "Nexus_power/engines/qe-explorer/**"
+      - "Nexus_power/proving-grounds/**"
+      - ".github/workflows/browser-harness.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: browser-harness-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: "3.11"
+  NODE_VERSION: "20"
+  EXPLORER: Nexus_power/engines/qe-explorer
+
+jobs:
+  # ── Lane 1: jsdom ────────────────────────────────────────────────────────
+  jsdom:
+    name: jsdom execution lane
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: ${{ env.EXPLORER }}/browser_harness/package-lock.json
+
+      - name: Install Python deps
+        working-directory: ${{ env.EXPLORER }}
+        run: pip install -r requirements.txt pytest pytest-asyncio
+
+      - name: Install jsdom
+        working-directory: ${{ env.EXPLORER }}/browser_harness
+        run: npm ci
+
+      - name: Fixture library validation
+        working-directory: ${{ env.EXPLORER }}
+        run: python -m pytest tests/browser/test_fixture_library.py -v -m "not playwright"
+
+      - name: jsdom execution lane
+        working-directory: ${{ env.EXPLORER }}
+        run: python -m pytest tests/browser/test_jsdom_execution.py -v
+
+  # ── Lane 2: real Chromium ────────────────────────────────────────────────
+  browser:
+    name: Chromium lane + characterization + coverage
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: ${{ env.EXPLORER }}/browser_harness/package-lock.json
+
+      - name: Install Python deps
+        working-directory: ${{ env.EXPLORER }}
+        run: pip install -r requirements.txt pytest pytest-asyncio
+
+      - name: Install jsdom
+        working-directory: ${{ env.EXPLORER }}/browser_harness
+        run: npm ci
+
+      # `--with-deps` installs the system libraries headless Chromium needs on a
+      # bare ubuntu runner. Without it the browser launches and immediately dies,
+      # which surfaces as an unrelated-looking timeout.
+      - name: Install Chromium
+        working-directory: ${{ env.EXPLORER }}
+        run: python -m playwright install --with-deps chromium
+
+      - name: Chromium execution lane (production injection path)
+        working-directory: ${{ env.EXPLORER }}
+        run: python -m pytest tests/browser/test_playwright_execution.py -v
+
+      - name: Regression guards + open bug reproductions
+        working-directory: ${{ env.EXPLORER }}
+        run: python -m pytest tests/browser/test_known_bugs.py tests/browser/test_capture_contract.py -v -rxX
+
+      # Run the characterization suite TWICE in the same job. A golden that only
+      # holds on the first run is not a golden, and a nondeterminism that appears
+      # once per ten runs is far cheaper to find here than as an unexplained red
+      # build three months from now.
+      - name: Characterization — pass 1
+        working-directory: ${{ env.EXPLORER }}
+        run: python -m pytest tests/browser/test_browser_characterization.py -v
+
+      - name: Characterization — pass 2 (determinism)
+        working-directory: ${{ env.EXPLORER }}
+        run: python -m pytest tests/browser/test_browser_characterization.py -v
+
+      # Goldens are recorded artefacts under version control. If a run rewrote
+      # one, the behaviour changed and the diff must be reviewed by a human —
+      # never absorbed silently by CI.
+      - name: Fail if any golden was rewritten
+        working-directory: ${{ env.EXPLORER }}
+        run: |
+          if ! git diff --quiet -- tests/browser/golden; then
+            echo "::error::A characterization golden changed during this run."
+            echo "Capture behaviour has changed. Review the diff below and, if the"
+            echo "change is intended, re-record with QEC_UPDATE_GOLDENS=1 and commit."
+            git diff -- tests/browser/golden
+            exit 1
+          fi
+          echo "All characterization goldens are byte-identical."
+
+      - name: Execution coverage for the injected capture JS
+        working-directory: ${{ env.EXPLORER }}
+        run: python -m pytest tests/browser/test_coverage.py -v
+
+      - name: Coverage summary
+        if: always()
+        working-directory: ${{ env.EXPLORER }}
+        run: |
+          test -f tests/browser/coverage_report.json || exit 0
+          python - <<'PY'
+          import json
+          rep = json.load(open("tests/browser/coverage_report.json", encoding="utf-8"))
+          rows = ["| snippet | branches (blocks) | functions | lines |",
+                  "|---|---|---|---|"]
+          for name, r in sorted(rep.items()):
+              rows.append(
+                  f"| `{name}` | {r['blocks']['pct']}% "
+                  f"({r['blocks']['covered']}/{r['blocks']['total']}) | "
+                  f"{r['functions']['pct']}% | {r['lines']['pct']}% |")
+          body = "## Injected-JS execution coverage\n\n" + "\n".join(rows) + "\n"
+          import os
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as fh:
+              fh.write(body)
+          print(body)
+          PY
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: browser-harness-coverage
+          path: ${{ env.EXPLORER }}/tests/browser/coverage_report.json
+          if-no-files-found: warn
+
+  # ── Lane 3: proving grounds, crawled for real ────────────────────────────
+  proving-ground:
+    name: Crawl ${{ matrix.app }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false          # one broken app must not hide the others
+      matrix:
+        include:
+          - app: acme-life
+            min_controls: 5
+          - app: summit-life-carrier
+            min_controls: 5
+          - app: vkpower-life
+            min_controls: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install Python deps
+        working-directory: ${{ env.EXPLORER }}
+        run: pip install -r requirements.txt pytest pytest-asyncio
+
+      - name: Install Chromium
+        working-directory: ${{ env.EXPLORER }}
+        run: python -m playwright install --with-deps chromium
+
+      # Start the application from its OWN Dockerfile — the same image the
+      # proving ground ships. Building it here is what makes this a real crawl
+      # target rather than a copy of its markup.
+      - name: Build and start ${{ matrix.app }}
+        run: |
+          set -euo pipefail
+          docker build -t pg-${{ matrix.app }}:ci Nexus_power/proving-grounds/${{ matrix.app }}
+          docker run -d --name pg-${{ matrix.app }} -p 8099:${{ matrix.app == 'summit-life-carrier' && '3000' || '80' }} pg-${{ matrix.app }}:ci
+
+      - name: Wait for the application to serve
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:8099/ > /dev/null 2>&1; then
+              echo "${{ matrix.app }} is serving after ${i}s"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "::error::${{ matrix.app }} never served on :8099"
+          docker logs pg-${{ matrix.app }} || true
+          exit 1
+
+      # Dispatch a REAL crawl through the production Crawler + production port,
+      # wait for completion, read the manifest off disk, and assert on what was
+      # discovered. A mocked success is not accepted: the test fails if the
+      # manifest is absent, empty, or reports no page state.
+      - name: Crawl and validate the manifest
+        working-directory: ${{ env.EXPLORER }}
+        env:
+          QEC_PROVING_GROUND_URL: http://127.0.0.1:8099/
+          QEC_PROVING_GROUND_NAME: ${{ matrix.app }}
+          QEC_PROVING_GROUND_MIN_CONTROLS: ${{ matrix.min_controls }}
+        run: python -m pytest tests/browser/test_proving_grounds.py -v -rs
+
+      - name: Application logs on failure
+        if: failure()
+        run: docker logs pg-${{ matrix.app }} || true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: crawl-manifest-${{ matrix.app }}
+          path: ${{ env.EXPLORER }}/tests/browser/_crawl_out/**
+          if-no-files-found: warn
+
+      - name: Stop the application
+        if: always()
+        run: docker rm -f pg-${{ matrix.app }} || true

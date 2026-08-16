@@ -101,8 +101,15 @@ class ExploreDispatchRequest(BaseModel):
     proven_mechanics: dict[str, str] = Field(default_factory=dict)
     #: POSTURE: observe-only mode for production environments.  When True the
     #: explorer captures pages/fields/locators/navigation but never fills forms,
-    #: never submits, and never advances a commit.
+    #: never submits, and never advances a commit.  A FLOOR — the explorer
+    #: re-derives the decision from ``env_kind``/the attestation and can only
+    #: raise it (M0.5 T-SEC-05).
     observe_only: bool = False
+    #: The environment kind this crawl resolved to (``disposable`` | ``staging``
+    #: | ``uat`` | ``production_test`` | ``prod``).  Sent so the explorer can
+    #: enforce the observation-only invariant itself instead of trusting the
+    #: boolean above.  Empty is treated as production (fail-closed).
+    env_kind: str = Field(default="", max_length=32)
 
 
 class DispatchResult(BaseModel):
@@ -215,7 +222,90 @@ async def dispatch_crawl(
     )
 
 
-async def crawl_liveness(crawl_id: str) -> str:
+_RESERVE_PATH = "/api/v1/reserve"
+
+
+async def reserve_worker(
+    *, explorer_url: str, crawl_id: str, tenant_id: str,
+) -> bool:
+    """Atomically claim ``explorer_url`` for this crawl.  True when we hold it.
+
+    M0.5 T-SEC-03 — THE ORDERING FIX.  The dispatch loop used to write a
+    worker's squid allowlist and THEN discover the worker was busy.  Tenant B
+    could therefore overwrite the egress fence of a worker mid-crawl for tenant
+    A: B's dispatch 409'd, but A's browser was already running against B's
+    allowlist.  Reservation-first makes the fence write unreachable unless the
+    caller actually owns the slot.
+
+    Returns False on a 409 (busy — try the next worker).  Raises
+    :class:`ExplorerDispatchError` for anything else, so a mis-provisioned token
+    or an unreachable pool is an honest failure rather than a silent skip.
+    """
+    token = phase1_settings.token_value()
+    if not token:
+        raise ExplorerDispatchError(
+            "QEC_EXPLORER_TOKEN is unset — refusing to reserve an "
+            "unauthenticated worker",
+            status_code=503,
+        )
+    body = {"crawl_id": crawl_id, "tenant_id": tenant_id}
+    try:
+        async with httpx.AsyncClient(
+            base_url=explorer_url, timeout=phase1_settings.dispatch_timeout_s,
+        ) as client:
+            resp = await client.post(
+                _RESERVE_PATH, json=body, headers={TOKEN_HEADER: token},
+            )
+    except Exception as exc:
+        raise ExplorerDispatchError(
+            f"explorer unreachable at {explorer_url}: {exc}", status_code=502,
+        ) from exc
+    if resp.status_code == 409:
+        return False
+    if resp.status_code == 404:
+        # An OLD worker image without the reservation endpoint. Fail CLOSED:
+        # dispatching anyway would restore exactly the race this closes, and a
+        # mixed-version pool is an operator problem with an obvious fix.
+        raise ExplorerDispatchError(
+            f"explorer at {explorer_url} does not support worker reservation "
+            "(upgrade the qe-explorer image) — refusing to fence its egress "
+            "without holding the slot",
+            status_code=503,
+        )
+    if resp.status_code // 100 != 2:
+        raise ExplorerDispatchError(
+            f"explorer refused reservation ({resp.status_code})", status_code=502,
+        )
+    return True
+
+
+async def release_worker(
+    *, explorer_url: str, crawl_id: str, tenant_id: str,
+) -> None:
+    """Give an unused reservation back.  Best-effort and never raises.
+
+    A reservation we fail to release is reclaimed by the worker's own
+    single-flight lifecycle, so a network error here degrades to "this worker
+    is busy for a while", never to a lost fence.
+    """
+    token = phase1_settings.token_value()
+    if not token:
+        return
+    try:
+        async with httpx.AsyncClient(
+            base_url=explorer_url, timeout=phase1_settings.dispatch_timeout_s,
+        ) as client:
+            await client.post(
+                f"{_RESERVE_PATH}/{crawl_id}/release",
+                json={"crawl_id": crawl_id, "tenant_id": tenant_id},
+                headers={TOKEN_HEADER: token},
+            )
+    except Exception as exc:  # pragma: no cover — best effort
+        logger.warning("qec.explorer.release_failed worker=%s error=%s",
+                       explorer_url, str(exc)[:200])
+
+
+async def crawl_liveness(crawl_id: str, tenant_id: str = "") -> str:
     """Is this crawl still ALIVE on any explorer worker? ``alive``/``dead``/``unknown``.
 
     The explorer answers 404 ``unknown crawl_id`` for a job it is not running,
@@ -232,6 +322,12 @@ async def crawl_liveness(crawl_id: str) -> str:
         degrades to the existing timeout rather than killing a healthy crawl.
     """
     if not str(crawl_id or "").strip():
+        return "unknown"
+    # M0.5 T-SEC-07: the worker's status endpoint is OWNER-SCOPED, so liveness
+    # must say whose crawl it is asking about. Without a tenant the worker
+    # refuses (400) and we honestly report ``unknown`` rather than reaping a
+    # crawl we could not check — the same fail-safe as an unreachable worker.
+    if not str(tenant_id or "").strip():
         return "unknown"
     token = phase1_settings.token_value()
     if not token:
@@ -255,6 +351,7 @@ async def crawl_liveness(crawl_id: str) -> str:
                 base_url=target, timeout=phase1_settings.dispatch_timeout_s,
             ) as client:
                 resp = await client.get(f"{_EXPLORE_PATH}/{crawl_id}",
+                                        params={"tenant_id": tenant_id},
                                         headers={TOKEN_HEADER: token})
         except Exception:
             inconclusive = True

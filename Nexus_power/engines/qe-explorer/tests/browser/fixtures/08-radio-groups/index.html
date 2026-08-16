@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Fixture 08 — choice groups</title></head>
+<body>
+  <main>
+    <h1>Product selection</h1>
+
+    <!-- SUBJECT A + B: TWO forms each using name="product". Same attribute, two
+         DIFFERENT questions. group_key must be scoped by the owning form, or the
+         crawler would force one option across both and believe it had answered
+         two questions with one click. -->
+    <form id="term-form">
+      <fieldset>
+        <legend>Term product</legend>
+        <label><input type="radio" name="product" value="t10"> Term 10</label>
+        <label><input type="radio" name="product" value="t20" checked> Term 20</label>
+      </fieldset>
+    </form>
+
+    <form id="whole-form">
+      <fieldset>
+        <legend>Whole life product</legend>
+        <label><input type="radio" name="product" value="w1"> Whole Life</label>
+        <label><input type="radio" name="product" value="w2"> Universal Life</label>
+      </fieldset>
+    </form>
+
+    <!-- SUBJECT C: an ARIA card set - nameless, not inputs at all. Grouping comes
+         from the ancestor role=radiogroup, keyed by its id. This is how a design
+         system renders "choose a plan" as clickable cards. -->
+    <div role="radiogroup" id="plan-group" aria-label="Choose a plan">
+      <div role="radio" aria-checked="false" tabindex="0">Bronze</div>
+      <div role="radio" aria-checked="true" tabindex="-1">Silver</div>
+      <div role="radio" aria-checked="false" tabindex="-1">Gold</div>
+    </div>
+
+    <!-- SUBJECT D: a CHECKBOX GROUP sharing one name. "Pick at least one of
+         four" is ONE question; recording it as four independent yes/no questions
+         describes a form the application does not have. -->
+    <form id="conditions-form">
+      <fieldset>
+        <legend>Health conditions</legend>
+        <label><input type="checkbox" name="conditions[]" value="diabetes"> Diabetes</label>
+        <label><input type="checkbox" name="conditions[]" value="asthma"> Asthma</label>
+        <label><input type="checkbox" name="conditions[]" value="cardiac"> Cardiac</label>
+        <label><input type="checkbox" name="conditions[]" value="none" checked> None of these</label>
+      </fieldset>
+    </form>
+
+    <!-- SUBJECT E: two UNRELATED checkboxes side by side. No shared name, no
+         fieldset, no role=group. They must stay UNGROUPED (group_key "") -
+         merging them on mere proximity would answer one and silently drop the
+         other from the residue. -->
+    <label><input type="checkbox" id="remember" name="remember"> Remember me</label>
+    <label><input type="checkbox" id="newsletter" name="newsletter"> Subscribe to newsletter</label>
+
+    <!-- SUBJECT F: an ARIA card set nested SEVERAL levels below its radiogroup -
+         the layout wrappers a real design system emits. The grouping ancestor is
+         not the parent, so finding it requires actually walking up rather than
+         checking one level. Same question, same key, regardless of how much
+         presentational markup sits in between. -->
+    <div role="radiogroup" id="tier-group" aria-label="Service tier">
+      <div class="row">
+        <div class="col">
+          <div class="card-body">
+            <div role="radio" id="tier-basic" aria-checked="false" tabindex="0">Basic</div>
+          </div>
+        </div>
+        <div class="col">
+          <div class="card-body">
+            <div role="radio" id="tier-plus" aria-checked="false" tabindex="-1">Plus</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- SUBJECT G: a role=radio with NO name attribute and NO declared grouping
+         ancestor anywhere. There is nothing to group it BY, so it must come back
+         ungrouped. Inventing a key here - by proximity, by document order, by
+         anything - would assert a question the application never asked. -->
+    <div role="radio" id="orphan-choice" aria-checked="false" tabindex="0">Standalone option</div>
+  </main>
+</body>
+</html>

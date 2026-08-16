@@ -32,7 +32,19 @@ services:
     container_name: nexus-qe-central
     restart: unless-stopped
     ports:
-    - "8093:8093"
+    # ── M0.5 T-SEC-02: LOOPBACK ONLY ────────────────────────────────────────
+    # This used to be "8093:8093", i.e. 0.0.0.0 — the whole qe-central API,
+    # INCLUDING the /internal/* explorer seam, was reachable from any host that
+    # could route to this machine. The reverse proxy and any operator tooling
+    # run ON this host, so binding the published port to 127.0.0.1 costs them
+    # nothing and removes the network exposure entirely.
+    #
+    # This is DEFENCE IN DEPTH, not the control: /internal/* is authenticated at
+    # the application boundary (app/auth.py::internal_auth_middleware) with the
+    # per-fleet token, so the seam is refused even from localhost, and even from
+    # inside the docker network. Set QEC_BIND_ADDRESS=0.0.0.0 only if a remote
+    # proxy genuinely terminates elsewhere.
+    - "${QEC_BIND_ADDRESS:-127.0.0.1}:8093:8093"
     environment:
       NEXUS_ENV: ${NEXUS_ENV:-development}
       PORT: '8093'
@@ -42,8 +54,14 @@ services:
       #    qec_substrate, least-privilege substrate writes only) ──────────
       QEC_DATABASE_URL: postgresql+asyncpg://qec:${QEC_DB_PASSWORD:-qec-dev}@postgres:5432/qecentral
       NEXUS_DATABASE_URL_SUBSTRATE: postgresql+asyncpg://qec_substrate:${QEC_SUBSTRATE_DB_PASSWORD:-qec-substrate-dev}@postgres:5432/nexus
-      # Shared HS256 secret — MUST match platform-api's (docker-compose.yml).
-      NEXUS_JWT_SECRET: ${NEXUS_JWT_SECRET:-test-secret-do-not-use-in-production}
+      # ── Shared HS256 secret — MUST match platform-api's (docker-compose.yml).
+      # M0.5 T-SEC-01: NO DEFAULT, and the ``:?`` form makes compose REFUSE to
+      # start without it. The previous default was
+      # `test-secret-do-not-use-in-production` — a value printed in this
+      # repository — so a fresh deployment accepted any token an attacker signed
+      # with it, including `{"role":"admin"}`. There is no safe fallback for a
+      # signing key: an unset one must stop the deploy, not silently authenticate.
+      NEXUS_JWT_SECRET: ${NEXUS_JWT_SECRET:?NEXUS_JWT_SECRET must be set to a strong random value (e.g. openssl rand -hex 32) - qe-central refuses to authenticate with a development default}
       # QEC-NAMESPACED so a shared main-stack .env (passed via --env-file for the
       # JWT secret) can NOT leak a host-oriented PLATFORM_API_URL into this
       # container — inside the nexus network the factory is ALWAYS platform-api:
@@ -102,7 +120,20 @@ services:
       QEC_EXPLORER_URL: ${QEC_EXPLORER_URL:-http://qe-explorer:8210}
       # Per-fleet HMAC shared secret (RUNNER_TOKEN pattern) — MUST equal the
       # qe-explorer value below; empty ⇒ fail-closed (dispatch + callback refuse).
-      QEC_EXPLORER_TOKEN: ${QEC_EXPLORER_TOKEN:-dev-explorer-token-change-me}
+      # M0.5 T-SEC-01: NO DEFAULT. `dev-explorer-token-change-me` shipped in this
+      # file, so every deployment that never changed it shared one publicly-known
+      # fleet credential — enough to authenticate the whole /internal seam.
+      QEC_EXPLORER_TOKEN: ${QEC_EXPLORER_TOKEN:?QEC_EXPLORER_TOKEN must be set to a strong random value (e.g. openssl rand -hex 32) and match the qe-explorer service}
+      # ── HMAC key rotation seam (M0.5 T-SEC-11) — both OPTIONAL ────────────
+      # Rotation: set QEC_EXPLORER_TOKEN to K2, move K1 to _PREVIOUS, and set
+      # _PREVIOUS_EXPIRES_AT to an epoch-SECONDS deadline a little beyond the
+      # longest in-flight crawl. Callbacks signed with K1 keep verifying until
+      # that moment and are refused after it. Unset ⇒ single-key (no overlap).
+      QEC_EXPLORER_TOKEN_PREVIOUS: ${QEC_EXPLORER_TOKEN_PREVIOUS:-}
+      QEC_EXPLORER_TOKEN_PREVIOUS_EXPIRES_AT: ${QEC_EXPLORER_TOKEN_PREVIOUS_EXPIRES_AT:-0}
+      # Allowed clock skew (seconds) on a signed callback, and the nonce
+      # retention window that makes a replay fail.
+      QEC_HMAC_SKEW_SECONDS: ${QEC_HMAC_SKEW_SECONDS:-300}
       # qe-central-side mount of the shared crawl volume (manifests + PNGs).
       QEC_CRAWL_STORAGE_ROOT: /work
       # Squid allowlist file qe-central populates before each dispatch.
@@ -169,7 +200,12 @@ services:
       # HMAC-signed completion callback target (qe-central on qec-internal).
       QEC_CALLBACK_URL: ${QEC_CALLBACK_URL:-http://qe-central:8093}
       # Per-fleet HMAC shared secret — MUST equal qe-central's QEC_EXPLORER_TOKEN.
-      QEC_EXPLORER_TOKEN: ${QEC_EXPLORER_TOKEN:-dev-explorer-token-change-me}
+      # M0.5 T-SEC-01: no default (see the qe-central service above).
+      QEC_EXPLORER_TOKEN: ${QEC_EXPLORER_TOKEN:?QEC_EXPLORER_TOKEN must be set to a strong random value and match the qe-central service}
+      # Rotation overlap — must mirror qe-central's (M0.5 T-SEC-11).
+      QEC_EXPLORER_TOKEN_PREVIOUS: ${QEC_EXPLORER_TOKEN_PREVIOUS:-}
+      QEC_EXPLORER_TOKEN_PREVIOUS_EXPIRES_AT: ${QEC_EXPLORER_TOKEN_PREVIOUS_EXPIRES_AT:-0}
+      QEC_HMAC_SKEW_SECONDS: ${QEC_HMAC_SKEW_SECONDS:-300}
       # The ONLY route to the internet: the squid egress proxy. The browser is
       # launched with --proxy-server=<this>; squid enforces the host allowlist.
       EGRESS_PROXY: ${EGRESS_PROXY:-http://qec-egress-proxy:3128}
@@ -251,7 +287,8 @@ services:
       QEC_LOG_LEVEL: ${QEC_LOG_LEVEL:-INFO}
       QEC_DATABASE_URL: postgresql+asyncpg://qec:${QEC_DB_PASSWORD:-qec-dev}@postgres:5432/qecentral
       NEXUS_DATABASE_URL_SUBSTRATE: postgresql+asyncpg://qec_substrate:${QEC_SUBSTRATE_DB_PASSWORD:-qec-substrate-dev}@postgres:5432/nexus
-      NEXUS_JWT_SECRET: ${NEXUS_JWT_SECRET:-test-secret-do-not-use-in-production}
+      # M0.5 T-SEC-01: no default (see the qe-central service above).
+      NEXUS_JWT_SECRET: ${NEXUS_JWT_SECRET:?NEXUS_JWT_SECRET must be set to a strong random value (e.g. openssl rand -hex 32)}
       REPO_INTEL_WORKDIR_ROOT: /app/service/data/repos
       REPO_INTEL_MAX_REPO_BYTES: ${REPO_INTEL_MAX_REPO_BYTES:-2000000000}
       # LLM lens OFF by default; envelope KEK provider (local dev / kms prod).

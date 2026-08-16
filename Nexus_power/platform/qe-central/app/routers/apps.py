@@ -33,6 +33,7 @@ from ..db import new_id, row_to_dict, tenant_scoped_qec_session, utc_now
 from ..db.models import ClientAppEnvironmentRow, ClientAppRow, QEExplorationRow
 from ..fleet import quota
 from ..security import prod_guard
+from ..security.host_policy import HostPolicyError, validate_allowed_hosts
 from ..services.crawl_diagnosis import diagnose as diagnose_crawl
 from ..services.data_agent import (
     LLM_SYSTEM as DATA_AGENT_SYSTEM,
@@ -566,7 +567,9 @@ async def create_app(
     # funnel was unwalkable from its very first crawl — the exact outcome this
     # guard exists to prevent an operator configuring by hand, arrived at by
     # skipping the door it guards. Same refusal, same message, both paths.
-    _reject_advance_shadowing_approvals(payload.fences)
+    # M0.5 T-SEC-04: also validates fences.allowed_hosts / idp_domains at the
+    # WRITE boundary and stores the normalised form.
+    validated_fences = _validated_fences(payload.fences or {})
     row = ClientAppRow(
         app_id=app_id,
         tenant_id=tenant_id,
@@ -579,7 +582,7 @@ async def create_app(
         login_recording=_sanitised_login_recording(payload.login_recording),
         answer_key=payload.answer_key or {},
         env_attestation=_finalize_attestation(_validated_env_kind(payload.env_attestation), user),
-        fences=payload.fences or {},
+        fences=validated_fences,
         repo_binding=repo_binding,
         schedule=payload.schedule or {},
         budgets=payload.budgets or {},
@@ -1098,6 +1101,52 @@ def _reject_advance_shadowing_approvals(fences: Any) -> None:
         )
 
 
+def _validated_fences(fences: Any) -> dict:
+    """THE fences write gate — every path that persists ``fences`` calls this.
+
+    M0.5 T-SEC-04.  ``fences.allowed_hosts`` becomes the squid egress allowlist
+    verbatim, and squid reads a leading-dot entry as "this domain and all
+    subdomains" — so a registration of ``[".com"]`` turned the fenced browser
+    into an open SSRF proxy.  Validation used to live (partially) at crawl time
+    only, which meant the dangerous value was already PERSISTED and every later
+    read path had to remember to re-check it.
+
+    Normalises then validates at the WRITE boundary, and returns the dict with
+    the canonical host forms substituted in — so what is stored is what was
+    checked, and no later normalisation can reintroduce a bypass.
+
+    Raises 422 with the offending entry and why (an operator must be able to fix
+    it), never a bare "invalid".
+    """
+    _reject_advance_shadowing_approvals(fences)
+    if not isinstance(fences, Mapping):
+        return dict(fences or {})
+    out = dict(fences)
+    for key in ("allowed_hosts", "idp_domains"):
+        if out.get(key) is None:
+            continue
+        try:
+            out[key] = validate_allowed_hosts(out.get(key), field=f"fences.{key}")
+        except HostPolicyError as exc:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "error": "unsafe egress allowlist entry",
+                    "field": f"fences.{key}",
+                    "entry": exc.entry,
+                    "reason": exc.reason,
+                    "message": (
+                        f"fences.{key} entry {exc.entry!r} was refused: {exc.reason}. "
+                        "The egress allowlist is the ONLY thing standing between a "
+                        "crawl and the rest of the internet — it must name the "
+                        "application's own hosts, never a registry, a wildcard or "
+                        "an address."
+                    ),
+                },
+            )
+    return out
+
+
 @router.patch("/apps/{app_id}")
 async def update_app(
     app_id: str,
@@ -1133,7 +1182,7 @@ async def update_app(
             value = getattr(payload, field)
             if value is not None:
                 if field == "fences":
-                    _reject_advance_shadowing_approvals(value)
+                    value = _validated_fences(value)
                 setattr(row, field, value)
         if payload.env_attestation is not None:
             # (Re-)attest binds the accountable human to the authenticated identity.
@@ -1569,7 +1618,7 @@ async def create_environment(
     env_assertion = _validated_env_assertion(payload.env_assertion)
     # An ENV PROFILE's fences overlay the app's at resolve time, so an approval
     # seeded here shadows the funnel exactly as one seeded on the app would.
-    _reject_advance_shadowing_approvals(payload.fences)
+    env_fences = _validated_fences(payload.fences or {})
     async with tenant_scoped_qec_session(tenant_id) as session:
         await _require_app(session, tenant_id, app_id)   # 404 if app absent/foreign
         row = ClientAppEnvironmentRow(
@@ -1582,7 +1631,7 @@ async def create_environment(
             cookies=list(payload.cookies or []),
             headers=dict(payload.headers or {}),
             data_overrides=dict(payload.data_overrides or {}),
-            fences=dict(payload.fences or {}),
+            fences=env_fences,
             env_attestation=dict(_validated_env_kind(payload.env_attestation) or {}),
             env_assertion=env_assertion,
             creds_blob=creds_blob,
@@ -1660,8 +1709,7 @@ async def update_environment(
         if payload.data_overrides is not None:
             row.data_overrides = dict(payload.data_overrides)
         if payload.fences is not None:
-            _reject_advance_shadowing_approvals(payload.fences)
-            row.fences = dict(payload.fences)
+            row.fences = _validated_fences(payload.fences)
         if payload.env_attestation is not None:
             row.env_attestation = dict(_validated_env_kind(payload.env_attestation) or {})
         if payload.env_assertion is not None:

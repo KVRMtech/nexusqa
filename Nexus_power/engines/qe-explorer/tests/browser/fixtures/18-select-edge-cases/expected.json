@@ -1,0 +1,132 @@
+{
+  "purpose": "The native-<select> edge matrix that fixture 07 does not cover: an empty enumeration, a single answer, a selection near the END of a long list, duplicate labels, an over-long label, disabled options, and a disabled control. These are the shapes at which a clipping or read-back bug hides.",
+  "targeted_defect": "Regression guard for the unified option ceiling (BUG-CATALOG-TRUNCATION-60). Fixture 07 pins the ceiling at scale; this one pins the BOUNDARIES and the read-back. A `value_committed` that degraded to the first option, a de-duplicated answer set, or a silently dropped disabled option would each pass fixture 07 untouched.",
+  "lanes": [
+    "jsdom",
+    "playwright"
+  ],
+  "snippet": "INVENTORY_JS",
+  "min_controls": 7,
+  "expect_controls": [
+    {
+      "where": {
+        "css_hint": "select#empty"
+      },
+      "fields": {
+        "name": "Empty Enumeration",
+        "role": "combobox",
+        "options_total": 0,
+        "value_committed": ""
+      },
+      "list_lengths": {
+        "options": 0
+      },
+      "why": "An enumeration with no answers is still a question. It must be captured, not dropped."
+    },
+    {
+      "where": {
+        "css_hint": "select#single"
+      },
+      "fields": {
+        "name": "Single Answer",
+        "options_total": 1,
+        "value_committed": "only"
+      },
+      "list_lengths": {
+        "options": 1
+      }
+    },
+    {
+      "where": {
+        "css_hint": "select#late-selected"
+      },
+      "fields": {
+        "name": "Selected Near The End",
+        "options_total": 60,
+        "value_committed": "opt060"
+      },
+      "list_lengths": {
+        "options": 60
+      },
+      "list_edges": {
+        "options": {
+          "first": "Option 001",
+          "last": "Option 060"
+        }
+      },
+      "why": "THE read-back assertion: the committed value is the 60th option, so a read that degraded to the first option would report opt001 and every generated verification would assert the wrong answer."
+    },
+    {
+      "where": {
+        "css_hint": "select#duplicates"
+      },
+      "fields": {
+        "name": "Duplicate Labels",
+        "options_total": 4,
+        "value_committed": "a"
+      },
+      "list_lengths": {
+        "options": 4
+      },
+      "list_edges": {
+        "options": {
+          "first": "Other",
+          "last": "None"
+        }
+      },
+      "why": "Three answers render identical text. De-duplicating them would report a 4-answer question as a 2-answer one."
+    },
+    {
+      "where": {
+        "css_hint": "select#long-labels"
+      },
+      "fields": {
+        "name": "Long Labels",
+        "options_total": 2,
+        "value_committed": "l1"
+      },
+      "list_lengths": {
+        "options": 2
+      },
+      "list_edges": {
+        "options": {
+          "first": "Coverage tier extremely-long-descriptive-suffix extremely-long-descriptive-suffix extremely-long-descriptive-suffix extremely-long-descriptive-suffix extremely-long-descriptive-suffix extremely-long-d",
+          "last": "Short"
+        }
+      },
+      "why": "A 422-char label clipped deterministically to MAX_OPTION (200) from the FRONT - a truncated label is still identifiable, an arbitrary slice is not."
+    },
+    {
+      "where": {
+        "css_hint": "select#with-disabled"
+      },
+      "fields": {
+        "name": "Some Disabled Options",
+        "options_total": 3,
+        "disabled": false,
+        "value_committed": "ok1"
+      },
+      "list_lengths": {
+        "options": 3
+      },
+      "list_edges": {
+        "options": {
+          "first": "Available One",
+          "last": "Available Two"
+        }
+      },
+      "why": "A disabled OPTION is still an answer the question lists; dropping it would under-report the enumeration. The disabled state of the CONTROL is a separate signal."
+    },
+    {
+      "where": {
+        "css_hint": "select#disabled-select"
+      },
+      "fields": {
+        "name": "Disabled Control",
+        "disabled": true,
+        "options_total": 1
+      },
+      "why": "The control is disabled; its enumeration is still captured honestly."
+    }
+  ]
+}

@@ -33,7 +33,7 @@ for _p in (_SERVICE_ROOT, _SDK_PATH):
 import structlog
 from fastapi import FastAPI, Request
 
-from app.auth import jwt_auth_middleware
+from app.auth import internal_auth_middleware, jwt_auth_middleware
 from app.config import settings
 from app.security.boot_validator import (
     BootSafetyError,
@@ -289,6 +289,12 @@ async def security_headers_middleware(request: Request, call_next):
 if API_RATE_LIMITER.enabled:
     app.middleware("http")(principal_rate_limit_middleware)
 app.middleware("http")(jwt_auth_middleware)
+# M0.5 T-SEC-02 — the /internal/* prefix is authenticated at the BOUNDARY with
+# the per-fleet token, so an anonymous host-level request never reaches a
+# handler regardless of what that handler remembers to check.  Registered
+# OUTSIDE jwt_auth (it runs first) because the two gates cover disjoint prefixes
+# and the internal seam must be refused before any route resolution.
+app.middleware("http")(internal_auth_middleware)
 app.middleware("http")(security_headers_middleware)
 app.add_middleware(CorrelationIdMiddleware)
 

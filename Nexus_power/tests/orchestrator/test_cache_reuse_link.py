@@ -167,13 +167,24 @@ class _FakeRedis:
         return self._existing_session
 
 
+# A REAL minimal WAV header (RIFF ---- WAVE + fmt chunk start).
+#
+# The upload path validates media by MAGIC BYTES — main.py::_validate_media_content
+# requires >=12 bytes and then `RIFF` at 0 with `WAVE` at 8. The previous fixture,
+# an 11-byte b"audio-bytes", was rejected with 415 before either test could reach
+# the fingerprint-dedup branch it exists to cover, so both were asserting 409 on a
+# request that never got that far. Using a genuinely valid header fixes the fixture
+# and leaves the content guard fully enforced.
+_WAV_BYTES = b"RIFF\x24\x00\x00\x00WAVEfmt \x10\x00\x00\x00"
+
+
 @pytest.mark.asyncio
 async def test_start_canonical_processing_marks_cache_hit_session_completed(orchestrator_main_module):
-    audio = _FakeUploadFile("dedup.wav", b"audio-bytes", "audio/wav")
+    audio = _FakeUploadFile("dedup.wav", _WAV_BYTES, "audio/wav")
     user = SimpleNamespace(tenant_id="tenant-1", user_id="user-1")
 
     with patch.object(orchestrator_main_module.file_store, "store", AsyncMock(return_value={"file_id": "audio-1"})):
-        with patch.object(orchestrator_main_module.file_store, "read", AsyncMock(return_value=b"audio-bytes")):
+        with patch.object(orchestrator_main_module.file_store, "read", AsyncMock(return_value=_WAV_BYTES)):
             with patch.object(orchestrator_main_module, "_check_fingerprint_cache", AsyncMock(return_value={
                 "artifact_id": "artifact-1",
                 "artifact_status": "completed",
@@ -208,12 +219,12 @@ async def test_start_canonical_processing_marks_cache_hit_session_completed(orch
 
 @pytest.mark.asyncio
 async def test_start_canonical_processing_marks_duplicate_retry_cancelled(orchestrator_main_module):
-    audio = _FakeUploadFile("dedup.wav", b"audio-bytes", "audio/wav")
+    audio = _FakeUploadFile("dedup.wav", _WAV_BYTES, "audio/wav")
     user = SimpleNamespace(tenant_id="tenant-1", user_id="user-1")
     fake_redis = _FakeRedis(set_result=False, existing_session="session-existing")
 
     with patch.object(orchestrator_main_module.file_store, "store", AsyncMock(return_value={"file_id": "audio-1"})):
-        with patch.object(orchestrator_main_module.file_store, "read", AsyncMock(return_value=b"audio-bytes")):
+        with patch.object(orchestrator_main_module.file_store, "read", AsyncMock(return_value=_WAV_BYTES)):
             with patch.object(orchestrator_main_module, "_check_fingerprint_cache", AsyncMock(return_value=None)):
                 with patch.object(orchestrator_main_module, "_update_session_status", AsyncMock(return_value=True)) as status_mock:
                     with patch.object(orchestrator_main_module.workflow_store, "_redis", fake_redis):

@@ -1,0 +1,96 @@
+{
+  "purpose": "Prove capture emits the four attributes the deterministic field classifier reads - autocomplete, inputmode, placeholder and id - so classify() rung 1 (the app's OWN W3C declaration of what a field is for) can fire on a live crawl instead of being unreachable code.",
+  "targeted_defect": "BUG-CAPTURE-ATTRS: describe() (inventory_js.py:561-631) emits none of autocomplete/inputmode/placeholder/id, and build_control_record() (inventory.py:584-646) does not carry them either. field_signature.compute() reads all four (field_signature.py:157-164,190) and field_semantics.classify() weights autocomplete FIRST at confidence 0.98 (field_semantics.py:190-195). With capture silent, rung 1 can never fire on a crawled control, the placeholder/id token fallbacks for nameless fields are dead, and every field falls through to the weakest name-token rung.",
+  "lanes": ["jsdom", "playwright"],
+  "snippet": "INVENTORY_JS",
+  "min_controls": 14,
+  "expect_controls": [
+    {
+      "where": {"css_hint": "input#email"},
+      "fields": {"name": "Email address", "name_source": "label-for", "role": "textbox", "input_type": "email"}
+    },
+    {
+      "where": {"css_hint": "input#x1"},
+      "fields": {"name": "Social Security Number", "name_source": "placeholder", "best_effort": true},
+      "why": "With no label/aria/title the placeholder is the ONLY name rung left, so the walker already reads the attribute - it simply never emits it as a field of its own."
+    },
+    {
+      "where": {"css_hint": "input#date-of-birth"},
+      "fields": {"name": "", "name_source": "none"},
+      "why": "No name of any kind. Its semantics live entirely in the id, which is exactly why id must be captured."
+    },
+    {
+      "where": {"css_hint": "select#country"},
+      "fields": {"name": "Country", "role": "combobox", "options_total": 3}
+    }
+  ],
+  "describes_correct_behaviour": [
+    {
+      "where": {"css_hint": "input#email"},
+      "fields": {
+        "autocomplete": "email",
+        "inputmode": "email",
+        "placeholder": "you@example.com",
+        "id": "email"
+      }
+    },
+    {
+      "where": {"css_hint": "input#field-a7"},
+      "fields": {"autocomplete": "given-name", "id": "field-a7"},
+      "why": "The label tokens ('Field A7') classify to nothing. Only the declared autocomplete can name this field."
+    },
+    {
+      "where": {"css_hint": "input#zip"},
+      "fields": {"autocomplete": "shipping postal-code", "inputmode": "numeric"},
+      "why": "Multi-token autocomplete must survive capture intact - classify() scans the tokens in reverse and needs them all."
+    },
+    {
+      "where": {"css_hint": "input#phone"},
+      "fields": {"autocomplete": "tel", "inputmode": "tel", "placeholder": "(555) 555-0100"},
+      "why": "autocomplete/inputmode are case-insensitive enumerated keywords, normalised at capture the same way role and aria-haspopup already are. placeholder is human text and is preserved verbatim."
+    },
+    {
+      "where": {"css_hint": "input#nickname"},
+      "fields": {"autocomplete": "", "inputmode": "", "placeholder": "", "id": "nickname"},
+      "why": "ABSENT must capture as empty string, never null and never invented."
+    },
+    {
+      "where": {"css_hint": "input#empty-ac"},
+      "fields": {"autocomplete": "", "inputmode": "", "placeholder": "", "id": "empty-ac"},
+      "why": "PRESENT-BUT-EMPTY must be indistinguishable from absent."
+    },
+    {
+      "where": {"css_hint": "input#opted-out"},
+      "fields": {"autocomplete": "off"},
+      "why": "Captured honestly, but classify() excludes on/off so rung 1 must NOT fire on it. Asserted in test_capture_contract.py."
+    },
+    {
+      "where": {"css_hint": "input#x1"},
+      "fields": {"placeholder": "Social Security Number", "id": "x1"}
+    },
+    {
+      "where": {"css_hint": "input#date-of-birth"},
+      "fields": {"id": "date-of-birth", "placeholder": ""}
+    },
+    {
+      "where": {"css_hint": "textarea#street"},
+      "fields": {"autocomplete": "street-address", "placeholder": "Street and number", "id": "street"}
+    },
+    {
+      "where": {"css_hint": "select#country"},
+      "fields": {"autocomplete": "country-name", "id": "country"}
+    },
+    {
+      "where": {"css_hint": "input#pw"},
+      "fields": {"autocomplete": "new-password", "id": "pw"}
+    },
+    {
+      "where": {"css_hint": "input#amount"},
+      "fields": {"inputmode": "decimal", "placeholder": "0.00", "autocomplete": ""}
+    },
+    {
+      "where": {"css_hint": "input#card"},
+      "fields": {"autocomplete": "cc-number", "inputmode": "numeric", "id": "card"}
+    }
+  ]
+}

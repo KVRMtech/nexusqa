@@ -166,7 +166,9 @@ class TestSpeakerDiarizer:
         d = SpeakerDiarizer()
         assert d.min_speakers == 1
         assert d.max_speakers == 10
-        assert d.pipeline is None
+        # Renamed to the private `_pyannote_pipeline` when the loader moved into
+        # app/diarization/__init__.py; these tests pinned the old name.
+        assert d._pyannote_pipeline is None
         assert d.is_real is False
 
     def test_load_model_stub_fallback(self):
@@ -195,6 +197,16 @@ class TestSpeakerDiarizer:
         assert d._stub_fallback_count == 2
 
     def test_manifest_verification_failure_updates_startup_reason(self, tmp_path):
+        # The manifest check sits BEHIND the `from pyannote.audio import Pipeline`
+        # guard in _try_load_pyannote: without pyannote installed the loader
+        # returns at the ImportError and the bundle is never inspected, so
+        # startup_reason is legitimately "stub" rather than the bundle reason.
+        # A genuine optional-dependency skip, not a masked failure — the assertion
+        # below is real wherever pyannote IS installed (the shipped ears image).
+        pytest.importorskip(
+            "pyannote.audio",
+            reason="manifest verification is unreachable without pyannote.audio",
+        )
         from app.diarization import SpeakerDiarizer
 
         d = SpeakerDiarizer(model_path=str(tmp_path / "missing"), verify_manifest=True)
@@ -226,16 +238,17 @@ class TestSpeakerDiarizer:
                 captured["kwargs"] = kwargs
                 return FakeDiarization()
 
-        class FakeWaveform:
-            """Mimics a numpy 2-D array with a .T transpose attribute."""
-            def __init__(self, data):
-                self._data = data
-            @property
-            def T(self):
-                return self._data
+        # A REAL numpy array, not a hand-rolled stand-in. The loader now reads
+        # `waveform.shape[1]` and mono-mixes (`.mean(axis=1)` / `[:, 0]`), which
+        # a fake exposing only `.T` cannot model — it failed with
+        # `AttributeError: 'FakeWaveform' object has no attribute 'shape'`.
+        # soundfile is still faked; only the array it returns is genuine, so the
+        # mono-mixing path is exercised instead of mocked away.
+        import numpy as _np
 
         fake_soundfile = types.SimpleNamespace(
-            read=lambda path, always_2d=True, dtype="float32": (FakeWaveform([[0.1], [0.2], [0.3]]), 16000)
+            read=lambda path, always_2d=True, dtype="float32": (
+                _np.array([[0.1], [0.2], [0.3]], dtype="float32"), 16000)
         )
 
         class FakeTensor:
@@ -251,7 +264,11 @@ class TestSpeakerDiarizer:
         monkeypatch.setitem(sys.modules, "torch", FakeTorch)
 
         diarizer = SpeakerDiarizer(device="cpu")
-        diarizer.pipeline = FakePipeline()
+        # `_diarize_sync` dispatches on `_backend`, so injecting the pipeline
+        # alone left these tests falling through to the speechbrain/Silero-VAD
+        # path they were never about (TypeError: self._vad_utils is None).
+        diarizer._backend = "pyannote"
+        diarizer._pyannote_pipeline = FakePipeline()
 
         segments = diarizer._diarize_sync(str(audio_path), num_speakers=2)
 
@@ -284,7 +301,11 @@ class TestSpeakerDiarizer:
         monkeypatch.setitem(sys.modules, "torch", types.SimpleNamespace(from_numpy=lambda values: values))
 
         diarizer = SpeakerDiarizer(device="cpu")
-        diarizer.pipeline = FakePipeline()
+        # `_diarize_sync` dispatches on `_backend`, so injecting the pipeline
+        # alone left these tests falling through to the speechbrain/Silero-VAD
+        # path they were never about (TypeError: self._vad_utils is None).
+        diarizer._backend = "pyannote"
+        diarizer._pyannote_pipeline = FakePipeline()
 
         segments = diarizer._diarize_sync("/tmp/example.wav", num_speakers=None)
 
@@ -315,19 +336,22 @@ class TestSpeakerDiarizer:
             def __call__(self, payload, **kwargs):
                 return FakeDiarizeOutput()
 
-        class FakeArray:
-            @property
-            def T(self):
-                return self
+        # Real numpy array — see the note in the preload test above.
+        import numpy as _np
 
         fake_soundfile = types.SimpleNamespace(
-            read=lambda path, always_2d=True, dtype="float32": (FakeArray(), 16000)
+            read=lambda path, always_2d=True, dtype="float32": (
+                _np.array([[0.1], [0.2], [0.3]], dtype="float32"), 16000)
         )
         monkeypatch.setitem(sys.modules, "soundfile", fake_soundfile)
         monkeypatch.setitem(sys.modules, "torch", types.SimpleNamespace(from_numpy=lambda values: values))
 
         diarizer = SpeakerDiarizer(device="cpu")
-        diarizer.pipeline = FakePipeline()
+        # `_diarize_sync` dispatches on `_backend`, so injecting the pipeline
+        # alone left these tests falling through to the speechbrain/Silero-VAD
+        # path they were never about (TypeError: self._vad_utils is None).
+        diarizer._backend = "pyannote"
+        diarizer._pyannote_pipeline = FakePipeline()
 
         segments = diarizer._diarize_sync(str(audio_path), num_speakers=None)
 

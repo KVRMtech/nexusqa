@@ -1,0 +1,35 @@
+{
+  "purpose": "The anti-overfit variation for BUG-IFRAME-SELECTOR. Widens the character set beyond fixture 03's dot-in-id and quote-in-name to apostrophes, brackets, parentheses, backslashes and spaces, and exercises the TITLE branch (which had never been escaped at all) as well as the id and name branches.",
+  "targeted_defect": "BUG-IFRAME-SELECTOR (variation): frameSelectorFor() has four branches - id, name, title, src - and each interpolated raw. Escaping only the two characters fixture 03 happens to use would leave the rest broken.",
+  "lanes": ["playwright"],
+  "lane_note": "Playwright only: the acceptance is that the emitted selector RESOLVES to exactly one frame in a real engine. jsdom has no frame-locator equivalent, so it could only compare selector strings - which is the test this ticket explicitly must not be reduced to.",
+  "snippet": "INVENTORY_JS",
+  "min_controls": 5,
+  "expect_controls": [
+    {
+      "where": {"css_hint": "input#host-ref"},
+      "fields": {"name": "Host Reference", "name_source": "label-for", "frame_selector": ""}
+    },
+    {
+      "where": {"css_hint": "input#field-a"},
+      "fields": {"name": "Field A"},
+      "why": "Captured at all - i.e. the walker descended a same-origin frame whose title is full of metacharacters."
+    },
+    {
+      "where": {"css_hint": "input#field-b"},
+      "fields": {"name": "Field B"}
+    },
+    {
+      "where": {"css_hint": "input#field-c"},
+      "fields": {"name": "Field C"}
+    },
+    {
+      "where": {"css_hint": "input#field-d"},
+      "fields": {"name": "Field D"}
+    }
+  ],
+  "frame_selectors_must_resolve": {
+    "expect_distinct": 4,
+    "why": "The real contract, asserted in test_capture_contract.py by handing each emitted selector back to the browser. A selector that resolves to zero frames is a control the crawl claimed to capture and replay cannot reach; one that resolves to several is worse, because it binds to the wrong frame silently."
+  }
+}

@@ -1,0 +1,236 @@
+[
+  {
+    "attestation": null,
+    "budgets": {
+      "max_actions_per_state": 30,
+      "max_depth": 6,
+      "max_requests": 200,
+      "max_states": 1,
+      "max_wall_ms": 1800000,
+      "rate_per_s": 1.0
+    },
+    "config_fingerprint": "characterization-fixed",
+    "crawl_id": "<normalized:crawl_id>",
+    "explorer_version": "qe-explorer/1.0+inv-js-v10",
+    "frame_count": 0,
+    "guard_version": "qe-explorer/1.0+inv-js-v10",
+    "refuse_pack_version": "refuse-pack-v1",
+    "stop_reason": "",
+    "target_url": "http://127.0.0.1:<port>/08-radio-groups/index.html",
+    "type": "crawl_meta"
+  },
+  {
+    "actions": [
+      {
+        "after": {
+          "detail": "",
+          "navigated": false,
+          "outcome": "none"
+        },
+        "anchor": null,
+        "phase": "explore",
+        "qec": {
+          "css_hint": "div#plan-group",
+          "expanded": "",
+          "frame_selector": "",
+          "haspopup": "",
+          "href": "",
+          "input_type": "",
+          "name_confidence": "high",
+          "options": [],
+          "role": "radiogroup",
+          "testid": ""
+        },
+        "screenshot_after": "<normalized:screenshot_after>",
+        "state_id": "<normalized:state_id>",
+        "subaction_index": 0,
+        "target_kind": "button",
+        "target_label": "Choose a plan",
+        "timestamp_ms": "<normalized:timestamp_ms>",
+        "to_state": "<normalized:to_state>",
+        "url_changed": false,
+        "value": null,
+        "verb": "click"
+      },
+      {
+        "after": {
+          "detail": "",
+          "navigated": false,
+          "outcome": "none"
+        },
+        "anchor": null,
+        "phase": "explore",
+        "qec": {
+          "css_hint": "div#tier-group",
+          "expanded": "",
+          "frame_selector": "",
+          "haspopup": "",
+          "href": "",
+          "input_type": "",
+          "name_confidence": "high",
+          "options": [],
+          "role": "radiogroup",
+          "testid": ""
+        },
+        "screenshot_after": "<normalized:screenshot_after>",
+        "state_id": "<normalized:state_id>",
+        "subaction_index": 1,
+        "target_kind": "button",
+        "target_label": "Service tier",
+        "timestamp_ms": "<normalized:timestamp_ms>",
+        "to_state": "<normalized:to_state>",
+        "url_changed": false,
+        "value": null,
+        "verb": "click"
+      }
+    ],
+    "ax_fingerprint": "<hash>",
+    "canonical_host": "127.0.0.1",
+    "displayed_values": [],
+    "first_seen_ms": "<normalized:first_seen_ms>",
+    "form_snapshot": {
+      "Asthma": "false",
+      "Basic": "false",
+      "Bronze": "false",
+      "Cardiac": "false",
+      "Diabetes": "false",
+      "Gold": "false",
+      "None of these": "true",
+      "Plus": "false",
+      "Remember me": "false",
+      "Silver": "true",
+      "Standalone option": "false",
+      "Subscribe to newsletter": "false",
+      "Term 10": "false",
+      "Term 20": "true",
+      "Universal Life": "false",
+      "Whole Life": "false"
+    },
+    "form_snapshot_signals": {
+      "Asthma": {
+        "options": [],
+        "required": false,
+        "type": "checkbox"
+      },
+      "Basic": {
+        "options": [],
+        "required": false,
+        "type": "radio"
+      },
+      "Bronze": {
+        "options": [],
+        "required": false,
+        "type": "radio"
+      },
+      "Cardiac": {
+        "options": [],
+        "required": false,
+        "type": "checkbox"
+      },
+      "Diabetes": {
+        "options": [],
+        "required": false,
+        "type": "checkbox"
+      },
+      "Gold": {
+        "options": [],
+        "required": false,
+        "type": "radio"
+      },
+      "None of these": {
+        "options": [],
+        "required": false,
+        "type": "checkbox"
+      },
+      "Plus": {
+        "options": [],
+        "required": false,
+        "type": "radio"
+      },
+      "Remember me": {
+        "options": [],
+        "required": false,
+        "type": "checkbox"
+      },
+      "Silver": {
+        "options": [],
+        "required": false,
+        "type": "radio"
+      },
+      "Standalone option": {
+        "options": [],
+        "required": false,
+        "type": "radio"
+      },
+      "Subscribe to newsletter": {
+        "options": [],
+        "required": false,
+        "type": "checkbox"
+      },
+      "Term 10": {
+        "options": [],
+        "required": false,
+        "type": "radio"
+      },
+      "Term 20": {
+        "options": [],
+        "required": false,
+        "type": "radio"
+      },
+      "Universal Life": {
+        "options": [],
+        "required": false,
+        "type": "radio"
+      },
+      "Whole Life": {
+        "options": [],
+        "required": false,
+        "type": "radio"
+      }
+    },
+    "last_seen_ms": "<normalized:last_seen_ms>",
+    "location": "http://127.0.0.1:<port>/08-radio-groups/index.html",
+    "network_calls": [],
+    "screenshots": [
+      {
+        "frame_index": 0,
+        "path": "<normalized:path>",
+        "timestamp_ms": "<normalized:timestamp_ms>"
+      }
+    ],
+    "sequence_index": 0,
+    "state_id": "<normalized:state_id>",
+    "title": "Fixture 08 — choice groups",
+    "type": "page_state",
+    "url_host": "127.0.0.1",
+    "url_path": "/08-radio-groups/index.html",
+    "url_query": ""
+  },
+  {
+    "attestation": null,
+    "budgets": {
+      "max_actions_per_state": 30,
+      "max_depth": 6,
+      "max_requests": 200,
+      "max_states": 1,
+      "max_wall_ms": 1800000,
+      "rate_per_s": 1.0
+    },
+    "config_fingerprint": "characterization-fixed",
+    "crawl_id": "<normalized:crawl_id>",
+    "explorer_version": "qe-explorer/1.0+inv-js-v10",
+    "frame_count": 1,
+    "guard_blocks": 0,
+    "guard_version": "qe-explorer/1.0+inv-js-v10",
+    "refuse_pack_version": "refuse-pack-v1",
+    "stats": {
+      "actions": 10,
+      "elapsed_ms": "<normalized:elapsed_ms>",
+      "requests": 4,
+      "states": 1
+    },
+    "stop_reason": "budget_max_states",
+    "target_url": "http://127.0.0.1:<port>/08-radio-groups/index.html",
+    "type": "crawl_meta"
+  }
+]

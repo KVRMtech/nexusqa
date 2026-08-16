@@ -1,0 +1,23 @@
+{
+  "purpose": "Prove the walker is HONESTLY BLIND to a closed shadow root - it captures nothing from inside it and fabricates nothing - and that OPAQUE_JS positively NAMES the blind spot instead of leaving a silently clean scan.",
+  "targeted_defect": "None (regression guard). This fixture pins the anti-green-wash contract: a surface the DOM cannot read must become a named ledger row, never an empty pass. A future 'improvement' that guessed at closed-shadow contents would break this fixture.",
+  "lanes": ["jsdom", "playwright"],
+  "snippet": "INVENTORY_JS",
+  "min_controls": 1,
+  "expect_controls": [
+    {
+      "where": {"css_hint": "input#zip"},
+      "fields": {"name": "ZIP Code", "name_source": "label-for", "role": "textbox"}
+    }
+  ],
+  "forbid_controls": [
+    {"where": {"name": "Coverage Amount"}},
+    {"where": {"name": "Get Quote"}}
+  ],
+  "opaque": {
+    "lanes": ["playwright"],
+    "expect": [
+      {"kind": "closed_shadow", "label": "closed-quote-widget"}
+    ]
+  }
+}

@@ -58,7 +58,13 @@ def test_the_guard_is_wired_into_every_write_path():
     """THE ACTUAL DEFECT. The guard was called only from the app PATCH handler,
     so the same fences could be seeded at CREATE, or on an env profile whose
     fences overlay the app's at resolve time. A guard on one door is not a
-    guard — this asserts the call exists on all four."""
+    guard — this asserts the call exists on all four.
+
+    M0.5 T-SEC-04 folded the advance-shadowing guard and the egress-host policy
+    into ONE fences write gate, ``_validated_fences``. The invariant is
+    unchanged and stricter: every write path routes through the single gate, and
+    the gate itself still runs the shadowing check.
+    """
     import inspect
 
     from app.routers import apps
@@ -66,9 +72,14 @@ def test_the_guard_is_wired_into_every_write_path():
     for fn_name in ("create_app", "update_app",
                     "create_environment", "update_environment"):
         src = inspect.getsource(getattr(apps, fn_name))
-        assert "_reject_advance_shadowing_approvals" in src, (
-            f"{fn_name} accepts fences without the advance-shadowing guard — "
-            f"a funnel-breaking approval can be written through it")
+        assert "_validated_fences" in src, (
+            f"{fn_name} accepts fences without the write gate — a "
+            f"funnel-breaking approval or an unsafe egress host can be written "
+            f"through it")
+
+    gate = inspect.getsource(apps._validated_fences)
+    assert "_reject_advance_shadowing_approvals" in gate
+    assert "validate_allowed_hosts" in gate
 
 
 # ── env-kind vocabulary: one source ────────────────────────────────────────

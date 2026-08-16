@@ -19,6 +19,7 @@ from typing import Optional
 
 from nexus_sdk.events import fire_stub_alert
 from nexus_sdk.config import production_guard
+from ._step_fields import expected_text
 
 logger = logging.getLogger(__name__)
 
@@ -175,7 +176,7 @@ class WebExecutor:
         from app.models import StepExecutionDetail, ExecutionStatus
 
         action = step.action
-        expected = step.expected_output or ""
+        expected = expected_text(step)
 
         # Replace variables
         for var, val in variables.items():
@@ -424,7 +425,7 @@ class WebExecutor:
                 StepExecutionDetail(
                     step_number=step.step_number,
                     action=step.action,
-                    expected=step.expected_output or "",
+                    expected=expected_text(step),
                     actual="[Stub] Playwright not installed",
                     status=ExecutionStatus.SKIPPED,
                 )

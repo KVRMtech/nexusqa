@@ -125,6 +125,19 @@ def fixture_loader(manifest):
         if fixture_id not in manifest:
             raise KeyError(f"unknown fixture {fixture_id!r}")
         f = manifest[fixture_id]
+        # The manifest's source_base is ${NEXUS_REGRESSION_FIXTURE_URL}. Unset,
+        # it expands to "" and every source degrades to a bare relative path, so
+        # the fetcher died with the opaque "unsupported fixture source scheme:
+        # /audio/kt-call-en-01.wav". SKIP with the real reason instead: this
+        # suite replays a hosted MEDIA CORPUS, and no corpus means the assertions
+        # cannot run — which is a missing input, not a regression. Point
+        # NEXUS_REGRESSION_FIXTURE_URL at the bucket/mirror and they execute.
+        if not f.source.startswith(("http://", "https://", "s3://", "gs://", "file://")):
+            pytest.skip(
+                "NEXUS_REGRESSION_FIXTURE_URL is not set — the regression media "
+                f"corpus is unavailable, so fixture {fixture_id!r} cannot be "
+                f"fetched (resolved to {f.source!r})"
+            )
         return _fetch_to_cache(f.source, f.sha256)
 
     return load

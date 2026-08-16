@@ -1,0 +1,27 @@
+{
+  "purpose": "Prove the walker descends into an OPEN shadow root and resolves accessible names against the shadow root that owns the element - not against the outer document.",
+  "targeted_defect": "BUG-SHADOW-NAME: walk() recurses host.shadowRoot but forwards the OUTER `doc` (inventory_js.py:648). accessibleName()/idText() therefore run label[for=] and aria-labelledby id lookups against the wrong root, so every shadow-scoped label is invisible and the control comes back name=''.",
+  "lanes": ["jsdom", "playwright"],
+  "snippet": "INVENTORY_JS",
+  "min_controls": 4,
+  "expect_controls": [
+    {
+      "where": {"css_hint": "input#policy-number"},
+      "fields": {"name": "Policy Number", "name_source": "label-for", "role": "textbox", "frame_selector": ""}
+    },
+    {
+      "where": {"css_hint": "button#verify-btn"},
+      "fields": {"name": "Verify Identity", "name_source": "content", "role": "button", "frame_selector": ""}
+    }
+  ],
+  "describes_correct_behaviour": [
+    {
+      "where": {"css_hint": "input#pin"},
+      "fields": {"name": "Security PIN", "name_source": "label-for", "required": true}
+    },
+    {
+      "where": {"css_hint": "input#dob"},
+      "fields": {"name": "Date of Birth", "name_source": "aria-labelledby"}
+    }
+  ]
+}

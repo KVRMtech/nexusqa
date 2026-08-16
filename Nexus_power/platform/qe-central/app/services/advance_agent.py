@@ -24,7 +24,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from ..clients import platform_api
 from . import advance_vocab
@@ -80,6 +80,12 @@ class AdvanceDecision:
     status: str
     index: int | None = None
     signature: str = ""
+    #: Provider-REPORTED token usage for the LLM call this decision cost, or an
+    #: empty dict when the decision was made without one (a recall hit, a
+    #: filtered-out control set) or the provider reported nothing.  Relayed to
+    #: the explorer so the tokens are attributed to the CRAWL that spent them —
+    #: the per-crawl half of the accounting Prometheus deliberately cannot hold.
+    usage: dict = field(default_factory=dict)
 
 
 def eligible_controls(
@@ -208,12 +214,29 @@ async def pick_advance(
         tenant_id=tenant_id, prompt=prompt, system=SYSTEM,
         task="pick_advance", max_tokens=60, temperature=0.0,
     )
+    # From here on EVERY outcome carries the call's token cost. A consultation
+    # that the model answered unreadably cost exactly what a clean pick cost, so
+    # attaching usage only to the happy path would understate spend precisely on
+    # the crawls that are going wrong.
+    # Read the telemetry field DEFENSIVELY. Usage is an observability enrichment
+    # on the client's result, not part of the decision contract — a result object
+    # without it must still yield a decision, degrading to "spend unknown" rather
+    # than to a failed consultation.
+    _usage = getattr(result, "usage", None)
+    usage = (_usage.as_dict()
+             if _usage is not None and getattr(_usage, "reported", False)
+             else {})
+
+    def _decided(status: str, index: int | None = None) -> AdvanceDecision:
+        return AdvanceDecision(status=status, index=index, signature=signature,
+                               usage=usage)
+
     if not result.ok:
         logger.warning(
             "qec.advance_agent.llm_failed",
             extra={"tenant_id": tenant_id, "detail": (result.detail or "")[:200]},
         )
-        return AdvanceDecision(status=STATUS_UNAVAILABLE, signature=signature)
+        return _decided(STATUS_UNAVAILABLE)
 
     reply = (result.text or "").strip()
     # The LAST number wins: a model that ignores the numbers-only instruction
@@ -234,21 +257,18 @@ async def pick_advance(
             name_norm = _WS_RE.sub(
                 " ", str(c.get("name") or "").strip().lower())
             if name_norm and normalized_reply == name_norm:
-                return AdvanceDecision(
-                    status=STATUS_PICKED, index=original_index,
-                    signature=signature)
+                return _decided(STATUS_PICKED, original_index)
         if _NONE_RE.search(reply):
-            return AdvanceDecision(status=STATUS_NONE, signature=signature)
+            return _decided(STATUS_NONE)
         logger.warning(
             "qec.advance_agent.unreadable_reply tenant=%s reply=%r",
             tenant_id, reply[:80],
         )
-        return AdvanceDecision(status=STATUS_UNAVAILABLE, signature=signature)
+        return _decided(STATUS_UNAVAILABLE)
     picked = int(match)
     if picked == 0:
-        return AdvanceDecision(status=STATUS_NONE, signature=signature)
+        return _decided(STATUS_NONE)
     idx = picked - 1
     if idx < 0 or idx >= len(eligible):
-        return AdvanceDecision(status=STATUS_UNAVAILABLE, signature=signature)
-    return AdvanceDecision(
-        status=STATUS_PICKED, index=eligible[idx][0], signature=signature)
+        return _decided(STATUS_UNAVAILABLE)
+    return _decided(STATUS_PICKED, eligible[idx][0])

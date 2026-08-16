@@ -21,8 +21,28 @@
 set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"   # -> Nexus_power/
-cd "$REPO_ROOT" || exit 2
-export PYTHONPATH="${REPO_ROOT}/platform/api${PYTHONPATH:+:$PYTHONPATH}"
+SERVICE_DIR="${REPO_ROOT}/platform/api"
+
+# RUN FROM THE SERVICE ROOT, not from Nexus_power/.
+#
+# Several of these tests are SOURCE-READING contracts — they open the production
+# module and assert on its text (that two wildcard sets are identical in both
+# files, that nothing in a module reaches the network, that a router defines the
+# identity label). They spell those paths relative to the CURRENT DIRECTORY:
+#
+#     open("app/routers/test_factory.py")
+#     open("app/services/test_factory/login_observation.py")
+#
+# Run from Nexus_power/ that is a FileNotFoundError, so the file died at
+# collection and the gate reported it as a failing test. Run from platform/api/
+# the same files pass untouched: test_run_identity 11 passed (was a collection
+# error), test_wildcard_host_domain 10 passed (was 2 failed), test_persona_identity
+# 18 passed. Nothing about the tests changed — only where pytest was standing.
+#
+# PYTHONPATH still names the service dir explicitly rather than relying on the
+# CWD, so `import app...` resolves the same way it did before.
+cd "$SERVICE_DIR" || exit 2
+export PYTHONPATH="${SERVICE_DIR}${PYTHONPATH:+:$PYTHONPATH}"
 export NEXUS_SECRET_KEY="${NEXUS_SECRET_KEY:-ci-not-for-prod}"
 export NEXUS_JWT_SECRET="${NEXUS_JWT_SECRET:-ci-not-for-prod}"
 
@@ -30,7 +50,7 @@ export NEXUS_JWT_SECRET="${NEXUS_JWT_SECRET:-ci-not-for-prod}"
 # skip): the grounded value oracle and the regression/outcome oracle.
 REQUIRED=(test_value_oracle.py test_outcome_oracle_breadth.py)
 
-mapfile -t FILES < <(ls platform/api/tests/test_*.py 2>/dev/null | sort)
+mapfile -t FILES < <(ls tests/test_*.py 2>/dev/null | sort)
 [ "${#FILES[@]}" -gt 0 ] || { echo "FATAL: no platform/api tests discovered." >&2; exit 1; }
 
 echo "== platform/api suite: ${#FILES[@]} files, per-file isolation =="
@@ -47,7 +67,7 @@ done
 
 # Guard: the crown-jewel files must exist (a rename/move must not silently drop them).
 for r in "${REQUIRED[@]}"; do
-  [ -f "platform/api/tests/$r" ] || { echo "FATAL: required crown-jewel test $r is missing." >&2; fail=1; }
+  [ -f "tests/$r" ] || { echo "FATAL: required crown-jewel test $r is missing." >&2; fail=1; }
 done
 
 echo ""

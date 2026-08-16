@@ -53,6 +53,7 @@ from ..db.models import ClientAppRow, QEExplorationRow
 from ..fleet.lifecycle import TenantNotOperational
 from ..fleet.provisioning import assert_tenant_operational_db
 from ..security import prod_guard
+from ..security.host_policy import HostPolicyError, validate_allowed_hosts
 from ..services.answer_key import explorer_fill_contract
 from ..services.crawl_diagnosis import diagnose as diagnose_crawl
 from ..services.exploration_planner import build_exploration_plan
@@ -410,13 +411,21 @@ def _idp_domains(fences: dict) -> list[str]:
 def _allowlist_domains(base_url: str, fences: dict) -> list[str]:
     """Resolve the egress allowlist for a crawl (operator fences win).
 
-    Uses the operator-declared ``fences.allowed_hosts`` verbatim (e.g.
+    Uses the operator-declared ``fences.allowed_hosts`` (e.g.
     ``['.acmelife.example']``); falls back to the base_url hostname when none
     are declared.  No public-suffix guessing — the allowlist is explicit data.
 
     Federated login (#7): the DECLARED ``fences.idp_domains`` are appended so the
     browser can egress to the IdP during the SSO redirect (the guard separately
     requires that POST be AUTH-phase + to a declared IdP).
+
+    M0.5 T-SEC-04 — DEFENCE IN DEPTH.  The write boundary
+    (``routers/apps._validated_fences``) is where an unsafe host is REFUSED, so
+    nothing dangerous should reach here.  We re-validate anyway, because rows
+    written before that gate existed are still in the database and this is the
+    last point before the value becomes squid's configuration.  A row that fails
+    now is refused (422), never silently trimmed — a partially-honoured fence is
+    not a fence, and an operator must be told which entry is unsafe.
     """
     declared = [str(h).strip() for h in (fences.get("allowed_hosts") or []) if str(h).strip()]
     if declared:
@@ -427,7 +436,26 @@ def _allowlist_domains(base_url: str, fences: dict) -> list[str]:
     for d in _idp_domains(fences):
         if d not in base:
             base.append(d)
-    return base
+    try:
+        return validate_allowed_hosts(base, field="fences.allowed_hosts")
+    except HostPolicyError as exc:
+        logger.error(
+            "qec.explorations.unsafe_allowlist_refused entry=%s reason=%s",
+            exc.entry, exc.reason)
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "refused": True,
+                "reason": "unsafe_egress_allowlist",
+                "entry": exc.entry,
+                "message": (
+                    f"This app's egress allowlist entry {exc.entry!r} is unsafe: "
+                    f"{exc.reason}. Fix fences.allowed_hosts on the app before "
+                    "crawling — dispatching would hand the browser a fence that "
+                    "does not fence."
+                ),
+            },
+        )
 
 
 def _write_egress_allowlist(domains: list[str], allowlist_path: str) -> None:
@@ -595,6 +623,41 @@ async def _resolve_session(credentials: dict | None) -> dict | None:
     except Exception as exc:
         logger.warning("qec.explorations.auth_hook_failed error=%s", str(exc)[:200])
     return None
+
+
+def resolve_crawl_observe_only(
+    env_attestation: dict | None, fences: dict | None,
+) -> tuple[bool, str]:
+    """The crawl path's OWN observe-only decision (M0.5 T-SEC-05).
+
+    Returns ``(observe_only, env_kind)``.
+
+    WHY IT LIVES HERE
+    =================
+    ``security.prod_guard.resolve_effective_fences`` already forces
+    ``observe_only`` for a production environment — but ONLY on the multi-env
+    ``env_resolver`` path, which a plain single-env crawl never travels.  So the
+    invariant "a non-disposable environment is never mutated" was enforced by a
+    configuration-resolution helper that the actual dispatch did not call: the
+    dispatch read ``fences.get("observe_only")`` and nothing else.  An app whose
+    fences simply lacked the key was dispatched free to type, fill, submit and
+    advance against whatever it was pointed at.
+
+    The rule, fail-closed:
+      * an explicit ``fences.observe_only`` is honoured (a floor, never lowered);
+      * mutation is permitted ONLY when the attested ``env_kind`` is
+        ``disposable`` — the same environment class that already gates SUBMIT;
+      * an absent, blank or unrecognised ``env_kind`` is treated as production.
+
+    The explorer re-derives this independently from the attestation it receives
+    (``main.resolve_observe_only``), so a manipulated dispatch cannot lower it.
+    """
+    att = dict(env_attestation or {})
+    fen = dict(fences or {})
+    env_kind = str(att.get("env_kind") or "").strip().lower()
+    if bool(fen.get("observe_only")):
+        return True, env_kind
+    return env_kind != prod_guard.ENV_KIND_DISPOSABLE, env_kind
 
 
 def _explorer_attestation(att: dict | None) -> dict | None:
@@ -795,6 +858,16 @@ async def _dispatch_explorer(
                 },
             )
 
+    # M0.5 T-SEC-05 — resolve the mutation posture BEFORE anything is dispatched.
+    # Non-disposable ⇒ observation only: no typing, no filling, no submitting, no
+    # commit advance. Recorded on the pending row so a client reading "completed"
+    # can see WHY the crawl catalogued rather than walked.
+    observe_only, crawl_env_kind = resolve_crawl_observe_only(env_attestation, fences)
+    if observe_only:
+        logger.info(
+            "qec.explorations.observe_only tenant=%s app=%s env_kind=%s",
+            tenant_id, app_id, crawl_env_kind or "(unattested)")
+
     credentials = await _decrypt_credentials(request, tenant_id, row)
     # Tier-4: resolve a start-authenticated session (static client session or a
     # fetched auth-hook) for a login the crawler cannot script. NOTE: named
@@ -820,6 +893,9 @@ async def _dispatch_explorer(
         # worker died holds the slot for EVERY app, not just this one, and the
         # portal's Crawl button stays disabled fleet-wide until it clears.
         "crawl_id": crawl_id,
+        # T-SEC-05 evidence: the posture this crawl actually ran under.
+        "observe_only": observe_only,
+        "env_kind": crawl_env_kind,
     }
     # B2 — WHAT WAS ASKED FOR vs WHAT WILL ACTUALLY RUN, recorded at dispatch.
     # B1 refuses the worst case (an explicit e2e that cannot run at full
@@ -951,7 +1027,11 @@ async def _dispatch_explorer(
         choice_overrides=(dict((walk_plan or {}).get("choice_overrides") or {})
                           if walk_plan else {}),
         proven_mechanics=proven_mechanics,
-        observe_only=bool(fences.get("observe_only")),
+        # M0.5 T-SEC-05 — decided HERE, in the crawl path, not inherited from an
+        # unrelated config resolver. ``env_kind`` travels with it so the explorer
+        # can reach the same verdict independently and refuse to be talked down.
+        observe_only=observe_only,
+        env_kind=crawl_env_kind,
     )
     # Dispatch to an available WORKER in the pool. For EACH worker we fence egress
     # into THAT worker's OWN allowlist file (fail-closed) BEFORE dispatching to it —
@@ -964,8 +1044,37 @@ async def _dispatch_explorer(
     result = None
     last_exc: ExplorerDispatchError | None = None
     for worker in workers:
-        _write_egress_allowlist(allowed_hosts, worker["allowlist_path"])
+        # ── M0.5 T-SEC-03: RESERVE FIRST, FENCE SECOND ────────────────────
+        # 1. authenticate (done: require_role on the route)
+        # 2. resolve tenant  (done: user["tenant_id"])
+        # 3. resolve crawl   (done: the pending exploration row above)
+        # 4. reserve the worker ATOMICALLY  ← must precede the fence write
+        # 5. ownership established (the worker records THIS tenant)
+        # 6. write THIS worker's own allowlist
+        # 7. dispatch
+        #
+        # The old order was 6 → 7 → discover-it-was-busy, which let a second
+        # tenant rewrite the egress fence of a worker already crawling for a
+        # first one. A busy worker now refuses at step 4 and its allowlist file
+        # is never opened.
         try:
+            reserved = await explorer_client.reserve_worker(
+                explorer_url=worker["url"], crawl_id=crawl_id, tenant_id=tenant_id,
+            )
+        except ExplorerDispatchError as exc:
+            last_exc = exc
+            if exc.status_code in (409, 502):
+                continue          # busy/unreachable → next worker, fence untouched
+            break                 # deterministic (token unset / old image)
+        if not reserved:
+            last_exc = ExplorerDispatchError(
+                "explorer is busy (single-flight job lock) — try again later",
+                status_code=409,
+            )
+            continue              # busy → next worker, fence untouched
+
+        try:
+            _write_egress_allowlist(allowed_hosts, worker["allowlist_path"])
             result = await explorer_client.dispatch_crawl(
                 dispatch_request, explorer_url=worker["url"],
             )
@@ -973,9 +1082,17 @@ async def _dispatch_explorer(
             break
         except ExplorerDispatchError as exc:
             last_exc = exc
+            await explorer_client.release_worker(
+                explorer_url=worker["url"], crawl_id=crawl_id, tenant_id=tenant_id)
             if exc.status_code in (409, 502):
                 continue  # this worker busy/unreachable → try the next
             break  # deterministic error (token unset / bad request) — same for all
+        except Exception:
+            # An allowlist write failure (503) or anything else: hand the slot
+            # back so a failed dispatch never leaves a worker wedged.
+            await explorer_client.release_worker(
+                explorer_url=worker["url"], crawl_id=crawl_id, tenant_id=tenant_id)
+            raise
     if result is None:
         detail = str(last_exc)[:500] if last_exc else "no explorer worker available"
         await _mark(

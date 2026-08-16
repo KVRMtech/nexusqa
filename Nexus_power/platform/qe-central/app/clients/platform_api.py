@@ -34,6 +34,201 @@ class AuthImportResult(BaseModel):
     detail: str = ""
 
 
+#: Provider-REPORTED token usage for one LLM call (M0.6 / T-OB-03).
+#:
+#: Every field defaults to ``None`` meaning "the provider did not report this",
+#: which is deliberately NOT the same as ``0``.  A silent regression in provider
+#: reporting must look like a gap in the account, never like a free call.
+class LLMUsage(BaseModel):
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+    total_tokens: int | None = None
+    cache_read_tokens: int | None = None
+    cache_creation_tokens: int | None = None
+    provider: str = ""
+    model: str = ""
+    #: Router-performed retries for this response. Every attempt is billed, so
+    #: the caller needs it to reconcile spend against logical call count.
+    retries: int = 0
+    latency_ms: int = 0
+
+    @property
+    def reported(self) -> bool:
+        """True when the provider reported at least one token count."""
+        return self.prompt_tokens is not None or self.completion_tokens is not None
+
+    def as_dict(self) -> dict:
+        data = self.model_dump()
+        # Derive the total when the boundary did not (older platform-api).
+        if data.get("total_tokens") is None and self.reported:
+            data["total_tokens"] = int(self.prompt_tokens or 0) + int(
+                self.completion_tokens or 0)
+        return data
+
+
+def _mint_or_refuse(tenant_id: str, site: str) -> "tuple[str, LLMResult | None]":
+    """Mint the service token, or return an honest ``ok=False`` result.
+
+    ``mint_service_jwt`` refuses to issue a token under an unconfigured or
+    known-development signing secret (M0.5 T-SEC-01).  That refusal is correct,
+    but these two functions are documented as NEVER raising — every caller
+    treats them as best-effort and falls back to a deterministic floor — so a
+    misconfigured deployment must degrade here rather than raise into a running
+    crawl.  The category is logged, so the cause is visible to an operator.
+    """
+    try:
+        return mint_service_jwt(tenant_id), None
+    except ValueError as exc:
+        logger.error("qec.platform_api.service_token_refused site=%s reason=%s",
+                     site, str(exc)[:200])
+        return "", LLMResult(
+            ok=False, status_code=0,
+            detail="service authentication is not configured"[:300])
+
+
+def _assert_egress_clean(site: str, *parts: str) -> "LLMResult | None":
+    """PII-scan an outbound model payload; return a BLOCKED result, or ``None``.
+
+    M0.5 T-SEC-12 — THE ONE CHOKEPOINT.
+    ===================================
+    The guard used to be invoked by exactly one caller
+    (``routers/apps`` → ``guard_inventory``), while ten other ``complete_llm``
+    sites and both screenshot endpoints reached the model with no scan at all.
+    A guard that each caller must remember to invoke is not a guard: it is a
+    convention, and the ten unguarded sites are what a convention looks like
+    after a year.
+
+    So the check moved to the WIRE.  ``complete_llm`` and ``complete_vision``
+    are the only two functions in this service that talk to a model, and both
+    scan here, immediately before the request is built.  There is no second
+    route: a new caller inherits the guard by construction, and a caller that
+    wants to skip it would have to write its own HTTP client — which the
+    security suite asserts nobody has.
+
+    Returns ``None`` when the payload is clean.  On a block it returns an
+    ``ok=False`` :class:`LLMResult`, which is the SAME shape every caller
+    already handles for "the model was unavailable" — so a refusal degrades to
+    the deterministic floor instead of raising into a crawl.
+    """
+    from ..services.pii_egress_guard import guard_text
+
+    verdict = guard_text("\n".join(p for p in parts if p), site=site)
+    if verdict["safe"]:
+        return None
+    logger.warning(
+        "qec.platform_api.egress_blocked site=%s patterns=%s",
+        site, verdict.get("matches"),
+    )
+    return LLMResult(
+        ok=False,
+        status_code=0,
+        detail=f"egress blocked: {verdict['reason']}"[:300],
+    )
+
+
+def _assert_image_egress_clean(site: str, screenshot_b64: str) -> "LLMResult | None":
+    """Gate a SCREENSHOT's egress; return a blocked result, or ``None``.
+
+    Companion to :func:`_assert_egress_clean` for the payload a text scan cannot
+    reach.  Same refusal shape, so a block degrades to the deterministic ladder
+    the crawler already falls back to rather than raising into a crawl.
+    """
+    from ..services.pii_egress_guard import guard_image
+
+    verdict = guard_image(screenshot_b64, site=site, nexus_env=settings.nexus_env)
+    if verdict["safe"]:
+        return None
+    logger.warning(
+        "qec.platform_api.image_egress_blocked site=%s reason=%s patterns=%s",
+        site, verdict["reason"][:120], verdict.get("matches"),
+    )
+    return LLMResult(
+        ok=False, status_code=0,
+        detail=f"screenshot egress blocked: {verdict['reason']}"[:300],
+    )
+
+
+def _parse_usage(response: httpx.Response, body: dict | None) -> LLMUsage:
+    """Read token usage off an LLM response — body first, then headers.
+
+    Two channels because usage must survive BOTH outcomes: a 200 carries it in
+    ``body["usage"]``, while a 502 (a provider that billed us and then failed)
+    has only the headers platform-api stamps on the error.  Reading both here
+    means no caller has to know which path it is on.  Unparseable values are
+    left as ``None`` rather than guessed.
+    """
+    def _int(value) -> int | None:
+        try:
+            if value is None or isinstance(value, bool):
+                return None
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+
+    raw = (body or {}).get("usage")
+    if isinstance(raw, dict):
+        return LLMUsage(
+            prompt_tokens=_int(raw.get("prompt_tokens")),
+            completion_tokens=_int(raw.get("completion_tokens")),
+            total_tokens=_int(raw.get("total_tokens")),
+            cache_read_tokens=_int(raw.get("cache_read_tokens")),
+            cache_creation_tokens=_int(raw.get("cache_creation_tokens")),
+            provider=str(raw.get("provider") or ""),
+            model=str(raw.get("model") or ""),
+            retries=_int(raw.get("retries")) or 0,
+            latency_ms=_int(raw.get("latency_ms")) or 0,
+        )
+    headers = response.headers if response is not None else {}
+    return LLMUsage(
+        prompt_tokens=_int(headers.get("X-LLM-Prompt-Tokens")),
+        completion_tokens=_int(headers.get("X-LLM-Completion-Tokens")),
+        total_tokens=_int(headers.get("X-LLM-Total-Tokens")),
+        provider=str(headers.get("X-LLM-Provider") or ""),
+        model=str(headers.get("X-LLM-Model") or ""),
+    )
+
+
+def _log_usage(tenant_id: str, endpoint: str, usage: "LLMUsage",
+               *, outcome: str) -> None:
+    """Record one LLM call's spend to the metrics registry and the log.
+
+    Two destinations by design (§10): Prometheus gets the AGGREGATE by bounded
+    provider/model/outcome, and the structured log gets the per-call detail
+    correlated by the request id the middleware bound — so "how many tokens this
+    week" and "which crawl spent them" are both answerable without a
+    ``crawl_id`` label ever entering the TSDB.  Never raises.
+    """
+    try:
+        from ..observability import metrics as qec_metrics
+
+        qec_metrics.record_llm_call(
+            endpoint=endpoint,
+            provider=usage.provider,
+            model=usage.model,
+            outcome=outcome,
+            prompt_tokens=usage.prompt_tokens or 0,
+            completion_tokens=usage.completion_tokens or 0,
+            cache_read_tokens=usage.cache_read_tokens or 0,
+            cache_creation_tokens=usage.cache_creation_tokens or 0,
+        )
+    except Exception:  # metrics are never load-bearing
+        logger.debug("qec.platform_api.llm_metrics_failed", exc_info=True)
+    try:
+        # No prompt, no completion text, no tenant secret — identifiers, counts
+        # and a bounded outcome only.
+        logger.info("qec.llm.usage", extra={
+            "tenant_id": tenant_id, "endpoint": endpoint, "outcome": outcome,
+            "provider": usage.provider, "model": usage.model,
+            "prompt_tokens": usage.prompt_tokens,
+            "completion_tokens": usage.completion_tokens,
+            "total_tokens": usage.as_dict().get("total_tokens"),
+            "retries": usage.retries, "latency_ms": usage.latency_ms,
+            "usage_reported": usage.reported,
+        })
+    except Exception:
+        logger.debug("qec.platform_api.llm_usage_log_failed", exc_info=True)
+
+
 #: Result of an LLM completion relay (ANSWERS P2). ``ok=False`` ⇒ no usable text →
 #: the brief compiler degrades to manual authoring, never a fabricated contract.
 class LLMResult(BaseModel):
@@ -41,6 +236,9 @@ class LLMResult(BaseModel):
     text: str = ""
     status_code: int = 0
     detail: str = ""
+    #: Provider-reported spend for this call. Populated on success AND on a
+    #: provider error that still billed — an unusable answer is not a free one.
+    usage: LLMUsage = LLMUsage()
 
 
 async def complete_llm(
@@ -53,7 +251,12 @@ async def complete_llm(
     (the grounding gate then simply has nothing to propose)."""
     if not prompt.strip():
         return LLMResult(ok=False, detail="empty prompt")
-    token = mint_service_jwt(tenant_id)
+    blocked = _assert_egress_clean(f"llm:{task}", prompt, system)
+    if blocked is not None:
+        return blocked
+    token, refused = _mint_or_refuse(tenant_id, f"llm:{task}")
+    if refused is not None:
+        return refused
     body = {"prompt": prompt, "system": system, "max_tokens": max_tokens,
             "temperature": temperature, "task": task}
     try:
@@ -69,19 +272,33 @@ async def complete_llm(
                        extra={"tenant_id": tenant_id, "error": str(exc)[:300]})
         return LLMResult(ok=False, detail=f"transport error: {exc}"[:300])
     if response.status_code == 200:
+        body = {}
         try:
-            text = str((response.json() or {}).get("text") or "")
+            body = response.json() or {}
         except Exception:
-            text = ""
-        return LLMResult(ok=bool(text.strip()), text=text, status_code=200)
+            body = {}
+        text = str(body.get("text") or "")
+        usage = _parse_usage(response, body)
+        _log_usage(tenant_id, "complete", usage, outcome="success")
+        return LLMResult(ok=bool(text.strip()), text=text, status_code=200,
+                         usage=usage)
     detail = ""
+    body = None
     try:
-        detail = str(response.json().get("detail") or "")
+        body = response.json()
+        detail = str((body or {}).get("detail") or "")
     except Exception:
         detail = response.text[:300]
+    # A provider that billed us and THEN failed still spent tokens. platform-api
+    # stamps them on the error headers precisely so this path can keep them —
+    # dropping them here would understate spend exactly when it is anomalous.
+    usage = _parse_usage(response, body if isinstance(body, dict) else None)
+    _log_usage(tenant_id, "complete", usage,
+               outcome="error_with_usage" if usage.reported else "error")
     logger.warning("qec.platform_api.llm_rejected",
                    extra={"tenant_id": tenant_id, "status_code": response.status_code, "detail": detail[:300]})
-    return LLMResult(ok=False, status_code=response.status_code, detail=detail[:300])
+    return LLMResult(ok=False, status_code=response.status_code,
+                     detail=detail[:300], usage=usage)
 
 
 async def complete_vision(
@@ -96,7 +313,19 @@ async def complete_vision(
     """
     if not prompt.strip() or not screenshot_b64:
         return LLMResult(ok=False, detail="empty prompt or screenshot")
-    token = mint_service_jwt(tenant_id)
+    blocked = _assert_egress_clean(f"vision:{task}", prompt, system)
+    if blocked is not None:
+        return blocked
+    # The IMAGE is a separate egress decision from the text beside it: it is the
+    # highest-PII payload this system sends, and no text scan can see a rendered
+    # SSN. Container validated, metadata scanned, pixels acknowledged — never
+    # claimed as scanned. (M0.5 T-SEC-12, pixel half.)
+    blocked = _assert_image_egress_clean(f"vision:{task}", screenshot_b64)
+    if blocked is not None:
+        return blocked
+    token, refused = _mint_or_refuse(tenant_id, f"vision:{task}")
+    if refused is not None:
+        return refused
     body = {"prompt": prompt, "system": system, "image": screenshot_b64,
             "max_tokens": max_tokens, "temperature": temperature, "task": task}
     try:
@@ -112,19 +341,30 @@ async def complete_vision(
                        extra={"tenant_id": tenant_id, "error": str(exc)[:300]})
         return LLMResult(ok=False, detail=f"transport error: {exc}"[:300])
     if response.status_code == 200:
+        body = {}
         try:
-            text = str((response.json() or {}).get("text") or "")
+            body = response.json() or {}
         except Exception:
-            text = ""
-        return LLMResult(ok=bool(text.strip()), text=text, status_code=200)
+            body = {}
+        text = str(body.get("text") or "")
+        usage = _parse_usage(response, body)
+        _log_usage(tenant_id, "vision", usage, outcome="success")
+        return LLMResult(ok=bool(text.strip()), text=text, status_code=200,
+                         usage=usage)
     detail = ""
+    body = None
     try:
-        detail = str(response.json().get("detail") or "")
+        body = response.json()
+        detail = str((body or {}).get("detail") or "")
     except Exception:
         detail = response.text[:300]
+    usage = _parse_usage(response, body if isinstance(body, dict) else None)
+    _log_usage(tenant_id, "vision", usage,
+               outcome="error_with_usage" if usage.reported else "error")
     logger.warning("qec.platform_api.vision_rejected",
                    extra={"tenant_id": tenant_id, "status_code": response.status_code, "detail": detail[:300]})
-    return LLMResult(ok=False, status_code=response.status_code, detail=detail[:300])
+    return LLMResult(ok=False, status_code=response.status_code,
+                     detail=detail[:300], usage=usage)
 
 
 def _auth_import_path(artifact_id: str) -> str:

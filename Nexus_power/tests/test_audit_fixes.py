@@ -295,12 +295,18 @@ class TestGPUSemaphoreInit:
             ears_path = os.path.join(_ROOT, "engines", "ears-engine")
             if ears_path not in sys.path:
                 sys.path.insert(0, ears_path)
-            # Just verify the pattern by checking the source has Semaphore(1) in __init__
+            # Verify __init__ binds a GPU semaphore. The guarantee under test is
+            # "never None after __init__", NOT one particular constructor: the
+            # engine has since moved from a bare ``asyncio.Semaphore(1)`` to the
+            # SDK's ``PriorityGPUSemaphore`` (starvation-free priority queueing),
+            # which is a STRENGTHENING of the same serialization property. Pin
+            # the assignment, not the obsolete literal.
             main_path = os.path.join(ears_path, "main.py")
-            with open(main_path, "r") as f:
+            with open(main_path, "r", encoding="utf-8") as f:
                 source = f.read()
-            assert "self._gpu_semaphore: asyncio.Semaphore = asyncio.Semaphore(1)" in source or \
-                   "self._gpu_semaphore = asyncio.Semaphore(1)" in source
+            assert "self._gpu_semaphore = self._create_gpu_semaphore()" in source or \
+                   "self._gpu_semaphore = asyncio.Semaphore(1)" in source or \
+                   "self._gpu_semaphore: asyncio.Semaphore = asyncio.Semaphore(1)" in source
         except ImportError:
             pytest.skip("Ears engine imports not available")
 

@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Fixture 14 — classifier attributes</title></head>
+<body>
+  <main>
+    <h1>Applicant details</h1>
+
+    <!-- ═══ THE PRIMARY CASE ═══════════════════════════════════════════════
+         The app NAMED this field's semantics itself, in the W3C autocomplete
+         vocabulary. field_semantics.classify() rung 1 maps "email" -> EMAIL at
+         confidence 0.98 without reading a single label token. That rung can
+         only ever fire if capture emits the attribute. -->
+    <label for="email">Email address</label>
+    <input id="email" name="email" type="email"
+           autocomplete="email" inputmode="email" placeholder="you@example.com">
+
+    <!-- A label whose TOKENS say nothing useful, so only the declared
+         autocomplete can classify it. This is the control that proves rung 1
+         fires on the declaration rather than on the name. -->
+    <label for="field-a7">Field A7</label>
+    <input id="field-a7" name="f_a7" type="text"
+           autocomplete="given-name" placeholder="Enter value">
+
+    <!-- MULTI-TOKEN autocomplete. The W3C grammar allows section/shipping
+         prefixes; classify() scans the tokens in REVERSE so the semantic token
+         wins over the "shipping" qualifier. -->
+    <label for="zip">Postcode</label>
+    <input id="zip" name="zip" type="text"
+           autocomplete="shipping postal-code" inputmode="numeric">
+
+    <!-- UNUSUAL CASING. HTML attribute NAMES are normalised to lower case by
+         the parser, but the VALUE is preserved verbatim - "TEL" stays "TEL".
+         Everything downstream must lower-case it or rung 1 misses. -->
+    <label for="phone">Contact</label>
+    <input id="phone" name="phone" type="tel"
+           AUTOCOMPLETE="TEL" INPUTMODE="TEL" PLACEHOLDER="(555) 555-0100">
+
+    <!-- ═══ THE NEGATIVE CASES ═════════════════════════════════════════════ -->
+
+    <!-- ATTRIBUTE ABSENT. Must capture "" and fall through to a later rung,
+         never invent a value. -->
+    <label for="nickname">Nickname</label>
+    <input id="nickname" name="nickname" type="text">
+
+    <!-- ATTRIBUTE EMPTY. Present-but-empty must behave exactly like absent. -->
+    <label for="empty-ac">Reference</label>
+    <input id="empty-ac" name="ref" type="text" autocomplete="" inputmode="" placeholder="">
+
+    <!-- autocomplete="off" is NOT a semantic declaration. classify() excludes
+         on/off explicitly; capturing it must not make rung 1 fire on garbage. -->
+    <label for="opted-out">Search term</label>
+    <input id="opted-out" name="q" type="search" autocomplete="off">
+
+    <!-- ═══ WHY placeholder AND id ARE PART OF THE CONTRACT ════════════════
+         field_signature.compute() falls back to placeholder tokens, then to id
+         tokens, when a control has NO accessible name. Both fallbacks are dead
+         code unless capture emits the attributes.
+
+         This control has no label, no aria-*, no title. Its ONLY semantic
+         signal is the placeholder. -->
+    <input id="x1" name="x1" type="text" placeholder="Social Security Number">
+
+    <!-- No label, no aria, no title, no placeholder. The id is the only
+         signal left. -->
+    <input id="date-of-birth" name="dob_raw" type="text">
+
+    <!-- ═══ ACROSS THE CONTROL TYPES ═══════════════════════════════════════ -->
+
+    <label for="street">Address</label>
+    <textarea id="street" name="street" autocomplete="street-address"
+              placeholder="Street and number"></textarea>
+
+    <label for="country">Country</label>
+    <select id="country" name="country" autocomplete="country-name">
+      <option value="">Select</option>
+      <option value="us">United States</option>
+      <option value="ca">Canada</option>
+    </select>
+
+    <label for="pw">Password</label>
+    <input id="pw" name="pw" type="password"
+           autocomplete="new-password" placeholder="At least 12 characters">
+
+    <label for="amount">Amount</label>
+    <input id="amount" name="amount" type="number"
+           inputmode="decimal" placeholder="0.00" min="0" max="1000000" step="0.01">
+
+    <label for="card">Card</label>
+    <input id="card" name="card" type="text"
+           autocomplete="cc-number" inputmode="numeric"
+           placeholder="1234 5678 9012 3456" maxlength="19">
+
+    <button type="submit" id="go">Continue</button>
+  </main>
+</body>
+</html>

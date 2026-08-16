@@ -42,6 +42,47 @@ spec:
       metricRelabelings:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+{{- if .Values.qeExplorer.enabled }}
+---
+# qe-explorer — the CRAWL-LIFECYCLE metrics (nexus_crawl*/nexus_crawls*).
+#
+# This target is what makes the explorer's DEATH detectable: the `up` series
+# Prometheus synthesises for it goes 1→0 when the pod stops answering, which is
+# what VerdictExplorerDown (templates/prometheusrule.yaml) alerts on. Without
+# this ServiceMonitor there is no `up{...,component="qe-explorer"}` series at
+# all, and a dead explorer is indistinguishable from one that was never
+# deployed — an absence, not an alert.
+#
+# /metrics on the explorer sits OUTSIDE /api/* and requires no X-QEC-Token
+# (app/metrics.py: same public posture as /health), so no scrape credential is
+# needed. The exposition carries no crawl id, URL, credential or prompt.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ $fullname }}-qe-explorer
+  namespace: {{ $namespace }}
+  labels:
+    {{- include "verdict.componentLabels" (dict "root" $root "component" "qe-explorer") | nindent 4 }}
+    {{- with .Values.monitoring.serviceMonitor.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "verdict.componentSelectorLabels" (dict "root" $root "component" "qe-explorer") | nindent 6 }}
+  namespaceSelector:
+    matchNames:
+      - {{ .Release.Namespace }}
+  endpoints:
+    - port: http
+      path: {{ .Values.env.explorerMetricsPath | default .Values.env.metricsPath | quote }}
+      interval: {{ $interval }}
+      scrapeTimeout: {{ $scrapeTimeout }}
+      {{- with .Values.monitoring.serviceMonitor.metricRelabelings }}
+      metricRelabelings:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}
 {{- if .Values.repoIntel.enabled }}
 ---
 apiVersion: monitoring.coreos.com/v1

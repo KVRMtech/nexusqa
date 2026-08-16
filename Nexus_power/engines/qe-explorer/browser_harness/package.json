@@ -1,0 +1,13 @@
+{
+  "name": "qe-explorer-browser-harness",
+  "version": "1.0.0",
+  "private": true,
+  "description": "jsdom execution lane for the QE Explorer capture engine (app/inventory_js.py). Executes the PRODUCTION injected JavaScript unmodified.",
+  "main": "jsdom_runner.js",
+  "scripts": {
+    "selftest": "node jsdom_runner.js --selftest"
+  },
+  "dependencies": {
+    "jsdom": "^24.1.3"
+  }
+}

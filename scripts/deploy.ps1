@@ -39,6 +39,29 @@ $BRANCH      = "develop"
 $QEC_COMPOSE  = "docker-compose.qec.yml"
 $MAIN_COMPOSE = "docker-compose.yml"
 
+# ── M0.5: THE DEPLOY MUST CARRY THE PRODUCTION ENVIRONMENT ──────────────────
+# Every `docker compose` call below used to run with NO --env-file, so the VM
+# inherited the compose DEFAULTS: `NEXUS_ENV: ${NEXUS_ENV:-development}`.
+#
+# That single unset variable disarmed the entire safety spine on the box that is
+# actually serving clients:
+#   * boot_validator.validate_boot_safety only REFUSES in staging/production, so
+#     it warned and booted — on a dev KEK, with whatever secrets were around;
+#   * auth.assert_signing_key_usable permits a known development JWT secret in a
+#     development environment, which is exactly what the fleet claimed to be;
+#   * prod_guard's dev-only onboarding bypass (fences.onboarding_test_bypass) is
+#     honoured in development and never in production — so a real client app
+#     could be waved past attestation by a flag in its own row.
+#
+# `.env.production` is what scripts/verdict_box_bootstrap.sh already GENERATES on
+# the box (NEXUS_ENV=production + 256-bit JWT/explorer/DB secrets + gcp_kms). It
+# was simply never passed to the deploys that followed the bootstrap. Passing it
+# is what makes the gate real, and it is also now REQUIRED: M0.5 removed the
+# shipped defaults for NEXUS_JWT_SECRET and QEC_EXPLORER_TOKEN, so compose will
+# refuse to start without them rather than authenticate with a value from this
+# repository.
+$ENV_FILE = ".env.production"
+
 $ValidServices = @("qe-central", "qe-explorer", "platform-api")
 
 foreach ($svc in $Services) {
@@ -97,6 +120,27 @@ if ($PushOnly) {
 # base Dockerfile does NOT reach it until the base image itself is rebuilt.
 $cmds = "set -e; cd $VM_SRC; " + 'NX_BEFORE=$(git rev-parse HEAD); git pull; NX_AFTER=$(git rev-parse HEAD)'
 
+# PRECONDITION, checked on the VM before anything is built: the production env
+# file must exist. Failing here is the whole point — a deploy that silently
+# falls back to compose defaults is a deploy that silently runs in development,
+# which is the state this check exists to make impossible. The message names the
+# script that creates the file, so the fix is one command away.
+$cmds += "; cd $VM_SRC/Nexus_power"
+$cmds += "; if [ ! -f $ENV_FILE ]; then " +
+         "echo '>> FATAL: $ENV_FILE is missing on this box.'; " +
+         "echo '>> Without it the fleet boots as NEXUS_ENV=development and the'; " +
+         "echo '>> safety spine (boot gate, JWT secret gate, prod_guard bypass'; " +
+         "echo '>> rule) is INERT. Generate it with:'; " +
+         "echo '>>   NEXUS_KEK_GCP_KEY=... GCS_BACKUP_BUCKET=gs://... \\'; " +
+         "echo '>>   bash scripts/verdict_box_bootstrap.sh'; " +
+         "exit 1; fi"
+# Prove what the fleet will actually run as — printed in the deploy log, so a
+# regression to development is visible in the transcript, not only in a health
+# check nobody reads.
+$cmds += "; echo '>> deploy env file: $ENV_FILE'; grep -E '^NEXUS_ENV=' $ENV_FILE"
+$cmds += "; grep -qE '^NEXUS_ENV=(staging|production)`$' $ENV_FILE || " +
+         "{ echo '>> FATAL: $ENV_FILE does not set NEXUS_ENV to staging or production'; exit 1; }"
+
 # Derived from the FROZEN inventory, not from $Services, so a later edit to
 # $Services can no longer desynchronise what is built from what is rolled back.
 $qecBuild  = @($DeployInventory | Where-Object { $_ -in @("qe-central","qe-explorer") })
@@ -120,15 +164,15 @@ if ($qecBuild -contains "qe-central") {
 if ($qecBuild.Count -gt 0) {
     $qecSvcList = $qecBuild -join " "
     $cmds += "; cd $VM_SRC/Nexus_power"
-    $cmds += "; docker compose -f $QEC_COMPOSE build $qecSvcList"
-    $cmds += "; docker compose -f $QEC_COMPOSE up -d --force-recreate $qecSvcList"
+    $cmds += "; docker compose --env-file $ENV_FILE -f $QEC_COMPOSE build $qecSvcList"
+    $cmds += "; docker compose --env-file $ENV_FILE -f $QEC_COMPOSE up -d --force-recreate $qecSvcList"
 }
 
 if ($mainBuild.Count -gt 0) {
     $mainSvcList = $mainBuild -join " "
     $cmds += "; cd $VM_SRC/Nexus_power"
-    $cmds += "; docker compose -f $MAIN_COMPOSE build $mainSvcList"
-    $cmds += "; docker compose -f $MAIN_COMPOSE up -d --force-recreate $mainSvcList"
+    $cmds += "; docker compose --env-file $ENV_FILE -f $MAIN_COMPOSE build $mainSvcList"
+    $cmds += "; docker compose --env-file $ENV_FILE -f $MAIN_COMPOSE up -d --force-recreate $mainSvcList"
 }
 
 # ── Write the deployment manifest ON THE VM, from the frozen inventory ──────

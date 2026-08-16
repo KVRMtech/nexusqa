@@ -14,8 +14,54 @@ Run:
 
 from __future__ import annotations
 
+import importlib
+import os
+import sys
+
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
+
+
+# ─── Importing platform/api from a test ──────────────────────────────────────
+# These tests used `from platform.api.app.routers.artifacts import ...`, which
+# can NEVER work: `platform` is a Python STANDARD LIBRARY module, and the repo's
+# `platform/` directory is not a package (no __init__.py), so the import failed
+# at collection with
+#
+#     ModuleNotFoundError: No module named 'platform.api'; 'platform' is not a package
+#
+# The service is imported the way it is at runtime and in CI — with
+# `platform/api` on sys.path, as `app.*` (see ci/run_platform_api_tests.sh, which
+# exports PYTHONPATH=platform/api). Because several services in this repo each
+# ship a top-level `app` package, the helper below also evicts any `app` already
+# bound to a DIFFERENT service before importing and restores it afterwards, so
+# these tests neither inherit nor cause the cross-suite import pollution that
+# per-file isolation exists to contain.
+_REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+_PLATFORM_API = os.path.join(_REPO_ROOT, "platform", "api")
+
+
+def _platform_api_module(dotted: str):
+    """Import `dotted` (e.g. "app.routers.artifacts") from platform/api."""
+    saved_path = sys.path[:]
+    saved_modules = {
+        name: mod for name, mod in sys.modules.items()
+        if name == "app" or name.startswith("app.")
+    }
+    already_ours = getattr(sys.modules.get("app"), "__file__", "") or ""
+    if not already_ours.startswith(_PLATFORM_API):
+        for name in list(sys.modules):
+            if name == "app" or name.startswith("app."):
+                del sys.modules[name]
+    sys.path.insert(0, _PLATFORM_API)
+    try:
+        return importlib.import_module(dotted)
+    finally:
+        sys.path[:] = saved_path
+        for name in list(sys.modules):
+            if name == "app" or name.startswith("app."):
+                del sys.modules[name]
+        sys.modules.update(saved_modules)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -99,7 +145,7 @@ async def test_artifact_list_endpoint_strips_blob():
     safe_transcript_text. If callers need the blob, they must use
     GET /v1/artifacts/{id} instead.
     """
-    from platform.api.app.routers.artifacts import _artifact_list_item
+    _artifact_list_item = _platform_api_module("app.routers.artifacts")._artifact_list_item
 
     full_artifact = _make_artifact_row()
     assert "full_artifact_json" in full_artifact
@@ -120,7 +166,7 @@ async def test_artifact_list_endpoint_strips_blob():
 @pytest.mark.asyncio
 async def test_artifact_list_does_not_mutate_source():
     """The list item helper must not mutate the original dict."""
-    from platform.api.app.routers.artifacts import _artifact_list_item
+    _artifact_list_item = _platform_api_module("app.routers.artifacts")._artifact_list_item
 
     full_artifact = _make_artifact_row()
     _artifact_list_item(full_artifact)
@@ -140,14 +186,25 @@ async def test_admin_canonical_operator_ready_includes_control_plane():
     canonical_operator_ready should check engine health AND control plane
     (orchestrator, message bus). It is broader than canonical_signoff_ready.
     """
-    try:
-        from platform.api.app.routers.admin import canonical_operator_ready
-    except ImportError:
-        pytest.skip("admin router not importable in this environment")
+    # `canonical_operator_ready` is a value COMPUTED INSIDE the readiness route,
+    # not a module-level callable — the old `assert callable(...)` could never
+    # have held. It never failed either, because the import above it was broken
+    # (`from platform.api...`) and the except-ImportError turned that into a
+    # skip: a test that asserted nothing, silently, for its whole life.
+    #
+    # Assert the CONTRACT the docstring describes instead: operator readiness is
+    # strictly stronger than signoff readiness — it adds control-plane health —
+    # and both are surfaced separately so the two audiences are never conflated.
+    import inspect
 
-    # This is a structural assertion — the function should exist and
-    # its implementation should be distinct from engine-only readiness.
-    assert callable(canonical_operator_ready)
+    admin = _platform_api_module("app.routers.admin")
+    source = inspect.getsource(admin)
+
+    assert "canonical_operator_ready = canonical_signoff_ready and control_plane_healthy" in source, (
+        "operator readiness must be signoff readiness AND control-plane health"
+    )
+    assert '"canonical_signoff_ready": canonical_signoff_ready' in source
+    assert '"canonical_operator_ready": canonical_operator_ready' in source
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -164,7 +221,7 @@ async def test_alias_artifact_preserves_original_session_id():
     adapter is responsible for using the requested session B as the
     viewing session.
     """
-    from platform.api.app.routers.artifacts import _artifact_list_item
+    _artifact_list_item = _platform_api_module("app.routers.artifacts")._artifact_list_item
 
     # Artifact was produced for original-session, now served to alias-session
     artifact = _make_artifact_row(

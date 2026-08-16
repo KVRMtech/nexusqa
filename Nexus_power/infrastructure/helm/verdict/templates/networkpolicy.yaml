@@ -221,6 +221,23 @@ spec:
       ports:
         - protocol: TCP
           port: {{ .Values.qeExplorer.port }}
+    {{- if .Values.monitoring.serviceMonitor.enabled }}
+    # M0.6 — the SCRAPE hole, and it must exist or the observability is a lie:
+    # with ingress restricted to qe-central alone, Prometheus cannot reach
+    # /metrics, `up` is pinned at 0, and VerdictExplorerDown fires forever on a
+    # perfectly healthy explorer. Opened ONLY for the monitoring namespace and
+    # ONLY on the metrics port — this is not a relaxation of the §1.1 isolation
+    # invariant (the explorer's EGRESS policy above is untouched; it still
+    # reaches nothing but squid and its callback). Mirrors the identical hole
+    # qe-central already has for its own scrape.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $monitorNs | quote }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.qeExplorer.port }}
+    {{- end }}
 {{- end }}
 
 {{- if .Values.egressProxy.enabled }}

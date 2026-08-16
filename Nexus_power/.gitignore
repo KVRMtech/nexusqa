@@ -124,3 +124,18 @@ node_modules/
 *.db
 *.sqlite
 *.sqlite3
+
+# ===== Coverage / test artifacts =====
+# ci/run_root_tests.sh writes coverage.xml at the application root and combines
+# per-shard .coverage.* data files; both are build output, never source.
+coverage.xml
+.coverage
+.coverage.*
+
+# ===== Browser-harness run output =====
+# tests/browser writes the production JS snippet it is about to execute into
+# .tmpjs/, and the proving-ground crawl tests write frames + manifests into
+# _crawl_out/. Both are produced by a run, never inputs to one — the golden
+# files under tests/browser/golden/ are the checked-in expectations.
+engines/qe-explorer/tests/browser/.tmpjs/
+engines/qe-explorer/tests/browser/_crawl_out/

@@ -17,6 +17,38 @@ from nexus_sdk.models import BusinessRule, SourceReference, Confidence
 
 logger = logging.getLogger(__name__)
 
+#: Label → score for the confidence word the extraction prompt asks the model for.
+_CONFIDENCE_SCORES = {"critical": 1.0, "high": 0.9, "medium": 0.6, "low": 0.3}
+
+
+def _confidence(raw) -> Confidence:
+    """Build a :class:`Confidence` from whatever the model returned.
+
+    ``Confidence`` is a MODEL (``score``/``reason``), not an enum or a scalar, so
+    the previous ``Confidence(r.get("confidence", "medium"))`` raised
+    ``TypeError: BaseModel.__init__() takes 1 positional argument but 2 were
+    given`` — every rule-extraction call died at the point of building its
+    result. The prompt asks for a WORD ("high"/"medium"/…), but an LLM will
+    sometimes answer with a number, so both are accepted and anything
+    unrecognised degrades to the neutral middle rather than throwing.
+    """
+    if isinstance(raw, Confidence):
+        return raw
+    if isinstance(raw, (int, float)) and not isinstance(raw, bool):
+        score = float(raw)
+        # Tolerate a 0-100 scale as well as 0-1.
+        if score > 1.0:
+            score = score / 100.0
+        return Confidence(score=max(0.0, min(1.0, score)), reason="model-reported score")
+    label = str(raw or "").strip().lower()
+    if label in _CONFIDENCE_SCORES:
+        return Confidence(score=_CONFIDENCE_SCORES[label], reason=f"model-reported '{label}'")
+    try:
+        return Confidence(score=max(0.0, min(1.0, float(label))), reason="model-reported score")
+    except ValueError:
+        return Confidence(score=0.6, reason=f"unrecognised confidence {raw!r}; defaulted")
+
+
 # ─── Prompt Templates ──────────────────────────────────────────
 
 RULE_EXTRACTION_SYSTEM = """You are an expert insurance business analyst AI.
@@ -237,7 +269,7 @@ class RuleExtractor:
                 source=SourceReference(
                     session_id=session_id,
                     speaker_name="SME",
-                    confidence=Confidence(r.get("confidence", "medium")),
+                    confidence=_confidence(r.get("confidence", "medium")),
                 ),
                 tags=[],
             )
