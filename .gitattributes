@@ -1,0 +1,49 @@
+# Line endings — CI runs on Linux, so executable text must be checked out LF.
+#
+# WHY THIS EXISTS. Every shell script in this repository is executed by a Linux
+# runner (ci.yml) or inside a Linux container (the qe-explorer / qe-central
+# images, scripts/qec_ci_db_setup.sh, ci/run_*_tests.sh). Bash cannot parse a
+# CRLF script: it reads the carriage return as part of the last token and fails
+# with a syntax error that names a line which is visibly correct —
+#
+#     scripts/gate_rollback.sh: line 33: syntax error near unexpected token $'in\r'
+#     scripts/gate_rollback.sh: line 33: `  case "$1" in'
+#
+# — which is exactly as confusing to debug as it looks. Observed on this repo:
+# tests/deploy_gate reported "12 failed, 11 errors" against a CRLF working tree
+# and "116 passed" against the identical files normalised to LF. Nothing was
+# wrong with the code.
+#
+# Without this file the outcome depends on each developer's `core.autocrlf`.
+# That happens to be `true` on the current Windows checkout, so its commits are
+# normalised to LF and CI is fine today. A contributor with `core.autocrlf=false`
+# would commit CRLF and break every shell-script job on Linux — a repository-wide
+# breakage caused by a local git setting nobody looks at.
+#
+# Scoped deliberately to the file types where the line ending is FUNCTIONAL
+# rather than cosmetic, instead of a blanket `* text=auto` that would rewrite
+# every file in the tree as a side effect of a CI fix.
+*.sh      text eol=lf
+*.bash    text eol=lf
+
+# Interpreter shebang lines have the same problem as bash: a `#!/usr/bin/env
+# python3\r` is not a valid interpreter path. Python source is also read by
+# tools (ruff, pytest assertion rewriting) that report CR as content.
+*.py      text eol=lf
+
+# Consumed by Linux tooling: docker build, alembic, helm, kubectl, GitHub Actions.
+Dockerfile* text eol=lf
+*.yml     text eol=lf
+*.yaml    text eol=lf
+*.sql     text eol=lf
+
+# PowerShell is run by Windows hosts (scripts/deploy.ps1 on the operator's box),
+# so it keeps CRLF rather than being dragged into the Linux convention.
+*.ps1     text eol=crlf
+
+# Binary — never touched, never diffed as text.
+*.png     binary
+*.jpg     binary
+*.gz      binary
+*.tgz     binary
+*.zip     binary

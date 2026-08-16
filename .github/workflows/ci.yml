@@ -177,7 +177,15 @@ jobs:
           pip install -e sdk/nexus-sdk/
           pip install \
             pytest pytest-asyncio pytest-cov \
-            httpx faker jinja2 numpy
+            httpx faker jinja2 numpy \
+            pillow aiosqlite
+          # pillow    — the visual/artifact-store suites import PIL (17 errors).
+          # aiosqlite — the orchestrator + qi-portal suites use an in-memory
+          #             async SQLite for their store round-trips (26 errors).
+          # Both are present on a dev box via some service's requirements and
+          # were simply never named here, so those suites failed on a clean
+          # runner only. Named explicitly rather than pulled in by installing a
+          # whole service, which would change what this job actually gates.
 
       # PER-DIRECTORY process isolation (ci/run_root_tests.sh).
       #
@@ -197,7 +205,16 @@ jobs:
           NEXUS_REDIS_URL: redis://localhost:6379
           NEXUS_SECRET_KEY: ci-test-secret-key-not-for-prod
           NEXUS_JWT_SECRET: ci-test-jwt-secret-not-for-prod
-        run: bash ci/run_root_tests.sh
+          # The SDK's storage root defaults to the container path /data/nexus
+          # (sdk/nexus_sdk/storage/base.py), which does not exist on a clean
+          # runner — the artifact-store tests died with
+          # FileNotFoundError: '/data/nexus'. Point it at the runner's temp dir
+          # rather than creating a root-owned /data, so the default stays the
+          # container's and only THIS run is redirected.
+          NEXUS_STORAGE_PATH: ${{ runner.temp }}/nexus-storage
+        run: |
+          mkdir -p "$NEXUS_STORAGE_PATH"
+          bash ci/run_root_tests.sh
 
       - name: Upload coverage artifact
         if: always()
