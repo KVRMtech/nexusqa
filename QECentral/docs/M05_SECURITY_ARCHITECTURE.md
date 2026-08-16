@@ -348,6 +348,70 @@ names `/api/v1/llm/`, and no provider SDK is imported anywhere in the service.
 `QEC_PII_EGRESS_GUARD=0` disables it for false-positive diagnosis, and logs
 loudly every time — a deployment running unguarded is visible in its own logs.
 
+### 10a. The pixel half
+
+Scanning the vision *prompt* is the wrong half on its own. A screenshot of a
+filled application renders the SSN, the name and the account number as **pixels**,
+which no text detector can see — and `screenshot_b64` was never validated to be
+an image at all, so any base64 string in that field reached the model with no
+scan of any kind: an unguarded text channel inside the guarded one.
+
+`guard_image` closes what can honestly be closed, and refuses to pretend about
+the rest:
+
+| layer | treatment |
+| --- | --- |
+| container | must be real PNG/JPEG/WebP magic, ≤ 8 MiB — else refused |
+| metadata | PNG `tEXt`/`iTXt`/`zTXt` and EXIF text runs are extracted and PII-scanned |
+| pixels | **not scanned, never reported as scanned** |
+
+Because the pixels cannot be scanned, their egress is a **consent** decision:
+in `staging`/`production` it requires `QEC_VISION_PIXEL_EGRESS=1`. That is the
+second gate, not the first — vision is already off unless
+`QEC_CRAWL_VISION_ENABLED` is set; this asks an operator turning it on in
+production to separately acknowledge that unredactable imagery of a client's
+screens may reach a third party. Every result carries `pixels_scanned: False`
+so no caller, log line or report can imply otherwise. OCR inside the service
+would be the only way to actually read them; that is not built.
+
+---
+
+## 10b. The variable that disarmed everything
+
+Found while closing the items above, and worth its own section because it is the
+highest-leverage defect in this document.
+
+`docker-compose.qec.yml` declares `NEXUS_ENV: ${NEXUS_ENV:-development}`, and
+`scripts/deploy.ps1` ran every `docker compose` call with **no `--env-file`**.
+The fleet that serves clients therefore booted as **development**, and three
+independent controls went inert at once:
+
+| control | behaviour in `development` |
+| --- | --- |
+| `boot_validator.validate_boot_safety` | warns and boots — dev KEK, dev secrets, default DB passwords all tolerated |
+| `auth.assert_signing_key_usable` | permits a **known development JWT secret** |
+| `prod_guard._bypass_allowed` | honours `fences.onboarding_test_bypass`, so a real client app can skip attestation via a flag in its own row |
+
+None of those is a bug. All three are correct code behaving exactly as designed
+for a laptop — on a box that told them it was one.
+
+`scripts/verdict_box_bootstrap.sh` already **generates** `.env.production`
+(`NEXUS_ENV=production`, 256-bit JWT/explorer/DB secrets, `gcp_kms`). It was
+simply never passed to the deploys that followed the bootstrap. Now:
+
+- `deploy.ps1` pins `.env.production`, **refuses to deploy** if it is missing
+  (naming the script that creates it), asserts it sets a deployed `NEXUS_ENV`,
+  prints the value into the deploy log, and passes `--env-file` on every
+  compose build/up;
+- `gate_rollback.sh` carries the same file, so an incident restore cannot
+  silently downgrade the fleet — and says so loudly if the file is absent,
+  because during an incident a degraded restore still beats no restore;
+- the CI gate asserts all of the above, so a future compose call without
+  `--env-file` fails the build.
+
+This is also why the M0.5 secret changes are safe to ship: the `:?` required-var
+form now resolves from the same file that supplies the production environment.
+
 ---
 
 ## 11. Observability of refusals
