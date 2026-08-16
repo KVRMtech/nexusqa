@@ -743,10 +743,15 @@ jobs:
       # explorer WRITES the manifest, and qe-central's real mapper INGESTS it.
       # Importing the mapper is what turns "a file was written" into "the
       # substrate would have received page visits".
+      # Each requirements.txt is installed FROM ITS OWN DIRECTORY. qe-central's
+      # line 5 is `-e ../../sdk/nexus-sdk`, a CWD-relative editable path: run
+      # from Nexus_power/ it resolves outside the repo and pip aborts the whole
+      # install with "../../sdk/nexus-sdk is not a valid editable requirement".
+      # The other jobs already use this subshell-cd form; this one did not.
       - name: Install the explorer and qe-central
         run: |
-          pip install -r engines/qe-explorer/requirements.txt
-          pip install -r platform/qe-central/requirements.txt
+          ( cd engines/qe-explorer   && pip install -r requirements.txt )
+          ( cd platform/qe-central   && pip install -r requirements.txt )
           pip install uvicorn
 
       - name: Install Chromium

@@ -593,20 +593,38 @@ class TestDecisionInvariants:
 
 
 class TestConfigHelpers:
+    """Settings is constructed by ALIAS (``QEC_EXPLORER_TOKEN=``), never by field
+    name (``explorer_token=``).
+
+    ``Settings`` declares ``populate_by_name: True``, so on a recent
+    pydantic-settings BOTH work — but on the version this service PINS
+    (pydantic-settings 2.6.1, requirements.txt) init-by-field-name is not honoured
+    for an aliased field, and the value silently falls back to the environment.
+    Under that fallback every instance below shared the one env-provided secret:
+    ``token_matches("s3cr3t-token")`` returned False, and two Settings built with
+    deliberately DIFFERENT keys produced byte-identical signatures — the
+    signing test asserting they differ failed with
+    ``assert '092f23c61642b10d' != '092f23c61642b10d'``.
+
+    It passed on a dev box with a newer pydantic-settings and failed in CI on the
+    pinned one. The alias form is accepted by every version, so it is the portable
+    way to say "this instance has THIS secret".
+    """
+
     def test_token_matches_constant_time_true(self):
-        s = Settings(explorer_token="s3cr3t-token")
+        s = Settings(QEC_EXPLORER_TOKEN="s3cr3t-token")
         assert s.token_matches("s3cr3t-token") is True
 
     @pytest.mark.parametrize("provided", ["wrong", "", "  ", None, "s3cr3t-token "])
     def test_token_matches_false_on_mismatch(self, provided):
-        s = Settings(explorer_token="s3cr3t-token")
+        s = Settings(QEC_EXPLORER_TOKEN="s3cr3t-token")
         # a trailing-space variant is stripped and still compared → still True,
         # so exclude it; everything else must be False.
         expected = provided is not None and provided.strip() == "s3cr3t-token"
         assert s.token_matches(provided) is expected
 
     def test_empty_configured_secret_never_matches(self):
-        s = Settings(explorer_token="")
+        s = Settings(QEC_EXPLORER_TOKEN="")
         assert s.token_matches("") is False
         assert s.token_matches("anything") is False
 
@@ -615,8 +633,8 @@ class TestConfigHelpers:
         # each envelope carries its own single-use nonce and timestamp, which is
         # precisely what makes a captured callback un-replayable. What must stay
         # stable is the KEY IDENTITY, and it must differ per secret.
-        a = Settings(explorer_token="k1")
-        b = Settings(explorer_token="k2")
+        a = Settings(QEC_EXPLORER_TOKEN="k1")
+        b = Settings(QEC_EXPLORER_TOKEN="k2")
         sig1 = a.sign_payload(b"hello")
         sig2 = a.sign_payload(b"hello")
         assert sig1 != sig2                               # fresh nonce each time
