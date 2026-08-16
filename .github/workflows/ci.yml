@@ -212,8 +212,12 @@ jobs:
           # rather than creating a root-owned /data, so the default stays the
           # container's and only THIS run is redirected.
           NEXUS_STORAGE_PATH: ${{ runner.temp }}/nexus-storage
+          # The orchestrator's upload_path is a separate literal, not derived
+          # from NEXUS_STORAGE_PATH, so it needs its own redirect or importing
+          # app.main dies with PermissionError on '/data'.
+          ORCHESTRATOR_UPLOAD_PATH: ${{ runner.temp }}/nexus-storage/orchestrator/uploads
         run: |
-          mkdir -p "$NEXUS_STORAGE_PATH"
+          mkdir -p "$NEXUS_STORAGE_PATH" "$ORCHESTRATOR_UPLOAD_PATH"
           bash ci/run_root_tests.sh
 
       - name: Upload coverage artifact

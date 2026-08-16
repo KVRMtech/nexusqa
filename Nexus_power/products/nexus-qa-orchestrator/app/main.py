@@ -110,7 +110,17 @@ class OrchestratorConfig(BaseSettings):
     jwt_secret: str = Field(default="dev-jwt-secret-key-change-in-production", alias="NEXUS_JWT_SECRET")
 
     # File storage
-    upload_path: str = "/data/nexus/orchestrator/uploads"
+    #
+    # Every other configurable field in this class carries an alias; this one did
+    # not, so the CONTAINER path below was the only value it could ever take. On
+    # any host without a writable /data, importing app.main raised
+    # `PermissionError: [Errno 13] Permission denied: '/data'` before a single
+    # test could run — and NEXUS_STORAGE_PATH could not help, because this path
+    # is a literal rather than derived from the SDK storage root. The default is
+    # unchanged; it is now merely overridable, like its siblings.
+    upload_path: str = Field(
+        default="/data/nexus/orchestrator/uploads", alias="ORCHESTRATOR_UPLOAD_PATH",
+    )
 
     # Processing
     default_processing_profile: str = Field(
