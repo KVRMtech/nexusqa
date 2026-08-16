@@ -38,7 +38,14 @@ SRC="${DRILL_SRC:-/home/srika/nexus-src}"
 DRILL_SERVICES="${DRILL_SERVICES:-qe-central qe-explorer platform-api}"
 
 cd "$SRC/Nexus_power" || exit 2
-HERE="$SRC/Nexus_power/scripts"
+# WHERE THE GATE SCRIPTS COME FROM, separately from where the SOURCE TREE is.
+# They are normally the same directory. Splitting them lets the drill exercise a
+# candidate gate against the real repo and the real containers WITHOUT dirtying
+# tracked files — which matters because the rollback under test does
+# `git checkout <green>`, and git refuses that with modified tracked files. So a
+# drill that staged its own scripts into the repo would break the very operation
+# it exists to prove.
+HERE="${DRILL_SCRIPTS:-$SRC/Nexus_power/scripts}"
 BASE="$HERE/golden_crawl_baseline.json"
 MANIFEST=/tmp/drill_manifest.json
 
@@ -68,14 +75,30 @@ restore() {
   echo "--- restoring ---"
   git -C "$SRC" checkout -q "$START_REF" 2>/dev/null || git -C "$SRC" checkout -q "$START"
   cp /tmp/drill_baseline.bak "$BASE" 2>/dev/null
+  # REBUILD AND FORCE-RECREATE — not a bare `up -d`.
+  #
+  # This drill deliberately builds the fleet from the LAST-GREEN commit, so
+  # putting the source tree back is only half the restore: `up -d` is a no-op
+  # when a container's config has not changed, so the containers keep serving
+  # images built from the green commit while `git rev-parse` cheerfully reports
+  # the starting branch. Observed live on 2026-08-16, and harmless only because
+  # the one commit in range touched a host-side script that is baked into no
+  # image. Across a real code change this would leave production silently
+  # reverted by the very drill that exists to prove reverting works.
   ( cd "$SRC/Nexus_power" || exit 0
     for f in docker-compose.qec.yml docker-compose.yml; do
       for s in $DRILL_SERVICES; do
-        docker compose -f "$f" config --services 2>/dev/null | grep -qx "$s" \
-          && docker compose -f "$f" up -d "$s" >/dev/null 2>&1
+        docker compose -f "$f" config --services 2>/dev/null | grep -qx "$s" || continue
+        docker compose -f "$f" build "$s" >/dev/null 2>&1 \
+          && docker compose -f "$f" up -d --force-recreate "$s" >/dev/null 2>&1
       done
     done )
   echo "restored HEAD : $(git -C "$SRC" rev-parse --short HEAD) ($(git -C "$SRC" rev-parse --abbrev-ref HEAD))"
+  # Report what is SERVING, not only what is checked out — the two came apart.
+  for c in nexus-platform-api nexus-qe-explorer nexus-qe-central; do
+    printf 'restored %-22s %s\n' "$c" \
+      "$(docker inspect -f '{{.State.Status}}' "$c" 2>/dev/null || echo missing)"
+  done
 }
 trap restore EXIT
 
