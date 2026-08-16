@@ -8,12 +8,13 @@ BASE=scripts/golden_crawl_baseline.json
 cp "$BASE" /tmp/gap_base.bak
 trap 'cp /tmp/gap_base.bak "$BASE"' EXIT
 
-# Start from a clean gap history so the run counter is unambiguous.
-python3 - "$BASE" <<'PY'
-import json, sys
-b = json.load(open(sys.argv[1])); b.pop("_gaps", None)
-json.dump(b, open(sys.argv[1], "w"), indent=2)
-PY
+# ISOLATED RUNTIME STATE (M0.4 / T-GT-04). Gap bookkeeping used to live inside
+# the git-tracked baseline, so this proof reset it by editing that file. It now
+# lives in a separate untracked state file — and the proof gets its OWN, both so
+# the run counter starts at a known zero and so running the proof cannot age the
+# host's real gap history toward overdue.
+export GOLDEN_GATE_STATE=/tmp/gap_proof_state.json
+rm -f "$GOLDEN_GATE_STATE"
 
 EXPL=$(docker exec nexus-postgres psql -U nexus -d qecentral -A -t -c \
   "SELECT exploration_id FROM qe_explorations WHERE app_id='$APP' AND status='completed' ORDER BY created_at DESC LIMIT 1" | tr -d '\r ')

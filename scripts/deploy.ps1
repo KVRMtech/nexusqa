@@ -55,8 +55,22 @@ if (-not $Services -or $Services.Count -eq 0) {
     Write-Host "Deploying: $($Services -join ', ')" -ForegroundColor Cyan
 }
 
+# ── THE DEPLOYMENT INVENTORY — captured ONCE, never re-derived (T-GT-01) ────
+# This list is the answer to "what did this deploy touch?", and it is frozen
+# here, before a single container is built. Everything downstream — the build
+# commands, the manifest written to the VM, and the rollback — reads THIS.
+#
+# What it replaces: the build section assigned `$svcList` twice (once for the
+# qec overlay, once for the main overlay) and `Invoke-GateRollback` read the
+# same script-scoped variable afterwards. It therefore saw only whatever the
+# LAST build block wrote — `platform-api` on a default 3-service deploy. A red
+# gate rolled back one service in three, printed "Fleet restored to <sha>", and
+# closed the incident while two containers kept serving the rejected build.
+$DeployInventory = @($ValidServices | Where-Object { $_ -in $Services })
+Write-Host "Deployment inventory (rollback set): $($DeployInventory -join ', ')" -ForegroundColor Cyan
+
 # Step 1: Push
-Write-Host "`n[1/3] Pushing to $REMOTE/$BRANCH..." -ForegroundColor Blue
+Write-Host "`n[1/4] Pushing to $REMOTE/$BRANCH..." -ForegroundColor Blue
 Set-Location $PSScriptRoot\..
 # git writes ordinary progress ("To github.com:...") to STDERR. Under
 # $ErrorActionPreference='Stop' PowerShell 5.1 promotes that to a TERMINATING
@@ -83,8 +97,10 @@ if ($PushOnly) {
 # base Dockerfile does NOT reach it until the base image itself is rebuilt.
 $cmds = "set -e; cd $VM_SRC; " + 'NX_BEFORE=$(git rev-parse HEAD); git pull; NX_AFTER=$(git rev-parse HEAD)'
 
-$qecBuild  = @($Services | Where-Object { $_ -in @("qe-central","qe-explorer") })
-$mainBuild = @($Services | Where-Object { $_ -eq "platform-api" })
+# Derived from the FROZEN inventory, not from $Services, so a later edit to
+# $Services can no longer desynchronise what is built from what is rolled back.
+$qecBuild  = @($DeployInventory | Where-Object { $_ -in @("qe-central","qe-explorer") })
+$mainBuild = @($DeployInventory | Where-Object { $_ -eq "platform-api" })
 
 # Rebuild the base image before qe-central when the SDK / base Dockerfile changed
 # in the pulled range (or -RebuildBase forced it). Guarded so a normal deploy
@@ -99,24 +115,66 @@ if ($qecBuild -contains "qe-central") {
     $cmds += "; if $baseGuard; then echo '>> nexus-base:dev: SDK/base changed - rebuilding'; docker build -f infrastructure/docker/Dockerfile.base -t nexus-base:dev . ; else echo '>> nexus-base:dev: no rebuild needed'; fi"
 }
 
+# Distinct variable per overlay. They used to share one name, which is the whole
+# of T-GT-01: the rollback read the survivor of that collision.
 if ($qecBuild.Count -gt 0) {
-    $svcList = $qecBuild -join " "
+    $qecSvcList = $qecBuild -join " "
     $cmds += "; cd $VM_SRC/Nexus_power"
-    $cmds += "; docker compose -f $QEC_COMPOSE build $svcList"
-    $cmds += "; docker compose -f $QEC_COMPOSE up -d --force-recreate $svcList"
+    $cmds += "; docker compose -f $QEC_COMPOSE build $qecSvcList"
+    $cmds += "; docker compose -f $QEC_COMPOSE up -d --force-recreate $qecSvcList"
 }
 
 if ($mainBuild.Count -gt 0) {
-    $svcList = $mainBuild -join " "
+    $mainSvcList = $mainBuild -join " "
     $cmds += "; cd $VM_SRC/Nexus_power"
-    $cmds += "; docker compose -f $MAIN_COMPOSE build $svcList"
-    $cmds += "; docker compose -f $MAIN_COMPOSE up -d --force-recreate $svcList"
+    $cmds += "; docker compose -f $MAIN_COMPOSE build $mainSvcList"
+    $cmds += "; docker compose -f $MAIN_COMPOSE up -d --force-recreate $mainSvcList"
 }
+
+# ── Write the deployment manifest ON THE VM, from the frozen inventory ──────
+# The manifest is the rollback's ONLY input. Written after the swap succeeds and
+# before the gate runs, so the file on disk always describes the build that is
+# actually serving. gate_manifest.py validates the service set, so an unknown
+# service fails here — loudly, at deploy time — rather than at rollback time,
+# when a bad inventory means restoring the wrong containers during an incident.
+$manifestArgs = ($DeployInventory -join " ")
+$cmds += "; cd $VM_SRC/Nexus_power"
+$cmds += "; python3 scripts/gate_manifest.py build --out $VM_SRC/.deploy_manifest.json" +
+         " --commit `$(git -C $VM_SRC rev-parse HEAD)" +
+         " --deployed-at `$(date -u +%Y-%m-%dT%H:%M:%SZ) $manifestArgs"
+$cmds += "; echo '>> deployment manifest:'; cat $VM_SRC/.deploy_manifest.json"
 
 $cmds += "; echo ''; echo 'Container status:'; docker ps --format 'table {{.Names}}\t{{.Status}}' | head -15"
 
+# ── PRE-SWAP HOST HEALTH PREFLIGHT (T-GT-05) ───────────────────────────────
+# The rollback matrix says infrastructure failure must not revert a healthy
+# deployment. The cleanest way to honour that is to notice the infrastructure
+# failure BEFORE the fleet changes: at this point the previous build is still
+# serving, so aborting costs nothing and reverts nothing. Post-swap the same
+# check still runs inside the gate, where it aborts without rolling back - but
+# by then something has already changed, which is why this preflight exists.
+Write-Host "`n[2/4] Host health preflight (pre-swap)..." -ForegroundColor Blue
+$ErrorActionPreference = "Continue"
+$healthCmd = "bash $VM_SRC/Nexus_power/scripts/host_health.sh"
+& gcloud compute ssh "$VM_USER@$VM_NAME" --zone="$VM_ZONE" --project="$VM_PROJECT" --command="$healthCmd"
+$healthExit = $LASTEXITCODE
+$ErrorActionPreference = "Stop"
+if ($healthExit -eq 4) {
+    Write-Host "`nDEPLOY ABORTED - the host cannot support a trustworthy deploy." -ForegroundColor Red
+    Write-Host "NOTHING WAS SWAPPED. The previous build is still serving, untouched." -ForegroundColor Green
+    Write-Host "Fix the host (disk / pruned containers / dead services) and re-run." -ForegroundColor Yellow
+    exit 2
+}
+if ($healthExit -ne 0) {
+    # The preflight itself could not run (SSH, missing script on an older VM
+    # checkout). That is not evidence of an unhealthy host, and it must not
+    # silently become a green light either - say so and continue, because the
+    # gate will check health again after the swap.
+    Write-Host "Preflight INCONCLUSIVE (exit $healthExit) - continuing; the gate re-checks." -ForegroundColor Yellow
+}
+
 # Step 3: SSH and deploy
-Write-Host "`n[2/3] SSHing to $VM_NAME and deploying..." -ForegroundColor Blue
+Write-Host "`n[3/4] SSHing to $VM_NAME and deploying..." -ForegroundColor Blue
 
 # Same stderr trap as the push: git-pull progress and docker build output both go
 # to stderr, and under 'Stop' PowerShell 5.1 kills a deploy that is working.
@@ -130,37 +188,31 @@ if ($sshExit -ne 0) {
     exit 1
 }
 
-Write-Host "`n[3/3] Deploy complete! Services restarted: $($Services -join ', ')" -ForegroundColor Green
+Write-Host "`n[4/4] Swap complete. Services restarted: $($DeployInventory -join ', ')" -ForegroundColor Green
 Write-Host "Portal: https://136.85.106.73" -ForegroundColor Green
 
 function Invoke-GateRollback {
     param([string]$Reason)
     Write-Host "`nROLLING BACK - the fleet must not stay on a build the gate refused ($Reason)." -ForegroundColor Red
-    $prev = "cat $VM_SRC/.last_green_deploy 2>/dev/null || true"
-    $green = (& gcloud compute ssh "$VM_USER@$VM_NAME" --zone="$VM_ZONE" --project="$VM_PROJECT" --command="$prev" 2>$null | Select-Object -Last 1)
-    $green = "$green".Trim()
-    if (-not $green) {
-        Write-Host "NO LAST-GREEN COMMIT RECORDED - cannot roll back automatically." -ForegroundColor Red
-        Write-Host "The fleet is running an UNVERIFIED build. Roll back by hand." -ForegroundColor Red
-        return
-    }
-    Write-Host "Restoring last green commit $green ..." -ForegroundColor Yellow
-    # Rebuild from whichever compose file actually owns each service. Trying
-    # only one silently left a main-compose service on the rejected build - a
-    # rollback that reports success while the bad container keeps serving is
-    # worse than no rollback, because it ends the investigation.
-    $rb = "set -e; cd $VM_SRC; git checkout $green; cd Nexus_power; ok=0; " +
-          "for f in $QEC_COMPOSE $MAIN_COMPOSE; do " +
-          'for s in ' + "$svcList" + '; do ' +
-          'if docker compose -f $f config --services 2>/dev/null | grep -qx "$s"; then ' +
-          'docker compose -f $f build "$s" && docker compose -f $f up -d --force-recreate "$s" && ok=1; ' +
-          'fi; done; done; test "$ok" = 1'
+    Write-Host "Rollback set (from the deployment manifest): $($DeployInventory -join ', ')" -ForegroundColor Yellow
+    # ONE rollback implementation, on the VM, driven by the manifest this deploy
+    # wrote. deploy.ps1 no longer inlines a shell loop over a variable it hopes
+    # is still correct, and gate_rollback_drill.sh no longer re-types a copy of
+    # that loop: the drill and the incident run the SAME code, so the drill
+    # actually proves the thing that will execute at 3am.
+    $rb = "bash $VM_SRC/Nexus_power/scripts/gate_rollback.sh --src $VM_SRC --manifest $VM_SRC/.deploy_manifest.json"
     & gcloud compute ssh "$VM_USER@$VM_NAME" --zone="$VM_ZONE" --project="$VM_PROJECT" --command="$rb"
-    if ($LASTEXITCODE -eq 0) {
-        Write-Host "Fleet restored to $green. The rejected build is NOT serving." -ForegroundColor Green
+    $rbExit = $LASTEXITCODE
+    if ($rbExit -eq 0) {
+        Write-Host "Fleet restored. EVERY deployed service is off the rejected build." -ForegroundColor Green
+    } elseif ($rbExit -eq 2) {
+        Write-Host "ROLLBACK NOT ATTEMPTED - no green anchor or no usable manifest." -ForegroundColor Red
+        Write-Host "The fleet is running an UNVERIFIED build. Roll back by hand." -ForegroundColor Red
     } else {
-        Write-Host "ROLLBACK FAILED - the fleet may be on a rejected build. Intervene now." -ForegroundColor Red
+        Write-Host "ROLLBACK INCOMPLETE - the fleet is MIXED. Intervene now." -ForegroundColor Red
+        Write-Host "Read the 'failed:' line above: those services are still on the rejected build." -ForegroundColor Red
     }
+    return $rbExit
 }
 
 # -- A2: prove the deploy with one real crawl --------------------------------
@@ -188,31 +240,66 @@ else {
     # No backtick continuation here: a single trailing space after one turns the
     # whole block into a parse error, which is exactly how this shipped broken.
     $gateCmd = "cd $VM_SRC/Nexus_power && bash scripts/golden_crawl_gate.sh $GoldenAppId"
-    & gcloud compute ssh "$VM_USER@$VM_NAME" --zone="$VM_ZONE" --project="$VM_PROJECT" --command="$gateCmd"
+    # Tee the transcript: the gate's last line carries a machine-readable verdict,
+    # which is the only thing that survives an SSH drop that eats the exit code.
+    $gateOut = (& gcloud compute ssh "$VM_USER@$VM_NAME" --zone="$VM_ZONE" --project="$VM_PROJECT" --command="$gateCmd" 2>&1 | Tee-Object -Variable _t | Out-String)
     $gateExit = $LASTEXITCODE
     $ErrorActionPreference = "Stop"
-    # Exit 3 is the gate's VERDICT that the funnel regressed. Any other non-zero
-    # code means it never reached a verdict - a dropped SSH connection, a crawl
-    # that could not be dispatched, a run that timed out. Announcing those as a
-    # regression is a false alarm, and a gate that cries wolf gets switched off.
-    # THE GATE RUNS AFTER THE CONTAINER SWAP, so "blocks the deploy" can only
-    # mean one thing honestly: the fleet does not STAY on a build the gate
-    # refused. A red verdict returns the VM to the last commit that passed.
-    # Without this, a red gate printed a warning while the bad build kept
-    # serving - which is what "reports" rather than "blocks" actually meant.
-    if ($gateExit -eq 3) {
+
+    # ── THE ROLLBACK DECISION MATRIX (T-GT-05) ─────────────────────────────
+    # Rollback follows DEPLOYMENT CORRECTNESS, never monitoring availability.
+    #
+    #   condition                     verdict            rollback
+    #   ---------------------------   ----------------   --------
+    #   funnel regressed              REGRESSION (3)     YES
+    #   app could not produce a crawl APP_UNHEALTHY (1)  YES
+    #   host unhealthy / DB unread    HOST_UNAVAIL (4)   NO  - abort
+    #   SSH dropped, no verdict line  <transport>        NO  - abort
+    #   gate passed                   PASS (0)           NO  - finalize
+    #
+    # What changed and why: host-health failure used to exit 1, which landed in
+    # the catch-all "gate reached no verdict" branch and rolled back. So a full
+    # disk on the VM reverted a deployment nothing had found fault with. An
+    # infrastructure failure means we know LESS about the build, not that the
+    # build is bad; reverting on it is an outage we inflict on ourselves. The
+    # honest response is to abort, leave the fleet alone, say the build is
+    # UNVERIFIED, and demand a re-run.
+    $gateVerdict = ""
+    if ($gateOut -match 'GATE_VERDICT=(\w+)') { $gateVerdict = $Matches[1] }
+
+    if ($gateExit -eq 0 -and $gateVerdict -eq "PASS") {
+        # fall through to finalize
+    }
+    elseif ($gateVerdict -eq "REGRESSION" -or $gateExit -eq 3) {
         Write-Host "`nGOLDEN CRAWL GATE FAILED - the funnel regressed on this deploy." -ForegroundColor Red
-        Invoke-GateRollback -Reason "funnel regression"
+        Invoke-GateRollback -Reason "funnel regression" | Out-Null
         exit 1
     }
-    if ($gateExit -ne 0) {
-        Write-Host "`nGOLDEN CRAWL GATE DID NOT COMPLETE (exit $gateExit)." -ForegroundColor Yellow
-        Write-Host "This is NOT a regression verdict - the crawl or the connection failed." -ForegroundColor Yellow
-        # An UNGATED build on the fleet is exactly what rule 1 forbids, and a
-        # gate that could not reach a verdict has proven nothing about it. Live
-        # example: a 409 single-flight lock let an ungated qe-central ship.
-        Invoke-GateRollback -Reason "gate reached no verdict"
+    elseif ($gateVerdict -eq "APP_UNHEALTHY" -or $gateExit -eq 1) {
+        # The gate confirmed the host was healthy and the containers were up, and
+        # the application STILL could not produce a crawl. That is a statement
+        # about this build. Live example: a 409 single-flight lock let an ungated
+        # qe-central ship.
+        Write-Host "`nGOLDEN CRAWL GATE: the deployed build could not produce a crawl." -ForegroundColor Red
+        Invoke-GateRollback -Reason "deployed application unhealthy" | Out-Null
         exit 1
+    }
+    elseif ($gateVerdict -eq "HOST_UNAVAILABLE" -or $gateExit -eq 4) {
+        Write-Host "`nGATE ABORTED - the HOST is unhealthy. NO verdict on this build." -ForegroundColor Yellow
+        Write-Host "NOT rolling back: infrastructure failure is not deployment failure." -ForegroundColor Yellow
+        Write-Host "The fleet stays on this build, and this build is UNVERIFIED." -ForegroundColor Yellow
+        Write-Host "Fix the host, then: bash scripts/golden_crawl_gate.sh $GoldenAppId" -ForegroundColor Yellow
+        exit 2
+    }
+    else {
+        # No verdict line at all: the transport failed, or the gate died before
+        # it could speak. Same class as monitoring being unavailable - we learned
+        # nothing about the build, so we change nothing about the fleet.
+        Write-Host "`nGATE UNREACHABLE (exit $gateExit, verdict '$gateVerdict')." -ForegroundColor Yellow
+        Write-Host "The gate never reported a verdict - treat as a transport/monitoring failure." -ForegroundColor Yellow
+        Write-Host "NOT rolling back. The fleet stays on this build, and it is UNVERIFIED." -ForegroundColor Yellow
+        Write-Host "Re-run the gate before trusting it: bash scripts/golden_crawl_gate.sh $GoldenAppId" -ForegroundColor Yellow
+        exit 2
     }
     Write-Host "`nGolden crawl gate PASSED - no funnel regression." -ForegroundColor Green
     $markGreen = "cd $VM_SRC && git rev-parse HEAD > .last_green_deploy"

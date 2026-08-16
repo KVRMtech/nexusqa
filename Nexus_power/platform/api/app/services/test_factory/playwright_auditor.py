@@ -391,6 +391,170 @@ def gate(report: dict, *, blocking: bool = False) -> dict:
     }
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+#  API-POLICY LINT — the validation four reports have always ADVERTISED
+# ═══════════════════════════════════════════════════════════════════════════
+# WHY THIS EXISTS (M0.4 / T-GT-07). Four call sites called ``lint_spec`` inside a
+# bare ``except: lint = []``. The function did not exist, so every call raised
+# AttributeError, every report carried ``"lint": []`` / ``"lint_errors": 0``, and
+# the rubric line read "score_spec + API-policy lint". An empty finding list is
+# INDISTINGUISHABLE from a clean asset — so the certificate claimed a policy
+# audit that had never run, on every asset, since the field was added. The
+# redteam benchmark had even written the contract down
+# (``expect_lint_errors_min: 3`` on a sleep + page.click + ElementHandle spec)
+# and passed anyway, because the same except-swallow zeroed the count.
+#
+# The rule of this milestone is that a report never claims work that did not
+# execute. So the function is now real, it is PURE (regex over a string, no I/O,
+# no imports beyond ``re``), and it CANNOT raise — the call sites therefore drop
+# their except-swallow and an empty list finally means "ran, found nothing".
+#
+# SEVERITY CALIBRATION. ``error`` is reserved for API usage that is wrong under
+# any circumstance and that the compiler provably never emits — so a
+# COMPILER-GENERATED spec scores zero lint errors and its risk score is unchanged
+# by this change. Deliberate compiler idioms that merely deserve a reader's
+# attention (bounded ``networkidle``, the visual coordinate-click fallback,
+# tolerant ``.catch(() => {})`` oracles) are ``warning``: surfaced, never scored.
+LINT_RULES_VERSION = "api-policy-lint-v1"
+
+# Page-level selector actions. Deprecated in favour of locators: they re-resolve
+# the selector with no strictness check, so they silently act on the FIRST of N
+# matches instead of failing on the ambiguity.
+_LINT_PAGE_ACTIONS = ("click", "dblclick", "fill", "type", "press", "check",
+                      "uncheck", "hover", "tap", "focus", "selectOption",
+                      "setInputFiles", "dragAndDrop")
+_LINT_PAGE_ACTION_RX = re.compile(
+    r"\bpage\.(" + "|".join(_LINT_PAGE_ACTIONS) + r")\s*\(")
+# ElementHandles detach from the DOM the moment the framework re-renders; the
+# handle then points at a node that is no longer on the page.
+_LINT_HANDLE_RX = re.compile(
+    r"(\bpage\.\$\$?\s*\(|\bpage\.\$\$?eval\s*\(|\bElementHandle\b"
+    r"|\.elementHandle\s*\(|\bwaitForSelector\s*\()")
+_LINT_SLEEP_RX = re.compile(r"\bwaitForTimeout\s*\(")
+# Retrying (async) matchers must be awaited or the assertion never runs — the
+# test goes green on an unresolved promise. Sync matchers (toBeTruthy on a
+# boolean the compiler computes itself) are legitimately un-awaited.
+_LINT_ASYNC_MATCHERS = ("toHaveURL", "toHaveValue", "toBeVisible", "toBeHidden",
+                        "toBeChecked", "toHaveText", "toContainText",
+                        "toHaveCount", "toBeEnabled", "toBeDisabled",
+                        "toBeAttached", "toHaveAttribute", "toHaveClass",
+                        "toBeEditable", "toBeFocused", "toPass")
+_LINT_FLOATING_EXPECT_RX = re.compile(
+    r"(?<!await )(?<!return )\bexpect\s*\([^;]*?\.(" +
+    "|".join(_LINT_ASYNC_MATCHERS) + r")\s*\(")
+_LINT_NETWORKIDLE_RX = re.compile(r"waitForLoadState\s*\(\s*['\"]networkidle['\"]")
+_LINT_TIMEOUT_OPT_RX = re.compile(r"\btimeout\s*:")
+_LINT_MOUSE_RX = re.compile(r"\bpage\.mouse\.(click|dblclick|move)\s*\(")
+_LINT_FORCE_RX = re.compile(r"\bforce\s*:\s*true\b")
+_LINT_SWALLOWED_EXPECT_RX = re.compile(r"\bexpect\s*\(.*\)\s*\.[^;]*\.catch\s*\(")
+_LINT_SECRET_RX = re.compile(
+    r"\b(password|passwd|secret|api[_-]?key|token|bearer)\b\s*[:=]\s*['\"][^'\"]{6,}['\"]",
+    re.IGNORECASE)
+# A literal placeholder credential is scaffolding, not a leaked secret.
+_LINT_SECRET_BENIGN_RX = re.compile(
+    r"(process\.env|\$\{|__nx|<[^>]+>|\bxxx+\b|example|changeme|placeholder|redacted)",
+    re.IGNORECASE)
+_LINT_LINE_COMMENT_RX = re.compile(r"//.*$")
+
+
+def _lint_code_only(line: str) -> str:
+    """Strip a trailing line comment so prose never trips a code rule.
+
+    Conservative on purpose: a ``//`` inside a string literal (``'http://x'``)
+    must not truncate the line, so the strip is skipped when the ``//`` is
+    preceded by a colon (the only form that occurs in a URL) or sits inside an
+    obvious quote pair."""
+    m = re.search(r"(?<!:)//", line)
+    if not m:
+        return line
+    head = line[: m.start()]
+    if head.count("'") % 2 or head.count('"') % 2 or head.count("`") % 2:
+        return line  # the // is inside a string literal
+    return head
+
+
+def lint_spec(spec_text: Any) -> list[dict]:
+    """Deterministic API-policy lint of a Playwright spec.
+
+    Returns a list of ``{rule, severity, line, message}`` — ``severity`` is
+    ``error`` (wrong under any circumstance; feeds the risk model and the
+    remediation channel) or ``warning`` (worth a reader's attention; never
+    scored). Pure and total: no I/O, and it never raises, so an empty list
+    means the lint RAN and found nothing — never that it failed to run."""
+    findings: list[dict] = []
+    try:
+        text = spec_text if isinstance(spec_text, str) else str(spec_text or "")
+        if not text.strip():
+            return []
+
+        # One finding per (rule, line): `const h: ElementHandle = await page.$()`
+        # violates the handle rule twice on one line, and reporting it twice
+        # inflates lint_errors — which feeds the risk model — without adding a
+        # single fact a reader can act on.
+        seen: set[tuple[str, int]] = set()
+
+        def add(rule: str, severity: str, line_no: int, message: str) -> None:
+            if (rule, line_no) in seen:
+                return
+            seen.add((rule, line_no))
+            findings.append({"rule": rule, "severity": severity,
+                             "line": line_no, "message": message})
+
+        for i, raw in enumerate(text.splitlines(), start=1):
+            line = _lint_code_only(raw)
+            if not line.strip():
+                continue
+
+            # ── errors ──────────────────────────────────────────────────────
+            for _m in _LINT_SLEEP_RX.finditer(line):
+                add("no-arbitrary-sleep", "error", i,
+                    "waitForTimeout() sleeps for a fixed duration — it is either "
+                    "too short (flake) or wasted wall-clock. Wait on a condition.")
+            for m in _LINT_PAGE_ACTION_RX.finditer(line):
+                add("no-page-selector-action", "error", i,
+                    f"page.{m.group(1)}() re-resolves a raw selector with no "
+                    "strictness check — it silently acts on the first of N "
+                    f"matches. Use a locator: page.getByRole(...).{m.group(1)}().")
+            for _m in _LINT_HANDLE_RX.finditer(line):
+                add("no-element-handle", "error", i,
+                    "ElementHandle / page.$ / waitForSelector returns a handle "
+                    "that detaches on the next re-render and then points at a "
+                    "node no longer in the DOM. Use a locator.")
+            for m in _LINT_FLOATING_EXPECT_RX.finditer(line):
+                add("no-floating-expect", "error", i,
+                    f"expect(...).{m.group(1)}() is a RETRYING matcher and is not "
+                    "awaited — the assertion never runs and the step goes green "
+                    "on an unresolved promise.")
+
+            # ── warnings ────────────────────────────────────────────────────
+            if _LINT_NETWORKIDLE_RX.search(line) and not _LINT_TIMEOUT_OPT_RX.search(line):
+                add("unbounded-networkidle", "warning", i,
+                    "waitForLoadState('networkidle') with no timeout hangs on any "
+                    "page that keeps a socket open. Bound it.")
+            for m in _LINT_MOUSE_RX.finditer(line):
+                add("coordinate-interaction", "warning", i,
+                    f"page.mouse.{m.group(1)}() targets a pixel, not an element — "
+                    "it breaks on any re-layout. Deliberate as a visual fallback; "
+                    "flagged so a reader knows this step is not element-bound.")
+            if _LINT_FORCE_RX.search(line):
+                add("force-interaction", "warning", i,
+                    "{ force: true } skips actionability checks — the click is "
+                    "recorded even if the control was covered or disabled.")
+            if _LINT_SWALLOWED_EXPECT_RX.search(line):
+                add("swallowed-assertion", "warning", i,
+                    "an expect() whose rejection is .catch()-ed cannot fail — it "
+                    "is a tolerant oracle, not a proof. Intentional in compiler "
+                    "output; never count it as evidence.")
+            if _LINT_SECRET_RX.search(line) and not _LINT_SECRET_BENIGN_RX.search(line):
+                add("hardcoded-credential", "warning", i,
+                    "a credential literal in a spec leaks into every artifact "
+                    "that stores the script. Read it from the environment.")
+    except Exception as exc:  # pragma: no cover — a lint must never break delivery
+        return [{"rule": "lint_internal_error", "severity": "warning", "line": 0,
+                 "message": f"api-policy lint aborted: {str(exc)[:160]}"}]
+    return findings
+
+
 def _path(u: str) -> str:
     u = (u or "").strip()
     m = re.search(r"https?://[^/]+(/[^?#]*)", u)

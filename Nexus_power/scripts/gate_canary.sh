@@ -17,7 +17,13 @@ if [ -z "$EXPL" ]; then echo "CANARY ABORT: no completed exploration"; exit 2; f
 echo "canary against exploration $EXPL"
 
 cp "$BASE" /tmp/baseline.bak
-trap 'cp /tmp/baseline.bak "$BASE"' EXIT
+trap 'cp /tmp/baseline.bak "$BASE"; rm -f /tmp/canary_state.json' EXIT
+
+# The canary runs the gate three times. Against the host's real gap state that
+# would age every unmet floor three runs closer to overdue on every canary — so
+# a routine canary would eventually turn the gate red by being run. Isolate it.
+export GOLDEN_GATE_STATE=/tmp/canary_state.json
+rm -f "$GOLDEN_GATE_STATE"
 
 # 1. Baseline unchanged -> must be GREEN (proves the canary's own control case).
 bash scripts/golden_crawl_gate.sh "$APP" --exploration "$EXPL" >/tmp/c1.log 2>&1

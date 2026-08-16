@@ -11,9 +11,19 @@ control would be blocked. Run in CI / nightly:
 
 Never green-wash applied to ourselves: the verifier is only trustworthy if it
 provably cannot be evaded by the failure modes it claims to catch."""
+import os
 import sys
 
-sys.path.insert(0, "/app/service")
+# In the container the api package is mounted at /app/service; from a checkout it
+# is platform/api relative to this file. Try both so the benchmark is runnable
+# where it is EDITED, not only where it is deployed — an adversarial self-test
+# nobody can run locally is one nobody runs.
+for _root in ("/app/service",
+              os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                           "..", "..", "platform", "api")):
+    if os.path.isdir(os.path.join(_root, "app")):
+        sys.path.insert(0, os.path.abspath(_root))
+        break
 from app.services.test_factory import playwright_auditor as P  # noqa: E402
 
 
@@ -82,10 +92,11 @@ def main() -> int:
     failures = []
     for c in CASES:
         det = P.score_spec(c["spec"], c["steps"], evidence=c["evidence"])
-        try:
-            lint = P.lint_spec(c["spec"])
-        except Exception:
-            lint = []
+        # T-GT-07: the except-swallow here zeroed lint_err for EVERY case, so the
+        # expect_lint_errors_min contract below was scored against a lint that
+        # had never run. lint_spec is now real, pure and total — let it raise if
+        # it ever isn't, rather than quietly passing the benchmark.
+        lint = P.lint_spec(c["spec"])
         lint_err = sum(1 for l in lint if l.get("severity") == "error")
         certified = det.get("decision") == "certified" and int(det.get("overall_score") or 0) >= 9
         ok = True

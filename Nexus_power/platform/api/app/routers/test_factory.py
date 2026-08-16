@@ -660,7 +660,7 @@ async def generate_playwright(
     try:
         files.update(_engine_extra_files(_gv if _gv else visits, _gate_actions, cases))
     except Exception:
-        logger.warning("playwright.extras_failed", extra={"artifact_id": artifact_id})
+        _logger.warning("playwright.extras_failed", extra={"artifact_id": artifact_id})
 
     _audit_by_test: dict = {}
     _audit_min = 10
@@ -683,10 +683,10 @@ async def generate_playwright(
             _rep = {"overall_score": 0, "decision": "audit_error",
                     "findings": [f"auditor crashed: {str(_exc)[:120]}"],
                     "gaps": [], "dimension_scores": {}}
-        try:
-            _lint = _pw_gate.lint_spec(files[_p])
-        except Exception:
-            _lint = []
+        # T-GT-07: no except-swallow. lint_spec is pure and total, so an empty
+        # list here means the lint RAN and found nothing — which is the only
+        # reading under which the report's "API-policy lint" claim is true.
+        _lint = _pw_gate.lint_spec(files[_p])
         _audit_by_test[_tid] = {
             "spec_path": _p,
             "overall_score": _rep.get("overall_score"),
@@ -699,6 +699,12 @@ async def generate_playwright(
                      if isinstance(_rep.get("gaps"), (list, tuple))
                      else ([] if _rep.get("gaps") in (None, 0) else [str(_rep.get("gaps"))])),
             "lint": _lint[:20],
+            # The report says WHICH lint ran. "lint": [] alone cannot be told
+            # apart from "the lint never executed" — the exact ambiguity that
+            # let this field claim a policy audit for months.
+            "lint_status": "executed",
+            "lint_rules_version": _pw_gate.LINT_RULES_VERSION,
+            "lint_errors": sum(1 for _l in _lint if _l.get("severity") == "error"),
         }
         try:
             _audit_min = min(_audit_min, int(_rep.get("overall_score") or 0))
@@ -711,7 +717,9 @@ async def generate_playwright(
         _gate_min = 9
     if _audit_by_test:
         files["vkpower-audit-report.json"] = json.dumps({
-            "rubric": "HONEST-10 deterministic (playwright_auditor.score_spec) + API-policy lint",
+            "rubric": ("HONEST-10 deterministic (playwright_auditor.score_spec) "
+                       f"+ API-policy lint ({_pw_gate.LINT_RULES_VERSION})"),
+            "validations_executed": ["score_spec", "lint_spec"],
             "gate_mode": _gate_mode,
             "min_score_threshold": _gate_min,
             "suite_min_overall": _audit_min,
@@ -737,7 +745,7 @@ async def generate_playwright(
                 lint=list(_s2.get("lint") or []),
             )
     except Exception:
-        logger.warning("verdict_events.gate_record_failed", extra={"artifact_id": artifact_id})
+        _logger.warning("verdict_events.gate_record_failed", extra={"artifact_id": artifact_id})
 
     if _gate_mode == "block" and _audit_by_test and _audit_min < _gate_min:
         raise HTTPException(
@@ -6937,10 +6945,7 @@ async def verify_script(
     steps = list(getattr(tc, "steps", []) or [])
 
     det = pw_auditor.score_spec(spec, steps, evidence=actions)
-    try:
-        lint = pw_auditor.lint_spec(spec)
-    except Exception:
-        lint = []
+    lint = pw_auditor.lint_spec(spec)  # T-GT-07: total + pure; [] means "clean"
 
     # optional READINESS probe (base_url): reachability + live locator preflight.
     preflight_result = None
@@ -7012,6 +7017,8 @@ async def verify_script(
         "per_step": det.get("per_step", []),
         "lint": lint,
         "lint_errors": len(lint_errors),
+        "lint_status": "executed",
+        "lint_rules_version": pw_auditor.LINT_RULES_VERSION,
         "preflight": preflight_result,
         "readiness": readiness,
         "decision_source": "deterministic",
@@ -7134,10 +7141,7 @@ async def list_remediations(
     spec = (getattr(active, "script_source", None) if active else None) \
         or compile_case(tc, field_meta, parametrize=True)
     det = pw_auditor.score_spec(spec, list(getattr(tc, "steps", []) or []), evidence=actions)
-    try:
-        lint = pw_auditor.lint_spec(spec)
-    except Exception:
-        lint = []
+    lint = pw_auditor.lint_spec(spec)  # T-GT-07: total + pure; [] means "clean"
     items = []
     for f in det.get("findings") or []:
         txt = str(f)
@@ -7212,10 +7216,7 @@ async def verify_imported_script(
     if len(script) < 40:
         raise HTTPException(status_code=422, detail="body.script (>=40 chars) required")
     det = pw_auditor.score_spec(script, [], evidence=None)
-    try:
-        lint = pw_auditor.lint_spec(script)
-    except Exception:
-        lint = []
+    lint = pw_auditor.lint_spec(script)  # T-GT-07: total + pure; [] means "clean"
     risk_obj = _ve.risk(steps=[], det=det, lint=lint, preflight=None)
     pseudo_id = _hl.sha256(script.encode("utf-8")).hexdigest()[:32]
     rec = await _ve.record_verdict(
@@ -7245,6 +7246,9 @@ async def verify_imported_script(
         "dimension_scores": det.get("dimension_scores"),
         "risk": risk_obj,
         "lint": lint,
+        "lint_errors": sum(1 for l in lint if l.get("severity") == "error"),
+        "lint_status": "executed",
+        "lint_rules_version": pw_auditor.LINT_RULES_VERSION,
         "verdict_event": rec,
         "decision_source": "deterministic",
     }

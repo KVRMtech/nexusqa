@@ -23,6 +23,16 @@ dist/
 .vscode/
 .idea/
 
+# ---- Deploy-gate RUNTIME state (M0.4 / T-GT-04) ----
+# The golden-crawl baseline is git-tracked, reviewable evidence and must stay
+# byte-identical across a gate run. Per-host mutable bookkeeping — how many runs
+# a never-met floor has been unmet, and which services the last deploy touched —
+# lives in these files instead. Committing either would dirty the tree on every
+# gate run and turn the next `git pull` on the VM into a merge conflict.
+.gate_runtime_state.json
+.deploy_manifest.json
+.last_green_deploy
+
 # ---- Archives, images, logs, patches (scratch artifacts) ----
 *.tgz
 *.tar.gz

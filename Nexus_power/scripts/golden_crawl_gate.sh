@@ -29,13 +29,43 @@
 #
 # The baseline lives in git (scripts/golden_crawl_baseline.json) so the funnel's
 # best-known state is version-controlled evidence, reviewed like any other change.
+# It is IMMUTABLE during a gate run (M0.4 / T-GT-04): a plain run reads it and
+# never writes it. Mutable per-host bookkeeping lives in an untracked runtime
+# state file. The ratchet itself lives in scripts/gate_baseline.py so it can be
+# unit-tested — it used to be three python heredocs whose metric lists drifted.
 #
 # Usage (on the VM):
 #   scripts/golden_crawl_gate.sh <app_id> [--update-baseline]
 #
-# Exit 0 = no regression. Exit 1 = a funnel metric went backwards; the deploy
-# should be rolled back or the regression fixed before anything else ships.
+# ── EXIT CODES ARE THE ROLLBACK DECISION (M0.4 / T-GT-05) ───────────────────
+#   0  PASS             — no funnel regression.
+#   2  usage error      — the gate was invoked wrongly. No verdict.
+#   3  REGRESSION       — a funnel metric went backwards. ROLL BACK.
+#   4  HOST UNAVAILABLE — the infrastructure could not support a verdict (disk,
+#                         dead container, no DB). NOT a verdict on the build, and
+#                         explicitly NOT a rollback trigger: reverting a healthy
+#                         deployment because monitoring was down is an outage we
+#                         caused ourselves.
+#   1  APP UNHEALTHY    — the build was reachable but could not produce a crawl:
+#                         dispatch refused, crawl failed/stalled. That IS a
+#                         statement about the build. ROLL BACK.
+# The final line of output is always `GATE_VERDICT=<PASS|REGRESSION|APP_UNHEALTHY
+# |HOST_UNAVAILABLE|USAGE>` so a caller that only captured stdout — or whose SSH
+# dropped before the exit code arrived — can still tell these apart.
 set -u
+
+EXIT_PASS=0
+EXIT_APP_UNHEALTHY=1
+EXIT_USAGE=2
+EXIT_REGRESSION=3
+EXIT_HOST_UNAVAILABLE=4
+
+# Every exit goes through here so the machine-readable verdict can never drift
+# from the exit code — they are emitted by the same statement.
+finish() {  # verdict  code
+  printf 'GATE_VERDICT=%s\n' "$1"
+  exit "$2"
+}
 
 APP_ID="${1:-}"
 UPDATE_BASELINE=0
@@ -52,7 +82,7 @@ case "${2:-}" in
     REUSE_EXPL="${3:-}"
     if [ -z "$REUSE_EXPL" ]; then
       echo "--exploration requires an exploration id" >&2
-      exit 2
+      finish USAGE $EXIT_USAGE
     fi ;;
   # THE THIRD STATE. A metric can legitimately FALL when the funnel gets better:
   # consolidating duplicated one-step fragments into one real journey lowers the
@@ -68,17 +98,18 @@ case "${2:-}" in
     REBASELINE_REASON="${3:-}"
     if [ -z "$REBASELINE_REASON" ]; then
       echo "--rebaseline requires a reason: $0 <app_id> --rebaseline \"why\"" >&2
-      exit 2
+      finish USAGE $EXIT_USAGE
     fi ;;
 esac
 
 if [ -z "$APP_ID" ]; then
   echo "usage: $0 <app_id> [--update-baseline | --rebaseline \"reason\" | --exploration <id>]" >&2
-  exit 2
+  finish USAGE $EXIT_USAGE
 fi
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 BASELINE="$HERE/golden_crawl_baseline.json"
+RATCHET="$HERE/gate_baseline.py"
 QEC=nexus-qe-central
 PG=nexus-postgres
 #: The control that is the ENTRANCE to this app's deepest funnel. Per-app by
@@ -100,35 +131,21 @@ psql_qec() { docker exec "$PG" psql -U nexus -d qecentral -A -t -c "$1" 2>/dev/n
 say "=== GOLDEN CRAWL GATE ==="
 say "app: $APP_ID"
 
-host_health() {
-  local bad=0
-  local disk zombies
-  disk=$(df --output=pcent / 2>/dev/null | tail -1 | tr -dc '0-9')
-  if [ "${disk:-0}" -ge 90 ]; then
-    say "FAIL  host: disk ${disk}% full — evidence capture will truncate silently"
-    bad=1
-  else
-    say "OK    host: disk ${disk:-?}% used"
-  fi
-  zombies=$(docker ps -q -f status=exited 2>/dev/null | wc -l | tr -d ' ')
-  if [ "${zombies:-0}" -ge 100 ]; then
-    say "FAIL  host: $zombies exited containers — prune before trusting a crawl"
-    bad=1
-  else
-    say "OK    host: $zombies exited containers"
-  fi
-  for c in "$QEC" "$PG" nexus-qe-explorer; do
-    if [ "$(docker inspect -f '{{.State.Running}}' "$c" 2>/dev/null)" != "true" ]; then
-      say "FAIL  host: container $c is not running"
-      bad=1
-    fi
-  done
-  return $bad
-}
-if ! host_health; then
+# ONE definition of healthy, shared with the pre-swap preflight deploy.ps1 runs
+# (scripts/host_health.sh). A preflight that checked something subtly different
+# from the gate would admit a deploy through a door the gate then refuses.
+. "$HERE/host_health.sh"
+if ! host_health "$QEC" "$PG" nexus-qe-explorer; then
   say ""
   say "GATE ABORTED — the HOST is unhealthy. This is not a verdict on the build."
-  exit 1
+  # T-GT-05. This used to exit 1, which deploy.ps1 read as "the gate reached no
+  # verdict" and answered with a rollback. So a full disk on the VM reverted a
+  # deployment that was, as far as anyone could tell, perfectly healthy — an
+  # outage manufactured by our own monitoring. Infrastructure failures abort;
+  # they do not revert. Exit 4 says exactly that and nothing else.
+  say "The deployment is NOT rolled back: a monitoring failure is not a build failure."
+  say "Fix the host, then re-run the gate to obtain a verdict."
+  finish HOST_UNAVAILABLE $EXIT_HOST_UNAVAILABLE
 fi
 
 if [ -n "$REUSE_EXPL" ]; then
@@ -160,7 +177,9 @@ RC=$?
 if [ $RC -ne 0 ]; then
   say "FAIL — the crawl could not be dispatched:"
   say "$DISPATCH"
-  exit 1
+  # The containers were confirmed running by host_health above, so a refused or
+  # failed dispatch is the BUILD refusing work — a statement about this deploy.
+  finish APP_UNHEALTHY $EXIT_APP_UNHEALTHY
 fi
 EXPL="${DISPATCH: -36}"
 say "exploration: $EXPL"
@@ -174,15 +193,29 @@ for _ in $(seq 1 "$MAX_POLLS"); do
     failed|refused|cancelled|error|stalled)
       say "FAIL — crawl ended '$STATUS'"
       psql_qec "SELECT left(COALESCE(error,''),400) FROM qe_explorations WHERE exploration_id='$EXPL';"
-      exit 1 ;;
+      finish APP_UNHEALTHY $EXIT_APP_UNHEALTHY ;;
   esac
   sleep "$POLL_SECONDS"
 done
 if [ "$STATUS" != "completed" ]; then
   say "FAIL — crawl did not reach a terminal state within the budget"
-  exit 1
+  finish APP_UNHEALTHY $EXIT_APP_UNHEALTHY
 fi
 fi   # end: dispatch-and-wait (skipped by --exploration)
+
+# ── 2b. The evidence must EXIST before it can be judged ─────────────────────
+# If postgres dies between the crawl and the read, every metric reads 0, every
+# floor "regresses", and the gate announces a total funnel collapse — rolling
+# back a healthy deploy on the strength of a database that was not answering.
+# A missing exploration row is an INFRASTRUCTURE fact, not a funnel verdict.
+EXPL_ROWS=$(psql_qec "SELECT count(*) FROM qe_explorations WHERE exploration_id='$EXPL';" | tr -d ' ')
+if [ "${EXPL_ROWS:-0}" != "1" ]; then
+  say ""
+  say "GATE ABORTED — exploration '$EXPL' is not readable (rows=${EXPL_ROWS:-<no answer>})."
+  say "Metrics cannot be read, so no verdict about the funnel is possible."
+  say "The deployment is NOT rolled back: an unreadable substrate is not a regression."
+  finish HOST_UNAVAILABLE $EXIT_HOST_UNAVAILABLE
+fi
 
 # ── 3. Read the funnel ──────────────────────────────────────────────────────
 # Every metric below is already recorded by the crawl; nothing here recomputes
@@ -292,8 +325,26 @@ fi
 ORACLE=$(psql_qec "SELECT COALESCE(stats->'coverage'->'advance_oracle'->>'state','') FROM qe_explorations WHERE exploration_id='$EXPL';" | tr -d ' ')
 say "INFO  advance_oracle: ${ORACLE:-<unrecorded>}"
 
+# ── 4b. CATALOG COMPLETENESS (Track M0.4 / T-GT-06) ─────────────────────────
+# The Master Catalog is what this product actually delivers — the deduped set of
+# questions an application asks. Every floor above measures the CRAWL; none
+# measured the ARTEFACT. So a fold change that dropped a question class, or a
+# dedup key that collapsed distinct questions into one, shrank the catalog while
+# pages/forms/flows all held and the gate went green. The catalog is app-scoped
+# and deduped by stable question_id, so its size is directly comparable across
+# crawls and belongs in the ratchet like any other floor.
+CATALOG=$(psql_qec "SELECT count(*) FROM catalog_questions WHERE app_id='$APP_ID';" | tr -d ' ')
+if [ -z "$CATALOG" ]; then
+  # An unanswered count is not a count of zero. Reporting it as 0 would fake a
+  # total catalog collapse and trigger a rollback on a missing table.
+  say ""
+  say "GATE ABORTED — catalog_questions could not be counted for app '$APP_ID'."
+  say "The deployment is NOT rolled back: an unreadable table is not a shrunk catalog."
+  finish HOST_UNAVAILABLE $EXIT_HOST_UNAVAILABLE
+fi
+say "INFO  catalog_questions: $CATALOG"
+
 # ── 5. The ratchet ─────────────────────────────────────────────────────────
-GAPS=""
 #: A floor may sit unmet while the capability that feeds it is still being
 #: built — but not forever, and not silently. After this many gate runs, or this
 #: many days since it was first seen unmet, an unenforced floor fails the gate:
@@ -302,87 +353,32 @@ GAPS=""
 GAP_MAX_RUNS="${GOLDEN_GAP_MAX_RUNS:-3}"
 GAP_MAX_DAYS="${GOLDEN_GAP_MAX_DAYS:-7}"
 
-best_of() { python3 -c "
-import json,sys
-try: b=json.load(open('$BASELINE'))
-except Exception: b={}
-print(int(b.get(sys.argv[1], 0)))
-" "$1"; }
-
-check() {  # metric  current
-  local name="$1" cur="$2" best
-  best=$(best_of "$name")
-  if [ "$cur" -lt "$best" ]; then
-    printf 'FAIL  %-18s %s  (regressed from best %s)\n' "$name" "$cur" "$best"
-    fail=1
-  elif [ "$cur" -gt "$best" ]; then
-    printf 'RISE  %-18s %s  (was %s — new floor)\n' "$name" "$cur" "$best"
-  elif [ "$best" -eq 0 ]; then
-    # NOT A PASS. A floor nobody has ever met is unenforced, and an unenforced
-    # floor that reads as green is how "confirmed 0" sat behind a PASSING gate
-    # while nine submits fired and the application confirmed none of them.
-    printf 'GAP   %-18s %s  (NOT YET ENFORCED — never achieved)\n' "$name" "$cur"
-    GAPS="$GAPS $name"
-  else
-    printf 'OK    %-18s %s  (holds at %s)\n' "$name" "$cur" "$best"
-  fi
-}
+# ONE JSON object of everything measured. The ratchet lives in gate_baseline.py,
+# which owns the metric list — so a metric cannot be evaluated here and silently
+# missing from the writer that persists it, which is exactly how selects_filled
+# and forms_confirmed spent their entire lives at floor 0 (T-GT-03).
+CURRENT_JSON=$(printf '{"pages":%s,"forms":%s,"auto_filled":%s,"selects_filled":%s,"forms_confirmed":%s,"submitted":%s,"flows":%s,"deepest_flow":%s,"wizard_advances":%s,"tests":%s,"catalog_questions":%s}' \
+  "${VISITS:-0}" "${FORMS:-0}" "${AUTOFILL:-0}" "${SELECTS:-0}" "${CONFIRMED:-0}" \
+  "${SUBMITTED:-0}" "${FLOWS:-0}" "${DEEPEST:-0}" "${ADVANCES:-0}" "${GENERATED:-0}" \
+  "${CATALOG:-0}")
 
 say ""
 say "--- ratchet (fails only on regression below the best ever seen) ---"
-check pages           "$VISITS"
-check forms           "$FORMS"
-check auto_filled     "$AUTOFILL"
-check selects_filled    "$SELECTS"
-# A SUBMIT THAT FIRED IS NOT A SUBMIT THAT WORKED. Ratcheting attempts alone
-# scores nine errored submits exactly like nine completed transactions.
-check forms_confirmed   "$CONFIRMED"
-check submitted       "$SUBMITTED"
-check flows           "$FLOWS"
-check deepest_flow    "$DEEPEST"
-check wizard_advances "$ADVANCES"
-check tests           "$GENERATED"
+RATCHET_ERR=$(mktemp)
+python3 "$RATCHET" evaluate --baseline "$BASELINE" --current "$CURRENT_JSON" 2>"$RATCHET_ERR"
+if [ $? -ne 0 ]; then fail=1; fi
+GAPS=$(sed -n 's/^GAPS=//p' "$RATCHET_ERR" | head -1)
+rm -f "$RATCHET_ERR"
 
 # ── 6. Move the floor ──────────────────────────────────────────────────────
-# --update-baseline RAISES only, and only on a clean run: today's proven reality
-# becomes tomorrow's floor. --rebaseline may also LOWER, and records why.
+# EXPLICIT COMMANDS ONLY (T-GT-04). A plain gate run never writes the baseline;
+# --update-baseline RAISES only, and only on a clean run, so today's proven
+# reality becomes tomorrow's floor. --rebaseline may also LOWER, and records why.
 if [ "$UPDATE_BASELINE" -eq 1 ] && [ "$fail" -eq 0 ]; then
-  python3 -c "
-import json
-try: b=json.load(open('$BASELINE'))
-except Exception: b={}
-cur = dict(pages=$VISITS, forms=$FORMS, auto_filled=$AUTOFILL,
-           submitted=$SUBMITTED, flows=$FLOWS, deepest_flow=$DEEPEST,
-           wizard_advances=$ADVANCES, tests=$GENERATED)
-for k, v in cur.items():
-    b[k] = max(int(b.get(k, 0)), int(v))
-json.dump(b, open('$BASELINE','w'), indent=2, sort_keys=True)
-open('$BASELINE','a').write('\n')
-print('baseline RAISED — commit scripts/golden_crawl_baseline.json')
-"
+  python3 "$RATCHET" raise --baseline "$BASELINE" --current "$CURRENT_JSON"
 elif [ -n "$REBASELINE_REASON" ]; then
-  python3 -c "
-import json, sys
-try: b=json.load(open('$BASELINE'))
-except Exception: b={}
-cur = dict(pages=$VISITS, forms=$FORMS, auto_filled=$AUTOFILL,
-           submitted=$SUBMITTED, flows=$FLOWS, deepest_flow=$DEEPEST,
-           wizard_advances=$ADVANCES, tests=$GENERATED)
-lowered = {k: [int(b.get(k, 0)), int(v)] for k, v in cur.items()
-           if int(v) < int(b.get(k, 0))}
-b.update({k: int(v) for k, v in cur.items()})
-# The justification lives WITH the numbers it justifies, so a future reader
-# cannot see a lowered floor without also seeing why it was lowered.
-b['_rebaselined'] = {
-    'reason': '''$REBASELINE_REASON'''[:500],
-    'exploration': '$EXPL',
-    'lowered': lowered,
-}
-json.dump(b, open('$BASELINE','w'), indent=2, sort_keys=True)
-open('$BASELINE','a').write('\n')
-print('baseline RE-BASELINED (lowered: %s)' % (sorted(lowered) or 'none'))
-print('reason recorded — commit scripts/golden_crawl_baseline.json')
-"
+  python3 "$RATCHET" rebaseline --baseline "$BASELINE" --current "$CURRENT_JSON" \
+    --reason "$REBASELINE_REASON" --exploration "$EXPL"
 fi
 
 say ""
@@ -398,41 +394,15 @@ if [ -n "$GAPS" ]; then
   say ""
   say "--- unenforced floors ---"
 fi
-GAP_VERDICT=$(python3 - "$BASELINE" "$GAP_MAX_RUNS" "$GAP_MAX_DAYS" $GAPS <<'PYGAP'
-import json, sys, datetime
-path, max_runs, max_days = sys.argv[1], int(sys.argv[2]), int(sys.argv[3])
-current = set(sys.argv[4:])
-try:
-    b = json.load(open(path))
-except Exception:
-    b = {}
-gaps = b.get("_gaps") or {}
-today = datetime.date.today()
-# A floor that stopped being a gap has been MET -- drop its history entirely,
-# so a capability that lands and later regresses is judged by the ratchet
-# (which knows its best-ever) and never by a stale unmet-since date.
-for name in list(gaps):
-    if name not in current:
-        gaps.pop(name, None)
-overdue = []
-for name in sorted(current):
-    rec = gaps.get(name) or {"runs": 0, "since": today.isoformat()}
-    rec["runs"] = int(rec.get("runs", 0)) + 1
-    gaps[name] = rec
-    try:
-        age = (today - datetime.date.fromisoformat(rec["since"])).days
-    except Exception:
-        age = 0
-    if rec["runs"] > max_runs or age > max_days:
-        overdue.append("%s unmet for %d runs / %d days" % (name, rec["runs"], age))
-    else:
-        sys.stderr.write("INFO  %-18s unenforced, run %d of %d\n"
-                         % (name, rec["runs"], max_runs))
-b["_gaps"] = gaps
-json.dump(b, open(path, "w"), indent=2)
-sys.stdout.write("|".join(overdue))
-PYGAP
-)
+# THE BOOKKEEPING GOES TO RUNTIME STATE, NOT THE BASELINE (T-GT-04). This block
+# used to json.dump() the run counters straight back into the git-tracked
+# baseline, so every single gate run — including a pure read-only evaluation —
+# left the working tree dirty, and the next `git pull` on the VM hit a conflict
+# on a file whose only changed content was a counter no reviewer can act on.
+GAP_ARGS=""
+for _g in $GAPS; do GAP_ARGS="$GAP_ARGS --gap $_g"; done
+GAP_VERDICT=$(python3 "$RATCHET" gaps --baseline "$BASELINE" \
+  --max-runs "$GAP_MAX_RUNS" --max-days "$GAP_MAX_DAYS" $GAP_ARGS)
 if [ -n "$GAP_VERDICT" ]; then
   say "FAIL  a floor that has never been met is overdue:"
   printf '%s\n' "$GAP_VERDICT" | tr '|' '\n' | sed 's/^/        /'
@@ -442,7 +412,7 @@ fi
 
 if [ "$fail" -eq 0 ]; then
   say "GATE PASSED — no funnel regression (exploration $EXPL)"
-  exit 0
+  finish PASS $EXIT_PASS
 fi
 say "GATE FAILED — the funnel went backwards. Roll back or fix before shipping."
 # A DISTINCT CODE FOR "THE FUNNEL REGRESSED", so a caller can tell a VERDICT
@@ -451,4 +421,4 @@ say "GATE FAILED — the funnel went backwards. Roll back or fix before shipping
 # funnel regression — observed live, on a deploy whose funnel had in fact just
 # reached its best result ever. A gate that cries wolf gets switched off, and
 # then it is not a gate.
-exit 3
+finish REGRESSION $EXIT_REGRESSION
