@@ -883,20 +883,34 @@ jobs:
           docker build -f infrastructure/docker/Dockerfile.client \
             -t nexus-client:ci .
 
-      # INSTALLED INTO A DIRECTORY THE RUNNER OWNS, then put on PATH explicitly.
-      # Targeting /usr/local/bin, the installer resolved the tag ("found version:
-      # 0.58.2 for v0.58.2/Linux/64bit") and then produced no binary, so this step
-      # failed on its own `trivy --version` and the next one died with
-      # "trivy: command not found". That mattered more than it looks: the base-image
-      # scan below is the ONLY blocking CVE gate (--exit-code 1), and a failed
-      # install SKIPPED it — so the one step that can reject a vulnerable image
-      # never ran, on the first execution this job has ever had.
+      # THE PINNED VERSION DID NOT EXIST. This step asked for trivy v0.58.2;
+      # `repos/aquasecurity/trivy/releases/tags/v0.58.2` returns 404 and there is
+      # no 0.5x release at all (the line was latest v0.74.0 when this was fixed).
+      # The upstream installer nonetheless printed
+      #   aquasecurity/trivy info found version: 0.58.2 for v0.58.2/Linux/64bit
+      # and then exited 1 a third of a second later without downloading anything,
+      # so the failure read as a flaky network install rather than a bad pin.
+      #
+      # What that cost: "Scan base image for CVEs" is the ONLY BLOCKING
+      # vulnerability gate here — it alone runs `--exit-code 1`, while the gateway
+      # scan below is `--exit-code 0` and reports without failing. A failed install
+      # meant that step was SKIPPED, so the check that exists to reject a
+      # vulnerable base image has never actually executed: docker-build itself was
+      # skipped on every prior run (it `needs: [test, frontend]`, and one of those
+      # was always red), and on its first real run the scanner would not install.
+      #
+      # Fetches the release asset directly rather than piping the upstream
+      # installer: one pinned URL, no third-party shell script deciding what
+      # "found" means, and a 404 on a bad pin fails loudly at curl -f. Unpacked
+      # into $RUNNER_TEMP, which the runner owns, and put on PATH for later steps.
       - name: Install Trivy scanner
         run: |
           set -euo pipefail
+          TRIVY_VERSION=0.74.0
           mkdir -p "$RUNNER_TEMP/trivy-bin"
-          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
-            | sh -s -- -b "$RUNNER_TEMP/trivy-bin" v0.58.2
+          curl -sfL \
+            "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz" \
+            | tar -xz -C "$RUNNER_TEMP/trivy-bin" trivy
           echo "$RUNNER_TEMP/trivy-bin" >> "$GITHUB_PATH"
           "$RUNNER_TEMP/trivy-bin/trivy" --version
 
