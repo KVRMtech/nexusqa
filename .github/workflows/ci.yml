@@ -883,11 +883,22 @@ jobs:
           docker build -f infrastructure/docker/Dockerfile.client \
             -t nexus-client:ci .
 
+      # INSTALLED INTO A DIRECTORY THE RUNNER OWNS, then put on PATH explicitly.
+      # Targeting /usr/local/bin, the installer resolved the tag ("found version:
+      # 0.58.2 for v0.58.2/Linux/64bit") and then produced no binary, so this step
+      # failed on its own `trivy --version` and the next one died with
+      # "trivy: command not found". That mattered more than it looks: the base-image
+      # scan below is the ONLY blocking CVE gate (--exit-code 1), and a failed
+      # install SKIPPED it — so the one step that can reject a vulnerable image
+      # never ran, on the first execution this job has ever had.
       - name: Install Trivy scanner
         run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/trivy-bin"
           curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
-            | sh -s -- -b /usr/local/bin v0.58.2
-          trivy --version
+            | sh -s -- -b "$RUNNER_TEMP/trivy-bin" v0.58.2
+          echo "$RUNNER_TEMP/trivy-bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/trivy-bin/trivy" --version
 
       - name: Scan base image for CVEs (Trivy)
         run: |
