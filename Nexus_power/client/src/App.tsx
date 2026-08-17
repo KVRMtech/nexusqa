@@ -18,7 +18,23 @@ const CanonicalResultPage = lazy(() => import('./pages/CanonicalResultPage'));
 const PersonaWorkspacePage = lazy(() => import('./pages/PersonaWorkspacePage'));
 const TestStrategyWorkspacePage = lazy(() => import('./pages/TestStrategyWorkspacePage'));
 const E2EArchitectWorkspacePage = lazy(() => import('./pages/E2EArchitectWorkspacePage'));
-const BatchLightsOutPage = lazy(() => import('./pages/BatchLightsOutPage'));
+// NO BatchLightsOutPage. `src/pages/BatchLightsOutPage.tsx` has never existed in
+// this repository — `git log --all -- '*BatchLightsOutPage*'` returns nothing.
+// The import and its `sessions/:sessionId/batch-lights-out` route arrived in
+// bcf08a7, a bulk "synced from VM" commit that copied this file's contents but
+// not the page it names, so the reference has been dangling ever since.
+//
+// It broke the build rather than only that one route: `tsc --noEmit` fails the
+// whole compile with TS2307, and Vite/rollup cannot resolve the chunk. Nothing
+// else in the client referenced it — no nav entry, no link, no test — so the
+// route was unreachable even if it had resolved. The backend "Lights-Out
+// (Mode C)" scheduler in platform/api/main.py is a separate, flag-gated feature
+// that never had a client page; it is untouched.
+//
+// Removed rather than reconstructed on purpose: writing a page from scratch here
+// would invent a UI with no spec, no design and no caller, and would green the
+// build by adding unproven surface. If the VM copy is wanted, commit that file
+// and restore these two lines with it.
 const VisualFlowDiagramPage = lazy(() => import('./pages/VisualFlowDiagramPage'));
 const VisualE2ETestsPage = lazy(() => import('./pages/VisualE2ETestsPage'));
 
@@ -92,7 +108,6 @@ export default function App() {
         <Route path="sessions/:sessionId/persona-workspace" element={<LazyPage name="Persona Workspace"><PersonaWorkspacePage /></LazyPage>} />
         <Route path="sessions/:sessionId/test-strategy" element={<LazyPage name="Test Strategy"><TestStrategyWorkspacePage /></LazyPage>} />
         <Route path="sessions/:sessionId/e2e-architect" element={<LazyPage name="E2E Architect"><E2EArchitectWorkspacePage /></LazyPage>} />
-        <Route path="sessions/:sessionId/batch-lights-out" element={<LazyPage name="Batch Lights-Out"><BatchLightsOutPage /></LazyPage>} />
         <Route path="sessions/:sessionId/visual-flow" element={<LazyPage name="Visual Flow Diagram"><VisualFlowDiagramPage /></LazyPage>} />
         <Route path="visual-e2e-tests" element={<LazyPage name="Visual E2E Tests"><VisualE2ETestsPage /></LazyPage>} />
 
