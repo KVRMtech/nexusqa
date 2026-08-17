@@ -43,7 +43,12 @@ spec:
 
   # Synchronous replication: at least one replica must confirm a write
   # before the primary acks. Trades a small write-latency increase for
-  # zero data loss on failover. Override to async via .Values.postgres.cnpg.synchronousReplicas=0.
+  # zero data loss on failover. For async, set BOTH
+  # .Values.postgres.cnpg.minSyncReplicas and .maxSyncReplicas to 0 — those are
+  # the keys this template actually reads. The line previously named a
+  # `synchronousReplicas` key that exists nowhere in values.yaml or in this
+  # chart, so an operator following it would have changed nothing and believed
+  # replication was async.
   minSyncReplicas: {{ $cnpg.minSyncReplicas | default 1 }}
   maxSyncReplicas: {{ $cnpg.maxSyncReplicas | default 1 }}
 

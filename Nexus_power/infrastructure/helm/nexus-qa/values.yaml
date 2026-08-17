@@ -36,6 +36,13 @@ secrets:
   heartTier2ApiKey: ""    # Optional: fallback provider secret for Heart
   brainTier1ApiKey: ""    # Optional: best-quality provider secret for Brain
   brainTier2ApiKey: ""    # Optional: fallback provider secret for Brain
+  # Declared for the same reason as the four above: templates/secret.yaml emits
+  # EYES_VISION_TIER1/2_API_KEY from these, but unlike its heart/brain siblings
+  # neither key was ever listed here — so `--set secrets.eyesVisionTier1ApiKey`
+  # was the only way to discover it existed, and chart_lint reported both as
+  # undeclared .Values references.
+  eyesVisionTier1ApiKey: ""  # Optional: best-quality vision provider secret for Eyes
+  eyesVisionTier2ApiKey: ""  # Optional: fallback vision provider secret for Eyes
   # Cloud object-storage credentials (only set the ones that match storage.backend).
   s3AccessKey: ""         # AWS / MinIO / R2 access key
   s3SecretKey: ""         # AWS / MinIO / R2 secret key
