@@ -12,8 +12,30 @@ FROM python:3.11-slim@sha256:a3ab0b966bc4e91546a033e22093cb840908979487a9fc0e6e3
 LABEL maintainer="Nexus QA Platform"
 LABEL description="Base image for Nexus engine services"
 
-# System dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# System dependencies.
+#
+# `apt-get upgrade` IS deliberate here, and it is what closes the CVE gate.
+# The FROM line above is digest-pinned, which fixes the starting layer forever —
+# including whatever Debian security fixes have shipped since that digest was
+# cut. `apt-get install` only touches the three packages it names, so everything
+# inherited from the base stayed at its original version indefinitely.
+#
+# Trivy's first-ever run against this image (the scanner had never installed —
+# see ci.yml) reported 12 fixable HIGH findings, all of them the util-linux
+# family (bsdutils, libblkid1, libmount1, libsmartcols1, libuuid1, mount, …)
+# carrying CVE-2026-53615 and CVE-2026-45447, installed 1:2.41-5 against a
+# published fix in 2.41.5-0+deb13u1. Nothing in this repo pulls util-linux in;
+# it arrives with debian:trixie underneath python:3.11-slim, so no change to the
+# package list could ever have fixed it.
+#
+# Upgrading does not weaken the digest pin's purpose. The pin makes the build
+# start from a known layer; the upgrade brings that layer's packages to the
+# current security state at build time. Refreshing the digest periodically is
+# still the right hygiene — this makes the image patched in the meantime rather
+# than only after someone remembers.
+RUN apt-get update \
+    && apt-get upgrade -y \
+    && apt-get install -y --no-install-recommends \
     build-essential \
     curl \
     git \
@@ -26,6 +48,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN groupadd -r -g 999 nexus && useradd -r -u 999 -g nexus -m nexus
 
 WORKDIR /app
+
+# The other half of the same Trivy report: 3 fixable HIGH findings in the Python
+# layer, all jaraco.context 5.3.0 (CVE-2026-23949, path traversal via a malicious
+# archive; fixed in 6.1.0). It is not a dependency of anything here — it ships as
+# part of the setuptools distribution baked into python:3.11-slim — so it is
+# upgraded at the toolchain level rather than added to any service's
+# requirements.txt, where it would be a phantom direct dependency. setuptools is
+# floored at the same version ci.yml's pip-audit gate requires (PYSEC-2026-3447).
+RUN pip install --no-cache-dir --upgrade \
+    'setuptools>=83.0.0' \
+    'jaraco.context>=6.1.0'
 
 # Install shared SDK first (cache layer)
 COPY sdk/nexus-sdk/ /app/sdk/nexus-sdk/
