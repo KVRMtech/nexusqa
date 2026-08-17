@@ -712,41 +712,71 @@ class TestStageExecutionResult:
 # ═══════════════════════════════════════════════════════════════
 
 
+def _route_paths(app) -> list[str]:
+    """Every registered route path, flattened.
+
+    `[r.path for r in app.routes]` stopped working on newer Starlette: an
+    included router is now kept in `app.routes` as an `_IncludedRouter` wrapper
+    holding its own `.routes` instead of being flattened into the parent at
+    include time. The wrapper has no `.path`, so the comprehension died with
+    `AttributeError: '_IncludedRouter' object has no attribute 'path'`, and the
+    count test saw 5 top-level entries where it expected 30+.
+
+    Both shapes are handled here — a route contributes its own `path` if it has
+    one, and any nested `routes` are walked — so this reads the same set on the
+    old flattened layout and the new nested one. Prefixes are joined so a nested
+    path is reported as it is actually served.
+    """
+    out: list[str] = []
+
+    def walk(routes, prefix: str = "") -> None:
+        for r in routes or ():
+            path = getattr(r, "path", None)
+            if isinstance(path, str):
+                out.append(prefix + path)
+            nested = getattr(r, "routes", None)
+            if nested is None:
+                inner = getattr(r, "router", None)
+                nested = getattr(inner, "routes", None) if inner is not None else None
+            if nested:
+                walk(nested, prefix + (getattr(r, "prefix", "") or ""))
+
+    walk(getattr(app, "routes", ()))
+    return out
+
+
 class TestQIRouterRegistration:
     """Verify QI Portal routers are registered in the main app."""
 
     def test_personas_router_registered(self):
         from main import app
-        paths = [r.path for r in app.routes]
-        assert any("/personas" in p for p in paths)
+        assert any("/personas" in p for p in _route_paths(app))
 
     def test_missions_router_registered(self):
         from main import app
-        paths = [r.path for r in app.routes]
-        assert any("/missions" in p for p in paths)
+        assert any("/missions" in p for p in _route_paths(app))
 
     def test_missions_dashboard_registered(self):
         from main import app
-        paths = [r.path for r in app.routes]
-        assert any("dashboard" in p for p in paths)
+        assert any("dashboard" in p for p in _route_paths(app))
 
     def test_missions_stages_registered(self):
         from main import app
-        paths = [r.path for r in app.routes]
-        assert any("stages" in p for p in paths)
+        assert any("stages" in p for p in _route_paths(app))
 
     def test_missions_artifacts_registered(self):
         from main import app
-        paths = [r.path for r in app.routes]
-        assert any("artifacts" in p for p in paths)
+        assert any("artifacts" in p for p in _route_paths(app))
 
     def test_missions_messages_registered(self):
         from main import app
-        paths = [r.path for r in app.routes]
-        assert any("messages" in p for p in paths)
+        assert any("messages" in p for p in _route_paths(app))
 
     def test_route_count_updated(self):
         from main import app
-        # After registering 2 new routers (personas + missions), total should be >= 36
-        route_count = len([r for r in app.routes if hasattr(r, "methods")])
+        # After registering 2 new routers (personas + missions), total should be >= 36.
+        # Counted over the FLATTENED route set for the same reason as above: on
+        # newer Starlette only 5 entries live directly on `app.routes`, so the old
+        # top-level count reported 5 and failed against a real 100+ route surface.
+        route_count = len(_route_paths(app))
         assert route_count >= 30, f"Expected at least 30 routes, got {route_count}"

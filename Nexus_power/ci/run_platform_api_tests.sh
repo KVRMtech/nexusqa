@@ -56,12 +56,24 @@ mapfile -t FILES < <(ls tests/test_*.py 2>/dev/null | sort)
 echo "== platform/api suite: ${#FILES[@]} files, per-file isolation =="
 fail=0; failed=()
 for f in "${FILES[@]}"; do
-  out="$(python -m pytest "$f" -p no:cacheprovider --no-header -q --tb=short -rX 2>&1)"; rc=$?
+  # -rfEX, NOT -rX. `-r` REPLACES pytest's default summary selection, so `-rX`
+  # asked for xpassed ONLY — which silently switched OFF the `FAILED …` lines
+  # that the grep below exists to surface. The result: a failing file printed its
+  # count ("2 failed, 6 passed") and then nothing at all, so CI reported THAT a
+  # file broke while withholding WHICH test broke and why. Observed on
+  # test_module_graph_smoke.py, which is green locally and red on the runner —
+  # precisely the case where the traceback is the only way in.
+  out="$(python -m pytest "$f" -p no:cacheprovider --no-header -q --tb=short -rfEX 2>&1)"; rc=$?
   summary="$(printf '%s\n' "$out" | grep -E '[0-9]+ (passed|failed|error|xfailed|xpassed|skipped)' | tail -1)"
   printf '  %-52s %s\n' "$(basename "$f")" "${summary:-<no tests collected>}"
   if [ "$rc" != "0" ]; then
     fail=1; failed+=("$(basename "$f")")
-    printf '%s\n' "$out" | grep -E 'FAILED|ERROR|XPASS' | sed 's/^/      /'
+    # The FULL output for a failing file, not a grep of it. A one-line `FAILED`
+    # names the test but not the cause, and a runner-only failure cannot be
+    # reproduced locally by definition — the traceback has to survive the run
+    # that produced it. Only failing files pay this cost; green files stay one
+    # line each.
+    printf '%s\n' "$out" | sed 's/^/      /'
   fi
 done
 

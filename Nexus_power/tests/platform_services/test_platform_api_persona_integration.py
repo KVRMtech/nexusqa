@@ -21,6 +21,7 @@ before ``app`` can be resolved.
 from __future__ import annotations
 
 import json
+import os
 import time
 import uuid
 from datetime import datetime, timezone
@@ -46,7 +47,20 @@ from nexus_sdk.db.models import (
 
 # ── Constants ──────────────────────────────────────────────────
 
-JWT_SECRET = "dev-jwt-secret-change-me"
+# SIGN WITH THE SECRET THE APP WILL VERIFY WITH, whatever it is.
+#
+# This was the literal "dev-jwt-secret-change-me". The application reads its
+# signing key from NEXUS_JWT_SECRET and only falls back to that literal when the
+# variable is unset — true on a developer laptop, false in CI, which exports
+# NEXUS_JWT_SECRET for every job. So every token this file minted was signed with
+# the wrong key and the API correctly rejected all of them: twenty tests failing
+# as `assert 401 == 200`, reported as broken tenant-isolation and broken Brain
+# error handling when the only thing broken was the fixture's key.
+#
+# Reading the same variable keeps the suite honest in both places, and does NOT
+# weaken the auth assertions: the 401 paths are proven separately by
+# test_invalid_token_returns_401, which sends deliberate garbage.
+JWT_SECRET = os.getenv("NEXUS_JWT_SECRET", "dev-jwt-secret-change-me")
 JWT_ALG = "HS256"
 
 TENANT_A = "tenant-alpha"

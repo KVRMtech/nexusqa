@@ -39,7 +39,23 @@ class TestOrchestratorConfig:
         assert cfg.mouth_url == "http://localhost:8010"
         assert cfg.redis_url == "redis://localhost:6379/0"
 
-    def test_jwt_secret_default(self):
+    def test_jwt_secret_default(self, monkeypatch):
+        """The BUILT-IN default, with nothing configured.
+
+        `jwt_secret` is declared as
+        `Field(default="dev-jwt-secret-change-me", alias="NEXUS_JWT_SECRET")`,
+        so it reads NEXUS_JWT_SECRET from the environment whenever one is set.
+        This test asserted the default WITHOUT clearing that variable, which made
+        it a test of the developer's shell: green on a laptop that has no
+        NEXUS_JWT_SECRET, red on CI, which sets one for every job. It was failing
+        with `assert 'ci-test-jwt-secret-not-for-prod' == 'dev-jwt-secret-change-me'`
+        — the config behaving exactly as designed.
+
+        Deleting the variable for the duration of the test makes it hermetic and
+        makes it test what its name claims. The override path is already covered
+        by the alias being honoured at all; that is what CI's own env proves.
+        """
+        monkeypatch.delenv("NEXUS_JWT_SECRET", raising=False)
         from app.config import OrchestratorConfig
         cfg = OrchestratorConfig()
         assert cfg.jwt_secret == "dev-jwt-secret-change-me"

@@ -4,19 +4,32 @@ name: deploy-validation
 # modules, GitOps overlays). Catches the bugs that only surface at
 # render/apply time — typo'd values keys, missing helpers, broken
 # module-output references — before a real deploy.
+# PATHS ARE REPO-ROOT-RELATIVE AND THE APPLICATION LIVES IN Nexus_power/.
+# Without that prefix these globs matched nothing, so the workflow's own path
+# filter could never fire — see the working-directory note below for the other
+# half of the same mistake.
 on:
   pull_request:
     paths:
-      - 'infrastructure/helm/**'
-      - 'infrastructure/terraform/**'
-      - 'infrastructure/gitops/**'
+      - 'Nexus_power/infrastructure/helm/**'
+      - 'Nexus_power/infrastructure/terraform/**'
+      - 'Nexus_power/infrastructure/gitops/**'
       - '.github/workflows/deploy-validation.yml'
   push:
     branches: [develop, main]
     paths:
-      - 'infrastructure/helm/**'
-      - 'infrastructure/terraform/**'
-      - 'infrastructure/gitops/**'
+      - 'Nexus_power/infrastructure/helm/**'
+      - 'Nexus_power/infrastructure/terraform/**'
+      - 'Nexus_power/infrastructure/gitops/**'
+
+# Same rule as ci.yml: only .github/ sits at the repository root, the application
+# is under Nexus_power/. Every `run:` step below names `infrastructure/...`, which
+# resolved to a path that does not exist until this was set. `uses:` action INPUTS
+# and step-level `working-directory:` overrides are NOT covered by this and carry
+# the prefix explicitly wherever they appear.
+defaults:
+  run:
+    working-directory: Nexus_power
 
 jobs:
   helm-static-lint:
@@ -155,20 +168,27 @@ jobs:
         with:
           terraform_version: 1.7.5
       - name: terraform fmt check
-        working-directory: infrastructure/terraform/envs/${{ matrix.env }}
+        working-directory: Nexus_power/infrastructure/terraform/envs/${{ matrix.env }}
         run: terraform fmt -check -recursive
         continue-on-error: true
       - name: terraform init (no backend)
-        working-directory: infrastructure/terraform/envs/${{ matrix.env }}
+        working-directory: Nexus_power/infrastructure/terraform/envs/${{ matrix.env }}
         run: terraform init -backend=false -input=false
       - name: terraform validate
-        working-directory: infrastructure/terraform/envs/${{ matrix.env }}
+        working-directory: Nexus_power/infrastructure/terraform/envs/${{ matrix.env }}
         run: terraform validate -no-color
 
   kyverno-policy-lint:
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    if: hashFiles('infrastructure/gitops/resources/kyverno/**') != ''
+    # NO job-level `if: hashFiles(...)`. `hashFiles` is not available in a
+    # jobs.<id>.if expression — only in a step-level one — so the whole FILE
+    # failed validation and every run of this workflow was a zero-second
+    # startup_failure with no jobs at all. That is why GitHub listed it as
+    # ".github/workflows/deploy-validation.yml" instead of its `name:`: it never
+    # parsed far enough to read one. The guard was also pointless — the eight
+    # policies in Nexus_power/infrastructure/gitops/resources/kyverno/ are
+    # committed, so the directory is always present.
     steps:
       - uses: actions/checkout@v4
       - name: Install kyverno CLI

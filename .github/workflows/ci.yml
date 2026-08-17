@@ -914,8 +914,17 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
+      # setuptools is UPGRADED, not ignored. The runner ships 79.0.1, which
+      # pip-audit flags as PYSEC-2026-3447 (MANIFEST.in exclude rules are matched
+      # without Unicode normalization, so an NFD filename can slip past an NFC
+      # exclusion and be published in an sdist; fixed in 83.0.0). It is a finding
+      # against the RUNNER's build toolchain rather than anything this repo ships
+      # — nothing here builds an sdist — but the honest response to a flagged
+      # vulnerability is to take the fixed version, not to add its ID to an
+      # ignore list. Pinning the floor at the fix version keeps the gate real: if
+      # a FUTURE setuptools advisory lands, this job goes red again as it should.
       - name: Install pip-audit
-        run: pip install pip-audit
+        run: pip install pip-audit 'setuptools>=83.0.0'
 
       - name: Audit dependencies for known vulnerabilities
         run: |
