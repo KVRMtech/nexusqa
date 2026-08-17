@@ -56,9 +56,15 @@ WORKDIR /app
 # upgraded at the toolchain level rather than added to any service's
 # requirements.txt, where it would be a phantom direct dependency. setuptools is
 # floored at the same version ci.yml's pip-audit gate requires (PYSEC-2026-3447).
+# wheel is the same story one layer along: 0.45.1 ships in the image and carries
+# CVE-2026-24049 (privilege escalation / arbitrary code execution, fixed 0.46.2).
+# It surfaced only after the three above were cleared — Trivy reports the whole
+# set each run, and this was the last remaining HIGH once util-linux and
+# jaraco.context were patched. Floored here with the rest of the build toolchain.
 RUN pip install --no-cache-dir --upgrade \
     'setuptools>=83.0.0' \
-    'jaraco.context>=6.1.0'
+    'jaraco.context>=6.1.0' \
+    'wheel>=0.46.2'
 
 # Install shared SDK first (cache layer)
 COPY sdk/nexus-sdk/ /app/sdk/nexus-sdk/
