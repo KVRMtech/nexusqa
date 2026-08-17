@@ -809,11 +809,31 @@ jobs:
           BUILT=0
           FAILED=0
 
+          # THE BUILD CONTEXT IS PER-SERVICE, exactly as docker-compose.yml
+          # declares it. This helper used to hardcode `context == the service
+          # directory` for all fourteen, which is right for twelve of them and
+          # wrong for two:
+          #
+          #   compose `eyes`  → context: .  dockerfile: engines/eyes-engine/Dockerfile
+          #   compose `spine` → context: .  dockerfile: engines/spine-engine/Dockerfile
+          #
+          # Those two Dockerfiles `COPY sdk/nexus-sdk/` and address their own
+          # files as `engines/<svc>/…`, so they need the Nexus_power root as
+          # context; the other twelve COPY `requirements.txt` / `app/` relative
+          # to themselves. Built with the narrow context they died with
+          #   failed to compute cache key: "/engines/spine-engine/main.py": not found
+          # — 12 images built, 2 failed. It had never been reported because
+          # docker-build `needs: [test, frontend]` and had been SKIPPED on every
+          # run this repository has ever done.
+          #
+          # $4 is the context and defaults to $2, so the twelve ordinary
+          # services read exactly as before and only the two exceptions carry
+          # the override — and they now match compose line for line.
           build_svc() {
-            local name="$1" dir="$2" base="$3"
-            echo "Building $name from $dir..."
+            local name="$1" dir="$2" base="$3" ctx="${4:-$2}"
+            echo "Building $name (context=$ctx, dockerfile=$dir/Dockerfile)..."
             if docker build --build-arg BASE_IMAGE="$base" \
-                -t "nexus-$name:ci" "$dir"; then
+                -f "$dir/Dockerfile" -t "nexus-$name:ci" "$ctx"; then
               BUILT=$((BUILT + 1))
             else
               echo "::error::Failed to build $name"
@@ -827,12 +847,12 @@ jobs:
           build_svc nerves-engine   engines/nerves-engine   nexus-base:ci
           build_svc legs-engine     engines/legs-engine     nexus-base:ci
           build_svc hands-engine    engines/hands-engine    nexus-base:ci
-          build_svc spine-engine    engines/spine-engine    nexus-base:ci
+          build_svc spine-engine    engines/spine-engine    nexus-base:ci .
           build_svc mouth-engine    engines/mouth-engine    nexus-base:ci
 
           # GPU engines
           build_svc ears-engine  engines/ears-engine  nexus-gpu:ci
-          build_svc eyes-engine  engines/eyes-engine  nexus-gpu:ci
+          build_svc eyes-engine  engines/eyes-engine  nexus-gpu:ci .
           build_svc heart-engine engines/heart-engine nexus-gpu:ci
 
           # Platform services
