@@ -493,6 +493,29 @@ _UUID_RX = re.compile(
 _PORT_RX = re.compile(r"(https?://(?:127\.0\.0\.1|localhost)):\d{2,5}")
 _HEX32_RX = re.compile(r"\b[0-9a-f]{32,64}\b")
 
+#: PLAYWRIGHT'S OWN ERROR PROSE, not ours.
+#:
+#: When a click times out, the port stores Playwright's exception text verbatim
+#: in the record's ``detail``, and that text contains a "Call log:" block whose
+#: lines Playwright itself formats. The bullet prefix on those lines is not
+#: stable across Playwright builds:
+#:
+#:     recorded:  "Call log:\n  - waiting for get_by_role(\"button\", …)"
+#:     observed:  "Call log:\nwaiting for get_by_role(\"button\", …)"
+#:
+#: Two goldens (11-confirm-gated-step, 13-canvas) failed on exactly that, with
+#: the locator, the timeout, ``navigated: false`` and ``outcome: "error"`` all
+#: identical — a third-party punctuation change reported as "captured behaviour
+#: changed". requirements.txt pins playwright==1.48.0 and CI installs precisely
+#: that, so the goldens had simply been recorded against a different build.
+#:
+#: Only the bullet is removed, and only inside a string that actually contains a
+#: Call log block, so the locator text, the error class and the timeout value —
+#: everything that says what OUR crawler did — still diff normally. This is the
+#: same principle as _UNSTABLE_KEYS: normalise what another system's clock or
+#: formatter owns, never what Capture decided.
+_PW_CALL_LOG_BULLET_RX = re.compile(r"(?m)^[ \t]*-[ \t]+(?=waiting for )")
+
 
 def normalize_value(value: Any, key: str = "") -> Any:
     """Replace ONLY run-varying values with stable tokens.
@@ -502,6 +525,8 @@ def normalize_value(value: Any, key: str = "") -> Any:
       * a key in :data:`_UNSTABLE_KEYS` → ``"<normalized:key>"``
       * a UUID anywhere in a string     → ``"<uuid>"``
       * an ephemeral localhost port     → ``"<port>"``
+      * Playwright's own Call-log bullet prefix (see
+        :data:`_PW_CALL_LOG_BULLET_RX`) — third-party formatting, not behaviour
 
     Functional output — names, roles, options, group keys, outcomes, counts,
     coverage — is returned untouched. That is the whole contract: a behavioural
@@ -513,6 +538,8 @@ def normalize_value(value: Any, key: str = "") -> Any:
         v = _UUID_RX.sub("<uuid>", value)
         v = _PORT_RX.sub(r"\1:<port>", v)
         v = _HEX32_RX.sub("<hash>", v)
+        if "Call log:" in v:
+            v = _PW_CALL_LOG_BULLET_RX.sub("", v)
         return v
     if isinstance(value, dict):
         return {k: normalize_value(v, k) for k, v in sorted(value.items())}

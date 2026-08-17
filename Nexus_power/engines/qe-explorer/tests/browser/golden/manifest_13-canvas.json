@@ -54,7 +54,7 @@
       },
       {
         "after": {
-          "detail": "action_error: Locator.click: Timeout 15000ms exceeded.\nCall log:\n  - waiting for get_by_role(\"button\", name=\"Illustration detail $0.99\").first",
+          "detail": "action_error: Locator.click: Timeout 15000ms exceeded.\nCall log:\nwaiting for get_by_role(\"button\", name=\"Illustration detail $0.99\").first",
           "navigated": false,
           "outcome": "error"
         },

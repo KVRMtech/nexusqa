@@ -54,7 +54,7 @@
       },
       {
         "after": {
-          "detail": "action_error: Locator.click: Timeout 15000ms exceeded.\nCall log:\n  - waiting for get_by_role(\"button\", name=\"Optional disclosures What is this?\").first",
+          "detail": "action_error: Locator.click: Timeout 15000ms exceeded.\nCall log:\nwaiting for get_by_role(\"button\", name=\"Optional disclosures What is this?\").first",
           "navigated": false,
           "outcome": "error"
         },
@@ -116,7 +116,7 @@
       },
       {
         "after": {
-          "detail": "action_error: Locator.click: Timeout 15000ms exceeded.\nCall log:\n  - waiting for get_by_role(\"button\", name=\"Beneficiary disclosures\").first",
+          "detail": "action_error: Locator.click: Timeout 15000ms exceeded.\nCall log:\nwaiting for get_by_role(\"button\", name=\"Beneficiary disclosures\").first",
           "navigated": false,
           "outcome": "error"
         },

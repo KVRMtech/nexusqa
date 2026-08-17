@@ -713,36 +713,34 @@ class TestStageExecutionResult:
 
 
 def _route_paths(app) -> list[str]:
-    """Every registered route path, flattened.
+    """Every registered route path, read through a PUBLIC api.
 
-    `[r.path for r in app.routes]` stopped working on newer Starlette: an
-    included router is now kept in `app.routes` as an `_IncludedRouter` wrapper
-    holding its own `.routes` instead of being flattened into the parent at
-    include time. The wrapper has no `.path`, so the comprehension died with
+    `[r.path for r in app.routes]` stopped working on newer FastAPI. Including a
+    router no longer flattens its routes into the parent at include time; the
+    parent keeps a `fastapi.routing._IncludedRouter` dataclass that resolves its
+    children lazily. That wrapper has no `.path`, so the comprehension died with
     `AttributeError: '_IncludedRouter' object has no attribute 'path'`, and the
-    count test saw 5 top-level entries where it expected 30+.
+    count test saw the 5 remaining top-level entries against a real 300+ route
+    surface.
 
-    Both shapes are handled here — a route contributes its own `path` if it has
-    one, and any nested `routes` are walked — so this reads the same set on the
-    old flattened layout and the new nested one. Prefixes are joined so a nested
-    path is reported as it is actually served.
+    The obvious repair — walk `.routes` / `.router` recursively — does NOT work
+    either: `_IncludedRouter` exposes its children as `original_router`, behind
+    an `effective_candidates()` resolver, and both are private and new. A test
+    that reaches into them is a test that breaks on the next FastAPI release for
+    reasons that have nothing to do with this application.
+
+    So the schema is used instead. `app.openapi()` is public, stable across all
+    of these versions, and enumerates every route the app actually serves.
+    Non-schema routes (include_in_schema=False, mounts, static) never appear
+    there, so the top-level entries that DO carry a `.path` are added as well —
+    that pair covers both layouts without touching a private attribute.
     """
-    out: list[str] = []
-
-    def walk(routes, prefix: str = "") -> None:
-        for r in routes or ():
-            path = getattr(r, "path", None)
-            if isinstance(path, str):
-                out.append(prefix + path)
-            nested = getattr(r, "routes", None)
-            if nested is None:
-                inner = getattr(r, "router", None)
-                nested = getattr(inner, "routes", None) if inner is not None else None
-            if nested:
-                walk(nested, prefix + (getattr(r, "prefix", "") or ""))
-
-    walk(getattr(app, "routes", ()))
-    return out
+    paths: list[str] = list(app.openapi().get("paths", {}))
+    for route in getattr(app, "routes", ()) or ():
+        path = getattr(route, "path", None)
+        if isinstance(path, str):
+            paths.append(path)
+    return paths
 
 
 class TestQIRouterRegistration:

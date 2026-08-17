@@ -192,6 +192,27 @@ def test_platform_routers_import():
     _import("app.routers.diff_and_heal")
 
 
+def _schema(app) -> dict:
+    """The app's OpenAPI document — the version-stable view of what it serves.
+
+    Both tests below used to read `app.routes` directly, taking `.tags` and
+    `.path` off each entry. Newer FastAPI no longer flattens an included router
+    into its parent: `app.routes` keeps a `fastapi.routing._IncludedRouter`
+    dataclass that resolves children lazily, and that wrapper exposes neither
+    attribute. Every route registered via `include_router` therefore became
+    INVISIBLE — which is why CI reported all six tags and all fifteen P3-P7
+    endpoints as missing while the application was serving every one of them,
+    and why the same suite stayed green on a laptop pinning older FastAPI.
+
+    Reading the schema fixes that without reaching into `_IncludedRouter`'s
+    private `original_router` / `effective_candidates()`, which would only move
+    the breakage to the next release. It is also a STRONGER assertion than the
+    old one: a path appears here only if its router was actually included and
+    its operation actually built.
+    """
+    return app.openapi()
+
+
 def test_platform_main_assembles_app():
     """Importing main.py builds the full FastAPI app — catches any
     route-registration or middleware error at startup."""
@@ -209,20 +230,22 @@ def test_platform_main_assembles_app():
         "E2E Diff & Heal",
         "Tests",
     }
+    schema = _schema(app)
     actual_tags: set[str] = set()
-    for route in app.routes:
-        tags = getattr(route, "tags", None) or []
-        actual_tags.update(tags)
+    for _path, operations in schema.get("paths", {}).items():
+        for _method, operation in operations.items():
+            if isinstance(operation, dict):
+                actual_tags.update(operation.get("tags", []) or [])
     missing = expected_tags - actual_tags
     assert not missing, f"FastAPI app missing tag(s): {sorted(missing)}"
-    print(f"[OK] FastAPI app assembled. {len(app.routes)} routes registered. Tags present: {sorted(expected_tags)}")
+    print(f"[OK] FastAPI app assembled. {len(schema.get('paths', {}))} paths registered. Tags present: {sorted(expected_tags)}")
 
 
 def test_p3_p6_endpoints_registered():
     """Verify the specific endpoints we added are reachable via path lookup."""
     main_mod = importlib.import_module("main")
     app = main_mod.app
-    paths: set[str] = set()
+    paths: set[str] = set(_schema(app).get("paths", {}))
     for route in app.routes:
         path = getattr(route, "path", None)
         if path:
