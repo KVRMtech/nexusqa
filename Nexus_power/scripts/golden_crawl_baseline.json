@@ -1,28 +1,52 @@
 {
+  "_raised": {
+    "exploration": "d45c711c-5ec6-42e2-8680-b0d674b7c0a0",
+    "note": "The five-step application walked END TO END for the first time: Applicant -> Address & Employment -> Coverage -> Health -> Review & Submit, four advances, every one taken at tier 1. The Health step was the last block - eight condition checkboxes whose 'select at least one' rule exists only in the app's own script and cannot be written in HTML - and it was cleared by answering one question and letting the application re-render its own verdict on Continue. THE FLOORS LIVE IN THIS REPO FILE, NOT ON THE VM: deploy overwrites the VM copy from git, so a rise recorded only on the VM is silently forgotten on the next deploy. Two earlier rises (pages 21, deepest_flow 4, wizard_advances 3) were lost exactly that way.",
+    "raised": {
+      "deepest_flow": [
+        3,
+        5
+      ],
+      "pages": [
+        20,
+        22
+      ],
+      "wizard_advances": [
+        2,
+        4
+      ]
+    }
+  },
   "_rebaselined": {
     "exploration": "9bb06cb1-e861-49a2-ad65-9b712efd9784",
     "lowered": {
-      "flows": [8, 7],
-      "pages": [24, 20],
-      "submitted": [11, 9],
-      "tests": [12, 9]
+      "flows": [
+        8,
+        7
+      ],
+      "pages": [
+        24,
+        20
+      ],
+      "submitted": [
+        11,
+        9
+      ],
+      "tests": [
+        12,
+        9
+      ]
     },
     "reason": "The previous floors were seeded from a BROKEN funnel. Before the danger-scope fix the crawler could not advance the wizard, so it recorded each step as an unrelated one-step flow and re-submitted the same form repeatedly - 11 submits for a form that is submitted once. Walking the funnel properly consolidates those fragments into one 3-deep journey, which necessarily lowers the page, flow, submit and test counts while strictly improving the result. Verified before lowering: seq 1 captured the Applicant step (Gender, names, DOB, SSN, email, phone) and seq 2 captured Address & Employment (street, city, state, ZIP, occupation, employer, income) - seven fields that had NEVER been captured before. deepest_flow 1->3 and wizard_advances 0->2 are the same change seen from the other side. Left as floors so a future regression below the consolidated numbers still fails."
   },
-  "_raised": {
-    "exploration": "d45c711c-5ec6-42e2-8680-b0d674b7c0a0",
-    "raised": {
-      "deepest_flow": [3, 5],
-      "pages": [20, 22],
-      "wizard_advances": [2, 4]
-    },
-    "note": "The five-step application walked END TO END for the first time: Applicant -> Address & Employment -> Coverage -> Health -> Review & Submit, four advances, every one taken at tier 1. The Health step was the last block - eight condition checkboxes whose 'select at least one' rule exists only in the app's own script and cannot be written in HTML - and it was cleared by answering one question and letting the application re-render its own verdict on Continue. THE FLOORS LIVE IN THIS REPO FILE, NOT ON THE VM: deploy overwrites the VM copy from git, so a rise recorded only on the VM is silently forgotten on the next deploy. Two earlier rises (pages 21, deepest_flow 4, wizard_advances 3) were lost exactly that way."
-  },
   "auto_filled": 29,
+  "catalog_questions": 67,
   "deepest_flow": 5,
   "flows": 7,
   "forms": 7,
+  "forms_confirmed": 0,
   "pages": 22,
+  "selects_filled": 10,
   "submitted": 9,
   "tests": 9,
   "wizard_advances": 4
