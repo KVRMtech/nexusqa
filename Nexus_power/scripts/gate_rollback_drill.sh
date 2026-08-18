@@ -45,7 +45,36 @@ cd "$SRC/Nexus_power" || exit 2
 # `git checkout <green>`, and git refuses that with modified tracked files. So a
 # drill that staged its own scripts into the repo would break the very operation
 # it exists to prove.
-HERE="${DRILL_SCRIPTS:-$SRC/Nexus_power/scripts}"
+# THE DEFAULT IS A SNAPSHOT, NOT THE LIVE WORKTREE — and that is load-bearing.
+#
+# Step 4 runs `git checkout <green>`, and the M0.4 gate scripts do not exist at
+# an older green commit: gate_rollback.sh first appears in 24a802e. With HERE
+# pointing into the repo, steps 1-4 ran fine and then the checkout deleted the
+# very files steps 6-7 invoke, so both failure-injection cases exited 127
+# (command not found) and were scored as failures.
+#
+# The drill then printed "DRILL FAILED - do not trust the rollback path" over
+# four checks that had NEVER RUN — the most misleading output it could produce,
+# because the rollback path was in fact perfect (15/15 up to that point) and the
+# drill had simply eaten its own tools. Observed live on 2026-08-18 against
+# green 9dc00d9.
+#
+# Copying the scripts out first makes the default invocation correct. DRILL_SCRIPTS
+# still overrides, which is how a CANDIDATE gate is exercised against the real
+# repo and the real containers without dirtying tracked files.
+if [ -n "${DRILL_SCRIPTS:-}" ]; then
+  HERE="$DRILL_SCRIPTS"
+else
+  HERE="$(mktemp -d /tmp/drill-scripts.XXXXXX)"
+  cp -a "$SRC/Nexus_power/scripts/." "$HERE/" 2>/dev/null || {
+    echo "DRILL ABORT: could not stage the gate scripts into $HERE"; exit 2; }
+  echo "staged gate scripts -> $HERE (survives the rollback checkout)"
+fi
+# Fail EARLY and by name if a tool the drill depends on is missing, rather than
+# discovering it as a 127 forty minutes in and mislabelling it a rollback defect.
+for _t in gate_rollback.sh gate_manifest.py golden_crawl_gate.sh gate_baseline.py; do
+  [ -f "$HERE/$_t" ] || { echo "DRILL ABORT: $_t not found in $HERE"; exit 2; }
+done
 BASE="$HERE/golden_crawl_baseline.json"
 MANIFEST=/tmp/drill_manifest.json
 
