@@ -56,8 +56,24 @@ def test_completion_cannot_be_asserted_by_a_caller():
     assert '"completed": term in COMPLETING_TERMINALS' in inspect.getsource(FL.build_flow)
 
 
-def test_only_two_terminals_mean_covered():
-    assert FL.COMPLETING_TERMINALS == {FL.TERMINAL_SUBMIT_BOUNDARY, FL.TERMINAL_NO_ADVANCE}
+def test_only_four_terminals_mean_covered():
+    """A4.3 added ``submit_crossed``: the walk did not merely reach the commit
+    button, it was authorised through it. M1.4 added ``confirmation``: the
+    application itself declared the journey done. Still COVERAGE of the funnel,
+    which is what this set means — whether the crossing LANDED is a separate and
+    stronger claim carried by ``journey_completed``, never by the terminal.
+
+    The set is pinned EXACTLY, so widening it is always a deliberate edit to
+    this line rather than a side effect of adding a terminal somewhere else."""
+    assert FL.COMPLETING_TERMINALS == {FL.TERMINAL_SUBMIT_BOUNDARY,
+                                       FL.TERMINAL_NO_ADVANCE,
+                                       FL.TERMINAL_SUBMIT_CROSSED,
+                                       FL.TERMINAL_CONFIRMATION}
+    # The terminals that must NEVER count as coverage, restated positively so a
+    # future edit that moves one of them across is caught here too.
+    for terminal in (FL.TERMINAL_LOOP, FL.TERMINAL_BUDGET, FL.TERMINAL_CANCELLED,
+                     FL.TERMINAL_ORACLE_UNAVAILABLE):
+        assert terminal not in FL.COMPLETING_TERMINALS
 
 
 def test_an_unrecognised_terminal_fails_closed_to_not_covered():

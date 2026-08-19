@@ -112,6 +112,55 @@ class Settings(BaseSettings):
     auth_window_ms: int = Field(default=30_000, alias="QEC_AUTH_WINDOW_MS")
     #: Re-login attempts on session expiry (design §3.2 auth.py: ≤3).
     max_relogins: int = Field(default=3, alias="QEC_MAX_RELOGINS")
+
+    # ── M1.3 CONTROLLED WALK PERSISTENCE (T-WP-01 / T-WP-02) ─────────────
+    # There is deliberately NO enable/disable flag here.  The capability is
+    # switched on by the arrival of a cryptographically valid, platform-issued
+    # provisioning proof and by nothing else — an operator cannot turn walk
+    # mutation on, and cannot turn the verification off.  Absent public keys or
+    # an absent issuer means the trust store is unconfigured, which means every
+    # walk mutation is refused: that is the shipped default.
+    #
+    #: Comma-separated base64 raw-32-byte Ed25519 PUBLIC keys of the platform
+    #: attestation issuer.  VERIFICATION ONLY — this service never holds the
+    #: private half, so a full compromise of the explorer cannot mint a proof.
+    attestation_public_keys: str = Field(
+        default="", alias="QEC_ATTESTATION_PUBLIC_KEYS")
+    #: The issuer identity every proof's ``issuer`` claim must equal.  Empty ⇒
+    #: the trust store is unconfigured ⇒ walk mutation is off.
+    attestation_issuer: str = Field(default="", alias="QEC_ATTESTATION_ISSUER")
+    #: Verifier-enforced ceiling on a proof's lifetime.  Bounds the window in
+    #: which a stolen proof is useful, independently of what the issuer minted.
+    attestation_max_lifetime_ms: int = Field(
+        default=86_400_000, alias="QEC_ATTESTATION_MAX_LIFETIME_MS")
+    #: Allowed issuer↔verifier clock skew, both directions (epoch ms).
+    attestation_skew_ms: int = Field(
+        default=300_000, alias="QEC_ATTESTATION_SKEW_MS")
+    #: FLEET CEILING on mutations per logical wizard step.  The effective budget
+    #: is ``min(this, the proof's own request)`` — a proof can ask for less, and
+    #: can never ask for more.
+    walk_max_mutations_per_step: int = Field(
+        default=3, alias="QEC_WALK_MAX_MUTATIONS_PER_STEP")
+    #: How long the actuation window around ONE walk click stays open (ms).
+    #: Bounds a Save-Draft burst without admitting background autosave.
+    walk_mutation_window_ms: int = Field(
+        default=15_000, alias="QEC_WALK_MUTATION_WINDOW_MS")
+
+    def attestation_trust_store(self):
+        """Build the :class:`app.attest.TrustStore` for this fleet.
+
+        Fail-closed by construction: no keys or no issuer ⇒ ``configured`` is
+        False ⇒ :func:`app.attest.verify_provisioning_proof` denies everything
+        with ``no_trust_anchor``."""
+        from .attest import TrustStore
+        keys = [k.strip() for k in (self.attestation_public_keys or "").split(",")
+                if k.strip()]
+        return TrustStore.from_public_keys(
+            keys, issuer=self.attestation_issuer,
+            max_lifetime_ms=int(self.attestation_max_lifetime_ms),
+            skew_ms=int(self.attestation_skew_ms),
+            max_mutations_per_step=int(self.walk_max_mutations_per_step),
+        )
     #: Wizard/stepper traversal (#1) — advance non-danger Next/Continue on filled
     #: form states to record deeper steps.  Bounded + fingerprint-deduped +
     #: fail-closed (danger OR commit-word vetoes an advance).  ON by default; a

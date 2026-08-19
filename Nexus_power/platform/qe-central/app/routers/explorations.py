@@ -688,7 +688,7 @@ def _explorer_attestation(att: dict | None) -> dict | None:
 
 async def _dispatch_explorer(
     *, tenant_id: str, app_id: str, request: Request, response: Response,
-    walk_plan: dict | None = None,
+    walk_plan: dict | None = None, resume_from: dict | None = None,
 ) -> dict:
     """Mint a crawl, fence egress, and dispatch the contained explorer (Phase-1).
 
@@ -793,6 +793,14 @@ async def _dispatch_explorer(
         # unexpired attestation + a non-empty per-flow list). [] for an explore-only
         # app → the crawl stays at the Phase-A boundary, exactly as before.
         submit_approvals = prod_guard.submit_approvals(row)
+        # A4.3 / T-AC-02 — the PER-CONTROL approval seam, carried through
+        # unchanged from the app's stored config. This is the grant the explorer
+        # needs to cross an irreversible boundary at least privilege; without it
+        # the only route was `submit_approvals == ["*"]`, which authorises every
+        # submit the application offers. prod_guard applies the same fail-closed
+        # gate as the label list (signed RoE + a valid attestation), so an app
+        # that may not submit at all still gets [].
+        boundary_approvals = prod_guard.boundary_approvals(row)
         # TRAVERSAL POSTURE — how far this crawl may walk a business journey.
         # Derived from the attestation the operator already signed, so a test
         # environment does not need a second dial set by hand. Never a safety
@@ -875,11 +883,31 @@ async def _dispatch_explorer(
     # `async with tenant_scoped_qec_session(...) as session` block below.
     auth_session = await _resolve_session(credentials)
 
-    crawl_id = uuid.uuid4().hex  # 32 hex chars — matches CRAWL_ID_PATTERN, fits String(50)
+    # ── M1.7 / T-GW-03 · A RESUME IS NOT A NEW CRAWL ──────────────────────
+    # THE REASON RESUME WAS UNREACHABLE. Every dispatch minted a fresh
+    # ``uuid.uuid4().hex``, and the explorer derives its work directory — and
+    # therefore its durable manifest — from the crawl id. So a "resumed" crawl
+    # looked for a manifest under an id that had never been written, found
+    # nothing, and walked the application from zero. The recovery machinery in
+    # the engine was real and simply could not be addressed.
+    #
+    # A resume therefore reuses BOTH ids: the crawl id (so the worker opens the
+    # manifest it is meant to continue) and the exploration id (so the evidence
+    # is not split across two rows that each hold half a crawl). The row
+    # transitions back to ``dispatched``; nothing is deleted, and the manifest is
+    # appended to, never truncated.
+    resuming = bool(resume_from)
+    if resuming:
+        crawl_id = str((resume_from or {}).get("crawl_id") or "")
+        exploration_id = str((resume_from or {}).get("exploration_id") or "")
+        if not (crawl_id and exploration_id):   # pragma: no cover — caller-validated
+            raise HTTPException(status_code=500, detail="resume target is incomplete")
+    else:
+        crawl_id = uuid.uuid4().hex  # 32 hex chars — matches CRAWL_ID_PATTERN, fits String(50)
+        exploration_id = new_id()
     if not CRAWL_ID_PATTERN.match(crawl_id):  # pragma: no cover — uuid hex is always valid
         raise HTTPException(status_code=500, detail="generated crawl_id failed validation")
     extractor_version = _extractor_version(crawl_id)
-    exploration_id = new_id()
 
     # Persist the pending row BEFORE dispatch so a lost callback still leaves an
     # honest, queryable record (never a silent orphan crawl). Stamp the crawl's wall
@@ -947,18 +975,49 @@ async def _dispatch_explorer(
             # re-planning every ~2.5 minutes and burning the branch backlog.
             "walk_depth": int(walk_plan.get("walk_depth") or 0),
         }
-    async with tenant_scoped_qec_session(tenant_id) as session:
-        session.add(
-            QEExplorationRow(
-                exploration_id=exploration_id,
-                tenant_id=tenant_id,
-                app_id=app_id[:64],
-                status="pending",
-                extractor_version=extractor_version,
-                started_at=utc_now(),
-                stats=pending_stats,
+    if resuming:
+        # RE-ARM the existing row rather than inserting a second one. Inserting
+        # would leave two rows describing one crawl id, and every consumer that
+        # asks "what happened to this exploration" would get two different
+        # answers depending on which it found first.
+        #
+        # ``_mark`` REPLACES ``stats`` wholesale (it setattrs the field), so the
+        # replacement must be complete: ``pending_stats`` is rebuilt above with
+        # the wall budget, the crawl id the reaper's liveness probe reads, and
+        # the posture — and the resume counter is carried forward explicitly
+        # below rather than relying on a merge that does not happen.
+        prior_resumes = 0
+        async with tenant_scoped_qec_session(tenant_id) as session:
+            existing = (await session.execute(
+                select(QEExplorationRow).where(
+                    QEExplorationRow.exploration_id == exploration_id,
+                    QEExplorationRow.tenant_id == tenant_id,
+                )
+            )).scalar_one_or_none()
+            if existing is not None:
+                prior_resumes = int((existing.stats or {}).get("resumes") or 0)
+        pending_stats["resumes"] = prior_resumes + 1
+        pending_stats["resumed_at"] = utc_now().isoformat()
+        await _mark(tenant_id, exploration_id, status="pending",
+                    stats=pending_stats, error="", finished_at=None,
+                    started_at=utc_now())
+        logger.warning(
+            "qec.explorations.resuming tenant=%s app=%s crawl_id=%s attempt=%d — "
+            "the worker CONTINUES this crawl id; it does not start a new crawl",
+            tenant_id, app_id, crawl_id, prior_resumes + 1)
+    else:
+        async with tenant_scoped_qec_session(tenant_id) as session:
+            session.add(
+                QEExplorationRow(
+                    exploration_id=exploration_id,
+                    tenant_id=tenant_id,
+                    app_id=app_id[:64],
+                    status="pending",
+                    extractor_version=extractor_version,
+                    started_at=utc_now(),
+                    stats=pending_stats,
+                )
             )
-        )
 
     allowed_hosts = _allowlist_domains(base_url, fences)
     # CAGED PLANNER (agent inside the cage): an LLM proposes grounded frontier-
@@ -976,8 +1035,22 @@ async def _dispatch_explorer(
     # HERE, never in the quarantined explorer, and fail-open: no memory means the
     # crawl fills what it can and asks for the rest, exactly as it always did.
     resolution = await platform_api.fetch_field_resolution(
-        tenant_id=tenant_id, artifact_id=prior_artifact_id,
+        tenant_id=tenant_id, artifact_id=prior_artifact_id, app_id=app_id,
     )
+    # ── M1.7 / T-GW-04 · WHAT EARLIER CRAWLS OF THIS APP PROVED ───────────
+    # Business rules the engine discovered by experiment and, until this
+    # milestone, threw away — so every crawl re-ran the identical experiment to
+    # re-derive them. Fetched HERE, never in the quarantined explorer, exactly as
+    # field memory and mechanic memory are. Fail-open: no rules ⇒ every blocked
+    # advance runs the full experiment, which is byte-identical to the behaviour
+    # before this existed.
+    from ..services import rule_store
+    known_rules = await rule_store.fetch_rules(tenant_id, app_id)
+    if known_rules:
+        logger.info(
+            "qec.explorations.rules_recalled tenant=%s app=%s rules=%d",
+            tenant_id, app_id, len(known_rules))
+
     # R4 MECHANIC MEMORY — proven ladder rungs for this tenant's controls.
     # Fail-open: no memory → full ladder walk, exactly as before.
     from ..services import mechanic_memory
@@ -1008,10 +1081,15 @@ async def _dispatch_explorer(
         phase="explore",
         attestation=_explorer_attestation(env_attestation),
         submit_approvals=submit_approvals,
+        boundary_approvals=boundary_approvals,
         session=auth_session,
         scope_path_prefixes=scope_paths,
         recalled_values=resolution["recalled_values"],
         field_priors=resolution["field_priors"],
+        # T-FE-04 · STABLE ACROSS CRAWLS.  The resolution now returns an
+        # APPLICATION-scoped seed; the fallback was already app-scoped, which is
+        # why this line looked correct while the value it usually received —
+        # "tenant::artifact" — changed the applicant on every single re-crawl.
         identity_seed=resolution["identity_seed"] or f"{tenant_id}::{app_id}",
         # The operator's DATA dial, from the app row. Absent ⇒ "user", which is the
         # behaviour that existed before field learning — an unset app must never be
@@ -1023,6 +1101,10 @@ async def _dispatch_explorer(
         # branch walk IS an e2e walk by definition.
         crawl_mode=crawl_mode,
         traversal=traversal,
+        # M1.7 — continue an existing crawl (T-GW-03) and consume what earlier
+        # crawls of this app proved (T-GW-04).
+        resume=resuming,
+        known_rules=known_rules,
         vision_enabled=_vision_enabled,
         choice_overrides=(dict((walk_plan or {}).get("choice_overrides") or {})
                           if walk_plan else {}),
@@ -1177,6 +1259,82 @@ async def create_exploration(
     return await _write_inline_bundle(
         tenant_id=tenant_id, exploration_id=exploration_id,
         extractor_version=extractor_version, bundle=bundle, app_id=payload.app_id,
+    )
+
+
+#: Statuses a crawl may be resumed FROM. ``stalled`` is the reaper's terminal
+#: state for a crawl whose worker died or whose callback was lost; ``failed`` is
+#: included because an adjudicated failure (T-GW-01: an inventory read the crawl
+#: could not recover) leaves a perfectly valid durable prefix, and the whole
+#: point of resume is that such a crawl is CONTINUED once the cause is fixed
+#: rather than restarted from nothing.
+_RESUMABLE_STATUSES = frozenset({"stalled", "failed"})
+
+
+@router.post("/explorations/{exploration_id}/resume", status_code=202)
+async def resume_exploration(
+    exploration_id: str,
+    request: Request,
+    response: Response,
+    user: dict = Depends(require_role("admin", "manager")),
+) -> dict:
+    """CONTINUE an interrupted crawl under its ORIGINAL crawl id (T-GW-03).
+
+    The operator-facing half of durable resume.  Everything the crawl already
+    proved — its page states, its actions, its screenshots, its walk mutations —
+    stays exactly where it is; the worker re-opens the same manifest, restores
+    the frontier from the last checkpoint, and continues past the durable prefix.
+
+    WHY THIS IS NOT "CRAWL AGAIN".  A fresh dispatch mints a new crawl id, so it
+    writes a new manifest, discovers the same states over again, and the earlier
+    evidence is orphaned under an id nothing will ever complete.  For a crawl
+    that died forty minutes into a fifty-minute walk, that is the difference
+    between losing ten minutes and losing forty.
+
+    REFUSED, LOUDLY, when the row is not resumable: a crawl still running must
+    not be double-dispatched (the explorer is single-flight and the second
+    dispatch would be refused anyway, but refusing here says why), and a
+    ``completed`` crawl has nothing to continue.
+    """
+    tenant_id = user["tenant_id"]
+    async with tenant_scoped_qec_session(tenant_id) as session:
+        row = (await session.execute(
+            select(QEExplorationRow).where(
+                QEExplorationRow.exploration_id == exploration_id,
+                QEExplorationRow.tenant_id == tenant_id,
+            )
+        )).scalar_one_or_none()
+        if row is None:
+            raise HTTPException(status_code=404, detail="exploration not found")
+        status_now = row.status
+        app_id = row.app_id
+        crawl_id = str((row.stats or {}).get("crawl_id") or "")
+
+    if status_now not in _RESUMABLE_STATUSES:
+        raise HTTPException(
+            status_code=409,
+            detail=(f"exploration is '{status_now}' — only "
+                    f"{sorted(_RESUMABLE_STATUSES)} may be resumed"),
+        )
+    if not crawl_id:
+        # A row from before the crawl id was stamped on stats. There is no way to
+        # find its manifest, so there is nothing to continue — and saying so is
+        # the honest answer. Silently starting a fresh crawl here would be this
+        # milestone's own failure mode wearing a resume label.
+        raise HTTPException(
+            status_code=409,
+            detail=("this exploration has no recorded crawl_id, so its durable "
+                    "evidence cannot be located — start a new crawl instead"),
+        )
+    if not app_id:
+        raise HTTPException(
+            status_code=409,
+            detail="this exploration is not bound to an app and cannot be resumed",
+        )
+
+    return await _dispatch_explorer(
+        tenant_id=tenant_id, app_id=app_id, request=request, response=response,
+        resume_from={"exploration_id": exploration_id, "crawl_id": crawl_id},
     )
 
 

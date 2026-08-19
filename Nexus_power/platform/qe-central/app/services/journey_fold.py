@@ -92,7 +92,13 @@ BRANCH_EQUIVALENT = "equivalent"
 #: explorer's ``flow_ledger.COMPLETING_TERMINALS`` (services share no library;
 #: the fold still COPIES the flow's own ``completed`` and uses this only as a
 #: defensive fallback for malformed rows).
-_COMPLETING_TERMINALS = frozenset({"submit_boundary", "no_advance"})
+#:
+#: ``submit_crossed`` (A4.3) and ``confirmation`` (M1.4) joined that set on the
+#: producer side. A mirror that silently stops mirroring is worse than no
+#: mirror: the fallback would have read a completed journey as truncated on
+#: exactly the rows it exists to rescue.
+_COMPLETING_TERMINALS = frozenset({"submit_boundary", "no_advance",
+                                   "submit_crossed", "confirmation"})
 
 
 def _sid(*parts: str) -> str:

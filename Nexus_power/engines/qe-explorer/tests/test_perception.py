@@ -14,14 +14,29 @@ from app.perception import (
 )
 
 
-# ── G1: perceptual hash mixed into the fingerprint only when DOM is sparse ────────
+# ── G1: perceptual hash mixed into the fingerprint whenever it is SUPPLIED ───────
+#
+# T-SI-02 MOVED THIS GUARANTEE, it did not drop it. The hasher used to decide for
+# itself whether a supplied phash counted, by counting controls: at most two and
+# it was mixed in, otherwise it was silently discarded. That rule cannot see the
+# case it most needed to serve — a 40-control questionnaire whose twenty steps
+# differ in rendered text alone — because it only ever looks at ONE state.
+#
+# The hasher now honours what it is given (below), and the decision of whether
+# the DOM already suffices lives in WalkIdentity, which holds the previous step
+# and can actually answer the question. The invariant a rich-DOM page needs —
+# "a cosmetic repaint must never fragment my state" — is asserted directly, at
+# the layer that now owns it, in test_state_identity.py.
 
-def test_perceptual_hash_is_ignored_on_a_rich_dom_page():
+def test_perceptual_hash_is_honoured_whenever_supplied():
     controls = [{"role": "button", "name": "A"}, {"role": "button", "name": "B"},
                 {"role": "button", "name": "C"}]
     a = state_fingerprint("http://x/app", controls)
     b = state_fingerprint("http://x/app", controls, perceptual_hash="deadbeef")
-    assert a == b                       # rich DOM → phash never fragments state
+    assert a != b                       # the hasher decides nothing; it hashes
+    # ...and it stays deterministic: same inputs, same digest.
+    assert b == state_fingerprint("http://x/app", controls,
+                                  perceptual_hash="deadbeef")
 
 
 def test_perceptual_hash_distinguishes_canvas_screens():

@@ -40,7 +40,19 @@ class CoverageHost(Protocol):
     _opaque_surfaces: list[dict[str, str]]
     _unhandled_controls: list[dict[str, str]]
     _submit_candidates: list[str]
+    _approvable_boundary: list[dict[str, Any]]
+    _outcome_milestones: list[dict[str, Any]]
+    _crossings: Any
     _advance_blocked: list[dict[str, Any]]
+    #: M1.7 - the durable-learning and evidence-health attributes the coverage
+    #: payload reads. Declared here (rather than duck-typed at the read) because
+    #: this Protocol is the written contract between the crawler and its ledger,
+    #: and a field that appears in the payload but not the contract is how the
+    #: two drift apart.
+    _rule_ledger: Any
+    _known_rules: Any
+    _inventory_failures: int
+    _inventory_failure_detail: str
     _flows: list[dict[str, Any]]
     _forms_found: int
     _forms_submitted: int
@@ -145,6 +157,30 @@ class CoverageLedger:
                                 "reason": str(d.get("reason") or "")})
             return out
 
+        def _dedup_boundary(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+            """Deduped by LOGICAL boundary, not by label.
+
+            The same "Submit" button on two different pages is two boundaries
+            and needs two approvals; deduping on the label alone would show the
+            operator one row and silently authorise both.
+            """
+            seen: set[str] = set()
+            out: list[dict[str, Any]] = []
+            for d in items or ():
+                key = str(d.get("boundary_key") or "")
+                label = str(d.get("label") or "").strip()
+                if not label or (key and key in seen):
+                    continue
+                if key:
+                    seen.add(key)
+                out.append({"label": label,
+                            "url": str(d.get("url") or ""),
+                            "reason": str(d.get("reason") or ""),
+                            "rule_id": str(d.get("rule_id") or ""),
+                            "severity": str(d.get("severity") or ""),
+                            "boundary_key": key})
+            return out[:80]
+
         def _dedup_unhandled(items: list[dict[str, str]]) -> list[dict[str, str]]:
             seen: set[str] = set()
             out: list[dict[str, str]] = []
@@ -163,7 +199,26 @@ class CoverageLedger:
         opaque_surfaces = _dedup_opaque(c._opaque_surfaces)
         unhandled_controls = _dedup_unhandled(c._unhandled_controls)
         submits = _dedup(c._submit_candidates)
-        unexercised = max(0, len(submits) - c._forms_submitted)
+        # ── A4.3 / T-AC-01 — TWO LISTS, TWO MEANINGS ────────────────────────
+        # `submit_candidates` used to hold both the controls the walk crosses
+        # freely AND the irreversible ones it stops at, and qe-central built the
+        # operator's approval picker from it. Dangerous controls were filtered
+        # out of it at both producers, so the picker was built from a list that
+        # structurally could not contain anything needing approval.
+        approvable = _dedup_boundary(c._approvable_boundary)
+        milestones = list(c._outcome_milestones or [])
+        crossings = (c._crossings.to_list()
+                     if getattr(c, "_crossings", None) is not None else [])
+        # ── T-AC-06 — NOT `- c._forms_submitted` ────────────────────────────
+        # That counter rises on every submit ATTEMPT, error or not, so an
+        # application whose submits all fail reported its boundaries as
+        # "exercised" and its funnel as worked. The ledger knows which boundaries
+        # were actually crossed, by logical identity, so this subtracts a fact
+        # instead of a tally.
+        crossed_keys = {r.get("boundary_key") for r in crossings
+                        if r.get("status") == "crossed"}
+        unexercised = max(0, len([a for a in approvable
+                                  if a.get("boundary_key") not in crossed_keys]))
         # Honest, LOUD auth prefix: if credentials were supplied but no login form could
         # be driven, the crawl covered PUBLIC pages only — say so plainly, never imply the
         # authenticated app was covered.
@@ -247,10 +302,49 @@ class CoverageLedger:
             "opaque_surfaces": opaque_surfaces,
             # Interactive controls the matcher has no primitive for → the ledger's UNHANDLED rows.
             "unhandled_controls": unhandled_controls,
+            # Controls the walk may cross on its own authority. NOT an approval
+            # list — see approvable_boundary for that.
             "submit_candidates": submits,
+            # ── THE APPROVAL SURFACE (A4.3 / T-AC-01) ───────────────────────
+            # Every irreversible control this crawl MET and did not cross, with
+            # the reason it is one. This is what an operator picks a
+            # `boundary_approvals` grant from — and until it existed there was
+            # nothing to pick from, which is why no journey had ever completed.
+            "approvable_boundary": approvable,
+            # ── THE CROSSINGS AND THEIR LANDINGS (T-AC-03 / T-AC-04) ────────
+            # Every attempt, including refusals: a crawl that reached the commit
+            # button and was not authorised must be distinguishable from one
+            # that never got there.
+            "boundary_crossings": crossings,
+            # The verified landings. `verified` on each is DERIVED from the
+            # observed transition; nothing may set it directly.
+            "outcome_milestones": milestones,
+            # THE PRODUCT CLAIM, computed from the milestones alone.
+            "journeys_completed": sum(1 for m in milestones if m.get("verified")),
+            "boundaries_crossed": sum(1 for r in crossings
+                                      if r.get("status") == "crossed"),
             # Why a funnel stopped one step in, named. A walk that declines is
             # honest but silent; this is the sentence that makes it actionable.
             "advance_blocked": c._advance_blocked[:40],
+            # ── M1.7 / T-GW-04 · DURABLE LEARNING ───────────────────────────
+            # The rules THIS crawl proved, keyed and versioned, for qe-central to
+            # persist against (tenant, app). Until this existed the proof lived
+            # only as a sentence inside ``advance_blocked`` - readable by a human,
+            # indexable by nothing - so every crawl of the same application
+            # re-ran the same experiment to re-derive it.
+            "discovered_rules": c._rule_ledger.as_list(),
+            # Whether inherited knowledge was actually USED, and how often. The
+            # reuse RATE is a headline metric of this milestone, and a metric
+            # derived after the fact from log lines is a metric nobody can hold a
+            # gate on.
+            "rule_reuse": c._known_rules.stats(),
+            # ── M1.7 / T-GW-01 · READS THAT FAILED ──────────────────────────
+            # Pages the crawl could NOT observe. Non-zero here is why a crawl
+            # reports ``inventory_failed`` instead of ``completed``; it is carried
+            # into coverage so the refusal is explainable from the artefact and
+            # not only from the container logs.
+            "inventory_failures": c._inventory_failures,
+            "inventory_failure_detail": c._inventory_failure_detail[:500],
             # THE QUESTIONS EACH STATE ASKED — the producer side of a contract
             # qe-central has always read and nothing has ever written. See
             # _note_state_signals: without this the Master Catalog can only ever
@@ -294,7 +388,9 @@ class CoverageLedger:
                 f"{len(inferred)} field(s) auto-filled with a default; "
                 f"{len(needs_seed)} field(s) need a real seed; "
                 f"{c._forms_submitted} submit(s) exercised (Phase-B), "
-                f"{unexercised} at the submit boundary."
+                f"{unexercised} irreversible boundary/ies awaiting approval; "
+                f"{sum(1 for m in milestones if m.get('verified'))} journey(s) "
+                f"completed end-to-end through an approved crossing."
             ),
         }
 

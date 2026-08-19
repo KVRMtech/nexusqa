@@ -660,6 +660,35 @@ def build_control_record(
         # Drag-and-drop signal → matcher names it UNHANDLED (blind spot, ledgered).
         "draggable": _as_bool(raw.get("draggable")),
         "roledescription": _s(raw.get("roledescription")).strip(),
+        # ── CONTROL-SCOPED VALIDITY ──────────────────────────────────────
+        # Validity used to be a property of the PAGE: the fill path read every
+        # visible [role=alert] on the document and took the first one as the
+        # verdict on whatever control it had just typed into.  A cookie banner
+        # (nearly always role=alert, so screen readers announce it) therefore
+        # failed every fill on the page, and one real error on field 3 failed
+        # fields 4 through 12 with it.
+        #
+        # These are the accessibility contract for exactly this question, and
+        # every mainstream form library already emits them.  Carried so
+        # `fill_engine.validation` can ANCHOR a message to the control it is
+        # about, and record everything else as page context that fails nothing.
+        #
+        # VALUE-FREE: an error message says what the application demands, never
+        # what anybody entered — the same class of string as a label.
+        "aria_invalid": _s(raw.get("aria_invalid")).strip().lower(),
+        "aria_describedby": _s(raw.get("aria_describedby")).strip(),
+        "aria_errormessage": _s(raw.get("aria_errormessage")).strip(),
+        "error_text": _clip(_s(raw.get("error_text")).strip(), _MAX_NAME),
+        "validation_message": _clip(_s(raw.get("validation_message")).strip(),
+                                    _MAX_NAME),
+        # ── POSSESSOR CONTEXT ────────────────────────────────────────────
+        # The heading this control sits under.  A real application labels the
+        # group once ("Beneficiary Information") and the fields inside it
+        # plainly ("First Name"), so a resolver that reads only the control's
+        # own name answers every one of them with the applicant.  The nearest
+        # landmark was already computed; it was simply discarded unless two
+        # controls collided.  Product UI text, never a value.
+        "section": _clip(_s(raw.get("section")).strip(), _MAX_ANCHOR),
         "value_committed": value_committed,
         "frame_selector": frame_selector,
         # DOM-declared choice grouping; GROUP_ASSEMBLE (pass 3) turns this into

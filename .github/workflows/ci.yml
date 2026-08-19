@@ -301,6 +301,89 @@ jobs:
           NEXUS_JWT_SECRET: ci-test-jwt-secret-not-for-prod
         run: pytest platform/qe-central/tests -q
 
+  # ── M1.7 SYSTEM INTEGRITY PROOF (T-GW-05) ─────────────────────────
+  #  The green-wash invariants, run as their OWN gate.
+  #
+  #  WHY A DEDICATED LANE RATHER THAN "they already run in the big suites".
+  #  They do already run — and that is exactly the problem this job fixes. The
+  #  integrity invariants were 54 tests inside two suites of 1697 and 2016, so a
+  #  regression in "a crashed crawl must never report completed" arrived as one
+  #  more red dot in a wall of them, indistinguishable from a flaky fixture or an
+  #  unrelated refactor. These are not ordinary tests: each one asserts that a
+  #  SPECIFIC false-completion path is closed, and the cost of shipping past one
+  #  is a customer being told a crawl covered an application it never read.
+  #  Naming the gate is what makes that class of failure legible on the PR page.
+  #
+  #  It is also the only place the two halves of the CROSS-SERVICE contract are
+  #  seen together. qe-explorer and qe-central each ship a top-level `app`
+  #  package and cannot be imported into one interpreter, so the rule wire shape
+  #  is frozen in contracts/m17_business_rule_v1.json and asserted from each side
+  #  separately (see either test file's header). Neither half alone proves the
+  #  loop; this job is where both must be green at once.
+  #
+  #  Deliberately REDUNDANT with qe-explorer-tests and qe-central-tests. The
+  #  duplication costs about ninety seconds and buys a gate whose failure names
+  #  the invariant that broke. BLOCKING.
+  integrity-proof:
+    runs-on: ubuntu-latest
+    needs: [lint, compile]
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+
+      # Python 3.10 — the interpreter the explorer container actually ships
+      # (mcr.microsoft.com/playwright/python:v1.48.0-jammy), matching
+      # qe-explorer-tests. The invariants are proven on the runtime that runs
+      # them in production, not on whatever the rest of the matrix uses.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: pip
+          cache-dependency-path: Nexus_power/engines/qe-explorer/requirements.txt
+
+      - name: Install qe-explorer dependencies
+        working-directory: Nexus_power/engines/qe-explorer
+        run: |
+          pip install -r requirements.txt
+          pip install pytest pytest-asyncio
+
+      # T-GW-01 (inventory failure → FAILED), T-GW-02 (durable completion
+      # record), T-GW-03 (killed crawl → resume → continue), T-GW-04 (rules
+      # persist and are reused) — the engine side.
+      #
+      # -p no:cacheprovider because several of these write a manifest under
+      # tmp_path and assert on the EXACT set of files in it; a .pytest_cache
+      # landing in the wrong place has broken that assertion before.
+      - name: T-GW-01..04 — crawl-engine invariants
+        working-directory: Nexus_power/engines/qe-explorer
+        run: |
+          pytest tests/test_greenwash_holes.py                  tests/test_m17_wire_contract.py                  -q --tb=short -p no:cacheprovider
+
+      # Python 3.11 for the control plane, matching qe-central-tests. Two
+      # setup-python steps in one job is intentional: the alternative is two jobs
+      # and no single check that says "the integrity invariants hold".
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install qe-central dependencies
+        run: |
+          pip install -e sdk/nexus-sdk/
+          ( cd platform/qe-central && pip install -r requirements.txt )
+          pip install pytest pytest-asyncio
+
+      # T-GW-02 (dropped callback → reaper reconciles from the durable manifest)
+      # and T-GW-04 (the store half of the rule contract) — the control-plane
+      # side. The DB-backed reaper proofs run in qec-database, where a skip is a
+      # failure; these are the shape-and-logic half that must hold on every push.
+      - name: T-GW-02/T-GW-04 — control-plane recovery invariants
+        env:
+          NEXUS_SECRET_KEY: ci-test-secret-key-not-for-prod
+          NEXUS_JWT_SECRET: ci-test-jwt-secret-not-for-prod
+        run: |
+          pytest platform/qe-central/tests/unit/test_greenwash_recovery.py                  platform/qe-central/tests/contract/test_m17_business_rule_contract.py                  -q --tb=short -p no:cacheprovider
+
   # ── qe-explorer suite — the crawl engine (perception, guard, forms, flow
   #    ledger) PLUS the Browser Test Harness, whose two lanes execute the real
   #    injected capture JavaScript in jsdom and in real Chromium. ~1140 tests

@@ -122,6 +122,29 @@ class PlaywrightLane:
 
         self.run(_boot())
 
+    async def fresh_context(self, **kwargs: Any) -> Any:
+        """A BRAND-NEW browser context on this lane's loop and browser (M1.5).
+
+        The session-scoped ``context``/``page`` above are shared by ~250 capture
+        tests, and M1.5 is the first behaviour that MUTATES which page is active:
+        a popup adoption re-points the port, a page close removes one. Sharing a
+        context across those tests would make each one's outcome depend on which
+        ran before it. Every page-lifecycle test therefore takes its own context
+        and closes it, while still paying for exactly one Chromium launch.
+
+        Options default to the BROWSER LAYER's own declaration
+        (``app.playwright_port.context_defaults``), so a test context is
+        configured the way ``app.main`` configures a crawl context — including
+        ``accept_downloads`` — rather than the way a test author remembered to.
+        """
+        from app.playwright_port import context_defaults      # noqa: PLC0415
+
+        options = dict(context_defaults())
+        options.update(kwargs)
+        ctx = await self._browser.new_context(**options)
+        ctx.set_default_timeout(15000)
+        return ctx
+
     def collect_fresh(self, url: str, what: str = "controls") -> list[dict[str, Any]]:
         return self.run(H.collect_via_production_port(
             self.page, self.context, url, what=what))

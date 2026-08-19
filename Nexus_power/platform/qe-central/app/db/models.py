@@ -22,6 +22,7 @@ from sqlalchemy import (
     Boolean,
     DateTime,
     Index,
+    Integer,
     LargeBinary,
     String,
     Text,
@@ -220,4 +221,62 @@ class QEHarnessRunRow(QecBase):
 
     __table_args__ = (
         Index("ix_qe_harness_runs_tenant_created", "tenant_id", "created_at"),
+    )
+
+
+class QEBusinessRuleRow(QecBase):
+    """M1.7 / T-GW-04 — ONE business rule an experiment PROVED about an app.
+
+    The durable half of a discovery the engine has been making and discarding.
+    ``walker._answer_to_unblock`` answers one declined question on a step whose
+    forward control the application has disabled, re-reads the page, and lets the
+    app render its own verdict; when the control enables, a rule that exists
+    nowhere in the markup has been proved.  Until this table, that proof lived
+    only as a sentence inside ``coverage.advance_blocked`` — readable by a human,
+    indexable by nothing — so the next crawl of the same application re-ran the
+    identical experiment to re-derive it.
+
+    Identity is ``(tenant_id, app_id, rule_key)``.  ``rule_key`` comes from the
+    explorer (``app/rules.rule_key``) and is derived from the URL TEMPLATE, so an
+    id in the path does not mint a fresh rule per record.
+
+    VERSIONED rather than overwritten: ``version`` and ``times_proven`` increment
+    on every re-proof, and ``last_proven_at`` / ``last_crawl_id`` trace the row
+    back to the run that proved it.  That is what makes this a record of evidence
+    instead of a cache of assertions — a rule confirmed on forty crawls is
+    distinguishable from one proved once, long ago, and never seen since.
+
+    RLS FORCED in qec_018: a rule names business questions on a client's own
+    application.  There is no cross-tenant pooling and none is contemplated.
+    """
+
+    __tablename__ = "qe_business_rules"
+
+    rule_row_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    app_id: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    rule_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    kind: Mapped[str] = mapped_column(String(32), nullable=False, default="advance_gate")
+    url_template: Mapped[str] = mapped_column(String(500), nullable=False, default="")
+    blocked_label: Mapped[str] = mapped_column(String(120), nullable=False, default="")
+    field_label: Mapped[str] = mapped_column(String(120), nullable=False, default="")
+    #: The sentence the application itself justified, kept VERBATIM.
+    proof: Mapped[str] = mapped_column(String(500), nullable=False, default="")
+    #: The explorer wire-shape version this row was written from.
+    schema_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    times_proven: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    last_crawl_id: Mapped[str] = mapped_column(String(50), nullable=False, default="")
+    first_proven_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utc_now,
+    )
+    last_proven_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utc_now, onupdate=_utc_now,
+    )
+
+    __table_args__ = (
+        Index("uq_qe_business_rules_identity", "tenant_id", "app_id", "rule_key",
+              unique=True),
+        Index("ix_qe_business_rules_tenant_app_proven", "tenant_id", "app_id",
+              "last_proven_at"),
     )

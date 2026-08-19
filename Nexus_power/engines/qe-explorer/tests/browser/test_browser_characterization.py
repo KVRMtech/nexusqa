@@ -74,7 +74,18 @@ def _run_real_crawl(pw, url: str, work_dir: Path, *, crawl_id: str) -> dict[str,
         "max_duration_ms": 120_000,
     })
 
-    port = PlaywrightBrowserPort(pw.page, pw.context)
+    # A FRESH context + page per crawl (M1.5).  Every characterization crawl used
+    # to share the session page, which meant each new port stacked another set of
+    # listeners on it: by fixture 18 a single response was being recorded
+    # eighteen times, and a popup opened by one fixture was still counted by the
+    # next fixture's port.  That was invisible while the `response` listener
+    # silently failed to attach in this lane at all; repairing the attachment
+    # (see PlaywrightBrowserPort._attach_page_observers) made it observable, as a
+    # page token that drifted between two runs of the same fixture.  One crawl,
+    # one browser context — which is also what production does.
+    context = pw.run(pw.fresh_context())
+    page = pw.run(context.new_page())
+    port = PlaywrightBrowserPort(page, context)
     crawler = Crawler(
         port,
         crawl_id=crawl_id,
@@ -94,7 +105,13 @@ def _run_real_crawl(pw, url: str, work_dir: Path, *, crawl_id: str) -> dict[str,
         identity_seed="qec-characterization",
         observe_only=True,          # capture only — never mutate a fixture app
     )
-    pw.run(crawler.run())
+    try:
+        pw.run(crawler.run())
+    finally:
+        try:
+            pw.run(context.close())
+        except Exception:
+            pass
 
     manifest = work_dir / crawl_id / "manifest.jsonl"
     assert manifest.exists(), f"no manifest was written at {manifest}"

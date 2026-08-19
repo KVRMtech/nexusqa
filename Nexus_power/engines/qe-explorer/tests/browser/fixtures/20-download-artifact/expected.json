@@ -1,0 +1,24 @@
+{
+  "purpose": "Prove a download-triggering action produces a REAL FILE on disk as an auditable evidence artifact — for a server-side file behind a download anchor, for a client-generated Blob behind a plain button that the DOM cannot distinguish from any other button, and for a hostile suggested filename that must not escape the artifact directory.",
+  "targeted_defect": "BUG-M15-DOWNLOAD-NO-ARTIFACT — the browser context was created without a stated accept_downloads and no page.on('download') listener existed, so a click that downloaded a file produced no artifact, no filename, no content type and no record. The download simply evaporated: the crawl could not distinguish 'this button exports the policy schedule' from 'this button does nothing', which is exactly the P4 evidence the milestone requires.",
+  "lanes": ["jsdom", "playwright"],
+  "snippet": "INVENTORY_JS",
+  "min_controls": 4,
+  "expect_controls": [
+    {"where": {"css_hint": "a#dl-packet"}, "fields": {"name": "Download Sales Packet", "role": "link", "name_source": "content"}, "href_suffix": "/20-download-artifact/sales-packet.pdf",
+     "why": "a server-side file behind a download anchor — the href is captured, but only the browser event proves a file arrived"},
+    {"where": {"css_hint": "button#btn-export"}, "fields": {"name": "Export Policy Schedule", "role": "button", "href": ""},
+     "why": "a CLIENT-GENERATED download: no href, so capture alone cannot tell this from any other button"},
+    {"where": {"css_hint": "button#btn-traversal"}, "fields": {"name": "Export Audit Log", "role": "button", "href": ""},
+     "why": "its suggested filename is ../../../etc/audit-log.txt — application-controlled text that must never be used as a path component unreduced"},
+    {"where": {"css_hint": "a#nav-claims"}, "fields": {"name": "Claims", "role": "link"}, "href_suffix": "/20-download-artifact/claims.html",
+     "why": "an ordinary navigation — proves a link is not mistaken for a download"}
+  ],
+  "describes_runtime_behaviour": [
+    {"behaviour": "clicking Download Sales Packet writes a non-empty file under the crawl's artifacts/ directory whose bytes begin %PDF-", "lanes": ["playwright"]},
+    {"behaviour": "clicking Export Policy Schedule captures the client-generated CSV even though nothing in the DOM declared a download", "lanes": ["playwright"]},
+    {"behaviour": "a hostile suggested filename lands INSIDE the artifact directory with its path separators reduced", "lanes": ["playwright"]},
+    {"behaviour": "each capture emits a browser_event with event=download carrying filename, bytes, content_type, page_url and the triggering control label", "lanes": ["playwright"]}
+  ],
+  "lane_note": "The capture assertions adjudicate in both lanes (they are href/name/role facts). The behavioural expectations are playwright-only because jsdom has no download primitive and no filesystem sink; they are exercised by tests/browser/test_page_lifecycle_execution.py."
+}

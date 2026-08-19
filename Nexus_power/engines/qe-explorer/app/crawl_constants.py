@@ -45,6 +45,37 @@ STOP_AUTH_REQUIRED = "auth_required_no_credentials"
 
 STOP_ERROR = "error"
 
+# ─── M1.7 · the green-wash stops ─────────────────────────────────────────────
+# Three terminal reasons that did not exist, which is exactly why the conditions
+# they name used to arrive at the completion line with an empty ``_stop_reason``
+# and be reported as ``completed``.  A condition with no name cannot be reported,
+# and an unreported failure becomes a success by default.
+
+#: T-GW-01 — an INVENTORY READ FAILED and could not be recovered.  The page
+#: behind it was never observed, so nothing may be claimed about it.  Distinct
+#: from ``error``: the crawl loop did not crash, it was denied its evidence.
+STOP_INVENTORY_FAILED = "inventory_failed"
+
+#: T-GW-03 — this run was dispatched as a RESUME of an existing crawl id and the
+#: durable prefix could not be rebuilt into a continuable crawl (a lost or
+#: unmounted evidence volume, a truncated manifest).  Failing here is what stops
+#: a resume from silently re-crawling from zero and superseding a real crawl's
+#: evidence with an empty capture.
+STOP_RESUME_UNRECOVERABLE = "resume_unrecoverable"
+
+#: T-GW-01/T-GW-03 — the crawl claimed completion and recorded ZERO page states.
+#: The claim is refused: there is no evidence a page was ever observed.  Set by
+#: :func:`app.completion.adjudicate`, never by the crawl loop.
+STOP_NO_EVIDENCE = "no_evidence"
+
+#: Stop reasons that mean the crawl DID NOT prove what it set out to prove.  The
+#: engine, qe-central and the tests all read this one set, so a new failure
+#: reason cannot be added on one side and silently read as success on the other.
+FAILED_STOP_REASONS = frozenset({
+    STOP_ERROR, STOP_AUTH_FAILED, STOP_INVENTORY_FAILED,
+    STOP_RESUME_UNRECOVERABLE, STOP_NO_EVIDENCE,
+})
+
 #: Value-bearing kinds that make a state a "form" (buttons are then submit
 #: candidates and are NOT auto-clicked in EXPLORE).
 _FILLABLE_KINDS = frozenset({"text", "date", "select", "checkbox", "radio", "toggle"})

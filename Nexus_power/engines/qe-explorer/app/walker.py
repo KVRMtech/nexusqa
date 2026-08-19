@@ -25,11 +25,12 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import hashlib
 import heapq
 import logging
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Callable, Mapping, Optional, Sequence
 from urllib.parse import urljoin, urlsplit
 
@@ -37,6 +38,7 @@ from . import danger_signals
 from . import emit
 from . import matcher
 from . import perception
+from . import rules
 from . import value_infer
 from . import vocab
 from .auth import (
@@ -51,7 +53,8 @@ from .auth import (
     match_login_controls,
     match_secret_field,
 )
-from .browser import BrowserPort, PageObservation
+from .browser import (OUTCOME_CONFIRMATION, BrowserPort, PageObservation,
+                      classify_submit_after)
 from .coverage import CoverageLedger
 from .emitter import MetaEmitter
 from .filler import ControlFiller, _FIELD_KINDS
@@ -117,21 +120,30 @@ from .budget import (STOP_MAX_REQUESTS, STOP_MAX_STATES, STOP_MAX_WALL_MS,
                      Budget, BudgetTracker)
 from .frontier import (Frontier, FrontierItem, _parse_plan_patterns,
                        _section_signature)
-from .fingerprint import state_fingerprint
+# NO ``state_fingerprint`` IMPORT. The walk constructs no identities of its
+# own; it asks WalkIdentity (state_identity.py), which is the single
+# authority for what a page state IS. Re-adding a direct import here is
+# how the two call sites that caused the same-shape collapse got in.
+from .perception import perceptual_hash_png
 from .state_identity import (_MAX_COVERAGE_STATES, _MAX_DANGER_NAMES,
                              _MAX_NETWORK_CALLS, _MAX_STATE_FIELDS,
-                             StateFingerprinter, StateRecorder,
+                             StateFingerprinter, StateRecorder, StepSignals,
+                             WalkIdentity, structural_signature,
                              _action_to_dict, _displayed_values,
                              _form_snapshot, _is_password, _network_calls)
 from . import flow_ledger
+from .boundary import (BOUNDARY_APPROVABLE, BOUNDARY_SAFE, RUNG_DIALOG,
+                       boundary_key, classify_boundary, confirmation_transition,
+                       is_confirmation_landing)
 from .identity_pack import derive as derive_identity
-from .forms import (AnswerKey, PROV_UNBLOCK, execute_submit_phase_b,
-                    fill_form_phase_a)
+from .forms import (AnswerKey, PROV_UNBLOCK, capture_page_declarations,
+                    execute_submit_phase_b, fill_form_phase_a)
 from .guard import (
     EVENT_BLOCKED_METHOD,
     MUTATING_METHODS,
     GuardDecision,
     Phase,
+    classify_action_verb,
     classify_request,
     registrable_domain,
     same_registrable_domain,
@@ -140,9 +152,161 @@ from .inventory import build_inventory, form_signal_for
 
 logger = logging.getLogger("app.crawler")
 
+#: M1.4 — how much of a journey's text history the confirmation diff remembers.
+#: Bounded because the history grows with every step of a 60-step walk and a
+#: content-heavy application can render hundreds of text nodes per page; an
+#: unbounded accumulator would be a slow leak proportional to funnel depth. The
+#: MOST RECENT entries are kept, which is where a repeat of the boilerplate a
+#: confirmation might be confused with actually lives.
+_MAX_WALK_TEXT_HISTORY = 4000
+
+
+def _recent_text_history(seq: list[str]) -> list[str]:
+    return seq[-_MAX_WALK_TEXT_HISTORY:]
+
 
 class WalkerMixin:
     """Mixed into :class:`app.crawler.Crawler` (T-DE-13)."""
+
+    # ── M1.3 · CONTROLLED WALK PERSISTENCE ───────────────────────────────────
+    #
+    # THE ROOT CAUSE THESE THREE METHODS ADDRESS.  The guard was built on
+    # ``EXPLORE == READ ONLY``, and an enterprise wizard breaks that assumption
+    # in the middle of ordinary navigation: the Continue on step 3 POSTs the
+    # step to the server, and the server will not render step 4 until it has.
+    # The walk therefore died at the first server-validated step and every page
+    # behind it went uncatalogued — recorded honestly as a one-step journey,
+    # which is the correct report and a useless one.
+    #
+    # WHAT DID **NOT** CHANGE.  Absent a verified platform provisioning proof,
+    # every method here is a no-op: ``_walk_authorization`` returns None, the
+    # window never opens, the phase never leaves EXPLORE, and the mutation is
+    # blocked by the same rule that blocked it before this milestone. The
+    # capability is switched on by cryptography, not by configuration.
+
+    def _walk_authorization(self):
+        """This crawl's :class:`app.walk_persist.WalkAuthorization`, or ``None``.
+
+        ``None`` means "behave exactly as the crawler did before M1.3", and is
+        the value for every crawl without a verified proof — including every
+        production crawl, forever."""
+        guard = getattr(self, "_guard", None)
+        if guard is None or not getattr(guard, "walk_attested", False):
+            return None
+        if getattr(self, "_observe_only", False):
+            # Production posture is catalogue-only. A proof could never name a
+            # production environment (env_kind must be 'disposable'), so this is
+            # belt-and-braces — and belt-and-braces is the point.
+            return None
+        return getattr(guard, "walk_authorization", None)
+
+    def _begin_walk_step(self, *, journey_id: str, step_index: int,
+                         step_fingerprint: str) -> None:
+        """Enter a logical step: reset the per-step mutation budget.
+
+        DETERMINISTIC AND AUTOMATIC.  The reset is keyed to the step identity the
+        walk already computes, so it happens exactly once per step whatever the
+        page does, and a step that is merely re-observed does NOT refill its
+        allowance (see ``StepMutationBudget.begin``)."""
+        auth = self._walk_authorization()
+        if auth is None:
+            return
+        auth.begin_step(journey_id=journey_id, step_index=int(step_index),
+                        step_fingerprint=step_fingerprint,
+                        now_ms=self._clock.now_ms())
+
+    @contextlib.asynccontextmanager
+    async def _walk_persistence_window(self, control_name: str):
+        """Open the narrow WALK window around ONE actuation, then close it.
+
+        Yields True when the window actually opened (attested crawl), False
+        otherwise — callers use the flag only for reporting; the click itself is
+        identical either way, because whether its network effects are permitted
+        is the guard's decision and not the walker's.
+
+        The phase is restored in ``finally`` on every path, including an
+        exception: a crawl that raised mid-click must not be left standing in a
+        phase that permits writes.  This mirrors ``_execute_approved_submit``
+        exactly, which is the pattern this extends."""
+        auth = self._walk_authorization()
+        if auth is None:
+            yield False
+            return
+        prev_phase = self._guard.phase
+        auth.authorize_step(True)
+        auth.open_window(control_name, self._clock.now_ms())
+        self._guard.phase = Phase.WALK
+        try:
+            yield True
+        finally:
+            self._guard.phase = prev_phase
+            auth.close_window()
+            auth.authorize_step(False)
+
+    def _pick_persistence_control(
+        self, controls: Sequence[dict[str, Any]],
+    ) -> Optional[dict[str, Any]]:
+        """A NON-ADVANCING persistence control on this step, or ``None``.
+
+        Four independent vetoes, every one of them fail-closed:
+          * the WHOLE accessible name must read as persistence (``PERSISTENCE_RE``
+            is a full-string match — "Save Draft and Submit Application" fails);
+          * no commit word anywhere in the label (``COMMIT_RE``);
+          * no advance word — a control that moves the funnel is an ADVANCE and
+            is picked by the advance tiers, not here (fixture 10's whole point:
+            a walk that treats Save Draft as an advance records a step that
+            never happened);
+          * no refuse-pack irreversible verb, and not an operator-approved
+            submit name.
+        """
+        for control in controls or ():
+            if control.get("disabled"):
+                continue
+            if control.get("kind") not in ("button", "submit"):
+                continue
+            name = str(control.get("name") or "").strip()
+            if not name or not vocab.PERSISTENCE_RE.match(name):
+                continue
+            if vocab.COMMIT_RE.search(name) or vocab.ADVANCE_RE.search(name):
+                continue
+            verdict = classify_action_verb(name, "", self._refuse_pack)
+            if verdict.irreversible:
+                continue
+            if name.lower() in getattr(self, "_submit_approvals", ()):  # a submit
+                continue
+            return control
+        return None
+
+    async def _maybe_persist_walk_step(
+        self, controls: Sequence[dict[str, Any]], url: str, fingerprint: str,
+    ) -> Optional[Any]:
+        """Actuate this step's Save Draft (or equivalent) inside a walk window.
+
+        Returns the recorded :class:`app.emit.ActionRecord` when it fired, else
+        ``None``.  Deduped per (step, control) so a re-observed step cannot loop
+        on its own draft save."""
+        auth = self._walk_authorization()
+        if auth is None:
+            return None
+        control = self._pick_persistence_control(controls)
+        if control is None:
+            return None
+        name = str(control.get("name") or "").strip()
+        key = f"{fingerprint}::{name.lower()}"
+        if key in self._walk_persisted:
+            return None
+        self._walk_persisted.add(key)
+        await self._politeness_delay()
+        async with self._walk_persistence_window(name):
+            observation = await self._port.click(control)
+        self._tracker.note_request()
+        self._tracker.note_action()
+        logger.info("qec.walk.persisted control=%r url=%s remaining_budget=%d",
+                    name[:40], url, auth.budget.remaining)
+        return emit.build_action_record(
+            dict(control), verb="click", value=None, observation=observation,
+            phase=Phase.WALK.value, state_id=fingerprint,
+            timestamp_ms=self._clock.now_ms())
 
     async def _answer_questionnaire(
         self, controls: Sequence[dict[str, Any]], url: str, fingerprint: str,
@@ -373,10 +537,51 @@ class WalkerMixin:
         if not candidates:
             return controls              # nothing declined is answerable this way
 
-        pick = next(
-            (c for c in candidates
-             if vocab.NEGATIVE_OPTION_RE.match(str(c.get("name") or "").strip())),
-            candidates[0])
+        # ── M1.7 / T-GW-04 · ASK WHAT WE ALREADY PROVED ─────────────────────
+        # An earlier crawl of THIS application may already have made the app
+        # render its verdict on THIS control, and recorded which question
+        # unblocked it. Until this milestone that knowledge died with the crawl
+        # that found it, so every run re-derived the same rule by re-running the
+        # same speculative choice against the same checkbox.
+        #
+        # WHAT REUSE REMOVES, precisely: the GUESS. Below, with no knowledge, the
+        # walk picks the least-asserting declined question and finds out what
+        # happens - and when the guess is wrong the change is reverted, the block
+        # stands, and the funnel stops one step short of the end. With a rule the
+        # choice is not a guess, so that failure mode is gone.
+        #
+        # WHAT REUSE DOES NOT REMOVE: the ACTION, and the app's confirmation of
+        # it. The control is still set and the page is still re-read, because a
+        # rule is knowledge ABOUT an application, never a substitute for having
+        # done the thing - and a walk that reported an advance it had not
+        # actually unblocked would be this milestone's own failure mode, rebuilt
+        # inside the feature meant to close it.
+        known = self._known_rules.lookup(url=url, blocked_label=blocked_label)
+        reused = False
+        pick = None
+        if known is not None:
+            wanted = rules.norm_label(known.field_label)
+            pick = next((c for c in candidates
+                         if rules.norm_label(c.get("name")) == wanted), None)
+            if pick is not None:
+                reused = True
+                logger.info(
+                    "qec.rules.reused url=%s advance=%r field=%r - answered from a "
+                    "rule an earlier crawl proved; no experiment run",
+                    url[:120], blocked_label[:40], known.field_label[:40])
+            else:
+                # The rule names a question this page is not currently asking (a
+                # branch that hides it, or the app changed). Fall through to the
+                # experiment rather than force a control that is not there.
+                logger.info(
+                    "qec.rules.stale url=%s advance=%r field=%r - the known rule "
+                    "names a question this state does not ask; experimenting",
+                    url[:120], blocked_label[:40], known.field_label[:40])
+        if pick is None:
+            pick = next(
+                (c for c in candidates
+                 if vocab.NEGATIVE_OPTION_RE.match(str(c.get("name") or "").strip())),
+                candidates[0])
         pick_name = str(pick.get("name") or "").strip()
         try:
             observation = await self._port.set_checked(pick, True)
@@ -418,13 +623,27 @@ class WalkerMixin:
         # application itself has just contradicted. The record keeps its
         # missing_fields as evidence of the page as it stood.
         released: set[str] = {_norm_label(pick_name)}
+        proof = (
+            "%s requires an answer to %r before it is enabled "
+            "(proven: the app enabled it when the agent answered)"
+            % (blocked_label[:60], pick_name[:60]))
+        # ── M1.7 / T-GW-04 · THE RULE OUTLIVES THIS CRAWL ───────────────────
+        # This sentence used to be written into a list on the crawler object,
+        # counted once by qe-central, and thrown away - so the next crawl of the
+        # same application re-ran the same experiment to re-derive it. It is now
+        # also minted as a first-class, keyed, versioned rule that travels out on
+        # the completion callback for qe-central to persist against
+        # (tenant, app). Recorded on the REUSE path too: a rule that was applied
+        # and confirmed again is a rule whose evidence is fresher, and dropping
+        # it here would slowly starve the store of everything it had learned.
+        self._rule_ledger.add(rules.discover(
+            url=url, blocked_label=blocked_label, field_label=pick_name,
+            proof=proof))
         for b in self._advance_blocked:
             if b.get("url") == url[:300] and b.get("label") == blocked_label[:120]:
                 b["resolved_by_agent"] = pick_name[:120]
-                b["business_rule"] = (
-                    "%s requires an answer to %r before it is enabled "
-                    "(proven: the app enabled it when the agent answered)"
-                    % (blocked_label[:60], pick_name[:60]))
+                b["rule_reused"] = reused
+                b["business_rule"] = proof
                 released.update(_norm_label(m)
                                 for m in (b.get("missing_fields") or ()))
         self._fields_unfilled = [n for n in self._fields_unfilled
@@ -441,7 +660,14 @@ class WalkerMixin:
             for row in ledger:
                 if _norm_label(row.get("label") or row.get("name")) != _norm_label(pick_name):
                     continue
-                row["provenance"] = PROV_UNBLOCK
+                # PROV_UNBLOCK means "this crawl proved it just now";
+                # PROV_KNOWN_RULE means "an earlier crawl proved it and this one
+                # applied and re-confirmed it". Keeping them apart is what lets a
+                # report say whether a claim rests on evidence from THIS run or on
+                # inherited evidence - conflating them would make an inherited
+                # rule indistinguishable from a fresh proof, which is exactly the
+                # kind of blur this milestone exists to remove.
+                row["provenance"] = rules.PROV_KNOWN_RULE if reused else PROV_UNBLOCK
                 row["filled"] = True
                 if "options" in row:
                     row["choice"] = "checked"
@@ -457,31 +683,92 @@ class WalkerMixin:
             url[:120], pick_name[:40], blocked_label[:40], blocked_label[:40])
         return refreshed
 
-    def _note_boundary_controls(self, controls: Sequence[dict[str, Any]]) -> None:
-        """Record the commit-boundary controls this state offers.
+    def _note_boundary_controls(self, controls: Sequence[dict[str, Any]],
+                                *, url: str = "") -> None:
+        """Record the commit-boundary controls this state offers, SPLIT BY CLASS.
 
-        Submit candidates used to be collected ONLY from a form fill, so a page
-        with no input fields contributed none. That is exactly the shape of the
-        page where a business journey actually forks: a quote summary whose whole
-        content is "here is your price — Apply Now / Start Over / Back to
-        Dashboard". Live-observed on the VKPower funnel — the walk ended
-        `no_advance`, `Apply Now` never appeared in `submit_candidates`, and no
-        branch was ever recorded, so the catalogue held no continuation at all and
-        the operator had nothing to approve.
+        THE LIST THAT DROPPED THE ONLY CONTROLS THAT NEEDED IT.
 
-        Recording only. Nothing here decides to click anything; the walk's commit
-        veto and the Phase-B approval path are untouched.
+        This used to append to one list, ``_submit_candidates``, and skip every
+        control the refuse pack flagged: ``if not name or c.get("danger"):
+        continue``.  ``_submit_candidates`` is where qe-central builds the
+        operator's approval picker from — so the controls that REQUIRE an
+        approval were exactly the controls never offered for one.  A dangerous
+        boundary could not be approved because it could not be seen, and it
+        could not be seen because it was dangerous.  That deadlock is why
+        completed journeys were zero.
+
+        Two lists now, with two meanings that cannot be confused (T-AC-01):
+
+          ``_approvable_boundary``  irreversible.  The walk STOPS.  The operator
+                                    is offered the control by name and may issue
+                                    a per-control grant.
+          ``_submit_candidates``    crossable on the crawl's own authority — the
+                                    forward controls the walk actually walks.
+
+        Recording only.  Nothing here decides to click anything.
         """
         for c in controls:
-            if c.get("kind") not in ("button", "link") or c.get("disabled"):
+            if c.get("kind") not in ("button", "link", "submit"):
                 continue
             name = str(c.get("name") or "").strip()
-            # Danger controls are the refuse pack's call and are never offered as
-            # something to approve — "Start Over" wipes the quote.
-            if not name or c.get("danger"):
+            if not name:
                 continue
-            if _WIZARD_COMMIT_RE.search(name):
-                self._submit_candidates.append(name)
+            klass = classify_boundary(c)
+            if klass.cls == BOUNDARY_APPROVABLE:
+                # A DISABLED commit button is still the boundary this journey
+                # ends at — it is the reason the funnel stopped, and an operator
+                # who cannot see it will keep asking why the crawl went nowhere.
+                # classify_boundary already reports a disabled control as safe;
+                # this branch is reached only for a live one.
+                self._approvable_boundary.append({
+                    "label": name,
+                    "url": url,
+                    "reason": klass.reason,
+                    "rule_id": klass.rule_id,
+                    "severity": klass.severity,
+                    "boundary_key": boundary_key(url, name),
+                })
+            elif klass.cls == BOUNDARY_SAFE and not c.get("disabled"):
+                # The forward controls the walk crosses WITHOUT asking anyone.
+                # Kept because a report that lists only what it refused cannot
+                # show that anything was covered at all.
+                if _is_wizard_advance(name):
+                    self._submit_candidates.append(name)
+
+    def _link_crossing_to_flow(self, flow_index: int, milestones_before: int) -> None:
+        """Attach the outcome milestone to the journey that produced it (T-AC-06).
+
+        THE JOURNEY IS REBUILT, NOT PATCHED.  ``journey_completed`` is derived
+        inside :func:`flow_ledger.build_flow` from the milestone's own
+        ``verified`` flag, and the entire point of deriving it there is that no
+        caller can set it.  Poking the field into the existing dict would be
+        exactly the caller-set completion this design refuses, so the flow is
+        rebuilt through the same constructor with the milestone supplied and the
+        derivation runs once, in one place.
+
+        No milestone means no upgrade: the journey keeps its honest
+        ``submit_boundary`` terminal, which is the correct record of a walk that
+        reached the commit button and was not authorised to cross it.
+        """
+        if not (0 <= flow_index < len(self._flows)):
+            return
+        if len(self._outcome_milestones) <= milestones_before:
+            return
+        milestone = self._outcome_milestones[-1]
+        flow = self._flows[flow_index]
+        self._flows[flow_index] = flow_ledger.build_flow(
+            entry_fingerprint=str(flow.get("entry_fingerprint") or ""),
+            entry_url=str(flow.get("entry_url") or ""),
+            entry_title=str(flow.get("entry_title") or ""),
+            steps=flow.get("steps") or (),
+            terminal=flow_ledger.TERMINAL_SUBMIT_CROSSED,
+            terminal_url=str(milestone.get("url_after")
+                             or flow.get("terminal_url") or ""),
+            outcome_values=flow.get("outcome_values") or (),
+            max_steps=int(flow.get("step_budget") or 0),
+            outcome_milestone=milestone,
+        )
 
     def _pick_wizard_advance(self, controls: Sequence[dict[str, Any]]) -> Optional[dict[str, Any]]:
         """The first non-danger advance control (Next/Continue/Proceed/Forward) to
@@ -664,7 +951,13 @@ class WalkerMixin:
         # never a sign-out — so the walk cannot be sent sideways. This runs BEFORE
         # the oracle precisely so a real forward step is never passed over for a nav
         # link the oracle might otherwise pick.
-        if self._submit_enabled and self._submit_approve_all:
+        # A4.3: the gate here was `self._submit_approve_all` — the THIRD and last
+        # site that made an irreversible forward step crossable only under "*".
+        # An operator who had named this exact control was refused by this line
+        # and never told why. It now asks the same authorisation ladder the
+        # executor enforces, so a per-control grant reaches the crossing and a
+        # crawl with no approvals behaves exactly as it always did.
+        if self._submit_enabled:
             for c in controls:
                 if c.get("kind") not in ("button", "link") or c.get("disabled"):
                     continue
@@ -673,7 +966,11 @@ class WalkerMixin:
                 name = str(c.get("name") or "").strip()
                 if not name or _AUTH_SESSION_RE.search(name):
                     continue
-                if _WIZARD_COMMIT_RE.search(name) or _WIZARD_ADVANCE_RE.search(name):
+                if not (_WIZARD_COMMIT_RE.search(name)
+                        or _WIZARD_ADVANCE_RE.search(name)):
+                    continue
+                if self._may_attempt_crossing(
+                        name=name, control=c, url=page_url, fingerprint=fingerprint):
                     return AdvanceDecision(submit_control=dict(c))
 
         # Tier 3: ask the agent which control advances the flow.
@@ -888,11 +1185,59 @@ class WalkerMixin:
         # funnel was recorded as a chain of two-step fragments terminating in
         # `loop`. The journey was walked; the evidence just never said so.
         walk_seen: set[str] = {fingerprint}
+        # T-SI-01..03 — THE IDENTITY AUTHORITY FOR THIS JOURNEY.
+        #
+        # ``walk_seen`` above is only as good as the identities put into it, and
+        # for a one-question-at-a-time questionnaire those identities used to be
+        # all the same one: url, interactive controls and dialogs are constant
+        # across every step, so twenty steps hashed to ONE digest and the second
+        # step was rejected as already-visited. The walk terminated at step 1 and
+        # reported a twenty-question funnel as a one-step fragment.
+        #
+        # WalkIdentity holds the previous step, which is what the hasher cannot
+        # see, and admits a discriminating signal only when one is actually
+        # OBSERVED — the DOM's own question grouping first, then what an answer
+        # revealed, then the pixels. When nothing differs it returns the previous
+        # digest unchanged, so a no-op Continue is still caught as a loop instead
+        # of minting a fake step. One instance per walk; nothing global.
+        # SEED THE ENTRY STEP WITH ITS OWN SIGNALS. An unseeded entry carries an
+        # empty structural digest and no perceptual hash, so the FIRST advance
+        # compared a real signature against a blank one, called that a
+        # difference, and minted a distinct state for a click that had done
+        # nothing — the exact green-wash this layer exists to prevent, arriving
+        # through the back door. The entry screenshot is already in hand
+        # (``entry_shot``), so its hash costs one aHash per WALK and no I/O.
+        identity = WalkIdentity(
+            self._fingerprinter, entry_fingerprint=fingerprint,
+            entry_signals=StepSignals(
+                base=fingerprint,
+                structural=structural_signature(controls),
+                perceptual=perceptual_hash_png(
+                    entry_shot[0] if entry_shot else b"")))
         cur_actions = list(base_actions)
         cur_shot, cur_first = entry_shot, first_seen_ms
         cur_dv, cur_nc = displayed_values, network_calls
         depth, steps = item.depth, 0
         flow_steps: list[dict[str, Any]] = []
+        # M1.4 · THE JOURNEY'S OWN CONFIRMATION, once one has been OBSERVED.
+        # Empty until a step lands on a page the application declared a success
+        # (see :func:`app.boundary.is_confirmation_landing`); non-empty, it is
+        # both the reason this walk ends and the evidence recorded with it.
+        confirm_rung, confirm_detail = "", ""
+        # EVERY TEXT THIS JOURNEY HAS ALREADY SEEN — the "before" side of the
+        # confirmation diff, widened from one step to the whole walk.
+        #
+        # A confirmation is text that is NEW. Diffing only against the PREVIOUS
+        # page makes that test far too weak on a walk, because a walk can go
+        # BACKWARDS: click something on a dead-end page, land back on step one,
+        # and step one's own "You will receive a confirmation email once
+        # submitted" is, relative to the page just left, brand new. Measured on a
+        # fixture built to be a plain loop, that scored `transition_text` and
+        # completed a journey that had gone in a circle. Text the journey has
+        # read before is not news, wherever it reappears.
+        walk_texts: list[str] = []
+        walk_status: list[str] = []
+
 
         def _step_record(**extra: Any) -> dict[str, Any]:
             """The CURRENT step's flow entry: its own fill counts and its own
@@ -947,7 +1292,11 @@ class WalkerMixin:
             # questionnaire dead-ended on that page and recorded a one-step journey,
             # even on an environment attested for full traversal. Never in
             # observe-only: production is catalogued, never interacted with.
-            if (self._submit_enabled or self._full_traversal) and not self._observe_only:
+            # M1.4 · ``not confirm_rung`` — see THE CONFIRMATION IS THE END OF
+            # THE JOURNEY below. Answering questions on a page that has already
+            # said "Application Submitted" answers nothing.
+            if ((self._submit_enabled or self._full_traversal)
+                    and not self._observe_only and not confirm_rung):
                 pre_q_controls = cur_controls    # snapshot for the trigger→child diff
                 q_dps = await self._answer_questionnaire(cur_controls, cur_url, cur_fp)
                 if q_dps:
@@ -955,7 +1304,6 @@ class WalkerMixin:
                     cur_controls = build_inventory(
                         obs_q.raw_controls, self._refuse_pack, url=obs_q.url)
                     cur_url = obs_q.url
-                    cur_fp = state_fingerprint(obs_q.url, cur_controls, obs_q.dialog_flags)
                     # Record what THIS answer activated (trigger→child, P1): the
                     # controls that appeared after the click but were absent before
                     # it. Attached to the question just answered so the fold stores
@@ -964,9 +1312,72 @@ class WalkerMixin:
                         pre_q_controls, cur_controls)
                     if revealed:
                         q_dps[-1]["reveals"] = revealed
+                    # T-SI-03. The reveal delta is already computed here and was
+                    # already value-free (``kind:accessible-name`` counts, never a
+                    # user value) — it was recorded as evidence and thrown away as
+                    # IDENTITY. Answering "Yes" to "any pre-existing conditions?"
+                    # can expand the same step into a different one; feeding the
+                    # delta to the identity layer is what lets that count as a
+                    # distinct state. RESYNC, not advance: we are still standing on
+                    # the step we were on, so the step counter must not move.
+                    cur_fp, _q_signals = identity.identify(
+                        url=obs_q.url, controls=cur_controls,
+                        dialogs=obs_q.dialog_flags, revealed=revealed,
+                        page_token=obs_q.page_token)
+                    identity.resync(cur_fp, _q_signals)
+                    walk_seen.add(cur_fp)
                     cur_dps = list(cur_dps) + q_dps   # record the question on this step
                     continue
-            pick = await self._pick_advance(cur_controls, cur_url, cur_title, cur_fp)
+            # M1.3 · ENTER THE LOGICAL STEP. Resets the per-step mutation
+            # budget deterministically, exactly once per step, before anything
+            # on this step can be actuated. A no-op without a verified proof.
+            self._begin_walk_step(journey_id=fingerprint, step_index=steps,
+                                  step_fingerprint=cur_fp)
+            # This step's own NON-ADVANCING persistence (Save Draft / calculate
+            # quote / check eligibility). It writes server state and does NOT
+            # move the funnel, so it is actuated here and the advance is still
+            # decided by the tiers below — a walk that counted Save Draft as an
+            # advance would record a step that never happened (fixture 10).
+            persist_action = (
+                None if confirm_rung
+                else await self._maybe_persist_walk_step(
+                    cur_controls, cur_url, cur_fp))
+            if persist_action is not None:
+                cur_actions.append(persist_action)
+                obs_p = await self._observe()
+                cur_controls = build_inventory(
+                    obs_p.raw_controls, self._refuse_pack, url=obs_p.url)
+                cur_url = obs_p.url
+                # RESYNC, not advance — the same precedent (and the same
+                # reasoning) as the questionnaire path above: the page changed,
+                # we are still standing on the step we were standing on, so the
+                # step counter must not move.
+                cur_fp, _p_signals = identity.identify(
+                    url=obs_p.url, controls=cur_controls,
+                    dialogs=obs_p.dialog_flags, page_token=obs_p.page_token)
+                identity.resync(cur_fp, _p_signals)
+                walk_seen.add(cur_fp)
+            # ── M1.4 · THE CONFIRMATION IS THE END OF THE JOURNEY ───────────
+            #
+            # The previous step landed on a page the APPLICATION declared a
+            # success. Everything the walk does from here — filling, persisting,
+            # picking an advance — exists to move a funnel FORWARD, and there is
+            # no forward left: what a confirmation page offers is a handful of
+            # ways to LEAVE (Back to Dashboard, Home, Print, New Application,
+            # sometimes a bare "Continue"), and each of them starts a different
+            # journey or ends this one somewhere it has already been.
+            #
+            # Walking one of them is what produced the bug this milestone
+            # closes. The click either did nothing or landed on an already-seen
+            # state, so the walk recorded ``loop`` / ``completed=false`` for a
+            # funnel it had just driven to a confirmation number. Declining to
+            # advance out of a terminal is what makes ``confirmation`` a terminal
+            # rather than one more step, and it is deliberately the ONLY thing
+            # that changes here: a walk that never observed a confirmation takes
+            # exactly the path it always took, loop detection included.
+            pick = (AdvanceDecision() if confirm_rung
+                    else await self._pick_advance(
+                        cur_controls, cur_url, cur_title, cur_fp))
             if pick.submit_control is not None:
                 # A danger forward step the advance tiers had to skip (e.g.
                 # "Continue to Underwriting Decision"). Record THIS page as a crossed
@@ -984,20 +1395,69 @@ class WalkerMixin:
                         if str(v.get("value_type") or "")
                         in _BOUNDARY_OUTCOME_TYPES],
                     max_steps=self._max_wizard_steps))
+                # The journey is recorded BEFORE the crossing is attempted, so a
+                # crossing that refuses, throws or never returns still leaves the
+                # walk in the ledger with an honest `submit_boundary` terminal.
+                # If it lands, _link_crossing_to_flow upgrades this entry in
+                # place — the flow is never written twice and never left claiming
+                # a crossing that did not happen.
+                flow_index = len(self._flows) - 1
+                milestones_before = len(self._outcome_milestones)
                 await self._execute_approved_submit(
                     name=str(pick.submit_control.get("name") or "").strip(),
                     control=pick.submit_control, url=cur_url, fingerprint=cur_fp,
                     depth=item.depth, renavigate=False)
+                self._link_crossing_to_flow(flow_index, milestones_before)
                 return True
             trig = pick.control
             advance: Optional[tuple[Any, list[dict[str, Any]], str]] = None
+            # T-SI-04 — TWO BUDGETS, AND THIS WALK IS ONLY BOUND BY ONE.
+            #
+            # ``max_depth`` (default 6) bounds how far the CRAWL FRONTIER
+            # expands: how many links deep from the seed a new state may be
+            # discovered. ``max_wizard_steps`` (default 60 on a full-traversal
+            # posture) bounds how far ONE JOURNEY is walked. They answer
+            # different questions, and this loop was gated on both.
+            #
+            # ``depth`` starts at the frontier depth of the step we entered on
+            # and increments per wizard step, so a questionnaire reached two
+            # links in had FOUR steps of headroom before ``depth`` hit 6 — a
+            # twenty-question funnel stopped at question four and recorded
+            # TERMINAL_BUDGET, with the 60-step budget the operator configured
+            # never once consulted. The frontier is still bounded: max_depth is
+            # enforced at all four expansion points in ``discovery.py`` and in
+            # ``submit.py``, none of which this touches. What changes is that a
+            # journey is no longer truncated by a number that was never about
+            # journeys.
             budget_left = (steps < self._max_wizard_steps
-                           and self._wizard_advances < self._max_wizard_advances
-                           and depth < self._budget.max_depth)
+                           and self._wizard_advances < self._max_wizard_advances)
             stopped = bool(self._tracker.stop_reason() or self._cancelled)
             if trig is not None and budget_left and not stopped:
                 await self._politeness_delay()
-                observation = await self._port.click(trig)
+                # M1.3 · THE ADVANCE ITSELF MAY PERSIST. This is the root cause:
+                # a server-validated Next POSTs the step and the server will not
+                # render the next one until it has. The window is open for THIS
+                # click only, and closes before the observation below — so an
+                # autosave that fires a second later is refused exactly as it is
+                # today. Without a verified proof the window never opens and the
+                # phase never leaves EXPLORE: byte-identical to before.
+                trig_name = str((trig or {}).get("name") or "")
+                # M1.4 · THE BEFORE SIDE. Captured immediately adjacent to the
+                # click, exactly as the submit path captures it, because a
+                # confirmation is a TRANSITION — text that was absent before and
+                # present after. Reading the after-state alone would score a form
+                # that says "you will receive a confirmation email" as a
+                # confirmation before anything had happened. Best-effort by
+                # construction: a port that implements neither optional verb
+                # yields empty readings and the walk behaves exactly as before.
+                before_side = await capture_page_declarations(self._port)
+                walk_texts = _recent_text_history(
+                    walk_texts + before_side["texts"])
+                walk_status = _recent_text_history(
+                    walk_status + before_side["status"])
+                async with self._walk_persistence_window(trig_name):
+                    observation = await self._port.click(trig)
+                after_side = await capture_page_declarations(self._port)
                 self._tracker.note_request()
                 action = emit.build_action_record(
                     dict(trig), verb="click", value=None, observation=observation,
@@ -1007,7 +1467,68 @@ class WalkerMixin:
                 outcome = str((action.after or {}).get("outcome") or "")
                 obs = await self._observe()
                 new_controls = build_inventory(obs.raw_controls, self._refuse_pack, url=obs.url)
-                new_fp = state_fingerprint(obs.url, new_controls, obs.dialog_flags)
+                # ── M1.4 · THE CLASSIFIER THE WALK NEVER CALLED ─────────────
+                #
+                # ``build_action_record`` above runs ``classify_after``, which
+                # has no ``confirmation`` branch at all — so the one classifier
+                # in the codebase that can say "this landed on a confirmation"
+                # was reachable only from the submit tier, and a funnel whose
+                # last step is an ordinary advance could not produce the verdict
+                # by any path.
+                #
+                # Decided HERE, below the inventory, because the landing page's
+                # control names are part of the evidence: a button is an offer,
+                # not a statement. The M1.2 confirmation page offers "Print
+                # Confirmation" three lines from the banner that is the real
+                # declaration, and without the inventory the diff could return
+                # the button.
+                #
+                # ``observation`` is left PRISTINE for the action record already
+                # built above; the derived detail is supplied to the classifier
+                # on a copy, so nothing about the manifest changes.
+                landed_detail, landed_rung = confirmation_transition(
+                    walk_texts, after_side["texts"],
+                    aria_before=walk_status, aria_after=after_side["status"],
+                    control_names=[str(c.get("name") or "") for c in new_controls])
+                landed = classify_submit_after(
+                    replace(observation, confirmation_detail=landed_detail)
+                    if landed_detail and not (observation.confirmation_detail or "").strip()
+                    else observation)
+                if landed.outcome == OUTCOME_CONFIRMATION and not landed_rung:
+                    # A dialog-borne confirmation: ``classify_submit_after``
+                    # reached it through ``dialog_opened``, which the text diff
+                    # cannot see. Same reconciliation as the submit path.
+                    landed_rung = RUNG_DIALOG if observation.dialog_opened else ""
+                # T-SI-01/02 — IDENTIFY, never hash directly. The identity layer
+                # decides which signals this observation has EARNED (see
+                # WalkIdentity); the walk's job is to hand it everything it has
+                # observed and to pay for a screenshot only when the DOM has
+                # already proved insufficient.
+                probe_png: Optional[bytes] = None
+                probe_phash = ""
+                if identity.needs_perception(url=obs.url, controls=new_controls,
+                                             dialogs=obs.dialog_flags,
+                                             page_token=obs.page_token):
+                    # RUNG 4, and the only rung that costs I/O. Reached only when
+                    # url, controls, dialogs AND the declared question grouping
+                    # are all identical to the previous step — a DOM-opaque
+                    # surface, or a wizard whose steps differ in rendered text
+                    # alone. The shot is reused as this step's evidence
+                    # screenshot below, so a successful advance pays nothing
+                    # extra; only a stalled step (which ends the walk anyway)
+                    # costs one capture.
+                    probe_png = await self._port.screenshot_png()
+                    probe_ts = self._clock.now_ms()
+                    probe_phash = perceptual_hash_png(probe_png or b"")
+                # T-ND-04 — the post-action observation may have come from a
+                # DIFFERENT page than the pre-action one (a target=_blank step
+                # adopted a new tab). The identity follows the page the
+                # inventory above was read from, so a popup can never inherit
+                # the opener's fingerprint.
+                new_fp, new_signals = identity.identify(
+                    url=obs.url, controls=new_controls,
+                    dialogs=obs.dialog_flags, perceptual_hash=probe_phash,
+                    page_token=obs.page_token)
                 # a GENUINE advance: an observable effect AND a state this WALK
                 # has not already been through (see ``walk_seen``).
                 # A NEW STATE IS ITSELF THE EVIDENCE.
@@ -1029,9 +1550,36 @@ class WalkerMixin:
                 # dialogs), not from the click event. A fingerprint this journey
                 # has not seen IS a step forward. The outcome is kept as
                 # corroboration in the action record, never as the gate.
+                # M1.4 · DID THIS STEP LAND ON A RECOGNIZED CONFIRMATION?
+                #
+                # Decided BEFORE and INDEPENDENTLY of whether the click counted
+                # as an advance, because both answers matter and they are not the
+                # same question. A submit that navigates to a confirmation page
+                # advances (and that page becomes this journey's last step); a
+                # submit that re-renders the SAME page with a success banner, or
+                # one that drops the walk back onto a state it has already
+                # visited, does NOT advance — and that is precisely the case the
+                # ledger used to record as ``loop``.
+                #
+                # ``changed`` is the anti-green-wash conjunct: the page must have
+                # actually moved (a new URL, or an interactive shape this journey
+                # has not seen). Without it an inline "Saved successfully" toast
+                # on step two would end a nine-step funnel.
+                if is_confirmation_landing(
+                        outcome=landed.outcome, rung=landed_rung,
+                        changed=bool(landed.navigated or new_fp != cur_fp)):
+                    confirm_rung, confirm_detail = landed_rung, landed_detail
+                    logger.warning(
+                        "qec.wizard.confirmation url=%s rung=%s detail=%r — the "
+                        "application DECLARED this journey complete; the walk "
+                        "stops here rather than clicking its way off the "
+                        "confirmation page and recording a loop.",
+                        (obs.url or cur_url)[:120], landed_rung,
+                        (landed_detail or "")[:80])
                 if new_fp != cur_fp and new_fp not in walk_seen:
                     cur_actions.append(action)
                     walk_seen.add(new_fp)
+                    identity.advance(new_fp, new_signals)
                     advance = (obs, new_controls, new_fp)
                 # WALK TRACE. Six rounds of reasoning about why a five-page funnel
                 # records as two-step fragments have each disproved the previous
@@ -1058,9 +1606,15 @@ class WalkerMixin:
                 # submit boundary or a step with nothing to advance means the funnel
                 # was walked to its end; running out of budget means it was not, and
                 # the difference must survive into the report.
-                if stopped:
-                    terminal = flow_ledger.TERMINAL_CANCELLED
-                elif trig is None:
+                #
+                # M1.4 — the ORDER of those reasons is now stated once, in
+                # ``flow_ledger.resolve_walk_terminal``, instead of being implied
+                # by the shape of an ``if`` chain here. This site keeps the two
+                # judgements only IT can make: whether the walk was stopped, and
+                # (when nothing was clickable) which of the three "nothing left"
+                # verdicts applies.
+                nothing_to_click = ""
+                if trig is None:
                     if pick.oracle_status == ORACLE_UNAVAILABLE:
                         # The regex tiers found nothing and the agent could not
                         # be reached — whether more funnel existed is UNKNOWN.
@@ -1068,17 +1622,16 @@ class WalkerMixin:
                         # button on this page does not upgrade the walk to a
                         # covered boundary, because a non-commit advance may
                         # have existed that nobody could identify.
-                        terminal = flow_ledger.TERMINAL_ORACLE_UNAVAILABLE
+                        nothing_to_click = flow_ledger.TERMINAL_ORACLE_UNAVAILABLE
                     elif self._pick_submit_candidate(cur_controls):
-                        terminal = flow_ledger.TERMINAL_SUBMIT_BOUNDARY
+                        nothing_to_click = flow_ledger.TERMINAL_SUBMIT_BOUNDARY
                     else:
-                        terminal = flow_ledger.TERMINAL_NO_ADVANCE
-                elif not budget_left:
-                    terminal = flow_ledger.TERMINAL_BUDGET
-                else:
-                    # A trigger existed and the budget allowed it, so the click
-                    # produced no effect or landed on a state already seen.
-                    terminal = flow_ledger.TERMINAL_LOOP
+                        nothing_to_click = flow_ledger.TERMINAL_NO_ADVANCE
+                terminal = flow_ledger.resolve_walk_terminal(
+                    cancelled=stopped,
+                    confirmation=bool(confirm_rung),
+                    nothing_to_click=nothing_to_click,
+                    budget_left=budget_left)
                 flow_steps.append(_step_record())
                 self._flows.append(flow_ledger.build_flow(
                     entry_fingerprint=fingerprint, entry_url=url, entry_title=title,
@@ -1094,7 +1647,13 @@ class WalkerMixin:
                         v for v in _displayed_values(cur_dv or ())
                         if str(v.get("value_type") or "")
                         in _BOUNDARY_OUTCOME_TYPES],
-                    max_steps=self._max_wizard_steps))
+                    max_steps=self._max_wizard_steps,
+                    # M1.4 — WHAT the app said and on which rung, recorded with
+                    # the terminal it justifies. The ledger drops both unless the
+                    # terminal actually IS ``confirmation``, so this cannot be
+                    # used to dress up any other ending.
+                    confirmation_rung=confirm_rung,
+                    confirmation_detail=confirm_detail))
                 # CROSS the boundary. The walk reached a submit boundary (a quote
                 # summary with "Apply Now") and recorded it; now, on a disposable
                 # attested env, click the approved forward action IN PLACE (the
@@ -1104,9 +1663,12 @@ class WalkerMixin:
                 # a non-disposable env leaves self._submit_enabled False and stops at
                 # the boundary as before.
                 if terminal == flow_ledger.TERMINAL_SUBMIT_BOUNDARY:
+                    flow_index = len(self._flows) - 1
+                    milestones_before = len(self._outcome_milestones)
                     await self._maybe_submit_next_action(
                         controls=cur_controls, url=cur_url, fingerprint=cur_fp,
                         depth=item.depth)
+                    self._link_crossing_to_flow(flow_index, milestones_before)
                 return True
 
             obs, new_controls, new_fp = advance
@@ -1127,8 +1689,16 @@ class WalkerMixin:
             depth += 1
             # capture + fill the new step so a validation-gated onward Next can fire.
             step_first = self._clock.now_ms()
-            step_png = await self._port.screenshot_png()
-            step_ts = self._clock.now_ms()
+            # REUSE the perceptual probe's capture when rung 4 already took one:
+            # it is a shot of exactly this page at exactly this moment (both are
+            # taken after the advance observation and before this step's fills),
+            # so re-capturing would buy an identical image for a second
+            # round-trip. Absent a probe (the common path) this is unchanged.
+            if probe_png is not None:
+                step_png, step_ts = probe_png, probe_ts
+            else:
+                step_png = await self._port.screenshot_png()
+                step_ts = self._clock.now_ms()
             step_actions: list[emit.ActionRecord] = []
             # The NEW step's own truth — attached to ITS record when it is
             # appended (advance or terminal), never to the step just left.

@@ -1,0 +1,30 @@
+{
+  "purpose": "Prove the crawler follows a journey into a SECOND browser page — target=_blank, window.open with a URL, and window.open to about:blank navigated a tick later — adopts it as the active page, re-attaches its observers, and fingerprints the ADOPTED page rather than the stale opener; and prove it records but never adopts a popup that is blank, foreign-origin or already closed.",
+  "targeted_defect": "BUG-M15-POPUP-NEVER-ADOPTED — there was no context.on('page') anywhere in the crawler, so a second page was created and the crawler never learned it existed. Every subsequent action, inventory read, screenshot and fingerprint went to the page the journey had already left: a target=_blank step recorded the OPENER as if nothing had happened, and the tab the user is actually looking at was never inventoried. The Identical Copy control additionally reproduces the T-ND-04 half: a popup whose URL template, interactive controls and dialogs are all identical to its opener collapses to the same base digest and would silently inherit the opener's identity.",
+  "lanes": ["jsdom", "playwright"],
+  "snippet": "INVENTORY_JS",
+  "min_controls": 7,
+  "expect_controls": [
+    {"where": {"css_hint": "a#open-details"}, "fields": {"name": "Open Details", "role": "link", "name_source": "content"}, "href_suffix": "/21-new-tab-adoption/details.html",
+     "why": "target=_blank — the canonical T-ND-01 step"},
+    {"where": {"css_hint": "button#open-window"}, "fields": {"name": "Open Underwriting Window", "role": "button"}},
+    {"where": {"css_hint": "button#open-late"}, "fields": {"name": "Open Deferred Window", "role": "button"},
+     "why": "window.open to about:blank, navigated a tick later — judged at creation it reads as 'never navigated'"},
+    {"where": {"css_hint": "button#open-twin"}, "fields": {"name": "Open Identical Copy", "role": "button"},
+     "why": "T-ND-04: the popup is identical to its opener in every DOM signal the fingerprint reads"},
+    {"where": {"css_hint": "button#open-foreign"}, "fields": {"name": "Open Partner Site", "role": "button"},
+     "why": "a foreign origin — recorded, never adopted"},
+    {"where": {"css_hint": "button#open-transient"}, "fields": {"name": "Open Transient Window", "role": "button"},
+     "why": "opens and closes itself — adopting a dead handle breaks every later action"},
+    {"where": {"css_hint": "a#nav-same-tab"}, "fields": {"name": "View Details In Place", "role": "link"}, "href_suffix": "/21-new-tab-adoption/details.html",
+     "why": "ordinary same-tab navigation must keep behaving ordinarily"}
+  ],
+  "describes_runtime_behaviour": [
+    {"behaviour": "clicking Open Details adopts the new page: the port's active URL becomes details.html while the opener stays open", "lanes": ["playwright"]},
+    {"behaviour": "window.open to about:blank followed by a deferred navigation is adopted on the URL it settles on, not on about:blank", "lanes": ["playwright"]},
+    {"behaviour": "the adopted page is fingerprinted; a popup identical to its opener still receives a DISTINCT state identity", "lanes": ["playwright"]},
+    {"behaviour": "a foreign-origin popup and a self-closing popup are recorded as browser_events with disposition=retain and are never made active", "lanes": ["playwright"]},
+    {"behaviour": "when the active page closes, an open page is promoted and the promotion is recorded", "lanes": ["playwright"]}
+  ],
+  "lane_note": "Capture assertions adjudicate in both lanes. The behavioural expectations are playwright-only: jsdom has no browser context, so it can neither create a second page nor report one. They are exercised by tests/browser/test_page_lifecycle_execution.py."
+}

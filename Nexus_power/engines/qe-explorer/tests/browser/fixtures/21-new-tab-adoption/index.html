@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Fixture 21 — new tab adoption</title></head>
+<body>
+  <main>
+    <h1>Quote summary</h1>
+    <p>Quote 41-9008. Open the detail views below.</p>
+
+    <!-- SUBJECT A: the plain target="_blank" link. The browser creates a second
+         page and navigates it; the opener stays open and stays put. Before
+         M1.5 the crawler had no context.on("page"), so it never learned the
+         page existed and went on acting against — and fingerprinting — the page
+         it had already left. -->
+    <a id="open-details" href="details.html" target="_blank">Open Details</a>
+
+    <!-- SUBJECT B: window.open() with a URL. Same outcome, different API. -->
+    <button type="button" id="open-window">Open Underwriting Window</button>
+
+    <!-- SUBJECT C: window.open() to about:blank, navigated a tick LATER. The
+         classic shape, and the one that breaks a naive implementation: judged
+         at creation time the page is blank, so a crawler that decides
+         immediately concludes "never navigated" and drops the real journey. -->
+    <button type="button" id="open-late">Open Deferred Window</button>
+
+    <!-- SUBJECT D: THE IDENTITY COLLISION (T-ND-04). Opens a copy of THIS PAGE
+         in a new tab: same URL template, same interactive controls, same
+         dialogs. Every DOM signal the fingerprint reads is identical, so the
+         base digest collapses and the popup would silently inherit the
+         opener's identity — the exact "fingerprint the stale page" failure the
+         milestone names. Only the page identity separates them. -->
+    <button type="button" id="open-twin">Open Identical Copy</button>
+
+    <!-- SUBJECT E: a popup onto a genuinely FOREIGN origin. It must be recorded
+         and NOT adopted: attributing a third party's page to the application
+         under test is the same error as inventorying an IdP as the app. -->
+    <button type="button" id="open-foreign">Open Partner Site</button>
+
+    <!-- SUBJECT F: a popup that opens and CLOSES itself immediately. Adopting a
+         dead handle would break every subsequent action. -->
+    <button type="button" id="open-transient">Open Transient Window</button>
+
+    <!-- SUBJECT H: TWO windows from ONE action. Which one becomes the journey
+         has to be decided deterministically, and the one that does not still
+         has to be recorded — "it picked a tab" is not an answer anybody can
+         audit. -->
+    <button type="button" id="open-two">Open Two Windows</button>
+
+    <!-- SUBJECT G: an ordinary SAME-TAB link, so the fixture proves ordinary
+         navigation still behaves like ordinary navigation. -->
+    <a id="nav-same-tab" href="details.html">View Details In Place</a>
+
+    <div role="status" id="tab-status">No windows opened</div>
+  </main>
+
+  <script>
+    // NOT named `status`: at global scope `var status` binds to
+    // window.status, a legacy accessor that coerces whatever you assign
+    // to a STRING — every later textContent write would silently vanish.
+    var statusEl = document.getElementById('tab-status');
+
+    document.getElementById('open-window').addEventListener('click', function () {
+      window.open('underwriting.html', '_blank');
+      statusEl.textContent = 'Underwriting window opened';
+    });
+
+    document.getElementById('open-late').addEventListener('click', function () {
+      var w = window.open('', '_blank');
+      // Deliberately deferred: the page exists at about:blank first and only
+      // becomes the journey a tick later.
+      setTimeout(function () { if (w) { w.location.href = 'deferred.html'; } }, 250);
+      statusEl.textContent = 'Deferred window opened';
+    });
+
+    document.getElementById('open-twin').addEventListener('click', function () {
+      window.open(window.location.href, '_blank');
+      statusEl.textContent = 'Identical copy opened';
+    });
+
+    document.getElementById('open-foreign').addEventListener('click', function () {
+      window.open('__ALT_ORIGIN__/21-new-tab-adoption/partner.html', '_blank');
+      statusEl.textContent = 'Partner site opened';
+    });
+
+    document.getElementById('open-two').addEventListener('click', function () {
+      window.open('details.html', '_blank');
+      window.open('underwriting.html', '_blank');
+      statusEl.textContent = 'Two windows opened';
+    });
+
+    document.getElementById('open-transient').addEventListener('click', function () {
+      var w = window.open('', '_blank');
+      if (w) { w.close(); }
+      statusEl.textContent = 'Transient window closed';
+    });
+  </script>
+</body>
+</html>

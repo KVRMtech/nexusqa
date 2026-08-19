@@ -73,6 +73,16 @@ needs_admin_db = db_gate(
 REQUIRED_INDEXES = [
     ("ix_qe_explorations_status_updated", "qe_explorations", ["status", "updated_at"]),
     ("ix_app_cycles_tenant_app_created", "app_cycles", ["tenant_id", "app_id", "created_at"]),
+    # M1.7 / T-GW-04 (qec_018). The dispatch read is
+    #   SELECT ... FROM qe_business_rules
+    #   WHERE tenant_id = ? AND app_id = ? AND schema_version <= ?
+    #   ORDER BY last_proven_at DESC LIMIT 500
+    # so the equality columns lead and the ordering column follows -- the same
+    # shape, and the same reasoning, as the reaper index above.
+    ("uq_qe_business_rules_identity", "qe_business_rules",
+     ["tenant_id", "app_id", "rule_key"]),
+    ("ix_qe_business_rules_tenant_app_proven", "qe_business_rules",
+     ["tenant_id", "app_id", "last_proven_at"]),
 ]
 
 # ── the real queries, verbatim in shape ─────────────────────────────────────

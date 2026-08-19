@@ -118,8 +118,40 @@ def test_every_fixture_declares_a_valid_contract(fixture_name) -> None:
     # It must assert SOMETHING.
     assertions = (len(spec.get("expect_controls", []))
                   + len(spec.get("forbid_controls", []))
-                  + len(spec.get("describes_correct_behaviour", [])))
+                  + len(spec.get("describes_correct_behaviour", []))
+                  + len(spec.get("describes_runtime_behaviour", [])))
     assert assertions > 0, f"{fixture_name} declares no expectations at all"
+
+
+def test_runtime_behaviour_blocks_are_well_formed(fixture_name) -> None:
+    """``describes_runtime_behaviour`` states behaviour that IS implemented.
+
+    It exists because the older ``describes_correct_behaviour`` means the exact
+    opposite — correct-but-UNIMPLEMENTED — and ``test_known_bugs`` reproduces
+    every entry of it as a control-shape assertion. Declaring working behaviour
+    under that key does not merely mis-file it: it asserts a control shape that
+    was never written, so the fixture reports a bug that does not exist. The two
+    blocks are therefore kept apart by name and by shape, and a fixture may not
+    put the same claim in both.
+    """
+    spec = H.fixture_spec(fixture_name)
+    cases = spec.get("describes_runtime_behaviour", [])
+    if not cases:
+        return
+    assert "describes_correct_behaviour" not in spec, (
+        f"{fixture_name} declares BOTH behaviour blocks; one means implemented "
+        f"and the other means not, so a reader cannot tell which claim is which")
+    for case in cases:
+        assert str(case.get("behaviour") or "").strip(), (
+            f"{fixture_name}/describes_runtime_behaviour has an entry with no "
+            f"'behaviour' prose: {case}")
+        assert "where" not in case and "fields" not in case, (
+            f"{fixture_name}/describes_runtime_behaviour entry {case} carries a "
+            f"control shape — that is the describes_correct_behaviour contract, "
+            f"and this block is adjudicated by a runtime test, not by capture")
+    assert spec.get("lane_note"), (
+        f"{fixture_name} declares runtime behaviour but no lane_note saying "
+        f"which test adjudicates it")
 
 
 def test_every_fixture_is_independently_servable(fixture_server, fixture_name) -> None:
@@ -141,7 +173,8 @@ def test_expectations_are_lane_reachable(fixture_name) -> None:
     spec = H.fixture_spec(fixture_name)
     fixture_lanes = set(spec["lanes"])
     for block in ("expect_controls", "forbid_controls",
-                  "describes_correct_behaviour", "already_correct"):
+                  "describes_correct_behaviour", "describes_runtime_behaviour",
+                  "already_correct"):
         for item in spec.get(block, []):
             lanes = set(item.get("lanes") or fixture_lanes)
             assert lanes <= fixture_lanes, (

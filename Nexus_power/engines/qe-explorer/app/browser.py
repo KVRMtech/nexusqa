@@ -331,6 +331,25 @@ class BrowserPort(Protocol):
 
         Returns the ``RawControl`` shape :func:`app.inventory.build_inventory`
         consumes (``app.inventory_js.INVENTORY_JS`` output).
+
+        LOSSY BY CONSTRUCTION, and kept that way for compatibility: a failed read
+        is indistinguishable from an empty page in the return type.  Callers whose
+        decisions depend on that difference — which is every caller that
+        fingerprints — must use :meth:`collect_controls_result` instead.
+        """
+        ...
+
+    async def collect_controls_result(self) -> Any:
+        """The SAME read, carrying the health of the read (M1.7 / T-GW-01).
+
+        Returns an :class:`app.observation_health.InventoryResult`: the controls,
+        plus whether the read succeeded and, if not, why.
+
+        OPTIONAL on the port and reached through ``getattr``, exactly as
+        ``drain_network`` and ``click_at`` are.  A scripted fake or a jsdom lane
+        that only implements ``collect_controls`` degrades to a healthy result
+        holding whatever that returned — which is the correct reading for a fake,
+        because a fake's ``[]`` genuinely IS the page it is pretending to be.
         """
         ...
 
@@ -346,6 +365,36 @@ class BrowserPort(Protocol):
 
     async def error_texts(self) -> list[str]:
         """Visible error live-region texts (role=alert / aria-live=assertive)."""
+        ...
+
+    async def status_texts(self) -> list[str]:
+        """Visible STATUS live-region texts (role=status / aria-live=polite).
+
+        THE OTHER HALF OF A PAIR THAT SHIPPED WITH ONE SIDE MISSING.
+        ``RawObservation.confirmation_detail`` has been declared here and read by
+        :func:`classify_submit_after` since the submit tier was written, and
+        NOTHING in ``app/`` has ever written it — the Playwright adapter captures
+        ``error_texts`` (role=alert) and stops.  A same-page confirmation was
+        therefore unreachable by construction: only a URL change or a dialog
+        could ever set ``confirmed``, so an application whose submit renders a
+        success banner in place could never complete a journey no matter how it
+        was approved.  This is the producer.
+
+        Optional on the protocol: a port that does not implement it degrades to
+        the navigation/dialog rungs, exactly as today.
+        """
+        ...
+
+    async def visible_texts(self) -> list[str]:
+        """Short visible text blocks on the page (best-effort, bounded).
+
+        Used ONLY to diff before-vs-after a boundary crossing.  An application
+        that renders "Application submitted successfully" as a plain ``div`` —
+        which is most of them — declares no ARIA role, so the status rung above
+        cannot see it.  Diffing text that APPEARED against text that was already
+        there is what keeps that from becoming a fabricated confirmation; see
+        :func:`app.boundary.confirmation_transition`.
+        """
         ...
 
     async def screenshot_png(self) -> bytes:
@@ -412,6 +461,29 @@ class BrowserPort(Protocol):
         or older adapter that omits it degrades to no network evidence."""
         ...
 
+    async def drain_browser_events(self) -> list[dict[str, Any]]:
+        """M1.5 — return + CLEAR the special browser events recorded since the
+        last drain: popups/new tabs adopted or retained, native dialogs answered,
+        downloads captured, pages closed.
+
+        Each entry is an already-bounded, already-scrubbed evidence record built
+        by :mod:`app.page_lifecycle` and carries an ``event`` discriminator.
+        OPTIONAL + best-effort — the crawler reaches it via ``getattr``, so a
+        fake or older adapter that omits it degrades to no browser evidence,
+        exactly as it degrades for ``drain_network``.
+        """
+        ...
+
+    async def active_page_token(self) -> str:
+        """M1.5 / T-ND-04 — WHICH page the port is currently acting against.
+
+        ``""`` for the page the crawl was started with; ``"p1"``, ``"p2"``, …
+        for an adopted popup / new tab.  The empty primary token is load-bearing:
+        it is what keeps every fingerprint recorded before M1.5 reproducing
+        unchanged.  OPTIONAL + best-effort (reached via ``getattr``).
+        """
+        ...
+
     async def fill(self, control: Mapping[str, Any], value: str) -> RawObservation:
         """Type ``value`` into ``control`` and read the committed value back."""
         ...
@@ -446,3 +518,39 @@ class PageObservation:
     raw_controls: Sequence[Mapping[str, Any]] = field(default_factory=list)
     dialog_flags: Sequence[str] = field(default_factory=list)
     error_texts: Sequence[str] = field(default_factory=list)
+    #: M1.5 / T-ND-04 — WHICH PAGE this observation was read from.  Empty for
+    #: the page the crawl started with (so every fingerprint ever recorded still
+    #: reproduces byte for byte) and ``"p1"``, ``"p2"``, … for an ADOPTED popup
+    #: or new tab.  It is an identity input only when the DOM signals collapse;
+    #: see :meth:`app.state_identity.StateFingerprinter.fingerprint`.
+    page_token: str = ""
+    #: M1.7 / T-GW-01 — THE HEALTH OF THE READ THAT PRODUCED ``raw_controls``.
+    #: ``"ok"`` (the default, so every existing construction site is unchanged and
+    #: every fake port keeps working) means the controls are a FACT about the
+    #: page, including the legitimate fact that there are none.  Any other value
+    #: is one of :data:`app.observation_health.FAILURE_STATUSES` and means the
+    #: read FAILED — the emptiness describes the crawl, not the application, and
+    #: it must never reach a fingerprint.  See :mod:`app.observation_health` for
+    #: why this could not be inferred downstream.
+    inventory_status: str = "ok"
+    #: The bounded failure message, ``""`` when healthy.
+    inventory_error: str = ""
+
+    @property
+    def inventory_ok(self) -> bool:
+        """True only when the inventory read actually completed.
+
+        The one predicate the crawl branches on.  Named as a property rather than
+        left to every call site to compare against ``"ok"`` so there is exactly
+        one spelling of the check — the previous bug was born of a comparison
+        (``controls == []``) that meant two different things in two places.
+        """
+        return self.inventory_status == "ok"
+
+    def health_detail(self) -> str:
+        """One operator-facing sentence naming the failed read; "" when healthy."""
+        if self.inventory_ok:
+            return ""
+        return "inventory read failed (%s) on %s: %s" % (
+            self.inventory_status, (self.url or "?")[:200],
+            self.inventory_error or "no detail")

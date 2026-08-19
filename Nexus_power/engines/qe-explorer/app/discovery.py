@@ -32,6 +32,7 @@ from urllib.parse import urljoin, urlsplit
 from . import danger_signals
 from . import emit
 from . import matcher
+from . import observation_health
 from . import perception
 from . import value_infer
 from . import vocab
@@ -64,6 +65,7 @@ from .crawl_constants import (  # noqa: F401  (re-exported public vocabulary)
     STOP_AUTH_FAILED,
     STOP_AUTH_REQUIRED,
     STOP_CANCELLED,
+    STOP_INVENTORY_FAILED,
     STOP_COMPLETED,
     STOP_ERROR,
     TRAVERSAL_FULL,
@@ -113,13 +115,16 @@ from .budget import (STOP_MAX_REQUESTS, STOP_MAX_STATES, STOP_MAX_WALL_MS,
                      Budget, BudgetTracker)
 from .frontier import (Frontier, FrontierItem, _parse_plan_patterns,
                        _section_signature)
-from .fingerprint import state_fingerprint
+# Identity comes from the identity layer (``self._fingerprinter``), never
+# from the hasher directly — see app.state_identity.
 from .state_identity import (_MAX_COVERAGE_STATES, _MAX_DANGER_NAMES,
                              _MAX_NETWORK_CALLS, _MAX_STATE_FIELDS,
                              StateFingerprinter, StateRecorder,
                              _action_to_dict, _displayed_values,
                              _form_snapshot, _is_password, _network_calls)
 from . import flow_ledger
+from .boundary import (BOUNDARY_APPROVABLE, BOUNDARY_SAFE,
+                       boundary_key, classify_boundary)
 from .identity_pack import derive as derive_identity
 from .forms import (AnswerKey, PROV_UNBLOCK, execute_submit_phase_b,
                     fill_form_phase_a)
@@ -164,6 +169,21 @@ class DiscoveryMixin:
             except Exception:
                 logger.exception("qec.crawler.expand_failed url_scope=%s depth=%d",
                                  _host_of(item.url), item.depth)
+            finally:
+                # M1.5 — flush this expansion's popup / dialog / download
+                # evidence. In the ``finally`` deliberately: an expansion that
+                # threw is precisely the one whose browser events explain WHY,
+                # and losing them there would leave the exception above with no
+                # context. Best-effort; never raises.
+                await self._drain_browser_events()
+                # M1.7 / T-GW-03 — CHECKPOINT THE WORK LIST, also in the
+                # ``finally``. The expansion that threw is exactly the one after
+                # which the process is most likely to die, so it is the one whose
+                # frontier is most worth persisting. Written per expansion rather
+                # than per N states because the unit of lost work on a kill is one
+                # expansion, and a cheaper cadence would trade durability for an
+                # append the crawl is already paying for on every state.
+                self._emit_checkpoint()
 
     async def _goto_entry(self, url: str) -> Any:
         """The crawl's ENTRY navigation, with a small bounded retry.
@@ -184,6 +204,72 @@ class DiscoveryMixin:
             nav = await self._port.goto(url)
             self._tracker.note_request()
         return nav
+
+    async def _recover_inventory(self, obs: Any, item: FrontierItem) -> bool:
+        """One bounded attempt to rescue a failed inventory read (T-GW-01).
+
+        Returns True only when the RE-READ succeeded, in which case the caller
+        continues with the observation this method installed.  Returns False when
+        the page could not be read — and, before doing so, terminates the crawl
+        honestly.
+
+        WHY EXACTLY ONE RETRY.  ``context_lost`` and ``timeout`` are transient by
+        construction: the page was navigating, or was briefly too busy, and the
+        next read sees the page it moved to.  ``eval_failed`` and ``malformed``
+        are properties of the DOCUMENT — a second read returns the same answer
+        and spends wall budget proving it, which is why
+        :func:`app.observation_health.is_retryable` gates the attempt.  Retrying
+        harder would be a search for a good read, and a crawler that searches
+        until it gets an answer it likes is the thing this milestone exists to
+        remove.
+
+        WHY THE WHOLE CRAWL STOPS.  An inventory failure is almost never local:
+        the injection is refused by a CSP that covers the app, or the browser has
+        lost its context, or the page broke an intrinsic the walker needs. The
+        remaining frontier would produce state after state of the same failure,
+        each one recorded as an empty page. Terminating with a named reason gives
+        the operator ONE diagnosis instead of forty empty states — and, crucially,
+        the manifest written up to this point stays valid and resumable, so the
+        crawl can be continued once the cause is fixed (T-GW-03).
+        """
+        detail = obs.health_detail()
+        self._inventory_failures += 1
+        if observation_health.is_retryable(obs.inventory_status):
+            logger.warning(
+                "qec.crawler.inventory_retry status=%s depth=%d url=%s — the page "
+                "moved or stalled under the read; re-reading once",
+                obs.inventory_status, item.depth, (obs.url or "")[:120])
+            await self._politeness_delay()
+            retry = await self._observe()
+            if retry.inventory_ok:
+                self._inventory_failures -= 1
+                # Install the healthy observation IN PLACE so the caller's local
+                # ``obs`` is the one that was actually read.  A retry whose result
+                # went somewhere the caller could not see would be a second,
+                # quieter version of the bug this closes.
+                obs.__dict__.update(retry.__dict__)
+                logger.info("qec.crawler.inventory_recovered depth=%d url=%s",
+                            item.depth, (retry.url or "")[:120])
+                return True
+            detail = retry.health_detail()
+
+        self._stop_reason = STOP_INVENTORY_FAILED
+        self._hard_stop = True
+        self._inventory_failure_detail = detail
+        logger.error(
+            "qec.crawler.inventory_failed_terminal depth=%d detail=%s — the crawl "
+            "is stopping as FAILED rather than recording an unobserved page as "
+            "an empty one", item.depth, detail[:300])
+        # The failure goes in the MANIFEST, not only the log: a crawl that ended
+        # this way must be explainable from its own durable evidence by someone
+        # who does not have the container's stderr.
+        self._emitter.emit_guard_event(
+            kind="inventory_failed", method="GET",
+            url=(obs.url or item.url), rule_id=obs.inventory_status,
+            severity="fatal", reason=detail[:500],
+            phase=self._guard.phase.value,
+        )
+        return False
 
     async def _expand(self, item: FrontierItem) -> None:
         await self._politeness_delay()
@@ -209,6 +295,14 @@ class DiscoveryMixin:
             await materialize()
 
         obs = await self._observe()
+        # ── M1.7 / T-GW-01 · THE EVIDENCE GATE ───────────────────────────────
+        # An inventory read that FAILED is not a page with no controls, and this
+        # is the last point at which the two are still distinguishable. Below
+        # this line the observation becomes a fingerprint, a recorded state and a
+        # coverage claim; a failed read admitted here is a page the crawl never
+        # saw being reported as a page the crawl covered.
+        if not obs.inventory_ok and not await self._recover_inventory(obs, item):
+            return
         # SCOPE GATE: a goto can REDIRECT off-domain (an SSO re-redirect to an IdP, an
         # expired session, an external link). Frontier pushes are already scope-gated, but a
         # redirect lands us elsewhere — we must NOT inventory/record an off-domain page as
@@ -237,7 +331,9 @@ class DiscoveryMixin:
         # _classify_no_cred_auth). A username-first wall walked INLINE by _walk_wizard is
         # caught there by _secret_wall_reached; this call establishes the gated flow.
         if self._classify_no_cred_auth(controls, item, item.url, obs.url) == "stop":
-            wall_fp = state_fingerprint(obs.url, controls, obs.dialog_flags)
+            wall_fp = self._fingerprinter.fingerprint(
+                url=obs.url, controls=controls, dialogs=obs.dialog_flags,
+                page_token=obs.page_token, observation_ok=obs.inventory_ok)
             if wall_fp not in self._visited_fingerprints:
                 self._visited_fingerprints.add(wall_fp)
                 self._record_state(
@@ -249,7 +345,12 @@ class DiscoveryMixin:
             self._stop_reason = STOP_AUTH_REQUIRED
             self._hard_stop = True
             return
-        fingerprint = state_fingerprint(obs.url, controls, obs.dialog_flags)
+        # M1.5 / T-ND-04 — the identity is computed from the page the
+        # observation was actually READ from. When a popup was adopted mid-visit
+        # this is the popup, not the page the goto landed on.
+        fingerprint = self._fingerprinter.fingerprint(
+            url=obs.url, controls=controls, dialogs=obs.dialog_flags,
+            page_token=obs.page_token, observation_ok=obs.inventory_ok)
 
         # AN ITEM IS ONLY SPENT WHEN ITS URL WAS ACTUALLY OBSERVED. The frontier's
         # push-time dedup marked this item's key used the moment it was queued —
@@ -340,8 +441,34 @@ class DiscoveryMixin:
             # without it a second crawl has no way to know it already asked. Values
             # are deliberately not carried.
             self._collect_ledger(fill.field_ledger, obs.url or "")
-            self._submit_candidates.extend(
-                fc.name for fc in fill.flow_candidates if fc.name and not fc.danger)
+            # A4.3 / T-AC-01 — the SECOND producer that dropped exactly the
+            # controls needing approval (`if fc.name and not fc.danger`). A form
+            # whose submit is "Bind Coverage" contributed nothing at all, so the
+            # operator was never shown the one control the crawl was waiting on.
+            # Classified now, and routed to the list that matches its class.
+            for fc in fill.flow_candidates:
+                fc_name = str(getattr(fc, "name", "") or "").strip()
+                if not fc_name:
+                    continue
+                fc_control = getattr(fc, "control", None)
+                probe = dict(fc_control) if isinstance(fc_control, dict) else {}
+                probe.setdefault("kind", "button")
+                probe["name"] = fc_name
+                probe["danger"] = bool(getattr(fc, "danger", False))
+                probe["danger_rule_id"] = str(getattr(fc, "danger_rule_id", "") or "")
+                probe["danger_severity"] = str(getattr(fc, "danger_severity", "") or "")
+                klass = classify_boundary(probe)
+                if klass.cls == BOUNDARY_APPROVABLE:
+                    self._approvable_boundary.append({
+                        "label": fc_name,
+                        "url": obs.url or "",
+                        "reason": klass.reason,
+                        "rule_id": klass.rule_id,
+                        "severity": klass.severity,
+                        "boundary_key": boundary_key(obs.url or "", fc_name),
+                    })
+                elif klass.cls == BOUNDARY_SAFE:
+                    self._submit_candidates.append(fc_name)
             if fill.filled:
                 # re-inventory so form_snapshot carries the committed values.
                 after_fill = await self._observe()
@@ -469,6 +596,18 @@ class DiscoveryMixin:
         # one-step one. Recording only multi-step wizards made an application with a
         # real quote form report ZERO flows, which reads as "no journeys here" when
         # the truth is "one journey, one step long".
+        # M1.4 · WHICH flow (if any) THIS call site owns.
+        #
+        # A crossing performed below must be attached to the journey that
+        # produced it, and only the site that BUILT that journey knows which one
+        # it is. The walker has done this since A4.3; this path never did, so a
+        # single-page form that crossed an approved boundary and landed on a
+        # confirmation recorded the milestone, dropped it before ``build_flow``,
+        # and reported ``journey_completed=false`` on a journey the crawl had
+        # watched complete. ``None`` means "this state produced no flow of its
+        # own" — the walk owns it, or there was nothing to record — and nothing
+        # is linked.
+        owned_flow_index: Optional[int] = None
         if not walked and is_form and fill is not None:
             # The entry-level honesty rung: when the tiers found nothing AND the
             # agent could not be reached, whether this form advances is UNKNOWN —
@@ -499,6 +638,7 @@ class DiscoveryMixin:
                     if str(v.get("value_type") or "")
                     in _BOUNDARY_OUTCOME_TYPES],
                 max_steps=self._max_wizard_steps))
+            owned_flow_index = len(self._flows) - 1
         # A NON-form page that is a next-action fork (a quote summary: Apply Now /
         # Start Over / Back to Dashboard) is a one-step business flow with a
         # 3-branch decision. Without this the fork lived only in the flat
@@ -523,6 +663,7 @@ class DiscoveryMixin:
                         if str(v.get("value_type") or "")
                         in _BOUNDARY_OUTCOME_TYPES],
                     max_steps=self._max_wizard_steps))
+                owned_flow_index = len(self._flows) - 1
         if not walked:
             self._record_state(
                 url=obs.url, title=obs.title, controls=snapshot_controls,
@@ -535,6 +676,7 @@ class DiscoveryMixin:
         # Phase B (attested submit): after the form state is recorded, drive the
         # FIRST operator-approved non-danger flow and push the post-submit page onto
         # the frontier so the deeper flow is crawled. Default-OFF (self._submit_enabled).
+        milestones_before = len(self._outcome_milestones)
         if self._submit_enabled and is_form and fill is not None:
             await self._maybe_submit_phase_b(item, snapshot_controls, fill, fingerprint)
         elif self._submit_enabled and not is_form and not walked:
@@ -545,6 +687,12 @@ class DiscoveryMixin:
             await self._maybe_submit_next_action(
                 controls=snapshot_controls, url=obs.url, fingerprint=fingerprint,
                 depth=item.depth)
+        # THE JOURNEY IS REBUILT, NOT PATCHED — the same helper, and therefore
+        # the same single derivation of ``journey_completed``, the walk uses. A
+        # no-op unless this state owned a flow AND a crossing actually minted a
+        # milestone, so a refused or already-spent boundary changes nothing.
+        if owned_flow_index is not None:
+            self._link_crossing_to_flow(owned_flow_index, milestones_before)
 
     async def _discover(
         self, item: FrontierItem, controls: Sequence[dict[str, Any]], is_form: bool,

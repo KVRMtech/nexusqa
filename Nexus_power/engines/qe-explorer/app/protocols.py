@@ -62,12 +62,22 @@ Control = dict
 class StateIdentity(Protocol):
     """Reduces an observed page to the id that decides "have we been here?".
 
-    THE PHASE-1 SEAM.  ``perceptual_hash`` is accepted and threaded to the
-    hasher TODAY but is always empty in production, because nothing computes
-    one yet.  M1.1 State Identity supplies a real value; no signature, no call
-    site and no module boundary has to move for it to land.  M0.3 opens the
-    door and walks past it — implementing propagation here would be exactly the
-    opportunistic improvement Rule #2 forbids.
+    THE SEAM, NOW LOAD-BEARING (T-SI-01/02).  ``perceptual_hash`` was accepted
+    and threaded to the hasher but always empty, because nothing computed one.
+    It is joined here by the three signals a same-shape wizard needs, and the
+    walk now supplies them: ``url`` + controls + dialogs are all constant across
+    the twenty steps of a one-question-at-a-time questionnaire, so an
+    implementation reading only those returns ONE identity for twenty states and
+    traversal stops at step one.
+
+    EVERY ADDED SIGNAL IS OPTIONAL AND OFF BY DEFAULT.  Omitted or empty means
+    "not observed", and the digest is then exactly the digest this contract has
+    always produced — which is what lets the signals be switched on per-tenant
+    without re-fingerprinting a single previously-visited state.
+
+    An implementation MUST NOT decide for itself which signals matter; that
+    needs the PREVIOUS state, which this contract never sees.  That policy lives
+    in :class:`app.state_identity.WalkIdentity`.
     """
 
     def fingerprint(
@@ -77,13 +87,30 @@ class StateIdentity(Protocol):
         controls: Sequence[Mapping[str, Any]],
         dialogs: Sequence[str] = (),
         perceptual_hash: Optional[str] = None,
+        structural_hash: Optional[str] = None,
+        revealed_delta: Sequence[str] = (),
+        step_ordinal: int = 0,
+        page_token: str = "",
     ) -> str:
         """Return the 64-char sha256 hex identifying this state.
 
-        ``perceptual_hash=None`` and ``perceptual_hash=""`` are the SAME
-        request (no perceptual signal) and must produce the same digest — that
-        equivalence is what lets M1.1 be switched on per-tenant without
-        re-fingerprinting every previously-visited state.
+        ``None`` and ``""`` are the SAME request (no signal) for every optional
+        argument, and must produce the same digest.
+
+        Args:
+            perceptual_hash: coarse aHash of the rendered screen.
+            structural_hash: digest of the page's DECLARED question grouping.
+            revealed_delta: value-free ids of controls an answer activated.
+            page_token: M1.5 / T-ND-04 — WHICH browser page the observation was
+                read from. ``""`` is the page the crawl started with; an ADOPTED
+                popup / new tab carries ``"p1"``, ``"p2"``, … An implementation
+                MUST NOT fold it into every digest: doing so fractures the
+                identity of a page whose Playwright object merely changed, and
+                moves every fingerprint already persisted. It is admitted only
+                when the DOM signals alone cannot separate two DIFFERENT pages.
+            step_ordinal: walk-local position; hashed only when > 0.  An
+                implementation must treat this as manufacturing distinctness —
+                see the warning on :func:`app.fingerprint.state_fingerprint`.
         """
         ...
 

@@ -27,17 +27,43 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from typing import Any, Optional, Sequence
+from pathlib import Path
+from typing import Any, Callable, Mapping, Optional, Sequence
 from urllib.parse import urlsplit
 
 from . import emit
 from . import field_signature
+from . import page_lifecycle as pl
 from .browser import BrowserPort, NavResult, RawObservation, verify_intent
 from .fingerprint import interactive_signature
 from .interaction_ladder import Rung, ladder_for
+from . import observation_health
 from .inventory_js import DISPLAYED_VALUES_JS, INVENTORY_JS, OPAQUE_JS
 
 logger = logging.getLogger("qe-explorer")
+
+
+def context_defaults() -> dict[str, Any]:
+    """The ``browser.new_context`` options the BROWSER LAYER requires (M1.5).
+
+    Declared here rather than inline in ``app.main`` because they are facts
+    about how a browser must be driven, not about how an HTTP request is
+    served — the same reason ``_LAUNCH_ARGS`` lives in this module.  ``app.main``
+    merges these and then layers the per-crawl bindings (session, headers,
+    credentials) on top.
+
+    ``accept_downloads`` is T-ND-03's precondition and the one that had never
+    been stated.  Playwright's current default happens to be ``True``, which is
+    exactly why it is written down: a default that a version bump can flip is
+    not a guarantee, and the difference between the two settings is whether a
+    click on "Download Sales Packet" produces an artifact or is silently
+    cancelled at the browser edge before any listener can see it.
+    """
+    return {
+        "service_workers": "block",
+        "ignore_https_errors": False,
+        "accept_downloads": True,
+    }
 
 
 # ─── Browser-layer tuning constants ──────────────────────────────────────────
@@ -68,6 +94,28 @@ _MATERIALIZE_STEPS = 8
 _DEFAULT_BACKOFF_MS = 2000
 _MAX_BACKOFF_MS = 15000
 
+# ─── M1.5 page-lifecycle bounds ──────────────────────────────────────────────
+#: How long a newly created page gets to reach ``domcontentloaded`` before the
+#: adoption decision is made on whatever it has.  A popup that is still loading
+#: after this is judged on its URL, which is enough to classify it.
+_POPUP_LOAD_MS = 8000
+#: How long a popup created at ``about:blank`` gets to navigate somewhere.
+#: ``window.open()`` followed by ``location.href = …`` is the classic shape, and
+#: judging it at creation time would always read "never navigated".  This is a
+#: Playwright ``wait_for_url`` predicate, NOT a sleep.
+_POPUP_NAVIGATE_MS = 5000
+#: How long a download gets to finish streaming to disk.
+_DOWNLOAD_MS = 30000
+#: Hard cap on the between-drain browser-event buffer.
+_EVENT_BUFFER_MAX = 400
+#: Hard cap on captured download artifacts per crawl — an application that
+#: streams a file on every click must not fill the evidence volume.
+_MAX_ARTIFACTS = 50
+#: Open pages tolerated before the port starts closing RETAINED ones (never the
+#: active page, never the primary).  An app that opens a tab per click would
+#: otherwise accumulate Chromium targets for the whole crawl.
+_MAX_OPEN_PAGES = 8
+
 #: Cheap page-quiescence signature: visible-interactive count : readyState :
 #: scrollHeight. Stable across two reads ⇒ the DOM has stopped mounting controls.
 _QUIESCENCE_JS = (
@@ -90,6 +138,53 @@ def _retry_after_ms(resp: Any) -> int:
     except Exception:
         pass
     return _DEFAULT_BACKOFF_MS
+
+
+def _stable_source_url(url: str) -> str:
+    """A download's source URL, with per-load opaque handles collapsed.
+
+    A client-generated download ("Export to CSV") is served from a
+    ``blob:http://host/4d2c1836-fcfb-…`` URL whose UUID is minted fresh on every
+    page load.  Recording it verbatim does two bad things and no good one: it
+    identifies nothing a reader could ever resolve, and its digit runs trip the
+    PII scrubber into stamping ``[REDACTED:phone]`` in the middle of a URL —
+    a false positive that makes the evidence read as if it had leaked a phone
+    number.  ``data:`` URIs are collapsed for a stronger reason: the whole file
+    is IN the URL, so recording it would copy the payload into the manifest.
+
+    An ordinary ``http(s)`` source URL is returned untouched; it is the real
+    evidence of where the file came from.
+    """
+    raw = str(url or "").strip()
+    lowered = raw.lower()
+    if lowered.startswith("blob:"):
+        # blob:http://host:port/<uuid> -> blob:http://host:port. Split off the
+        # LAST segment only: the origin is the evidence, the handle is not, and
+        # partitioning on the first "/" would leave the useless string "blob:http:".
+        rest = raw[5:]
+        origin = rest.rsplit("/", 1)[0] if "/" in rest else rest
+        return f"blob:{origin}" if origin else "blob:"
+    if lowered.startswith("data:"):
+        mime = raw[5:].split(";", 1)[0].split(",", 1)[0]
+        return f"data:{mime}" if mime else "data:"
+    return raw
+
+
+def _page_url(page: Any) -> str:
+    """A page's URL, or ``""`` — never raises, including on a closed target."""
+    try:
+        return str(getattr(page, "url", "") or "")
+    except Exception:
+        return ""
+
+
+def _page_is_closed(page: Any) -> bool:
+    """True when Playwright says the page is gone (or we cannot tell)."""
+    try:
+        closed = getattr(page, "is_closed", None)
+        return bool(closed()) if callable(closed) else False
+    except Exception:
+        return True
 
 
 def _safe_headers(obj: Any) -> dict[str, str]:
@@ -118,24 +213,128 @@ class PlaywrightBrowserPort(BrowserPort):
 
     def __init__(self, page: Any, context: Any, *,
                  proven_mechanics: dict[str, str] | None = None,
-                 medic_oracle: Any = None) -> None:
-        self._page = page
+                 medic_oracle: Any = None,
+                 artifact_dir: str = "") -> None:
+        # M1.5 — the ACTIVE page, not "the page".  A browser context holds many
+        # pages and the journey's page can change (a popup, a target=_blank tab,
+        # the original closing under us).  Every method below still reads
+        # ``self._page``; it is now a property over the registry's ACTIVE entry,
+        # so an adoption re-points the whole adapter — actions, inventory,
+        # fingerprint inputs and evidence — in one assignment instead of in
+        # thirty call sites that could each be forgotten.
+        self._registry = pl.PageRegistry()
+        self._active_page = page
+        self._registry.register_primary(page, url=_page_url(page))
         self._context = context
         self._proven_mechanics = dict(proven_mechanics or {})
         self._medic_oracle = medic_oracle
+        self._artifact_dir = str(artifact_dir or "")
+        self._artifacts_written = 0
         # API/network mining — a bounded buffer of the XHR/fetch calls the app
         # makes, filled by a passive `response` listener and drained per-visit by
         # the crawler.  Query strings are dropped + paths PII-scrubbed HERE (at
         # source) so raw PII never lingers in the buffer.
         self._net_buffer: list[dict[str, Any]] = []
+        # M1.5 — the special-browser-event buffer, drained by the crawler the
+        # same way ``_net_buffer`` is.
+        self._event_buffer: list[dict[str, Any]] = []
+        # Pages the context reported but that have not been adjudicated yet.
+        # The ``page`` listener is deliberately SYNCHRONOUS and does nothing but
+        # append here: adoption needs awaits (load state, URL), and doing them
+        # inside the event callback would race the very action that produced the
+        # popup.  Adjudication happens at a defined synchronisation point —
+        # :meth:`_reconcile_pages`, called from :meth:`_settle`, i.e. after
+        # every action and every navigation.
+        self._pending_pages: list[Any] = []
+        self._closed_pages: list[Any] = []
+        self._observed_pages: set[int] = set()
+        # Observers whose subscription could not be sent because __init__ ran
+        # outside a running event loop — retried by _ensure_observers(). See
+        # _attach_page_observers for why this is deferred rather than dropped.
+        self._pending_observers: list[tuple[Any, list[str]]] = []
+        # In-flight download captures. A download is scheduled by a listener and
+        # completes later; these are joined at every synchronisation point so a
+        # drain can never outrun a capture (see _on_download).
+        self._download_tasks: list[Any] = []
+        # WHAT THE CRAWL WAS DOING when a dialog/download fires.  Set by the act
+        # path before the action is performed, so dialog intent resolution is
+        # not reduced to string-matching a message: the control's accessible
+        # name and the verb are first-class inputs.
+        self._action_label = ""
+        self._action_verb = ""
+        # Has THIS action already adopted a popup? Scoped to the action rather
+        # than to one reconcile pass, because a single click is adjudicated on
+        # both sides of the settle quiesce (see _settle) and "first usable popup
+        # wins" would otherwise mean "first per pass" — two windows from one
+        # click would both take over, and which one ended up active would depend
+        # on how fast each happened to load.
+        self._adopted_this_action = False
+        # Injected by the Crawler (see :meth:`bind_journey_context` /
+        # :meth:`bind_scope_check`) — never imported, so the browser layer keeps
+        # pointing away from the crawler.
+        self._journey_context: Optional[Callable[[], Mapping[str, Any]]] = None
+        self._scope_check: Optional[Callable[[str], bool]] = None
+        self._attach_page_observers(page)
         try:
-            self._page.on("response", self._on_response)
-        except Exception:  # a fake/None page (defensive) — no network evidence.
-            logger.warning("qec.explorer.network_listener_unavailable")
-        try:  # (D) real-time transports — WebSocket opens are a distinct surface.
-            self._page.on("websocket", self._on_websocket)
+            # T-ND-01 — the listener that did not exist.  A context can hold
+            # many pages; without this the crawler could not learn that one had
+            # been created, let alone follow it.
+            self._context.on("page", self._on_new_page)
         except Exception:
-            logger.warning("qec.explorer.websocket_listener_unavailable")
+            logger.warning("qec.explorer.page_listener_unavailable")
+
+    # -- M1.5 wiring (injected by the crawler; never imported) -----------------
+
+    def bind_journey_context(
+        self, provider: Optional[Callable[[], Mapping[str, Any]]]
+    ) -> None:
+        """Supply a zero-arg reader for the live journey context.
+
+        Returns a mapping with ``phase`` (the guard phase), ``observe_only``
+        (the resolved M0.5 posture) and ``approved_labels`` (A4.3 grants).  A
+        CALLABLE rather than a snapshot because the phase changes several times
+        per crawl and a value copied at construction would be stale by the first
+        dialog.  Unbound, the policy runs on its own conservative defaults.
+        """
+        self._journey_context = provider
+
+    def bind_scope_check(self, predicate: Optional[Callable[[str], bool]]) -> None:
+        """Supply the crawl's in-scope test, so a popup that lands on a third
+        party (an IdP, a help centre, a payment processor) is recorded but never
+        adopted — the same gate ``_expand`` applies to an off-domain redirect."""
+        self._scope_check = predicate
+
+    @property
+    def _page(self) -> Any:
+        """THE ACTIVE PAGE.  Read-only on purpose: the only way to change which
+        page the adapter drives is :meth:`_adopt`, which records why."""
+        return self._active_page
+
+    @property
+    def registry(self) -> pl.PageRegistry:
+        """The page lifecycle registry (evidence + tests read it; nothing writes)."""
+        return self._registry
+
+    def _journey(self) -> dict[str, Any]:
+        ctx: Mapping[str, Any] = {}
+        if self._journey_context is not None:
+            try:
+                ctx = self._journey_context() or {}
+            except Exception:  # a context reader must never break an action
+                ctx = {}
+        return {
+            "phase": str(ctx.get("phase") or ""),
+            "observe_only": bool(ctx.get("observe_only", False)),
+            "approved_labels": tuple(ctx.get("approved_labels") or ()),
+        }
+
+    def _in_scope(self, url: str) -> bool:
+        if self._scope_check is None:
+            return True                 # unbound (unit test / fake) — no gate
+        try:
+            return bool(self._scope_check(url))
+        except Exception:
+            return False                # a scope test that errors fails CLOSED
 
     #: Resource types worth recording as API evidence (the app's real surface);
     #: document/stylesheet/image/font/script/media are chrome, not API calls.
@@ -215,7 +414,580 @@ class PlaywrightBrowserPort(BrowserPort):
         self._net_buffer = []
         return drained
 
+    # ─── M1.5 · page lifecycle ────────────────────────────────────────────────
+
+    def _record_event(self, record: dict[str, Any]) -> None:
+        """Buffer ONE browser-event record (bounded).
+
+        Bounded rather than unbounded for the same reason the network buffer is:
+        an application that opens a tab or raises a dialog in a loop must not be
+        able to grow the adapter's memory without limit.  Reaching the cap is
+        itself recorded once, so a truncated stream never reads as a complete one.
+        """
+        if len(self._event_buffer) < _EVENT_BUFFER_MAX:
+            self._event_buffer.append(record)
+        elif len(self._event_buffer) == _EVENT_BUFFER_MAX:
+            self._event_buffer.append({
+                "event": "buffer_truncated",
+                "reason": f"more than {_EVENT_BUFFER_MAX} browser events between drains",
+                "timestamp_ms": int(time.time() * 1000),
+            })
+
+    async def drain_browser_events(self) -> list[dict[str, Any]]:
+        """Return + CLEAR the special browser events buffered since the last drain.
+
+        Joins any in-flight download capture FIRST: a drain that reported an
+        empty list while a file was still being written would leave the artifact
+        on disk with nothing in the manifest pointing at it.
+        """
+        await self._await_downloads()
+        drained = self._event_buffer
+        self._event_buffer = []
+        return drained
+
+    async def active_page_token(self) -> str:
+        """T-ND-04 — which page the adapter is acting against right now."""
+        return self._registry.active_token()
+
+    #: The observers every page the journey touches must carry.
+    _PAGE_OBSERVERS = (
+        ("response", "_on_response", "network"),
+        ("websocket", "_on_websocket", "websocket"),
+        ("dialog", "_on_dialog", "dialog"),
+        ("download", "_on_download", "download"),
+        ("close", "_on_page_close", "close"),
+    )
+
+    def _attach_page_observers(self, page: Any) -> None:
+        """Attach EVERY observer this adapter needs to ``page`` (idempotent).
+
+        Called for the primary page at construction and for every ADOPTED page,
+        so a popup that becomes the journey is observed exactly as richly as the
+        page it replaced.  Before M1.5 the two network observers were attached
+        once, to one page, in ``__init__`` — a tab the crawl moved into
+        therefore produced no API evidence and no WebSocket evidence at all,
+        silently.
+
+        WHY A FAILURE HERE IS DEFERRED RATHER THAN SWALLOWED, and this is a
+        defect M1.5 found rather than introduced.  Playwright subscribes to
+        ``response`` and ``dialog`` by sending a protocol message, so
+        ``page.on()`` for those two REQUIRES a running event loop — and this
+        adapter's ``__init__`` is ordinary synchronous code.  Constructed from
+        inside a coroutine (which is how ``app.main._run_job`` does it) both
+        attach; constructed outside one they raise ``no running event loop`` and,
+        before this change, were logged and abandoned.  That is exactly what
+        happened in the characterization lane, where the port is built
+        synchronously: every crawl there captured ZERO network evidence and said
+        so only in a warning nobody was reading.  Failures are therefore queued
+        and retried by :meth:`_ensure_observers` at the first async call, where
+        a loop is guaranteed to exist.
+
+        Idempotent by page identity: re-adopting a page (the original, after a
+        popup closes) must not double-register a listener and record every
+        response twice.
+        """
+        key = id(page)
+        if key in self._observed_pages:
+            return
+        self._observed_pages.add(key)
+        pending = self._attach_events(page, [e for e, _h, _w in self._PAGE_OBSERVERS])
+        if pending:
+            self._pending_observers.append((page, pending))
+
+    def _attach_events(self, page: Any, events: Sequence[str]) -> list[str]:
+        """Attach ``events`` to ``page``; return the ones that did not take."""
+        handlers = {event: (getattr(self, attr), why)
+                    for event, attr, why in self._PAGE_OBSERVERS}
+        failed: list[str] = []
+        for event in events:
+            handler, why = handlers[event]
+            try:
+                page.on(event, handler)
+            except Exception as exc:
+                failed.append(event)
+                # NAME THE REASON. A listener that silently failed to attach is
+                # indistinguishable from an application that never raised the
+                # event, and the two call for opposite investigations.
+                logger.info("qec.explorer.%s_listener_deferred error=%s",
+                            why, str(exc)[:200])
+        return failed
+
+    async def _ensure_observers(self) -> None:
+        """Retry any observer that could not attach at construction time.
+
+        Called from the two async chokepoints every path passes through
+        (:meth:`goto` and :meth:`_settle`), so by the time a page can produce a
+        response or raise a dialog its listeners are attached.  A no-op — one
+        list truth-test — once everything has taken, which is after the first
+        call of a crawl.
+        """
+        if not self._pending_observers:
+            return
+        still_pending: list[tuple[Any, list[str]]] = []
+        for page, events in self._pending_observers:
+            if _page_is_closed(page):
+                continue
+            failed = self._attach_events(page, events)
+            if failed:
+                still_pending.append((page, failed))
+            else:
+                logger.info("qec.explorer.listeners_attached_late events=%s",
+                            ",".join(events))
+        self._pending_observers = still_pending
+        if still_pending:
+            logger.warning(
+                "qec.explorer.listeners_still_unattached events=%s — the crawl "
+                "will under-report the corresponding evidence",
+                ";".join(",".join(ev) for _p, ev in still_pending))
+
+    def _on_new_page(self, page: Any) -> None:
+        """T-ND-01 — ``context.on("page")``.  SYNCHRONOUS and near-free.
+
+        This fires in the middle of the very click that produced the popup.
+        Everything that would make the decision — waiting for a load state,
+        reading a settled URL — needs an await, and awaiting here would
+        interleave with the action still in flight.  So this does one thing:
+        remember the handle.  :meth:`_reconcile_pages` adjudicates it at the
+        next synchronisation point, which is the end of the action.
+        """
+        try:
+            # The opener is whichever page is ACTIVE at the moment the context
+            # reports the new one — recorded by token as well as by URL, so a
+            # chain of hand-offs stays reconstructable.
+            self._registry.register(page, opener_url=self._safe_url(),
+                                    opener_token=self._registry.active_token())
+            self._pending_pages.append(page)
+        except Exception:  # a listener exception must never surface into the page
+            pass
+
+    def _on_page_close(self, page: Any) -> None:
+        """A page left the browser.  SYNCHRONOUS; the promotion happens in
+        :meth:`_reconcile_pages`, which can await the replacement's load state."""
+        try:
+            self._closed_pages.append(page)
+        except Exception:
+            pass
+
+    async def _reconcile_pages(self) -> None:
+        """THE synchronisation point: adjudicate every pending page event.
+
+        Called from :meth:`_settle`, which runs after every action and every
+        navigation — so adoption is decided at a defined moment in the walk
+        rather than inside a listener racing the action.  Ordinary navigation
+        pays two empty-list checks.
+
+        The ordering this resolves, explicitly::
+
+            click ─▶ popup event ─▶ popup navigation ─▶ DOMContentLoaded
+                                                            │
+                        _reconcile_pages ◀──────────────────┘
+                                │
+                                ▼  active page = popup
+                        _settle (on the ADOPTED page)
+                                │
+                                ▼
+                        url_after / inventory / fingerprint  ── all read the popup
+
+        Closures are handled FIRST: if the active page died, the walk must be
+        re-homed before a popup decision is taken against a dead handle.
+        """
+        if self._closed_pages:
+            await self._handle_closures()
+        if self._pending_pages:
+            await self._adjudicate_pending()
+        if self._registry.open_count() > _MAX_OPEN_PAGES:
+            await self._prune_retained_pages()
+
+    async def _handle_closures(self) -> None:
+        closed, self._closed_pages = self._closed_pages, []
+        for page in closed:
+            entry = self._registry.get(page)
+            if entry is None:
+                continue
+            was_active = page is self._active_page
+            token, url = entry.token, entry.url or _page_url(page)
+            self._registry.close(page)
+            self._observed_pages.discard(id(page))
+            promoted_token, promoted_url = "", ""
+            if was_active:
+                # PAGE REPLACEMENT.  The journey's page is gone; somebody has to
+                # inherit it or every later action fails against a dead target.
+                # Newest open page first (see PageRegistry.candidates_for_promotion);
+                # if there is none, the adapter keeps the dead handle so its
+                # failures are honest Playwright errors rather than AttributeErrors
+                # on None, and the crawl's own goto can recover the context.
+                for candidate in self._registry.candidates_for_promotion():
+                    if _page_is_closed(candidate.handle):
+                        continue
+                    adopted = self._registry.adopt(
+                        candidate.handle,
+                        reason=f"promoted after the active page {token or 'primary'} closed")
+                    if adopted is None:
+                        continue
+                    self._active_page = candidate.handle
+                    self._attach_page_observers(candidate.handle)
+                    promoted_token = adopted.token
+                    promoted_url = await self._settle_page(candidate.handle)
+                    self._registry.observe(candidate.handle, url=promoted_url)
+                    break
+            self._record_event(pl.page_closed_record(
+                page_url=self._scrub(url), page_token=token,
+                was_active=was_active, promoted_token=promoted_token,
+                promoted_url=self._scrub(promoted_url),
+                timestamp_ms=int(time.time() * 1000)))
+            logger.info("qec.explorer.page_closed token=%s was_active=%s promoted=%s",
+                        token or "primary", was_active, promoted_token or "(none)")
+
+    async def _adjudicate_pending(self) -> None:
+        pending, self._pending_pages = self._pending_pages, []
+        adopted_in_batch = self._adopted_this_action
+        for page in pending:
+            entry = self._registry.get(page) or self._registry.register(page)
+            url = await self._settle_new_page(page)
+            closed = _page_is_closed(page)
+            if not closed:
+                self._registry.observe(page, url=url)
+            opener_token, opener_url = await self._resolve_opener(page, entry)
+            decision = pl.resolve_popup(
+                popup_url=url,
+                opener_url=opener_url,
+                in_scope=self._in_scope(url) if url else False,
+                closed=closed,
+                already_adopted_this_batch=adopted_in_batch,
+            )
+            if decision.adopt:
+                self._adopt(page, reason=decision.reason)
+                adopted_in_batch = True
+                self._adopted_this_action = True
+            else:
+                self._registry.retain(page, reason=decision.reason)
+            self._record_event(pl.popup_record(
+                opener_url=self._scrub(opener_url),
+                opener_token=opener_token,
+                popup_url=self._scrub(url), token=entry.token,
+                decision=decision, timestamp_ms=int(time.time() * 1000),
+                trigger_label=self._action_label))
+            logger.info(
+                "qec.explorer.popup token=%s disposition=%s url=%s reason=%s",
+                entry.token, decision.disposition, (url or "")[:120],
+                decision.reason[:160])
+
+    async def _resolve_opener(self, page: Any, entry: pl.PageEntry) -> tuple[str, str]:
+        """WHICH page actually opened ``page``, asked of Playwright.
+
+        The obvious implementation — remember whichever page was ACTIVE when the
+        ``page`` event fired — is wrong twice over.  It is not the browser's
+        answer (a popup opened by a background tab records the foreground one),
+        and it is not even STABLE: when one action opens several windows, the
+        recorded opener depends on whether an earlier adoption happened to land
+        before or after this event was dispatched.  Measured: the same fixture
+        recorded the last popup's opener as ``p3``/index.html on one run and
+        ``p6``/details.html on the next, from an identical crawl.
+
+        ``page.opener()`` is the browser's own answer and does not move.  The
+        registration-time guess is kept only as the fallback for the cases where
+        Playwright legitimately has no answer — ``rel="noopener"``, or an opener
+        that has already closed.
+        """
+        opener: Any = None
+        try:
+            opener = await page.opener()
+        except Exception:
+            opener = None
+        if opener is None:
+            return entry.opener_token, entry.opener_url
+        known = self._registry.get(opener)
+        live_url = _page_url(opener)
+        if known is not None:
+            return known.token, (live_url or known.url)
+        # A page the registry never saw (created before this port existed).
+        return "", live_url
+
+    async def _settle_new_page(self, page: Any) -> str:
+        """Wait for a brand-new page to become USABLE, then return its URL.
+
+        Two bounded Playwright waits, no sleeps:
+
+          1. ``wait_for_load_state("domcontentloaded")`` — the page has a document.
+          2. if it is STILL ``about:blank``, ``wait_for_url`` on a
+             not-blank predicate.  ``window.open()`` followed by
+             ``location.href = …`` (or by the opener writing into it) creates the
+             page at ``about:blank`` and navigates a tick later; judging it at
+             creation would classify every such popup as "never navigated".
+
+        Both are best-effort: a popup that never settles is judged on whatever
+        URL it has, which is exactly enough to decide not to adopt it.
+        """
+        try:
+            await page.wait_for_load_state("domcontentloaded", timeout=_POPUP_LOAD_MS)
+        except Exception:
+            pass
+        url = _page_url(page)
+        if pl.is_blank_url(url) and not _page_is_closed(page):
+            try:
+                await page.wait_for_url(
+                    lambda u: bool(u) and str(u) not in ("about:blank", ""),
+                    timeout=_POPUP_NAVIGATE_MS)
+            except Exception:
+                pass
+            try:
+                await page.wait_for_load_state("domcontentloaded",
+                                               timeout=_POPUP_LOAD_MS)
+            except Exception:
+                pass
+            url = _page_url(page)
+        return url
+
+    def _adopt(self, page: Any, *, reason: str) -> None:
+        """Make ``page`` the ACTIVE journey page.
+
+        Six things have to happen together, and doing five of them is the bug
+        this method exists to prevent: the registry records the transition, the
+        adapter re-points, the new page gets EVERY observer the old one had,
+        and — because ``self._page`` is a property over the active entry — every
+        subsequent action, inventory read, dialog probe, screenshot and
+        fingerprint input follows without a further call site changing.
+        """
+        entry = self._registry.adopt(page, reason=reason)
+        if entry is None:
+            return
+        self._active_page = page
+        self._attach_page_observers(page)
+        try:  # a foreground tab renders; a background one may not paint at all
+            fut = page.bring_to_front()
+            if asyncio.iscoroutine(fut):
+                asyncio.ensure_future(fut)
+        except Exception:
+            pass
+        logger.warning(
+            "qec.explorer.page_adopted token=%s url=%s reason=%s — the journey's "
+            "active page has changed; identity and evidence follow it",
+            entry.token, _page_url(page)[:160], reason[:200])
+
+    async def _prune_retained_pages(self) -> None:
+        """Close RETAINED pages beyond the cap — never the active one, never the
+        primary.  An application that opens a tab per click would otherwise
+        accumulate Chromium targets for the whole crawl."""
+        for entry in reversed(self._registry.entries()):
+            if self._registry.open_count() <= _MAX_OPEN_PAGES:
+                return
+            if entry.is_primary or entry.lifecycle != pl.LIFECYCLE_RETAINED:
+                continue
+            if entry.handle is self._active_page:
+                continue
+            try:
+                await entry.handle.close()
+            except Exception:
+                pass
+            self._registry.close(entry.handle)
+            self._observed_pages.discard(id(entry.handle))
+
+    async def _settle_page(self, page: Any) -> str:
+        """Bounded load-state wait for an arbitrary page; returns its URL."""
+        try:
+            await page.wait_for_load_state("domcontentloaded", timeout=_POPUP_LOAD_MS)
+        except Exception:
+            pass
+        return _page_url(page)
+
+    # ─── M1.5 · native dialogs (T-ND-02) ──────────────────────────────────────
+
+    async def _on_dialog(self, dialog: Any) -> None:
+        """Answer ONE native dialog, deterministically, and record why.
+
+        THE BUG THIS CLOSES.  Playwright auto-dismisses every dialog on a page
+        with no ``dialog`` listener.  A confirm-gated "Continue" therefore
+        answered CANCEL every single time, the funnel silently did not advance,
+        and the crawl recorded an honest-looking "nothing happened" — a
+        no-outcome that looked exactly like a dead button.
+
+        THE DECISION IS NOT MADE HERE.  :func:`app.page_lifecycle.resolve_dialog`
+        makes it, from the dialog type, the message, the accessible name of the
+        control being acted on, the verb, the guard phase, the observe-only
+        posture and any operator approval.  This method only executes it and
+        writes it down.
+
+        FAIL-SAFE.  If anything at all goes wrong, the dialog is DISMISSED.  A
+        dialog left unanswered blocks the page forever and every subsequent
+        action times out, so "do nothing" is the one response that is never
+        available.
+        """
+        decision: pl.DialogDecision = pl.DialogDecision(
+            pl.ACTION_DISMISS, pl.INTENT_FUNNEL_CONFIRMATION, "not yet resolved")
+        dtype, message, error = "", "", ""
+        try:
+            dtype = str(getattr(dialog, "type", "") or "")
+            message = str(getattr(dialog, "message", "") or "")
+            journey = self._journey()
+            decision = pl.resolve_dialog(
+                dialog_type=dtype, message=message,
+                control_label=self._action_label, action_verb=self._action_verb,
+                journey_phase=journey["phase"],
+                observe_only=journey["observe_only"],
+                approved_labels=journey["approved_labels"])
+            if decision.accepted:
+                await dialog.accept()
+            else:
+                await dialog.dismiss()
+        except Exception as exc:
+            error = str(exc)[:300]
+            try:    # the page is BLOCKED until this is answered — answer it.
+                await dialog.dismiss()
+            except Exception:
+                pass
+        # Recorded whether or not the handling itself succeeded: a dialog that
+        # appeared and could not be answered is exactly the kind of event whose
+        # absence from the evidence would make a stalled crawl inexplicable.
+        self._record_event(pl.dialog_record(
+            dialog_type=dtype, message=self._scrub(message), decision=decision,
+            timestamp_ms=int(time.time() * 1000),
+            page_url=self._safe_url(), page_token=self._registry.active_token(),
+            control_label=self._action_label, action_verb=self._action_verb,
+            journey_phase=self._journey()["phase"],
+            handled=not error, error=error))
+        logger.warning(
+            "qec.explorer.dialog type=%s action=%s intent=%s control=%r reason=%s",
+            dtype or "?", decision.action, decision.intent,
+            self._action_label[:60], decision.reason[:200])
+
+    # ─── M1.5 · downloads (T-ND-03) ───────────────────────────────────────────
+
+    def _on_download(self, download: Any) -> None:
+        """SYNCHRONOUS: start the capture and REMEMBER the task.
+
+        WHY IT IS NOT AN ``async def``, which is what it was first written as and
+        which is racy.  Playwright dispatches the ``download`` event by calling
+        the listener; an ``async`` listener is merely SCHEDULED, and the click
+        that produced the download returns immediately afterwards.  A crawler
+        that drained its evidence at that moment got an empty list and the
+        artifact appeared — silently, later — with nothing referencing it.  Not
+        theoretical: this exact race dropped the PDF capture on the first, slow,
+        Chromium boot and captured it on every subsequent run.
+
+        pyee calls listeners synchronously during ``emit``, so scheduling the
+        task HERE makes the task's existence synchronous with the event.
+        :meth:`_await_downloads` then joins it at the next synchronisation point,
+        and a drain can no longer outrun a capture.
+        """
+        try:
+            self._download_tasks.append(
+                asyncio.ensure_future(self._capture_download(download)))
+        except Exception as exc:  # no running loop — cannot capture, so say so
+            self._record_event(pl.download_record(
+                suggested_filename=str(getattr(download, "suggested_filename", "") or ""),
+                source_url=self._scrub(
+                    _stable_source_url(str(getattr(download, "url", "") or ""))),
+                page_url=self._safe_url(), artifact_path="", bytes_written=0,
+                timestamp_ms=int(time.time() * 1000),
+                page_token=self._registry.active_token(),
+                trigger_label=self._action_label, action_verb=self._action_verb,
+                error=f"could not schedule capture: {str(exc)[:200]}"))
+
+    async def _await_downloads(self) -> None:
+        """Join every in-flight download capture (bounded).
+
+        Called from :meth:`_settle` and from :meth:`drain_browser_events`, so by
+        the time an action is observed or evidence is drained, a file that was
+        started is a file that exists.  A capture that exceeds the budget is
+        KEPT in the list rather than abandoned, so it is joined at the next
+        synchronisation point instead of being lost.
+        """
+        if not self._download_tasks:
+            return
+        pending = [t for t in self._download_tasks if not t.done()]
+        if not pending:
+            self._download_tasks = []
+            return
+        _done, still_pending = await asyncio.wait(
+            pending, timeout=_DOWNLOAD_MS / 1000.0)
+        self._download_tasks = list(still_pending)
+        if still_pending:
+            logger.warning(
+                "qec.explorer.download_capture_slow pending=%d — %d ms was not "
+                "enough; the artifact will be joined at the next settle",
+                len(still_pending), _DOWNLOAD_MS)
+
+    async def _capture_download(self, download: Any) -> None:
+        """Capture ONE download as a real artifact on disk.
+
+        NOT a log line.  ``save_as`` streams the file to the crawl's artifact
+        directory and waits for it to finish, and the recorded evidence carries
+        the byte count — so "a download started" and "a file exists and is not
+        empty" stay distinguishable, which is the whole difference between a
+        claim and an artifact.
+
+        The suggested filename is APPLICATION-CONTROLLED text and is never used
+        as a path component before ``safe_artifact_name`` reduces it.
+        """
+        suggested, source_url, error = "", "", ""
+        rel_path, written = "", 0
+        try:
+            suggested = str(getattr(download, "suggested_filename", "") or "")
+            source_url = str(getattr(download, "url", "") or "")
+            if not self._artifact_dir:
+                error = "no artifact directory configured for this port"
+            elif self._artifacts_written >= _MAX_ARTIFACTS:
+                error = f"artifact cap of {_MAX_ARTIFACTS} reached for this crawl"
+            else:
+                self._artifacts_written += 1
+                name = pl.safe_artifact_name(suggested, index=self._artifacts_written)
+                directory = Path(self._artifact_dir)
+                directory.mkdir(parents=True, exist_ok=True)
+                target = directory / name
+                await asyncio.wait_for(download.save_as(str(target)),
+                                       timeout=_DOWNLOAD_MS / 1000.0)
+                if target.exists():
+                    written = target.stat().st_size
+                    rel_path = f"{emit.ARTIFACT_SUBDIR}/{name}"
+                else:
+                    error = "save_as reported success but no file was written"
+        except Exception as exc:
+            error = str(exc)[:300]
+            # A download that failed mid-stream may still have left a partial
+            # file; report what is actually there rather than assuming.
+            try:
+                failure = getattr(download, "failure", None)
+                if callable(failure):
+                    detail = await failure()
+                    if detail:
+                        error = f"{error} | {str(detail)[:120]}"
+            except Exception:
+                pass
+        self._record_event(pl.download_record(
+            suggested_filename=suggested,
+            source_url=self._scrub(_stable_source_url(source_url)),
+            page_url=self._safe_url(), artifact_path=rel_path,
+            bytes_written=written, timestamp_ms=int(time.time() * 1000),
+            page_token=self._registry.active_token(),
+            content_type=pl.content_type_for(suggested),
+            trigger_label=self._action_label, action_verb=self._action_verb,
+            error=error))
+        logger.warning(
+            "qec.explorer.download filename=%r bytes=%d artifact=%s error=%s",
+            suggested[:120], written, rel_path or "(none)", error or "(none)")
+
+    def _scrub(self, text: str) -> str:
+        """PII-scrub a value bound for the evidence stream (never raises)."""
+        try:
+            return emit.scrub_value(str(text or "")).value
+        except Exception:
+            return ""
+
     async def goto(self, url: str) -> NavResult:
+        # A navigation is its own trigger context: a dialog or a download that
+        # fires here was raised by the load, not by a control, and recording a
+        # stale control label against it would be a fabricated attribution.
+        self._set_action_context("", "navigate")
+        # BEFORE the request, not after: a response listener attached later
+        # cannot observe the navigation it missed.
+        await self._ensure_observers()
+        # And BEFORE the navigation, adjudicate any page event still queued —
+        # because the queued event may be the ACTIVE PAGE CLOSING. Navigating
+        # first would drive a dead target and return
+        # "Target page, context or browser has been closed" for the rest of the
+        # crawl; reconciling first promotes an open page and the walk survives
+        # an application that closes the tab it moved the journey into.
+        await self._reconcile_quietly()
         try:
             resp = await self._page.goto(url, wait_until="domcontentloaded")
             # Adaptive backoff on an explicit server rate-limit (429), then ONE retry
@@ -255,13 +1027,42 @@ class PlaywrightBrowserPort(BrowserPort):
         except Exception:
             return ""
 
-    async def collect_controls(self) -> list[dict[str, Any]]:
+    async def collect_controls_result(self) -> observation_health.InventoryResult:
+        """The inventory read, WITH the health of the read (M1.7 / T-GW-01).
+
+        This is now the real implementation and ``collect_controls`` is the lossy
+        projection of it, rather than the other way round.  The exception is
+        classified HERE because this is the last place that can still see it —
+        one frame further out there is only a list, and a list cannot say whether
+        it is a page with no controls or a page we failed to read.
+        """
         try:
-            result = await self._page.evaluate(INVENTORY_JS)
-            return list(result or [])
+            payload = await self._page.evaluate(INVENTORY_JS)
         except Exception as exc:
-            logger.warning("qec.explorer.inventory_failed error=%s", str(exc)[:200])
-            return []
+            result = observation_health.InventoryResult.from_exception(exc)
+            logger.warning(
+                "qec.explorer.inventory_failed status=%s error=%s url=%s — this "
+                "page was NOT observed; it must not be recorded as empty",
+                result.status, result.error, self._safe_url()[:120])
+            return result
+        result = observation_health.InventoryResult.from_payload(payload)
+        if result.failed:
+            logger.warning(
+                "qec.explorer.inventory_corrupt status=%s error=%s url=%s",
+                result.status, result.error, self._safe_url()[:120])
+        return result
+
+    async def collect_controls(self) -> list[dict[str, Any]]:
+        """The BackCompat projection: controls only, health discarded.
+
+        Every pre-M1.7 call site keeps working through this — the auth flow, the
+        filler's re-reads, the walker's post-action refreshes.  Those paths act on
+        the CONTENT of a page they have already decided to be on; the paths that
+        decide whether a page EXISTS AS EVIDENCE go through
+        ``collect_controls_result``.  Splitting the two is what let this land
+        without re-auditing every read in the engine.
+        """
+        return (await self.collect_controls_result()).as_list()
 
     async def collect_opaque(self) -> list[dict[str, Any]]:
         """OPAQUE surfaces the DOM walker cannot read ``[{kind, label, reason}]`` — a
@@ -315,6 +1116,82 @@ class PlaywrightBrowserPort(BrowserPort):
                 continue
         return texts
 
+    async def status_texts(self) -> list[str]:
+        """Visible STATUS live-region texts (role=status / aria-live=polite).
+
+        THE PRODUCER THAT WAS NEVER WRITTEN.  ``RawObservation.confirmation_detail``
+        is declared in :mod:`app.browser` and read by ``classify_submit_after``;
+        grepping ``app/`` for a WRITE of it returns nothing.  So the same-page
+        ``confirmation`` branch of that classifier has been dead code since it
+        was written, and ``confirmed`` could only ever be reached through a URL
+        change or a dialog.  An application that answers a submit with a banner
+        in place — which is the majority of single-page applications, including
+        the one this milestone is proven on — could not complete a journey at
+        any privilege level.
+
+        Mirrors :meth:`error_texts` exactly (same bounds, same visibility check,
+        same never-raise contract); only the selectors differ.  ``role=alert``
+        and ``aria-live=assertive`` are deliberately NOT read here: those are
+        errors, and an error read as a confirmation is the one misclassification
+        that turns a failed submit into a green journey.
+        """
+        texts: list[str] = []
+        for selector in ('[role="status"]', '[aria-live="polite"]'):
+            try:
+                loc = self._page.locator(selector)
+                count = await loc.count()
+                for i in range(min(count, 5)):
+                    node = loc.nth(i)
+                    if await node.is_visible():
+                        txt = (await node.inner_text()).strip()
+                        if txt:
+                            texts.append(txt[:300])
+            except Exception:
+                continue
+        return texts
+
+    async def visible_texts(self) -> list[str]:
+        """Short visible text blocks, for the before/after crossing diff.
+
+        BOUNDED HARD, because this is the only place the crawl reads free page
+        text and an unbounded read of a data-heavy page is both a latency cost
+        and a PII surface.  Leaf-ish blocks only, 300 chars each, 40 blocks
+        total, and the result is used ONLY as a set difference — the text that
+        was already on the page before the click is discarded and never stored.
+
+        Called twice per approved crossing and (since M1.4) twice per wizard
+        advance, which is what lets a walk recognise the confirmation page it
+        landed on.  The walk pays for these two reads and NOT for a third: it
+        calls :func:`app.forms.capture_page_declarations`, which omits the
+        expensive ``collect_controls`` the crossing helper also needs.
+        """
+        texts: list[str] = []
+        try:
+            raw = await self._page.evaluate(
+                """() => {
+                    const out = [];
+                    const sel = 'p,span,div,h1,h2,h3,h4,li,td,strong,em,label';
+                    for (const el of document.querySelectorAll(sel)) {
+                        if (out.length >= 40) break;
+                        // Leaf-ish only: a wrapper repeats its children's text and
+                        // would make every diff look like the whole page changed.
+                        if (el.querySelector(sel)) continue;
+                        const r = el.getBoundingClientRect();
+                        if (!r.width || !r.height) continue;
+                        const t = (el.innerText || '').trim();
+                        if (t && t.length <= 300) out.push(t);
+                    }
+                    return out;
+                }"""
+            )
+            for item in list(raw or [])[:40]:
+                text = str(item or "").strip()
+                if text:
+                    texts.append(text[:300])
+        except Exception:
+            return texts
+        return texts
+
     async def screenshot_png(self) -> bytes:
         try:
             return await self._page.screenshot(full_page=True, type="png")
@@ -343,6 +1220,7 @@ class PlaywrightBrowserPort(BrowserPort):
                               paths: Sequence[str]) -> RawObservation:
         """Attach ``paths`` to a file-input ``control`` (Phase-A: choose the file,
         never submit) and read back the chosen filename."""
+        self._set_action_context(control, "upload")
         url_before = self._safe_url()
         sig_before = await self._interactive_signature()
         locator = self._locator(control)
@@ -380,8 +1258,33 @@ class PlaywrightBrowserPort(BrowserPort):
 
     # -- internals -------------------------------------------------------------
 
+    def _set_action_context(self, control: Any, verb: str) -> None:
+        """Remember WHAT the crawl is doing, for the dialog/popup/download
+        evidence and for dialog INTENT resolution (T-ND-02).
+
+        This is the whole reason dialog handling is not string-matching: a
+        confirm raised behind "Continue" and the same confirm raised behind
+        "Delete Policy" are different questions, and only the adapter — which
+        performed the click — knows which control asked it.  Set before the
+        action, because a dialog fires DURING it.
+        """
+        try:
+            label = (str(control.get("name") or "").strip()
+                     if isinstance(control, Mapping) else str(control or "").strip())
+        except Exception:
+            label = ""
+        label, verb = label[:200], str(verb or "")[:40]
+        if (label, verb) != (self._action_label, self._action_verb):
+            # A genuinely NEW action. Re-stating the same context (the ladder
+            # re-enters _act for the same control) is not a new action and must
+            # not re-arm the adoption budget.
+            self._adopted_this_action = False
+        self._action_label = label
+        self._action_verb = verb
+
     async def _act(self, control: dict[str, Any], kind: str, *, value: str = "",
                    checked: bool = False, read_back: bool = False) -> RawObservation:
+        self._set_action_context(control, kind)
         url_before = self._safe_url()
         sig_before = await self._interactive_signature()
         intended = value if kind != "checked" else ("true" if checked else "false")
@@ -442,6 +1345,7 @@ class PlaywrightBrowserPort(BrowserPort):
         the ``_act`` observe pattern (url + interactive-signature before/after) so a
         coordinate action produces the SAME grounded ``RawObservation`` and R0
         verdict: a click that changes nothing is honestly ``intent_met=False``."""
+        self._set_action_context("", "click_at")
         url_before = self._safe_url()
         sig_before = await self._interactive_signature()
         try:
@@ -504,6 +1408,7 @@ class PlaywrightBrowserPort(BrowserPort):
             error_detail=err, dom_changed=(sig_before != sig_after), intent_met=met)
 
     async def drag(self, path) -> RawObservation:
+        self._set_action_context("", "drag")
         pts = []
         for p in (path or []):
             try:
@@ -527,6 +1432,7 @@ class PlaywrightBrowserPort(BrowserPort):
         return await self.drag(points)
 
     async def press_keys(self, keys) -> RawObservation:
+        self._set_action_context("", "press_keys")
         seq = [str(k) for k in (keys or []) if str(k)]
 
         async def _do():
@@ -537,6 +1443,7 @@ class PlaywrightBrowserPort(BrowserPort):
 
     async def scroll_until(self, control: dict[str, Any],
                            max_steps: int = 10) -> RawObservation:
+        self._set_action_context(control, "scroll")
         loc = self._locator(control)
 
         async def _do():
@@ -567,6 +1474,7 @@ class PlaywrightBrowserPort(BrowserPort):
         set), or the last failed observation if no rung succeeded.
         """
         from dataclasses import replace
+        self._set_action_context(control, kind)
         rungs = ladder_for(kind)
         if not rungs:
             return await self._act(control, kind, value=value,
@@ -885,6 +1793,52 @@ class PlaywrightBrowserPort(BrowserPort):
             return ()
 
     async def _settle(self) -> None:
+        """THE synchronisation point after every action and every navigation.
+
+        M1.5 EVENT ORDERING, resolved explicitly.  Playwright delivers a
+        ``page`` event over the protocol, so it does NOT necessarily arrive
+        before the click that caused it returns::
+
+            click ──▶ (returns) ──▶ _settle ──▶ … ──▶ popup event arrives
+
+        Adjudicating only on entry therefore adopted the popups that were
+        already queued and MISSED the ones still in flight — measured, and
+        exactly split by shape: ``window.open('')`` + a deferred navigation was
+        adopted (its event had time to land), while a plain ``target="_blank"``
+        was not.  So the pages are adjudicated on BOTH sides of the quiesce:
+
+          1. adopt whatever is already queued, so the quiesce below waits on the
+             page the journey is actually on rather than the one it just left;
+          2. quiesce (network idle + the hydration gate) — which is many
+             protocol round-trips, and is what gives an in-flight ``page`` event
+             time to be delivered;
+          3. if anything arrived during (2), adopt it and quiesce ONCE more, on
+             the newly adopted page.
+
+        Bounded at one extra quiesce, and the second pass costs two empty-list
+        checks in the overwhelmingly common case where no page event happened.
+        """
+        # A running loop exists HERE even when the adapter was constructed
+        # without one, so this is where a deferred `response` / `dialog`
+        # subscription finally takes.
+        await self._ensure_observers()
+        # ...and where a download started by the action just performed is joined,
+        # so the observation that follows describes a page whose file has landed.
+        await self._await_downloads()
+        await self._reconcile_quietly()
+        await self._quiesce()
+        if self._pending_pages or self._closed_pages:
+            await self._reconcile_quietly()
+            await self._quiesce()
+
+    async def _reconcile_quietly(self) -> None:
+        """:meth:`_reconcile_pages`, but page bookkeeping can never break an action."""
+        try:
+            await self._reconcile_pages()
+        except Exception:
+            logger.exception("qec.explorer.page_reconcile_failed")
+
+    async def _quiesce(self) -> None:
         # 1. best-effort network quiesce.
         try:
             await self._page.wait_for_load_state("networkidle", timeout=_SETTLE_MS)

@@ -31,6 +31,7 @@ from types import SimpleNamespace
 import pytest
 
 from app import vocab
+from app import rules
 from app.crawler import Crawler
 from app.forms import PROV_UNBLOCK
 
@@ -87,9 +88,15 @@ class _Port:
                                committed_value="true" if checked else "false")
 
 
-def _crawler(port, *, unblocks: bool, url: str = "https://app/x"):
+def _crawler(port, *, unblocks: bool, url: str = "https://app/x",
+             known_rules=()):
     """A stub carrying only what the method touches — so the code under test is
-    the shipped code, not a re-implementation of it."""
+    the shipped code, not a re-implementation of it.
+
+    M1.7 / T-GW-04 added two more things it touches: the rules earlier crawls
+    PROVED about this app (``_known_rules``) and the ledger of what THIS crawl
+    proves (``_rule_ledger``). ``known_rules`` defaults to empty, which is the
+    pre-M1.7 behaviour exactly — every block runs the full experiment."""
     fields = [_checkbox(n) for n in CONDITIONS]
 
     async def _observe():
@@ -109,6 +116,8 @@ def _crawler(port, *, unblocks: bool, url: str = "https://app/x"):
         _fields_seed_detail=[{"label": n, "url": url} for n in CONDITIONS],
         _field_ledger=[{"label": n, "provenance": "needs_input", "filled": False,
                         "options": ["checked", "unchecked"]} for n in CONDITIONS],
+        _known_rules=rules.KnownRules(known_rules),
+        _rule_ledger=rules.RuleLedger(),
     )
 
 
@@ -323,3 +332,146 @@ async def test_a_browser_that_refuses_the_answer_leaves_the_block_standing(monke
     assert "resolved_by_agent" not in me._advance_blocked[0]
     assert me._fields_unfilled == CONDITIONS
     assert out[-1]["disabled"] is True
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  M1.7 / T-GW-04 — the rule outlives the crawl that proved it
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def _rule_for(field_label: str, url: str = "https://app/x"):
+    return rules.discover(url=url, blocked_label="Continue",
+                          field_label=field_label,
+                          proof="proven on an earlier crawl").as_dict()
+
+
+@pytest.mark.asyncio
+async def test_a_proved_rule_is_recorded_for_persistence(monkeypatch):
+    """THE PRODUCER. Before M1.7 the proof was written into a list on the
+    crawler object, counted once by qe-central, and thrown away. It must now
+    also be minted as a keyed, versioned rule that can be persisted."""
+    monkeypatch.setattr("app.crawler.build_inventory",
+                        lambda raw, pack, url="": list(raw))
+    me = _crawler(_Port(), unblocks=True)
+    fill = SimpleNamespace(unfilled_fields=list(CONDITIONS))
+
+    await Crawler._answer_to_unblock(me, _controls(), "Continue",
+                                     "https://app/x", fill)
+
+    recorded = me._rule_ledger.as_list()
+    assert len(recorded) == 1
+    assert recorded[0]["blocked_label"] == "Continue"
+    assert recorded[0]["field_label"] == "None"
+    assert recorded[0]["schema_version"] == rules.RULE_SCHEMA_VERSION
+    assert "proven" in recorded[0]["proof"]
+    # And it is keyed on the URL TEMPLATE, so a second applicant is the same rule.
+    assert recorded[0]["key"] == rules.rule_key(
+        url="https://app/x", blocked_label="Continue", field_label="None")
+
+
+@pytest.mark.asyncio
+async def test_a_failed_experiment_proves_no_rule(monkeypatch):
+    """A rule is a record of EVIDENCE. An experiment the application refused
+    proved nothing, and storing it would poison every later crawl with a wrong
+    answer that skips the search which would have found the right one."""
+    monkeypatch.setattr("app.crawler.build_inventory",
+                        lambda raw, pack, url="": list(raw))
+    me = _crawler(_Port(), unblocks=False)
+    fill = SimpleNamespace(unfilled_fields=list(CONDITIONS))
+
+    await Crawler._answer_to_unblock(me, _controls(), "Continue",
+                                     "https://app/x", fill)
+
+    assert me._rule_ledger.as_list() == []
+
+
+@pytest.mark.asyncio
+async def test_a_known_rule_picks_the_proved_field_not_the_heuristic(monkeypatch):
+    """THE CONSUMER, and the whole point of persisting anything.
+
+    With no knowledge the walk picks the LEAST-ASSERTING declined question
+    ("None") and finds out what happens. On this application the answer that
+    actually unblocks Continue is a different one — so without a rule the walk
+    guesses, the guess is reverted, and the funnel stops one step short.
+
+    A rule removes the guess: the field the application already proved is the
+    one that gets answered.
+    """
+    monkeypatch.setattr("app.crawler.build_inventory",
+                        lambda raw, pack, url="": list(raw))
+    port = _Port()
+    me = _crawler(port, unblocks=True, known_rules=[_rule_for("Asthma")])
+    fill = SimpleNamespace(unfilled_fields=list(CONDITIONS))
+
+    await Crawler._answer_to_unblock(me, _controls(), "Continue",
+                                     "https://app/x", fill)
+
+    # The heuristic would have chosen "None" (it matches NEGATIVE_OPTION_RE and
+    # comes first in DOM order); the rule chose the proved field instead.
+    assert [name for name, _ in port.calls] == ["Asthma"]
+    assert me._last_unblock_field == "Asthma"
+    assert me._known_rules.stats() == {"known": 1, "lookups": 1, "hits": 1,
+                                       "misses": 0, "reuse_rate": 1.0}
+
+
+@pytest.mark.asyncio
+async def test_a_reused_rule_is_provenanced_apart_from_a_fresh_proof(monkeypatch):
+    """Inherited evidence must not be indistinguishable from evidence gathered
+    on this run — that blur is the thing this milestone exists to remove."""
+    monkeypatch.setattr("app.crawler.build_inventory",
+                        lambda raw, pack, url="": list(raw))
+    me = _crawler(_Port(), unblocks=True, known_rules=[_rule_for("Asthma")])
+    fill = SimpleNamespace(unfilled_fields=list(CONDITIONS))
+
+    await Crawler._answer_to_unblock(me, _controls(), "Continue",
+                                     "https://app/x", fill)
+
+    row = next(r for r in me._field_ledger if r["label"] == "Asthma")
+    assert row["provenance"] == rules.PROV_KNOWN_RULE
+    assert row["provenance"] != PROV_UNBLOCK
+    assert me._advance_blocked[0]["rule_reused"] is True
+
+
+@pytest.mark.asyncio
+async def test_a_reused_rule_still_performs_and_confirms_the_action(monkeypatch):
+    """WHAT REUSE MUST NOT SKIP. A rule is knowledge ABOUT an application, never
+    a substitute for having done the thing. A walk that reported an advance it
+    had not actually unblocked would be this milestone's own failure mode,
+    rebuilt inside the feature meant to close it."""
+    monkeypatch.setattr("app.crawler.build_inventory",
+                        lambda raw, pack, url="": list(raw))
+    port = _Port()
+    # The app REFUSES to unblock, even though a rule says this field should work
+    # (the application changed since the rule was proved).
+    me = _crawler(port, unblocks=False, known_rules=[_rule_for("Asthma")])
+    fill = SimpleNamespace(unfilled_fields=list(CONDITIONS))
+
+    await Crawler._answer_to_unblock(me, _controls(), "Continue",
+                                     "https://app/x", fill)
+
+    # It ACTED (the control was set, then reverted when the app disagreed)...
+    assert [name for name, _ in port.calls] == ["Asthma", "Asthma"]
+    assert port.calls[-1][1] is False
+    # ...and it claimed NOTHING the application did not confirm.
+    assert "resolved_by_agent" not in me._advance_blocked[0]
+    assert me._rule_ledger.as_list() == []
+
+
+@pytest.mark.asyncio
+async def test_a_stale_rule_falls_back_to_the_experiment(monkeypatch):
+    """A rule naming a question this state no longer asks must not force a
+    control that is not there — it degrades to the search, which is exactly the
+    pre-M1.7 behaviour."""
+    monkeypatch.setattr("app.crawler.build_inventory",
+                        lambda raw, pack, url="": list(raw))
+    port = _Port()
+    me = _crawler(port, unblocks=True,
+                  known_rules=[_rule_for("A Question This Page Does Not Ask")])
+    fill = SimpleNamespace(unfilled_fields=list(CONDITIONS))
+
+    await Crawler._answer_to_unblock(me, _controls(), "Continue",
+                                     "https://app/x", fill)
+
+    assert [name for name, _ in port.calls] == ["None"]     # the heuristic pick
+    assert me._advance_blocked[0]["rule_reused"] is False
+

@@ -481,6 +481,66 @@ def submit_approvals(app_row: Any) -> list[str]:
     return [str(x).strip() for x in (approvals or []) if str(x).strip()]
 
 
+def boundary_approvals(app_row: Any) -> list[dict]:
+    """The operator's PER-CONTROL boundary grants for this app, or ``[]``.
+
+    A4.3 / T-AC-02.  Distinct from :func:`submit_approvals` in exactly the way
+    that matters: a grant names ONE control and optionally ONE page, so it can
+    authorise a point of no return without authorising the whole application.
+    The label list cannot express that, which is why crossing an irreversible
+    control previously required ``"*"``.
+
+    FAIL-CLOSED AND NO BLANKET.  Unlike ``submit_approvals``, a disposable
+    attestation grants nothing here: the disposable blanket exists to spare an
+    operator the ceremony of naming safe submits on a throwaway environment, and
+    the ceremony is the entire point for an irreversible one.  A grant must be
+    written down, by a person, naming the control.
+
+    Still gated on the same authorisations as any submit — a signed RoE, an
+    unexpired attestation on a crawlable env kind, and the app being authorised
+    to test.  The explorer re-verifies at click time (``gate_submit`` +
+    ``_authorize_crossing``), so this is the coarse gate, never the only one.
+    """
+    fences = _jsonb(app_row, "fences")
+    att = _jsonb(app_row, "env_attestation")
+    raw = fences.get("boundary_approvals") or att.get("boundary_approvals") or []
+    if not isinstance(raw, (list, tuple)) or not raw:
+        return []
+    if not _roe_signed(app_row) or not _authorized_to_test(app_row):
+        return []
+    att_ok, _kind, _reason = _attestation_status(
+        app_row, allowed_kinds=CRAWLABLE_ENV_KINDS, now=_utcnow(),
+    )
+    if not att_ok:
+        return []
+    out: list[dict] = []
+    for entry in raw:
+        if isinstance(entry, str):
+            entry = {"control": entry}
+        if not isinstance(entry, dict):
+            continue
+        control = str(entry.get("control") or entry.get("name") or "").strip()
+        # "*" is refused HERE as well as in the explorer's parser. Two
+        # independent refusals, because this one is the boundary between a
+        # tenant's stored config and the crawl process, and a wildcard that got
+        # this far would already have been persisted as an operator decision.
+        if not control or "*" in control:
+            continue
+        grant: dict = {"control": control}
+        for key in ("url", "state_fingerprint", "approval_id",
+                    "approved_by", "approved_at"):
+            value = str(entry.get(key) or "").strip()
+            if value:
+                grant[key] = value
+        try:
+            max_crossings = int(entry.get("max_crossings", 1))
+        except (TypeError, ValueError):
+            max_crossings = 1
+        grant["max_crossings"] = max(1, max_crossings)
+        out.append(grant)
+    return out
+
+
 def onboarding_status(app_row: Any) -> str:
     """Derive the onboarding state (``draft`` | ``attested`` | ``live``).
 

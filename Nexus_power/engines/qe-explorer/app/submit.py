@@ -1,11 +1,20 @@
-"""Phase-B attested submit (M0.3 / T-DE-11).
+"""Phase-B attested submit, and the A4.3 APPROVED BOUNDARY CROSSING.
 
-Extracted VERBATIM from :mod:`app.crawler`.
+Extracted VERBATIM from :mod:`app.crawler` (M0.3 / T-DE-11); the crossing
+ladder, the exactly-once ledger and the outcome milestone were added here by
+A4.3.  The boundary model itself is pure and lives in :mod:`app.boundary`.
 
-DEFAULT-OFF AND DOUBLE-GATED.  A submit fires only when the operator supplied a
-per-flow approval list AND a disposable-environment attestation is present.
-Without both, the crawl stops at the Phase-A submit boundary, byte-identical to
-a crawl that never had this code.
+DEFAULT-OFF AND DOUBLE-GATED.  A submit fires only when the operator supplied an
+approval — a per-control ``boundary_approvals`` grant or the legacy
+``submit_approvals`` label list — AND a disposable-environment attestation is
+present.  Without both, the crawl stops at the Phase-A submit boundary,
+byte-identical to a crawl that never had this code.
+
+THREE AUTHORITIES, ONE LADDER (:meth:`SubmitMixin._authorize_crossing`).  A
+per-control grant is the only one that may cross a refuse-pack irreversible
+verb; the two legacy seams are unchanged and cannot.  Before A4.3 there was no
+grant at all, so the ONLY route across an irreversible control was the ``"*"``
+blanket — which authorises every submit the application offers at once.
 
 THE APPROVAL IS NOT A STANDING PERMISSION.  ``execute_submit_phase_b``
 re-verifies the guard at the moment of the click, not merely at admission, and
@@ -109,12 +118,15 @@ from .crawl_constants import (  # noqa: F401  (re-exported public vocabulary)
     _reach_target_labels,
     _segment_label,
     _url_key)
+from .boundary import (AUTHORITY_BLANKET, AUTHORITY_GRANT, AUTHORITY_NAMED,
+                       BOUNDARY_APPROVABLE, BOUNDARY_NEVER, REASON_DANGER_VERB,
+                       ApprovalGrant, CrossingRecord, OutcomeMilestone,
+                       classify_boundary, milestone_id_for)
 from .guard_context import GuardContext
 from .budget import (STOP_MAX_REQUESTS, STOP_MAX_STATES, STOP_MAX_WALL_MS,
                      Budget, BudgetTracker)
 from .frontier import (Frontier, FrontierItem, _parse_plan_patterns,
                        _section_signature)
-from .fingerprint import state_fingerprint
 from .state_identity import (_MAX_COVERAGE_STATES, _MAX_DANGER_NAMES,
                              _MAX_NETWORK_CALLS, _MAX_STATE_FIELDS,
                              StateFingerprinter, StateRecorder,
@@ -145,27 +157,45 @@ class SubmitMixin:
         self, item: FrontierItem, controls: Sequence[dict[str, Any]],
         fill: Any, fingerprint: str,
     ) -> None:
-        """Phase-5 attested submit: drive the FIRST operator-approved, non-danger flow
-        candidate on this form and push the post-submit page onto the frontier so the
-        deeper flow gets crawled.
+        """Phase-5 attested submit: drive the FIRST authorised flow candidate on this
+        form and push the post-submit page onto the frontier so the deeper flow gets
+        crawled.
 
-        Triple-gated so a real app mutation only ever happens on an attested disposable
-        env for an explicitly approved, non-irreversible flow: (1) this method runs only
-        when ``self._submit_enabled`` (approvals + attestation supplied); (2) the flow
-        name must be in the operator's ``submit_approvals`` and the candidate non-danger;
-        (3) :func:`execute_submit_phase_b` re-runs ``gate_submit`` (attestation + per-flow
-        approval + non-irreversible-verb) and REFUSES — recording a guard_event, clicking
-        nothing — if any check fails. One submit per state (no combinatorial fan-out); a
-        non-navigating or unconfirmed submit is recorded honestly and adds no frontier."""
+        Triple-gated so a real app mutation only ever happens under an explicit
+        authorisation: (1) :meth:`_may_attempt_crossing` runs the same ladder the
+        executor enforces, so the filter and the decision can never disagree;
+        (2) :meth:`_execute_approved_submit` re-authorises, checks exactly-once,
+        and reserves the boundary before clicking; (3)
+        :func:`execute_submit_phase_b` re-runs ``gate_submit`` at click time and
+        REFUSES — recording a guard_event, clicking nothing — if any check fails.
+
+        An irreversible candidate is no longer skipped unconditionally. It used
+        to be (``if fc.danger and not self._submit_approve_all: continue``),
+        which is what made a named per-control approval impossible and left the
+        ``"*"`` blanket as the only way through.
+
+        One submit per state (no combinatorial fan-out); a non-navigating or
+        unconfirmed submit is recorded honestly and adds no frontier."""
         for fc in getattr(fill, "flow_candidates", ()):
             name = (getattr(fc, "name", "") or "").strip()
-            # On a DISPOSABLE env the blanket covers danger controls too: the guard
-            # behind this now allows an irreversible verb there, so skipping them
-            # here would keep the old refusal alive one layer up and the operator
-            # would see no submit at all with no reason given.
-            if not name or not self._submit_approved(name):
+            if not name:
                 continue
-            if getattr(fc, "danger", False) and not self._submit_approve_all:
+            # ONE LADDER, ONE ANSWER. This used to re-derive authorisation with
+            # its own pair of conditions (`_submit_approved` plus `danger and not
+            # approve_all`), and the danger clause is precisely what made a named
+            # per-control approval impossible: an irreversible flow candidate was
+            # skipped here no matter what the operator had approved, so the "*"
+            # blanket was the only route through. The filter now asks the same
+            # ladder the executor enforces, so the two can never disagree.
+            probe = getattr(fc, "control", None)
+            probe = dict(probe) if isinstance(probe, dict) else {}
+            probe.setdefault("kind", "button")
+            probe["name"] = name
+            probe["danger"] = bool(getattr(fc, "danger", False))
+            probe["danger_rule_id"] = str(getattr(fc, "danger_rule_id", "") or "")
+            probe["danger_severity"] = str(getattr(fc, "danger_severity", "") or "")
+            if not self._may_attempt_crossing(
+                    name=name, control=probe, url=item.url, fingerprint=fingerprint):
                 continue
             # The candidate carries the exact submit control it was recorded from; fall
             # back to a name match in the snapshot if it is somehow absent.
@@ -184,29 +214,167 @@ class SubmitMixin:
                     depth=item.depth, fill_controls=controls, renavigate=True):
                 return  # one submit per state — avoid combinatorial explosion
 
+    # -- A4.3 AUTHORISATION --------------------------------------------------
+
+    def _authorize_crossing(
+        self, *, name: str, control: Mapping[str, Any], url: str,
+        fingerprint: str,
+    ) -> tuple[Optional[ApprovalGrant], str, str]:
+        """May this control be crossed, on whose authority - ``(grant, authority, refusal)``.
+
+        THE LADDER, STRONGEST RUNG FIRST.  Either ``authority`` is set and
+        ``refusal`` is empty, or ``refusal`` names why not.  Pure and
+        synchronous: the decision is a function of the operator's approvals and
+        the control in front of us, so it replays identically and can be
+        asserted on directly.
+
+          1. A per-control :class:`ApprovalGrant`.  Least privilege, works on any
+             env kind, and the ONLY route that can cross a refuse-pack
+             irreversible verb.  This rung did not exist before A4.3, which is
+             the whole defect: crossing "Bind Coverage" required ``"*"``.
+          2. A bare label in ``submit_approvals`` - the shipped behaviour, kept
+             verbatim, and deliberately NOT extended to irreversible verbs.  A
+             flat list of labels cannot express "this control, on this page,
+             once", so it must not be what authorises a point of no return.
+          3. The ``"*"`` disposable blanket - also shipped, also unchanged.  It
+             still requires a signed disposable attestation and still refuses
+             step-advance labels.
+
+        ``BOUNDARY_NEVER`` short-circuits everything above it.  No approval of
+        any strength crosses a sign-out: the click would end the session the
+        remaining journey is observed through, so it can only ever trade real
+        coverage for one meaningless data point.
+        """
+        klass = classify_boundary(control)
+        if klass.cls == BOUNDARY_NEVER:
+            return None, "", "boundary_never:%s" % klass.reason
+
+        grant = self._boundary_grants.grant_for(
+            control_name=name, url=url, state_fingerprint=fingerprint)
+        if grant is not None:
+            attestation = self._guard.attestation
+            if attestation is None:
+                # Say this plainly rather than letting the guard refuse a POST
+                # the operator believes they authorised: the grant is valid, the
+                # ENVIRONMENT is not attested, and those need different remedies.
+                return None, "", "grant_without_attestation"
+            if not attestation.is_submit_capable():
+                # CHECKED HERE RATHER THAN ONLY AT THE GUARD, and the reason is
+                # the ledger. ``gate_submit`` would refuse this too — it requires
+                # a disposable, attributed, unexpired attestation — but only
+                # AFTER the boundary has been reserved, so a grant issued against
+                # a staging or lapsed attestation would spend the boundary
+                # without ever crossing it and the operator would be told
+                # nothing they could act on. Refusing before the reservation
+                # leaves the boundary intact and names the actual problem.
+                return None, "", "attestation_not_submit_capable"
+            return grant, AUTHORITY_GRANT, ""
+
+        if not self._submit_enabled:
+            return None, "", "submit_not_enabled"
+
+        if klass.cls == BOUNDARY_APPROVABLE and klass.reason == REASON_DANGER_VERB:
+            if self._submit_approve_all:
+                return None, AUTHORITY_BLANKET, ""
+            # NAMED-BUT-DANGEROUS.  The operator listed this label in
+            # submit_approvals and the control carries an irreversible verb.
+            # Refused - and refused LOUDLY at the call site, because silently
+            # treating it as unapproved is how an operator concludes the feature
+            # is broken rather than that their approval was the wrong shape.
+            return None, "", "danger_requires_boundary_grant"
+
+        if self._submit_approved(name):
+            named = name.strip().lower() in self._submit_approvals
+            return None, (AUTHORITY_NAMED if named else AUTHORITY_BLANKET), ""
+        return None, "", "not_approved"
+
+    def _may_attempt_crossing(self, *, name: str, control: Mapping[str, Any],
+                              url: str, fingerprint: str) -> bool:
+        """Cheap predicate for the discovery loops - is this worth attempting?
+
+        Authoritative refusal still happens inside
+        :meth:`_execute_approved_submit`; this only keeps the loops from walking
+        every button on a page through the full path just to be told no.
+        """
+        _grant, authority, refusal = self._authorize_crossing(
+            name=name, control=control, url=url, fingerprint=fingerprint)
+        return not refusal and bool(authority)
+
     async def _execute_approved_submit(
         self, *, name: str, control: dict[str, Any], url: str, fingerprint: str,
         depth: int, fill_controls: Sequence[dict[str, Any]] = (),
         renavigate: bool = True,
     ) -> bool:
-        """Click ONE approved submit control through the SUBMIT guard, record it, and
-        push the post-submit page onto the frontier so the flow BEYOND it is crawled.
+        """CROSS ONE APPROVED BOUNDARY, EXACTLY ONCE, AND RECORD THE LANDING.
 
-        Returns False when this control was already submitted at this state (dedup),
-        else True. Shared by the form path (:meth:`_maybe_submit_phase_b`) and the
-        next-action path (:meth:`_maybe_submit_next_action`).
+        The single authoritative crossing path - the form path, the next-action
+        path and the walk's danger-forward tier all arrive here, so there is one
+        place where authorisation, exactly-once, the guard and the outcome
+        milestone are decided, and no second place where any of them can drift.
 
-        ``renavigate=False`` submits IN PLACE — a wizard TERMINAL (a quote summary
-        whose state the walk built up) would lose that state on a re-navigation.
-        Either way :func:`execute_submit_phase_b` re-runs ``gate_submit`` (attestation
-        + approval + non-irreversible unless the disposable blanket allows it), so the
-        guard is never bypassed."""
-        flow_key = f"{fingerprint}::{name.lower()}"
-        if flow_key in self._submitted_flows:
+        Order is load-bearing:
+
+          1. AUTHORISE   (:meth:`_authorize_crossing`) - a refusal is recorded as
+                          evidence and clicks nothing.
+          2. EXACTLY-ONCE reserve the boundary BEFORE the click.  A crossing that
+                          dies mid-flight leaves the boundary spent, because a
+                          duplicate irreversible action is unrecoverable and a
+                          missing milestone is not.
+          3. GUARD        ``execute_submit_phase_b`` re-runs ``gate_submit`` at
+                          click time.  The approval says WHICH control; the guard
+                          still says whether THIS click may proceed.
+          4. MILESTONE    the verified landing, derived from what was OBSERVED -
+                          never from ``submitted``.
+
+        Returns False when nothing was clicked (refused, or already crossed).
+
+        ``renavigate=False`` submits IN PLACE - a wizard terminal whose state the
+        walk built up would lose it on a re-navigation, and with it the very
+        button we mean to click.
+        """
+        grant, authority, refusal = self._authorize_crossing(
+            name=name, control=control, url=url, fingerprint=fingerprint)
+        if refusal:
+            self._crossings.note_refusal(
+                control_name=name, url=url, state_fingerprint=fingerprint,
+                reason=refusal, now_ms=self._clock.now_ms())
+            logger.warning(
+                "qec.boundary.refused control=%r url=%s reason=%s - the crawl "
+                "reached an irreversible boundary and was NOT authorised to "
+                "cross it. Issue a boundary_approvals grant naming this control "
+                "to complete the journey.",
+                name[:60], (url or "")[:120], refusal)
+            return False
+
+        max_crossings = grant.max_crossings if grant is not None else 1
+        # EXACTLY-ONCE, UNDER BOTH KEYS.  ``_submitted_flows`` is the shipped
+        # fingerprint-scoped dedup and stays; the ledger adds the LOGICAL key
+        # (page + label), which is the one that survives a second traversal
+        # arriving with a different DOM and therefore a different fingerprint.
+        flow_key = "%s::%s" % (fingerprint, name.lower())
+        if flow_key in self._submitted_flows or self._crossings.would_exceed(
+                control_name=name, url=url, state_fingerprint=fingerprint,
+                max_crossings=max_crossings):
+            logger.info(
+                "qec.boundary.already_crossed control=%r url=%s - this boundary "
+                "has been crossed under this approval; NOT submitting again.",
+                name[:60], (url or "")[:120])
             return False
         self._submitted_flows.add(flow_key)
+
         seq = self._next_seq
         self._next_seq += 1
+        record = self._crossings.reserve(
+            control_name=name, url=url, state_fingerprint=fingerprint,
+            approval_id=(grant.approval_id if grant is not None else authority),
+            sequence_index=seq, now_ms=self._clock.now_ms())
+        logger.warning(
+            "qec.boundary.crossing crossing_id=%s control=%r url=%s authority=%s "
+            "approval_id=%s attestation=%s - ONE irreversible click, explicitly "
+            "authorised, about to fire.",
+            record.crossing_id, name[:60], (url or "")[:120], authority,
+            record.approval_id, getattr(self._guard.attestation, "env_kind", "none"))
+
         prev_phase = self._guard.phase
         prev_approved = self._guard.submit_flow_approved
         # Flip the shared guard to SUBMIT so the network route handler authorises the
@@ -223,7 +391,7 @@ class SubmitMixin:
                 now_ms=self._clock.now_ms(), state_id=fingerprint,
                 sequence_index=seq, answer_key=self._answer_key,
                 fill_controls=fill_controls, renavigate=renavigate,
-                # The renavigation must KEEP THE LOGIN. Phase-B's own goto is raw —
+                # The renavigation must KEEP THE LOGIN. Phase-B's own goto is raw -
                 # on an app that drops its login per page load it lands on the
                 # SIGN-IN WALL, so the submit fired into a login form (recorded
                 # live: nine submits, outcome=error, five sign-in "pages" stitched
@@ -244,11 +412,16 @@ class SubmitMixin:
         # application answered with a navigation or a success confirmation. The
         # crawl computed that distinction and then dropped it, so nine submits
         # that all errored scored exactly the same as nine completed business
-        # transactions — in the counter, in the gate floor, and in the weekly
+        # transactions - in the counter, in the gate floor, and in the weekly
         # yield. This is the one boundary where the product claims something
         # HAPPENED, so it is the last place a count may be generous.
         if getattr(result, "confirmed", False):
             self._forms_confirmed += 1
+        self._crossings.complete(
+            record, outcome=str(getattr(result, "outcome", "") or ""),
+            confirmed=bool(getattr(result, "confirmed", False)),
+            now_ms=self._clock.now_ms())
+        milestone = self._record_outcome_milestone(record, grant, result)
         ps = result.page_state
         dest = (getattr(ps, "location", "") or "").strip() if ps else ""
         # Honour max_depth for submit-derived states too (mirrors _discover's depth
@@ -257,11 +430,69 @@ class SubmitMixin:
                 and depth < self._budget.max_depth and self._in_scope(dest)):
             self._frontier.push(
                 FrontierItem(url=dest, depth=depth + 1,
-                             discovered_via=f"submit:{name}",
+                             discovered_via="submit:%s" % name,
                              parent_fingerprint=fingerprint),
                 key=_url_key(dest),
             )
+        if milestone is not None:
+            logger.warning(
+                "qec.boundary.outcome_milestone milestone_id=%s crossing_id=%s "
+                "outcome=%s rung=%s verified=%s url_after=%s - %s",
+                milestone.milestone_id, record.crossing_id, milestone.outcome,
+                milestone.confirmation_rung or "(none)", milestone.verified,
+                (milestone.url_after or "")[:120],
+                "JOURNEY COMPLETED" if milestone.verified else
+                "crossed but NOT verified: the far side was not a confirmation")
         return True
+
+    def _record_outcome_milestone(
+        self, record: CrossingRecord, grant: Optional[ApprovalGrant], result: Any,
+    ) -> Optional[OutcomeMilestone]:
+        """Mint the outcome milestone from what the crossing OBSERVED (T-AC-04).
+
+        Completion is the landing, not the click, so every field here comes off
+        the evidence bundle ``execute_submit_phase_b`` captured adjacent to the
+        click.  ``verified`` is computed by :class:`OutcomeMilestone` itself and
+        cannot be supplied - if it were an argument, some caller would eventually
+        pass ``True``.
+        """
+        evidence = dict(getattr(result, "crossing", None) or {})
+        if not evidence and not getattr(result, "submitted", False):
+            return None
+        attestation = self._guard.attestation
+        milestone = OutcomeMilestone(
+            milestone_id=milestone_id_for(record.crossing_id),
+            crossing_id=record.crossing_id,
+            approval_id=record.approval_id,
+            boundary_key=record.boundary_key,
+            control_name=record.control_name,
+            url_before=str(evidence.get("url_before") or record.url),
+            url_after=str(evidence.get("url_after") or ""),
+            navigated=bool(evidence.get("navigated")),
+            outcome=str(evidence.get("outcome") or getattr(result, "outcome", "") or ""),
+            confirmation_detail=str(evidence.get("confirmation_detail") or ""),
+            confirmation_rung=str(evidence.get("confirmation_rung") or ""),
+            state_fingerprint_before=record.state_fingerprint,
+            state_fingerprint_after=str(
+                getattr(getattr(result, "page_state", None), "state_id", "") or ""),
+            dom_digest_before=str(evidence.get("dom_digest_before") or ""),
+            dom_digest_after=str(evidence.get("dom_digest_after") or ""),
+            screenshot_before=str(evidence.get("screenshot_before") or ""),
+            screenshot_after=str(evidence.get("screenshot_after") or ""),
+            attestation_env_kind=str(getattr(attestation, "env_kind", "") or ""),
+            attestation_attributed_to=str(getattr(attestation, "attested_by", "") or ""),
+            refuse_pack_version=str(getattr(self._refuse_pack, "version", "") or ""),
+            guard_rule_id=str(evidence.get("guard_rule_id") or ""),
+            clicked_at_ms=int(evidence.get("clicked_at_ms") or 0),
+            observed_at_ms=int(evidence.get("observed_at_ms") or 0),
+            outcome_values=list(evidence.get("outcome_values") or []),
+        )
+        row = milestone.to_dict()
+        if grant is not None:
+            row["grant"] = grant.to_dict()
+        self._outcome_milestones.append(row)
+        self._emitter.emit_outcome_milestone(row)
+        return milestone
 
     async def _maybe_submit_next_action(
         self, *, controls: Sequence[dict[str, Any]], url: str, fingerprint: str,
@@ -288,9 +519,13 @@ class SubmitMixin:
                 continue
             if not _WIZARD_COMMIT_RE.search(name):
                 continue  # only a FORWARD commit action crosses a boundary here
-            if c.get("danger") and not self._submit_approve_all:
-                continue
-            if not self._submit_approved(name):
+            # Same single ladder as the form path — see _may_attempt_crossing.
+            # The `danger and not approve_all` line this replaces is the second
+            # of the three sites that made an irreversible control crossable
+            # ONLY under "*"; a grant naming this control now reaches the
+            # executor, and nothing else has been loosened.
+            if not self._may_attempt_crossing(
+                    name=name, control=c, url=url, fingerprint=fingerprint):
                 continue
             if await self._execute_approved_submit(
                     name=name, control=dict(c), url=url, fingerprint=fingerprint,

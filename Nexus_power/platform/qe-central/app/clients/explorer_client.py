@@ -78,6 +78,15 @@ class ExploreDispatchRequest(BaseModel):
     choice_overrides: dict[str, str] = Field(default_factory=dict)
     phase: str = Field(default="explore")
     submit_approvals: list[str] = Field(default_factory=list)
+    #: A4.3 / T-AC-02 — PER-CONTROL BOUNDARY APPROVALS.
+    #: ``submit_approvals`` is a flat list of LABELS. It cannot say "this
+    #: control, on this page, once", so it was never able to authorise an
+    #: irreversible action at least privilege — the only route to one was the
+    #: ``"*"`` blanket, which authorises every submit in the application.
+    #: Each entry here is ``{control, url?, state_fingerprint?, max_crossings?,
+    #: approval_id?, approved_by?, approved_at?}``. ``"*"`` is REFUSED at parse
+    #: time. Empty ⇒ behaviour is byte-identical to before this field existed.
+    boundary_approvals: list[dict] = Field(default_factory=list)
     #: TARGET MODE (R3 Mode 2) — path prefixes the crawl is CONFINED to (e.g.
     #: ["/quote"]): the operator-supplied journey is validated exhaustively and
     #: nothing else on the host is explored. Sourced from the app's
@@ -94,6 +103,19 @@ class ExploreDispatchRequest(BaseModel):
     extra_http_headers: dict = Field(default_factory=dict)
     http_credentials: dict | None = None
     env_assertion: dict | None = None
+    #: M1.7 / T-GW-03 — THIS DISPATCH IS A RESUME. Sent when qe-central
+    #: re-dispatches an interrupted crawl under its ORIGINAL ``crawl_id`` so the
+    #: worker continues the durable manifest prefix instead of starting a new
+    #: crawl over the top of it. It does not change how the crawl runs; it
+    #: changes what a MISSING prefix means — for a resume that is an honest
+    #: failure (``resume_unrecoverable``), never a zero-state "completed".
+    resume: bool = Field(default=False)
+    #: M1.7 / T-GW-04 — BUSINESS RULES earlier crawls of this app PROVED, from
+    #: ``services/rule_store.fetch_rules``. Tenant- and app-scoped by the query
+    #: that produced them, and VALUE-FREE (labels are product UI text, never
+    #: anything a user typed), so they are safe to log by count. Empty ⇒ every
+    #: blocked advance runs the full experiment, exactly as before.
+    known_rules: list[dict] = Field(default_factory=list)
     #: R4 MECHANIC MEMORY. ``{control_sig: mechanic_variant}`` — the proven
     #: ladder rung for each control this tenant has interacted with before.
     #: Value-free (only rung variant names like "click_element", "focus_space"),
@@ -147,6 +169,11 @@ def _log_safe(req: ExploreDispatchRequest) -> dict:
         # a crawl asks for something it should already know.
         "recalled_count": len(req.recalled_values or {}),
         "priors_count": len(req.field_priors or {}),
+        # Counts only: a rule names product UI text, but WHICH questions an
+        # application asks is still that tenant's business, so the log records
+        # how many travelled and never which.
+        "known_rules": len(req.known_rules or []),
+        "resume": bool(req.resume),
         "mechanics_count": len(req.proven_mechanics or {}),
         "data_mode": req.data_mode,
         "crawl_mode": req.crawl_mode,

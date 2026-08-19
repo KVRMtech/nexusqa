@@ -236,7 +236,12 @@ jobs:
           QEC_PROVING_GROUND_URL: http://127.0.0.1:8099/
           QEC_PROVING_GROUND_NAME: ${{ matrix.app }}
           QEC_PROVING_GROUND_MIN_CONTROLS: ${{ matrix.min_controls }}
-        run: python -m pytest tests/browser/test_proving_grounds.py -v -rs
+        # M1.4 / T-CF-04: the confirmation recognizer is asserted against the
+        # REAL rendered pages on the vkpower-life leg. It skips itself on the
+        # other two legs (they serve different applications), so one line here
+        # covers all three without a matrix condition.
+        run: |
+          python -m pytest tests/browser/test_proving_grounds.py                            tests/browser/test_m12_confirmation_live.py -v -rs
 
       - name: Application logs on failure
         if: failure()

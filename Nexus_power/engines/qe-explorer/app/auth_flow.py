@@ -121,7 +121,8 @@ from .budget import (STOP_MAX_REQUESTS, STOP_MAX_STATES, STOP_MAX_WALL_MS,
                      Budget, BudgetTracker)
 from .frontier import (Frontier, FrontierItem, _parse_plan_patterns,
                        _section_signature)
-from .fingerprint import state_fingerprint
+# Identity comes from ``self._fingerprinter`` (app.state_identity), not the
+# hasher — one authority for what a page state IS.
 from .state_identity import (_MAX_COVERAGE_STATES, _MAX_DANGER_NAMES,
                              _MAX_NETWORK_CALLS, _MAX_STATE_FIELDS,
                              StateFingerprinter, StateRecorder,
@@ -191,7 +192,7 @@ class AuthFlowMixin:
                                           url=login_obs.url)
         self._record_state(
             url=login_obs.url, title=login_obs.title, controls=login_controls,
-            fingerprint=result.before_fingerprint or state_fingerprint(
+            fingerprint=result.before_fingerprint or self._fingerprinter.fingerprint(
                 login_obs.url, login_controls, login_obs.dialog_flags),
             actions=result.actions, screenshots=[(login_png, login_ts)],
             last_seen_ms=self._clock.now_ms(),
@@ -385,7 +386,8 @@ class AuthFlowMixin:
 
             # The state we are clicking FROM. A navigation is a transition between
             # two states, so an edge needs a real source.
-            from_fp = state_fingerprint(cur_url, cur_controls, ()) if cur_url else ""
+            from_fp = (self._fingerprinter.fingerprint(
+                url=cur_url, controls=cur_controls, dialogs=()) if cur_url else "")
             try:
                 click_obs = await self._port.click(control)
             except Exception:

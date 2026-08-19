@@ -20,23 +20,28 @@
   },
   "INVENTORY_JS": {
     "blocks": {
-      "covered": 290,
-      "pct": 79.89,
-      "total": 363
+      "covered": 304,
+      "pct": 78.96,
+      "total": 385
     },
     "functions": {
-      "covered": 34,
+      "covered": 37,
       "pct": 100.0,
-      "total": 34
+      "total": 37
     },
     "lines": {
-      "covered": 714,
-      "pct": 99.86,
-      "total": 715
+      "covered": 786,
+      "pct": 99.24,
+      "total": 792
     },
     "snippet": "INVENTORY_JS",
     "uncovered_line_numbers": [
-      506
+      506,
+      573,
+      574,
+      576,
+      590,
+      591
     ]
   },
   "OPAQUE_JS": {

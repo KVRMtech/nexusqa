@@ -1,9 +1,9 @@
 """Flow ledger — the oracle_unavailable terminal and the per-step advance
 evidence (who decided each advance, and the rollups the audit reads).
 
-The law under test: ``completed`` derives from the terminal and ONLY
-``submit_boundary`` / ``no_advance`` complete — an infrastructure failure
-(``oracle_unavailable``) can never be reported as a covered journey.
+The law under test: ``completed`` derives from the terminal and only the
+COVERED terminals complete — an infrastructure failure (``oracle_unavailable``)
+can never be reported as a covered journey.
 """
 from __future__ import annotations
 
@@ -19,7 +19,8 @@ def _flow(terminal, steps=None):
 
 def test_completing_terminals_membership_is_pinned():
     assert flow_ledger.COMPLETING_TERMINALS == frozenset({
-        flow_ledger.TERMINAL_SUBMIT_BOUNDARY, flow_ledger.TERMINAL_NO_ADVANCE})
+        flow_ledger.TERMINAL_SUBMIT_BOUNDARY, flow_ledger.TERMINAL_NO_ADVANCE,
+        flow_ledger.TERMINAL_SUBMIT_CROSSED, flow_ledger.TERMINAL_CONFIRMATION})
 
 
 def test_oracle_unavailable_is_not_complete():

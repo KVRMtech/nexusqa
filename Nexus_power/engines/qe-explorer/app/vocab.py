@@ -66,6 +66,50 @@ NEGATIVE_OPTION_PACKS: dict[str, list[str]] = {
 }
 
 
+#: M1.3 — WALK PERSISTENCE vocabulary: controls whose whole purpose is to write
+#: server state WITHOUT moving the funnel forward, or to ask the server a
+#: question that only a write can answer (a quote, an eligibility decision).
+#:
+#: Deliberately OUTSIDE ``LANGUAGE_PACKS`` for the same reason as
+#: ``NEGATIVE_OPTION_PACKS``: that table is mirrored byte-for-byte in qe-central
+#: and pinned by parity tests in both suites, and this vocabulary has no
+#: counterpart there.
+#:
+#: MATCHING THIS LIST GRANTS NOTHING. It only makes a control ELIGIBLE to be
+#: actuated inside a walk-persistence window; the control must additionally
+#: carry no commit word, no advance word, and no refuse-pack irreversible verb,
+#: and the window itself opens only under a verified platform attestation. The
+#: list widens what the crawler will TRY, never what the guard will ALLOW.
+PERSISTENCE_PACKS: dict[str, list[str]] = {
+    "en": [
+        r"save\s*(?:as\s*)?draft", r"save\s*(?:my\s*)?progress",
+        r"save\s*(?:and|&)\s*(?:continue|finish|resume)\s*later",
+        r"save\s*for\s*later", r"save\s*(?:and|&)\s*exit", r"save\s*changes",
+        r"re\s*-?\s*calculate", r"calculate\s*(?:premium|quote|cost|total)?",
+        r"get\s*(?:a\s*)?quote", r"update\s*quote", r"price\s*it",
+        r"check\s*eligibility", r"check\s*availability",
+        r"validate\s*(?:address|details|information)?",
+        r"verify\s*(?:address|details|eligibility)",
+        r"estimate\s*(?:premium|cost)?",
+    ],
+}
+
+
+def compile_persistence_re() -> re.Pattern[str]:
+    """FULL-STRING match, like the negative-option rule and for the same reason.
+
+    A substring rule would read "Save Draft" inside "Save Draft and Submit
+    Application" and hand a commit control a persistence grant. The whole label
+    has to say persistence and nothing else."""
+    alts: list[str] = []
+    for pack in PERSISTENCE_PACKS.values():
+        alts.extend(pack)
+    return re.compile(r"^(?:" + "|".join(alts) + r")$", re.I)
+
+
+PERSISTENCE_RE = compile_persistence_re()
+
+
 def compile_negative_option_re() -> re.Pattern[str]:
     """FULL-STRING match — an option is negative only when the WHOLE label says
     so. A substring rule would read "None" inside "Nonexistent condition" and

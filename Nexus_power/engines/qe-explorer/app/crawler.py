@@ -35,14 +35,18 @@ import hashlib
 import heapq
 import logging
 import re
+import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Mapping, Optional, Sequence
 from urllib.parse import urljoin, urlsplit
 
+from . import completion
 from . import danger_signals
 from . import emit
 from . import matcher
 from . import perception
+from . import resume_state
+from . import rules
 from . import value_infer
 from . import vocab
 from .auth import (
@@ -80,6 +84,8 @@ from .crawl_constants import (  # noqa: F401  (re-exported public vocabulary)
     STOP_CANCELLED,
     STOP_COMPLETED,
     STOP_ERROR,
+    STOP_INVENTORY_FAILED,
+    STOP_RESUME_UNRECOVERABLE,
     TRAVERSAL_FULL,
     TRAVERSAL_OBSERVE,
     TRAVERSAL_POSTURES,
@@ -122,6 +128,7 @@ from .crawl_constants import (  # noqa: F401  (re-exported public vocabulary)
     _reach_target_labels,
     _segment_label,
     _url_key)
+from .boundary import (ApprovalRegistry, CrossingLedger, parse_grants)
 from .guard_context import GuardContext
 from .budget import (STOP_MAX_REQUESTS, STOP_MAX_STATES, STOP_MAX_WALL_MS,
                      Budget, BudgetTracker, TraversalBudget)
@@ -202,6 +209,21 @@ class CrawlSummary:
     #: What the crawl found vs could fill/advance (forms_found, fields_inferred,
     #: fields_needing_seed, submit_candidates) — the coverage the operator sees.
     coverage: Optional[dict[str, Any]] = None
+    #: M1.7 — the terminal DISPOSITION adjudicated from evidence
+    #: (:mod:`app.completion`): ``completed`` / ``failed`` / ``incomplete``.
+    #: ``stop_reason`` says WHAT happened; this says whether the crawl may be
+    #: believed.  qe-central reads this rather than re-deriving the judgement
+    #: from a string it would have to keep in sync.
+    disposition: str = ""
+    #: The evidence the disposition was adjudicated FROM, so the decision can be
+    #: re-checked by a reader who does not trust the process that made it.
+    evidence: Optional[dict[str, Any]] = None
+    #: True when a completion CLAIM was refused for want of evidence — the
+    #: milestone's "recovery must always be observable", applied to completion.
+    downgraded: bool = False
+    #: M1.7 / T-GW-04 — business rules this crawl PROVED, for qe-central to
+    #: persist as durable, reusable knowledge.
+    discovered_rules: Optional[list] = None
 
 
 # ─── The crawler ─────────────────────────────────────────────────────────────
@@ -243,6 +265,7 @@ class Crawler(AuthFlowMixin, SubmitMixin, DiscoveryMixin, WalkerMixin):
         allowed_hosts: Sequence[str] = (),
         max_relogins: int = 3,
         submit_approvals: Sequence[str] = (),
+        boundary_approvals: Any = (),
         wizard_enabled: bool = True,
         plan: Optional[dict[str, Any]] = None,
         scope_path_prefixes: Sequence[str] = (),
@@ -253,6 +276,16 @@ class Crawler(AuthFlowMixin, SubmitMixin, DiscoveryMixin, WalkerMixin):
         e2e_wizard_steps: int = _E2E_WIZARD_STEPS,
         e2e_wizard_advances: int = _E2E_WIZARD_ADVANCES,
         observe_only: bool = False,
+        #: M1.7 / T-GW-03 — this dispatch is a RESUME of an existing crawl id.
+        #: Changes nothing about HOW the crawl runs; it changes what a missing
+        #: durable prefix MEANS.  For a fresh crawl an empty prefix is normal; for
+        #: a resume it means the evidence we were told to continue is gone, and
+        #: continuing anyway would replace a real crawl with an empty one.
+        resume: bool = False,
+        #: M1.7 / T-GW-04 — business rules earlier crawls of THIS app proved,
+        #: already tenant- and app-scoped by qe-central.  Empty ⇒ byte-identical
+        #: pre-M1.7 behaviour: every blocked advance runs the full experiment.
+        known_rules: Sequence[Mapping[str, Any]] = (),
     ) -> None:
         self._port = port
         self.crawl_id = crawl_id
@@ -364,8 +397,16 @@ class Crawler(AuthFlowMixin, SubmitMixin, DiscoveryMixin, WalkerMixin):
             if p.startswith("/")
         ))
 
-        # Resume: seed visited/seq/frame from the durable manifest prefix.
-        prior = emit.scan_resume_state(emit.read_records(work_dir, crawl_id))
+        # ── RESUME (M1.7 / T-GW-03) ─────────────────────────────────────────
+        # ONE read of the durable prefix feeds BOTH halves of a resume: what the
+        # crawl had SEEN (visited fingerprints, sequence/frame indices, the clock
+        # offset) and what it still had TO DO (the frontier).  Reading the file
+        # twice would let the two halves describe different moments, which is a
+        # subtler version of exactly the bug being fixed.
+        records = emit.read_records(work_dir, crawl_id)
+        prior = emit.scan_resume_state(records)
+        self._resume_requested = bool(resume)
+        self._resume_plan = resume_state.rebuild(records, resuming=bool(resume))
         self._visited_fingerprints: set[str] = set(prior["visited_fingerprints"])
         self._next_seq = int(prior["next_sequence_index"])
         self._clock = emit.MonotonicClock(offset_ms=int(prior["last_timestamp_ms"]))
@@ -375,6 +416,14 @@ class Crawler(AuthFlowMixin, SubmitMixin, DiscoveryMixin, WalkerMixin):
         )
         self._tracker = BudgetTracker(budget, self._clock)
         self._frontier = Frontier(_parse_plan_patterns(plan))
+        # ── DURABLE LEARNING (M1.7 / T-GW-04) ───────────────────────────────
+        self._known_rules = rules.KnownRules(known_rules or ())
+        self._rule_ledger = rules.RuleLedger()
+        if self._known_rules:
+            logger.info(
+                "qec.rules.loaded crawl_id=%s known=%d — blocked advances proved "
+                "by earlier crawls of this app will be answered from knowledge "
+                "instead of re-run as experiments", crawl_id, len(self._known_rules))
         #: M0.3 collaborators. They read crawl state through the
         #: interfaces they declare (see state_identity.RecorderHost),
         #: so this object satisfies a contract rather than being one.
@@ -415,6 +464,12 @@ class Crawler(AuthFlowMixin, SubmitMixin, DiscoveryMixin, WalkerMixin):
         # login-wall block). The explore loop checks it and stops WITHOUT treating the
         # stop as cancellation or budget exhaustion.
         self._hard_stop = False
+        # ── M1.7 / T-GW-01 · unrecovered inventory reads ────────────────────
+        # Counted, not merely logged: it is an INPUT to the completion verdict
+        # (app.completion.adjudicate), so a crawl that failed to read a page can
+        # never claim completion no matter which code path reaches the end.
+        self._inventory_failures = 0
+        self._inventory_failure_detail = ""
         # NO-CREDENTIALS AUTH-WALL tracking — single-screen AND multi-step / username-
         # first. `_auth_flow_active`: we are inside the gated ENTRY login flow (anchored
         # at a redirected entry that landed on a dedicated auth step). `_captured_public`:
@@ -495,12 +550,72 @@ class Crawler(AuthFlowMixin, SubmitMixin, DiscoveryMixin, WalkerMixin):
         # the right ceremony for a live system and pure friction for a throwaway one,
         # which is what the attestation already says this is.
         self._submit_approve_all = "*" in self._submit_approvals
-        self._submit_enabled = bool(self._submit_approvals) and self._guard.attestation is not None
+        # NOTE: the enable gate is evaluated AFTER _boundary_grants is built
+        # (below) so a crawl authorised purely by per-control grants — the
+        # least-privilege shape, with no legacy label list at all — is not
+        # silently disabled by a check that only knows about the old seam.
         self._forms_submitted = 0
         #: Submits the APPLICATION confirmed (navigation or success), a subset
         #: of _forms_submitted. See the increment site.
         self._forms_confirmed = 0
         self._submitted_flows: set[str] = set()    # dedup key = f"{fingerprint}::{name}"
+        # ── A4.3 THE APPROVED SUBMIT CROSSING ────────────────────────────────
+        # The seam that did not exist. `submit_approvals` is a set of LABELS and
+        # cannot express "this control, on this page, once" — so crossing an
+        # irreversible control was only ever reachable through the "*" blanket,
+        # which authorises every submit in the application at once. These carry
+        # the per-control grant instead; see app.boundary for the full argument.
+        #
+        # Parse errors are RAISED, not swallowed: an approval that silently
+        # evaluates to nothing is indistinguishable from a crawl that stopped at
+        # the boundary for a good reason, and the operator would re-issue the
+        # same broken grant forever without being told why.
+        self._boundary_grants = ApprovalRegistry(parse_grants(boundary_approvals))
+        #: EXACTLY-ONCE. Reserved BEFORE the click, so a crash mid-crossing still
+        #: leaves the boundary spent. See CrossingLedger.
+        self._crossings = CrossingLedger()
+        #: The verified landings. THE canonical journey outcome (T-AC-04) — never
+        #: a counter, never the click.
+        self._outcome_milestones: list[dict[str, Any]] = []
+        #: Irreversible controls this crawl MET and did not cross — the list the
+        #: operator picks an approval from. Kept strictly apart from
+        #: _submit_candidates, which means "crossable without approval".
+        self._approvable_boundary: list[dict[str, Any]] = []
+        # Enabled by EITHER seam, and still only with a signed attestation:
+        # gate_submit refuses in SUBMIT phase without one, so this flag can
+        # never be the thing that authorises a mutation — it only decides
+        # whether the crawl bothers to walk up to the boundary at all.
+        self._submit_enabled = bool(
+            self._submit_approvals or self._boundary_grants
+        ) and self._guard.attestation is not None
+        # M1.3 CONTROLLED WALK PERSISTENCE. Bind the crawl's manifest sink + wall
+        # clock to the authorisation built in the request handler, so every
+        # permitted mutation lands in THIS crawl's evidence. Absent (no verified
+        # proof) this is a no-op and the crawl is byte-identical to before.
+        walk_auth = getattr(self._guard, "walk_authorization", None)
+        if walk_auth is not None:
+            walk_auth.attach(sink=self._emitter.emit_walk_mutation,
+                             wall_clock_ms=lambda: int(time.time() * 1000))
+        # M1.5 — hand the browser port the two things it cannot know on its own:
+        # the live journey context (for dialog intent) and this crawl's scope
+        # test (so a popup onto a third-party origin is recorded and never
+        # adopted). PUSHED, not imported: the port must keep no reference to the
+        # crawler's module. Reached through getattr so a scripted fake, the
+        # jsdom lane and every port written before M1.5 stay valid.
+        for verb, value in (("bind_journey_context", self._journey_context),
+                            ("bind_scope_check", self._in_scope)):
+            binder = getattr(self._port, verb, None)
+            if binder is not None:
+                try:
+                    binder(value)
+                except Exception:  # pragma: no cover — a bind failure is not fatal
+                    logger.warning("qec.crawler.%s_failed", verb, exc_info=True)
+        #: Persistence controls actuated, keyed f"{fingerprint}::{name}" — one
+        #: Save Draft per step, never a loop of them.
+        self._walk_persisted: set[str] = set()
+        #: Why walk persistence was NOT granted, for crawl_meta. Set by the
+        #: request handler; "" when it was granted.
+        self._walk_denied_reason: str = getattr(self._guard, "walk_denied_reason", "")
         # Questions answered on a bare-button questionnaire this crawl (by a stable
         # per-question signature), so a re-observe of the same page — which looks
         # identical because the buttons carry no selected-state — does not re-answer.
@@ -612,6 +727,18 @@ class Crawler(AuthFlowMixin, SubmitMixin, DiscoveryMixin, WalkerMixin):
         """Execute the crawl and return an honest :class:`CrawlSummary`."""
         self._emit_initial_meta()
         detail = ""
+        # -- M1.7 / T-GW-03 . A RESUME THAT CANNOT RESUME MUST NOT RUN --------
+        # Checked BEFORE the browser is driven. A resume whose durable prefix is
+        # gone has nothing to continue, and the one thing it must never do is
+        # walk the app from zero under an id that already owns evidence - that
+        # supersedes a real crawl with an empty capture, which is the most
+        # destructive shape this whole class of bug takes.
+        if self._resume_requested and not self._resume_plan.recoverable:
+            logger.error(
+                "qec.crawler.resume_unrecoverable crawl_id=%s - %s",
+                self.crawl_id, self._resume_plan.refusal)
+            self._stop_reason = STOP_RESUME_UNRECOVERABLE
+            return self._finish(self._resume_plan.refusal)
         try:
             root_url = await self._maybe_authenticate()
             if root_url is None:
@@ -635,15 +762,155 @@ class Crawler(AuthFlowMixin, SubmitMixin, DiscoveryMixin, WalkerMixin):
                         FrontierItem(url=root_url, depth=0),
                         key=_url_key(root_url),
                     )
+                # -- RESTORE THE WORK LIST (M1.7 / T-GW-03) ------------------
+                # AFTER the entry seeds, so a resumed crawl still re-establishes
+                # its entry point (the session is new; the app may land it
+                # elsewhere) and the seeds keys are already spent before the
+                # restore re-arms the rest. Nothing here can ADD reachability:
+                # every restored item was reachable when it was queued.
+                self._restore_frontier()
                 await self._explore_loop()
         except Exception as exc:  # honest terminal error — never a silent crash
             self._stop_reason = STOP_ERROR
             detail = str(exc)[:500]
             logger.exception("qec.crawler.run_failed crawl_id=%s", self.crawl_id)
 
-        if not self._stop_reason:
-            self._stop_reason = STOP_COMPLETED
+        # M1.5 — THE TERMINAL FLUSH. Whatever the crawl's exit path (completed,
+        # budget, cancelled, auth-required, or the exception handler above), any
+        # popup/dialog/download evidence still sitting in the port's buffer is
+        # written before the terminal meta. A dialog that was answered and never
+        # recorded would leave a crawl whose behaviour cannot be explained from
+        # its own manifest, which is exactly what this milestone exists to fix.
+        await self._drain_browser_events()
+        return self._finish(detail)
+
+    # -- durable resume (M1.7 / T-GW-03) --------------------------------------
+
+    def _restore_frontier(self) -> int:
+        """Re-queue the work list a previous run of THIS crawl id left behind.
+
+        The half of a resume that was never written.  ``emit.scan_resume_state``
+        restores what the crawl had SEEN; without this, what it still had TO DO
+        was rebuilt empty on every start - so the restored visited-set matched
+        the freshly-observed entry page, ``_expand`` took its unique-state early
+        return, the frontier drained, and the run reported ``completed`` with
+        zero states.  The recovery half actively CAUSED the zero-state
+        completion; this is the missing counterweight.
+
+        Order matters and is the reason this is a method rather than three lines
+        at the call site:
+
+          1. **Push the queued items first.**  Each carries the reach key it was
+             deduped under, so pushing re-arms exactly the key it owns.
+          2. **Then mark the consumed keys.**  These are routes an earlier run
+             already dequeued and expanded.  Marking them AFTER the pushes is
+             what stops a restored item from being rejected by a dedup set that
+             already contains its own key - which would silently drop the work
+             this method exists to restore.
+
+        Ordering within the queue is deliberately NOT restored from the file:
+        :meth:`app.frontier.Frontier.push` recomputes novelty rank and plan
+        priority from the key, so re-pushing reproduces the same traversal order
+        the original run would have had.  The snapshot only has to be COMPLETE,
+        not ordered.
+
+        Returns how many items were re-queued (0 for a fresh crawl).
+        """
+        plan = self._resume_plan
+        if not plan.frontier and not plan.spent_keys:
+            return 0
+        requeued = 0
+        for snapshot in plan.frontier:
+            item = FrontierItem(
+                url=snapshot.url, depth=snapshot.depth, priority=snapshot.priority,
+                discovered_via=snapshot.discovered_via,
+                parent_fingerprint=snapshot.parent_fingerprint,
+            )
+            if self._frontier.push(item, key=snapshot.key or _url_key(snapshot.url)):
+                requeued += 1
+        marked = self._frontier.mark_spent(plan.spent_keys)
+        logger.warning(
+            "qec.crawler.resume_restored crawl_id=%s requeued=%d spent_keys=%d "
+            "prior_states=%d prior_actions=%d - this run CONTINUES the crawl; it "
+            "does not start a new one",
+            self.crawl_id, requeued, marked, plan.prior_states, plan.prior_actions)
+        return requeued
+
+    def _emit_checkpoint(self) -> None:
+        """Persist the current work list into the durable manifest.
+
+        Written after every expansion, into the SAME append-only file the
+        evidence goes to.  One file means one crash-consistency story: a
+        checkpoint can never describe a moment the evidence does not, because
+        both are ordered by the same fsynced appends and
+        ``emit.read_records`` truncates both at the same partial line.
+
+        Best-effort by construction.  A checkpoint that cannot be written costs a
+        resume some re-walking; a checkpoint that KILLS a running crawl costs the
+        whole crawl.  The evidence records are the ones whose write failures are
+        allowed to propagate.
+        """
+        try:
+            self._emitter.emit_checkpoint(resume_state.build_checkpoint(
+                frontier=self._frontier.snapshot_items(),
+                visited=self._visited_fingerprints,
+                states=self._tracker.states,
+                actions=self._tracker.actions,
+                spent_keys=self._frontier.spent_keys(),
+                sequence_index=self._next_seq,
+            ))
+        except Exception:  # pragma: no cover - never fail a crawl for a checkpoint
+            logger.warning("qec.crawler.checkpoint_failed crawl_id=%s", self.crawl_id,
+                           exc_info=True)
+
+    # -- the terminal verdict (M1.7 / T-GW-01, T-GW-03) ------------------------
+
+    def _finish(self, detail: str) -> CrawlSummary:
+        """Adjudicate the terminal state from EVIDENCE and build the summary.
+
+        THE LINE THIS REPLACES was ``if not self._stop_reason: self._stop_reason
+        = STOP_COMPLETED`` - "nothing set a reason, therefore we finished". That
+        is an inference from an absence, and it is the last link in every
+        green-wash chain in the engine: a failed inventory read, an unrecoverable
+        resume and a crawl that never reached a page all arrive there with an
+        empty ``_stop_reason`` and all three used to claim ``completed``.
+
+        The claim now goes through :func:`app.completion.adjudicate`, which may
+        only ever pull a verdict DOWN: it can refuse ``completed`` for want of
+        evidence, and it can never turn a failure into a success or invent a
+        reason nobody set.
+
+        Reached from BOTH terminal paths - the normal exit and the early resume
+        refusal - so there is exactly one place a crawl can end. A second exit
+        that skipped the adjudicator would be a green-wash hole in the code that
+        closes green-wash holes.
+        """
+        claimed = self._stop_reason or STOP_COMPLETED
+        verdict = completion.adjudicate(
+            claimed,
+            completion.CrawlEvidence(
+                states=self._tracker.states,
+                actions=self._tracker.actions,
+                resumed_states=self._resume_plan.prior_states,
+                inventory_failures=self._inventory_failures,
+                resumed=self._resume_requested,
+                resume_broken=(self._resume_requested
+                               and not self._resume_plan.recoverable),
+            ),
+        )
+        self._stop_reason = verdict.stop_reason
         self._done = True
+        if verdict.downgraded:
+            # LOUD, and in the manifest below. A refused completion claim is the
+            # single most important thing an operator can be told about a crawl,
+            # and the failure mode being fixed here is precisely one that used to
+            # be silent.
+            logger.error(
+                "qec.crawler.completion_refused crawl_id=%s claimed=%s verdict=%s "
+                "evidence=%s - %s",
+                self.crawl_id, verdict.claimed_stop_reason, verdict.stop_reason,
+                verdict.evidence, verdict.detail)
+        detail = detail or verdict.detail or self._inventory_failure_detail
         self._emit_terminal_meta(detail)
         summary = CrawlSummary(
             crawl_id=self.crawl_id,
@@ -657,6 +924,10 @@ class Crawler(AuthFlowMixin, SubmitMixin, DiscoveryMixin, WalkerMixin):
             detail=detail,
             coverage=self._build_coverage(),
             max_depth_reached=self._max_depth_reached,
+            disposition=verdict.disposition,
+            evidence=dict(verdict.evidence),
+            downgraded=verdict.downgraded,
+            discovered_rules=self._rule_ledger.as_list(),
         )
         logger.info("qec.crawler.completed crawl_id=%s stop_reason=%s states=%d "
                     "actions=%d screenshots=%d guard_blocks=%d",
@@ -758,6 +1029,39 @@ class Crawler(AuthFlowMixin, SubmitMixin, DiscoveryMixin, WalkerMixin):
 
     async def _drain_network(self) -> list[dict[str, Any]]:
         return await self._meta_emitter.drain_network()
+
+    async def _drain_browser_events(self) -> int:
+        """M1.5 — flush the port's popup / dialog / download / page-close
+        evidence into the manifest.  Best-effort; never raises."""
+        try:
+            return await self._meta_emitter.drain_browser_events()
+        except Exception:  # pragma: no cover — evidence, never a crawl-stopper
+            logger.warning("qec.crawler.browser_event_flush_failed", exc_info=True)
+            return 0
+
+    def _journey_context(self) -> dict[str, Any]:
+        """The live journey context the browser port resolves dialog intent
+        against (M1.5 / T-ND-02).
+
+        A CALLABLE handed to the port rather than a value copied into it: the
+        guard phase changes several times per crawl (explore → auth → walk →
+        submit) and a snapshot taken at construction would be stale by the first
+        dialog.  The port never imports the crawler; the crawler pushes this
+        reader in, which keeps the dependency arrow pointing the same way M0.3
+        set it.
+        """
+        try:
+            phase = self._guard.phase.value
+        except Exception:
+            phase = ""
+        return {
+            "phase": phase,
+            "observe_only": self._observe_only,
+            # A4.3 grants. A native confirm is not an approval, so the ONLY way
+            # a destructive dialog is ever accepted is an operator grant that
+            # already exists for that control.
+            "approved_labels": tuple(sorted(self._submit_approvals)),
+        }
 
     async def _politeness_delay(self) -> None:
         rate = self._budget.rate_per_s

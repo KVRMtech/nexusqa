@@ -9,6 +9,14 @@ lingers in the DB and can wedge fleet accounting. This daemon turns that passive
 detection into an ACTIVE, leader-gated transition to a first-class ``stalled``
 terminal state with an honest reason.
 
+M1.7 / T-GW-02 — THIS DAEMON IS NOW A RECONCILER, NOT ONLY A GRAVEDIGGER.
+``stalled`` used to be written for two conditions that need opposite responses:
+a crawl whose worker really did die mid-walk, and a crawl that FINISHED
+perfectly and lost one HTTP POST. The explorer now writes a durable completion
+manifest to the shared volume BEFORE it attempts its callback, so the second
+case is answerable from disk — see :func:`orphaned_completion`. A stale row is
+reconciled from that record where one exists, and only reaped where none does.
+
 Never-green-wash + no-data-loss:
   * A reaped row is marked ``stalled`` with a truthful reason — never a fabricated
     ``completed``. An empty/failed crawl stays honestly RED.
@@ -208,6 +216,44 @@ async def _tenant_ids() -> list[str]:
         return ["__platform__"]
 
 
+#: Reconciled instead of reaped: the crawl DID finish, its evidence is on the
+#: volume, and only the notification was lost.
+_RECONCILED_REASON = "recovered: durable completion manifest re-delivered by the reaper"
+
+
+async def _reconcile_from_manifest(row: Mapping) -> bool:
+    """Try to COMPLETE a stale row from its durable completion record.
+
+    Returns True when the row was reconciled and must NOT be reaped.
+
+    The file reading and the re-delivery both live in
+    :mod:`app.controlplane.completion_recovery`; this is only the decision to
+    ask.  Every failure mode returns False, which means "reap it as before" —
+    a recovery that cannot run must degrade to the pre-M1.7 behaviour, never
+    leave a row un-terminalized and spinning in the UI forever.
+    """
+    crawl_id = str(_as_mapping(row.get("stats")).get("crawl_id") or "")
+    if not crawl_id:
+        return False
+    try:
+        from . import completion_recovery
+        body = completion_recovery.read_orphaned_completion(crawl_id)
+        if body is None:
+            return False
+        delivered = await completion_recovery.redeliver_completion(crawl_id, body)
+    except Exception as exc:                                # never break the sweep
+        logger.warning("qec.reaper.reconcile_failed",
+                       extra={"crawl_id": crawl_id, "error": str(exc)[:200]})
+        return False
+    if delivered:
+        logger.warning(
+            "qec.reaper.reconciled",
+            extra={"exploration_id": row.get("exploration_id"), "crawl_id": crawl_id,
+                   "note": _RECONCILED_REASON},
+        )
+    return bool(delivered)
+
+
 async def reap_stale_explorations(now: datetime | None = None) -> int:
     """Terminalize every stale non-terminal exploration, PER TENANT under RLS.
 
@@ -245,6 +291,17 @@ async def reap_stale_explorations(now: datetime | None = None) -> int:
                     if not stale and not await _worker_says_dead(
                         r, now=now, grace_s=grace_s,
                     ):
+                        continue
+                    # ── M1.7 / T-GW-02 · RECONCILE BEFORE YOU BURY ─────────
+                    # A crawl that FINISHED and lost its callback is not a
+                    # stall, and writing ``stalled`` on it discards a completed
+                    # crawl's evidence for want of one HTTP POST. Ask the volume
+                    # what actually happened before terminalizing the row.
+                    #
+                    # Checked here rather than earlier so the cost is paid only
+                    # for rows already judged stale — a healthy fleet does no
+                    # filesystem work at all.
+                    if await _reconcile_from_manifest(r):
                         continue
                     result = await conn.execute(text(
                         "UPDATE qe_explorations "

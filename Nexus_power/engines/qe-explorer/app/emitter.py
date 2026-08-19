@@ -69,6 +69,41 @@ class MetaEmitter:
             logger.warning("qec.crawler.network_drain_failed", exc_info=True)
             return []
 
+    async def drain_browser_events(self) -> int:
+        """M1.5 — drain the port's special-browser-event buffer and EMIT each
+        entry to the manifest.  Returns how many were written.
+
+        Unlike ``drain_network``, which hands its result back to the caller to
+        fold into a ``page_state``, these are emitted here and now.  A popup
+        adoption, a dialog answer and a captured download are facts about the
+        SESSION, not about one page's inventory — and emitting at the drain
+        keeps them in the manifest even when the visit that produced them ends
+        without recording a state (a de-duplicated fingerprint, an out-of-scope
+        landing, a budget stop).  Evidence that only survives the happy path is
+        the kind that is missing exactly when it is needed.
+
+        Optional + best-effort, exactly like its sibling: a fake or older
+        adapter with no such buffer is a clean no-op.
+        """
+        drain = getattr(self._c._port, "drain_browser_events", None)
+        if drain is None:
+            return 0
+        try:
+            events = list(await drain() or [])
+        except Exception:
+            logger.warning("qec.crawler.browser_event_drain_failed", exc_info=True)
+            return 0
+        written = 0
+        for event in events:
+            if not isinstance(event, dict):
+                continue
+            try:
+                self._c._emitter.emit_browser_event(event)
+                written += 1
+            except Exception:
+                logger.warning("qec.crawler.browser_event_emit_failed", exc_info=True)
+        return written
+
     def emit_initial_meta(self) -> None:
         self._c._emitter.emit_crawl_meta(self.meta(stop_reason=""))
 
@@ -95,11 +130,25 @@ class MetaEmitter:
             "guard_version": c._guard_version,
             "refuse_pack_version": c._refuse_pack_version,
             "attestation": self._attestation_dict(attestation),
+            # M1.3 — whether this crawl held a verified platform provisioning
+            # proof, and what it spent. Recorded on EVERY crawl, granted or not:
+            # a walk that stopped at a Save Draft has to be able to say why, and
+            # "no walk persistence was authorised" is the answer.
+            "walk_persistence": self._walk_persistence_dict(),
             "stop_reason": stop_reason,
         }
         if c._scope_path_prefixes:  # Target-mode audit trail (mapper ignores extras)
             meta["scope_path_prefixes"] = list(c._scope_path_prefixes)
         return meta
+
+
+    def _walk_persistence_dict(self) -> dict[str, Any]:
+        auth = getattr(self._c._guard, "walk_authorization", None)
+        if auth is None:
+            from .walk_persist import unauthorized_summary
+            return unauthorized_summary(
+                getattr(self._c, "_walk_denied_reason", "") or "not_attested")
+        return auth.summary()
 
 
 __all__ = ["EmitterHost", "MetaEmitter"]

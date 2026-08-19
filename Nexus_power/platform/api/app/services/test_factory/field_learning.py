@@ -36,7 +36,9 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Iterable, Mapping, Optional
 
-from sqlalchemy import Boolean, DateTime, Integer, LargeBinary, String, func, select, update
+from sqlalchemy import (Boolean, DateTime, Index, Integer, LargeBinary, String,
+                        UniqueConstraint, and_, func, or_, select, text,
+                        update)
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Mapped, mapped_column
@@ -76,9 +78,39 @@ def _new_id() -> str:
 
 class TpFieldMemoryRow(Base):
     __tablename__ = "tp_field_memory"
+    #: DECLARED HERE AS WELL AS IN THE DDL, because the ``ON CONFLICT`` clauses
+    #: below name them and a model that does not know about a constraint cannot
+    #: be relied on to reproduce production's behaviour anywhere else.  The
+    #: app-scoped one is PARTIAL, matching ``apply_field_memory_app_scope.sql``
+    #: exactly: legacy rows (``app_id = ''``) keep the per-artifact key they were
+    #: written under, and only rows that have been given an application take the
+    #: new one — which is what lets both keyings coexist without a bulk rewrite
+    #: that would have to re-wrap every existing blob.
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "artifact_id", "signature",
+                         name="tp_field_memory_uq"),
+        Index("tp_field_memory_app_uq", "tenant_id", "app_id", "signature",
+              unique=True,
+              postgresql_where=text("app_id <> ''"),
+              sqlite_where=text("app_id <> ''")),
+    )
     memory_id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_new_id)
     tenant_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    #: THE PER-RUN HANDLE.  Kept, because the ciphertext of every row written
+    #: before T-FE-09 is bound to it through its AAD, and rewriting the column
+    #: would make all of it undecryptable — a silent, total loss of everything
+    #: clients have already told us.  No longer the key.
     artifact_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    #: THE PER-APPLICATION SCOPE — the thing that is the same on every crawl.
+    #: A re-crawl MINTS A NEW ARTIFACT, so keying memory on the artifact meant
+    #: each crawl inherited exactly one generation of answers and then dropped
+    #: them, which from the outside reads exactly like learning that works.
+    #: Empty on legacy rows, which the reader still falls back to.
+    app_id: Mapped[str] = mapped_column(String(64), default="")
+    #: Bumped when the MEANING of a scope changes, so old rows are identifiable
+    #: rather than silently mismatched — the same discipline as
+    #: ``field_signature.SIGNATURE_VERSION``.
+    scope_version: Mapped[int] = mapped_column(Integer, default=1)
     signature: Mapped[str] = mapped_column(String(64), nullable=False)
     signature_version: Mapped[int] = mapped_column(Integer, default=1)
     semantic_type: Mapped[str] = mapped_column(String(48), default="unknown")
@@ -157,17 +189,40 @@ async def set_consent(session: AsyncSession, *, tenant_id: str, contribute: bool
 
 # ── P1 · tenant-private memory ───────────────────────────────────────────────
 
+#: Bumped only when the meaning of an application scope changes.
+SCOPE_VERSION = 1
+
+
 def _aad(tenant_id: str, artifact_id: str, signature: str) -> bytes:
-    """Bind the ciphertext to exactly one tenant, artifact and field, so a blob
-    lifted from one row cannot be decrypted in the context of another."""
+    """LEGACY AAD — binds a blob to one tenant, ARTIFACT and field.
+
+    Still needed, and will be for as long as any pre-T-FE-09 row exists: those
+    blobs were sealed with this string and can only ever be opened with it."""
     return f"fieldmem::{tenant_id}::{artifact_id}::{signature}".encode("utf-8")
+
+
+def _app_aad(tenant_id: str, app_id: str, signature: str) -> bytes:
+    """Bind the ciphertext to exactly one tenant, APPLICATION and field.
+
+    Deliberately a different STRING SHAPE from the legacy form, not merely a
+    different value in the same slot: a blob written under one scope must not be
+    openable under the other by accident, or the two keyings could silently
+    cross and a value learned for one application would decrypt for another."""
+    return (f"fieldmem/v{SCOPE_VERSION}::{tenant_id}::app::{app_id}"
+            f"::{signature}").encode("utf-8")
 
 
 async def remember(session: AsyncSession, *, envelope, tenant_id: str,
                    artifact_id: str, signature: str, value: str,
                    semantic_type: str = "unknown", field_label: str = "",
-                   signature_version: int = 1) -> dict:
+                   signature_version: int = 1, app_id: str = "") -> dict:
     """Store a value this client supplied, encrypted. Caller commits.
+
+    T-FE-09: written under the APPLICATION when one is supplied, so the next
+    crawl — which will carry a different artifact — can still find it.  Without
+    an ``app_id`` the old per-artifact behaviour is kept exactly, so a caller
+    that has not been updated degrades to what it always did rather than
+    failing.
 
     Only ``provided`` values are ever remembered. A synthesized value is
     regenerated identically from the identity seed every crawl, so storing it
@@ -182,77 +237,124 @@ async def remember(session: AsyncSession, *, envelope, tenant_id: str,
     if len(payload) > MAX_VALUE_BYTES:
         raise ValueError("field value too large to remember")
 
+    app_id = str(app_id or "").strip()
+    scoped = bool(app_id)
+    scope_filter = (TpFieldMemoryRow.app_id == app_id) if scoped else (
+        TpFieldMemoryRow.artifact_id == artifact_id)
+
     count = (await session.execute(
         select(func.count()).select_from(TpFieldMemoryRow).where(
-            TpFieldMemoryRow.tenant_id == tenant_id,
-            TpFieldMemoryRow.artifact_id == artifact_id))).scalar() or 0
+            TpFieldMemoryRow.tenant_id == tenant_id, scope_filter))).scalar() or 0
     existing = (await session.execute(select(TpFieldMemoryRow.memory_id).where(
-        TpFieldMemoryRow.tenant_id == tenant_id,
-        TpFieldMemoryRow.artifact_id == artifact_id,
+        TpFieldMemoryRow.tenant_id == tenant_id, scope_filter,
         TpFieldMemoryRow.signature == signature))).scalar_one_or_none()
     if existing is None and count >= MAX_MEMORIES_PER_ARTIFACT:
         raise ValueError("field-memory limit reached for this application")
 
-    blob = await envelope.encrypt(tenant_id, payload,
-                                  aad=_aad(tenant_id, artifact_id, signature))
+    aad = (_app_aad(tenant_id, app_id, signature) if scoped
+           else _aad(tenant_id, artifact_id, signature))
+    blob = await envelope.encrypt(tenant_id, payload, aad=aad)
     raw = blob.to_bytes()
+    conflict_on = ([TpFieldMemoryRow.tenant_id, TpFieldMemoryRow.app_id,
+                    TpFieldMemoryRow.signature] if scoped else
+                   [TpFieldMemoryRow.tenant_id, TpFieldMemoryRow.artifact_id,
+                    TpFieldMemoryRow.signature])
     stmt = (pg_insert(TpFieldMemoryRow).values(
         memory_id=existing or _new_id(), tenant_id=tenant_id, artifact_id=artifact_id,
+        app_id=app_id, scope_version=SCOPE_VERSION,
         signature=signature, signature_version=int(signature_version or 1),
         semantic_type=_coerce_type(semantic_type), field_label=str(field_label or "")[:300],
         value_blob=raw, provenance="provided", created_at=_utc_now(), updated_at=_utc_now())
         .on_conflict_do_update(
-            index_elements=[TpFieldMemoryRow.tenant_id, TpFieldMemoryRow.artifact_id,
-                            TpFieldMemoryRow.signature],
+            index_elements=conflict_on,
+            # THE APP-SCOPED KEY IS A PARTIAL UNIQUE INDEX, so the upsert has to
+            # restate its predicate or the database cannot infer which index is
+            # meant.  Postgres raises "no unique or exclusion constraint matching
+            # the ON CONFLICT specification" without it — i.e. this is a
+            # production correctness requirement, not a test-database quirk.
+            index_where=(text("app_id <> ''") if scoped else None),
             # A rewritten value has NOT been proven against the app, so the accept
             # /reject history of the value it replaced must not carry over — that
             # history described a different string.
             set_={"value_blob": raw, "semantic_type": _coerce_type(semantic_type),
                   "field_label": str(field_label or "")[:300], "provenance": "provided",
                   "accept_count": 0, "reject_count": 0, "last_outcome": "",
-                  "updated_at": _utc_now()}))
+                  "app_id": app_id, "scope_version": SCOPE_VERSION,
+                  "artifact_id": artifact_id, "updated_at": _utc_now()}))
     await session.execute(stmt)
     return {"signature": signature, "semantic_type": _coerce_type(semantic_type),
             "remembered": True}
 
 
 async def recall(session: AsyncSession, *, envelope, tenant_id: str,
-                 artifact_id: str) -> dict[str, str]:
+                 artifact_id: str, app_id: str = "") -> dict[str, str]:
     """Every remembered value for this application, as ``{signature: value}``.
 
-    Never raises: a crawl that cannot read its memory must still run, filling what
-    it can and asking for the rest — degraded, never broken. A memory the
+    T-FE-09 · TWO SCOPES, READ IN ONE PASS.  Rows written under the APPLICATION
+    are the durable ones and win.  Rows written under an ARTIFACT are what every
+    crawl before this milestone produced, and they are read too — with their own
+    original AAD, because that is the only string that opens them.  A legacy row
+    is therefore inherited exactly once more and then superseded the next time
+    the field is remembered, which is a migration that costs nothing and cannot
+    lose anything.
+
+    Never raises: a crawl that cannot read its memory must still run, filling
+    what it can and asking for the rest — degraded, never broken.  A memory the
     application has REJECTED more often than it accepted is withheld, because a
     remembered wrong answer is worse than no answer: it looks like an answer."""
     if envelope is None:
         return {}
+    app_id = str(app_id or "").strip()
     try:
+        # THE LEGACY SCOPE IS RESTRICTED TO LEGACY ROWS.  A row that already
+        # carries an application belongs to that application and to no other,
+        # even when the artifact happens to match — otherwise a value learned
+        # for one product could be returned to a crawl of a different one, which
+        # is the same class of leak as crossing tenants and just as unrecoverable.
+        scopes = []
+        if artifact_id:
+            scopes.append(and_(TpFieldMemoryRow.artifact_id == artifact_id,
+                               TpFieldMemoryRow.app_id == ""))
+        if app_id:
+            scopes.append(TpFieldMemoryRow.app_id == app_id)
+        if not scopes:
+            return {}
         rows = (await session.execute(select(TpFieldMemoryRow).where(
-            TpFieldMemoryRow.tenant_id == tenant_id,
-            TpFieldMemoryRow.artifact_id == artifact_id))).scalars().all()
+            TpFieldMemoryRow.tenant_id == tenant_id, or_(*scopes)))).scalars().all()
     except Exception as exc:
         _logger.warning("test_factory.field_memory.recall_failed error=%s", str(exc)[:200])
         return {}
+    # App-scoped rows last, so that where both exist the durable one overwrites
+    # the inherited one rather than the other way round.
+    rows = sorted(rows, key=lambda r: bool(str(r.app_id or "").strip()))
     out: dict[str, str] = {}
+    legacy = 0
     for r in rows:
         if r.reject_count > r.accept_count and r.reject_count > 0:
             continue
+        row_app = str(r.app_id or "").strip()
+        expected = (_app_aad(tenant_id, row_app, r.signature) if row_app
+                    else _aad(tenant_id, r.artifact_id, r.signature))
         try:
             # The envelope takes a parsed blob and names the AAD `expected_aad` —
             # passing raw bytes silently fails every decrypt, which looks exactly
             # like "we remembered nothing" and is impossible to tell apart from an
             # empty memory without reading the row.
             blob = EnvelopeBlob.from_bytes(bytes(r.value_blob))
-            plain = await envelope.decrypt(
-                tenant_id, blob,
-                expected_aad=_aad(tenant_id, artifact_id, r.signature))
+            plain = await envelope.decrypt(tenant_id, blob, expected_aad=expected)
             out[r.signature] = plain.decode("utf-8")
+            legacy += 0 if row_app else 1
         except Exception as exc:
             _logger.warning("test_factory.field_memory.decrypt_failed sig=%s err=%s",
                             r.signature[:12], str(exc)[:160])
             # A blob we cannot open is a field we must ask about again. Silently
             # skipping is right; raising would strand the whole crawl.
             continue
+    if legacy:
+        _logger.info(
+            "test_factory.field_memory.legacy_scope_read app=%s legacy_rows=%d — "
+            "inherited from the artifact-keyed scope; they become durable the "
+            "next time the field is remembered", app_id[:32], legacy)
     return out
 
 
@@ -291,7 +393,7 @@ async def forget(session: AsyncSession, *, tenant_id: str, artifact_id: str,
 # ── P5 · did the application actually accept it? ─────────────────────────────
 
 async def record_outcome(session: AsyncSession, *, tenant_id: str, artifact_id: str,
-                         signature: str, accepted: bool) -> None:
+                         signature: str, accepted: bool, app_id: str = "") -> None:
     """Close the loop on the APPLICATION'S verdict, not on our optimism.
 
     A recalled value that the app rejects is demoted, and once it has been
@@ -299,9 +401,21 @@ async def record_outcome(session: AsyncSession, *, tenant_id: str, artifact_id: 
     field returns to the residue ask instead of silently poisoning every future
     crawl. Caller commits."""
     col = TpFieldMemoryRow.accept_count if accepted else TpFieldMemoryRow.reject_count
+    app_id = str(app_id or "").strip()
+    # The verdict belongs to whichever scope the value was READ from, and recall
+    # reads both.  Updating only one would let a value the application rejected
+    # keep being offered from the other scope for ever.
+    scopes = []
+    if artifact_id:
+        scopes.append(and_(TpFieldMemoryRow.artifact_id == artifact_id,
+                           TpFieldMemoryRow.app_id == ""))
+    if app_id:
+        scopes.append(TpFieldMemoryRow.app_id == app_id)
+    if not scopes:
+        return
     await session.execute(update(TpFieldMemoryRow).where(
         TpFieldMemoryRow.tenant_id == tenant_id,
-        TpFieldMemoryRow.artifact_id == artifact_id,
+        or_(*scopes),
         TpFieldMemoryRow.signature == signature,
     ).values({col: col + 1,
               TpFieldMemoryRow.last_outcome: "accepted" if accepted else "rejected",

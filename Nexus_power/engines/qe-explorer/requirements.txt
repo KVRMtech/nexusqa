@@ -22,3 +22,8 @@ prometheus-client==0.21.1
 # pin it explicitly (matching the base's browser version) so the crawler can
 # ``import playwright``. pip installs only the package; the browsers come from the base.
 playwright==1.48.0
+# M1.3 - Ed25519 verification of platform-issued disposable-environment
+# attestations (app/attest.py). VERIFICATION ONLY: this service holds public
+# keys and never a private half, so it cannot mint a proof it would accept.
+# Pinned exactly, like every other dependency in this container.
+cryptography==43.0.1

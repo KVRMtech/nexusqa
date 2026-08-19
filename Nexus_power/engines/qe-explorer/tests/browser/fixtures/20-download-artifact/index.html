@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Fixture 20 — download artifact</title></head>
+<body>
+  <main>
+    <h1>Your documents</h1>
+
+    <!-- SUBJECT A: a SERVER-SIDE file behind a download anchor. Chromium starts
+         a real download; the `download` attribute is what makes it a download
+         rather than a navigation. The crawler must end up with the actual PDF
+         bytes on disk, not a log line saying one was offered. -->
+    <a id="dl-packet" href="sales-packet.pdf" download="sales-packet.pdf">Download Sales Packet</a>
+
+    <!-- SUBJECT B: a CLIENT-GENERATED download. There is no href and no file on
+         the server — the bytes are minted in the page and handed to a synthetic
+         anchor. This is how every "Export to CSV" button in an enterprise app
+         works, and it is the case where nothing in the DOM says a download is
+         about to happen: capture sees a plain <button>. Only the browser's
+         download event can tell. -->
+    <button type="button" id="btn-export">Export Policy Schedule</button>
+
+    <!-- SUBJECT C: a download whose suggested filename is HOSTILE. The name is
+         application-controlled text and must never be used as a path component
+         unreduced; it has to land inside the artifact directory. -->
+    <button type="button" id="btn-traversal">Export Audit Log</button>
+
+    <!-- SUBJECT D: an ordinary in-app link, so the fixture proves a navigation
+         is still a navigation and not mistaken for a download. -->
+    <a id="nav-claims" href="claims.html">Claims</a>
+
+    <div role="status" id="export-status">Ready</div>
+  </main>
+
+  <script>
+    function offer(name, text, mime) {
+      var blob = new Blob([text], {type: mime});
+      var url = URL.createObjectURL(blob);
+      var a = document.createElement('a');
+      a.href = url;
+      a.download = name;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      // Revoked on a task turn, not synchronously: revoking before the browser
+      // has read the blob cancels the very download this fixture exists to prove.
+      setTimeout(function () { URL.revokeObjectURL(url); }, 4000);
+      document.getElementById('export-status').textContent = 'Exported ' + name;
+    }
+
+    document.getElementById('btn-export').addEventListener('click', function () {
+      offer('policy-schedule.csv',
+            'policy,holder,face_amount\n88-2201,Fictional Applicant,250000\n',
+            'text/csv');
+    });
+
+    document.getElementById('btn-traversal').addEventListener('click', function () {
+      offer('../../../etc/audit-log.txt',
+            'audit entry 1\naudit entry 2\n',
+            'text/plain');
+    });
+  </script>
+</body>
+</html>

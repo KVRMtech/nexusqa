@@ -35,12 +35,14 @@ import logging
 import os
 import re
 import tempfile
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from datetime import date
 from typing import Any, Callable, Mapping, MutableMapping, Optional, Sequence
 from urllib.parse import urlsplit
 
 from . import emit
+from .boundary import (RUNG_DIALOG, RUNG_NAVIGATION,
+                       confirmation_transition, dom_digest)
 from .browser import (
     OUTCOME_CONFIRMATION,
     OUTCOME_NAVIGATION,
@@ -48,6 +50,12 @@ from .browser import (
     classify_submit_after,
 )
 from . import field_semantics, field_signature, field_values
+from .fill_engine import constraints as fe_constraints
+from .fill_engine import generator as fe_generator
+from .fill_engine import widgets as fe_widgets
+from .fill_engine.driver import ControlFillDriver, read_page_alerts
+from .fill_engine.repair import RepairBudget, RepairOutcome, repair_loop
+from .fill_engine.validation import PageAlertFilter
 from .identity_pack import Identity, derive as derive_identity
 from .guard import GuardDecision, Phase, classify_request, registrable_domain
 from .inventory import target_kind_for
@@ -161,6 +169,29 @@ class FormFillResult:
     #: refused: the answer may well be in the form while the evidence says it is
     #: not, which is the one direction this product must never report loosely.
     open_choice_unverified: int = 0
+    #: T-FE-01 — fields the application REJECTED and the repair loop then got
+    #: accepted.  The numerator of the repair-success rate; it was structurally
+    #: zero before, because there was no way back from a rejection.
+    repaired: int = 0
+    #: Fields accepted on the FIRST commit.  Constraint-aware generation is
+    #: supposed to make this the overwhelming majority — repair is the
+    #: exception, not the path — so it is measured rather than asserted.
+    first_pass: int = 0
+    #: Fields the loop could not get accepted within its budget, and WHY, so an
+    #: unrepairable field is a named finding rather than a silent gap.
+    repair_failed: list[dict[str, Any]] = field(default_factory=list)
+    #: T-FE-02 — page alerts held back as stale, consenting or informational.
+    #: The direct measure of the false-positive class control-scoped validation
+    #: removes: it used to be zero by construction, and every one of those
+    #: alerts wrongly failed a field.
+    alerts_suppressed: int = 0
+    #: How many times the expensive verdict read actually ran.  The latency
+    #: claim ("free on a clean fill") is a measurement, not a promise.
+    verdict_reads: int = 0
+    #: Widget classes met, and how many of each were ANSWERED — so a class that
+    #: silently stops working is visible instead of merely absent.
+    widgets_met: dict[str, int] = field(default_factory=dict)
+    widgets_answered: dict[str, int] = field(default_factory=dict)
     #: PER-FIELD LEDGER — one entry for every fillable control the crawl met, filled
     #: or not: {name, signature, semantic_type, basis, provenance, filled, sensitive}.
     #: Never a value. This is what makes the residue ask specific ("give me these
@@ -665,6 +696,12 @@ async def fill_form_phase_a(
     priors: Optional[Mapping[str, Any]] = None,
     data_mode: str = field_values.DATA_MODE_USER,
     choice_overrides: Optional[Mapping[str, str]] = None,
+    #: T-FE-01 — how many COMMITS one field may take, the first one included.
+    #: Bounded on purpose: an unbounded loop against an application that rejects
+    #: everything is a denial of service aimed at our own crawl.  Three means one
+    #: generation and at most two evidence-driven repairs, which is enough for
+    #: every constraint an application states honestly.
+    repair_budget: RepairBudget = RepairBudget(),
 ) -> FormFillResult:
     """Phase A: fill fillable controls from ``answer_key``, read back, STOP.
 
@@ -679,6 +716,21 @@ async def fill_form_phase_a(
     # form whose postcode belongs to a different state than its region — internally
     # inconsistent in exactly the way an application validates.
     identity = identity or derive_identity(state_id or "qec")
+    # And one coherent HOUSEHOLD around that person, so a field about a spouse,
+    # a beneficiary, a child or an employer is answered from the right member
+    # rather than from the applicant.
+    persona = field_values.persona_for(identity)
+
+    # T-FE-02 — EVERY ALERT ALREADY ON THE PAGE IS STALE FOR EVERY FILL BELOW.
+    #
+    # Snapshotting here, once, is the whole mechanism.  A cookie banner, a
+    # session notice or an error left over from the previous step is in this set
+    # by construction, so it can never be read as a verdict on a value that had
+    # not been typed when it appeared.  The old page-wide read could not express
+    # "already there", which is why one real failure was reported as ten and a
+    # consent banner failed every fill on the page.
+    alerts = PageAlertFilter(await read_page_alerts(port))
+
     for control in controls:
         kind = _norm(control.get("kind"))
         name = str(control.get("name") or "")
@@ -718,6 +770,14 @@ async def fill_form_phase_a(
                                  priors=priors, data_mode=data_mode,
                                  choice_overrides=choice_overrides)
         entry, value = decision["entry"], decision["value"]
+
+        # WHICH WIDGET THIS IS.  Counted whether or not it is answered, so a
+        # class that quietly stops working shows up as a coverage hole rather
+        # than as an absence nobody can see.
+        widget = fe_widgets.classify_widget(control, kind=kind)
+        entry["widget"] = widget.name
+        result.widgets_met[widget.name] = result.widgets_met.get(widget.name, 0) + 1
+
         if value is None:
             # A radio-group SIBLING is not a gap: its question was answered by
             # the member that IS the answer, and the browser owns exclusivity.
@@ -729,8 +789,13 @@ async def fill_form_phase_a(
             result.field_ledger.append(entry)
             continue
 
-        action, mechanic = await _fill_one(port, control, kind, value, clock,
-                                             phase=phase, state_id=state_id)
+        # ── T-FE-01: GENERATE → FILL → READ THE VERDICT → REPAIR ─────────
+        outcome = await _fill_with_repair(
+            port, control, kind, value, clock, phase=phase, state_id=state_id,
+            alerts=alerts, persona=persona, entry=entry, result=result,
+            data_mode=data_mode, repair_budget=repair_budget)
+        action, mechanic = outcome.action, outcome.mechanic
+
         if action is None:
             entry.update(filled=False, provenance=PROV_INTENT_UNMET)
             result.unfilled_fields.append(name)
@@ -744,6 +809,9 @@ async def fill_form_phase_a(
             continue
         if mechanic:
             entry["mechanic"] = mechanic
+        value = outcome.value if outcome.value is not None else value
+        result.widgets_answered[widget.name] = (
+            result.widgets_answered.get(widget.name, 0) + 1)
         # WHAT THE FORM ACTUALLY HOLDS, not what we asked it to hold. The two
         # differ whenever the widget decided: an open-and-pick choice is resolved
         # from the options the widget itself offered, so the requested value can
@@ -787,10 +855,144 @@ async def fill_form_phase_a(
             result.inferred += 1
             result.inferred_fields.append(name)
 
+    result.alerts_suppressed = alerts.suppressed
     logger.info("qec.forms.phase_a filled=%d inferred=%d intent_unmet=%d flow_candidates=%d dangerous=%d unfilled=%d",
                 result.filled, result.inferred, result.intent_unmet, len(result.flow_candidates),
                 sum(1 for f in result.flow_candidates if f.danger), len(result.unfilled_fields))
+    logger.info(
+        "qec.forms.repair first_pass=%d repaired=%d unrepairable=%d "
+        "alerts_suppressed=%d verdict_reads=%d widgets=%s",
+        result.first_pass, result.repaired, len(result.repair_failed),
+        result.alerts_suppressed, result.verdict_reads,
+        result.widgets_answered)
     return result
+
+
+@dataclass
+class _FillOutcome:
+    """What one control's fill-and-repair produced, for the caller's ledger."""
+
+    action: Optional[emit.ActionRecord]
+    mechanic: str = ""
+    value: Optional[str] = None
+
+
+async def _fill_with_repair(
+    port: BrowserPort,
+    control: Mapping[str, Any],
+    kind: str,
+    value: str,
+    clock: emit.MonotonicClock,
+    *,
+    phase: str,
+    state_id: str,
+    alerts: PageAlertFilter,
+    persona: Any,
+    entry: dict[str, Any],
+    result: FormFillResult,
+    data_mode: str,
+    repair_budget: RepairBudget,
+) -> _FillOutcome:
+    """Commit one value, read the application's verdict, and repair on evidence.
+
+    THE ARROW THAT DID NOT EXIST.  The old path called :func:`_fill_one` once: a
+    value the application rejected ended the field, the field ended the page, and
+    the crawl reported the number of fields it had ATTEMPTED — which is the
+    metric that made the whole thing look like it was working.
+
+    Two rules govern every retry here, and they are what make this a repair loop
+    rather than a retry loop:
+
+      * a retry must be CAUSED by an observed, control-anchored rejection — no
+        signal, no retry;
+      * a retry must CHANGE something that rejection named, and say so.
+
+    Both live in :func:`app.fill_engine.repair.repair_loop`; this function
+    supplies the two things that loop cannot have — a way to commit through the
+    existing mechanic ladder, and a way to ask the generator for a better value
+    under the constraints the application has just tightened.
+
+    WHOSE VALUE MAY BE REPLACED.  Only a SYNTHESIZED one.  A value the client
+    supplied in their answer key, remembered from a previous crawl, or already
+    committed earlier in this journey is not ours to overwrite: if the
+    application rejects it, that rejection IS the finding, and quietly
+    substituting a generated value would hide the one thing worth reporting.
+    Those provenances therefore regenerate to nothing, and the loop stops with
+    the rejection recorded against the value that actually failed.
+    """
+    holder: dict[str, Any] = {"action": None, "mechanic": ""}
+
+    async def _commit(ctl: Mapping[str, Any], candidate: str):
+        action, mechanic = await _fill_one(port, ctl, kind, candidate, clock,
+                                           phase=phase, state_id=state_id)
+        holder["action"], holder["mechanic"] = action, mechanic
+        if action is None:
+            return None, False, (mechanic or "fill_refused")
+        committed = (str(action.value) if action.value is not None else None)
+        return committed, True, ""
+
+    driver = ControlFillDriver(port, _commit, alerts)
+    cons = fe_constraints.extract(control, kind=kind)
+
+    provenance = str(entry.get("provenance") or "")
+    repairable = provenance == PROV_SYNTHESIZED
+    semantic = str(entry.get("semantic_type") or "")
+
+    def _regenerate(tightened: fe_constraints.Constraints,
+                    refused: "frozenset[str]") -> Optional[str]:
+        if not repairable:
+            return None
+        candidate = fe_generator.generate(
+            semantic, control, persona, kind=kind,
+            name=str(control.get("name") or ""), cons=tightened,
+            answer_choices=(_norm(data_mode) == field_values.DATA_MODE_AGENT))
+        if candidate.value is None or candidate.value in refused:
+            return None
+        entry["repair_rationale"] = candidate.rationale[:300]
+        return candidate.value
+
+    outcome: RepairOutcome = await repair_loop(
+        driver, control, first_value=value, cons=cons,
+        regenerate=_regenerate, budget=repair_budget,
+        first_reason=str(entry.get("rationale")
+                         or "the value the generator produced for this field"))
+
+    result.verdict_reads += driver.verdict_reads
+    if len(outcome.attempts) > 1 or not outcome.accepted:
+        # Only recorded when something actually happened, so the ledger of a
+        # clean page stays the size it always was.
+        entry["repair"] = outcome.as_dict()
+
+    if outcome.accepted:
+        if outcome.first_pass:
+            result.first_pass += 1
+        else:
+            result.repaired += 1
+            logger.info(
+                "qec.forms.repaired control=%r attempts=%d — %s",
+                str(control.get("name") or "")[:40], len(outcome.attempts),
+                outcome.explanation()[:300])
+        return _FillOutcome(holder["action"], holder["mechanic"], outcome.value)
+
+    # NOT ACCEPTED.  Say which field, how hard we tried, and why we stopped —
+    # an unrepairable field is a finding the operator can act on, and a silent
+    # one is the failure mode this whole milestone exists to remove.
+    result.repair_failed.append({
+        "name": str(control.get("name") or "")[:120],
+        "attempts": len(outcome.attempts),
+        "stop_reason": outcome.stop_reason,
+        "explanation": outcome.explanation()[:400],
+    })
+    logger.warning(
+        "qec.forms.unrepairable control=%r attempts=%d stop=%s — %s",
+        str(control.get("name") or "")[:40], len(outcome.attempts),
+        outcome.stop_reason, outcome.explanation()[:300])
+    # A MECHANICAL refusal keeps its old meaning exactly: the widget would not
+    # take the value, which the caller records as intent_unmet.  A value the
+    # APPLICATION rejected is different in kind, and the ledger says so.
+    if outcome.stop_reason.startswith("widget_refused") or not outcome.attempts:
+        return _FillOutcome(None, holder["mechanic"])
+    return _FillOutcome(None, holder["mechanic"])
 
 
 def _is_file(control: Mapping[str, Any]) -> bool:
@@ -1148,6 +1350,13 @@ class SubmitResult:
     action: Optional[emit.ActionRecord] = None
     page_state: Optional[emit.PageStateRecord] = None
     baseline: Optional[emit.ScreenshotRecord] = None
+    #: A4.3 / T-AC-03 — everything OBSERVED around the one irreversible click,
+    #: captured adjacent to it rather than reconstructed by the caller. A
+    #: crossing whose evidence is assembled two layers up describes the page the
+    #: caller was standing on, not the page the click happened on: this path
+    #: RE-NAVIGATES and RE-FILLS before clicking, so those are different pages.
+    #: Empty on a refusal (nothing happened, so there is nothing to observe).
+    crossing: dict[str, Any] = field(default_factory=dict)
 
 
 def gate_submit(
@@ -1264,9 +1473,46 @@ async def execute_submit_phase_b(
                 phase=Phase.SUBMIT.value, state_id=state_id,
             )
 
+    # ── Instrument the BEFORE side, immediately adjacent to the click ────────
+    # Adjacent, because this function may have re-navigated and re-filled since
+    # the caller last looked at the page. Everything here is best-effort: a port
+    # that cannot answer yields an empty reading, which shows up as a weaker
+    # milestone, never as a crash and never as a fabricated one.
+    before = await _capture_crossing_side(port)
+    clicked_at_ms = clock.now_ms()
+    shot_before = await _capture_baseline(port, emitter, clock, first_seen)
+
     # ── Submit + observe the grounded terminal outcome ───────────────────────
     observation = await port.click(control)
+    after = await _capture_crossing_side(port)
+    observed_at_ms = clock.now_ms()
+
+    # THE MISSING HALF OF classify_submit_after.  Its ``confirmation`` branch
+    # reads ``obs.confirmation_detail``, which no adapter has ever written — so
+    # a same-page success was unclassifiable and every in-place submit scored
+    # ``dom_changed``/``confirmed=False`` forever. The detail is derived here as
+    # a TRANSITION (text that appeared, never text that was merely present), so
+    # a page that says "you will receive a confirmation" before anything happens
+    # still cannot green-wash itself.
+    confirm_detail, confirm_rung = confirmation_transition(
+        before["texts"], after["texts"],
+        aria_before=before["status"], aria_after=after["status"],
+        # M1.4 — a button is an offer, not a statement. The far side's own
+        # "Print Confirmation" / "Confirm Order" label carries the success
+        # vocabulary and declares nothing; the banner beside it is the
+        # declaration. Same guard the walk applies, from the inventory this
+        # helper already collects.
+        control_names=after.get("names") or (),
+    )
+    if confirm_detail and not (observation.confirmation_detail or "").strip():
+        observation = replace(observation, confirmation_detail=confirm_detail)
     outcome = classify_submit_after(observation)
+    if outcome.outcome == OUTCOME_NAVIGATION:
+        confirm_rung = RUNG_NAVIGATION
+    elif outcome.outcome == OUTCOME_CONFIRMATION and not confirm_rung:
+        # A dialog-borne confirmation: classify_submit_after reached it through
+        # ``dialog_opened``, which the text diff cannot see.
+        confirm_rung = RUNG_DIALOG if observation.dialog_opened else ""
     submit_action = emit.build_action_record(
         dict(control), verb="submit", value=None, observation=observation,
         phase=Phase.SUBMIT.value, state_id=state_id, timestamp_ms=clock.now_ms(),
@@ -1317,7 +1563,76 @@ async def execute_submit_phase_b(
         submitted=True, decision=decision, confirmed=confirmed,
         outcome=outcome.outcome, action=submit_action, page_state=page_state,
         baseline=baseline,
+        crossing={
+            "url_before": str(getattr(observation, "url_before", "") or url),
+            "url_after": confirmation_url,
+            "navigated": bool(outcome.navigated),
+            "outcome": outcome.outcome,
+            "confirmation_detail": confirm_detail or (
+                observation.confirmation_detail or ""),
+            "confirmation_rung": confirm_rung,
+            "dom_digest_before": before["digest"],
+            "dom_digest_after": after["digest"],
+            "screenshot_before": (shot_before.path if shot_before is not None else ""),
+            "screenshot_after": (baseline.path if baseline is not None else ""),
+            "guard_rule_id": getattr(decision, "rule_id", "") or "",
+            "clicked_at_ms": int(clicked_at_ms),
+            "observed_at_ms": int(observed_at_ms),
+            "outcome_values": list(displayed_values or []),
+            "error_detail": (observation.error_detail or "")[:300],
+        },
     )
+
+
+async def _capture_crossing_side(port: BrowserPort) -> dict[str, Any]:
+    """One side (before or after) of a boundary crossing, as evidence.
+
+    BEST-EFFORT BY CONSTRUCTION.  Three independent optional port verbs, each
+    wrapped separately: a port that implements none of them (every scripted
+    fake written before this milestone, and any future adapter) yields empty
+    readings and the crossing still runs, still records, and still reports the
+    navigation rung.  A capture failure must never be able to block or crash a
+    submit that the operator explicitly approved.
+    """
+    controls: list[dict[str, Any]] = []
+    try:
+        controls = list(await port.collect_controls() or [])
+    except Exception:
+        logger.warning("qec.forms.crossing_controls_failed", exc_info=True)
+    side = await capture_page_declarations(port)
+    return {"digest": dom_digest(controls),
+            "names": [str(c.get("name") or "") for c in controls], **side}
+
+
+async def capture_page_declarations(port: BrowserPort) -> dict[str, list[str]]:
+    """What the page SAYS: its declared status regions and its visible text.
+
+    Split out of :func:`_capture_crossing_side` for M1.4. The wizard walk needs
+    exactly these two readings on both sides of every advance click, and it does
+    NOT need the third — ``collect_controls`` is the expensive verb, its only
+    use here is the DOM digest, and the walk re-observes the page in full one
+    line later anyway. Calling the crossing helper wholesale would have added two
+    redundant full control collections to EVERY step of EVERY walk.
+
+    Best-effort by construction, exactly as before: each optional verb is wrapped
+    separately, and a port that implements neither yields empty readings rather
+    than raising into a state machine.
+    """
+    status: list[str] = []
+    texts: list[str] = []
+    getter = getattr(port, "status_texts", None)
+    if getter is not None:
+        try:
+            status = [str(t) for t in (await getter() or [])]
+        except Exception:
+            logger.warning("qec.forms.crossing_status_failed", exc_info=True)
+    getter = getattr(port, "visible_texts", None)
+    if getter is not None:
+        try:
+            texts = [str(t) for t in (await getter() or [])]
+        except Exception:
+            logger.warning("qec.forms.crossing_texts_failed", exc_info=True)
+    return {"status": status, "texts": texts}
 
 
 # ─── Phase-B terminal-state helpers (mirror crawler._record_state shape) ─────

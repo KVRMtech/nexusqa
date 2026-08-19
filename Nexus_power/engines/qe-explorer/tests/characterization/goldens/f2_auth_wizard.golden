@@ -1,11 +1,14 @@
-{"attestation":null,"budgets":{"max_actions_per_state":30,"max_depth":6,"max_requests":5000,"max_states":200,"max_wall_ms":1800000,"rate_per_s":0},"config_fingerprint":"char-fp","crawl_id":"char-crawl","explorer_version":"char/1.0","frame_count":0,"guard_version":"char","refuse_pack_version":"refuse-pack-v1","stop_reason":"","target_url":"https://app.char/portal","type":"crawl_meta"}
+{"attestation":null,"budgets":{"max_actions_per_state":30,"max_depth":6,"max_requests":5000,"max_states":200,"max_wall_ms":1800000,"rate_per_s":0},"config_fingerprint":"char-fp","crawl_id":"char-crawl","explorer_version":"char/1.0","frame_count":0,"guard_version":"char","refuse_pack_version":"refuse-pack-v1","stop_reason":"","target_url":"https://app.char/portal","type":"crawl_meta","walk_persistence":{"authorized":false,"max_mutations_per_step":0,"mutations":0,"reason":"not_attested"}}
 {"actions":[{"after":{"detail":"","navigated":false,"outcome":"value_committed"},"anchor":null,"phase":"auth","qec":{"css_hint":"","expanded":"","frame_selector":"","haspopup":"","href":"","input_type":"text","name_confidence":"medium","options":[],"role":"textbox","testid":""},"screenshot_after":"","state_id":"369e78fce9cf9af37043129137fee54eaeaddf91d7e034353ccc72e986e386e5","subaction_index":0,"target_kind":"text_field","target_label":"Username","timestamp_ms":3,"to_state":"","url_changed":false,"value":"[REDACTED:email]","verb":"type"},{"after":{"detail":"","navigated":false,"outcome":"value_committed"},"anchor":null,"phase":"auth","qec":{"css_hint":"","expanded":"","frame_selector":"","haspopup":"","href":"","input_type":"password","name_confidence":"medium","options":[],"role":"textbox","testid":""},"screenshot_after":"","state_id":"369e78fce9cf9af37043129137fee54eaeaddf91d7e034353ccc72e986e386e5","subaction_index":1,"target_kind":"text_field","target_label":"Password","timestamp_ms":4,"to_state":"","url_changed":false,"value":"","verb":"type"},{"after":{"detail":"https://app.char/portal/dashboard","navigated":true,"outcome":"navigation"},"anchor":null,"phase":"auth","qec":{"css_hint":"","expanded":"","frame_selector":"","haspopup":"","href":"","input_type":"","name_confidence":"medium","options":[],"role":"button","testid":""},"screenshot_after":"","state_id":"369e78fce9cf9af37043129137fee54eaeaddf91d7e034353ccc72e986e386e5","subaction_index":2,"target_kind":"button","target_label":"Sign In","timestamp_ms":6,"to_state":"","url_changed":true,"value":null,"verb":"submit"}],"ax_fingerprint":"369e78fce9cf9af37043129137fee54eaeaddf91d7e034353ccc72e986e386e5","canonical_host":"app.char","displayed_values":[],"first_seen_ms":2,"form_snapshot":{"Password":"","Username":""},"form_snapshot_signals":{"Password":{"options":[],"required":true,"type":"password"},"Username":{"options":[],"required":true,"type":"text"}},"last_seen_ms":7,"location":"https://app.char/portal","network_calls":[],"screenshots":[{"frame_index":0,"path":"frame_00000.png","timestamp_ms":2}],"sequence_index":0,"state_id":"369e78fce9cf9af37043129137fee54eaeaddf91d7e034353ccc72e986e386e5","title":"Sign In","type":"page_state","url_host":"app.char","url_path":"/portal","url_query":""}
 {"actions":[{"after":{"detail":"https://app.char/portal/apply","navigated":true,"outcome":"navigation"},"anchor":null,"phase":"explore","qec":{"css_hint":"","expanded":"","frame_selector":"","haspopup":"","href":"/portal/apply","input_type":"","name_confidence":"medium","options":[],"role":"link","testid":""},"screenshot_after":"","state_id":"fa96e7e7a6e5c3afb36b50cebd6897ccbef337071af9cd4814fc6ea339b88b9d","subaction_index":0,"target_kind":"link","target_label":"Start Application","timestamp_ms":25,"to_state":"app.char/portal/apply","url_changed":true,"value":null,"verb":"click"}],"ax_fingerprint":"fa96e7e7a6e5c3afb36b50cebd6897ccbef337071af9cd4814fc6ea339b88b9d","canonical_host":"app.char","displayed_values":[],"first_seen_ms":18,"form_snapshot":{},"form_snapshot_signals":{},"last_seen_ms":26,"location":"https://app.char/portal/dashboard","network_calls":[],"screenshots":[{"frame_index":1,"path":"frame_00001.png","timestamp_ms":19}],"sequence_index":1,"state_id":"fa96e7e7a6e5c3afb36b50cebd6897ccbef337071af9cd4814fc6ea339b88b9d","title":"Dashboard","type":"page_state","url_host":"app.char","url_path":"/portal/dashboard","url_query":""}
-{"from_state":"fa96e7e7a6e5c3afb36b50cebd6897ccbef337071af9cd4814fc6ea339b88b9d","target_label":"Start Application","timestamp_ms":29,"to_state":"60645fb6ff346d7efaa0fba57d0d1e6cbd18a1236491224d6de80c109de3dcfe","type":"edge","verb":"navigate"}
-{"actions":[{"after":{"detail":"","navigated":false,"outcome":"value_committed"},"anchor":null,"phase":"explore","qec":{"css_hint":"","expanded":"","frame_selector":"","haspopup":"","href":"","input_type":"text","name_confidence":"medium","options":[],"role":"textbox","testid":""},"screenshot_after":"","state_id":"60645fb6ff346d7efaa0fba57d0d1e6cbd18a1236491224d6de80c109de3dcfe","subaction_index":0,"target_kind":"text_field","target_label":"First Name","timestamp_ms":32,"to_state":"","url_changed":false,"value":"Mariam","verb":"type"},{"after":{"detail":"","navigated":false,"outcome":"value_committed"},"anchor":null,"phase":"explore","qec":{"css_hint":"","expanded":"","frame_selector":"","haspopup":"","href":"","input_type":"text","name_confidence":"medium","options":[],"role":"textbox","testid":""},"screenshot_after":"","state_id":"60645fb6ff346d7efaa0fba57d0d1e6cbd18a1236491224d6de80c109de3dcfe","subaction_index":1,"target_kind":"text_field","target_label":"Last Name","timestamp_ms":33,"to_state":"","url_changed":false,"value":"Ashcombe","verb":"type"},{"after":{"detail":"","navigated":false,"outcome":"none"},"anchor":null,"phase":"explore","qec":{"css_hint":"","expanded":"","frame_selector":"","haspopup":"","href":"","input_type":"","name_confidence":"medium","options":[],"role":"button","testid":""},"screenshot_after":"","state_id":"60645fb6ff346d7efaa0fba57d0d1e6cbd18a1236491224d6de80c109de3dcfe","subaction_index":2,"target_kind":"button","target_label":"Continue","timestamp_ms":38,"to_state":"","url_changed":false,"value":null,"verb":"click"}],"ax_fingerprint":"60645fb6ff346d7efaa0fba57d0d1e6cbd18a1236491224d6de80c109de3dcfe","canonical_host":"app.char","displayed_values":[],"first_seen_ms":30,"form_snapshot":{"First Name":"","Last Name":""},"form_snapshot_signals":{"First Name":{"options":[],"required":true,"type":"text"},"Last Name":{"options":[],"required":true,"type":"text"}},"last_seen_ms":39,"location":"https://app.char/portal/apply","network_calls":[],"screenshots":[{"frame_index":2,"path":"frame_00002.png","timestamp_ms":31}],"sequence_index":2,"state_id":"60645fb6ff346d7efaa0fba57d0d1e6cbd18a1236491224d6de80c109de3dcfe","title":"Apply \u00b7 Step 1","type":"page_state","url_host":"app.char","url_path":"/portal/apply","url_query":""}
-{"actions":[{"after":{"detail":"","navigated":false,"outcome":"value_committed"},"anchor":null,"phase":"explore","qec":{"css_hint":"","expanded":"","frame_selector":"","haspopup":"","href":"","input_type":"","name_confidence":"medium","options":["100000","250000","500000"],"role":"combobox","testid":""},"screenshot_after":"","state_id":"31cf689f4c5d8c75808fa26071b1173d004bee7ea30fd1136f907914952326f2","subaction_index":0,"target_kind":"dropdown","target_label":"Coverage Amount","timestamp_ms":42,"to_state":"","url_changed":false,"value":"100000","verb":"select"},{"after":{"detail":"","navigated":false,"outcome":"value_committed"},"anchor":null,"phase":"explore","qec":{"css_hint":"","expanded":"","frame_selector":"","haspopup":"","href":"","input_type":"date","name_confidence":"medium","options":[],"role":"textbox","testid":""},"screenshot_after":"","state_id":"31cf689f4c5d8c75808fa26071b1173d004bee7ea30fd1136f907914952326f2","subaction_index":1,"target_kind":"text_field","target_label":"Date of Birth","timestamp_ms":43,"to_state":"","url_changed":false,"value":"1980-04-26","verb":"type"},{"after":{"detail":"","navigated":false,"outcome":"none"},"anchor":null,"phase":"explore","qec":{"css_hint":"","expanded":"","frame_selector":"","haspopup":"","href":"","input_type":"","name_confidence":"medium","options":[],"role":"button","testid":""},"screenshot_after":"","state_id":"31cf689f4c5d8c75808fa26071b1173d004bee7ea30fd1136f907914952326f2","subaction_index":2,"target_kind":"button","target_label":"Continue","timestamp_ms":45,"to_state":"","url_changed":false,"value":null,"verb":"click"}],"ax_fingerprint":"31cf689f4c5d8c75808fa26071b1173d004bee7ea30fd1136f907914952326f2","canonical_host":"app.char","displayed_values":[],"first_seen_ms":40,"form_snapshot":{"Coverage Amount":"","Date of Birth":""},"form_snapshot_signals":{"Coverage Amount":{"options":["100000","250000","500000"],"required":false,"type":"select"},"Date of Birth":{"options":[],"required":true,"type":"date"}},"last_seen_ms":46,"location":"https://app.char/portal/apply","network_calls":[],"screenshots":[{"frame_index":3,"path":"frame_00003.png","timestamp_ms":41}],"sequence_index":3,"state_id":"31cf689f4c5d8c75808fa26071b1173d004bee7ea30fd1136f907914952326f2","title":"Apply \u00b7 Step 2","type":"page_state","url_host":"app.char","url_path":"/portal/apply","url_query":""}
-{"actions":[],"ax_fingerprint":"a831cc425aa5cb8e0d023fb6c0c66935f266b8369abf181a5166aa1b9d22ad06","canonical_host":"app.char","displayed_values":[{"label":"Premium","selector":"#premium","text":"$42.00","value_candidate":"true","value_confidence":"0.90","value_reason":"currency value under an outcome label","value_type":"currency"}],"first_seen_ms":47,"form_snapshot":{},"form_snapshot_signals":{},"last_seen_ms":52,"location":"https://app.char/portal/apply","network_calls":[],"screenshots":[{"frame_index":4,"path":"frame_00004.png","timestamp_ms":48}],"sequence_index":4,"state_id":"a831cc425aa5cb8e0d023fb6c0c66935f266b8369abf181a5166aa1b9d22ad06","title":"Apply \u00b7 Review","type":"page_state","url_host":"app.char","url_path":"/portal/apply","url_query":""}
-{"attestation":null,"budgets":{"max_actions_per_state":30,"max_depth":6,"max_requests":5000,"max_states":200,"max_wall_ms":1800000,"rate_per_s":0},"config_fingerprint":"char-fp","crawl_id":"char-crawl","explorer_version":"char/1.0","frame_count":5,"guard_blocks":0,"guard_version":"char","refuse_pack_version":"refuse-pack-v1","stats":{"actions":19,"elapsed_ms":53,"requests":10,"states":5},"stop_reason":"completed","target_url":"https://app.char/portal","type":"crawl_meta"}
+{"actions":13,"frontier":[{"depth":0,"discovered_via":"","key":"app.char/portal/dashboard","parent_fingerprint":"","priority":0,"url":"https://app.char/portal/dashboard"},{"depth":1,"discovered_via":"Start Application","key":"app.char/portal/apply","parent_fingerprint":"fa96e7e7a6e5c3afb36b50cebd6897ccbef337071af9cd4814fc6ea339b88b9d","priority":0,"url":"https://app.char/portal/apply"}],"frontier_truncated":false,"sequence_index":2,"spent_keys":["app.char/portal/apply","app.char/portal/dashboard"],"states":2,"timestamp_ms":27,"type":"checkpoint","visited_count":1}
+{"actions":13,"frontier":[{"depth":1,"discovered_via":"Start Application","key":"app.char/portal/apply","parent_fingerprint":"fa96e7e7a6e5c3afb36b50cebd6897ccbef337071af9cd4814fc6ea339b88b9d","priority":0,"url":"https://app.char/portal/apply"}],"frontier_truncated":false,"sequence_index":2,"spent_keys":["app.char/portal/apply","app.char/portal/dashboard"],"states":2,"timestamp_ms":29,"type":"checkpoint","visited_count":1}
+{"from_state":"fa96e7e7a6e5c3afb36b50cebd6897ccbef337071af9cd4814fc6ea339b88b9d","target_label":"Start Application","timestamp_ms":31,"to_state":"60645fb6ff346d7efaa0fba57d0d1e6cbd18a1236491224d6de80c109de3dcfe","type":"edge","verb":"navigate"}
+{"actions":[{"after":{"detail":"","navigated":false,"outcome":"value_committed"},"anchor":null,"phase":"explore","qec":{"css_hint":"","expanded":"","frame_selector":"","haspopup":"","href":"","input_type":"text","name_confidence":"medium","options":[],"role":"textbox","testid":""},"screenshot_after":"","state_id":"60645fb6ff346d7efaa0fba57d0d1e6cbd18a1236491224d6de80c109de3dcfe","subaction_index":0,"target_kind":"text_field","target_label":"First Name","timestamp_ms":34,"to_state":"","url_changed":false,"value":"Mariam","verb":"type"},{"after":{"detail":"","navigated":false,"outcome":"value_committed"},"anchor":null,"phase":"explore","qec":{"css_hint":"","expanded":"","frame_selector":"","haspopup":"","href":"","input_type":"text","name_confidence":"medium","options":[],"role":"textbox","testid":""},"screenshot_after":"","state_id":"60645fb6ff346d7efaa0fba57d0d1e6cbd18a1236491224d6de80c109de3dcfe","subaction_index":1,"target_kind":"text_field","target_label":"Last Name","timestamp_ms":35,"to_state":"","url_changed":false,"value":"Ashcombe","verb":"type"},{"after":{"detail":"","navigated":false,"outcome":"none"},"anchor":null,"phase":"explore","qec":{"css_hint":"","expanded":"","frame_selector":"","haspopup":"","href":"","input_type":"","name_confidence":"medium","options":[],"role":"button","testid":""},"screenshot_after":"","state_id":"60645fb6ff346d7efaa0fba57d0d1e6cbd18a1236491224d6de80c109de3dcfe","subaction_index":2,"target_kind":"button","target_label":"Continue","timestamp_ms":40,"to_state":"","url_changed":false,"value":null,"verb":"click"}],"ax_fingerprint":"60645fb6ff346d7efaa0fba57d0d1e6cbd18a1236491224d6de80c109de3dcfe","canonical_host":"app.char","displayed_values":[],"first_seen_ms":32,"form_snapshot":{"First Name":"","Last Name":""},"form_snapshot_signals":{"First Name":{"options":[],"required":true,"type":"text"},"Last Name":{"options":[],"required":true,"type":"text"}},"last_seen_ms":41,"location":"https://app.char/portal/apply","network_calls":[],"screenshots":[{"frame_index":2,"path":"frame_00002.png","timestamp_ms":33}],"sequence_index":2,"state_id":"60645fb6ff346d7efaa0fba57d0d1e6cbd18a1236491224d6de80c109de3dcfe","title":"Apply \u00b7 Step 1","type":"page_state","url_host":"app.char","url_path":"/portal/apply","url_query":""}
+{"actions":[{"after":{"detail":"","navigated":false,"outcome":"value_committed"},"anchor":null,"phase":"explore","qec":{"css_hint":"","expanded":"","frame_selector":"","haspopup":"","href":"","input_type":"","name_confidence":"medium","options":["100000","250000","500000"],"role":"combobox","testid":""},"screenshot_after":"","state_id":"31cf689f4c5d8c75808fa26071b1173d004bee7ea30fd1136f907914952326f2","subaction_index":0,"target_kind":"dropdown","target_label":"Coverage Amount","timestamp_ms":44,"to_state":"","url_changed":false,"value":"100000","verb":"select"},{"after":{"detail":"","navigated":false,"outcome":"value_committed"},"anchor":null,"phase":"explore","qec":{"css_hint":"","expanded":"","frame_selector":"","haspopup":"","href":"","input_type":"date","name_confidence":"medium","options":[],"role":"textbox","testid":""},"screenshot_after":"","state_id":"31cf689f4c5d8c75808fa26071b1173d004bee7ea30fd1136f907914952326f2","subaction_index":1,"target_kind":"text_field","target_label":"Date of Birth","timestamp_ms":45,"to_state":"","url_changed":false,"value":"1980-04-26","verb":"type"},{"after":{"detail":"","navigated":false,"outcome":"none"},"anchor":null,"phase":"explore","qec":{"css_hint":"","expanded":"","frame_selector":"","haspopup":"","href":"","input_type":"","name_confidence":"medium","options":[],"role":"button","testid":""},"screenshot_after":"","state_id":"31cf689f4c5d8c75808fa26071b1173d004bee7ea30fd1136f907914952326f2","subaction_index":2,"target_kind":"button","target_label":"Continue","timestamp_ms":47,"to_state":"","url_changed":false,"value":null,"verb":"click"}],"ax_fingerprint":"31cf689f4c5d8c75808fa26071b1173d004bee7ea30fd1136f907914952326f2","canonical_host":"app.char","displayed_values":[],"first_seen_ms":42,"form_snapshot":{"Coverage Amount":"","Date of Birth":""},"form_snapshot_signals":{"Coverage Amount":{"options":["100000","250000","500000"],"required":false,"type":"select"},"Date of Birth":{"options":[],"required":true,"type":"date"}},"last_seen_ms":48,"location":"https://app.char/portal/apply","network_calls":[],"screenshots":[{"frame_index":3,"path":"frame_00003.png","timestamp_ms":43}],"sequence_index":3,"state_id":"31cf689f4c5d8c75808fa26071b1173d004bee7ea30fd1136f907914952326f2","title":"Apply \u00b7 Step 2","type":"page_state","url_host":"app.char","url_path":"/portal/apply","url_query":""}
+{"actions":[],"ax_fingerprint":"a831cc425aa5cb8e0d023fb6c0c66935f266b8369abf181a5166aa1b9d22ad06","canonical_host":"app.char","displayed_values":[{"label":"Premium","selector":"#premium","text":"$42.00","value_candidate":"true","value_confidence":"0.90","value_reason":"currency value under an outcome label","value_type":"currency"}],"first_seen_ms":49,"form_snapshot":{},"form_snapshot_signals":{},"last_seen_ms":54,"location":"https://app.char/portal/apply","network_calls":[],"screenshots":[{"frame_index":4,"path":"frame_00004.png","timestamp_ms":50}],"sequence_index":4,"state_id":"a831cc425aa5cb8e0d023fb6c0c66935f266b8369abf181a5166aa1b9d22ad06","title":"Apply \u00b7 Review","type":"page_state","url_host":"app.char","url_path":"/portal/apply","url_query":""}
+{"actions":19,"frontier":[],"frontier_truncated":false,"sequence_index":5,"spent_keys":["app.char/portal/apply","app.char/portal/dashboard"],"states":5,"timestamp_ms":55,"type":"checkpoint","visited_count":4}
+{"attestation":null,"budgets":{"max_actions_per_state":30,"max_depth":6,"max_requests":5000,"max_states":200,"max_wall_ms":1800000,"rate_per_s":0},"config_fingerprint":"char-fp","crawl_id":"char-crawl","explorer_version":"char/1.0","frame_count":5,"guard_blocks":0,"guard_version":"char","refuse_pack_version":"refuse-pack-v1","stats":{"actions":19,"elapsed_ms":56,"requests":10,"states":5},"stop_reason":"completed","target_url":"https://app.char/portal","type":"crawl_meta","walk_persistence":{"authorized":false,"max_mutations_per_step":0,"mutations":0,"reason":"not_attested"}}
 
 ===SUMMARY===
 {
@@ -20,11 +23,15 @@
       "state": "configured",
       "unavailable": 0
     },
+    "approvable_boundary": [],
     "auth_blocked": false,
     "auth_blocked_reason": "",
     "auth_incomplete": true,
     "auth_reason": "not_persisted",
+    "boundaries_crossed": 0,
+    "boundary_crossings": [],
     "crawl_mode": "e2e",
+    "discovered_rules": [],
     "field_ledger": [
       {
         "basis": "name_tokens",
@@ -35,7 +42,8 @@
         "semantic_type": "given_name",
         "sensitive": true,
         "signature": "15e73a3b67873867d9638f2408c3c78c",
-        "url": "https://app.char/portal/apply"
+        "url": "https://app.char/portal/apply",
+        "widget": "text"
       },
       {
         "basis": "name_tokens",
@@ -46,7 +54,8 @@
         "semantic_type": "family_name",
         "sensitive": true,
         "signature": "350a5e5988cdab4dd6a04337345f1ec2",
-        "url": "https://app.char/portal/apply"
+        "url": "https://app.char/portal/apply",
+        "widget": "text"
       },
       {
         "basis": "name_tokens",
@@ -63,7 +72,8 @@
         "semantic_type": "currency_amount",
         "sensitive": false,
         "signature": "9c4ba48be2da004f3153b266385aab38",
-        "url": "https://app.char/portal/apply"
+        "url": "https://app.char/portal/apply",
+        "widget": "native_select"
       },
       {
         "basis": "name_tokens",
@@ -74,7 +84,8 @@
         "semantic_type": "date_of_birth",
         "sensitive": true,
         "signature": "662ff44f5bae70bf02b5e790553f82bf",
-        "url": "https://app.char/portal/apply"
+        "url": "https://app.char/portal/apply",
+        "widget": "text"
       }
     ],
     "fields_inferred": [
@@ -93,14 +104,19 @@
       "advances_by_tier": {
         "1": 2
       },
+      "boundaries_crossed": 0,
       "branch_coverage": false,
       "branch_coverage_note": "One path per journey. At each decision point a single option was taken, so business paths behind the other options were not visited.",
+      "deepest_flow_capped": false,
+      "deepest_flow_proven_steps": 3,
       "deepest_flow_steps": 3,
+      "deepest_flow_terminal": "no_advance",
       "flows_completed": 1,
       "flows_found": 1,
       "flows_fully_answered": 1,
       "flows_truncated": 0,
       "intent_unmet": 0,
+      "journeys_completed": 0,
       "oracle_advances": 0,
       "truncation_reasons": {}
     },
@@ -115,6 +131,8 @@
         "fields_unanswered": 0,
         "flow_id": "2f0fbc02fd6bc3ae74d55248",
         "fully_answered": true,
+        "journey_completed": false,
+        "outcome_milestone": null,
         "outcome_values": [
           {
             "label": "Premium",
@@ -177,8 +195,19 @@
     "forms_confirmed": 0,
     "forms_found": 1,
     "forms_submitted": 0,
+    "inventory_failure_detail": "",
+    "inventory_failures": 0,
+    "journeys_completed": 0,
     "opaque_surfaces": [],
     "open_choice_unverified": 0,
+    "outcome_milestones": [],
+    "rule_reuse": {
+      "hits": 0,
+      "known": 0,
+      "lookups": 0,
+      "misses": 0,
+      "reuse_rate": 0.0
+    },
     "states": [
       {
         "ax_fingerprint": "369e78fce9cf9af37043129137fee54eaeaddf91d7e034353ccc72e986e386e5",
@@ -261,10 +290,9 @@
       }
     ],
     "submit_candidates": [
-      "Sign In",
       "Continue"
     ],
-    "summary": "AUTHENTICATED AREAS NOT COVERED \u2014 the crawl SIGNED IN successfully, but this app drops the sign-in on every page load (it keeps the signed-in user in the page, not in a cookie), so pages behind the login could not be reached. Re-recording and new credentials will not change this. 1 form(s) found; 2 field(s) auto-filled with a default; 0 field(s) need a real seed; 0 submit(s) exercised (Phase-B), 2 at the submit boundary.",
+    "summary": "AUTHENTICATED AREAS NOT COVERED \u2014 the crawl SIGNED IN successfully, but this app drops the sign-in on every page load (it keeps the signed-in user in the page, not in a cookie), so pages behind the login could not be reached. Re-recording and new credentials will not change this. 1 form(s) found; 2 field(s) auto-filled with a default; 0 field(s) need a real seed; 0 submit(s) exercised (Phase-B), 0 irreversible boundary/ies awaiting approval; 0 journey(s) completed end-to-end through an approved crossing.",
     "traversal": "probe",
     "unhandled_controls": []
   },

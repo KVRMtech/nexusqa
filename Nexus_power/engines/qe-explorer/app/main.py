@@ -27,6 +27,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import os
 import time
 from collections import OrderedDict
 from contextlib import asynccontextmanager
@@ -36,16 +37,18 @@ import httpx
 from fastapi import Depends, FastAPI, Header, HTTPException, status
 from pydantic import BaseModel, Field
 
-from . import crawl_context, metrics
+from . import completion_manifest, crawl_context, emit, metrics
 from .config import settings
 from .crawl_context import CrawlTokenUsage
 from .crawler import TRAVERSAL_FULL, Budget, Crawler, CrawlSummary, GuardContext
 from .forms import AnswerKey
 from .auth import AuthWindow, Credentials
-from .guard import Attestation, RefusePack, load_refuse_pack
+from .attest import AttestReason, verify_provisioning_proof
+from .guard import Attestation, GuardRule, RefusePack, load_refuse_pack
+from .walk_persist import WalkAuthorization
 from .inventory_js import INVENTORY_JS_VERSION
 from .playwright_port import (_ACTION_TIMEOUT_MS, _LAUNCH_ARGS,
-                              PlaywrightBrowserPort)
+                              PlaywrightBrowserPort, context_defaults)
 
 logging.basicConfig(level=getattr(logging, settings.log_level.upper(), logging.INFO))
 logger = logging.getLogger("qe-explorer")
@@ -73,6 +76,15 @@ class ExploreRequest(BaseModel):
     allowed_hosts: list[str] = Field(default_factory=list)
     phase: str = "explore"
     submit_approvals: list[str] = Field(default_factory=list)
+    #: A4.3 / T-AC-02 — PER-CONTROL BOUNDARY APPROVALS.
+    #: ``submit_approvals`` is a flat list of LABELS. It cannot say "this
+    #: control, on this page, once", so it was never able to authorise an
+    #: irreversible action at least privilege — the only route to one was the
+    #: ``"*"`` blanket, which authorises every submit in the application.
+    #: Each entry here is ``{control, url?, state_fingerprint?, max_crossings?,
+    #: approval_id?, approved_by?, approved_at?}``. ``"*"`` is REFUSED at parse
+    #: time. Empty ⇒ behaviour is byte-identical to before this field existed.
+    boundary_approvals: list[dict[str, Any]] = Field(default_factory=list)
     #: TARGET MODE (R3 Mode 2) — URL-path prefixes the crawl is CONFINED to
     #: (e.g. ["/quote"]): only URLs whose path equals a prefix or sits under it
     #: are enqueued/recorded; everything else on the host is out of scope. The
@@ -103,6 +115,19 @@ class ExploreRequest(BaseModel):
     #: client presents the same person every crawl — a quote that changes because
     #: the age changed between runs is a false difference, not a regression.
     identity_seed: str = Field(default="", max_length=200)
+    #: M1.7 / T-GW-03 — THIS DISPATCH IS A RESUME of an existing crawl id.
+    #: qe-central re-dispatches a stalled crawl under its ORIGINAL crawl_id and
+    #: sets this. It does not change how the crawl runs; it changes what a
+    #: MISSING durable prefix means. For a fresh crawl an empty prefix is normal;
+    #: for a resume it means the evidence we were told to continue is gone, and
+    #: walking the app from zero under that id would supersede a real crawl with
+    #: an empty capture. Absent ⇒ byte-identical pre-M1.7 behaviour.
+    resume: bool = False
+    #: M1.7 / T-GW-04 — BUSINESS RULES earlier crawls of this app PROVED, already
+    #: tenant- and app-scoped by qe-central. Value-free (labels are product UI
+    #: text). Empty ⇒ every blocked advance runs the full experiment, exactly as
+    #: before this field existed.
+    known_rules: list[dict[str, Any]] = Field(default_factory=list)
     #: DATA MODE — the operator's dial. "user" (default) is byte-identical to the
     #: behaviour before field learning existed: a radio group is a semantic choice
     #: and is left to the client. "agent" answers everything honestly answerable so
@@ -455,13 +480,46 @@ async def lifespan(app: FastAPI):
                        version=EXPLORER_VERSION,
                        refuse_pack_version=refuse_pack.version,
                        port=settings.port)
+    # ── M1.7 / T-GW-02 · RECONCILE ON STARTUP ───────────────────────────────
+    # A restart is the single most likely moment for an orphan to exist: the
+    # process that owned a completion delivery is exactly the one that died. The
+    # startup sweep runs UNCONDITIONALLY (the periodic loop below is the part
+    # that is env-gated), because gating recovery-after-a-crash behind a variable
+    # nobody set is how a recovery path stays theoretical.
+    #
+    # Scheduled rather than awaited: a volume holding many crawls must not delay
+    # the port opening, and an explorer that cannot answer /health because it is
+    # busy recovering looks exactly like an explorer that is down.
+    app.state.sweeper = asyncio.ensure_future(_startup_and_periodic_sweep())
     try:
         yield
     finally:
+        sweeper = getattr(app.state, "sweeper", None)
+        if sweeper is not None:
+            sweeper.cancel()
+            try:
+                await sweeper
+            except (asyncio.CancelledError, Exception):     # pragma: no cover
+                pass
         await app.state.http.aclose()
         logger.info("qec.explorer.stopped")
         crawl_context.emit(crawl_context.EV_EXPLORER_STOPPED,
                            version=EXPLORER_VERSION)
+
+
+async def _startup_and_periodic_sweep() -> None:
+    """One sweep at startup, then the env-gated periodic loop."""
+    try:
+        cleared = await _sweep_orphaned_completions()
+        if cleared:
+            logger.warning(
+                "qec.explorer.startup_sweep_recovered crawls=%d — completions "
+                "left un-acknowledged by a previous process instance", cleared)
+    except asyncio.CancelledError:
+        raise
+    except Exception:                                       # pragma: no cover
+        logger.warning("qec.explorer.startup_sweep_failed", exc_info=True)
+    await _sweeper_loop()
 
 
 app = FastAPI(title="QE-Central Contained Explorer", version=EXPLORER_VERSION,
@@ -516,12 +574,18 @@ async def explore(req: ExploreRequest, _: None = Depends(require_token)) -> dict
     answer_key = AnswerKey.from_payload(req.answer_key)
     credentials = Credentials.from_payload(req.credentials)
     attestation = _attestation(req.attestation)
+    # M1.3 · CONTROLLED WALK PERSISTENCE. Verified HERE, once, before a browser
+    # exists — and re-checked on every single request by the guard. A denial is
+    # not an error: it is the default, and it is what production always gets.
+    walk_authorization, walk_denied_reason = _walk_authorization(req)
     guard_ctx = GuardContext(
         refuse_pack=pack,
         auth_window=AuthWindow(max_requests=settings.auth_max_requests,
                                window_ms=settings.auth_window_ms),
         attestation=attestation,
         submit_flow_approved=bool(req.submit_approvals),
+        walk_authorization=walk_authorization,
+        walk_denied_reason=walk_denied_reason,
         idp_domains=frozenset(req.idp_domains),
     )
 
@@ -1103,6 +1167,17 @@ async def _run_job(
     # only ever RAISE the caller's floor: a dispatch that says False against a
     # non-disposable environment is overruled before a browser exists.
     observe_only = resolve_observe_only(req, guard_ctx.attestation)
+    if observe_only and guard_ctx.walk_authorization is not None:
+        # BELT AND BRACES. A verified proof must name a disposable environment,
+        # so this pairing should be impossible — which is exactly why it is
+        # checked rather than assumed. If the two independent gates ever
+        # disagree, the more restrictive one wins and says so.
+        logger.error(
+            "qec.explorer.walk_persistence_revoked_by_posture crawl_id=%s — "
+            "observe-only and an attested proof disagree; refusing walk mutation",
+            req.crawl_id)
+        guard_ctx.walk_authorization = None
+        guard_ctx.walk_denied_reason = "observe_only_posture"
     if observe_only and not req.observe_only:
         logger.warning(
             "qec.explorer.observe_only_forced crawl_id=%s env_kind=%r — "
@@ -1129,7 +1204,12 @@ async def _run_job(
             # storageState, start the context authenticated (cookies + origins) so
             # a crawl can proceed past a login the crawler cannot script. A bad/
             # empty session is ignored (a normal cold crawl), never a hard failure.
-            _ctx_kwargs: dict[str, Any] = {"service_workers": "block", "ignore_https_errors": False}
+            # M1.5 / T-ND-03 — the browser layer owns what a context must be
+            # configured with (``service_workers``, ``ignore_https_errors`` and
+            # now ``accept_downloads``); this is a read of that declaration, not
+            # a second copy of it. Without ``accept_downloads`` a download is
+            # cancelled at the browser edge and no listener can ever see it.
+            _ctx_kwargs: dict[str, Any] = dict(context_defaults())
             # sessionStorage is NOT part of Playwright's storageState, so a captured
             # session carries it under our own namespaced key. It must be stripped
             # before the state reaches Playwright (an unknown key is a schema error)
@@ -1237,7 +1317,11 @@ async def _run_job(
                 full_traversal or req.vision_enabled)
             port = PlaywrightBrowserPort(
                 page, context, proven_mechanics=req.proven_mechanics,
-                medic_oracle=medic)
+                medic_oracle=medic,
+                # M1.5 / T-ND-03 — captured downloads are staged beside this
+                # crawl's manifest on the shared volume, so the artifact travels
+                # with the record that references it.
+                artifact_dir=str(emit.artifact_dir(settings.work_dir, req.crawl_id)))
 
             crawler = Crawler(
                 port,
@@ -1253,6 +1337,7 @@ async def _run_job(
                 session_injected=bool(req.session),
                 allowed_hosts=req.allowed_hosts, max_relogins=settings.max_relogins,
                 submit_approvals=req.submit_approvals,
+                boundary_approvals=req.boundary_approvals,
                 wizard_enabled=settings.wizard_enabled,
                 plan=req.plan,
                 scope_path_prefixes=req.scope_path_prefixes,
@@ -1283,6 +1368,10 @@ async def _run_job(
                 e2e_wizard_advances=settings.e2e_wizard_advances,
                 # NOT req.observe_only — the resolved decision (T-SEC-05).
                 observe_only=observe_only,
+                # M1.7 — continue an existing crawl rather than start a new one
+                # (T-GW-03), and consume what earlier crawls proved (T-GW-04).
+                resume=req.resume,
+                known_rules=req.known_rules,
             )
             job = _Job(crawler)
             jobs.activate(job)
@@ -1290,6 +1379,10 @@ async def _run_job(
             # THE fail-closed net — wired now that the crawler (guard + emitter)
             # exists.  Squid enforces host; this enforces method + phase.
             await context.route("**/*", _make_route_handler(crawler))
+            # M1.3 · the audit's second half: response statuses for permitted
+            # walk mutations. Registered only alongside the guard, so it can
+            # never observe a request the guard did not authorise.
+            context.on("response", _make_response_listener(crawler))
 
             summary = await crawler.run()
             job.summary = summary
@@ -1390,6 +1483,31 @@ def _record_crawl_terminal(
 _MAX_LOGGED_ERROR_LEN = 300
 
 
+#: url -> audit request id, for the one hop between a permitted walk mutation
+#: being released and its response arriving. Bounded by the per-step mutation
+#: budget, so it cannot grow: at most a handful of entries exist at any moment.
+_pending_walk_responses: dict[str, str] = {}
+
+
+def _make_response_listener(crawler: Crawler):
+    """Record the response status of a permitted walk mutation (T-WP-03).
+
+    A SEPARATE, linked ledger entry — the authorisation record is never edited,
+    because an append-only ledger that rewrites entries is not append-only."""
+    async def on_response(response: Any) -> None:
+        try:
+            request_id = _pending_walk_responses.pop(response.url, "")
+            if not request_id:
+                return
+            auth = getattr(crawler.guard, "walk_authorization", None)
+            if auth is not None:
+                auth.note_response(request_id, int(response.status))
+        except Exception:  # pragma: no cover — evidence, never a crawl-stopper
+            logger.exception("qec.explorer.walk_response_audit_failed")
+
+    return on_response
+
+
 def _make_route_handler(crawler: Crawler):
     """Build the ``context.route`` handler bound to this crawl's guard state."""
     async def handler(route: Any, request: Any) -> None:
@@ -1403,7 +1521,16 @@ def _make_route_handler(crawler: Crawler):
             await route.abort()
             return
         if decision.allow:
+            # M1.3 · link the observed response back to the audit entry this
+            # mutation was authorised under. The ledger entry itself was already
+            # written BEFORE this line — evidence precedes the request, never
+            # follows it — so a crash here loses the status, never the record.
+            request_id = ""
+            if decision.rule_id == GuardRule.WALK_MUTATION_OK:
+                request_id = crawler.guard.last_walk_request_id
             await route.continue_()
+            if request_id:
+                _pending_walk_responses[request.url] = request_id
             return
         crawler.note_network_guard_block()
         try:
@@ -1423,13 +1550,21 @@ def _make_route_handler(crawler: Crawler):
 async def _fire_callback(req: ExploreRequest, summary: Optional[CrawlSummary],
                          error: str,
                          telemetry: Optional["_CrawlTelemetry"] = None) -> None:
-    """POST the HMAC-signed completion callback to qe-central (best-effort).
+    """Record this crawl's completion DURABLY, then deliver it (M1.7 / T-GW-02).
 
-    The body carries the manifest path (on the shared volume) + the in-memory
-    ``storage_state`` (the ONLY channel a captured session leaves the container).
-    Signed with the shared secret so qe-central can trust the caller.  A missing
-    endpoint / network error is logged honestly — the durable manifest is the
-    source of truth regardless.
+    The body carries the manifest path (on the shared volume), the adjudicated
+    verdict, and the in-memory ``storage_state`` (the ONLY channel a captured
+    session leaves the container).  Signed with the shared secret so qe-central
+    can trust the caller.
+
+    NO LONGER BEST-EFFORT, and the docstring that used to say so was the bug in
+    miniature: it claimed "the durable manifest is the source of truth
+    regardless", which was aspirational — the crawl manifest really does hold the
+    evidence, but nothing ever READ it unless a callback arrived to point at it.
+    One lost POST orphaned a finished crawl permanently.  The completion record
+    is now written and fsynced BEFORE the first attempt, so the fact that this
+    crawl reached a terminal state survives the delivery failing, this process
+    dying, and the container being replaced.
     """
     body = {
         "crawl_id": req.crawl_id,
@@ -1450,6 +1585,23 @@ async def _fire_callback(req: ExploreRequest, summary: Optional[CrawlSummary],
         },
         "storage_state": summary.storage_state if summary else None,
         "coverage": summary.coverage if summary else None,
+        # ── M1.7 · THE ADJUDICATED VERDICT TRAVELS WITH THE CLAIM ───────────
+        # ``stop_reason`` says WHAT happened; ``disposition`` says whether the
+        # crawl may be BELIEVED, and it was decided against evidence qe-central
+        # cannot see (the unrecovered-inventory count, the resumed-state count,
+        # whether a completion claim was refused). Sending the verdict rather
+        # than leaving qe-central to re-derive it from a string is what keeps one
+        # judgement in one place: two services each mapping stop reasons onto a
+        # belief is two mappings that drift, and a drift in THIS mapping is a
+        # failed crawl reading as a completed one.
+        #
+        # A crawl with NO summary never reached the adjudicator at all — it died
+        # before or during browser launch — so it is failed, explicitly. That
+        # default is the fail-closed one: an absent verdict must never be
+        # optimistic.
+        "disposition": summary.disposition if summary else "failed",
+        "evidence": summary.evidence if summary else {},
+        "downgraded": bool(summary.downgraded) if summary else False,
     }
     # M0.6 — the per-crawl telemetry record travels back with the callback so
     # qe-central holds the exact spend and oracle participation for THIS crawl.
@@ -1466,31 +1618,172 @@ async def _fire_callback(req: ExploreRequest, summary: Optional[CrawlSummary],
                 summary.stop_reason if summary else "error"),
             "tokens": telemetry.tokens.as_dict(),
         }
-    payload = json.dumps(body, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    # Scope-bound (T-SEC-06): the signature authenticates a completion for THIS
-    # crawl. A captured envelope cannot be re-pointed at another crawl id, and
-    # its single-use nonce makes even a verbatim replay of this one fail.
-    url = settings.callback_url.rstrip("/") + settings.callback_path(req.crawl_id)
+    # ── M1.7 / T-GW-02 · DURABLE FIRST, DELIVER SECOND ──────────────────────
+    # The completion record is written and fsynced BEFORE the first POST is
+    # attempted. That ordering is the whole recovery story: the FACT that this
+    # crawl reached a terminal state now lives on the shared volume, and the POST
+    # is only a notification of it. A dropped notification is then recoverable —
+    # by this process's own sweeper, or by qe-central's reaper reading the same
+    # file — instead of permanently orphaning a finished crawl.
+    #
+    # A failure to write it is NOT swallowed: with no durable record there is no
+    # recovery path at all, and continuing as though there were is the green-wash
+    # this milestone removes.
     try:
-        # Signing inside the guard: with no fleet secret configured this raises,
-        # and an unsignable callback must be reported honestly — the durable
-        # manifest is the source of truth either way — rather than propagate out
-        # of a job that has already finished its work.
-        signature = settings.sign_payload(payload, scope=f"complete:{req.crawl_id}")
-        client: httpx.AsyncClient = app.state.http
-        resp = await client.post(
-            url, content=payload,
-            headers={"Content-Type": "application/json",
-                     "X-QEC-Signature": signature,
-                     "X-QEC-Token": settings.explorer_token},
-        )
-        logger.info("qec.explorer.callback_sent crawl_id=%s status=%d",
-                    req.crawl_id, resp.status_code)
-    except Exception as exc:
-        logger.warning("qec.explorer.callback_failed crawl_id=%s error=%s "
-                       "(manifest at %s is authoritative)",
-                       req.crawl_id, str(exc)[:200],
-                       summary.manifest_path if summary else "?")
+        completion_manifest.write_completion(settings.work_dir, req.crawl_id, body)
+    except OSError as exc:
+        logger.error(
+            "qec.explorer.completion_record_failed crawl_id=%s error=%s — this "
+            "crawl has NO durable completion record, so a dropped callback "
+            "cannot be recovered", req.crawl_id, str(exc)[:200])
+    await _deliver_completion(req.crawl_id, body)
+
+
+async def _deliver_completion(crawl_id: str, body: dict[str, Any], *,
+                              max_attempts: int = completion_manifest.DEFAULT_MAX_ATTEMPTS,
+                              ) -> bool:
+    """POST a durable completion to qe-central, retried with backoff (T-GW-02).
+
+    Returns True once qe-central has ACCEPTED it, and writes the acknowledgement
+    that takes the crawl off the orphan list.
+
+    RE-SIGNED PER ATTEMPT, and that is load-bearing. The v2 envelope carries a
+    SINGLE-USE NONCE (T-SEC-06): re-POSTing one signed envelope is a replay and
+    the receiver refuses it, so a retry loop that signed once would have been a
+    retry loop that could only ever fail. Each attempt mints a fresh envelope
+    over the same body.
+
+    WHICH FAILURES ARE RETRIED. A transport error or a 5xx is retried — the
+    receiver never saw it, or could not process it now. A 4xx is NOT: a bad
+    signature, an unknown crawl or a malformed body will fail identically forever,
+    and spending five attempts proving that delays the sweeper's honest report.
+    A 2xx — including the endpoint telling us it already holds a terminal state
+    for this crawl — is a successful delivery, because the crawl is landed either
+    way; that is what makes duplicate delivery safe and idempotent.
+    """
+    payload = json.dumps(body, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    url = settings.callback_url.rstrip("/") + settings.callback_path(crawl_id)
+    client: httpx.AsyncClient = app.state.http
+    for attempt in range(1, max(1, int(max_attempts)) + 1):
+        delay = completion_manifest.backoff_delay(attempt)
+        if delay:
+            await asyncio.sleep(delay)
+        try:
+            # Signing inside the guard: with no fleet secret configured this
+            # raises, and an unsignable callback must be reported honestly rather
+            # than propagate out of a job that has already finished its work.
+            signature = settings.sign_payload(payload, scope=f"complete:{crawl_id}")
+            resp = await client.post(
+                url, content=payload,
+                headers={"Content-Type": "application/json",
+                         "X-QEC-Signature": signature,
+                         "X-QEC-Token": settings.explorer_token},
+            )
+        except Exception as exc:
+            completion_manifest.record_attempt(
+                settings.work_dir, crawl_id, attempt=attempt, ok=False,
+                error=str(exc)[:300])
+            logger.warning(
+                "qec.explorer.callback_attempt_failed crawl_id=%s attempt=%d/%d "
+                "error=%s", crawl_id, attempt, max_attempts, str(exc)[:200])
+            continue
+        ok = 200 <= resp.status_code < 300
+        completion_manifest.record_attempt(
+            settings.work_dir, crawl_id, attempt=attempt, ok=ok,
+            status=resp.status_code)
+        if ok:
+            completion_manifest.mark_delivered(
+                settings.work_dir, crawl_id, status=resp.status_code)
+            logger.info(
+                "qec.explorer.callback_sent crawl_id=%s status=%d attempt=%d",
+                crawl_id, resp.status_code, attempt)
+            return True
+        if 400 <= resp.status_code < 500:
+            logger.error(
+                "qec.explorer.callback_rejected crawl_id=%s status=%d — a client "
+                "error will not resolve on retry; the durable completion record "
+                "is left for the reaper to reconcile",
+                crawl_id, resp.status_code)
+            return False
+        logger.warning(
+            "qec.explorer.callback_attempt_failed crawl_id=%s attempt=%d/%d "
+            "status=%d", crawl_id, attempt, max_attempts, resp.status_code)
+    logger.error(
+        "qec.explorer.callback_undelivered crawl_id=%s attempts=%d — the crawl is "
+        "ORPHANED until the sweeper or the qe-central reaper reconciles its "
+        "durable completion record", crawl_id, max_attempts)
+    return False
+
+
+async def _sweep_orphaned_completions() -> int:
+    """Re-deliver every durable completion this volume holds un-acknowledged.
+
+    THE SECOND LEG OF RECOVERY, and the one that survives the process dying. The
+    in-line retry above only helps a crawl whose worker is still alive; a worker
+    killed mid-delivery leaves a completion record with no ack and nobody to
+    notice. This scan runs at STARTUP — so a restarted container immediately
+    reconciles whatever its predecessor left behind — and on a slow timer for
+    outages longer than the in-line backoff.
+
+    Idempotent by construction: the receiving endpoint is a no-op on a crawl that
+    already reached a terminal state, and it returns 2xx for that case, so a
+    duplicate delivery ends with the ack written and the orphan cleared. Running
+    this twice concurrently is therefore safe, if wasteful.
+
+    Returns how many orphans were cleared.
+    """
+    try:
+        pending = completion_manifest.pending_completions(settings.work_dir)
+    except Exception as exc:                                # pragma: no cover
+        logger.warning("qec.explorer.sweep_failed error=%s", str(exc)[:200])
+        return 0
+    if not pending:
+        return 0
+    logger.warning(
+        "qec.explorer.sweep_found orphans=%d — completions that reached a "
+        "terminal state and were never acknowledged", len(pending))
+    cleared = 0
+    for item in pending:
+        if not completion_manifest.completion_body_is_sane(item.body):
+            logger.error(
+                "qec.explorer.sweep_unroutable crawl_id=%s — the durable "
+                "completion is missing crawl_id/tenant_id/exploration_id and "
+                "cannot be routed; left in place for an operator", item.crawl_id)
+            continue
+        if await _deliver_completion(item.crawl_id, item.body, max_attempts=2):
+            cleared += 1
+            logger.warning("qec.explorer.sweep_recovered crawl_id=%s prior_attempts=%d",
+                           item.crawl_id, item.attempts)
+    return cleared
+
+
+async def _sweeper_loop() -> None:
+    """The periodic orphan sweep. Self-gating on ``QEC_SWEEP_SECONDS`` > 0."""
+    interval = _sweep_interval_seconds()
+    if interval <= 0:
+        logger.info("qec.explorer.sweeper_disabled — set QEC_SWEEP_SECONDS>0 to enable")
+        return
+    while True:
+        try:
+            await asyncio.sleep(interval)
+            await _sweep_orphaned_completions()
+        except asyncio.CancelledError:
+            raise
+        except Exception:                                   # pragma: no cover
+            logger.warning("qec.explorer.sweeper_tick_failed", exc_info=True)
+
+
+def _sweep_interval_seconds() -> float:
+    """Seconds between orphan sweeps; <=0 disables the periodic loop.
+
+    The STARTUP sweep runs regardless — a restart is the single most likely
+    moment for an orphan to exist, and gating the recovery for that case behind
+    an env var nobody set is how a recovery path stays theoretical.
+    """
+    try:
+        return float(os.environ.get("QEC_SWEEP_SECONDS", "") or 300.0)
+    except (TypeError, ValueError):
+        return 300.0
 
 
 def _summary_public(summary: CrawlSummary) -> dict[str, Any]:
@@ -1506,14 +1799,62 @@ def _summary_public(summary: CrawlSummary) -> dict[str, Any]:
     }
 
 
+#: The M1.3 envelope keys, carried INSIDE ``attestation`` alongside the legacy
+#: operator statement.  ``guard.Attestation`` is ``extra="forbid"``, so they are
+#: stripped before it parses — a dispatch that carries a provisioning proof must
+#: not thereby break the SUBMIT tier that has nothing to do with it.
+_WALK_ENVELOPE_KEYS = ("proof", "revocations")
+
+
 def _attestation(payload: Optional[dict[str, Any]]) -> Optional[Attestation]:
     if not payload:
         return None
+    legacy = {k: v for k, v in dict(payload).items() if k not in _WALK_ENVELOPE_KEYS}
     try:
-        return Attestation.model_validate(payload)
+        return Attestation.model_validate(legacy)
     except Exception as exc:
         logger.warning("qec.explorer.bad_attestation error=%s", str(exc)[:200])
         return None
+
+
+def _walk_authorization(req: "ExploreRequest"):
+    """``(WalkAuthorization | None, denied_reason)`` for this dispatch.
+
+    M1.3 / T-WP-02.  The ONLY path by which walk mutation can ever be enabled.
+    Everything it consults is either a configured PUBLIC key or a signature over
+    claims; nothing the caller writes in the dispatch body is trusted, including
+    ``req.env_kind`` and the legacy ``attestation.env_kind`` — a proof states its
+    own environment kind inside the signed claims, and that is the only statement
+    the verifier reads.
+
+    Returns ``(None, reason)`` on every failure, and the Crawler treats ``None``
+    exactly as it behaved before this feature existed.
+    """
+    verdict = verify_provisioning_proof(
+        req.attestation,
+        trust=settings.attestation_trust_store(),
+        crawl_id=req.crawl_id,
+        tenant_id=req.tenant_id,
+        target_url=req.target_url,
+    )
+    if not verdict.authorized:
+        # INFO, not ERROR: for the overwhelming majority of crawls (every
+        # production one, forever) "no walk persistence" is the correct and
+        # expected outcome, and logging it as a failure would train operators to
+        # ignore the line that matters.
+        logger.info(
+            "qec.explorer.walk_persistence_denied crawl_id=%s reason=%s",
+            req.crawl_id, verdict.reason)
+        return None, verdict.reason
+    auth = WalkAuthorization.from_verdict(
+        verdict, workflow_id=req.crawl_id,
+        window_ms=int(settings.walk_mutation_window_ms))
+    logger.warning(
+        "qec.explorer.walk_persistence_granted crawl_id=%s proof_id=%s env=%s "
+        "budget=%d/step — bounded server-side mutation is ENABLED for this crawl",
+        req.crawl_id, verdict.proof_id, verdict.environment_id,
+        verdict.max_mutations_per_step)
+    return auth, ""
 
 
 # ─── Entrypoint (container CMD is `python -m app.main`) ──────────────────────

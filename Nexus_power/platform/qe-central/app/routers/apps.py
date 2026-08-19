@@ -1000,11 +1000,32 @@ async def get_seed_manifest(
                 if _ok not in _seen_opaque:
                     _seen_opaque.add(_ok)
                     opaque_surfaces.append(dict(_o))
-            for _sc in (_cov.get("submit_candidates") or []):
-                _s2 = str(_sc).strip()
+            # A4.3 / T-AC-01 — READ THE APPROVAL LIST, THEN FALL BACK.
+            #
+            # `submit_candidates` used to carry both "safe to cross" and "needs
+            # your approval", and BOTH of its producers filtered dangerous
+            # controls out. So this loop — whose entire purpose is to offer the
+            # operator an APPROVE row — was reading a list that structurally
+            # could not contain a control requiring approval. "Bind Coverage"
+            # was never offered because it was dangerous, and it could not be
+            # crossed because it was never approved.
+            #
+            # `approvable_boundary` is now the irreversible set. The fallback to
+            # `submit_candidates` is for manifests minted before this change:
+            # those crawls really did put commit controls there, and dropping
+            # them would silently un-offer approvals an operator already relies
+            # on.
+            for _ab in (_cov.get("approvable_boundary") or []):
+                _s2 = str((_ab or {}).get("label") or "").strip()
                 if _s2 and _s2.lower() not in _seen_submit:
                     _seen_submit.add(_s2.lower())
                     submit_candidates.append(_s2)
+            if not (_cov.get("approvable_boundary") or []):
+                for _sc in (_cov.get("submit_candidates") or []):
+                    _s2 = str(_sc).strip()
+                    if _s2 and _s2.lower() not in _seen_submit:
+                        _seen_submit.add(_s2.lower())
+                        submit_candidates.append(_s2)
             for _u in (_cov.get("unhandled_controls") or []):
                 _uk = str((_u or {}).get("label") or "").strip().lower()
                 if _uk and _uk not in _seen_unhandled:

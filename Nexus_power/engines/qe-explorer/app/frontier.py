@@ -30,6 +30,13 @@ class FrontierItem:
     priority: int = 0
     discovered_via: str = ""
     parent_fingerprint: str = ""
+    #: M1.7 / T-GW-03 — the REACH KEY this item was deduped on, stamped by
+    #: :meth:`Frontier.push`.  Callers never set it; it exists so a durable
+    #: checkpoint can persist the queue AND the dedup set consistently.  Without
+    #: it, a resume that restored the queue by URL would have to guess which key
+    #: each item had been deduped under, and a guess that was wrong either
+    #: re-walks a finished route or permanently blocks an unfinished one.
+    key: str = ""
 
 
 def _section_signature(url_template: str) -> str:
@@ -119,6 +126,9 @@ class Frontier:
         if key in self._enqueued_keys:
             return False
         self._enqueued_keys.add(key)
+        # Stamp the key ON the item so the queue can be snapshotted without the
+        # snapshotter having to re-derive it (M1.7 / T-GW-03).
+        item.key = key
         # Novelty rank = how many items are ALREADY queued from this item's section
         # (the reach key IS the url_template). 0 for the first, growing per sibling.
         section = _section_signature(key)
@@ -158,6 +168,40 @@ class Frontier:
 
     def __len__(self) -> int:
         return len(self._heap)
+
+    # -- durable checkpointing (M1.7 / T-GW-03) --------------------------------
+
+    def snapshot_items(self) -> list[FrontierItem]:
+        """Every item still QUEUED, in heap-array order.
+
+        Deliberately NOT in pop order: draining the heap to sort it would destroy
+        the queue, and a copy sorted by the ordering tuple would still have to be
+        re-pushed one at a time on restore — which re-derives the same order
+        anyway, because :meth:`push` recomputes novelty rank and plan priority
+        from the key.  Order is therefore restored by the push, not by the
+        snapshot, and the snapshot only has to be COMPLETE.
+        """
+        return [entry[-1] for entry in self._heap]
+
+    def spent_keys(self) -> set[str]:
+        """The push-time dedup set — every reach key this crawl has consumed."""
+        return set(self._enqueued_keys)
+
+    def mark_spent(self, keys) -> int:
+        """Re-arm the dedup set from a durable checkpoint, WITHOUT queueing.
+
+        These are routes an earlier run already dequeued and expanded.  Marking
+        them keeps a resumed run from walking the app a second time inside one
+        crawl id the moment a restored page re-discovers a link to one of them.
+        Returns how many keys were newly marked.
+        """
+        added = 0
+        for key in keys or ():
+            key = str(key or "")
+            if key and key not in self._enqueued_keys:
+                self._enqueued_keys.add(key)
+                added += 1
+        return added
 
 
 __all__ = ["Frontier", "FrontierItem", "_parse_plan_patterns", "_section_signature"]

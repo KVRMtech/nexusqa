@@ -35,7 +35,7 @@ from typing import Any, Mapping, Optional, Sequence
 
 from . import emit
 from .browser import BrowserPort, PageObservation, RawObservation
-from .fingerprint import state_fingerprint
+from .state_identity import StateFingerprinter
 from .guard import Phase, classify_action_verb
 from .inventory import build_inventory
 
@@ -623,6 +623,10 @@ class Authenticator:
         self._creds = credentials
         self._clock = clock
         self._refuse_pack = refuse_pack
+        # ONE AUTHORITY FOR PAGE IDENTITY. The login flow compares the screen
+        # before a submit against the screen after it, which is the same
+        # question the crawl asks, so it must be answered by the same code.
+        self._identity = StateFingerprinter()
         self._window = auth_window
         self._max_relogins = max(0, int(max_relogins))
         self._relogins = 0
@@ -644,7 +648,8 @@ class Authenticator:
         moved, no error region), never assumed.  Credential-free result.
         """
         controls = build_inventory(observation.raw_controls, self._refuse_pack, url=observation.url)
-        before_fp = state_fingerprint(observation.url, controls, observation.dialog_flags)
+        before_fp = self._identity.fingerprint(
+            url=observation.url, controls=controls, dialogs=observation.dialog_flags)
 
         # (a) Reach the login form. When NEITHER a username nor a password field is
         # present, the form sits behind a "Sign in" affordance (SPA/marketing
@@ -666,7 +671,8 @@ class Authenticator:
             ))
             observation = await self._observe_current()
             controls = build_inventory(observation.raw_controls, self._refuse_pack, url=observation.url)
-            before_fp = state_fingerprint(observation.url, controls, observation.dialog_flags)
+            before_fp = self._identity.fingerprint(
+                url=observation.url, controls=controls, dialogs=observation.dialog_flags)
             hops += 1
 
         # (b) Step loop across login screens.
@@ -678,7 +684,8 @@ class Authenticator:
 
         for step in range(self.MAX_LOGIN_STEPS):
             controls = build_inventory(observation.raw_controls, self._refuse_pack, url=observation.url)
-            screen_fp = state_fingerprint(observation.url, controls, observation.dialog_flags)
+            screen_fp = self._identity.fingerprint(
+                url=observation.url, controls=controls, dialogs=observation.dialog_flags)
 
             password_ctrl = _match_password_control(controls)
             username_ctrl = _match_username_control(controls, self._creds.username_hints, password=password_ctrl)
@@ -776,7 +783,9 @@ class Authenticator:
 
             observation = await self._observe_current()
             after_controls = build_inventory(observation.raw_controls, self._refuse_pack, url=observation.url)
-            after_fp = state_fingerprint(observation.url, after_controls, observation.dialog_flags)
+            after_fp = self._identity.fingerprint(
+                url=observation.url, controls=after_controls,
+                dialogs=observation.dialog_flags)
             live_errors = [e for e in observation.error_texts if _norm(e)]
             has_password = _match_password_control(after_controls) is not None
             has_otp = self._creds.mfa is not None and match_otp_control(after_controls, self._creds.otp_hints) is not None

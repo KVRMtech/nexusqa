@@ -155,9 +155,23 @@ _CONTROL_KINDS = frozenset(
 )
 
 #: G1 (any-UI): at or below this many interactive controls a page is "DOM-sparse"
-#: — the DOM cannot distinguish its screens. Only then is a supplied perceptual
-#: hash mixed into the fingerprint, so a normal (rich-DOM) page's cosmetic repaint
-#: can never fragment its state.
+#: — the DOM cannot distinguish its screens.
+#:
+#: T-SI-02 RETIRED THIS AS A GATE.  It used to decide, HERE, whether a supplied
+#: perceptual hash counted; a rich-DOM page's hash was silently dropped.  That
+#: made a same-shape wizard (40 controls, 20 steps, one URL) unhashable by
+#: pixels even though pixels were the only thing that differed.  The decision of
+#: WHETHER DOM identity suffices needs both the current state and the previous
+#: one, and this function sees only one state — so the gate moved UP to
+#: :class:`app.state_identity.WalkIdentity`, which holds both.  This hasher now
+#: honours every signal it is GIVEN and decides nothing.
+#:
+#: RETAINED, UNUSED, DELIBERATELY. Nothing reads it any more — the vision
+#: escalation in ``app.perception.should_perceive`` carries its own ``min_named``
+#: threshold and never referenced this one. It is kept as the published
+#: definition of "DOM-sparse" that the removed gate was built on, so a reader who
+#: finds this constant in an old crawl's design notes can see what it meant and
+#: that it is no longer a decision. Delete it freely; nothing depends on it.
 _SPARSE_DOM_MAX = 2
 
 
@@ -213,8 +227,18 @@ def state_fingerprint(
     dialog_flags: Any = (),
     *,
     perceptual_hash: str = "",
+    structural_hash: str = "",
+    revealed_delta: Any = (),
+    step_ordinal: int = 0,
+    page_token: str = "",
 ) -> str:
-    """A sha256 hex identifying a page STATE (design §3.2 fingerprint contract).
+    """A sha256 hex identifying a page STATE (design 3.2 fingerprint contract).
+
+    THIS FUNCTION DECIDES NOTHING.  It hashes exactly the signals it is handed.
+    Which signals a given crawl path is entitled to supply is the identity
+    layer's call (:mod:`app.state_identity`) - see T-SI-02 above.  Keeping the
+    policy out of the hasher is what lets the hasher stay a pure, order-free,
+    clock-free function of its arguments.
 
     Args:
         url: the state's location; only its :func:`url_template` is hashed.
@@ -223,11 +247,44 @@ def state_fingerprint(
             hashed.
         dialog_flags: optional extra SPA-state flags (open modal/dialog markers);
             normalised and hashed so an overlay state is distinct.
+        perceptual_hash: a coarse aHash of the rendered screen.  Honoured
+            WHENEVER non-empty (the old DOM-sparse gate is gone).
+        structural_hash: a digest of the page's DECLARED question grouping (see
+            :func:`app.state_identity.structural_signature`).  This is the
+            DOM-native discriminator for a same-shape wizard: question 3 and
+            question 17 carry the same ``(role, name)`` controls and different
+            ``group_key`` s.
+        revealed_delta: value-free identities of controls an answer ACTIVATED
+            (``kind:name``), from :func:`app.flow_ledger.activated_signatures`.
+        step_ordinal: the walk-local position of this state in its journey.
+            Hashed only when > 0.  READ THE WARNING BELOW BEFORE PASSING IT.
+        page_token: M1.5 / T-ND-04 — WHICH browser page this state was read
+            from (``""`` = the page the crawl started with, ``"p1"``… = an
+            adopted popup / new tab).  Hashed only when non-empty.  Like
+            ``step_ordinal`` this is a signal a caller must EARN the right to
+            pass: it discriminates a popup that is byte-identical to its opener
+            in every DOM signal, and it fractures identity if handed over
+            unconditionally.  ``app.state_identity.StateFingerprinter`` is the
+            caller that earns it, and it passes it only when the same base
+            digest was first claimed by a different page.
 
     Returns:
         A 64-char lower-case sha256 hex.  Identical states across runs hash
         identically; a cosmetic text change does not move it; a new required
         field / opened dialog / enabled-state change does.
+
+    Backward compatibility: with all four keyword signals at their defaults the
+    payload is byte-identical to the pre-T-SI-01 payload, so every fingerprint
+    ever persisted still reproduces.
+
+    .. warning::
+       ``step_ordinal`` MANUFACTURES distinctness.  Two observations that are
+       identical in every observable respect hash differently purely because a
+       counter moved, which is precisely how a no-op click becomes a "new
+       state" and a stalled walk reports twenty steps it never took.  It is
+       exposed because an ordinal is a legitimate identity input for a caller
+       that has ALREADY established the two states differ; the walk itself does
+       not use it (see :class:`app.state_identity.WalkIdentity`).
     """
     sig = interactive_signature(controls)
     payload = {
@@ -236,13 +293,28 @@ def state_fingerprint(
         "dialogs": _normalise_flags(dialog_flags),
     }
     # G1 (any-UI): a DOM-opaque page (canvas / Flutter Web) changes screens with
-    # the same URL and a (near-)empty DOM, so the two signals above collapse every
-    # screen into ONE state — vision clicks would "work" while the journey graph
-    # and catalog become garbage. When the walk supplies a COARSE perceptual hash
-    # of the screenshot AND the DOM is sparse, mix it in so each rendered screen is
-    # a distinct node. Absent hash (every DOM caller today) → byte-identical output.
+    # the same URL and a (near-)empty DOM, so the three signals above collapse
+    # every screen into ONE state. So does a one-question-at-a-time questionnaire
+    # whose every step renders the same Yes/No/Continue triple. Each additional
+    # signal below is absent from the payload when the caller supplies nothing,
+    # so a caller that supplies nothing gets the historical digest exactly.
     ph = str(perceptual_hash or "").strip()
-    if ph and len(sig) <= _SPARSE_DOM_MAX:
+    if ph:
         payload["phash"] = ph
+    sh = str(structural_hash or "").strip()
+    if sh:
+        payload["structure"] = sh
+    rev = _normalise_flags(revealed_delta)
+    if rev:
+        payload["revealed"] = rev
+    try:
+        ordinal = int(step_ordinal or 0)
+    except (TypeError, ValueError):
+        ordinal = 0
+    if ordinal > 0:
+        payload["step"] = ordinal
+    pt = str(page_token or "").strip()
+    if pt:
+        payload["page"] = pt
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()

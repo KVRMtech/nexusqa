@@ -23,60 +23,30 @@ from typing import Any, Mapping, Optional
 
 from . import field_semantics as S
 from . import vocab
+from .fill_engine import generator as _generator
+from .fill_engine import options as _option_rules
+from .fill_engine import persona as _persona
 from .identity_pack import Identity
 
-__all__ = ["value_for", "PROVENANCE_SYNTHESIZED"]
+__all__ = ["value_for", "explain", "persona_for", "PROVENANCE_SYNTHESIZED"]
 
 PROVENANCE_SYNTHESIZED = "synthesized"
 
 _DIGITS_RE = re.compile(r"\D+")
-#: Option text that is a prompt, never a real choice.
-_PLACEHOLDER = frozenset({
-    "", "select", "choose", "please select", "select one", "select an option",
-    "--", "---", "-- select --", "none", "choose one", "pick one", "select...",
-})
 
-#: THE canonical placeholder rule. It lives here — the lowest layer that has to
-#: choose an option — and forms.py imports it, because there used to be two
-#: lists and fixing one left the other choosing "Select coverage amount...".
+#: THE CANONICAL PLACEHOLDER RULE now lives in :mod:`app.fill_engine.options`,
+#: because the fill engine's generator needs it at a layer below this one and a
+#: function-local import would have hidden the dependency rather than removed
+#: it.  Re-exported here — unchanged in behaviour and identity — so every
+#: existing caller keeps working and there is still exactly ONE rule.
 #:
-#: An exact-phrase set cannot survive real applications: they write "Select
-#: coverage amount...", "Choose your state", "-- Select term length --". Those
-#: are the SAME thing — the option whose underlying value is "". Picking one
-#: leaves the field EMPTY while the fill reports success, so a validation-gated
-#: form never enables Continue and the crawl stalls on a page it believes it
-#: completed. Observed live on a quote funnel, twice, in two different modules.
-_PLACEHOLDER_LEAD_VERBS = ("select", "choose", "pick")
-
-
-def is_placeholder_option(label: Any, *, first: bool = False) -> bool:
-    """Is this the "nothing chosen yet" entry rather than a real answer?
-
-    Deliberately conservative: the leading-verb rule applies only when ``first``
-    (where placeholders conventionally live) or when the text trails off in an
-    ellipsis, so a genuine product named "Choose Life Term 20" further down a
-    list is still selectable. A false positive silently discards a real business
-    path, which is worse than occasionally keeping a placeholder.
-    """
-    text = _norm(label)
-    if not text or text in _PLACEHOLDER:
-        return True
-    stripped = text.strip("-–—_ .·:…")
-    if not stripped:
-        return True
-    lead = stripped.split()[0]
-    trails_off = text.endswith(("...", "…"))
-    if trails_off and lead in _PLACEHOLDER_LEAD_VERBS:
-        return True
-    # A FIRST option that trails off — "Feet...", "Inches...", "Year..." — is the
-    # same "nothing chosen yet" entry wearing the field's own name instead of a
-    # verb. Observed live: the health step's height dropdowns were answered
-    # "Feet..." / "Inches...", so the field stayed empty and the funnel stopped
-    # one page short of the quote. A real answer almost never trails off, and
-    # restricting this to the first option keeps it safe.
-    if first and trails_off:
-        return True
-    return bool(first) and lead in _PLACEHOLDER_LEAD_VERBS
+#: The incident that produced the rule is worth keeping in view: there used to
+#: be two lists, and fixing one still left the other choosing "Select coverage
+#: amount…".  That option's underlying value is "", so the field is EMPTY while
+#: the fill reports success, a validation-gated form never enables Continue, and
+#: the crawl stalls on a page it believes it completed.
+is_placeholder_option = _option_rules.is_placeholder_option
+enumerate_real = _option_rules.enumerate_real
 
 
 def _norm(text: Any) -> str:
@@ -128,14 +98,6 @@ def _options(control: Mapping[str, Any]) -> list[str]:
     if not isinstance(raw, (list, tuple)):
         return []
     return [str(o).strip() for o in enumerate_real(raw)]
-
-
-def enumerate_real(raw: Any) -> list[str]:
-    """Every option that is a real ANSWER, in order — placeholders dropped."""
-    if not isinstance(raw, (list, tuple)):
-        return []
-    return [str(o).strip() for i, o in enumerate(raw)
-            if str(o).strip() and not is_placeholder_option(o, first=(i == 0))]
 
 
 def _pick_option(control: Mapping[str, Any], *wanted: str) -> Optional[str]:
@@ -230,113 +192,83 @@ DATA_MODE_AGENT = "agent"
 
 
 def value_for(semantic_type: str, control: Mapping[str, Any], identity: Identity,
-              *, kind: str = "", data_mode: str = DATA_MODE_USER) -> Optional[str]:
+              *, kind: str = "", data_mode: str = DATA_MODE_USER,
+              section: str = "") -> Optional[str]:
     """The value to type, or ``None`` when nothing can honestly be produced.
 
-    ``None`` is a real answer: for a one-time code or a password there is no value
-    a generator could invent that would mean anything, so the field becomes part
-    of the residue the client is asked for. Inventing one would produce a test
-    that passes against nothing."""
-    sem = S.coerce(semantic_type)
-    k = _norm(kind) or _norm(_attr(control, "kind"))
+    THE SIGNATURE IS UNCHANGED AND THE BODY IS NOT.  Everything below now runs
+    through :mod:`app.fill_engine`, which decides a value from three inputs
+    instead of one — the semantic type this function has always received, plus
+    WHOSE field it is and WHAT THE CONTROL WILL ACCEPT.  The old body could only
+    ever answer the first, which is why "Beneficiary Name" came back as the
+    applicant, a money field came back as the constant ``100``, all three parts
+    of a split birth date came back as the YEAR, and a declared ``pattern`` was
+    read to classify the field and then ignored when filling it.
 
-    if sem in S.UNGENERATABLE or sem == S.UNKNOWN:
-        return None
+    ``None`` is still a real answer: for a one-time code or a password there is
+    no value a generator could invent that would mean anything, so the field
+    becomes residue the client is asked for.  Inventing one produces a test that
+    passes against nothing.
 
-    # A radio group is a semantic choice. In USER mode it is left alone, exactly as
-    # before — the crawl must not decide which business path gets exercised and then
-    # not say so. In AGENT mode it is answered, and the ledger records what was
-    # chosen so the report can.
-    # A GROUPED checkbox is a multi-select question, so it is the client's
-    # decision in user mode for exactly the same reason a radio group is.
-    # An ungrouped one is still a lone boolean and keeps its old behaviour.
-    if ((k == "radio" or (k == "checkbox" and control.get("group_id")))
-            and data_mode != DATA_MODE_AGENT):
-        return None
+    ``section`` is the heading the control sits under — a bare "First Name"
+    below a legend reading "Beneficiary Information" belongs to the beneficiary,
+    and reading only the control's own label is exactly how it used to be
+    answered with the applicant.  Optional, so every existing caller keeps
+    working and simply gets the weaker of the two rungs.
+    """
+    persona = persona_for(identity)
+    candidate = _generator.generate(
+        semantic_type, control, persona, kind=kind,
+        name=str(control.get("name") or ""), section=section,
+        # THE OPERATOR'S DATA DIAL, unchanged.  ``user`` still declines to make a
+        # semantic choice on the client's behalf; what changed is that the
+        # DISPATCH default is now ``agent`` (see ``main.ExploreRequest``), so a
+        # funnel completes without anyone having to change posture — which is
+        # what "radio groups are skipped" actually meant.
+        answer_choices=(_norm(data_mode) == DATA_MODE_AGENT),
+    )
+    return candidate.value
 
-    # A choice control is answered by CHOOSING, whatever the semantics — but the
-    # semantics decide WHICH option, so the answer stays internally consistent.
-    if k in ("select", "radio") or _options(control):
-        if sem == S.REGION:
-            return _pick_option(control, identity.region_name, identity.region_code)
-        if sem == S.COUNTRY:
-            return _pick_option(control, identity.country, "US", "USA")
-        if sem == S.CITY:
-            return _pick_option(control, identity.city)
-        if sem == S.CARD_EXPIRY:
-            return _pick_option(control, identity.card_expiry.split("/")[0])
-        if sem == S.DOB:
-            return _pick_option(control, identity.date_of_birth[:4])
-        if k == "checkbox" and control.get("group_id"):
-            # A MULTI-SELECT is answered with the member that asserts the LEAST
-            # — the same rule the advance-unblock experiment applies, for the
-            # same reason: every member answers the question equally well, and
-            # only the negative one invents nothing about a synthetic person.
-            # DOM order is not a safe proxy: an app that lists "None" last would
-            # otherwise have a condition disclosed on its behalf.
-            for opt in _options(control):
-                if vocab.NEGATIVE_OPTION_RE.match(str(opt).strip()):
-                    return opt
-        picked = _pick_option(control)
-        if picked is not None:
-            return picked
 
-    if k in ("checkbox", "toggle"):
-        # Only a REQUIRED consent is cleared — an optional toggle changes what the
-        # application does, and choosing for the client would invent a scenario
-        # they never asked to test.
-        if sem == S.CONSENT and (control.get("required")
-                                 or (control.get("qec") or {}).get("required")):
-            return "true"
-        return None
+def explain(semantic_type: str, control: Mapping[str, Any], identity: Identity,
+            *, kind: str = "", data_mode: str = DATA_MODE_USER,
+            section: str = "") -> "_generator.Candidate":
+    """:func:`value_for`, plus the reasoning that produced the value.
 
-    mapping = {
-        S.GIVEN_NAME: identity.given_name,
-        S.FAMILY_NAME: identity.family_name,
-        S.FULL_NAME: identity.full_name,
-        S.USERNAME: identity.username,
-        S.EMAIL: identity.email,
-        S.COMPANY: identity.company,
-        S.JOB_TITLE: identity.job_title,
-        S.STREET: identity.street_address,
-        S.STREET_2: identity.street_address_2 or identity.street_address,
-        S.CITY: identity.city,
-        S.REGION: identity.region_name,
-        S.POSTAL_CODE: identity.postal_code,
-        S.COUNTRY: identity.country,
-        S.URL: "https://example.com",
-        S.FREE_TEXT: "autotest",
-    }
-    if sem in mapping:
-        return _fit(mapping[sem], control)
+    Same decision, same determinism — the caller that wants provenance in the
+    field ledger reads this, and the caller that only wants a string keeps the
+    older, narrower contract above.  Two entry points onto ONE decision, so the
+    explanation can never drift from the value it explains."""
+    return _generator.generate(
+        semantic_type, control, persona_for(identity), kind=kind,
+        name=str(control.get("name") or ""), section=section,
+        answer_choices=(_norm(data_mode) == DATA_MODE_AGENT))
 
-    if sem == S.PHONE:
-        return _fit(_digits_only(identity.phone, control), control)
-    if sem == S.SSN:
-        return _fit(_digits_only(identity.national_id, control), control)
-    if sem == S.CARD_NUMBER:
-        return _fit(identity.card_number, control)
-    if sem == S.CARD_CVC:
-        return _fit(identity.card_cvc, control)
-    if sem == S.CARD_EXPIRY:
-        return _fit(identity.card_expiry, control)
-    if sem == S.DOB:
-        return _date_for(control, identity.date_of_birth)
-    if sem == S.DATE:
-        return _date_for(control, date.today().isoformat())
-    if sem == S.TIME:
-        return "12:00"
-    if sem == S.AGE:
-        return _number_in_range(control, identity.age)
-    if sem == S.QUANTITY:
-        return _number_in_range(control, 1)
-    if sem == S.CURRENCY:
-        return _number_in_range(control, 100)
-    if sem == S.PERCENT:
-        return _number_in_range(control, 10)
-    if sem == S.CHOICE:
-        return _pick_option(control)
-    if sem == S.CONSENT:
-        return "true" if (control.get("required")
-                          or (control.get("qec") or {}).get("required")) else None
-    return None
+
+#: One household per identity, for the life of the process.
+#:
+#: Deriving it costs a handful of SHA-256 blocks, which is nothing per field and
+#: real across the thousands of fields a deep crawl fills.  Keyed on the
+#: identity's own seed AND its birth date, so an identity built against an
+#: explicit reference date can never collide with one built against today's —
+#: two different people who share a seed must not share a household.
+_PERSONA_CACHE: "dict[tuple[str, str], _persona.Persona]" = {}
+#: A crawl meets one identity, occasionally a handful; a runaway cache would be
+#: a leak in a long-lived process, so it is bounded and simply stops caching.
+_PERSONA_CACHE_MAX = 32
+
+
+def persona_for(identity: Identity) -> "_persona.Persona":
+    """The coherent household grown around this identity.
+
+    The applicant IS the identity, verbatim — every value the old body produced
+    from ``identity.x`` still comes from the same place, so nothing that already
+    worked moves."""
+    key = (identity.seed, identity.date_of_birth)
+    cached = _PERSONA_CACHE.get(key)
+    if cached is not None:
+        return cached
+    built = _persona.derive_persona(identity.seed, identity=identity)
+    if len(_PERSONA_CACHE) < _PERSONA_CACHE_MAX:
+        _PERSONA_CACHE[key] = built
+    return built

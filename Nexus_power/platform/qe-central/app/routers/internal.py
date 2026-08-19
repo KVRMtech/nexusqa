@@ -52,7 +52,7 @@ from sqlalchemy import select
 from ..artifacts.creator import create_crawl_artifact
 from ..clients import factory, platform_api
 from ..config import settings
-from ..services import field_agent
+from ..services import field_agent, rule_store
 from ..clients.config import SIGNATURE_HEADER, phase1_settings
 from ..clients.manifest_mapper import (
     ManifestMappingError,
@@ -75,6 +75,40 @@ router = APIRouter(prefix="/internal", tags=["QEC Internal"])
 _MANIFEST_FILENAME = "manifest.jsonl"
 #: Terminal states that make a repeat callback a no-op (idempotency).
 _TERMINAL_STATES = frozenset({"completed", "refused", "failed"})
+
+#: M1.7 — stop reasons that mean the crawl did NOT prove what it set out to
+#: prove. Mirrors ``app.crawl_constants.FAILED_STOP_REASONS`` in the explorer.
+#: The two services share no library, so this list and that one must change
+#: together or a new failure reason is invented on one side and read as a
+#: success on the other. The contract test asserts they match.
+_FAILED_STOP_REASONS = frozenset({
+    "error", "auth_failed", "inventory_failed", "resume_unrecoverable",
+    "no_evidence",
+})
+
+
+def _disposition_of(body: "CompletionCallback") -> str:
+    """The terminal disposition of a completion — the explorer's if it sent one.
+
+    An explorer that predates M1.7 sends no ``disposition``, and for it the
+    reasons that existed then map exactly as they always did. A NEWER explorer
+    that sends one is believed, because it adjudicated against evidence this
+    service cannot see (the inventory-failure count, the resumed-state count).
+
+    Fail-closed on an unrecognised reason: something nobody classified must never
+    read as a success.
+    """
+    declared = (body.disposition or "").strip().lower()
+    if declared in ("completed", "failed", "incomplete"):
+        return declared
+    reason = (body.stop_reason or "").strip().lower()
+    if reason in _FAILED_STOP_REASONS:
+        return "failed"
+    if reason in ("cancelled", "auth_required_no_credentials"):
+        return "incomplete"
+    if reason == "completed" or reason.startswith("budget_"):
+        return "completed"
+    return "failed" if reason else "completed"
 
 
 class CompletionCallback(BaseModel):
@@ -100,6 +134,20 @@ class CompletionCallback(BaseModel):
     #: submit_candidates. Carried on the exploration ``stats`` so the app UI can
     #: turn "why so shallow?" into a NAMED, seed-this-field remediation list.
     coverage: dict | None = None
+    #: M1.7 — the terminal DISPOSITION the explorer ADJUDICATED from evidence
+    #: (``completed`` / ``failed`` / ``incomplete``; see ``app/completion.py`` in
+    #: the explorer). ``stop_reason`` says WHAT happened; this says whether the
+    #: crawl may be believed. Read rather than re-derived: two services each
+    #: mapping a stop-reason string onto a judgement is two mappings that drift.
+    #: Absent (an older explorer) ⇒ derived locally by :func:`_disposition_of`,
+    #: which is byte-identical to the pre-M1.7 behaviour for every reason that
+    #: existed then.
+    disposition: str = Field(default="", max_length=24)
+    #: The evidence the disposition was adjudicated FROM, so a completion claim
+    #: can be re-checked against counts rather than trusted.
+    evidence: dict | None = None
+    #: True when the explorer REFUSED a completion claim for want of evidence.
+    downgraded: bool = Field(default=False)
 
 
 class _UsageAccumulator:
@@ -876,6 +924,39 @@ async def complete_crawl(crawl_id: str, request: Request) -> dict:
             "idempotent": True,
         }
 
+    # ── 3b) M1.7 · AN ADJUDICATED FAILURE IS A FAILURE ────────────────────
+    # Checked BEFORE the manifest is opened, and that ordering is the whole
+    # point. A crawl that could not READ a page still wrote a manifest — the
+    # records it managed before the failure are real — so a manifest-exists test
+    # says nothing about whether the crawl may be believed. Mapping the bundle
+    # here would write a partial capture over a good prior artifact and mark the
+    # row ``completed``, which is precisely the shape of green-wash this
+    # milestone exists to remove: the evidence is genuine, the CLAIM about it is
+    # not.
+    #
+    # The row is failed with the explorer's own diagnosis. The manifest is left
+    # in place, untouched: it is a durable, resumable prefix, and T-GW-03 exists
+    # so the crawl can be CONTINUED once the cause is fixed rather than restarted.
+    if _disposition_of(body) == "failed":
+        reason = (body.error
+                  or f"crawl did not complete honestly (stop_reason={body.stop_reason})")
+        await _mark(tenant_id, exploration_id, status="failed",
+                    error=reason[:2000],
+                    stats={"coverage": body.coverage or {}, "crawl_id": crawl_id,
+                           "stop_reason": body.stop_reason,
+                           "evidence": body.evidence or {},
+                           "downgraded": bool(body.downgraded)},
+                    finished_at=utc_now())
+        logger.warning(
+            "qec.internal.adjudicated_failure",
+            extra={"exploration_id": exploration_id, "crawl_id": crawl_id,
+                   "stop_reason": body.stop_reason, "downgraded": bool(body.downgraded),
+                   "evidence": body.evidence or {}, "reason": reason[:300]},
+        )
+        return {"status": "failed", "exploration_id": exploration_id,
+                "error": reason[:500], "stop_reason": body.stop_reason,
+                "downgraded": bool(body.downgraded)}
+
     # ── 4) The explorer reported an honest failure with no usable manifest ─
     manifest_file = _crawl_dir(crawl_id) / _MANIFEST_FILENAME
     if not manifest_file.is_file():
@@ -1298,6 +1379,31 @@ async def complete_crawl(crawl_id: str, request: Request) -> dict:
         )
     stats_dict["generate"] = generate_result
 
+    # ── M1.7 / T-GW-04 · THE LEARNING SURVIVES THE CRAWL ───────────────────
+    # The rules this crawl proved become durable, versioned, tenant-scoped
+    # knowledge that the NEXT dispatch of this app hands back to the explorer.
+    # Until this call, every crawl re-ran the same experiment against the same
+    # checkbox to re-derive the same fact.
+    #
+    # Best-effort, and only here: a rule store that is unreachable costs a future
+    # crawl one repeated experiment, never this crawl its evidence. That is the
+    # opposite of the discipline everywhere else in this milestone, and the
+    # asymmetry is deliberate — a missing OPTIMISATION is not a false claim.
+    rules_persisted = 0
+    reuse = rule_store.reuse_metrics(body.coverage)
+    try:
+        rules_persisted = await rule_store.persist_rules(
+            tenant_id, app_id,
+            (body.coverage or {}).get("discovered_rules") or [],
+            crawl_id=crawl_id,
+        )
+    except Exception as exc:                       # pragma: no cover - defensive
+        logger.warning(
+            "qec.internal.rule_persist_failed",
+            extra={"exploration_id": exploration_id, "error": str(exc)[:300]},
+        )
+    stats_dict["rules"] = {"persisted": rules_persisted, **reuse}
+
     await _mark(
         tenant_id, exploration_id,
         status="completed",
@@ -1314,7 +1420,10 @@ async def complete_crawl(crawl_id: str, request: Request) -> dict:
                "artifact_id": created.artifact_id, "extractor_version": extractor_version,
                "auth_import_ok": auth_import.get("ok"),
                "generated": generate_result.get("generated"),
-               "generate_ok": generate_result.get("ok")},
+               "generate_ok": generate_result.get("ok"),
+               "rules_persisted": rules_persisted,
+               "rules_reused": reuse.get("rules_reused"),
+               "rule_reuse_rate": reuse.get("rule_reuse_rate")},
     )
     return {
         "status": "completed",

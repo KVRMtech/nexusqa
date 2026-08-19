@@ -130,6 +130,30 @@ class ScriptedPage:
     displayed_values: list[dict[str, Any]] = field(default_factory=list)
     network: list[dict[str, Any]] = field(default_factory=list)
     dialogs: list[str] = field(default_factory=list)
+    #: A4.3 — the application's own DECLARED status regions (role=status /
+    #: aria-live=polite) visible on this page. The strongest same-page
+    #: confirmation signal there is: the app is telling us, not us inferring.
+    statuses: list[str] = field(default_factory=list)
+    #: Plain visible text blocks. Modelled because most applications render a
+    #: success banner as an undecorated div with no ARIA role at all — including
+    #: the one this milestone is proven on — so a fixture that only offered
+    #: `statuses` would prove a capability real pages cannot exercise.
+    texts: list[str] = field(default_factory=list)
+    #: M1.3 — the requests clicking a control ACTUALLY fires, classified by the
+    #: REAL guard.  ``{control_name: [{"method": "POST", "url": "..."}]}``.
+    #: Empty (the default) means the fake behaves exactly as it always has, so
+    #: every existing fixture and golden is untouched.
+    emits: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
+    #: A server-side precondition for LEAVING this page: the transition fires
+    #: only once the named token has been persisted by an ALLOWED request.  This
+    #: is what makes the fixture a real proof rather than a mime — a blocked
+    #: Save Draft leaves the server without the draft, and the wizard genuinely
+    #: cannot advance, which is precisely the production behaviour M1.3 exists
+    #: to unblock.
+    requires_persisted: str = ""
+    #: ``{control_name: token}`` — what an ALLOWED request from this control
+    #: persists on the server.
+    persists: dict[str, str] = field(default_factory=dict)
 
 
 def control(role: str, name: str, **over: Any) -> dict[str, Any]:
@@ -165,6 +189,46 @@ class ScriptedBrowser(BrowserPort):
         self.materialize_calls = 0
         self.network_drains = 0
         self._drained: set[str] = set()
+        # M1.3 network simulation.  Unbound (the default for every pre-existing
+        # fixture) the whole mechanism is inert.
+        self._guard: Any = None
+        self._now: Any = None
+        self.persisted: set[str] = set()
+        self.allowed_requests: list[dict[str, Any]] = []
+        self.blocked_requests: list[dict[str, Any]] = []
+
+    def bind_crawler(self, crawler: Any) -> None:
+        """Wire the fake app's network to the crawl's REAL guard + clock.
+
+        Without this the fake cannot prove anything about the guard; with it,
+        every request the scripted app makes is classified by exactly the object
+        the Playwright route handler consults in production, on exactly the
+        clock the guard's windows are measured against."""
+        self._guard = crawler.guard
+        self._now = crawler.now_ms
+
+    def _fire(self, control_name: str) -> None:
+        """Emit this control's requests through the guard, and persist what it
+        allowed.  A BLOCKED request changes no server state — which is the
+        whole point of the guard, and the reason a blocked Save Draft leaves the
+        wizard genuinely stuck."""
+        page = self._page()
+        requests = page.emits.get(str(control_name or "")) or ()
+        if not requests or self._guard is None:
+            return
+        for req in requests:
+            method = str(req.get("method") or "GET").upper()
+            url = str(req.get("url") or "")
+            decision = self._guard.decide(method, url, now_ms=int(self._now()))
+            record = {"method": method, "url": url, "allow": bool(decision.allow),
+                      "rule_id": decision.rule_id}
+            if decision.allow:
+                self.allowed_requests.append(record)
+                token = page.persists.get(str(control_name or ""))
+                if token:
+                    self.persisted.add(token)
+            else:
+                self.blocked_requests.append(record)
 
     # -- internals ------------------------------------------------------------
 
@@ -172,8 +236,14 @@ class ScriptedBrowser(BrowserPort):
         return self._pages.get(self._key) or ScriptedPage(url=self._key)
 
     def _advance(self, name: Any) -> Optional[str]:
-        dest = self._page().transitions.get(str(name or ""))
+        page = self._page()
+        dest = page.transitions.get(str(name or ""))
         if dest and dest in self._pages:
+            # THE SERVER'S OWN GATE.  A step whose state was never persisted
+            # does not render the next step, exactly as a real wizard does not.
+            required = str(page.requires_persisted or "")
+            if required and required not in self.persisted:
+                return None
             self._key = dest
             return self._pages[dest].url
         return None
@@ -208,6 +278,12 @@ class ScriptedBrowser(BrowserPort):
     async def error_texts(self) -> list[str]:
         return list(self._page().errors)
 
+    async def status_texts(self) -> list[str]:
+        return list(self._page().statuses)
+
+    async def visible_texts(self) -> list[str]:
+        return list(self._page().texts)
+
     async def screenshot_png(self) -> bytes:
         return PNG_1x1
 
@@ -228,6 +304,10 @@ class ScriptedBrowser(BrowserPort):
 
     async def click(self, control: Mapping[str, Any]) -> RawObservation:
         before = self._page().url
+        # ORDER MATTERS: the request fires FIRST (the browser sends it as the
+        # click is handled), and only its outcome decides whether the server
+        # will serve the next step.
+        self._fire(control.get("name"))
         after = self._advance(control.get("name"))
         return RawObservation(url_before=before, url_after=after or before)
 
@@ -376,6 +456,10 @@ def run_fixture(fixture: Fixture, work_dir: Path,
     kwargs.update(fixture.kwargs)
 
     crawler = Crawler(port, **kwargs)
+    # Wire the fake app's network to the crawl's real guard.  Inert for every
+    # fixture that declares no ``emits``.
+    if hasattr(port, "bind_crawler"):
+        port.bind_crawler(crawler)
     summary = asyncio.run(crawler.run())
 
     manifest = emit.manifest_path(str(work_dir), "char-crawl")

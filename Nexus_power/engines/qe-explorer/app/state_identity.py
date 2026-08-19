@@ -25,12 +25,14 @@ switched on per-tenant without invalidating states already visited.
 """
 from __future__ import annotations
 
+import hashlib
 import logging
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from typing import Any, Mapping, Optional, Protocol, Sequence
 from urllib.parse import urlsplit
 
 from . import emit
+from . import observation_health
 from . import value_infer
 from .browser import PageObservation
 from .fingerprint import state_fingerprint
@@ -49,8 +51,112 @@ _MAX_DANGER_NAMES = 40
 # ─── Identity ────────────────────────────────────────────────────────────────
 
 
+#: Controls whose DECLARED grouping is meaningful (a question, not a lone toggle).
+#: Mirrors ``groupKeyOf``: only radios and checkboxes ever carry a ``group_key``.
+_GROUPED_KINDS = frozenset({"radio", "checkbox"})
+
+
+def structural_signature(controls: Sequence[Mapping[str, Any]]) -> str:
+    """T-SI-01/T-SI-03: a digest of WHICH QUESTIONS this page asks, ignoring what
+    they are called and what was answered.
+
+    THE SAME-SHAPE PROBLEM, STATED EXACTLY.  A one-question-at-a-time health
+    questionnaire renders ``radio "Yes" / radio "No" / button "Continue"`` at
+    every one of its twenty steps, from one URL, with no dialog.  All three
+    signals :func:`app.fingerprint.state_fingerprint` hashes are therefore
+    constant, and twenty logical steps collapse to ONE digest — measured, not
+    supposed: 20 steps produced 1 fingerprint before this function existed.
+
+    The DOM does distinguish them, just not through any signal the base
+    fingerprint reads.  Question 3's radios declare ``name="q03"`` and question
+    17's declare ``name="q17"``; ``groupKeyOf`` already lifts that into
+    ``group_key`` (``name:doc:q03``) and ``build_inventory`` already hashes it
+    into ``group_id``.  Both are pure DOM STRUCTURE — which question is on
+    screen — and neither can carry a user value, an ordinal, a clock or a
+    counter.  The discriminator was already being captured; nothing read it.
+
+    Identity per control is ``group_id`` when the inventory stamped one (it
+    folds in the frame selector, so the same question in two iframes stays two
+    questions) and the raw ``group_key`` otherwise.  Distinct keys are sorted,
+    so DOM order never moves the digest.
+
+    Returns "" when the page declares no grouping at all — a page with no
+    radio/checkbox question has nothing structural to say, and an empty return
+    keeps it OUT of the payload so its digest is unchanged.  That "" is the
+    honest answer, not a failure: it hands the decision to the next rung
+    (perceptual) rather than inventing a difference.
+    """
+    keys: set[str] = set()
+    for control in controls or ():
+        if not isinstance(control, Mapping):
+            continue
+        if str(control.get("kind") or "").strip().lower() not in _GROUPED_KINDS:
+            continue
+        key = str(control.get("group_id") or "").strip()
+        if not key:
+            key = str(control.get("group_key") or "").strip()
+        if key:
+            keys.add(key[:120])
+    if not keys:
+        return ""
+    basis = "\x1f".join(sorted(keys))
+    return hashlib.sha256(basis.encode("utf-8")).hexdigest()[:32]
+
+
+@dataclass(frozen=True)
+class StepSignals:
+    """Everything OBSERVED about one page beyond ``url`` + controls + dialogs.
+
+    Frozen, hashable, all-scalar: it is compared with ``==`` on the hot path and
+    never mutated.  Every field is value-free — a structure digest, a coarse
+    pixel hash and a set of ``kind:name`` control identities.  No timestamp, no
+    counter and no user input can reach it.
+    """
+
+    #: The DOM-only digest (url + interactive controls + dialogs) — the
+    #: historical fingerprint. Carried so the ladder can compare BASE-to-BASE.
+    #: Comparing a new base against the previous COMPOSITE is the bug this field
+    #: exists to prevent: once step 2 earns a composite digest, every later step
+    #: looks "different from the previous fingerprint" at rung 1 and is handed
+    #: back the collapsed base — so a 20-step wizard re-collapsed from step 3 on.
+    base: str = ""
+    structural: str = ""
+    perceptual: str = ""
+    revealed: tuple[str, ...] = ()
+
+    def is_empty(self) -> bool:
+        """True when nothing beyond the base signals was observed."""
+        return not (self.structural or self.perceptual or self.revealed)
+
+
+class CorruptObservationError(RuntimeError):
+    """Raised when something asks for the identity of a page that was never read.
+
+    M1.7 / T-GW-01.  Carries no recovery semantics of its own — the crawl loop
+    decides what to do (retry once, then terminate as ``inventory_failed``).  It
+    exists so that "we could not read the page" cannot be answered with a
+    perfectly well-formed 64-character hex string.
+    """
+
+
 class StateFingerprinter:
-    """Implements the frozen :class:`app.protocols.StateIdentity` contract."""
+    """Implements the frozen :class:`app.protocols.StateIdentity` contract.
+
+    STATEFUL FOR EXACTLY ONE REASON (M1.5 / T-ND-04).  It remembers which PAGE
+    each base digest was first seen on, so a popup that renders the same shape
+    at the same URL as its opener does not inherit the opener's identity.  See
+    :meth:`fingerprint`.  One instance per crawl, owned by the crawler.
+    """
+
+    #: Bound on the base-digest → first-page map.  A crawl that visits more
+    #: distinct states than this stops discriminating by page, which degrades to
+    #: exactly the pre-M1.5 behaviour rather than to a memory leak.
+    _MAX_PAGE_CLAIMS = 4000
+
+    __slots__ = ("_page_claims",)
+
+    def __init__(self) -> None:
+        self._page_claims: dict[str, str] = {}
 
     def fingerprint(
         self,
@@ -59,14 +165,283 @@ class StateFingerprinter:
         controls: Sequence[Mapping[str, Any]],
         dialogs: Sequence[str] = (),
         perceptual_hash: Optional[str] = None,
+        structural_hash: Optional[str] = None,
+        revealed_delta: Sequence[str] = (),
+        step_ordinal: int = 0,
+        page_token: str = "",
+        observation_ok: bool = True,
     ) -> str:
         """The 64-char sha256 hex identifying this page state.
 
+        ``observation_ok=False`` RAISES :class:`CorruptObservationError` (M1.7 /
+        T-GW-01).  This is the choke point, and it is a hard raise rather than a
+        sentinel return on purpose: an identity minted from a failed read is the
+        first link of the whole green-wash chain, and a caller that forgets to
+        check a returned sentinel re-opens it silently.  A raise cannot be
+        forgotten.  The default is ``True`` so every historical call site — the
+        auth flow, the ladder, the wizard walk, every test — behaves byte for
+        byte as before; only the paths that hold a health-carrying observation
+        pass the flag, and those are precisely the paths that record states.
+
         ``perceptual_hash=None`` and ``""`` are the SAME request — see the
-        module docstring for why that equivalence matters to M1.1.
+        module docstring for why that equivalence matters to M1.1.  The three
+        signals added for T-SI-01 behave the same way: omitted or empty means
+        "not observed", and the digest is then the historical one exactly.
+
+        ``page_token`` (M1.5 / T-ND-04) IS NOT AN UNCONDITIONAL INPUT, and that
+        is the whole design.  The milestone asks for two things that pull in
+        opposite directions:
+
+          * identity must FOLLOW the adopted page — a popup must not be handed
+            the stale opener's fingerprint;
+          * identity must not FRACTURE — a page must not mint a new identity
+            merely because the Playwright object behind it changed.
+
+        Folding the token into every digest would satisfy the first and violate
+        the second (and would move every fingerprint ever persisted).  So the
+        token is admitted on exactly one condition: **this base digest was first
+        seen on a DIFFERENT page**.  The consequences, all of them:
+
+        =====================================  =========================
+        situation                               identity
+        =====================================  =========================
+        single-page crawl (token always "")     unchanged, byte for byte
+        popup with a different URL/shape        already distinct — no token
+        popup identical in shape AND url        DISTINCT (token folded in)
+        adopted page revisiting its own state   same identity (same claim)
+        opener revisiting its own state         same identity (claim is "")
+        =====================================  =========================
+
+        The claim map is what makes it conditional; without it this would be a
+        counter, and a counter manufactures distinctness (see the warning on
+        ``step_ordinal``).
         """
-        return state_fingerprint(url, controls, dialogs,
-                                 perceptual_hash=perceptual_hash or "")
+        if not observation_ok:
+            raise CorruptObservationError(
+                "refusing to fingerprint a page whose inventory read failed "
+                "(url=%s): an identity minted from a failed observation is "
+                "indistinguishable from one minted from an empty page, and that "
+                "is what lets a crashed crawl report itself complete"
+                % (str(url or "?")[:200])
+            )
+
+        base = state_fingerprint(
+            url, controls, dialogs,
+            perceptual_hash=perceptual_hash or "",
+            structural_hash=structural_hash or "",
+            revealed_delta=tuple(revealed_delta or ()),
+            step_ordinal=int(step_ordinal or 0),
+        )
+        token = str(page_token or "")
+        claimed = self._page_claims.get(base)
+        if claimed is None:
+            if len(self._page_claims) < self._MAX_PAGE_CLAIMS:
+                self._page_claims[base] = token
+            return base
+        if claimed == token:
+            return base
+        # A DIFFERENT page produces the identical DOM digest. Re-hash WITH the
+        # page identity so the two states stay two states.
+        return state_fingerprint(
+            url, controls, dialogs,
+            perceptual_hash=perceptual_hash or "",
+            structural_hash=structural_hash or "",
+            revealed_delta=tuple(revealed_delta or ()),
+            step_ordinal=int(step_ordinal or 0),
+            page_token=token,
+        )
+
+
+class WalkIdentity:
+    """The identity POLICY for one journey — which signals a state is entitled to.
+
+    WHY THIS EXISTS AND WHY IT IS NOT A FUNCTION.  Deciding whether the DOM
+    alone identifies a page needs TWO observations: this one and the one before
+    it.  ``state_fingerprint`` sees one, so it can only ever hash what it is
+    given; the choice of what to give it lives here, where the previous step is
+    still in hand.
+
+    THE LADDER, cheapest and most trustworthy first:
+
+      1. **Base differs** (url template, interactive controls, or dialogs) —
+         the DOM already identifies the page.  Emit the HISTORICAL digest with
+         no extra signal, so every state the crawler has ever recorded still
+         hashes to the value it hashed before.  This is the overwhelmingly
+         common path and it costs one hash.
+      2. **Base collapses, structure differs** — same Yes/No/Continue, different
+         declared question (``name="q03"`` -> ``name="q04"``).  DOM-native,
+         free, deterministic.  Admit the structural digest.
+      3. **Base and structure collapse, an answer revealed something** — the
+         trigger->child delta the walk already computes.  Admit it.
+      4. **Every DOM signal collapses, the pixels differ** — the last honest
+         resort, and the only rung that costs I/O.  Admit the perceptual hash.
+      5. **Nothing differs** — then nothing differs.  Return the previous digest
+         unchanged so ``walk_seen`` sees the loop it is there to see.
+
+    RUNG 5 IS THE POINT.  It would be trivial to guarantee twenty distinct
+    fingerprints by folding the step counter into the digest, and it would be a
+    lie: a Continue that does nothing would mint a fresh state on every click,
+    the walk would report twenty steps it never took, and ``TERMINAL_LOOP``
+    would never fire again.  Distinctness has to be EARNED by an observed
+    difference.  That is why ``step_ordinal`` exists on the hasher (a caller
+    that has already established two states differ may legitimately key on it)
+    and is not used here.
+
+    NO HIDDEN GLOBAL STATE.  One instance per walk, owned by the walk, mutated
+    only by :meth:`advance` / :meth:`resync` on that walk's own task.  Two
+    crawls, or two journeys inside one crawl, share nothing.
+    """
+
+    __slots__ = ("_fingerprinter", "_prev_signals", "_prev_fingerprint", "_ordinal")
+
+    def __init__(
+        self,
+        fingerprinter: "StateFingerprinter",
+        *,
+        entry_fingerprint: str,
+        entry_signals: Optional[StepSignals] = None,
+    ) -> None:
+        self._fingerprinter = fingerprinter
+        entry_fp = str(entry_fingerprint or "")
+        # The entry state admits no extra signal, so its composite IS its base.
+        self._prev_signals = entry_signals or StepSignals(base=entry_fp)
+        self._prev_fingerprint = entry_fp
+        self._ordinal = 0
+
+    @property
+    def ordinal(self) -> int:
+        """How many steps this walk has ADVANCED THROUGH (0 at the entry state).
+
+        Audit evidence and the depth metric read this.  It is deliberately not
+        an identity input — see the class docstring.
+        """
+        return self._ordinal
+
+    @property
+    def previous_fingerprint(self) -> str:
+        return self._prev_fingerprint
+
+    @property
+    def previous_signals(self) -> StepSignals:
+        return self._prev_signals
+
+    def needs_perception(
+        self,
+        *,
+        url: str,
+        controls: Sequence[Mapping[str, Any]],
+        dialogs: Sequence[str] = (),
+        structural: Optional[str] = None,
+        revealed: Sequence[str] = (),
+        page_token: str = "",
+    ) -> bool:
+        """Would rung 4 be reached — i.e. is a screenshot worth taking here?
+
+        Lets the walk skip the perceptual hash on every state the DOM already
+        separates, which is nearly all of them.  Pure; mutates nothing.
+        """
+        base = self._fingerprinter.fingerprint(
+            url=url, controls=controls, dialogs=dialogs, page_token=page_token)
+        if base != self._prev_signals.base:
+            return False
+        struct = (structural_signature(controls) if structural is None
+                  else str(structural or ""))
+        rev = tuple(str(r) for r in (revealed or ()) if str(r).strip())
+        return (struct, rev) == (self._prev_signals.structural,
+                                 self._prev_signals.revealed)
+
+    def identify(
+        self,
+        *,
+        url: str,
+        controls: Sequence[Mapping[str, Any]],
+        dialogs: Sequence[str] = (),
+        structural: Optional[str] = None,
+        revealed: Sequence[str] = (),
+        perceptual_hash: str = "",
+        page_token: str = "",
+    ) -> tuple[str, StepSignals]:
+        """Identify one observation against the previous step.  Pure — call
+        :meth:`advance` (or :meth:`resync`) to make the result the new current
+        step.
+
+        Returns ``(fingerprint, signals)``.  ``structural=None`` means "compute
+        it from ``controls``"; pass ``""`` to suppress that rung entirely.
+        """
+        struct = (structural_signature(controls) if structural is None
+                  else str(structural or ""))
+        # M1.5 / T-ND-04 — the page token reaches the ladder through the SAME
+        # door every other signal does: the fingerprinter decides whether it is
+        # admissible (only when this base digest was first claimed by a
+        # different page), so the walk never fractures an identity just because
+        # a popup was adopted somewhere earlier in the journey.
+        base = self._fingerprinter.fingerprint(
+            url=url, controls=controls, dialogs=dialogs, page_token=page_token)
+        signals = StepSignals(
+            base=base,
+            structural=struct,
+            perceptual=str(perceptual_hash or "").strip(),
+            revealed=tuple(str(r) for r in (revealed or ()) if str(r).strip()),
+        )
+        # Rung 1 — the DOM already tells these two states apart. Historical
+        # digest, byte for byte. Compared BASE-to-BASE (see StepSignals.base).
+        if base != self._prev_signals.base:
+            return base, signals
+        # Rungs 2-4 — the base collapsed. Admit ONLY the signals that actually
+        # DIFFER from the previous step; a signal identical on both sides
+        # discriminates nothing and stays out of the payload, so a page reached
+        # twice by the same route keeps one identity.
+        admitted_struct = (signals.structural
+                           if signals.structural != self._prev_signals.structural
+                           else "")
+        admitted_revealed = (signals.revealed
+                             if signals.revealed != self._prev_signals.revealed
+                             else ())
+        # An EMPTY perceptual hash means NOT MEASURED (rung 4 was not reached on
+        # that step, or Pillow was unavailable) — it does NOT mean "blank
+        # screen". Comparing a measured hash against an unmeasured one answers
+        # a question nobody asked and reads as a pixel change, which is how the
+        # first advance of every walk used to look perceptually distinct from
+        # its entry step regardless of what was on screen. Pixels are admitted
+        # only when BOTH sides were actually measured and actually differ; when
+        # they were not, the honest answer is that pixels say nothing here.
+        prev_phash = self._prev_signals.perceptual
+        admitted_phash = (signals.perceptual
+                          if (signals.perceptual and prev_phash
+                              and signals.perceptual != prev_phash)
+                          else "")
+        if not (admitted_struct or admitted_revealed or admitted_phash):
+            # Rung 5 — indistinguishable by every signal we hold. Saying so is
+            # the honest answer, and it is what lets the walk terminate as a
+            # loop instead of inventing progress.
+            return self._prev_fingerprint, signals
+        return (
+            self._fingerprinter.fingerprint(
+                url=url, controls=controls, dialogs=dialogs,
+                structural_hash=admitted_struct,
+                revealed_delta=admitted_revealed,
+                perceptual_hash=admitted_phash,
+                page_token=page_token,
+            ),
+            signals,
+        )
+
+    def advance(self, fingerprint: str, signals: StepSignals) -> None:
+        """Commit an :meth:`identify` result as this walk's new current step."""
+        self._prev_fingerprint = str(fingerprint or "")
+        self._prev_signals = signals
+        self._ordinal += 1
+
+    def resync(self, fingerprint: str, signals: StepSignals) -> None:
+        """Restate the CURRENT step without counting an advance.
+
+        A questionnaire answer re-observes the step it is standing on (it may
+        have revealed a follow-up); that is new information about where we
+        already are, not a step forward, and counting it as one would inflate
+        the very depth metric T-SI-06 exists to make trustworthy.
+        """
+        self._prev_fingerprint = str(fingerprint or "")
+        self._prev_signals = signals
 
 
 # ─── Page-state normalisers ──────────────────────────────────────────────────
@@ -210,7 +585,68 @@ class RecorderHost(Protocol):
     _next_seq: int
     _states: dict[str, dict[str, Any]]
 
-    def _note_boundary_controls(self, controls: Sequence[dict[str, Any]]) -> None: ...
+    def _note_boundary_controls(self, controls: Sequence[dict[str, Any]],
+                                *, url: str = "") -> None: ...
+
+
+async def _active_page_token(port: Any) -> str:
+    """The port's ACTIVE page token, or ``""`` — OPTIONAL + best-effort.
+
+    Reached through ``getattr`` for the same reason ``drain_network`` is: a
+    scripted fake, a jsdom lane and every port written before M1.5 have exactly
+    one page and nothing to report, and they must keep working unchanged.
+    """
+    getter = getattr(port, "active_page_token", None)
+    if getter is None:
+        return ""
+    try:
+        return str(await getter() or "")
+    except Exception:
+        return ""
+
+
+async def _collect_controls_checked(port: Any) -> observation_health.InventoryResult:
+    """The inventory read with its health, degrading to the legacy read.
+
+    OPTIONAL on the port for the same reason ``active_page_token`` is: a scripted
+    fake, the jsdom lane and every port written before M1.7 implement only
+    ``collect_controls``.  For those, the returned list IS the truth — a fake's
+    ``[]`` really is the page it is pretending to be — so it is wrapped as a
+    HEALTHY result and behaviour is byte-identical to before this existed.
+
+    ``None`` MEANS NOT IMPLEMENTED, and that rule is load-bearing.
+    :class:`app.browser.BrowserPort` is a ``Protocol``, and the fakes across this
+    suite SUBCLASS it — so they inherit its method bodies, which are ``...``.
+    ``getattr`` therefore finds ``collect_controls_result`` on every one of them
+    and awaiting it yields ``None``.  The sibling optional verbs get away with
+    this because ``list(None or [])`` is ``[]``, which for network events means
+    the same thing as "not implemented".  Here it emphatically does not: an empty
+    inventory is a claim about the PAGE, and treating the stub's ``None`` as one
+    would report every scripted fake's application as a blank document — the
+    exact confusion this milestone exists to remove, reintroduced by the fix for
+    it.  So ``None`` falls through to the legacy read instead.
+
+    A port that raises out of the legacy read is treated as a failed read rather
+    than allowed to propagate: this sits in the observation path of every visit,
+    and turning a read failure into a crawl-killing exception would trade one
+    dishonest outcome for a different one.
+    """
+    checked = getattr(port, "collect_controls_result", None)
+    if checked is not None:
+        try:
+            result = await checked()
+        except Exception as exc:                      # pragma: no cover - defensive
+            return observation_health.InventoryResult.from_exception(exc)
+        if isinstance(result, observation_health.InventoryResult):
+            return result
+        if result is not None:
+            # A port that answered the new name with the old shape: honour the
+            # data, not the signature.
+            return observation_health.InventoryResult.from_payload(result)
+    try:
+        return observation_health.InventoryResult.from_payload(await port.collect_controls())
+    except Exception as exc:
+        return observation_health.InventoryResult.from_exception(exc)
 
 
 class StateRecorder:
@@ -223,12 +659,26 @@ class StateRecorder:
 
     async def observe(self) -> PageObservation:
         port = self._c._port
+        # M1.7 / T-GW-01 — the CHECKED read.  The controls and the health of the
+        # read that produced them arrive together, so an inventory failure cannot
+        # be laundered into "this page has no controls" by the time this
+        # observation reaches the fingerprinter.
+        inventory = await _collect_controls_checked(port)
         return PageObservation(
             url=await port.current_url(),
             title=await port.title(),
-            raw_controls=await port.collect_controls(),
+            raw_controls=inventory.as_list(),
+            inventory_status=inventory.status,
+            inventory_error=inventory.error,
             dialog_flags=await port.dialog_flags(),
             error_texts=await port.error_texts(),
+            # M1.5 / T-ND-04 — WHICH page this coherent read came from. Part of
+            # the SAME observation as the url and the controls on purpose: a
+            # token fetched separately could name a page the inventory did not
+            # come from, which is precisely the stale-page bug in miniature.
+            # OPTIONAL on the port (a fake or an older adapter has no pages to
+            # swap), so it degrades to "" — the primary-page identity.
+            page_token=await _active_page_token(port),
         )
 
     # -- the states index (what each state ASKED) -----------------------------
@@ -338,7 +788,7 @@ class StateRecorder:
         # `Start Over` and `Back to Dashboard` (confirmed in the crawl's own
         # screenshot) and contributed no boundary control at all, while the same fix
         # captured `Add Beneficiary` on a page reached by ordinary navigation.
-        c._note_boundary_controls(controls)
+        c._note_boundary_controls(controls, url=url)
         seq = c._next_seq
         c._next_seq += 1
         parts = urlsplit(url or "")
@@ -393,6 +843,7 @@ class StateRecorder:
         c._tracker.note_state()
 
 
-__all__ = ["StateFingerprinter", "StateRecorder", "RecorderHost",
+__all__ = ["StateFingerprinter", "WalkIdentity", "StepSignals",
+           "structural_signature", "StateRecorder", "RecorderHost",
            "_action_to_dict", "_displayed_values", "_form_snapshot",
            "_is_password", "_network_calls"]

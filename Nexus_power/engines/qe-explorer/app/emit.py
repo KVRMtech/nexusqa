@@ -57,7 +57,32 @@ REC_PAGE_STATE = "page_state"
 REC_ACTION = "action"
 REC_GUARD_EVENT = "guard_event"
 REC_EDGE = "edge"
+#: M1.3 — one permitted walk mutation (or its linked response), written to
+#: the manifest BEFORE the request is released. Hash-chained; see
+#: app/walk_persist.py.
+REC_WALK_MUTATION = "walk_mutation"
 
+#: A4.3 — one verified (or honestly unverified) landing on the far side of an
+#: approved irreversible boundary. THE canonical journey outcome.
+REC_OUTCOME_MILESTONE = "outcome_milestone"
+
+#: M1.5 — ONE special browser event: a popup/new tab, a native dialog, a
+#: download, or a page leaving the journey. One record type carrying an
+#: ``event`` discriminator rather than four, because a consumer that wants "what
+#: did the browser do outside the DOM" wants all four and would otherwise have
+#: to know four names to ask one question.
+REC_BROWSER_EVENT = "browser_event"
+
+#: M1.7 / T-GW-03 - the RESUME CHECKPOINT: the crawl work list, snapshotted into
+#: the same append-only manifest as the evidence.  Owned by
+#: :mod:`app.resume_state` (which defines its shape); re-exported here so every
+#: manifest record type is enumerable from one module.  ADDITIVE: every existing
+#: reader dispatches on ``type`` and ignores what it does not know, so a manifest
+#: carrying checkpoints maps to a byte-identical exploration bundle.
+REC_CHECKPOINT = "checkpoint"
+
+#: Where captured download artifacts are staged inside the crawl directory.
+ARTIFACT_SUBDIR = "artifacts"
 _MAX_VALUE = 1000
 _PASSWORD_PLACEHOLDER = ""  # a password value is EMPTIED, never redacted-in-place
 
@@ -299,6 +324,20 @@ def manifest_path(work_dir: str, crawl_id: str) -> Path:
     return crawl_dir(work_dir, crawl_id) / MANIFEST_FILENAME
 
 
+def artifact_dir(work_dir: str, crawl_id: str) -> Path:
+    """The per-crawl DOWNLOAD ARTIFACT directory (created on demand).
+
+    A sibling of ``manifest.jsonl`` on the same shared volume, so a captured
+    download travels with the manifest that references it.  The manifest carries
+    the path RELATIVE to the crawl directory (``artifacts/001_policy.pdf``), the
+    same convention screenshots already use — an absolute path would be a
+    container-local fact that means nothing to the reader downstream.
+    """
+    path = crawl_dir(work_dir, crawl_id) / ARTIFACT_SUBDIR
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
 def append_record(work_dir: str, crawl_id: str, record: dict[str, Any]) -> None:
     """Append ONE record to the crawl manifest, durably (fsync).
 
@@ -415,6 +454,62 @@ class ManifestEmitter:
         }
         append_record(self.work_dir, self.crawl_id, record)
 
+    def emit_walk_mutation(self, record: dict) -> None:
+        """Append one walk-mutation audit entry VERBATIM.
+
+        No field is dropped, reordered or reformatted here: the record's
+        ``entry_hash`` was computed over exactly these keys, so a courier that
+        edited them would break the chain it is carrying."""
+        payload = dict(record)
+        payload["type"] = REC_WALK_MUTATION
+        append_record(self.work_dir, self.crawl_id, payload)
+
+    def emit_outcome_milestone(self, record: dict) -> None:
+        """Append one outcome milestone VERBATIM (A4.3 / T-AC-04).
+
+        VERBATIM for the same reason ``emit_walk_mutation`` is: this record IS
+        the evidence that an irreversible action was taken and what came of it.
+        A courier that reformatted it would be editing an audit entry.
+
+        Emitted at the moment the landing is observed rather than rolled up at
+        the end of the crawl, so a crawl that is cancelled, times out or crashes
+        after the crossing still leaves the crossing in the manifest.  A submit
+        that happened and was never written down is the one outcome this whole
+        subsystem exists to make impossible.
+        """
+        payload = dict(record)
+        payload["type"] = REC_OUTCOME_MILESTONE
+        append_record(self.work_dir, self.crawl_id, payload)
+
+    def emit_checkpoint(self, record: dict) -> None:
+        """Append one resume CHECKPOINT verbatim (M1.7 / T-GW-03).
+
+        Stamped with the monotonic clock like every other record so the manifest
+        timeline stays ordered, and written through the same fsynced
+        :func:`append_record` - a checkpoint that survived a crash less reliably
+        than the evidence would let a resume rebuild a work list from a moment
+        the evidence never reached.
+        """
+        payload = dict(record or {})
+        payload["type"] = REC_CHECKPOINT
+        payload["timestamp_ms"] = self.clock.now_ms()
+        append_record(self.work_dir, self.crawl_id, payload)
+
+    def emit_browser_event(self, record: dict) -> None:
+        """Append ONE special-browser-event record VERBATIM (M1.5).
+
+        VERBATIM for the same reason ``emit_walk_mutation`` is: the record IS
+        the evidence that the browser did something the DOM cannot show — a tab
+        was adopted, a native dialog was answered a particular way, a file left
+        the application — and a courier that reformatted it would be editing an
+        audit entry.  The producer (:mod:`app.page_lifecycle`) has already
+        bounded and scrubbed every field.
+        """
+        payload = dict(record)
+        payload["type"] = REC_BROWSER_EVENT
+        payload.setdefault("timestamp_ms", self.clock.now_ms())
+        append_record(self.work_dir, self.crawl_id, payload)
+
     def emit_edge(self, *, from_state: str, to_state: str, verb: str,
                   target_label: str = "") -> None:
         record = {
@@ -514,6 +609,11 @@ def scan_resume_state(records: Iterable[dict[str, Any]]) -> dict[str, Any]:
                 next_frame = max(next_frame, int(shot.get("frame_index") or 0) + 1)
         elif rtype == REC_ACTION:
             last_ts = max(last_ts, int(rec.get("timestamp_ms") or 0))
+        # REC_CHECKPOINT is deliberately NOT read here.  This function answers
+        # "what had the crawl SEEN"; the work list it still had TO DO is a
+        # separate question with a separate reader (:func:`app.resume_state.
+        # rebuild`).  Folding a checkpoint's counters in here would double-count
+        # states that are already present as page_state records.
     return {
         "visited_fingerprints": visited,
         "next_sequence_index": next_seq,

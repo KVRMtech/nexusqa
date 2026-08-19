@@ -72,11 +72,20 @@ EVENT_REFUSED_VERB_GET = "refused_verb_get"
 
 
 class Phase(str, Enum):
-    """The crawl state machine's phase (design §3.2: explore|auth|submit)."""
+    """The crawl state machine's phase (design §3.2: explore|auth|submit,
+    extended by M1.3 with ``walk``).
+
+    ``WALK`` is NOT a wider EXPLORE.  It is a separate, narrower phase the
+    crawler may only be in while a platform-attested actuation window is open
+    (see :mod:`app.walk_persist`), and it refuses things SUBMIT permits — an
+    irreversible verb crosses in SUBMIT under a human approval, and never
+    crosses in WALK, which has no human in the loop.
+    """
 
     EXPLORE = "explore"
     AUTH = "auth"
     SUBMIT = "submit"
+    WALK = "walk"
 
 
 def _coerce_phase(phase: "Phase | str | None") -> "Phase | None":
@@ -117,6 +126,16 @@ class GuardRule:
     SUBMIT_MUTATION_OK = "guard.submit.mutation_ok"
     SUBMIT_NO_ATTESTATION = "guard.submit.no_attestation"
     SUBMIT_NOT_APPROVED = "guard.submit.not_approved"
+
+    # M1.3 — controlled walk persistence.  Every one of these except
+    # WALK_READ_OK / WALK_MUTATION_OK is a refusal, and WALK_MUTATION_OK is
+    # reachable ONLY behind a verified platform attestation.
+    WALK_READ_OK = "guard.walk.read_ok"
+    WALK_MUTATION_OK = "guard.walk.mutation_ok"
+    WALK_NO_ATTESTATION = "guard.walk.no_attestation"
+    WALK_IRREVERSIBLE_BLOCKED = "guard.walk.irreversible_blocked"
+    WALK_NOT_AUTHORIZED = "guard.walk.not_authorized"
+    WALK_BUDGET_EXCEEDED = "guard.walk.budget_exceeded"
 
 
 # ─── Refuse-pack data model ────────────────────────────────────────────────
@@ -556,14 +575,15 @@ def classify_request(
     attestation: "Attestation | None" = None,
     submit_flow_approved: bool = False,
     now_ms: int | None = None,
+    walk_attested: bool = False,
 ) -> GuardDecision:
     """Decide whether one network request may proceed. PURE + fail-closed.
 
     The 6 positional parameters are the pinned shared-conventions signature
     (``method, url, phase, refuse_pack, is_login_domain, action_button_name``).
-    The three keyword-only params gate the SUBMIT phase; they default to the
+    The keyword-only params gate the SUBMIT and WALK phases; they default to the
     safe (refusing) values so a caller that supplies only the positional args
-    can NEVER accidentally authorise a mutating submit.
+    can NEVER accidentally authorise a mutating submit or a walk write.
 
     Rules:
       * unknown method / phase / missing pack        → ABORT (fail-closed);
@@ -575,7 +595,14 @@ def classify_request(
                    ≤30-s window is caller-enforced (design §3.2);
       * SUBMIT   : allow reads (unless mutation-signal GET); allow a mutating
                    request ONLY when a valid attestation is present AND the flow
-                   is approved AND it does not match an irreversible verb.
+                   is approved AND it does not match an irreversible verb;
+      * WALK     : allow reads (unless mutation-signal GET); allow a mutating
+                   request ONLY when ``walk_attested`` — which the caller sets
+                   from a VERIFIED platform provisioning proof, never from a
+                   dispatch field — and it does not match an irreversible verb.
+                   The per-step mutation budget and the actuation window are
+                   caller-enforced (:meth:`app.guard_context.GuardContext.decide`),
+                   exactly as the AUTH and SUBMIT windows already are.
 
     Every returned :class:`GuardDecision` carries a stable ``rule_id`` +
     ``reason``; a block also carries the ``guard_event`` ``event_kind``.
@@ -616,6 +643,41 @@ def classify_request(
                       "critical",
                       f"{normalized_method} blocked in EXPLORE — no mutation "
                       f"is permitted outside AUTH/SUBMIT")
+
+    # ── Phase WALK (M1.3 controlled persistence) ──────────────────────────
+    # A NARROWER grant than SUBMIT, not a wider EXPLORE. Reaching the allow at
+    # the bottom requires a cryptographically verified platform provisioning
+    # proof; the per-step budget and the actuation window are enforced by the
+    # caller BEFORE this function is reached, so a mutation that gets here has
+    # already been counted against a bounded, audited allowance.
+    if resolved_phase is Phase.WALK:
+        if is_read:
+            return _allow(GuardRule.WALK_READ_OK,
+                          f"{normalized_method} allowed in WALK (read-only)")
+        if not walk_attested:
+            return _block(GuardRule.WALK_NO_ATTESTATION, EVENT_BLOCKED_METHOD,
+                          "critical",
+                          f"{normalized_method} refused in WALK — no verified "
+                          f"platform disposable-environment attestation")
+        # IRREVERSIBLE VERBS NEVER CROSS HERE.
+        #
+        # SUBMIT deliberately lets one through on a disposable env, because a
+        # human named that flow and the product exists to prove checkouts and
+        # cancellations actually work. WALK has no human in the loop: it fires
+        # on every wizard step the crawler chooses for itself. "Save Draft"
+        # earning the same rights as "Delete Account" is the escalation this
+        # feature would otherwise ship, so the danger gate stays absolute here
+        # even though the environment is attested throwaway.
+        verb = classify_action_verb(action_button_name, url, refuse_pack)
+        if verb.irreversible:
+            return _block(GuardRule.WALK_IRREVERSIBLE_BLOCKED,
+                          EVENT_REFUSED_VERB_GET, verb.severity,
+                          f"{normalized_method} refused in WALK — carries an "
+                          f"irreversible verb: {verb.reason}")
+        return _allow(GuardRule.WALK_MUTATION_OK,
+                      f"{normalized_method} allowed in WALK (attested disposable "
+                      f"environment, non-irreversible; budget + window are "
+                      f"caller-enforced and audited)")
 
     # ── Phase AUTH ────────────────────────────────────────────────────────
     if resolved_phase is Phase.AUTH:

@@ -8846,6 +8846,7 @@ async def forget_field_memory_endpoint(
 async def field_resolution_endpoint(
     request: Request,
     artifact_id: str = PathParam(..., min_length=1, max_length=64),
+    app_id: str = Query("", max_length=64),
     user: dict = Depends(get_current_user),
 ):
     """Everything a crawl of this application needs in order not to ask twice.
@@ -8853,13 +8854,24 @@ async def field_resolution_endpoint(
     Called by the orchestrator immediately before dispatch. Returns the tenant's own
     remembered values (decrypted for this dispatch only) AND the pooled, value-free
     priors. They are separate keys because they carry entirely different risk and
-    the caller must never conflate them."""
+    the caller must never conflate them.
+
+    T-FE-04 / T-FE-09 · ``app_id`` IS THE SCOPE THAT SURVIVES A RE-CRAWL.  The
+    path still carries an artifact because that is how the route has always been
+    addressed and because legacy rows are keyed by it, but the artifact is a
+    PER-RUN handle: a re-crawl mints a new one.  Keyed on it, the identity seed
+    changed between runs — so the synthetic applicant changed, and every rate
+    quote read as a regression — and remembered values expired after exactly one
+    crawl.  With an application, both are stable, and without one the old
+    behaviour is returned unchanged rather than failing."""
     tenant_id = user["tenant_id"]
     envelope = getattr(request.app.state, "envelope_service", None)
+    app_id = (app_id or "").strip()
     async with tenant_scoped_session(tenant_id) as session:
         await _require_artifact(session, artifact_id, tenant_id)
         recalled = await field_learning.recall(
-            session, envelope=envelope, tenant_id=tenant_id, artifact_id=artifact_id)
+            session, envelope=envelope, tenant_id=tenant_id,
+            artifact_id=artifact_id, app_id=app_id)
         priors = await field_learning.load_priors(session, tenant_id=tenant_id)
         consent = await field_learning.get_consent(session, tenant_id=tenant_id)
     # Refuse to hand out priors that are not value-free rather than distribute them:
@@ -8867,15 +8879,23 @@ async def field_resolution_endpoint(
     if not field_learning.priors_are_value_free(priors):
         _logger.error("test_factory.field_priors.not_value_free artifact=%s", artifact_id)
         priors = {}
-    return {"artifact_id": artifact_id, "recalled_values": recalled,
+    # THE SEED AND THE MEMORY SHARE ONE SCOPE, deliberately.  A person who
+    # rotates while their remembered values persist produces a form holding one
+    # person's postcode beside another person's name, which validates worse than
+    # either alone.
+    seed = (f"v{field_learning.SCOPE_VERSION}::{tenant_id}::{app_id}" if app_id
+            else f"{tenant_id}::{artifact_id}")
+    return {"artifact_id": artifact_id, "app_id": app_id,
+            "recalled_values": recalled,
             "field_priors": priors, "consent": consent,
-            "identity_seed": f"{tenant_id}::{artifact_id}"}
+            "identity_seed": seed}
 
 
 @router.post("/api/v1/test-factory/{artifact_id}/field-outcome")
 async def field_outcome_endpoint(
     body: dict,
     artifact_id: str = PathParam(..., min_length=1, max_length=64),
+    app_id: str = Query("", max_length=64),
     user: dict = Depends(get_current_user),
 ):
     """P5 - did the APPLICATION accept the value we remembered?
@@ -8900,7 +8920,7 @@ async def field_outcome_endpoint(
             accepted = bool(o.get("accepted"))
             await field_learning.record_outcome(
                 session, tenant_id=tenant_id, artifact_id=artifact_id,
-                signature=sig, accepted=accepted)
+                signature=sig, accepted=accepted, app_id=(app_id or "").strip())
             await field_learning.observe_prior(
                 session, tenant_id=tenant_id, signature=sig,
                 semantic_type=str(o.get("semantic_type") or "unknown"),

@@ -690,6 +690,78 @@ INVENTORY_JS = r"""
     return "";                              // ungrouped → behaves exactly as before
   }
 
+  // ── VALIDITY, SCOPED TO THE CONTROL THAT OWNS IT ─────────────────────────
+  //
+  // Nothing here was ever captured, which is why validity had to be read from
+  // the PAGE: `error_texts()` returns every visible [role=alert] on the
+  // document, so a cookie banner marked role=alert (they nearly all are, so a
+  // screen reader announces them) failed every fill on the page, and one real
+  // error on field 3 failed fields 4 through 12 as well.
+  //
+  // These three attributes are the accessibility contract for exactly this
+  // question, and every form library in common use already emits them.
+  //
+  // VALUE-FREE: an error MESSAGE is product UI text, the same class of string as
+  // a label or an option — it says what the application demands, never what
+  // anybody entered.
+  function errorTextFor(el, doc) {
+    var ids = (attr(el, "aria-errormessage") + " " +
+               attr(el, "aria-describedby")).split(/\s+/);
+    var out = [];
+    for (var i = 0; i < ids.length && out.length < 2; i++) {
+      if (!ids[i]) continue;
+      try {
+        var node = doc.getElementById(ids[i]);
+        if (!node || !isVisible(node)) continue;
+        var t = norm(node.textContent);
+        if (t) out.push(t);
+      } catch (e) {}
+    }
+    if (!out.length) {
+      // The convention every form library falls back to when it does not wire
+      // aria-describedby: an error node whose id is the field id plus a suffix.
+      var base = attr(el, "id");
+      var SUFFIXES = ["-error", "_error", "-err", "_err", "-error-message",
+                      "-helper-text", "-validation"];
+      for (var j = 0; j < SUFFIXES.length && !out.length; j++) {
+        try {
+          var n2 = doc.getElementById(base + SUFFIXES[j]);
+          if (n2 && isVisible(n2)) {
+            var t2 = norm(n2.textContent);
+            if (t2) out.push(t2);
+          }
+        } catch (e) {}
+      }
+    }
+    return clip(out.join(" "), MAX_LANDMARK);
+  }
+
+  // The browser's OWN verdict on the value the control currently holds.  Free,
+  // exact, and the strongest signal there is — it is the constraint the browser
+  // will itself enforce on submit, in the browser's own words.
+  function nativeValidationMessage(el) {
+    try {
+      if (typeof el.checkValidity !== "function") return "";
+      if (el.checkValidity()) return "";
+      return clip(norm(el.validationMessage || ""), MAX_LANDMARK);
+    } catch (e) { return ""; }
+  }
+
+  // The SECTION heading a control sits under.
+  //
+  // A real application labels the group once — "Beneficiary Information" — and
+  // then labels the fields inside it plainly: "First Name", "Date of Birth".
+  // Read only the control's own name and every one of them belongs to the
+  // applicant, which is exactly how a beneficiary came to be filled with the
+  // insured.  The nearest landmark already computes this; it was simply thrown
+  // away unless two controls collided.
+  //
+  // Product UI text, never a value — the same discipline as a label.
+  function sectionOf(el, doc) {
+    var lm = nearestLandmark(el, doc);
+    return lm && lm.name ? clip(lm.name, MAX_LANDMARK) : "";
+  }
+
   function nearestLandmark(el, doc) {
     var cur = parentAcross(el);
     var hops = 0;
@@ -833,6 +905,14 @@ INVENTORY_JS = r"""
       draggable: (attr(el, "draggable") === "true") ||
                  (attr(el, "aria-grabbed") !== ""),
       roledescription: lc(attr(el, "aria-roledescription")),
+      // CONTROL-SCOPED VALIDITY (see errorTextFor / nativeValidationMessage).
+      aria_invalid: lc(attr(el, "aria-invalid")),
+      aria_describedby: attr(el, "aria-describedby"),
+      aria_errormessage: attr(el, "aria-errormessage"),
+      error_text: errorTextFor(el, doc),
+      validation_message: nativeValidationMessage(el),
+      // POSSESSOR CONTEXT (see sectionOf).
+      section: sectionOf(el, doc),
       landmark: nearestLandmark(el, doc)
     };
   }

@@ -596,7 +596,8 @@ async def mirror_environment_profile(
     return False
 
 
-async def fetch_field_resolution(*, tenant_id: str, artifact_id: str) -> dict:
+async def fetch_field_resolution(*, tenant_id: str, artifact_id: str,
+                                 app_id: str = "") -> dict:
     """Everything a crawl of this application needs in order not to ask twice.
 
     Two halves under separate keys because they carry entirely different risk:
@@ -604,10 +605,19 @@ async def fetch_field_resolution(*, tenant_id: str, artifact_id: str) -> dict:
     ``field_priors`` is pooled and value-free. They must never be conflated, so
     they are never merged here.
 
+    T-FE-04 / T-FE-09 · ``app_id`` IS WHAT MAKES ANY OF THIS OUTLIVE ONE CRAWL.
+    The artifact is a per-RUN handle and a re-crawl mints a new one, so a memory
+    keyed on it expires after exactly one crawl and an identity seeded from it
+    gives a DIFFERENT applicant every run.  The application is the thing that
+    stays the same, so it is what both are scoped by.
+
     NEVER raises. Without memory a crawl still runs — it fills what it can and asks
     for the rest, which is exactly the behaviour that existed before any of this.
     """
-    if not artifact_id:
+    # An application with no completed crawl yet has no artifact, and that is no
+    # longer a reason to skip: the identity seed and any memory this tenant has
+    # already given us for this application are both available without one.
+    if not artifact_id and not app_id:
         return {"recalled_values": {}, "field_priors": {}, "identity_seed": ""}
     try:
         token = mint_service_jwt(tenant_id)
@@ -617,6 +627,7 @@ async def fetch_field_resolution(*, tenant_id: str, artifact_id: str) -> dict:
         ) as client:
             resp = await client.get(
                 f"/api/v1/test-factory/{artifact_id}/field-resolution",
+                params={"app_id": app_id} if app_id else None,
                 headers={"Authorization": f"Bearer {token}"},
             )
             if resp.status_code != 200:

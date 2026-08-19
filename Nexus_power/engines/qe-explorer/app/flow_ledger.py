@@ -28,10 +28,12 @@ from collections import Counter
 from typing import Any, Iterable, Mapping, Sequence
 
 __all__ = [
-    "TERMINAL_SUBMIT_BOUNDARY", "TERMINAL_NO_ADVANCE", "TERMINAL_BUDGET",
+    "TERMINAL_SUBMIT_BOUNDARY", "TERMINAL_SUBMIT_CROSSED", "TERMINAL_NO_ADVANCE",
+    "TERMINAL_BUDGET",
     "TERMINAL_LOOP", "TERMINAL_CANCELLED", "TERMINAL_ORACLE_UNAVAILABLE",
+    "TERMINAL_CONFIRMATION", "resolve_walk_terminal",
     "COMPLETING_TERMINALS", "flow_id_for", "build_flow", "summarize",
-    "activated_signatures",
+    "activated_signatures", "journeys_completed",
 ]
 
 
@@ -84,10 +86,90 @@ TERMINAL_CANCELLED = "cancelled"
 #: "re-crawl when the advance service is healthy", not a defect report.
 TERMINAL_ORACLE_UNAVAILABLE = "oracle_unavailable"
 
+#: A4.3 — the walk CROSSED an approved irreversible boundary and landed. Distinct
+#: from ``submit_boundary``, which means it stopped in front of one. Both are
+#: complete COVERAGE of the funnel; only this one can carry a journey outcome.
+TERMINAL_SUBMIT_CROSSED = "submit_crossed"
+
+#: M1.4 — THE APPLICATION ITSELF SAID THE JOURNEY WAS DONE.
+#:
+#: A step landed on a page that DECLARED success: a ``role=status`` region it
+#: published, success-shaped text that appeared as a result of the click, or a
+#: non-error confirmation dialog it opened (see
+#: :func:`app.boundary.is_confirmation_landing` — that predicate, and nothing
+#: about a URL, a button label or a page title, is what "recognized" means here).
+#:
+#: This is a COMPLETING terminal, and it deliberately OUTRANKS ``loop``. A
+#: confirmation page is a page with an application number on it and a handful of
+#: ways to leave — "Back to Dashboard", "Print Confirmation", "New Application".
+#: Every one of those is clickable, none of them continues the funnel, and the
+#: walk that clicked one and found itself somewhere it had already been recorded
+#: the whole journey as ``loop`` / ``completed=false``. The funnel was walked to
+#: its business end; the ledger simply had no word for that end.
+TERMINAL_CONFIRMATION = "confirmation"
+
 #: Exactly the terminals that mean the journey was actually covered. A terminal not
 #: in this set produces ``completed=False``, and there is deliberately no way for a
 #: caller to override that.
-COMPLETING_TERMINALS = frozenset({TERMINAL_SUBMIT_BOUNDARY, TERMINAL_NO_ADVANCE})
+COMPLETING_TERMINALS = frozenset({TERMINAL_SUBMIT_BOUNDARY, TERMINAL_NO_ADVANCE,
+                                  TERMINAL_SUBMIT_CROSSED, TERMINAL_CONFIRMATION})
+
+#: The three verdicts a caller may pass to :func:`resolve_walk_terminal` as its
+#: "there was nothing left to click" answer. Whitelisted rather than accepted
+#: verbatim so the precedence function can never be used as a back door for a
+#: caller-chosen terminal — which is the same reason ``completed`` is derived
+#: rather than passed in.
+_NOTHING_TO_CLICK_TERMINALS = frozenset({TERMINAL_SUBMIT_BOUNDARY,
+                                         TERMINAL_NO_ADVANCE,
+                                         TERMINAL_ORACLE_UNAVAILABLE})
+
+
+def resolve_walk_terminal(*, cancelled: bool = False, confirmation: bool = False,
+                          nothing_to_click: str = "",
+                          budget_left: bool = True) -> str:
+    """WHY A WALK ENDED, decided once, in one place, in a fixed order (T-CF-03).
+
+    The walk can end for several reasons AT THE SAME TIME — a confirmation page
+    that also still offers a clickable control, with the step budget nearly
+    spent. Which of them gets recorded decides whether the journey reads as
+    covered, so the order may not be an accident of how the ``if`` chain was
+    typed. It is:
+
+      1. ``cancelled``   an operator stopped the crawl. Nothing OBSERVED may
+                         override an explicit human abort, or "I stopped it"
+                         would silently become "it finished".
+      2. ``confirmation`` the application declared success. This is the most
+                         specific statement available about why a walk ended —
+                         not "we ran out of things to click" but "the app told
+                         us the transaction is done" — so it outranks every
+                         inference below it.
+      3. ``nothing_to_click`` the caller's own three-way verdict:
+                         ``submit_boundary`` (stopped in front of a commit
+                         control), ``no_advance`` (nothing on the page advances)
+                         or ``oracle_unavailable`` (we could not find out).
+      4. ``budget``      the walk was TRUNCATED. Not complete, and it must not
+                         be able to hide behind a weaker reason below it.
+      5. ``loop``        the click produced nothing, or landed somewhere this
+                         journey had already been.
+
+    Nothing here weakens loop detection: ``loop`` is still the answer for every
+    walk that did not observe a confirmation, and ``confirmation`` is not a flag
+    a caller may assert — it is the output of
+    :func:`app.boundary.is_confirmation_landing` over what the browser observed.
+    """
+    if cancelled:
+        return TERMINAL_CANCELLED
+    if confirmation:
+        return TERMINAL_CONFIRMATION
+    if nothing_to_click:
+        if nothing_to_click not in _NOTHING_TO_CLICK_TERMINALS:
+            raise ValueError(
+                "nothing_to_click must be one of %s, got %r"
+                % (sorted(_NOTHING_TO_CLICK_TERMINALS), nothing_to_click))
+        return nothing_to_click
+    if not budget_left:
+        return TERMINAL_BUDGET
+    return TERMINAL_LOOP
 
 #: The app REFUSED to move on: the page did not change at all.
 #:
@@ -113,11 +195,32 @@ def flow_id_for(entry_fingerprint: str) -> str:
 def build_flow(*, entry_fingerprint: str, entry_url: str, entry_title: str,
                steps: Sequence[Mapping[str, Any]], terminal: str,
                terminal_url: str = "", outcome_values: Iterable[Mapping[str, Any]] = (),
-               max_steps: int = 0) -> dict[str, Any]:
+               max_steps: int = 0,
+               outcome_milestone: Mapping[str, Any] | None = None,
+               confirmation_rung: str = "",
+               confirmation_detail: str = "") -> dict[str, Any]:
     """One recorded journey.
 
     ``completed`` is DERIVED from the terminal reason, never passed in — the whole
-    point is that a truncated walk cannot be reported as a covered journey."""
+    point is that a truncated walk cannot be reported as a covered journey.
+
+    ``journey_completed`` (A4.3 / T-AC-06) is a STRICTLY STRONGER claim and is
+    derived from something else entirely: the linked outcome milestone's own
+    ``verified`` flag, which is itself a function of the observed transition.
+    The two must not be conflated —
+
+        completed          the funnel was WALKED to its natural end. True at a
+                           submit boundary the crawl never crossed.
+        journey_completed  the irreversible boundary was CROSSED under an
+                           explicit approval and the far side was verified to be
+                           a genuine confirmation. This is what "we complete real
+                           customer journeys" means, and nothing else is.
+
+    No counter participates in either. ``forms_submitted`` counts attempts and
+    is incremented whatever the outcome, so nine submits that all errored score
+    exactly as nine completed applications — which is why it is not consulted
+    here and why a test pins that it cannot be.
+    """
     term = str(terminal or TERMINAL_BUDGET)
     step_list: list[dict[str, Any]] = []
     for s in (steps or ()):
@@ -249,7 +352,39 @@ def build_flow(*, entry_fingerprint: str, entry_url: str, entry_title: str,
         #: healthy outcome, and never silent.
         "advance_contradicts_fills": contradicted,
         "fields_filled_total": filled_total,
+        #: A4.3 — the journey's outcome milestone, or ``None``. Its presence
+        #: means an approved irreversible boundary was crossed on this journey;
+        #: its ``verified`` flag means the far side was a genuine confirmation.
+        "outcome_milestone": (dict(outcome_milestone)
+                              if isinstance(outcome_milestone, Mapping) else None),
+        #: THE PRODUCT CLAIM, and the only field that may carry it. Derived from
+        #: the milestone's own observation — never from a terminal, never from a
+        #: counter, and never settable by a caller.
+        "journey_completed": bool(
+            isinstance(outcome_milestone, Mapping)
+            and outcome_milestone.get("verified")),
+        #: M1.4 — WHAT the application said, and on which rung it said it, when
+        #: this journey ended at a recognized confirmation. Both empty on every
+        #: other terminal (and therefore on every flow recorded before this
+        #: milestone), so a reader can never mistake "we inferred completion"
+        #: for "the app declared it" — the evidence travels with the claim.
+        **({"confirmation_rung": str(confirmation_rung)[:40],
+            "confirmation_detail": str(confirmation_detail)[:300]}
+           if term == TERMINAL_CONFIRMATION and confirmation_rung else {}),
     }
+
+
+def journeys_completed(flows: Sequence[Mapping[str, Any]]) -> int:
+    """How many journeys were completed END TO END — the product claim.
+
+    Deliberately a function over the FLOWS rather than a counter maintained
+    during the crawl. A counter can be incremented from anywhere and has been:
+    ``forms_submitted`` rises on every attempt, error or not. This can only be
+    computed from journeys that carry a verified outcome milestone, so there is
+    no line of code anywhere that can raise it without an observation behind it.
+    """
+    return sum(1 for f in (flows or ()) if isinstance(f, Mapping)
+               and f.get("journey_completed"))
 
 
 def summarize(flows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
@@ -261,6 +396,8 @@ def summarize(flows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     points that fork the funnel have not been explored."""
     total = len(flows)
     done = [f for f in flows if f.get("completed")]
+    journeys = [f for f in flows if f.get("journey_completed")]
+    crossed = [f for f in flows if isinstance(f.get("outcome_milestone"), Mapping)]
     answered = [f for f in done if f.get("fully_answered")]
     truncated = [f for f in flows if not f.get("completed")]
     reasons: dict[str, int] = {}
@@ -273,6 +410,19 @@ def summarize(flows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     advances_by_tier: dict[str, int] = {}
     oracle_advances = 0
     total_intent_unmet = 0
+    # T-SI-06 — see the reported keys below for why one integer was not enough.
+    def _steps(f: Mapping[str, Any]) -> int:
+        return int(f.get("step_count") or 0)
+
+    deepest_steps = max((_steps(f) for f in flows), default=0)
+    deepest_proven = max((_steps(f) for f in done), default=0)
+    # The deepest flow, tie-broken toward a COMPLETED one: if a six-step walk
+    # finished and another six-step walk was cut off, the depth six IS proven,
+    # and reporting it as capped would understate what the crawl established.
+    deepest = max(flows, key=lambda f: (_steps(f), bool(f.get("completed"))),
+                  default=None) if flows else None
+    deepest_terminal = str((deepest or {}).get("terminal") or "")
+    deepest_capped = bool(deepest is not None and not deepest.get("completed"))
     for f in flows:
         for s in f.get("steps") or ():
             if not isinstance(s, Mapping):
@@ -288,6 +438,16 @@ def summarize(flows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     return {
         "flows_found": total,
         "flows_completed": len(done),
+        # ── A4.3 / T-AC-06: THE THREE NUMBERS, AND WHY THERE ARE THREE ───────
+        # `flows_completed` says the funnel was walked to an end — which
+        # includes stopping politely in front of a submit button.
+        # `boundaries_crossed` says an approved irreversible click actually
+        # fired. `journeys_completed` says the far side was OBSERVED to be a
+        # confirmation. Collapsing any two of these is how "we complete customer
+        # journeys" gets claimed on the strength of a crawl that never crossed
+        # anything, or on one that crossed and then errored.
+        "boundaries_crossed": len(crossed),
+        "journeys_completed": len(journeys),
         "flows_fully_answered": len(answered),
         "flows_truncated": len(truncated),
         "truncation_reasons": reasons,
@@ -302,7 +462,32 @@ def summarize(flows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
         # completed, and only one of them can be right.
         "advance_contradicts_fills": sum(
             1 for f in flows if f.get("advance_contradicts_fills")),
-        "deepest_flow_steps": max((int(f.get("step_count") or 0) for f in flows), default=0),
+        # ── T-SI-06: DEPTH THAT MEANS SOMETHING ──────────────────────────────
+        #
+        # ``deepest_flow_steps`` answers "how many steps did the deepest walk
+        # take", and on its own that number cannot be read. Six steps because
+        # the application has six, and six steps because the walk was cut off at
+        # six, are the same integer and opposite facts — the first is full
+        # coverage of a short funnel, the second is unknown coverage of a funnel
+        # of unknown length. A golden gate asserting ``deepest_flow >= 5`` passes
+        # identically on both, which is how a traversal cap was mistaken for an
+        # application's shape.
+        #
+        # These four report the depth the crawl actually PROVED, whether the
+        # deepest walk was capped, and by what — so a shallow application and a
+        # truncated traversal can never be read as the same result again.
+        "deepest_flow_steps": deepest_steps,
+        #: The deepest journey walked to a genuine end (submit boundary or
+        #: nothing left to advance). THIS is the application's proven depth: no
+        #: budget was involved, so the funnel really was this long.
+        "deepest_flow_proven_steps": deepest_proven,
+        #: True when the deepest journey stopped because it ran out of budget
+        #: rather than out of funnel. The application is at least this deep and
+        #: possibly deeper; ``deepest_flow_steps`` is a floor, not a measurement.
+        "deepest_flow_capped": deepest_capped,
+        #: The terminal of the deepest journey, so a reader never has to guess
+        #: which of the two cases above produced the number.
+        "deepest_flow_terminal": deepest_terminal,
         # THE HONESTY FLAG. One path per funnel was walked. Which option was taken
         # at each decision point was decided once, and the alternatives — a
         # different premium, a different eligibility outcome — were never visited.

@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Fixture 19 — native confirm dialog</title></head>
+<body>
+  <main>
+    <h1>Review your application</h1>
+    <p>Policy number 88-2201. Review the details below and continue.</p>
+
+    <!-- SUBJECT A: the FUNNEL CONFIRMATION. This is the whole of T-ND-02.
+         Playwright auto-dismisses every dialog on a page with no `dialog`
+         listener, so before M1.5 this confirm answered CANCEL on every crawl,
+         `location.href` never ran, and the crawl recorded an honest-looking
+         "nothing happened" that is indistinguishable from a dead button.
+         The crawler must ACCEPT this one and land on step2.html. -->
+    <button type="button" id="continue-confirmed">Continue</button>
+
+    <!-- SUBJECT B: the LEAVE WARNING. Same native primitive, opposite correct
+         answer. Accepting it abandons the journey the walk is standing in the
+         middle of, so a crawler that "just accepts everything" destroys the
+         funnel it was sent to catalogue. The crawler must DISMISS this one and
+         stay on this page. -->
+    <button type="button" id="leave-warned">Return to dashboard</button>
+
+    <!-- SUBJECT C: an ALERT. One button; nothing to decide — but the page stays
+         BLOCKED until it is answered, so "ignore it" is not an available
+         response. Accept + record. -->
+    <button type="button" id="notice-alert">Show session notice</button>
+
+    <!-- SUBJECT D: a DESTRUCTIVE confirm. A native confirm() is NOT an approved
+         crossing; the A4.3 approval subsystem is. With no operator grant for
+         this control the crawler must DISMISS, and the application must still
+         be here afterwards. -->
+    <button type="button" id="delete-destructive">Delete Application</button>
+
+    <!-- SUBJECT E: a PROMPT. There is no grounded value to type into it, and a
+         fabricated one is invented user input. Dismiss. -->
+    <button type="button" id="prompt-unanswerable">Add a reference code</button>
+
+    <!-- SUBJECT F: a plain control that raises NO dialog, so the fixture proves
+         the dialog path is not being taken indiscriminately. -->
+    <button type="button" id="no-dialog">Print summary</button>
+
+    <div role="status" id="page-status">Awaiting review</div>
+  </main>
+
+  <script>
+    // NOT named `status`: at global scope `var status` binds to
+    // window.status, a legacy accessor that coerces whatever you assign
+    // to a STRING — every later textContent write would silently vanish.
+    var statusEl = document.getElementById('page-status');
+
+    document.getElementById('continue-confirmed').addEventListener('click', function () {
+      if (confirm('Are you sure you want to continue? Your application will be sent for review.')) {
+        window.location.href = 'step2.html';
+      } else {
+        statusEl.textContent = 'Continue was cancelled';
+      }
+    });
+
+    document.getElementById('leave-warned').addEventListener('click', function () {
+      if (confirm('Are you sure you want to leave this page? Changes you made may not be saved.')) {
+        window.location.href = 'dashboard.html';
+      } else {
+        statusEl.textContent = 'Stayed on the application';
+      }
+    });
+
+    document.getElementById('notice-alert').addEventListener('click', function () {
+      alert('Your session expires in five minutes.');
+      statusEl.textContent = 'Notice acknowledged';
+    });
+
+    document.getElementById('delete-destructive').addEventListener('click', function () {
+      if (confirm('Delete this application permanently? This cannot be undone.')) {
+        window.location.href = 'deleted.html';
+      } else {
+        statusEl.textContent = 'Deletion refused';
+      }
+    });
+
+    document.getElementById('prompt-unanswerable').addEventListener('click', function () {
+      var code = prompt('Enter your agent reference code');
+      statusEl.textContent = code ? ('Reference ' + code) : 'No reference supplied';
+    });
+
+    document.getElementById('no-dialog').addEventListener('click', function () {
+      statusEl.textContent = 'Summary printed';
+    });
+  </script>
+</body>
+</html>
