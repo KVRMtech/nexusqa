@@ -40,9 +40,17 @@ def test_the_lane_uses_the_production_adapter() -> None:
         "the crawl entrypoint no longer constructs PlaywrightBrowserPort — this "
         "lane is testing an adapter production does not use")
 
-    collect_src = inspect.getsource(PlaywrightBrowserPort.collect_controls)
+    # `collect_controls` is the BackCompat projection and delegates to
+    # `collect_controls_result`, which owns the injection. Follow the delegation
+    # rather than pinning one method name: what must stay true is that the class
+    # this lane exercises evaluates the PRODUCTION snippet somewhere in that
+    # path, not which of its two methods holds the call this month.
+    collect_src = "".join(
+        inspect.getsource(getattr(PlaywrightBrowserPort, name))
+        for name in ("collect_controls", "collect_controls_result")
+        if hasattr(PlaywrightBrowserPort, name))
     assert "page.evaluate(INVENTORY_JS)" in collect_src.replace("self._", ""), (
-        "collect_controls no longer evaluates INVENTORY_JS directly; the "
+        "no method on the collect_controls path evaluates INVENTORY_JS; the "
         "injection path under test has changed")
 
     # The harness must reach the page ONLY through the port. Checked on the

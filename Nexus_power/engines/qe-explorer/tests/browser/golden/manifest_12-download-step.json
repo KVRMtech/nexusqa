@@ -17,7 +17,13 @@
     "refuse_pack_version": "refuse-pack-v1",
     "stop_reason": "",
     "target_url": "http://127.0.0.1:<port>/12-download-step/index.html",
-    "type": "crawl_meta"
+    "type": "crawl_meta",
+    "walk_persistence": {
+      "authorized": false,
+      "max_mutations_per_step": 0,
+      "mutations": 0,
+      "reason": "not_attested"
+    }
   },
   {
     "actions": [
@@ -202,6 +208,79 @@
     "url_query": ""
   },
   {
+    "action_verb": "click",
+    "artifact_path": "",
+    "bytes": 0,
+    "captured": false,
+    "content_type": "application/pdf",
+    "error": "no artifact directory configured for this port",
+    "event": "download",
+    "filename": "policy.pdf",
+    "page_token": "primary",
+    "page_url": "http://127.0.0.1:<port>/12-download-step/index.html",
+    "source_url": "http://127.0.0.1:<port>/12-download-step/policy.pdf",
+    "timestamp_ms": "<normalized:timestamp_ms>",
+    "trigger_label": "Download Policy Document",
+    "type": "browser_event"
+  },
+  {
+    "action_verb": "click",
+    "artifact_path": "",
+    "bytes": 0,
+    "captured": false,
+    "content_type": "application/pdf",
+    "error": "no artifact directory configured for this port",
+    "event": "download",
+    "filename": "schedule.pdf",
+    "page_token": "primary",
+    "page_url": "http://127.0.0.1:<port>/12-download-step/index.html",
+    "source_url": "http://127.0.0.1:<port>/documents/schedule.pdf",
+    "timestamp_ms": "<normalized:timestamp_ms>",
+    "trigger_label": "Download Schedule",
+    "type": "browser_event"
+  },
+  {
+    "actions": 7,
+    "frontier": [
+      {
+        "depth": 1,
+        "discovered_via": "Download Schedule",
+        "key": "127.0.0.1/documents/schedule.pdf",
+        "parent_fingerprint": "<hash>",
+        "priority": 0,
+        "url": "http://127.0.0.1:<port>/documents/schedule.pdf"
+      },
+      {
+        "depth": 1,
+        "discovered_via": "Download Policy Document",
+        "key": "127.0.0.1/12-download-step/policy.pdf",
+        "parent_fingerprint": "<hash>",
+        "priority": 0,
+        "url": "http://127.0.0.1:<port>/12-download-step/policy.pdf"
+      },
+      {
+        "depth": 1,
+        "discovered_via": "Claims",
+        "key": "127.0.0.1/12-download-step/index.html#/claims",
+        "parent_fingerprint": "<hash>",
+        "priority": 0,
+        "url": "http://127.0.0.1:<port>/12-download-step/index.html#/claims"
+      }
+    ],
+    "frontier_truncated": false,
+    "sequence_index": 1,
+    "spent_keys": [
+      "127.0.0.1/12-download-step/index.html",
+      "127.0.0.1/12-download-step/index.html#/claims",
+      "127.0.0.1/12-download-step/policy.pdf",
+      "127.0.0.1/documents/schedule.pdf"
+    ],
+    "states": 1,
+    "timestamp_ms": "<normalized:timestamp_ms>",
+    "type": "checkpoint",
+    "visited_count": 1
+  },
+  {
     "attestation": null,
     "budgets": {
       "max_actions_per_state": 30,
@@ -226,6 +305,12 @@
     },
     "stop_reason": "budget_max_states",
     "target_url": "http://127.0.0.1:<port>/12-download-step/index.html",
-    "type": "crawl_meta"
+    "type": "crawl_meta",
+    "walk_persistence": {
+      "authorized": false,
+      "max_mutations_per_step": 0,
+      "mutations": 0,
+      "reason": "not_attested"
+    }
   }
 ]

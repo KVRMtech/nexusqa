@@ -17,7 +17,13 @@
     "refuse_pack_version": "refuse-pack-v1",
     "stop_reason": "",
     "target_url": "http://127.0.0.1:<port>/18-select-edge-cases/index.html",
-    "type": "crawl_meta"
+    "type": "crawl_meta",
+    "walk_persistence": {
+      "authorized": false,
+      "max_mutations_per_step": 0,
+      "mutations": 0,
+      "reason": "not_attested"
+    }
   },
   {
     "actions": [],
@@ -167,6 +173,19 @@
     "url_query": ""
   },
   {
+    "actions": 5,
+    "frontier": [],
+    "frontier_truncated": false,
+    "sequence_index": 1,
+    "spent_keys": [
+      "127.0.0.1/18-select-edge-cases/index.html"
+    ],
+    "states": 1,
+    "timestamp_ms": "<normalized:timestamp_ms>",
+    "type": "checkpoint",
+    "visited_count": 1
+  },
+  {
     "attestation": null,
     "budgets": {
       "max_actions_per_state": 30,
@@ -191,6 +210,12 @@
     },
     "stop_reason": "budget_max_states",
     "target_url": "http://127.0.0.1:<port>/18-select-edge-cases/index.html",
-    "type": "crawl_meta"
+    "type": "crawl_meta",
+    "walk_persistence": {
+      "authorized": false,
+      "max_mutations_per_step": 0,
+      "mutations": 0,
+      "reason": "not_attested"
+    }
   }
 ]
