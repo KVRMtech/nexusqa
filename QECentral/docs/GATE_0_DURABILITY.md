@@ -1,15 +1,15 @@
 # Gate 0 — Durability and an honest CI
 
-**Status: NOT SIGNED OFF.** Three of five actions are complete and evidenced.
-Two cannot be completed from this working tree, for one shared cause that is
-stated plainly in §0 rather than worked around.
+**Status: NOT SIGNED OFF.** Two of five actions are complete and evidenced. Three
+are blocked on one shared cause, stated plainly in §0 rather than worked around:
+**this working tree is being written to by four other squads while Gate 0 runs.**
 
 | # | Action | Verdict |
 |---|---|---|
-| A1 | Commit the unversioned work; working tree clean | **PARTIAL** — committed; "clean" is unattainable on a live shared tree |
+| A1 | Commit the unversioned work; working tree clean | **NOT DONE** — Gate 0's own 20 files are committed; the ~250-file backlog is not, and grew 254 → 282 during the session |
 | A2 | Re-record `f1_public_discovery` as a *reviewed* diff | **DONE** |
-| A3 | Resolve the browser failures permanently | **PARTIAL** — root cause found and corrected; the headline claim was false |
-| A4 | Record a crawl-wide performance baseline | **INSTRUMENT DELIVERED; baseline NOT recorded** — no quiet machine |
+| A3 | Resolve the browser failures permanently | **MOSTLY DONE** — 2 failures measured (not 10), both root-caused and fixed, one guarded; whole-suite repetition and parallel not proven |
+| A4 | Record a crawl-wide performance baseline | **INSTRUMENT DELIVERED + RUN; baseline NOT committed** — no quiet machine; the run found a reproducible 61 s stall |
 | A5 | Require *both* CI lanes before merge | **DONE (code) / PENDING (apply)** — two blocking traps found and fixed first |
 
 ---
@@ -105,18 +105,53 @@ Every changed path was enumerated at file granularity
 (`git status --porcelain --untracked-files=all`), then reviewed along four axes
 before staging: secrets, generated artefacts, package structure, and syntax.
 
-### Counts
+### Counts — and the correction that matters
 
 The Closure Plan's "209 unversioned files (87 untracked + 121 modified)" counts
-untracked *directories* as one entry each. At file granularity the same tree is:
+untracked *directories* as one entry each. At file granularity:
 
-| | at session start | committed |
+| | session start (08:20) | session end (10:40) |
 |---|---|---|
-| modified (tracked) | 121 | 121 |
-| untracked (files, not dirs) | 133 | — |
-| **total** | **254** | **256** |
+| modified (tracked) | 121 | 118 |
+| untracked (files, not dirs) | 133 | 164 |
+| **total unversioned** | **254** | **282** |
 
-The committed figure differs from 254 for four deliberate reasons, each below.
+**The backlog grew by 28 files while Gate 0 was closing it.** That single row is
+the honest summary of A1: this is not a queue that can be drained by one commit,
+because it is being refilled faster than a review can empty it.
+
+### What was actually committed
+
+Three scoped commits, twenty files, all of them Gate 0's own work:
+
+| commit | files | what |
+|---|---|---|
+| `0a91cea` | 9 | A2 golden re-record, A5 `paths:` trap fix + CI-coverage guard, `.gitattributes` LF pin, `_measure_live/` ignore, A4 instrument |
+| `faecf78` | 8 | A3 fixture-30 migration + `where`-clause contract guard + jsdom slack fix |
+| `6da62fb` | 3 | A5 protection script, A4 instrument fixes, this document |
+
+### What was NOT committed, and why that is the right answer
+
+**The ~250-file milestone backlog remains unversioned.** Committing it was the
+literal instruction, and I did not do it. The reason is in §0 and is not a
+scheduling excuse:
+
+* Other squads hold **uncommitted edits inside the same files** — `crawler.py`,
+  `walker.py`, `forms.py`, `completion.py`, `fill_engine/repair.py`. A commit
+  cannot take the M2.5 half of `walker.py` and leave the in-progress A6 half; the
+  separation is intra-file, and file-level exclusion cannot express it.
+* Their work is demonstrably mid-flight. Fixture 27's `expected.json` expects a
+  `css_hint` its own `index.html` does not emit — it fails right now. Twelve
+  minutes before the first commit, `test_fill_engine_retry.py` did not import.
+* `evidence/m23_retirement/*` was **rewritten at 09:52** by another squad's
+  browser run, and `coverage_report.json` at 10:06. Both are CI-asserted
+  artefacts. Committing a file while another process is regenerating it risks
+  capturing a partial write into the record CI compares against.
+
+Sweeping all of that into a durability commit would attribute another team's
+half-finished Gate 1 work to Gate 0 and could version a state that does not run.
+That is a worse outcome than leaving it unversioned for one more hour, and it is
+the opposite of what this gate is for.
 
 ### What was removed rather than committed
 
@@ -125,13 +160,12 @@ The committed figure differs from 254 for four deliberate reasons, each below.
 | `engines/qe-explorer/_measure_live/` | 5 (368 KB) | Instrument OUTPUT, not source: `frame_*.png` screenshots of a **live third-party deployment** plus its `manifest.jsonl`, regenerated on every run. Now `.gitignore`d. The instrument that writes it stays in version control; what it emits does not. |
 | `tests/browser/golden/{inventory,manifest}_23-network-retry-poll-ratelimit.json` | 2 | Orphans of a fixture renumber — fixture 23 is now `23-canvas-app` and the network fixture is `30-`. No fixture directory, and **no reference anywhere in the tree**. Deleted. |
 
-### What was excluded, and is still uncommitted
+### The review the backlog did get
 
-The six files in §0 belonging to another squad's in-flight Gate 1 work. Landing
-another team's half-saved modules under a durability commit would attribute
-their work to Gate 0 and risks committing a state that does not run —
-`test_fill_engine_retry.py` demonstrably did not, twelve minutes before this
-commit.
+Every one of the 254 files present at session start was reviewed along the four
+axes below before I concluded it was *safe* to commit — the blocker is
+concurrency, not content.
+
 
 ### Review results
 
@@ -394,17 +428,78 @@ versions, the crawl budget, and every stand-in.
 * `psutil` is now pinned in `requirements.txt`; without it the instrument
   degrades to timings-only rather than failing.
 
-### Not recorded — and why that is the honest answer
+### Run, and deliberately not committed as the baseline
 
-See §0. Four other `pytest` processes and a browser suite were running against
-this machine. A baseline taken under that load is not a baseline. **One command
-on a quiet machine produces it:**
+The instrument was executed across all four static proving grounds, two
+repetitions each, and produced every metric the gate asks for. The output is
+committed as `perf/crawl_contended_2026-08-20.json` and is explicitly **not** the
+baseline; `perf/README.md` says so beside it. `perf/crawl_baseline.json` does not
+exist yet, on purpose.
+
+Environment: Windows 11 (10.0.26200), 12 logical CPUs, 15.7 GB RAM, Python
+3.10.11, Playwright 1.49.0, Chromium 131.0.6778.33.
+
+| app | states | navs | port calls | wall (rep1 / rep2) | peak RSS |
+|---|---|---|---|---|---|
+| acme-life | 6 | 16 | 685 | 98 845 / **147 132** ms | 517 MB |
+| vkpower-life | 5 | 11 | 318 | 75 055 / 75 470 ms | 531 MB |
+| questionnaire-life | 2 | 3 | 114 | 22 872 / 23 818 ms | 526 MB |
+| catalog-evidence | 2 | 3 | 127 | 101 531 / 98 778 ms | 537 MB |
+
+Browser startup 622–921 ms. Artifact generation 0.07–0.23 ms — negligible, and
+worth knowing precisely because it was a candidate suspect.
+
+### Why this is not the baseline, measured rather than asserted
+
+`acme-life` did **identical work** in both repetitions — same 6 states, same 16
+navigations, same 685 port calls — and took 98.8 s then 147.1 s. **A 49% spread
+with no behavioural difference whatsoever.** `vkpower-life`, minutes later,
+varied 0.6%. The noise is bursty rather than a constant tax, which is the worse
+case: an average over it would look plausible and mean nothing, and every future
+comparison against it would inherit the lie.
+
+### What the instrument found on its first real run
+
+Two things worth the exercise on their own:
+
+**1. Interaction dominates, everywhere.** Not DOM extraction, which is the
+intuitive suspect and is cheap:
+
+| app | interaction | dom_extraction | navigation |
+|---|---|---|---|
+| acme-life | 57 940 ms (n=99) | 6 480 ms (n=326) | 11 743 ms |
+| vkpower-life | 40 806 ms (n=38) | 10 190 ms (n=138) | 11 422 ms |
+| catalog-evidence | 89 857 ms (n=25) | 4 896 ms (n=55) | 3 833 ms |
+
+DOM extraction runs 4–6× as often as interaction and costs a fraction as much.
+Any future optimisation aimed at capture would be aimed at the wrong thing.
+
+**2. A reproducible 61-second stall.** `catalog-evidence` spends 61 s inside a
+single `select_option`:
+
+| rep | worst `select_option` | its median | crawl wall | share of crawl |
+|---|---|---|---|---|
+| 1 | 61 637 ms | 1 272 ms | 101 531 ms | **61%** |
+| 2 | 61 117 ms | 1 164 ms | 98 778 ms | **62%** |
+
+Half a second apart across two reps — contention does not reproduce like that
+(see the 49% acme-life spread above). One call runs ~50× its own median and is
+more than half the crawl. The shape, ≈61 s ≈ two 30 s Playwright waits, points at
+a locator that never resolves and is retried once rather than at slow work.
+
+**Not fixed here** — it is crawler/fill-engine behaviour, not durability — but it
+is the first thing this instrument found, it was invisible while the only
+benchmark was a browserless fill-engine harness, and it should be triaged before
+anyone tunes anything else.
+
+### To produce the real baseline
+
+One command, on a machine nobody else is using:
 
 ```
 python measure_crawl_performance.py --reps 3 --baseline
 ```
 
----
 
 ## §5 · A5 — CI enforcement
 
@@ -543,7 +638,8 @@ a skip is a failure.
 | risk | severity | note |
 |---|---|---|
 | Shared tree has no freeze protocol | **high** | Manufactured a phantom defect in this very session; will do so again, and the next reader may believe it |
-| A4 baseline unrecorded | **high** | Every future performance claim stays unfalsifiable until one quiet run happens |
+| A4 baseline uncommitted | **high** | Every future performance claim stays unfalsifiable until one quiet run happens. One command. |
+| `catalog-evidence` 61 s `select_option` stall | **high** | Reproducible across reps; 61% of that crawl's wall time. Found by the new instrument, owned by nobody yet. Triage before tuning anything else. |
 | `proving-ground` lanes unmeasured and unrequired | medium | Closure Plan A17; three real-app crawls gate nothing today |
 | `requirements.txt` pins `playwright==1.48.0`, this machine ran 1.49.0 | medium | Local/CI drift; the browser results above were produced on 1.49.0 |
 | `capture_window_start_ms` sentinel `"0"` | low | Weakens the network-window assertion to vacuously-true when absent |
