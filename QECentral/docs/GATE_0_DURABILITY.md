@@ -677,6 +677,17 @@ to stop.
 | lint | `ruff check .` | **All checks passed** |
 | compile | 132 changed `.py` | **all OK** |
 | browser | `pytest tests/browser -q` | see §3 |
+| **clean clone** | `bash scripts/gate0_verify_clean_clone.sh` | **PASS** — 0 dirty entries in a fresh clone, all `.py` compile, ruff clean, **1712 passed / 0 failed**, characterization 6 passed twice, no golden or evidence rewritten by the run |
+
+The clean-clone check is the one that earned its keep: it caught a defect in this
+gate's own A2 work that four green runs in the working tree had hidden (§2). It
+is committed as `scripts/gate0_verify_clean_clone.sh` and takes one argument-free
+command.
+
+Note the clean clone runs **1712** tests against the working tree's **1988**. The
+276-test gap is the unversioned backlog and the other squads' in-flight work —
+i.e. a second party reproducing from the commit today sees 86% of the suite that
+exists. Closing that gap is A1.
 
 The 146 qe-central skips are DB-gated and are covered by the `qec-database` job,
 which runs the same suite against real Postgres with `QEC_REQUIRE_DB` set, where
@@ -702,13 +713,36 @@ a skip is a failure.
 
 **Gate 0 is not signed off.**
 
-A2 and A5's code work are complete and evidenced. A1 is committed but its
-"working tree clean" criterion is unattainable while other squads write to this
-checkout. A3's headline was measured and found false; what remains is stated in
-§3. A4's instrument is delivered and its baseline is not recorded, because the
-only honest place to record it is a machine nobody else is using.
+Five commits landed — `0a91cea`, `faecf78`, `6da62fb`, `1cc9878`, and the A2
+revert — and the repository is verifiably better than it was: the clean clone
+passes, two real browser defects are fixed and one is guarded, a CI trap that
+would have blocked every pull request is closed, and the crawl has a measuring
+instrument for the first time.
 
-The two open items need a scheduling decision, not engineering:
+None of that is Gate 0. Gate 0's exit criterion is *"CI is green on a named
+commit, from a clean clone, on hardware the author does not control"*, and the
+work that commit must contain is still sitting in a working directory that four
+other squads are writing to.
 
-1. a tree freeze long enough for one commit, and
-2. one quiet machine for one benchmark run.
+What this gate learned, that the Closure Plan did not know:
+
+* **A2 depends on A1.** A golden cannot land before the code that produces it.
+  Committing it alone does not fix the red build, it relocates it to everyone
+  else's machine. Proven by a clean clone, on my own work.
+* **A1 is not a task, it is a scheduling problem.** The backlog grew 254 → 282
+  while being reviewed. No amount of care empties a queue that refills faster.
+* **A3's "10 failures" was 2**, with two unrelated causes, one of which was not a
+  defect in this repository at all.
+* **A5's two lanes could not have been made mandatory** as the plan assumed —
+  both a `paths:` filter and a never-reported context would have converted the
+  gate into an outage.
+
+Three things are needed, and none of them is engineering:
+
+1. **A tree freeze** long enough for one commit — minutes, announced.
+2. **One quiet machine** for one benchmark command.
+3. **A decision on who owns the 61-second `select_option` stall** the baseline
+   found. It is 61% of a crawl and it belongs to no milestone.
+
+Given (1), A1, A2 and A5 close in a single sitting. A3's whole-suite repetition
+closes with them. A4 closes with (2).
