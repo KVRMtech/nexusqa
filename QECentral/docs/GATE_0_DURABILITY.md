@@ -7,7 +7,7 @@ are blocked on one shared cause, stated plainly in §0 rather than worked around
 | # | Action | Verdict |
 |---|---|---|
 | A1 | Commit the unversioned work; working tree clean | **NOT DONE** — Gate 0's own 20 files are committed; the ~250-file backlog is not, and grew 254 → 282 during the session |
-| A2 | Re-record `f1_public_discovery` as a *reviewed* diff | **DONE** |
+| A2 | Re-record `f1_public_discovery` as a *reviewed* diff | **REVIEWED, NOT LANDABLE** — the review is complete; the re-record **cannot ship before A1**, proven by a clean clone |
 | A3 | Resolve the browser failures permanently | **MOSTLY DONE** — 2 failures measured (not 10), both root-caused and fixed, one guarded; whole-suite repetition and parallel not proven |
 | A4 | Record a crawl-wide performance baseline | **INSTRUMENT DELIVERED + RUN; baseline NOT committed** — no quiet machine; the run found a reproducible 61 s stall |
 | A5 | Require *both* CI lanes before merge | **DONE (code) / PENDING (apply)** — two blocking traps found and fixed first |
@@ -260,6 +260,57 @@ belongs to a named milestone:
 f3 is the questionnaire-**submit** fixture — the only one that crosses a
 boundary — so it is the only one that could gain crossing records. The diff is
 consistent with the milestones that shipped, in every case.
+
+### The clean clone refused the re-record, and it was right to
+
+The re-recorded golden was committed in `0a91cea`, passed twice in this working
+tree, and then **failed in a clean clone of that very commit**:
+
+```
+== HEAD: 1cc9878…
+   dirty entries in a FRESH clone: 0
+FAILED tests/test_characterization.py::…[f1_public_discovery]
+   golden 317 lines,  actual 224 lines
+```
+
+The clone produces the OLD 224-line shape, and every one of the 93 missing lines
+is a field from the M2.1 / M2.5 / M3.2 families:
+
+```
+.actions[].qec.{capture_scope,disclosure,frame_origin,shadow_scope}   REMOVED
+.network_calls[].{action_label,action_token,…}                        REMOVED
+```
+
+**The golden records behaviour that only exists in an uncommitted working tree.**
+`state_identity.py` — the producer — is modified-uncommitted, and it opens with
+`from . import network_evidence`, a module that is **untracked**. The producer
+chain does not terminate before it reaches the whole ~250-file backlog.
+
+So committing the golden by itself did not fix the failure — it **inverted** it:
+
+| | working tree | clean clone |
+|---|---|---|
+| before `0a91cea` | f1 FAILS | f1 passes |
+| after `0a91cea` | f1 passes | **f1 FAILS** |
+
+A golden and the code that produces it are one atomic change. Splitting them
+moves the red build from the author's machine to everyone else's, which is
+strictly worse — the author stops seeing it.
+
+**The re-record is therefore reverted** (`f1_public_discovery.golden` is back to
+the shape the committed code actually produces, and the clean clone is green
+again). The reviewed 317-line version is kept at
+`scratchpad/f1_reviewed_NEW.golden` and reproduced by one command once the
+backlog lands:
+
+```
+QEC_UPDATE_GOLDENS=1 pytest tests/test_characterization.py -k f1_public_discovery
+```
+
+**A2 depends on A1.** The Closure Plan lists them as siblings; they are not. That
+dependency is the single most useful thing this section found, and only a clean
+clone could have found it — which is exactly why the Definition of Done asks for
+one.
 
 ### Accepted, recorded, not fixed
 
