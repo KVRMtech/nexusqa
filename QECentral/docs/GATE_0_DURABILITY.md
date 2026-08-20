@@ -1,16 +1,20 @@
 # Gate 0 — Durability and an honest CI
 
-**Status: NOT SIGNED OFF.** Two of five actions are complete and evidenced. Three
-are blocked on one shared cause, stated plainly in §0 rather than worked around:
-**this working tree is being written to by four other squads while Gate 0 runs.**
+**Status: A1 and A2 CLOSED. A3 and A4 in measurement. A5 blocked on repository access.**
+
+The tree freeze that §0 asked for arrived on its own: by 12:18 no other squad had
+written for twenty minutes and no competing `pytest` process was running. That
+window was all A1 ever needed. `git status` now reports **working tree clean**, and
+a clean clone runs **2003 passed / 0 failed** — up from 1712, closing the whole
+reproducibility gap.
 
 | # | Action | Verdict |
 |---|---|---|
-| A1 | Commit the unversioned work; working tree clean | **NOT DONE** — Gate 0's own 20 files are committed; the ~250-file backlog is not, and grew 254 → 282 during the session |
-| A2 | Re-record `f1_public_discovery` as a *reviewed* diff | **REVIEWED, NOT LANDABLE** — the review is complete; the re-record **cannot ship before A1**, proven by a clean clone |
+| A1 | Commit the unversioned work; working tree clean | **DONE** — 255 files / 46,087 insertions in `3420d88`; working tree clean; clean clone 2003 passed |
+| A2 | Re-record `f1_public_discovery` as a *reviewed* diff | **DONE** — landed *inside* `3420d88` with its producer, the only way it could ship; determinism reconfirmed hours apart at the same sha256 |
 | A3 | Resolve the browser failures permanently | **MOSTLY DONE** — 2 failures measured (not 10), both root-caused and fixed, one guarded; whole-suite repetition and parallel not proven |
 | A4 | Record a crawl-wide performance baseline | **INSTRUMENT DELIVERED + RUN; baseline NOT committed** — no quiet machine; the run found a reproducible 61 s stall |
-| A5 | Require *both* CI lanes before merge | **DONE (code) / PENDING (apply)** — two blocking traps found and fixed first |
+| A5 | Require *both* CI lanes before merge | **BLOCKED ON ACCESS** — script and workflow fixes delivered; the push that would let any lane report is denied to this machine |
 
 ---
 
@@ -664,6 +668,51 @@ three jobs' green-ness on this commit is unmeasured. That is Closure Plan **A17*
 to stop.
 
 ---
+
+### The one thing Gate 0 cannot do for itself
+
+Every remaining A5 step is downstream of a single `git push`, and this machine
+cannot make it:
+
+```
+$ git push origin HEAD:feat/qec-dynamic-catalog-p0-p6
+ERROR: Permission to KVRMtech/nexusqa.git denied to Venkatareddy2012.
+```
+
+`origin` is `git@github.com:KVRMtech/nexusqa.git` over **SSH**, and the SSH key on
+this box belongs to `Venkatareddy2012`, who has no write access. The `gh` CLI *is*
+authenticated as `KVRMtech` with `repo` and `workflow` scope, so the same push over
+HTTPS would succeed — but that is a credential decision for the repository owner,
+not something to route around.
+
+Without a push, no workflow runs on this branch; without a run, no context
+reports; without a report, no context can be required. A5 stops there.
+
+**A second, structural fact governs the refusal proof.** A pull request from this
+branch into `develop` cannot be opened at all:
+
+```
+$ git merge-base HEAD origin/develop
+(nothing — no common ancestor)
+```
+
+`develop` is a single flattened "Initial commit" sharing no history with this
+branch, exactly as `ci.yml`'s own header comment documents. GitHub refuses the PR
+outright. The refusal proof must therefore be run from a branch cut **from
+`origin/develop`**, not from this one.
+
+### Handover, in order
+
+| # | Step | Who |
+|---|---|---|
+| 1 | Push the branch — `git push origin HEAD:feat/qec-dynamic-catalog-p0-p6`, or allow the equivalent HTTPS push | **repository owner** |
+| 2 | Let `ci.yml` finish, then run `browser-harness.yml` via `workflow_dispatch` on the branch — its `push` trigger is scoped to main/develop, so it will not fire on its own | either |
+| 3 | `bash scripts/gate0_require_ci_lanes.sh` — dry run; confirm all three contexts now report | either |
+| 4 | `bash scripts/gate0_require_ci_lanes.sh --apply` | either |
+| 5 | Refusal proof, from a **develop-based** branch: break one required lane, open the PR, and record the `gh pr merge` 405 | either |
+
+Steps 3–5 are minutes. Step 1 is the gate.
+
 
 ## §6 · Evidence index
 

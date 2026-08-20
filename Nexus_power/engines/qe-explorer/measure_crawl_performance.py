@@ -87,6 +87,12 @@ BASELINE = EXPLORER / "perf" / "crawl_baseline.json"
 #: named gap in the report instead of being quietly dropped.
 DEFAULT_APPS = ("acme-life", "vkpower-life", "questionnaire-life", "catalog-evidence")
 
+#: The crawl budget, in the key names ``Budget.from_dict`` actually reads.
+#: ONE definition, used both to build the budget and to report it -- see the
+#: comment at its use site for why a second, hand-written copy is dangerous.
+BUDGET_SPEC = {"max_states": 40, "max_actions_per_state": 30,
+               "max_requests": 4000, "max_wall_ms": 1_800_000}
+
 CREDS = {"username": "qec.perf@example.test", "password": "Perf!Passw0rd"}
 
 #: Phase attribution for every BrowserPort method the crawler can call. A method
@@ -315,8 +321,18 @@ async def crawl_once(app: str, url: str, rep: int, work_root: Path) -> dict[str,
         walk_authorization=None,
         idp_domains=frozenset(),
     )
-    budget = Budget.from_dict({"max_states": 40, "max_actions": 250,
-                               "max_requests": 4000, "max_duration_ms": 420_000})
+    # THE KEY NAMES ARE LOAD-BEARING AND WERE WRONG.
+    #
+    # This dict originally read `max_actions` and `max_duration_ms`, copied from
+    # `measure_boundary_crossing.py`, which still carries the same typo.
+    # `Budget.from_dict` reads `max_actions_per_state` and `max_wall_ms` and
+    # SILENTLY IGNORES anything else -- so a crawl configured with a 7-minute cap
+    # actually ran with the 30-minute default, and nothing anywhere said so.
+    #
+    # The values below are the ones that ACTUALLY TOOK EFFECT during the recorded
+    # baseline, spelled with the names Budget reads. Re-running therefore
+    # reproduces that baseline rather than silently measuring a different crawl.
+    budget = Budget.from_dict(BUDGET_SPEC)
     work = work_root / f"{app}-rep{rep}"
     shutil.rmtree(work, ignore_errors=True)
     work.mkdir(parents=True, exist_ok=True)
@@ -345,11 +361,28 @@ async def crawl_once(app: str, url: str, rep: int, work_root: Path) -> dict[str,
         credentials=Credentials.from_payload(CREDS),
     )
 
+    # A HARD CEILING ON ONE REPETITION.
+    #
+    # `max_wall_ms` cannot deliver this. `BudgetTracker.stop_reason()` is polled
+    # BETWEEN crawler actions, so it can never interrupt a browser call that is
+    # already blocked -- and one measured here was: a single `fill` on
+    # catalog-evidence ran for 11,317,974 ms (3h 08m) against a 656 ms median,
+    # inside a crawl whose wall budget was 30 minutes. The budget was not
+    # violated; it was never consulted.
+    #
+    # This cap is the instrument refusing to run away. A trip is RECORDED as data
+    # rather than raised, because "this crawl could not finish" is exactly the
+    # kind of result a performance baseline exists to capture.
+    cap_s = float(os.environ.get("QEC_PERF_REP_CAP_S") or 900)
     with ResourceSampler() as res:
         t0 = time.perf_counter()
         try:
-            await crawler.run()
+            await asyncio.wait_for(crawler.run(), timeout=cap_s)
             crawl_error = None
+        except asyncio.TimeoutError:
+            crawl_error = (f"REP CAP: the crawl did not finish within {cap_s:.0f}s "
+                           f"(QEC_PERF_REP_CAP_S). max_wall_ms cannot stop a blocked "
+                           f"port call -- see the module comment.")
         except Exception as exc:                       # instrument, never mask
             crawl_error = f"{type(exc).__name__}: {exc}"
         crawl_wall_ms = (time.perf_counter() - t0) * 1000.0
@@ -528,14 +561,23 @@ async def main() -> int:
     finally:
         srv.stop()
 
+    eb = Budget.from_dict(BUDGET_SPEC)
+    effective_budget = {k: getattr(eb, k) for k in
+                        ("max_states", "max_depth", "max_actions_per_state",
+                         "max_wall_ms", "max_requests", "rate_per_s")}
+
     report = {
         "schema": "qec.crawl_perf_baseline/1",
         "environment": environment(browser_version),
         "configuration": {
             "reps_per_app": args.reps,
             "apps_requested": apps,
-            "budget": {"max_states": 40, "max_actions": 250,
-                       "max_requests": 4000, "max_duration_ms": 420_000},
+            # The EFFECTIVE budget, read back off the Budget object rather than
+            # restated as a literal. A hand-written copy is how the wrong keys
+            # above stayed invisible: the report said 420_000 while the crawl ran
+            # 1_800_000, and both numbers lived in the same file.
+            "budget": effective_budget,
+            "rep_cap_s": float(os.environ.get("QEC_PERF_REP_CAP_S") or 900),
             "observe_only": False,
             "submit_flow_approved": False,
             "boundary_approvals": None,
