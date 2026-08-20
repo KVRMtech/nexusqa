@@ -139,3 +139,5 @@ coverage.xml
 # files under tests/browser/golden/ are the checked-in expectations.
 engines/qe-explorer/tests/browser/.tmpjs/
 engines/qe-explorer/tests/browser/_crawl_out/
+# measure_boundary_crossing.py writes its crawl there for the same reason.
+engines/qe-explorer/_measure_out/

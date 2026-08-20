@@ -720,9 +720,27 @@ def confirmation_transition(
         return out
 
     for text in _fresh(aria_before, aria_after):
-        # A declared status region that appeared is a confirmation on the
-        # application's own authority; we do not second-guess its wording.
-        return text[:300], RUNG_ARIA_STATUS
+        # A declared status region outranks free text, but it must still SAY
+        # something. Trusting the region's mere existence assumed a small banner
+        # the application publishes on purpose; a single-page application that
+        # wraps its whole view in `aria-live="polite"` republishes the ENTIRE
+        # page on every route, so every step of every wizard arrived here as a
+        # fresh "declaration".
+        #
+        # Measured on two proving grounds: acme-life declared the journey
+        # complete on the APPLICATION FORM, quoting its own field labels
+        # ("Full legal name Date of birth SSN"), and vkpower-life declared it on
+        # step 1 of 4, quoting the breadcrumb that says so
+        # ("1. Quote > 2. Apply > 3. Review > 4. Bind").
+        #
+        # So the same conservative vocabulary the free-text rung uses is applied
+        # here too. This can only ever REFUSE a confirmation it used to accept —
+        # the safe direction for a ladder whose whole purpose is to stop a
+        # half-finished journey being reported as a finished one.
+        if _norm_label(text) in banned:
+            continue
+        if _SUCCESS_RE.search(text):
+            return text[:300], RUNG_ARIA_STATUS
 
     for text in _fresh(before, after):
         if _norm_label(text) in banned:

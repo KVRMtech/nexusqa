@@ -132,9 +132,9 @@ from .state_identity import (_MAX_COVERAGE_STATES, _MAX_DANGER_NAMES,
                              _action_to_dict, _displayed_values,
                              _form_snapshot, _is_password, _network_calls)
 from . import flow_ledger
-from .boundary import (BOUNDARY_APPROVABLE, BOUNDARY_SAFE, RUNG_DIALOG,
-                       boundary_key, classify_boundary, confirmation_transition,
-                       is_confirmation_landing)
+from .boundary import (AUTHORITY_BLANKET, BOUNDARY_APPROVABLE, BOUNDARY_SAFE,
+                       RUNG_DIALOG, boundary_key, classify_boundary,
+                       confirmation_transition, is_confirmation_landing)
 from .identity_pack import derive as derive_identity
 from .forms import (AnswerKey, PROV_UNBLOCK, capture_page_declarations,
                     execute_submit_phase_b, fill_form_phase_a)
@@ -966,12 +966,31 @@ class WalkerMixin:
                 name = str(c.get("name") or "").strip()
                 if not name or _AUTH_SESSION_RE.search(name):
                     continue
-                if not (_WIZARD_COMMIT_RE.search(name)
+                # SHAPE GUARDS THE BLANKET, NOT A NAMED GRANT. The commit/advance
+                # test exists so a "*" approval cannot be steered sideways into a
+                # "Delete Account" the walk never reasoned about. An operator who
+                # issued a PER-CONTROL grant has already reasoned about it —
+                # naming the control is the entire point of the grant — and
+                # requiring their label to ALSO carry a generic commit word
+                # silently refused the one route A4.3 built for refuse-pack
+                # irreversible verbs. "Bind policy" carries no commit word, so a
+                # named, attested, budgeted grant for it never reached the
+                # authorisation ladder at all. Measured on the acme-life proving
+                # ground: the walk arrived at #/review, saw its own approved
+                # boundary, and declined it.
+                #
+                # Authorisation itself is UNCHANGED — the ladder consulted here is
+                # the same one the executor re-runs at click time. This only stops
+                # a label filter from suppressing a grant that ladder would honour.
+                _grant, authority, refusal = self._authorize_crossing(
+                    name=name, control=c, url=page_url, fingerprint=fingerprint)
+                if refusal or not authority:
+                    continue
+                if authority == AUTHORITY_BLANKET and not (
+                        _WIZARD_COMMIT_RE.search(name)
                         or _WIZARD_ADVANCE_RE.search(name)):
                     continue
-                if self._may_attempt_crossing(
-                        name=name, control=c, url=page_url, fingerprint=fingerprint):
-                    return AdvanceDecision(submit_control=dict(c))
+                return AdvanceDecision(submit_control=dict(c))
 
         # Tier 3: ask the agent which control advances the flow.
         if not self._oracle.advance_configured:
