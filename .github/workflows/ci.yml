@@ -797,6 +797,17 @@ jobs:
       - name: Phase 5 — database contract suite
         run: pytest platform/qe-central/tests/contract -v --tb=short -p no:cacheprovider
 
+      # ── M2.3 · CATALOG RETIREMENT (consumer half) ────────────────────────
+      # Named separately although Phase 5 already runs it, because this is the
+      # milestone's stop condition and a reader of a CI run should be able to
+      # see it held without unfolding a 200-test log. It folds the two REAL
+      # crawls recorded by the browser-harness workflow (acme-life, before and
+      # after a question was deleted from it) into this Postgres and asserts the
+      # catalogue retires the question and the diff reports it as removed.
+      - name: M2.3 — a real app change retires a catalogue question
+        run: |
+          pytest platform/qe-central/tests/contract/test_m23_retirement_regression.py                  -v --tb=short -p no:cacheprovider -s
+
       # ── Phase 6 — Integration. The whole qe-central suite WITH the databases
       #    wired, so the ~40 DB-gated tests that skip in the no-service job
       #    actually execute here. QEC_REQUIRE_DB makes any remaining db-shaped

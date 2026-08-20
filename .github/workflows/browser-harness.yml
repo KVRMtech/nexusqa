@@ -18,11 +18,24 @@ on:
       - "Nexus_power/engines/qe-explorer/**"
       - "Nexus_power/proving-grounds/**"
       - ".github/workflows/browser-harness.yml"
+  # GATE 0 / A5 — NO `paths:` FILTER HERE, DELIBERATELY.
+  #
+  # These lanes are REQUIRED status checks on `develop` and `main`. A required
+  # check that never runs is never reported, and GitHub blocks the pull request
+  # forever waiting for it — so a path-filtered required check does not gate
+  # merges, it prevents them. The filter was safe only while these lanes were
+  # advisory.
+  #
+  # The consequence is deliberate and is the point of A5: every pull request now
+  # pays the Chromium lane, including one that touches only qe-central. A
+  # fast-lane green while the browser lane was skipped by a path filter is
+  # exactly the "partial-lane merge" this action exists to refuse.
+  #
+  # `push` KEEPS its filter: pushes to main/develop arrive through a pull request
+  # that has already run these lanes, so re-running them on the merge commit buys
+  # nothing and costs 45 minutes of runner time.
   pull_request:
-    paths:
-      - "Nexus_power/engines/qe-explorer/**"
-      - "Nexus_power/proving-grounds/**"
-      - ".github/workflows/browser-harness.yml"
+    branches: [main, develop]
   workflow_dispatch:
 
 concurrency:
@@ -148,6 +161,35 @@ jobs:
       - name: Golden Gate — the crawl still crosses an approved boundary
         working-directory: ${{ env.EXPLORER }}
         run: python -m pytest tests/browser/test_boundary_crossing_gate.py -v
+
+      # ── M2.3 · CATALOG RETIREMENT (producer half) ────────────────────────
+      # Crawls acme-life, DELETES a question from it, crawls it again, and
+      # writes both coverage accounts to Nexus_power/evidence/m23_retirement/.
+      # qe-central's half folds those two accounts into a real Postgres and
+      # asserts the catalogue retires the question and the diff reports it as
+      # removed — the two services cannot share a process, so the recording is
+      # the seam between them.
+      - name: M2.3 — a real application change is recorded by two real crawls
+        working-directory: ${{ env.EXPLORER }}
+        run: python -m pytest tests/browser/test_catalog_retirement_regression.py -v
+
+      # The recording is under version control and qe-central's job asserts the
+      # committed stamp against the acme-life that ships. If this run produced a
+      # different recording, either the proving ground or the crawler changed and
+      # a human has to say which — CI must never absorb it silently. Same rule as
+      # the characterization goldens above.
+      - name: Fail if the M2.3 crawl evidence changed
+        working-directory: ${{ env.EXPLORER }}
+        run: |
+          if ! git diff --quiet -- ../../evidence/m23_retirement; then
+            echo "::error::The M2.3 retirement recording changed during this run."
+            echo "Either proving-grounds/acme-life or the crawler produces"
+            echo "different coverage than the committed evidence. Review the diff,"
+            echo "and if the change is intended commit the re-recorded evidence."
+            git diff --stat -- ../../evidence/m23_retirement
+            exit 1
+          fi
+          echo "M2.3 crawl evidence is unchanged."
 
       - name: Execution coverage for the injected capture JS
         working-directory: ${{ env.EXPLORER }}

@@ -27,3 +27,18 @@ playwright==1.48.0
 # keys and never a private half, so it cannot mint a proof it would accept.
 # Pinned exactly, like every other dependency in this container.
 cryptography==43.0.1
+# M3.3 / T-FL-03 — the durable evidence handoff. This service publishes a
+# finished crawl's manifest + frames to object storage BEFORE the completion
+# callback, so a qe-central pod on another node can ingest it and a pod restart
+# cannot destroy it.
+#
+# boto3 (not the SDK's aiobotocore) because the contained explorer deliberately
+# carries no ``nexus_sdk`` dependency — see app/evidence_publisher.py. Pinned
+# exactly, like every other dependency in this container.
+boto3==1.35.36
+# Gate 0 / A4 — the crawl-wide performance baseline (measure_crawl_performance.py)
+# samples RSS and CPU across this process AND its children, because the browser is
+# a child process and a crawl's real footprint is both. The instrument degrades to
+# timings-only without psutil rather than failing, so this pin is what makes the
+# memory and CPU columns of the baseline present instead of "not measured".
+psutil==7.0.0

@@ -141,3 +141,12 @@ engines/qe-explorer/tests/browser/.tmpjs/
 engines/qe-explorer/tests/browser/_crawl_out/
 # measure_boundary_crossing.py writes its crawl there for the same reason.
 engines/qe-explorer/_measure_out/
+
+# ---- Live measurement OUTPUT (instrument artefacts, not source) ----
+# `measure_network_evidence.py` and its siblings are instruments: they run the
+# production crawler against a REAL deployed application and write the crawl's
+# own artefact tree (frame_*.png screenshots + manifest.jsonl) beside the script.
+# That output is a recording of somebody's live deployment, it is regenerated on
+# every run, and it is not reviewable evidence the way a golden is. The
+# instruments stay in version control; what they emit does not.
+engines/qe-explorer/_measure_live/

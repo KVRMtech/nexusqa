@@ -1,8 +1,8 @@
 {"attestation":null,"budgets":{"max_actions_per_state":30,"max_depth":6,"max_requests":5000,"max_states":200,"max_wall_ms":1800000,"rate_per_s":0},"config_fingerprint":"char-fp","crawl_id":"char-crawl","explorer_version":"char/1.0","frame_count":0,"guard_version":"char","refuse_pack_version":"refuse-pack-v1","stop_reason":"","target_url":"https://app.char/home","type":"crawl_meta","walk_persistence":{"authorized":false,"max_mutations_per_step":0,"mutations":0,"reason":"not_attested"}}
-{"actions":[{"after":{"detail":"https://app.char/quote","navigated":true,"outcome":"navigation"},"anchor":null,"phase":"explore","qec":{"css_hint":"","expanded":"","frame_selector":"","haspopup":"","href":"/quote","input_type":"","name_confidence":"medium","options":[],"role":"link","testid":""},"screenshot_after":"","state_id":"9167cb7e452d9cea69d008e70ffcc201a4dd96d2a81407a69fa57a718406033e","subaction_index":0,"target_kind":"link","target_label":"Get a Quote","timestamp_ms":6,"to_state":"app.char/quote","url_changed":true,"value":null,"verb":"click"},{"after":{"detail":"https://app.char/about","navigated":true,"outcome":"navigation"},"anchor":null,"phase":"explore","qec":{"css_hint":"","expanded":"","frame_selector":"","haspopup":"","href":"/about","input_type":"","name_confidence":"medium","options":[],"role":"link","testid":""},"screenshot_after":"","state_id":"9167cb7e452d9cea69d008e70ffcc201a4dd96d2a81407a69fa57a718406033e","subaction_index":1,"target_kind":"link","target_label":"About Us","timestamp_ms":8,"to_state":"app.char/about","url_changed":true,"value":null,"verb":"click"},{"after":{"detail":"","navigated":false,"outcome":"none"},"anchor":null,"phase":"explore","qec":{"css_hint":"","expanded":"","frame_selector":"","haspopup":"","href":"https://elsewhere.example/x","input_type":"","name_confidence":"medium","options":[],"role":"link","testid":""},"screenshot_after":"","state_id":"9167cb7e452d9cea69d008e70ffcc201a4dd96d2a81407a69fa57a718406033e","subaction_index":2,"target_kind":"link","target_label":"External Partner","timestamp_ms":10,"to_state":"","url_changed":false,"value":null,"verb":"click"},{"after":{"detail":"","navigated":false,"outcome":"none"},"anchor":null,"phase":"explore","qec":{"css_hint":"","expanded":"","frame_selector":"","haspopup":"","href":"mailto:hi@app.char","input_type":"","name_confidence":"medium","options":[],"role":"link","testid":""},"screenshot_after":"","state_id":"9167cb7e452d9cea69d008e70ffcc201a4dd96d2a81407a69fa57a718406033e","subaction_index":3,"target_kind":"link","target_label":"Email Us","timestamp_ms":12,"to_state":"","url_changed":false,"value":null,"verb":"click"}],"ax_fingerprint":"9167cb7e452d9cea69d008e70ffcc201a4dd96d2a81407a69fa57a718406033e","canonical_host":"app.char","displayed_values":[],"first_seen_ms":3,"form_snapshot":{},"form_snapshot_signals":{},"last_seen_ms":13,"location":"https://app.char/home","network_calls":[{"has_query":"false","method":"GET","request_mime":"","resource_type":"fetch","response_bytes":"","response_mime":"","status":"200","timestamp_ms":"","url":"https://app.char/api/config"}],"screenshots":[{"frame_index":0,"path":"frame_00000.png","timestamp_ms":4}],"sequence_index":0,"state_id":"9167cb7e452d9cea69d008e70ffcc201a4dd96d2a81407a69fa57a718406033e","title":"Home","type":"page_state","url_host":"app.char","url_path":"/home","url_query":""}
+{"actions":[{"after":{"detail":"https://app.char/quote","navigated":true,"outcome":"navigation"},"anchor":null,"phase":"explore","qec":{"capture_scope":"","css_hint":"","disclosure":"","expanded":"","frame_origin":"","frame_selector":"","haspopup":"","href":"/quote","input_type":"","name_confidence":"medium","options":[],"role":"link","shadow_scope":"","testid":""},"screenshot_after":"","state_id":"9167cb7e452d9cea69d008e70ffcc201a4dd96d2a81407a69fa57a718406033e","subaction_index":0,"target_kind":"link","target_label":"Get a Quote","timestamp_ms":6,"to_state":"app.char/quote","url_changed":true,"value":null,"verb":"click"},{"after":{"detail":"https://app.char/about","navigated":true,"outcome":"navigation"},"anchor":null,"phase":"explore","qec":{"capture_scope":"","css_hint":"","disclosure":"","expanded":"","frame_origin":"","frame_selector":"","haspopup":"","href":"/about","input_type":"","name_confidence":"medium","options":[],"role":"link","shadow_scope":"","testid":""},"screenshot_after":"","state_id":"9167cb7e452d9cea69d008e70ffcc201a4dd96d2a81407a69fa57a718406033e","subaction_index":1,"target_kind":"link","target_label":"About Us","timestamp_ms":8,"to_state":"app.char/about","url_changed":true,"value":null,"verb":"click"},{"after":{"detail":"","navigated":false,"outcome":"none"},"anchor":null,"phase":"explore","qec":{"capture_scope":"","css_hint":"","disclosure":"","expanded":"","frame_origin":"","frame_selector":"","haspopup":"","href":"https://elsewhere.example/x","input_type":"","name_confidence":"medium","options":[],"role":"link","shadow_scope":"","testid":""},"screenshot_after":"","state_id":"9167cb7e452d9cea69d008e70ffcc201a4dd96d2a81407a69fa57a718406033e","subaction_index":2,"target_kind":"link","target_label":"External Partner","timestamp_ms":10,"to_state":"","url_changed":false,"value":null,"verb":"click"},{"after":{"detail":"","navigated":false,"outcome":"none"},"anchor":null,"phase":"explore","qec":{"capture_scope":"","css_hint":"","disclosure":"","expanded":"","frame_origin":"","frame_selector":"","haspopup":"","href":"mailto:hi@app.char","input_type":"","name_confidence":"medium","options":[],"role":"link","shadow_scope":"","testid":""},"screenshot_after":"","state_id":"9167cb7e452d9cea69d008e70ffcc201a4dd96d2a81407a69fa57a718406033e","subaction_index":3,"target_kind":"link","target_label":"Email Us","timestamp_ms":12,"to_state":"","url_changed":false,"value":null,"verb":"click"}],"ax_fingerprint":"9167cb7e452d9cea69d008e70ffcc201a4dd96d2a81407a69fa57a718406033e","canonical_host":"app.char","displayed_values":[],"first_seen_ms":3,"form_snapshot":{},"form_snapshot_signals":{},"last_seen_ms":13,"location":"https://app.char/home","network_calls":[{"action_label":"","action_token":"","action_verb":"","auth_pattern":"","capture_window_start_ms":"0","error":"","failed":"false","has_query":"false","method":"GET","page_token":"","path_template":"/api/config","request_body_bytes":"0","request_body_keys":"","request_body_source":"","request_headers":"","request_mime":"","resource_type":"fetch","response_bytes":"","response_headers":"","response_mime":"","response_shape":"","sequence":"","shape_source":"","status":"200","timestamp_ms":"","url":"https://app.char/api/config"}],"screenshots":[{"frame_index":0,"path":"frame_00000.png","timestamp_ms":4}],"sequence_index":0,"state_id":"9167cb7e452d9cea69d008e70ffcc201a4dd96d2a81407a69fa57a718406033e","title":"Home","type":"page_state","url_host":"app.char","url_path":"/home","url_query":""}
 {"actions":4,"frontier":[{"depth":1,"discovered_via":"Get a Quote","key":"app.char/quote","parent_fingerprint":"9167cb7e452d9cea69d008e70ffcc201a4dd96d2a81407a69fa57a718406033e","priority":0,"url":"https://app.char/quote"},{"depth":1,"discovered_via":"About Us","key":"app.char/about","parent_fingerprint":"9167cb7e452d9cea69d008e70ffcc201a4dd96d2a81407a69fa57a718406033e","priority":0,"url":"https://app.char/about"}],"frontier_truncated":false,"sequence_index":1,"spent_keys":["app.char/about","app.char/home","app.char/quote"],"states":1,"timestamp_ms":14,"type":"checkpoint","visited_count":1}
 {"from_state":"9167cb7e452d9cea69d008e70ffcc201a4dd96d2a81407a69fa57a718406033e","target_label":"Get a Quote","timestamp_ms":16,"to_state":"0ef7f36c2c69b5c84271bc7d1e9fcba493363d787b533d3dfe094e1e74419cb8","type":"edge","verb":"navigate"}
-{"actions":[{"after":{"detail":"","navigated":false,"outcome":"value_committed"},"anchor":null,"phase":"explore","qec":{"css_hint":"","expanded":"","frame_selector":"","haspopup":"","href":"","input_type":"text","name_confidence":"medium","options":[],"role":"textbox","testid":""},"screenshot_after":"","state_id":"0ef7f36c2c69b5c84271bc7d1e9fcba493363d787b533d3dfe094e1e74419cb8","subaction_index":0,"target_kind":"text_field","target_label":"Full Name","timestamp_ms":19,"to_state":"","url_changed":false,"value":"Mariam Ashcombe","verb":"type"},{"after":{"detail":"","navigated":false,"outcome":"value_committed"},"anchor":null,"phase":"explore","qec":{"css_hint":"","expanded":"","frame_selector":"","haspopup":"","href":"","input_type":"email","name_confidence":"medium","options":[],"role":"textbox","testid":""},"screenshot_after":"","state_id":"0ef7f36c2c69b5c84271bc7d1e9fcba493363d787b533d3dfe094e1e74419cb8","subaction_index":1,"target_kind":"text_field","target_label":"Email","timestamp_ms":20,"to_state":"","url_changed":false,"value":"[REDACTED:email]","verb":"type"},{"after":{"detail":"","navigated":false,"outcome":"value_committed"},"anchor":null,"phase":"explore","qec":{"css_hint":"","expanded":"","frame_selector":"","haspopup":"","href":"","input_type":"","name_confidence":"medium","options":["California","New York","Texas"],"role":"combobox","testid":""},"screenshot_after":"","state_id":"0ef7f36c2c69b5c84271bc7d1e9fcba493363d787b533d3dfe094e1e74419cb8","subaction_index":2,"target_kind":"dropdown","target_label":"State","timestamp_ms":21,"to_state":"","url_changed":false,"value":"California","verb":"select"},{"after":{"detail":"https://app.char/home","navigated":true,"outcome":"navigation"},"anchor":null,"phase":"explore","qec":{"css_hint":"","expanded":"","frame_selector":"","haspopup":"","href":"/home","input_type":"","name_confidence":"medium","options":[],"role":"link","testid":""},"screenshot_after":"","state_id":"0ef7f36c2c69b5c84271bc7d1e9fcba493363d787b533d3dfe094e1e74419cb8","subaction_index":3,"target_kind":"link","target_label":"Back Home","timestamp_ms":23,"to_state":"app.char/home","url_changed":true,"value":null,"verb":"click"}],"ax_fingerprint":"0ef7f36c2c69b5c84271bc7d1e9fcba493363d787b533d3dfe094e1e74419cb8","canonical_host":"app.char","displayed_values":[],"first_seen_ms":17,"form_snapshot":{"Email":"","Full Name":"","State":""},"form_snapshot_signals":{"Email":{"options":[],"required":true,"type":"text"},"Full Name":{"options":[],"required":true,"type":"text"},"State":{"options":["California","New York","Texas"],"required":false,"type":"select"}},"last_seen_ms":24,"location":"https://app.char/quote","network_calls":[],"screenshots":[{"frame_index":1,"path":"frame_00001.png","timestamp_ms":18}],"sequence_index":1,"state_id":"0ef7f36c2c69b5c84271bc7d1e9fcba493363d787b533d3dfe094e1e74419cb8","title":"Get a Quote","type":"page_state","url_host":"app.char","url_path":"/quote","url_query":""}
+{"actions":[{"after":{"detail":"","navigated":false,"outcome":"value_committed"},"anchor":null,"phase":"explore","qec":{"capture_scope":"","css_hint":"","disclosure":"","expanded":"","frame_origin":"","frame_selector":"","haspopup":"","href":"","input_type":"text","name_confidence":"medium","options":[],"role":"textbox","shadow_scope":"","testid":""},"screenshot_after":"","state_id":"0ef7f36c2c69b5c84271bc7d1e9fcba493363d787b533d3dfe094e1e74419cb8","subaction_index":0,"target_kind":"text_field","target_label":"Full Name","timestamp_ms":19,"to_state":"","url_changed":false,"value":"Mariam Ashcombe","verb":"type"},{"after":{"detail":"","navigated":false,"outcome":"value_committed"},"anchor":null,"phase":"explore","qec":{"capture_scope":"","css_hint":"","disclosure":"","expanded":"","frame_origin":"","frame_selector":"","haspopup":"","href":"","input_type":"email","name_confidence":"medium","options":[],"role":"textbox","shadow_scope":"","testid":""},"screenshot_after":"","state_id":"0ef7f36c2c69b5c84271bc7d1e9fcba493363d787b533d3dfe094e1e74419cb8","subaction_index":1,"target_kind":"text_field","target_label":"Email","timestamp_ms":20,"to_state":"","url_changed":false,"value":"[REDACTED:email]","verb":"type"},{"after":{"detail":"","navigated":false,"outcome":"value_committed"},"anchor":null,"phase":"explore","qec":{"capture_scope":"","css_hint":"","disclosure":"","expanded":"","frame_origin":"","frame_selector":"","haspopup":"","href":"","input_type":"","name_confidence":"medium","options":["California","New York","Texas"],"role":"combobox","shadow_scope":"","testid":""},"screenshot_after":"","state_id":"0ef7f36c2c69b5c84271bc7d1e9fcba493363d787b533d3dfe094e1e74419cb8","subaction_index":2,"target_kind":"dropdown","target_label":"State","timestamp_ms":21,"to_state":"","url_changed":false,"value":"California","verb":"select"},{"after":{"detail":"https://app.char/home","navigated":true,"outcome":"navigation"},"anchor":null,"phase":"explore","qec":{"capture_scope":"","css_hint":"","disclosure":"","expanded":"","frame_origin":"","frame_selector":"","haspopup":"","href":"/home","input_type":"","name_confidence":"medium","options":[],"role":"link","shadow_scope":"","testid":""},"screenshot_after":"","state_id":"0ef7f36c2c69b5c84271bc7d1e9fcba493363d787b533d3dfe094e1e74419cb8","subaction_index":3,"target_kind":"link","target_label":"Back Home","timestamp_ms":23,"to_state":"app.char/home","url_changed":true,"value":null,"verb":"click"}],"ax_fingerprint":"0ef7f36c2c69b5c84271bc7d1e9fcba493363d787b533d3dfe094e1e74419cb8","canonical_host":"app.char","displayed_values":[],"first_seen_ms":17,"form_snapshot":{"Email":"","Full Name":"","State":""},"form_snapshot_signals":{"Email":{"locator":{"bindable":true,"role":"textbox","strategy":"accessible_name","value":"Email","verified":true},"options":[],"options_total":0,"required":true,"type":"text"},"Full Name":{"locator":{"bindable":true,"role":"textbox","strategy":"accessible_name","value":"Full Name","verified":true},"options":[],"options_total":0,"required":true,"type":"text"},"State":{"locator":{"bindable":true,"role":"combobox","strategy":"accessible_name","value":"State","verified":true},"options":["California","New York","Texas"],"options_total":3,"required":false,"type":"select"}},"last_seen_ms":24,"location":"https://app.char/quote","network_calls":[],"screenshots":[{"frame_index":1,"path":"frame_00001.png","timestamp_ms":18}],"sequence_index":1,"state_id":"0ef7f36c2c69b5c84271bc7d1e9fcba493363d787b533d3dfe094e1e74419cb8","title":"Get a Quote","type":"page_state","url_host":"app.char","url_path":"/quote","url_query":""}
 {"actions":9,"frontier":[{"depth":1,"discovered_via":"About Us","key":"app.char/about","parent_fingerprint":"9167cb7e452d9cea69d008e70ffcc201a4dd96d2a81407a69fa57a718406033e","priority":0,"url":"https://app.char/about"}],"frontier_truncated":false,"sequence_index":2,"spent_keys":["app.char/about","app.char/home","app.char/quote"],"states":2,"timestamp_ms":25,"type":"checkpoint","visited_count":2}
 {"from_state":"9167cb7e452d9cea69d008e70ffcc201a4dd96d2a81407a69fa57a718406033e","target_label":"About Us","timestamp_ms":27,"to_state":"2d6828dd47e458b11bba3ac36e57c420654e498eefaba5071cf9c29624c59563","type":"edge","verb":"navigate"}
 {"actions":[],"ax_fingerprint":"2d6828dd47e458b11bba3ac36e57c420654e498eefaba5071cf9c29624c59563","canonical_host":"app.char","displayed_values":[],"first_seen_ms":28,"form_snapshot":{},"form_snapshot_signals":{},"last_seen_ms":30,"location":"https://app.char/about","network_calls":[],"screenshots":[{"frame_index":2,"path":"frame_00002.png","timestamp_ms":29}],"sequence_index":2,"state_id":"2d6828dd47e458b11bba3ac36e57c420654e498eefaba5071cf9c29624c59563","title":"About Us","type":"page_state","url_host":"app.char","url_path":"/about","url_query":""}
@@ -31,6 +31,37 @@
     "boundary_crossings": [],
     "crawl_mode": "explore",
     "discovered_rules": [],
+    "endpoint_inventory": [
+      {
+        "actions": [],
+        "auth_pattern": "none",
+        "first_sequence": null,
+        "first_timestamp_ms": null,
+        "has_server_error": false,
+        "host": "app.char",
+        "last_sequence": null,
+        "last_timestamp_ms": null,
+        "method": "GET",
+        "observed_count": 1,
+        "path_template": "/api/config",
+        "rate_limited": false,
+        "request_keys": [],
+        "resource_types": [
+          "fetch"
+        ],
+        "response_shape": "",
+        "retried": false,
+        "status_classes": [
+          "2xx"
+        ],
+        "statuses": {
+          "200": 1
+        }
+      }
+    ],
+    "endpoint_inventory_truncated": false,
+    "expansions_opened": 0,
+    "expansions_skipped": 0,
     "field_ledger": [
       {
         "basis": "name_tokens",
@@ -153,6 +184,9 @@
     "inventory_failure_detail": "",
     "inventory_failures": 0,
     "journeys_completed": 0,
+    "network_events_observed": 1,
+    "network_server_error_count": 0,
+    "network_server_errors": [],
     "opaque_surfaces": [],
     "open_choice_unverified": 0,
     "outcome_milestones": [],
@@ -169,52 +203,111 @@
         "controls_total": 4,
         "danger_controls": 0,
         "danger_names": [],
+        "endpoints": [
+          {
+            "method": "GET",
+            "path": "/api/config",
+            "response_mime": "",
+            "status": "200"
+          }
+        ],
         "form_snapshot_signals": {},
-        "location": "https://app.char/home"
+        "location": "https://app.char/home",
+        "question_groups": []
       },
       {
         "ax_fingerprint": "0ef7f36c2c69b5c84271bc7d1e9fcba493363d787b533d3dfe094e1e74419cb8",
         "controls_total": 5,
         "danger_controls": 0,
         "danger_names": [],
+        "endpoints": [],
         "form_snapshot_signals": {
           "Email": {
+            "locator": {
+              "bindable": true,
+              "role": "textbox",
+              "strategy": "accessible_name",
+              "value": "Email",
+              "verified": true
+            },
             "options": [],
+            "options_total": 0,
             "required": true,
             "type": "text"
           },
           "Full Name": {
+            "locator": {
+              "bindable": true,
+              "role": "textbox",
+              "strategy": "accessible_name",
+              "value": "Full Name",
+              "verified": true
+            },
             "options": [],
+            "options_total": 0,
             "required": true,
             "type": "text"
           },
           "State": {
+            "locator": {
+              "bindable": true,
+              "role": "combobox",
+              "strategy": "accessible_name",
+              "value": "State",
+              "verified": true
+            },
             "options": [
               "California",
               "New York",
               "Texas"
             ],
+            "options_total": 3,
             "required": false,
             "type": "select"
           }
         },
-        "location": "https://app.char/quote"
+        "location": "https://app.char/quote",
+        "question_groups": []
       },
       {
         "ax_fingerprint": "2d6828dd47e458b11bba3ac36e57c420654e498eefaba5071cf9c29624c59563",
         "controls_total": 1,
         "danger_controls": 0,
         "danger_names": [],
+        "endpoints": [],
         "form_snapshot_signals": {},
-        "location": "https://app.char/about"
+        "location": "https://app.char/about",
+        "question_groups": []
       }
     ],
     "submit_candidates": [
       "Get Quote"
     ],
     "summary": "1 form(s) found; 3 field(s) auto-filled with a default; 0 field(s) need a real seed; 0 submit(s) exercised (Phase-B), 0 irreversible boundary/ies awaiting approval; 0 journey(s) completed end-to-end through an approved crossing.",
+    "tab_views_recorded": 0,
     "traversal": "probe",
-    "unhandled_controls": []
+    "unhandled_controls": [],
+    "vision_budget": {
+      "breaker_open": false,
+      "breaker_threshold": 3,
+      "calls": 0,
+      "consecutive_failures": 0,
+      "failures": 0,
+      "gate": {
+        "attestation_rung": "none",
+        "attested": false,
+        "enabled": false,
+        "reason": "no_oracle",
+        "tenant_enabled": false
+      },
+      "latency_ms": 0,
+      "max_calls": 0,
+      "refusals": {},
+      "timeout_s": 20.0
+    },
+    "vision_ledger": [],
+    "vision_refused": 0,
+    "vision_verified": 0
   },
   "detail": "",
   "guard_blocks": 0,

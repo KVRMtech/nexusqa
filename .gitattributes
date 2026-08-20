@@ -41,6 +41,21 @@ Dockerfile* text eol=lf
 # so it keeps CRLF rather than being dragged into the Linux convention.
 *.ps1     text eol=crlf
 
+# Recorded evidence — goldens, characterization manifests and crawl recordings.
+#
+# WHY. These files are compared BYTE FOR BYTE, both by pytest (the M0.3
+# characterization gate) and by CI itself (`git diff --quiet -- tests/browser/golden`
+# and `-- evidence/m23_retirement`). The recorder always writes an LF newline.
+# Without a rule here, `core.autocrlf=true` — which is the setting on the current
+# Windows checkout — checks them out with CRLF, and the very next re-record
+# rewrites every line back to LF. `git status` then reports the whole file dirty
+# with no behaviour change behind it, and the CI "a golden was rewritten" guard
+# cannot tell that apart from a real capture regression.
+#
+# Pinning them to LF makes a clean clone byte-identical on Linux and Windows, so
+# a diff in one of these files always means the CAPTURE changed.
+*.golden  text eol=lf
+
 # Binary — never touched, never diffed as text.
 *.png     binary
 *.jpg     binary
