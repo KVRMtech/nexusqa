@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Meridian Life — Quote</title>
+</head>
+<body>
+<main>
+  <h1>Meridian Life — Instant Quote</h1>
+
+  <!--
+    FIXTURE 30 — M2.5 / T-NET-06.
+
+    Four network behaviours the BASELINE capture destroyed, each behind a
+    separate control so a reviewer can point at one click and one consequence:
+
+      * "Get quote"      -> POST /__net/quote     503, 503, 200  (a RETRY that succeeds)
+      * "Check status"   -> GET  /__net/status    x4             (a POLL: same call, same status)
+      * "Refresh limits" -> GET  /__net/limited   429, 429, 200  (RATE LIMITING + Retry-After)
+      * "Submit claim"   -> POST /__net/claim     500            (an OBSERVED 5xx, never recovered)
+
+    Every endpoint is served by the harness's `/__net/` namespace, so the
+    sequences are deterministic and identical on a laptop and in CI.
+
+    The request bodies deliberately carry BOTH contract-shaped keys (age, state,
+    coverage) and a secret-shaped one (password), so the redaction evidence has
+    something real to prove rather than an empty body.
+  -->
+
+  <section aria-label="Quote">
+    <button type="button" id="quote">Get quote</button>
+    <p id="quote-out">no quote yet</p>
+  </section>
+
+  <section aria-label="Status">
+    <button type="button" id="status">Check status</button>
+    <p id="status-out">not polled</p>
+  </section>
+
+  <section aria-label="Limits">
+    <button type="button" id="limits">Refresh limits</button>
+    <p id="limits-out">limits unknown</p>
+  </section>
+
+  <section aria-label="Claim">
+    <button type="button" id="claim">Submit claim</button>
+    <p id="claim-out">no claim filed</p>
+  </section>
+</main>
+
+<script>
+// Deterministic: no timers longer than the settle budget, no randomness, and
+// every sequence is driven by the server's own counter so a re-run replays it.
+const BASE = "/__net";
+
+function say(id, text) { document.getElementById(id).textContent = text; }
+
+async function postJson(path, body) {
+  return fetch(BASE + path, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      // A credential-shaped header, so the redaction evidence has a real one to
+      // reduce to `<bearer>` instead of a synthetic example.
+      "Authorization": "Bearer meridian-test-token-do-not-log-abc123",
+      "X-Request-Id": "req-quote-001"
+    },
+    body: JSON.stringify(body)
+  });
+}
+
+// RETRY: three attempts, in order, each one its own request. The server fails
+// the first two; the client retries until it succeeds.
+document.getElementById("quote").addEventListener("click", async () => {
+  say("quote-out", "quoting…");
+  let last = 0;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const res = await postJson("/quote", {
+      age: 42, state: "CA", coverage: 500000,
+      password: "not-a-real-password"
+    });
+    last = res.status;
+    if (res.ok) { say("quote-out", "quote ready (attempt " + attempt + ")"); return; }
+  }
+  say("quote-out", "quote failed: " + last);
+});
+
+// POLL: the same GET four times. Identical method, URL and status every time —
+// the exact shape the baseline dedup collapsed to a single record.
+document.getElementById("status").addEventListener("click", async () => {
+  say("status-out", "polling…");
+  for (let i = 0; i < 4; i++) {
+    await fetch(BASE + "/status", { headers: { "Accept": "application/json" } });
+  }
+  say("status-out", "polled 4 times");
+});
+
+// RATE LIMIT: 429 twice with Retry-After, then 200.
+document.getElementById("limits").addEventListener("click", async () => {
+  say("limits-out", "checking…");
+  let last = 0;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const res = await fetch(BASE + "/limited", { headers: { "Accept": "application/json" } });
+    last = res.status;
+    if (res.ok) { say("limits-out", "limits ok (attempt " + attempt + ")"); return; }
+  }
+  say("limits-out", "rate limited: " + last);
+});
+
+// 5xx: one POST, one 500, no recovery. This is the oracle's trigger.
+document.getElementById("claim").addEventListener("click", async () => {
+  say("claim-out", "filing…");
+  const res = await postJson("/claim", { policy: "P-100", amount: 250 });
+  say("claim-out", res.ok ? "claim filed" : "claim rejected: " + res.status);
+});
+</script>
+</body>
+</html>

@@ -243,7 +243,114 @@ correctly *present*, which is what that gate's other assertion requires.
 
 *(see §0 first — the "10 failures" headline did not survive measurement)*
 
-<!--A3-RESULTS-->
+### The headline did not survive measurement
+
+The brief says *"Resolve the 10 browser failures"*. A full serial run of all 797
+browser tests produced:
+
+```
+2 failed, 503 passed, 291 skipped, 1 xfailed   in 4337s (1:12:17)
+```
+
+**Two**, not ten. The number is not disputed for its own sake — it matters
+because the two have *different* causes and only one of them is a defect in this
+repository. Treating them as one population of ten would have produced one fix
+for two unrelated problems.
+
+### Failure 1 — a timing assumption, not a capture bug
+
+```
+test_jsdom_execution.py::test_jsdom_capability_probe
+subprocess.TimeoutExpired: ['node', 'jsdom_runner.js'] timed out after 45.0 seconds
+```
+
+Passes alone in **3.87 s**. The 45 s ceiling is `timeout_ms/1000 + 30` in
+`_harness.run_jsdom` — a 15 s in-jsdom budget plus a hard-coded 30 s of process
+slack for node startup, module resolution and jsdom construction, none of which
+the in-page timeout can observe. That constant is a statement about how busy the
+machine is, not about the code under test, and this machine was running four
+other squads' pytest processes.
+
+**Fixed** by making the slack an env-tunable (`QEC_JSDOM_PROC_SLACK_S`, default
+raised 30 → 90) and by converting `TimeoutExpired` into a named error that says
+it is a wall-clock failure, names contention as the usual cause, and tells the
+reader to re-run alone before investigating capture. **Deliberately not
+retried**: a retry would convert a genuine runner hang into an intermittent
+failure, which is strictly worse than a slow one.
+
+### Failure 2 — a real defect, reproducible in isolation
+
+```
+test_playwright_execution.py::test_expected_controls_in_chromium[30-network-retry-poll-ratelimit]
+KeyError: 'where'   at _harness.py:487
+```
+
+Fixture 30's four `expect_controls` entries were authored in the wrong schema —
+flat `{"name": …, "kind": …}` instead of `{"where": {…}, "fields": {…}}`.
+`assert_control` opens with an unguarded `spec["where"]`, so the fixture's own
+error surfaced as a bare `KeyError` from inside the harness, in the Chromium
+lane, forty minutes into a seventy-minute run, pointing at the harness rather
+than at the fixture that was wrong.
+
+**Fixed** by migrating fixture 30 to the harness schema. The expectations are
+anchored on `css_hint` (the ids the fixture's own HTML declares) and *assert*
+`name`/`role`/`tag`, rather than matching on `name`. Matching on the name would
+have been tautological — a capture regression that lost the accessible name
+would simply match nothing and read as "the fixture changed".
+
+### Why the contract did not catch it, and the guard that now does
+
+`test_every_fixture_declares_a_valid_contract` checks that a fixture names its
+purpose, its lanes, its snippet, and that it asserts *something*. It never looked
+at the **shape** of the entries. The inverse rule already existed one function
+away — `describes_runtime_behaviour` is checked for *not* carrying a control
+shape — so only the positive half was missing.
+
+`test_control_expectations_carry_a_where_clause` now runs in the fast
+fixture-library lane and answers in milliseconds instead of forty minutes.
+Verified in both directions: green on all 26 fixtures; revert fixture 30 and it
+fires by name.
+
+It also caught its own author. The first version carried an allow-list of
+permitted keys that I had **guessed rather than read**, and it red-flagged
+eighteen correct fixtures over `why`, `href_suffix` and `list_lengths` — all
+three of which `assert_control` genuinely consumes. The shipped list is derived
+from the harness source and says so.
+
+### Confirmation
+
+| run | order | result |
+|---|---|---|
+| fixture 30 + fixture library | declaration | 146 passed |
+| fixture library (all 26) | declaration | 173 passed |
+| fixture-library + jsdom + playwright (526 tests) | **randomised** | 298 passed, 274 skipped, 1 failed |
+
+The one remaining failure is
+`test_expected_controls_in_jsdom[27-wizard-20-step-samefingerprint]`: another
+squad's fixture, created at **09:30:50** and last edited at **09:31:54**, whose
+`expected.json` expects `css_hint='#opt-yes'` that its own `index.html` does not
+yet emit. It did not exist during the baseline run and is A9 work in progress.
+
+### What is NOT proven
+
+A3's exit criteria ask for the full suite green **in parallel** and across
+**repeated** whole-suite executions. Neither is delivered:
+
+* One full serial pass costs **72 minutes** on this machine, and the tree changes
+  underneath it — the run that produced the baseline started before fixture 27
+  existed and finished after.
+* CI does not run the suite serially either: it shards by marker across two
+  jobs, and `ci.yml` records that `pytest-xdist` was **measured and rejected**
+  (`-n 2` took 28 min against a 23 min serial baseline) because both lanes are
+  session-scoped — every extra worker re-pays the whole Chromium launch. So
+  "passes in parallel" is not a property this suite is built to have, and
+  asserting it would require redesigning the lane fixtures, which is well
+  outside Gate 0.
+
+What *is* established: both measured failures are root-caused, both are fixed,
+one has a regression guard, and the affected files pass in randomised order.
+Whole-suite repetition needs the same tree freeze §0 asks for.
+
 
 ---
 

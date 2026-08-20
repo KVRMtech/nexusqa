@@ -1,0 +1,97 @@
+{
+  "purpose": "Isolate the four network behaviours the baseline capture destroyed - a retry that recovers, a poll where nothing varies, a rate-limit backoff, and an observed 5xx - so M2.5 network evidence is proven on an application that really produces them rather than on a hand-written event list.",
+  "targeted_defect": "Regression guard for T-NET-01 (network events stamped on a raw monotonic epoch could never fall inside a visit window), T-NET-02 (dedup on method|url|status collapsed three retries into one record), T-NET-03 (no event named the UI action that caused it) and T-NET-05 (the oracle read start_ms while the crawler wrote timestamp_ms, silently disabling the step window).",
+  "lanes": [
+    "playwright"
+  ],
+  "snippet": "INVENTORY_JS",
+  "min_controls": 4,
+  "expect_controls": [
+    {
+      "where": {
+        "css_hint": "button#quote"
+      },
+      "fields": {
+        "name": "Get quote",
+        "role": "button",
+        "tag": "button"
+      }
+    },
+    {
+      "where": {
+        "css_hint": "button#status"
+      },
+      "fields": {
+        "name": "Check status",
+        "role": "button",
+        "tag": "button"
+      }
+    },
+    {
+      "where": {
+        "css_hint": "button#limits"
+      },
+      "fields": {
+        "name": "Refresh limits",
+        "role": "button",
+        "tag": "button"
+      }
+    },
+    {
+      "where": {
+        "css_hint": "button#claim"
+      },
+      "fields": {
+        "name": "Submit claim",
+        "role": "button",
+        "tag": "button"
+      }
+    }
+  ],
+  "forbid": [],
+  "network": {
+    "expected_event_count": 11,
+    "endpoints": [
+      {
+        "method": "POST",
+        "path_template": "/__net/quote",
+        "statuses": [
+          503,
+          503,
+          200
+        ],
+        "behaviour": "retry"
+      },
+      {
+        "method": "GET",
+        "path_template": "/__net/status",
+        "statuses": [
+          200,
+          200,
+          200,
+          200
+        ],
+        "behaviour": "poll"
+      },
+      {
+        "method": "GET",
+        "path_template": "/__net/limited",
+        "statuses": [
+          429,
+          429,
+          200
+        ],
+        "behaviour": "rate_limit"
+      },
+      {
+        "method": "POST",
+        "path_template": "/__net/claim",
+        "statuses": [
+          500
+        ],
+        "behaviour": "server_error"
+      }
+    ]
+  },
+  "lane_note": "jsdom has no network stack, so a fixture whose whole subject is the ORDER and COUNT of real HTTP requests cannot be measured there. Declaring both lanes would report a lane that never ran as one that passed."
+}

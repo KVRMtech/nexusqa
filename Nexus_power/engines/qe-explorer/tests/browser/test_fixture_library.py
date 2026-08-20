@@ -168,6 +168,68 @@ def test_every_fixture_is_independently_servable(fixture_server, fixture_name) -
         f"cross-origin embed would resolve to a relative path instead")
 
 
+#: Every key ``_harness.assert_control`` reads, plus the documentation keys the
+#: fixture library already uses. Kept beside the test that enforces it.
+_CONTROL_SPEC_KEYS = frozenset({
+    "where", "fields", "list_lengths", "list_edges", "href_suffix",  # consumed
+    "lanes",                                                          # runs_in_lane
+    "why", "lane_note",                                               # prose
+})
+
+
+def test_control_expectations_carry_a_where_clause(fixture_name) -> None:
+    """``expect_controls`` / ``forbid_controls`` entries must be MATCHABLE.
+
+    THE ESCAPE THIS CLOSES.  ``assert_control`` opens with an unguarded
+    ``spec["where"]``, so an entry written in the wrong shape does not fail as a
+    contract violation — it fails as a bare ``KeyError: 'where'`` from inside the
+    harness, in the Chromium lane, forty minutes into a seventy-minute run, with a
+    traceback that points at the harness rather than at the fixture that is
+    actually wrong.
+
+    Fixture 30 shipped in exactly that state.  Its four entries were flat
+    ``{"name": …, "kind": …}`` dicts rather than ``{"where": {…}, "fields": {…}}``,
+    and every other contract test passed it: the fixture declares its purpose, its
+    lanes, its snippet, and it asserts SOMETHING, which is all
+    ``test_every_fixture_declares_a_valid_contract`` measures.  Nothing looked at
+    the shape of the entries themselves.
+
+    The inverse rule already existed one function up —
+    ``describes_runtime_behaviour`` is checked for NOT carrying a control shape —
+    so the positive half was simply missing.  It runs in the jsdom lane, needs no
+    browser, and answers in milliseconds.
+    """
+    spec = H.fixture_spec(fixture_name)
+    for block in ("expect_controls", "forbid_controls"):
+        for i, item in enumerate(spec.get(block, [])):
+            where = item.get("where")
+            assert isinstance(where, dict) and where, (
+                f"{fixture_name}/{block}[{i}] has no usable 'where' mapping: "
+                f"{item}" + chr(10) +
+                f"Control expectations are {{'where': {{<captured fields to match "
+                f"on>}}, 'fields': {{<fields to assert>}}}}. Without it "
+                f"assert_control raises KeyError from inside the harness and the "
+                f"failure names the harness instead of this fixture.")
+            # The allowed vocabulary is DERIVED from what assert_control actually
+            # reads (`where`, `fields`, `list_lengths`, `list_edges`,
+            # `href_suffix`) plus the two documentation keys the library already
+            # uses (`why`, `lane_note`) and the lane narrowing `runs_in_lane`
+            # honours. It is written down here rather than inferred at runtime so
+            # that ADDING an assertion kind to the harness is a deliberate two-line
+            # change instead of something a fixture can invent silently.
+            #
+            # This half of the guard was very nearly shipped with an allow-list I
+            # had guessed instead of read, which red-flagged eighteen correct
+            # fixtures over `why`, `href_suffix` and `list_lengths` — all three of
+            # which the harness genuinely consumes.
+            unknown = sorted(k for k in item if k not in _CONTROL_SPEC_KEYS)
+            assert not unknown, (
+                f"{fixture_name}/{block}[{i}] carries unrecognised key(s) "
+                f"{unknown}. assert_control reads only {sorted(_CONTROL_SPEC_KEYS)}, "
+                f"so a misspelled key is silently ignored and the expectation "
+                f"passes while asserting nothing.")
+
+
 def test_expectations_are_lane_reachable(fixture_name) -> None:
     """No expectation may be declared in a lane the fixture does not run in."""
     spec = H.fixture_spec(fixture_name)

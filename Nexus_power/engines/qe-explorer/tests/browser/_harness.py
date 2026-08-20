@@ -86,7 +86,8 @@ def fixture_spec(name: str) -> dict[str, Any]:
 
 # ─── The production snippets (read, never copied) ────────────────────────────
 
-_SNIPPETS = ("INVENTORY_JS", "OPAQUE_JS", "DISPLAYED_VALUES_JS")
+_SNIPPETS = ("INVENTORY_JS", "OPAQUE_JS", "DISPLAYED_VALUES_JS",
+             "CAPTURE_HOOKS_JS")
 
 
 def production_snippet(name: str = "INVENTORY_JS") -> str:
@@ -136,9 +137,112 @@ class _FixtureHandler(SimpleHTTPRequestHandler):
     #: set by FixtureServer before serving
     alt_origin = ""
     self_origin = ""
+    #: M2.5 — per-origin counters behind the ``/__net/`` endpoints, so a retry
+    #: sequence is DETERMINISTIC (503, 503, 200) rather than timing-dependent.
+    #: Class-level and lock-guarded because ``ThreadingHTTPServer`` serves each
+    #: request on its own thread and the browser fires these concurrently; a
+    #: plain dict would make the fixture flaky in exactly the way a fixture about
+    #: request ordering must never be.
+    _net_counts: dict = {}
+    _net_lock = threading.Lock()
+
+    #: The scripted status sequence for each dynamic endpoint. The LAST entry
+    #: repeats once the sequence is exhausted, so a crawl that clicks a control
+    #: more times than the script anticipated still gets a defined answer.
+    _NET_SCRIPT = {
+        "/quote": [503, 503, 200],
+        "/status": [200],
+        "/limited": [429, 429, 200],
+        "/claim": [500],
+    }
+
+    @classmethod
+    def reset_net_counts(cls) -> None:
+        """Forget every scripted sequence — one test must not inherit another's."""
+        with cls._net_lock:
+            cls._net_counts.clear()
 
     def log_message(self, fmt: str, *args: Any) -> None:      # silence the test run
         pass
+
+    # ─── M2.5 · the dynamic ``/__net/`` namespace ────────────────────────────
+
+    def _net_route(self) -> str:
+        """The scripted route this request is for, or ``""``.
+
+        Matched on the path only: the fixture's own query strings are irrelevant
+        here, and the capture layer drops them anyway.
+        """
+        path = (self.path or "").split("?", 1)[0]
+        marker = "/__net"
+        idx = path.find(marker)
+        if idx < 0:
+            return ""
+        route = path[idx + len(marker):]
+        return route if route in self._NET_SCRIPT else ""
+
+    def _serve_net(self, route: str, *, method: str) -> None:
+        """Answer one scripted call, advancing that route's counter by one.
+
+        The response deliberately carries headers a real API carries — a
+        ``Retry-After`` on the rate-limited route, a request id, a rate-limit
+        budget — because the point of the fixture is to give the capture layer
+        real headers to allow-list and redact, not synthetic ones.
+        """
+        script = self._NET_SCRIPT[route]
+        with self._net_lock:
+            n = self._net_counts.get(route, 0)
+            self._net_counts[route] = n + 1
+        status = script[n] if n < len(script) else script[-1]
+
+        # Drain the request body so the client is never left writing into a
+        # closed socket (which would surface as a spurious network failure).
+        length = 0
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except (TypeError, ValueError):
+            length = 0
+        if length > 0:
+            try:
+                self.rfile.read(length)
+            except Exception:
+                pass
+
+        payload = json.dumps({
+            "route": route, "attempt": n + 1, "status": status,
+        }).encode("utf-8")
+
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(payload)))
+        self.send_header("X-Request-Id", f"srv-{route.strip('/')}-{n + 1}")
+        if status == 429:
+            self.send_header("Retry-After", "1")
+            self.send_header("X-RateLimit-Limit", "3")
+            self.send_header("X-RateLimit-Remaining", "0")
+        # A credential-shaped response header, so redaction has a real
+        # `Set-Cookie` to reduce to a presence marker.
+        self.send_header("Set-Cookie", "session=abc123secret; Path=/")
+        self.end_headers()
+        if method != "HEAD":
+            try:
+                self.wfile.write(payload)
+            except Exception:
+                pass
+
+    def do_POST(self) -> None:                                 # noqa: N802
+        route = self._net_route()
+        if route:
+            self._serve_net(route, method="POST")
+            return
+        self.send_error(405, "only the /__net/ namespace accepts POST")
+
+    def do_GET(self) -> None:                                  # noqa: N802
+        route = self._net_route()
+        if route:
+            self._serve_net(route, method="GET")
+            return
+        super().do_GET()
 
     def end_headers(self) -> None:
         # A cached fixture would make a characterization run depend on what a
@@ -246,7 +350,8 @@ class JsdomResult:
     console: list[str]
 
 
-def run_jsdom(url: str, snippet: str, js_path: Path, timeout_ms: int = 15000) -> JsdomResult:
+def run_jsdom(url: str, snippet: str, js_path: Path, timeout_ms: int = 15000,
+              hooks_path: Optional[Path] = None) -> JsdomResult:
     """Execute a PRODUCTION snippet inside jsdom against ``url``.
 
     Raises on any runner failure — a jsdom lane that silently returned ``[]``
@@ -257,12 +362,45 @@ def run_jsdom(url: str, snippet: str, js_path: Path, timeout_ms: int = 15000) ->
     if not ok:
         raise JsdomUnavailable(why)
 
-    job = json.dumps({"url": url, "js_path": str(js_path), "timeout_ms": timeout_ms})
-    proc = subprocess.run(
-        ["node", str(JSDOM_RUNNER)],
-        input=job, capture_output=True, text=True,
-        cwd=str(HARNESS_DIR), timeout=timeout_ms / 1000.0 + 30,
-    )
+    # M3.2 / T-FR-02 — the CAPTURE INIT SCRIPT, handed to the runner so it can
+    # install it in `beforeParse`: jsdom's equivalent of `add_init_script`, i.e.
+    # before the fixture's own scripts construct their components. The ORDERING
+    # is the behaviour under test, so this lane has to reproduce it rather than
+    # approximate it; a runner that evaluated the hooks after load would prove
+    # the opposite of what the fixture claims.
+    job = json.dumps({"url": url, "js_path": str(js_path), "timeout_ms": timeout_ms,
+                      "hooks_path": str(hooks_path) if hooks_path else ""})
+    # PROCESS slack on top of the in-jsdom budget, covering node startup, module
+    # resolution and jsdom construction — none of which the in-page timeout can
+    # see. It was a hard-coded +30s, which is a statement about how busy the
+    # machine is, not about the code under test. Observed failing: on a box also
+    # running four other pytest processes, `test_jsdom_capability_probe` blew the
+    # 45s ceiling and reported as a capture failure; the same test passes alone in
+    # under four seconds. A shared runner or a developer laptop mid-build hits the
+    # same wall, and the traceback (`subprocess.TimeoutExpired`) points at node
+    # rather than at the load that actually caused it.
+    slack_s = float(os.environ.get("QEC_JSDOM_PROC_SLACK_S") or 90)
+    try:
+        proc = subprocess.run(
+            ["node", str(JSDOM_RUNNER)],
+            input=job, capture_output=True, text=True,
+            cwd=str(HARNESS_DIR), timeout=timeout_ms / 1000.0 + slack_s,
+        )
+    except subprocess.TimeoutExpired as exc:
+        # Deliberately NOT retried. A retry would paper over a genuine runner hang
+        # and turn a reproducible failure into an intermittent one. Name the cause
+        # instead, so the reader does not go looking for a capture bug.
+        raise RuntimeError(
+            f"the jsdom runner did not finish within "
+            f"{timeout_ms / 1000.0 + slack_s:.0f}s for {snippet} @ {url}." + chr(10) +
+            f"The in-jsdom budget is {timeout_ms / 1000.0:.0f}s and the process "
+            f"slack is {slack_s:.0f}s (QEC_JSDOM_PROC_SLACK_S)." + chr(10) +
+            f"This is a WALL-CLOCK failure, not a capture failure: node never "
+            f"reported back. The usual cause is machine contention — another test "
+            f"run, a build, or a busy shared runner. Re-run this test alone before "
+            f"investigating the snippet; if it passes alone, raise the slack rather "
+            f"than changing capture."
+        ) from exc
     out = (proc.stdout or "").strip().splitlines()
     if not out:
         raise RuntimeError(
@@ -297,6 +435,18 @@ def playwright_available() -> tuple[bool, str]:
     except Exception as exc:                                   # pragma: no cover
         return False, f"chromium probe failed: {exc}"
     return True, ""
+
+
+async def install_production_capture_hooks(context: Any) -> bool:
+    """Install the capture hooks on a lane context, through PRODUCTION code.
+
+    A thin read of :func:`app.playwright_port.install_capture_hooks`, for the
+    same reason :func:`production_snippet` is a read rather than a copy: the
+    harness must never own a second way of configuring a browser context, or it
+    would go on proving that ITS way works while production's broke.
+    """
+    from app.playwright_port import install_capture_hooks   # noqa: PLC0415
+    return await install_capture_hooks(context)
 
 
 async def collect_via_production_port(page: Any, context: Any, url: str,
