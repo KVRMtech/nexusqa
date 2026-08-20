@@ -139,6 +139,16 @@ jobs:
           fi
           echo "All characterization goldens are byte-identical."
 
+      # ── THE GOLDEN GATE ──────────────────────────────────────────────────
+      # A real crawl, in real Chromium, must still walk a real application's
+      # funnel to its end and CROSS the irreversible control it was granted.
+      # That capability was broken for the whole of Phase 1 without a single red
+      # test, because every other lane stops short of the boundary. A build that
+      # cannot cross fails here, and the failure names what it saw instead.
+      - name: Golden Gate — the crawl still crosses an approved boundary
+        working-directory: ${{ env.EXPLORER }}
+        run: python -m pytest tests/browser/test_boundary_crossing_gate.py -v
+
       - name: Execution coverage for the injected capture JS
         working-directory: ${{ env.EXPLORER }}
         run: python -m pytest tests/browser/test_coverage.py -v
