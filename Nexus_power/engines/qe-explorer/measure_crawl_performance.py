@@ -44,6 +44,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import importlib.metadata
 import json
 import os
 import platform
@@ -382,6 +383,11 @@ async def crawl_once(app: str, url: str, rep: int, work_root: Path) -> dict[str,
         "states_discovered": states,
         "navigations": navigations,
         "interactions": interactions,
+        # A STATIC proving ground that issues no XHR legitimately measures 0 here
+        # (acme-life does). That is a property of the application, not a broken
+        # counter -- `network_events_observed` is an int straight from coverage.
+        # It does mean network throughput is only meaningful for an app that
+        # actually calls an API; see `methodology.not_measured`.
         "network_requests": net_events,
         "forms_found": cov.get("forms_found"),
         "port_calls": port.total_calls(),
@@ -409,13 +415,20 @@ async def crawl_once(app: str, url: str, rep: int, work_root: Path) -> dict[str,
 # ─── Environment ─────────────────────────────────────────────────────────────
 
 def environment(browser_version: str | None) -> dict[str, Any]:
-    import playwright
+    # `playwright` the PACKAGE exposes no __version__; the installed distribution
+    # does. Reading the attribute silently produced "unknown" in the first run of
+    # this instrument, which would have left the baseline unable to say which
+    # browser stack produced it -- the one field a performance record cannot omit.
+    try:
+        pw_version = importlib.metadata.version("playwright")
+    except Exception:                                # pragma: no cover
+        pw_version = "unknown"
     env: dict[str, Any] = {
         "python": sys.version.split()[0],
         "platform": platform.platform(),
         "machine": platform.machine(),
         "processor": platform.processor() or "unknown",
-        "playwright": getattr(playwright, "__version__", "unknown"),
+        "playwright": pw_version,
         "chromium": browser_version or "unknown",
         "explorer_version": EXPLORER_VERSION,
     }
@@ -539,6 +552,8 @@ async def main() -> int:
                 "summit-life-carrier — Next.js SSR, needs a Docker lane (Gate 2 / A16)",
                 "tier-3 oracle latency — deliberately stubbed",
                 "qe-central ingest — a separate service, not in this process",
+                "network throughput on apps that issue no XHR — acme-life is "
+                "static and correctly measures 0 network events",
             ],
         },
         "per_app": per_app,

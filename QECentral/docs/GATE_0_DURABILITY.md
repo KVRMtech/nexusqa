@@ -466,16 +466,50 @@ directory — as proof that the directory runs. The single invocation that
 guarantees those files do *not* execute was being counted as coverage. Fixed with
 a lookbehind, and the negative control is now part of the test's own docstring.
 
-### Still to apply
+### Delivered as a script, deliberately not applied
 
-The protection change itself is a one-call API update and is deliberately **not
-applied yet**: a required context must be green before it is required, and the
-browser lane has not yet run on a commit that contains this work. Sequence:
+`scripts/gate0_require_ci_lanes.sh` — dry-run by default, idempotent, and it
+refuses on unmet preconditions. Branch protection is the one part of this
+programme with no diff and no review, so it ships executable rather than as a
+click-path in a README.
 
-1. Push the Gate 0 commit; let both workflows run.
-2. Add `integrity-proof`, `jsdom execution lane` and
-   `Chromium lane + characterization + coverage` to the required contexts.
-3. Prove refusal — open a PR that fails one lane and show the merge blocked.
+It is **not applied**, on the release owner's instruction and for a reason the
+script itself demonstrates. Its dry run against the live repository says:
+
+```
+-- would ADD (3):
+     + integrity-proof
+     + jsdom execution lane
+     + Chromium lane + characterization + coverage
+
+-- checking each context has reported on a recent commit (the never-runs trap):
+     NEVER RAN  integrity-proof
+     NEVER RAN  jsdom execution lane
+     NEVER RAN  Chromium lane + characterization + coverage
+
+REFUSING: 3 context(s) have not reported on develop's head commit.
+```
+
+That is the trap from the previous section, confirmed live: **none of the three
+has ever reported on `develop`.** Requiring them today would not gate merges, it
+would stop them — for the four squads currently working in this tree, on a branch
+whose browser lane is red for a reason belonging to none of them (fixture 27,
+mid-authoring).
+
+Sequence, in order:
+
+1. Push a commit that runs both workflows; let them finish.
+2. `bash scripts/gate0_require_ci_lanes.sh` — dry run; confirm all three report.
+3. `bash scripts/gate0_require_ci_lanes.sh --apply`.
+4. Prove the refusal. Configuration is not evidence; a refused merge is. The
+   script's header carries the exact commands, ending in a `gh pr merge` that
+   must fail **405**.
+
+One implementation note worth keeping: the script **PATCHes** the
+`required_status_checks` sub-resource rather than PUTting `/protection`. A PUT
+replaces the whole protection object, so one that omits `enforce_admins` or
+`required_pull_request_reviews` silently switches them off — turning a hardening
+step into a regression nobody would notice.
 
 `Crawl <app>` (proving-ground) is **not** proposed for the required set here.
 Making a job required before its status is known blocks all merges, and those
