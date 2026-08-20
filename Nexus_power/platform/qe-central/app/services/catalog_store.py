@@ -30,7 +30,10 @@ from ..db.journey_models import (
     JourneyEdgeRow,
     JourneyNodeRow,
 )
-from .catalog import MAX_CATALOG_OPTIONS, build_master_catalog, snapshot_catalog
+from .catalog import (
+    LIFECYCLE_RETIRED, MAX_CATALOG_OPTIONS, build_master_catalog,
+    snapshot_catalog,
+)
 from .catalog_diff import diff_catalogs
 
 logger = logging.getLogger(__name__)
@@ -39,6 +42,23 @@ logger = logging.getLogger(__name__)
 def _sid(*parts: str) -> str:
     """Deterministic row id from a natural key — the upsert identity."""
     return hashlib.sha256("\x1f".join(parts).encode("utf-8")).hexdigest()[:64]
+
+
+async def _load_rules(tenant_id: str, app_id: str) -> list[dict]:
+    """Every business rule this tenant has PROVED about this app.
+
+    Read through :func:`rule_store.fetch_rules` rather than with a query of its
+    own, so the catalogue and the dispatch that hands rules back to a crawl see
+    exactly the same rows under exactly the same schema-version filter. A second
+    query here would be a second definition of "a rule this app has", and the day
+    they disagreed the catalogue would claim evidence the engine had rejected.
+
+    Fails open to ``[]`` inside ``fetch_rules``: an unreachable rule store must
+    cost the catalogue its rules — which it then reports honestly as UNVERIFIED —
+    never the catalogue itself.
+    """
+    from .rule_store import fetch_rules
+    return await fetch_rules(tenant_id, app_id)
 
 
 async def _load_graph(
@@ -76,19 +96,38 @@ async def _load_graph(
         # reveals is what makes a branch a trigger→child RULE — without it
         # rules_from_branches produces nothing and no journey ever branches.
         "reveals": list(b.reveals or []),
+        # M2.3 — the answer's lifecycle. Carried into the catalogue build so a
+        # question the application withdrew is not resurrected as active by the
+        # branch fold-in the moment the node side retired it.
+        "stale": bool(b.stale),
+        "retired_at": b.retired_at.isoformat() if b.retired_at else "",
+        "retired_in_crawl": b.retired_in_crawl or "",
+        "retire_reason": b.retire_reason or "",
+        "last_seen_crawl": b.last_seen_crawl or "",
     } for b in branch_rows]
     return nodes, edges, branches
 
 
-async def build_app_master_catalog(tenant_id: str, app_id: str) -> dict[str, Any]:
+async def build_app_master_catalog(
+    tenant_id: str, app_id: str, include_retired: bool = False,
+) -> dict[str, Any]:
     """The live app-scoped Master Catalog, aggregated from the journey graph.
 
     Read path for ``GET /apps/{app_id}/catalog`` — deduped by stable question_id
     across every journey/node, so the 400 questions appear once.
+
+    ``include_retired`` selects the AUDIT view: every question this application
+    has ever asked, each labelled with its lifecycle and — where it retired — the
+    timestamp and the crawl that retired it. The default is the ACTIVE catalogue,
+    which is what planning and scenario derivation must read, because a plan
+    built against a question the application no longer asks is a plan that fails
+    for a reason the report will blame on the application.
     """
     async with tenant_scoped_qec_session(tenant_id) as session:
         nodes, edges, branches = await _load_graph(session, tenant_id, app_id)
-    return build_master_catalog(nodes, edges=edges, branches=branches)
+    rules = await _load_rules(tenant_id, app_id)
+    return build_master_catalog(nodes, edges=edges, branches=branches, rules=rules,
+                                include_retired=include_retired)
 
 
 async def load_catalog_and_rules(
@@ -103,7 +142,14 @@ async def load_catalog_and_rules(
     from .journey_projector import rules_from_branches
     async with tenant_scoped_qec_session(tenant_id) as session:
         nodes, edges, branches = await _load_graph(session, tenant_id, app_id)
-    master = build_master_catalog(nodes, edges=edges, branches=branches)
+    # Two different things both called "rules", deliberately kept apart: the
+    # BUSINESS rules an experiment proved (what a question requires) go INTO the
+    # catalogue, while the trigger→child branch rules the projector returns are
+    # derived FROM it (which question reveals which). Folding either into the
+    # other would let a projection rule masquerade as observed business logic.
+    business_rules = await _load_rules(tenant_id, app_id)
+    master = build_master_catalog(nodes, edges=edges, branches=branches,
+                                  rules=business_rules)
     rules = rules_from_branches(branches, master["questions"])
     return master, rules
 
@@ -131,16 +177,39 @@ async def persist_catalog_version(
     references, and are surfaced as ``crawl_ref`` by :func:`diff_latest_versions`.
     """
     now = utc_now()
+    rules = await _load_rules(tenant_id, app_id)
     async with tenant_scoped_qec_session(tenant_id) as session:
         nodes, edges, branches = await _load_graph(session, tenant_id, app_id)
-        master = build_master_catalog(nodes, edges=edges, branches=branches)
-        questions = master.get("questions") or []
+        # BOTH CATALOGUES, ONE BUILD. ``full`` carries every question the
+        # application has ever asked, retired ones included and labelled;
+        # ``questions`` is the active subset. The durable rows are stamped from
+        # ``full`` — a retired question still needs its row updated, that is what
+        # records the retirement — while the SNAPSHOT is taken from the active
+        # catalogue alone, and that is precisely what makes ``catalog_diff``'s
+        # ``removed`` bucket reachable: the retired question leaves the new
+        # snapshot, so the next diff names it.
+        full = build_master_catalog(nodes, edges=edges, branches=branches,
+                                    rules=rules, include_retired=True)
+        all_questions = full.get("questions") or []
+        # NO SUMMARY IS CARRIED ONTO THIS. ``snapshot_catalog`` reads only
+        # ``questions``, and ``full``'s summary counts the retired rows too —
+        # copying it here would put an over-count on an object whose whole
+        # purpose is to be the ACTIVE catalogue. The lifecycle numbers this
+        # function reports are computed from the two lists below instead.
+        master = {"questions": [q for q in all_questions
+                                if q.get("lifecycle") != LIFECYCLE_RETIRED]}
+        questions = master["questions"]
+        retired_now = 0
 
         upserted = 0
-        for q in questions:
+        for q in all_questions:
             qid = str(q.get("question_id") or "")
             if not qid:
                 continue
+            # ── M2.3 · THE LIFECYCLE THIS BUILD RESOLVED ────────────────────
+            is_retired = q.get("lifecycle") == LIFECYCLE_RETIRED
+            q_stale = bool(q.get("stale"))
+            retired_at = _parse_ts(q.get("retired_at")) if is_retired else None
             row = (await session.execute(
                 select(CatalogQuestionRow).where(
                     CatalogQuestionRow.tenant_id == tenant_id,
@@ -149,6 +218,17 @@ async def persist_catalog_version(
                 ))).scalar_one_or_none()
             pages = [str(p) for p in (q.get("pages") or [])][:64]
             validation = q.get("validation") if isinstance(q.get("validation"), dict) else None
+            # ── M2.2 — the four signals qec_019 made durable ─────────────────
+            locator = q.get("locator") if isinstance(q.get("locator"), dict) else None
+            rule_evidence = (q.get("business_rule_evidence")
+                             if isinstance(q.get("business_rule_evidence"), dict)
+                             else None)
+            depends_on = str(q.get("depends_on") or "")[:200] or None
+            try:
+                options_total = int(q.get("options_total") or 0)
+            except (TypeError, ValueError):
+                options_total = 0
+            rule_state = str(q.get("business_rule_state") or "UNVERIFIED")[:24]
             if row is None:
                 session.add(CatalogQuestionRow(
                     cq_id=_sid("cq", tenant_id, app_id, qid),
@@ -159,6 +239,12 @@ async def persist_catalog_version(
                     options=[str(o) for o in (q.get("options") or [])][:MAX_CATALOG_OPTIONS],
                     validation=validation,
                     business_rule=str(q.get("business_rule") or "")[:500],
+                    business_rule_state=rule_state,
+                    business_rule_evidence=rule_evidence,
+                    depends_on=depends_on,
+                    locator=locator,
+                    options_total=max(options_total,
+                                      len(q.get("options") or [])),
                     expected_next_page=str(q.get("expected_next_page") or "")[:200],
                     semantic_type=str(q.get("semantic_type") or "")[:80],
                     provenance=str(q.get("provenance") or "observed")[:24],
@@ -166,8 +252,16 @@ async def persist_catalog_version(
                     first_seen_artifact=crawl_ref[:64],
                     last_seen_artifact=crawl_ref[:64],
                     first_seen_at=now, last_seen_at=now,
+                    stale=q_stale,
+                    missed_crawls=int(q.get("missed_crawls") or 0),
+                    retired_at=retired_at,
+                    retired_in_crawl=str(q.get("retired_in_crawl") or "")[:64],
+                    retire_reason=str(q.get("retire_reason") or "")[:32],
+                    last_seen_crawl=("" if is_retired else crawl_ref[:64]),
                 ))
                 upserted += 1
+                if is_retired:
+                    retired_now += 1
             else:
                 # Keep the richest: required sticky, fill options/validation, merge pages.
                 row.required = bool(row.required) or bool(q.get("required"))
@@ -180,6 +274,33 @@ async def persist_catalog_version(
                     row.options = [str(o) for o in q["options"]][:MAX_CATALOG_OPTIONS]
                 if row.validation is None and validation:
                     row.validation = validation
+                # ── M2.2 upsert semantics ────────────────────────────────────
+                # A rule, a dependency and a locator are all things ONE sighting
+                # proves and the others simply never witnessed — a dependent
+                # select looks unconditional until the crawl that answers its
+                # driver, and an experiment only runs where the app blocks. So
+                # each of these fills in and UPGRADES, and none of them clears:
+                # a later crawl that did not reach the gate must not erase the
+                # evidence an earlier one produced. What DOES overwrite is a
+                # fresher proof of the same kind, because the newest observation
+                # is the one that describes the application as it is now.
+                if q.get("business_rule"):
+                    row.business_rule = str(q["business_rule"])[:500]
+                    row.business_rule_state = rule_state
+                    row.business_rule_evidence = rule_evidence
+                elif not row.business_rule:
+                    row.business_rule_state = rule_state
+                if depends_on:
+                    row.depends_on = depends_on
+                if locator and (not row.locator
+                                or (locator.get("verified")
+                                    and not (row.locator or {}).get("verified"))):
+                    row.locator = locator
+                # NEVER DOWNWARD. The total is a count of what the application
+                # offers; a later sighting of a dependent control that was still
+                # empty is not evidence the answer set shrank.
+                row.options_total = max(int(row.options_total or 0), options_total,
+                                        len(row.options or []))
                 if q.get("expected_next_page"):
                     row.expected_next_page = str(q["expected_next_page"])[:200]
                 merged_pages = list(row.pages or [])
@@ -187,8 +308,45 @@ async def persist_catalog_version(
                     if p not in merged_pages:
                         merged_pages.append(p)
                 row.pages = merged_pages[:64]
-                row.last_seen_artifact = crawl_ref[:64]
-                row.last_seen_at = now
+
+                # ── M2.3 · THE LIFECYCLE WRITE ───────────────────────────────
+                # ``last_seen_artifact`` USED TO BUMP UNCONDITIONALLY, on every
+                # fold, for every question in the catalogue — including ones this
+                # crawl never saw. That is what made "when did we last actually
+                # observe this question?" unanswerable, and it is why a removed
+                # question looked freshly-confirmed for ever. It now bumps only
+                # on a real sighting; a retired question keeps the crawl that
+                # last saw it, which is the whole point of the record.
+                if not q_stale and not is_retired:
+                    row.stale = False
+                    row.missed_crawls = 0
+                    row.retired_at = None
+                    row.retired_in_crawl = ""
+                    row.retire_reason = ""
+                    row.last_seen_crawl = crawl_ref[:64]
+                    row.last_seen_artifact = crawl_ref[:64]
+                    row.last_seen_at = now
+                else:
+                    row.stale = True
+                    # MIRRORED, not incremented. The count belongs to the
+                    # sightings — a fold that never visited the page did not miss
+                    # the question, and incrementing here once per fold inflated
+                    # the evidence trail with folds that never looked. Floored at
+                    # what the row already holds so a rebuild cannot lose history.
+                    row.missed_crawls = max(int(row.missed_crawls or 0),
+                                            int(q.get("missed_crawls") or 0))
+                    if is_retired and row.retired_at is None:
+                        # FIRST retirement wins the timestamp. A later fold must
+                        # not keep pushing the date forward — an auditor asking
+                        # "when did this application stop asking?" is owed the
+                        # crawl that established it, not the most recent one to
+                        # agree.
+                        row.retired_at = retired_at or now
+                        row.retired_in_crawl = (
+                            str(q.get("retired_in_crawl") or crawl_ref)[:64])
+                        row.retire_reason = str(
+                            q.get("retire_reason") or "conclusive_absence")[:32]
+                        retired_now += 1
 
         snap = snapshot_catalog(master, artifact_id=crawl_ref)
         version = (await session.execute(
@@ -211,7 +369,87 @@ async def persist_catalog_version(
             version.snapshot = snap
 
     return {"questions_upserted": upserted, "question_count": len(questions),
-            "snapshot_hash": snap["snapshot_hash"]}
+            "snapshot_hash": snap["snapshot_hash"],
+            # M2.3 — what this fold RETIRED, and how much of the catalogue is now
+            # history. Reported so a crawl completion can say it out loud instead
+            # of a client discovering it from a diff three releases later.
+            "questions_retired": retired_now,
+            "retired_total": len(all_questions) - len(questions),
+            "catalog_total": len(all_questions)}
+
+
+def _parse_ts(value: Any) -> Any:
+    """An ISO timestamp from the pure catalogue back into a datetime, or None.
+
+    The pure layer works in strings because it is DB-free; the column is
+    timestamptz. A value that will not parse yields None rather than an
+    exception: a malformed timestamp must cost the fold a retirement DATE, never
+    the fold.
+    """
+    from datetime import datetime
+    if not value:
+        return None
+    if isinstance(value, datetime):
+        return value
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+
+
+async def load_retired_questions(
+    tenant_id: str, app_id: str, limit: int = 500,
+) -> list[dict[str, Any]]:
+    """Every question this application has STOPPED asking — the audit record.
+
+    Read straight off ``catalog_questions``, not reconstructed from the graph, so
+    it answers the question an auditor actually asks: what did we catalogue, when
+    did we stop seeing it, and on which crawl's evidence. The row keeps its id,
+    its content, its pages and its first-seen record; retirement adds to it and
+    removes nothing.
+
+    Newest retirement first — a reader looking for "what changed in this release"
+    finds it at the top.
+    """
+    async with tenant_scoped_qec_session(tenant_id) as session:
+        rows = (await session.execute(
+            select(CatalogQuestionRow).where(
+                CatalogQuestionRow.tenant_id == tenant_id,
+                CatalogQuestionRow.app_id == app_id,
+                CatalogQuestionRow.retired_at.isnot(None),
+            ).order_by(CatalogQuestionRow.retired_at.desc()).limit(limit)
+        )).scalars().all()
+    return [_retired_view(r) for r in rows]
+
+
+def _retired_view(row: Any) -> dict[str, Any]:
+    """One retired question as an audit record — content AND provenance."""
+    return {
+        "question_id": row.question_id,
+        "name": row.name,
+        "answer_type": row.answer_type,
+        "required": bool(row.required),
+        "options": list(row.options or []),
+        "validation": row.validation,
+        "business_rule": row.business_rule,
+        "semantic_type": row.semantic_type,
+        "pages": list(row.pages or []),
+        "lifecycle": LIFECYCLE_RETIRED,
+        "stale": True,
+        "retired_at": row.retired_at.isoformat() if row.retired_at else "",
+        "retired_in_crawl": row.retired_in_crawl or "",
+        "retire_reason": row.retire_reason or "",
+        "missed_crawls": int(row.missed_crawls or 0),
+        # WHEN IT WAS LAST ACTUALLY SEEN, and in which crawl. ``last_seen_crawl``
+        # is the M2.3 column that only ever moves on a real sighting;
+        # ``last_seen_artifact`` is the older one that used to bump on every fold
+        # and is reported beside it rather than silently replaced.
+        "last_seen_crawl": row.last_seen_crawl or "",
+        "last_seen_artifact": row.last_seen_artifact or "",
+        "last_seen_at": row.last_seen_at.isoformat() if row.last_seen_at else "",
+        "first_seen_crawl": row.first_seen_artifact or "",
+        "first_seen_at": row.first_seen_at.isoformat() if row.first_seen_at else "",
+    }
 
 
 async def diff_latest_versions(
@@ -234,6 +472,13 @@ async def diff_latest_versions(
                 "reason": "need at least two catalog versions to diff"}
     newer, older = rows[0], rows[1]
     diff = diff_catalogs(older.snapshot or {}, newer.snapshot or {})
+    # A BARE LIST OF IDS IS NOT A REPORT. ``removed`` names hashes; a reviewer
+    # asked to sign off on "the application stopped asking these" needs the
+    # question TEXT and the retirement record behind it. Sourced from the durable
+    # rows — the audit record — and falling back to the older snapshot's own copy
+    # for a question whose row predates M2.3 and therefore never got stamped.
+    diff["removed_detail"] = await _describe_removed(
+        tenant_id, app_id, diff.get("removed") or [], older.snapshot or {})
     return {
         # ``crawl_ref`` is what the column actually holds (an exploration id).
         # It was reported as ``artifact_id``, so a consumer joining it against
@@ -248,3 +493,47 @@ async def diff_latest_versions(
                "question_count": newer.question_count},
         "diff": diff,
     }
+
+
+async def _describe_removed(
+    tenant_id: str, app_id: str, removed_ids: Any, old_snapshot: Any,
+) -> list[dict[str, Any]]:
+    """The retired questions behind ``diff.removed``, in the diff's own order."""
+    ids = [str(q) for q in (removed_ids or []) if str(q)]
+    if not ids:
+        return []
+    async with tenant_scoped_qec_session(tenant_id) as session:
+        rows = (await session.execute(
+            select(CatalogQuestionRow).where(
+                CatalogQuestionRow.tenant_id == tenant_id,
+                CatalogQuestionRow.app_id == app_id,
+                CatalogQuestionRow.question_id.in_(ids),
+            ))).scalars().all()
+    by_id = {r.question_id: r for r in rows}
+    old_by_id = {}
+    for q in ((old_snapshot or {}).get("questions") or []):
+        if isinstance(q, dict) and q.get("question_id"):
+            old_by_id[str(q["question_id"])] = q
+
+    out: list[dict[str, Any]] = []
+    for qid in ids:
+        row = by_id.get(qid)
+        if row is not None:
+            out.append(_retired_view(row))
+            continue
+        # No durable row: report what the previous snapshot held and say plainly
+        # that the retirement record is missing, rather than inventing one.
+        prev = old_by_id.get(qid) or {}
+        out.append({
+            "question_id": qid,
+            "name": str(prev.get("name") or ""),
+            "answer_type": str(prev.get("answer_type") or prev.get("type") or ""),
+            "options": list(prev.get("options") or []),
+            "pages": list(prev.get("pages") or []),
+            "lifecycle": LIFECYCLE_RETIRED,
+            "retired_at": "",
+            "retired_in_crawl": "",
+            "retire_reason": "",
+            "record": "snapshot_only",
+        })
+    return out

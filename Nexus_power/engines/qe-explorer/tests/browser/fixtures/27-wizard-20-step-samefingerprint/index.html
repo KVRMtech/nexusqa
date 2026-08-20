@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<!--
+  FIXTURE 27 — a TWENTY-STEP wizard whose every step is the same shape.
+
+  Deliberately built from the smallest set of primitives that reproduces the
+  hardest thing in the target domain, and nothing else:
+
+    * one radio question per step, always named "Yes"/"No", always inside a
+      declared <fieldset> so `group_key` is the ONLY thing distinguishing step 3
+      from step 17;
+    * Continue DISABLED until the step's question is answered — the rule stated
+      in script and nowhere in the markup, which is the shape no crawler can
+      read and only an experiment can discover;
+    * Back, always enabled after step 1, so backward navigation is real;
+    * answers PERSISTED in a plain object, so returning to a step re-checks what
+      was chosen and Continue is already enabled — state survives navigation;
+    * ONE conditional transition: answering "Yes" at step 7 (the disclosure
+      question) inserts step 7a, which is a real branch rather than a skipped
+      number.
+
+  There is NO framework, NO network, NO timer and NO randomness anywhere in this
+  file. Every transition is a synchronous function of (step, answers), which is
+  what makes a replay of this fixture byte-comparable with the last one.
+-->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Fixture 27 — 20-step underwriting questionnaire</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 2rem; max-width: 40rem; }
+    fieldset { border: 1px solid #ccc; padding: 1rem; }
+    button[disabled] { opacity: .5; }
+    .err { color: #b00; min-height: 1.2em; }
+  </style>
+</head>
+<body>
+  <h1>Underwriting questionnaire</h1>
+
+  <!-- The step indicator is TEXT ONLY and carries no accessible name that any
+       control is labelled by. A crawler that told steps apart by reading this
+       heading would be reading page furniture, not control identity — which is
+       precisely the shortcut this fixture exists to deny. -->
+  <p id="progress">Step 1 of 20</p>
+
+  <form id="wizard" novalidate>
+    <fieldset id="qbox">
+      <legend id="qlegend">Question</legend>
+      <label><input type="radio" id="opt-yes" name="q01" value="yes"> Yes</label>
+      <label><input type="radio" id="opt-no" name="q01" value="no"> No</label>
+    </fieldset>
+
+    <p class="err" id="err"></p>
+
+    <button type="button" id="back" disabled>Back</button>
+    <button type="button" id="next" disabled>Continue</button>
+  </form>
+
+  <p id="done" hidden>Questionnaire complete.</p>
+
+  <script>
+  (function () {
+    "use strict";
+
+    // ── the application's own data ──────────────────────────────────────────
+    // Twenty questions. The WORDING differs (it is the legend, a declared naming
+    // rung); the SHAPE never does. That asymmetry is the whole fixture: a crawl
+    // that identifies questions by control name sees two, and a crawl that reads
+    // the declared group sees twenty.
+    var QUESTIONS = [
+      "Have you used tobacco in the last 12 months?",
+      "Do you hold another active life policy?",
+      "Have you been hospitalised in the last 5 years?",
+      "Do you take prescription medication daily?",
+      "Have you ever been declined for insurance?",
+      "Do you travel abroad more than 90 days a year?",
+      "Do you have any condition requiring ongoing treatment?",
+      "Do you participate in aviation as a pilot?",
+      "Do you engage in scuba diving below 30 metres?",
+      "Have you had a moving violation in the last 3 years?",
+      "Is your occupation classified as hazardous?",
+      "Have you filed a disability claim in the last 10 years?",
+      "Do you consume more than 14 units of alcohol weekly?",
+      "Has a parent or sibling been diagnosed before age 60?",
+      "Have you had a biopsy in the last 24 months?",
+      "Are you currently awaiting a medical test result?",
+      "Do you use a CPAP or similar device?",
+      "Have you changed employer in the last 6 months?",
+      "Do you intend to relocate outside the country?",
+      "Do you authorise us to contact your physician?"
+    ];
+
+    // The ONE conditional transition. Answering "Yes" to question 7 inserts a
+    // follow-up step; answering "No" does not. A branch, not a skipped number.
+    var BRANCH_AFTER = 7;
+    var BRANCH_QUESTION = "Please confirm the treatment is currently supervised.";
+
+    // ── state, which is the point of the fixture ────────────────────────────
+    // `answers` is keyed by STEP KEY, so a step reached twice is the same step.
+    // Nothing here is cleared on navigation: that is what makes Back lossless.
+    var answers = {};
+    var index = 0;            // position within `order`
+    var order = buildOrder();
+
+    function buildOrder() {
+      // Recomputed from `answers` on every transition, so the branch appears and
+      // disappears as the answer changes rather than being appended once.
+      var out = [];
+      for (var i = 1; i <= QUESTIONS.length; i++) {
+        out.push({ key: "q" + pad(i), text: QUESTIONS[i - 1] });
+        if (i === BRANCH_AFTER && answers["q" + pad(BRANCH_AFTER)] === "yes") {
+          out.push({ key: "q" + pad(BRANCH_AFTER) + "a", text: BRANCH_QUESTION });
+        }
+      }
+      return out;
+    }
+
+    function pad(n) { return n < 10 ? "0" + n : String(n); }
+
+    var el = {
+      legend: document.getElementById("qlegend"),
+      yes: document.getElementById("opt-yes"),
+      no: document.getElementById("opt-no"),
+      next: document.getElementById("next"),
+      back: document.getElementById("back"),
+      err: document.getElementById("err"),
+      progress: document.getElementById("progress"),
+      form: document.getElementById("wizard"),
+      done: document.getElementById("done")
+    };
+
+    function current() { return order[index]; }
+
+    function render() {
+      var step = current();
+      el.legend.textContent = step.text;
+
+      // The radio NAME is the step key. This is the DOM's own declaration that
+      // these two inputs answer THIS question and not question 3 — and it is the
+      // only such declaration on the page.
+      el.yes.name = step.key;
+      el.no.name = step.key;
+
+      var saved = answers[step.key] || "";
+      el.yes.checked = (saved === "yes");
+      el.no.checked = (saved === "no");
+
+      // VALIDATION CHECKPOINT. Stated in script, invisible to markup: `required`
+      // on a radio is not what "this question must be answered" means, so there
+      // is nothing here for a static read to find.
+      el.next.disabled = !saved;
+      el.back.disabled = (index === 0);
+      el.err.textContent = "";
+      el.progress.textContent =
+        "Step " + (index + 1) + " of " + order.length;
+    }
+
+    function choose(value) {
+      answers[current().key] = value;
+      // The branch may have just appeared or vanished. Recompute the route and
+      // re-find our position by KEY, never by number — an index would silently
+      // point at a different question the moment the route length changed.
+      var key = current().key;
+      order = buildOrder();
+      index = indexOfKey(key);
+      render();
+    }
+
+    function indexOfKey(key) {
+      for (var i = 0; i < order.length; i++) {
+        if (order[i].key === key) { return i; }
+      }
+      return 0;
+    }
+
+    el.yes.addEventListener("change", function () { choose("yes"); });
+    el.no.addEventListener("change", function () { choose("no"); });
+
+    el.next.addEventListener("click", function () {
+      if (!answers[current().key]) {
+        // Unreachable through the UI (the control is disabled), and asserted
+        // anyway: a crawl that forces a disabled control must meet the rule
+        // rather than slip past it.
+        el.err.textContent = "Please answer this question before continuing.";
+        return;
+      }
+      if (index === order.length - 1) {
+        el.form.hidden = true;
+        el.progress.hidden = true;
+        el.done.hidden = false;
+        return;
+      }
+      index += 1;
+      render();
+    });
+
+    el.back.addEventListener("click", function () {
+      if (index === 0) { return; }
+      index -= 1;
+      render();          // `answers` untouched: this is the persistence claim
+    });
+
+    render();
+  }());
+  </script>
+</body>
+</html>

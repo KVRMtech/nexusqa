@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, DateTime, Index, Integer, String
+from sqlalchemy import Boolean, DateTime, Index, Integer, String, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -108,6 +108,15 @@ class JourneyNodeRow(QecBase):
     #: entry: {label, selector, value_type}.
     displayed_outcomes: Mapped[list | None] = mapped_column(
         JSONB, nullable=True)
+    #: M2.4 / T-GEN-03 (qec_021) — THE ENDPOINT MAP for this state: the
+    #: value-free ``[{method, path, status, response_mime}]`` of the API calls
+    #: observed while it was open, 2xx only. Narrow ON PURPOSE — this is what a
+    #: compiler turns into an assertion, and compiling an observed 5xx would
+    #: freeze the application's bug into the regression suite as the behaviour
+    #: it demands. The FULL account (every status, every retry, the auth pattern,
+    #: the response shape) is the M2.5 endpoint inventory, which is a different
+    #: artifact for a different reader.
+    observed_endpoints: Mapped[list | None] = mapped_column(JSONB, nullable=True)
     #: Not observed by the app's latest fold — kept (history), marked, and
     #: excluded from active planning. Never deleted.
     stale: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
@@ -136,6 +145,14 @@ class JourneyEdgeRow(QecBase):
     #: WHO decided the advance that walked this edge (Release B P3 evidence):
     #: 1/2 = deterministic regex, 3 = agent oracle, 0 = pre-evidence manifest.
     advance_tier: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    #: M2.4 / T-GEN-03 (qec_021) — the endpoints the crawl RECORDED this
+    #: trigger firing (M2.5 stamps the in-flight UI action on every network
+    #: event; the fold joins on it here). An EDGE is the right home because an
+    #: edge IS the UI step: "which click caused this POST" is a property of the
+    #: transition, not of either state it connects. Empty when the crawl
+    #: predates the stamp — the compiler then falls back to the state-difference
+    #: inference and says which rule it used.
+    observed_endpoints: Mapped[list | None] = mapped_column(JSONB, nullable=True)
     walk_count: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     first_walked_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=_utc_now)
@@ -214,6 +231,35 @@ class JourneyBranchRow(QecBase):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=_utc_now)
 
+    # ONE BRANCH ROW IS ONE ANSWER of a questionnaire question, and every choice
+    # question in the Master Catalog is built from these rows. The lifecycle
+    # lives here as well as on the node inventory because without it a withdrawn
+    # Yes/No would be resurrected as active by the branch fold-in the moment the
+    # node side retired it. Kept on a SEPARATE axis from ``status``: ``walked``
+    # is a fact about a past crawl and must never downgrade, while retirement is
+    # a statement about the application today.
+    # ── M2.3 · LIFECYCLE (qec_020) ───────────────────────────────────────
+    #: Previously known, NOT observed by the crawl that last looked for it.
+    #: Reversible: an application that asks the question again clears it.
+    stale: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    #: When the absence became CONCLUSIVE. NULL while live — the presence of
+    #: this value IS the retirement, so there is one place to look and no way
+    #: for a flag and a timestamp to disagree.
+    retired_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True)
+    #: WHICH crawl retired it — the audit answer to "on whose evidence?".
+    retired_in_crawl: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    #: ``conclusive_absence`` | ``repeated_absence``. See
+    #: :func:`app.services.catalog.apply_control_lifecycle`.
+    retire_reason: Mapped[str] = mapped_column(String(32), nullable=False, default="")
+    #: How many crawls have looked and not found it. Kept after retirement: it
+    #: is the evidence trail behind the stamp.
+    missed_crawls: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    #: The last crawl that DID observe it. Distinct from ``last_seen_artifact``,
+    #: which the pre-M2.3 upsert bumped on every fold whether it saw the question
+    #: or not, and which therefore cannot answer "when did we last SEE it".
+    last_seen_crawl: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+
     __table_args__ = (
         Index("uq_journey_branches_identity", "tenant_id", "app_id", "node_fp",
               "control_signature", "option_label_norm", unique=True),
@@ -240,6 +286,24 @@ class CatalogQuestionRow(QecBase):
     options: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
     validation: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     business_rule: Mapped[str] = mapped_column(String(500), nullable=False, default="")
+    # ── M2.2 (qec_019) — the evidence the catalogue could not previously hold ──
+    #: ``observed`` only when a crawl EXPERIMENT proved the rule; ``UNVERIFIED``
+    #: otherwise, written explicitly so an empty ``business_rule`` is never
+    #: ambiguous between "this question gates nothing" and "nobody looked".
+    business_rule_state: Mapped[str] = mapped_column(
+        String(24), nullable=False, default="UNVERIFIED")
+    #: Which experiment proved it and which control it gates. Kept beside the
+    #: sentence, never inside it: the sentence is the record of what was observed
+    #: and must stay verbatim.
+    business_rule_evidence: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    #: The question whose answer this one hangs off (ACT-THEN-DIFF proven).
+    depends_on: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    #: The handle the page declared for the control + whether it resolves to one
+    #: element. Never a selector this service composed.
+    locator: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    #: How many answers the control offers in the page; greater than
+    #: ``len(options)`` exactly when the read was clipped.
+    options_total: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     expected_next_page: Mapped[str] = mapped_column(String(200), nullable=False, default="")
     semantic_type: Mapped[str] = mapped_column(String(80), nullable=False, default="")
     provenance: Mapped[str] = mapped_column(String(24), nullable=False, default="observed")
@@ -251,9 +315,40 @@ class CatalogQuestionRow(QecBase):
     last_seen_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=_utc_now)
 
+    # A RETIRED QUESTION KEEPS EVERYTHING ABOVE. Its id, its content, its
+    # first-seen record and its pages all survive retirement untouched, because
+    # the whole point of retiring rather than deleting is that "what did this
+    # application used to ask, and when did it stop?" stays answerable.
+    # ── M2.3 · LIFECYCLE (qec_020) ───────────────────────────────────────
+    #: Previously known, NOT observed by the crawl that last looked for it.
+    #: Reversible: an application that asks the question again clears it.
+    stale: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    #: When the absence became CONCLUSIVE. NULL while live — the presence of
+    #: this value IS the retirement, so there is one place to look and no way
+    #: for a flag and a timestamp to disagree.
+    retired_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True)
+    #: WHICH crawl retired it — the audit answer to "on whose evidence?".
+    retired_in_crawl: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    #: ``conclusive_absence`` | ``repeated_absence``. See
+    #: :func:`app.services.catalog.apply_control_lifecycle`.
+    retire_reason: Mapped[str] = mapped_column(String(32), nullable=False, default="")
+    #: How many crawls have looked and not found it. Kept after retirement: it
+    #: is the evidence trail behind the stamp.
+    missed_crawls: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    #: The last crawl that DID observe it. Distinct from ``last_seen_artifact``,
+    #: which the pre-M2.3 upsert bumped on every fold whether it saw the question
+    #: or not, and which therefore cannot answer "when did we last SEE it".
+    last_seen_crawl: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+
     __table_args__ = (
         Index("uq_catalog_questions_identity", "tenant_id", "app_id",
               "question_id", unique=True),
+        # Active planning asks for the NON-retired questions of one app; the
+        # partial index is what keeps that off a full scan of every question the
+        # tenant has ever catalogued. Mirrors qec_020.
+        Index("ix_catalog_questions_active", "tenant_id", "app_id",
+              postgresql_where=text("retired_at IS NULL")),
     )
 
 

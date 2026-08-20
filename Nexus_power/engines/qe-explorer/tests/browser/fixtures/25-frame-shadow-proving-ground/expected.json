@@ -1,0 +1,136 @@
+{
+  "purpose": "The M3.2 proving ground: one page carrying BOTH previously-opaque surfaces - a cross-origin payment embed and a closed shadow component with a further shadow root nested inside it - plus ordinary DOM beside them. Every control on it must become a catalogued, bindable record, and the ordinary controls must be untouched.",
+  "targeted_defect": "None (regression guard) for M3.2 as a whole. It pins the two capabilities together, because they fail in opposite directions: a frame entry that fabricated controls and a shadow hook that silently stopped installing would both leave a green suite if only one surface were fixtured. It also pins the reach of the CONTEXT-level init script - the closed shadow root inside the FOREIGN frame can only be observed if the hook runs in every frame the context loads.",
+  "lanes": [
+    "playwright"
+  ],
+  "lane_note": "Playwright only: the cross-origin half needs true origin isolation (jsdom has none, so a second origin cannot be simulated faithfully) and frame entry goes through Playwright's own frame APIs. The closed-shadow half alone is covered in both lanes by fixture 02.",
+  "snippet": "INVENTORY_JS",
+  "min_controls": 11,
+  "expect_controls": [
+    {
+      "where": {
+        "css_hint": "input#holder-name"
+      },
+      "fields": {
+        "name": "Policy Holder Name",
+        "name_source": "label-for",
+        "frame_selector": ""
+      }
+    },
+    {
+      "where": {
+        "css_hint": "input#holder-email"
+      },
+      "fields": {
+        "name": "Email Address",
+        "name_source": "label-for",
+        "required": true,
+        "frame_selector": ""
+      }
+    },
+    {
+      "where": {
+        "css_hint": "input#consent-initials"
+      },
+      "fields": {
+        "name": "Signature Initials",
+        "name_source": "label-for",
+        "required": true,
+        "frame_selector": "",
+        "shadow_scope": "closed_shadow"
+      },
+      "why": "Inside a CLOSED shadow root. Same frame, so no selector change - the compiler's getByRole/getByLabel pierce shadow DOM."
+    },
+    {
+      "where": {
+        "css_hint": "input#disclosure-ack"
+      },
+      "fields": {
+        "name": "Disclosure Acknowledgement",
+        "name_source": "label-for",
+        "role": "checkbox",
+        "shadow_scope": "closed_shadow"
+      },
+      "why": "An OPEN shadow root nested INSIDE the closed one. Reading the closed root's first level only would leave this uncatalogued. It inherits the closed scope because it is only reachable through the closed root."
+    },
+    {
+      "where": {
+        "css_hint": "input#card-number"
+      },
+      "fields": {
+        "name": "Card Number",
+        "name_source": "label-for",
+        "required": true,
+        "frame_selector": "iframe#payment-frame"
+      },
+      "why": "The field that takes the money, on a foreign origin. The whole point of T-FR-01."
+    },
+    {
+      "where": {
+        "css_hint": "input#card-expiry"
+      },
+      "fields": {
+        "name": "Expiry (MM/YY)",
+        "frame_selector": "iframe#payment-frame"
+      }
+    },
+    {
+      "where": {
+        "css_hint": "input#billing-postcode"
+      },
+      "fields": {
+        "name": "Billing Postcode",
+        "frame_selector": "iframe#payment-frame"
+      }
+    },
+    {
+      "where": {
+        "css_hint": "input#card-cvc"
+      },
+      "fields": {
+        "name": "Security Code",
+        "frame_selector": "iframe#payment-frame",
+        "shadow_scope": "closed_shadow"
+      },
+      "why": "A CLOSED shadow root INSIDE the cross-origin frame. Only reachable because the hook is installed on the browser CONTEXT, so it runs in every frame the context loads - a page-level install would not reach here. It is catalogued and STAMPED: no selector engine reaches into a closed root, so this control is observable evidence that is not bindable, and the stamp is what stops 'catalogued' being read as 'replayable'."
+    },
+    {
+      "where": {
+        "name": "Pay Now"
+      },
+      "fields": {
+        "role": "button",
+        "frame_selector": "iframe#payment-frame"
+      }
+    },
+    {
+      "where": {
+        "name": "Review Order"
+      },
+      "fields": {
+        "role": "button",
+        "frame_selector": ""
+      }
+    }
+  ],
+  "opaque": {
+    "lanes": [
+      "playwright"
+    ],
+    "expect": [
+      {
+        "kind": "cross_origin_iframe"
+      },
+      {
+        "kind": "closed_shadow_entered",
+        "label": "secure-consent-panel"
+      }
+    ],
+    "why": "The frame stays a NAMED surface even though it was entered - the row is what carries its selector - and the closed root is reported as OBSERVED rather than opaque, because reporting a surface we read as a blind spot understates coverage exactly as badly as the reverse overstates it."
+  },
+  "frame_selectors_must_resolve": {
+    "expect_distinct": 1,
+    "why": "The payment frame's selector is handed back to the browser and must resolve to exactly one frame, and every control captured through it must be findable inside it - i.e. the catalogued payment fields are ACTIONABLE, not merely recorded."
+  }
+}

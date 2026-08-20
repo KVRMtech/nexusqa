@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Fixture 22 — collapsed disclosure</title>
+<style>
+  /* The accordion panel is hidden the way real accordion libraries hide one:
+     display:none on an ANCESTOR of the fields. `display` is not inherited, so
+     a visibility check that reads only the control's own computed style calls
+     these fields visible — that is the defect hiddenByAncestor() closed, and
+     it is why they must be OPENED rather than read through. */
+  .panel[data-open="false"] { display: none; }
+</style>
+</head>
+<body>
+  <main>
+    <h1>Life application</h1>
+
+    <!-- ═══ CONTROL GROUP ═══════════════════════════════════════════════════
+         Always on the page, open or shut. If these disappear the walker is
+         broken, not the expansion pass. -->
+    <label for="full-name">Full name</label>
+    <input id="full-name" name="full_name" type="text" autocomplete="name">
+
+    <!-- ═══ CASE 1 · ARIA ACCORDION (the acceptance criterion) ══════════════
+         The header declares aria-expanded="false"; its panel is display:none,
+         so `beneficiary-name` is NOT captured until the header is clicked.
+         This is the field the milestone requires to be catalogued. -->
+    <button id="acc-beneficiary" type="button"
+            aria-expanded="false" aria-controls="panel-beneficiary">
+      Beneficiary details
+    </button>
+    <div class="panel" id="panel-beneficiary" data-open="false">
+      <label for="beneficiary-name">Beneficiary full name</label>
+      <input id="beneficiary-name" name="beneficiary_name" type="text"
+             autocomplete="name" required>
+      <label for="beneficiary-share">Beneficiary share percent</label>
+      <input id="beneficiary-share" name="beneficiary_share" type="number"
+             min="1" max="100" step="1">
+    </div>
+
+    <!-- ═══ CASE 2 · NATIVE <details> ═══════════════════════════════════════
+         No ARIA at all. `open` is a live PROPERTY, not a state-tracking
+         attribute, so nothing capture already emitted could tell an open one
+         from a shut one — this is the case that required disclosureState(). -->
+    <details id="det-medical">
+      <summary>Medical history</summary>
+      <label for="medical-conditions">Existing conditions</label>
+      <textarea id="medical-conditions" name="medical_conditions"></textarea>
+    </details>
+
+    <!-- ═══ CASE 3 · ALREADY-EXPANDED DISCLOSURE ════════════════════════════
+         aria-expanded="true". The pass must LEAVE THIS ALONE: clicking it would
+         close it and the crawl would catalogue fewer fields than a crawl that
+         did nothing. The field inside is captured with no expansion at all. -->
+    <button id="acc-contact" type="button"
+            aria-expanded="true" aria-controls="panel-contact">
+      Contact preferences
+    </button>
+    <div class="panel" id="panel-contact" data-open="true">
+      <label for="contact-email">Contact email</label>
+      <input id="contact-email" name="contact_email" type="email"
+             autocomplete="email">
+    </div>
+
+    <!-- ═══ CASE 4 · A TAB STRIP — MUTUALLY EXCLUSIVE, NOT ADDITIVE ═════════
+         Selecting "Term" hides the Whole-life panel. The two panels are never
+         on screen together, so merging their controls into one catalogued state
+         would describe a page that has never existed. The pass must click it,
+         SEE the loss in the re-read, undo it, and skip — never merge. -->
+    <div role="tablist" aria-label="Product">
+      <button role="tab" id="tab-whole" aria-selected="true"
+              aria-controls="panel-whole" type="button">Whole life</button>
+      <button role="tab" id="tab-term" aria-selected="false"
+              aria-controls="panel-term" type="button">Term life</button>
+    </div>
+    <div class="panel" id="panel-whole" role="tabpanel" data-open="true">
+      <label for="whole-cash-value">Target cash value</label>
+      <input id="whole-cash-value" name="whole_cash_value" type="number">
+    </div>
+    <div class="panel" id="panel-term" role="tabpanel" data-open="false">
+      <label for="term-years">Term length years</label>
+      <input id="term-years" name="term_years" type="number">
+    </div>
+
+    <!-- ═══ CASE 5 · A COLLAPSED CONTROL THE PASS MUST REFUSE ═══════════════
+         It declares aria-expanded="false" exactly like case 1, and it is a
+         SUBMIT. The only thing separating them is the commit-word veto. If the
+         expansion pass ever submits an application to see more of a page, this
+         is the control it will have done it with. -->
+    <button id="submit-app" type="button"
+            aria-expanded="false" aria-controls="panel-submit">
+      Submit application
+    </button>
+    <div class="panel" id="panel-submit" data-open="false">
+      <label for="submit-confirmed">Confirmation code</label>
+      <input id="submit-confirmed" name="submit_confirmed" type="text">
+    </div>
+
+    <!-- ═══ CASE 6 · A MENU OPENER, NOT A SECTION ═══════════════════════════
+         aria-haspopup marks navigation chrome. _menu_reveal owns it; folding a
+         nav fly-out into this state's control set would put the site's whole
+         menu into the catalogue of an application form. -->
+    <button id="nav-more" type="button" aria-haspopup="menu"
+            aria-expanded="false" aria-controls="menu-more">More</button>
+    <div class="panel" id="menu-more" role="menu" data-open="false">
+      <a role="menuitem" href="/help.html" id="menu-help">Help centre</a>
+    </div>
+  </main>
+
+<script>
+// Deterministic, no clock, no randomness, no network. Each handler does exactly
+// what its ARIA declaration promises, so the pass is measured against the DOM's
+// own contract rather than against a bespoke widget.
+function togglePanel(btnId, panelId) {
+  var btn = document.getElementById(btnId), panel = document.getElementById(panelId);
+  btn.addEventListener("click", function () {
+    var open = btn.getAttribute("aria-expanded") === "true";
+    btn.setAttribute("aria-expanded", open ? "false" : "true");
+    panel.setAttribute("data-open", open ? "false" : "true");
+  });
+}
+togglePanel("acc-beneficiary", "panel-beneficiary");
+togglePanel("acc-contact", "panel-contact");
+togglePanel("submit-app", "panel-submit");
+togglePanel("nav-more", "menu-more");
+
+// A tab strip: selecting one DESELECTS the other. Exclusivity is the point.
+["whole", "term"].forEach(function (which) {
+  document.getElementById("tab-" + which).addEventListener("click", function () {
+    ["whole", "term"].forEach(function (other) {
+      var on = other === which;
+      document.getElementById("tab-" + other).setAttribute("aria-selected", String(on));
+      document.getElementById("panel-" + other).setAttribute("data-open", String(on));
+    });
+  });
+});
+</script>
+</body>
+</html>

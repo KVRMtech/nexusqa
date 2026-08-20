@@ -297,11 +297,33 @@ async function main() {
   try {
     const source = fs.readFileSync(job.js_path, "utf8");
 
+    // ── THE CAPTURE INIT SCRIPT, INSTALLED BEFORE THE PAGE PARSES ────────
+    // M3.2 / T-FR-02.  `beforeParse` is jsdom's `context.addInitScript`: it runs
+    // on a window that exists but on a document that has not been parsed, so
+    // nothing the fixture ships has executed yet.  That ORDERING is the whole
+    // claim — a closed shadow root is observable only at the moment
+    // `attachShadow` creates it — so installing the hooks anywhere later would
+    // make this lane prove the opposite of what it reports.  The source is the
+    // production constant, verbatim, exactly like the snippet under test.
+    const hooksSource = job.hooks_path
+      ? fs.readFileSync(job.hooks_path, "utf8")
+      : "";
+    let hooksInstalled = false;
+
     dom = await JSDOM.fromURL(job.url, {
       runScripts: "dangerously",   // fixture setup scripts (attachShadow, etc.)
       resources: "usable",          // fetch <iframe src>, <link>, <script src>
       pretendToBeVisual: true,      // rAF + a visual-ish default view
       virtualConsole,
+      beforeParse(window) {
+        if (!hooksSource) return;
+        try {
+          window.eval(hooksSource);
+          hooksInstalled = !!window.__nxCaptureHooks;
+        } catch (e) {
+          logs.push("captureHooksError: " + (e && e.message ? e.message : String(e)));
+        }
+      },
     });
 
     await waitForReady(dom.window, timeoutMs);
@@ -312,6 +334,10 @@ async function main() {
 
     const capabilities = dom.window.eval(CAPABILITY_PROBE);
     capabilities.css_escape_polyfilled = !!cssEscapePolyfilled;
+    // Reported, never assumed: a result from a run where the hooks did NOT
+    // install is not a statement about closed shadow roots, and a reader has to
+    // be able to tell the two apart.
+    capabilities.capture_hooks_installed = hooksInstalled;
 
     // ── THE PRODUCTION SNIPPET, VERBATIM ──────────────────────────────────
     // `source` is the byte-for-byte value of app.inventory_js.INVENTORY_JS

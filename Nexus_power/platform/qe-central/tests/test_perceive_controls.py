@@ -32,7 +32,15 @@ def test_parse_perceived_tolerates_junk_and_code_fences():
 
 def test_perceive_controls_with_fake_propose():
     async def fake(prompt, img):
-        assert "SCREENSHOT" in prompt
+        # M3.1 / T-VIS-03 — the OUTPUT CONTRACT is no longer restated in the user
+        # prompt. It lives in exactly one place (PERCEIVE_SYSTEM, reached through
+        # system_prompt_for), because two copies in two channels is how the
+        # endpoint came to send the perceive contract and the click-region
+        # contract on the same call. The user prompt now carries page context.
+        from app.services.vision_medic import PERCEIVE_SYSTEM
+
+        assert "SCREENSHOT" not in prompt
+        assert "SCREENSHOT" in PERCEIVE_SYSTEM
         return '{"controls":[{"label":"Pay","role":"button","bbox":[10,10,80,30]}],"displayed_values":[]}'
 
     got = asyncio.run(perceive_controls(tenant_id="t", screenshot_b64="abc", propose_fn=fake))

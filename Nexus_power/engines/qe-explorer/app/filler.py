@@ -240,7 +240,41 @@ class ControlFiller:
             str(ctl.get("name") or ""): ctl for ctl in controls
             if ctl.get("kind") == "select" and not ctl.get("options") and ctl.get("name")
         }
+        # ── M2.2 · A DEPENDENCY IS AN ENUMERATION THAT CHANGED, IN EITHER
+        #    DIRECTION — not only one that appeared. ────────────────────────────
+        #
+        # This pass used to look for exactly one shape: a select that was EMPTY
+        # before the act and POPULATED after it.  On a real application it
+        # therefore proved almost nothing, for two independent reasons found by
+        # crawling one:
+        #
+        #   1. IT RUNS AFTER THE FILL.  ``discovery.py`` fills the form first,
+        #      re-inventories, and hands THAT snapshot here.  The fill answers
+        #      every select it can — including the driver — so by the time this
+        #      pass looks, the dependent has already been populated by the
+        #      application's own change handler and is not empty.  The single
+        #      most common dependency in business software (choose a state, get
+        #      its counties) was invisible precisely BECAUSE the crawl had
+        #      successfully driven it.
+        #   2. THE ACT IS OFTEN A PLACEHOLDER.  ``commit_choice`` commits the
+        #      driver's FIRST option, which on a real form is "Select a state…".
+        #      Committing it CLEARS the dependent rather than filling it, so even
+        #      a correctly-timed pass saw populated→empty and concluded nothing.
+        #
+        # Both collapse once the question is asked properly.  What proves a
+        # dependency is not the direction the enumeration moved; it is that
+        # acting on ONE control changed ANOTHER control's answer set at all.
+        # Recording the set before the act and comparing after is the whole fix,
+        # and it subsumes the original empty→populated case exactly.
+        select_by_name: dict[str, dict[str, Any]] = {}
+        options_before: dict[str, tuple] = {}
+        for ctl in controls:
+            name = str(ctl.get("name") or "").strip()
+            if name and ctl.get("kind") == "select" and name not in select_by_name:
+                select_by_name[name] = ctl
+                options_before[name] = tuple(ctl.get("options") or ())
         acted = 0
+        proved: dict[str, str] = {}
         for d in drivers:
             if acted >= c._max_dep_probes:
                 break
@@ -257,19 +291,46 @@ class ControlFiller:
             after = build_inventory(await collect(), c._refuse_pack, url=url)
             driver_label = d.get("name") or ""
 
-            # (a) DEPENDENT selects: empty -> populated (open-probe custom ones so they surface).
+            # (a) DEPENDENT selects: the act CHANGED this question's answer set.
             pending = [ctl for ctl in after
-                       if ctl.get("kind") == "select" and str(ctl.get("name") or "") in empty_by_name]
+                       if ctl.get("kind") == "select"
+                       and str(ctl.get("name") or "") in options_before]
+            # A custom select builds its menu only on open, so one that reads
+            # empty here may simply be unread rather than genuinely empty — probe
+            # it before concluding anything about it.
             await self.probe_select_options(
                 [ctl for ctl in pending if not ctl.get("options")], url=url)
             for r in pending:
-                nm = str(r.get("name") or "")
-                if r.get("options") and nm in empty_by_name:
-                    tgt = empty_by_name.pop(nm)
-                    self.set_options(tgt, list(r.get("options") or []))
-                    tgt["depends_on"] = driver_label
-                    if isinstance(tgt.get("qec"), dict):
-                        tgt["qec"]["options"] = tgt["options"]
+                nm = str(r.get("name") or "").strip()
+                # A control does not depend on itself: acting on a driver
+                # naturally changes the driver, and attributing that to itself
+                # would make every acted select in the fleet "conditional".
+                if not nm or nm == str(driver_label or "").strip():
+                    continue
+                before, now = options_before[nm], tuple(r.get("options") or ())
+                if now == before:
+                    continue                    # the act changed nothing here
+                tgt = select_by_name.get(nm)
+                if tgt is None:
+                    continue
+                # KEEP THE RICHER ENUMERATION. The act that PROVED the dependency
+                # is often the one that emptied the dependent (committing a
+                # driver's placeholder clears it), and paying for the proof with
+                # the answers we already had would be a poor trade: the reason to
+                # know a question is conditional is to know what it can be
+                # answered with.
+                if len(now) > len(before):
+                    self.set_options(tgt, list(now))
+                tgt["depends_on"] = driver_label
+                proved[nm] = str(driver_label)
+                if isinstance(tgt.get("qec"), dict):
+                    tgt["qec"]["options"] = tgt.get("options")
+                    tgt["qec"]["depends_on"] = driver_label
+                # First proof wins, as it did before: a wizard revisits the same
+                # question across branches and a later act must not overwrite the
+                # driver that was actually shown to move it.
+                options_before.pop(nm, None)
+                empty_by_name.pop(nm, None)
 
             # (b) CONDITIONALLY-REVEALED fields: value-bearing controls that were not present
             # before the act. Append to the snapshot (so the manifest sees them) tagged
@@ -286,6 +347,16 @@ class ControlFiller:
                 controls.append(r)
                 if r.get("kind") == "select" and not r.get("options"):
                     empty_by_name[str(r.get("name") or "")] = r
+
+        # THE PASS SAYS WHAT IT DID. It was silent before, which is a large part
+        # of why it could go on proving nothing on real applications without
+        # anyone noticing: "no dependencies found" and "the pass never acted"
+        # produce the same empty result and left the same empty log.
+        logger.info(
+            "qec.filler.dep_probe url=%s drivers=%d acted=%d proved=%d %s",
+            url[:120], len(drivers), acted, len(proved),
+            {k[:40]: v[:40] for k, v in list(proved.items())[:8]},
+        )
 
 
 __all__ = ["ControlFiller", "FillerHost", "_FIELD_KINDS"]

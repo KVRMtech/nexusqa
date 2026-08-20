@@ -73,7 +73,15 @@ def classify_network_signal(entries, *, step_start_ms=None, step_end_ms=None,
         if not isinstance(e, dict):
             continue
         if step_start_ms is not None and step_end_ms is not None:
+            # M2.5 — accept ``timestamp_ms`` as well as ``start_ms``.  The crawler
+            # records ``timestamp_ms``; reading only ``start_ms`` meant every
+            # crawl-sourced entry produced ``t is None``, which does not raise —
+            # it SILENTLY DISABLES the step window and lets an unrelated 5xx from
+            # anywhere in the run be attributed to the failing step.  A window
+            # that is off is worse than one that is absent, because it looks on.
             t = e.get("start_ms")
+            if t is None:
+                t = e.get("timestamp_ms")
             if t is not None and not (step_start_ms <= t <= step_end_ms):
                 continue
         try:

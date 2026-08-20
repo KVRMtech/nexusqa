@@ -102,6 +102,12 @@ def read_orphaned_completion(crawl_id: str) -> dict | None:
     """
     if not _is_contained(crawl_id):
         return None
+    # M3.3 / T-FL-03 — this module stays SYNCHRONOUS and filesystem-only. The
+    # evidence is MATERIALISED by the async caller (``reaper._reconcile_from_
+    # manifest``), which holds the row's owning tenant and can await the
+    # object-store fetch. Keeping the fetch out of here preserves this
+    # function's signature (and its five unit tests) and keeps one clear rule:
+    # the reaper decides to fetch, this module only reads local files.
     directory = _crawl_dir(crawl_id)
     completion = directory / COMPLETION_FILENAME
     if not completion.is_file() or (directory / ACK_FILENAME).is_file():

@@ -471,12 +471,16 @@ class CrossingLedger:
     key would relax a dedup that is already shipped and already relied upon.
     """
 
-    __slots__ = ("_spent", "_records", "_by_boundary")
+    __slots__ = ("_spent", "_records", "_by_boundary", "_inherited")
 
     def __init__(self) -> None:
         self._spent: set[str] = set()
         self._records: list[CrossingRecord] = []
         self._by_boundary: dict[str, int] = {}
+        #: How many crossing records this ledger INHERITED from a durable
+        #: journal (see :meth:`restore`).  Kept apart from ``_records`` so
+        #: reporting stays this-run-only while id minting stays globally unique.
+        self._inherited: int = 0
 
     # -- keys -----------------------------------------------------------------
 
@@ -555,7 +559,8 @@ class CrossingLedger:
         """
         bkey = boundary_key(url, control_name)
         record = CrossingRecord(
-            crossing_id="refuse_%s_%d" % (bkey[4:16], len(self._records) + 1),
+            crossing_id="refuse_%s_%d" % (
+                bkey[4:16], self._inherited + len(self._records) + 1),
             boundary_key=bkey, control_name=control_name, url=url,
             state_fingerprint=state_fingerprint, approval_id="",
             sequence_index=-1, status=CROSSING_REFUSED, refusal_reason=reason,
@@ -570,6 +575,60 @@ class CrossingLedger:
         record.outcome = outcome
         record.confirmed = bool(confirmed)
         record.completed_at_ms = int(now_ms)
+
+    # -- durable restore (M3.4 / T-RS-01) --------------------------------------
+
+    def restore(self, records: Iterable[Mapping[str, Any]]) -> int:
+        """Rehydrate exactly-once state from a durable crossing journal.
+
+        THE POINT OF THE WHOLE MILESTONE.  ``reserve`` spends a boundary before
+        the click so a crash mid-crossing cannot yield a duplicate - but that
+        reservation lived only in this object, so a killed worker took it with
+        it and the resumed crawl crossed every boundary a second time.  The
+        guarantee was real inside one process and absent across the kill it was
+        designed for.  Feeding the journal back in is what makes it survive.
+
+        WHAT IS RESTORED, AND WHAT DELIBERATELY IS NOT.  The SPENT SET and the
+        per-boundary COUNTS are restored: they are the safety property, and a
+        reservation that never completed (status ``reserved`` - the exact shape
+        a kill leaves behind) stays spent, because an interrupted irreversible
+        action must be assumed to have LANDED.  The RECORDS are not re-appended:
+        they are already durable in the manifest, and re-emitting them would
+        double-count the crossings in the resumed run's bundle.  So this ledger
+        reports what THIS run did, and refuses what ANY run already did.
+
+        A REFUSAL IS NOT A CROSSING and never spends - restoring one as spent
+        would permanently bar a boundary the operator has since approved, which
+        turns a re-dispatch after issuing a grant into a silent no-op.
+
+        Returns the number of journal records that were honoured.
+        """
+        honoured = 0
+        for raw in records or ():
+            if not isinstance(raw, Mapping):
+                continue
+            control_name = str(raw.get("control_name") or "")
+            if not control_name:
+                continue                      # not a crossing: nothing to dedup on
+            self._inherited += 1
+            honoured += 1
+            if str(raw.get("status") or "") == CROSSING_REFUSED:
+                continue                      # evidence, not a spend
+            url = str(raw.get("url") or "")
+            # The STORED boundary key wins over a recomputed one: it is the key
+            # that was actually spent, so honouring it keeps a resume correct
+            # even across a change to `boundary_key`'s derivation.
+            bkey = str(raw.get("boundary_key") or "") or boundary_key(url, control_name)
+            lkey = self._legacy_key(str(raw.get("state_fingerprint") or ""), control_name)
+            self._spent.add(bkey)
+            self._spent.add(lkey)
+            self._by_boundary[bkey] = self._by_boundary.get(bkey, 0) + 1
+        return honoured
+
+    @property
+    def inherited(self) -> int:
+        """Crossing records adopted from a durable journal (diagnostics)."""
+        return self._inherited
 
     # -- reporting ------------------------------------------------------------
 

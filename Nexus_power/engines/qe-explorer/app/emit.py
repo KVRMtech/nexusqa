@@ -81,6 +81,22 @@ REC_BROWSER_EVENT = "browser_event"
 #: carrying checkpoints maps to a byte-identical exploration bundle.
 REC_CHECKPOINT = "checkpoint"
 
+#: M3.4 / T-RS-01 - the WRITE-AHEAD CROSSING JOURNAL: one record per attempt at
+#: an irreversible boundary, appended BEFORE the click and updated after it.
+#:
+#: WHY THIS IS NOT THE CHECKPOINT.  The checkpoint is periodic, and an
+#: irreversible action cannot wait for the next period.  ``CrossingLedger``
+#: reserves a boundary before the click precisely so a crash mid-crossing leaves
+#: it spent - but that reservation lived only in RAM, so a killed worker took the
+#: whole ledger with it and the resumed crawl re-crossed every boundary it had
+#: already crossed.  Exactly-once held within one process and was lost at exactly
+#: the moment it mattered.  Journaling the reservation makes the guarantee
+#: survive the process that made it.
+#:
+#: ADDITIVE like every other type: readers dispatch on ``type`` and ignore what
+#: they do not know, so a manifest carrying crossings maps to the same bundle.
+REC_CROSSING = "crossing"
+
 #: Where captured download artifacts are staged inside the crawl directory.
 ARTIFACT_SUBDIR = "artifacts"
 _MAX_VALUE = 1000
@@ -493,6 +509,32 @@ class ManifestEmitter:
         payload = dict(record or {})
         payload["type"] = REC_CHECKPOINT
         payload["timestamp_ms"] = self.clock.now_ms()
+        append_record(self.work_dir, self.crawl_id, payload)
+
+    def emit_crossing(self, record: dict) -> None:
+        """Append ONE crossing-journal record VERBATIM (M3.4 / T-RS-01).
+
+        WRITE-AHEAD.  The caller emits the RESERVED record BEFORE the
+        irreversible click and the CROSSED record after the landing is observed,
+        so the durable manifest can never show a click the journal does not
+        already know about.  The ordering is the entire guarantee: a journal
+        written after the fact has a window - a kill, a timeout, an OOM - in
+        which the application was mutated and nothing durable records it, and a
+        resume walking that window re-submits the same application.
+
+        Deliberately NOT best-effort.  Every other emitter here may swallow a
+        write failure because the cost is lost evidence; the cost here is a
+        DUPLICATE IRREVERSIBLE ACTION, so a reservation that cannot be made
+        durable must stop the crossing rather than proceed unjournaled.  The
+        exception propagates to :meth:`SubmitMixin.cross_boundary`, which
+        refuses the crossing and records why.
+
+        VERBATIM for the same reason ``emit_outcome_milestone`` is: the record
+        IS the evidence that an irreversible action was authorised and fired.
+        """
+        payload = dict(record or {})
+        payload["type"] = REC_CROSSING
+        payload.setdefault("timestamp_ms", self.clock.now_ms())
         append_record(self.work_dir, self.crawl_id, payload)
 
     def emit_browser_event(self, record: dict) -> None:

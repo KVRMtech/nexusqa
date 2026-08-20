@@ -39,6 +39,7 @@ from .crawl_constants import (
     STOP_COMPLETED,
     STOP_ERROR,
     STOP_INVENTORY_FAILED,
+    STOP_JOURNEY_ZERO_CROSSING,
     STOP_NO_EVIDENCE,
     STOP_RESUME_UNRECOVERABLE,
 )
@@ -66,6 +67,11 @@ _DISPOSITION: dict[str, str] = {
     STOP_INVENTORY_FAILED: DISPOSITION_FAILED,
     STOP_RESUME_UNRECOVERABLE: DISPOSITION_FAILED,
     STOP_NO_EVIDENCE: DISPOSITION_FAILED,
+    # INCOMPLETE, not FAILED.  Nothing malfunctioned: pages were observed and
+    # catalogued, and the evidence produced is real and worth keeping.  What did
+    # not happen is the journey — and the remediation is a look at the funnel
+    # (an unanswerable question, a gate needing credentials), not at the engine.
+    STOP_JOURNEY_ZERO_CROSSING: DISPOSITION_INCOMPLETE,
 }
 
 
@@ -111,11 +117,36 @@ class CrawlEvidence:
     #: True when a resume was requested and the durable prefix could not be
     #: rebuilt into a continuable crawl.
     resume_broken: bool = False
+    #: Journeys this run WALKED — flows the walker actually entered, not forms
+    #: seen or buttons found.  It is what makes the zero-crossing test
+    #: conditional: an app with no funnel has nothing to cross (Gate 1/T-JC-01).
+    journeys_walked: int = 0
+    #: FORWARD STEP TRANSITIONS this run proved, summed across every journey.  A
+    #: flow that arrived and never advanced contributes 0; a five-step walk
+    #: contributes 4.  Counted from the durable flow ledger, so it is answerable
+    #: from the manifest after the process is gone.
+    journey_crossings: int = 0
+    #: Crossings already durable in the manifest when this run started — a
+    #: resumed crawl inherits its predecessor's progression exactly as it
+    #: inherits its states.
+    resumed_crossings: int = 0
 
     @property
     def total_states(self) -> int:
         """All the evidence this crawl id can show, this run plus its prefix."""
         return int(self.states) + int(self.resumed_states)
+
+    @property
+    def total_crossings(self) -> int:
+        """All the progression this crawl id can show, this run plus its prefix.
+
+        Judged on the TOTAL for the same reason ``total_states`` is: a resume
+        that adds nothing new because its predecessor already walked the funnel
+        HAS the evidence, it simply did not add to it.  Judging this run alone
+        would refuse every late-stage resume of a crawl that had already
+        succeeded.
+        """
+        return int(self.journey_crossings) + int(self.resumed_crossings)
 
     def as_dict(self) -> dict:
         return {
@@ -124,6 +155,10 @@ class CrawlEvidence:
             "total_states": self.total_states,
             "inventory_failures": self.inventory_failures,
             "resumed": self.resumed, "resume_broken": self.resume_broken,
+            "journeys_walked": self.journeys_walked,
+            "journey_crossings": self.journey_crossings,
+            "resumed_crossings": self.resumed_crossings,
+            "total_crossings": self.total_crossings,
         }
 
 
@@ -179,6 +214,12 @@ INVENTORY_FAILED_DETAIL = (
     "the pages behind them were never observed"
 )
 
+ZERO_CROSSING_DETAIL = (
+    "refused to report completed: %d journey(s) were walked and not one of them "
+    "advanced a single step, so the crawl covered page discovery rather than the "
+    "journeys it reported"
+)
+
 
 def adjudicate(stop_reason: str, evidence: CrawlEvidence) -> CompletionVerdict:
     """Decide the terminal state of a crawl from its evidence.  PURE.
@@ -196,7 +237,11 @@ def adjudicate(stop_reason: str, evidence: CrawlEvidence) -> CompletionVerdict:
          make impossible.  Evaluated on ``total_states``, so a legitimate resume
          that adds nothing new because its predecessor already covered the app
          still completes — it HAS evidence, it simply did not add to it.
-      4. Otherwise the engine's own reason stands.
+      4. **A journey that never crossed a step.**  The crawl walked funnels and
+         advanced none of them — page discovery reported as journey execution
+         (Gate 1 / T-JC-01).  Conditional on ``journeys_walked``, so an
+         application with no funnel in it still completes.
+      5. Otherwise the engine's own reason stands.
 
     Anything already failing keeps its own, more specific, reason: a crawl that
     died with ``error`` must not be relabelled ``no_evidence``, because ``error``
@@ -240,6 +285,18 @@ def adjudicate(stop_reason: str, evidence: CrawlEvidence) -> CompletionVerdict:
             claimed_stop_reason=claimed, evidence=ev,
         )
 
+    # 5. **A journey that never moved.**  Last, because it is the least severe
+    #    diagnosis and every check above is a better answer to "what went wrong"
+    #    when both are true: a crawl that read no page cannot be said to have
+    #    failed to advance one.
+    if evidence.journeys_walked > 0 and evidence.total_crossings <= 0:
+        return CompletionVerdict(
+            stop_reason=STOP_JOURNEY_ZERO_CROSSING,
+            disposition=DISPOSITION_INCOMPLETE,
+            detail=ZERO_CROSSING_DETAIL % evidence.journeys_walked,
+            claimed_stop_reason=claimed, evidence=ev,
+        )
+
     return CompletionVerdict(
         stop_reason=claimed, disposition=DISPOSITION_COMPLETED,
         detail="", claimed_stop_reason=claimed, evidence=ev,
@@ -250,4 +307,5 @@ __all__ = [
     "DISPOSITION_COMPLETED", "DISPOSITION_FAILED", "DISPOSITION_INCOMPLETE",
     "CrawlEvidence", "CompletionVerdict", "adjudicate", "disposition_for",
     "NO_EVIDENCE_DETAIL", "RESUME_BROKEN_DETAIL", "INVENTORY_FAILED_DETAIL",
+    "ZERO_CROSSING_DETAIL", "STOP_JOURNEY_ZERO_CROSSING",
 ]

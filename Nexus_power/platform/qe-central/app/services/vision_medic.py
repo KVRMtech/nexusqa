@@ -34,6 +34,7 @@ NEVER raises.  Pure functions + an async top-level that calls the LLM.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import re
@@ -315,7 +316,7 @@ async def consult_vision(
 
 # ── page Perceiver (U2/G2): enumerate controls + outcomes from a screenshot ─────
 
-_PERCEIVE_SYSTEM = (
+PERCEIVE_SYSTEM = (
     "You are a UI perception engine. You receive a SCREENSHOT of a page whose "
     "controls the DOM could not read (canvas / Flutter Web / WebGL). Enumerate the "
     "INTERACTIVE controls you can see, and any DISPLAYED OUTCOME values (a total, a "
@@ -328,10 +329,70 @@ _PERCEIVE_SYSTEM = (
 )
 
 
+# ── M3.1 / T-VIS-03 · EXACTLY ONE AUTHORITATIVE SYSTEM PROMPT PER TASK ────────
+#
+# THE CONTRADICTION THIS RESOLVES.  ``/internal/perceive-controls`` sent
+# ``system=vision_medic.SYSTEM`` — the MEDIC prompt, which demands
+# ``{"action":"click_region","x":…,"y":…}`` — while ``perceive_controls`` built
+# ``PERCEIVE_SYSTEM`` (a ``{"controls":[…]}`` contract) into the USER prompt.
+# Every perceive call therefore carried two mutually exclusive output contracts,
+# one in each channel, and which one the model obeyed was a property of the
+# provider rather than of this codebase.  ``parse_perceived`` then quietly
+# returned empty lists for any reply that followed the system prompt — so the
+# failure mode was "vision found nothing", the single most plausible-looking
+# outcome there is.
+#
+# The resolution is a MAPPING, not a convention: the system prompt is selected
+# by task from one frozen table, unknown tasks RAISE rather than defaulting, and
+# the user prompt no longer restates any contract.  There is now exactly one
+# place where "which prompt does this task use" is answered.
+
+#: The two tasks that reach a vision model.  Same strings ``platform_api``
+#: bills against, so the prompt and the cost attribution cannot disagree.
+TASK_VISION_MEDIC = "vision_medic"
+TASK_VISION_PERCEIVE = "vision_perceive"
+
+_SYSTEM_BY_TASK: dict[str, str] = {
+    TASK_VISION_MEDIC: SYSTEM,
+    TASK_VISION_PERCEIVE: PERCEIVE_SYSTEM,
+}
+
+
+def system_prompt_for(task: str) -> str:
+    """THE authoritative system prompt for ``task``.  Fail-closed.
+
+    An unknown task RAISES.  A default here would be a silent third contract,
+    which is the class of bug this function exists to end.
+    """
+    key = str(task or "").strip()
+    if key not in _SYSTEM_BY_TASK:
+        raise ValueError(
+            "no authoritative vision system prompt for task %r (known: %s)"
+            % (key, ", ".join(sorted(_SYSTEM_BY_TASK))))
+    return _SYSTEM_BY_TASK[key]
+
+
+def effective_prompt(task: str) -> dict:
+    """What WILL be sent, and its digest — the inspectability half of T-VIS-03.
+
+    Returned on every vision response so an operator can prove which prompt a
+    given crawl actually ran under instead of reading the deploy and hoping.
+    """
+    system = system_prompt_for(task)
+    return {"task": str(task), "system_sha256": hashlib.sha256(
+        system.encode("utf-8")).hexdigest(), "system_chars": len(system)}
+
+
 def build_perceive_prompt(page_context: dict) -> str:
+    """The USER half of a perceive call: page context only.
+
+    Deliberately carries NO output contract.  The contract lives in exactly one
+    place — :data:`PERCEIVE_SYSTEM`, reached through :func:`system_prompt_for` —
+    and restating it here is how the two came to disagree.
+    """
     ctx = page_context or {}
     hint = str(ctx.get("url") or "")[:200]
-    return _PERCEIVE_SYSTEM + ("\nPage: " + hint if hint else "")
+    return ("Page: " + hint) if hint else "Enumerate the controls in this screenshot."
 
 
 def _coerce_int(v: Any) -> Any:
@@ -421,6 +482,11 @@ async def perceive_controls(
 
 __all__ = [
     "SYSTEM",
+    "PERCEIVE_SYSTEM",
+    "TASK_VISION_MEDIC",
+    "TASK_VISION_PERCEIVE",
+    "system_prompt_for",
+    "effective_prompt",
     "perceive_controls",
     "parse_perceived",
     "build_perceive_prompt",

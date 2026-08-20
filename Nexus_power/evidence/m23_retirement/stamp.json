@@ -1,0 +1,14 @@
+{
+  "after_crawl": "m23-after-removal",
+  "app": "acme-life",
+  "app_sha256_after": "c74fa9d5c681f7e8f15099c3fafacb5f00c4b6653b822f5532e26ee760576ac1",
+  "app_sha256_before": "6fa9a663aff8e0c1d0174d400820e972bbc60630f2dd42beb91e7319bf16ac70",
+  "baseline_crawl": "m23-baseline",
+  "milestone": "M2.3",
+  "removed_question": "Primary beneficiary",
+  "surviving_questions": [
+    "Full legal name",
+    "Date of birth",
+    "SSN (synthetic)"
+  ]
+}

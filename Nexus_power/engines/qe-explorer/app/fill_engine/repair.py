@@ -49,7 +49,9 @@ __all__ = [
     "RepairAttempt", "RepairOutcome", "RepairBudget", "FillDriver",
     "FillVerdict", "repair_loop", "tighten",
     "STOP_ACCEPTED", "STOP_BUDGET", "STOP_NO_SIGNAL", "STOP_NOT_ACTIONABLE",
-    "STOP_NO_BETTER_VALUE", "STOP_REPEATED_VALUE",
+    "STOP_NO_BETTER_VALUE", "STOP_REPEATED_VALUE", "STOP_NOT_REPAIRABLE",
+    "STOP_TRANSIENT_BUDGET", "RetryPolicy", "FAILURE_TRANSIENT",
+    "FAILURE_PERMANENT", "classify_failure",
 ]
 
 STOP_ACCEPTED = "accepted"
@@ -58,6 +60,55 @@ STOP_NO_SIGNAL = "rejected_without_a_readable_reason"
 STOP_NOT_ACTIONABLE = "rejection_named_nothing_to_change"
 STOP_NO_BETTER_VALUE = "no_value_satisfies_the_tightened_constraints"
 STOP_REPEATED_VALUE = "the_only_remaining_value_was_already_rejected"
+#: The application rejected the value and this field's value may NOT be
+#: regenerated, because it did not come from the generator — it came from a
+#: persona, recalled data, a credential or an MFA code.  Distinct from
+#: ``STOP_NO_BETTER_VALUE``, which means the generator was ASKED and had nothing.
+#: Conflating them was a real defect: a rejected Security PIN was reported as
+#: "no value satisfies the tightened constraints" when no value had been sought.
+STOP_NOT_REPAIRABLE = "value_is_provenance_locked_and_must_not_be_regenerated"
+#: A transient, page-race failure kept recurring until the transient budget ran
+#: out.  The value was never the problem and was never changed.
+STOP_TRANSIENT_BUDGET = "transient_failure_persisted_across_every_retry"
+
+#: How a mechanical failure is CLASSIFIED, which decides whether retrying the
+#: identical value can possibly help.
+FAILURE_TRANSIENT = "transient"
+FAILURE_PERMANENT = "permanent"
+
+#: Substrings that identify a failure as a RACE WITH THE PAGE rather than a fact
+#: about the control.  Deliberately a small, closed list of things a browser
+#: automation layer says when the DOM moved under it: each one describes a state
+#: that a later moment can differ from, which is precisely what makes re-issuing
+#: the SAME value a sane act rather than a hopeful one.
+#:
+#: Everything not on this list is PERMANENT.  Fail-closed on purpose — an
+#: unrecognised failure retried three times is three times the wall clock for
+#: the same answer, and on a crawl that is a budget the rest of the funnel
+#: needed.
+_TRANSIENT_MARKERS: tuple[str, ...] = (
+    "not attached", "detached", "stale", "element is not attached",
+    "timeout", "timed out", "intercept", "navigating", "navigation",
+    "context was destroyed", "execution context", "target closed",
+    "element is outside of the viewport", "not stable",
+)
+
+
+def classify_failure(mechanical: str) -> str:
+    """Is this failure worth trying again with the SAME value?
+
+    The question is never "did it fail" but "was the failure ABOUT the value".
+    A detached element, an in-flight navigation and a settle timeout are all the
+    page moving while we typed; the value was never examined.  A control that
+    took the keystrokes and held something else is a fact about the control, and
+    a second identical attempt reproduces it exactly.
+    """
+    text = str(mechanical or "").strip().lower()
+    if not text:
+        return FAILURE_PERMANENT
+    return (FAILURE_TRANSIENT
+            if any(marker in text for marker in _TRANSIENT_MARKERS)
+            else FAILURE_PERMANENT)
 
 
 @dataclass(frozen=True)
@@ -74,6 +125,52 @@ class RepairBudget:
     def __post_init__(self) -> None:
         if self.attempts < 1:
             object.__setattr__(self, "attempts", 1)
+
+
+@dataclass(frozen=True)
+class RetryPolicy:
+    """How a TRANSIENT failure is retried — a separate budget from the repair one.
+
+    THE TWO BUDGETS ANSWER DIFFERENT QUESTIONS and must not share a number.
+    ``RepairBudget.attempts`` bounds how many DIFFERENT VALUES the loop may try
+    against an application that keeps rejecting them; this bounds how many times
+    the SAME value is re-issued after the page moved under it.  A field can
+    legitimately consume one of each: a detached-element retry that then commits
+    a value the app rejects has used one transient retry and one repair attempt.
+
+    BACKOFF IS EXPONENTIAL AND WITHOUT JITTER.  Jitter is the usual right answer
+    and is wrong here: this crawl's evidence is replayed and compared against
+    goldens, so identical inputs must produce an identical timing sequence.  The
+    thing backoff protects against — a re-render storm we are racing — is
+    unaffected by whether the wait is randomised.
+    """
+
+    #: TOTAL commits of the same value, including the first.  ``1`` disables
+    #: transient retry entirely and is the pre-Gate-1 behaviour exactly.
+    transient_attempts: int = 3
+    #: Wait before the FIRST retry, in milliseconds.
+    backoff_ms: int = 50
+    #: Multiplier applied to the wait after each retry.
+    backoff_factor: float = 2.0
+    #: Ceiling, so a long budget cannot turn into a long sleep.
+    max_backoff_ms: int = 400
+
+    def __post_init__(self) -> None:
+        if self.transient_attempts < 1:
+            object.__setattr__(self, "transient_attempts", 1)
+        if self.backoff_ms < 0:
+            object.__setattr__(self, "backoff_ms", 0)
+        if self.backoff_factor < 1.0:
+            object.__setattr__(self, "backoff_factor", 1.0)
+        if self.max_backoff_ms < self.backoff_ms:
+            object.__setattr__(self, "max_backoff_ms", self.backoff_ms)
+
+    def delay_ms(self, retry_index: int) -> int:
+        """Wait before retry ``retry_index`` (1-based).  Deterministic."""
+        if retry_index < 1:
+            return 0
+        delay = float(self.backoff_ms) * (self.backoff_factor ** (retry_index - 1))
+        return int(min(delay, float(self.max_backoff_ms)))
 
 
 @dataclass(frozen=True)
@@ -127,6 +224,11 @@ class RepairOutcome:
     attempts: tuple[RepairAttempt, ...] = ()
     stop_reason: str = STOP_ACCEPTED
     committed: Optional[str] = None
+    #: Commits spent re-issuing the SAME value after a transient page race.
+    #: Reported separately from ``attempts`` because they are not repairs: no
+    #: value changed, so counting them as repair attempts would make the
+    #: repair-success rate a measurement of page flakiness.
+    transient_retries: int = 0
 
     @property
     def repaired(self) -> bool:
@@ -150,6 +252,7 @@ class RepairOutcome:
             "first_pass": self.first_pass,
             "repaired": self.repaired,
             "attempt_count": len(self.attempts),
+            "transient_retries": self.transient_retries,
             "stop_reason": self.stop_reason,
             "attempts": [a.as_dict() for a in self.attempts],
         }
@@ -240,6 +343,9 @@ async def repair_loop(
     regenerate: Regenerate,
     budget: RepairBudget = RepairBudget(),
     first_reason: str = "",
+    retry: RetryPolicy = RetryPolicy(),
+    repairable: bool = True,
+    sleep: Optional[Callable[[float], Awaitable[None]]] = None,
 ) -> RepairOutcome:
     """Fill one control, and repair it until the application accepts it.
 
@@ -257,6 +363,12 @@ async def repair_loop(
     value = first_value
     current = cons
     reason = first_reason or "the value the generator produced for this field"
+    transient_retries = 0
+    if sleep is None:
+        import asyncio as _asyncio
+
+        async def sleep(seconds: float) -> None:      # noqa: E306
+            await _asyncio.sleep(seconds)
 
     if value is None:
         return RepairOutcome(
@@ -267,7 +379,36 @@ async def repair_loop(
             stop_reason=STOP_NO_BETTER_VALUE)
 
     for index in range(1, budget.attempts + 1):
+        # ── Gate 1 / T-RE-01 · THE SAME VALUE, WHEN THE PAGE MOVED ──────────
+        # One commit used to be the whole story: any mechanical failure returned
+        # immediately, so a control that was detached by a re-render mid-fill was
+        # abandoned after a single attempt and reported as though the widget had
+        # refused the value. It had not refused anything — it had not been asked.
+        #
+        # Re-issuing the SAME value is what makes this safe to do at all. No
+        # value is invented, nothing is tightened, no constraint is inferred; the
+        # act is idempotent, so a retry that turns out to have been unnecessary
+        # costs a backoff and changes nothing. That is why this retry is allowed
+        # for fields the repair path below is forbidden to touch: a Security PIN
+        # may not be REGENERATED, and re-typing the operator's own PIN after the
+        # form re-rendered is not a regeneration.
         verdict = await driver.commit(control, value)
+        while (verdict.mechanical_failure
+               and classify_failure(verdict.mechanical_failure) == FAILURE_TRANSIENT
+               and transient_retries < retry.transient_attempts - 1):
+            transient_retries += 1
+            delay = retry.delay_ms(transient_retries)
+            logger.info(
+                "qec.repair.transient control=%r attempt=%d retry=%d/%d "
+                "backoff_ms=%d failure=%r - the page moved under the fill; "
+                "re-issuing the same value",
+                str(control.get("name") or "")[:40], index, transient_retries,
+                retry.transient_attempts - 1, delay,
+                verdict.mechanical_failure[:80])
+            if delay:
+                await sleep(delay / 1000.0)
+            verdict = await driver.commit(control, value)
+
         attempts.append(RepairAttempt(
             attempt=index, value=value, accepted=verdict.accepted, reason=reason,
             signals=tuple(verdict.signals), committed=verdict.committed))
@@ -276,21 +417,47 @@ async def repair_loop(
             return RepairOutcome(accepted=True, value=value,
                                  attempts=tuple(attempts),
                                  stop_reason=STOP_ACCEPTED,
-                                 committed=verdict.committed)
+                                 committed=verdict.committed,
+                                 transient_retries=transient_retries)
 
         refused.add(value)
 
         if verdict.mechanical_failure:
             # The widget would not take the value at all.  Repairing the VALUE
             # cannot help, and pretending otherwise burns the budget on the wrong
-            # problem.
+            # problem.  Two endings, kept apart because they mean opposite
+            # things to whoever reads the ledger: a failure we retried and could
+            # not outlast, and one that was never worth retrying.
+            exhausted = (classify_failure(verdict.mechanical_failure)
+                         == FAILURE_TRANSIENT)
             return RepairOutcome(
                 accepted=False, value=None, attempts=tuple(attempts),
-                stop_reason=f"widget_refused:{verdict.mechanical_failure[:60]}")
+                transient_retries=transient_retries,
+                stop_reason=(STOP_TRANSIENT_BUDGET if exhausted
+                             else f"widget_refused:{verdict.mechanical_failure[:60]}"))
+
+        if not repairable:
+            # ── Gate 1 / T-RE-02 · SAY WHICH GATE STOPPED THIS ──────────────
+            # The application rejected a value this loop is FORBIDDEN to change,
+            # because it did not come from the generator: a persona's real date
+            # of birth, a member number, a credential, an MFA code. Regenerating
+            # any of those would fabricate the very data the crawl is supposed to
+            # be carrying, so the refusal is correct and stays.
+            #
+            # What was NOT correct is what the ledger said about it. The
+            # regenerate callback returned None and the loop reported
+            # "no value satisfies the tightened constraints" — a sentence about a
+            # search that never ran, which sent operators looking at constraint
+            # inference for a field whose value was never in question.
+            return RepairOutcome(accepted=False, value=None,
+                                 attempts=tuple(attempts),
+                                 transient_retries=transient_retries,
+                                 stop_reason=STOP_NOT_REPAIRABLE)
 
         if index >= budget.attempts:
             return RepairOutcome(accepted=False, value=None,
                                  attempts=tuple(attempts),
+                                 transient_retries=transient_retries,
                                  stop_reason=STOP_BUDGET)
 
         # RULE 1 — no observed rejection, no retry.
@@ -298,6 +465,7 @@ async def repair_loop(
         if not anchored:
             return RepairOutcome(accepted=False, value=None,
                                  attempts=tuple(attempts),
+                                 transient_retries=transient_retries,
                                  stop_reason=STOP_NO_SIGNAL)
 
         # RULE 2 — the retry must change something the rejection named.
@@ -306,6 +474,7 @@ async def repair_loop(
         if not hint.actionable:
             return RepairOutcome(accepted=False, value=None,
                                  attempts=tuple(attempts),
+                                 transient_retries=transient_retries,
                                  stop_reason=STOP_NOT_ACTIONABLE)
 
         tightened = tighten(current, hint)
@@ -313,14 +482,17 @@ async def repair_loop(
         if candidate is None:
             return RepairOutcome(accepted=False, value=None,
                                  attempts=tuple(attempts),
+                                 transient_retries=transient_retries,
                                  stop_reason=STOP_NO_BETTER_VALUE)
         if candidate in refused:
             return RepairOutcome(accepted=False, value=None,
                                  attempts=tuple(attempts),
+                                 transient_retries=transient_retries,
                                  stop_reason=STOP_REPEATED_VALUE)
 
         reason = _reason_for(signal, hint, current, tightened)
         current, value = tightened, candidate
 
     return RepairOutcome(accepted=False, value=None, attempts=tuple(attempts),
+                         transient_retries=transient_retries,
                          stop_reason=STOP_BUDGET)

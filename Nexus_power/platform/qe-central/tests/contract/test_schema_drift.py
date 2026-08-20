@@ -50,6 +50,15 @@ _NO_ORM_MODEL: dict[str, str] = {
     # tolerated: if one of them ever gains a model, the stale-entry check below
     # forces this list to be updated.
     "repo_connections": "S3 repo-intel — raw-SQL access only, no declarative model",
+    # M3.3 / T-FL-02. The explorer worker registry is FLEET INFRASTRUCTURE, read
+    # and written exclusively through raw SQL in
+    # app/controlplane/scheduling/worker_registry.py. The scheduling hot path is
+    # a set of single conditional UPDATEs whose atomicity is the whole point
+    # ("in_flight < capacity" evaluated under the row lock the UPDATE takes), and
+    # an ORM round trip would reintroduce the check-then-write window that the
+    # raw statement exists to close.
+    "explorer_workers": "M3.3 worker registry — raw-SQL only; the atomic "
+                        "capacity UPDATE must not become an ORM read-modify-write",
     "app_model_universes": "S3 repo-intel — raw-SQL access only, no declarative model",
     "app_model_atoms": "S3 repo-intel — raw-SQL access only, no declarative model",
     "crawl_seed_manifests": "S3 repo-intel — raw-SQL access only, no declarative model",

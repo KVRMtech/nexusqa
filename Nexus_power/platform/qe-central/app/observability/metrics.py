@@ -102,6 +102,17 @@ METRIC_COST_UNITS = "qec_cost_units"
 METRIC_QUOTA_DECISIONS = "qec_quota_decisions"
 METRIC_LLM_CALLS = "qec_llm_calls"
 METRIC_LLM_TOKENS = "qec_llm_tokens"
+# ── M3.3 FLEET metrics. `qec_crawl_queue_depth` is the AUTOSCALING SIGNAL:
+# KEDA scales the explorer Deployment on it, so it must be exported even when
+# it is zero (an absent series reads as "no data" to a scaler, which is not the
+# same as "no backlog" and stalls scale-down).
+METRIC_QUEUE_DEPTH = "qec_crawl_queue_depth"
+METRIC_QUEUE_OLDEST_WAIT = "qec_crawl_queue_oldest_wait_seconds"
+METRIC_FLEET_CAPACITY = "qec_fleet_capacity"
+METRIC_FLEET_IN_FLIGHT = "qec_fleet_in_flight"
+METRIC_FLEET_WORKERS_ALIVE = "qec_fleet_workers_alive"
+METRIC_CRAWLS_QUEUED = "qec_crawls_queued_total"
+METRIC_EGRESS_FENCE_CONFLICTS = "qec_egress_fence_conflicts"
 
 #: The metric families a healthy ``/metrics`` scrape MUST expose (test contract).
 EXPECTED_METRIC_NAMES = frozenset({
@@ -189,6 +200,42 @@ def _build_metrics() -> None:
     m[METRIC_ADMISSION_IN_FLIGHT] = Gauge(
         METRIC_ADMISSION_IN_FLIGHT,
         "Cycles currently holding an admission lease (in-flight concurrency).",
+        registry=reg,
+    )
+    m[METRIC_QUEUE_DEPTH] = Gauge(
+        METRIC_QUEUE_DEPTH,
+        "Crawls waiting in the durable queue (the KEDA autoscaling signal).",
+        registry=reg,
+    )
+    m[METRIC_QUEUE_OLDEST_WAIT] = Gauge(
+        METRIC_QUEUE_OLDEST_WAIT,
+        "Seconds the longest-waiting queued crawl has been waiting.",
+        registry=reg,
+    )
+    m[METRIC_FLEET_CAPACITY] = Gauge(
+        METRIC_FLEET_CAPACITY,
+        "Total crawl slots across ALIVE, ACTIVE explorer workers.",
+        registry=reg,
+    )
+    m[METRIC_FLEET_IN_FLIGHT] = Gauge(
+        METRIC_FLEET_IN_FLIGHT, "Crawl slots currently occupied.", registry=reg,
+    )
+    m[METRIC_FLEET_WORKERS_ALIVE] = Gauge(
+        METRIC_FLEET_WORKERS_ALIVE,
+        "Explorer workers with a fresh heartbeat.", registry=reg,
+    )
+    m[METRIC_CRAWLS_QUEUED] = Counter(
+        METRIC_CRAWLS_QUEUED,
+        "Crawls enqueued because the fleet was at capacity, by reason. NOTE: "
+        "these are QUEUED, never failed — a busy fleet is not a failed crawl.",
+        ["reason"],
+        registry=reg,
+    )
+    m[METRIC_EGRESS_FENCE_CONFLICTS] = Gauge(
+        METRIC_EGRESS_FENCE_CONFLICTS,
+        "Workers refused work because they SHARE an egress allowlist file. "
+        "Any non-zero value is a misconfiguration that would break per-worker "
+        "tenant egress isolation; it should page.",
         registry=reg,
     )
     m[METRIC_FACTORY_CALLS] = Counter(
@@ -342,6 +389,30 @@ def record_admission_decision(*, admitted: bool, reason: str = "") -> None:
     """Count one admission decision (labels: decision=admitted|denied, reason)."""
     decision = "admitted" if admitted else "denied"
     _M[METRIC_ADMISSION_DECISIONS].labels(decision=decision, reason=_lbl(reason)).inc()
+
+
+@_never_raises
+def record_fleet_state(*, queue_depth: int, oldest_wait_s: float,
+                       capacity: int, in_flight: int, workers_alive: int,
+                       fence_conflicts: int = 0) -> None:
+    """Publish the fleet gauges. Called from the drain tick.
+
+    Exported even when every value is zero: to a scaler an ABSENT series means
+    "no data", which is not the same as "no backlog" and leaves a scaled-up
+    fleet stuck at its high-water mark.
+    """
+    _M[METRIC_QUEUE_DEPTH].set(float(max(0, queue_depth)))
+    _M[METRIC_QUEUE_OLDEST_WAIT].set(float(max(0.0, oldest_wait_s)))
+    _M[METRIC_FLEET_CAPACITY].set(float(max(0, capacity)))
+    _M[METRIC_FLEET_IN_FLIGHT].set(float(max(0, in_flight)))
+    _M[METRIC_FLEET_WORKERS_ALIVE].set(float(max(0, workers_alive)))
+    _M[METRIC_EGRESS_FENCE_CONFLICTS].set(float(max(0, fence_conflicts)))
+
+
+@_never_raises
+def record_crawl_queued(*, reason: str) -> None:
+    """Count one crawl that was QUEUED (not failed) because the fleet was busy."""
+    _M[METRIC_CRAWLS_QUEUED].labels(reason=_lbl(reason)).inc()
 
 
 @_never_raises

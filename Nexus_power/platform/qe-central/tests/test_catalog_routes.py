@@ -24,8 +24,9 @@ def _client() -> TestClient:
 def test_get_master_catalog_passes_tenant_and_app_and_returns_shape(monkeypatch):
     seen = {}
 
-    async def fake(tenant_id, app_id):
+    async def fake(tenant_id, app_id, include_retired=False):
         seen["args"] = (tenant_id, app_id)
+        seen["include_retired"] = include_retired
         return {"questions": [{"question_id": "q_1", "name": "Q"}],
                 "summary": {"question_count": 1}}
 
@@ -36,6 +37,46 @@ def test_get_master_catalog_passes_tenant_and_app_and_returns_shape(monkeypatch)
     assert body["app_id"] == "app-9"
     assert body["questions"][0]["question_id"] == "q_1"
     assert seen["args"] == ("t-1", "app-9")     # tenant from auth, app from path
+    # M2.3 — THE DEFAULT IS THE ACTIVE CATALOGUE. Pinned here rather than left
+    # implicit: this route feeds planning, and a default that silently flipped to
+    # the audit view would hand a client questions the application has stopped
+    # asking, with nothing in the response shape to reveal it.
+    assert seen["include_retired"] is False
+
+
+def test_get_master_catalog_forwards_the_audit_view_flag(monkeypatch):
+    """M2.3 — ``include_retired=true`` asks for the history, not the plan."""
+    seen = {}
+
+    async def fake(tenant_id, app_id, include_retired=False):
+        seen["include_retired"] = include_retired
+        return {"questions": [], "summary": {"question_count": 0}}
+
+    monkeypatch.setattr(catalog_store, "build_app_master_catalog", fake)
+    r = _client().get("/api/v1/qec/apps/app-9/catalog?include_retired=true")
+    assert r.status_code == 200
+    assert seen["include_retired"] is True
+
+
+def test_get_retired_questions_route(monkeypatch):
+    """M2.3 — the audit record of what the application stopped asking."""
+    seen = {}
+
+    async def fake(tenant_id, app_id):
+        seen["args"] = (tenant_id, app_id)
+        return [{"question_id": "q_gone", "name": "Primary beneficiary",
+                 "lifecycle": "retired", "retired_at": "2026-08-19T00:00:00+00:00",
+                 "retired_in_crawl": "crawl-2"}]
+
+    monkeypatch.setattr(catalog_store, "load_retired_questions", fake)
+    r = _client().get("/api/v1/qec/apps/app-9/catalog/retired")
+    assert r.status_code == 200
+    body = r.json()
+    assert seen["args"] == ("t-1", "app-9")
+    assert body["app_id"] == "app-9" and body["count"] == 1
+    entry = body["retired"][0]
+    assert entry["question_id"] == "q_gone"
+    assert entry["retired_at"] and entry["retired_in_crawl"] == "crawl-2"
 
 
 def test_project_route_forwards_answers_body(monkeypatch):

@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Fixture 24 — frame + shadow proving ground</title>
+<style>
+  iframe { display: block; width: 460px; height: 260px; border: 1px solid #ccc; }
+  secure-consent-panel { display: block; width: 460px; height: 220px; border: 1px solid #ccc; }
+</style>
+</head>
+<body>
+  <main>
+    <h1>Purchase coverage</h1>
+
+    <!-- (1) ORDINARY DOM. The control group: if the two surfaces below start
+         being read, these must go on reading exactly as they did. -->
+    <label for="holder-name">Policy Holder Name</label>
+    <input id="holder-name" name="holder_name" type="text" autocomplete="name">
+    <label for="holder-email">Email Address</label>
+    <input id="holder-email" name="holder_email" type="email" autocomplete="email" required>
+
+    <!-- (2) A CLOSED SHADOW COMPONENT, with a further OPEN shadow root nested
+         inside it. Nothing outside can reach either: `shadowRoot` is null for
+         the closed host, and the nested root is only reachable THROUGH it. Both
+         levels have to be observed, or "we read the closed root" would mean
+         "we read its first level". -->
+    <secure-consent-panel id="consent-panel"></secure-consent-panel>
+
+    <!-- (3) THE PAYMENT EMBED, on a genuinely foreign origin (__ALT_ORIGIN__ is
+         substituted at serve time with a second http origin). This is the shape
+         of every Stripe Elements / Adyen / Braintree checkout: the fields that
+         take the money are the ones the DOM cannot read. -->
+    <iframe id="payment-frame" title="Card payment"
+            src="__ALT_ORIGIN__/25-frame-shadow-proving-ground/child-payment.html"></iframe>
+
+    <button type="button" id="review">Review Order</button>
+  </main>
+
+  <script>
+    class SecureConsentPanel extends HTMLElement {
+      connectedCallback() {
+        // mode:"closed" — `this.shadowRoot` stays null for every outside caller.
+        const closed = this.attachShadow({ mode: "closed" });
+        closed.innerHTML = [
+          '<label for="consent-initials">Signature Initials</label>',
+          '<input id="consent-initials" name="consent_initials" type="text" maxlength="4" required>',
+          '<div id="disclosure-host"></div>',
+          '<button type="button" id="accept-terms">Accept Terms</button>'
+        ].join("");
+        // A second, OPEN shadow root nested INSIDE the closed one.
+        const nested = closed.querySelector("#disclosure-host")
+                             .attachShadow({ mode: "open" });
+        nested.innerHTML = [
+          '<label for="disclosure-ack">Disclosure Acknowledgement</label>',
+          '<input id="disclosure-ack" name="disclosure_ack" type="checkbox">'
+        ].join("");
+      }
+    }
+    customElements.define("secure-consent-panel", SecureConsentPanel);
+  </script>
+</body>
+</html>

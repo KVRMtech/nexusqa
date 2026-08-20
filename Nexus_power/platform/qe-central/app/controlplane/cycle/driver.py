@@ -78,6 +78,7 @@ from ...db.controlplane_models import (
     is_terminal_cycle_state,
 )
 from ...db.models import ClientAppRow
+from ..tenant_scope import fleet_tenant_ids, scope_to_tenant
 from ...security.prod_guard import (
     PHASE_EXPLORE,
     OnboardingRefused,
@@ -2011,37 +2012,92 @@ _TERMINAL_SQL_TUPLE = "(" + ", ".join(f"'{s}'" for s in sorted(TERMINAL_CYCLE_ST
 
 
 async def _scan_fleet(limit: int) -> tuple[set[tuple[str, str]], list[dict], list[dict], list[dict]]:
-    """Fleet-wide (non-tenant-scoped) read of the state the scheduler needs."""
+    """Read the state the scheduler needs, PER TENANT, under production RLS.
+
+    M3.3 / T-FL-05 — THE DEFECT THIS CLOSES.  This function used to open one
+    ``qec_engine.connect()`` and query the fleet with NO tenant GUC set.  Every
+    table it reads carries ``FORCE ROW LEVEL SECURITY`` with a
+    ``tenant_isolation`` policy of the form::
+
+        tenant_id = current_setting('nexus.current_tenant_id', true)
+
+    With no GUC that comparison is against ``NULL`` — never true.  On the
+    production posture (the ``qec`` role is ``NOSUPERUSER``/``NOBYPASSRLS``, so
+    it cannot bypass the policy) the scan therefore returned **zero rows** and
+    the cycle daemon discovered no work at all, while logging nothing wrong.
+    It only ever "worked" in a dev/superuser posture, where RLS is bypassed —
+    which is precisely the posture production must not have.
+
+    Measured on a production-like DB before the fix: 0 apps visible with no GUC,
+    1 visible under ``GUC = tenant_a``.
+
+    THE FIX IS NOT TO WEAKEN RLS.  Tenants are enumerated once from the global
+    registry (:func:`tenant_scope.fleet_tenant_ids`), then each tenant's rows are
+    read inside a transaction scoped to THAT tenant's GUC — the same RLS-compliant
+    shape the stale-crawl reaper has always used, now shared so the two cannot
+    drift.  Isolation is preserved *during* discovery: the policy is still
+    enforcing on every statement, so a scan for tenant A cannot return tenant B's
+    rows even if the SQL were wrong.
+
+    One tenant's failure never stops the fleet: a per-tenant ``try`` logs and
+    continues, so a single tenant with a broken row cannot starve every other
+    tenant's scheduling.
+
+    ``limit`` is applied PER TENANT (it bounds a single tenant's contribution),
+    and the caller re-applies the fleet-wide cap — so one large tenant cannot
+    consume the entire discovery budget and starve the rest.
+    """
     active_apps: set[tuple[str, str]] = set()
     deferred: list[dict] = []
     changes: list[dict] = []
     apps: list[dict] = []
-    async with qec_engine.connect() as conn:
-        active_rows = (await conn.execute(text(
-            "SELECT tenant_id, app_id, cycle_id, state, trigger FROM app_cycles "
-            f"WHERE state NOT IN {_TERMINAL_SQL_TUPLE}"
-        ))).mappings().all()
-        for r in active_rows:
-            active_apps.add((r["tenant_id"], r["app_id"]))
-            if r["state"] == CYCLE_STATE_BLACKOUT_DEFERRED:
-                deferred.append(dict(r))
-        change_rows = (await conn.execute(text(
-            "SELECT event_id, tenant_id, app_id, source, payload, created_at FROM change_events "
-            "WHERE processed_cycle_id IS NULL ORDER BY created_at ASC LIMIT :lim"
-        ), {"lim": max(1, limit) * 20})).mappings().all()
-        changes = [dict(r) for r in change_rows]
-        app_rows = (await conn.execute(text(
-            "SELECT ca.tenant_id, ca.app_id, ca.status, ca.schedule, ca.fences, "
-            "ca.latest_artifact_id, "
-            "(SELECT max(created_at) FROM app_cycles c "
-            " WHERE c.tenant_id = ca.tenant_id AND c.app_id = ca.app_id) AS last_cycle_at, "
-            "(SELECT max(created_at) FROM app_cycles c2 "
-            " WHERE c2.tenant_id = ca.tenant_id AND c2.app_id = ca.app_id "
-            " AND c2.trigger = :full_floor) AS last_full_at "
-            "FROM client_apps ca WHERE ca.status = 'active' "
-            "AND ca.latest_artifact_id <> '' LIMIT :lim"
-        ), {"full_floor": CYCLE_TRIGGER_FULL_FLOOR, "lim": max(1, limit) * 4})).mappings().all()
-        apps = [dict(r) for r in app_rows]
+    tenants = await fleet_tenant_ids()
+    for tenant_id in tenants:
+        try:
+            # A transaction (not a bare connection): set_config(..., true) is
+            # transaction-local, so this tenant's scope is discarded at COMMIT
+            # and can never leak onto the next iteration of a pooled connection.
+            async with qec_engine.begin() as conn:
+                await scope_to_tenant(conn, tenant_id)
+                active_rows = (await conn.execute(text(
+                    "SELECT tenant_id, app_id, cycle_id, state, trigger FROM app_cycles "
+                    f"WHERE state NOT IN {_TERMINAL_SQL_TUPLE}"
+                ))).mappings().all()
+                for r in active_rows:
+                    active_apps.add((r["tenant_id"], r["app_id"]))
+                    if r["state"] == CYCLE_STATE_BLACKOUT_DEFERRED:
+                        deferred.append(dict(r))
+                change_rows = (await conn.execute(text(
+                    "SELECT event_id, tenant_id, app_id, source, payload, created_at "
+                    "FROM change_events "
+                    "WHERE processed_cycle_id IS NULL ORDER BY created_at ASC LIMIT :lim"
+                ), {"lim": max(1, limit) * 20})).mappings().all()
+                changes.extend(dict(r) for r in change_rows)
+                app_rows = (await conn.execute(text(
+                    "SELECT ca.tenant_id, ca.app_id, ca.status, ca.schedule, ca.fences, "
+                    "ca.latest_artifact_id, "
+                    "(SELECT max(created_at) FROM app_cycles c "
+                    " WHERE c.tenant_id = ca.tenant_id AND c.app_id = ca.app_id) AS last_cycle_at, "
+                    "(SELECT max(created_at) FROM app_cycles c2 "
+                    " WHERE c2.tenant_id = ca.tenant_id AND c2.app_id = ca.app_id "
+                    " AND c2.trigger = :full_floor) AS last_full_at "
+                    "FROM client_apps ca WHERE ca.status = 'active' "
+                    "AND ca.latest_artifact_id <> '' LIMIT :lim"
+                ), {"full_floor": CYCLE_TRIGGER_FULL_FLOOR,
+                    "lim": max(1, limit) * 4})).mappings().all()
+                apps.extend(dict(r) for r in app_rows)
+        except Exception as exc:
+            # One tenant's failure must never stop the fleet scan.
+            logger.warning(
+                "qec.cycle_daemon.tenant_scan_failed",
+                extra={"tenant_id": tenant_id, "error": str(exc)[:200]},
+            )
+            continue
+    logger.debug(
+        "qec.cycle_daemon.fleet_scanned",
+        extra={"tenants": len(tenants), "apps": len(apps),
+               "changes": len(changes), "active": len(active_apps)},
+    )
     return active_apps, deferred, changes, apps
 
 

@@ -199,6 +199,36 @@ class Settings(BaseSettings):
     medic_oracle_max_calls: int = Field(
         default=50, alias="QEC_MEDIC_MAX_CALLS")
 
+    # ── M3.1 / T-VIS-03 · VISION'S OWN BUDGET ─────────────────────────────
+    # These three used to be the MEDIC's. ``_make_vision_oracle`` spent
+    # ``medic_oracle_max_calls`` / ``medic_oracle_timeout_s`` /
+    # ``medic_oracle_breaker_threshold``, so a canvas application that burned ten
+    # perceive calls silently took ten repair calls away from the interaction
+    # ladder, and a vision provider outage opened the breaker the DOM medic was
+    # relying on. Two capabilities with different cost profiles, different
+    # failure modes and different blast radii cannot share one budget.
+    #
+    # qe-central has declared ``vision_max_calls`` / ``vision_breaker_threshold``
+    # since the flag was written and NOTHING read them; these are the reader.
+    #: Hard cap on vision (perceive) calls per crawl. Each is a multimodal call
+    #: over a full-page screenshot — the most expensive thing this engine does.
+    vision_oracle_max_calls: int = Field(
+        default=10, alias="QEC_VISION_MAX_CALLS")
+    #: Per-call HTTP timeout for a vision consultation. Longer than the medic's:
+    #: a multimodal request over an 8 MiB image legitimately takes longer than a
+    #: text repair, and timing it out at the text budget would report a working
+    #: provider as unavailable.
+    vision_oracle_timeout_s: float = Field(
+        default=25.0, alias="QEC_VISION_ORACLE_TIMEOUT_S")
+    #: Consecutive vision failures that open vision's OWN breaker. Once open it
+    #: stays open for the crawl — fail-closed, no half-open probe.
+    vision_oracle_breaker_threshold: int = Field(
+        default=3, alias="QEC_VISION_BREAKER")
+    #: How many coordinate actions one state may spend on perceived controls.
+    #: Bounds a hallucinated 40-control perception into a handful of clicks.
+    vision_max_actions_per_state: int = Field(
+        default=2, alias="QEC_VISION_MAX_ACTIONS_PER_STATE")
+
     # ── Security helpers (the HMAC shared secret lives here) ──────────────
 
     def keyring(self) -> KeyRing:

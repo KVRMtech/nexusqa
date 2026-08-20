@@ -1,0 +1,138 @@
+{
+  "purpose": "Prove that capture reports the DOM's own disclosure state - collapsed / expanded / neither - for the three ways a page declares it (a closed <details>, aria-expanded, an unselected role=tab), which is the evidence the crawler's pre-capture expansion pass decides from. Without it the only way to find a field behind a collapsed accordion is to click things and hope.",
+  "targeted_defect": "BUG-DISCLOSURE-BLIND: capture emitted no signal that a <details> was shut (`open` is a property, not an attribute), so a deliberate expansion pass could not be written and every field inside a collapsed section went uncatalogued. Fixed by disclosureState() (M2.6 / T-CAP-03).",
+  "lanes": [
+    "jsdom",
+    "playwright"
+  ],
+  "snippet": "INVENTORY_JS",
+  "min_controls": 6,
+  "expect_controls": [
+    {
+      "where": {
+        "css_hint": "button#acc-beneficiary"
+      },
+      "fields": {
+        "name": "Beneficiary details",
+        "disclosure": "collapsed",
+        "expanded": "false",
+        "haspopup": ""
+      }
+    },
+    {
+      "where": {
+        "css_hint": "button#acc-contact"
+      },
+      "fields": {
+        "name": "Contact preferences",
+        "disclosure": "expanded",
+        "expanded": "true"
+      }
+    },
+    {
+      "where": {
+        "css_hint": "summary"
+      },
+      "fields": {
+        "name": "Medical history",
+        "disclosure": "collapsed",
+        "expanded": ""
+      }
+    },
+    {
+      "where": {
+        "css_hint": "button#tab-term"
+      },
+      "fields": {
+        "name": "Term life",
+        "disclosure": "collapsed"
+      }
+    },
+    {
+      "where": {
+        "css_hint": "button#tab-whole"
+      },
+      "fields": {
+        "name": "Whole life",
+        "disclosure": "expanded"
+      }
+    },
+    {
+      "where": {
+        "css_hint": "button#submit-app"
+      },
+      "fields": {
+        "name": "Submit application",
+        "disclosure": "collapsed"
+      }
+    },
+    {
+      "where": {
+        "css_hint": "button#nav-more"
+      },
+      "fields": {
+        "name": "More",
+        "disclosure": "collapsed",
+        "haspopup": "menu"
+      }
+    },
+    {
+      "where": {
+        "css_hint": "input#full-name"
+      },
+      "fields": {
+        "name": "Full name",
+        "disclosure": ""
+      }
+    },
+    {
+      "where": {
+        "css_hint": "input#contact-email"
+      },
+      "fields": {
+        "name": "Contact email",
+        "disclosure": ""
+      }
+    },
+    {
+      "where": {
+        "css_hint": "input#whole-cash-value"
+      },
+      "fields": {
+        "name": "Target cash value"
+      }
+    }
+  ],
+  "forbid_controls": [
+    {
+      "where": {
+        "name": "Beneficiary full name"
+      }
+    },
+    {
+      "where": {
+        "name": "Beneficiary share percent"
+      }
+    },
+    {
+      "where": {
+        "name": "Existing conditions"
+      }
+    },
+    {
+      "where": {
+        "name": "Term length years"
+      }
+    },
+    {
+      "where": {
+        "name": "Confirmation code"
+      }
+    },
+    {
+      "where": {
+        "name": "Help centre"
+      }
+    }
+  ]
+}

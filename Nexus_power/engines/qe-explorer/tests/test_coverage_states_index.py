@@ -196,8 +196,22 @@ def test_every_recorded_state_is_offered_to_the_index():
     # M0.3/T-DE-06: the emit point moved into StateRecorder.record_state. The
     # invariant is unchanged — the index is still fed from the SAME single place
     # a page_state is built, and still strictly before the record is assembled.
+    #
+    # M2.4: the guard no longer pins the ARGUMENT LIST. It used to require the
+    # exact string ``note_state_signals(fingerprint, url, form_signals,
+    # controls)``, so adding a fifth argument — the network calls, which the
+    # endpoint map is built from — failed a test whose stated invariant was
+    # untouched. A guard that reds on a change it does not describe teaches the
+    # next reader to edit the guard rather than to think about it. What is
+    # actually load-bearing is asserted instead: the call happens HERE, it is fed
+    # THIS state's own fingerprint and signals, and it happens BEFORE the record
+    # is assembled.
     src = inspect.getsource(StateRecorder.record_state)
-    assert "note_state_signals(fingerprint, url, form_signals, controls)" in src
+    assert "note_state_signals(" in src
+    call = src[src.index("note_state_signals("):]
+    args = call[len("note_state_signals("): call.index(")")]
+    for required in ("fingerprint", "url", "form_signals", "controls"):
+        assert required in args, f"{required} is no longer fed to the index"
     assert src.index("note_state_signals") < src.index("emit.PageStateRecord")
 
 

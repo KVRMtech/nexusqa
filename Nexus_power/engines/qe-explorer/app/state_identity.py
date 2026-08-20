@@ -32,12 +32,13 @@ from typing import Any, Mapping, Optional, Protocol, Sequence
 from urllib.parse import urlsplit
 
 from . import emit
+from . import network_evidence as net_evidence
 from . import observation_health
 from . import value_infer
 from .browser import PageObservation
 from .fingerprint import state_fingerprint
 from .guard import registrable_domain
-from .inventory import form_signal_for
+from .inventory import form_signal_for, question_groups_of
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +47,16 @@ _MAX_NETWORK_CALLS = 100
 _MAX_COVERAGE_STATES = 400
 _MAX_STATE_FIELDS = 200
 _MAX_DANGER_NAMES = 40
+#: M2.4 / T-GEN-03 — how many distinct (method, path) endpoints one state may
+#: carry into ``coverage.states``. The full per-visit list already rides the
+#: page_state record; this is the DEDUPED, value-free shape the journey graph
+#: needs to build a network assertion, so the bound is far below
+#: ``_MAX_NETWORK_CALLS``.
+_MAX_STATE_ENDPOINTS = 24
+#: Bound on the declared QUESTION groups carried per state. Sized well above the
+#: 20-question health questionnaire that is the worst real case; coverage is a
+#: report, not a mirror.
+_MAX_QUESTION_GROUPS = 120
 
 
 # ─── Identity ────────────────────────────────────────────────────────────────
@@ -517,21 +528,57 @@ def _displayed_values(raw: Sequence[dict[str, Any]]) -> list[dict[str, str]]:
 
 def _network_calls(raw: Sequence[dict[str, Any]]) -> list[dict[str, str]]:
     """API/network mining — normalize + PII-scrub captured XHR/fetch/SSE/WebSocket
-    calls into ``[{method, url, has_query, status, resource_type, request_mime,
-    response_mime, response_bytes, timestamp_ms}]`` (deduped, bounded, ALL-string
-    values so the schema's ``dict[str, str]`` can never refuse a bundle over a
-    diagnostic).
+    calls into an ORDERED, NON-DEDUPLICATED stream of ALL-string records (so the
+    schema's ``dict[str, str]`` can never refuse a bundle over a diagnostic).
 
-    Safety: the query string is DROPPED here regardless of what the adapter sent
-    (a query param is the likeliest PII carrier — ``has_query`` preserves the
-    honest fact that one existed, without its values), and the query-stripped URL
-    is re-scrubbed for path-embedded PII (belt-and-suspenders over the adapter's
-    source-side scrub).  http(s) API calls AND ws(s) real-time endpoints (D) are
-    evidence; every other scheme is dropped."""
+    M2.5 / T-NET-02 — THE DEDUPLICATION IS GONE, DELIBERATELY.  This function
+    used to collapse on ``method|url|status``, which meant three retries of the
+    same call became one record and a poll that fired forty times reported once.
+    That is not noise reduction; it is destruction of the signal.  A retry
+    sequence, a poll cadence and a rate-limit backoff are all *repetition* — they
+    exist only in the repeated events, and an evidence stream that removes them
+    cannot show a reviewer that the application retried, or how often, or in what
+    order.  Every event now survives, carrying:
+
+    * ``sequence`` — the crawl-wide ordinal assigned at CAPTURE, so ordering
+      survives any downstream transport that does not preserve list order;
+    * ``timestamp_ms`` — on the crawl clock (T-NET-01), so the event joins to the
+      visit window and the step it happened in;
+    * ``action_token`` / ``action_label`` / ``action_verb`` — WHICH UI action was
+      in flight when the request went out (T-NET-03).
+
+    Safety is unchanged and still belt-and-braces: the query string is DROPPED
+    here regardless of what the adapter sent (a query param is the likeliest PII
+    carrier — ``has_query`` preserves the honest fact that one existed, without
+    its values), and the query-stripped URL is re-scrubbed for path-embedded PII
+    over the adapter's source-side scrub.  Header and body evidence arrives
+    already allow-listed and value-redacted by :mod:`app.network_evidence` and is
+    serialized here without ever being widened.  http(s) API calls AND ws(s)
+    real-time endpoints are evidence; every other scheme is dropped.
+
+    The ``_MAX_NETWORK_CALLS`` cap still applies, but a clip is now REPORTED as a
+    final ``stream_truncated`` record rather than being a silent ``break`` — a
+    stream that stopped early must not read as one that ended.
+    """
     out: list[dict[str, str]] = []
-    seen: set[str] = set()
+    kept = 0
     for r in raw or ():
         if not isinstance(r, dict):
+            continue
+        if str(r.get("event") or "") == "buffer_truncated":
+            # The adapter refused events at its own cap. That is evidence about
+            # the stream, not an API call — carry it through so the gap in the
+            # sequence numbers has a stated cause.
+            out.append({
+                "event": "buffer_truncated",
+                "method": "", "url": "", "has_query": "false", "status": "",
+                "resource_type": "meta", "request_mime": "", "response_mime": "",
+                "response_bytes": "",
+                "dropped": str(r.get("dropped") or "")[:10],
+                "reason": str(r.get("reason") or "")[:200],
+                "sequence": str(r.get("sequence") or "")[:15],
+                "timestamp_ms": str(r.get("timestamp_ms") or "")[:15],
+            })
             continue
         parts = urlsplit(str(r.get("url") or "").strip())
         if (parts.scheme or "").lower() not in ("http", "https", "ws", "wss"):
@@ -539,27 +586,163 @@ def _network_calls(raw: Sequence[dict[str, Any]]) -> list[dict[str, str]]:
         url = emit.scrub_value(f"{parts.scheme}://{parts.netloc}{parts.path}").value.strip()
         if not url:
             continue
+        if kept >= _MAX_NETWORK_CALLS:
+            out.append({
+                "event": "stream_truncated",
+                "method": "", "url": "", "has_query": "false", "status": "",
+                "resource_type": "meta", "request_mime": "", "response_mime": "",
+                "response_bytes": "",
+                "reason": (f"more than {_MAX_NETWORK_CALLS} network events in one "
+                           f"visit; the remainder is not recorded"),
+                "sequence": str(r.get("sequence") or "")[:15],
+                "timestamp_ms": str(r.get("timestamp_ms") or "")[:15],
+            })
+            break
+        kept += 1
         had_query = bool(parts.query) or bool(r.get("has_query"))
-        method = str(r.get("method") or "").strip().upper()[:10]
-        status = str(r.get("status") or "").strip()[:3]
-        key = f"{method}|{url}|{status}"
-        if key in seen:
-            continue
-        seen.add(key)
+        body = r.get("request_body") if isinstance(r.get("request_body"), Mapping) else {}
         out.append({
-            "method": method,
+            "method": str(r.get("method") or "").strip().upper()[:10],
             "url": url[:1000],
+            "path_template": str(r.get("path_template")
+                                 or net_evidence.path_template(parts.path))[:500],
             "has_query": "true" if had_query else "false",
-            "status": status,
+            "status": str(r.get("status") or "").strip()[:3],
             "resource_type": str(r.get("resource_type") or "").strip()[:20],
             "request_mime": str(r.get("request_mime") or "").strip()[:100],
             "response_mime": str(r.get("response_mime") or "").strip()[:100],
             "response_bytes": str(r.get("response_bytes") or "").strip()[:12],
+            # T-NET-01 / 02 / 03 — the three joins.
+            "sequence": str(r.get("sequence") or "")[:15],
             "timestamp_ms": str(r.get("timestamp_ms") or "").strip()[:15],
+            # WHEN THIS VISIT'S CAPTURE WINDOW OPENED. The join key that makes
+            # navigation traffic legible: a route prefetch fired on the way INTO
+            # this state has a true timestamp earlier than the state's
+            # ``first_seen_ms``, and is still correctly attributed here. Carrying
+            # the window means a reviewer can verify that attribution instead of
+            # having to take it on trust -- or having it hidden by a clamp.
+            "capture_window_start_ms": str(r.get("capture_window_start_ms") or "0")[:15],
+            "action_token": str(r.get("action_token") or "")[:20],
+            "action_label": str(r.get("action_label") or "")[:200],
+            "action_verb": str(r.get("action_verb") or "")[:40],
+            "page_token": str(r.get("page_token") or "")[:20],
+            # T-NET-02 — headers/body, already redacted at source.  Serialized
+            # compactly because the manifest field is typed ``dict[str, str]``;
+            # widening that type would ripple into the frozen substrate schema.
+            "request_headers": _compact_headers(r.get("request_headers")),
+            "response_headers": _compact_headers(r.get("response_headers")),
+            "request_body_bytes": str(body.get("bytes") or "0")[:12],
+            "request_body_keys": ",".join(str(k) for k in (body.get("keys") or []))[:500],
+            "request_body_source": str(body.get("keys_source") or "")[:20],
+            "auth_pattern": str(r.get("auth_pattern") or "")[:20],
+            "response_shape": str(r.get("response_shape") or "")[:20],
+            "shape_source": str(r.get("shape_source") or "")[:30],
+            # A request that never got a response is evidence too, and is what
+            # lets the network oracle's ``failed`` branch fire from a crawl.
+            "failed": "true" if r.get("failed") else "false",
+            "error": str(r.get("error") or "")[:200],
         })
-        if len(out) >= _MAX_NETWORK_CALLS:
-            break
     return out
+
+
+def _compact_headers(headers: Any) -> str:
+    """Serialize an ALREADY-REDACTED header dict into one manifest string.
+
+    Never widens: whatever :func:`app.network_evidence.redact_headers` refused to
+    include cannot reappear here, because this function only formats what it is
+    given.  Sorted, so the same request serializes identically on every run.
+    """
+    if not isinstance(headers, Mapping):
+        return ""
+    return "; ".join(f"{str(k)}={str(v)}" for k, v in sorted(headers.items()))[:1000]
+
+
+def _state_endpoints(raw: Sequence[dict[str, Any]]) -> list[dict[str, str]]:
+    """M2.4 / T-GEN-03 — the ENDPOINT MAP for one state, value-free and
+    env-portable.
+
+    THE HOLE THIS FILLS. ``network_calls`` has ridden every ``page_state``
+    record since the API-mining work, and every consumer of it is a DIAGNOSTIC
+    one: the substrate stores the list, the failure attributor scans it after a
+    red run. Nothing ever carried it into ``coverage.states`` — the index the
+    journey fold reads — so the journey graph knew which CONTROL a walk clicked
+    and never which CALL that click made. A generated spec could therefore only
+    ever assert that a page rendered; the backend behind it was unasserted, and
+    a silent API regression behind an unchanged UI passed green.
+
+    Normalisation is what makes the result assertable rather than merely true:
+
+      * PATH ONLY. The host is dropped, exactly as
+        ``journey_case_linker.norm_path`` drops it for page comparison — a spec
+        generated from a staging crawl has to run against prod, and a
+        host-pinned network assertion is a spec that only ever runs once.
+      * DOCUMENT NAVIGATIONS ARE NOT API CALLS. ``resource_type='document'`` is
+        the page load itself; asserting it would re-prove the navigation oracle
+        and add nothing. Dropped.
+      * 2xx ONLY. A redirect hop is a hop, a call with no observed status
+        never settled, and a 4xx/5xx the crawl happened to see is a DEFECT —
+        compiling it into an assertion would freeze the application's bug into
+        the regression suite as the expected behaviour. Only a settled success
+        is a claim a generated spec may hold the app to.
+      * DEDUPED AND SORTED. Two identical calls are one endpoint, and the order
+        is the sort order — the ranking and the compiled spec both have to be
+        byte-stable across two folds of the same crawl.
+
+    Values never enter: the query string was already dropped upstream
+    (``_network_calls``) and only the method, the path, the status and the
+    response mime survive here.
+    """
+    by_key: dict[tuple[str, str], dict[str, str]] = {}
+    for call in raw or ():
+        if not isinstance(call, dict):
+            continue
+        if str(call.get("resource_type") or "").strip().lower() == "document":
+            continue
+        method = str(call.get("method") or "").strip().upper()[:10]
+        path = (urlsplit(str(call.get("url") or "")).path or "").strip()[:300]
+        if not method or not path:
+            continue
+        try:
+            status = int(str(call.get("status") or "").strip() or 0)
+        except ValueError:
+            continue
+        if not 200 <= status < 300:
+            continue
+        key = (method, path)
+        if key in by_key:
+            continue
+        by_key[key] = {
+            "method": method,
+            "path": path,
+            "status": str(status),
+            "response_mime": str(call.get("response_mime") or "").strip()[:100],
+        }
+    ordered = [by_key[k] for k in sorted(by_key)]
+    return ordered[:_MAX_STATE_ENDPOINTS]
+
+
+def _merge_endpoints(
+    previous: Any, fresh: Sequence[Mapping[str, str]],
+) -> list[dict[str, str]]:
+    """Union two endpoint maps for the same state, first-observation-wins per
+    (method, path), sorted and bounded.
+
+    First-wins rather than last-wins on purpose: the status recorded is the one
+    the crawl SAW settle first for that call, and a later sighting overwriting
+    it would silently rewrite the observation a spec was going to be built on.
+    """
+    merged: dict[tuple[str, str], dict[str, str]] = {}
+    for source in (previous or (), fresh or ()):
+        if not isinstance(source, Sequence):
+            continue
+        for entry in source:
+            if not isinstance(entry, Mapping):
+                continue
+            method = str(entry.get("method") or "")
+            path = str(entry.get("path") or "")
+            if method and path:
+                merged.setdefault((method, path), dict(entry))
+    return [merged[key] for key in sorted(merged)][:_MAX_STATE_ENDPOINTS]
 
 
 def _action_to_dict(action: emit.ActionRecord) -> dict[str, Any]:
@@ -587,6 +770,9 @@ class RecorderHost(Protocol):
 
     def _note_boundary_controls(self, controls: Sequence[dict[str, Any]],
                                 *, url: str = "") -> None: ...
+
+    def _note_network_stream(self, events: Sequence[dict[str, Any]],
+                             *, url: str = "") -> None: ...
 
 
 async def _active_page_token(port: Any) -> str:
@@ -686,6 +872,7 @@ class StateRecorder:
     def note_state_signals(
         self, fingerprint: str, url: str, signals: Mapping[str, Any],
         controls: Sequence[Mapping[str, Any]] = (),
+        network_calls: Sequence[Mapping[str, Any]] = (),
     ) -> None:
         """Remember WHAT THIS STATE ASKED, keyed by the fingerprint the journey
         graph uses.
@@ -716,6 +903,16 @@ class StateRecorder:
         offers nothing until its driver is answered — so keeping the first
         sighting would hold the emptiest view of exactly the questions whose
         enumeration is hardest to get.
+
+        M2.4 / T-GEN-03 — ``endpoints`` (see :func:`_state_endpoints`) rides
+        here too, and it accumulates on a rule of its OWN. Richest-sighting is
+        about the questions a page asks; the API calls it makes are a different
+        axis, and the sighting that makes the load-bearing call is very often
+        the sighting with the FEWEST questions — a submit that clears the form.
+        Letting the questions rule govern the endpoints would have discarded
+        precisely the call a journey most needs to assert, so endpoints are
+        UNIONED across every sighting of the state, including the ones whose
+        signals are rejected below.
         """
         if not fingerprint:
             return
@@ -728,7 +925,12 @@ class StateRecorder:
             return
         states = self._c._states
         prev = states.get(fingerprint)
+        endpoints = _merge_endpoints(
+            (prev or {}).get("endpoints"), _state_endpoints(network_calls))
         if prev is not None and len(prev.get("form_snapshot_signals") or {}) >= len(signals):
+            # The signals lose, the endpoints still win: this sighting's calls
+            # are facts about the state whatever its question count says.
+            prev["endpoints"] = endpoints
             return
         if prev is None and len(states) >= _MAX_COVERAGE_STATES:
             return                      # bounded: coverage is a report, not a mirror
@@ -758,6 +960,24 @@ class StateRecorder:
             # the ONE control a funnel depends on — live, `New Application`,
             # the single door into the wizard. Product UI text, never user data.
             "danger_names": danger_names[:_MAX_DANGER_NAMES],
+            # WHAT THIS STATE ASKED, AS QUESTIONS RATHER THAN AS CONTROLS (M2.1).
+            #
+            # ``form_snapshot_signals`` above is keyed by a control's accessible
+            # name, and for a choice group that name is the name of an ANSWER.
+            # A "Gender" question crossed to the catalogue as two questions,
+            # "Male" and "Female", each offering no answers; a 20-question health
+            # questionnaire whose every control is named "Yes" or "No" crossed as
+            # TWO, because a dict keyed by name cannot hold forty. The grouping
+            # was known in this process the whole time and had no way across.
+            #
+            # Carried ALONGSIDE the signals, never instead of them: the frozen
+            # compiler reads ``form_snapshot_signals[label]`` and must keep
+            # reading exactly what it always has.
+            "question_groups": question_groups_of(controls)[:_MAX_QUESTION_GROUPS],
+            # M2.4 / T-GEN-03 — THE ENDPOINT MAP: the producer half of the join
+            # that lets a generated spec assert the BACKEND behaved, instead of
+            # only that the page did not crash.
+            "endpoints": endpoints,
         }
 
     def state_signals(self) -> list[dict[str, Any]]:
@@ -789,6 +1009,13 @@ class StateRecorder:
         # screenshot) and contributed no boundary control at all, while the same fix
         # captured `Add Beneficiary` on a page reached by ordinary navigation.
         c._note_boundary_controls(controls, url=url)
+        # M2.5 / T-NET-04 + T-NET-05 — fold THIS visit's network stream into the
+        # crawl-level endpoint inventory and the oracle feed.  Done here, beside
+        # the boundary note, because this is the one place every recorded state
+        # passes through whichever path reached it (discovery, walk, submit) —
+        # hanging it off one caller would silently miss the others, which is the
+        # same shape of hole `_note_boundary_controls` was written to close.
+        c._note_network_stream(network_calls, url=url)
         seq = c._next_seq
         c._next_seq += 1
         parts = urlsplit(url or "")
@@ -819,7 +1046,8 @@ class StateRecorder:
             action.state_id = fingerprint
             ordered_actions.append(_action_to_dict(action))
 
-        self.note_state_signals(fingerprint, url, form_signals, controls)
+        self.note_state_signals(fingerprint, url, form_signals, controls,
+                                network_calls)
         record = emit.PageStateRecord(
             sequence_index=seq,
             location=url[:2000],

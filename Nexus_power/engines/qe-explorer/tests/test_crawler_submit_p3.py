@@ -343,7 +343,9 @@ def test_answer_questionnaire_answers_one_question_per_call_preferring_no(tmp_pa
     assert c._port.clicks == ["No"]
 
     dp2 = asyncio.run(c._answer_questionnaire(controls, "u", "fp"))
-    assert len(dp2) == 1 and dp2[0]["control_label"] == "Question 2"
+    # M2.1 — the page declared no question wording, so the crawl records NONE.
+    # It used to record "Question 2", which no element on the page ever said.
+    assert len(dp2) == 1 and dp2[0]["control_label"] == ""
     assert c._port.clicks == ["No", "No"]                    # second question answered
 
     dp3 = asyncio.run(c._answer_questionnaire(controls, "u", "fp"))
@@ -388,13 +390,19 @@ def test_answer_questionnaire_scales_to_many_questions(tmp_path):
     for _ in range(17):
         controls.append({"name": "Yes", "kind": "button"})
         controls.append({"name": "No", "kind": "button"})
-    answered = []
+    answered: list[str] = []
+    sigs: list[str] = []
     for _ in range(17):
         dp = asyncio.run(c._answer_questionnaire(controls, "u", "fp"))
         assert len(dp) == 1
         answered.append(dp[0]["control_label"])
+        sigs.append(dp[0]["control_signature"])
     assert asyncio.run(c._answer_questionnaire(controls, "u", "fp")) == []
-    assert answered == ["Question %d" % k for k in range(1, 18)]
+    # M2.1 — 17 questions, 17 DISTINCT identities, and not one word of invented
+    # wording: this page declares no question text, so every label is empty and
+    # the catalogue will mark these UNVERIFIED rather than publish "Question 9".
+    assert answered == [""] * 17
+    assert len(set(sigs)) == 17            # 17 questions, never merged
     assert c._port.clicks == ["No"] * 17
 
 
@@ -414,7 +422,9 @@ def test_answer_questionnaire_groups_three_option_questions(tmp_path):
     assert len(dp1) == 1 and dp1[0]["choice"] == "Never"
     assert dp1[0]["options"] == ["Never", "Sometimes", "Often"]
     dp2 = asyncio.run(c._answer_questionnaire(controls, "u", "fp"))
-    assert len(dp2) == 1 and dp2[0]["control_label"] == "Question 2"
+    # M2.1 — the page declared no question wording, so the crawl records NONE.
+    # It used to record "Question 2", which no element on the page ever said.
+    assert len(dp2) == 1 and dp2[0]["control_label"] == ""
     assert asyncio.run(c._answer_questionnaire(controls, "u", "fp")) == []
     assert c._port.clicks == ["Never", "Never"]
 
@@ -434,7 +444,9 @@ def test_answer_questionnaire_excludes_auth_chrome_between_questions(tmp_path):
     dp1 = asyncio.run(c._answer_questionnaire(controls, "u", "fp"))
     assert len(dp1) == 1 and dp1[0]["options"] == ["Yes", "No"]
     dp2 = asyncio.run(c._answer_questionnaire(controls, "u", "fp"))
-    assert len(dp2) == 1 and dp2[0]["control_label"] == "Question 2"
+    # M2.1 — the page declared no question wording, so the crawl records NONE.
+    # It used to record "Question 2", which no element on the page ever said.
+    assert len(dp2) == 1 and dp2[0]["control_label"] == ""
     assert asyncio.run(c._answer_questionnaire(controls, "u", "fp")) == []
     assert c._port.clicks == ["No", "No"]        # 'Sign out' never clicked
 
@@ -477,3 +489,66 @@ def test_boundary_outcome_types_capture_policy_reference_not_noise():
     assert "other" not in _BOUNDARY_OUTCOME_TYPES
     assert "number" not in _BOUNDARY_OUTCOME_TYPES
     assert "date" not in _BOUNDARY_OUTCOME_TYPES
+
+
+# ── M2.1 · T-QT-01/T-QT-04: the question, in the application's own words ───────
+
+def test_answer_questionnaire_records_the_declared_question_wording(tmp_path):
+    """A questionnaire that DECLARES its questions is catalogued in its own words.
+
+    This is the defect M2.1 closes. The walker had no handle on a bare-button
+    question but its DOM ordinal, so it wrote "Question 1", "Question 2" — text
+    no element on the page has ever contained — and the catalogue published it as
+    if it were the application's. Here the page states the questions; the crawl
+    must repeat them and invent nothing.
+    """
+    c = _build(tmp_path, approvals=["*"], attestation={"env_kind": "disposable"})
+    c._port = _RecordingPort()
+    controls = [
+        {"name": "Yes", "kind": "button", "question_group_id": "g_tobacco",
+         "question_label": "Have you used tobacco in the last 12 months?"},
+        {"name": "No", "kind": "button", "question_group_id": "g_tobacco",
+         "question_label": "Have you used tobacco in the last 12 months?"},
+        {"name": "Yes", "kind": "button", "question_group_id": "g_hosp",
+         "question_label": "Have you been hospitalised in the last 5 years?"},
+        {"name": "No", "kind": "button", "question_group_id": "g_hosp",
+         "question_label": "Have you been hospitalised in the last 5 years?"},
+    ]
+    dp1 = asyncio.run(c._answer_questionnaire(controls, "u", "fp"))
+    assert dp1[0]["control_label"] == "Have you used tobacco in the last 12 months?"
+    # The DECLARED question id is the branch key, so the fold and the catalogue
+    # land on ONE identity for this question (T-QT-04).
+    assert dp1[0]["group_id"] == "g_tobacco"
+    # ONE value: the branch key the fold stores and the key a planned walk
+    # forces its answer on must be the same string, or a planned questionnaire
+    # walk silently answers the default and reports the branch walked.
+    assert dp1[0]["control_signature"] == "g_tobacco"
+
+    dp2 = asyncio.run(c._answer_questionnaire(controls, "u", "fp"))
+    assert dp2[0]["control_label"] == "Have you been hospitalised in the last 5 years?"
+    assert dp2[0]["group_id"] == "g_hosp"
+    assert asyncio.run(c._answer_questionnaire(controls, "u", "fp")) == []
+
+
+def test_declared_question_identity_survives_a_question_inserted_above_it(tmp_path):
+    """STABLE ACROSS RE-CRAWLS. The ordinal hash re-keyed every question below an
+    inserted one, so adding a question to a form made the catalogue believe the
+    rest had been replaced. A declared identity does not move."""
+    def _q(gid, label):
+        return [{"name": n, "kind": "button", "question_group_id": gid,
+                 "question_label": label} for n in ("Yes", "No")]
+
+    before = _q("g_tobacco", "Do you use tobacco?") + _q("g_diab", "Diabetes?")
+    c1 = _build(tmp_path / "a", approvals=["*"], attestation={"env_kind": "disposable"})
+    c1._port = _RecordingPort()
+    sig_before = asyncio.run(
+        c1._answer_questionnaire(before, "u", "fp"))[0]["control_signature"]
+
+    # The SAME application with one question inserted ABOVE tobacco.
+    after = _q("g_new", "Are you a citizen?") + before
+    c2 = _build(tmp_path / "b", approvals=["*"], attestation={"env_kind": "disposable"})
+    c2._port = _RecordingPort()
+    asyncio.run(c2._answer_questionnaire(after, "u", "fp"))           # the new Q1
+    second = asyncio.run(c2._answer_questionnaire(after, "u", "fp"))  # tobacco, now Q2
+    assert second[0]["control_label"] == "Do you use tobacco?"
+    assert second[0]["control_signature"] == sig_before

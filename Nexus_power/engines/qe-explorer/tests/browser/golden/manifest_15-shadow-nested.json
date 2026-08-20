@@ -11,9 +11,9 @@
     },
     "config_fingerprint": "characterization-fixed",
     "crawl_id": "<normalized:crawl_id>",
-    "explorer_version": "qe-explorer/1.0+inv-js-v10",
+    "explorer_version": "qe-explorer/1.0+inv-js-v12",
     "frame_count": 0,
-    "guard_version": "qe-explorer/1.0+inv-js-v10",
+    "guard_version": "qe-explorer/1.0+inv-js-v12",
     "refuse_pack_version": "refuse-pack-v1",
     "stop_reason": "",
     "target_url": "http://127.0.0.1:<port>/15-shadow-nested/index.html",
@@ -40,29 +40,69 @@
     },
     "form_snapshot_signals": {
       "Deep Nested Field": {
+        "locator": {
+          "bindable": false,
+          "role": "textbox",
+          "strategy": "dom_id",
+          "value": "deep-field",
+          "verified": true
+        },
         "options": [],
+        "options_total": 0,
         "required": true,
         "type": "text"
       },
       "Inner Account Number": {
+        "locator": {
+          "bindable": true,
+          "role": "textbox",
+          "strategy": "accessible_name",
+          "value": "Inner Account Number",
+          "verified": true
+        },
         "options": [],
+        "options_total": 0,
         "required": false,
         "type": "text"
       },
       "Outer Account Number": {
+        "locator": {
+          "bindable": true,
+          "role": "textbox",
+          "strategy": "accessible_name",
+          "value": "Outer Account Number",
+          "verified": true
+        },
         "options": [],
+        "options_total": 0,
         "required": false,
         "type": "text"
       },
       "Share Percentage": {
+        "locator": {
+          "bindable": false,
+          "role": "spinbutton",
+          "strategy": "dom_id",
+          "value": "share",
+          "verified": true
+        },
         "max": "100",
         "min": "0",
         "options": [],
+        "options_total": 0,
         "required": false,
         "type": "text"
       },
       "Trust Registered name": {
+        "locator": {
+          "bindable": false,
+          "role": "textbox",
+          "strategy": "dom_id",
+          "value": "deep-aria",
+          "verified": true
+        },
         "options": [],
+        "options_total": 0,
         "required": false,
         "type": "text"
       }
@@ -110,10 +150,10 @@
     },
     "config_fingerprint": "characterization-fixed",
     "crawl_id": "<normalized:crawl_id>",
-    "explorer_version": "qe-explorer/1.0+inv-js-v10",
+    "explorer_version": "qe-explorer/1.0+inv-js-v12",
     "frame_count": 1,
     "guard_blocks": 0,
-    "guard_version": "qe-explorer/1.0+inv-js-v10",
+    "guard_version": "qe-explorer/1.0+inv-js-v12",
     "refuse_pack_version": "refuse-pack-v1",
     "stats": {
       "actions": 0,

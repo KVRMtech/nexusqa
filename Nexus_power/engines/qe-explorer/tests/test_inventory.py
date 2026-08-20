@@ -120,7 +120,17 @@ def test_build_inventory_preserves_name_and_kind_and_qec():
     # target_kind + form-signal mappings hit the two distinct vocabularies.
     assert target_kind_for(cov) == "dropdown"
     assert target_kind_for(cov) in TARGET_KINDS
-    assert form_signal_for(cov) == {"type": "select", "options": [], "required": False}
+    # EXACT equality, deliberately: this is the whole shape that crosses to
+    # qe-central, and a field added here without the consumer knowing is dead
+    # weight on every page state in the fleet. ``options_total`` and ``locator``
+    # joined it in M2.2 (T-BR-03/T-BR-05); the frozen agreement they answer to
+    # lives in contracts/m22_catalog_question_v1.json and is asserted by
+    # tests/test_m22_catalog_contract.py.
+    assert form_signal_for(cov) == {
+        "type": "select", "options": [], "options_total": 0, "required": False,
+        "locator": {"strategy": "testid", "value": "cov-type", "verified": True,
+                    "bindable": False, "role": "combobox"},
+    }
 
     amount = by_name["Coverage amount"]
     # native range ⇒ kind 'slider' — a first-class FILLABLE control (the
@@ -354,7 +364,20 @@ def test_injected_js_is_a_self_invoking_expression():
     # MAX_OPTIONS also moved to a Python constant interpolated into the JS, so
     # the walker, the refiner and the catalogue cannot drift to three ceilings
     # again.
-    assert INVENTORY_JS_VERSION == "inv-js-v10"
+    # v12 (M2.6 / T-CAP-03) — `disclosure` is emitted: the DOM's own declaration
+    # that a control is a shut door ("collapsed" | "expanded" | ""), normalised
+    # across a closed <details>, aria-expanded, and an unselected role=tab.
+    # Two of those three were already emitted raw; `<details>` was not emittable
+    # at all, because `open` is a live PROPERTY and getAttribute() does not track
+    # it. Without the field the crawler's only way to find a field behind a
+    # collapsed section is to click things and hope — and clicking a <summary>
+    # to find out CLOSES every <details> that was already open.
+    #
+    # NOTE ON THE NUMBER: v11 was taken by the M3.2 capture-init work in flight
+    # alongside this, so this generation is v12. The stamp's contract is that a
+    # manifest can be traced to the JS that produced its controls, which needs
+    # the number to MOVE on a capture change, not to be consecutive per author.
+    assert INVENTORY_JS_VERSION == "inv-js-v12"
 
 
 # ─── GROUP_ASSEMBLE — a radio group is ONE question, not N toggles ────────────

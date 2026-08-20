@@ -170,6 +170,13 @@ async def lifespan(application: FastAPI):
     try:
         from app.controlplane.cycle.driver import set_control_plane_envelope
         set_control_plane_envelope(application.state.envelope_service)
+        # M3.3 / T-FL-01 — the queue drainer dispatches without a Request, so
+        # it needs the same shared EnvelopeService to decrypt app credentials.
+        # Without it a QUEUED crawl for an app that has a login would 503 at
+        # drain time rather than run — the queue would accept work it could
+        # never complete.
+        from app.routers.explorations import set_dispatch_envelope
+        set_dispatch_envelope(application.state.envelope_service)
     except Exception as exc:  # never let this optional wiring break boot
         logger.warning("qe_central.control_plane_envelope_wire_failed", error=str(exc)[:200])
     # S5 (Phase-4) control plane: the cycle-driver daemon (design §3.5). Hosted
@@ -214,6 +221,35 @@ async def lifespan(application: FastAPI):
     application.state.reaper_task = reaper_task
     application.state.reaper_stop = reaper_stop
 
+    # M3.3 / T-FL-01 — the crawl-queue drainer, under the SAME leader election.
+    # N replicas must not each drain: they would read the same fair order and
+    # race for the same crawls, with the SKIP LOCKED claim as the only thing
+    # preventing duplicate work. Env-gated (QEC_QUEUE_DRAIN_TICK_SECONDS): unset,
+    # the daemon returns immediately and this milestone is inert.
+    from app.controlplane.scheduling.queue_drainer import crawl_queue_drainer_daemon
+    drainer_election = build_leader_election(lock_key_str="qec-crawl-queue-drainer-leader")
+    drainer_stop = asyncio.Event()
+    drainer_task = asyncio.create_task(
+        drainer_election.run_as_leader(crawl_queue_drainer_daemon, stop_event=drainer_stop),
+        name="qec-crawl-queue-drainer",
+    )
+    application.state.drainer_task = drainer_task
+    application.state.drainer_stop = drainer_stop
+
+    # M3.3 / T-FL-07 — evidence disk GC, also leader-elected (N replicas must
+    # not each walk and delete the same tree). Env-gated on
+    # QEC_EVIDENCE_GC_TICK_SECONDS: unset, nothing is ever deleted, which is
+    # today's behaviour exactly.
+    from app.controlplane.evidence_gc import evidence_gc_daemon
+    gc_election = build_leader_election(lock_key_str="qec-evidence-gc-leader")
+    gc_stop = asyncio.Event()
+    gc_task = asyncio.create_task(
+        gc_election.run_as_leader(evidence_gc_daemon, stop_event=gc_stop),
+        name="qec-evidence-gc",
+    )
+    application.state.gc_task = gc_task
+    application.state.gc_stop = gc_stop
+
     logger.info(
         "qe_central.started",
         port=settings.port,
@@ -235,7 +271,11 @@ async def lifespan(application: FastAPI):
     driver_task.cancel()
     reaper_stop.set()
     reaper_task.cancel()
-    for _task in (driver_task, reaper_task):
+    drainer_stop.set()
+    drainer_task.cancel()
+    gc_stop.set()
+    gc_task.cancel()
+    for _task in (driver_task, reaper_task, drainer_task, gc_task):
         try:
             await _task
         except (asyncio.CancelledError, Exception):  # noqa: BLE001 - clean shutdown

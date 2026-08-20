@@ -11,9 +11,9 @@
     },
     "config_fingerprint": "characterization-fixed",
     "crawl_id": "<normalized:crawl_id>",
-    "explorer_version": "qe-explorer/1.0+inv-js-v10",
+    "explorer_version": "qe-explorer/1.0+inv-js-v12",
     "frame_count": 0,
-    "guard_version": "qe-explorer/1.0+inv-js-v10",
+    "guard_version": "qe-explorer/1.0+inv-js-v12",
     "refuse_pack_version": "refuse-pack-v1",
     "stop_reason": "",
     "target_url": "http://127.0.0.1:<port>/14-capture-attributes/index.html",
@@ -36,8 +36,11 @@
         "anchor": null,
         "phase": "explore",
         "qec": {
+          "capture_scope": "",
           "css_hint": "button#go",
+          "disclosure": "",
           "expanded": "",
+          "frame_origin": "",
           "frame_selector": "",
           "haspopup": "",
           "href": "",
@@ -45,6 +48,7 @@
           "name_confidence": "medium",
           "options": [],
           "role": "button",
+          "shadow_scope": "",
           "testid": ""
         },
         "screenshot_after": "<normalized:screenshot_after>",
@@ -80,75 +84,179 @@
     },
     "form_snapshot_signals": {
       "Address": {
+        "locator": {
+          "bindable": false,
+          "role": "textbox",
+          "strategy": "dom_id",
+          "value": "street",
+          "verified": true
+        },
         "options": [],
+        "options_total": 0,
         "required": false,
         "type": "text"
       },
       "Amount": {
+        "locator": {
+          "bindable": false,
+          "role": "spinbutton",
+          "strategy": "dom_id",
+          "value": "amount",
+          "verified": true
+        },
         "max": "1000000",
         "min": "0",
         "options": [],
+        "options_total": 0,
         "required": false,
         "step": "0.01",
         "type": "text"
       },
       "Card": {
+        "locator": {
+          "bindable": false,
+          "role": "textbox",
+          "strategy": "dom_id",
+          "value": "card",
+          "verified": true
+        },
         "maxlength": "19",
         "options": [],
+        "options_total": 0,
         "required": false,
         "type": "text"
       },
       "Contact": {
+        "locator": {
+          "bindable": false,
+          "role": "textbox",
+          "strategy": "dom_id",
+          "value": "phone",
+          "verified": true
+        },
         "options": [],
+        "options_total": 0,
         "required": false,
         "type": "text"
       },
       "Country": {
+        "locator": {
+          "bindable": false,
+          "role": "combobox",
+          "strategy": "dom_id",
+          "value": "country",
+          "verified": true
+        },
         "options": [
           "Select",
           "United States",
           "Canada"
         ],
+        "options_total": 3,
         "required": false,
         "type": "select"
       },
       "Email address": {
+        "locator": {
+          "bindable": false,
+          "role": "textbox",
+          "strategy": "dom_id",
+          "value": "email",
+          "verified": true
+        },
         "options": [],
+        "options_total": 0,
         "required": false,
         "type": "text"
       },
       "Field A7": {
+        "locator": {
+          "bindable": false,
+          "role": "textbox",
+          "strategy": "dom_id",
+          "value": "field-a7",
+          "verified": true
+        },
         "options": [],
+        "options_total": 0,
         "required": false,
         "type": "text"
       },
       "Nickname": {
+        "locator": {
+          "bindable": false,
+          "role": "textbox",
+          "strategy": "dom_id",
+          "value": "nickname",
+          "verified": true
+        },
         "options": [],
+        "options_total": 0,
         "required": false,
         "type": "text"
       },
       "Password": {
+        "locator": {
+          "bindable": false,
+          "role": "textbox",
+          "strategy": "dom_id",
+          "value": "pw",
+          "verified": true
+        },
         "options": [],
+        "options_total": 0,
         "required": false,
         "type": "password"
       },
       "Postcode": {
+        "locator": {
+          "bindable": false,
+          "role": "textbox",
+          "strategy": "dom_id",
+          "value": "zip",
+          "verified": true
+        },
         "options": [],
+        "options_total": 0,
         "required": false,
         "type": "text"
       },
       "Reference": {
+        "locator": {
+          "bindable": false,
+          "role": "textbox",
+          "strategy": "dom_id",
+          "value": "empty-ac",
+          "verified": true
+        },
         "options": [],
+        "options_total": 0,
         "required": false,
         "type": "text"
       },
       "Search term": {
+        "locator": {
+          "bindable": false,
+          "role": "searchbox",
+          "strategy": "dom_id",
+          "value": "opted-out",
+          "verified": true
+        },
         "options": [],
+        "options_total": 0,
         "required": false,
         "type": "text"
       },
       "Social Security Number": {
+        "locator": {
+          "bindable": false,
+          "role": "textbox",
+          "strategy": "dom_id",
+          "value": "x1",
+          "verified": true
+        },
         "options": [],
+        "options_total": 0,
         "required": false,
         "type": "text"
       }
@@ -196,10 +304,10 @@
     },
     "config_fingerprint": "characterization-fixed",
     "crawl_id": "<normalized:crawl_id>",
-    "explorer_version": "qe-explorer/1.0+inv-js-v10",
+    "explorer_version": "qe-explorer/1.0+inv-js-v12",
     "frame_count": 1,
     "guard_blocks": 0,
-    "guard_version": "qe-explorer/1.0+inv-js-v10",
+    "guard_version": "qe-explorer/1.0+inv-js-v12",
     "refuse_pack_version": "refuse-pack-v1",
     "stats": {
       "actions": 2,

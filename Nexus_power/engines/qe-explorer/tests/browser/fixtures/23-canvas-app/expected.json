@@ -1,0 +1,57 @@
+{
+  "purpose": "Prove that a canvas-only application is captured HONESTLY: the DOM walker finds no interactive control because there is none, OPAQUE_JS names the canvas as the surface it cannot read, and nothing on the page is fabricated into a control the crawl could bind to. This is the fixture the M3.1 vision escalation is proven on \u2014 `should_perceive` must be TRUE here and FALSE on fixture 13, and the difference is that fixture 13's DOM explains its page while this one's cannot.",
+  "targeted_defect": "None (regression guard). Pins the PRECONDITION of the whole vision path. Every M3.1 claim \u2014 perception, coordinate action, R0, catalogue promotion \u2014 is only meaningful while DOM capture genuinely cannot describe this target. If capture ever starts reporting controls here, the escalation stops firing and the proving ground silently becomes a test of nothing.",
+  "lanes": [
+    "playwright"
+  ],
+  "snippet": "INVENTORY_JS",
+  "min_controls": 0,
+  "forbid_controls": [
+    {
+      "where": {
+        "tag": "canvas"
+      },
+      "why": "A canvas is a surface, not a control. Capturing it would hand the crawl an unbindable locator and hide the fact that the page is unreadable."
+    },
+    {
+      "where": {
+        "name": "Annual Income"
+      },
+      "why": "PAINTED, NOT MARKED UP. This label exists only as pixels drawn by fillText. Capture must not find it \u2014 the ONLY way it becomes evidence is a vision perception followed by a coordinate click and a measured response (M3.1 T-VIS-01)."
+    },
+    {
+      "where": {
+        "name": "Recalculate"
+      },
+      "why": "Same: drawn onto the canvas, reachable only by coordinate."
+    },
+    {
+      "where": {
+        "css_hint": "p#case-strip"
+      },
+      "why": "A rendered PII strip is not an interactive control. It is a T-VIS-05 subject: the redaction pass must MASK it before any screenshot egresses, and the walker must never capture it as something to act on."
+    }
+  ],
+  "opaque": {
+    "lane_note": "OPAQUE_JS gates on getBoundingClientRect() area (40,000 px). jsdom has no layout engine, so every rect is zero and no canvas is ever detected there \u2014 asserting it in jsdom would be asserting a false negative. Identical restriction, and identical reason, as fixture 13.",
+    "expect": [
+      {
+        "kind": "canvas",
+        "label": "illustration studio"
+      }
+    ],
+    "expect_count": 1,
+    "lanes": [
+      "playwright"
+    ]
+  },
+  "describes_runtime_behaviour": [
+    {
+      "behaviour": "The canvas paints two operable controls ('Annual Income', 'Recalculate') and one inert crest. Clicking Annual Income repaints ONLY pixels \u2014 no element is created, removed or renamed \u2014 so the interactive signature is byte-identical and R0 can verify it only on the perceptual rung. Clicking Recalculate repaints AND appends a real <button id=apply-btn>, so R0 verifies it on the DOM rung. Clicking the crest does nothing at all, so a perception aimed there can never be verified."
+    },
+    {
+      "behaviour": "window.__canvasApp exposes the application's OWN view of what happened (clicks, runs, focus). It is ground truth for the proving-ground test and is never read by the crawler, so an R0 verdict can be checked against what the application really did rather than trusted."
+    }
+  ],
+  "lane_note": "PLAYWRIGHT ONLY, for the same reason fixture 13 restricts its opaque block. jsdom implements no canvas 2D context (`getContext` is unimplemented) and has no layout engine, so in that lane this application paints nothing and every rect is zero. Its inventory would then be empty because the fixture never rendered, not because capture correctly refused to fabricate a control out of pixels - i.e. every assertion here would pass as a FALSE NEGATIVE. The runtime behaviour is adjudicated by tests/browser/test_vision_canvas_proving_ground.py, which drives a real crawl through the production PlaywrightBrowserPort and Crawler."
+}

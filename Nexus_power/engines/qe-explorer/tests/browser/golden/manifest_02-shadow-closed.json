@@ -11,9 +11,9 @@
     },
     "config_fingerprint": "characterization-fixed",
     "crawl_id": "<normalized:crawl_id>",
-    "explorer_version": "qe-explorer/1.0+inv-js-v10",
+    "explorer_version": "qe-explorer/1.0+inv-js-v12",
     "frame_count": 0,
-    "guard_version": "qe-explorer/1.0+inv-js-v10",
+    "guard_version": "qe-explorer/1.0+inv-js-v12",
     "refuse_pack_version": "refuse-pack-v1",
     "stop_reason": "",
     "target_url": "http://127.0.0.1:<port>/02-shadow-closed/index.html",
@@ -26,17 +26,77 @@
     }
   },
   {
-    "actions": [],
+    "actions": [
+      {
+        "after": {
+          "detail": "action_error: Locator.click: Timeout 15000ms exceeded.\nCall log:\nwaiting for get_by_role(\"button\", name=\"Get Quote\").first",
+          "navigated": false,
+          "outcome": "error"
+        },
+        "anchor": null,
+        "phase": "explore",
+        "qec": {
+          "capture_scope": "",
+          "css_hint": "button",
+          "disclosure": "",
+          "expanded": "",
+          "frame_origin": "",
+          "frame_selector": "",
+          "haspopup": "",
+          "href": "",
+          "input_type": "button",
+          "name_confidence": "medium",
+          "options": [],
+          "role": "button",
+          "shadow_scope": "closed_shadow",
+          "testid": ""
+        },
+        "screenshot_after": "<normalized:screenshot_after>",
+        "state_id": "<normalized:state_id>",
+        "subaction_index": 0,
+        "target_kind": "button",
+        "target_label": "Get Quote",
+        "timestamp_ms": "<normalized:timestamp_ms>",
+        "to_state": "<normalized:to_state>",
+        "url_changed": false,
+        "value": null,
+        "verb": "click"
+      }
+    ],
     "ax_fingerprint": "<hash>",
     "canonical_host": "127.0.0.1",
     "displayed_values": [],
     "first_seen_ms": "<normalized:first_seen_ms>",
     "form_snapshot": {
+      "Coverage Amount": "",
       "ZIP Code": ""
     },
     "form_snapshot_signals": {
-      "ZIP Code": {
+      "Coverage Amount": {
+        "locator": {
+          "bindable": false,
+          "role": "spinbutton",
+          "strategy": "dom_id",
+          "value": "coverage",
+          "verified": true
+        },
+        "max": "1000000",
+        "min": "10000",
         "options": [],
+        "options_total": 0,
+        "required": false,
+        "type": "text"
+      },
+      "ZIP Code": {
+        "locator": {
+          "bindable": false,
+          "role": "textbox",
+          "strategy": "dom_id",
+          "value": "zip",
+          "verified": true
+        },
+        "options": [],
+        "options_total": 0,
         "required": false,
         "type": "text"
       }
@@ -60,7 +120,7 @@
     "url_query": ""
   },
   {
-    "actions": 0,
+    "actions": 1,
     "frontier": [],
     "frontier_truncated": false,
     "sequence_index": 1,
@@ -84,15 +144,15 @@
     },
     "config_fingerprint": "characterization-fixed",
     "crawl_id": "<normalized:crawl_id>",
-    "explorer_version": "qe-explorer/1.0+inv-js-v10",
+    "explorer_version": "qe-explorer/1.0+inv-js-v12",
     "frame_count": 1,
     "guard_blocks": 0,
-    "guard_version": "qe-explorer/1.0+inv-js-v10",
+    "guard_version": "qe-explorer/1.0+inv-js-v12",
     "refuse_pack_version": "refuse-pack-v1",
     "stats": {
-      "actions": 0,
+      "actions": 1,
       "elapsed_ms": "<normalized:elapsed_ms>",
-      "requests": 1,
+      "requests": 3,
       "states": 1
     },
     "stop_reason": "budget_max_states",

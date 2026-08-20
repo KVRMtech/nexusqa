@@ -282,4 +282,30 @@ async def list_runs(
     return [r for r in runs if isinstance(r, dict)]
 
 
-__all__ = ["FactoryClientError", "get_rtm", "generate"]
+async def compile_journeys(
+    *, tenant_id: str, journeys: list[dict], parametrize: bool = False,
+) -> dict:
+    """M2.4 / T-GEN-01 — compile RANKED journey payloads into Playwright specs.
+
+    The payloads are what ``journey_spec.build_journey_case`` produced: a
+    journey's own walked evidence, sufficient on its own, with no dependence on
+    an adopted artifact-level case.  The factory compiles each through the SAME
+    ``compile_case`` every other spec goes through, LINTS the result and returns
+    the lint verdict alongside it (T-GEN-05).
+
+    Deliberately NOT retried.  Compilation is pure and deterministic, so a
+    transient blip has nothing to re-derive differently — and the endpoint is a
+    POST, which the retry helper is right to refuse on principle.  A failure
+    propagates as :class:`FactoryClientError` with the upstream reason.
+    """
+    return await _call(
+        method="POST",
+        path="/api/v1/test-factory/journeys/compile",
+        endpoint="journeys_compile", tenant_id=tenant_id,
+        timeout_s=_GENERATE_TIMEOUT_S,
+        json_body={"journeys": list(journeys or []),
+                   "parametrize": bool(parametrize)},
+    )
+
+
+__all__ = ["FactoryClientError", "get_rtm", "generate", "compile_journeys"]

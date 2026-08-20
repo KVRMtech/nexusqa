@@ -11,9 +11,9 @@
     },
     "config_fingerprint": "characterization-fixed",
     "crawl_id": "<normalized:crawl_id>",
-    "explorer_version": "qe-explorer/1.0+inv-js-v10",
+    "explorer_version": "qe-explorer/1.0+inv-js-v12",
     "frame_count": 0,
-    "guard_version": "qe-explorer/1.0+inv-js-v10",
+    "guard_version": "qe-explorer/1.0+inv-js-v12",
     "refuse_pack_version": "refuse-pack-v1",
     "stop_reason": "",
     "target_url": "http://127.0.0.1:<port>/16-iframe-special-chars/index.html",
@@ -40,27 +40,71 @@
     },
     "form_snapshot_signals": {
       "Field A": {
+        "locator": {
+          "bindable": false,
+          "frame_selector": "iframe[title=\"customer's [account] \\\"primary\\\"\"]",
+          "role": "textbox",
+          "strategy": "dom_id",
+          "value": "field-a",
+          "verified": true
+        },
         "options": [],
+        "options_total": 0,
         "required": false,
         "type": "text"
       },
       "Field B": {
+        "locator": {
+          "bindable": false,
+          "frame_selector": "iframe[title=\"back\\\\slash and (parens)\"]",
+          "role": "textbox",
+          "strategy": "dom_id",
+          "value": "field-b",
+          "verified": true
+        },
         "options": [],
+        "options_total": 0,
         "required": false,
         "type": "text"
       },
       "Field C": {
+        "locator": {
+          "bindable": false,
+          "frame_selector": "iframe#step\\[2\\]\\.section",
+          "role": "textbox",
+          "strategy": "dom_id",
+          "value": "field-c",
+          "verified": true
+        },
         "options": [],
+        "options_total": 0,
         "required": false,
         "type": "text"
       },
       "Field D": {
+        "locator": {
+          "bindable": false,
+          "frame_selector": "iframe[name=\"a b \\\"c\\\" \\\\d\"]",
+          "role": "textbox",
+          "strategy": "dom_id",
+          "value": "field-d",
+          "verified": true
+        },
         "options": [],
+        "options_total": 0,
         "required": false,
         "type": "text"
       },
       "Host Reference": {
+        "locator": {
+          "bindable": false,
+          "role": "textbox",
+          "strategy": "dom_id",
+          "value": "host-ref",
+          "verified": true
+        },
         "options": [],
+        "options_total": 0,
         "required": false,
         "type": "text"
       }
@@ -108,10 +152,10 @@
     },
     "config_fingerprint": "characterization-fixed",
     "crawl_id": "<normalized:crawl_id>",
-    "explorer_version": "qe-explorer/1.0+inv-js-v10",
+    "explorer_version": "qe-explorer/1.0+inv-js-v12",
     "frame_count": 1,
     "guard_blocks": 0,
-    "guard_version": "qe-explorer/1.0+inv-js-v10",
+    "guard_version": "qe-explorer/1.0+inv-js-v12",
     "refuse_pack_version": "refuse-pack-v1",
     "stats": {
       "actions": 0,

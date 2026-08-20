@@ -401,6 +401,17 @@ class BrowserPort(Protocol):
         """A full-page PNG of the current state (raw bytes)."""
         ...
 
+    async def collect_pii_regions(self) -> dict[str, Any]:
+        """M3.1 / T-VIS-05 — full-page CSS-pixel boxes a screenshot would render
+        something sensitive into: ``{ok, regions, page_w, page_h, dpr}``.
+
+        OPTIONAL on the protocol and reached via ``getattr``, like ``click_at``
+        and ``drain_network``.  A port that omits it yields ``ok=False``, which
+        REFUSES the screenshot rather than sending it unmasked — the one place in
+        this protocol where an absent verb must not degrade to "nothing found".
+        """
+        ...
+
     async def click(self, control: Mapping[str, Any]) -> RawObservation:
         """Click ``control`` and return the measured raw observation."""
         ...

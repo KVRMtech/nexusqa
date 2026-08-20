@@ -126,16 +126,23 @@ def _assert_egress_clean(site: str, *parts: str) -> "LLMResult | None":
     )
 
 
-def _assert_image_egress_clean(site: str, screenshot_b64: str) -> "LLMResult | None":
+def _assert_image_egress_clean(site: str, screenshot_b64: str,
+                               redaction=None) -> "LLMResult | None":
     """Gate a SCREENSHOT's egress; return a blocked result, or ``None``.
 
     Companion to :func:`_assert_egress_clean` for the payload a text scan cannot
     reach.  Same refusal shape, so a block degrades to the deterministic ladder
     the crawler already falls back to rather than raising into a crawl.
+
+    M3.1 / T-VIS-05 — ``redaction`` is the receipt the explorer produced when it
+    masked the image.  It defaults to ``None``, which BLOCKS: a caller that does
+    not pass one cannot send a screenshot, so the protection cannot be lost by a
+    future call site forgetting about it.
     """
     from ..services.pii_egress_guard import guard_image
 
-    verdict = guard_image(screenshot_b64, site=site, nexus_env=settings.nexus_env)
+    verdict = guard_image(screenshot_b64, site=site, nexus_env=settings.nexus_env,
+                          redaction=redaction)
     if verdict["safe"]:
         return None
     logger.warning(
@@ -304,6 +311,7 @@ async def complete_llm(
 async def complete_vision(
     *, tenant_id: str, prompt: str, screenshot_b64: str, system: str = "",
     max_tokens: int = 800, temperature: float = 0.1, task: str = "vision_medic",
+    redaction=None,
 ) -> LLMResult:
     """Run ONE multimodal LLM completion (text + image).
 
@@ -318,9 +326,11 @@ async def complete_vision(
         return blocked
     # The IMAGE is a separate egress decision from the text beside it: it is the
     # highest-PII payload this system sends, and no text scan can see a rendered
-    # SSN. Container validated, metadata scanned, pixels acknowledged — never
-    # claimed as scanned. (M0.5 T-SEC-12, pixel half.)
-    blocked = _assert_image_egress_clean(f"vision:{task}", screenshot_b64)
+    # SSN. Container validated, metadata scanned, REDACTION PROVEN against these
+    # exact bytes, pixels acknowledged — never claimed as scanned.
+    # (M0.5 T-SEC-12 pixel half; M3.1 T-VIS-05 redaction half.)
+    blocked = _assert_image_egress_clean(f"vision:{task}", screenshot_b64,
+                                         redaction=redaction)
     if blocked is not None:
         return blocked
     token, refused = _mint_or_refuse(tenant_id, f"vision:{task}")

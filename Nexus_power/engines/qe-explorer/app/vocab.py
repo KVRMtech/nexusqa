@@ -60,6 +60,25 @@ NEGATIVE_OPTION_PACKS: dict[str, list[str]] = {
     "en": [
         r"none\s*of\s*(?:the\s*)?(?:above|these)",
         r"none", r"no", r"n/?a", r"not\s*applicable", r"neither", r"nothing",
+        # ── Gate 1 / T-RG-02 · THE FREQUENCY SCALE ──────────────────────────
+        # A health questionnaire does not only ask yes/no. "How often do you use
+        # tobacco?" offers Never / Rarely / Weekly / Daily, and until this line
+        # NONE of those matched — so the group fell through to DOM order and the
+        # walk could answer "Daily", fabricating a habit for a synthetic person
+        # on an insurance application. That is the exact failure this vocabulary
+        # exists to prevent, on the exact domain it was written for.
+        #
+        # "RARELY" IS DELIBERATELY ABSENT. The rule is "the option that asserts
+        # the LEAST", and "Rarely" asserts that the person does the thing — just
+        # not often. It is a positive disclosure, and auto-selecting it would
+        # invent a smaller version of the same fabrication. Only outright
+        # denials belong here.
+        #
+        # Safe by construction: the compiled pattern is FULL-STRING anchored, so
+        # "never" cannot match inside "Nevertheless" any more than "none" can
+        # match inside "Nonexistent condition" — the property the pinned
+        # non-match suite already guards.
+        r"never", r"not\s*at\s*all",
         r"no\s+known\b.*", r"decline\s*to\s*(?:answer|state)",
         r"prefer\s*not\s*to\s*(?:say|answer)",
     ],

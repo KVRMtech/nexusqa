@@ -54,7 +54,8 @@ from .fill_engine import constraints as fe_constraints
 from .fill_engine import generator as fe_generator
 from .fill_engine import widgets as fe_widgets
 from .fill_engine.driver import ControlFillDriver, read_page_alerts
-from .fill_engine.repair import RepairBudget, RepairOutcome, repair_loop
+from .fill_engine.repair import (RepairBudget, RepairOutcome, RetryPolicy,
+                                 repair_loop)
 from .fill_engine.validation import PageAlertFilter
 from .identity_pack import Identity, derive as derive_identity
 from .guard import GuardDecision, Phase, classify_request, registrable_domain
@@ -331,13 +332,26 @@ def _enumerable_options(control: Mapping[str, Any], kind: str) -> list[str]:
 
     Binary controls (checkbox / toggle) enumerate their two states; select /
     radio enumerate their option labels (product UI text — never values)."""
-    if kind in ("checkbox", "toggle"):
+    # A GROUPED checkbox answers a question the same way a radio does. "Which of
+    # these have you been diagnosed with? - Diabetes / Heart disease / Cancer /
+    # None of these" is ONE question offering four answers, and enumerating it as
+    # ["checked", "unchecked"] describes a form the application does not have:
+    # the catalogue then states that the question accepts two answers, neither of
+    # which appears anywhere on the page. The override path already treats a
+    # grouped checkbox by OPTION LABEL exactly like a radio (see the Rung 0 block
+    # below), so this is the enumeration catching up with the answering.
+    #
+    # A LONE checkbox keeps its two states, because for it they ARE the answers:
+    # "I consent to a medical records check" is checked or it is not.
+    grouped = bool(str(control.get("group_id") or "")) and bool(
+        control.get("group_options"))
+    if kind in ("checkbox", "toggle") and not grouped:
         return ["checked", "unchecked"]
     # A radio's answers live on its GROUP, not on the element: a single
     # <input type=radio> has no option list of its own, so without the group it
     # enumerates as [] and the decision point vanishes from the graph.
     source = control.get("options")
-    if kind == "radio" and control.get("group_options"):
+    if grouped or (kind == "radio" and control.get("group_options")):
         source = control.get("group_options")
     out: list[str] = []
     for i, opt in enumerate((source or ())[:_MAX_RECORDED_OPTIONS]):
@@ -555,6 +569,17 @@ def resolve_field(control: Mapping[str, Any], kind: str, name: str,
         group_id = str(control.get("group_id") or "")
         if group_id:
             entry["group_id"] = group_id
+        # THE QUESTION IN THE APPLICATION'S OWN WORDS (M2.1). ``name`` above is
+        # this control's accessible name, and for a group member that names the
+        # ANSWER — "Male", "Yes". The decision point built from this entry used
+        # it as the question's label, so the catalogue called a gender question
+        # "male" and a tobacco question "yes". The wording lives on the DOM's
+        # declared question container and is captured verbatim; "" when the page
+        # declared none, and the catalogue then says UNVERIFIED rather than
+        # inventing one.
+        question_label = str(control.get("question_label") or "").strip()
+        if question_label:
+            entry["question_label"] = question_label[:200]
 
     # Rung 0 — a planned branch walk forces WHICH enumerated option this
     # decision point takes. Fail-closed: enumerable kinds only, and the forced
@@ -702,6 +727,12 @@ async def fill_form_phase_a(
     #: generation and at most two evidence-driven repairs, which is enough for
     #: every constraint an application states honestly.
     repair_budget: RepairBudget = RepairBudget(),
+    #: Gate 1 / T-RE-01 — how many times the SAME value may be re-issued after a
+    #: TRANSIENT page race (a detached element, an in-flight navigation, a settle
+    #: timeout).  A separate budget from ``repair_budget`` because it answers a
+    #: different question: that one bounds how many DIFFERENT values an
+    #: application may reject, this one bounds how long we outlast a re-render.
+    retry_policy: RetryPolicy = RetryPolicy(),
 ) -> FormFillResult:
     """Phase A: fill fillable controls from ``answer_key``, read back, STOP.
 
@@ -793,7 +824,8 @@ async def fill_form_phase_a(
         outcome = await _fill_with_repair(
             port, control, kind, value, clock, phase=phase, state_id=state_id,
             alerts=alerts, persona=persona, entry=entry, result=result,
-            data_mode=data_mode, repair_budget=repair_budget)
+            data_mode=data_mode, repair_budget=repair_budget,
+            retry_policy=retry_policy)
         action, mechanic = outcome.action, outcome.mechanic
 
         if action is None:
@@ -892,6 +924,7 @@ async def _fill_with_repair(
     result: FormFillResult,
     data_mode: str,
     repair_budget: RepairBudget,
+    retry_policy: RetryPolicy = RetryPolicy(),
 ) -> _FillOutcome:
     """Commit one value, read the application's verdict, and repair on evidence.
 
@@ -940,6 +973,11 @@ async def _fill_with_repair(
 
     def _regenerate(tightened: fe_constraints.Constraints,
                     refused: "frozenset[str]") -> Optional[str]:
+        # Still refuses, and for the same reason: a value that did not come from
+        # the generator must never be replaced by one that did.  The difference
+        # is that the loop is now TOLD this up front (``repairable=`` below), so
+        # it can stop with a reason that names the real gate instead of
+        # reporting a constraint search that never happened.
         if not repairable:
             return None
         candidate = fe_generator.generate(
@@ -954,6 +992,18 @@ async def _fill_with_repair(
     outcome: RepairOutcome = await repair_loop(
         driver, control, first_value=value, cons=cons,
         regenerate=_regenerate, budget=repair_budget,
+        # ── Gate 1 / T-RE-01+02 ─────────────────────────────────────────────
+        # ``repairable`` was previously visible to the loop ONLY as a regenerate
+        # callback that returned None, which the loop could not tell apart from
+        # a generator that had genuinely run out of candidates.
+        #
+        # ``retry`` applies to EVERY field regardless of that flag. A transient
+        # page race is not a fact about the value, so outlasting one is not a
+        # repair — which is why a Security PIN, unrepairable by construction, is
+        # nonetheless retried when the form re-renders mid-fill. That single
+        # abandoned attempt is the defect this closes.
+        repairable=repairable,
+        retry=retry_policy,
         first_reason=str(entry.get("rationale")
                          or "the value the generator produced for this field"))
 

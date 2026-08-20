@@ -174,6 +174,64 @@ def test_group_key_partition_in_chromium(pw, fixture_server, fixture_name) -> No
         assert not wrong, f"[{fixture_name}] questions with wrong arity: {wrong}"
 
 
+def test_question_label_partition_in_chromium(pw, fixture_server, fixture_name) -> None:
+    """M2.1 - the QUESTION a control answers, in the application's own words.
+
+    ``group_key`` says WHICH question; this says WHAT it is. The catalogue used
+    to have neither for a bare-button questionnaire, so it published
+    "Question 1" ... "Question 20" - text no element on the page ever contained.
+
+    Asserted as a PARTITION over the declaring rungs rather than one control at
+    a time: a page states its questions through ``aria-labelledby``,
+    ``aria-label``, ``<legend>`` or a heading, and a rung that silently stops
+    resolving would otherwise hide behind the rungs still working. The empty
+    source is counted too - a declared question the application words NOWHERE
+    must come back with no wording rather than with a guess.
+    """
+    spec = H.fixture_spec(fixture_name)
+    partition = spec.get("question_label_partition")
+    if not partition or "playwright" not in spec.get("lanes", []):
+        pytest.skip("fixture declares no question_label partition")
+
+    controls = pw.collect(fixture_server.url(fixture_name))
+    counts: dict[str, int] = {}
+    for c in controls:
+        if not c.get("question_key"):
+            continue           # no declared container - not a declared question
+        counts.setdefault(str(c.get("question_label_source") or ""), 0)
+        counts[str(c.get("question_label_source") or "")] += 1
+
+    # One entry per QUESTION, not per control that answers it.
+    by_question: dict[str, str] = {}
+    for c in controls:
+        qk = c.get("question_key")
+        if qk:
+            by_question.setdefault(qk, str(c.get("question_label_source") or ""))
+    per_source: dict[str, int] = {}
+    for source in by_question.values():
+        per_source[source] = per_source.get(source, 0) + 1
+
+    want = {str(k): int(v) for k, v in partition["expect_sources"].items()}
+    assert per_source == want, (
+        f"[{fixture_name}] questions per declaring rung: {per_source}, "
+        f"expected {want}")
+
+    # A wording that resolved must not be empty, and one that did not must be.
+    for c in controls:
+        if not c.get("question_key"):
+            continue
+        source = str(c.get("question_label_source") or "")
+        label = str(c.get("question_label") or "")
+        if source:
+            assert label, (
+                f"[{fixture_name}] {c.get('name')!r} claims a {source} wording "
+                f"and carries none")
+        else:
+            assert not label, (
+                f"[{fixture_name}] {c.get('name')!r} carries wording {label!r} "
+                f"from no declared rung - that is an invention")
+
+
 def test_href_absoluteness_in_chromium(pw, fixture_server, fixture_name) -> None:
     spec = H.fixture_spec(fixture_name)
     rule = spec.get("href_absoluteness")

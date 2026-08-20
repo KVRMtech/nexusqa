@@ -1,23 +1,30 @@
 {
-  "purpose": "Prove the walker is HONESTLY BLIND to a closed shadow root - it captures nothing from inside it and fabricates nothing - and that OPAQUE_JS positively NAMES the blind spot instead of leaving a silently clean scan.",
-  "targeted_defect": "None (regression guard). This fixture pins the anti-green-wash contract: a surface the DOM cannot read must become a named ledger row, never an empty pass. A future 'improvement' that guessed at closed-shadow contents would break this fixture.",
+  "purpose": "Prove a CLOSED shadow root is OBSERVED - because the capture init script was in place before the component constructed itself - and that the surface is reported as observed rather than as a permanent blind spot. Before M3.2 this fixture asserted the opposite: that the walker was honestly blind here.",
+  "targeted_defect": "Regression guard, re-aimed by M3.2 / T-FR-02. It previously pinned the anti-green-wash contract that an unreadable surface must become a named ledger row rather than an empty pass. That contract is unchanged and still binding - what changed is that this surface is no longer unreadable. `attachShadow({mode:'closed'})` hands its root to the component and to nobody else, so the ONLY moment it can be observed is the moment it is created; the hook is installed on the browser context, before any page script runs. A future change that installed it later - on the page, after navigation, or on demand - would silently restore the blind spot, and this fixture is what catches that.",
   "lanes": ["jsdom", "playwright"],
   "snippet": "INVENTORY_JS",
-  "min_controls": 1,
+  "min_controls": 3,
   "expect_controls": [
     {
       "where": {"css_hint": "input#zip"},
-      "fields": {"name": "ZIP Code", "name_source": "label-for", "role": "textbox"}
+      "fields": {"name": "ZIP Code", "name_source": "label-for", "role": "textbox"},
+      "why": "The light-DOM control group: the ordinary page must read exactly as it did before the hook existed."
+    },
+    {
+      "where": {"name": "Coverage Amount"},
+      "fields": {"name_source": "label-for", "role": "spinbutton", "frame_selector": ""},
+      "why": "Inside the closed shadow root. Same frame, so no selector change - the compiler's getByRole/getByLabel pierce shadow DOM. Its name resolves via label[for] against the SHADOW ROOT, not the host document, because an id reference does not cross a shadow boundary."
+    },
+    {
+      "where": {"name": "Get Quote"},
+      "fields": {"role": "button", "frame_selector": ""}
     }
-  ],
-  "forbid_controls": [
-    {"where": {"name": "Coverage Amount"}},
-    {"where": {"name": "Get Quote"}}
   ],
   "opaque": {
     "lanes": ["playwright"],
     "expect": [
-      {"kind": "closed_shadow", "label": "closed-quote-widget"}
-    ]
+      {"kind": "closed_shadow_entered", "label": "closed-quote-widget"}
+    ],
+    "why": "OBSERVED, not opaque. Reporting a surface we read as a blind spot understates this crawl's coverage exactly as badly as the reverse would overstate it, so the row names what was read instead of what could not be."
   }
 }

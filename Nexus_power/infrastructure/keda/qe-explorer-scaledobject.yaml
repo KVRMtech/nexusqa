@@ -1,0 +1,177 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# M3.3 / T-FL-07 — queue-depth-driven autoscaling for the explorer fleet.
+#
+# WHY KEDA AND NOT A PLAIN HPA
+# ============================
+# A CPU-based HPA is the wrong instrument for this workload. A crawl is
+# browser-driven and mostly WAITING — on page loads, on network, on the
+# application under test. A pod running one crawl at full concurrency can sit at
+# 15% CPU, so a CPU HPA scales down a fleet that is completely saturated, and
+# the queue grows while the autoscaler reports everything is fine.
+#
+# The honest signal is the one the scheduler itself acts on: how many crawls are
+# WAITING (`qec_crawl_queue_depth`), published by the drain tick in
+# `controlplane/scheduling/queue_drainer._publish_fleet_metrics`. That gauge is
+# exported even at zero — to a scaler an ABSENT series means "no data", which is
+# not the same as "no backlog" and would strand a scaled-up fleet at its
+# high-water mark forever.
+#
+# THE THRESHOLDS, AND THE REASONING
+# =================================
+#   threshold: 2          scale-up trigger. KEDA targets ~2 QUEUED crawls per
+#                         replica, so a backlog of 8 asks for 4 replicas. Not 1:
+#                         at a threshold of one, a single crawl arriving a
+#                         moment before a worker frees up provokes a pod launch
+#                         that is unnecessary by the time it is Ready.
+#
+#   minReplicaCount: 1    never scale to zero. A cold explorer pays a browser
+#                         image pull plus a Playwright/Chromium start, so a
+#                         scale-to-zero fleet makes the FIRST crawl after any
+#                         quiet period dramatically slower — and the first crawl
+#                         after a quiet period is usually a human waiting.
+#
+#   maxReplicaCount: 20   the ceiling that keeps the blast radius bounded. Every
+#                         replica consumes a DB connection budget through
+#                         PgBouncer and its own egress fence; unbounded scaling
+#                         moves the bottleneck from the fleet to the database,
+#                         which fails far less gracefully.
+#
+#   pollingInterval: 15   the queue changes on the drain tick's timescale.
+#
+#   cooldownPeriod: 300   scale-DOWN stabilisation. A crawl can run for tens of
+#                         minutes; removing a pod that holds a live crawl throws
+#                         that crawl away. Five minutes of quiet is required
+#                         before the fleet shrinks, and the pods themselves also
+#                         drain (status='draining' stops NEW work while letting
+#                         the current crawl finish).
+#
+# EVERY WORKER STILL NEEDS ITS OWN EGRESS FENCE
+# =============================================
+# Scaling the Deployment multiplies workers, and T-FL-04 refuses any worker that
+# SHARES an allowlist file with another. The fence file MUST therefore be
+# per-pod — a pod-local volume with the pod name in the path, never a shared
+# ReadWriteMany mount. `qec_egress_fence_conflicts` alerts on this below; a
+# non-zero value means autoscaling has produced workers that cannot be isolated
+# and they are (correctly) being refused work.
+# ═══════════════════════════════════════════════════════════════════════════
+---
+apiVersion: keda.sh/v1alpha1
+kind: TriggerAuthentication
+metadata:
+  name: qec-prometheus-auth
+  namespace: nexus
+spec:
+  secretTargetRef:
+    - parameter: bearerToken
+      name: qec-prometheus
+      key: bearer-token
+
+---
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: qe-explorer-queue-depth
+  namespace: nexus
+  annotations:
+    m33.nexus/task: T-FL-07
+spec:
+  scaleTargetRef:
+    name: qe-explorer
+  minReplicaCount: 1
+  maxReplicaCount: 20
+  pollingInterval: 15
+  cooldownPeriod: 300
+  advanced:
+    horizontalPodAutoscalerConfig:
+      behavior:
+        scaleUp:
+          # Absorb a burst quickly — a queued crawl is a customer waiting.
+          stabilizationWindowSeconds: 30
+          policies:
+            - type: Pods
+              value: 4
+              periodSeconds: 60
+        scaleDown:
+          # Shrink slowly and one pod at a time: a removed pod may be holding a
+          # live crawl, and losing that crawl costs far more than the node does.
+          stabilizationWindowSeconds: 300
+          policies:
+            - type: Pods
+              value: 1
+              periodSeconds: 120
+  triggers:
+    - type: prometheus
+      metadata:
+        serverAddress: http://prometheus-operated.monitoring:9090
+        metricName: qec_crawl_queue_depth
+        # Target ~2 waiting crawls per explorer replica.
+        threshold: "2"
+        query: sum(qec_crawl_queue_depth)
+      authenticationRef:
+        name: qec-prometheus-auth
+
+    # SECOND TRIGGER — WAIT TIME, not just depth.
+    # Depth alone under-reacts to a small queue that is not moving: 2 crawls
+    # stuck for 30 minutes is an incident, and the depth trigger above would sit
+    # exactly on its threshold and do nothing. Whichever trigger asks for more
+    # replicas wins, which is the correct semantics here.
+    - type: prometheus
+      metadata:
+        serverAddress: http://prometheus-operated.monitoring:9090
+        metricName: qec_crawl_queue_oldest_wait_seconds
+        threshold: "300"
+        query: max(qec_crawl_queue_oldest_wait_seconds)
+      authenticationRef:
+        name: qec-prometheus-auth
+
+---
+# Alerts that make the fleet legible. The first is a SECURITY alert, not a
+# capacity one.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: qec-fleet-m33
+  namespace: nexus
+spec:
+  groups:
+    - name: qec-fleet
+      rules:
+        - alert: QecEgressFenceConflict
+          expr: qec_egress_fence_conflicts > 0
+          for: 1m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Explorer workers share an egress allowlist file"
+            description: >-
+              {{ $value }} worker(s) are configured with an allowlist_path that
+              another worker also uses. Per-worker egress isolation is
+              impossible in that configuration — one tenant's dispatch
+              overwrites another's live fence — so these workers are being
+              REFUSED work (fleet capacity is reduced). Fix the per-pod fence
+              path; do not silence this.
+
+        - alert: QecCrawlQueueStalled
+          expr: qec_crawl_queue_oldest_wait_seconds > 1800
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "A crawl has been queued for over 30 minutes"
+            description: >-
+              The queue is not draining. Check whether explorer workers are
+              heartbeating (qec_fleet_workers_alive) and whether the fleet has
+              capacity (qec_fleet_capacity vs qec_fleet_in_flight). A queued
+              crawl is honest, but a permanently queued one is an outage.
+
+        - alert: QecFleetNoLiveWorkers
+          expr: qec_fleet_workers_alive == 0 and qec_crawl_queue_depth > 0
+          for: 2m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Crawls are queued but NO explorer worker is alive"
+            description: >-
+              Every registered worker has missed its heartbeat window while work
+              is waiting. Crawls are being queued (not failed, by design), but
+              nothing will drain them until a worker returns.

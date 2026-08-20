@@ -19,6 +19,15 @@
   Accessibility: every input has a <label for>; buttons carry clear text; the
   Bind action is named "Bind policy" so the crawler's irreversible-verb refuse
   pack catches it; a modal confirms the bind.  Synthetic data only (SSN 900-xx).
+
+  COLLAPSED UI (M2.6 / T-CAP-03).  The application step asks three questions
+  that are not on the page when it loads: two inside a collapsed "Optional
+  riders" accordion, one inside a closed <details>.  Real applications are full
+  of these and a crawl that only reads what is already open catalogues a subset
+  of the product while reporting it as the product.  All three are OPTIONAL and
+  none is on the submit path, so the bind funnel - and the Golden Gate that
+  measures it - behaves identically whether or not they are opened.  What
+  changes is only whether they are CATALOGUED.
 -->
 <style>
   :root{--ink:#12233a;--soft:#5a6b82;--line:#d7dfea;--navy:#0e2a53;--gold:#b8892b;--bg:#f4f7fb;--ok:#1f8a5b;--err:#c0392b}
@@ -249,7 +258,33 @@
         '<fieldset><legend>In the last 5 years, any major diagnosis?</legend><div class="radio">'+
         '<label><input type="radio" name="health" value="no" checked> No</label>'+
         '<label><input type="radio" name="health" value="yes"> Yes</label></div></fieldset>'+
+        // M2.6 / T-CAP-03 - two questions this application asks that no crawl of
+        // it could see. Both are OPTIONAL and both sit outside the submit path,
+        // so the funnel and the Golden Gate behave exactly as before whether or
+        // not anything opens them: what changes is only whether they are
+        // CATALOGUED. The accordion panel is hidden the way accordion libraries
+        // hide one (an ancestor), and the <details> carries no ARIA at all -
+        // its shut-ness is a live property, readable only by capture.
+        '<button type="button" id="ridersToggle" aria-expanded="false" aria-controls="ridersPanel">Optional riders</button>'+
+        '<div id="ridersPanel" hidden>'+
+        '<div class="field"><label for="riderAdb">Accidental death benefit amount ($)</label>'+
+        '<input id="riderAdb" name="riderAdb" type="number" min="0" max="500000" step="25000"></div>'+
+        '<div class="field"><label for="riderWaiver">Waiver of premium rider</label>'+
+        '<select id="riderWaiver" name="riderWaiver"><option value="">Select an option</option>'+
+        '<option>Yes</option><option>No</option></select></div></div>'+
+        '<details id="disclosures"><summary>Policy replacement disclosures</summary>'+
+        '<div class="field"><label for="replacePolicy">Replacing an existing policy?</label>'+
+        '<select id="replacePolicy" name="replacePolicy"><option value="">Select an option</option>'+
+        '<option>No</option><option>Yes</option></select></div></details>'+
         '<button type="submit">Continue to review</button></form></div>';
+      (function(){
+        var t=document.getElementById("ridersToggle"), pnl=document.getElementById("ridersPanel");
+        t.addEventListener("click",function(){
+          var open=t.getAttribute("aria-expanded")==="true";
+          t.setAttribute("aria-expanded",open?"false":"true");
+          if(open){pnl.setAttribute("hidden","");}else{pnl.removeAttribute("hidden");}
+        });
+      })();
       document.getElementById("applyForm").addEventListener("submit",function(e){
         e.preventDefault();
         state.applicant={ fullName:document.getElementById("fullName").value, beneficiary:document.getElementById("beneficiary").value };

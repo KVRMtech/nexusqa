@@ -11,9 +11,9 @@
     },
     "config_fingerprint": "characterization-fixed",
     "crawl_id": "<normalized:crawl_id>",
-    "explorer_version": "qe-explorer/1.0+inv-js-v10",
+    "explorer_version": "qe-explorer/1.0+inv-js-v12",
     "frame_count": 0,
-    "guard_version": "qe-explorer/1.0+inv-js-v10",
+    "guard_version": "qe-explorer/1.0+inv-js-v12",
     "refuse_pack_version": "refuse-pack-v1",
     "stop_reason": "",
     "target_url": "http://127.0.0.1:<port>/07-native-select-250/index.html",
@@ -39,6 +39,13 @@
     },
     "form_snapshot_signals": {
       "Country of Residence": {
+        "locator": {
+          "bindable": false,
+          "role": "combobox",
+          "strategy": "dom_id",
+          "value": "country",
+          "verified": true
+        },
         "options": [
           "Country 001",
           "Country 002",
@@ -291,28 +298,52 @@
           "Country 249",
           "Country 250"
         ],
+        "options_total": 250,
         "required": false,
         "type": "select"
       },
       "Riders": {
+        "locator": {
+          "bindable": false,
+          "role": "listbox",
+          "strategy": "dom_id",
+          "value": "riders",
+          "verified": true
+        },
         "options": [
           "Waiver of Premium",
           "Accidental Death"
         ],
+        "options_total": 2,
         "required": false,
         "type": "select"
       },
       "State": {
+        "locator": {
+          "bindable": false,
+          "role": "combobox",
+          "strategy": "dom_id",
+          "value": "state",
+          "verified": true
+        },
         "options": [
           "Select state",
           "California",
           "New York",
           "Texas"
         ],
+        "options_total": 4,
         "required": false,
         "type": "select"
       },
       "Year of Birth": {
+        "locator": {
+          "bindable": false,
+          "role": "combobox",
+          "strategy": "dom_id",
+          "value": "birth-year",
+          "verified": true
+        },
         "options": [
           "1700",
           "1701",
@@ -615,6 +646,7 @@
           "1998",
           "1999"
         ],
+        "options_total": 320,
         "required": false,
         "type": "select"
       }
@@ -662,10 +694,10 @@
     },
     "config_fingerprint": "characterization-fixed",
     "crawl_id": "<normalized:crawl_id>",
-    "explorer_version": "qe-explorer/1.0+inv-js-v10",
+    "explorer_version": "qe-explorer/1.0+inv-js-v12",
     "frame_count": 1,
     "guard_blocks": 0,
-    "guard_version": "qe-explorer/1.0+inv-js-v10",
+    "guard_version": "qe-explorer/1.0+inv-js-v12",
     "refuse_pack_version": "refuse-pack-v1",
     "stats": {
       "actions": 4,

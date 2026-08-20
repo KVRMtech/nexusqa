@@ -128,7 +128,8 @@ from .crawl_constants import (  # noqa: F401  (re-exported public vocabulary)
     _reach_target_labels,
     _segment_label,
     _url_key)
-from .boundary import (ApprovalRegistry, CrossingLedger, parse_grants)
+from .boundary import (CROSSING_REFUSED, ApprovalRegistry, CrossingLedger,
+                       parse_grants)
 from .guard_context import GuardContext
 from .budget import (STOP_MAX_REQUESTS, STOP_MAX_STATES, STOP_MAX_WALL_MS,
                      Budget, BudgetTracker, TraversalBudget)
@@ -142,6 +143,8 @@ from .state_identity import (_MAX_COVERAGE_STATES, _MAX_DANGER_NAMES,
                              _form_snapshot, _is_password, _network_calls)
 from . import flow_ledger
 from .identity_pack import derive as derive_identity
+from . import vision_gate
+from .vision_loop import VisionEscalation
 from .forms import (AnswerKey, PROV_UNBLOCK, execute_submit_phase_b,
                     fill_form_phase_a)
 from .guard import (
@@ -272,6 +275,16 @@ class Crawler(AuthFlowMixin, SubmitMixin, DiscoveryMixin, WalkerMixin):
         sleep: Any = asyncio.sleep,
         advance_oracle: Optional[Callable[..., Any]] = None,
         vision_oracle: Optional[Callable[..., Any]] = None,
+        #: M3.1 / T-VIS-03+04 — vision's OWN gate, cap, timeout and breaker.
+        #: ``None`` builds a permanently-closed budget, so a crawl wired with a
+        #: vision oracle and no budget still cannot spend: the capability is off
+        #: unless something explicitly turned it on.
+        vision_budget: Optional[Any] = None,
+        #: How many coordinate actions ONE state may spend on perceived
+        #: controls.  Bounds a hallucinated 40-control perception into a handful
+        #: of clicks; the ones beyond it are ledgered as refused-with-a-reason,
+        #: never silently dropped.
+        vision_max_actions_per_state: int = 2,
         choice_overrides: Optional[Mapping[str, str]] = None,
         e2e_wizard_steps: int = _E2E_WIZARD_STEPS,
         e2e_wizard_advances: int = _E2E_WIZARD_ADVANCES,
@@ -358,6 +371,12 @@ class Crawler(AuthFlowMixin, SubmitMixin, DiscoveryMixin, WalkerMixin):
         # BUSINESS FLOWS: one entry per journey walked, carrying whether it actually
         # REACHED THE END. Six steps of a fifteen-step funnel is not the Apply flow.
         self._flows: list[dict[str, Any]] = []
+        # Gate 1 / T-JC-01 — journeys the WALKER entered, which is NOT
+        # ``len(self._flows)``: discovery also mints one-step flows for a form
+        # page it never walked and for a next-action fork, and counting those as
+        # attempted journeys would refuse a perfectly good crawl of a
+        # single-page application for failing to advance a funnel it never had.
+        self._journeys_walked: int = 0
         # E2E: when regex cannot identify the advance control, ask the LLM.
         self._advance_oracle = advance_oracle
         self._vision_oracle = vision_oracle
@@ -410,6 +429,17 @@ class Crawler(AuthFlowMixin, SubmitMixin, DiscoveryMixin, WalkerMixin):
         self._visited_fingerprints: set[str] = set(prior["visited_fingerprints"])
         self._next_seq = int(prior["next_sequence_index"])
         self._clock = emit.MonotonicClock(offset_ms=int(prior["last_timestamp_ms"]))
+        # M2.5 / T-NET-01 — ONE clock for the whole crawl, network evidence
+        # included.  The port is constructed before the Crawler, so it starts on
+        # its own reading of the same epoch and adopts THIS clock here: from now
+        # on a network event's timestamp and a visit's first_seen/last_seen are
+        # readings of the same instrument, which is the entire precondition for
+        # joining an observed request to the page and step it happened on.  A
+        # resumed crawl's offset rides along, so resumed network evidence
+        # continues strictly after the durable prefix exactly as page state does.
+        _bind_clock = getattr(port, "bind_clock", None)
+        if callable(_bind_clock):
+            _bind_clock(self._clock)
         self._emitter = emit.ManifestEmitter(
             work_dir, crawl_id, self._clock,
             next_frame_index=int(prior["next_frame_index"]),
@@ -438,6 +468,34 @@ class Crawler(AuthFlowMixin, SubmitMixin, DiscoveryMixin, WalkerMixin):
         #: The ONE seam to an LLM. Owns the tier-3 memo and the
         #: consultation telemetry that used to be five loose counters.
         self._oracle = OracleGateway(advance_oracle, vision_oracle, self._clock)
+
+        # ── M3.1 — THE VISION ESCALATION (T-VIS-01/03/04) ────────────────────
+        # Built here, once, so `_expand` never has to ask whether vision is on:
+        # it either holds an escalation or it holds ``None``. The budget is the
+        # ONLY door to a vision call, and a closed budget refuses every one of
+        # them — so "no oracle", "gate shut", "cap spent" and "breaker open" are
+        # one mechanism with four recorded reasons rather than four call sites
+        # each remembering to check.
+        self._vision_budget = vision_budget or vision_gate.closed_budget()
+        self._vision = (
+            VisionEscalation(port=port, oracle=self._oracle,
+                             budget=self._vision_budget, clock=self._clock,
+                             screen=self._screen_vision_control,
+                             max_actions_per_state=vision_max_actions_per_state)
+            if (vision_oracle is not None and self._vision_budget.gate.enabled)
+            else None
+        )
+        if (vision_oracle is not None and self._vision is None
+                and self._vision_budget.gate.tenant_enabled):
+            # WARN only when somebody actually ASKED for vision and was refused.
+            # A crawl that never requested it (no budget supplied at all) is the
+            # default posture, not an anomaly, and warning about the default is
+            # how a log stops being read.
+            logger.warning(
+                "qec.vision.disabled crawl_id=%s reason=%s attested=%s — the "
+                "tenant enabled vision but the double gate refused this target",
+                crawl_id, self._vision_budget.gate.reason,
+                self._vision_budget.gate.attested)
 
         self._cancelled = False
         self._stop_reason = ""
@@ -503,6 +561,16 @@ class Crawler(AuthFlowMixin, SubmitMixin, DiscoveryMixin, WalkerMixin):
         # vs could actually fill/advance, so the shallow-vs-full gap is visible and the
         # human's remediation is a NAMED, targeted seed request — never blind guessing.
         self._forms_found = 0
+        # M2.6 / T-CAP-03 - the expansion pass, counted. A crawl that opened
+        # nothing on an accordion-heavy application and a crawl that had
+        # nothing to open look identical in a manifest; these two numbers are
+        # what tells them apart. `skipped` is not a failure count - it is
+        # mostly tab strips correctly refusing to be merged into one state.
+        self._expansions_opened = 0
+        self._expansions_skipped = 0
+        # Tab panels given a state of their own rather than merged into the
+        # page that offered them (M2.6 / T-CAP-03).
+        self._tab_views_recorded = 0
         self._fields_inferred: list[str] = []      # filled with a synthesized default
         self._fields_unfilled: list[str] = []      # no seed AND no safe default -> needs seed
         # Per-field PAGE context for the ones needing a seed: {label, url}. The label
@@ -514,6 +582,18 @@ class Crawler(AuthFlowMixin, SubmitMixin, DiscoveryMixin, WalkerMixin):
         # shadow) — detected + named so the coverage ledger flags a blind spot instead of a
         # silent skip. {kind, label, reason}; deduped in coverage.
         self._opaque_surfaces: list[dict[str, str]] = []
+        # M3.1 / T-VIS-01 — EVERY vision escalation, verified and refused alike.
+        # The refused half is the point: it is the only evidence that separates
+        # "vision found nothing" from "vision was wrong".
+        self._vision_ledger: list[dict[str, Any]] = []
+        # M2.5 — the network evidence the crawl accumulates ACROSS visits.
+        # Per-visit inventories are folded rather than concatenated so a long
+        # crawl never has to hold every event it ever saw in memory, and the
+        # 5xx rows are kept separately because they are the oracle's input,
+        # not a catalog row.
+        self._endpoint_inventories: list[dict[str, Any]] = []
+        self._network_server_errors: list[dict[str, str]] = []
+        self._network_events_seen = 0
         # Interactive controls the matcher registry has NO primitive for — named in the
         # ledger as UNHANDLED (on the roadmap), never a silent skip. {label, kind}.
         self._unhandled_controls: list[dict[str, str]] = []
@@ -523,6 +603,12 @@ class Crawler(AuthFlowMixin, SubmitMixin, DiscoveryMixin, WalkerMixin):
         # field whose absence stopped the walk, so a one-step journey explains
         # itself instead of being investigated.
         self._advance_blocked: list[dict[str, Any]] = []
+        # Unblock experiments that could NOT be undone: a radio question the app
+        # had left unanswered has no unanswered state to be put back to, so an
+        # attempt that bought nothing still leaves one committed answer behind.
+        # Recorded so the residue is auditable rather than merely absent
+        # (T-RG-01): [{url, advance, field, reason}].
+        self._unblock_irreversible: list[dict[str, Any]] = []
         # Per-button verdicts from the most recent tier-1 miss, carried so the
         # DECLINE line can state why it declined. Kept in memory only.
         self._last_advance_verdicts: list[str] = []
@@ -574,6 +660,34 @@ class Crawler(AuthFlowMixin, SubmitMixin, DiscoveryMixin, WalkerMixin):
         #: EXACTLY-ONCE. Reserved BEFORE the click, so a crash mid-crossing still
         #: leaves the boundary spent. See CrossingLedger.
         self._crossings = CrossingLedger()
+        # -- INHERIT THE CROSSING JOURNAL (M3.4 / T-RS-01) --------------------
+        # Exactly-once was a PROCESS-LOCAL guarantee: this ledger was built
+        # empty on every start, resume included, so a killed worker took its
+        # spent set with it and the resumed crawl re-crossed every boundary the
+        # first one had already crossed. The reservation-before-click discipline
+        # was correct and survived nothing, because the event it defends against
+        # is the one that destroys the object holding it.
+        #
+        # RESTORED HERE, IN __init__, and not alongside the frontier restore:
+        # _restore_frontier runs only on the authenticated path and returns
+        # early when there is no work list, so a crawl that was killed right
+        # after its one and only crossing - the case that matters most - would
+        # skip the restore entirely and cross again.
+        inherited = self._crossings.restore(self._resume_plan.crossings)
+        if inherited:
+            # The fingerprint-scoped half of the dedup travels too. Both keys
+            # are checked before a crossing and restoring only one would leave
+            # the other blind on the exact path it was built to cover.
+            for raw in self._resume_plan.crossings:
+                name = str(raw.get("control_name") or "")
+                fp = str(raw.get("state_fingerprint") or "")
+                if name and fp and str(raw.get("status") or "") != CROSSING_REFUSED:
+                    self._submitted_flows.add("%s::%s" % (fp, name.lower()))
+            logger.warning(
+                "qec.crawler.crossings_restored crawl_id=%s journalled=%d "
+                "flows=%d - this run INHERITS the irreversible actions the "
+                "killed run took; it will not repeat them",
+                crawl_id, inherited, len(self._submitted_flows))
         #: The verified landings. THE canonical journey outcome (T-AC-04) — never
         #: a counter, never the click.
         self._outcome_milestones: list[dict[str, Any]] = []
@@ -668,6 +782,46 @@ class Crawler(AuthFlowMixin, SubmitMixin, DiscoveryMixin, WalkerMixin):
 
     def _collect_ledger(self, entries: list[dict[str, Any]], url: str) -> None:
         self._coverage.collect_ledger(entries, url)
+
+    # -- M3.1 · what a coordinate click is allowed to touch --------------------
+
+    def _screen_vision_control(self, control: Mapping[str, Any]) -> tuple[bool, str]:
+        """May the vision loop click THIS perceived control?  Fail-closed.
+
+        A canvas button reading "Submit Application" is exactly as irreversible
+        as a marked-up one, and a boundary the crawl cannot see in the DOM is a
+        boundary it must be MORE careful with, not less.  The perceived label is
+        therefore run through the same two authorities a DOM control passes:
+
+          1. the refuse pack (:func:`classify_control_danger`) — the insurance
+             lexicon, ``rp.verb.bind`` / ``rp.verb.approve`` and the rest;
+          2. :func:`boundary.classify_boundary` — which additionally catches the
+             commonest commit label in the world, "Submit Application", that the
+             pack deliberately does not flag.
+
+        Anything that is not ``BOUNDARY_SAFE`` is refused HERE and never
+        approved elsewhere: the A4.3 per-control grant flow names a control the
+        operator can see in the ledger, and a coordinate on a canvas is not
+        that.  An unnamed perception is refused outright — clicking an unknown
+        point on a surface whose effects we cannot read is not exploration.
+        """
+        from .boundary import BOUNDARY_SAFE, classify_boundary
+        from .inventory import classify_control_danger
+
+        name = str(control.get("name") or "").strip()
+        if not name:
+            return False, "unnamed perceived control"
+        if danger_signals.is_consequential(name):
+            return False, "consequential label"
+        danger, rule_id, severity = classify_control_danger(
+            name, "button", str(control.get("role") or "button"),
+            self._refuse_pack, url=self.target_url)
+        probe = {"kind": "button", "name": name, "danger": danger,
+                 "danger_rule_id": rule_id, "danger_severity": severity}
+        klass = classify_boundary(probe)
+        if klass.cls != BOUNDARY_SAFE:
+            return False, "%s boundary (%s)" % (klass.cls, klass.reason)
+        return True, ""
 
     def _note_state_signals(
         self, fingerprint: str, url: str, signals: Mapping[str, Any],
@@ -858,6 +1012,12 @@ class Crawler(AuthFlowMixin, SubmitMixin, DiscoveryMixin, WalkerMixin):
                 actions=self._tracker.actions,
                 spent_keys=self._frontier.spent_keys(),
                 sequence_index=self._next_seq,
+                # Gate 1 / T-JC-02 — so a resume inherits progression the way it
+                # already inherits states.
+                journeys_walked=self._journeys_walked,
+                journey_crossings=sum(
+                    max(0, int(f.get("step_count") or 0) - 1)
+                    for f in self._flows),
             ))
         except Exception:  # pragma: no cover - never fail a crawl for a checkpoint
             logger.warning("qec.crawler.checkpoint_failed crawl_id=%s", self.crawl_id,
@@ -896,6 +1056,36 @@ class Crawler(AuthFlowMixin, SubmitMixin, DiscoveryMixin, WalkerMixin):
                 resumed=self._resume_requested,
                 resume_broken=(self._resume_requested
                                and not self._resume_plan.recoverable),
+                # ── Gate 1 / T-JC-01 · DID ANY JOURNEY ACTUALLY MOVE ────────
+                # Counted from the flow ledger this run built, which is the same
+                # object the manifest's coverage summary is derived from — so an
+                # auditor can recompute both numbers from the artifact on disk
+                # without trusting the process that wrote them.
+                #
+                # A flow's ``step_count`` includes the step it STARTED on, so a
+                # journey that arrived and never advanced counts 1 step and
+                # contributes ZERO crossings. That subtraction is the whole
+                # measurement: it is what separates "walked a funnel" from
+                # "observed a funnel's first page N times".
+                journeys_walked=self._journeys_walked,
+                journey_crossings=sum(
+                    max(0, int(f.get("step_count") or 0) - 1)
+                    for f in self._flows),
+                # ^ summed over ALL flows, including discovery's one-step ones:
+                # they contribute exactly 0, so including them cannot inflate the
+                # count, and excluding them would need a second bookkeeping path
+                # that could drift from this one.
+                # Inherited from the newest checkpoint of this crawl id
+                # (T-JC-02). A resume that adds no new crossing because its
+                # predecessor already walked the funnel HAS the evidence; it
+                # simply did not add to it — the same doctrine `resumed_states`
+                # applies to page states.
+                #
+                # A checkpoint is periodic, so this UNDER-counts by at most the
+                # crossings made after the last one. That direction is safe by
+                # construction: it can cause a conservative refusal and can never
+                # manufacture a progression that did not happen.
+                resumed_crossings=self._resume_plan.prior_crossings,
             ),
         )
         self._stop_reason = verdict.stop_reason

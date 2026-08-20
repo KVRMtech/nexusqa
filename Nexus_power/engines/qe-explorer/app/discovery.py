@@ -84,6 +84,8 @@ from .crawl_constants import (  # noqa: F401  (re-exported public vocabulary)
     _FULL_OPTION_PROBES,
     _FULL_PROBED_OPTIONS,
     _MAX_DEP_PROBES,
+    _MAX_EXPANSIONS,
+    _MAX_TAB_VIEWS,
     _MAX_GROUND_NAVS,
     _MAX_HOVER_REVEALS,
     _MAX_MENU_ITEMS,
@@ -137,7 +139,8 @@ from .guard import (
     registrable_domain,
     same_registrable_domain,
 )
-from .inventory import build_inventory, form_signal_for
+from .inventory import (build_inventory, carry_earned_annotations,
+                        form_signal_for)
 
 logger = logging.getLogger("app.crawler")
 
@@ -271,6 +274,53 @@ class DiscoveryMixin:
         )
         return False
 
+    async def _collect_opaque_now(self) -> list[dict[str, Any]]:
+        """The DOM-unreadable surfaces on the page as it stands.  Best-effort.
+
+        Called ONCE per state, before the fingerprint is taken, because two
+        consumers need the same answer: vision-aware identity (T-VIS-02) and the
+        coverage ledger.  Evaluating twice could return two different pictures of
+        one state, and the digest would then have been taken from a page the
+        ledger does not describe.
+        """
+        collect = getattr(self._port, "collect_opaque", None)
+        if collect is None:
+            return []
+        try:
+            return list(await collect() or [])
+        except Exception:
+            return []
+
+    def _note_vision_result(self, result: Any, *, url: str) -> None:
+        """Fold ONE state's vision outcome into the crawl-level ledger.
+
+        BOTH HALVES ARE RECORDED.  The verified controls are already in the
+        inventory; what this adds is the REFUSED half — the perceptions the model
+        offered and the page did not confirm. A wrong perception that leaves no
+        trace is indistinguishable from a perception that never happened, and
+        that difference is the only way an operator can learn to distrust a
+        model. Refused rows live in the vision ledger and in NOTHING the
+        catalogue reads.
+        """
+        if result is None:
+            return
+        row = result.as_ledger()
+        row["url"] = (url or "")[:2000]
+        self._vision_ledger.append(row)
+        if result.perceived and not result.promoted:
+            # Named in the OPAQUE ledger too, so the coverage report says this
+            # page was seen, perceived, and not proven — never silently clean.
+            # ``vision_perceived`` — an OBSERVED kind, so the row reads as
+            # evidence rather than as a blind spot, and a later escalation
+            # decision never re-routes it as an unread surface.
+            self._opaque_surfaces.append({
+                "kind": "vision_perceived",
+                "label": "%d perceived control(s), none R0-verified" % result.perceived,
+                "reason": ("vision proposed controls on a DOM-opaque page and no "
+                           "coordinate action could be verified — nothing was "
+                           "catalogued from this perception"),
+            })
+
     async def _expand(self, item: FrontierItem) -> None:
         await self._politeness_delay()
         if item.depth == 0 and not item.parent_fingerprint:
@@ -345,11 +395,45 @@ class DiscoveryMixin:
             self._stop_reason = STOP_AUTH_REQUIRED
             self._hard_stop = True
             return
+        # ── M2.6 / T-CAP-03 · OPEN THE DOORS BEFORE CATALOGUING THE ROOM ────
+        # A field inside a collapsed accordion is not on the page, so capture
+        # correctly refuses to catalogue it — and the question the application
+        # asks there was never recorded by any crawl of it. Open what the DOM
+        # itself declares to be shut, then read again. Runs HERE, before the
+        # identity is taken, so the state that is fingerprinted, screenshotted
+        # and recorded is the state that was actually catalogued.
+        expansion_actions, controls, obs = await self._expand_disclosures(
+            item, controls, obs)
+
+        # ── M3.1 / T-VIS-02 · VISION-AWARE STATE IDENTITY ───────────────────
+        # Rung 4 of the identity ladder (the perceptual hash) has existed since
+        # M1.1 and only the WALK ever supplied one. Discovery — the path that
+        # records states and feeds the catalogue — passed none, so a canvas
+        # application whose screens share one URL and one (empty) DOM collapsed
+        # to a SINGLE fingerprint and every screen after the first was dropped by
+        # the `_visited_fingerprints` dedup below.
+        #
+        # The hash is admitted on ONE condition: this state is DOM-opaque and
+        # DOM-sparse, i.e. exactly the states `should_perceive` escalates. A page
+        # the DOM explains is fingerprinted byte-for-byte as it always was, so no
+        # historical identity moves and a cosmetic repaint on an ordinary page
+        # still cannot fragment its state.
+        opaque_here = await self._collect_opaque_now()
+        state_phash = ""
+        if opaque_here and perception.should_perceive(controls, opaque_here):
+            state_phash = perception.perceptual_hash_png(
+                await self._port.screenshot_png() or b"")
+            if state_phash:
+                logger.info(
+                    "qec.vision.identity_phash url=%s phash=%s — the DOM cannot "
+                    "tell this state apart, so the pixels are admitted",
+                    (obs.url or "")[:120], state_phash[:16])
         # M1.5 / T-ND-04 — the identity is computed from the page the
         # observation was actually READ from. When a popup was adopted mid-visit
         # this is the popup, not the page the goto landed on.
         fingerprint = self._fingerprinter.fingerprint(
             url=obs.url, controls=controls, dialogs=obs.dialog_flags,
+            perceptual_hash=state_phash,
             page_token=obs.page_token, observation_ok=obs.inventory_ok)
 
         # AN ITEM IS ONLY SPENT WHEN ITS URL WAS ACTUALLY OBSERVED. The frontier's
@@ -384,6 +468,17 @@ class DiscoveryMixin:
         entry_ts = self._clock.now_ms()
 
         actions: list[emit.ActionRecord] = []
+        # THE OPENING IS PART OF THE STATE, not a prelude to it. A catalogue
+        # entry for a field that only exists once a section is open is
+        # unbindable at replay unless the run that binds it opens the section
+        # first — the exact capture-says-covered / replay-cannot-bind shape the
+        # browser harness exists to catch. These are stamped with the identity
+        # of the state they produced and recorded FIRST, so the generated flow
+        # opens before it fills.
+        if expansion_actions:
+            for opened in expansion_actions:
+                opened.state_id = fingerprint
+            actions.extend(expansion_actions)
         # A grounded [click → navigation] that REACHED this state (an auth-wall
         # crossing that clicked its way here rather than re-navigating). Stamped
         # with this state's id now that it exists, so the proof is attached to a
@@ -509,43 +604,83 @@ class DiscoveryMixin:
         network_calls = await self._drain_network()
         # OPAQUE-SURFACE detection (best-effort): positively find DOM-unreadable surfaces on
         # this state so the coverage ledger names them, never a silent "clean" scan.
-        collect_opaque = getattr(self._port, "collect_opaque", None)
-        if collect_opaque is not None:
+        # Collected ONCE, before the fingerprint was taken (T-VIS-02), and folded
+        # into the ledger here so a single probe serves both identity and
+        # coverage — a second evaluation could disagree with the first and would
+        # make the ledger describe a state the digest was not taken from.
+        if opaque_here:
+            self._opaque_surfaces.extend(opaque_here)
+        # ── M3.2 / T-FR-01 · THE FRAME LEDGER ───────────────────────────────
+        # The port has already ENTERED the cross-origin frames on this page —
+        # their controls are in the inventory above, catalogued on exactly the
+        # same terms as a control beside them — and this is the account of that:
+        # one row per frame met, entered or refused, with the reason.
+        #
+        # Without it, a crawl that read a payment iframe and a crawl that could
+        # not address one produce identical coverage, and the surfaces this
+        # milestone exists to open are indistinguishable from the ones still
+        # shut. A refusal is recorded as loudly as an entry for the same reason
+        # the opaque ledger exists at all.
+        drain_frames = getattr(self._port, "drain_frame_evidence", None)
+        if drain_frames is not None:
             try:
-                self._opaque_surfaces.extend(await collect_opaque())
+                frame_rows = list(await drain_frames() or [])
             except Exception:
-                pass
-        # VISION PERCEIVER (U2): a DOM-opaque page (canvas / Flutter Web) yields
-        # controls the DOM can't read. When vision is enabled (per-tenant, default
-        # OFF) AND the page is opaque + sparse, perceive its controls + displayed
-        # outcomes from a screenshot and attach them to the OPAQUE ledger as
-        # vision-sourced evidence (capture_mode=vision, unverified). Gated + best-
-        # effort: a no-op without the oracle or on a normal page. This records what
-        # vision SAW; it does NOT act on it (coordinate action + R0 is the next
-        # increment) — so nothing unverified enters the proven catalog.
-        if self._oracle.vision_configured and perception.should_perceive(
-                snapshot_controls, self._opaque_surfaces):
-            try:
-                shot = await self._port.screenshot_png()
-                b64 = base64.b64encode(shot).decode("ascii") if shot else ""
-                pv = await self._oracle.perceive(b64, {"url": obs.url})
-                pv_controls = pv.get("controls") or []
-                if pv_controls:
-                    self._opaque_surfaces.append({
-                        "kind": "vision_perceived",
-                        "label": "%d controls perceived by vision" % len(pv_controls),
-                        "reason": ("DOM-opaque page; vision enumerated its controls "
-                                   "(unverified — not yet acted on)"),
-                        "capture_mode": "vision",
-                        "controls": pv_controls[:24],
-                        "displayed_values": (pv.get("displayed_values") or [])[:12],
-                    })
-                    logger.info(
-                        "qec.vision.perceived url=%s controls=%d values=%d",
-                        (obs.url or "")[:80], len(pv_controls),
-                        len(pv.get("displayed_values") or []))
-            except Exception:
-                pass
+                frame_rows = []
+            for frame_row in frame_rows:
+                entered = frame_row.get("status") == "entered"
+                # The label carries the SELECTOR as well as the origin,
+                # because the ledger dedupes on it: two embeds from one vendor
+                # host are two surfaces, and labelling both with the host alone
+                # collapses them into one row that reports half the truth.
+                origin = str(frame_row.get("label") or "embedded frame")
+                selector = str(frame_row.get("selector") or "")
+                self._opaque_surfaces.append({
+                    "kind": "frame_entered" if entered else "frame_not_entered",
+                    "label": ("%s (%s)" % (origin, selector[:80])) if selector else origin,
+                    "reason": str(frame_row.get("reason") or ""),
+                })
+            if frame_rows:
+                logger.info(
+                    "qec.explorer.frames_ledgered url=%s entered=%d refused=%d",
+                    (obs.url or "")[:120],
+                    sum(1 for r in frame_rows if r.get("status") == "entered"),
+                    sum(1 for r in frame_rows if r.get("status") != "entered"))
+        # ── M3.1 / T-VIS-01 · THE VISION ESCALATION LOOP ────────────────────
+        # Until this milestone the block here perceived and STOPPED: it appended
+        # a prose row to the opaque ledger and said so in its own comment
+        # ("This records what vision SAW; it does NOT act on it"). Everything
+        # after synthesis — the coordinate rung, R0, promotion — was built and
+        # unreachable.
+        #
+        # It now runs the whole loop, and the law it enforces is that a vision
+        # prediction is never catalogue truth: `run()` returns ONLY the controls
+        # it clicked at a coordinate and then MEASURED the page responding to.
+        # Those join `snapshot_controls`, from where they reach the catalogue by
+        # the identical route a DOM control takes. Everything else is written to
+        # the vision ledger as REFUSED and reaches nothing the catalogue reads.
+        #
+        # `act` is the crawl posture: an observe-only crawl perceives but never
+        # actuates, and therefore promotes nothing — which is correct rather than
+        # unfortunate, because nothing was verified.
+        if self._vision is not None and opaque_here:
+            vres = await self._vision.run(
+                url=obs.url or "", controls=snapshot_controls,
+                opaque_surfaces=opaque_here, act=not self._observe_only)
+            self._note_vision_result(vres, url=obs.url or "")
+            if vres.promoted:
+                # THE ONLY PROMOTION PATH. Folded into the inventory the state is
+                # recorded from, so `note_state_signals` -> coverage.states ->
+                # qe-central's catalogue sees them exactly as it sees DOM
+                # controls, carrying `capture_mode=vision` + `r0_verified=True`
+                # so their provenance survives the crossing.
+                snapshot_controls = list(snapshot_controls) + list(vres.promoted)
+                logger.info(
+                    "qec.vision.promoted url=%s verified=%d refused=%d — only the "
+                    "verified controls entered the state inventory",
+                    (obs.url or "")[:120], vres.verified, vres.refused)
+            if vres.outcomes:
+                displayed_values = list(displayed_values or []) + list(vres.outcomes)
         # WIZARD/STEPPER (#1): on a FILLED form state, advance a non-danger
         # Next/Continue to record deeper wizard steps in place (SPA quote wizards
         # live at one URL — step 2 is reachable only by the click sequence). The
@@ -566,8 +701,16 @@ class DiscoveryMixin:
             # by disabling its own forward control, exactly what it is waiting
             # for — so try to satisfy it before recording a human ask.
             if blocked_label:
-                snapshot_controls = await self._answer_to_unblock(
-                    snapshot_controls, blocked_label, obs.url or "", fill)
+                # The unblock experiment MUST re-read the page — that re-read is
+                # how the application renders its verdict — and the fresh
+                # inventory it returns is silent about everything the DOM never
+                # said. Carry the findings the earlier passes EARNED across it,
+                # or a dependency proved sixty lines ago dies here and the
+                # catalogue reports a conditional question as unconditional.
+                snapshot_controls = carry_earned_annotations(
+                    snapshot_controls,
+                    list(await self._answer_to_unblock(
+                        snapshot_controls, blocked_label, obs.url or "", fill)))
         if self._wizard_enabled and is_form and fill is not None and (fill.filled or fill.has_unanswered_decisions):
             entry_pick = await self._pick_advance(
                 snapshot_controls, obs.url, obs.title, fingerprint)
@@ -693,6 +836,406 @@ class DiscoveryMixin:
         # milestone, so a refused or already-spent boundary changes nothing.
         if owned_flow_index is not None:
             self._link_crossing_to_flow(owned_flow_index, milestones_before)
+
+        # M2.6 / T-CAP-03 - the other half of expansion. The additive pass above
+        # deliberately refuses to click a tab, because a tab panel is not more of
+        # this page. It is a DIFFERENT page, and this is where it gets recorded
+        # as one. Last, because it navigates: everything this visit owns has
+        # already been recorded by the time it runs.
+        if not walked:
+            await self._tab_views(item, snapshot_controls, fingerprint)
+
+    # -- M2.6 / T-CAP-03 . deliberate expansion ----------------------------
+
+    def _collapsed_disclosures(
+        self, controls: Sequence[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """The controls on this page that the DOM ITSELF declares to be shut
+        doors - in document order.
+
+        DECIDED FROM CAPTURED EVIDENCE, NEVER FROM A GUESS. ``qec.disclosure``
+        is capture's normalisation of three explicit declarations (a closed
+        ``<details>``, ``aria-expanded="false"``, an unselected ``role=tab``);
+        nothing is inferred from a class name, a chevron glyph or the shape of
+        the DOM. That is the whole difference between an expansion pass and
+        blind clicking: a page that declares nothing is left completely alone,
+        and this returns an empty list for the overwhelming majority of states.
+
+        Excluded even when collapsed:
+
+          * DANGER and DISABLED controls - the refuse-pack gate is never
+            relaxed to see more of a page;
+          * MENU openers (``aria-haspopup``, ``role=menuitem``) - a fly-out is
+            navigation, owned by :meth:`_menu_reveal`, and opening one here
+            would fold the nav bar into this state's own control set;
+          * ADVANCE and COMMIT labels - a "Next" or a "Submit" that happens to
+            carry ``aria-expanded`` is a step in the flow, not a section of this
+            page, and the expansion pass must never be the thing that advances
+            or submits;
+          * an operator-approved submit name, and a sign-out;
+          * nameless controls - no name means no label to veto on and nothing to
+            put in the evidence record; fail closed.
+        """
+        out: list[dict[str, Any]] = []
+        for c in controls:
+            q = c.get("qec") or {}
+            if str(q.get("disclosure") or "").strip().lower() != "collapsed":
+                continue
+            if c.get("kind") not in _ACTUATOR_KINDS:
+                continue
+            if c.get("disabled") or c.get("danger"):
+                continue
+            name = str(c.get("name") or "").strip()
+            if not name or name.lower() in self._submit_approvals:
+                continue
+            if str(q.get("haspopup") or "").strip():
+                continue
+            if str(q.get("role") or "").strip().lower() in ("menuitem", "menu"):
+                continue
+            if str(q.get("role") or "").strip().lower() == "tab":
+                # A TAB IS DECLARED MUTUALLY EXCLUSIVE, so there is nothing to
+                # discover by clicking it: selecting one panel deselects
+                # another, and its controls and the current panel's are never on
+                # screen together. Merging them would catalogue a page that has
+                # never existed; and unlike a disclosure a tab does not toggle,
+                # so clicking it again does not put the page back - the pass
+                # would have to abandon the visit to undo a click it could have
+                # known not to make. Measured on fixture 22: attempting one cost
+                # a click, a re-read, a failed undo and every expansion already
+                # earned on that page. Recorded, not silently dropped: see
+                # `_tab_views`, which gives each panel its own state.
+                continue
+            if _WIZARD_COMMIT_RE.search(name) or _WIZARD_ADVANCE_RE.search(name):
+                continue
+            if _AUTH_SESSION_RE.search(name):
+                continue
+            out.append(c)
+        return out
+
+    @staticmethod
+    def _control_keys(
+        controls: Sequence[Mapping[str, Any]],
+    ) -> set[tuple[str, str, str]]:
+        """A set identity for a captured control list - enough to answer "did
+        this page keep everything it had and gain more?", and nothing else.
+
+        Deliberately (kind, name, css_hint) and not the whole record: a control
+        whose disclosure flag flipped from ``collapsed`` to ``expanded`` is the
+        SAME control, and comparing full records would read every successful
+        expansion as a loss.
+        """
+        keys: set[tuple[str, str, str]] = set()
+        for c in controls or ():
+            q = c.get("qec") or {}
+            keys.add((str(c.get("kind") or ""),
+                      str(c.get("name") or "").strip().lower(),
+                      str(q.get("css_hint") or "")))
+        return keys
+
+    async def _read_controls(self, url: str) -> list[dict[str, Any]]:
+        """A control-only re-read of the live page (no screenshot, no dialog or
+        network drain): the cheapest observation that can answer whether an
+        expansion revealed anything."""
+        raw = await self._port.collect_controls()
+        self._tracker.note_request()
+        return build_inventory(raw, self._refuse_pack, url=url)
+
+    async def _expand_disclosures(
+        self, item: FrontierItem, controls: list[dict[str, Any]], obs: Any,
+    ) -> tuple[list[emit.ActionRecord], list[dict[str, Any]], Any]:
+        """Open the collapsed sections of this page, then re-read it.
+
+        Returns ``(actions, controls, observation)`` - the grounded opens that
+        were KEPT, and the control list / observation the state should be
+        catalogued from. On any page with nothing collapsed this is a pure
+        pass-through that costs one list comprehension and no browser round
+        trip at all.
+
+        THE ACCEPTANCE TEST FOR EACH CLICK IS EVIDENCE, NOT INTENT. After every
+        open the page is re-read and the new control set must be a strict
+        SUPERSET of the one before it. That single rule is what keeps this from
+        degenerating into clicking things and hoping:
+
+          * a click that revealed nothing is not recorded - it is not evidence
+            of anything, and recording it would put a step into the generated
+            flow that does nothing;
+          * a click that revealed something while HIDING something else did not
+            open a door, it turned a dial. A tab strip is the common case: the
+            page after it is a different, equally real state, but folding it
+            into this one would catalogue a page that never existed - the
+            controls of two panels that are never on screen together. It is
+            undone (the same control, clicked again) and skipped;
+          * a click that LEFT THE PAGE was never a disclosure at all. The visit
+            is restarted from the entry URL and the whole pass is abandoned, so
+            a mislabelled control costs one navigation and never a wrong
+            catalogue.
+
+        Bounded by :data:`_MAX_EXPANSIONS` in document order - a stable prefix,
+        not a sample - and what was left shut is logged rather than implied.
+        """
+        collapsed = self._collapsed_disclosures(controls)
+        if not collapsed:
+            return [], controls, obs
+        if len(collapsed) > _MAX_EXPANSIONS:
+            logger.info(
+                "qec.crawler.expansion_bounded url=%s collapsed=%d opening=%d - "
+                "the rest stay shut and their fields stay uncatalogued",
+                (obs.url or "")[:120], len(collapsed), _MAX_EXPANSIONS)
+        targets = collapsed[:_MAX_EXPANSIONS]
+
+        kept: list[emit.ActionRecord] = []
+        before = self._control_keys(controls)
+        opened = skipped = 0
+        for control in targets:
+            if self._tracker.stop_reason() or self._cancelled:
+                break
+            await self._politeness_delay()
+            observation = await self._port.click(control)
+            self._tracker.note_request()
+            action = emit.build_action_record(
+                dict(control), verb="click", value=None, observation=observation,
+                phase=Phase.EXPLORE.value, state_id="",
+                timestamp_ms=self._clock.now_ms(),
+            )
+            self._tracker.note_action()
+            after = action.after or {}
+            if after.get("navigated"):
+                logger.info(
+                    "qec.crawler.expansion_navigated url=%s control=%r - a "
+                    "control that declared itself a disclosure left the page; "
+                    "the visit is restarted and nothing is expanded",
+                    (obs.url or "")[:120], str(control.get("name") or "")[:60])
+                self._expansions_skipped += skipped + 1
+                return await self._expansion_restart(item, controls, obs)
+            outcome = str(after.get("outcome") or "")
+            if outcome in ("none", "error"):
+                # `none` - the click landed and the page did not move.
+                # `error` - the click never landed at all (an unresolvable
+                # handle, an action timeout). Neither opened anything, and
+                # neither left the page changed, so there is nothing to undo and
+                # nothing to record. Distinguished in the log because they call
+                # for different work: `none` is a page that lied about being a
+                # disclosure, `error` is a control this engine could not reach.
+                skipped += 1
+                if outcome == "error":
+                    logger.info(
+                        "qec.crawler.expansion_unreachable url=%s control=%r "
+                        "detail=%s - the section stays shut and its fields stay "
+                        "uncatalogued", (obs.url or "")[:120],
+                        str(control.get("name") or "")[:60],
+                        str(after.get("detail") or "")[:120])
+                continue
+            now_keys = self._control_keys(await self._read_controls(obs.url or ""))
+            if not (now_keys > before):
+                # Not a door: a dial. Put it back the way it was.
+                skipped += 1
+                logger.info(
+                    "qec.crawler.expansion_not_additive url=%s control=%r "
+                    "gained=%d lost=%d - this view is a DIFFERENT state, not "
+                    "more of this one; it is restored, not merged",
+                    (obs.url or "")[:120], str(control.get("name") or "")[:60],
+                    len(now_keys - before), len(before - now_keys))
+                await self._port.click(control)
+                self._tracker.note_request()
+                restored = self._control_keys(
+                    await self._read_controls(obs.url or ""))
+                if restored != before:
+                    logger.info(
+                        "qec.crawler.expansion_undo_failed url=%s opened=%d - "
+                        "restarting the visit rather than cataloguing a page "
+                        "nobody saw; the %d section(s) already opened are given "
+                        "up with it, because after the restart they are shut "
+                        "again and claiming them would be a fabrication",
+                        (obs.url or "")[:120], opened, opened)
+                    self._expansions_skipped += skipped
+                    return await self._expansion_restart(item, controls, obs)
+                continue
+            kept.append(action)
+            before = now_keys
+            opened += 1
+
+        # COUNTED BEFORE THE EARLY RETURN. A page where every declared
+        # disclosure was unreachable used to report `skipped=0` because the
+        # counters were only updated on the success path - which is precisely
+        # the invisible failure they exist to make visible.
+        self._expansions_skipped += skipped
+        if not kept:
+            return [], controls, obs
+        # One full observation now that the page is open - the state is
+        # catalogued, fingerprinted and screenshotted from THIS.
+        final = await self._observe()
+        if not final.inventory_ok or not self._in_scope(final.url):
+            logger.info(
+                "qec.crawler.expansion_reread_failed url=%s - the page was "
+                "opened but could not be re-read; the unexpanded capture stands",
+                (obs.url or "")[:120])
+            return [], controls, obs
+        expanded = build_inventory(final.raw_controls, self._refuse_pack,
+                                   url=final.url)
+        self._expansions_opened += opened
+        logger.info(
+            "qec.crawler.expanded url=%s opened=%d skipped=%d controls=%d->%d - "
+            "fields behind a collapsed section are catalogued, and the opens "
+            "that revealed them are recorded so a replay can reach them",
+            (final.url or "")[:120], opened, skipped, len(controls), len(expanded))
+        return kept, expanded, final
+
+    async def _expansion_restart(
+        self, item: FrontierItem, controls: list[dict[str, Any]], obs: Any,
+    ) -> tuple[list[emit.ActionRecord], list[dict[str, Any]], Any]:
+        """Abandon the expansion pass and re-read the entry state.
+
+        The page is in a shape this visit did not intend, so nothing about it is
+        kept: no actions, and the catalogue comes from a fresh read. If even
+        that read fails, the pre-expansion observation stands - degrading to
+        "no expansion" is always available, degrading to a wrong catalogue is
+        not.
+        """
+        await self._goto_keeping_login(item.url)
+        fresh = await self._observe()
+        if fresh.inventory_ok and self._in_scope(fresh.url):
+            return [], build_inventory(fresh.raw_controls, self._refuse_pack,
+                                       url=fresh.url), fresh
+        return [], controls, obs
+
+    def _unselected_tabs(
+        self, controls: Sequence[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """The tabs of this page whose panel is not the one on screen."""
+        out: list[dict[str, Any]] = []
+        for c in controls:
+            q = c.get("qec") or {}
+            if str(q.get("role") or "").strip().lower() != "tab":
+                continue
+            if str(q.get("disclosure") or "").strip().lower() != "collapsed":
+                continue
+            if c.get("disabled") or c.get("danger"):
+                continue
+            name = str(c.get("name") or "").strip()
+            if not name or name.lower() in self._submit_approvals:
+                continue
+            if _WIZARD_COMMIT_RE.search(name) or _AUTH_SESSION_RE.search(name):
+                continue
+            out.append(c)
+        return out
+
+    @staticmethod
+    def _same_control(a: Mapping[str, Any], b: Mapping[str, Any]) -> bool:
+        """Is this the same control, seen in a later capture of the same page?"""
+        qa, qb = (a.get("qec") or {}), (b.get("qec") or {})
+        return (str(a.get("kind") or "") == str(b.get("kind") or "")
+                and str(a.get("name") or "").strip().lower()
+                == str(b.get("name") or "").strip().lower()
+                and str(qa.get("css_hint") or "") == str(qb.get("css_hint") or ""))
+
+    async def _tab_views(
+        self, item: FrontierItem, controls: Sequence[dict[str, Any]],
+        parent_fingerprint: str,
+    ) -> None:
+        """Record each unselected tab panel as the state it actually is.
+
+        WHY THIS IS NOT PART OF THE EXPANSION PASS. Opening an accordion gives
+        you a page with MORE on it; selecting a tab gives you a DIFFERENT page.
+        Folding the second into the first would put the controls of two panels
+        that are never on screen together into one catalogued state - a page no
+        user of the application has ever seen - and the generated script that
+        binds to it would be unrunnable by construction. So the panels are not
+        merged; each is fingerprinted, screenshotted and recorded on its own
+        terms, reached by a GROUNDED click that is recorded with it. The
+        catalogue gains the questions behind every tab, and every one of them is
+        attached to a state where it really is on screen.
+
+        Each view is entered from a FRESH LOAD rather than from wherever the
+        visit happened to leave the page: this runs after navigation discovery,
+        which deliberately clicks its way around, and a tab selected on top of an
+        unknown page state is not evidence of anything. The additive pass runs
+        again inside each view, so a collapsed section INSIDE a tab is opened
+        too.
+
+        Bounded by :data:`_MAX_TAB_VIEWS`, by the crawl's own budget, and by the
+        fingerprint dedup - a tab whose panel is identical to one already
+        recorded costs one click and adds no state.
+        """
+        tabs = self._unselected_tabs(controls)
+        if not tabs:
+            return
+        if len(tabs) > _MAX_TAB_VIEWS:
+            logger.info(
+                "qec.crawler.tab_views_bounded url=%s tabs=%d recording=%d - the "
+                "rest are not visited and their fields stay uncatalogued",
+                (item.url or "")[:120], len(tabs), _MAX_TAB_VIEWS)
+        recorded = 0
+        for tab in tabs[:_MAX_TAB_VIEWS]:
+            if self._tracker.stop_reason() or self._cancelled or self._hard_stop:
+                break
+            label = str(tab.get("name") or "").strip()
+            await self._politeness_delay()
+            await self._goto_keeping_login(item.url)
+            base_obs = await self._observe()
+            if not base_obs.inventory_ok or not self._in_scope(base_obs.url):
+                logger.info(
+                    "qec.crawler.tab_view_unreadable url=%s tab=%r - the reload "
+                    "could not be read; the panel stays uncatalogued",
+                    (item.url or "")[:120], label[:60])
+                continue
+            base = build_inventory(base_obs.raw_controls, self._refuse_pack,
+                                   url=base_obs.url)
+            live = next((c for c in base if self._same_control(c, tab)), None)
+            if live is None:
+                continue          # the page no longer offers it; nothing to say
+            observation = await self._port.click(live)
+            self._tracker.note_request()
+            action = emit.build_action_record(
+                dict(live), verb="click", value=None, observation=observation,
+                phase=Phase.EXPLORE.value, state_id="",
+                timestamp_ms=self._clock.now_ms(),
+            )
+            self._tracker.note_action()
+            after = action.after or {}
+            outcome = str(after.get("outcome") or "")
+            if outcome in ("none", "error") or after.get("navigated"):
+                # Nothing happened, the click never landed, or it turned out to
+                # be a link. None of the three is a panel this crawl can show.
+                logger.info(
+                    "qec.crawler.tab_view_skipped url=%s tab=%r outcome=%s",
+                    (item.url or "")[:120], label[:60], outcome or "navigated")
+                continue
+            view_obs = await self._observe()
+            if not view_obs.inventory_ok or not self._in_scope(view_obs.url):
+                continue
+            view = build_inventory(view_obs.raw_controls, self._refuse_pack,
+                                   url=view_obs.url)
+            # A collapsed section INSIDE the panel is still a shut door.
+            opened, view, view_obs = await self._expand_disclosures(
+                item, view, view_obs)
+            view_fp = self._fingerprinter.fingerprint(
+                url=view_obs.url, controls=view, dialogs=view_obs.dialog_flags,
+                page_token=view_obs.page_token,
+                observation_ok=view_obs.inventory_ok)
+            if view_fp in self._visited_fingerprints:
+                continue
+            self._visited_fingerprints.add(view_fp)
+            now = self._clock.now_ms()
+            for act in [action, *opened]:
+                act.state_id = view_fp
+            if parent_fingerprint and parent_fingerprint != view_fp:
+                self._emitter.emit_edge(
+                    from_state=parent_fingerprint, to_state=view_fp,
+                    verb="click", target_label=label)
+            self._record_state(
+                url=view_obs.url, title=view_obs.title, controls=view,
+                fingerprint=view_fp, actions=[action, *opened],
+                screenshots=[(await self._port.screenshot_png(), now)],
+                first_seen_ms=now, last_seen_ms=self._clock.now_ms(),
+            )
+            recorded += 1
+            self._tab_views_recorded += 1
+        if recorded:
+            logger.info(
+                "qec.crawler.tab_views url=%s recorded=%d of %d - each panel is "
+                "its own state, reached by a recorded click, never merged into "
+                "the page that offered it",
+                (item.url or "")[:120], recorded, len(tabs))
 
     async def _discover(
         self, item: FrontierItem, controls: Sequence[dict[str, Any]], is_form: bool,

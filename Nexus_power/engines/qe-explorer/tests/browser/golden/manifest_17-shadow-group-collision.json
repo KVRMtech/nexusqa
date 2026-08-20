@@ -11,9 +11,9 @@
     },
     "config_fingerprint": "characterization-fixed",
     "crawl_id": "<normalized:crawl_id>",
-    "explorer_version": "qe-explorer/1.0+inv-js-v10",
+    "explorer_version": "qe-explorer/1.0+inv-js-v12",
     "frame_count": 0,
-    "guard_version": "qe-explorer/1.0+inv-js-v10",
+    "guard_version": "qe-explorer/1.0+inv-js-v12",
     "refuse_pack_version": "refuse-pack-v1",
     "stop_reason": "",
     "target_url": "http://127.0.0.1:<port>/17-shadow-group-collision/index.html",
@@ -39,22 +39,58 @@
     },
     "form_snapshot_signals": {
       "Alcohol No": {
+        "locator": {
+          "bindable": true,
+          "group_id": "<hash>",
+          "role": "radio",
+          "strategy": "accessible_name",
+          "value": "Alcohol No",
+          "verified": true
+        },
         "options": [],
+        "options_total": 0,
         "required": false,
         "type": "radio"
       },
       "Alcohol Yes": {
+        "locator": {
+          "bindable": true,
+          "group_id": "<hash>",
+          "role": "radio",
+          "strategy": "accessible_name",
+          "value": "Alcohol Yes",
+          "verified": true
+        },
         "options": [],
+        "options_total": 0,
         "required": false,
         "type": "radio"
       },
       "Tobacco No": {
+        "locator": {
+          "bindable": true,
+          "group_id": "<hash>",
+          "role": "radio",
+          "strategy": "accessible_name",
+          "value": "Tobacco No",
+          "verified": true
+        },
         "options": [],
+        "options_total": 0,
         "required": false,
         "type": "radio"
       },
       "Tobacco Yes": {
+        "locator": {
+          "bindable": true,
+          "group_id": "<hash>",
+          "role": "radio",
+          "strategy": "accessible_name",
+          "value": "Tobacco Yes",
+          "verified": true
+        },
         "options": [],
+        "options_total": 0,
         "required": false,
         "type": "radio"
       }
@@ -102,10 +138,10 @@
     },
     "config_fingerprint": "characterization-fixed",
     "crawl_id": "<normalized:crawl_id>",
-    "explorer_version": "qe-explorer/1.0+inv-js-v10",
+    "explorer_version": "qe-explorer/1.0+inv-js-v12",
     "frame_count": 1,
     "guard_blocks": 0,
-    "guard_version": "qe-explorer/1.0+inv-js-v10",
+    "guard_version": "qe-explorer/1.0+inv-js-v12",
     "refuse_pack_version": "refuse-pack-v1",
     "stats": {
       "actions": 4,

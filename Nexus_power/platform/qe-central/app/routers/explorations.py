@@ -46,10 +46,12 @@ from ..auth import require_auth, require_role
 from ..clients import explorer_client
 from ..clients import platform_api
 from ..clients.config import phase1_settings
+from ..controlplane.scheduling import queue_store, worker_registry
 from ..clients.explorer_client import ExploreDispatchRequest, ExplorerDispatchError
 from ..clients.refusal_messages import client_refusal_message
 from ..db import new_id, row_to_dict, tenant_scoped_qec_session, utc_now
 from ..db.models import ClientAppRow, QEExplorationRow
+from ..fleet import quota
 from ..fleet.lifecycle import TenantNotOperational
 from ..fleet.provisioning import assert_tenant_operational_db
 from ..security import prod_guard
@@ -492,7 +494,37 @@ def _write_egress_allowlist(domains: list[str], allowlist_path: str) -> None:
         )
 
 
-async def _decrypt_credentials(request: Request, tenant_id: str, row: ClientAppRow) -> dict | None:
+#: The process ``EnvelopeService``, shared with the QUEUE DRAINER (M3.3 /
+#: T-FL-01). A queued crawl is dispatched by a background daemon, which has no
+#: ``Request`` to read ``app.state`` from — the same seam the cycle driver
+#: already uses (``driver.set_control_plane_envelope``). Unset ⇒ a queued crawl
+#: that needs credentials fails honestly with the existing 503 rather than
+#: dispatching an UNAUTHENTICATED crawl that would masquerade as a logged-in one.
+_DISPATCH_ENVELOPE = None
+
+
+def set_dispatch_envelope(envelope) -> None:
+    """Share the process EnvelopeService with the queue drainer (called once
+    from main's lifespan)."""
+    global _DISPATCH_ENVELOPE
+    _DISPATCH_ENVELOPE = envelope
+
+
+def _envelope_for(request: "Request | None"):
+    """The envelope service for this dispatch.
+
+    Prefers the live request's ``app.state`` (the interactive path, unchanged);
+    falls back to the process-shared instance for a daemon-driven dispatch,
+    which has no request at all.
+    """
+    if request is not None:
+        found = getattr(request.app.state, "envelope_service", None)
+        if found is not None:
+            return found
+    return _DISPATCH_ENVELOPE
+
+
+async def _decrypt_credentials(envelope, tenant_id: str, row: ClientAppRow) -> dict | None:
     """Decrypt a registered app's credentials for in-memory relay to the explorer.
 
     Symmetric with ``routers/apps.py::_encrypt_credentials`` (AAD=app_id).
@@ -502,7 +534,6 @@ async def _decrypt_credentials(request: Request, tenant_id: str, row: ClientAppR
     """
     if not row.creds_blob:
         return None
-    envelope = getattr(request.app.state, "envelope_service", None)
     if envelope is None:
         raise HTTPException(
             status_code=503,
@@ -686,9 +717,28 @@ def _explorer_attestation(att: dict | None) -> dict | None:
     return out
 
 
+async def _release_registry_slot(worker_id: str) -> None:
+    """Hand a registry slot back, best-effort.
+
+    NEVER raises into the dispatch path: a metrics/accounting failure must not
+    convert a recoverable dispatch error into a 500. A slot that leaks despite
+    this is reconciled by the worker's next heartbeat, which reports its OWN
+    in-flight count and is the authority on what it is actually running.
+    """
+    if not worker_id:
+        return
+    try:
+        await worker_registry.release_slot(worker_id=worker_id)
+    except Exception as exc:  # pragma: no cover - accounting must never raise
+        logger.warning("qec.explorations.slot_release_failed",
+                       extra={"worker_id": worker_id, "error": str(exc)[:200]})
+
+
 async def _dispatch_explorer(
-    *, tenant_id: str, app_id: str, request: Request, response: Response,
+    *, tenant_id: str, app_id: str,
+    request: Request | None = None, response: Response | None = None,
     walk_plan: dict | None = None, resume_from: dict | None = None,
+    from_queue: bool = False,
 ) -> dict:
     """Mint a crawl, fence egress, and dispatch the contained explorer (Phase-1).
 
@@ -734,6 +784,27 @@ async def _dispatch_explorer(
             await assert_tenant_operational_db(session, tenant_id, operation="crawl")
         except TenantNotOperational as exc:
             raise HTTPException(status_code=exc.status_code, detail=exc.as_http_detail())
+        # M3.4 / T-RS-03 — THE PER-TENANT QUOTA, ENFORCED ON THE DISPATCH PATH.
+        # Quota enforcement was real but wired only into ``run_cycle``, so the
+        # SCHEDULED door was capped and this one — the direct crawl dispatch —
+        # was not. A tenant sitting at its monthly browser-second ceiling could
+        # still saturate the fleet by POSTing crawls, because no cycle row was
+        # ever created for the cap to see.
+        #
+        # THIS IS THE CHOKE POINT, and that is the whole point of putting it
+        # here rather than on the two routes above: ``create_exploration`` and
+        # ``resume_exploration`` both funnel through this function, and a crawl
+        # cannot reach a worker without passing it. A future route that dispatches
+        # a crawl inherits the cap by construction instead of by review.
+        #
+        # BEFORE the worker is reserved and BEFORE the egress fence is written:
+        # a refused tenant must not consume a fleet slot or leave an allowlist
+        # file behind on a worker it was never allowed to use.
+        try:
+            await quota.enforce_crawl_quota(tenant_id, session=session)
+        except quota.QuotaExceeded as exc:
+            raise HTTPException(status_code=exc.status_code,
+                                detail=exc.as_http_detail())
         base_url = row.base_url
         prior_artifact_id = row.latest_artifact_id or ""   # the LAST completed crawl
         fences = dict(row.fences or {})
@@ -876,7 +947,8 @@ async def _dispatch_explorer(
             "qec.explorations.observe_only tenant=%s app=%s env_kind=%s",
             tenant_id, app_id, crawl_env_kind or "(unattested)")
 
-    credentials = await _decrypt_credentials(request, tenant_id, row)
+    credentials = await _decrypt_credentials(
+        _envelope_for(request), tenant_id, row)
     # Tier-4: resolve a start-authenticated session (static client session or a
     # fetched auth-hook) for a login the crawler cannot script. NOTE: named
     # `auth_session` — NOT `session` — to avoid shadowing by the DB
@@ -924,6 +996,10 @@ async def _dispatch_explorer(
         # T-SEC-05 evidence: the posture this crawl actually ran under.
         "observe_only": observe_only,
         "env_kind": crawl_env_kind,
+        # M3.3 / T-FL-01 — the host this crawl occupies, so the per-host
+        # concurrency cap can COUNT what is actually in flight. Without it the
+        # queue's politeness cap has nothing to count and silently never fires.
+        "target_host": (urlparse(base_url).hostname or "").strip().lower(),
     }
     # B2 — WHAT WAS ASKED FOR vs WHAT WILL ACTUALLY RUN, recorded at dispatch.
     # B1 refuses the worst case (an explicit e2e that cannot run at full
@@ -1122,10 +1198,69 @@ async def _dispatch_explorer(
     # (config/reject) stops immediately; all-workers-unavailable is an honest,
     # retryable failure. With the default single-worker pool this is byte-identical
     # to the pre-pool path.
-    workers = phase1_settings.workers()
+    # ── M3.3 / T-FL-01 · PRE-ADMISSION (declared concurrency caps) ───────
+    # Before touching a worker, ask the PURE admission core whether this tenant
+    # is already at its concurrency cap (or at its per-host politeness cap). A
+    # crawl over cap is QUEUED, never rejected — and when no cap is configured
+    # the verdict is always ADMIT, so an un-provisioned tenant behaves exactly
+    # as it did before this milestone. This is what stops one tenant flooding
+    # 20 crawls from consuming the whole fleet before another tenant's single
+    # crawl is even considered.
+    _verdict, _cap_reason = await queue_store.admission_verdict(
+        tenant_id=tenant_id, host=(urlparse(base_url).hostname or "").lower())
+    if _verdict == queue_store.QUEUE:
+        _pos = await queue_store.enqueue(
+            tenant_id=tenant_id, exploration_id=exploration_id,
+            reason=_cap_reason,
+            detail=f"tenant is at its configured concurrency cap ({_cap_reason})",
+        )
+        try:
+            from ..observability import metrics as _metrics
+            _metrics.record_crawl_queued(reason=_cap_reason)
+        except Exception:  # pragma: no cover — metrics never break dispatch
+            pass
+        logger.warning(
+            "qec.explorations.queued_at_cap",
+            extra={"exploration_id": exploration_id, "tenant_id": tenant_id,
+                   "reason": _cap_reason, "position": _pos})
+        if response is not None:
+            response.status_code = 202
+        return {
+            "exploration_id": exploration_id, "app_id": app_id,
+            "crawl_id": crawl_id, "extractor_version": extractor_version,
+            "status": queue_store.STATUS_QUEUED, "queue_position": _pos,
+            "queued_reason": _cap_reason, "accepted": False,
+        }
+
+    # M3.3 / T-FL-02 — the WORKER REGISTRY replaces static-pool order. Workers
+    # are tried LEAST-LOADED-ELIGIBLE first instead of in fixed array order, so
+    # worker[0] no longer absorbs every dispatch attempt and a stale worker is
+    # never offered work at all. An empty/unreadable registry falls back to the
+    # static QEC_EXPLORER_POOL, which is byte-identical to the previous path.
+    workers, worker_source = await worker_registry.schedulable_workers(
+        tenant_id=tenant_id)
+    _now = worker_registry.utc_now()
+    _ttl = worker_registry.heartbeat_ttl_seconds()
+    ranked: list[dict] = []
+    _pool = list(workers)
+    while True:
+        pick = worker_registry.choose_worker(
+            _pool, tenant_id=tenant_id, now=_now, ttl_s=_ttl)
+        if pick is None:
+            break
+        ranked.append(pick)
+        _pool = [w for w in _pool if w.get("worker_id") != pick.get("worker_id")]
+    if not ranked:
+        # Nothing eligible: record WHY (busy vs dead vs parked vs foreign) so the
+        # queued crawl carries a real cause instead of "unavailable".
+        no_worker_reason = worker_registry.explain_unavailable(
+            workers, tenant_id=tenant_id, now=_now, ttl_s=_ttl)
+    else:
+        no_worker_reason = ""
     result = None
     last_exc: ExplorerDispatchError | None = None
-    for worker in workers:
+    claimed_worker_id = ""
+    for worker in ranked:
         # ── M0.5 T-SEC-03: RESERVE FIRST, FENCE SECOND ────────────────────
         # 1. authenticate (done: require_role on the route)
         # 2. resolve tenant  (done: user["tenant_id"])
@@ -1155,6 +1290,25 @@ async def _dispatch_explorer(
             )
             continue              # busy → next worker, fence untouched
 
+        # T-FL-02 — take the registry slot ONLY after the worker itself agreed.
+        # The worker's own reservation is the authority on whether it can run
+        # this crawl; the registry slot is qe-central's accounting of that fact.
+        # Taking it first would leak a slot every time a worker refused.
+        _wid = str(worker.get("worker_id") or "")
+        if _wid and worker_source == "registry":
+            if not await worker_registry.acquire_slot(worker_id=_wid):
+                # Another replica took the last slot between ranking and here.
+                # Hand the worker's own reservation back so it is not wedged,
+                # then try the next-least-loaded worker.
+                await explorer_client.release_worker(
+                    explorer_url=worker["url"], crawl_id=crawl_id,
+                    tenant_id=tenant_id)
+                last_exc = ExplorerDispatchError(
+                    "worker reached capacity between selection and dispatch",
+                    status_code=409)
+                continue
+            claimed_worker_id = _wid
+
         try:
             _write_egress_allowlist(allowed_hosts, worker["allowlist_path"])
             result = await explorer_client.dispatch_crawl(
@@ -1166,6 +1320,8 @@ async def _dispatch_explorer(
             last_exc = exc
             await explorer_client.release_worker(
                 explorer_url=worker["url"], crawl_id=crawl_id, tenant_id=tenant_id)
+            await _release_registry_slot(claimed_worker_id)
+            claimed_worker_id = ""
             if exc.status_code in (409, 502):
                 continue  # this worker busy/unreachable → try the next
             break  # deterministic error (token unset / bad request) — same for all
@@ -1174,9 +1330,73 @@ async def _dispatch_explorer(
             # back so a failed dispatch never leaves a worker wedged.
             await explorer_client.release_worker(
                 explorer_url=worker["url"], crawl_id=crawl_id, tenant_id=tenant_id)
+            await _release_registry_slot(claimed_worker_id)
+            claimed_worker_id = ""
             raise
     if result is None:
-        detail = str(last_exc)[:500] if last_exc else "no explorer worker available"
+        # ── M3.3 / T-FL-01 · A BUSY FLEET IS NOT A FAILED CRAWL ───────────
+        # This block used to mark the row `failed` and raise. A crawl was
+        # therefore recorded as FAILED because someone else's crawl got to the
+        # worker first — indistinguishable, in the row and in the UI, from a
+        # crawl that failed because the customer's application is broken. And
+        # the work was simply LOST: no retry, no record of intent.
+        #
+        # Now a CAPACITY condition (409 busy / 502 unreachable / nothing
+        # eligible) ENQUEUES the crawl durably and answers 202 `queued` with a
+        # real position in the fair drain order. A DETERMINISTIC error (missing
+        # fleet token, rejected request, misconfiguration) still fails
+        # immediately and loudly — it will fail identically on every worker and
+        # at every future moment, so queueing it would trade an actionable error
+        # for an hour of silence and a timeout naming the wrong cause.
+        detail = (str(last_exc)[:500] if last_exc
+                  else (no_worker_reason or "no explorer worker available"))
+        capacity_bound = (
+            last_exc is None or queue_store.queue_verdict_is_capacity(
+                last_exc.status_code)
+        )
+        if capacity_bound:
+            try:
+                position = await queue_store.enqueue(
+                    tenant_id=tenant_id, exploration_id=exploration_id,
+                    reason="fleet_at_capacity", detail=detail,
+                )
+            except Exception as exc:
+                # The queue itself is unavailable. Fail honestly rather than
+                # answer 202 for a crawl that was never durably recorded — a
+                # fabricated "queued" is worse than an honest 503.
+                logger.error("qec.explorations.enqueue_failed",
+                             extra={"exploration_id": exploration_id,
+                                    "error": str(exc)[:300]})
+                await _mark(tenant_id, exploration_id, status="failed",
+                            error=f"could not queue: {str(exc)[:300]}",
+                            finished_at=utc_now())
+                raise HTTPException(
+                    status_code=503,
+                    detail="the fleet is busy and the crawl queue is "
+                           "unavailable — nothing was started",
+                ) from exc
+            try:
+                from ..observability import metrics as _metrics
+                _metrics.record_crawl_queued(reason="fleet_at_capacity")
+            except Exception:  # pragma: no cover — metrics never break dispatch
+                pass
+            logger.warning(
+                "qec.explorations.queued",
+                extra={"exploration_id": exploration_id, "tenant_id": tenant_id,
+                       "app_id": app_id, "crawl_id": crawl_id,
+                       "position": position, "reason": detail[:200]})
+            if response is not None:
+                response.status_code = 202
+            return {
+                "exploration_id": exploration_id, "app_id": app_id,
+                "crawl_id": crawl_id, "extractor_version": extractor_version,
+                "status": queue_store.STATUS_QUEUED,
+                "queue_position": position,
+                # WHY it is waiting — busy fleet, dead workers, or parked
+                # workers are three different incidents and must not read alike.
+                "queued_reason": detail,
+                "accepted": False,
+            }
         await _mark(
             tenant_id, exploration_id,
             status="failed", error=detail[:2000], finished_at=utc_now(),
@@ -1198,7 +1418,8 @@ async def _dispatch_explorer(
     status = await _mark_if_status(
         tenant_id, exploration_id, expect="pending", status="dispatched",
     )
-    response.status_code = 202
+    if response is not None:
+        response.status_code = 202
     logger.info(
         "qec.explorations.dispatched",
         extra={"exploration_id": exploration_id, "tenant_id": tenant_id,

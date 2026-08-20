@@ -61,6 +61,7 @@ from ..clients.manifest_mapper import (
 from ..clients.refusal_messages import client_refusal_message
 from ..db import tenant_scoped_qec_session, utc_now
 from ..db.models import ClientAppEnvironmentRow, ClientAppRow, QEExplorationRow
+from ..storage import object_store
 from ..substrate.schema import CRAWL_ID_PATTERN, ExplorationBundle, RefusalError
 from ..substrate.writer import (
     EXTRACTOR_VERSION_PREFIX,
@@ -716,11 +717,22 @@ async def vision_operate(request: Request) -> dict:
     # spend whether or not it produced a usable answer (M0.6 / T-OB-03).
     spend = _UsageAccumulator()
 
+    # M3.1 / T-VIS-03 — the system prompt comes from the ONE authoritative table,
+    # keyed by the SAME task string the spend is billed under, so the prompt and
+    # the cost attribution cannot drift apart.
+    task = vision_medic.TASK_VISION_MEDIC
+    # M3.1 / T-VIS-05 — the redaction receipt travels beside the image and is
+    # ENFORCED at the wire (``platform_api._assert_image_egress_clean``). Absent
+    # or mismatched ⇒ the call is refused there, and this endpoint reports the
+    # medic as unavailable, which is an outcome the crawler already handles.
+    redaction = body.get("pixel_redaction") or {}
+
     async def _propose(prompt: str, image_b64: str) -> str:
         res = await platform_api.complete_vision(
             tenant_id=tenant_id, prompt=prompt,
-            screenshot_b64=image_b64, system=vision_medic.SYSTEM,
-            task="vision_medic",
+            screenshot_b64=image_b64,
+            system=vision_medic.system_prompt_for(task),
+            task=task, redaction=redaction,
         )
         spend.add(res)
         if not res.ok:
@@ -742,6 +754,10 @@ async def vision_operate(request: Request) -> dict:
         "click_y": decision.click_y,
         "reason": decision.reason,
         "usage": spend.as_dict(),
+        # WHICH prompt this call actually ran under (T-VIS-03). Deterministic and
+        # inspectable from the response, so nobody has to read a deploy to find
+        # out which contract the model was given.
+        "prompt": vision_medic.effective_prompt(task),
     }
 
 
@@ -772,11 +788,26 @@ async def perceive_controls_endpoint(request: Request) -> dict:
 
     spend = _UsageAccumulator()
 
+    # M3.1 / T-VIS-03 — THE CONTRADICTION THAT LIVED ON THIS LINE.
+    # This endpoint sent ``system=vision_medic.SYSTEM``, the click-region prompt
+    # demanding ``{"action":"click_region","x","y"}``, while
+    # ``perceive_controls`` built its own ``{"controls":[…]}`` contract into the
+    # user prompt. The model received two mutually exclusive output contracts on
+    # every call, and ``parse_perceived`` returned empty lists for any reply that
+    # obeyed the system one — so a misconfiguration presented as "vision found
+    # nothing". The prompt is now selected by task from one authoritative table.
+    task = vision_medic.TASK_VISION_PERCEIVE
+    # M3.1 / T-VIS-05 — proof that the explorer masked the sensitive regions of
+    # THESE bytes before encoding them. Enforced at the wire; absent or
+    # mismatched ⇒ blocked there, and this returns honest empties.
+    redaction = body.get("pixel_redaction") or {}
+
     async def _propose(prompt: str, image_b64: str) -> str:
         res = await platform_api.complete_vision(
             tenant_id=tenant_id, prompt=prompt,
-            screenshot_b64=image_b64, system=vision_medic.SYSTEM,
-            task="vision_perceive",
+            screenshot_b64=image_b64,
+            system=vision_medic.system_prompt_for(task),
+            task=task, redaction=redaction,
         )
         spend.add(res)
         if not res.ok:
@@ -786,7 +817,8 @@ async def perceive_controls_endpoint(request: Request) -> dict:
     perceived = await vision_medic.perceive_controls(
         tenant_id=tenant_id, screenshot_b64=screenshot_b64,
         page_context=body.get("page_context", {}), propose_fn=_propose)
-    return {**(perceived or {}), "usage": spend.as_dict()}
+    return {**(perceived or {}), "usage": spend.as_dict(),
+            "prompt": vision_medic.effective_prompt(task)}
 
 
 async def _autowalk_convergence(tenant_id: str, app_id: str) -> dict:
@@ -958,7 +990,28 @@ async def complete_crawl(crawl_id: str, request: Request) -> dict:
                 "downgraded": bool(body.downgraded)}
 
     # ── 4) The explorer reported an honest failure with no usable manifest ─
-    manifest_file = _crawl_dir(crawl_id) / _MANIFEST_FILENAME
+    # ── M3.3 / T-FL-03 · MATERIALISE THE EVIDENCE BEFORE READING IT ──────
+    # The producer (explorer) and this consumer are DIFFERENT PODS in K8s, and
+    # `/work` is a pod-local emptyDir on each — so the manifest this line looks
+    # for was never on this node's disk, and a completed crawl was recorded as
+    # "no manifest produced". `ensure_local` is read-through: when the manifest
+    # IS already local (single node, or a shared volume) it returns immediately
+    # and costs nothing; otherwise it fetches from object storage.
+    try:
+        crawl_dir = await object_store.ensure_local(
+            tenant_id, crawl_id, _crawl_dir(crawl_id))
+    except object_store.EvidenceStoreError as exc:
+        # A CONFIGURED store that cannot be reached must not degrade to "no
+        # manifest" — that would discard a real crawl's evidence and blame the
+        # crawl for an infrastructure fault.
+        logger.error("qec.internal.evidence_store_unavailable",
+                     extra={"crawl_id": crawl_id, "error": str(exc)[:300]})
+        raise HTTPException(
+            status_code=503,
+            detail="crawl evidence store unavailable — refusing to record this "
+                   "crawl as failed for an infrastructure fault",
+        ) from exc
+    manifest_file = crawl_dir / _MANIFEST_FILENAME
     if not manifest_file.is_file():
         reason = body.error or f"no manifest produced (stop_reason={body.stop_reason or 'unknown'})"
         await _mark(tenant_id, exploration_id, status="failed", error=reason[:2000], finished_at=utc_now())
@@ -1004,7 +1057,7 @@ async def complete_crawl(crawl_id: str, request: Request) -> dict:
     extractor_version = _extractor_version(crawl_id)
     try:
         records = _read_manifest(manifest_file)
-        loader = _make_screenshot_loader(_crawl_dir(crawl_id))
+        loader = _make_screenshot_loader(crawl_dir)
         bundle: ExplorationBundle = map_manifest_records_to_bundle(
             records, screenshot_loader=loader,
         )
@@ -1134,11 +1187,13 @@ async def complete_crawl(crawl_id: str, request: Request) -> dict:
         learning = {"attempted": True, "error": str(exc)[:200]}
     stats_dict["field_learning"] = learning
 
-    # ── ADVANCE MEMORY (Release B P4) — harvest PROVEN oracle advances ────
-    # Only tier-3 advances the walk actually confirmed (real effect + new
-    # unseen state) carry evidence; folding them into tenant memory makes the
-    # next crawl of the same decision point free. Consent gates contribution
-    # to the shared pool; everything is best-effort after the durable write.
+    # ── ADVANCE MEMORY (Release B P4 / M2.6) — harvest PROVEN advances ───
+    # EVERY advance the walk actually confirmed (real effect + new unseen
+    # state) carries evidence, whichever tier decided it; folding them into
+    # tenant memory makes the next crawl of the same decision point free. This
+    # used to admit tier-3 only, so an application whose forward controls are
+    # named "Next" contributed nothing. Consent gates contribution to the
+    # shared pool; everything is best-effort after the durable write.
     try:
         from ..services import advance_memory
         stats_dict["advance_memory"] = await advance_memory.harvest_completion(
@@ -1157,6 +1212,43 @@ async def complete_crawl(crawl_id: str, request: Request) -> dict:
             tenant_id=tenant_id, app_id=app_id, coverage=body.coverage)
     except Exception as exc:                       # never fail a durable crawl
         stats_dict["mechanic_memory"] = {"error": str(exc)[:200]}
+
+    # ── M1.7 / T-GW-04 · THE LEARNING SURVIVES THE CRAWL ───────────────────
+    # The rules this crawl proved become durable, versioned, tenant-scoped
+    # knowledge that the NEXT dispatch of this app hands back to the explorer.
+    # Until this call, every crawl re-ran the same experiment against the same
+    # checkbox to re-derive the same fact.
+    #
+    # ── M2.2 · WHY THIS RUNS BEFORE THE FOLD, NOT AFTER IT ─────────────────
+    # It used to sit below, just before the exploration row was marked complete,
+    # which was fine while the store had exactly one reader — the NEXT dispatch.
+    # T-BR-01 gave it a second: the fold builds the Master Catalog and writes
+    # ``catalog_questions``, joining each question to the rule an experiment
+    # proved about it. Persisting after the fold meant the crawl that PROVED a
+    # rule catalogued it as UNVERIFIED and only the crawl after that could see
+    # it — the durable catalogue permanently one crawl behind the evidence, and
+    # an application crawled once (which is most of them, at first) showing no
+    # business rules at all despite having proved several. Ordering is the whole
+    # fix: nothing else changes, and the fold reads the store it now writes to.
+    #
+    # Best-effort, and only here: a rule store that is unreachable costs a future
+    # crawl one repeated experiment, never this crawl its evidence. That is the
+    # opposite of the discipline everywhere else in this milestone, and the
+    # asymmetry is deliberate — a missing OPTIMISATION is not a false claim.
+    rules_persisted = 0
+    reuse = rule_store.reuse_metrics(body.coverage)
+    try:
+        rules_persisted = await rule_store.persist_rules(
+            tenant_id, app_id,
+            (body.coverage or {}).get("discovered_rules") or [],
+            crawl_id=crawl_id,
+        )
+    except Exception as exc:                       # pragma: no cover - defensive
+        logger.warning(
+            "qec.internal.rule_persist_failed",
+            extra={"exploration_id": exploration_id, "error": str(exc)[:300]},
+        )
+    stats_dict["rules"] = {"persisted": rules_persisted, **reuse}
 
     # ── JOURNEY GRAPH (Release C1/C2/C4/C5) ───────────────────────────────
     # Fold flows into the graph (idempotent upserts; unwalked options become
@@ -1378,31 +1470,6 @@ async def complete_crawl(crawl_id: str, request: Request) -> dict:
                    "error": str(exc)[:300]},
         )
     stats_dict["generate"] = generate_result
-
-    # ── M1.7 / T-GW-04 · THE LEARNING SURVIVES THE CRAWL ───────────────────
-    # The rules this crawl proved become durable, versioned, tenant-scoped
-    # knowledge that the NEXT dispatch of this app hands back to the explorer.
-    # Until this call, every crawl re-ran the same experiment against the same
-    # checkbox to re-derive the same fact.
-    #
-    # Best-effort, and only here: a rule store that is unreachable costs a future
-    # crawl one repeated experiment, never this crawl its evidence. That is the
-    # opposite of the discipline everywhere else in this milestone, and the
-    # asymmetry is deliberate — a missing OPTIMISATION is not a false claim.
-    rules_persisted = 0
-    reuse = rule_store.reuse_metrics(body.coverage)
-    try:
-        rules_persisted = await rule_store.persist_rules(
-            tenant_id, app_id,
-            (body.coverage or {}).get("discovered_rules") or [],
-            crawl_id=crawl_id,
-        )
-    except Exception as exc:                       # pragma: no cover - defensive
-        logger.warning(
-            "qec.internal.rule_persist_failed",
-            extra={"exploration_id": exploration_id, "error": str(exc)[:300]},
-        )
-    stats_dict["rules"] = {"persisted": rules_persisted, **reuse}
 
     await _mark(
         tenant_id, exploration_id,

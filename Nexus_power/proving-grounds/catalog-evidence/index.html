@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Meridian Life — Term Application</title>
+<!--
+  M2.2 PROVING GROUND — an application whose behaviour the catalogue must be
+  able to describe from evidence alone.
+
+  This is a REAL application, not a mock of one: every behaviour below is
+  implemented in ordinary DOM and JavaScript, with no hooks, no test attributes
+  the crawler is told about in advance, and no cooperation with the crawler of
+  any kind.  It exists so that a claim about the catalogue can be checked
+  against something that actually behaves, rather than against a captured blob
+  somebody hand-wrote.
+
+  WHAT IT ASKS THE CATALOGUE TO PROVE — one behaviour per row:
+
+    1. A CONDITIONAL RULE THAT EXISTS NOWHERE IN THE MARKUP.  "Continue to
+       review" is disabled, and NOTHING declares why.  There is no `required`
+       attribute, no aria-describedby, no error text — the gate lives in
+       `refreshGate()`, exactly where a `.min(1)` in a validation schema or a
+       hand-written canAdvance() lives in a real product.  A catalogue can only
+       learn this rule by ANSWERING the question and watching the application
+       change its own mind.  Reading the page can never produce it, which is
+       what makes it the honest test of T-BR-01.
+
+    2. A DEPENDENCY THE PAGE DOES NOT DECLARE.  "County" is an empty <select>
+       until "State of residence" is chosen, at which point it populates from
+       that state's list.  Nothing links the two elements: no data-depends-on,
+       no aria-controls.  Only ACT-THEN-DIFF — choose the driver, re-read the
+       page, observe the enumeration appear — can establish it (T-BR-02).
+
+    3. A CLIPPED ENUMERATION.  "Country of citizenship" offers 250 options, over
+       the capture ceiling's own boundary conditions and far past the 48/60
+       clips that made a catalogue silently describe a prefix as an answer set
+       (T-BR-05).  The catalogue must report BOTH what it stored and what the
+       page offers.
+
+    4. DECLARED VALIDATION.  "Face amount" declares min/max/step and "Policy
+       number" declares a pattern and a length.  These are the application's own
+       statements about itself and the only grounds a boundary case has.
+
+    5. LOCATORS OF EVERY STRENGTH, INCLUDING NONE.  A control identified by a
+       data-testid, one by an id, one by its label alone, and — deliberately —
+       one the application identifies by NOTHING.  The last is the important
+       one: the catalogue must report it as UNVERIFIED rather than invent a
+       positional selector for it.
+
+    6. A CONTROL GROUP.  Two radios are ONE question with two answers, and each
+       answer is a different element.  The catalogue must keep them under one
+       group and still point each at its own control.
+
+  THE CONTROL GROUP (in the experimental sense).  "Marketing preferences" is an
+  ordinary optional checkbox that gates nothing and depends on nothing.  It is
+  here so that a catalogue which marked EVERYTHING as rule-bearing would be
+  visibly wrong: if it acquires a business rule, the join is fabricating.
+
+  DETERMINISTIC.  No clock, no randomness, no network.  The country list is
+  generated from a fixed formula so the file stays readable and the 250 is not a
+  transcription anyone has to trust.
+-->
+<style>
+  :root { --ink:#0f172a; --muted:#64748b; --line:#e2e8f0; --brand:#1e3a5f; }
+  * { box-sizing: border-box; }
+  body { margin:0; font:15px/1.55 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+         color:var(--ink); background:#f8fafc; }
+  header { background:var(--brand); color:#fff; padding:14px 24px; font-weight:700; }
+  main { max-width:760px; margin:24px auto; padding:0 16px; }
+  .card { background:#fff; border:1px solid var(--line); border-radius:12px;
+          padding:24px; margin-bottom:16px; }
+  h1 { font-size:22px; margin:0 0 4px; }
+  .lede { color:var(--muted); margin:0 0 20px; }
+  .field { margin-bottom:16px; }
+  label { display:block; font-weight:600; margin-bottom:4px; }
+  input[type=text], input[type=number], select {
+    width:100%; padding:8px 10px; border:1px solid var(--line); border-radius:8px;
+    font:inherit; background:#fff; }
+  fieldset { border:1px solid var(--line); border-radius:8px; margin:0 0 16px; }
+  legend { font-weight:600; padding:0 6px; }
+  .radio label { display:inline-block; font-weight:400; margin-right:20px; }
+  button { padding:10px 18px; border:0; border-radius:8px; background:var(--brand);
+           color:#fff; font:inherit; font-weight:600; cursor:pointer; }
+  button:disabled { background:#cbd5e1; color:#64748b; cursor:not-allowed; }
+  .out { margin-top:20px; padding:16px; border:1px solid var(--line);
+         border-radius:8px; background:#f1f5f9; }
+</style>
+</head>
+<body>
+<header>Meridian Life</header>
+<main>
+  <div class="card">
+    <h1>Term Life Application</h1>
+    <p class="lede">Tell us about the coverage you need.</p>
+
+    <form id="applyForm">
+
+      <!-- (5a) Identified by a data-testid: the strongest handle a page can
+           declare, and one with no compiler rung — the catalogue must record it
+           as evidence AND say it is not bindable. -->
+      <div class="field">
+        <label for="face-amount">Face amount ($)</label>
+        <input type="number" id="face-amount" data-testid="face-amount"
+               name="faceAmount" min="50000" max="2000000" step="10000">
+      </div>
+
+      <!-- (4) Declared validation with no id and no testid: the accessible name
+           is the only handle, which is also the only rung the compiler binds. -->
+      <div class="field">
+        <label for="policy-number">Existing policy number</label>
+        <input type="text" id="policy-number" name="policyNumber"
+               pattern="ML-[0-9]{6}" minlength="9" maxlength="9"
+               placeholder="ML-000000">
+      </div>
+
+      <!-- (2) The DRIVER. Choosing it populates County below. Nothing in the
+           markup connects them. -->
+      <div class="field">
+        <label for="state-of-residence">State of residence</label>
+        <select id="state-of-residence" name="state">
+          <option value="">Select a state…</option>
+          <option value="TX">Texas</option>
+          <option value="CA">California</option>
+          <option value="FL">Florida</option>
+        </select>
+      </div>
+
+      <!-- (2) The DEPENDENT. Empty until the driver is answered. -->
+      <div class="field">
+        <label for="county">County</label>
+        <select id="county" name="county"></select>
+      </div>
+
+      <!-- (3) 250 options — a clipped read must stay visibly clipped. -->
+      <div class="field">
+        <label for="country-of-citizenship">Country of citizenship</label>
+        <select id="country-of-citizenship" name="citizenship"></select>
+      </div>
+
+      <!-- (6) ONE question, TWO answers, two elements. -->
+      <fieldset>
+        <legend>Do you use tobacco?</legend>
+        <div class="radio">
+          <label><input type="radio" name="tobacco" value="no"> No</label>
+          <label><input type="radio" name="tobacco" value="yes"> Yes</label>
+        </div>
+      </fieldset>
+
+      <!-- (1) THE GATE. Answering this — and only this — enables Continue.
+           Nothing here says so. -->
+      <div class="field">
+        <label><input type="checkbox" id="health-attestation" name="healthAttestation">
+          I have reviewed the health questionnaire</label>
+      </div>
+
+      <!-- (5b) The CONTROL GROUP: optional, gates nothing, depends on nothing.
+           A catalogue that gives this a business rule is fabricating. -->
+      <div class="field">
+        <label><input type="checkbox" id="marketing-preferences" name="marketing">
+          Send me product updates</label>
+      </div>
+
+      <!-- (5c) Identified by NOTHING: no id, no testid, no label association, no
+           class. The catalogue must say UNVERIFIED, not invent a selector. -->
+      <div class="field">
+        <input type="text" name="referralCode">
+      </div>
+
+      <button type="submit" id="continue-review" disabled>Continue to review</button>
+    </form>
+    <div id="reviewOut"></div>
+  </div>
+</main>
+
+<script>
+(function () {
+  "use strict";
+
+  // ── Deterministic 250-country list ────────────────────────────────────────
+  // Generated rather than transcribed so the count is a fact of the file and
+  // not something a reader has to take on trust.
+  var citizenship = document.getElementById("country-of-citizenship");
+  citizenship.appendChild(new Option("Select a country…", ""));
+  for (var i = 1; i <= 250; i++) {
+    citizenship.appendChild(new Option("Country " + String(i).padStart(3, "0"),
+                                       "C" + i));
+  }
+
+  // ── The undeclared dependency ─────────────────────────────────────────────
+  var COUNTIES = {
+    TX: ["Travis", "Harris", "Bexar", "Dallas"],
+    CA: ["Alameda", "Los Angeles", "San Diego"],
+    FL: ["Broward", "Miami-Dade", "Orange", "Pinellas", "Duval"]
+  };
+  var stateEl = document.getElementById("state-of-residence");
+  var countyEl = document.getElementById("county");
+  stateEl.addEventListener("change", function () {
+    countyEl.innerHTML = "";
+    var list = COUNTIES[stateEl.value] || [];
+    if (!list.length) return;             // no state chosen -> genuinely empty
+    countyEl.appendChild(new Option("Select a county…", ""));
+    list.forEach(function (name) {
+      countyEl.appendChild(new Option(name, name));
+    });
+  });
+
+  // ── The undeclared advance gate ───────────────────────────────────────────
+  // The whole rule, in one place, invisible to any reader of the DOM. This is
+  // what a crawl must ANSWER a question to discover.
+  var attestation = document.getElementById("health-attestation");
+  var advance = document.getElementById("continue-review");
+  function refreshGate() { advance.disabled = !attestation.checked; }
+  attestation.addEventListener("change", refreshGate);
+  refreshGate();
+
+  document.getElementById("applyForm").addEventListener("submit", function (e) {
+    e.preventDefault();
+    document.getElementById("reviewOut").innerHTML =
+      '<div class="out"><strong>Application received.</strong> ' +
+      'A licensed agent will contact you to complete underwriting.</div>';
+  });
+})();
+</script>
+</body>
+</html>

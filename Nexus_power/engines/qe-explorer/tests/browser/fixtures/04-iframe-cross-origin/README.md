@@ -2,56 +2,66 @@
 
 ## Purpose
 
-Isolate ONE capability: **failing honestly at an origin boundary**.
+Isolate ONE capability: **crossing an origin boundary the supported way**.
 
-`iframe.contentDocument` throws a `SecurityError` for a foreign origin. The walker must
+`iframe.contentDocument` throws a `SecurityError` for a foreign origin. That is a real
+browser security boundary, and injected JavaScript must not try to defeat it. The walker
+therefore still does exactly what it always did:
 
-1. catch it and skip that frame,
-2. keep capturing the rest of the page (the exception must not unwind the whole walk), and
-3. surface the frame in the opaque ledger so an operator sees a named blind spot rather
-   than a page that merely looks fully covered.
+1. catches the `SecurityError` and skips that frame, and
+2. keeps capturing the rest of the page — the exception must never unwind the whole walk
+   and take the main frame's controls with it.
+
+What M3.2 adds is the other half. The walker stops at the boundary because JavaScript
+running inside the page structurally cannot cross it; the **port** then crosses it with
+Playwright's own frame APIs. `content_frame()` asks the browser for the frame's own
+execution context, and the walker runs inside it under that frame's origin, exactly as the
+frame's own scripts do. Nothing is injected across the boundary; origin isolation is used,
+not circumvented.
 
 This is the shape of every real payment / captcha / KYC embed, so it is the difference
-between "we captured the checkout page" and "we captured the checkout page except the part
-that takes the money, and here it is by name."
+between "we captured the checkout page except the part that takes the money, and here it
+is by name" and "we captured the checkout page".
+
+## What this fixture used to assert
+
+That the three controls inside the foreign frame — `Card Number`, `CVC`, `Pay Now` — were
+in `forbid_controls`: capturing nothing from the embed and naming it in the opaque ledger.
+They are now `expect_controls`, each carrying `frame_selector: "iframe#card-entry"`. The
+embed is still NAMED in the ledger, because that row is what carries the deterministic
+selector the port enters with; whether the entry succeeded is a separate `frame_entered`
+row, so a frame that was named and a frame that was read are never confused.
 
 ## Lane
 
 **Playwright only.** jsdom does not enforce true cross-origin isolation, so simulating a
-second origin there would exercise a different code path than the one under test. The
-`lanes` key in `expected.json` states this, and the jsdom suite *skips this fixture by
-name* rather than silently not asserting.
+second origin there would exercise a different code path than the one under test, and it
+has no frame-locator equivalent to enter one with. The `lanes` key in `expected.json`
+states this, and the jsdom suite *skips this fixture by name* rather than silently not
+asserting.
 
-The fixture server substitutes `__ALT_ORIGIN__` with a second `http://127.0.0.1:<port2>`
+The fixture server substitutes `__ALT_ORIGIN__` with a second `http://localhost:<port2>`
 origin at serve time, so the embed is genuinely cross-origin.
 
 ## Expected controls
 
-One: `input#amount-due` from the main frame, with `value_committed` `"129.00"`. The three
-controls inside the foreign frame (`Card Number`, `CVC`, `Pay Now`) are in
-`forbid_controls`.
+Four: `input#amount-due` from the main frame with `value_committed` `"129.00"` and an empty
+`frame_selector` (entering the embed must not disturb it), plus `Card Number`, `CVC` and
+`Pay Now` from inside the foreign frame, each stamped `iframe#card-entry`.
+
+`frame_selectors_must_resolve` additionally hands that selector back to the browser: it
+must resolve to exactly one frame, and each control captured through it must be findable
+inside that frame — i.e. the catalogued payment fields are ACTIONABLE at replay, not merely
+recorded.
 
 ## Expected manifest
 
 `tests/browser/golden/manifest_04-iframe-cross-origin.json`, whose `coverage.opaque` must
-carry one `cross_origin_iframe` row.
+carry one `cross_origin_iframe` row and one `frame_entered` row.
 
 ## Targeted defect
 
-None — regression guard. It pins two branches:
-
-```js
-// app/inventory_js.py:657 — the honest skip
-try { cdoc = ifr.contentDocument; } catch (e) { cdoc = null; }
-if (cdoc && seenDocs.indexOf(cdoc) === -1) { ... }
-```
-
-```js
-// app/inventory_js.py:692-698 — the named blind spot
-var readable = false;
-try { readable = !!f.contentDocument; } catch (e) { readable = false; }
-if (!readable) { push("cross_origin_iframe", host || "embedded frame", ...); }
-```
+Regression guard, re-aimed by M3.2 / T-FR-01 — see `expected.json`.
 
 ## Running this fixture alone
 

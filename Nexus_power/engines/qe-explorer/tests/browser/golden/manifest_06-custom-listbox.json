@@ -11,9 +11,9 @@
     },
     "config_fingerprint": "characterization-fixed",
     "crawl_id": "<normalized:crawl_id>",
-    "explorer_version": "qe-explorer/1.0+inv-js-v10",
+    "explorer_version": "qe-explorer/1.0+inv-js-v12",
     "frame_count": 0,
-    "guard_version": "qe-explorer/1.0+inv-js-v10",
+    "guard_version": "qe-explorer/1.0+inv-js-v12",
     "refuse_pack_version": "refuse-pack-v1",
     "stop_reason": "",
     "target_url": "http://127.0.0.1:<port>/06-custom-listbox/index.html",
@@ -39,35 +39,67 @@
     },
     "form_snapshot_signals": {
       "Beneficiary Relationship": {
+        "locator": {
+          "bindable": false,
+          "role": "combobox",
+          "strategy": "dom_id",
+          "value": "lazy-trigger",
+          "verified": true
+        },
         "options": [],
+        "options_total": 0,
         "required": false,
         "type": "select"
       },
       "Optional Rider": {
+        "locator": {
+          "bindable": false,
+          "role": "combobox",
+          "strategy": "dom_id",
+          "value": "rider-trigger",
+          "verified": true
+        },
         "options": [
           "Waiver of Premium",
           "Accidental Death",
           "Child Term"
         ],
+        "options_total": 3,
         "required": false,
         "type": "select"
       },
       "Payment Mode": {
+        "locator": {
+          "bindable": false,
+          "role": "combobox",
+          "strategy": "dom_id",
+          "value": "payment-mode",
+          "verified": true
+        },
         "options": [
           "Monthly",
           "Quarterly",
           "Annual"
         ],
+        "options_total": 3,
         "required": false,
         "type": "select"
       },
       "Term Length": {
+        "locator": {
+          "bindable": false,
+          "role": "combobox",
+          "strategy": "dom_id",
+          "value": "term-trigger",
+          "verified": true
+        },
         "options": [
           "10 years",
           "15 years",
           "20 years",
           "30 years"
         ],
+        "options_total": 4,
         "required": false,
         "type": "select"
       }
@@ -115,10 +147,10 @@
     },
     "config_fingerprint": "characterization-fixed",
     "crawl_id": "<normalized:crawl_id>",
-    "explorer_version": "qe-explorer/1.0+inv-js-v10",
+    "explorer_version": "qe-explorer/1.0+inv-js-v12",
     "frame_count": 1,
     "guard_blocks": 0,
-    "guard_version": "qe-explorer/1.0+inv-js-v10",
+    "guard_version": "qe-explorer/1.0+inv-js-v12",
     "refuse_pack_version": "refuse-pack-v1",
     "stats": {
       "actions": 0,

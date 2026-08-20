@@ -11,9 +11,9 @@
     },
     "config_fingerprint": "characterization-fixed",
     "crawl_id": "<normalized:crawl_id>",
-    "explorer_version": "qe-explorer/1.0+inv-js-v10",
+    "explorer_version": "qe-explorer/1.0+inv-js-v12",
     "frame_count": 0,
-    "guard_version": "qe-explorer/1.0+inv-js-v10",
+    "guard_version": "qe-explorer/1.0+inv-js-v12",
     "refuse_pack_version": "refuse-pack-v1",
     "stop_reason": "",
     "target_url": "http://127.0.0.1:<port>/01-shadow-open/index.html",
@@ -36,8 +36,11 @@
         "anchor": null,
         "phase": "explore",
         "qec": {
+          "capture_scope": "",
           "css_hint": "button#verify-btn",
+          "disclosure": "",
           "expanded": "",
+          "frame_origin": "",
           "frame_selector": "",
           "haspopup": "",
           "href": "",
@@ -45,6 +48,7 @@
           "name_confidence": "medium",
           "options": [],
           "role": "button",
+          "shadow_scope": "",
           "testid": ""
         },
         "screenshot_after": "<normalized:screenshot_after>",
@@ -70,17 +74,41 @@
     },
     "form_snapshot_signals": {
       "Date of Birth": {
+        "locator": {
+          "bindable": false,
+          "role": "textbox",
+          "strategy": "dom_id",
+          "value": "dob",
+          "verified": true
+        },
         "options": [],
+        "options_total": 0,
         "required": false,
         "type": "date"
       },
       "Policy Number": {
+        "locator": {
+          "bindable": false,
+          "role": "textbox",
+          "strategy": "dom_id",
+          "value": "policy-number",
+          "verified": true
+        },
         "options": [],
+        "options_total": 0,
         "required": false,
         "type": "text"
       },
       "Security PIN": {
+        "locator": {
+          "bindable": false,
+          "role": "textbox",
+          "strategy": "dom_id",
+          "value": "pin",
+          "verified": true
+        },
         "options": [],
+        "options_total": 0,
         "required": true,
         "type": "text"
       }
@@ -128,10 +156,10 @@
     },
     "config_fingerprint": "characterization-fixed",
     "crawl_id": "<normalized:crawl_id>",
-    "explorer_version": "qe-explorer/1.0+inv-js-v10",
+    "explorer_version": "qe-explorer/1.0+inv-js-v12",
     "frame_count": 1,
     "guard_blocks": 0,
-    "guard_version": "qe-explorer/1.0+inv-js-v10",
+    "guard_version": "qe-explorer/1.0+inv-js-v12",
     "refuse_pack_version": "refuse-pack-v1",
     "stats": {
       "actions": 1,

@@ -11,9 +11,9 @@
     },
     "config_fingerprint": "characterization-fixed",
     "crawl_id": "<normalized:crawl_id>",
-    "explorer_version": "qe-explorer/1.0+inv-js-v10",
+    "explorer_version": "qe-explorer/1.0+inv-js-v12",
     "frame_count": 0,
-    "guard_version": "qe-explorer/1.0+inv-js-v10",
+    "guard_version": "qe-explorer/1.0+inv-js-v12",
     "refuse_pack_version": "refuse-pack-v1",
     "stop_reason": "",
     "target_url": "http://127.0.0.1:<port>/09-questionnaire-20-samefingerprint/index.html",
@@ -36,8 +36,11 @@
         "anchor": null,
         "phase": "explore",
         "qec": {
+          "capture_scope": "",
           "css_hint": "button",
+          "disclosure": "",
           "expanded": "",
+          "frame_origin": "",
           "frame_selector": "",
           "haspopup": "",
           "href": "",
@@ -45,6 +48,7 @@
           "name_confidence": "medium",
           "options": [],
           "role": "button",
+          "shadow_scope": "",
           "testid": ""
         },
         "screenshot_after": "<normalized:screenshot_after>",
@@ -69,12 +73,40 @@
     },
     "form_snapshot_signals": {
       "No": {
+        "locator": {
+          "anchor": {
+            "kind": "group",
+            "label": "Have you been advised to have a medical test not yet completed? Yes No"
+          },
+          "bindable": true,
+          "group_id": "<hash>",
+          "match_index": 19,
+          "role": "radio",
+          "strategy": "accessible_name",
+          "value": "No",
+          "verified": true
+        },
         "options": [],
+        "options_total": 0,
         "required": false,
         "type": "radio"
       },
       "Yes": {
+        "locator": {
+          "anchor": {
+            "kind": "group",
+            "label": "Have you been advised to have a medical test not yet completed? Yes No"
+          },
+          "bindable": true,
+          "group_id": "<hash>",
+          "match_index": 19,
+          "role": "radio",
+          "strategy": "accessible_name",
+          "value": "Yes",
+          "verified": true
+        },
         "options": [],
+        "options_total": 0,
         "required": false,
         "type": "radio"
       }
@@ -122,10 +154,10 @@
     },
     "config_fingerprint": "characterization-fixed",
     "crawl_id": "<normalized:crawl_id>",
-    "explorer_version": "qe-explorer/1.0+inv-js-v10",
+    "explorer_version": "qe-explorer/1.0+inv-js-v12",
     "frame_count": 1,
     "guard_blocks": 0,
-    "guard_version": "qe-explorer/1.0+inv-js-v10",
+    "guard_version": "qe-explorer/1.0+inv-js-v12",
     "refuse_pack_version": "refuse-pack-v1",
     "stats": {
       "actions": 9,

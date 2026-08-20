@@ -49,7 +49,8 @@ from typing import Any
 
 from sqlalchemy import text
 
-from ..db import qec_engine, substrate_engine, utc_now
+from ..db import qec_engine, utc_now
+from .tenant_scope import fleet_tenant_ids
 
 logger = logging.getLogger(__name__)
 
@@ -199,21 +200,16 @@ def _reason_for(status: str) -> str:
 
 
 async def _tenant_ids() -> list[str]:
-    """Enumerate tenants from the global registry so the reap can scope PER-TENANT
-    under RLS. On an RLS-enforced qec role (non-superuser + FORCE RLS), a GUC-less
-    fleet query is filtered to zero rows — so the reaper must set the tenant GUC for
-    each tenant to SEE its own crawls. The ``tenants`` registry lives in the substrate
-    DB (a global, non-tenant-scoped table); falls back to the platform tenant if it
-    cannot be read, so the reaper degrades to platform-scope rather than no-op."""
-    try:
-        async with substrate_engine.begin() as conn:
-            rows = (await conn.execute(text("SELECT tenant_id FROM tenants"))).all()
-        ids = [str(r[0]) for r in rows if r[0]]
-        return ids or ["__platform__"]
-    except Exception as exc:  # pragma: no cover — registry unreadable → platform scope
-        logger.warning("qec.reaper.tenant_enum_failed",
-                       extra={"error": str(exc)[:200]})
-        return ["__platform__"]
+    """Enumerate tenants so the reap can scope PER-TENANT under RLS.
+
+    M3.3 / T-FL-05 — the body moved to :mod:`app.controlplane.tenant_scope` and
+    is now SHARED with the cycle driver's fleet scan. It used to live here as a
+    private copy, and the driver's ``_scan_fleet`` never adopted it: one policy
+    decision implemented twice, with the second copy GUC-less and therefore
+    blind under FORCE RLS. This alias is kept so the reaper's own callers and
+    tests are untouched.
+    """
+    return await fleet_tenant_ids()
 
 
 #: Reconciled instead of reaped: the crawl DID finish, its evidence is on the
@@ -237,6 +233,20 @@ async def _reconcile_from_manifest(row: Mapping) -> bool:
         return False
     try:
         from . import completion_recovery
+        # M3.3 / T-FL-03 — MATERIALISE before reading. The recovery path reads
+        # the same pod-local directory the ingestion path does, so on a fleet it
+        # would find nothing: the crawl that finished lives on the explorer pod,
+        # not on this one. Best-effort, unlike ingestion — recovery is ALREADY
+        # the fallback, so a store failure must degrade to "reap as before"
+        # rather than abort the sweep for every other crawl.
+        try:
+            from ..storage import object_store
+            await object_store.ensure_local(
+                str(row.get("tenant_id") or ""), crawl_id,
+                completion_recovery._crawl_dir(crawl_id))
+        except Exception as exc:
+            logger.warning("qec.recovery.evidence_fetch_failed",
+                           extra={"crawl_id": crawl_id, "error": str(exc)[:200]})
         body = completion_recovery.read_orphaned_completion(crawl_id)
         if body is None:
             return False

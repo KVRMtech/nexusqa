@@ -11,9 +11,9 @@
     },
     "config_fingerprint": "characterization-fixed",
     "crawl_id": "<normalized:crawl_id>",
-    "explorer_version": "qe-explorer/1.0+inv-js-v10",
+    "explorer_version": "qe-explorer/1.0+inv-js-v12",
     "frame_count": 0,
-    "guard_version": "qe-explorer/1.0+inv-js-v10",
+    "guard_version": "qe-explorer/1.0+inv-js-v12",
     "refuse_pack_version": "refuse-pack-v1",
     "stop_reason": "",
     "target_url": "http://127.0.0.1:<port>/04-iframe-cross-origin/index.html",
@@ -32,11 +32,49 @@
     "displayed_values": [],
     "first_seen_ms": "<normalized:first_seen_ms>",
     "form_snapshot": {
-      "Amount Due": "129.00"
+      "Amount Due": "129.00",
+      "CVC": "",
+      "Card Number": ""
     },
     "form_snapshot_signals": {
       "Amount Due": {
+        "locator": {
+          "bindable": false,
+          "role": "textbox",
+          "strategy": "dom_id",
+          "value": "amount-due",
+          "verified": true
+        },
         "options": [],
+        "options_total": 0,
+        "required": false,
+        "type": "text"
+      },
+      "CVC": {
+        "locator": {
+          "bindable": false,
+          "frame_selector": "iframe#card-entry",
+          "role": "textbox",
+          "strategy": "dom_id",
+          "value": "card-cvc",
+          "verified": true
+        },
+        "options": [],
+        "options_total": 0,
+        "required": false,
+        "type": "text"
+      },
+      "Card Number": {
+        "locator": {
+          "bindable": false,
+          "frame_selector": "iframe#card-entry",
+          "role": "textbox",
+          "strategy": "dom_id",
+          "value": "card-number",
+          "verified": true
+        },
+        "options": [],
+        "options_total": 0,
         "required": false,
         "type": "text"
       }
@@ -84,10 +122,10 @@
     },
     "config_fingerprint": "characterization-fixed",
     "crawl_id": "<normalized:crawl_id>",
-    "explorer_version": "qe-explorer/1.0+inv-js-v10",
+    "explorer_version": "qe-explorer/1.0+inv-js-v12",
     "frame_count": 1,
     "guard_blocks": 0,
-    "guard_version": "qe-explorer/1.0+inv-js-v10",
+    "guard_version": "qe-explorer/1.0+inv-js-v12",
     "refuse_pack_version": "refuse-pack-v1",
     "stats": {
       "actions": 0,

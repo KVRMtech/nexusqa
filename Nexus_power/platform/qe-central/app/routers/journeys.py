@@ -36,16 +36,20 @@ from ..db.journey_models import (
     JourneyTraversalRow,
 )
 from ..db.journey_run_models import JourneyCaseRow, JourneyRunRow
+from ..clients import factory
 from ..db.models import ClientAppRow, QEExplorationRow
 from ..services import (
     branch_planner,
     catalog_scenarios,
     catalog_store,
+    criticality,
     journey_baseline,
     journey_case_linker,
+    journey_criticality,
     journey_fold,
     journey_naming,
     journey_runner,
+    journey_spec,
     persona_journeys,
 )
 from ..services.catalog import (
@@ -233,6 +237,105 @@ async def _journey_rollup(session, tenant_id: str, app_id: str,
     }
 
 
+async def _journey_evidence(
+    session, tenant_id: str, app_id: str, journey: JourneyRow,
+) -> dict[str, Any]:
+    """The graph rows one journey compiles and is banded from.
+
+    Returns ``{nodes, edges, traversal, edge_labels, path_fps}`` for the
+    journey's most recent COMPLETED traversal, or empty collections when it has
+    none.  Completed on purpose: a specification generated from a walk the crawl
+    abandoned would assert a path nobody has ever finished, and a criticality
+    band derived from one would rank a dead end above a working funnel.
+    """
+    traversal = (await session.execute(
+        select(JourneyTraversalRow).where(
+            JourneyTraversalRow.tenant_id == tenant_id,
+            JourneyTraversalRow.app_id == app_id,
+            JourneyTraversalRow.journey_id == journey.journey_id,
+            JourneyTraversalRow.completed.is_(True),
+        ).order_by(JourneyTraversalRow.created_at.desc())
+        .limit(1))).scalar_one_or_none()
+    path_fps = [str(fp) for fp in ((traversal.path_fps if traversal else []) or [])]
+    if not path_fps:
+        return {"nodes": [], "edges": [], "traversal": traversal,
+                "edge_labels": [], "path_fps": []}
+    rows = (await session.execute(
+        select(JourneyNodeRow).where(
+            JourneyNodeRow.tenant_id == tenant_id,
+            JourneyNodeRow.app_id == app_id,
+            JourneyNodeRow.fingerprint.in_(set(path_fps)),
+        ))).scalars().all()
+    by_fp = {r.fingerprint: r for r in rows}
+    # WALK ORDER, not query order. The criticality projection and the compiled
+    # steps are both sequences, and a set-ordered node list would make both
+    # non-deterministic for a reason no reader could see.
+    nodes = [by_fp[fp] for fp in path_fps if fp in by_fp]
+    edges = (await session.execute(
+        select(JourneyEdgeRow).where(
+            JourneyEdgeRow.tenant_id == tenant_id,
+            JourneyEdgeRow.app_id == app_id,
+            JourneyEdgeRow.from_fp.in_(set(path_fps)),
+        ))).scalars().all()
+    walked = {(e.from_fp, e.to_fp): e for e in edges}
+    edge_labels = [
+        walked[(path_fps[i], path_fps[i + 1])].trigger_label_norm
+        for i in range(len(path_fps) - 1)
+        if (path_fps[i], path_fps[i + 1]) in walked
+    ]
+    return {"nodes": nodes, "edges": list(edges), "traversal": traversal,
+            "edge_labels": edge_labels, "path_fps": path_fps}
+
+
+async def _rank_journeys(
+    session, tenant_id: str, app_id: str, journeys: list[JourneyRow],
+    rollups: list[dict[str, Any]],
+    evidence_by_journey: dict[str, dict] | None = None,
+) -> list[dict[str, Any]]:
+    """Band every journey and return the list in deterministic rank order.
+
+    The band comes from ``criticality.evaluate`` through the journey adapter —
+    the same registry that bands scenarios and personas, reading the tenant's
+    ACTIVE pack.  Nothing here re-scores or second-guesses it; the evidence list
+    is carried through verbatim so a reviewer can see WHICH marker fired.
+    """
+    signals, registry_version = await criticality.load_active_pack(tenant_id)
+    by_id = {j.journey_id: j for j in journeys}
+    entries: list[dict[str, Any]] = []
+    for rollup in rollups:
+        journey = by_id.get(rollup["journey_id"])
+        if journey is None:
+            continue
+        # T-FL-06: when the caller has already batch-loaded the graph, band from
+        # that instead of re-querying per journey. The single-journey callers
+        # pass nothing and keep the original per-journey read, which is correct
+        # for them — one journey cannot have an N+1.
+        if evidence_by_journey is not None:
+            evidence = evidence_by_journey.get(
+                journey.journey_id,
+                {"nodes": [], "edges": [], "traversal": None,
+                 "edge_labels": [], "path_fps": []})
+        else:
+            evidence = await _journey_evidence(session, tenant_id, app_id, journey)
+        banded = journey_criticality.evaluate_journey(
+            journey, evidence["nodes"], edge_labels=evidence["edge_labels"],
+            pack={"signals": signals}, registry_version=registry_version)
+        entry = dict(rollup)
+        entry["criticality"] = {
+            "band": banded["band"],
+            "evidence": banded["evidence"],
+            "registry_version": banded["registry_version"],
+            "classifier": banded["classifier"],
+            "subject": banded["subject"],
+        }
+        entry["boundary_nodes"] = journey_criticality.boundary_node_count(
+            evidence["nodes"])
+        entry["endpoints_observed"] = journey_criticality.endpoint_count(
+            evidence["nodes"])
+        entries.append(entry)
+    return journey_criticality.rank(entries)
+
+
 def _path_enumeration(branches: list[JourneyBranchRow]) -> dict[str, Any]:
     """The honesty block: the exact path product up to the cap, else
     ``not_enumerated`` — never an extrapolated claim over an uncounted space."""
@@ -250,6 +353,256 @@ def _path_enumeration(branches: list[JourneyBranchRow]) -> dict[str, Any]:
                     "decision_controls": len(per_control)}
     return {"enumerated": True, "path_product": product,
             "decision_controls": len(per_control)}
+
+
+
+
+async def _runnable_view_batched(
+    session, *, tenant_id: str, app_id: str, journey_id: str,
+    artifact_id: str, paths_completed: int, adopted,
+    walk_signature: tuple[list[str], list[str]] = ([], []),
+) -> dict:
+    """``_runnable_view`` with the adopted case supplied by the batch loader.
+
+    Identical verdicts and identical wording — the only change is that the
+    adopted case arrives from ONE app-scoped query instead of one query per
+    journey. ``journey_walk_signature`` stays lazy: it runs only for a journey
+    that has NO adopted case, which is the minority branch, so the common path
+    costs zero extra round trips.
+    """
+    if paths_completed <= 0:
+        return {"ok": False, "test_case_id": "", "display_name": "",
+                "reason": ("no completed walk yet — re-crawl to prove the "
+                           "path before it can be executed")}
+    if not artifact_id:
+        return {"ok": False, "test_case_id": "", "display_name": "",
+                "reason": "no crawl artifact promoted for this app yet"}
+    if adopted is None:
+        # The walk signature comes from the app-scoped node/edge batches, not
+        # from a per-journey query that itself queried per NODE. On an app whose
+        # cases have not been generated yet EVERY journey takes this branch, so
+        # it is emphatically not a rare path — it was the dominant cost.
+        walked, walk_labels = walk_signature
+        if not walk_labels and len(set(walked)) < journey_case_linker.MIN_JOURNEY_PAGES:
+            return {"ok": False, "test_case_id": "", "display_name": "",
+                    "reason": ("this walk never advanced past its first page, "
+                               "so there is no end-to-end path to re-prove — "
+                               "crawl deeper (raise the crawl budget or scope "
+                               "End-to-end mode at this funnel)")}
+        return {"ok": False, "test_case_id": "", "display_name": "",
+                "reason": ("no test case walks this journey's pages in order "
+                           "on the current crawl artifact — re-crawl to "
+                           "regenerate its cases")}
+    return {"ok": True, "test_case_id": adopted.test_case_id,
+            "display_name": adopted.display_name or adopted.case_name,
+            "reason": ""}
+
+
+# ─── M3.3 / T-FL-06 · THE JOURNEYS N+1, REMOVED ─────────────────────────────
+# ``list_journeys`` used to call, PER JOURNEY: ``_journey_rollup`` (traversals +
+# branches = 2 queries), ``_runnable_view`` (the adopted case, sometimes a walk
+# signature too) and ``latest_run`` (1 query). At ~5 queries per journey, an app
+# with 60 journeys issued ~300 round trips for ONE page load — and every one of
+# them holds a pooled connection, so the endpoint's cost scales with the product
+# of journeys and concurrent viewers. Under the concurrent-crawl volume this
+# milestone introduces, that is what exhausts PgBouncer's pool first.
+#
+# The rollups are now computed from THREE app-scoped queries, in memory. The
+# per-journey shape of the response is unchanged — this is purely a change of
+# how the same numbers are obtained.
+
+
+async def _batch_traversals(session, tenant_id: str, app_id: str
+                            ) -> dict[str, list]:
+    """Every traversal for the app, grouped by journey_id. ONE query."""
+    rows = (await session.execute(
+        select(JourneyTraversalRow).where(
+            JourneyTraversalRow.tenant_id == tenant_id,
+            JourneyTraversalRow.app_id == app_id,
+        ))).scalars().all()
+    out: dict[str, list] = {}
+    for t in rows:
+        out.setdefault(t.journey_id, []).append(t)
+    return out
+
+
+async def _batch_branches(session, tenant_id: str, app_id: str
+                          ) -> dict[str, list]:
+    """Every branch for the app, indexed by node_fp. ONE query.
+
+    Indexed by ``node_fp`` (not journey_id) because that is how a journey
+    resolves its branches: through the node fingerprints on its traversals. One
+    node can serve several journeys, so a journey-keyed load would either
+    duplicate rows or miss shared ones.
+    """
+    rows = (await session.execute(
+        select(JourneyBranchRow).where(
+            JourneyBranchRow.tenant_id == tenant_id,
+            JourneyBranchRow.app_id == app_id,
+        ))).scalars().all()
+    out: dict[str, list] = {}
+    for b in rows:
+        out.setdefault(str(b.node_fp), []).append(b)
+    return out
+
+
+
+async def _batch_nodes(session, tenant_id: str, app_id: str) -> dict[str, Any]:
+    """Every graph node for the app, indexed by fingerprint. ONE query.
+
+    ``_journey_evidence`` and ``journey_walk_signature`` each resolved node URLs
+    fingerprint-by-fingerprint — a query per NODE, nested inside a loop per
+    journey. That is the most expensive shape in the endpoint: quadratic in the
+    app's graph size, and entirely avoidable, since the node set is small and
+    shared across journeys.
+    """
+    rows = (await session.execute(
+        select(JourneyNodeRow).where(
+            JourneyNodeRow.tenant_id == tenant_id,
+            JourneyNodeRow.app_id == app_id,
+        ))).scalars().all()
+    return {r.fingerprint: r for r in rows}
+
+
+async def _batch_edges(session, tenant_id: str, app_id: str) -> dict[tuple, Any]:
+    """Every graph edge for the app, indexed by ``(from_fp, to_fp)``. ONE query."""
+    rows = (await session.execute(
+        select(JourneyEdgeRow).where(
+            JourneyEdgeRow.tenant_id == tenant_id,
+            JourneyEdgeRow.app_id == app_id,
+        ))).scalars().all()
+    return {(r.from_fp, r.to_fp): r for r in rows}
+
+
+def _latest_completed(traversals: list):
+    """The journey's most recent COMPLETED traversal, from batched rows.
+
+    Completed on purpose, matching the per-journey original: a band or a
+    specification derived from a walk the crawl abandoned would rank a dead end
+    above a working funnel.
+    """
+    done = [t for t in traversals if t.completed]
+    if not done:
+        return None
+    # ``created_at`` descending, exactly as the per-journey query ordered.
+    return max(done, key=lambda t: (t.created_at, t.traversal_id))
+
+
+def _evidence_from_batches(traversals: list, nodes_by_fp: dict,
+                           edges_by_pair: dict) -> dict[str, Any]:
+    """``_journey_evidence`` computed in memory. Same shape, same ordering."""
+    traversal = _latest_completed(traversals)
+    path_fps = [str(fp) for fp in ((traversal.path_fps if traversal else []) or [])]
+    if not path_fps:
+        return {"nodes": [], "edges": [], "traversal": traversal,
+                "edge_labels": [], "path_fps": []}
+    # WALK ORDER, not query order — preserved from the original.
+    nodes = [nodes_by_fp[fp] for fp in path_fps if fp in nodes_by_fp]
+    edges = [e for (a, _b), e in edges_by_pair.items() if a in set(path_fps)]
+    edge_labels = [
+        edges_by_pair[(path_fps[i], path_fps[i + 1])].trigger_label_norm
+        for i in range(len(path_fps) - 1)
+        if (path_fps[i], path_fps[i + 1]) in edges_by_pair
+    ]
+    return {"nodes": nodes, "edges": edges, "traversal": traversal,
+            "edge_labels": edge_labels, "path_fps": path_fps}
+
+
+def _walk_signature_from_batches(traversals: list, nodes_by_fp: dict,
+                                 edges_by_pair: dict) -> tuple[list[str], list[str]]:
+    """``journey_case_linker.journey_walk_signature`` computed in memory."""
+    from ..services.journey_case_linker import norm_path, normalize_option_label
+    traversal = _latest_completed(traversals)
+    if traversal is None:
+        return [], []
+    fps = [str(fp) for fp in (traversal.path_fps or [])]
+    paths: list[str] = []
+    for fp in fps:
+        node = nodes_by_fp.get(fp)
+        p = norm_path(node.url) if node is not None and node.url else ""
+        if p and (not paths or paths[-1] != p):
+            paths.append(p)
+    labels: list[str] = []
+    for a, b in zip(fps, fps[1:]):
+        edge = edges_by_pair.get((a, b))
+        label = normalize_option_label(str(
+            getattr(edge, "trigger_label_norm", "") or ""))
+        if label:
+            labels.append(label)
+    return paths, labels
+
+
+async def _batch_latest_runs(session, tenant_id: str, app_id: str) -> dict[str, Any]:
+    """The most recent run per journey. ONE query.
+
+    ``DISTINCT ON`` is PostgreSQL-specific and deliberate: qe-central is a
+    Postgres-only service (JSONB columns, RLS policies, ``FOR UPDATE SKIP
+    LOCKED``), and the alternative — fetching every run and reducing in Python —
+    would move the whole run ledger over the wire to discard almost all of it.
+    """
+    rows = (await session.execute(
+        select(JourneyRunRow).where(
+            JourneyRunRow.tenant_id == tenant_id,
+            JourneyRunRow.app_id == app_id,
+        ).distinct(JourneyRunRow.journey_id)
+        .order_by(JourneyRunRow.journey_id,
+                  JourneyRunRow.started_at.desc()))).scalars().all()
+    return {r.journey_id: r for r in rows}
+
+
+async def _batch_cases(session, tenant_id: str, app_id: str,
+                       artifact_id: str) -> dict[str, Any]:
+    """The adopted end-to-end case per journey, for the CURRENT artifact. ONE query."""
+    if not artifact_id:
+        return {}
+    rows = (await session.execute(
+        select(JourneyCaseRow).where(
+            JourneyCaseRow.tenant_id == tenant_id,
+            JourneyCaseRow.app_id == app_id,
+            JourneyCaseRow.artifact_id == artifact_id,
+            JourneyCaseRow.kind == journey_case_linker.KIND_JOURNEY_E2E,
+        ))).scalars().all()
+    return {r.journey_id: r for r in rows}
+
+
+def _rollup_from_batches(journey: JourneyRow, traversals: list,
+                         branches_by_fp: dict[str, list]) -> dict[str, Any]:
+    """The per-journey rollup, computed in memory. Byte-identical output to
+    ``_journey_rollup`` — only the source of the rows differs."""
+    distinct_paths = {t.path_hash for t in traversals}
+    completed_paths = {t.path_hash for t in traversals if t.completed}
+    node_fps = sorted({str(fp) for t in traversals for fp in (t.path_fps or [])})
+    branches = [b for fp in node_fps for b in branches_by_fp.get(fp, [])]
+    by_status: dict[str, int] = {}
+    for b in branches:
+        by_status[b.status] = by_status.get(b.status, 0) + 1
+    all_settled = all(b.status in (BRANCH_WALKED, BRANCH_BLOCKED) for b in branches)
+    branch_coverage = bool(completed_paths) and all_settled
+    return {
+        "journey_id": journey.journey_id,
+        "flow_id": journey.flow_id,
+        "business_name": journey.business_name,
+        "name_source": journey.name_source,
+        "description": journey.name_description,
+        "entry_title": journey.entry_title,
+        "entry_url": journey.entry_url,
+        "deepest_steps": journey.deepest_steps,
+        "last_proven_at": (journey.last_proven_at.isoformat()
+                           if journey.last_proven_at else None),
+        "paths_walked": len(distinct_paths),
+        "paths_completed": len(completed_paths),
+        "branches": {
+            "walked": by_status.get(BRANCH_WALKED, 0),
+            "discovered": by_status.get(BRANCH_DISCOVERED, 0),
+            "planned": by_status.get("planned", 0),
+            "blocked": by_status.get(BRANCH_BLOCKED, 0),
+        },
+        "branch_coverage": branch_coverage,
+        "baseline_status": journey.baseline_status,
+        "baseline_approved_at": (journey.baseline_approved_at.isoformat()
+                                 if journey.baseline_approved_at else None),
+        "node_fps": node_fps,
+    }
 
 
 @router.get("/apps/{app_id}/journeys")
@@ -274,16 +627,37 @@ async def list_journeys(app_id: str, user: dict = Depends(require_auth)) -> dict
         rollups = []
         run_rollup = {"runnable": 0, "run_green": 0, "run_red": 0,
                       "never_run": 0}
+        # T-FL-06 — THREE app-scoped queries replace ~5 per journey. See the
+        # batch loaders above for why this was the endpoint that exhausted the
+        # connection pool first under concurrent crawl volume.
+        traversals_by_journey = await _batch_traversals(session, tenant_id, app_id)
+        branches_by_fp = await _batch_branches(session, tenant_id, app_id)
+        latest_runs = await _batch_latest_runs(session, tenant_id, app_id)
+        cases_by_journey = await _batch_cases(session, tenant_id, app_id, artifact_id)
+        nodes_by_fp = await _batch_nodes(session, tenant_id, app_id)
+        edges_by_pair = await _batch_edges(session, tenant_id, app_id)
+        # Derived once per journey from the batches above — no further queries.
+        evidence_by_journey = {
+            j.journey_id: _evidence_from_batches(
+                traversals_by_journey.get(j.journey_id, []),
+                nodes_by_fp, edges_by_pair)
+            for j in journeys}
+        walk_sigs = {
+            j.journey_id: _walk_signature_from_batches(
+                traversals_by_journey.get(j.journey_id, []),
+                nodes_by_fp, edges_by_pair)
+            for j in journeys}
         for j in journeys:
-            r = await _journey_rollup(session, tenant_id, app_id, j)
+            r = _rollup_from_batches(
+                j, traversals_by_journey.get(j.journey_id, []), branches_by_fp)
             r.pop("node_fps", None)
-            runnable = await _runnable_view(
+            runnable = await _runnable_view_batched(
                 session, tenant_id=tenant_id, app_id=app_id,
                 journey_id=j.journey_id, artifact_id=artifact_id,
-                paths_completed=r["paths_completed"])
-            last = await journey_runner.latest_run(
-                session, tenant_id=tenant_id, app_id=app_id,
-                journey_id=j.journey_id)
+                paths_completed=r["paths_completed"],
+                adopted=cases_by_journey.get(j.journey_id),
+                walk_signature=walk_sigs.get(j.journey_id, ([], [])))
+            last = latest_runs.get(j.journey_id)
             r["runnable"] = runnable
             r["last_run"] = _run_view(last)
             if runnable["ok"]:
@@ -295,16 +669,84 @@ async def list_journeys(app_id: str, user: dict = Depends(require_auth)) -> dict
             elif last.status in ("failed", "timed_out", "error", "blocked"):
                 run_rollup["run_red"] += 1
             rollups.append(r)
+        # M2.4 / T-GEN-02 — band every journey and order the list.  Done inside
+        # the session because banding reads the graph rows; done for the WHOLE
+        # set before any slice, so the twentieth entry is rank 20 of everything
+        # rather than rank 20 of a list somebody already truncated.
+        rollups = await _rank_journeys(
+            session, tenant_id, app_id, list(journeys), rollups,
+            evidence_by_journey=evidence_by_journey)
     return {
         "app_id": app_id,
         "artifact_id": artifact_id,
+        # Returned in RANK order: most critical first, deterministically.
         "journeys": rollups,
         "journeys_found": len(rollups),
         "runs": run_rollup,
+        # The ranked head, as a first-class list rather than a client-side
+        # slice — "which twenty matter most" is the question this surface
+        # exists to answer, and every reader must get the same twenty.
+        "top_n": journey_criticality.TOP_N_DEFAULT,
+        "top_journeys": [r["journey_id"]
+                         for r in rollups[:journey_criticality.TOP_N_DEFAULT]],
+        "ranking": {
+            "deterministic": True,
+            "key": ["criticality_band", "deepest_steps", "paths_completed",
+                    "boundary_nodes", "endpoints_observed", "journey_id"],
+            "classifier": criticality.CLASSIFIER,
+        },
         # App-level claim, earnable only: EVERY journey earned it and at
         # least one exists. One discovered branch anywhere keeps it false.
         "branch_coverage": bool(rollups) and all(
             r["branch_coverage"] for r in rollups),
+    }
+
+
+# DECLARED BEFORE ``/journeys/{journey_id}``, and that is load-bearing.
+# FastAPI matches routes in declaration order, so a literal path sitting
+# below a single-segment parameter route is unreachable: every request to
+# /journeys/top would bind journey_id="top" and 404 with "journey not
+# found" — a failure that reads like missing data rather than like the
+# routing mistake it is.
+@router.get("/apps/{app_id}/journeys/top")
+async def top_journeys(
+    app_id: str, n: int = journey_criticality.TOP_N_DEFAULT,
+    user: dict = Depends(require_auth),
+) -> dict:
+    """T-GEN-02 — the ranked Top-N journeys with their criticality evidence.
+
+    Ranks are assigned over EVERY journey before the slice, so entry twenty is
+    rank 20 of the application and not rank 20 of a list already truncated.  The
+    order is deterministic over the stored evidence: the same rows produce the
+    same list on every call, which is what makes a Top-20 something a team can
+    plan against rather than a suggestion that moves between two reads.
+    """
+    tenant_id = user["tenant_id"]
+    async with tenant_scoped_qec_session(tenant_id) as session:
+        journeys = (await session.execute(
+            select(JourneyRow).where(
+                JourneyRow.tenant_id == tenant_id,
+                JourneyRow.app_id == app_id,
+            ).order_by(JourneyRow.created_at))).scalars().all()
+        rollups = []
+        for j in journeys:
+            r = await _journey_rollup(session, tenant_id, app_id, j)
+            r.pop("node_fps", None)
+            rollups.append(r)
+        ranked = await _rank_journeys(
+            session, tenant_id, app_id, list(journeys), rollups)
+    limit = max(1, min(int(n or journey_criticality.TOP_N_DEFAULT), 200))
+    return {
+        "app_id": app_id,
+        "journeys_found": len(ranked),
+        "top_n": limit,
+        "journeys": ranked[:limit],
+        "ranking": {
+            "deterministic": True,
+            "key": ["criticality_band", "deepest_steps", "paths_completed",
+                    "boundary_nodes", "endpoints_observed", "journey_id"],
+            "classifier": criticality.CLASSIFIER,
+        },
     }
 
 
@@ -804,18 +1246,97 @@ async def get_catalog(
 
 @router.get("/apps/{app_id}/catalog")
 async def get_app_master_catalog(
-    app_id: str, user: dict = Depends(require_auth),
+    app_id: str, include_retired: bool = False,
+    user: dict = Depends(require_auth),
 ) -> dict:
-    """P2 — the app-scoped Master Catalog: every question the application has,
-    deduped by a stable ``question_id`` across every journey and node (so the 400
-    questions live once, not per journey). Each row carries the pages it was seen
-    on, answer type, required, options, validation, and expected next page.
+    """P2 / M2.2 — the app-scoped Master Catalog: every question the application
+    has, deduped by a stable ``question_id`` across every journey and node (so the
+    400 questions live once, not per journey).
 
-    Aggregated live from the journey graph — a re-crawl refreshes it.
+    Each question carries the complete record the crawl was able to establish:
+
+    ``question_id`` · ``name`` (the question text) · ``type`` · ``required`` ·
+    ``options`` and ``options_total`` (see below) · ``validation`` (the HTML
+    constraints the application declared about itself) · ``depends_on`` (the
+    question this one hangs off, proven by watching a driver populate it) ·
+    ``locator`` (the handle the PAGE declared for the control) ·
+    ``business_rule`` (the sentence an experiment proved) · ``pages`` ·
+    ``expected_next_page`` · ``provenance``.
+
+    THREE FIELDS EXIST TO STOP THIS FROM READING AS MORE THAN IT IS:
+
+      * ``business_rule_state`` — ``observed`` only when a crawl experiment
+        proved the rule, ``UNVERIFIED`` otherwise. Most questions in any
+        application gate nothing, so ``UNVERIFIED`` is a correct final answer and
+        not a pending one. Nothing here infers a rule from a field's shape.
+      * ``locator_state`` — ``verified`` when the captured handle resolves to
+        exactly one control, ``UNVERIFIED`` when the application identifies the
+        control by nothing usable, ``absent`` for a questionnaire question folded
+        in from a branch row, which is a signature and an option and never an
+        element.
+      * ``options_total`` — how many answers the control OFFERS, carried apart
+        from ``options`` so a clipped read stays visible as clipped. A 250-option
+        control whose stored list was bounded reports both numbers; a consumer
+        that needs completeness compares them rather than trusting the list.
+
+    ``summary`` additionally reports how much of the catalogue is evidence:
+    ``with_business_rule`` / ``with_dependency`` / ``with_verified_locator`` /
+    ``with_validation`` / ``options_clipped``.
+
+    ── M2.3 · LIFECYCLE ────────────────────────────────────────────────────
+
+    Every question also carries ``lifecycle``: ``active`` (observed by the crawl
+    that last looked for it), ``stale`` (previously known, not observed, and the
+    absence is not yet conclusive) or ``retired`` (not observed, conclusively —
+    with ``retired_at``, ``retired_in_crawl`` and ``retire_reason``).
+
+    THIS ROUTE RETURNS THE ACTIVE CATALOGUE BY DEFAULT. A retired question is
+    absent from it, because a client planning against this catalogue must not be
+    handed a question the application has stopped asking — a test built on one
+    fails for a reason the report would blame on the application. ``summary``
+    always states ``retired_count``, so a reader can see that questions are being
+    withheld rather than having to infer it.
+
+    Pass ``include_retired=true`` for the AUDIT catalogue: everything the
+    application has ever asked, retired questions included and labelled with when
+    they went and which crawl established it. Nothing is ever deleted, so that
+    view can always answer "what did we stop asking?".
+
+    PURELY ADDITIVE. Every key an earlier consumer read is present and unchanged;
+    this release only adds. Aggregated live from the journey graph joined to the
+    durable business-rule store — a re-crawl refreshes it.
     """
     tenant_id = user["tenant_id"]
-    master = await catalog_store.build_app_master_catalog(tenant_id, app_id)
+    master = await catalog_store.build_app_master_catalog(
+        tenant_id, app_id, include_retired=include_retired)
     return {"app_id": app_id, **master}
+
+
+@router.get("/apps/{app_id}/catalog/retired")
+async def get_app_retired_questions(
+    app_id: str, user: dict = Depends(require_auth),
+) -> dict:
+    """M2.3 — every question this application has STOPPED asking.
+
+    The audit record, read straight off the durable ``catalog_questions`` rows
+    rather than reconstructed from the graph. Each entry keeps its historical
+    ``question_id``, the content it had, the pages it was asked on and its
+    first-seen record, and adds the retirement: ``retired_at``,
+    ``retired_in_crawl``, ``retire_reason`` and ``missed_crawls`` — the evidence
+    trail behind the stamp.
+
+    ``last_seen_crawl`` is the crawl that last actually OBSERVED the question. It
+    is reported beside the older ``last_seen_artifact``, which used to be bumped
+    on every fold whether the question was seen or not and therefore cannot
+    answer the question its name implies.
+
+    Newest retirement first. A question the application starts asking again is
+    revived by the next crawl and leaves this list — retirement is a record, not
+    a tombstone.
+    """
+    tenant_id = user["tenant_id"]
+    retired = await catalog_store.load_retired_questions(tenant_id, app_id)
+    return {"app_id": app_id, "retired": retired, "count": len(retired)}
 
 
 @router.get("/apps/{app_id}/catalog/scenarios")
@@ -870,6 +1391,24 @@ async def get_app_catalog_diff(
     — added / removed / changed questions, each change labelled (renamed,
     options_changed, validation_changed, required_changed, rule_changed,
     moved_next_page). With fewer than two versions there is nothing to diff yet.
+
+    ── M2.3 · ``removed`` IS REACHABLE ─────────────────────────────────────
+
+    This bucket has always been computed and, until M2.3, could never fire from a
+    real crawl: node control inventories merged by UNION, so a question the
+    application dropped stayed in every later snapshot for ever. Retirement is
+    what removes it from the ACTIVE catalogue the snapshot is taken from, so a
+    question the application stopped asking now leaves the newer snapshot and
+    lands here.
+
+    ``removed_detail`` carries the question TEXT and the retirement record behind
+    each id — ``retired_at``, ``retired_in_crawl``, ``retire_reason``,
+    ``last_seen_crawl``, and the pages it used to be asked on. A bare list of
+    hashes is not something a reviewer can sign off on.
+
+    ``unchanged_ids`` names the questions that did NOT move, alongside the count.
+    All four buckets are then auditable against the snapshots themselves rather
+    than being a number a reader has to take on trust.
     """
     tenant_id = user["tenant_id"]
     return await catalog_store.diff_latest_versions(tenant_id, app_id)
@@ -1045,6 +1584,131 @@ async def nl_case(
                "outcomes_unverified": result.get("outcomes_unverified")},
     )
     return result
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  M2.4 · GENERATION — a journey compiles on its own evidence
+# ═══════════════════════════════════════════════════════════════════════════
+
+async def _journey_payload(
+    session, tenant_id: str, app_id: str, journey: JourneyRow,
+    *, criticality_result: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """One journey's compile payload, built from its OWN graph rows."""
+    evidence = await _journey_evidence(session, tenant_id, app_id, journey)
+    nodes_by_fp = {n.fingerprint: n for n in evidence["nodes"]}
+    return journey_spec.build_journey_case(
+        journey, traversal=evidence["traversal"], nodes_by_fp=nodes_by_fp,
+        edges=evidence["edges"], tenant_id=tenant_id,
+        criticality=criticality_result or {},
+    )
+
+
+@router.post("/apps/{app_id}/journeys/{journey_id}/spec")
+async def compile_journey_spec(
+    app_id: str, journey_id: str, user: dict = Depends(_MUTATE),
+) -> dict:
+    """T-GEN-01 — compile ONE journey into a runnable, linted Playwright spec.
+
+    No adopting case is consulted and none is required: the journey's own walk
+    IS the specification.  A journey the crawl never finished is REFUSED with a
+    named reason rather than compiled into a spec that asserts a path nobody has
+    walked to the end.
+    """
+    tenant_id = user["tenant_id"]
+    async with tenant_scoped_qec_session(tenant_id) as session:
+        journey = await _journey_or_404(session, tenant_id, app_id, journey_id)
+        payload = await _journey_payload(session, tenant_id, app_id, journey)
+    if not payload.get("compilable"):
+        return {"app_id": app_id, "journey_id": journey_id,
+                "compiled": False, "reason": payload.get("reason", "")}
+    try:
+        result = await factory.compile_journeys(
+            tenant_id=tenant_id, journeys=[payload])
+    except factory.FactoryClientError as exc:
+        raise HTTPException(status_code=exc.status_code or 502,
+                            detail=exc.detail) from exc
+    results = list(result.get("results") or [{}])
+    head = results[0] if results else {}
+    return {"app_id": app_id, "journey_id": journey_id,
+            "payload": payload, **head,
+            "spec": (result.get("specs") or {}).get(head.get("spec_path", ""), ""),
+            "lint_status": result.get("lint_status"),
+            "lint_rules_version": result.get("lint_rules_version")}
+
+
+@router.post("/apps/{app_id}/journeys/generate-top")
+async def generate_top_journeys(
+    app_id: str, n: int = journey_criticality.TOP_N_DEFAULT,
+    user: dict = Depends(_MUTATE),
+) -> dict:
+    """T-GEN-02 + T-GEN-05 — compile the ranked Top-N, and LINT every one.
+
+    The whole M2.4 path in one call: discovered journeys → criticality → rank →
+    Top-N → per-journey compilation → lint.  Journeys that cannot be compiled
+    are returned with their reason IN the same list; a Top-20 that silently
+    shrank to eleven would hide the nine facts an operator most needs to see.
+    """
+    tenant_id = user["tenant_id"]
+    limit = max(1, min(int(n or journey_criticality.TOP_N_DEFAULT), 100))
+    async with tenant_scoped_qec_session(tenant_id) as session:
+        journeys = (await session.execute(
+            select(JourneyRow).where(
+                JourneyRow.tenant_id == tenant_id,
+                JourneyRow.app_id == app_id,
+            ).order_by(JourneyRow.created_at))).scalars().all()
+        rollups = []
+        for j in journeys:
+            r = await _journey_rollup(session, tenant_id, app_id, j)
+            r.pop("node_fps", None)
+            rollups.append(r)
+        ranked = await _rank_journeys(
+            session, tenant_id, app_id, list(journeys), rollups)
+        by_id = {j.journey_id: j for j in journeys}
+        payloads = []
+        for entry in ranked[:limit]:
+            journey = by_id.get(entry["journey_id"])
+            if journey is None:
+                continue
+            payload = await _journey_payload(
+                session, tenant_id, app_id, journey,
+                criticality_result=entry.get("criticality"))
+            payload["rank"] = entry.get("rank")
+            payloads.append(payload)
+
+    compilable = [p for p in payloads if p.get("compilable")]
+    refused = [{"journey_id": p.get("journey_id"), "rank": p.get("rank"),
+                "compiled": False, "reason": p.get("reason", "")}
+               for p in payloads if not p.get("compilable")]
+    compiled: dict[str, Any] = {"results": [], "specs": {}}
+    if compilable:
+        try:
+            compiled = await factory.compile_journeys(
+                tenant_id=tenant_id, journeys=compilable)
+        except factory.FactoryClientError as exc:
+            raise HTTPException(status_code=exc.status_code or 502,
+                                detail=exc.detail) from exc
+    results = list(compiled.get("results") or []) + refused
+    logger.info(
+        "qec.journeys.generate_top",
+        extra={"tenant_id": tenant_id, "app_id": app_id, "requested": limit,
+               "compiled": sum(1 for r in results if r.get("compiled")),
+               "refused": len(refused)},
+    )
+    return {
+        "app_id": app_id,
+        "top_n": limit,
+        "journeys_ranked": len(ranked),
+        "results": results,
+        "compiled": sum(1 for r in results if r.get("compiled")),
+        "refused": len(refused),
+        "specs": compiled.get("specs") or {},
+        # T-GEN-05 — the lint verdict, stated as a fact about an execution
+        # rather than as a shape that an absent execution also produces.
+        "lint_status": compiled.get("lint_status", "not_run"),
+        "lint_rules_version": compiled.get("lint_rules_version", ""),
+        "lint_errors_total": compiled.get("lint_errors_total", 0),
+    }
 
 
 @router.post("/apps/{app_id}/journeys/walk-branches")

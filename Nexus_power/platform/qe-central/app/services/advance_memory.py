@@ -11,7 +11,11 @@ field-learning doctrine:
   * WRITE-BACK ON PROOF ONLY: the harvest runs at completion-callback time
     over the flow steps' advance evidence — a pick enters memory only after
     the crawler observed a genuine advance (real effect + new unseen state).
-    An LLM guess is not knowledge.
+    An LLM guess is not knowledge.  PROOF, not PROVENANCE, is the gate: a
+    deterministic tier-1/2 advance the walk carried forward is remembered on
+    exactly the same terms as a tier-3 one (M2.6 / T-CAP-02).  It did not use
+    to be, so on an ordinary "Next"/"Continue" application the learning layer
+    stored nothing at all.
   * CONSENT: contributing label patterns to the shared pool requires the
     tenant's explicit ``share_advance_priors`` opt-in (OFF by default).
     Recall of the pool is open — it is value-free by construction.
@@ -170,15 +174,32 @@ async def _contribute_prior(session, *, tenant_id: str, label_norm: str) -> None
     row.last_proven_at = utc_now()
 
 
-def _proven_oracle_advances(coverage: Any) -> list[tuple[str, str]]:
-    """(signature, label_norm) pairs from a completion's flow evidence.
+def _proven_advances(coverage: Any) -> list[tuple[str, str, bool]]:
+    """(signature, label_norm, was_oracle) triples from a completion's flow
+    evidence — EVERY tier, not only the oracle's.
 
-    Only tier-3 (oracle) advances carry a signature, and an ``advance`` entry
-    exists on a step ONLY when the walk genuinely advanced out of it — so
-    presence here IS the proof."""
+    PROOF IS THE SAME FACT WHATEVER DECIDED IT. An ``advance`` entry exists on
+    a step only when the walk genuinely advanced out of it (real effect + a new
+    unseen state), so presence here IS the proof — and a deterministic tier-1
+    "Continue" that carried the walk forward is exactly as proven as a tier-3
+    pick.  This filtered on ``oracle`` and therefore remembered ONLY the LLM's
+    picks: on a normal application, whose forward controls are named "Next" and
+    "Continue", the crawl proved an advance at every step and stored none of
+    them.  The learning layer only ever saw the rare case (M2.6 / T-CAP-02).
+
+    The gate that remains is the SIGNATURE.  It is the value-free decision-point
+    key both halves compute the same way (qe-explorer ``app.advance_signature``
+    mirrors :func:`app.services.advance_agent.compute_signature`), and without
+    it a remembered label has no decision point to be recalled at.  A step whose
+    advance carries no signature is skipped rather than stored under a fabricated
+    key.
+
+    ``was_oracle`` is kept so the harvest can REPORT the split — a fleet whose
+    advances are suddenly all tier-3 is a fleet whose deterministic tiers broke.
+    """
     if not isinstance(coverage, Mapping):
         return []
-    out: list[tuple[str, str]] = []
+    out: list[tuple[str, str, bool]] = []
     for flow in coverage.get("flows") or []:
         if not isinstance(flow, Mapping):
             continue
@@ -186,30 +207,39 @@ def _proven_oracle_advances(coverage: Any) -> list[tuple[str, str]]:
             if not isinstance(step, Mapping):
                 continue
             adv = step.get("advance")
-            if not isinstance(adv, Mapping) or not adv.get("oracle"):
+            if not isinstance(adv, Mapping):
                 continue
             signature = str(adv.get("signature") or "")
             label = normalize_label(str(adv.get("control_name") or ""))
             if signature and label:
-                out.append((signature, label))
+                out.append((signature, label, bool(adv.get("oracle"))))
     return out
 
 
 async def harvest_completion(
     *, tenant_id: str, app_id: str, coverage: Any,
 ) -> dict[str, int]:
-    """Fold a finished crawl's PROVEN oracle advances into memory (and, with
-    consent, into the shared label pool).  Best-effort: never raises, and a
-    failure never breaks the completion callback."""
-    pairs = _proven_oracle_advances(coverage)
-    if not pairs:
-        return {"proven": 0, "remembered": 0, "contributed": 0}
+    """Fold a finished crawl's PROVEN advances — every tier — into memory (and,
+    with consent, into the shared label pool).  Best-effort: never raises, and a
+    failure never breaks the completion callback.
+
+    ``oracle`` / ``deterministic`` split the proven set by WHO decided, so the
+    fleet can see at a glance whether the deterministic tiers are still doing
+    the work.  Before M2.6 the deterministic column did not exist because those
+    advances were dropped on the floor."""
+    triples = _proven_advances(coverage)
+    if not triples:
+        return {"proven": 0, "remembered": 0, "contributed": 0,
+                "oracle": 0, "deterministic": 0}
+    oracle_n = sum(1 for _s, _l, was_oracle in triples if was_oracle)
+    base = {"proven": len(triples), "oracle": oracle_n,
+            "deterministic": len(triples) - oracle_n}
     remembered = contributed = 0
     try:
         async with tenant_scoped_qec_session(tenant_id) as session:
             consented = await _tenant_consented(session, tenant_id)
             seen: set[str] = set()
-            for signature, label in pairs:
+            for signature, label, _was_oracle in triples:
                 if signature in seen:
                     continue
                 seen.add(signature)
@@ -225,9 +255,10 @@ async def harvest_completion(
         logger.warning("qec.advance_memory.harvest_failed",
                        extra={"tenant_id": tenant_id, "app_id": app_id,
                               "error": str(exc)[:200]})
-        return {"proven": len(pairs), "remembered": 0, "contributed": 0}
+        return {**base, "remembered": 0, "contributed": 0}
     logger.warning(
-        "qec.advance_memory.harvested proven=%d remembered=%d contributed=%d "
-        "tenant=%s app=%s", len(pairs), remembered, contributed, tenant_id, app_id)
-    return {"proven": len(pairs), "remembered": remembered,
-            "contributed": contributed}
+        "qec.advance_memory.harvested proven=%d oracle=%d deterministic=%d "
+        "remembered=%d contributed=%d tenant=%s app=%s",
+        len(triples), oracle_n, len(triples) - oracle_n, remembered,
+        contributed, tenant_id, app_id)
+    return {**base, "remembered": remembered, "contributed": contributed}

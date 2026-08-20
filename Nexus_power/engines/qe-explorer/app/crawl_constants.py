@@ -68,6 +68,17 @@ STOP_RESUME_UNRECOVERABLE = "resume_unrecoverable"
 #: :func:`app.completion.adjudicate`, never by the crawl loop.
 STOP_NO_EVIDENCE = "no_evidence"
 
+#: Gate 1 / T-JC-01 — the crawl WALKED journeys and crossed no step in any of
+#: them.  It observed pages, it catalogued them, and it never once advanced a
+#: funnel: page discovery reported under the name of journey execution.  Set by
+#: :func:`app.completion.adjudicate`, never by the crawl loop.
+#:
+#: Conditional on ``journeys_walked``, deliberately.  An application with no
+#: funnel in it has nothing to cross and completes correctly with zero
+#: crossings; making this unconditional would make "has a wizard" a
+#: precondition of a successful crawl.
+STOP_JOURNEY_ZERO_CROSSING = "journey_zero_crossing"
+
 #: Stop reasons that mean the crawl DID NOT prove what it set out to prove.  The
 #: engine, qe-central and the tests all read this one set, so a new failure
 #: reason cannot be added on one side and silently read as success on the other.
@@ -91,6 +102,19 @@ _MAX_HOVER_REVEALS = 8
 #: Bound on the revealed nav ITEMS a single opened menu is probed for (find the
 #: one the open made clickable) — keeps a big mega-menu from spending the budget.
 _MAX_MENU_ITEMS = 10
+
+#: M2.6 / T-CAP-03 — bound on DISCLOSURE controls opened per state before the
+#: state is catalogued (accordion headers, <details>, unselected tabs). A page
+#: that renders forty collapsed sections is a real thing; opening all of them
+#: would turn one state into a forty-click visit, so the pass takes the first N
+#: in DOM order — a stable, reproducible prefix rather than an arbitrary sample —
+#: and says out loud in the log how many it left shut.
+_MAX_EXPANSIONS = 12
+
+#: M2.6 / T-CAP-03 - bound on TAB PANELS given their own recorded state. Each
+#: costs a fresh load plus a click, and a product page with six tabs is a real
+#: thing while one with forty is a table pretending to be tabs.
+_MAX_TAB_VIEWS = 6
 
 #: Bound on DIRECT nav-link click-groundings per state (top in-scope links clicked to
 #: record a grounded [click → navigation]). Global dedup (``_grounded_navs``) grounds
@@ -246,9 +270,18 @@ def _decision_points(field_ledger: Sequence[Mapping[str, Any]]) -> list[dict[str
     for e in field_ledger or ():
         if not isinstance(e, Mapping) or "options" not in e:
             continue
+        # THE LABEL OF A DECISION POINT IS THE QUESTION, NOT THE ANSWER (M2.1).
+        # ``name`` is this control's accessible name; on a member of a choice
+        # group that is the name of one ANSWER, so a "Do you use tobacco?"
+        # question reached the journey graph — and from there the catalogue —
+        # labelled "yes". The application's own wording for the question is
+        # captured on the ledger entry when the DOM declared it; falling back to
+        # the control name keeps every ungrouped control (a select, a lone
+        # checkbox) exactly as it was, because for those the control name IS the
+        # question.
         dp: dict[str, Any] = {
             "control_signature": str(e.get("signature") or ""),
-            "control_label": str(e.get("name") or "")[:120],
+            "control_label": str(e.get("question_label") or e.get("name") or "")[:120],
             "options": [str(o)[:80] for o in (e.get("options") or ())][:24],
             "provenance": str(e.get("provenance") or ""),
         }
@@ -397,9 +430,17 @@ class AdvanceDecision:
     when the agent oracle was consulted — HOW that consultation ended.
 
     ``tier`` is the evidence: 1 = strict regex, 2 = relaxed regex, 3 = agent
-    oracle, 0 = no advance found.  ``signature`` is the oracle's value-free
-    decision-point signature (empty unless tier 3), carried into the flow step
-    so a PROVEN pick can be harvested into tenant advance memory."""
+    oracle, 0 = no advance found.  ``signature`` is the value-free
+    decision-point signature the choice was made under, carried into the flow
+    step so a PROVEN pick can be harvested into tenant advance memory.
+
+    M2.6 / T-CAP-02: the signature is NO LONGER oracle-only.  Tiers 1-2 compute
+    the identical key locally (:mod:`app.advance_signature`, the mirror of
+    qe-central's), because a deterministic advance the walk carried forward is
+    exactly as proven as an LLM's pick and used to be dropped by the harvest for
+    want of a key.  It stays empty when nothing decided (tier 0), when the
+    oracle could not be reached, and when the control that advanced is outside
+    the oracle-eligible set (see ``Walker._deterministic_signature``)."""
 
     control: Optional[dict[str, Any]] = None
     tier: int = 0

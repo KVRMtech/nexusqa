@@ -54,7 +54,13 @@ async def _register_tenant(tenant: str) -> None:
     enumerates tenants from this registry (reaper._tenant_ids), so an
     unregistered tenant's rows are honestly invisible to it. Real path, no
     mocks; ON CONFLICT keeps it idempotent."""
-    async with reaper.substrate_engine.begin() as conn:
+    # M3.3 / T-FL-05: tenant enumeration moved out of reaper.py into the shared
+    # app.controlplane.tenant_scope (the cycle driver needed the same RLS-safe
+    # pattern and had a GUC-less copy of its own). The reaper no longer imports
+    # substrate_engine, so reach for the engine where it actually lives — still
+    # the SAME engine production uses, which is what this helper asserts.
+    from app.db import substrate_engine
+    async with substrate_engine.begin() as conn:
         await conn.execute(text(
             "INSERT INTO tenants (tenant_id, name, domain, plan, status) "
             "VALUES (:tid, :name, :domain, 'starter', 'active') "

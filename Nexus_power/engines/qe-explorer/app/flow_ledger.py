@@ -27,6 +27,8 @@ import hashlib
 from collections import Counter
 from typing import Any, Iterable, Mapping, Sequence
 
+from .inventory import question_identity
+
 __all__ = [
     "TERMINAL_SUBMIT_BOUNDARY", "TERMINAL_SUBMIT_CROSSED", "TERMINAL_NO_ADVANCE",
     "TERMINAL_BUDGET",
@@ -55,8 +57,21 @@ def activated_signatures(
     and report any identity whose count rose — a new field, or one more instance of
     an existing label. Identity is ``kind:accessible-name`` — UI shape, like every
     other label in the graph; no user value ever enters it.
+
+    EXCEPT WHERE THE REVEALED CONTROL ANSWERS A DECLARED QUESTION (M2.1), in
+    which case the identity is ``group:<question id>`` instead. A revealed
+    follow-up is usually a whole question — "Yes, I use tobacco" reveals "How
+    many per day?", itself a Yes/No/More radio group — and naming it by a
+    member's accessible name is naming it "yes". Downstream that could not be
+    reconciled to a catalogue question at all: every questionnaire on the page
+    has a member called "yes", so the reveal either matched nothing or matched
+    the wrong question. The group id IS the catalogue's question id basis, so
+    this form resolves exactly, with no name matching in between.
     """
     def _key(c: Mapping[str, Any]) -> str:
+        gid = question_identity(c)
+        if gid:
+            return ("group:%s" % gid)[:80]
         name = str(c.get("name") or "").strip().lower()
         kind = str(c.get("kind") or "").strip().lower()
         return ("%s:%s" % (kind, name))[:80] if name else ""

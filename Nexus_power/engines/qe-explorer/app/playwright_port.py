@@ -31,14 +31,19 @@ from pathlib import Path
 from typing import Any, Callable, Mapping, Optional, Sequence
 from urllib.parse import urlsplit
 
+from dataclasses import replace as _dc_replace
+
 from . import emit
 from . import field_signature
+from . import network_evidence as netev
 from . import page_lifecycle as pl
+from . import perception
 from .browser import BrowserPort, NavResult, RawObservation, verify_intent
 from .fingerprint import interactive_signature
 from .interaction_ladder import Rung, ladder_for
 from . import observation_health
-from .inventory_js import DISPLAYED_VALUES_JS, INVENTORY_JS, OPAQUE_JS
+from .inventory_js import (CAPTURE_HOOKS_JS, DISPLAYED_VALUES_JS, INVENTORY_JS,
+                           OPAQUE_JS, PII_REGIONS_JS)
 
 logger = logging.getLogger("qe-explorer")
 
@@ -64,6 +69,39 @@ def context_defaults() -> dict[str, Any]:
         "ignore_https_errors": False,
         "accept_downloads": True,
     }
+
+
+async def install_capture_hooks(context: Any) -> bool:
+    """Install the capture init script on a freshly created browser context.
+
+    M3.2 / T-FR-02.  This MUST be called between ``browser.new_context(...)`` and
+    the creation of the first page.  ``add_init_script`` is evaluated in every
+    page and every frame of the context BEFORE any application script runs,
+    which is the only window in which a closed shadow root is observable at all:
+    ``attachShadow({mode:"closed"})`` hands its root to the component and to
+    nobody else, and no API recovers it afterwards.  Retrofitting after the
+    component exists cannot work — see the contract on
+    :data:`app.inventory_js.CAPTURE_HOOKS_JS`.
+
+    Returns whether the script was installed.  A context that refuses it is
+    logged and the crawl continues exactly as blind as it was before: a closed
+    shadow root then stays a named opaque row, which is honest.  It is never a
+    crawl-stopping failure, because capture degrading is not the same as capture
+    lying.
+    """
+    if context is None:
+        return False
+    add = getattr(context, "add_init_script", None)
+    if add is None:
+        return False
+    try:
+        await add(CAPTURE_HOOKS_JS)
+    except Exception as exc:                              # pragma: no cover
+        logger.warning(
+            "qec.explorer.capture_hooks_not_installed error=%s — closed shadow "
+            "roots on this crawl stay opaque", str(exc)[:200])
+        return False
+    return True
 
 
 # ─── Browser-layer tuning constants ──────────────────────────────────────────
@@ -115,6 +153,17 @@ _MAX_ARTIFACTS = 50
 #: active page, never the primary).  An app that opens a tab per click would
 #: otherwise accumulate Chromium targets for the whole crawl.
 _MAX_OPEN_PAGES = 8
+
+# ─── M3.2 frame-entry bounds (T-FR-01) ───────────────────────────────────────
+#: How many cross-origin frames one observation may enter.  A page that embeds a
+#: dozen ad frames must not turn one inventory read into a dozen round trips.
+_MAX_ENTERED_FRAMES = 6
+#: How deep frame entry recurses.  1 = the embeds on the page; 2 = the embed a
+#: vendor's own embed loads (a 3-D-Secure step inside a payment frame), which is
+#: where real checkout flows stop.
+_MAX_FRAME_DEPTH = 2
+#: Controls read from a single frame.  A frame is a widget, not an application.
+_MAX_FRAME_CONTROLS = 60
 
 #: Cheap page-quiescence signature: visible-interactive count : readyState :
 #: scrollHeight. Stable across two reads ⇒ the DOM has stopped mounting controls.
@@ -178,6 +227,23 @@ def _page_url(page: Any) -> str:
         return ""
 
 
+def _frame_origin(frame: Any) -> str:
+    """``scheme://host[:port]`` of a frame, or "".
+
+    ORIGIN, NOT URL.  A vendor frame's URL routinely carries a client secret, a
+    session token or a payment intent id in its query string, and this string
+    travels into the manifest and out to qe-central.  The origin is what
+    identifies the embed; the rest is somebody's secret.
+    """
+    try:
+        parts = urlsplit(str(getattr(frame, "url", "") or ""))
+    except Exception:
+        return ""
+    if not parts.scheme or not parts.netloc:
+        return ""
+    return "%s://%s" % (parts.scheme, parts.netloc)
+
+
 def _page_is_closed(page: Any) -> bool:
     """True when Playwright says the page is gone (or we cannot tell)."""
     try:
@@ -194,6 +260,22 @@ def _safe_headers(obj: Any) -> dict[str, str]:
         return {str(k).lower(): str(v) for k, v in dict(obj.headers or {}).items()}
     except Exception:
         return {}
+
+
+def _safe_post_data(request: Any) -> str | None:
+    """The SYNC ``post_data`` of a Playwright request, or ``None``.
+
+    ``post_data`` is a property, not a coroutine, so a request body is one of the
+    few things the synchronous ``response`` listener can honestly reach.  It is
+    handed straight to :func:`app.network_evidence.describe_body`, which reduces
+    it to a size + media type + masked KEY NAMES — the body never leaves this
+    function as content.
+    """
+    try:
+        data = getattr(request, "post_data", None)
+        return str(data) if data else None
+    except Exception:
+        return None
 
 
 # ─── The Playwright BrowserPort adapter (the only Playwright code) ───────────
@@ -235,6 +317,43 @@ class PlaywrightBrowserPort(BrowserPort):
         # the crawler.  Query strings are dropped + paths PII-scrubbed HERE (at
         # source) so raw PII never lingers in the buffer.
         self._net_buffer: list[dict[str, Any]] = []
+        # M3.2 / T-FR-01 — the frame-entry ledger, drained per-visit like the
+        # network buffer.  One row per cross-origin frame this port MET: entered
+        # (with what was read from inside it) or refused (with why).  A frame we
+        # could not address must stay as visible as one we could, or "no frames
+        # entered" reads as "no frames present".
+        self._frames_seen: list[dict[str, Any]] = []
+        # M2.5 / T-NET-02 — the CRAWL-WIDE event ordinal.  Assigned at capture and
+        # never re-derived, so three retries stay three ordered events no matter
+        # what any downstream transport does to list order.  It counts every
+        # event the listener saw, including ones the buffer cap refused, so a gap
+        # in the sequence is itself the evidence that something was dropped.
+        self._net_sequence = 0
+        self._net_dropped = 0
+        # M2.5 — WHEN THE CURRENT CAPTURE WINDOW OPENED (the previous drain).
+        #
+        # Found on a live application, not on the fixture. A page_state's
+        # ``first_seen_ms`` is stamped when the crawl OBSERVES the state, but the
+        # requests attributed to that state include the ones the browser fired
+        # while NAVIGATING to it — a Next.js route prefetch goes out before the
+        # new page exists to be observed. Five of thirteen events in a real crawl
+        # therefore carried a true timestamp that fell before the visit window
+        # containing them, and the fixture could not show this because it is a
+        # single page that never navigates.
+        #
+        # Clamping the timestamp into the window (what the screenshot path does)
+        # would make the assertion pass by writing down a time the request did
+        # not happen. Instead the record carries the window that ACTUALLY
+        # corresponds to it: everything from the previous drain to this one.
+        self._net_window_start_ms = 0
+        # M2.5 / T-NET-01 — the CRAWL-RELATIVE clock.  A network event stamped
+        # with raw ``time.monotonic()`` (an arbitrary epoch, system boot on
+        # Linux) can never fall inside a visit window measured in ms-since-crawl-
+        # start, which is why the baseline stream was unjoinable.  The adapter
+        # starts its own clock so evidence captured before the crawler exists is
+        # still on the right epoch, and :meth:`bind_clock` replaces it with the
+        # crawl's own the moment the Crawler is constructed.
+        self._clock = emit.MonotonicClock()
         # M1.5 — the special-browser-event buffer, drained by the crawler the
         # same way ``_net_buffer`` is.
         self._event_buffer: list[dict[str, Any]] = []
@@ -262,6 +381,14 @@ class PlaywrightBrowserPort(BrowserPort):
         # name and the verb are first-class inputs.
         self._action_label = ""
         self._action_verb = ""
+        # M2.5 / T-NET-03 — the identity of the action currently in flight.  A
+        # network event captured while this is set was caused by THIS action:
+        # the adapter is the only object that knows a request arrived between
+        # "click Get quote" starting and settling.  Bumped on every genuinely new
+        # action by :meth:`_set_action_context`, which already exists for exactly
+        # this reason on the dialog/download side.
+        self._action_seq = 0
+        self._action_token = ""
         # Has THIS action already adopted a popup? Scoped to the action rather
         # than to one reconcile pass, because a single click is adjudicated on
         # both sides of the settle quiesce (see _settle) and "first usable popup
@@ -346,8 +473,25 @@ class PlaywrightBrowserPort(BrowserPort):
     _NET_BUFFER_MAX = 500
 
     def _record_net(self, entry: dict[str, Any]) -> None:
+        """Buffer ONE network event (bounded, ordered, correlated).
+
+        The ordinal and the correlation stamp are applied HERE rather than by
+        the caller so every producer — response, websocket, and any listener
+        added later — is ordered and attributed on the same rule.  Reaching the
+        cap is COUNTED and reported on drain: the baseline dropped silently, so
+        a truncated stream read as a complete one.
+        """
+        self._net_sequence += 1
+        entry["sequence"] = self._net_sequence
+        entry["timestamp_ms"] = self._clock.now_ms()
+        entry["action_token"] = self._action_token
+        entry["action_label"] = self._action_label
+        entry["action_verb"] = self._action_verb
+        entry["page_token"] = self._registry.active_token()
         if len(self._net_buffer) < self._NET_BUFFER_MAX:
             self._net_buffer.append(entry)
+        else:
+            self._net_dropped += 1
 
     def _on_response(self, response: Any) -> None:
         """Passive `response` listener — record ONE XHR/fetch/SSE call's shape.
@@ -370,18 +514,81 @@ class PlaywrightBrowserPort(BrowserPort):
             url = emit.scrub_value(f"{parts.scheme}://{parts.netloc}{parts.path}").value
             req_headers = _safe_headers(request)
             is_sse = (resp_mime == "text/event-stream" or rtype == "eventsource")
+            req_mime = req_headers.get("content-type", "").split(";", 1)[0]
+            resp_bytes = resp_headers.get("content-length", "")
             self._record_net({
                 "method": str(getattr(request, "method", "") or "").upper(),
                 "url": url,
+                "path_template": netev.path_template(parts.path),
                 "has_query": bool(parts.query),
                 "status": str(getattr(response, "status", "") or ""),
                 "resource_type": "sse" if is_sse else rtype,
-                "request_mime": req_headers.get("content-type", "").split(";", 1)[0],
+                "request_mime": req_mime,
                 "response_mime": resp_mime,
-                "response_bytes": resp_headers.get("content-length", ""),
-                "timestamp_ms": int(time.monotonic() * 1000),
+                "response_bytes": resp_bytes,
+                # M2.5 / T-NET-02 — headers + body METADATA, allow-listed and
+                # value-redacted by :mod:`app.network_evidence`.  A header not
+                # named in the allow-list is dropped; a header whose value is a
+                # credential is recorded as a named presence, never as its value.
+                "request_headers": netev.redact_headers(req_headers),
+                "response_headers": netev.redact_headers(resp_headers),
+                "request_body": netev.describe_body(_safe_post_data(request), req_mime),
+                "auth_pattern": netev.auth_pattern(req_headers),
+                "response_shape": netev.response_shape(resp_mime, resp_bytes),
+                # The response BODY is not read: this listener is synchronous by
+                # design (M1.5 — an awaiting listener races the action that
+                # produced it), and reading a body requires an await.  Saying so
+                # on the event is what stops a media-type inference downstream
+                # from being mistaken for a body that was actually parsed.
+                "shape_source": "media_type",
+                "from_service_worker": bool(getattr(response, "from_service_worker", False)),
             })
         except Exception:  # never let a listener crash affect the page
+            pass
+
+    def _on_request_failed(self, request: Any) -> None:
+        """Passive `requestfailed` listener (M2.5) — a request that got NO response.
+
+        The baseline captured only responses, so a connection refused, a DNS
+        failure or an aborted fetch left no evidence at all — and the network
+        oracle's ``failed``/``error`` branch could therefore never fire from crawl
+        evidence, however hard the adapter tried.  A request that died is exactly
+        the evidence a reviewer needs, so it is recorded as an event with status
+        0 and the failure text.
+        """
+        try:
+            rtype = (getattr(request, "resource_type", "") or "")
+            if rtype not in self._NET_RESOURCE_TYPES:
+                return
+            parts = urlsplit(str(getattr(request, "url", "") or ""))
+            if (parts.scheme or "").lower() not in ("http", "https"):
+                return
+            failure = getattr(request, "failure", None)
+            detail = str(failure or "")[:200]
+            req_headers = _safe_headers(request)
+            req_mime = req_headers.get("content-type", "").split(";", 1)[0]
+            self._record_net({
+                "method": str(getattr(request, "method", "") or "").upper(),
+                "url": emit.scrub_value(
+                    f"{parts.scheme}://{parts.netloc}{parts.path}").value,
+                "path_template": netev.path_template(parts.path),
+                "has_query": bool(parts.query),
+                "status": "0",
+                "failed": True,
+                "error": detail or "request_failed",
+                "resource_type": rtype,
+                "request_mime": req_mime,
+                "response_mime": "",
+                "response_bytes": "",
+                "request_headers": netev.redact_headers(req_headers),
+                "response_headers": {},
+                "request_body": netev.describe_body(_safe_post_data(request), req_mime),
+                "auth_pattern": netev.auth_pattern(req_headers),
+                "response_shape": "none",
+                "shape_source": "request_failed",
+                "from_service_worker": False,
+            })
+        except Exception:
             pass
 
     def _on_websocket(self, ws: Any) -> None:
@@ -403,16 +610,71 @@ class PlaywrightBrowserPort(BrowserPort):
                 "request_mime": "",
                 "response_mime": "",
                 "response_bytes": "",
-                "timestamp_ms": int(time.monotonic() * 1000),
+                "path_template": netev.path_template(parts.path),
+                "request_headers": {},
+                "response_headers": {},
+                "request_body": netev.describe_body(None, ""),
+                "auth_pattern": "none",
+                "response_shape": "stream",
+                "shape_source": "websocket_upgrade",
+                "from_service_worker": False,
             })
         except Exception:
             pass
 
     async def drain_network(self) -> list[dict[str, Any]]:
-        """Return + CLEAR the network calls buffered since the last drain."""
+        """Return + CLEAR the network calls buffered since the last drain.
+
+        A drain that hit the buffer cap appends ONE ``buffer_truncated`` event
+        naming how many were refused, mirroring what the browser-event buffer
+        already does.  The baseline dropped silently, so a clipped stream was
+        indistinguishable from a complete one — which is the same green-wash the
+        sequence numbers exist to prevent.
+        """
         drained = self._net_buffer
         self._net_buffer = []
+        window_start = self._net_window_start_ms
+        for entry in drained:
+            entry["capture_window_start_ms"] = window_start
+        self._net_window_start_ms = self._clock.now_ms()
+        if self._net_dropped:
+            drained.append({
+                "event": "buffer_truncated",
+                "method": "", "url": "", "status": "",
+                "dropped": self._net_dropped,
+                "reason": (f"more than {self._NET_BUFFER_MAX} network events "
+                           f"between drains"),
+                "sequence": self._net_sequence,
+                "timestamp_ms": self._clock.now_ms(),
+                "capture_window_start_ms": window_start,
+            })
+            self._net_dropped = 0
         return drained
+
+    def bind_clock(self, clock: Any) -> None:
+        """M2.5 / T-NET-01 — adopt the CRAWL's clock.
+
+        Called by the Crawler once, immediately after it builds its own
+        :class:`app.emit.MonotonicClock`.  Until then the adapter runs its own
+        clock on the same epoch shape, so evidence captured during construction
+        or first navigation is never stamped on a foreign epoch; after it, every
+        network event, every visit window and every action timestamp are readings
+        of ONE clock, which is the whole condition for a join.
+
+        Guarded rather than trusting: a clock without ``now_ms`` is refused and
+        the adapter keeps the one it has, because a listener that raises would
+        take the page down with it.
+        """
+        if clock is not None and callable(getattr(clock, "now_ms", None)):
+            self._clock = clock
+
+    def network_sequence(self) -> int:
+        """How many network events the listener has SEEN this crawl.
+
+        Distinct from how many were buffered: the difference is what the buffer
+        cap refused.
+        """
+        return self._net_sequence
 
     # ─── M1.5 · page lifecycle ────────────────────────────────────────────────
 
@@ -452,6 +714,7 @@ class PlaywrightBrowserPort(BrowserPort):
     #: The observers every page the journey touches must carry.
     _PAGE_OBSERVERS = (
         ("response", "_on_response", "network"),
+        ("requestfailed", "_on_request_failed", "network_failed"),
         ("websocket", "_on_websocket", "websocket"),
         ("dialog", "_on_dialog", "dialog"),
         ("download", "_on_download", "download"),
@@ -1050,6 +1313,26 @@ class PlaywrightBrowserPort(BrowserPort):
             logger.warning(
                 "qec.explorer.inventory_corrupt status=%s error=%s url=%s",
                 result.status, result.error, self._safe_url()[:120])
+            return result
+        # M3.2 / T-FR-01 — COMPLETE THE WALK ACROSS THE ORIGIN BOUNDARY.
+        #
+        # INVENTORY_JS descends same-origin frames itself and stops, correctly,
+        # at a foreign origin: `contentDocument` throws, and injecting anything
+        # past that boundary would be defeating browser origin isolation rather
+        # than working within it. Playwright's frame APIs cross it legitimately —
+        # the browser hands us the frame's own execution context — so the part of
+        # the walk that JavaScript structurally cannot do is done here, where the
+        # driver can, and joined onto the same list.
+        #
+        # This is deliberately inside the read that produces the observation, not
+        # bolted on beside it: every consumer of an observation (the fingerprint,
+        # the form filler, the catalogue, the walker) then sees frame controls
+        # without a single one of them being taught about frames, and a control
+        # inside a payment iframe is evidence on exactly the same terms as one
+        # beside it.
+        framed = await self._observe_entered_frames()
+        if framed:
+            result = _dc_replace(result, controls=tuple(result.controls) + tuple(framed))
         return result
 
     async def collect_controls(self) -> list[dict[str, Any]]:
@@ -1074,6 +1357,182 @@ class PlaywrightBrowserPort(BrowserPort):
         except Exception as exc:
             logger.warning("qec.explorer.opaque_failed error=%s", str(exc)[:200])
             return []
+
+    async def drain_frame_evidence(self) -> list[dict[str, Any]]:
+        """Take and clear the frame-entry evidence gathered since the last drain.
+
+        One row per frame this port MET, entered or not, with the reason — so a
+        frame that could not be addressed is as visible as one that was read.
+        Drained (not accumulated) for the same reason the network buffer is:
+        the crawler attributes evidence to the state it was observed on.
+        """
+        rows, self._frames_seen = list(self._frames_seen), []
+        return rows
+
+    async def _observe_entered_frames(self) -> list[dict[str, Any]]:
+        """Controls read from INSIDE the cross-origin frames on this page.
+
+        The routing decision is ``perception.route_opaque_surfaces`` — the same
+        pure function the vision escalation consults — so "which surfaces are
+        enterable" is answered in one place, by code that unit-tests without a
+        browser, rather than by a second rule living in the driver.
+        """
+        try:
+            surfaces = await self._page.evaluate(OPAQUE_JS)
+        except Exception as exc:
+            logger.warning("qec.explorer.frame_scan_failed error=%s", str(exc)[:200])
+            return []
+        routed = perception.route_opaque_surfaces(surfaces or [])
+        for unaddressable in routed["blind"]:
+            self._frames_seen.append({
+                "status": "not_entered",
+                "label": str(unaddressable.get("label") or "embedded frame"),
+                "selector": "",
+                "reason": "no deterministic selector could be built for this surface",
+            })
+        out: list[dict[str, Any]] = []
+        for surface in routed["enter_frames"][:_MAX_ENTERED_FRAMES]:
+            out.extend(await self._enter_frame(
+                self._page, str(surface.get("frame_selector") or ""),
+                prefix="", depth=1,
+                label=str(surface.get("frame_host") or surface.get("label") or "")))
+        return out
+
+    async def _enter_frame(self, root: Any, selector: str, *, prefix: str,
+                           depth: int, label: str) -> list[dict[str, Any]]:
+        """Enter ONE frame through supported Playwright APIs and observe inside it.
+
+        ``root`` is the page or the parent ``FrameLocator``, so the same code
+        handles an embed and an embed-inside-an-embed. The chain of selectors is
+        joined with the walker's own ``" >>> "`` separator, which is exactly what
+        :meth:`_locator` splits on — so a control captured here is ACTIONABLE by
+        the existing ladder, not merely recorded.
+
+        NOTHING IS INJECTED ACROSS THE ORIGIN BOUNDARY. ``content_frame()`` asks
+        the browser for the frame's own execution context; ``frame.evaluate``
+        then runs the walker inside it under that frame's origin, exactly as the
+        frame's own scripts run. Origin isolation is used, not circumvented.
+        """
+        full = (prefix + " >>> " + selector) if prefix else selector
+        note = {"status": "not_entered", "label": label or selector,
+                "selector": full, "reason": ""}
+        if not selector:
+            note["reason"] = "the surface carried no frame selector"
+            self._frames_seen.append(note)
+            return []
+        # DETERMINISM IS CHECKED, NOT ASSUMED (T-FR-03). A selector that resolves
+        # to two frames binds silently to the first, and every control read
+        # through it would be attributed to a frame it is not in. Refusing is the
+        # only honest answer, and the count is recorded so the refusal is legible.
+        try:
+            count = await root.locator(selector).count()
+        except Exception as exc:
+            note["reason"] = "selector did not resolve: %s" % str(exc)[:120]
+            self._frames_seen.append(note)
+            return []
+        if count != 1:
+            note["reason"] = (
+                "selector resolved to %d frames, not 1 — refusing to attribute "
+                "controls to a frame chosen by accident" % count)
+            note["resolved"] = count
+            self._frames_seen.append(note)
+            logger.warning("qec.explorer.frame_ambiguous selector=%r resolved=%d",
+                           full[:160], count)
+            return []
+        try:
+            handle = await root.locator(selector).element_handle()
+            frame = await handle.content_frame() if handle is not None else None
+        except Exception as exc:
+            note["reason"] = "could not reach the frame: %s" % str(exc)[:120]
+            self._frames_seen.append(note)
+            return []
+        if frame is None:
+            note["reason"] = "the element resolved but exposes no frame"
+            self._frames_seen.append(note)
+            return []
+        try:
+            payload = await frame.evaluate(INVENTORY_JS)
+        except Exception as exc:
+            note["reason"] = "the frame refused observation: %s" % str(exc)[:120]
+            self._frames_seen.append(note)
+            logger.warning("qec.explorer.frame_inventory_failed selector=%r error=%s",
+                           full[:160], str(exc)[:200])
+            return []
+        raw = [c for c in list(payload or []) if isinstance(c, dict)]
+        clipped = len(raw) > _MAX_FRAME_CONTROLS
+        controls: list[dict[str, Any]] = []
+        origin = _frame_origin(frame)
+        for control in raw[:_MAX_FRAME_CONTROLS]:
+            inner = str(control.get("frame_selector") or "").strip()
+            control["frame_selector"] = (full + " >>> " + inner) if inner else full
+            # WHERE THIS CAME FROM travels with it. A control read inside a
+            # third-party embed is bindable evidence, but a reader deciding
+            # whether to ACT on it (a payment field is not a form field) must be
+            # able to tell without re-deriving it from the selector string.
+            # Orthogonal to `shadow_scope`, which the walker set inside the
+            # frame: a closed shadow root inside a foreign embed is both, and
+            # overwriting one with the other would lose a fact a reader needs.
+            control["capture_scope"] = "cross_origin_frame"
+            control["frame_origin"] = origin
+            controls.append(control)
+        note.update({
+            "status": "entered",
+            "label": label or origin or selector,
+            "origin": origin,
+            "controls": len(controls),
+            "clipped": clipped,
+            "depth": depth,
+            "reason": "entered through page.frame_locator and observed from inside"
+                      " — %d control(s) catalogued%s" % (
+                          len(controls),
+                          " (clipped at %d)" % _MAX_FRAME_CONTROLS if clipped else ""),
+        })
+        self._frames_seen.append(note)
+        logger.info("qec.explorer.frame_entered selector=%r origin=%s controls=%d depth=%d",
+                    full[:160], origin, len(controls), depth)
+        if depth >= _MAX_FRAME_DEPTH:
+            return controls
+        # A vendor embed that itself embeds a foreign frame (3-D Secure inside a
+        # payment frame). Bounded by _MAX_FRAME_DEPTH; a scan failure here costs
+        # the nested frame only, never the controls already read.
+        try:
+            nested = await frame.evaluate(OPAQUE_JS)
+        except Exception:
+            return controls
+        child_root = root.frame_locator(selector)
+        for surface in perception.route_opaque_surfaces(
+                nested or [])["enter_frames"][:_MAX_ENTERED_FRAMES]:
+            controls.extend(await self._enter_frame(
+                child_root, str(surface.get("frame_selector") or ""),
+                prefix=full, depth=depth + 1,
+                label=str(surface.get("frame_host") or surface.get("label") or "")))
+        return controls
+
+    async def collect_pii_regions(self) -> dict[str, Any]:
+        """M3.1 / T-VIS-05 — where a screenshot of this page would render
+        something sensitive, in full-page CSS pixels.
+
+        Returns ``{ok, regions, page_w, page_h, dpr}``.  NOT best-effort: a
+        snippet that throws returns ``ok=False``, and
+        :func:`app.pixel_redaction.redact_screenshot` refuses to produce an image
+        from a failed read.  Degrading to ``[]`` here — the pattern every other
+        capture verb correctly uses — would mean an evaluation error silently
+        published an unmasked screenshot of a real application.
+        """
+        try:
+            result = await self._page.evaluate(PII_REGIONS_JS)
+        except Exception as exc:
+            logger.warning("qec.explorer.pii_regions_failed error=%s", str(exc)[:200])
+            return {"ok": False, "regions": [], "page_w": 0, "page_h": 0, "dpr": 1}
+        if not isinstance(result, dict):
+            return {"ok": False, "regions": [], "page_w": 0, "page_h": 0, "dpr": 1}
+        return {
+            "ok": bool(result.get("ok")),
+            "regions": list(result.get("regions") or []),
+            "page_w": result.get("page_w") or 0,
+            "page_h": result.get("page_h") or 0,
+            "dpr": result.get("dpr") or 1,
+        }
 
     async def collect_displayed_values(self) -> list[dict[str, Any]]:
         """ANSWERS P1.B — rendered value nodes ``[{label, selector, text}]`` (a
@@ -1279,6 +1738,12 @@ class PlaywrightBrowserPort(BrowserPort):
             # re-enters _act for the same control) is not a new action and must
             # not re-arm the adoption budget.
             self._adopted_this_action = False
+            # M2.5 / T-NET-03 — and it is a new causal window for network
+            # evidence. Bumped on the SAME condition as the adoption budget, so
+            # the ladder retrying one control cannot split that control's
+            # requests across two tokens and hide a retry.
+            self._action_seq += 1
+            self._action_token = f"a{self._action_seq}"
         self._action_label = label
         self._action_verb = verb
 
@@ -1288,7 +1753,7 @@ class PlaywrightBrowserPort(BrowserPort):
         url_before = self._safe_url()
         sig_before = await self._interactive_signature()
         intended = value if kind != "checked" else ("true" if checked else "false")
-        locator = self._locator(control)
+        locator = await self._bound_locator(control)
         if locator is None:
             return RawObservation(url_before=url_before, url_after=url_before,
                                   error_detail="locator_unresolved",
@@ -1339,12 +1804,62 @@ class PlaywrightBrowserPort(BrowserPort):
             intended_value=intended, intent_met=met,
         )
 
+    async def _page_point_to_viewport(self, x: int, y: int) -> tuple[int, int]:
+        """PAGE coordinates -> VIEWPORT coordinates, scrolling if it has to.
+
+        M3.1 — THE DEFECT THIS CLOSES, found by the canvas proving ground.
+        ``page.mouse.click`` takes VIEWPORT coordinates, and the only producer of
+        coordinates for :meth:`click_at` is a vision perception of a
+        ``full_page=True`` screenshot, whose coordinate space is the PAGE.  On a
+        page no taller than the viewport the two spaces coincide and the rung
+        worked; on any page that scrolls, EVERY vision coordinate was off by the
+        scroll offset.  It went unnoticed because the failure is silent and
+        plausible: the click lands on nothing, R0 honestly reports unverified,
+        and the perception is discarded as a hallucination.  A systematically
+        mis-aimed rung would have read as a model that is always wrong.
+
+        The point is scrolled into view when it is outside the viewport, and the
+        offset is re-read AFTER the scroll rather than predicted — a scroll can
+        be clamped at the document edge, and predicting it would reintroduce the
+        same class of error one layer up.  Falls back to treating the input as
+        viewport coordinates if the page cannot be measured, which is the
+        historical behaviour.
+
+        The gesture verbs (``drag`` / ``draw_stroke`` / ``press_keys``) are
+        deliberately NOT changed: their callers derive points from element boxes,
+        which are already viewport-relative.
+        """
+        try:
+            m = await self._page.evaluate(
+                "() => ({sx: window.scrollX || 0, sy: window.scrollY || 0,"
+                " iw: window.innerWidth || 0, ih: window.innerHeight || 0})")
+        except Exception:
+            return x, y
+        if not isinstance(m, dict) or not (m.get("iw") and m.get("ih")):
+            return x, y
+        vx, vy = x - int(m["sx"] or 0), y - int(m["sy"] or 0)
+        if 0 <= vx < int(m["iw"]) and 0 <= vy < int(m["ih"]):
+            return vx, vy
+        try:
+            await self._page.evaluate(
+                "([px, py, ih]) => window.scrollTo(0, Math.max(0, py - ih / 2))",
+                [x, y, int(m["ih"])])
+            after = await self._page.evaluate(
+                "() => ({sx: window.scrollX || 0, sy: window.scrollY || 0})")
+            return x - int(after.get("sx") or 0), y - int(after.get("sy") or 0)
+        except Exception:
+            return vx, vy
+
     async def click_at(self, x: int, y: int) -> RawObservation:
-        """Coordinate rung (U2/U3) — click absolute page ``(x, y)`` via
+        """Coordinate rung (U2/U3) — click absolute PAGE ``(x, y)`` via
         ``page.mouse``, for a vision-proposed point on a DOM-opaque surface. Mirrors
         the ``_act`` observe pattern (url + interactive-signature before/after) so a
         coordinate action produces the SAME grounded ``RawObservation`` and R0
-        verdict: a click that changes nothing is honestly ``intent_met=False``."""
+        verdict: a click that changes nothing is honestly ``intent_met=False``.
+
+        ``(x, y)`` really are PAGE coordinates — see
+        :meth:`_page_point_to_viewport`, which is what makes that true rather
+        than merely documented."""
         self._set_action_context("", "click_at")
         url_before = self._safe_url()
         sig_before = await self._interactive_signature()
@@ -1354,6 +1869,7 @@ class PlaywrightBrowserPort(BrowserPort):
             return RawObservation(url_before=url_before, url_after=url_before,
                                   error_detail="bad_coordinates", intent_met=False)
         try:
+            xi, yi = await self._page_point_to_viewport(xi, yi)
             await self._page.mouse.click(xi, yi)
         except Exception as exc:
             return RawObservation(url_before=url_before, url_after=self._safe_url(),
@@ -1690,7 +2206,69 @@ class PlaywrightBrowserPort(BrowserPort):
             intended_value=value, intent_met=met)
 
     def _locator(self, control: dict[str, Any]) -> Any:
-        """Build a Playwright locator mirroring the compiler ladder (best-effort)."""
+        """Build a Playwright locator mirroring the compiler ladder (best-effort).
+
+        Returns the first rung that BUILDS. See :meth:`_locator_builders` for why
+        that is not the same as the first rung that MATCHES, and
+        :meth:`_bound_locator` for the acting path that resolves the difference.
+        """
+        for builder in self._locator_builders(control):
+            try:
+                return builder()
+            except Exception:
+                continue
+        return None
+
+    async def _bound_locator(self, control: dict[str, Any]) -> Any:
+        """The first rung of the ladder that actually MATCHES AN ELEMENT.
+
+        THE DEFECT THIS CLOSES (M2.6). ``_locator`` walked its rungs and took the
+        first that did not raise — but ``get_by_role(role, name=...)`` does not
+        raise when it matches nothing; it happily returns a locator over zero
+        elements. So for every control carrying both a role and a name (which is
+        nearly all of them) the rungs below it were UNREACHABLE, and a control
+        whose role Playwright does not expose could not be acted on at all even
+        though capture had recorded a perfectly good css handle for it.
+
+        Measured, not reasoned: a ``<summary>`` inside a ``<details>`` matches
+        ``get_by_role`` for NO role in Chromium — not button, not group, not
+        generic — while capture calls it a button (the tag's behaviour, which is
+        what the crawler needs). Every click the crawl ever aimed at a native
+        disclosure therefore spent a full action timeout and came back
+        ``action_error``, and no ``<details>`` on any application was ever opened.
+        Its css rung, ``summary``, was sitting one line further down the ladder.
+
+        Falls back to :meth:`_locator` when NOTHING matches, so "no handle
+        resolved" still reads as ``locator_unresolved`` / an action timeout
+        exactly as before rather than becoming a new silent skip. The cost is one
+        ``count()`` per rung tried, which is a page round trip an order of
+        magnitude cheaper than the action timeout it avoids.
+
+        THE ONE RISK, AND WHAT IS DONE ABOUT IT. ``count()`` does not auto-wait,
+        while ``click()`` does — so a top rung whose element has not mounted YET
+        would be skipped in favour of a lower rung that matches something else,
+        and the action would land on the wrong control. The top rung therefore
+        gets a second chance behind the port's own quiescence wait before the
+        ladder descends past it. That costs nothing on the healthy path (the
+        first check already matched) and only ever runs where the old code was
+        about to spend a full action timeout anyway.
+        """
+        rungs = self._locator_builders(control)
+        for i, builder in enumerate(rungs):
+            try:
+                loc = builder()
+                if await loc.count() > 0:
+                    return loc
+                if i == 0:
+                    await self._settle()
+                    if await loc.count() > 0:
+                        return loc
+            except Exception:
+                continue
+        return self._locator(control)
+
+    def _locator_builders(self, control: dict[str, Any]) -> list[Any]:
+        """The compiler ladder as thunks, most specific first (best-effort)."""
         root = self._page
         for seg in (control.get("frame_selector") or "").split(" >>> "):
             seg = seg.strip()
@@ -1725,20 +2303,13 @@ class PlaywrightBrowserPort(BrowserPort):
             base = scope.get_by_role(role, name=name)
             return base.nth(nth) if nth is not None else base.first
 
-        for builder in (
+        return [b for b in (
             _role_name_loc if role and name else None,
             (lambda: scope.get_by_label(name).first) if name else None,
             (lambda: scope.get_by_text(name).nth(nth)) if name and nth is not None else
             (lambda: scope.get_by_text(name).first) if name else None,
             (lambda: scope.locator(css_hint).first) if css_hint else None,
-        ):
-            if builder is None:
-                continue
-            try:
-                return builder()
-            except Exception:
-                continue
-        return None
+        ) if b is not None]
 
     async def _read_value(self, locator: Any, *, kind: str = "") -> Optional[str]:
         """Read back what a control COMMITTED, so R0 can verify intent.

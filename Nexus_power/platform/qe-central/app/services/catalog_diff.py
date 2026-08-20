@@ -80,11 +80,20 @@ def diff_catalogs(
         if changes:
             changed.append({"question_id": qid, "kinds": kinds, "changes": changes})
 
-    unchanged = len(set(o) & set(n)) - len(changed)
+    changed_ids = {c["question_id"] for c in changed}
+    unchanged_ids = sorted((set(o) & set(n)) - changed_ids)
+    unchanged = len(unchanged_ids)
     return {
         "added": added,
         "removed": removed,
         "changed": changed,
+        # THE COUNT WAS NOT PROVABLE. "unchanged: 62" cannot be checked against
+        # anything, so a bug that silently moved a question from unchanged into
+        # changed (or out of the catalogue entirely) showed up only as a number
+        # nobody could dispute. Naming them makes each of the four buckets a
+        # claim a reader can audit against the snapshots themselves. The count
+        # stays beside it — existing readers use it.
+        "unchanged_ids": unchanged_ids,
         "unchanged": unchanged,
         "summary": {
             "added": len(added),

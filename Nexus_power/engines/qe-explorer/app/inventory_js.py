@@ -56,6 +56,17 @@ RawControl shape (one object per visible interactive element):
                     for ARIA radiogroup/fieldset sets, "" when ungrouped).
                     Structure, never a value — it says WHICH QUESTION, not what
                     anyone answered.
+    question_key    the DECLARED question container this control sits in
+                    ("q:<container>"), "" when the page declared none.  Wider
+                    than ``group_key``: a bare-<button> Yes/No pair inside a
+                    <fieldset> is one question too, and grouping by radio
+                    semantics alone could never see it.
+    question_label  the application's OWN wording for that question, from a
+                    declared accessible-name rung only (aria-labelledby →
+                    aria-label → <legend> → heading inside the container).
+                    "" when nothing was declared — never inferred from layout.
+    question_label_source
+                    which rung produced it, so a reader can weigh it
     required        required || aria-required
     disabled        disabled || aria-disabled
     frame_selector  ""  for the main frame, else the owning iframe selector
@@ -120,7 +131,7 @@ from __future__ import annotations
 
 #: Stamped into the crawl manifest so a manifest can be traced to the exact
 #: injected-JS generation that produced its controls.
-INVENTORY_JS_VERSION = "inv-js-v10"
+INVENTORY_JS_VERSION = "inv-js-v12"
 
 #: THE OPTION CEILING. One number, for the whole pipeline.
 #:
@@ -137,7 +148,262 @@ INVENTORY_JS_VERSION = "inv-js-v10"
 #: prefix is never presented as the whole answer set.
 MAX_OPTIONS = 300
 
-INVENTORY_JS = r"""
+#: M3.2 / T-FR-02 — THE CAPTURE INIT SCRIPT, installed at BROWSER-CONTEXT
+#: creation (``context.add_init_script``) and therefore evaluated in every page
+#: and every frame BEFORE a single line of application script runs.
+#:
+#: WHY IT HAS TO BE HERE AND NOT ANYWHERE ELSE.  A closed shadow root is handed
+#: to its component and to nobody else: ``attachShadow({mode:"closed"})`` returns
+#: the root, ``el.shadowRoot`` stays ``null`` forever, and there is no API that
+#: recovers it afterwards.  A retrofit — patching, querying or re-attaching once
+#: the component exists — cannot work, because the root it would need was
+#: created and captured before we arrived.  The only moment at which the root is
+#: observable is the moment it is created, so the observation has to be in place
+#: before the component's constructor runs.  That moment is context creation.
+#:
+#: WHAT THIS IS AND IS NOT.  A closed shadow root is an ENCAPSULATION
+#: convention, not a security boundary — the HTML spec says so in as many words,
+#: and the DOM it hides is same-origin, same-process content the page already
+#: rendered to the user.  Wrapping ``attachShadow`` inside our own automation
+#: context therefore crosses no browser security boundary: nothing here reaches
+#: another origin, another process or another context.  Contrast the iframe half
+#: of M3.2, which deliberately refuses to inject anything across an origin
+#: boundary and uses Playwright's own frame APIs instead.
+#:
+#: WHAT IT PROMISES THE PAGE.  The application must not be able to tell.  The
+#: native method is called with the caller's own arguments and its return value
+#: is returned unchanged; ``el.shadowRoot`` still reads ``null`` for a closed
+#: root; the replacement is non-enumerable, carries the native ``name`` and
+#: ``length`` and forwards ``toString`` to the native implementation, so a
+#: framework that fingerprints ``attachShadow`` sees what it expects.  The roots
+#: are held in a ``WeakMap`` — no leak, and no property the page can enumerate —
+#: reachable only through a non-enumerable ``window.__nxCaptureHooks``.
+#:
+#: DECLARATIVE shadow DOM (``<template shadowrootmode="closed">``) does NOT go
+#: through ``attachShadow`` and is therefore NOT observed by this hook.  That is
+#: stated rather than papered over: such a surface stays a named opaque row.
+CAPTURE_HOOKS_JS = r"""
+(function () {
+  try {
+    if (window.__nxCaptureHooks) return;
+    var native = Element.prototype.attachShadow;
+    if (typeof native !== "function") return;
+    var roots = new WeakMap();
+    var patched = function attachShadow(init) {
+      var root = native.apply(this, arguments);
+      try {
+        if (init && init.mode === "closed") roots.set(this, root);
+      } catch (e) { /* a host that is not weak-mappable is simply not observed */ }
+      return root;
+    };
+    try {
+      Object.defineProperty(patched, "name", { value: "attachShadow", configurable: true });
+      Object.defineProperty(patched, "length", { value: 1, configurable: true });
+      patched.toString = function () { return native.toString(); };
+    } catch (e) {}
+    Object.defineProperty(Element.prototype, "attachShadow", {
+      value: patched, writable: true, configurable: true, enumerable: false });
+    var hooks = {
+      installed: true,
+      closedRoot: function (el) {
+        try { return roots.get(el) || null; } catch (e) { return null; }
+      }
+    };
+    try {
+      Object.defineProperty(window, "__nxCaptureHooks", {
+        value: hooks, writable: false, configurable: true, enumerable: false });
+    } catch (e) { window.__nxCaptureHooks = hooks; }
+  } catch (e) { /* a page that refuses the hook is simply as blind as before */ }
+})();
+"""
+
+#: Bumped when the init script changes, so a manifest can be traced back to the
+#: capture hooks that were in force when it was produced.
+CAPTURE_HOOKS_JS_VERSION = "hooks-js-v1"
+
+
+#: Shared walker block: how capture asks an element for its shadow root.
+#:
+#: Injected into BOTH injected snippets so there is exactly one answer to "what
+#: is inside this custom element".  Absent the init script both helpers return
+#: null and every consumer is exactly as blind as it was before — the hook can
+#: never manufacture a capture, only reveal one.
+_SHADOW_HOOK_JS = r"""
+  function closedRootOf(el) {
+    try {
+      var h = window.__nxCaptureHooks;
+      return (h && typeof h.closedRoot === "function") ? (h.closedRoot(el) || null) : null;
+    } catch (e) { return null; }
+  }
+
+  function shadowRootOf(el) {
+    try { if (el && el.shadowRoot) return el.shadowRoot; } catch (e) {}
+    return closedRootOf(el);
+  }
+"""
+
+
+#: Shared walker block: the iframe-selector recipe (mirrors compiler.py:1005-1011).
+#:
+#: ONE recipe, injected into both snippets, because the snippet that DETECTS a
+#: frame and the snippet that CAPTURES inside one must name it identically — a
+#: second spelling is a frame the port enters and then cannot attribute.
+#:
+#: Depends on ``_SHADOW_HOOK_JS`` (a frame nested in a shadow root belongs to
+#: the same document's frame set), so that block is injected first.
+_FRAME_SELECTOR_JS = r"""
+  // An IDENTIFIER in selector position — an id following '#'. CSS.escape is the
+  // standard answer, and the label[for] lookup elsewhere in this walker already
+  // uses it; this recipe simply never did. Unescaped, id="pay.frame" yields
+  // `iframe#pay.frame`, which is VALID CSS that means something else entirely
+  // ("id=pay AND class=frame") — so it fails silently, matching nothing, while
+  // the manifest records every control in that frame as captured.
+  function cssIdent(s) {
+    try { return CSS.escape(s); }
+    catch (e) { return ("" + s).replace(/([^a-zA-Z0-9_-])/g, "\\$1"); }
+  }
+
+  // A STRING in attribute-value position. Inside a quoted CSS string only the
+  // quote itself and the backslash need escaping — spaces, brackets,
+  // apostrophes and punctuation are all already legal there, so a title like
+  // `customer's [account]` needs no mangling. A literal newline is not legal and
+  // takes the CSS \A escape. Unescaped, name='quote"frame' yielded
+  // `iframe[name="quote"frame"]`, which is not parseable CSS at all.
+  function cssStr(s) {
+    return ("" + (s == null ? "" : s))
+      .replace(/\\/g, "\\\\")
+      .replace(/"/g, "\\\"")
+      .replace(/\n/g, "\\A ");
+  }
+
+  function fsAttr(el, name) {
+    try { var v = el.getAttribute(name); return v == null ? "" : v; }
+    catch (e) { return ""; }
+  }
+
+  function fsTag(el) {
+    try { return ("" + (el.tagName || "")).toLowerCase(); } catch (e) { return ""; }
+  }
+
+  // The ROOT NODE an element belongs to: its document, or the shadow root that
+  // encapsulates it.  Everything below is scoped to this rather than to the
+  // page, which is the whole of T-FR-03.
+  function fsRootOf(el) {
+    try { return el.getRootNode ? el.getRootNode() : el.ownerDocument; }
+    catch (e) { try { return el.ownerDocument; } catch (e2) { return null; } }
+  }
+
+  function fsHostOf(root) {
+    try { return (root && root.nodeType === 11 && root.host) ? root.host : null; }
+    catch (e) { return null; }
+  }
+
+  // EVERY iframe reachable from ONE root, IN THE ORDER PLAYWRIGHT RESOLVES THEM.
+  //
+  // M3.2 / T-FR-03.  The positional rung emits `iframe >> nth=N`, and N only
+  // means anything if it counts the same frames, in the same order, as the
+  // engine that will resolve it.  Two things were wrong.  The ordinal was the
+  // loop index inside whichever subtree the walker was standing in, so a frame
+  // nested in a shadow root was numbered among its shadow siblings and the
+  // selector bound to a completely different frame.  And the order has to be
+  // BREADTH-FIRST — this root's own tree first, then the shadow roots hanging
+  // off it — because that is what Playwright's shadow-piercing CSS engine does,
+  // as fixture 23 demonstrates by handing the emitted selectors back to a real
+  // browser.  A depth-first, tree-order list looks more natural and is wrong.
+  //
+  // Memoised per root: the walker asks once per frame it descends.
+  var FRAME_ROOTS = [], FRAME_LISTS = [];
+  function framesOf(rootNode) {
+    var at = FRAME_ROOTS.indexOf(rootNode);
+    if (at >= 0) return FRAME_LISTS[at];
+    var out = [], queue = [rootNode];
+    function scanRoot(r) {
+      var list;
+      try { list = r.querySelectorAll("*"); } catch (e) { return; }
+      for (var i = 0; i < list.length; i++) {
+        var el = list[i];
+        if (fsTag(el) === "iframe") out.push(el);
+        var sr = shadowRootOf(el);
+        if (sr) queue.push(sr);
+      }
+    }
+    while (queue.length) { scanRoot(queue.shift()); }
+    FRAME_ROOTS.push(rootNode); FRAME_LISTS.push(out);
+    return out;
+  }
+
+  // The chained prefix that ADDRESSES an element's root: "" for a document, and
+  // `<hostSelector> >> ` for a shadow root, recursively.  Playwright scopes the
+  // right-hand side of `>>` to the left-hand element's subtree and pierces open
+  // shadow roots on the way in, so this is a supported, deterministic address
+  // for a frame the document-wide ordinal cannot safely name.
+  function frameScopeOf(el) {
+    var host = fsHostOf(fsRootOf(el));
+    if (!host) return "";
+    return frameScopeOf(host) + hostSelectorFor(host) + " >> ";
+  }
+
+  function hostSelectorFor(host) {
+    var tag = fsTag(host) || "*";
+    try { if (host.id) return tag + "#" + cssIdent(host.id); } catch (e) {}
+    var siblings = [];
+    try { siblings = fsRootOf(host).querySelectorAll(tag); } catch (e) { siblings = []; }
+    if (siblings.length <= 1) return tag;
+    var at = Array.prototype.indexOf.call(siblings, host);
+    return at >= 0 ? (tag + " >> nth=" + at) : tag;
+  }
+
+  // Which of this root's frames ALSO carry `name`=`value`.
+  function framePeersBy(peers, name, value) {
+    var out = [];
+    for (var i = 0; i < peers.length; i++) {
+      var v = (name === "id") ? (peers[i].id || "") : fsAttr(peers[i], name);
+      if (v === value) out.push(peers[i]);
+    }
+    return out;
+  }
+
+  // DETERMINISM, not merely escaping (M3.2 / T-FR-03).
+  //
+  // Escaping makes a selector PARSE. It does not make it identify ONE frame. A
+  // page with two `<iframe title="Payment">` embeds emitted the same selector
+  // twice; `frameLocator` takes the first match and says nothing, so half the
+  // captured controls were recorded against a frame they are not in — the worst
+  // failure available, because it reads as coverage. When a rung's value is not
+  // unique among the frames its own scope can see, the selector is disambiguated
+  // by the frame's ordinal AMONG ITS OWN MATCHES, which is exactly what `>> nth=`
+  // means to Playwright.
+  function frameRung(scope, sel, peers, name, value, iframeEl) {
+    var matches = framePeersBy(peers, name, value);
+    if (matches.length <= 1) return scope + sel;
+    var at = matches.indexOf(iframeEl);
+    return scope + sel + " >> nth=" + (at < 0 ? 0 : at);
+  }
+
+  function frameSelectorFor(iframeEl, index) {
+    var scope = "", peers = [];
+    try {
+      scope = frameScopeOf(iframeEl);
+      peers = framesOf(fsRootOf(iframeEl));
+    } catch (e) { scope = ""; peers = []; }
+    var gi = peers.indexOf(iframeEl);
+    if (gi < 0) gi = index;
+    try {
+      var id = iframeEl.id;
+      if (id) return frameRung(scope, 'iframe#' + cssIdent(id), peers, "id", id, iframeEl);
+      var nm = fsAttr(iframeEl, "name");
+      if (nm) return frameRung(scope, 'iframe[name="' + cssStr(nm) + '"]', peers, "name", nm, iframeEl);
+      var title = fsAttr(iframeEl, "title");
+      if (title) return frameRung(scope, 'iframe[title="' + cssStr(title) + '"]', peers, "title", title, iframeEl);
+      var src = fsAttr(iframeEl, "src");
+      if (src) return frameRung(scope, 'iframe[src="' + cssStr(src) + '"]', peers, "src", src, iframeEl);
+    } catch (e) {}
+    return scope + "iframe >> nth=" + gi;
+  }
+"""
+
+
+INVENTORY_JS = (r"""
 (() => {
   "use strict";
 
@@ -646,6 +912,96 @@ INVENTORY_JS = r"""
     return "";
   }
 
+  // ── THE QUESTION A CONTROL ANSWERS, IN THE APPLICATION'S OWN WORDS ────────
+  //
+  // A control's accessible name names the ANSWER ("Yes", "Male", "Term 20"),
+  // never the question. The question lives on the grouping container the DOM
+  // already declares — a <legend>, a radiogroup's aria-label, a heading inside
+  // a role=group — and nothing has ever read it. Downstream that left the
+  // catalogue with the only wording it had: the answers themselves, and for a
+  // bare-button questionnaire a fabricated "Question 1", "Question 2".
+  //
+  // DECLARED SOURCES ONLY, strongest first, and every one of them is an
+  // accessible-name rung the W3C already defines for a group:
+  //   1. aria-labelledby on the container  → resolved rendered text
+  //   2. aria-label on the container
+  //   3. <legend> — the HTML element whose entire purpose is to caption a
+  //      <fieldset>, i.e. to state the question its controls answer
+  //   4. a heading inside the container (h1-h6 / role=heading) — how a design
+  //      system that cannot use <legend> states the same thing
+  //
+  // NEVER proximity, never "the text just above". A question inferred from
+  // layout is a question the application never asked, and a catalogue that
+  // invents wording is worse than one that admits it has none: the whole point
+  // of this field is that a reader can trust what it says. "" when the page
+  // declared nothing, and the caller records UNVERIFIED rather than guessing.
+  function questionLabelOf(container, doc) {
+    if (!container) return { label: "", source: "" };
+    try {
+      var lb = attr(container, "aria-labelledby");
+      if (lb) {
+        var parts = [], ids = lb.split(/\s+/);
+        for (var i = 0; i < ids.length; i++) {
+          var t = idText(doc, ids[i]);
+          if (t) parts.push(t);
+        }
+        var joined = norm(parts.join(" "));
+        if (joined) return { label: clip(joined, MAX_NAME), source: "aria-labelledby" };
+      }
+      var al = norm(attr(container, "aria-label"));
+      if (al) return { label: clip(al, MAX_NAME), source: "aria-label" };
+      if (lc(container.tagName) === "fieldset") {
+        // The FIRST legend that belongs to THIS fieldset. A nested fieldset's
+        // legend captions its own question, and querySelector would return it
+        // for the outer one too — which would label a question with a
+        // sub-question's wording.
+        for (var c = container.firstElementChild; c; c = c.nextElementSibling) {
+          if (lc(c.tagName) === "legend") {
+            var lt = accText(c);
+            if (lt) return { label: clip(lt, MAX_NAME), source: "legend" };
+            break;
+          }
+        }
+      }
+      var h = container.querySelector("h1,h2,h3,h4,h5,h6,[role=heading],legend");
+      if (h) {
+        var ht = accText(h);
+        if (ht) return { label: clip(ht, MAX_NAME), source: "heading" };
+      }
+    } catch (e) {}
+    return { label: "", source: "" };
+  }
+
+  // The nearest DECLARED question container above a control, or null.
+  //
+  // Wider than groupKeyOf's radio/checkbox scope on purpose: the questions that
+  // most needed real wording are rendered as bare <button>s ("Yes"/"No" pairs on
+  // a health questionnaire), which are not radios, carry no name attribute, and
+  // therefore never entered the grouping logic at all.
+  function questionContainerOf(el) {
+    var cur = parentAcross(el), hops = 0;
+    while (cur && cur.nodeType === 1 && hops < 12) {
+      var r = lc(attr(cur, "role"));
+      if (r === "radiogroup" || r === "group"
+          || lc(cur.tagName) === "fieldset") {
+        return cur;
+      }
+      cur = parentAcross(cur);
+      hops++;
+    }
+    return null;
+  }
+
+  function questionOf(el, doc) {
+    try {
+      var container = questionContainerOf(el);
+      if (!container) return { key: "", label: "", source: "" };
+      var key = groupContainerKey(container, doc);
+      var q = questionLabelOf(container, doc);
+      return { key: key ? ("q:" + key) : "", label: q.label, source: q.source };
+    } catch (e) { return { key: "", label: "", source: "" }; }
+  }
+
   function groupKeyOf(el, doc) {
     try {
       var tag = lc(el.tagName);
@@ -776,43 +1132,59 @@ INVENTORY_JS = r"""
     return { role: "", name: "" };
   }
 
-  // ---- iframe selector (mirrors compiler.py:1005-1011) ---------------------
+__SHADOW_HOOK_JS__
+__FRAME_SELECTOR_JS__
 
-  // An IDENTIFIER in selector position — an id following '#'. CSS.escape is the
-  // standard answer, and the label[for] lookup above already uses it; this
-  // recipe simply never did. Unescaped, id="pay.frame" yields `iframe#pay.frame`,
-  // which is VALID CSS that means something else entirely ("id=pay AND
-  // class=frame") — so it fails silently, matching nothing, while the manifest
-  // records every control in that frame as captured.
-  function cssIdent(s) {
-    try { return CSS.escape(s); }
-    catch (e) { return ("" + s).replace(/([^a-zA-Z0-9_-])/g, "\\$1"); }
-  }
+  // ---- disclosure state ----------------------------------------------------
 
-  // A STRING in attribute-value position. Inside a quoted CSS string only the
-  // quote itself and the backslash need escaping — spaces, brackets,
-  // apostrophes and punctuation are all already legal there, so a title like
-  // `customer's [account]` needs no mangling. A literal newline is not legal and
-  // takes the CSS \A escape. Unescaped, name='quote"frame' yielded
-  // `iframe[name="quote"frame"]`, which is not parseable CSS at all.
-  function cssStr(s) {
-    return ("" + (s == null ? "" : s))
-      .replace(/\\/g, "\\\\")
-      .replace(/"/g, "\\\"")
-      .replace(/\n/g, "\\A ");
-  }
-
-  function frameSelectorFor(iframeEl, index) {
+  // Is this control a CLOSED door in front of content the page is not currently
+  // showing — an accordion header, a <details>, an unselected tab?  (M2.6 /
+  // T-CAP-03.)
+  //
+  // WHY CAPTURE HAS TO ANSWER THIS. `isVisible` correctly refuses to catalogue
+  // a control inside a collapsed accordion or a closed <details>: it is not on
+  // the page, and cataloguing it would be a capture-says-covered /
+  // replay-cannot-bind claim. But that leaves the field genuinely uncatalogued —
+  // a question the application asks that no crawl of it ever recorded. The
+  // crawler's answer is to OPEN the door and read again, and the only way for
+  // that to be a deliberate act rather than blind clicking is for it to know,
+  // from the DOM itself, which controls are doors and which of those are shut.
+  //
+  // Three declarations, in the order of how much they mean:
+  //
+  //   1. <details>/<summary> — `open` is a live PROPERTY, not an attribute that
+  //      tracks state, so it cannot be read with attr(). This is the case that
+  //      forced a capture change: nothing already emitted distinguishes an open
+  //      <details> from a closed one, and clicking a <summary> to find out
+  //      CLOSES the ones that were already open.
+  //   2. aria-expanded — the ARIA disclosure contract (also already emitted raw
+  //      as `expanded`; normalised here so one field answers the question).
+  //   3. role=tab + aria-selected — a tab panel is a disclosure whose "closed"
+  //      state is spelled differently.
+  //
+  // "" means "not a disclosure control", and is the answer for the overwhelming
+  // majority of controls. NOTHING is inferred from class names or from the
+  // shape of the DOM: a heuristic here would turn into a blind click.
+  function disclosureState(el) {
     try {
-      if (iframeEl.id) return 'iframe#' + cssIdent(iframeEl.id);
-      var nm = attr(iframeEl, "name");
-      if (nm) return 'iframe[name="' + cssStr(nm) + '"]';
-      var title = attr(iframeEl, "title");
-      if (title) return 'iframe[title="' + cssStr(title) + '"]';
-      var src = attr(iframeEl, "src");
-      if (src) return 'iframe[src="' + cssStr(src) + '"]';
-    } catch (e) {}
-    return "iframe >> nth=" + index;
+      var tag = lc(el.tagName);
+      if (tag === "summary") {
+        var host = el.parentNode;
+        if (host && lc(host.tagName || "") === "details") {
+          return host.open ? "expanded" : "collapsed";
+        }
+        return "";
+      }
+      var exp = lc(attr(el, "aria-expanded"));
+      if (exp === "true") return "expanded";
+      if (exp === "false") return "collapsed";
+      if (lc(attr(el, "role")) === "tab") {
+        var sel = lc(attr(el, "aria-selected"));
+        if (sel === "true") return "expanded";
+        if (sel === "false") return "collapsed";
+      }
+      return "";
+    } catch (e) { return ""; }
   }
 
   // ---- collection ----------------------------------------------------------
@@ -824,6 +1196,7 @@ INVENTORY_JS = r"""
     var type = lc(el.type || "");
     var best = an.source === "title" || an.source === "placeholder";
     var opt = optionsAndTotalOf(el);
+    var qOf = questionOf(el, doc);
     return {
       role: role,
       name: clip(an.name, MAX_NAME),
@@ -860,6 +1233,17 @@ INVENTORY_JS = r"""
       options_total: opt.total,
       // Which mutually-exclusive question this control answers ("" if none).
       group_key: groupKeyOf(el, doc),
+      // WHICH QUESTION THIS CONTROL ANSWERS, AND HOW THE PAGE WORDED IT.
+      // ``question_key`` identifies the declared container (so two controls in
+      // one <fieldset> are two answers to ONE question, even when they are bare
+      // buttons the grouping logic above cannot see); ``question_label`` is the
+      // application's own wording for it, from a declared accessible-name rung
+      // only. Both "" when the page declared no question container — the honest
+      // answer, and the one that keeps a fabricated "Question 3" out of the
+      // catalogue.
+      question_key: qOf.key,
+      question_label: qOf.label,
+      question_label_source: qOf.source,
       required: isRequired(el),
       disabled: isDisabled(el),
       frame_selector: frameSelector || "",
@@ -869,6 +1253,11 @@ INVENTORY_JS = r"""
       href: hrefOf(el),
       haspopup: lc(attr(el, "aria-haspopup")),
       expanded: lc(attr(el, "aria-expanded")),
+      // "collapsed" | "expanded" | "" — the DOM's own declaration that this
+      // control is a door, and whether it is shut. Drives the crawler's
+      // deliberate pre-capture expansion pass (M2.6 / T-CAP-03); see
+      // `disclosureState` above for why aria-expanded alone was not enough.
+      disclosure: disclosureState(el),
       // Toggle-button selection state. A custom questionnaire renders each answer
       // as a <button> (not a radio), and marks the chosen one with aria-pressed /
       // aria-checked — the ONLY signal that a button IS an answer and whether it is
@@ -918,13 +1307,29 @@ INVENTORY_JS = r"""
   }
 
   // Walk a document/shadow-root subtree; recurse open shadow roots + iframes.
-  function walk(root, doc, frameSelector, sink, seenDocs) {
+  //
+  // ``shadowScope`` is "" for everything reachable by an ordinary locator, and
+  // "closed_shadow" once the walk is inside a CLOSED root (M3.2 / T-FR-02).
+  // THAT DISTINCTION IS NOT DECORATION.  Playwright's selector engine pierces
+  // OPEN shadow roots by reading `element.shadowRoot`, which the spec keeps null
+  // for a closed one — for Playwright exactly as for the page.  So a control in
+  // there can now be OBSERVED and catalogued, and still cannot be bound by
+  // `getByRole`, `getByLabel` or CSS.  Carrying the fact with the control is
+  // what stops "we catalogued it" being read as "we can act on it", which is
+  // precisely the capture-says-covered / replay-cannot-bind claim this engine's
+  // browser harness exists to catch.  A nested OPEN root inside a closed one
+  // inherits the scope, because it is only reachable through the closed one.
+  function walk(root, doc, frameSelector, sink, seenDocs, shadowScope) {
     var nodes;
     try { nodes = root.querySelectorAll(SELECTOR); } catch (e) { return; }
     for (var i = 0; i < nodes.length; i++) {
       var el = nodes[i];
       if (!isVisible(el)) continue;
-      try { sink.push(describe(el, doc, frameSelector)); } catch (e) {}
+      try {
+        var rec = describe(el, doc, frameSelector);
+        if (shadowScope) rec.shadow_scope = shadowScope;
+        sink.push(rec);
+      } catch (e) {}
     }
     // open shadow roots (same frame → no selector change)
     //
@@ -942,12 +1347,23 @@ INVENTORY_JS = r"""
     // ShadowRoot implements getElementById and querySelectorAll, so it is a
     // drop-in root here — and scoping to it is also what keeps an identically-id'd
     // element OUTSIDE the shadow root from being picked up by mistake.
+    //
+    // M3.2 / T-FR-02 — and CLOSED shadow roots, when the capture init script was
+    // in place before the component constructed itself. `shadowRootOf` returns
+    // the open root when there is one and otherwise asks the hook; with no hook
+    // installed it returns null and this loop descends exactly what it always
+    // descended. The closed root is walked as its OWN resolution root for the
+    // same id-scoping reason as the open one.
     var all;
     try { all = root.querySelectorAll("*"); } catch (e) { all = []; }
     for (var j = 0; j < all.length; j++) {
       var host = all[j];
-      if (host.shadowRoot) {
-        walk(host.shadowRoot, host.shadowRoot, frameSelector, sink, seenDocs);
+      var hostRoot = shadowRootOf(host);
+      if (hostRoot) {
+        var openHere = false;
+        try { openHere = !!host.shadowRoot; } catch (e) { openHere = false; }
+        walk(hostRoot, hostRoot, frameSelector, sink, seenDocs,
+             openHere ? shadowScope : "closed_shadow");
       }
     }
     // same-origin iframes (cross-origin access throws → skip honestly)
@@ -961,17 +1377,19 @@ INVENTORY_JS = r"""
         seenDocs.push(cdoc);
         var childSel = frameSelectorFor(ifr, k);
         var sel = frameSelector ? (frameSelector + " >>> " + childSel) : childSel;
-        try { walk(cdoc, cdoc, sel, sink, seenDocs); } catch (e) {}
+        try { walk(cdoc, cdoc, sel, sink, seenDocs, shadowScope); } catch (e) {}
       }
     }
   }
 
   var out = [];
   var seen = [document];
-  walk(document, document, "", out, seen);
+  walk(document, document, "", out, seen, "");
   return out;
 })()
-""".replace("__MAX_OPTIONS__", str(MAX_OPTIONS))
+""".replace("__SHADOW_HOOK_JS__", _SHADOW_HOOK_JS)
+  .replace("__FRAME_SELECTOR_JS__", _FRAME_SELECTOR_JS)
+  .replace("__MAX_OPTIONS__", str(MAX_OPTIONS)))
 
 
 #: OPAQUE-SURFACE detector — positively FINDS the surfaces the DOM walker cannot read, so a
@@ -980,24 +1398,44 @@ INVENTORY_JS = r"""
 #: (Flutter/WebGL/charts), (c) custom elements rendering via a CLOSED shadow root (heuristic:
 #: a dash-tagged element with size but no readable light DOM). Labels/kinds only, never a
 #: fabricated capture — the honest anti-green-wash of coverage.
-OPAQUE_JS = r"""
+OPAQUE_JS = (r"""
 (function () {
   var out = [], MAXO = 40, seen = {};
+__SHADOW_HOOK_JS__
+__FRAME_SELECTOR_JS__
   function vis(el){ try { var r = el.getBoundingClientRect(); var s = getComputedStyle(el);
     return r.width > 1 && r.height > 1 && s.display !== "none" && s.visibility !== "hidden"
       && parseFloat(s.opacity || "1") > 0; } catch (e) { return false; } }
-  function push(kind, label, reason){
-    var key = kind + "|" + label;
+  // THE DEDUP KEY IS WHAT MAKES TWO SURFACES TWO SURFACES.
+  //
+  // `kind|label` was fine while a label identified a surface, and a frame's
+  // label is its HOST. A checkout that embeds a card frame and a 3-D-Secure
+  // frame from the same vendor is two frames on one host, so the second was
+  // silently dropped — named nowhere, entered never, and indistinguishable in
+  // the ledger from a page that only had one. When a row carries a frame
+  // selector, THAT is its identity.
+  function push(kind, label, reason, extra){
+    var key = kind + "|" + ((extra && extra.frame_selector) || label);
     if (out.length < MAXO && !seen[key]) { seen[key] = 1;
-      out.push({ kind: kind, label: ("" + label).slice(0, 160), reason: reason }); } }
+      var row = { kind: kind, label: ("" + label).slice(0, 160), reason: reason };
+      if (extra) { for (var k2 in extra) {
+        if (Object.prototype.hasOwnProperty.call(extra, k2)) row[k2] = extra[k2]; } }
+      out.push(row); } }
   try {
-    var frames = document.querySelectorAll("iframe");
+    // M3.2 / T-FR-01 — the frame set is the SHADOW-PIERCING, document-wide one,
+    // so the ordinal in a positional `frame_selector` means the same thing here
+    // as it does when Playwright resolves it. Each row now carries the escaped,
+    // deterministic selector the port needs to ENTER the frame; before this, the
+    // row named a host and nothing could act on it, which is why
+    // `route_opaque_surfaces`'s `enter_frames` bucket had no consumer.
+    var frames = framesOf(document);
     for (var i = 0; i < frames.length; i++) { var f = frames[i]; if (!vis(f)) continue;
       var readable = false; try { readable = !!f.contentDocument; } catch (e) { readable = false; }
       if (!readable) { var src = ""; try { src = f.getAttribute("src") || ""; } catch (e) {}
         var host = src; try { host = new URL(src, location.href).host; } catch (e) {}
         push("cross_origin_iframe", host || "embedded frame",
-             "a cross-origin embed the DOM can't read (e.g. payment/captcha/map)"); } }
+             "a cross-origin embed the DOM can't read (e.g. payment/captcha/map)",
+             { frame_selector: frameSelectorFor(f, i), frame_host: host || "" }); } }
   } catch (e) {}
   try {
     var cs = document.querySelectorAll("canvas");
@@ -1012,6 +1450,26 @@ OPAQUE_JS = r"""
       var tag = (el.tagName || "").toLowerCase();
       if (tag.indexOf("-") === -1) continue;          // custom element only
       if (el.shadowRoot) continue;                     // open shadow — already walked
+      // M3.2 / T-FR-02 — a CLOSED root the init script observed at construction
+      // time is no longer a blind spot, and reporting it as one would understate
+      // this crawl's coverage as badly as the reverse would overstate it. It
+      // becomes a POSITIVE evidence row naming how many controls were read from
+      // inside it; the surface is only `closed_shadow` when it is really opaque.
+      var closed = closedRootOf(el);
+      if (closed) {
+        if (!vis(el)) continue;
+        var n = 0;
+        try { n = closed.querySelectorAll(
+          "input,select,textarea,button,a[href],[role],[contenteditable]").length; }
+        catch (e) { n = 0; }
+        push("closed_shadow_entered", tag,
+             "a <" + tag + "> closed shadow root, observed at construction time by the "
+             + "capture init script — " + n + " control(s) read from inside it, "
+             + "catalogued but NOT bindable by a standard locator (no selector "
+             + "engine can reach into a closed root)",
+             { controls_observed: n, controls_bindable: false });
+        continue;
+      }
       if (el.childElementCount > 0) continue;          // has light DOM we read
       if ((el.textContent || "").trim()) continue;     // has readable text
       if (!vis(el)) continue;
@@ -1021,7 +1479,8 @@ OPAQUE_JS = r"""
   } catch (e) {}
   return out;
 })()
-"""
+""".replace("__SHADOW_HOOK_JS__", _SHADOW_HOOK_JS)
+  .replace("__FRAME_SELECTOR_JS__", _FRAME_SELECTOR_JS))
 
 #: Bumped when either injected snippet changes (traces a manifest to its JS gen).
 DISPLAYED_VALUES_JS_VERSION = "disp-js-v1"
@@ -1120,5 +1579,108 @@ DISPLAYED_VALUES_JS = r"""
     out.push({label:clip(labelOf(el),MAX_LABEL),selector:clip(selector,200),text:clip(ot,MAX_TEXT)});
   }
   return out;
+})()
+"""
+
+
+#: Bumped when the PII region snippet changes.
+PII_REGIONS_JS_VERSION = "pii-regions-js-v1"
+
+#: M3.1 / T-VIS-05 — WHERE ON THE PAGE A SCREENSHOT WOULD RENDER SOMETHING
+#: SENSITIVE.  Returns ``{page_w, page_h, dpr, ok, regions:[{x,y,w,h,reason}]}``
+#: in CSS pixels of the FULL PAGE (rect + scroll offset), which is the coordinate
+#: space a ``full_page`` Playwright screenshot is captured in.
+#:
+#: The rule is SHAPE, NOT CONTENT.  Every control that can hold a typed value is
+#: reported whether or not it currently holds one, because deciding per-field
+#: would mean reading the value — and a value read in order to judge it is a
+#: value one bug away from a log line.  Content matching is used only for text
+#: the page RENDERS (an SSN printed on a review step is not in any input).
+#:
+#: ``ok:false`` is the honest failure: the caller must then refuse egress rather
+#: than send an unmasked image, so a snippet that throws can never be mistaken
+#: for a page with nothing to hide.
+PII_REGIONS_JS = r"""
+(function () {
+  "use strict";
+  var MAX = 400, out = [], ok = true;
+  function push(el, reason) {
+    if (out.length >= MAX) return;
+    try {
+      var r = el.getBoundingClientRect();
+      if (!(r.width > 0 && r.height > 0)) return;
+      var st = (el.ownerDocument.defaultView || window).getComputedStyle(el);
+      if (st && (st.display === "none" || st.visibility === "hidden")) return;
+      out.push({
+        x: r.left + (window.scrollX || window.pageXOffset || 0),
+        y: r.top + (window.scrollY || window.pageYOffset || 0),
+        w: r.width, h: r.height, reason: reason
+      });
+    } catch (e) { ok = false; }
+  }
+  // ── 1. Controls that can hold a typed value ────────────────────────────────
+  // A checkbox/radio/button/submit/reset/hidden holds no free text, so masking
+  // one buys nothing and would blind the perceiver to a control it must see.
+  var SKIP = {checkbox:1, radio:1, button:1, submit:1, reset:1, image:1, hidden:1, range:1, color:1};
+  try {
+    var ins = document.querySelectorAll("input, textarea, select, [contenteditable=''], [contenteditable='true']");
+    for (var i = 0; i < ins.length; i++) {
+      var el = ins[i], tag = (el.tagName || "").toLowerCase();
+      if (tag === "input") {
+        var t = ((el.getAttribute("type") || "text") + "").toLowerCase();
+        if (SKIP[t]) continue;
+      }
+      push(el, tag === "select" ? "select_value" : "value_bearing_control");
+    }
+  } catch (e) { ok = false; }
+  // ── 2. What the PAGE ITSELF declares sensitive ─────────────────────────────
+  try {
+    var declared = document.querySelectorAll(
+      "[type='password'], [data-pii], [data-sensitive], " +
+      "[autocomplete*='cc-'], [autocomplete*='name'], [autocomplete*='tel'], " +
+      "[autocomplete*='email'], [autocomplete*='bday'], [autocomplete*='street'], " +
+      "[autocomplete*='postal']");
+    for (var d = 0; d < declared.length; d++) push(declared[d], "declared_sensitive");
+  } catch (e) { ok = false; }
+  // ── 3. RENDERED text that looks like an identifier ─────────────────────────
+  // The review step of an application prints the SSN and the account number as
+  // ordinary text; no input exists to mask. Own-text only, so masking a leaf
+  // never blacks out a whole container.
+  var RX = [
+    /\b\d{3}-\d{2}-\d{4}\b/,                                   // SSN
+    /\b(?:\d[ -]?){13,19}\b/,                                  // card / account
+    /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/,      // email
+    /\(?\b\d{3}\)?[ .-]?\d{3}[ .-]?\d{4}\b/,                   // phone
+    /\b\d{4}-\d{2}-\d{2}\b/,                                   // ISO date (DOB)
+    /\b\d{1,2}\/\d{1,2}\/\d{4}\b/                              // US date (DOB)
+  ];
+  function ownText(el) {
+    var t = "", ch = el.childNodes;
+    for (var k = 0; k < ch.length; k++) if (ch[k].nodeType === 3) t += ch[k].nodeValue;
+    return (t + "").replace(/\s+/g, " ").trim();
+  }
+  try {
+    var all = document.body ? document.body.getElementsByTagName("*") : [];
+    for (var j = 0; j < all.length && j < 6000 && out.length < MAX; j++) {
+      var e2 = all[j], tg = (e2.tagName || "");
+      if (tg === "SCRIPT" || tg === "STYLE" || tg === "NOSCRIPT") continue;
+      var txt = ownText(e2);
+      if (!txt || txt.length > 400) continue;
+      for (var m = 0; m < RX.length; m++) {
+        if (RX[m].test(txt)) { push(e2, "rendered_identifier"); break; }
+      }
+    }
+  } catch (e) { ok = false; }
+  var de = document.documentElement || {};
+  var body = document.body || {};
+  return {
+    ok: ok && out.length < MAX,
+    regions: out,
+    page_w: Math.max(de.scrollWidth || 0, body.scrollWidth || 0,
+                     de.clientWidth || 0, window.innerWidth || 0),
+    page_h: Math.max(de.scrollHeight || 0, body.scrollHeight || 0,
+                     de.clientHeight || 0, window.innerHeight || 0),
+    dpr: window.devicePixelRatio || 1
+  };
 })()
 """

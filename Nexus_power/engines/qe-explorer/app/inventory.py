@@ -43,7 +43,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import re
-from typing import Any, Iterable, Optional, TypedDict
+from typing import Any, Iterable, Mapping, Optional, Sequence, TypedDict
 
 from .inventory_js import MAX_OPTIONS
 
@@ -206,8 +206,26 @@ class ControlRecord(TypedDict):
     group_id: str
     group_options: list[str]
     group_size: int
+    #: THE QUESTION THIS CONTROL ANSWERS, as the DOM declared it (M2.1).
+    #: ``question_key`` is the declared container (fieldset / role=radiogroup /
+    #: role=group) — wider than ``group_key``, which only ever sees radios and
+    #: checkboxes; ``question_label`` is the application's own wording for that
+    #: question, from a declared accessible-name rung only, "" when the page
+    #: declared none. ``question_group_id`` is stamped by QUESTION_ASSEMBLE on
+    #: the members of a declared container holding 2+ controls that acquired NO
+    #: ``group_id`` — a bare-<button> Yes/No pair is one question too, and until
+    #: this existed the only identity it could be given was its DOM ordinal.
+    question_key: str
+    question_label: str
+    question_label_source: str
+    question_group_id: str
     anchor: Optional[AnchorRecord]
     match_index: Optional[int]
+    #: CAPTURE-EVIDENCE LOCATOR (M2.2 / T-BR-03) — stamped by
+    #: :func:`build_inventory` pass 4, which is the only place that can see the
+    #: whole page and therefore the only place that can say whether a handle
+    #: resolves to ONE control. ``None`` when the page declared no handle at all.
+    locator: Optional[dict[str, Any]]
     danger: bool
     danger_rule_id: str
     danger_severity: str
@@ -374,6 +392,92 @@ def target_kind_for(record: ControlRecord) -> str:
     return _TARGET_KIND_BY_KIND.get(record.get("kind", ""), "other")
 
 
+#: Kinds whose members are ANSWERS to one question rather than questions of
+#: their own. A grouped <select> does not exist — a select IS its own question —
+#: so folding is scoped to the kinds that spread one question across N elements.
+_GROUPED_MEMBER_KINDS = frozenset({"radio", "checkbox", "toggle", "button"})
+
+
+def question_identity(record: Mapping[str, Any]) -> str:
+    """THE ONE id of the question a control answers, or "" when it answers a
+    question of its own (M2.1 / T-QT-04).
+
+    Two DOM declarations can group controls into a question and they never
+    overlap: ``group_id`` (radio / checkbox sets, from HTML's own grouping) and
+    ``question_group_id`` (any 2+ controls sharing a declared fieldset /
+    role=group / role=radiogroup container — the bare-button questionnaire).
+    Every consumer that asks "which question is this" must go through here, or
+    the two declarations become two id spaces for one question, which is exactly
+    the collision this milestone closes.
+    """
+    return (str(record.get("group_id") or "").strip()
+            or str(record.get("question_group_id") or "").strip())
+
+
+def question_groups_of(
+    records: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    """The QUESTIONS a page asks, folded from the controls that answer them.
+
+    One entry per declared question group, in first-sighting order:
+
+    ``{group_id, label, label_source, type, options, options_total, required,
+    members:[{name, kind}]}``
+
+    THE HOLE THIS FILLS. ``form_snapshot_signals`` — the only control payload
+    that has ever crossed to qe-central — is keyed by a control's ACCESSIBLE
+    NAME, which for a radio group is the name of an ANSWER. A "Gender" question
+    therefore reached the catalogue as two questions called "Male" and "Female",
+    each offering no answers at all, and a 20-question health questionnaire whose
+    every control is named "Yes" or "No" reached it as TWO questions, because a
+    dict keyed by name cannot hold forty. The grouping was known in this process
+    the whole time and simply had no way across.
+
+    Value-free: labels and option text are product UI text, exactly like every
+    other name in the manifest. No committed value enters this.
+    """
+    out: list[dict[str, Any]] = []
+    by_gid: dict[str, dict[str, Any]] = {}
+    for rec in records:
+        if not isinstance(rec, Mapping):
+            continue
+        gid = question_identity(rec)
+        if not gid:
+            continue
+        kind = str(rec.get("kind") or "")
+        if kind not in _GROUPED_MEMBER_KINDS:
+            continue
+        name = _s(rec.get("name")).strip()
+        row = by_gid.get(gid)
+        if row is None:
+            row = {
+                "group_id": gid,
+                # The application's OWN wording, or "" — never a substitute.
+                "label": _s(rec.get("question_label")).strip()[:_MAX_NAME],
+                "label_source": _s(rec.get("question_label_source")).strip()[:40],
+                "type": kind,
+                "options": [],
+                "required": False,
+                "members": [],
+            }
+            by_gid[gid] = row
+            out.append(row)
+        elif not row["label"]:
+            # Any member may be the one that saw the container's wording.
+            row["label"] = _s(rec.get("question_label")).strip()[:_MAX_NAME]
+            row["label_source"] = _s(rec.get("question_label_source")).strip()[:40]
+        row["required"] = bool(row["required"]) or bool(rec.get("required"))
+        if name and name not in row["options"]:
+            row["options"].append(name)
+        if name and not any(m.get("name") == name for m in row["members"]):
+            row["members"].append({"name": name[:_MAX_NAME], "kind": kind})
+    for row in out:
+        # ``group_options`` is the DOM order the grouping pass recorded; prefer
+        # it when it is at least as complete, so the answers read in page order.
+        row["options_total"] = len(row["options"])
+    return out
+
+
 def form_signal_for(record: ControlRecord) -> Optional[dict[str, Any]]:
     """``form_snapshot_signals[label]`` value for a value-bearing control, or
     ``None`` for a button/link (not a form field).
@@ -384,11 +488,34 @@ def form_signal_for(record: ControlRecord) -> Optional[dict[str, Any]]:
     signal_type = _FORM_SIGNAL_TYPE_BY_KIND.get(record.get("kind", ""))
     if signal_type is None:
         return None
+    options = list(record.get("options") or [])
     sig = {
         "type": signal_type,
-        "options": list(record.get("options") or []),
+        "options": options,
+        # HOW MANY ANSWERS THE QUESTION OFFERS — not how many survived the read.
+        # The browser has always counted this (inventory_js.optionsAndTotalOf)
+        # and the control record has always carried it, and this function — the
+        # ONLY boundary qe-central reads a question's answers from — did not pass
+        # it on. Downstream, ``catalog._options_total`` floors the total at the
+        # number stored, so with nothing declared the catalogue reported exactly
+        # as many answers as it happened to keep: a clipped 250-option country
+        # list came out as a complete 300, and a scenario deriver that refuses to
+        # claim completeness on a clipped enumeration could not tell it was one.
+        # The honesty marker existed at both ends of the wire and nothing carried
+        # it across.
+        "options_total": max(_as_int(record.get("options_total")), len(options)),
         "required": bool(record.get("required")),
     }
+    # THE HANDLE THE PAGE DECLARED FOR THIS CONTROL (M2.2 / T-BR-03). Captured
+    # since M0.x as ``testid`` / ``css_hint`` / the accessible name, verified for
+    # uniqueness by :func:`attach_locators`, and until now readable only inside
+    # the explorer: the catalogue described a question in full and could not say
+    # which element on the page asks it. Carried whole — including an UNVERIFIED
+    # verdict, which is a finding about the application (a control it identifies
+    # by nothing) and not an absence to hide.
+    locator = record.get("locator")
+    if isinstance(locator, dict) and locator:
+        sig["locator"] = dict(locator)
     # A DEPENDENT control (its options only populate after a driver field is chosen) carries
     # the driver's label — set by the crawler's ACT-THEN-DIFF pass. Keeps a downstream
     # consumer honest that the captured options are for ONE branch of the driver, not fixed.
@@ -556,6 +683,205 @@ def _collision_key(record: ControlRecord) -> tuple[str, str, str]:
     return (record.get("frame_selector", ""), _norm(record.get("role")), _norm(record.get("name")))
 
 
+# ─── Carrying what a re-read cannot recover (M2.2 / T-BR-02) ──────────────────
+
+#: Annotations that are CRAWL FINDINGS, not DOM readings. Every one of them was
+#: established by DOING something — acting on a driver and diffing the page,
+#: opening a menu that builds itself on open — and none of them can be recovered
+#: by inventorying the page again, because the page never stated them.
+_EARNED_KEYS = ("depends_on", "options_total", "options_truncated")
+
+
+def carry_earned_annotations(
+    previous: Iterable["ControlRecord"], fresh: list["ControlRecord"],
+) -> list["ControlRecord"]:
+    """Re-apply to ``fresh`` the findings ``previous`` earned. Mutates + returns.
+
+    THE DEFECT THIS CLOSES, found by crawling a real application.  The discovery
+    pass proves a dependency the way it can only be proven — commit a driver act,
+    re-observe, watch a second question's answer set change — and writes it onto
+    the control.  A later step then re-inventories the page (the unblock
+    experiment does, because it must re-read the page to see whether the
+    application enabled its forward control) and REPLACES the snapshot with the
+    fresh read.  The fresh read is correct about everything the DOM says and
+    silent about everything it does not, so the dependency vanished between the
+    step that proved it and the record that leaves the crawl.  Live, the
+    catalogue's ``depends_on`` was empty on every question in the fleet, and the
+    pass that produces it looked like it had simply never found anything.
+
+    The same applies to an enumeration read by OPENING a custom menu: re-reading
+    the closed page yields nothing, and taking the fresh silence would trade a
+    known answer set for an empty one.
+
+    RICHER WINS, NEVER POORER.  A fresh read that genuinely saw MORE keeps what
+    it saw — this only fills silence, so a page that really did change is still
+    described by the newest observation.
+    """
+    by_name: dict[str, "ControlRecord"] = {}
+    for rec in previous or ():
+        name = _norm(rec.get("name"))
+        if name and name not in by_name:
+            by_name[name] = rec
+    for rec in fresh:
+        prior = by_name.get(_norm(rec.get("name")))
+        if prior is None:
+            continue
+        for key in _EARNED_KEYS:
+            if not rec.get(key) and prior.get(key):
+                rec[key] = prior[key]
+        prior_options = list(prior.get("options") or ())
+        if len(prior_options) > len(rec.get("options") or ()):
+            rec["options"] = prior_options
+        qec, prior_qec = rec.get("qec"), prior.get("qec")
+        if isinstance(qec, dict) and isinstance(prior_qec, dict):
+            if rec.get("depends_on"):
+                qec["depends_on"] = rec["depends_on"]
+            if len(prior_options) > len(qec.get("options") or ()):
+                qec["options"] = prior_options
+    return fresh
+
+
+# ─── Locator evidence (M2.2 / T-BR-03) ────────────────────────────────────────
+
+#: Ceiling on any single locator string. A locator is a HANDLE, not a document;
+#: a page that emits a 4KB generated class list must not be able to inflate every
+#: catalogue row by it.
+_MAX_LOCATOR = 200
+
+#: The handles a page can DECLARE about one control, strongest first. Every one
+#: of these is read straight off the DOM — there is no rung here that composes a
+#: selector the application never offered. That is the whole discipline of
+#: T-BR-03: a catalogue may report the handle a page gave, and must report
+#: nothing when the page gave none, because a manufactured selector is a claim
+#: about an application that no crawl ever tested.
+#:
+#: ``accessible_name`` sits below the two data attributes and above ``css_hint``
+#: for a reason that is not about strength but about MEANING: it is the only rung
+#: the deterministic compiler actually binds on (compiler.py:297-331), so a
+#: catalogue question whose locator is an accessible name is one a generated
+#: script can target unchanged. ``css_hint`` never can — it is recorded as
+#: evidence that SOMETHING identifies the control, and marked as the diagnostic
+#: it is.
+LOCATOR_TESTID = "testid"
+LOCATOR_DOM_ID = "dom_id"
+LOCATOR_ACCESSIBLE_NAME = "accessible_name"
+LOCATOR_CSS_HINT = "css_hint"
+
+#: Why a control has no verified locator. Recorded rather than left blank: "we
+#: could not identify this control" and "we did not look" are different findings,
+#: and only one of them is the application's fault.
+LOCATOR_UNVERIFIED_NO_HANDLE = "no_handle_declared"
+LOCATOR_UNVERIFIED_AMBIGUOUS = "ambiguous_in_page"
+
+
+def _dom_id_of(record: "ControlRecord") -> str:
+    return _s(record.get("id")).strip()
+
+
+def _testid_of(record: "ControlRecord") -> str:
+    qec = record.get("qec")
+    return _s(qec.get("testid")).strip() if isinstance(qec, dict) else ""
+
+
+def _css_hint_of(record: "ControlRecord") -> str:
+    qec = record.get("qec")
+    return _s(qec.get("css_hint")).strip() if isinstance(qec, dict) else ""
+
+
+def attach_locators(records: list["ControlRecord"]) -> int:
+    """Stamp each control with the locator its page DECLARED. Returns how many
+    came out VERIFIED.
+
+    Uniqueness is why this cannot live in :func:`build_control_record`: a handle
+    is only a locator if it resolves to ONE control, and that is a property of
+    the PAGE, not of the element. One control examined alone can report the id it
+    carries; only the page can say whether another control carries it too —
+    and ids DO collide in practice (two shadow roots, a repeated row template,
+    a component rendered twice). A per-control pass would have had to either
+    assume uniqueness — which is the fabrication this task exists to prevent —
+    or never claim it, which would make every locator unverified and the field
+    worthless.
+
+    Scoping is per FRAME: the compiler enters an iframe before resolving
+    anything inside it (compiler.py:254-259), so the same id in the main
+    document and in an embedded one is not a collision.
+
+    A control whose name collides is still verified: :func:`build_inventory` has
+    already stamped the DOM ordinal that separates it from its twins, and the
+    k-th match in document order is exactly as real a handle as a data-testid.
+    What is NOT verified is a control the page identified by nothing at all —
+    no test attribute, no id, no accessible name — and that is recorded as the
+    finding it is rather than papered over with a positional guess.
+    """
+    frames = [_s(r.get("frame_selector")) for r in records]
+    testid_counts: dict[tuple[str, str], int] = {}
+    dom_id_counts: dict[tuple[str, str], int] = {}
+    css_counts: dict[tuple[str, str], int] = {}
+    for frame, rec in zip(frames, records):
+        for value, counts in ((_testid_of(rec), testid_counts),
+                              (_dom_id_of(rec), dom_id_counts),
+                              (_css_hint_of(rec), css_counts)):
+            if value:
+                counts[(frame, value)] = counts.get((frame, value), 0) + 1
+
+    verified = 0
+    for frame, rec in zip(frames, records):
+        loc: dict[str, Any] = {}
+        testid, dom_id = _testid_of(rec), _dom_id_of(rec)
+        css_hint, name = _css_hint_of(rec), _s(rec.get("name")).strip()
+        if testid and testid_counts.get((frame, testid), 0) == 1:
+            loc = {"strategy": LOCATOR_TESTID, "value": _clip(testid, _MAX_LOCATOR)}
+        elif dom_id and dom_id_counts.get((frame, dom_id), 0) == 1:
+            loc = {"strategy": LOCATOR_DOM_ID, "value": _clip(dom_id, _MAX_LOCATOR)}
+        elif name:
+            # The compiler's own rung. Verified whether or not the name is
+            # unique, because a collision here has already been given an ordinal.
+            loc = {"strategy": LOCATOR_ACCESSIBLE_NAME,
+                   "value": _clip(name, _MAX_LOCATOR)}
+        elif css_hint and css_counts.get((frame, css_hint), 0) == 1:
+            # Diagnostics-grade: no compiler rung binds on it, so it is carried
+            # as evidence the control is identifiable and NOT as something a
+            # generated script may target.
+            loc = {"strategy": LOCATOR_CSS_HINT,
+                   "value": _clip(css_hint, _MAX_LOCATOR), "bindable": False}
+        else:
+            rec["locator"] = {
+                "strategy": "", "value": "", "verified": False,
+                "unverified_reason": (LOCATOR_UNVERIFIED_AMBIGUOUS
+                                      if (testid or dom_id or css_hint)
+                                      else LOCATOR_UNVERIFIED_NO_HANDLE),
+            }
+            continue
+
+        loc["verified"] = True
+        loc.setdefault("bindable", loc["strategy"] == LOCATOR_ACCESSIBLE_NAME)
+        # SCOPE — everything the compiler needs to enter the right context before
+        # it resolves the handle above. Each is present only when the page made
+        # it true, so an absent key is evidence of a simple page, not a gap.
+        role = _norm(rec.get("role"))
+        if role:
+            loc["role"] = role
+        if frame:
+            loc["frame_selector"] = _clip(frame, _MAX_LOCATOR)
+        idx = rec.get("match_index")
+        if isinstance(idx, int):
+            loc["match_index"] = idx
+        if isinstance(rec.get("anchor"), dict):
+            loc["anchor"] = dict(rec["anchor"])
+        # WHICH QUESTION A MEMBER ANSWERS. Four radios are one question with four
+        # answers, and each answer is a different element: without this a reader
+        # holding four locators cannot tell four members of one question from
+        # four unrelated toggles, and a merge that "kept the richest" could put
+        # one member's handle on another member's row without contradicting
+        # anything. Structure only — never which answer was taken.
+        group_id = _s(rec.get("group_id")).strip()
+        if group_id:
+            loc["group_id"] = group_id
+        rec["locator"] = loc
+        verified += 1
+    return verified
+
+
 # ─── Public entry point ────────────────────────────────────────────────────────
 
 
@@ -694,8 +1020,15 @@ def build_control_record(
         # DOM-declared choice grouping; GROUP_ASSEMBLE (pass 3) turns this into
         # group_id/group_options once it knows the control's siblings.
         "group_key": _s(raw.get("group_key")).strip(),
+        # DOM-declared QUESTION identity + wording; QUESTION_ASSEMBLE (pass 3b)
+        # turns question_key into question_group_id once it knows the siblings.
+        "question_key": _s(raw.get("question_key")).strip(),
+        "question_label": _clip(_s(raw.get("question_label")).strip(), _MAX_NAME),
+        "question_label_source": _s(raw.get("question_label_source")).strip(),
+        "question_group_id": "",
         "anchor": None,   # filled by build_inventory only on collision
         "match_index": None,  # DOM ordinal among identical controls (collision only)
+        "locator": None,  # filled by build_inventory pass 4 (needs whole-page uniqueness)
         "danger": danger,
         "danger_rule_id": danger_rule_id,
         "danger_severity": danger_severity,
@@ -718,9 +1051,40 @@ def build_control_record(
             # aria-expanded — marks a CLICK-to-open dropdown/disclosure toggle the
             # crawler clicks to reveal hidden menu items; diagnostics-only.
             "expanded": _s(raw.get("expanded")).strip(),
+            # M2.6 / T-CAP-03 — "collapsed" | "expanded" | "". The DOM's own
+            # answer to "is this control a door, and is it shut", normalised
+            # across <details>/aria-expanded/role=tab by capture (only capture
+            # can see `details.open`, which is a property, not an attribute).
+            # Read by the crawler's pre-capture expansion pass so a field behind
+            # a collapsed accordion is catalogued; no compiler rung.
+            "disclosure": _s(raw.get("disclosure")).strip(),
             # U0 — accessible-name confidence (high|medium|low|none), graded by the
             # name rung. The escalate-to-vision signal for DOM-opaque pages.
             "name_confidence": name_confidence_for(raw.get("name_source"), name),
+            # M3.2 / T-FR-01 — HOW this control was reached. "" is the ordinary
+            # in-page walk (main document, open/closed shadow roots, same-origin
+            # frames); "cross_origin_frame" means the port entered a foreign
+            # embed through Playwright's frame APIs and read it from inside.
+            # Carried because a reader deciding whether to ACT on a control (a
+            # vendor payment field is not an application form field) must be able
+            # to tell without re-deriving it from the selector string.
+            "capture_scope": _s(raw.get("capture_scope")).strip(),
+            # scheme://host of that embed. ORIGIN, never the URL: a vendor frame
+            # URL routinely carries a client secret in its query string.
+            "frame_origin": _s(raw.get("frame_origin")).strip(),
+            # M3.2 / T-FR-02 — "" or "closed_shadow". A control the capture hook
+            # observed inside a CLOSED shadow root. Orthogonal to capture_scope:
+            # a closed root can sit inside a cross-origin frame and both facts
+            # are true at once.
+            #
+            # IT IS CARRIED BECAUSE IT LIMITS WHAT MAY BE CLAIMED. Playwright's
+            # selector engine pierces OPEN shadow roots by reading
+            # `element.shadowRoot`, which is null for a closed one — for
+            # Playwright exactly as for the page. So this control is real,
+            # catalogued evidence of a question the application asks, and NO
+            # standard locator can bind it. Recording it without recording that
+            # would be a capture-says-covered / replay-cannot-bind claim.
+            "shadow_scope": _s(raw.get("shadow_scope")).strip(),
         },
     }
     return record
@@ -836,10 +1200,66 @@ def build_inventory(
         groups_found += 1
         grouped += len(indices)
 
+    # Pass 3b: QUESTION_ASSEMBLE — the questions the choice-grouping above
+    # CANNOT see (M2.1).
+    #
+    # GROUP_ASSEMBLE groups radios and checkboxes, because those are the kinds
+    # HTML defines a grouping for. A health questionnaire rendered as pairs of
+    # bare <button>s — the single most common shape in the insurance funnels
+    # this product exists to crawl — is not radios, carries no name attribute,
+    # and came out of pass 3 as N unrelated buttons. The walker could only
+    # identify each question by its DOM ORDINAL, which is why the catalogue
+    # called them "Question 1" … "Question 20": there was no other handle.
+    #
+    # The DOM did declare one, though, and nobody read it: the <fieldset> /
+    # role=group / role=radiogroup container those buttons sit in. Keyed on
+    # exactly that, so a question keeps its identity when a sibling question is
+    # added above it, when the page re-renders, and across crawls.
+    #
+    # A SEPARATE FIELD, NOT AN OVERLOADED ``group_id``. Radio ``group_id`` hashes
+    # key the remembered branch-walk overrides a previous crawl recorded, and
+    # ``state_identity`` reads ``group_id`` as per-control identity when building
+    # a page fingerprint — stamping it on buttons would re-key both. Consumers
+    # that want "the question, whichever kind declared it" call
+    # :func:`question_identity`.
+    q_by_container: dict[tuple[str, str], list[int]] = {}
+    for idx, rec in enumerate(records):
+        if rec.get("group_id"):
+            continue           # already ONE question via the choice grouping
+        qk = _s(rec.get("question_key")).strip()
+        if not qk:
+            continue           # no declared container → nothing honest to group by
+        q_by_container.setdefault(
+            (rec.get("frame_selector") or "", qk), []).append(idx)
+
+    questions_found = 0
+    for (frame, qkey), indices in q_by_container.items():
+        if len(indices) < 2:
+            continue           # a lone control in a fieldset is just that control
+        qgid = hashlib.sha256(
+            f"q{frame}{qkey}".encode("utf-8")).hexdigest()[:32]
+        answers = [records[i]["name"] for i in indices if records[i].get("name")]
+        for i in indices:
+            records[i]["question_group_id"] = qgid
+            # Only the ANSWERS, and only when every member could be named: a
+            # partial list presented as the answer set is the same fabrication
+            # a clipped enumeration would be.
+            if len(answers) == len(indices):
+                records[i]["group_options"] = (
+                    records[i].get("group_options") or answers)
+                records[i]["group_size"] = len(indices)
+        questions_found += 1
+
+    # Pass 4: LOCATOR EVIDENCE (M2.2 / T-BR-03). Last, deliberately — it reads
+    # the ordinal from pass 2 and the group identity from pass 3, so running it
+    # earlier would silently emit locators with no scope and no question.
+    verified_locators = attach_locators(records)
+
     logger.info(
         "qec.inventory.built controls=%d anchored=%d dangerous=%d "
-        "radio_groups=%d radio_grouped=%d",
+        "radio_groups=%d radio_grouped=%d declared_questions=%d "
+        "verified_locators=%d",
         len(records), anchored, sum(1 for r in records if r["danger"]),
-        groups_found, grouped,
+        groups_found, grouped, questions_found, verified_locators,
     )
     return records

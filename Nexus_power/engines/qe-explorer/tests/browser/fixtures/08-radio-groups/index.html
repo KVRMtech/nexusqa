@@ -74,6 +74,53 @@
       </div>
     </div>
 
+    <!-- SUBJECT H: THE QUESTION, IN THE APPLICATION'S OWN WORDS (M2.1).
+         group_key answers "which question", and says nothing about what the
+         question IS. The four rungs below are the only ways a page DECLARES
+         that, and each is isolated here so a regression in one cannot hide
+         behind another. Nothing is ever read from mere proximity: a question
+         inferred from layout is a question the application never asked. -->
+
+    <!-- H1: aria-labelledby, the standard markup for a questionnaire question
+         rendered as a title + helper-text pair. Two BLOCK children, so the
+         rendered name is "A B" and not "AB". -->
+    <div role="radiogroup" id="tobacco-group" aria-labelledby="tob-q tob-help">
+      <div id="tob-q">Have you used tobacco in the last 12 months?</div>
+      <div id="tob-help">Include cigarettes, vaping and nicotine replacement.</div>
+      <div role="radio" aria-checked="false" tabindex="0">Yes</div>
+      <div role="radio" aria-checked="false" tabindex="-1">No</div>
+    </div>
+
+    <!-- H2: a heading inside a role=group - how a design system that cannot use
+         <legend> states the same thing. -->
+    <div role="group" id="cover-group">
+      <h2>How much cover do you need?</h2>
+      <label><input type="radio" name="cover" value="low"> Up to $250,000</label>
+      <label><input type="radio" name="cover" value="high"> More than $250,000</label>
+    </div>
+
+    <!-- H3: a DECLARED question the page words NOWHERE. No legend, no
+         aria-label, no aria-labelledby, no heading. The only honest answer is
+         an empty label - the catalogue then reports it UNVERIFIED rather than
+         inventing wording, and the question is still identified by its
+         container. -->
+    <fieldset id="unworded-group">
+      <label><input type="radio" name="unworded" value="a"> Option A</label>
+      <label><input type="radio" name="unworded" value="b"> Option B</label>
+    </fieldset>
+
+    <!-- H4: a <legend> that is EMPTY. The element that exists to state the
+         question is present and says nothing, which is a different fact from
+         having no legend at all - and it must not be reported as wording. The
+         read breaks out rather than walking on to a later legend, because a
+         second legend in one fieldset captions nothing this browser recognises.
+         -->
+    <fieldset id="empty-legend-group">
+      <legend></legend>
+      <label><input type="radio" name="emptylg" value="a"> Choice A</label>
+      <label><input type="radio" name="emptylg" value="b"> Choice B</label>
+    </fieldset>
+
     <!-- SUBJECT G: a role=radio with NO name attribute and NO declared grouping
          ancestor anywhere. There is nothing to group it BY, so it must come back
          ungrouped. Inventing a key here - by proximity, by document order, by

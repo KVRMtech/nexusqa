@@ -37,18 +37,21 @@ import httpx
 from fastapi import Depends, FastAPI, Header, HTTPException, status
 from pydantic import BaseModel, Field
 
-from . import completion_manifest, crawl_context, emit, metrics
+from . import (completion_manifest, crawl_context, emit,
+               evidence_publisher, metrics)
 from .config import settings
 from .crawl_context import CrawlTokenUsage
 from .crawler import TRAVERSAL_FULL, Budget, Crawler, CrawlSummary, GuardContext
 from .forms import AnswerKey
 from .auth import AuthWindow, Credentials
 from .attest import AttestReason, verify_provisioning_proof
+from . import vision_gate
 from .guard import Attestation, GuardRule, RefusePack, load_refuse_pack
 from .walk_persist import WalkAuthorization
 from .inventory_js import INVENTORY_JS_VERSION
 from .playwright_port import (_ACTION_TIMEOUT_MS, _LAUNCH_ARGS,
-                              PlaywrightBrowserPort, context_defaults)
+                              PlaywrightBrowserPort, context_defaults,
+                              install_capture_hooks)
 
 logging.basicConfig(level=getattr(logging, settings.log_level.upper(), logging.INFO))
 logger = logging.getLogger("qe-explorer")
@@ -1048,6 +1051,7 @@ def _make_medic_oracle(
 def _make_vision_oracle(
     http_client: httpx.AsyncClient, tenant_id: str, crawl_id: str,
     telemetry: Optional[_CrawlTelemetry] = None,
+    budget: Optional[Any] = None,
 ):
     """Return an async callable the crawler invokes on a DOM-opaque page (when
     ``perception.should_perceive`` is true): POST the page SCREENSHOT to
@@ -1055,38 +1059,54 @@ def _make_vision_oracle(
     enumerate the interactive controls + displayed outcome values it can see.
 
     Contract: ``perceive(screenshot_b64, page_context) -> {"controls": [...],
-    "displayed_values": [...]}``. Same resilience as the medic oracle — per-crawl
-    circuit breaker + call cap (reuses the medic caps; no separate config). Never
-    raises; empties on any failure. The server side enforces the vision flag, so a
-    disabled tenant gets empties here.
+    "displayed_values": [...]}``. Never raises; empties on any failure. The
+    server side enforces the vision flag, so a disabled tenant gets empties here.
+
+    M3.1 / T-VIS-03 — THE CAP, TIMEOUT AND BREAKER ARE VISION OWNED.
+    ===============================================================
+    This callable used to spend ``settings.medic_oracle_max_calls``,
+    ``medic_oracle_timeout_s`` and ``medic_oracle_breaker_threshold``, i.e. the
+    DOM interaction ladder repair budget. A canvas application that burned ten
+    perceive calls therefore took ten repair calls away from the ladder, and a
+    vision provider outage opened the breaker the ladder depended on — neither
+    of which is visible in any number a crawl reports.
+
+    It now spends a :class:`app.vision_gate.VisionBudget`, which additionally
+    carries the T-VIS-04 double gate: ``try_spend`` refuses every call when the
+    gate is shut, so this callable cannot make a request the gate did not
+    authorise even if it is wired by mistake.
     """
-    state = {"consecutive_failures": 0, "circuit_open": False,
-             "calls": 0, "cap_logged": False}
+    from . import vision_gate as _vg
+
+    vbudget = budget if budget is not None else _vg.closed_budget()
     empty = {"controls": [], "displayed_values": []}
 
     async def perceive(screenshot_b64: str, page_context: dict[str, Any]) -> dict[str, Any]:
-        if state["circuit_open"] or not screenshot_b64:
-            if state["circuit_open"]:
-                metrics.record_oracle_call(oracle="vision", outcome="circuit_open",
-                                           failure_reason="circuit_open")
+        if not screenshot_b64:
             return dict(empty)
-        if state["calls"] >= settings.medic_oracle_max_calls:
-            if not state["cap_logged"]:
-                state["cap_logged"] = True
-                logger.warning(
-                    "qec.explorer.vision_oracle_cap_reached crawl_id=%s cap=%d",
-                    crawl_id, settings.medic_oracle_max_calls)
-            metrics.record_oracle_call(oracle="vision", outcome="cap_reached",
-                                       failure_reason="cap_reached")
+        allowed, why = vbudget.try_spend()
+        if not allowed:
+            metrics.record_oracle_call(oracle="vision", outcome=why,
+                                       failure_reason=why)
+            logger.info("qec.explorer.vision_oracle_refused crawl_id=%s reason=%s",
+                        crawl_id, why)
             return dict(empty)
-        state["calls"] += 1
         if telemetry is not None:
             telemetry.note_call()
         started = time.monotonic()
         crawl_context.emit(crawl_context.EV_ORACLE_CALLED, oracle="vision")
+        # M3.1 / T-VIS-05 — the REDACTION RECEIPT is lifted out of the page
+        # context and sent as a first-class field, because qe-central ENFORCES it
+        # rather than trusting it: the receipt names a sha256, the server hashes
+        # the bytes it was actually handed, and a mismatch is a refusal. A claim
+        # buried in a free-form context dict is a checkbox; a claim bound to the
+        # image is a control.
+        ctx = dict(page_context or {})
+        receipt = ctx.pop("pixel_redaction", None)
         body = {"crawl_id": crawl_id,      # T-SEC-07 server-verifiable identity
                 "tenant_id": tenant_id, "screenshot_b64": screenshot_b64,
-                "page_context": page_context or {}}
+                "pixel_redaction": receipt or {},
+                "page_context": ctx}
         payload = json.dumps(body, sort_keys=True, separators=(",", ":")).encode("utf-8")
         url = settings.callback_url.rstrip("/") + "/internal/perceive-controls"
         failure_reason = "bad_body"
@@ -1100,7 +1120,7 @@ def _make_vision_oracle(
                     "X-QEC-Signature": signature,
                     "X-QEC-Token": settings.explorer_token,
                 }),
-                timeout=settings.medic_oracle_timeout_s,
+                timeout=vbudget.timeout_s,
             )
             if resp.status_code == 200:
                 data = resp.json()
@@ -1108,7 +1128,7 @@ def _make_vision_oracle(
                 if telemetry is not None:
                     telemetry.note_usage(data)
                 if isinstance(controls, list):
-                    state["consecutive_failures"] = 0
+                    vbudget.note_success()
                     values = data.get("displayed_values")
                     _note_oracle_outcome(
                         "vision", "perceived" if controls else "empty", started)
@@ -1123,13 +1143,9 @@ def _make_vision_oracle(
                            crawl_id, str(exc)[:200])
         _note_oracle_outcome("vision", "unavailable", started,
                              failure_reason=failure_reason)
-        state["consecutive_failures"] += 1
-        if (state["consecutive_failures"] >= settings.medic_oracle_breaker_threshold
-                and not state["circuit_open"]):
-            state["circuit_open"] = True
-            logger.warning(
-                "qec.explorer.vision_oracle_circuit_open crawl_id=%s failures=%d",
-                crawl_id, state["consecutive_failures"])
+        # The breaker lives on the budget now, so vision failing can never open a
+        # circuit anything else is relying on.
+        vbudget.note_failure()
         return dict(empty)
 
     return perceive
@@ -1183,6 +1199,39 @@ async def _run_job(
             "qec.explorer.observe_only_forced crawl_id=%s env_kind=%r — "
             "mutation (fill/submit/advance) is disabled for a non-disposable "
             "environment", req.crawl_id, req.env_kind or "(unstated)")
+    # ── M3.1 / T-VIS-04 · THE VISION DOUBLE GATE, ON THE EXECUTION PATH ──
+    # qe-central already refuses to SET ``vision_enabled`` unless the env flag
+    # and the tenant flag are both on. That is a gate on the OPERATOR intent and
+    # it says nothing about the TARGET: a tenant with vision switched on could
+    # point a crawl at their live production portal and have full-page
+    # screenshots of real customers travel to a third-party model, because no
+    # gate on the vision path had ever consulted the environment attestation.
+    #
+    # Decided HERE for the same reason ``observe_only`` is (T-SEC-05): a
+    # permission resolved in the caller is a permission the caller can be wrong
+    # about, and this process holds the attestation it was actually handed. The
+    # dispatch flag can only ever be NARROWED by this — never widened.
+    vision_gate_decision = vision_gate.gate_for_crawl(
+        tenant_enabled=bool(req.vision_enabled),
+        attestation=guard_ctx.attestation,
+        walk_authorization=guard_ctx.walk_authorization,
+    )
+    vision_budget = vision_gate.VisionBudget(
+        gate=vision_gate_decision,
+        max_calls=settings.vision_oracle_max_calls,
+        timeout_s=settings.vision_oracle_timeout_s,
+        breaker_threshold=settings.vision_oracle_breaker_threshold,
+    )
+    if req.vision_enabled and not vision_gate_decision.enabled:
+        logger.warning(
+            "qec.explorer.vision_refused crawl_id=%s reason=%s — the tenant "
+            "enabled vision but this target is not attested; no screenshot will "
+            "leave this container", req.crawl_id, vision_gate_decision.reason)
+    elif vision_gate_decision.enabled:
+        logger.info(
+            "qec.explorer.vision_enabled crawl_id=%s rung=%s cap=%d timeout=%.1fs",
+            req.crawl_id, vision_gate_decision.rung,
+            vision_budget.max_calls, vision_budget.timeout_s)
     telemetry = _CrawlTelemetry(req.crawl_id)
     started_at = time.monotonic()
     metrics.record_crawl_started(crawl_mode=req.crawl_mode,
@@ -1190,7 +1239,12 @@ async def _run_job(
     crawl_context.emit(crawl_context.EV_CRAWL_STARTED,
                        crawl_mode=req.crawl_mode, traversal=req.traversal,
                        observe_only=observe_only,
-                       vision_enabled=req.vision_enabled,
+                       # The RESOLVED decision, not the dispatch flag: an event
+                       # that says "vision on" for a crawl that made no vision
+                       # call is the shape of telemetry nobody can act on.
+                       vision_enabled=vision_gate_decision.enabled,
+                       vision_gate_reason=vision_gate_decision.reason,
+                       vision_attestation_rung=vision_gate_decision.rung,
                        max_depth_budget=budget.max_depth,
                        max_states_budget=budget.max_states)
     try:
@@ -1241,6 +1295,14 @@ async def _run_job(
                     "password": req.http_credentials.get("password", ""),
                 }
             context = await browser.new_context(**_ctx_kwargs)
+            # M3.2 / T-FR-02 — THE CAPTURE HOOKS GO ON FIRST, before any page
+            # exists.  A closed shadow root can only be observed at the moment
+            # `attachShadow` creates it, so the hook has to be in place before
+            # the application's first script runs; `add_init_script` on the
+            # CONTEXT is the only placement that guarantees that for every page
+            # and every frame the crawl opens.  Moving this below `new_page()`,
+            # or into the port, would silently restore the blind spot.
+            await install_capture_hooks(context)
             context.set_default_timeout(_ACTION_TIMEOUT_MS)
             # Replay sessionStorage, for EVERY origin the recorded login walked
             # through. Playwright restores cookies and localStorage from a state but
@@ -1314,7 +1376,7 @@ async def _run_job(
             # "one was wired and never answered" (the silent failure) — which is
             # the whole distinction the no-oracle signal exists to draw.
             telemetry.oracle_configured = bool(
-                full_traversal or req.vision_enabled)
+                full_traversal or vision_gate_decision.enabled)
             port = PlaywrightBrowserPort(
                 page, context, proven_mechanics=req.proven_mechanics,
                 medic_oracle=medic,
@@ -1358,11 +1420,19 @@ async def _run_job(
                 # U2 vision Perceiver — only when the tenant has vision enabled
                 # (qe-central's double-gate). Default OFF → None → the walk hook is a
                 # no-op, and DOM-opaque pages are named but not perceived.
+                # U2 vision Perceiver. Built ONLY when the T-VIS-04 double gate
+                # returned enabled — and even then every call goes through
+                # ``vision_budget``, which is the single door: cap, timeout,
+                # breaker and gate are one object, so there is no second path a
+                # future caller could take around them.
                 vision_oracle=(
                     _make_vision_oracle(app.state.http, req.tenant_id,
-                                        req.crawl_id, telemetry)
-                    if req.vision_enabled else None
+                                        req.crawl_id, telemetry,
+                                        budget=vision_budget)
+                    if vision_gate_decision.enabled else None
                 ),
+                vision_budget=vision_budget,
+                vision_max_actions_per_state=settings.vision_max_actions_per_state,
                 choice_overrides=req.choice_overrides,
                 e2e_wizard_steps=settings.e2e_wizard_steps,
                 e2e_wizard_advances=settings.e2e_wizard_advances,
@@ -1636,6 +1706,22 @@ async def _fire_callback(req: ExploreRequest, summary: Optional[CrawlSummary],
             "qec.explorer.completion_record_failed crawl_id=%s error=%s — this "
             "crawl has NO durable completion record, so a dropped callback "
             "cannot be recovered", req.crawl_id, str(exc)[:200])
+
+    # ── M3.3 / T-FL-03 · PUBLISH BEFORE YOU ANNOUNCE ─────────────────────
+    # `{work_dir}/{crawl_id}` is a POD-LOCAL emptyDir in Kubernetes: invisible
+    # to the qe-central pod that must ingest it, and destroyed when this pod is
+    # replaced. Publishing here — after the durable local record, BEFORE the
+    # callback — means the evidence is durable before anything is told the crawl
+    # finished, so even a lost callback leaves a recoverable crawl.
+    #
+    # A no-op on the filesystem backend (single-node), so this cannot regress an
+    # existing install. Never raises: a storage incident must not become a lost
+    # crawl, so the outcome rides on the callback body where an operator sees it.
+    publish = evidence_publisher.publish_crawl_evidence(
+        settings.work_dir, req.crawl_id, req.tenant_id)
+    if publish.get("published") or publish.get("error"):
+        body["evidence_store"] = publish
+
     await _deliver_completion(req.crawl_id, body)
 
 

@@ -145,29 +145,63 @@ def synthesize_vision_controls(
     return out
 
 
+#: Surfaces that are no longer blind spots: something already read them, and the
+#: row exists to say so. Routed to ``observed`` so an escalation never fires on a
+#: surface that has already been catalogued.
+OBSERVED_KINDS = ("closed_shadow_entered", "frame_entered", "vision_perceived")
+
+
 def route_opaque_surfaces(
     surfaces: Iterable[Mapping[str, Any]],
 ) -> dict[str, list[dict[str, Any]]]:
-    """Route each detected opaque surface to its handler (U1/U2).
+    """Route each detected opaque surface to its handler (U1/U2 · M3.2 T-FR-01).
 
-    ``OPAQUE_JS`` emits ``{kind, label, reason}`` for the surfaces the DOM walker
-    cannot read. A **cross-origin iframe** is ENTERABLE — Playwright's
-    ``frame_locator`` crosses origins, so the walk re-observes INSIDE it (vendor
-    payment / e-sign / captcha). A **canvas** or **closed-shadow** surface has no
-    DOM to enter → the vision Perceiver (U2). Returns
-    ``{enter_frames: [...], vision: [...]}``. Pure.
+    ``OPAQUE_JS`` emits ``{kind, label, reason, ...}`` for every surface the DOM
+    walker could not read from inside the page. Four destinations:
+
+    ``enter_frames``
+        A **cross-origin iframe** carrying a ``frame_selector``. Playwright's
+        frame APIs cross origins, so the walk re-observes INSIDE it (vendor
+        payment / e-sign / captcha) without injecting anything across the origin
+        boundary. THE SELECTOR IS THE WHOLE POINT: this bucket had no consumer
+        for as long as the row named only a host, because a host is not
+        something ``frame_locator`` can be handed. A row without one is not
+        routed here — a caller must never be given a "frame to enter" it has no
+        way to address.
+    ``vision``
+        A **canvas** or a genuinely opaque **closed shadow** host: no DOM to
+        enter, so the vision Perceiver (U2) is the only remaining reader.
+    ``observed``
+        A surface something ALREADY read — a closed shadow root the capture init
+        script observed at construction time, a frame the port entered, controls
+        vision perceived. These are evidence rows, not blind spots, and routing
+        them anywhere else would escalate work that is already done.
+    ``blind``
+        Everything left that no handler can act on, including a cross-origin
+        frame with no addressable selector. Named, never silently dropped: this
+        is the list an operator has to be shown.
+
+    Pure.
     """
     enter: list[dict[str, Any]] = []
     vision: list[dict[str, Any]] = []
+    observed: list[dict[str, Any]] = []
+    blind: list[dict[str, Any]] = []
     for s in surfaces:
         if not isinstance(s, Mapping):
             continue
         kind = str(s.get("kind") or "").strip().lower()
         if kind == "cross_origin_iframe":
-            enter.append(dict(s))
+            selector = str(s.get("frame_selector") or "").strip()
+            (enter if selector else blind).append(dict(s))
         elif kind in ("canvas", "closed_shadow"):
             vision.append(dict(s))
-    return {"enter_frames": enter, "vision": vision}
+        elif kind in OBSERVED_KINDS:
+            observed.append(dict(s))
+        elif kind:
+            blind.append(dict(s))
+    return {"enter_frames": enter, "vision": vision,
+            "observed": observed, "blind": blind}
 
 
 def should_perceive(

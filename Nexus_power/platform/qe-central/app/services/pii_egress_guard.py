@@ -190,20 +190,78 @@ def pixel_egress_allowed(nexus_env: str) -> tuple[bool, str]:
     )
 
 
-def guard_image(screenshot_b64: str, *, site: str, nexus_env: str = "") -> dict:
-    """Decide whether ONE screenshot may egress (M0.5 T-SEC-12, pixel half).
+#: M3.1 / T-VIS-05 — the ONE redaction method this fleet accepts.  Frozen as a
+#: string because the producer lives in the OTHER service
+#: (``qe-explorer/app/pixel_redaction.py``) and the two cannot import each other.
+#: Bump on both sides together; an unknown method is refused, never assumed.
+REDACTION_METHOD = "dom-region-blackout-v1"
 
-    Returns ``{"safe", "reason", "matches", "pixels_scanned"}``.
+
+def verify_redaction_receipt(receipt, screenshot_b64: str) -> tuple:
+    """Was this EXACT image masked before it was sent?  ``(ok, reason)``.
+
+    THE RECEIPT IS BOUND TO THE BYTES.  It carries a sha256 and this function
+    hashes what it was actually handed; a receipt that describes some other
+    image — which is what a redaction bypass looks like from the server side — is
+    a refusal, not a warning.  Without that binding the receipt would be a
+    checkbox the caller ticks, and a checkbox the caller ticks is not a control.
+
+    Fail-closed on every unreadable case: no receipt, ``applied`` falsy, unknown
+    method, missing/short digest, undecodable base64, digest mismatch.
+    """
+    import base64 as _b64
+    import hashlib as _hashlib
+    from collections.abc import Mapping as _Mapping
+
+    if not isinstance(receipt, _Mapping) or not receipt.get("applied"):
+        return False, ("the screenshot carries no proof that its sensitive "
+                       "regions were masked before it left the crawler")
+    method = str(receipt.get("method") or "")
+    if method != REDACTION_METHOD:
+        return False, f"unknown pixel-redaction method {method!r}"
+    claimed = str(receipt.get("image_sha256") or "")
+    if len(claimed) != 64:
+        return False, "the redaction receipt carries no image digest"
+    raw = (screenshot_b64 or "").strip()
+    if raw.startswith("data:"):
+        _, _, raw = raw.partition(",")
+    try:
+        blob = _b64.b64decode(raw, validate=True)
+    except Exception:
+        return False, "screenshot is not valid base64"
+    if _hashlib.sha256(blob).hexdigest() != claimed:
+        return False, ("the redaction receipt does not describe the image being "
+                       "sent")
+    return True, ""
+
+
+def guard_image(screenshot_b64: str, *, site: str, nexus_env: str = "",
+                redaction=None) -> dict:
+    """Decide whether ONE screenshot may egress (M0.5 T-SEC-12, pixel half;
+    M3.1 T-VIS-05, redaction half).
+
+    Returns ``{"safe", "reason", "matches", "pixels_scanned", "pixels_redacted"}``.
     ``pixels_scanned`` is ALWAYS ``False`` — it exists so no caller, log line or
-    report can imply the image content was inspected when it was not.
+    report can imply the image content was inspected when it was not.  It is NOT
+    the same claim as ``pixels_redacted``: nothing here reads the pixels, and the
+    redaction is proven by a receipt from the process that could.
+
+    M3.1 CHANGED THE POLICY, NOT JUST THE CHECK.  This function used to relay a
+    full-page screenshot of a filled application — the SSN, the name and the
+    account number rendered as pixels — with only an ACKNOWLEDGEMENT flag
+    (``QEC_VISION_PIXEL_EGRESS=1``) standing in for a defence.  An acknowledgement
+    is a record that a risk was accepted; it is not a mitigation.  A screenshot
+    now egresses only when the explorer proves it masked the sensitive regions
+    BEFORE encoding, and the proof is bound to these exact bytes.
 
     Fail-closed on: an undecodable payload, a payload that is not an image, an
-    oversized payload, PII in the image metadata, or unacknowledged pixel egress
-    in a deployed environment.
+    oversized payload, PII in the image metadata, a missing/invalid/mismatched
+    redaction receipt, or unacknowledged pixel egress in a deployed environment.
     """
     import base64
 
-    result = {"safe": False, "reason": "", "matches": [], "pixels_scanned": False}
+    result = {"safe": False, "reason": "", "matches": [],
+              "pixels_scanned": False, "pixels_redacted": False}
     if not _guard_enabled():
         logger.warning("qec.egress.pii_guard_disabled site=%s (image)", site)
         return {**result, "safe": True, "reason": "guard disabled"}
@@ -237,11 +295,21 @@ def guard_image(screenshot_b64: str, *, site: str, nexus_env: str = "") -> dict:
         return {**result, "reason": f"image metadata: {verdict['reason']}",
                 "matches": verdict["matches"]}
 
+    # M3.1 / T-VIS-05 — REDACTION IS CHECKED BEFORE CONSENT IS CONSULTED.  The
+    # order matters: an operator who set QEC_VISION_PIXEL_EGRESS=1 consented to
+    # REDACTED imagery reaching a model, and reading that flag first would let
+    # the consent silently cover the unredacted case it was never given for.
+    redacted, why_redaction = verify_redaction_receipt(redaction, screenshot_b64)
+    if not redacted:
+        logger.warning("qec.egress.screenshot_unredacted site=%s reason=%s",
+                       site, why_redaction[:160])
+        return {**result, "reason": f"pixel redaction: {why_redaction}"}
+
     allowed, why = pixel_egress_allowed(nexus_env)
     if not allowed:
         logger.warning("qec.egress.pixel_egress_unacknowledged site=%s", site)
-        return {**result, "reason": why}
-    return {**result, "safe": True}
+        return {**result, "reason": why, "pixels_redacted": True}
+    return {**result, "safe": True, "pixels_redacted": True}
 
 
 def guard_inventory(inventory: Iterable[Mapping]) -> dict:
@@ -267,6 +335,8 @@ def guard_inventory(inventory: Iterable[Mapping]) -> dict:
 
 __all__ = [
     "MAX_SCREENSHOT_BYTES",
+    "REDACTION_METHOD",
+    "verify_redaction_receipt",
     "EgressBlocked",
     "guard_image",
     "guard_inventory",

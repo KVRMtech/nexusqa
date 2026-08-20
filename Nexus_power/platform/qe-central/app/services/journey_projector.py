@@ -18,7 +18,7 @@ import re
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from .catalog import question_id_for
+from .catalog import group_question_id, question_id_for
 
 
 def _norm(v: Any) -> str:
@@ -39,19 +39,73 @@ def rules_from_branches(
       * each REVEAL identity (``kind:name``) to a CHILD catalog ``question_id`` by
         matching its name against the catalog.
 
-    Reveals that match no named catalog question (e.g. a bare ``button:yes`` that
-    carries no distinct question identity) are dropped — honestly, not faked. A
-    rule is emitted only when the trigger and at least one child both resolve.
+    A reveal identity comes in two forms and BOTH are resolved here:
+
+      * ``group:<group id>`` — the revealed control answers a question the DOM
+        DECLARES (M2.1). This resolves exactly: the group id is the catalogue's
+        question-id basis, so no name matching happens at all.
+      * ``kind:name`` — an ungrouped control (a text input, a lone select). It
+        resolves against the catalogue by normalized question name, and — this
+        is the repair — also against the MEMBER names of grouped questions, so a
+        crawl recorded before ``group:`` existed still lands on the question its
+        member belongs to instead of on nothing.
+
+    WHY THE MEMBER FALLBACK IS NOT ENOUGH ON ITS OWN, and why ``group:`` had to
+    exist. A health questionnaire's revealed follow-up is itself a Yes/No
+    question, so its ``kind:name`` identity is ``radio:yes`` — a name that every
+    other question on the page also has. Matching that by name resolves to
+    whichever question happened to be indexed first: not "no rule", which would
+    be honest, but the WRONG rule, which is worse. So a member name that is
+    ambiguous across two or more questions resolves to NOTHING, deliberately.
+
+    Reveals that match no catalog question at all are dropped — honestly, not
+    faked. A rule is emitted only when the trigger and at least one child both
+    resolve.
 
     Returns ``[{question_id, option, reveals_question_ids}]`` — the exact shape
     ``project_traversal`` consumes.
     """
     by_name: dict[str, str] = {}
+    by_member: dict[str, str] = {}
+    ambiguous_members: set[str] = set()
+    known: set[str] = set()
     for q in questions:
-        if isinstance(q, Mapping):
-            qid = str(q.get("question_id") or "")
-            if qid:
-                by_name.setdefault(_norm(q.get("name")), qid)
+        if not isinstance(q, Mapping):
+            continue
+        qid = str(q.get("question_id") or "")
+        if not qid:
+            continue
+        known.add(qid)
+        by_name.setdefault(_norm(q.get("name")), qid)
+        # Per-option identity is metadata of the question now (T-QT-02), which
+        # is exactly what lets an answer-level reveal find its question.
+        for m in (q.get("members") or ()):
+            if not isinstance(m, Mapping):
+                continue
+            mn = _norm(m.get("name"))
+            if not mn:
+                continue
+            held = by_member.get(mn)
+            if held is None:
+                by_member[mn] = qid
+            elif held != qid:
+                ambiguous_members.add(mn)
+
+    def _resolve(reveal: Any) -> str:
+        raw = str(reveal or "")
+        kind, _, rest = raw.partition(":")
+        if kind == "group" and rest:
+            qid = group_question_id(rest)
+            return qid if qid in known else ""
+        name = _norm(rest or raw)
+        if not name:
+            return ""
+        qid = by_name.get(name)
+        if qid:
+            return qid
+        if name in ambiguous_members:
+            return ""            # honest silence beats the wrong question
+        return by_member.get(name, "")
 
     rules: list[dict[str, Any]] = []
     for b in branches:
@@ -69,8 +123,7 @@ def rules_from_branches(
         kids: list[str] = []
         seen: set[str] = set()
         for r in reveals:
-            name = str(r).split(":", 1)[-1]        # "kind:name" → name
-            kid = by_name.get(_norm(name))
+            kid = _resolve(r)
             if kid and kid != trigger_qid and kid not in seen:
                 seen.add(kid)
                 kids.append(kid)
@@ -179,7 +232,14 @@ def persona_answers_for(
         qid = str(q.get("question_id") or "")
         if not qid:
             continue
-        by_name[_norm(q.get("name"))] = qid
+        name = _norm(q.get("name"))
+        if name:
+            # An UNVERIFIED question (the application words it nowhere) must not
+            # claim the empty key, or every persona value that fails to match
+            # anything would be answered onto whichever unworded question came
+            # first. M2.1 made unworded questions catalogueable; this keeps them
+            # unanswerable-by-accident.
+            by_name[name] = qid
         sem = _norm(q.get("semantic_type"))
         if sem:
             by_sem.setdefault(sem, qid)

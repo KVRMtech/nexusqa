@@ -120,7 +120,8 @@ def test_synthesize_vision_outcomes_shape():
 def test_route_opaque_surfaces():
     from app.perception import route_opaque_surfaces
     surfaces = [
-        {"kind": "cross_origin_iframe", "label": "js.stripe.com"},
+        {"kind": "cross_origin_iframe", "label": "js.stripe.com",
+         "frame_selector": "iframe#pay"},
         {"kind": "canvas", "label": "chart region"},
         {"kind": "closed_shadow", "label": "x-widget"},
         {"kind": "unknown", "label": "?"},
@@ -129,6 +130,43 @@ def test_route_opaque_surfaces():
     routed = route_opaque_surfaces(surfaces)
     assert [s["label"] for s in routed["enter_frames"]] == ["js.stripe.com"]
     assert {s["label"] for s in routed["vision"]} == {"chart region", "x-widget"}
+    assert [s["label"] for s in routed["blind"]] == ["?"]
+    assert routed["observed"] == []
+
+
+def test_a_frame_with_no_selector_is_never_offered_as_enterable():
+    """M3.2 / T-FR-01 — the bucket must be ACTIONABLE, not merely classified.
+
+    For as long as a cross-origin row named only a host, `enter_frames` could
+    have no consumer: a host is not something `frame_locator` can be handed. A
+    row without a selector is therefore blind, not enterable — a caller must
+    never be given a "frame to enter" it has no way to address.
+    """
+    from app.perception import route_opaque_surfaces
+    routed = route_opaque_surfaces([
+        {"kind": "cross_origin_iframe", "label": "js.stripe.com"},
+        {"kind": "cross_origin_iframe", "label": "checkout.acme.test",
+         "frame_selector": "  "},
+    ])
+    assert routed["enter_frames"] == []
+    assert [s["label"] for s in routed["blind"]] == [
+        "js.stripe.com", "checkout.acme.test"]
+
+
+def test_an_observed_surface_is_not_routed_to_a_handler():
+    """A closed root the init script already read is evidence, not a blind spot.
+
+    Routing it to vision would escalate work that is done, and pay for a
+    screenshot + model call on a surface the DOM walker just catalogued.
+    """
+    from app.perception import route_opaque_surfaces, should_perceive
+    entered = [{"kind": "closed_shadow_entered", "label": "x-widget",
+                "controls_observed": 3}]
+    routed = route_opaque_surfaces(entered)
+    assert [s["label"] for s in routed["observed"]] == ["x-widget"]
+    assert routed["vision"] == [] and routed["enter_frames"] == []
+    sparse = [{"qec": {"name_confidence": "none"}}]
+    assert should_perceive(sparse, entered) is False
 
 
 # ── U2: escalation decision ──────────────────────────────────────────────────────

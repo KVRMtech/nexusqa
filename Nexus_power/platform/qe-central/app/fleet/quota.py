@@ -72,7 +72,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..controlplane.cost import meter
 from ..db import tenant_scoped_qec_session, utc_now
 from ..db.controlplane_models import TERMINAL_CYCLE_STATES, AppCycleRow, CostLedgerRow
-from ..db.models import ClientAppRow
+from ..db.models import ClientAppRow, QEExplorationRow
 from ..observability import record_quota_decision
 
 logger = logging.getLogger(__name__)
@@ -89,6 +89,13 @@ ENV_TENANT_PLANS = "QEC_TENANT_PLANS"
 # ── Quota resources (the dimensions a plan may cap) ─────────────────────────
 RESOURCE_APPS = "apps"
 RESOURCE_CONCURRENT_CYCLES = "concurrent_cycles"
+#: M3.4 / T-RS-03 - non-terminal CRAWLS a tenant may have in flight at once.
+#: Distinct from ``concurrent_cycles``: a cycle is the scheduled regression unit,
+#: a crawl is one exploration dispatch, and the crawl dispatch path
+#: (``POST /explorations`` and its resume sibling) reaches a worker WITHOUT ever
+#: creating a cycle.  Capping cycles therefore left the fleet's most expensive
+#: resource - a browser on a worker - entirely unmetered from that direction.
+RESOURCE_CONCURRENT_CRAWLS = "concurrent_crawls"
 RESOURCE_MONTHLY_BROWSER_SECONDS = "monthly_browser_seconds"
 RESOURCE_MONTHLY_LLM_TOKENS = "monthly_llm_tokens"
 
@@ -96,6 +103,7 @@ RESOURCE_MONTHLY_LLM_TOKENS = "monthly_llm_tokens"
 ALL_RESOURCES = frozenset({
     RESOURCE_APPS,
     RESOURCE_CONCURRENT_CYCLES,
+    RESOURCE_CONCURRENT_CRAWLS,
     RESOURCE_MONTHLY_BROWSER_SECONDS,
     RESOURCE_MONTHLY_LLM_TOKENS,
 })
@@ -112,6 +120,7 @@ REASON_ALLOWED = ""
 _RESOURCE_REASON = {
     RESOURCE_APPS: "max_apps_exceeded",
     RESOURCE_CONCURRENT_CYCLES: "max_concurrent_cycles_exceeded",
+    RESOURCE_CONCURRENT_CRAWLS: "max_concurrent_crawls_exceeded",
     RESOURCE_MONTHLY_BROWSER_SECONDS: "monthly_browser_seconds_exceeded",
     RESOURCE_MONTHLY_LLM_TOKENS: "monthly_llm_tokens_exceeded",
 }
@@ -121,6 +130,7 @@ _RESOURCE_REASON = {
 _RESOURCE_STATUS = {
     RESOURCE_APPS: 409,
     RESOURCE_CONCURRENT_CYCLES: 429,
+    RESOURCE_CONCURRENT_CRAWLS: 429,
     RESOURCE_MONTHLY_BROWSER_SECONDS: 429,
     RESOURCE_MONTHLY_LLM_TOKENS: 429,
 }
@@ -207,6 +217,7 @@ class QuotaPlan:
     name: str
     max_apps: Optional[int] = None
     max_concurrent_cycles: Optional[int] = None
+    max_concurrent_crawls: Optional[int] = None
     monthly_browser_seconds: Optional[Decimal] = None
     monthly_llm_tokens: Optional[Decimal] = None
     max_rps_default: Optional[float] = None
@@ -222,6 +233,8 @@ class QuotaPlan:
             return self.max_apps
         if resource == RESOURCE_CONCURRENT_CYCLES:
             return self.max_concurrent_cycles
+        if resource == RESOURCE_CONCURRENT_CRAWLS:
+            return self.max_concurrent_crawls
         if resource == RESOURCE_MONTHLY_BROWSER_SECONDS:
             return self.monthly_browser_seconds
         if resource == RESOURCE_MONTHLY_LLM_TOKENS:
@@ -244,6 +257,7 @@ class QuotaPlan:
             name=str(name),
             max_apps=_opt_int(d, "max_apps"),
             max_concurrent_cycles=_opt_int(d, "max_concurrent_cycles"),
+            max_concurrent_crawls=_opt_int(d, "max_concurrent_crawls"),
             monthly_browser_seconds=_opt_decimal(d, "monthly_browser_seconds"),
             monthly_llm_tokens=_opt_decimal(d, "monthly_llm_tokens"),
             max_rps_default=_opt_float(d, "max_rps_default"),
@@ -256,6 +270,7 @@ class QuotaPlan:
             "name": self.name,
             "max_apps": self.max_apps,
             "max_concurrent_cycles": self.max_concurrent_cycles,
+            "max_concurrent_crawls": self.max_concurrent_crawls,
             "monthly_browser_seconds": (
                 str(self.monthly_browser_seconds)
                 if self.monthly_browser_seconds is not None else None
@@ -288,6 +303,7 @@ BUILTIN_PLANS: dict[str, QuotaPlan] = {
         name="starter",
         max_apps=10,
         max_concurrent_cycles=2,
+        max_concurrent_crawls=2,
         monthly_browser_seconds=Decimal("360000"),      # ~100 browser-hours/mo
         monthly_llm_tokens=Decimal("5000000"),
         max_rps_default=1.0,
@@ -297,6 +313,7 @@ BUILTIN_PLANS: dict[str, QuotaPlan] = {
         name="growth",
         max_apps=100,
         max_concurrent_cycles=8,
+        max_concurrent_crawls=4,
         monthly_browser_seconds=Decimal("3600000"),
         monthly_llm_tokens=Decimal("50000000"),
         max_rps_default=2.0,
@@ -306,6 +323,7 @@ BUILTIN_PLANS: dict[str, QuotaPlan] = {
         name="scale",
         max_apps=1000,
         max_concurrent_cycles=32,
+        max_concurrent_crawls=16,
         monthly_browser_seconds=Decimal("36000000"),
         monthly_llm_tokens=Decimal("500000000"),
         max_rps_default=4.0,
@@ -620,6 +638,29 @@ async def _count_active_cycles(session: AsyncSession, tenant_id: str) -> int:
     return int(result.scalar() or 0)
 
 
+#: Exploration statuses that are FINISHED and therefore hold no worker.
+#: Everything else ("pending", "dispatched", "writing", ...) is in flight and
+#: counts against the tenant's crawl concurrency.  Expressed as the TERMINAL set
+#: rather than the active one so a status added later counts as active by
+#: default - a new state that silently escaped the cap would be a quota hole,
+#: while one that is briefly over-counted is merely conservative.
+TERMINAL_EXPLORATION_STATUSES = frozenset({"completed", "failed", "refused", "stalled"})
+
+
+async def _count_active_crawls(session: AsyncSession, tenant_id: str) -> int:
+    """Count a tenant's NON-terminal (in-flight) explorations across all apps."""
+    result = await session.execute(
+        select(func.count())
+        .select_from(QEExplorationRow)
+        .where(
+            QEExplorationRow.tenant_id == tenant_id,
+            QEExplorationRow.status.notin_(
+                tuple(sorted(TERMINAL_EXPLORATION_STATUSES))),
+        )
+    )
+    return int(result.scalar() or 0)
+
+
 async def _load_month_usage(
     session: AsyncSession, tenant_id: str, units: list[str], *, now: datetime,
 ) -> dict[str, Decimal]:
@@ -750,6 +791,72 @@ async def enforce_cycle_quota(
             await _run(s)
 
 
+async def enforce_crawl_quota(
+    tenant_id: str,
+    *,
+    session: Optional[AsyncSession] = None,
+    plan: Optional[QuotaPlan] = None,
+    now: Optional[datetime] = None,
+) -> None:
+    """Refuse a NEW crawl dispatch when the tenant is over a crawl or spend cap.
+
+    THE BYPASS THIS CLOSES (M3.4 / T-RS-03).  Quota enforcement existed and was
+    wired into ``run_cycle`` - so the SCHEDULED path was capped and the DIRECT
+    one was not.  ``POST /explorations`` and ``POST /explorations/{id}/resume``
+    both reach a worker through ``_dispatch_explorer`` without ever creating a
+    cycle, so a tenant at its monthly ceiling could still burn unlimited browser
+    time by dispatching crawls straight at the fleet.  A cap that one of two
+    doors ignores is not a cap.
+
+    Enforced at the ONE choke point both doors pass through, which is what makes
+    "another dispatch path" a contradiction rather than a gap to be re-audited:
+    a new route that dispatches a crawl must go through ``_dispatch_explorer``
+    to reach a worker, and it is checked there.
+
+    Checks (each independently OPT-IN, exactly like :func:`enforce_cycle_quota`):
+      1. ``max_concurrent_crawls`` - the tenant's non-terminal exploration count;
+      2. ``monthly_browser_seconds`` / ``monthly_llm_tokens`` - this month's
+         metered spend, which a crawl burns just as a cycle does.
+
+    Backward-compat SHORT-CIRCUIT: the default plan leaves all of these
+    unlimited, so an un-provisioned tenant opens no session, runs no query, and
+    behaves byte-for-byte as before.  A breach raises :class:`QuotaExceeded`
+    (429), which the router maps to an honest refusal.
+    """
+    plan = plan or resolve_plan(tenant_id)
+    now = now or utc_now()
+
+    crawl_capped = plan.limit_for(RESOURCE_CONCURRENT_CRAWLS) is not None
+    monthly_resources = [
+        r for r in (RESOURCE_MONTHLY_BROWSER_SECONDS, RESOURCE_MONTHLY_LLM_TOKENS)
+        if plan.limit_for(r) is not None
+    ]
+    if not crawl_capped and not monthly_resources:
+        return  # fully unlimited — no query, no behaviour change (default path)
+
+    async def _run(s: AsyncSession) -> None:
+        if crawl_capped:
+            count = await _count_active_crawls(s, tenant_id)
+            _emit_and_maybe_refuse(
+                check_quota(plan, RESOURCE_CONCURRENT_CRAWLS, count), status_code=429,
+            )
+        if monthly_resources:
+            units = [_RESOURCE_TO_METER_UNIT[r] for r in monthly_resources]
+            usage = await _load_month_usage(s, tenant_id, units, now=now)
+            for resource in monthly_resources:
+                unit = _RESOURCE_TO_METER_UNIT[resource]
+                _emit_and_maybe_refuse(
+                    check_quota(plan, resource, usage.get(unit, Decimal("0"))),
+                    status_code=429,
+                )
+
+    if session is not None:
+        await _run(session)
+    else:
+        async with tenant_scoped_qec_session(tenant_id) as s:
+            await _run(s)
+
+
 __all__ = [
     # env knobs
     "ENV_QUOTA_PLANS",
@@ -757,6 +864,7 @@ __all__ = [
     # resources
     "RESOURCE_APPS",
     "RESOURCE_CONCURRENT_CYCLES",
+    "RESOURCE_CONCURRENT_CRAWLS",
     "RESOURCE_MONTHLY_BROWSER_SECONDS",
     "RESOURCE_MONTHLY_LLM_TOKENS",
     "ALL_RESOURCES",
@@ -780,4 +888,6 @@ __all__ = [
     # enforcement
     "enforce_app_registration_quota",
     "enforce_cycle_quota",
+    "enforce_crawl_quota",
+    "TERMINAL_EXPLORATION_STATUSES",
 ]

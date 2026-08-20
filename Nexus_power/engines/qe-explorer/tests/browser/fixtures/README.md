@@ -23,13 +23,13 @@ reports it as one named failure.
 | # | Fixture | Capability isolated | Lanes | Targeted defect |
 |---|---|---|---|---|
 | 01 | `shadow-open` | open shadow root, names resolved against the owning root | both | BUG-SHADOW-NAME ✅ fixed |
-| 02 | `shadow-closed` | honest blindness + named opaque surface | both | guard |
+| 02 | `shadow-closed` | a CLOSED shadow root observed at construction time | both | guard (re-aimed by M3.2 / T-FR-02) |
 | 03 | `iframe-same-origin` | same-origin descent, all 5 `frameSelectorFor` rungs | both | BUG-IFRAME-SELECTOR ✅ fixed |
-| 04 | `iframe-cross-origin` | failing honestly at an origin boundary | playwright | guard |
+| 04 | `iframe-cross-origin` | crossing an origin boundary the supported way | playwright | guard (re-aimed by M3.2 / T-FR-01) |
 | 05 | `aria-labelledby-multiblock` | rendered accessible name over block children | playwright | BUG-ARIA-LABELLEDBY-TEXTCONTENT ✅ fixed |
 | 06 | `custom-listbox` | custom ARIA choice control + placeholder-is-not-a-value | both | guard |
 | 07 | `native-select-250` | complete answer set + honest clipping | both | BUG-CATALOG-TRUNCATION-60 ✅ fixed |
-| 08 | `radio-groups` | `group_key` — which question a control answers | both | guard |
+| 08 | `radio-groups` | `group_key` — which question a control answers; `question_label` — the wording it answers it in, from all four declared rungs, empty when the page declares none | both | BUG-QUESTION-ORDINAL ✅ fixed |
 | 09 | `questionnaire-20-samefingerprint` | 20 questions indistinguishable by `(role, name)` | both | guard |
 | 10 | `save-draft-wizard` | declared validation + four distinct actuators | both | guard |
 | 11 | `confirm-gated-step` | disabled/visibility — never offer a dead control | both | guard |
@@ -40,6 +40,52 @@ reports it as one named failure.
 | 16 | `iframe-special-chars` | all four `frameSelectorFor` branches, escaped | playwright | BUG-IFRAME-SELECTOR (variation) ✅ fixed |
 | 17 | `shadow-group-collision` | `group_key` uniqueness across shadow roots | both | guard (regression introduced by the CAP-02 fix) |
 | 18 | `select-edge-cases` | option-ceiling BOUNDARIES + select read-back | both | guard |
+| 30 | `network-retry-poll-ratelimit` | retries / polling / rate limiting / an observed 5xx — the ORDER, COUNT and CAUSE of real HTTP requests | playwright | T-NET-01/02/03/05 ✅ fixed |
+| 19 | `native-confirm-dialog` | native dialog answered against journey intent | playwright | guard (M1.5) |
+| 20 | `download-artifact` | a download captured as evidence, not a lost click | playwright | guard (M1.5) |
+| 21 | `new-tab-adoption` | a popup adopted as the page identity | playwright | guard (M1.5) |
+| 22 | `collapsed-disclosure` | the DOM's own "this door is shut" declaration | both | BUG-DISCLOSURE-BLIND ✅ fixed |
+| 24 | `iframe-ambiguous-attrs` | a frame selector that identifies exactly ONE frame | playwright | BUG-FRAME-AMBIGUOUS ✅ fixed |
+| 25 | `frame-shadow-proving-ground` | both opaque surfaces on one page, end to end | playwright | guard (M3.2) |
+| 27 | `wizard-20-step-samefingerprint` | twenty SEPARATE steps of one identical shape — that the walk knows it MOVED | both | Regression guard (F1 same-shape collapse + Gate 1 zero-crossing completion) |
+| 26 | `opaque-surface-rungs` | every selector rung reached from OPAQUE_JS + the closed root the hook cannot see | playwright | BUG-OPAQUE-FRAME-DEDUP ✅ fixed |
+
+**22 (M2.6 capture expansion).** The first fixture whose subject is what the CRAWLER
+does with a capture rather than what capture returns. `expected.json` pins the
+*unexpanded* truth — every field behind a shut door is absent — and
+`tests/browser/test_capture_expansion.py` asserts the same fields are present after a
+real crawl. Neither half means much alone; together they measure the difference the
+expansion pass makes rather than the state of a page.
+
+**02 and 04 changed meaning in M3.2, and the change is the point.** Both fixtures used to
+assert honest BLINDNESS — capture nothing from the surface, name it in the opaque ledger —
+and both now assert that the surface is READ. The anti-green-wash contract they were built
+for is unchanged and still binding everywhere it applies; what changed is that these two
+surfaces are no longer unreadable. A closed shadow root is observed by a hook installed at
+browser-context creation, before any page script runs, which is the only moment it exists
+to be seen; a cross-origin frame is entered with Playwright's own frame APIs, which cross
+the boundary the way the browser intends rather than working around it. Their `README.md`
+files each carry a *What this fixture used to assert* section, so the reversal is legible
+to someone who finds the old contract in git history.
+
+**24, 25 and 26 (M3.2).** 24 is the anti-overfit partner to 03 and 16: those prove a frame
+selector *parses*, this one proves it *identifies*. 25 is the milestone's proving ground —
+both surfaces plus ordinary DOM on one page, because they fail in opposite directions and
+either alone leaves the other's regression green. 26 is the far side of the origin
+boundary: four embeds on ONE host, which is what exposed a dedup that had been silently
+dropping every frame after the first on a given vendor host, and a declarative
+`<template shadowrootmode="closed">` — the one closed root the capture hook genuinely
+cannot observe, fixtured so that limitation is measured rather than merely written down.
+
+**27 (Gate 1).** The first fixture whose subject is a RELATIONSHIP BETWEEN OBSERVATIONS
+rather than the content of one. Every other capture assertion in this suite describes what
+a single `collect()` returned; "the walk knows it moved" cannot be said that way, which is
+why a suite full of green capture tests never saw F1. Its `expected.json` pins the FIRST
+step (all a single collect can see) and `tests/browser/test_wizard_20_step.py` drives all
+twenty in real Chromium. It is the partner to 09: that fixture puts twenty
+indistinguishable questions on ONE page and asks whether capture keeps them apart, this one
+puts them on twenty steps and asks whether the crawl can tell that it advanced. Neither
+fixture can see the other's failure mode.
 
 Fixtures numbered 14 and above were added after the milestone against the same contract
 and are picked up automatically — no harness change is needed to add one.

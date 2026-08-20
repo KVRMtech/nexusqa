@@ -1,9 +1,9 @@
 {
   "DISPLAYED_VALUES_JS": {
     "blocks": {
-      "covered": 72,
-      "pct": 75.79,
-      "total": 95
+      "covered": 77,
+      "pct": 77.78,
+      "total": 99
     },
     "functions": {
       "covered": 11,
@@ -20,47 +20,50 @@
   },
   "INVENTORY_JS": {
     "blocks": {
-      "covered": 304,
-      "pct": 78.96,
-      "total": 385
+      "covered": 411,
+      "pct": 79.34,
+      "total": 518
     },
     "functions": {
-      "covered": 37,
+      "covered": 53,
       "pct": 100.0,
-      "total": 37
+      "total": 53
     },
     "lines": {
-      "covered": 786,
-      "pct": 99.24,
-      "total": 792
+      "covered": 1078,
+      "pct": 99.35,
+      "total": 1085
     },
     "snippet": "INVENTORY_JS",
     "uncovered_line_numbers": [
       506,
-      573,
-      574,
-      576,
-      590,
-      591
+      663,
+      664,
+      666,
+      680,
+      681,
+      931
     ]
   },
   "OPAQUE_JS": {
     "blocks": {
-      "covered": 24,
-      "pct": 57.14,
-      "total": 42
+      "covered": 78,
+      "pct": 63.41,
+      "total": 123
     },
     "functions": {
-      "covered": 4,
+      "covered": 19,
       "pct": 100.0,
-      "total": 4
+      "total": 19
     },
     "lines": {
-      "covered": 40,
-      "pct": 100.0,
-      "total": 40
+      "covered": 224,
+      "pct": 99.56,
+      "total": 225
     },
     "snippet": "OPAQUE_JS",
-    "uncovered_line_numbers": []
+    "uncovered_line_numbers": [
+      163
+    ]
   }
 }

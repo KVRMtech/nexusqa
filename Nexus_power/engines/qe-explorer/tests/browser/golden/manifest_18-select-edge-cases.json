@@ -11,9 +11,9 @@
     },
     "config_fingerprint": "characterization-fixed",
     "crawl_id": "<normalized:crawl_id>",
-    "explorer_version": "qe-explorer/1.0+inv-js-v10",
+    "explorer_version": "qe-explorer/1.0+inv-js-v12",
     "frame_count": 0,
-    "guard_version": "qe-explorer/1.0+inv-js-v10",
+    "guard_version": "qe-explorer/1.0+inv-js-v12",
     "refuse_pack_version": "refuse-pack-v1",
     "stop_reason": "",
     "target_url": "http://127.0.0.1:<port>/18-select-edge-cases/index.html",
@@ -42,36 +42,75 @@
     },
     "form_snapshot_signals": {
       "Disabled Control": {
+        "locator": {
+          "bindable": false,
+          "role": "combobox",
+          "strategy": "dom_id",
+          "value": "disabled-select",
+          "verified": true
+        },
         "options": [
           "Locked Choice"
         ],
+        "options_total": 1,
         "required": false,
         "type": "select"
       },
       "Duplicate Labels": {
+        "locator": {
+          "bindable": false,
+          "role": "combobox",
+          "strategy": "dom_id",
+          "value": "duplicates",
+          "verified": true
+        },
         "options": [
           "Other",
           "Other",
           "Other",
           "None"
         ],
+        "options_total": 4,
         "required": false,
         "type": "select"
       },
       "Empty Enumeration": {
+        "locator": {
+          "bindable": false,
+          "role": "combobox",
+          "strategy": "dom_id",
+          "value": "empty",
+          "verified": true
+        },
         "options": [],
+        "options_total": 0,
         "required": false,
         "type": "select"
       },
       "Long Labels": {
+        "locator": {
+          "bindable": false,
+          "role": "combobox",
+          "strategy": "dom_id",
+          "value": "long-labels",
+          "verified": true
+        },
         "options": [
           "Coverage tier extremely-long-descriptive-suffix extremely-long-descriptive-suffix extremely-long-descriptive-suffix extremely-long-descriptive-suffix extremely-long-descriptive-suffix extremely-long-d",
           "Short"
         ],
+        "options_total": 2,
         "required": false,
         "type": "select"
       },
       "Selected Near The End": {
+        "locator": {
+          "bindable": false,
+          "role": "combobox",
+          "strategy": "dom_id",
+          "value": "late-selected",
+          "verified": true
+        },
         "options": [
           "Option 001",
           "Option 002",
@@ -134,22 +173,39 @@
           "Option 059",
           "Option 060"
         ],
+        "options_total": 60,
         "required": false,
         "type": "select"
       },
       "Single Answer": {
+        "locator": {
+          "bindable": false,
+          "role": "combobox",
+          "strategy": "dom_id",
+          "value": "single",
+          "verified": true
+        },
         "options": [
           "Only Choice"
         ],
+        "options_total": 1,
         "required": false,
         "type": "select"
       },
       "Some Disabled Options": {
+        "locator": {
+          "bindable": false,
+          "role": "combobox",
+          "strategy": "dom_id",
+          "value": "with-disabled",
+          "verified": true
+        },
         "options": [
           "Available One",
           "Sold Out",
           "Available Two"
         ],
+        "options_total": 3,
         "required": false,
         "type": "select"
       }
@@ -197,10 +253,10 @@
     },
     "config_fingerprint": "characterization-fixed",
     "crawl_id": "<normalized:crawl_id>",
-    "explorer_version": "qe-explorer/1.0+inv-js-v10",
+    "explorer_version": "qe-explorer/1.0+inv-js-v12",
     "frame_count": 1,
     "guard_blocks": 0,
-    "guard_version": "qe-explorer/1.0+inv-js-v10",
+    "guard_version": "qe-explorer/1.0+inv-js-v12",
     "refuse_pack_version": "refuse-pack-v1",
     "stats": {
       "actions": 5,

@@ -20,6 +20,7 @@ from __future__ import annotations
 
 from typing import Any, Mapping, Optional, Protocol, Sequence
 
+from . import endpoint_inventory
 from . import flow_ledger
 from .auth import (AUTH_NO_CREDENTIALS, AUTH_NOT_PERSISTED,
                    AUTH_SESSION_EXPIRED)
@@ -38,12 +39,25 @@ class CoverageHost(Protocol):
     _fields_unfilled: list[str]
     _fields_seed_detail: list[dict[str, str]]
     _opaque_surfaces: list[dict[str, str]]
+    #: M3.1 / T-VIS-01 - every vision escalation, VERIFIED and REFUSED alike.
+    #: Declared here for the same reason as the fields above: a payload key with
+    #: no contract entry is how the crawler and its ledger drift apart.
+    _vision_ledger: list[dict[str, Any]]
+    #: M3.1 / T-VIS-03 - vision's own gate, cap, timeout and breaker.
+    _vision_budget: Any
     _unhandled_controls: list[dict[str, str]]
     _submit_candidates: list[str]
     _approvable_boundary: list[dict[str, Any]]
     _outcome_milestones: list[dict[str, Any]]
     _crossings: Any
     _advance_blocked: list[dict[str, Any]]
+    #: M2.5 - the network-evidence accumulators the account renders. Declared
+    #: here for the same reason the M1.7 fields above are: a field that appears
+    #: in the payload but not in this contract is how the crawler and its
+    #: ledger drift apart without anything going red.
+    _endpoint_inventories: list[dict[str, Any]]
+    _network_server_errors: list[dict[str, str]]
+    _network_events_seen: int
     #: M1.7 - the durable-learning and evidence-health attributes the coverage
     #: payload reads. Declared here (rather than duck-typed at the read) because
     #: this Protocol is the written contract between the crawler and its ledger,
@@ -55,6 +69,9 @@ class CoverageHost(Protocol):
     _inventory_failure_detail: str
     _flows: list[dict[str, Any]]
     _forms_found: int
+    _expansions_opened: int
+    _expansions_skipped: int
+    _tab_views_recorded: int
     _forms_submitted: int
     _forms_confirmed: int
     _open_choice_unverified: int
@@ -271,8 +288,30 @@ class CoverageLedger:
                 f"form was found/completed at the entry ({c._auth_incomplete_reason}); "
                 "crawled the accessible (public) pages only. "
             )
+        # ── M2.5 / T-NET-04 — THE APPLICATION'S API SURFACE ─────────────────
+        # Folded from the per-visit inventories rather than rebuilt from a
+        # concatenated event stream, so a long crawl never has to hold every
+        # event it ever saw in memory. The merge is associative on the same key,
+        # so the result is the object a single build over the whole stream would
+        # have produced.
+        #
+        # This is NOT `states[*].endpoints` and must not be confused with it.
+        # That map is deliberately narrow — 2xx only, path only — because it
+        # feeds the compiler, and compiling a 5xx into an assertion would freeze
+        # the application's bug into the regression suite as expected behaviour.
+        # THIS is the inventory: every observed status including the failures,
+        # every retry counted, the auth pattern, the response shape, and the UI
+        # action each endpoint was seen to fire behind.
+        inventory = endpoint_inventory.merge_inventories(c._endpoint_inventories)
+        server_errors = list(c._network_server_errors or [])
         return {
             "forms_found": c._forms_found,
+            # M2.6 / T-CAP-03 - collapsed sections this crawl deliberately
+            # opened before cataloguing, and disclosures it declined to
+            # merge (a tab strip whose panels are never on screen together).
+            "expansions_opened": c._expansions_opened,
+            "expansions_skipped": c._expansions_skipped,
+            "tab_views_recorded": c._tab_views_recorded,
             "forms_submitted": c._forms_submitted,
             # Of those, the ones the APP confirmed. Ratcheted separately: a
             # floor on attempts cannot tell a working funnel from a broken one.
@@ -300,6 +339,30 @@ class CoverageLedger:
             "fields_needing_seed_detail": needs_seed_detail,
             # DOM-unreadable surfaces detected on the crawl → the ledger's OPAQUE rows.
             "opaque_surfaces": opaque_surfaces,
+            # ── M3.1 · THE VISION EVIDENCE (T-VIS-01 / T-VIS-03) ────────────
+            # BOTH halves, and the spend that produced them.
+            #
+            # `vision_verified` is the only number that may be read as coverage:
+            # it counts controls that were clicked at a perceived coordinate and
+            # then MEASURED responding. `vision_refused` counts the model's
+            # unproven guesses, and it is published precisely because a wrong
+            # perception that leaves no trace is indistinguishable from a
+            # perception that never happened.
+            #
+            # `vision_budget` carries the gate (attested? tenant-enabled? under
+            # which attestation rung?), the cap, the breaker and every refusal
+            # reason — so "this crawl made no vision calls" always has a stated
+            # cause rather than being an absence a reader has to interpret.
+            "vision_ledger": list(getattr(c, "_vision_ledger", []) or [])[:200],
+            "vision_verified": sum(
+                int(r.get("verified") or 0)
+                for r in (getattr(c, "_vision_ledger", []) or [])),
+            "vision_refused": sum(
+                int(r.get("refused") or 0)
+                for r in (getattr(c, "_vision_ledger", []) or [])),
+            "vision_budget": (c._vision_budget.telemetry()
+                              if getattr(c, "_vision_budget", None) is not None
+                              else {}),
             # Interactive controls the matcher has no primitive for → the ledger's UNHANDLED rows.
             "unhandled_controls": unhandled_controls,
             # Controls the walk may cross on its own authority. NOT an approval
@@ -352,6 +415,21 @@ class CoverageLedger:
             # every text, date and number field in every application is missing
             # from the catalogue the client is shown.
             "states": c._state_signals(),
+            # ── M2.5 — NETWORK EVIDENCE, AS AN ACCOUNT RATHER THAN A LOG ────
+            # `endpoint_inventory` is the application-level API surface
+            # (method x path template). No raw URL, no header value and no body
+            # value reaches it: the raw per-visit stream lives on the
+            # `page_state` records, where its blast radius is one crawl, and the
+            # catalog gets the aggregate.
+            "endpoint_inventory": inventory.get("endpoints", []),
+            "endpoint_inventory_truncated": bool(inventory.get("truncated")),
+            "network_events_observed": int(c._network_events_seen),
+            # Every OBSERVED 5xx, read as an integer from the structured stream.
+            # This is the network oracle's input and the reason it no longer has
+            # to search arbitrary error strings to learn the backend failed —
+            # each row names the request AND the UI action that caused it.
+            "network_server_errors": server_errors,
+            "network_server_error_count": len(server_errors),
             # A choice widget that would not confirm its own answer. Was a log
             # line only, so the fix that took it from 6 to 0 could regress with
             # nothing to notice — now a number the gate holds at zero.

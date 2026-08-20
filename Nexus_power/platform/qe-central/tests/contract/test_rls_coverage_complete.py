@@ -72,6 +72,20 @@ _NO_TENANT_COLUMN: dict[str, str] = {
         "tenant column by design, so one tenant's proven advance helps the fleet "
         "without exposing which tenant proved it"
     ),
+    "explorer_workers": (
+        "qec_022 M3.3/T-FL-02 explorer worker REGISTRY — FLEET INFRASTRUCTURE, "
+        "not tenant data: a worker is a process with a URL and a capacity, "
+        "owned by the deployment and holding no tenant business data. Its "
+        "`tenant_affinity` column is a CAPABILITY DECLARATION (an operator "
+        "pinning a dedicated worker to one customer), deliberately NOT named "
+        "`tenant_id` because it does not denote ownership of the row. Adding "
+        "RLS here would be actively harmful: the scheduler's read is "
+        "fleet-wide by nature (it compares every worker to pick the least "
+        "loaded), and a fleet-wide read of an RLS table with no GUC set "
+        "returns ZERO rows — the exact T-FL-05 defect, relocated into the "
+        "dispatch path, where it would present as 'no worker available' on a "
+        "healthy fleet"
+    ),
     "mechanic_priors": (
         "qec_009 federated control-mechanic priors — same value-free cross-tenant "
         "design as advance_label_priors: control SHAPES and success counts only, "

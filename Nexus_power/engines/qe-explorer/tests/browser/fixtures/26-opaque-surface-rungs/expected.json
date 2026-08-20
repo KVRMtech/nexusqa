@@ -1,0 +1,101 @@
+{
+  "purpose": "Reach every rung of the frame-selector recipe FROM OPAQUE_JS - the snippet that names a frame the walker cannot read, and therefore the one that decides whether the port can enter it at all - and pin the one closed shadow root the capture hook genuinely cannot observe.",
+  "targeted_defect": "BUG-OPAQUE-FRAME-DEDUP (M3.2). OPAQUE_JS deduped its rows on `kind|label`, and a cross-origin frame's label is its HOST. A checkout embedding a card frame and a 3-D-Secure frame from the same vendor is two frames on one host, so the second was silently dropped: named nowhere, entered never, and indistinguishable in the ledger from a page that only ever had one. Fixtures 04 and 25 each embed a single frame carrying an id, so they could not see it - and for the same reason only the FIRST rung of the recipe - and only the id rung of the HOST recipe under it - was ever executed from this snippet.",
+  "lanes": [
+    "playwright"
+  ],
+  "lane_note": "Playwright only, for two independent reasons: jsdom has no true cross-origin isolation (so the five embeds would be readable and none would reach OPAQUE_JS at all), and it does not implement declarative shadow DOM (so the honest blind spot would not exist either). Both halves of this fixture need a real browser.",
+  "snippet": "INVENTORY_JS",
+  "min_controls": 6,
+  "expect_controls": [
+    {
+      "where": {
+        "css_hint": "input#order-total"
+      },
+      "fields": {
+        "name": "Order Total",
+        "name_source": "label-for",
+        "value_committed": "42.00",
+        "frame_selector": ""
+      }
+    },
+    {
+      "where": {
+        "name": "Vendor Step A"
+      },
+      "fields": {
+        "frame_selector": "iframe[title=\"vendor step\"] >> nth=0",
+        "capture_scope": "cross_origin_frame"
+      },
+      "why": "TITLE rung, disambiguated - two foreign embeds share this title."
+    },
+    {
+      "where": {
+        "name": "Vendor Step B"
+      },
+      "fields": {
+        "frame_selector": "iframe[title=\"vendor step\"] >> nth=1",
+        "capture_scope": "cross_origin_frame"
+      },
+      "why": "The embed the host-keyed dedup used to drop. Same host, same title as A."
+    },
+    {
+      "where": {
+        "name": "Vendor Step C"
+      },
+      "fields": {
+        "capture_scope": "cross_origin_frame"
+      },
+      "why": "SRC rung - no id, no name, no title. The selector carries the fixture server's ephemeral port, so it is asserted by resolution rather than by spelling."
+    },
+    {
+      "where": {
+        "name": "Vendor Step D"
+      },
+      "fields": {
+        "capture_scope": "cross_origin_frame"
+      },
+      "why": "A foreign embed inside an OPEN shadow root whose host carries no id, so the host itself is addressed positionally among its siblings: `div >> nth=1 >> iframe[src=...]`. This is the rung a page-global ordinal cannot express at all."
+    },
+    {
+      "where": {
+        "name": "Vendor Step E"
+      },
+      "fields": {
+        "capture_scope": "cross_origin_frame"
+      },
+      "why": "A foreign embed inside an open shadow root whose host is the only element of its tag in its root, so the bare tag addresses it - the other host shape from (d), and the one a positional ordinal would get wrong."
+    }
+  ],
+  "forbid_controls": [
+    {
+      "where": {
+        "name": "Legacy Acknowledgement"
+      }
+    },
+    {
+      "where": {
+        "name": "Acknowledge"
+      }
+    }
+  ],
+  "opaque": {
+    "lanes": [
+      "playwright"
+    ],
+    "expect": [
+      {
+        "kind": "cross_origin_iframe"
+      },
+      {
+        "kind": "closed_shadow",
+        "label": "legacy-disclosure-panel"
+      }
+    ],
+    "why": "FIVE cross_origin_iframe rows, one per embed - the dedup defect above is what this counts - and exactly one closed_shadow row. `<template shadowrootmode=\"closed\">` is attached by the HTML parser and never calls Element.prototype.attachShadow, so the capture init script cannot observe it. That is a stated limitation of T-FR-02, and it is fixtured here so it is a measured fact rather than a sentence in a docstring: the surface stays an honest, named blind spot, and its two controls are in forbid_controls."
+  },
+  "frame_selectors_must_resolve": {
+    "expect_distinct": 5,
+    "why": "One selector per embed, each resolving to exactly one frame and binding the control captured through it. Three of the five carry the fixture server's ephemeral port, so this is asserted by handing them back to the browser - which is the only assertion that means anything anyway."
+  }
+}

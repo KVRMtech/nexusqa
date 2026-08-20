@@ -130,6 +130,28 @@ class KeyRing:
             return ""
         return ""
 
+    def effective_overlap_seconds(self, *, now: float,
+                                  skew_seconds: float = DEFAULT_SKEW_SECONDS) -> float:
+        """How long an in-flight callback is ACTUALLY protected, in seconds.
+
+        THE TRAP THIS NAMES (M3.4 / T-RS-02).  The overlap window and the
+        signature SKEW window are independent, and the smaller one binds.  A
+        callback signed under the outgoing key carries a timestamp, and rule 2
+        of :func:`verify` rejects it once that timestamp is older than
+        ``skew_seconds`` - whatever the key ring says.  So an operator who sets a
+        24-hour overlap believing it drains a long-tailed fleet actually gets
+        five minutes of protection, and every slower callback is refused as
+        ``timestamp_expired`` with a key error nowhere in sight.
+
+        Returns the MINIMUM of the two windows, which is the only number an
+        operator planning a rotation can safely reason about.  Zero means the
+        previous key is already retired.
+        """
+        remaining = float(self.previous_expires_at or 0.0) - float(now)
+        if remaining <= 0:
+            return 0.0
+        return min(remaining, float(skew_seconds))
+
     def known_key_ids(self, *, now: float) -> list[str]:
         """Key ids that would currently resolve (diagnostics; never secrets)."""
         out = []
@@ -161,11 +183,25 @@ class KeyRing:
             overlap = float(str(src.get(overlap_var, "") or "0").strip() or 0.0)
         except ValueError:
             overlap = 0.0
-        return cls(
+        ring = cls(
             current=str(src.get(current_var, "") or ""),
             previous=str(src.get(previous_var, "") or ""),
             previous_expires_at=overlap,
         )
+        # An overlap longer than the skew window is not more protection - it is
+        # FALSE CONFIDENCE. See `effective_overlap_seconds`. Warned at the point
+        # of configuration so the operator learns it while planning a rotation
+        # rather than while reading rejection logs during one.
+        if ring.previous.strip() and overlap > 0:
+            excess = overlap - time.time() - DEFAULT_SKEW_SECONDS
+            if excess > 0:
+                logger.warning(
+                    "qec.hmac.overlap_exceeds_skew overlap_ends_in=%.0fs "
+                    "skew=%ds - in-flight callbacks are protected for only the "
+                    "SKEW window; anything slower is refused as "
+                    "timestamp_expired regardless of the key",
+                    overlap - time.time(), DEFAULT_SKEW_SECONDS)
+        return ring
 
 
 @dataclass

@@ -150,3 +150,10 @@ engines/qe-explorer/_measure_out/
 # every run, and it is not reviewable evidence the way a golden is. The
 # instruments stay in version control; what they emit does not.
 engines/qe-explorer/_measure_live/
+# Same rule, the other instruments' working directories. `measure_crawl_performance.py`
+# writes a full crawl artefact tree per repetition (frame_*.png + manifest) and
+# `measure_boundary_crossing.py` writes one per app. Both are regenerated on every
+# run and neither is reviewable evidence the way a golden is. Named individually
+# rather than as `_*` so a future directory has to be considered, not swallowed.
+engines/qe-explorer/_perf_work/
+engines/qe-explorer/_measure_out/

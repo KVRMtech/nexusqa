@@ -11,9 +11,9 @@
     },
     "config_fingerprint": "characterization-fixed",
     "crawl_id": "<normalized:crawl_id>",
-    "explorer_version": "qe-explorer/1.0+inv-js-v10",
+    "explorer_version": "qe-explorer/1.0+inv-js-v12",
     "frame_count": 0,
-    "guard_version": "qe-explorer/1.0+inv-js-v10",
+    "guard_version": "qe-explorer/1.0+inv-js-v12",
     "refuse_pack_version": "refuse-pack-v1",
     "stop_reason": "",
     "target_url": "http://127.0.0.1:<port>/10-save-draft-wizard/index.html",
@@ -36,8 +36,11 @@
         "anchor": null,
         "phase": "explore",
         "qec": {
+          "capture_scope": "",
           "css_hint": "button#back-btn",
+          "disclosure": "",
           "expanded": "",
+          "frame_origin": "",
           "frame_selector": "",
           "haspopup": "",
           "href": "",
@@ -45,6 +48,7 @@
           "name_confidence": "medium",
           "options": [],
           "role": "button",
+          "shadow_scope": "",
           "testid": ""
         },
         "screenshot_after": "<normalized:screenshot_after>",
@@ -67,8 +71,11 @@
         "anchor": null,
         "phase": "explore",
         "qec": {
+          "capture_scope": "",
           "css_hint": "button#save-draft-btn",
+          "disclosure": "",
           "expanded": "",
+          "frame_origin": "",
           "frame_selector": "",
           "haspopup": "",
           "href": "",
@@ -76,6 +83,7 @@
           "name_confidence": "medium",
           "options": [],
           "role": "button",
+          "shadow_scope": "",
           "testid": ""
         },
         "screenshot_after": "<normalized:screenshot_after>",
@@ -98,8 +106,11 @@
         "anchor": null,
         "phase": "explore",
         "qec": {
+          "capture_scope": "",
           "css_hint": "button#continue-btn",
+          "disclosure": "",
           "expanded": "",
+          "frame_origin": "",
           "frame_selector": "",
           "haspopup": "",
           "href": "",
@@ -107,6 +118,7 @@
           "name_confidence": "medium",
           "options": [],
           "role": "button",
+          "shadow_scope": "",
           "testid": ""
         },
         "screenshot_after": "<normalized:screenshot_after>",
@@ -129,8 +141,11 @@
         "anchor": null,
         "phase": "explore",
         "qec": {
+          "capture_scope": "",
           "css_hint": "button#cancel-btn",
+          "disclosure": "",
           "expanded": "",
+          "frame_origin": "",
           "frame_selector": "",
           "haspopup": "",
           "href": "",
@@ -138,6 +153,7 @@
           "name_confidence": "medium",
           "options": [],
           "role": "button",
+          "shadow_scope": "",
           "testid": ""
         },
         "screenshot_after": "<normalized:screenshot_after>",
@@ -164,30 +180,62 @@
     },
     "form_snapshot_signals": {
       "Face Amount": {
+        "locator": {
+          "bindable": false,
+          "role": "spinbutton",
+          "strategy": "dom_id",
+          "value": "face-amount",
+          "verified": true
+        },
         "max": "2000000",
         "min": "25000",
         "options": [],
+        "options_total": 0,
         "required": true,
         "step": "1000",
         "type": "text"
       },
       "Notes": {
+        "locator": {
+          "bindable": false,
+          "role": "textbox",
+          "strategy": "dom_id",
+          "value": "notes",
+          "verified": true
+        },
         "maxlength": "500",
         "options": [],
+        "options_total": 0,
         "required": false,
         "type": "text"
       },
       "Term": {
+        "locator": {
+          "bindable": false,
+          "role": "combobox",
+          "strategy": "dom_id",
+          "value": "term",
+          "verified": true
+        },
         "options": [
           "Select term length",
           "10 years",
           "20 years"
         ],
+        "options_total": 3,
         "required": true,
         "type": "select"
       },
       "Underwriter Disclosure": {
+        "locator": {
+          "bindable": false,
+          "role": "textbox",
+          "strategy": "dom_id",
+          "value": "disclosure",
+          "verified": true
+        },
         "options": [],
+        "options_total": 0,
         "required": false,
         "type": "text"
       }
@@ -235,10 +283,10 @@
     },
     "config_fingerprint": "characterization-fixed",
     "crawl_id": "<normalized:crawl_id>",
-    "explorer_version": "qe-explorer/1.0+inv-js-v10",
+    "explorer_version": "qe-explorer/1.0+inv-js-v12",
     "frame_count": 1,
     "guard_blocks": 0,
-    "guard_version": "qe-explorer/1.0+inv-js-v10",
+    "guard_version": "qe-explorer/1.0+inv-js-v12",
     "refuse_pack_version": "refuse-pack-v1",
     "stats": {
       "actions": 5,

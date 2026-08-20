@@ -59,6 +59,27 @@ def _b64(blob: bytes) -> str:
     return base64.b64encode(blob).decode("ascii")
 
 
+def _receipt(screenshot_b64: str, **over):
+    """M3.1 / T-VIS-05 — the proof the explorer masked THESE bytes.
+
+    Every case below that expects a PASS now has to carry one: an image without
+    a receipt is refused, which is the point of the milestone.  The digest is
+    computed from the payload so the receipt is bound to it rather than asserted
+    about it.
+    """
+    import hashlib
+
+    from app.services.pii_egress_guard import REDACTION_METHOD
+
+    raw = screenshot_b64
+    if raw.startswith("data:"):
+        raw = raw.partition(",")[2]
+    out = {"applied": True, "method": REDACTION_METHOD, "regions": 3,
+           "image_sha256": hashlib.sha256(base64.b64decode(raw)).hexdigest()}
+    out.update(over)
+    return out
+
+
 CLEAN_PNG = _b64(_png())
 JPEG = _b64(b"\xff\xd8\xff\xe0" + b"\x00" * 64)
 
@@ -101,16 +122,22 @@ def test_pii_in_png_text_metadata_is_detected():
 
 def test_benign_metadata_is_not_blocked():
     ok = _b64(_png([(b"Software", b"qe-explorer capture")]))
-    assert guard_image(ok, site="vision:test")["safe"] is True
+    assert guard_image(ok, site="vision:test",
+                       redaction=_receipt(ok))["safe"] is True
 
 
 # ── honesty about the pixels ───────────────────────────────────────────────
 
 @pytest.mark.parametrize("payload", [CLEAN_PNG, JPEG])
 def test_a_valid_image_passes_but_is_never_reported_as_pixel_scanned(payload):
-    verdict = guard_image(payload, site="vision:test")
+    verdict = guard_image(payload, site="vision:test",
+                          redaction=_receipt(payload))
     assert verdict["safe"] is True
+    # REDACTED is not SCANNED, and the two flags exist so no report can conflate
+    # them: nothing in this service reads a pixel, and the mask is proven by a
+    # receipt from the process that could.
     assert verdict["pixels_scanned"] is False
+    assert verdict["pixels_redacted"] is True
 
 
 def test_every_refusal_also_reports_pixels_unscanned():

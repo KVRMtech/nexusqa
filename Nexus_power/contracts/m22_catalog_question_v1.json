@@ -1,0 +1,108 @@
+{
+  "$comment": [
+    "M2.2 / T-BR-01..05 — THE FROZEN WIRE SHAPE OF A CATALOGUED QUESTION.",
+    "",
+    "WHY THIS FILE EXISTS AT ALL. The catalogue crosses two services:",
+    "",
+    "    qe-explorer  app/inventory.form_signal_for(record)        (produces)",
+    "        -> page_state.form_snapshot_signals[<question text>]",
+    "        -> POST /internal/crawls/{id}/complete  coverage.states[].form_snapshot_signals",
+    "    qe-central   app/services/catalog.extract_controls()      (consumes)",
+    "        -> catalog.build_master_catalog() -> catalog_questions -> GET /apps/{id}/catalog",
+    "",
+    "Neither service can test the other: both ship a top-level `app` package, so",
+    "one pytest process cannot import both. That is not a theoretical hazard here,",
+    "it is the history of this milestone. Every signal M2.2 restores was ALREADY",
+    "captured by the browser and ALREADY read by the catalogue — and died in the",
+    "one function between them that neither side's suite covered:",
+    "",
+    "    options_total   counted by inventory_js, read by catalog._options_total,",
+    "                    never emitted by form_signal_for. So a clipped 250-option",
+    "                    enumeration catalogued as complete, and the honesty marker",
+    "                    that exists at BOTH ends of the wire meant nothing.",
+    "    locator         captured since M0.x, dropped at the same boundary. The",
+    "                    catalogue described a question in full and could not point",
+    "                    at the control that asks it.",
+    "    validation      the same defect, fixed one milestone earlier — which is the",
+    "                    proof that this seam breaks silently and repeatedly.",
+    "",
+    "Both suites were green through all of it, because a dropped field produces a",
+    "SMALLER true catalogue, never a failing one. Nothing errors; the deliverable",
+    "just knows less, and no test on either side can see the other end.",
+    "",
+    "So the shape is frozen HERE, as data, and each side asserts against it in its",
+    "own process. Drop a key on either side and that side's own suite fails.",
+    "",
+    "VALUE-FREE BY CONSTRUCTION. Every field below is SHAPE — what is asked, what",
+    "may be answered, what identifies the control. The sibling `form_snapshot`",
+    "(label -> committed value) deliberately does not cross this boundary. If a",
+    "future field could carry something a user typed, it does not belong here.",
+    "",
+    "CHANGING THIS FILE IS A PROTOCOL CHANGE. Add the new version beside this one",
+    "rather than editing it in place, and ship the reader before the writer: the",
+    "consumer tolerates unknown keys, so a new field is invisible until it reads it."
+  ],
+  "schema_version": 1,
+
+  "$always": "Emitted for EVERY value-bearing control. A button or link is not a question and gets no signal at all.",
+  "required_fields": [
+    "type",
+    "options",
+    "options_total",
+    "required"
+  ],
+
+  "$conditional": "Emitted only when the page declared it. ABSENCE IS EVIDENCE — it means the application said nothing, never that the crawl did not look.",
+  "conditional_fields": [
+    "depends_on",
+    "locator",
+    "pattern",
+    "minlength",
+    "maxlength",
+    "min",
+    "max",
+    "step"
+  ],
+
+  "$validation": "The HTML constraint attributes the application declared about its own field. Mirrored in qe-explorer app/inventory._VALIDATION_KEYS and qe-central app/services/catalog._VALIDATION_KEYS — change both or neither.",
+  "validation_fields": ["pattern", "minlength", "maxlength", "min", "max", "step"],
+
+  "$locator": "The handle the PAGE declared for the control. `verified` is true only when the capture proved it resolves to exactly ONE control on the page it was seen on — a property of the page, which is why qe-explorer stamps it in build_inventory and not per control. `strategy` is empty and `verified` false when the application identifies the control by nothing usable; that is a finding about the application and is carried, not omitted.",
+  "locator_required_fields": ["strategy", "value", "verified"],
+  "locator_optional_fields": [
+    "role",
+    "frame_selector",
+    "match_index",
+    "anchor",
+    "group_id",
+    "bindable",
+    "unverified_reason"
+  ],
+  "locator_strategies": ["testid", "dom_id", "accessible_name", "css_hint"],
+  "locator_unverified_reasons": ["no_handle_declared", "ambiguous_in_page"],
+
+  "$options_total": "How many answers the control OFFERS in the page. Equals len(options) unless the read was clipped at the shared ceiling. NEVER less than len(options): a catalogue may not claim fewer answers than it holds.",
+  "max_options": 300,
+
+  "$catalog_states": "The honesty markers qe-central writes onto each question. Frozen here because a consumer that filters on them is depending on the exact strings.",
+  "business_rule_states": ["observed", "UNVERIFIED"],
+  "locator_states": ["verified", "UNVERIFIED", "absent"],
+
+  "sample": {
+    "type": "select",
+    "options": ["Alabama", "Alaska", "Arizona"],
+    "options_total": 250,
+    "required": true,
+    "depends_on": "Country of residence",
+    "min": "1",
+    "max": "99",
+    "step": "1",
+    "locator": {
+      "strategy": "dom_id",
+      "value": "state-of-residence",
+      "verified": true,
+      "bindable": false,
+      "role": "combobox"
+    }
+  }
+}

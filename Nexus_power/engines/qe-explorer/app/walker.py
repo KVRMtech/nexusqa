@@ -36,11 +36,14 @@ from urllib.parse import urljoin, urlsplit
 
 from . import danger_signals
 from . import emit
+from . import endpoint_inventory
+from . import network_evidence as net_evidence
 from . import matcher
 from . import perception
 from . import rules
 from . import value_infer
 from . import vocab
+from .advance_signature import compute_signature
 from .auth import (
     AUTH_NO_CREDENTIALS,
     AUTH_NOT_PERSISTED,
@@ -115,6 +118,11 @@ from .crawl_constants import (  # noqa: F401  (re-exported public vocabulary)
     _reach_target_labels,
     _segment_label,
     _url_key)
+#: M2.5 — cap on 5xx rows carried in the coverage account.  Coverage is a
+#: report, not a mirror: an application failing in a loop must not be able to
+#: grow the account without bound.
+_MAX_NETWORK_SERVER_ERRORS = 200
+
 from .guard_context import GuardContext
 from .budget import (STOP_MAX_REQUESTS, STOP_MAX_STATES, STOP_MAX_WALL_MS,
                      Budget, BudgetTracker)
@@ -148,7 +156,8 @@ from .guard import (
     registrable_domain,
     same_registrable_domain,
 )
-from .inventory import build_inventory, form_signal_for
+from .inventory import (build_inventory, carry_earned_annotations,
+                        form_signal_for, question_identity)
 
 logger = logging.getLogger("app.crawler")
 
@@ -163,6 +172,115 @@ _MAX_WALK_TEXT_HISTORY = 4000
 
 def _recent_text_history(seq: list[str]) -> list[str]:
     return seq[-_MAX_WALK_TEXT_HISTORY:]
+
+
+#: The kinds ``_answer_to_unblock`` may answer, and the ONE that behaves
+#: differently.  A checkbox is a question you can put back; a radio is not (see
+#: :func:`_radio_unblock_groups`).
+_UNBLOCK_MULTI_KINDS = ("checkbox", "toggle")
+
+
+def _radio_unblock_groups(
+    controls: "Sequence[dict[str, Any]]", declined: "set[str]",
+) -> "list[tuple[str, list[dict[str, Any]], Optional[dict[str, Any]]]]":
+    """Assemble the RADIO QUESTIONS on this page that the fill declined.
+
+    WHY THIS IS NOT THE CHECKBOX PATH WITH ONE MORE ``kind`` IN THE TUPLE, which
+    is what it looks like it should be and what a first pass wrote.
+
+    1. **A radio's ``name`` is the name of an ANSWER, not of a question.**
+       ``build_inventory`` emits four radios for one "Gender" question, named
+       "Male"/"Female"/…, and it is the ``group_id`` stamped by GROUP_ASSEMBLE
+       that says they are one question.  The residue the fill declined therefore
+       contains ANSWER labels, so matching declined-name-to-control (what the
+       checkbox path does) would treat four answers to one question as four
+       independent questions and offer to "answer" each of them.
+
+    2. **Exclusivity means answering one member ANSWERS THE WHOLE QUESTION**, so
+       the unit of choice here is the GROUP: one pick per group, and a group
+       that already holds a committed answer is not a question the fill left
+       open at all — it is answered, and re-answering it would overwrite a real
+       choice with a speculative one.
+
+    3. **A radio cannot be un-checked.**  HTML offers no user gesture that
+       returns a group to "nothing selected"; only a form reset does, and that
+       would discard every other answer on the step.  So the caller's revert has
+       to restore the PREVIOUSLY SELECTED member instead of clearing the one it
+       set — which is why this returns that member as the third element of each
+       tuple, read BEFORE anything is touched.  When it is ``None`` the group had
+       no answer and the experiment is genuinely irreversible; the caller says so
+       rather than reporting an undo it did not perform.
+
+    Returns ``(group_id, answerable_members_in_DOM_order, previously_checked)``
+    for each declined, unanswered, answerable group — DOM order throughout, so
+    the choice below it is deterministic on the page rather than on dict order.
+    """
+    by_group: "dict[str, list[dict[str, Any]]]" = {}
+    for c in controls:
+        if c.get("kind") != "radio":
+            continue
+        gid = str(c.get("group_id") or "").strip()
+        if not gid:
+            # An UNGROUPED radio is one the DOM never declared a grouping for.
+            # Answering it would be a guess about which question it belongs to,
+            # and a wrong guess is a fabricated answer on a real application.
+            continue
+        by_group.setdefault(gid, []).append(c)
+
+    out: "list[tuple[str, list[dict[str, Any]], Optional[dict[str, Any]]]]" = []
+    for gid, members in by_group.items():
+        if len(members) < 2:
+            continue                     # a lone radio is a toggle, not a choice
+        prior = next(
+            (m for m in members
+             if str(m.get("value_committed") or "").strip().lower() == "true"),
+            None)
+        if prior is not None:
+            continue                     # already answered — not a declined question
+        # The fill declined this question if ANY of its answers is in the
+        # residue: forms.py appends every member of a group it could not answer.
+        if not any(_norm_label(m.get("name")) in declined
+                   for m in members if str(m.get("name") or "").strip()):
+            continue
+        answerable = [
+            m for m in members
+            if not m.get("disabled") and not m.get("danger")
+            and str(m.get("name") or "").strip()]
+        if not answerable:
+            # Every option is disabled or dangerous. The question is real and
+            # unanswered, and there is nothing safe to answer it with.
+            continue
+        out.append((gid, answerable, prior))
+    return out
+
+
+def _question_label(control: "Mapping[str, Any]") -> str:
+    """The DOM's own name for the QUESTION a radio answers — its ``group_key``.
+
+    Not UI text and not presented as such: it is the ``name`` attribute (or
+    ``role=radiogroup`` container id) the application itself used to declare that
+    these answers belong together, quoted so the recorded business rule says
+    WHICH question was gating rather than only which answer cleared it.  Empty
+    when the control carries no declared grouping, in which case the proof falls
+    back to naming the answer alone.
+    """
+    key = str(control.get("group_key") or "").strip()
+    # ``group_key`` is namespaced by the builder (``name:form0:tobacco``); the
+    # trailing segment is the part an application author actually chose.
+    return key.rsplit(":", 1)[-1] if key else ""
+
+
+def _least_asserting(members: "Sequence[dict[str, Any]]") -> "dict[str, Any]":
+    """The option that INVENTS THE LEAST — "No", "None", "N/A" — else DOM order.
+
+    Identical doctrine to the checkbox path, and for the identical reason: on an
+    insurance application "Yes" to a health question fabricates a medical history
+    for a synthetic person, and "No" does not.  Both unblock the walk.
+    """
+    return next(
+        (m for m in members
+         if vocab.NEGATIVE_OPTION_RE.match(str(m.get("name") or "").strip())),
+        members[0])
 
 
 class WalkerMixin:
@@ -344,12 +462,32 @@ class WalkerMixin:
                 return False
             return label_counts.get(n.lower(), 0) >= 2
 
-        # Group by DOM order: a new question begins when a label repeats.
+        # WHICH BUTTONS BELONG TO WHICH QUESTION.
+        #
+        # PREFERRED: the DOM's own declaration. A questionnaire that wraps each
+        # question in a <fieldset> / role=group names the grouping itself, and
+        # ``question_identity`` (M2.1) reads it. That identity is order-free, so
+        # inserting a question above this one does not re-key it, and it is the
+        # SAME id the catalogue keys the question on.
+        #
+        # FALLBACK: DOM order — a new question begins when a label repeats. Kept
+        # exactly as it was for a page that declares nothing, which is the only
+        # honest handle such a page offers.
         groups: list[list[dict[str, Any]]] = []
+        declared: dict[str, list[dict[str, Any]]] = {}
         cur: list[dict[str, Any]] = []
         cur_labels: set[str] = set()
         for c in controls:
             if not _is_option(c):
+                continue
+            qid = question_identity(c)
+            if qid:
+                bucket = declared.get(qid)
+                if bucket is None:
+                    bucket = []
+                    declared[qid] = bucket
+                    groups.append(bucket)     # position = first sighting
+                bucket.append(dict(c))
                 continue
             nl = str(c.get("name") or "").strip().lower()
             if nl in cur_labels:
@@ -362,7 +500,20 @@ class WalkerMixin:
 
         for ordinal, group in enumerate(groups):
             opts = [str(c.get("name") or "").strip() for c in group]
-            sig = "q:" + hashlib.sha256(
+            declared_id = question_identity(group[0]) if group else ""
+            # A DECLARED question keeps its identity across re-crawls and across
+            # a sibling question being added; the ordinal hash cannot, and was
+            # the only handle this path ever had.
+            #
+            # ONE VALUE, NOT TWO. This is also the key a PLANNED WALK forces its
+            # answer on, and the key ``journey_fold`` stores the branch under —
+            # and the fold stores ``group_id or control_signature``. Emitting a
+            # prefixed signature alongside a bare group id would mean
+            # ``branch_planner`` hands back an override keyed on one and this
+            # lookup reads the other, so every planned walk of a questionnaire
+            # question would silently fall through to the default answer and
+            # report itself as having walked the branch. Same value both places.
+            sig = declared_id or "q:" + hashlib.sha256(
                 ("%d|%s" % (ordinal, "|".join(sorted(o.lower() for o in opts))))
                 .encode("utf-8")).hexdigest()[:24]
             if sig in self._answered_questions:
@@ -402,9 +553,30 @@ class WalkerMixin:
                 "qec.questionnaire.answered url=%s groups=%d ordinal=%d choice=%s "
                 "match_index=%s", (url or "")[:80], len(groups), ordinal,
                 str(chosen.get("name") or "")[:20], chosen.get("match_index"))
+            # THE QUESTION, IN THE APPLICATION'S OWN WORDS — or nothing at all.
+            #
+            # This label was `"Question %d" % (ordinal + 1)`. Nothing on the page
+            # says "Question 3"; the crawl invented it because a bare-button
+            # questionnaire gave the walker no name to use, and the catalogue
+            # then published twenty rows of fabricated wording as if they were
+            # the application's questions. A reader could not tell which one
+            # asked about tobacco, and a regression diff could not tell a
+            # REWORDED question from a REORDERED one.
+            #
+            # The wording comes from the DOM's declared question container
+            # (`<legend>`, aria-label, a heading inside a role=group) and is
+            # captured verbatim. When the page declares none, this is EMPTY and
+            # the catalogue marks the question UNVERIFIED — an admission, not a
+            # substitute. The question is still catalogued, still answerable and
+            # still identified: identity is the signature, never the wording.
+            label = str(group[0].get("question_label") or "").strip()
             return [{
                 "control_signature": sig,
-                "control_label": "Question %d" % (ordinal + 1),
+                "control_label": label[:120],
+                # The declared question id, so the fold keys this branch on the
+                # SAME identity a radio group would get (T-QT-04). Absent when
+                # the page declared nothing — the signature above is then the key.
+                **({"group_id": declared_id} if declared_id else {}),
                 "options": opts[:12],
                 "provenance": "questionnaire",
                 "choice": str(chosen.get("name") or "").strip()[:80],
@@ -522,7 +694,7 @@ class WalkerMixin:
             return controls
         candidates: list[dict[str, Any]] = []
         for c in controls:
-            if c.get("kind") not in ("checkbox", "toggle"):
+            if c.get("kind") not in _UNBLOCK_MULTI_KINDS:
                 continue
             if c.get("disabled") or c.get("danger"):
                 continue
@@ -534,7 +706,26 @@ class WalkerMixin:
             if str(c.get("value_committed") or "").strip().lower() == "true":
                 continue
             candidates.append(c)
+
+        # ── M1.x / T-RG-01 · THE SAME EXPERIMENT ON A RADIO QUESTION ─────────
+        # A "choose at least one" rule hides from HTML; so does "you must answer
+        # this question", and the second is the one the target domain is made of
+        # — a health questionnaire is twenty required Yes/No groups, and its
+        # Continue is disabled by the same invisible script validator. The
+        # experiment that discovers the first discovers the second unchanged:
+        # answer one declined question, re-read the page, and let the app rule.
+        #
+        # CHECKBOXES ARE TRIED FIRST, AND THAT ORDER IS THE COMPATIBILITY
+        # GUARANTEE, not a preference. Every page that has a declined checkbox
+        # today picks exactly the checkbox it picks today, runs exactly the one
+        # attempt it runs today, and — because the budget below is still ONE
+        # attempt per blocked step — stops where it stops today. Radios are
+        # reached only on pages where the checkbox path found nothing and the
+        # walk therefore ended one step short. Strictly additive by construction.
+        radio_groups: list[tuple[str, list[dict[str, Any]], Optional[dict[str, Any]]]] = []
         if not candidates:
+            radio_groups = _radio_unblock_groups(controls, declined)
+        if not candidates and not radio_groups:
             return controls              # nothing declined is answerable this way
 
         # ── M1.7 / T-GW-04 · ASK WHAT WE ALREADY PROVED ─────────────────────
@@ -559,9 +750,19 @@ class WalkerMixin:
         known = self._known_rules.lookup(url=url, blocked_label=blocked_label)
         reused = False
         pick = None
+        #: The other answers to the question ``pick`` answers, and the member the
+        #: app had selected before we touched it.  Both are empty/None on the
+        #: checkbox path, where a control is its own whole question and the undo
+        #: is simply "put it back".
+        pick_siblings: list[dict[str, Any]] = []
+        pick_prior: Optional[dict[str, Any]] = None
+        # A rule names ONE control by label, and on the radio path that label is
+        # an ANSWER ("No"), which is exactly the handle needed to re-select it.
+        # Searched across both paths so a rule proved on either kind rebinds.
+        searchable = list(candidates) + [m for _, ms, _ in radio_groups for m in ms]
         if known is not None:
             wanted = rules.norm_label(known.field_label)
-            pick = next((c for c in candidates
+            pick = next((c for c in searchable
                          if rules.norm_label(c.get("name")) == wanted), None)
             if pick is not None:
                 reused = True
@@ -578,11 +779,26 @@ class WalkerMixin:
                     "names a question this state does not ask; experimenting",
                     url[:120], blocked_label[:40], known.field_label[:40])
         if pick is None:
-            pick = next(
-                (c for c in candidates
-                 if vocab.NEGATIVE_OPTION_RE.match(str(c.get("name") or "").strip())),
-                candidates[0])
+            if candidates:
+                pick = _least_asserting(candidates)
+            else:
+                # ONE question, and the FIRST one the page asks. A blocked step
+                # with five unanswered questions is blocked on all five, and
+                # answering them all would be a form-filling spree conducted on a
+                # guess. Answering the first tests the rule; the walk re-enters
+                # this function on the next observation if the block persists,
+                # so a genuinely multi-question gate is still cleared — one
+                # app-confirmed answer at a time, each with its own evidence.
+                pick = _least_asserting(radio_groups[0][1])
+        # Resolve the picked control's question, whichever path chose it and
+        # whether it was chosen by rule or by experiment.
+        for _gid, members, prior in radio_groups:
+            if any(m is pick for m in members):
+                pick_siblings = [m for m in members if m is not pick]
+                pick_prior = prior
+                break
         pick_name = str(pick.get("name") or "").strip()
+        pick_is_radio = pick.get("kind") == "radio"
         try:
             observation = await self._port.set_checked(pick, True)
             if observation.intent_met is False:
@@ -601,12 +817,45 @@ class WalkerMixin:
                 if c.get("kind") in ("button", "link"))
             if not cleared:
                 # Bought nothing — put the page back the way the app had it.
-                await self._port.set_checked(pick, False)
+                #
+                # A CHECKBOX GOES BACK. A RADIO GROUP MAY NOT BE ABLE TO, and
+                # saying "change reverted" when it did not would be a lie told by
+                # the log line whose whole job is to make the experiment
+                # trustworthy. HTML has no gesture that returns a group to
+                # "nothing selected" — only form reset does, and that would
+                # discard every other answer on the step. So:
+                #   * a group that HAD an answer is restored by re-selecting it,
+                #     and exclusivity clears ours as a side effect: a true undo;
+                #   * a group that had NONE stays answered, and is reported as
+                #     what it is — an irreversible experiment whose residue is
+                #     one committed answer on a test environment.
+                # The distinction is recorded, not smoothed over, because an
+                # operator reading this line is deciding whether the form
+                # snapshot below it reflects the app's state or ours.
+                undone = True
+                if not pick_is_radio:
+                    await self._port.set_checked(pick, False)
+                elif pick_prior is not None:
+                    await self._port.set_checked(pick_prior, True)
+                else:
+                    undone = False
                 logger.warning(
-                    "qec.wizard.unblock_declined url=%s field=%r advance=%r — "
-                    "answering it did not enable the forward control, so the "
-                    "block is about something else; change reverted",
-                    url[:120], pick_name[:40], blocked_label[:40])
+                    "qec.wizard.unblock_declined url=%s field=%r advance=%r "
+                    "reverted=%s — answering it did not enable the forward "
+                    "control, so the block is about something else%s",
+                    url[:120], pick_name[:40], blocked_label[:40], undone,
+                    "" if undone else
+                    "; the answer STANDS because a radio group with no prior "
+                    "selection cannot be returned to unanswered")
+                if not undone:
+                    ledger = getattr(self, "_unblock_irreversible", None)
+                    if ledger is None:
+                        ledger = self._unblock_irreversible = []
+                    ledger.append({
+                        "url": url[:300], "advance": blocked_label[:120],
+                        "field": pick_name[:120],
+                        "reason": "radio_group_has_no_unanswered_state",
+                    })
                 return controls
         except Exception as exc:                       # never fail the crawl for this
             logger.warning("qec.wizard.unblock_error url=%s field=%r err=%s",
@@ -622,11 +871,23 @@ class WalkerMixin:
         # leave seven fields on an operator's to-do list under a heading the
         # application itself has just contradicted. The record keeps its
         # missing_fields as evidence of the page as it stood.
+        # THE SIBLINGS ARE RELEASED WITH IT, because they were never a separate
+        # gap. forms.py puts every member of a declined radio group into the
+        # residue by its ANSWER label, so a Yes/No question the fill left open
+        # contributes TWO entries — and answering "No" answers both of them. The
+        # browser owns exclusivity; leaving "Yes" on an operator's to-do list
+        # would be asking someone to supply an answer we have, to a question that
+        # can only hold one. Exactly the correction forms.py already makes for
+        # its own group siblings (PROV_GROUP_SIBLING).
+        sibling_names = [str(m.get("name") or "").strip() for m in pick_siblings]
         released: set[str] = {_norm_label(pick_name)}
+        released.update(_norm_label(n) for n in sibling_names if n)
+        _q = _question_label(pick) if pick_is_radio else ""
         proof = (
             "%s requires an answer to %r before it is enabled "
             "(proven: the app enabled it when the agent answered)"
-            % (blocked_label[:60], pick_name[:60]))
+            % (blocked_label[:60],
+               ("%s = %s" % (_q, pick_name) if _q else pick_name)[:60]))
         # ── M1.7 / T-GW-04 · THE RULE OUTLIVES THIS CRAWL ───────────────────
         # This sentence used to be written into a list on the crawler object,
         # counted once by qe-central, and thrown away - so the next crawl of the
@@ -671,10 +932,19 @@ class WalkerMixin:
                 row["filled"] = True
                 if "options" in row:
                     row["choice"] = "checked"
+        # ONLY the answered question — never the whole `released` set. That set
+        # also carries the blocked step's other missing fields, which the
+        # crawl-wide residue above is right to drop (the funnel is no longer
+        # stopped) and this per-step ledger is NOT: it is what the CURRENT step's
+        # decision points are derived from, and emptying it would report a step
+        # as fully answered on the strength of one answer. Checkbox behaviour is
+        # therefore bit-identical — `answered` is {pick_name} when the pick was a
+        # checkbox, because a checkbox has no siblings.
+        answered = {_norm_label(pick_name)}
+        answered.update(_norm_label(n) for n in sibling_names if n)
         unfilled = getattr(fill, "unfilled_fields", None)
         if isinstance(unfilled, list):
-            unfilled[:] = [n for n in unfilled
-                           if _norm_label(n) != _norm_label(pick_name)]
+            unfilled[:] = [n for n in unfilled if _norm_label(n) not in answered]
         self._last_unblock_field = pick_name
         logger.warning(
             "qec.wizard.unblocked url=%s field=%r advance=%r — the app enabled "
@@ -682,6 +952,60 @@ class WalkerMixin:
             "discovered: %r is gated on that question",
             url[:120], pick_name[:40], blocked_label[:40], blocked_label[:40])
         return refreshed
+
+    def _note_network_stream(self, events: Sequence[dict[str, Any]],
+                             *, url: str = "") -> None:
+        """M2.5 — fold ONE visit's network stream into the crawl-level account.
+
+        Two products come out of the same pass, and they are deliberately
+        different objects:
+
+        * the ENDPOINT INVENTORY (T-NET-04) — the application's API surface,
+          keyed by ``method x path_template``, carrying auth pattern, response
+          shape, observed statuses and the UI actions seen to trigger each one.
+          It is an aggregate: no raw URL, no header value, no body value ever
+          reaches it, because a catalog is a durable widely-read artifact and
+          the raw stream is per-crawl evidence with a much tighter blast radius.
+        * the ORACLE FEED (T-NET-05) — every event whose OBSERVED status is 5xx,
+          read as an integer.  This is the whole point of structuring the
+          stream: the network oracle no longer has to search arbitrary error
+          strings to learn the backend failed, because the evidence says so.
+
+        Best-effort and never a crawl-stopper: evidence that cannot be folded is
+        logged, not raised.
+        """
+        try:
+            inventory = endpoint_inventory.build_inventory(events or ())
+            if inventory.get("endpoints"):
+                self._endpoint_inventories.append(inventory)
+            for event in net_evidence.observed_server_errors(events or ()):
+                if len(self._network_server_errors) >= _MAX_NETWORK_SERVER_ERRORS:
+                    break
+                row = {
+                    "method": str(event.get("method") or ""),
+                    "url": str(event.get("url") or ""),
+                    "path_template": str(event.get("path_template") or ""),
+                    "status": str(event.get("status") or ""),
+                    "sequence": str(event.get("sequence") or ""),
+                    "timestamp_ms": str(event.get("timestamp_ms") or ""),
+                    "action_token": str(event.get("action_token") or ""),
+                    "action_label": str(event.get("action_label") or ""),
+                    "action_verb": str(event.get("action_verb") or ""),
+                    "page_url": (url or "")[:500],
+                }
+                self._network_server_errors.append(row)
+                logger.warning(
+                    "qec.network.server_error %s %s -> %s during %s %r on %s — an "
+                    "OBSERVED 5xx, read from the structured stream and not from "
+                    "an error string",
+                    row["method"], row["url"][:160], row["status"],
+                    row["action_verb"] or "navigation", row["action_label"][:60],
+                    row["page_url"][:120])
+            self._network_events_seen += sum(
+                1 for e in (events or ())
+                if isinstance(e, dict) and not e.get("event"))
+        except Exception:  # pragma: no cover — evidence, never a crawl-stopper
+            logger.warning("qec.network.stream_fold_failed", exc_info=True)
 
     def _note_boundary_controls(self, controls: Sequence[dict[str, Any]],
                                 *, url: str = "") -> None:
@@ -896,6 +1220,48 @@ class WalkerMixin:
             out.append(c)
         return out
 
+    def _deterministic_signature(
+        self, chosen: Mapping[str, Any],
+        controls: Sequence[dict[str, Any]], page_title: str,
+    ) -> str:
+        """The decision-point signature for an advance NO ORACLE DECIDED
+        (M2.6 / T-CAP-02), or ``""`` when this advance must not be remembered.
+
+        WHY A DETERMINISTIC ADVANCE NEEDS ONE AT ALL. ``signature`` is the key
+        tenant advance memory is stored under, and only the oracle ever produced
+        it — so ``advance_memory.harvest_completion`` had nothing to harvest on
+        any application whose forward controls are named "Next" or "Continue",
+        which is most of them. The crawl proved an advance at every step of
+        every wizard and the learning layer stored none of them, then paid an
+        LLM at the first label a regex could not read. The proof is the same
+        fact whoever produced it; only the key was missing.
+
+        IT MUST BE THE SAME KEY THE ORACLE WOULD HAVE COMPUTED, or the memory is
+        written where nothing will ever look for it. qe-central signs the set it
+        RECEIVES, which is exactly :meth:`_tier3_candidates` — so that is the
+        set signed here, not the page inventory. :mod:`app.advance_signature`
+        mirrors its hash and a frozen vector pins the two together.
+
+        RETURNS "" — deliberately, not a fabricated key — when the control that
+        advanced is NOT in the oracle-eligible set. A commit-labelled or danger
+        control can reach tier 2 (a destination-shaped "Continue to Payment")
+        but is filtered out of every candidate list qe-central will ever see, so
+        remembering its label would put an answer into memory that recall is
+        structurally forbidden to give back, and — with consent on — contribute
+        a commit word to the shared label pool. The advance is still recorded as
+        evidence; it is simply not learned from.
+        """
+        candidates = self._tier3_candidates(controls)
+        if not candidates:
+            return ""
+        key = (str(chosen.get("kind") or ""),
+               str(chosen.get("name") or "").strip().lower())
+        if key not in {(str(c.get("kind") or ""),
+                        str(c.get("name") or "").strip().lower())
+                       for c in candidates}:
+            return ""
+        return compute_signature(candidates, page_title)
+
     async def _pick_advance_e2e(
         self, controls: Sequence[dict[str, Any]],
         page_url: str = "", page_title: str = "", fingerprint: str = "",
@@ -923,7 +1289,10 @@ class WalkerMixin:
         # Tier 1: strict regex — identical to explore mode.
         strict = self._pick_wizard_advance(controls)
         if strict is not None:
-            return AdvanceDecision(control=strict, tier=1)
+            return AdvanceDecision(
+                control=strict, tier=1,
+                signature=self._deterministic_signature(
+                    strict, controls, page_title))
 
         # Tier 2: the commit veto is lifted ONLY for destination-shaped labels
         # — advance word, then a destination preposition, then the commit word
@@ -938,7 +1307,10 @@ class WalkerMixin:
             if not name or name.lower() in self._submit_approvals:
                 continue
             if vocab.is_destination_advance(name):
-                return AdvanceDecision(control=c, tier=2)
+                return AdvanceDecision(
+                    control=c, tier=2,
+                    signature=self._deterministic_signature(
+                        c, controls, page_title))
 
         # DANGER FORWARD (disposable blanket only): tiers 1-2 skip refuse-pack
         # danger controls, but an application's forward step can BE one —
@@ -1158,7 +1530,20 @@ class WalkerMixin:
         # DISCARDED — the recorded step keeps its original snapshot + fill actions.
         await self._goto_keeping_login(item.url)
         reobs = await self._observe()
-        refreshed = build_inventory(reobs.raw_controls, self._refuse_pack, url=reobs.url)
+        # THE WALK RE-NAVIGATES AND RE-READS ITS OWN ENTRY STEP, and a re-read
+        # cannot recover a fact the DOM never stated (M2.2 / T-BR-02). The
+        # discovery pass proved this step's dependencies by ACTING — commit a
+        # driver, re-observe, watch a second question's answer set move — and
+        # this reload is the point at which the walk takes over recording. Every
+        # such finding died right here: the caller's snapshot was replaced by a
+        # fresh inventory of a freshly-loaded page, the walk recorded THAT, and
+        # the catalogue reported every conditional question in the fleet as
+        # unconditional. Nothing failed, because a page read correctly is still
+        # a page read correctly — it simply no longer knew what the crawl had
+        # learned about it.
+        refreshed = carry_earned_annotations(
+            controls,
+            build_inventory(reobs.raw_controls, self._refuse_pack, url=reobs.url))
         # The re-fill's ledger is ALSO the entry step's truth: real fill counts
         # and the decision points (forks) this step offered — Journey Graph C0.
         cur_filled, cur_unfilled, cur_intent_unmet = 0, 0, 0
@@ -1183,8 +1568,15 @@ class WalkerMixin:
             # whose forward control the app gates on an undeclared question.
             entry_blocked = self._note_advance_blocked(refreshed, reobs.url or "", refill)
             if entry_blocked:
-                refreshed = list(await self._answer_to_unblock(
-                    refreshed, entry_blocked, reobs.url or "", refill))
+                # The unblock experiment re-reads the page to see the
+                # application's verdict, and returns that fresh inventory. Same
+                # carry, same reason as the reload above: this is the LAST hop
+                # before the walk takes over recording, so a finding dropped
+                # here is a finding the manifest never sees.
+                refreshed = carry_earned_annotations(
+                    refreshed,
+                    list(await self._answer_to_unblock(
+                        refreshed, entry_blocked, reobs.url or "", refill)))
                 if self._last_unblock_field:
                     cur_filled += 1
                     cur_unfilled = max(0, cur_unfilled - 1)
@@ -1320,8 +1712,16 @@ class WalkerMixin:
                 q_dps = await self._answer_questionnaire(cur_controls, cur_url, cur_fp)
                 if q_dps:
                     obs_q = await self._observe()
-                    cur_controls = build_inventory(
-                        obs_q.raw_controls, self._refuse_pack, url=obs_q.url)
+                    # RESYNC OF THE SAME STEP, so the findings earlier passes
+                    # EARNED about it survive the re-read (M2.2 / T-BR-02). A
+                    # fresh inventory is authoritative about what the DOM says
+                    # and silent about what only an experiment could establish —
+                    # and silence, taken as truth, is how a proven dependency
+                    # became an unconditional question in the catalogue.
+                    cur_controls = carry_earned_annotations(
+                        cur_controls,
+                        build_inventory(obs_q.raw_controls, self._refuse_pack,
+                                        url=obs_q.url))
                     cur_url = obs_q.url
                     # Record what THIS answer activated (trigger→child, P1): the
                     # controls that appeared after the click but were absent before
@@ -1345,6 +1745,30 @@ class WalkerMixin:
                         page_token=obs_q.page_token)
                     identity.resync(cur_fp, _q_signals)
                     walk_seen.add(cur_fp)
+                    # M2.1 - A REVEALED QUESTION IS A QUESTION OF THE
+                    # APPLICATION, AND THE CATALOGUE HAS TO BE ABLE TO SEE IT.
+                    #
+                    # The reveal is TRANSIENT: answering the next question can
+                    # scroll it away, a later answer can hide it again, and the
+                    # step is recorded exactly once - at its end, with whatever
+                    # was on screen then. Measured on the questionnaire proving
+                    # ground: "Have you used tobacco..." = Yes revealed "How many
+                    # cigarettes per day...", the walk saw all three of its
+                    # answers, recorded the reveal as a branch RULE, and the
+                    # state it eventually recorded no longer contained the
+                    # question. So the rule pointed at a catalogue question that
+                    # did not exist, and the one relationship the projector is
+                    # for - answer this, and THAT gets asked - could not be
+                    # stated about any application that reveals anything.
+                    #
+                    # This is the same call the step recorder makes, on the
+                    # fingerprint the identity layer has just declared a distinct
+                    # state. Bounded and idempotent by the same rules as every
+                    # other sighting (richest wins, capped), and value-free: the
+                    # shapes of the questions now on screen, never an answer.
+                    self._note_state_signals(
+                        cur_fp, cur_url, _form_snapshot(cur_controls)[1],
+                        cur_controls)
                     cur_dps = list(cur_dps) + q_dps   # record the question on this step
                     continue
             # M1.3 · ENTER THE LOGICAL STEP. Resets the per-step mutation
@@ -1364,8 +1788,11 @@ class WalkerMixin:
             if persist_action is not None:
                 cur_actions.append(persist_action)
                 obs_p = await self._observe()
-                cur_controls = build_inventory(
-                    obs_p.raw_controls, self._refuse_pack, url=obs_p.url)
+                # Same-step resync, same reasoning as the questionnaire path.
+                cur_controls = carry_earned_annotations(
+                    cur_controls,
+                    build_inventory(obs_p.raw_controls, self._refuse_pack,
+                                    url=obs_p.url))
                 cur_url = obs_p.url
                 # RESYNC, not advance — the same precedent (and the same
                 # reasoning) as the questionnaire path above: the page changed,
@@ -1405,6 +1832,7 @@ class WalkerMixin:
                 # next page onto the frontier; the walk ends here and the outer loop
                 # picks the continuation up.
                 flow_steps.append(_step_record())
+                self._journeys_walked += 1
                 self._flows.append(flow_ledger.build_flow(
                     entry_fingerprint=fingerprint, entry_url=url, entry_title=title,
                     steps=flow_steps, terminal=flow_ledger.TERMINAL_SUBMIT_BOUNDARY,
@@ -1652,6 +2080,7 @@ class WalkerMixin:
                     nothing_to_click=nothing_to_click,
                     budget_left=budget_left)
                 flow_steps.append(_step_record())
+                self._journeys_walked += 1
                 self._flows.append(flow_ledger.build_flow(
                     entry_fingerprint=fingerprint, entry_url=url, entry_title=title,
                     steps=flow_steps, terminal=terminal, terminal_url=cur_url,
@@ -1692,8 +2121,10 @@ class WalkerMixin:
 
             obs, new_controls, new_fp = advance
             # WHO decided this advance — per-step audit evidence (tier 3 = the
-            # agent decided; its value-free decision signature rides along so a
-            # PROVEN pick can be harvested into tenant advance memory).
+            # agent decided). The value-free decision signature rides along on
+            # EVERY tier (M2.6 / T-CAP-02) so a PROVEN pick can be harvested
+            # into tenant advance memory; it was oracle-only, which meant the
+            # ordinary "Next"/"Continue" application taught the fleet nothing.
             advance_evidence: dict[str, Any] = {
                 "tier": pick.tier,
                 "control_name": str((trig or {}).get("name") or "")[:120],
@@ -1741,8 +2172,15 @@ class WalkerMixin:
                 self._collect_ledger(filled.field_ledger, obs.url or "")
                 if filled.filled:
                     after_fill = await self._observe()
-                    new_controls = build_inventory(
-                        after_fill.raw_controls, self._refuse_pack, url=after_fill.url)
+                    # Re-read of the step we just filled — same page, so the
+                    # earned findings carry. (The re-inventory after an ADVANCE
+                    # deliberately does not: that is a different step, and
+                    # carrying there would attribute one step's dependency to
+                    # another, which is worse than losing it.)
+                    new_controls = carry_earned_annotations(
+                        new_controls,
+                        build_inventory(after_fill.raw_controls,
+                                        self._refuse_pack, url=after_fill.url))
                 # THE APP'S OWN VERDICT, AT EVERY STEP OF THE WALK. Step 4 of a
                 # five-step application is only ever reached from inside this
                 # loop, so the hook on the outer form path could never see the

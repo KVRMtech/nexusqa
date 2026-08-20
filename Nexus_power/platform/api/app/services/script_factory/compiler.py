@@ -385,6 +385,38 @@ _NXSOFTMISS_JS = (
     "try{console.warn('NEXUS_SOFT_ORACLE_MISS step '+n+': '+d);}catch{}}"
 )
 
+# ── M2.4 / T-GEN-03 · THE NETWORK ORACLE ────────────────────────────────────
+# A UI-only assertion proves a page rendered.  It cannot tell a working
+# application from one whose API has started returning the wrong thing behind an
+# unchanged screen — which is precisely the regression class a test-evidence
+# product exists to catch, and precisely the one every generated spec used to
+# pass straight through.
+#
+# The armed-then-awaited shape is the only correct one: ``waitForResponse``
+# subscribes, so it MUST be created BEFORE the action that triggers the call or
+# a fast response races the subscription and the test flakes red for a reason
+# that has nothing to do with the application.  The compiler therefore emits the
+# arming line above the action lines and the await below them.
+#
+# The predicate is deliberately PATH-ONLY and case-folded: a spec generated from
+# a staging crawl has to run against production, and a host-pinned or
+# query-pinned network assertion is a spec that only ever runs once.  Status is
+# matched EXACTLY, because "some 2xx" is not the behaviour that was observed.
+#
+# A miss THROWS (waitForResponse rejects on timeout).  That is the whole point —
+# this is a hard oracle, not an observation, and it is never wrapped in a
+# ``.catch``.
+_NXNET_JS = r"""function __nxPath(u){try{const p=new URL(u).pathname.toLowerCase().replace(/\/+$/,'');return p||'/';}catch(e){return '';}}
+function __nxNet(page, method, path, status, timeout){
+  return page.waitForResponse(
+    (r) => __nxPath(r.url()) === path
+        && r.request().method().toUpperCase() === method
+        && r.status() === status,
+    { timeout: timeout || 30000 },
+  );
+}"""
+
+
 _NXSETTLE_JS = r"""async function __nxSettle(page){try{await page.waitForLoadState('domcontentloaded',{timeout:5000});}catch(e){}const sp=page.locator('[class*=spinner i],[class*=loading i],[aria-busy=\"true\"],[role=progressbar]').first();try{if(await sp.isVisible().catch(()=>false)){await sp.waitFor({state:'hidden',timeout:8000});}}catch(e){}}"""
 
 # Ordered-fallback click. Accepts ONE locator (legacy) or an ARRAY of rung
@@ -516,9 +548,81 @@ def _comment_safe(text: object, cap: int = 200) -> str:
     return " ".join(str(text or "").split())[:cap]
 
 
+def _network_expectations(step) -> list[dict]:
+    """The endpoints this step is RECORDED to have caused, canonicalised.
+
+    Read from ``observed['network_expect']`` (the compile payload a journey
+    produces).  Every entry needs a method, a path and a 2xx status or it is
+    dropped: a half-specified expectation compiles into a predicate that can
+    never match, which is a permanently-red test for a reason no reader could
+    diagnose.  Returns [] for every case that carries none — which is every case
+    the factory generated before this milestone, so their specs are unchanged.
+    """
+    raw = (_observed(step) or {}).get("network_expect")
+    if not isinstance(raw, (list, tuple)):
+        return []
+    out: list[dict] = []
+    seen: set[tuple[str, str]] = set()
+    for entry in raw:
+        if not isinstance(entry, dict):
+            continue
+        method = str(entry.get("method") or "").strip().upper()
+        path = str(entry.get("path") or "").strip().lower()
+        if path and path != "/":
+            path = path.rstrip("/") or "/"
+        try:
+            status = int(str(entry.get("status") or "").strip())
+        except ValueError:
+            continue
+        if not method or not path or not 200 <= status < 300:
+            continue
+        key = (method, path)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append({"method": method, "path": path, "status": status,
+                    "attribution": str(entry.get("attribution") or "")})
+    return out
+
+
+def _network_arm_lines(expectations: list[dict], var: str,
+                       timeout_ms: int) -> list[str]:
+    """The lines that ARM this step's network oracle, emitted ABOVE the action.
+
+    Arming before acting is not a style preference — ``waitForResponse``
+    subscribes when it is called, so a promise created after the click can miss
+    a response that already arrived and fail a working application.
+    """
+    if not expectations:
+        return []
+    lines = [f"const {var} = ["]
+    for exp in expectations:
+        how = exp.get("attribution") or "observed"
+        lines.append(
+            f"  __nxNet(page, '{js_str(exp['method'])}', "
+            f"'{js_str(exp['path'])}', {exp['status']}, {int(timeout_ms)}), "
+            f"// {how} cause: {exp['method']} {exp['path']} -> {exp['status']}")
+    lines.append("];")
+    return lines
+
+
+def _network_await_lines(expectations: list[dict], var: str) -> list[str]:
+    """The line that ENFORCES this step's network oracle, emitted BELOW the
+    action.  Never wrapped in a ``.catch``: a missed call is a real regression
+    and this assertion exists to be able to say so in red."""
+    if not expectations:
+        return []
+    summary = ", ".join(f"{e['method']} {e['path']}" for e in expectations)
+    return [
+        f"await Promise.all({var}); "
+        f"// network oracle: this step must reach {_comment_safe(summary, 160)}"
+    ]
+
+
 def _assertion_from_expected_result(observed: dict, expected_result: str = "",
                                     *, nav_proven: bool = True,
-                                    step_number: int = 0) -> list[str]:
+                                    step_number: int = 0,
+                                    soft_outcome: bool | None = None) -> list[str]:
     """Compile GROUNDED, tolerant assertions from a step's observed outcome.
 
     Closes the two oracles the compiler previously left as comments:
@@ -563,7 +667,23 @@ def _assertion_from_expected_result(observed: dict, expected_result: str = "",
     # fabricated description never false-reds a step whose real action +
     # navigation already passed — and never fails silently either. Set
     # NEXUS_PROVEN_NAV_ORACLE=0 to restore the legacy hard assertions.
-    _soft_outcome = os.getenv("NEXUS_PROVEN_NAV_ORACLE", "1") != "0"
+    # M2.4 / T-GEN-04 — an explicit caller decision OUTRANKS the env default.
+    #
+    # The env default exists because a prose Expected Result is not a grounded
+    # oracle: the words in a generated description may simply not be text the
+    # page renders, and hard-asserting them false-reds a step whose action and
+    # navigation both passed.  That reasoning is sound for prose and WRONG for a
+    # CONFIRMED journey outcome, where the criterion is not prose at all — it is
+    # a value the crawl watched the application display, bound to the selector
+    # it displayed it in, on a walk a human then approved as the baseline.
+    #
+    # Leaving that as a non-failing annotation is the defect T-GEN-04 names: a
+    # confirmed success criterion became an informational log, so the one
+    # assertion that encodes what the business actually cares about could not
+    # turn the test red.  ``soft_outcome=False`` makes it a hard oracle.
+    # ``None`` (every existing caller) keeps the env default → byte-identical.
+    _soft_outcome = (os.getenv("NEXUS_PROVEN_NAV_ORACLE", "1") != "0"
+                     if soft_outcome is None else bool(soft_outcome))
     _sn = int(step_number or 0)
     # URL-guard: an `after` that is (or embeds) a URL is not rendered page text.
     # Strip URL substrings BEFORE the region scan, so a path/query fragment
@@ -709,7 +829,8 @@ def _action_lines(step, field_meta: dict, parametrize: bool = False,
                   reanchor: dict | None = None, visual: dict | None = None,
                   interaction: dict | None = None, nav_override: str = "",
                   nav_recover: bool = False,
-                  autonomous_resolve: bool = False) -> list[str]:
+                  autonomous_resolve: bool = False,
+                  soft_outcome: bool | None = None) -> list[str]:
     """Kind-aware Playwright lines for one (observed) step.
 
     When `parametrize` is set, navigation targets a path resolved against
@@ -796,7 +917,8 @@ def _action_lines(step, field_meta: dict, parametrize: bool = False,
         out.append("await expect(cb)." + ("toBeChecked();" if _on else "not.toBeChecked();"))
         out.extend(_assertion_from_expected_result(
             observed, nav_proven=_nav_proven,
-            step_number=getattr(step, "step_number", 0) or 0))
+            step_number=getattr(step, "step_number", 0) or 0,
+            soft_outcome=soft_outcome))
         if after:
             out.append(f"// observed outcome: {_comment_safe(after)}")
         return out
@@ -1153,7 +1275,8 @@ def _action_lines(step, field_meta: dict, parametrize: bool = False,
     if verb != "upload":
         out.extend(_assertion_from_expected_result(
             observed, _er, nav_proven=_nav_proven,
-            step_number=getattr(step, "step_number", 0) or 0))
+            step_number=getattr(step, "step_number", 0) or 0,
+            soft_outcome=soft_outcome))
     if after:
         out.append(f"// observed outcome: {_comment_safe(after)}")
     return out
@@ -1341,7 +1464,9 @@ def compile_case(tc, field_meta: dict | None = None, *, parametrize: bool = Fals
                  interactions: dict | None = None, nav_overrides: dict | None = None,
                  pre_advance: dict | None = None, nav_recovers: dict | None = None,
                  force_open_shadow: bool = False,
-                 autonomous_resolve: bool = False, phantom_skips=None) -> str:
+                 autonomous_resolve: bool = False, phantom_skips=None,
+                 soft_outcome: bool | None = None,
+                 network_timeout_ms: int = 30000) -> str:
     """Compile one ProductionTestCase to a runnable Playwright .spec.ts (string).
 
     When `parametrize` is set, the spec reads optional env/data overrides
@@ -1354,7 +1479,20 @@ def compile_case(tc, field_meta: dict | None = None, *, parametrize: bool = Fals
 
     `heal_capture` appends a gated afterEach that snapshots the failure-state a11y
     tree for the re-anchor resolver (only on a NEXUS_HEAL_CAPTURE=1 re-run that
-    fails). Default False → byte-identical (the user's owned spec is untouched)."""
+    fails). Default False → byte-identical (the user's owned spec is untouched).
+
+    M2.4 adds two GATED channels; both are inert unless the case supplies their
+    input, so every existing case still compiles byte-for-byte identically:
+
+    `soft_outcome` (T-GEN-04) overrides the outcome-oracle policy. None keeps the
+    env default (a prose Expected Result stays a non-failing hint); False makes
+    it a HARD assertion — which is only correct for a CONFIRMED criterion, i.e.
+    one the crawl watched the application produce on a walk a human approved.
+
+    Network assertions (T-GEN-03) are emitted for any step carrying
+    `observed['network_expect']` — the endpoints the crawl RECORDED that step
+    causing. A step without them emits nothing at all, so no existing spec grows
+    a line."""
     field_meta = field_meta or {}
     name = (getattr(tc, "name", None) or "Generated test").strip()
     description = (getattr(tc, "description", None) or "").strip()
@@ -1544,13 +1682,23 @@ def compile_case(tc, field_meta: dict | None = None, *, parametrize: bool = Fals
         if _padv:
             for line in _emit_wizard_advance(step, int(_padv)):
                 out.append(f"    {line}")
+        # M2.4 / T-GEN-03 — arm the network oracle BEFORE the action.  A
+        # ``waitForResponse`` created after the click can miss a response that
+        # already arrived, so this ordering is load-bearing, not cosmetic.
+        _net = _network_expectations(step)
+        _net_var = f"__net{n}" if _net else ""
+        for line in _network_arm_lines(_net, _net_var, network_timeout_ms):
+            out.append(f"    {line}")
         for line in _action_lines(step, field_meta, parametrize,
                                   reanchor=(reanchors or {}).get(n),
                                   visual=(visual or {}).get(n),
                                   interaction=(interactions or {}).get(n),
                                   nav_override=(nav_overrides or {}).get(n) or "",
                                   nav_recover=bool((nav_recovers or {}).get(n)),
-                                  autonomous_resolve=autonomous_resolve):
+                                  autonomous_resolve=autonomous_resolve,
+                                  soft_outcome=soft_outcome):
+            out.append(f"    {line}")
+        for line in _network_await_lines(_net, _net_var):
             out.append(f"    {line}")
         out.append("  });")
         # Multi-env HARD env-pin — emitted ONCE, right after the FIRST step completes,
@@ -1602,6 +1750,15 @@ def compile_case(tc, field_meta: dict | None = None, *, parametrize: bool = Fals
     # P0.2 — define the soft-miss recorder ONLY when the body calls it (the
     # auditor's dead-scaffolding rule); JS function declarations hoist, but
     # placing it right after the import keeps the spec readable.
+    # M2.4 — the network-oracle helpers are injected ONLY when a step actually
+    # armed one (the auditor's dead-scaffolding rule, and the reason a case
+    # without network evidence stays byte-identical).
+    if "__nxNet(" in spec:
+        spec = spec.replace(
+            "import { test, expect } from '@playwright/test';",
+            "import { test, expect } from '@playwright/test';\n" + _NXNET_JS,
+            1,
+        )
     if "__nxSoftMiss(" in spec:
         spec = spec.replace(
             "import { test, expect } from '@playwright/test';",

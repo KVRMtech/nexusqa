@@ -38,12 +38,15 @@ from ..db.journey_models import (
 )
 from .advance_memory import normalize_label
 from .catalog import (
-    build_ledger_by_url, build_states_index,
-    extract_controls, extract_outcomes,
-    merge_controls, merge_outcomes,
+    apply_control_lifecycle, build_ledger_by_url, build_states_index,
+    crawl_evidence, extract_controls, extract_outcomes,
+    merge_controls, merge_outcomes, observed_question_ids, question_id_for,
+    RETIREMENT_MISS_THRESHOLD,
 )
 from .catalog_store import persist_catalog_version
+from .endpoint_map import merge_endpoints
 from .journey_baseline import BASELINE_CAPTURED, detect_drift
+from . import endpoint_map
 
 logger = logging.getLogger(__name__)
 
@@ -140,7 +143,8 @@ async def fold_crawl(
     """
     flows = flows_of(coverage)
     report = {"flows": len(flows), "journeys": 0, "nodes": 0, "edges": 0,
-              "traversals": 0, "branches": 0, "drift_checks": 0}
+              "traversals": 0, "branches": 0, "drift_checks": 0,
+              "questions_retired": 0, "questions_stale": 0, "nodes_stale": 0}
     if not flows:
         return report
     pre_hardening = is_pre_hardening(coverage)
@@ -149,6 +153,54 @@ async def fold_crawl(
 
     states_index = build_states_index(coverage)
     ledger_by_url = build_ledger_by_url(coverage)
+    # M2.4 / T-GEN-03 — the M2.5 endpoint inventory, inverted to {UI action
+    # label: [endpoint]}. Built ONCE per crawl rather than per edge: the
+    # inventory is crawl-level and re-inverting it inside the step loop would
+    # repeat the same work once per transition of every journey.
+    endpoints_by_action = endpoint_map.inventory_by_action(
+        (coverage or {}).get("endpoint_inventory")
+        if isinstance(coverage, Mapping) else None)
+
+    # ── M2.3 · WHAT THIS CRAWL ACTUALLY OBSERVED ────────────────────────────
+    # Retirement needs the other half of the ledger: not only what was seen, but
+    # WHERE the crawl looked and came back empty. ``observed_by_fp`` is that —
+    # per state, the question ids that state asked, derived through the same
+    # ``extract_controls``/``question_id_for`` pair the catalogue is built with,
+    # so "observed here" and "catalogued here" are the same identity rather than
+    # two rules that can drift apart and retire a question that never moved.
+    #
+    # Only states in ``states_index`` are eligible. A node the crawl walked but
+    # recorded no signals for is a node whose inventory we did not read, and an
+    # unread page is not a page whose questions are gone.
+    observed_by_fp: dict[str, set[str]] = {
+        fp: observed_question_ids(state, ledger_by_url)
+        for fp, state in states_index.items()
+    }
+    # …AND THE SAME THING KEYED BY URL, which is what makes retirement possible
+    # at all. A node's identity is a STATE identity: removing a question from a
+    # page changes the page's accessibility structure and therefore changes its
+    # fingerprint. Measured on two real crawls of ``proving-grounds/acme-life``
+    # either side of a real removal: the application form's fingerprint moved
+    # from b2111159… to fa9c56c9… while its URL did not move at all. Keyed only
+    # by fingerprint, the node holding the removed question is never re-observed,
+    # its inventory is never re-examined, and the question can never retire —
+    # precisely for the change retirement exists to catch. See
+    # :func:`_apply_lifecycle` for how the two are used together.
+    observed_by_url: dict[str, set[str]] = {}
+    for state in states_index.values():
+        loc = str(state.get("location") or "")
+        if loc:
+            observed_by_url.setdefault(loc, set()).update(
+                observed_question_ids(state, ledger_by_url))
+    #: Per node, the (control signature, option) pairs this crawl enumerated —
+    #: the branch-row equivalent of the above. A questionnaire question lives as
+    #: branch rows, so without this a withdrawn Yes/No could never retire.
+    observed_branches: dict[str, set[tuple[str, str]]] = {}
+    #: Nodes this crawl actually stepped through. Distinct from ``states_index``:
+    #: a state may be recorded without any walk enumerating its decisions, and
+    #: only a WALKED node licenses a conclusion about its branches.
+    walked_fps: set[str] = set()
+    evidence = crawl_evidence(coverage)
 
     async with tenant_scoped_qec_session(tenant_id) as session:
         for flow in flows:
@@ -231,6 +283,7 @@ async def fold_crawl(
                 fp = str(step.get("fingerprint") or "")
                 if not fp:
                     continue
+                walked_fps.add(fp)
                 is_last = i == len(steps) - 1
                 dps = [d for d in (step.get("decision_points") or [])
                        if isinstance(d, Mapping)]
@@ -267,6 +320,15 @@ async def fold_crawl(
                     if new_outcomes:
                         node.displayed_outcomes = merge_outcomes(
                             node.displayed_outcomes, new_outcomes)
+                    # M2.4 / T-GEN-03 — the state's own endpoint map. Merged
+                    # rather than replaced: a re-crawl that happens not to
+                    # exercise a call must not erase the evidence that the call
+                    # exists, which is the same rule the control inventory and
+                    # the displayed outcomes already follow.
+                    new_endpoints = endpoint_map.endpoints_of(page_state)
+                    if new_endpoints:
+                        node.observed_endpoints = merge_endpoints(
+                            node.observed_endpoints, new_endpoints)
 
                 # Edge OUT of this step (the advance that left it).
                 adv = step.get("advance")
@@ -282,6 +344,14 @@ async def fold_crawl(
                                 JourneyEdgeRow.to_fp == to_fp,
                                 JourneyEdgeRow.trigger_label_norm == trigger,
                             ))).scalar_one_or_none()
+                        # M2.4 / T-GEN-03 — WHICH CALLS THIS CLICK MADE. The
+                        # crawl stamped the in-flight UI action on every network
+                        # event (M2.5 / T-NET-03); the inventory carries those
+                        # forward per endpoint, and this is the join. An empty
+                        # result is honest and common — a crawl that predates
+                        # the stamp has nothing to join — and the compiler then
+                        # falls back to differencing the two states.
+                        caused = endpoints_by_action.get(trigger) or []
                         if edge is None:
                             session.add(JourneyEdgeRow(
                                 edge_id=_sid("edge", tenant_id, app_id, fp,
@@ -290,12 +360,17 @@ async def fold_crawl(
                                 from_fp=fp, to_fp=to_fp,
                                 trigger_label_norm=trigger,
                                 advance_tier=int(adv.get("tier") or 0),
+                                observed_endpoints=(list(caused) or None),
                                 walk_count=1))
                             report["edges"] += 1
-                        elif is_new_traversal:
-                            edge.walk_count += 1
-                            edge.last_walked_at = now
-                            edge.advance_tier = int(adv.get("tier") or 0)
+                        else:
+                            if caused:
+                                edge.observed_endpoints = merge_endpoints(
+                                    edge.observed_endpoints, caused)
+                            if is_new_traversal:
+                                edge.walk_count += 1
+                                edge.last_walked_at = now
+                                edge.advance_tier = int(adv.get("tier") or 0)
 
                 # Branches: every enumerated option — walked or NOT.
                 for dp in dps:
@@ -311,6 +386,15 @@ async def fold_crawl(
                     label = normalize_label(str(dp.get("control_label") or ""))
                     if not sig:
                         continue
+                    # M2.3 — this walk enumerated these answers HERE. Recorded
+                    # before the option loop so an option the application has
+                    # withdrawn (absent from ``options`` and so never reaching a
+                    # branch upsert) is still measurable as an absence.
+                    seen_here = observed_branches.setdefault(fp, set())
+                    for _opt in dp.get("options") or []:
+                        _opt_norm = normalize_label(str(_opt))
+                        if _opt_norm:
+                            seen_here.add((sig, _opt_norm))
                     choice = normalize_label(str(dp.get("choice") or ""))
                     # A next-action fork classifies each option. A destructive
                     # ("Start Over" wipes the quote) or navigational ("Back to
@@ -370,7 +454,24 @@ async def fold_crawl(
                                 last_status_at=now)
                             session.add(branch)
                             report["branches"] += 1
-                        elif walked_now and branch.status != BRANCH_WALKED:
+                        # THE WORDING IS RE-READ ON EVERY FOLD, THE KEY NEVER IS
+                        # (M2.1). ``control_label_norm`` is set once at row
+                        # creation, so a branch first recorded before the crawl
+                        # could read a question's text - or recorded under an
+                        # answer's name, which is what it held before this
+                        # milestone - kept that label for ever, and no re-crawl
+                        # could correct it. It is product UI text, so the latest
+                        # observation is simply the truest one.
+                        #
+                        # Safe precisely because identity does NOT depend on it:
+                        # the row is keyed on (node, control_signature, option)
+                        # and the catalogue question id is derived from the
+                        # signature, so re-reading a rewording updates the words
+                        # and moves nothing. Only ever upgrades - a fold that
+                        # observed no label never blanks one already read.
+                        if branch is not None and label and branch.control_label_norm != label:
+                            branch.control_label_norm = label
+                        if walked_now and branch.status != BRANCH_WALKED:
                             # walked WINS — planned/blocked/discovered all
                             # upgrade; nothing ever downgrades walked.
                             branch.status = BRANCH_WALKED
@@ -381,6 +482,22 @@ async def fold_crawl(
                         # across crawls). Only the taken option carries reveals.
                         if walked_now and dp_reveals and branch is not None:
                             branch.reveals = merge_reveals(branch.reveals, dp_reveals)
+
+        # ── M2.3 · THE LIFECYCLE PASS ───────────────────────────────────────
+        # Runs after every node, edge and branch of this crawl is upserted, in
+        # the SAME transaction, so what it marks absent is measured against the
+        # graph this crawl just finished writing rather than against a snapshot
+        # that could still change under it.
+        lifecycle = await _apply_lifecycle(
+            session, tenant_id=tenant_id, app_id=app_id,
+            crawl_ref=exploration_id, now=now,
+            observed_by_fp=observed_by_fp,
+            observed_by_url=observed_by_url,
+            observed_branches=observed_branches,
+            walked_fps=walked_fps,
+            conclusive=bool(evidence["conclusive"]),
+        )
+        report.update(lifecycle)
 
     for j_id, t_id, o_vals in drift_candidates:
         try:
@@ -409,8 +526,190 @@ async def fold_crawl(
     logger.warning(
         "qec.journey_fold.folded tenant=%s app=%s exploration=%s "
         "flows=%d journeys=%d nodes=%d edges=%d traversals=%d branches=%d "
-        "drift_checks=%d",
+        "drift_checks=%d retired=%d stale=%d nodes_stale=%d "
+        "conclusive=%s evidence=%s",
         tenant_id, app_id, exploration_id, report["flows"], report["journeys"],
         report["nodes"], report["edges"], report["traversals"],
-        report["branches"], report["drift_checks"])
+        report["branches"], report["drift_checks"],
+        report.get("questions_retired", 0), report.get("questions_stale", 0),
+        report.get("nodes_stale", 0), evidence["conclusive"],
+        evidence["reason"] or "-")
     return report
+
+
+#: How much of a node's known question set a state at the SAME URL must share
+#: before it counts as that node's replacement. Half.
+#:
+#: The number exists to separate two things a URL alone cannot tell apart: a page
+#: that CHANGED (most of its questions are still there, one is gone) from a
+#: DIFFERENT STEP of a single-page application that happens to serve every step
+#: from one URL. Supersede on the first and a removal is caught; supersede on the
+#: second and a crawl that reached step 1 of a twenty-step wizard would retire
+#: every question in steps 2 to 20 — the exact catastrophe a lifecycle feature
+#: must not be able to cause.
+#:
+#: A node sharing NOTHING with what the crawl saw at its URL is left entirely
+#: alone: the crawl was somewhere else, and that is an absence of evidence.
+SUPERSEDE_OVERLAP_RATIO = 0.5
+
+
+def _node_question_ids(node: Any) -> set[str]:
+    """The question ids one node's stored inventory holds."""
+    out: set[str] = set()
+    for ctrl in (node.controls_inventory or []):
+        if isinstance(ctrl, Mapping):
+            qid = str(ctrl.get("question_id") or "") or question_id_for(ctrl)
+            if qid:
+                out.add(qid)
+    return out
+
+
+def _superseding_observation(
+    node: Any, observed_by_url: Mapping[str, set[str]],
+) -> set[str] | None:
+    """What this crawl saw at the node's URL, IF it replaced this node.
+
+    Returns the observed question set when the crawl read a state at the same URL
+    that shares at least :data:`SUPERSEDE_OVERLAP_RATIO` of this node's known
+    questions — evidence that it was looking at this page in its new shape.
+    Returns None when it was not, and the caller then concludes nothing.
+    """
+    known = _node_question_ids(node)
+    if not known:
+        return None
+    seen = observed_by_url.get(str(node.url or ""))
+    if not seen:
+        return None
+    overlap = len(known & seen)
+    needed = max(1, int(len(known) * SUPERSEDE_OVERLAP_RATIO + 0.999))
+    return seen if overlap >= needed else None
+
+
+async def _apply_lifecycle(
+    session: Any, *, tenant_id: str, app_id: str, crawl_ref: str, now: Any,
+    observed_by_fp: Mapping[str, set[str]],
+    observed_by_url: Mapping[str, set[str]],
+    observed_branches: Mapping[str, set[tuple[str, str]]],
+    walked_fps: set[str],
+    conclusive: bool,
+) -> dict[str, int]:
+    """Mark what this crawl LOOKED FOR and did not find. Deletes nothing.
+
+    Three passes, each over a different kind of absence, and each refusing to
+    conclude anything from a page the crawl did not read:
+
+      1. **Controls on re-read pages.** For every state this crawl recorded, the
+         node's control inventory is stamped against what that state actually
+         asked. A control missing from a page the crawl DID read is an evidenced
+         absence; :func:`catalog.apply_control_lifecycle` decides whether it is
+         yet conclusive enough to retire.
+
+      1b. **Controls on SUPERSEDED pages.** A node is a STATE, and removing a
+         question changes a page's structure and so its fingerprint — the node
+         holding the removed question is therefore never re-observed by the crawl
+         that proves it gone. Where the crawl read a state at the SAME URL that
+         still shares most of this node's questions, that state IS this page in
+         its new shape, and the node's inventory is stamped against it. Without
+         this the whole feature is inert for the commonest kind of change there
+         is; with it unguarded, one crawl of one wizard step could retire a whole
+         application. See :data:`SUPERSEDE_OVERLAP_RATIO`.
+      2. **Branches on re-walked pages.** The same, one row per ANSWER, for the
+         questionnaire questions that live as branch rows. Gated on the node
+         having been WALKED as well as recorded: a state that was captured but
+         whose decisions were never enumerated tells us nothing about its
+         answers, and treating that silence as removal would retire every choice
+         question in the application the first time a walk took another path.
+      3. **Nodes.** ``journey_nodes.stale`` has carried a docstring promising
+         "not observed by the app's latest fold — kept, marked, and excluded
+         from active planning" since qec_005, and had exactly one writer, which
+         assigned it ``False``. This is the writer that makes the column true.
+         It fires only for a CONCLUSIVE crawl: a crawl that stopped on a budget
+         or never got past a login wall has not visited the pages it missed, and
+         staling them would mark most of an application dead on every short run.
+
+    ``status`` on a branch is deliberately untouched — ``walked`` is a fact about
+    a crawl that happened and must never downgrade. Retirement is a statement
+    about the application TODAY, and lives on its own axis.
+    """
+    now_iso = now.isoformat() if hasattr(now, "isoformat") else str(now)
+    counts = {"questions_retired": 0, "questions_stale": 0, "nodes_stale": 0}
+
+    node_rows = (await session.execute(
+        select(JourneyNodeRow).where(
+            JourneyNodeRow.tenant_id == tenant_id,
+            JourneyNodeRow.app_id == app_id,
+        ))).scalars().all()
+
+    for node in node_rows:
+        fp = str(node.fingerprint or "")
+        superseded = (None if fp in observed_by_fp
+                      else _superseding_observation(node, observed_by_url))
+        if fp in observed_by_fp or superseded is not None:
+            observed = (observed_by_fp[fp] if fp in observed_by_fp else superseded)
+            before = list(node.controls_inventory or [])
+            after = apply_control_lifecycle(
+                before, observed, crawl_ref=crawl_ref,
+                now_iso=now_iso, conclusive=conclusive)
+            node.controls_inventory = after
+            # A SUPERSEDED NODE IS STILL GONE. Its questions were re-examined
+            # against the page's new shape, but this exact state was not seen and
+            # must not be reported as current — the node stays stale and only its
+            # replacement is active.
+            if superseded is None:
+                node.stale = False
+                node.last_seen_at = now
+            else:
+                node.stale = True
+                counts["nodes_stale"] += 1
+            for entry in after:
+                if entry.get("retired_at") and entry.get("retired_in_crawl") == crawl_ref:
+                    counts["questions_retired"] += 1
+                elif entry.get("stale"):
+                    counts["questions_stale"] += 1
+        elif conclusive and not node.stale:
+            # The application was observed end to end and this state was not in
+            # it. Marked, kept, never deleted — and revived the moment a later
+            # crawl reaches it again.
+            node.stale = True
+            counts["nodes_stale"] += 1
+
+    # Branches: only where the crawl both RECORDED and WALKED the node.
+    branch_fps = {fp for fp in observed_branches if fp in walked_fps}
+    if branch_fps:
+        branch_rows = (await session.execute(
+            select(JourneyBranchRow).where(
+                JourneyBranchRow.tenant_id == tenant_id,
+                JourneyBranchRow.app_id == app_id,
+                JourneyBranchRow.node_fp.in_(sorted(branch_fps)),
+            ))).scalars().all()
+        for branch in branch_rows:
+            key = (str(branch.control_signature or ""),
+                   str(branch.option_label_norm or ""))
+            seen = observed_branches.get(str(branch.node_fp or ""), set())
+            if key in seen:
+                branch.stale = False
+                branch.missed_crawls = 0
+                branch.retired_at = None
+                branch.retired_in_crawl = ""
+                branch.retire_reason = ""
+                branch.last_seen_crawl = crawl_ref[:64]
+                continue
+            branch.stale = True
+            branch.missed_crawls = int(branch.missed_crawls or 0) + 1
+            if branch.retired_at is None:
+                if conclusive:
+                    branch.retired_at = now
+                    branch.retired_in_crawl = crawl_ref[:64]
+                    branch.retire_reason = "conclusive_absence"
+                    counts["questions_retired"] += 1
+                elif branch.missed_crawls >= RETIREMENT_MISS_THRESHOLD:
+                    branch.retired_at = now
+                    branch.retired_in_crawl = crawl_ref[:64]
+                    branch.retire_reason = "repeated_absence"
+                    counts["questions_retired"] += 1
+                else:
+                    counts["questions_stale"] += 1
+            else:
+                counts["questions_stale"] += 1
+
+    return counts

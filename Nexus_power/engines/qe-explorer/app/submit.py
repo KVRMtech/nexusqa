@@ -149,9 +149,48 @@ from .inventory import build_inventory, form_signal_for
 
 logger = logging.getLogger("app.crawler")
 
+#: Why a crossing was refused when its write-ahead journal record could not be
+#: made durable (M3.4 / T-RS-01).  Distinct from every authorisation refusal:
+#: the operator DID approve this boundary, and the crawl declined anyway because
+#: it could not guarantee it would only cross once.
+REFUSAL_JOURNAL_UNAVAILABLE = "crossing_journal_unavailable"
+
 
 class SubmitMixin:
     """Mixed into :class:`app.crawler.Crawler` (T-DE-11)."""
+
+    def _journal_crossing(self, record: CrossingRecord, *, required: bool = True) -> bool:
+        """Append ``record`` to the durable crossing journal (M3.4 / T-RS-01).
+
+        Returns True when the record is durable (or when journalling is not
+        available at all - see below).  ``required=False`` is the post-landing
+        update, where a failure is survivable because the write-ahead record has
+        already spent the boundary.
+
+        THE EMITTER-WITHOUT-A-JOURNAL CASE.  Unit tests drive this mixin with
+        stub emitters that predate ``emit_crossing``.  Those stubs write no
+        manifest at all, so there is no resume to protect and refusing every
+        crossing would fail a large body of tests over a risk that cannot exist
+        on that path.  A real :class:`app.emit.ManifestEmitter` always has the
+        method, so the production path is always journalled; the absence is
+        logged rather than passed over in silence.
+        """
+        emitter = getattr(self, "_emitter", None)
+        emit_crossing = getattr(emitter, "emit_crossing", None)
+        if emit_crossing is None:
+            if required:
+                logger.warning(
+                    "qec.boundary.journal_absent emitter=%s - this emitter cannot "
+                    "journal crossings; exactly-once holds only in-process.",
+                    type(emitter).__name__)
+            return True
+        try:
+            emit_crossing(record.to_dict())
+            return True
+        except Exception:
+            logger.exception("qec.boundary.journal_write_failed crossing_id=%s",
+                             record.crossing_id)
+            return False
 
     async def _maybe_submit_phase_b(
         self, item: FrontierItem, controls: Sequence[dict[str, Any]],
@@ -368,6 +407,28 @@ class SubmitMixin:
             control_name=name, url=url, state_fingerprint=fingerprint,
             approval_id=(grant.approval_id if grant is not None else authority),
             sequence_index=seq, now_ms=self._clock.now_ms())
+        # -- WRITE AHEAD (M3.4 / T-RS-01) ------------------------------------
+        # The reservation is made DURABLE before the click, not after it. An
+        # in-RAM reservation makes exactly-once true only for as long as the
+        # process lives, and the failure it guards against - a kill mid-crossing
+        # - is precisely the event that ends the process. Journaling here is
+        # what lets a resumed crawl know this boundary is spent.
+        #
+        # FAIL-CLOSED, uniquely on this path: if the reservation cannot be
+        # written, the click does not happen. Everywhere else a failed emit
+        # costs evidence; here proceeding would risk a SECOND irreversible
+        # action against the customer's application on the next resume, and no
+        # amount of captured evidence is worth that.
+        if not self._journal_crossing(record):
+            self._crossings.note_refusal(
+                control_name=name, url=url, state_fingerprint=fingerprint,
+                reason=REFUSAL_JOURNAL_UNAVAILABLE, now_ms=self._clock.now_ms())
+            logger.error(
+                "qec.boundary.journal_failed control=%r url=%s - the crossing "
+                "reservation could not be made durable; REFUSING to click. A "
+                "crossing that is not journalled would be crossed again by any "
+                "resume of this crawl id.", name[:60], (url or "")[:120])
+            return False
         logger.warning(
             "qec.boundary.crossing crossing_id=%s control=%r url=%s authority=%s "
             "approval_id=%s attestation=%s - ONE irreversible click, explicitly "
@@ -421,6 +482,11 @@ class SubmitMixin:
             record, outcome=str(getattr(result, "outcome", "") or ""),
             confirmed=bool(getattr(result, "confirmed", False)),
             now_ms=self._clock.now_ms())
+        # The SECOND journal write: same crossing, now carrying its outcome.
+        # Best-effort, and deliberately so - the boundary is already durably
+        # spent by the write-ahead record above, so losing this one costs a
+        # resumed run some outcome detail and can never cost a duplicate click.
+        self._journal_crossing(record, required=False)
         milestone = self._record_outcome_milestone(record, grant, result)
         ps = result.page_state
         dest = (getattr(ps, "location", "") or "").strip() if ps else ""

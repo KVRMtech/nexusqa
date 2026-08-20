@@ -10312,3 +10312,67 @@ async def impersonation_scaffold_endpoint(
         admin_login_steps=body.admin_login_steps, impersonate_path=body.impersonate_path,
         member_slot=body.member_slot, submit_selector=body.submit_selector)
     return {"artifact_id": artifact_id, **scaffold}
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  M2.4 · JOURNEY COMPILATION — a discovered journey is enough to make a spec
+# ═══════════════════════════════════════════════════════════════════════════
+# WHY THIS ENDPOINT EXISTS. Every other route here is keyed on an ARTIFACT: the
+# factory generates cases from a whole crawl, and a journey becomes runnable only
+# if one of those cases happens to walk its pages in its order (qe-central's
+# journey_case_linker then ADOPTS it). A journey with no spanning case was simply
+# not runnable, which describes a limitation of the pipeline rather than of the
+# journey — the walk already holds an entry URL, an ordered path, the control
+# that advanced each step, the calls those advances made and the values the
+# funnel produced.
+#
+# This route takes exactly that evidence and compiles it through the SAME
+# compile_case every artifact spec goes through, so a journey spec inherits every
+# locator ladder, honesty rule and audit the factory already enforces. It is
+# artifact-free ON PURPOSE: there is no artifact_id in the path, because a
+# journey's identity is not an artifact's, and a re-crawl must not renumber or
+# invalidate a spec whose business path has not changed.
+
+class _JourneyCompileBody(BaseModel):
+    journeys: list[dict] = Field(
+        ..., min_length=1, max_length=100,
+        description="ranked journey compile payloads (journey_spec.build_journey_case)")
+    parametrize: bool = Field(
+        False, description="emit env/data overrides (use.baseURL + data file)")
+    include_specs: bool = Field(
+        True, description="return the compiled spec text, not only the verdicts")
+
+
+@router.post("/api/v1/test-factory/journeys/compile")
+async def compile_journeys_endpoint(
+    body: _JourneyCompileBody,
+    user: dict = Depends(get_current_user),
+):
+    """Compile ranked journeys into Playwright specs, LINTED and AUDITED.
+
+    Returns ``{compiled, refused, lint_status, lint_rules_version,
+    lint_errors_total, results: [...], specs: {path: text}}``.
+
+    REFUSALS RIDE IN THE SAME LIST AS THE SUCCESSES. A Top-20 that quietly
+    returns eleven entries has said nothing about the nine, and "why can this one
+    not be generated" is the single most actionable output of this pipeline — so
+    a journey the crawl never walked to completion comes back as
+    ``{"compiled": false, "reason": ...}``, never as an absence.
+
+    ``lint_status: "executed"`` is written by the code path that ran the lint.
+    An empty finding list and a lint that never ran are otherwise
+    indistinguishable, which is precisely how four reports claimed an API-policy
+    audit that had never executed.
+    """
+    from ..services.script_factory import journey_compiler as _jc
+
+    result = _jc.compile_top_n(body.journeys, parametrize=body.parametrize)
+    specs = result.pop("specs", {})
+    _logger.info(
+        "journeys.compile",
+        extra={"tenant_id": user.get("tenant_id"), "requested": len(body.journeys),
+               "compiled": result.get("compiled"), "refused": result.get("refused"),
+               "lint_errors_total": result.get("lint_errors_total")},
+    )
+    return {**result, "specs": specs if body.include_specs else {},
+            "spec_count": len(specs)}

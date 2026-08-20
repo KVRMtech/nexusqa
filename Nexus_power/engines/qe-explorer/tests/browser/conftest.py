@@ -53,7 +53,8 @@ def snippet_files(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Path]:
     """The production snippets, written verbatim to disk for the node runner."""
     out_dir = tmp_path_factory.mktemp("production_js")
     return {name: H.snippet_to_tempfile(name, out_dir)
-            for name in ("INVENTORY_JS", "OPAQUE_JS", "DISPLAYED_VALUES_JS")}
+            for name in ("INVENTORY_JS", "OPAQUE_JS", "DISPLAYED_VALUES_JS",
+                         "CAPTURE_HOOKS_JS")}
 
 
 # ─── Lane 1: jsdom ───────────────────────────────────────────────────────────
@@ -74,7 +75,12 @@ def jsdom(snippet_files: dict[str, Path]) -> Any:
             self._memo: dict[tuple[str, str], H.JsdomResult] = {}
 
         def fresh(self, url: str, snippet: str = "INVENTORY_JS") -> H.JsdomResult:
-            return H.run_jsdom(url, snippet, snippet_files[snippet])
+            # M3.2 — every jsdom run installs the production capture hooks in
+            # `beforeParse`, the same way every production context installs them
+            # at creation. A lane that only did so for the shadow fixtures would
+            # be measuring a browser the crawl never drives.
+            return H.run_jsdom(url, snippet, snippet_files[snippet],
+                               hooks_path=snippet_files["CAPTURE_HOOKS_JS"])
 
         def run(self, url: str, snippet: str = "INVENTORY_JS") -> H.JsdomResult:
             key = (url, snippet)
@@ -117,6 +123,10 @@ class PlaywrightLane:
             # capture path, not the network gate.
             self._browser = await self._pw.chromium.launch(headless=True)
             self.context = await self._browser.new_context(service_workers="block")
+            # M3.2 / T-FR-02 — hooks BEFORE the first page, exactly as
+            # `app.main._run_job` does it. Installed through the production
+            # installer so the lane cannot drift into its own configuration.
+            await H.install_production_capture_hooks(self.context)
             self.context.set_default_timeout(15000)
             self.page = await self.context.new_page()
 
@@ -142,6 +152,7 @@ class PlaywrightLane:
         options = dict(context_defaults())
         options.update(kwargs)
         ctx = await self._browser.new_context(**options)
+        await H.install_production_capture_hooks(ctx)
         ctx.set_default_timeout(15000)
         return ctx
 

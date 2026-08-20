@@ -440,7 +440,14 @@ def run_fixture(fixture: Fixture, work_dir: Path,
             monkeypatch.setattr(module, "date", FrozenDate)
 
     port = ScriptedBrowser(fixture.pages, fixture.start)
-    guard_ctx = fixture.kwargs.pop("guard_context", None) or GuardContext(
+    # COPY, never pop the fixture's own dict. ``Fixture.kwargs`` is a MODULE-LEVEL
+    # mapping shared by every consumer, so popping from it permanently stripped
+    # the fixture of its guard context after the first run - F3's disposable
+    # attestation vanished, and any later test reusing F3 silently got a crawl
+    # that could no longer cross a boundary. Harmless while this harness had one
+    # caller; a landmine the moment it had two.
+    fixture_kwargs = dict(fixture.kwargs)
+    guard_ctx = fixture_kwargs.pop("guard_context", None) or GuardContext(
         refuse_pack=_REFUSE_PACK)
 
     kwargs: dict[str, Any] = dict(
@@ -453,7 +460,7 @@ def run_fixture(fixture: Fixture, work_dir: Path,
         advance_oracle=advance_oracle_stub(fixture.advance_reply),
         vision_oracle=vision_oracle_stub(fixture.vision_reply),
     )
-    kwargs.update(fixture.kwargs)
+    kwargs.update(fixture_kwargs)
 
     crawler = Crawler(port, **kwargs)
     # Wire the fake app's network to the crawl's real guard.  Inert for every
