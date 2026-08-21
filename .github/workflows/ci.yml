@@ -494,7 +494,18 @@ jobs:
           # missing node or a missing Chromium from going green having executed
           # none of the production capture JavaScript.
           QEC_REQUIRE_BROWSER_LANES: "1"
-        run: pytest tests/browser -m "not characterization" -q --tb=short -p no:cacheprovider
+        # `not proving_ground` TOO, and the exclusion is a scope decision
+        # rather than a convenience. The proving-ground modules each drive TWO
+        # real crawls of a real application end to end — M2.3 records a removal
+        # in ~7 minutes, Gate 3 / A21 records three changes in ~8. They belong
+        # to the browser-harness workflow, which budgets 75 minutes for exactly
+        # that and which also commits their recordings and guards them.
+        #
+        # Left in, they do not merely slow this job down — they SILENCE it. On
+        # run 32441252806 this step was CANCELLED at the job's 25-minute limit,
+        # and a cancelled job reports nothing at all about the ~600 fast browser
+        # tests it exists to run. A gate that cannot finish is not a slow gate.
+        run: pytest tests/browser -m "not characterization and not proving_ground" -q --tb=short -p no:cacheprovider
 
   # ── Characterization — the golden-snapshot half of the harness ───────────
   #  Runs a REAL crawl per fixture (the production Crawler + ManifestEmitter) and
@@ -837,6 +848,30 @@ jobs:
       - name: M2.3 — a real app change retires a catalogue question
         run: |
           pytest platform/qe-central/tests/contract/test_m23_retirement_regression.py                  -v --tb=short -p no:cacheprovider -s
+
+      # ── GATE 3 / A21 · CATALOG DIFF (consumer half) ──────────────────────
+      # The same seam as M2.3 above and the next question after it. M2.3 proves
+      # ONE classification — `removed` — because retirement was its milestone.
+      # A21 asks for all three at once, from two real crawls of an application
+      # that was changed in three ways between them:
+      #
+      #     removed  a question the app stopped asking      (SSN (synthetic))
+      #     added    a question the app started asking      (Occupation)
+      #     changed  a question that KEPT ITS IDENTITY      (State, +1 option)
+      #              while its answer set moved underneath it
+      #
+      # `changed` is the one that tests the catalogue's identity model, and it
+      # is why the third change is exactly ONE option: the answer set grows
+      # 3 -> 4 and field_signature._option_shape buckets both as "few", so the
+      # question_id survives. Four more options would cross into "many", mint a
+      # new id, and the same real-world change would be reported as a removal
+      # plus an addition.
+      #
+      # Prints the full diff with -s: a reviewer should be able to read the
+      # classification out of the CI log without re-running anything.
+      - name: A21 — three real app changes, three correct classifications
+        run: |
+          pytest platform/qe-central/tests/contract/test_a21_catalog_diff_regression.py                  -v --tb=short -p no:cacheprovider -s
 
       # ── Phase 6 — Integration. The whole qe-central suite WITH the databases
       #    wired, so the ~40 DB-gated tests that skip in the no-service job

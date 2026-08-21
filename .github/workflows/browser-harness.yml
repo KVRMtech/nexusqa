@@ -87,7 +87,15 @@ jobs:
   browser:
     name: Chromium lane + characterization + coverage
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    # 45 -> 75. This lane now carries FOUR real crawls of a real application:
+    # M2.3 records two (~7 min together) and Gate 3 / A21 records two more
+    # (~14 min, because its second crawl meets a larger form). Those recordings
+    # ARE the lane's purpose and cannot be made faster without making them less
+    # real. Raised deliberately rather than discovered as a cancellation:
+    # `qe-explorer-browser` in ci.yml was cancelled at its own 25-minute limit on
+    # run 32441252806 for exactly this reason, and a cancelled job reports
+    # nothing at all about whether the suite passes.
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@v4
 
@@ -178,18 +186,79 @@ jobs:
       # different recording, either the proving ground or the crawler changed and
       # a human has to say which — CI must never absorb it silently. Same rule as
       # the characterization goldens above.
+      #
+      # SCOPED TO stamp.json, NOT THE WHOLE DIRECTORY — a correction, made with a
+      # measurement rather than a guess. This step used to diff
+      # `evidence/m23_retirement` entirely, which includes the two coverage
+      # accounts, and those are NOT byte-reproducible: `FixtureServer` binds an
+      # ephemeral port and every `*_ms` field is a wall clock. Re-running this
+      # producer against an unchanged application with an unchanged crawler
+      # rewrote 117 lines — every one of them a port or a timing, not one of them
+      # a fact about the application. So this guard could only ever fail, and a
+      # guard that always fails is a guard someone deletes.
+      #
+      # stamp.json carries what actually has to hold still (the question that was
+      # removed, the control group, and the app hashes before and after), and the
+      # substance of the two accounts is asserted where it belongs — in the
+      # consumer half's `test_the_two_recordings_really_differ_by_one_question`,
+      # which reads the questions rather than the bytes.
       - name: Fail if the M2.3 crawl evidence changed
         working-directory: ${{ env.EXPLORER }}
         run: |
-          if ! git diff --quiet -- ../../evidence/m23_retirement; then
+          if ! git diff --quiet -- ../../evidence/m23_retirement/stamp.json; then
             echo "::error::The M2.3 retirement recording changed during this run."
             echo "Either proving-grounds/acme-life or the crawler produces"
             echo "different coverage than the committed evidence. Review the diff,"
-            echo "and if the change is intended commit the re-recorded evidence."
-            git diff --stat -- ../../evidence/m23_retirement
+            echo "and if the change is intended commit the re-recorded evidence"
+            echo "(all three files, not just the stamp)."
+            git diff -- ../../evidence/m23_retirement/stamp.json
             exit 1
           fi
           echo "M2.3 crawl evidence is unchanged."
+
+      # ── GATE 3 / A21 · CATALOG DIFF (producer half) ──────────────────────
+      # Crawls acme-life, makes THREE deliberate changes to it — removes a
+      # question, adds a question, and grows one question's answer set by a
+      # single option — then crawls it again and writes both coverage accounts
+      # to Nexus_power/evidence/a21_catalog_diff/.
+      #
+      # qe-central's half folds those two accounts into a real Postgres and
+      # asserts the diff puts each of the three in the right bucket. The two
+      # services cannot share a process, so the recording is the seam between
+      # them — the same shape as M2.3 above, proving all three classifications
+      # rather than only `removed`.
+      - name: A21 — three real application changes, recorded by two real crawls
+        working-directory: ${{ env.EXPLORER }}
+        run: python -m pytest tests/browser/test_a21_catalog_diff_regression.py -v
+
+      # THE GUARD IS ON stamp.json, NOT ON THE COVERAGE ACCOUNTS, and that is a
+      # measured decision rather than a weaker one.
+      #
+      # `FixtureServer` binds an EPHEMERAL port, so every URL in a fresh
+      # recording differs from the committed one, and every *_ms field is a wall
+      # clock. Re-running the equivalent M2.3 producer against an unchanged
+      # application and an unchanged crawler rewrote 117 lines of its evidence —
+      # every one of them a port or a timing, not one of them a fact about the
+      # application. A byte-equality guard over those files can therefore only
+      # ever fail, and a guard that always fails is a guard someone deletes.
+      #
+      # stamp.json carries the SUBSTANCE instead: the questions each crawl
+      # asked, with their types and answer sets. It is stable across runs and it
+      # still moves the instant the proving ground or the crawler starts
+      # producing different coverage — which is all the guard was ever for.
+      - name: Fail if the A21 crawl evidence changed in substance
+        working-directory: ${{ env.EXPLORER }}
+        run: |
+          if ! git diff --quiet -- ../../evidence/a21_catalog_diff/stamp.json; then
+            echo "::error::The A21 recording changed during this run."
+            echo "Either proving-grounds/acme-life or the crawler produces"
+            echo "different coverage than the committed evidence. Review the"
+            echo "diff, and if the change is intended commit the re-recorded"
+            echo "evidence (all three files, not just the stamp)."
+            git diff -- ../../evidence/a21_catalog_diff/stamp.json
+            exit 1
+          fi
+          echo "A21 crawl evidence is unchanged in substance."
 
       - name: Execution coverage for the injected capture JS
         working-directory: ${{ env.EXPLORER }}
@@ -233,11 +302,21 @@ jobs:
       fail-fast: false          # one broken app must not hide the others
       matrix:
         include:
+          # `port` is the port the IMAGE listens on, read from its own
+          # Dockerfile -- not guessed from the framework. A14/A17: this leg
+          # published container port 3000 for summit-life-carrier while its
+          # Dockerfile sets `ENV PORT=3002` and `EXPOSE 3002`, so nothing was
+          # ever listening behind the publish and the lane could only ever have
+          # failed at "never served on :8099". Verified against a real
+          # container: :3000 gives no answer, :3002 gives 200.
           - app: acme-life
+            port: 80
             min_controls: 5
           - app: summit-life-carrier
+            port: 3002
             min_controls: 5
           - app: vkpower-life
+            port: 80
             min_controls: 5
     steps:
       - uses: actions/checkout@v4
@@ -262,7 +341,7 @@ jobs:
         run: |
           set -euo pipefail
           docker build -t pg-${{ matrix.app }}:ci Nexus_power/proving-grounds/${{ matrix.app }}
-          docker run -d --name pg-${{ matrix.app }} -p 8099:${{ matrix.app == 'summit-life-carrier' && '3000' || '80' }} pg-${{ matrix.app }}:ci
+          docker run -d --name pg-${{ matrix.app }} -p 8099:${{ matrix.port }} pg-${{ matrix.app }}:ci
 
       - name: Wait for the application to serve
         run: |
