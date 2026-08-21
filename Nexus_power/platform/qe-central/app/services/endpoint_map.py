@@ -206,6 +206,66 @@ def inventory_by_action(inventory: Any) -> dict[str, list[dict[str, str]]]:
     return out
 
 
+def navigate_caused(inventory: Any) -> list[dict[str, str]]:
+    """The endpoints the crawl recorded a NAVIGATION firing, sorted.
+
+    A2.2 — WHY THE ENTRY STEP NEEDED ITS OWN JOIN. ``inventory_by_action`` indexes
+    on the clicked LABEL and skips actions that have none, which is right for its
+    callers and leaves a page LOAD unreachable through it: a navigation has a verb
+    and no label. So the entry step of a compiled journey had no recorded source
+    at all and fell back to inference over the entry state's endpoint map.
+
+    That map is the whole set of calls DRAINED during the visit, which includes
+    anything an on-page action fired. Measured on the M2.4 quote funnel: the entry
+    state carried BOTH ``GET /api/config`` (its page load) and ``POST /api/quote``
+    (fired by a discovery click that then navigated away), so the compiled step 1
+    asserted a POST that opening the page does not make — and the specification
+    went RED against a healthy application. A false regression is the exact mirror
+    of a green-wash, and it is worse in one respect: it teaches an operator to
+    ignore the suite.
+
+    The inventory already holds the correct answer and nothing was reading it —
+    ``/api/config`` carries a ``navigate`` action and ``/api/quote`` carries a
+    ``click`` one. This reads that, so the entry step asserts what a page LOAD was
+    observed to call, as RECORDED evidence rather than as a guess.
+
+    Same 2xx-only rule as :func:`inventory_by_action`, and for the same reason: a
+    compiler must not turn an observed failure into required behaviour.
+    """
+    rows = inventory
+    if isinstance(inventory, Mapping):
+        rows = inventory.get("endpoints") or inventory.get("endpoint_inventory")
+    if not isinstance(rows, Sequence) or isinstance(rows, (str, bytes)):
+        return []
+    out: list[dict[str, str]] = []
+    for row in rows:
+        if not isinstance(row, Mapping):
+            continue
+        method = str(row.get("method") or "").strip().upper()[:10]
+        path = normalize_path(row.get("path_template") or row.get("path") or "")
+        if not method or not path:
+            continue
+        status = _best_status(row.get("statuses"))
+        if status is None:
+            continue
+        verbs = {
+            str(a.get("verb") or "").strip().lower()
+            for a in (row.get("actions") or ()) if isinstance(a, Mapping)
+        }
+        if "navigate" not in verbs:
+            continue
+        record = {
+            "method": method,
+            "path": path,
+            "status": str(status),
+            "response_mime": str(row.get("response_shape") or "").strip()[:100],
+            "attribution": ATTRIBUTION_RECORDED,
+        }
+        if not any(_key(e) == _key(record) for e in out):
+            out.append(record)
+    return sorted(out, key=_key)
+
+
 def by_action_from_edges(edges: Any) -> dict[str, list[dict[str, str]]]:
     """``{trigger label: [endpoint, ...]}`` read from JOURNEY EDGE ROWS.
 

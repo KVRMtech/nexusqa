@@ -248,6 +248,22 @@ async def _run(capsys) -> None:
             f"the premium is neither grounded-and-unconfirmed nor ungrounded, so it "
             f"has gone missing between the graph and the payload: {case}")
 
+        # ── THE PAYLOAD BECOMES EVIDENCE, so the execution half can read it ──
+        #
+        # The compile payload is the seam between this proof and the one that RUNS
+        # the specification, exactly as `coverage.json` is the seam between the
+        # crawl and this proof. It has to be written down for the same reason:
+        # the fold needs a database and the Playwright runner needs node, and no
+        # one process in this repository has both — `platform/api` (the compiler)
+        # and `qe-central` (the fold) each ship a top-level `app` package, so one
+        # pytest cannot import both (M1.7).
+        #
+        # Written UNCONDITIONALLY once the assertions above have passed, so the
+        # file on disk is always a payload that satisfied them.
+        (EVIDENCE / "compile_payload.json").write_text(
+            json.dumps(case, indent=2, sort_keys=True, default=str),
+            encoding="utf-8")
+
         with capsys.disabled():
             print(f"\n{'=' * 72}\nGATE 3 / A22 — A DISCOVERED JOURNEY, COMPILED"
                   f"\n{'=' * 72}")
