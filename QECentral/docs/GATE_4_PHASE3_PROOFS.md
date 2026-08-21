@@ -71,6 +71,35 @@ is an instance, and so were two found elsewhere:
 | A32 config integrity | `git hash-object` | CRLF — the clean filter normalises the byte under test |
 | T-FL-08 explorer (M3.3) | a fence is not violated | a coroutine has no network stack |
 | T-FL-03 manifest (A26) | "arrived CORRUPTED" | `read_text()` on both sides normalises the newline that IS the delimiter |
+| A27 canary — AST guard | no skip-reason offenders | a wrong root or broken glob ⇒ empty ⇒ green having parsed nothing |
+| A27 canary — dbgate drift | no missing DSN vars | an empty `DB_ENV_VARS` ⇒ green having compared nothing |
+| A27 canary — categories | every category well-formed | every assertion is a loop; an empty registry satisfies all of them |
+
+Nine, and the last three are the sharpest of the set: they are inside the
+**canary** — the file whose entire purpose is proving a gate is not decorative.
+A canary that is itself vacuous is this class at its purest: the check that
+exists specifically to prevent "green having proven nothing", going green having
+proven nothing. Found by its author applying the question above to their own
+work the same afternoon they were pointing the class out in other people's. They
+now assert subject presence (≥50 modules parsed, ≥20 reasons extracted, a real
+`DB_ENV_VARS` containing a known DSN) and both mutations that previously passed
+now fail loudly.
+
+### Two further shapes
+
+**The wrong subject, rather than an absent one.** Gate 2 nearly recorded a
+boundary crossing on `summit-life-carrier` that never happened: the grant was
+spent on a navigation LINK that shared the commit button's label. The check
+fired, on the wrong object. "Would this pass if the subject were absent?" does
+not catch that one; the companion question does — **could this pass on something
+that merely resembles the subject?** Fixed by URL-scoping the grant.
+
+**A muted check and a blind check are indistinguishable in a log.** A CR
+verification heuristic phrased as "delta equals line count" fires on healthy
+files — an already-LF file, or a mixed-ending one — and a check that cries wolf
+gets switched off. The correct invariant is `delta == CR bytes on disk`. This
+matters here because muting returns a check to exactly the state this section is
+about: present, green, and incapable of telling you anything.
 
 The tell is always the same: **the check would still pass if the subject were
 absent.** No tenants, no submission, no egress, no bytes, no browser, no
