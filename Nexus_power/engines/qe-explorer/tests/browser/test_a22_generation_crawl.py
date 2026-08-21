@@ -401,19 +401,38 @@ def test_the_bare_button_funnel_is_walked_and_its_outcome_indexed(crawled) -> No
         f"assert the premium on and A22's chain is broken at the same place it "
         f"was before")
 
-    # AND THE VALUES DID NOT FOLLOW IT INTO THE SHAPES CHANNEL. Admitting the
-    # state was deliberately not the same as importing its values:
-    # note_state_signals is value-free by construction, and the premium travels
-    # on the FLOW (flow_ledger.build_flow(outcome_values=...)) where a reader
-    # expects an outcome to live. If a text ever appears in a state's signals,
-    # the boundary that keeps answers out of the catalogue has been breached.
+    # ── AND IT CARRIES THE SELECTOR THE ASSERTION IS GROUNDED ON ───────────
+    #
+    # Admitting the page is NOT sufficient on its own, which is worth pinning
+    # because the half-fix looks identical from the coverage account's outside.
+    # qe-central's `journey_spec.outcome_selectors` builds a journey's hard
+    # outcome assertion out of `node.displayed_outcomes`, and its ground is a
+    # captured SELECTOR — "an outcome with no captured selector is ungrounded".
+    # `catalog.extract_outcomes` reads that off `page_state["displayed_values"]`.
+    # The FLOW carries the premium's value; only the STATE carries the node it is
+    # asserted against. Miss this and the blocker moves instead of closing.
     premium = crawled["fixture_app"].BASELINE_PREMIUM
+    result_states = [s for s in (cov.get("states") or [])
+                     if "result" in str(s.get("location") or "")]
+    grounded = [dv for s in result_states
+                for dv in (s.get("displayed_values") or [])
+                if str(dv.get("text") or "") == premium and dv.get("selector")]
+    assert grounded, (
+        f"the result state carries no displayed value with BOTH the premium "
+        f"{premium!r} and a selector, so a generated spec has nothing to anchor a "
+        f"hard outcome assertion to: "
+        f"{[s.get('displayed_values') for s in result_states]}")
+
+    # THE SHAPES CHANNEL STAYS SHAPES. Outcomes cross in their OWN key, scrubbed
+    # by the same `emit.scrub_value` the manifest applies. What must never cross
+    # is a committed ANSWER into form_snapshot_signals — that is the boundary
+    # note_state_signals exists to hold, and it is unaffected by any of this.
     for state in (cov.get("states") or []):
         signal_blob = json.dumps(state.get("form_snapshot_signals") or {})
         assert premium not in signal_blob, (
-            f"the outcome VALUE {premium!r} reached coverage.states signals for "
-            f"{state.get('location')!r}. Admitting the outcome state must never "
-            f"carry its values across; that channel is shapes only.")
+            f"the outcome VALUE {premium!r} reached form_snapshot_signals for "
+            f"{state.get('location')!r}; that channel carries the shapes of "
+            f"questions, never a value")
 
 
 def test_the_backend_really_answered_the_crawl(crawled) -> None:

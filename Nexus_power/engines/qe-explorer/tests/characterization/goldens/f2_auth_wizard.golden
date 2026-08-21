@@ -223,6 +223,7 @@
         "controls_total": 3,
         "danger_controls": 0,
         "danger_names": [],
+        "displayed_values": [],
         "endpoints": [],
         "form_snapshot_signals": {
           "Password": {
@@ -262,6 +263,7 @@
         "danger_names": [
           "Sign Out"
         ],
+        "displayed_values": [],
         "endpoints": [],
         "form_snapshot_signals": {},
         "location": "https://app.char/portal/dashboard",
@@ -272,6 +274,7 @@
         "controls_total": 3,
         "danger_controls": 0,
         "danger_names": [],
+        "displayed_values": [],
         "endpoints": [],
         "form_snapshot_signals": {
           "First Name": {
@@ -309,6 +312,7 @@
         "controls_total": 4,
         "danger_controls": 0,
         "danger_names": [],
+        "displayed_values": [],
         "endpoints": [],
         "form_snapshot_signals": {
           "Coverage Amount": {
@@ -350,6 +354,17 @@
         "controls_total": 1,
         "danger_controls": 0,
         "danger_names": [],
+        "displayed_values": [
+          {
+            "label": "Premium",
+            "selector": "#premium",
+            "text": "$42.00",
+            "value_candidate": "true",
+            "value_confidence": "0.90",
+            "value_reason": "currency value under an outcome label",
+            "value_type": "currency"
+          }
+        ],
         "endpoints": [],
         "form_snapshot_signals": {},
         "location": "https://app.char/portal/apply",

@@ -186,6 +186,7 @@
         "danger_names": [
           "Delete Account"
         ],
+        "displayed_values": [],
         "endpoints": [],
         "form_snapshot_signals": {
           "Display Name": {
@@ -210,6 +211,7 @@
         "controls_total": 1,
         "danger_controls": 0,
         "danger_names": [],
+        "displayed_values": [],
         "endpoints": [],
         "form_snapshot_signals": {
           "Nickname": {

@@ -203,6 +203,7 @@
         "controls_total": 4,
         "danger_controls": 0,
         "danger_names": [],
+        "displayed_values": [],
         "endpoints": [
           {
             "method": "GET",
@@ -220,6 +221,7 @@
         "controls_total": 5,
         "danger_controls": 0,
         "danger_names": [],
+        "displayed_values": [],
         "endpoints": [],
         "form_snapshot_signals": {
           "Email": {
@@ -274,6 +276,7 @@
         "controls_total": 1,
         "danger_controls": 0,
         "danger_names": [],
+        "displayed_values": [],
         "endpoints": [],
         "form_snapshot_signals": {},
         "location": "https://app.char/about",

@@ -35,9 +35,9 @@
       "first_sequence": 1,
       "first_timestamp_ms": 1108,
       "has_server_error": false,
-      "host": "127.0.0.1:57943",
+      "host": "127.0.0.1:61623",
       "last_sequence": 4,
-      "last_timestamp_ms": 56203,
+      "last_timestamp_ms": 56390,
       "method": "GET",
       "observed_count": 3,
       "path_template": "/api/config",
@@ -70,11 +70,11 @@
       ],
       "auth_pattern": "none",
       "first_sequence": 3,
-      "first_timestamp_ms": 42656,
+      "first_timestamp_ms": 42670,
       "has_server_error": false,
-      "host": "127.0.0.1:57943",
+      "host": "127.0.0.1:61623",
       "last_sequence": 5,
-      "last_timestamp_ms": 70890,
+      "last_timestamp_ms": 71077,
       "method": "POST",
       "observed_count": 2,
       "path_template": "/api/quote",
@@ -129,7 +129,7 @@
       "completed": true,
       "entry_fingerprint": "4d4c87704c694b1a35a56f6f609d4997c08ede85c3536c663270485f441c1443",
       "entry_title": "Quote Start",
-      "entry_url": "http://127.0.0.1:57943/",
+      "entry_url": "http://127.0.0.1:61623/",
       "fields_filled_total": 0,
       "fields_unanswered": 0,
       "flow_id": "12c52cafcece911c79070a79",
@@ -145,11 +145,11 @@
           "fields_unfilled": 0,
           "fingerprint": "160c75605a41f618234fec56c34f67c38d20190f5e37ed40343bd7eb8d331224",
           "title": "Quote Start",
-          "url": "http://127.0.0.1:57943/result.html"
+          "url": "http://127.0.0.1:61623/result.html"
         }
       ],
       "terminal": "no_advance",
-      "terminal_url": "http://127.0.0.1:57943/result.html"
+      "terminal_url": "http://127.0.0.1:61623/result.html"
     }
   ],
   "forms_confirmed": 0,
@@ -177,6 +177,17 @@
       "controls_total": 0,
       "danger_controls": 0,
       "danger_names": [],
+      "displayed_values": [
+        {
+          "label": "Your monthly premium",
+          "selector": "#premium-value",
+          "text": "42.50",
+          "value_candidate": "true",
+          "value_confidence": "0.55",
+          "value_reason": "number value under an outcome label",
+          "value_type": "number"
+        }
+      ],
       "endpoints": [
         {
           "method": "GET",
@@ -192,7 +203,7 @@
         }
       ],
       "form_snapshot_signals": {},
-      "location": "http://127.0.0.1:57943/result.html",
+      "location": "http://127.0.0.1:61623/result.html",
       "question_groups": []
     }
   ],
