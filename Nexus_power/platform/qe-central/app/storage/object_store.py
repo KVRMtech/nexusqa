@@ -143,8 +143,36 @@ def backend_name() -> str:
 
 
 def is_object_backed() -> bool:
-    """True only for a genuinely remote backend (s3 / gcs / azure)."""
-    return backend_name() in _REMOTE_BACKENDS
+    """True only for a genuinely remote backend (s3 / gcs / azure).
+
+    FAIL-CLOSED WHEN A REMOTE BACKEND IS CONFIGURED BUT CANNOT BE BUILT.
+    ``backend_name`` swallows construction errors and answers "local", which is
+    the right answer for a deployment that IS local — and a silent catastrophe
+    for one that is not. With s3 configured but the store unbuildable (a missing
+    aiobotocore, an unwritable root, a malformed endpoint), the old path made
+    :func:`publish_crawl_dir` a no-op and returned 0: every crawl's evidence
+    silently never published, which is the exact defect this module exists to
+    fix, wearing the costume of a working local install.
+
+    CI found this by accident. Two tests in the T-FL-03 proof hit a real
+    PermissionError on the storage root and PASSED anyway, because the swallow
+    turned it into "local". A false pass, in the file whose job is proving the
+    handoff works.
+
+    A deployment that configures ``local`` is unchanged: it never reaches the
+    strict path.
+    """
+    configured = str(getattr(settings, "nexus_storage_backend", "") or "").strip().lower()
+    if configured not in _REMOTE_BACKENDS:
+        return False
+    try:
+        return _store().backend_name in _REMOTE_BACKENDS
+    except Exception as exc:
+        raise EvidenceStoreError(
+            f"{configured!r} object storage is configured but the store could "
+            f"not be built ({type(exc).__name__}: {str(exc)[:160]}). Refusing to "
+            f"report 'local' and silently stop publishing crawl evidence."
+        ) from exc
 
 
 def evidence_prefix(tenant_id: str, crawl_id: str) -> str:

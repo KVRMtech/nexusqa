@@ -295,6 +295,13 @@ async def test_local_backend_is_byte_identical_to_today(monkeypatch):
     from app.config import settings
     monkeypatch.setattr(settings, "nexus_storage_backend", "local",
                         raising=False)
+    # nexus_storage_path must ALSO be repointed, not just the backend.
+    # LocalStorage.__init__ mkdirs its root, and the shipped default is the
+    # container path /app/service/data — unwritable on a CI runner (root),
+    # writable as a drive-relative path on a Windows laptop. That is why this
+    # passed locally and could only ever fail on the machine that matters.
+    monkeypatch.setattr(settings, "nexus_storage_path",
+                        str(tempfile.mkdtemp()), raising=False)
     object_store.reset_store_cache_for_tests()
     try:
         assert object_store.is_object_backed() is False
@@ -351,10 +358,58 @@ async def test_a_configured_but_unreachable_store_fails_loudly(monkeypatch):
         object_store.reset_store_cache_for_tests()
 
 
+@pytest.mark.asyncio
+async def test_a_remote_backend_that_cannot_be_built_refuses_to_report_local(
+        monkeypatch):
+    """The swallow that made two tests in THIS file pass on a real error.
+
+    ``backend_name`` answers "local" when the store cannot be constructed. For a
+    deployment configured ``local`` that is correct. For one configured ``s3`` it
+    means publish_crawl_dir silently becomes a no-op and every crawl's evidence
+    is never published - the exact defect this module exists to fix, disguised as
+    a working local install. CI surfaced it: two tests here hit a genuine
+    PermissionError on the storage root and PASSED.
+    """
+    from app.config import settings
+    monkeypatch.setattr(settings, "nexus_storage_backend", "s3", raising=False)
+    # An unbuildable store: LocalStorage/S3 construction goes through a root the
+    # process may not create.
+    monkeypatch.setattr(object_store, "_store",
+                        lambda: (_ for _ in ()).throw(OSError("unwritable root")))
+    object_store.reset_store_cache_for_tests()
+    try:
+        with pytest.raises(object_store.EvidenceStoreError) as ei:
+            object_store.is_object_backed()
+        assert "silently stop publishing" in str(ei.value)
+    finally:
+        object_store.reset_store_cache_for_tests()
+
+
+@pytest.mark.asyncio
+async def test_a_local_deployment_is_unaffected_by_that_strictness(monkeypatch):
+    """The other direction: configured local must never raise."""
+    from app.config import settings
+    monkeypatch.setattr(settings, "nexus_storage_backend", "local", raising=False)
+    monkeypatch.setattr(object_store, "_store",
+                        lambda: (_ for _ in ()).throw(OSError("boom")))
+    object_store.reset_store_cache_for_tests()
+    try:
+        assert object_store.is_object_backed() is False
+    finally:
+        object_store.reset_store_cache_for_tests()
+
+
 def test_a_crafted_relative_path_cannot_escape_the_prefix(monkeypatch):
     from app.config import settings
     monkeypatch.setattr(settings, "nexus_storage_backend", "local",
                         raising=False)
+    # nexus_storage_path must ALSO be repointed, not just the backend.
+    # LocalStorage.__init__ mkdirs its root, and the shipped default is the
+    # container path /app/service/data — unwritable on a CI runner (root),
+    # writable as a drive-relative path on a Windows laptop. That is why this
+    # passed locally and could only ever fail on the machine that matters.
+    monkeypatch.setattr(settings, "nexus_storage_path",
+                        str(tempfile.mkdtemp()), raising=False)
     object_store.reset_store_cache_for_tests()
     try:
         with pytest.raises(object_store.EvidenceStoreError):
@@ -393,6 +448,13 @@ def test_producer_key_layout_matches_the_sdk_build_key(monkeypatch):
     from app.config import settings
     monkeypatch.setattr(settings, "nexus_storage_backend", "local",
                         raising=False)
+    # nexus_storage_path must ALSO be repointed, not just the backend.
+    # LocalStorage.__init__ mkdirs its root, and the shipped default is the
+    # container path /app/service/data — unwritable on a CI runner (root),
+    # writable as a drive-relative path on a Windows laptop. That is why this
+    # passed locally and could only ever fail on the machine that matters.
+    monkeypatch.setattr(settings, "nexus_storage_path",
+                        str(tempfile.mkdtemp()), raising=False)
     object_store.reset_store_cache_for_tests()
     try:
         ep = _load_producer()
