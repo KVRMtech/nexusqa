@@ -797,6 +797,27 @@ jobs:
       - name: Phase 5 — database contract suite
         run: pytest platform/qe-central/tests/contract -v --tb=short -p no:cacheprovider
 
+      # ── GATE 3 / A20 · qec_019 BEYOND A DEVELOPER'S LOCAL DATABASE ───────
+      # Named separately although Phase 5 already runs it, for the same reason
+      # the M2.3 step below is: this is A20's stop condition and it must be
+      # readable from the run summary without unfolding a 200-test log.
+      #
+      # The full six-leg trip A20 specifies —
+      #     qec_018 (before) → UP → validate → DOWN → validate restoration
+      #                            → UP → final validation
+      # — against a throwaway database on THIS Postgres, driven by the real
+      # `python -m alembic` command line, with a row seeded before the upgrade
+      # so the "existing rows keep their values" claim is tested as data and not
+      # only as schema. The head round-trip is re-run in the same step because
+      # A20 is the reason its qec_017-pinned assertions were rewritten to derive
+      # the head instead: they had been red since qec_018 landed and CI never saw
+      # it, because this branch had not been pushed since qec_017 was head.
+      - name: A20 — qec_019 up → down → up, in the CI database
+        run: |
+          pytest platform/qe-central/tests/contract/test_qec019_round_trip.py \
+                 platform/qe-central/tests/contract/test_migration_roundtrip.py \
+                 -v --tb=short -p no:cacheprovider
+
       # ── M2.3 · CATALOG RETIREMENT (consumer half) ────────────────────────
       # Named separately although Phase 5 already runs it, because this is the
       # milestone's stop condition and a reader of a CI run should be able to

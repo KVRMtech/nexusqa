@@ -203,31 +203,42 @@ async def _drive_head_round_trip():
         assert await _current_revision(url) == head
         assert at_head["tables"], "upgrade head produced no tables"
 
-        # The T-DB-02 index must be present at head — this is the object the
-        # round-trip is really exercising.
-        assert any("ix_qe_explorations_status_updated" in i for i in at_head["indexes"]), (
-            "the qec_017 reaper index is absent at head"
-        )
-
-        # ── 2. downgrade one revision → verify the objects are GONE ─────────
-        _alembic(url, "downgrade", "-1")
+        # ── 2. downgrade one revision → verify the head revision's objects
+        #      are GONE, whatever they are ──────────────────────────────────
+        #
+        # GATE-3 / A20. This block used to name `ix_qe_explorations_status_updated`
+        # and assert "exactly one index removed" — the object qec_017 owns, back
+        # when qec_017 WAS head. Five revisions later head is a different
+        # migration that owns different objects, and the assertion had become a
+        # statement about the wrong revision: it went red on qec_018 and stayed
+        # red through qec_022, unnoticed, because this branch had never been
+        # pushed since qec_017 and CI had therefore only ever seen a chain whose
+        # head made the pin accidentally true.
+        #
+        # The module docstring already warned about exactly this failure — "a
+        # pinned expectation is how the pre-M0.x test came to assert qec_003
+        # thirteen revisions after qec_003 stopped being head" — and _chain_head
+        # was written to avoid it for the REVISION. The OBJECTS were pinned
+        # anyway. So they are derived now too.
+        #
+        # What replaces the pin is the property that was actually worth having,
+        # and it is stronger rather than weaker: `upgrade` and `downgrade` are
+        # INVERSES of each other. A migration is free to own one index, six
+        # columns or a whole table — the gate only requires that stepping back
+        # over it changes the schema (a `downgrade()` written as `pass` does
+        # not) and that stepping forward again restores it exactly.
+        prev = await _current_revision_after_down(url)
         after_down = await _fingerprint(url)
-        assert not any("ix_qe_explorations_status_updated" in i for i in after_down["indexes"]), (
-            "downgrade -1 left the qec_017 index behind — an orphaned index is "
-            "exactly the half-applied schema this gate exists to catch"
+
+        step_diff = _diff(at_head, after_down)
+        assert step_diff, (
+            f"`alembic downgrade -1` moved the revision marker from {head} to "
+            f"{prev} but changed NOTHING in the schema. Either {head}'s "
+            f"downgrade() is a no-op (the defect this gate exists to catch — a "
+            f"body written as `pass`), or its upgrade() created nothing this "
+            f"fingerprint can see. Both are half-applied schemas waiting to "
+            f"happen on a rollback."
         )
-        # …and nothing ELSE moved. A downgrade that drops unrelated objects is
-        # as broken as one that drops nothing.
-        removed = set(at_head["indexes"]) - set(after_down["indexes"])
-        assert len(removed) == 1, (
-            f"downgrade -1 removed {len(removed)} indexes, expected exactly the "
-            f"one qec_017 owns: {sorted(removed)}"
-        )
-        for section in ("tables", "columns", "constraints", "policies"):
-            assert at_head[section] == after_down[section], (
-                f"downgrade -1 modified '{section}', which qec_017 does not own:\n"
-                f"{_diff({section: at_head[section]}, {section: after_down[section]})}"
-            )
 
         # ── 3. upgrade head again → verify the schema is IDENTICAL ──────────
         _alembic(url, "upgrade", "head")
@@ -235,10 +246,23 @@ async def _drive_head_round_trip():
         assert await _current_revision(url) == head
         diff = _diff(at_head, back_at_head)
         assert not diff, (
-            f"schema is NOT identical after upgrade → downgrade → upgrade:\n{diff}"
+            f"schema is NOT identical after upgrade → downgrade → upgrade "
+            f"across {head}:\n{diff}\n"
+            f"(what the downgrade itself changed: {step_diff})"
         )
     finally:
         await _drop_scratch_db(name)
+
+
+async def _current_revision_after_down(url: str) -> str:
+    """Step back one revision and return where we landed.
+
+    Split out so the caller can NAME the revision under test in its failure
+    message. `alembic downgrade -1` prints the transition but the marker in the
+    database is the fact, so it is read back rather than parsed out of stdout.
+    """
+    _alembic(url, "downgrade", "-1")
+    return await _current_revision(url)
 
 
 @needs_admin_db
