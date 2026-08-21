@@ -154,7 +154,40 @@ tenants:`, so the dedicated single-file steps pass (no `tfl%` tenant exists yet)
 and only the combined Phase 6 run trips it. Running the fleet file alone will not
 reproduce it.
 
-Fixed **test-side**, not with a grant. Widening `qec_substrate` to DELETE on
+Fixed **test-side**, not with a grant — at the second attempt.
+
+> **The first fix swapped one failure for another, and my verification could not
+> see it.** I routed the purge through `QEC_TEST_ADMIN_DATABASE_URL`. Privilege
+> errors went 294 → 0 and I called it done. But that DSN is superuser on the
+> **maintenance** database (`.../postgres`) — its documented job is CREATE/DROP of
+> throwaway databases — and `tenants` lives in `nexus`. Ample privilege, wrong
+> database: 490 `relation "tenants" does not exist`.
+>
+> The verification is the real lesson. I checked *absence of the old error*:
+>
+> ```
+> admin DSN unset → InsufficientPrivilegeError
+> admin DSN set   → 0 privilege errors        ← true, and the fixture still failed
+> ```
+>
+> A check scoped to "no `InsufficientPrivilegeError`" is satisfied by any *other*
+> exception. **Would this still pass if the subject broke in a new way?** Here,
+> yes — which is the same vacuity class as the nine passes below, this time in my
+> verification method rather than in a test.
+>
+> The assertion that cannot be fooled is *presence of success* — the pre-existing
+> row is actually gone:
+>
+> ```
+> substrate role (original)     tfl_probe still present = 1   purge did NOT run
+> superuser, WRONG db (v1)      tfl_probe still present = 1   purge did NOT run
+> superuser on substrate (v2)   tfl_probe still present = 0   PURGE COMPLETED
+> ```
+>
+> Corrected to `QEC_TEST_DATABASE_URL` — superuser **on nexus**. The constant is
+> named `SUPERUSER_SUBSTRATE_DB_URL` because the name has to say which *database*
+> it must point at; privilege was never the part that was hard to get right.
+> Caught by nexusqa-e3. Widening `qec_substrate` to DELETE on
 `tenants` — the table tenant isolation is anchored on — to make a cleanup fixture
 convenient would undo a boundary someone drew deliberately. The purge now uses
 the admin DSN that already exists for exactly this class of work, falling back to

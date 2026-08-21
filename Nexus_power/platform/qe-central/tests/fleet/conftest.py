@@ -44,7 +44,8 @@ TEST_TENANT_PREFIX = "tfl"
 
 QEC_DB_URL = os.environ.get("QEC_TEST_QEC_DATABASE_URL", "")
 SUBSTRATE_DB_URL = os.environ.get("QEC_TEST_SUBSTRATE_DATABASE_URL", "")
-#: The SUPERUSER dsn, used ONLY to deregister this suite's own test tenants.
+#: A SUPERUSER dsn ON THE SUBSTRATE DATABASE, used ONLY to deregister this
+#: suite's own test tenants.
 #:
 #: WHY NOT THE SUBSTRATE ROLE. The purge below used it, and it cannot work: the
 #: production bootstrap grants `qec_substrate` SELECT and INSERT on `tenants` and
@@ -55,18 +56,27 @@ SUBSTRATE_DB_URL = os.environ.get("QEC_TEST_SUBSTRATE_DATABASE_URL", "")
 #:       -- No UPDATE/DELETE - existing tenants are never touched.
 #:
 #: so the DELETE raises InsufficientPrivilegeError: permission denied for table
-#: tenants. Reproduced against a role holding exactly that grant.
+#: tenants. The fix is test-side on purpose: granting DELETE would widen a
+#: least-privilege role someone narrowed deliberately, on the table tenant
+#: isolation is anchored on, to make a cleanup fixture convenient.
 #:
-#: THE FIX IS TEST-SIDE ON PURPOSE. Granting DELETE to `qec_substrate` would widen
-#: a least-privilege role that someone narrowed deliberately, on the table tenant
-#: isolation is anchored on, to make a cleanup fixture convenient. The admin DSN
-#: already exists for exactly this class of work — the migration round-trip uses
-#: it to create and drop throwaway databases — so the boundary stays where its
-#: author put it and the fixture stops leaning on it.
+#: WHY *THIS* VARIABLE AND NOT QEC_TEST_ADMIN_DATABASE_URL. The first fix reached
+#: for the admin dsn and swapped one failure for another — 294 privilege errors
+#: became 490 `relation "tenants" does not exist`. The admin dsn is superuser on
+#: the **maintenance** database (`.../postgres`), because its documented job is
+#: CREATE/DROP of throwaway databases; `tenants` lives in `nexus`. Ample
+#: privilege, wrong database.
+#:
+#:     QEC_TEST_SUBSTRATE_DATABASE_URL  .../nexus     qec_substrate  no DELETE
+#:     QEC_TEST_DATABASE_URL            .../nexus     postgres       <- this one
+#:     QEC_TEST_ADMIN_DATABASE_URL      .../postgres  postgres       no `tenants`
+#:
+#: The name says which DATABASE it must point at, not merely how privileged it
+#: is, because privilege was never the part that was hard to get right.
 #:
 #: Falls back to the substrate engine when unset, which is the pre-existing
-#: behaviour and still correct on a laptop whose substrate DSN is a superuser.
-ADMIN_DB_URL = os.environ.get("QEC_TEST_ADMIN_DATABASE_URL", "")
+#: behaviour and still correct on a laptop whose substrate dsn is a superuser.
+SUPERUSER_SUBSTRATE_DB_URL = os.environ.get("QEC_TEST_DATABASE_URL", "")
 
 
 @pytest.fixture(autouse=True)
@@ -104,14 +114,15 @@ def _clean_fleet():
                         await conn.execute(
                             text("DELETE FROM client_apps WHERE tenant_id = :t"),
                             {"t": t})
-                # Deregistration goes through the ADMIN dsn — see ADMIN_DB_URL.
+                # Deregistration goes through a superuser dsn ON THE SUBSTRATE
+                # DATABASE — see SUPERUSER_SUBSTRATE_DB_URL.
                 # The two deletes above stay on `qec` under the tenant GUC on
                 # purpose: qe_explorations is RLS-protected and the fixture
                 # should be subject to the same isolation as the code it tests.
                 # Only this one needs a privilege the substrate role is
                 # deliberately denied.
                 purge = create_async_engine(
-                    ADMIN_DB_URL or SUBSTRATE_DB_URL, poolclass=NullPool)
+                    SUPERUSER_SUBSTRATE_DB_URL or SUBSTRATE_DB_URL, poolclass=NullPool)
                 try:
                     async with purge.begin() as conn:
                         await conn.execute(text(
