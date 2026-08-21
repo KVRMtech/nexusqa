@@ -1,0 +1,17 @@
+# Digest manifests are READ BY `sha256sum -c`, which treats a trailing CR as
+# part of the FILENAME. On a core.autocrlf=true clone — every Windows checkout
+# in this repo — a CRLF manifest makes EVERY entry fail to open, and the
+# reproducer reports that identically to real drift: "REFUSING: sources have
+# drifted ... the certification record has LAPSED". A certification tool that
+# cannot distinguish "the bytes moved" from "your git normalised my line
+# endings" is worse than no tool.
+#
+# Pinned by EXTENSION, not by filename: the first version of this rule named
+# A11_SNAPSHOT.sha256 explicitly, which meant the very next manifest — under any
+# other name — silently reintroduced the bug. Raised by session nexusqa-9e,
+# who found the same class of defect in squid.conf, where it did not fail
+# loudly but PASSED misleadingly.
+#
+# Scoped to certification/ deliberately. Other squads' files are not ours to
+# re-normalise.
+*.sha256  text eol=lf
