@@ -74,6 +74,8 @@ is an instance, and so were two found elsewhere:
 | A27 canary — AST guard | no skip-reason offenders | a wrong root or broken glob ⇒ empty ⇒ green having parsed nothing |
 | A27 canary — dbgate drift | no missing DSN vars | an empty `DB_ENV_VARS` ⇒ green having compared nothing |
 | A27 canary — categories | every category well-formed | every assertion is a loop; an empty registry satisfies all of them |
+| A27 scanner — module scope | `scanned >= 50` | *which* 50 — a module that fails to parse is skipped silently |
+| A27 manifest byte-compare | `read_bytes() == read_bytes()` | two EMPTY files compare equal |
 
 Nine, and the last three are the sharpest of the set: they are inside the
 **canary** — the file whose entire purpose is proving a gate is not decorative.
@@ -103,11 +105,36 @@ Their own example is the one to remember:
 specificity is what makes it depend on two populations both being present, and
 nothing makes it say so.
 
-The fix that squad landed is also the better form, and it converges with the one
-A26/A27 arrived at independently: assert the population **at the scale the claim
-needs**, not merely non-empty. A two-event recording satisfies "non-empty" while
-proving nothing about a join, exactly as a scan that finds three modules
-satisfies it while proving nothing about a codebase.
+The fix that squad landed converges with A26/A27's: assert the population **at
+the scale the claim needs**, not merely non-empty. A two-event recording
+satisfies "non-empty" while proving nothing about a join, exactly as a scan that
+finds three modules satisfies it while proving nothing about a codebase.
+
+**But scale is the weaker half, and A26/A27 were right to push back on my
+crediting it as the fix.** Fifty modules is a *number*; the file that must be in
+scope is an *identity*. A count catches a half-broken glob. Only an **anchor** —
+naming a specific artefact the scan is required to have seen — catches a scan
+pointed somewhere entirely plausible. **If a guard carries one of the two, carry
+the anchor.**
+
+Their anchor earned that within seconds of landing, and what it caught is the
+sharpest instance in this whole document. Their scanner held:
+
+```python
+except SyntaxError:
+    continue          # "a broken file fails elsewhere"
+```
+
+The comment was wrong. A module that will not parse was dropped from the scan and
+the guard went green having never looked at it — **a silent skip, inside the
+guard whose entire job is detecting silent skips.** It surfaced only because a
+fumbled heredoc put a syntax error into the T-FL-03 module: the scan then
+reported 158 modules examined *without the one file the milestone is about*, and
+nothing but the identity anchor noticed the absence.
+
+Note which question found it. "Would this pass if the subject were absent?" does
+**not** — the subject was present, 158 modules were genuinely parsed, the count
+was real. Only *is it the right 158?* catches it.
 
 So the useful statement is not a total. It is that **the question has a hit rate
 close to one on any suite nobody has asked it of yet** — including, in every
@@ -159,6 +186,10 @@ Two corollaries worth keeping:
 * **A mutation that turns several tests red has not yet told you which one is
   load-bearing** (A26's method, and their own correction — their first mutation
   reddened three tests, none of which was the new assertion).
+* **When a new check fails immediately on code you believe is fine, trust the
+  check before the belief.** A26/A27 assumed their fresh anchor was wrong rather
+  than their scanner, and it was the scanner. Recorded because that first
+  reaction is the one that discards a true finding.
 
 ---
 
