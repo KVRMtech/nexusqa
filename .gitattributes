@@ -109,10 +109,30 @@ Nexus_power/engines/qe-explorer/tests/browser/golden/**    text eol=lf
 #
 #     git cat-file -s HEAD:<path>     vs     the file's size on disk
 #
-# Equal means the working copy is already LF. A difference equal to the LINE
-# COUNT means the working copy is CRLF and the blob is LF, which is the healthy
-# normalised state, not a defect. (Found by nexusqa-e3, who nearly filed a
-# shebang bug against a script that was fine.)
+# Equal means the working copy is already LF. A difference means the working copy
+# has CR bytes the blob does not — which is the healthy normalised state, not a
+# defect.
+#
+# THE DIFFERENCE IS THE CR-BYTE COUNT, NOT THE LINE COUNT. An earlier version of
+# this note said "line count", which is right only when EVERY line ends CRLF and
+# raises a false alarm otherwise. Measured on three constructed files:
+#
+#     case        disk  normalised  delta  CR bytes  lines   line-count rule
+#     pure CRLF      9           6      3         3      3   OK (coincidence)
+#     MIXED          8           6      2         2      3   FALSE ALARM
+#     pure LF        6           6      0         0      3   FALSE ALARM
+#
+# Mixed endings are not exotic — one file created by an editor and appended to by
+# a bash heredoc is enough. Count CR bytes:
+#
+#     tr -dc '' < "$f" | wc -c
+#
+# The correction matters more than the arithmetic: a check that fires on healthy
+# files gets muted, and a muted check is indistinguishable from one that cannot
+# fire. The line-count form would have been switched off by the first person to
+# run it on an already-LF file, and the real CRLF regression would then have
+# arrived unopposed. (Rule and correction both from nexusqa-e3, who hit the
+# mixed-ending case in their own lane minutes after writing the first version.)
 
 # Binary — never touched, never diffed as text.
 *.png     binary
