@@ -16,10 +16,10 @@
     }
   ],
   "advance_oracle": {
-    "consults": 3,
+    "consults": 4,
     "errors": 0,
     "latency_ms_total": 0,
-    "picks": 3,
+    "picks": 4,
     "state": "configured",
     "unavailable": 0
   },
@@ -31,30 +31,30 @@
       "rule_id": "",
       "severity": "high",
       "url": "http://127.0.0.1:8101/life-insurance/quote/review/"
+    },
+    {
+      "boundary_key": "bnd_06b60205ac7f11b77829",
+      "label": "Continue to Payment",
+      "reason": "commit_shaped_label",
+      "rule_id": "",
+      "severity": "high",
+      "url": "http://127.0.0.1:8101/life-insurance/apply/decision/"
+    },
+    {
+      "boundary_key": "bnd_8fe9b2b825b9e2548942",
+      "label": "ACH Bank Transfer Direct debit from checking or savings",
+      "reason": "refuse_pack_irreversible_verb",
+      "rule_id": "rp.verb.transfer",
+      "severity": "critical",
+      "url": "http://127.0.0.1:8101/life-insurance/apply/payment/"
     }
   ],
   "auth_blocked": false,
   "auth_blocked_reason": "",
   "auth_incomplete": true,
   "auth_reason": "not_persisted",
-  "boundaries_crossed": 1,
-  "boundary_crossings": [
-    {
-      "approval_id": "apr_c4f32cbd625bc83a",
-      "boundary_key": "bnd_48814ea4205d8a33a32e",
-      "completed_at_ms": 224842,
-      "confirmed": true,
-      "control_name": "Continue to Underwriting Decision",
-      "crossing_id": "cross_48814ea4205d_1",
-      "outcome": "navigation",
-      "refusal_reason": "",
-      "reserved_at_ms": 222467,
-      "sequence_index": 20,
-      "state_fingerprint": "747af30ce300a09b888765cbc08257c4c378ce8598e2016eb928d9b4111e75f5",
-      "status": "crossed",
-      "url": "http://127.0.0.1:8101/life-insurance/apply/lifestyle/"
-    }
-  ],
+  "boundaries_crossed": 0,
+  "boundary_crossings": [],
   "crawl_mode": "explore",
   "discovered_rules": [
     {
@@ -111,11 +111,6 @@
           "verb": "navigate"
         },
         {
-          "action_token": "a54",
-          "label": "Start Over",
-          "verb": "click"
-        },
-        {
           "action_token": "a56",
           "label": "",
           "verb": "navigate"
@@ -129,17 +124,22 @@
           "action_token": "a68",
           "label": "",
           "verb": "navigate"
+        },
+        {
+          "action_token": "a78",
+          "label": "",
+          "verb": "navigate"
         }
       ],
       "auth_pattern": "none",
       "first_sequence": 1,
-      "first_timestamp_ms": 2983,
+      "first_timestamp_ms": 421,
       "has_server_error": false,
       "host": "127.0.0.1:8101",
-      "last_sequence": 92,
-      "last_timestamp_ms": 226281,
+      "last_sequence": 80,
+      "last_timestamp_ms": 187984,
       "method": "GET",
-      "observed_count": 19,
+      "observed_count": 17,
       "path_template": "/life-insurance/quote/start/index.txt",
       "rate_limited": false,
       "request_keys": [],
@@ -152,7 +152,7 @@
         "2xx"
       ],
       "statuses": {
-        "200": 19
+        "200": 17
       }
     },
     {
@@ -195,11 +195,11 @@
       ],
       "auth_pattern": "none",
       "first_sequence": 2,
-      "first_timestamp_ms": 3045,
+      "first_timestamp_ms": 421,
       "has_server_error": false,
       "host": "127.0.0.1:8101",
       "last_sequence": 35,
-      "last_timestamp_ms": 34656,
+      "last_timestamp_ms": 88546,
       "method": "GET",
       "observed_count": 8,
       "path_template": "/login/index.txt",
@@ -282,13 +282,13 @@
       ],
       "auth_pattern": "none",
       "first_sequence": 3,
-      "first_timestamp_ms": 10031,
+      "first_timestamp_ms": 11718,
       "has_server_error": false,
       "host": "127.0.0.1:8101",
-      "last_sequence": 89,
-      "last_timestamp_ms": 226250,
+      "last_sequence": 78,
+      "last_timestamp_ms": 187984,
       "method": "GET",
-      "observed_count": 18,
+      "observed_count": 17,
       "path_template": "/portal/dashboard/index.txt",
       "rate_limited": false,
       "request_keys": [],
@@ -301,7 +301,7 @@
         "2xx"
       ],
       "statuses": {
-        "200": 18
+        "200": 17
       }
     },
     {
@@ -369,13 +369,13 @@
       ],
       "auth_pattern": "none",
       "first_sequence": 4,
-      "first_timestamp_ms": 10077,
+      "first_timestamp_ms": 11734,
       "has_server_error": false,
       "host": "127.0.0.1:8101",
-      "last_sequence": 91,
-      "last_timestamp_ms": 226265,
+      "last_sequence": 79,
+      "last_timestamp_ms": 187984,
       "method": "GET",
-      "observed_count": 18,
+      "observed_count": 17,
       "path_template": "/portal/beneficiaries/index.txt",
       "rate_limited": false,
       "request_keys": [],
@@ -388,7 +388,7 @@
         "2xx"
       ],
       "statuses": {
-        "200": 18
+        "200": 17
       }
     },
     {
@@ -456,13 +456,13 @@
       ],
       "auth_pattern": "none",
       "first_sequence": 30,
-      "first_timestamp_ms": 30656,
+      "first_timestamp_ms": 84500,
       "has_server_error": false,
       "host": "127.0.0.1:8101",
-      "last_sequence": 90,
-      "last_timestamp_ms": 226265,
+      "last_sequence": 77,
+      "last_timestamp_ms": 187984,
       "method": "GET",
-      "observed_count": 14,
+      "observed_count": 13,
       "path_template": "/index.txt",
       "rate_limited": false,
       "request_keys": [],
@@ -475,7 +475,7 @@
         "2xx"
       ],
       "statuses": {
-        "200": 14
+        "200": 13
       }
     },
     {
@@ -486,23 +486,23 @@
           "verb": "click"
         },
         {
-          "action_token": "a55",
+          "action_token": "a89",
           "label": "Continue",
           "verb": "click"
         },
         {
-          "action_token": "a89",
+          "action_token": "a141",
           "label": "Continue",
           "verb": "click"
         }
       ],
       "auth_pattern": "none",
       "first_sequence": 48,
-      "first_timestamp_ms": 50108,
+      "first_timestamp_ms": 109593,
       "has_server_error": false,
       "host": "127.0.0.1:8101",
-      "last_sequence": 72,
-      "last_timestamp_ms": 127327,
+      "last_sequence": 87,
+      "last_timestamp_ms": 233202,
       "method": "GET",
       "observed_count": 3,
       "path_template": "/life-insurance/quote/coverage/index.txt",
@@ -531,17 +531,22 @@
           "action_token": "a94",
           "label": "Continue",
           "verb": "click"
+        },
+        {
+          "action_token": "a146",
+          "label": "Continue",
+          "verb": "click"
         }
       ],
       "auth_pattern": "none",
       "first_sequence": 49,
-      "first_timestamp_ms": 64467,
+      "first_timestamp_ms": 118905,
       "has_server_error": false,
       "host": "127.0.0.1:8101",
-      "last_sequence": 73,
-      "last_timestamp_ms": 133390,
+      "last_sequence": 88,
+      "last_timestamp_ms": 237780,
       "method": "GET",
-      "observed_count": 2,
+      "observed_count": 3,
       "path_template": "/life-insurance/quote/personal/index.txt",
       "rate_limited": false,
       "request_keys": [],
@@ -554,7 +559,7 @@
         "2xx"
       ],
       "statuses": {
-        "200": 2
+        "200": 3
       }
     },
     {
@@ -568,17 +573,22 @@
           "action_token": "a102",
           "label": "Continue",
           "verb": "click"
+        },
+        {
+          "action_token": "a154",
+          "label": "Continue",
+          "verb": "click"
         }
       ],
       "auth_pattern": "none",
       "first_sequence": 50,
-      "first_timestamp_ms": 76311,
+      "first_timestamp_ms": 126046,
       "has_server_error": false,
       "host": "127.0.0.1:8101",
-      "last_sequence": 74,
-      "last_timestamp_ms": 140827,
+      "last_sequence": 89,
+      "last_timestamp_ms": 244687,
       "method": "GET",
-      "observed_count": 2,
+      "observed_count": 3,
       "path_template": "/life-insurance/quote/health-check/index.txt",
       "rate_limited": false,
       "request_keys": [],
@@ -591,7 +601,7 @@
         "2xx"
       ],
       "statuses": {
-        "200": 2
+        "200": 3
       }
     },
     {
@@ -605,17 +615,22 @@
           "action_token": "a106",
           "label": "See My Quote",
           "verb": "click"
+        },
+        {
+          "action_token": "a158",
+          "label": "See My Quote",
+          "verb": "click"
         }
       ],
       "auth_pattern": "none",
       "first_sequence": 51,
-      "first_timestamp_ms": 83327,
+      "first_timestamp_ms": 131718,
       "has_server_error": false,
       "host": "127.0.0.1:8101",
-      "last_sequence": 75,
-      "last_timestamp_ms": 145406,
+      "last_sequence": 90,
+      "last_timestamp_ms": 248546,
       "method": "GET",
-      "observed_count": 2,
+      "observed_count": 3,
       "path_template": "/life-insurance/quote/review/index.txt",
       "rate_limited": false,
       "request_keys": [],
@@ -628,39 +643,7 @@
         "2xx"
       ],
       "statuses": {
-        "200": 2
-      }
-    },
-    {
-      "actions": [
-        {
-          "action_token": "a54",
-          "label": "Start Over",
-          "verb": "click"
-        }
-      ],
-      "auth_pattern": "none",
-      "first_sequence": 53,
-      "first_timestamp_ms": 85733,
-      "has_server_error": false,
-      "host": "127.0.0.1:8101",
-      "last_sequence": 53,
-      "last_timestamp_ms": 85733,
-      "method": "GET",
-      "observed_count": 1,
-      "path_template": "/life-insurance/apply/member-lookup/index.txt",
-      "rate_limited": false,
-      "request_keys": [],
-      "resource_types": [
-        "fetch"
-      ],
-      "response_shape": "text",
-      "retried": false,
-      "status_classes": [
-        "2xx"
-      ],
-      "statuses": {
-        "200": 1
+        "200": 3
       }
     },
     {
@@ -672,12 +655,12 @@
         }
       ],
       "auth_pattern": "none",
-      "first_sequence": 84,
-      "first_timestamp_ms": 159420,
+      "first_sequence": 81,
+      "first_timestamp_ms": 191062,
       "has_server_error": false,
       "host": "127.0.0.1:8101",
-      "last_sequence": 84,
-      "last_timestamp_ms": 159420,
+      "last_sequence": 81,
+      "last_timestamp_ms": 191062,
       "method": "GET",
       "observed_count": 1,
       "path_template": "/life-insurance/apply/personal-info/index.txt",
@@ -704,12 +687,12 @@
         }
       ],
       "auth_pattern": "none",
-      "first_sequence": 85,
-      "first_timestamp_ms": 188452,
+      "first_sequence": 82,
+      "first_timestamp_ms": 205484,
       "has_server_error": false,
       "host": "127.0.0.1:8101",
-      "last_sequence": 85,
-      "last_timestamp_ms": 188452,
+      "last_sequence": 82,
+      "last_timestamp_ms": 205484,
       "method": "GET",
       "observed_count": 1,
       "path_template": "/life-insurance/apply/replacement/index.txt",
@@ -736,15 +719,47 @@
         }
       ],
       "auth_pattern": "none",
-      "first_sequence": 86,
-      "first_timestamp_ms": 191531,
+      "first_sequence": 83,
+      "first_timestamp_ms": 207280,
       "has_server_error": false,
       "host": "127.0.0.1:8101",
-      "last_sequence": 86,
-      "last_timestamp_ms": 191531,
+      "last_sequence": 83,
+      "last_timestamp_ms": 207280,
       "method": "GET",
       "observed_count": 1,
       "path_template": "/life-insurance/apply/health/index.txt",
+      "rate_limited": false,
+      "request_keys": [],
+      "resource_types": [
+        "fetch"
+      ],
+      "response_shape": "text",
+      "retried": false,
+      "status_classes": [
+        "2xx"
+      ],
+      "statuses": {
+        "200": 1
+      }
+    },
+    {
+      "actions": [
+        {
+          "action_token": "a136",
+          "label": "Continue to Lifestyle Questions",
+          "verb": "click"
+        }
+      ],
+      "auth_pattern": "none",
+      "first_sequence": 84,
+      "first_timestamp_ms": 212937,
+      "has_server_error": false,
+      "host": "127.0.0.1:8101",
+      "last_sequence": 84,
+      "last_timestamp_ms": 212937,
+      "method": "GET",
+      "observed_count": 1,
+      "path_template": "/life-insurance/apply/lifestyle/index.txt",
       "rate_limited": false,
       "request_keys": [],
       "resource_types": [
@@ -768,15 +783,47 @@
         }
       ],
       "auth_pattern": "none",
-      "first_sequence": 88,
-      "first_timestamp_ms": 223390,
+      "first_sequence": 85,
+      "first_timestamp_ms": 225046,
       "has_server_error": false,
       "host": "127.0.0.1:8101",
-      "last_sequence": 88,
-      "last_timestamp_ms": 223390,
+      "last_sequence": 85,
+      "last_timestamp_ms": 225046,
       "method": "GET",
       "observed_count": 1,
       "path_template": "/life-insurance/apply/decision/index.txt",
+      "rate_limited": false,
+      "request_keys": [],
+      "resource_types": [
+        "fetch"
+      ],
+      "response_shape": "text",
+      "retried": false,
+      "status_classes": [
+        "2xx"
+      ],
+      "statuses": {
+        "200": 1
+      }
+    },
+    {
+      "actions": [
+        {
+          "action_token": "a139",
+          "label": "Continue to Payment",
+          "verb": "click"
+        }
+      ],
+      "auth_pattern": "none",
+      "first_sequence": 86,
+      "first_timestamp_ms": 229546,
+      "has_server_error": false,
+      "host": "127.0.0.1:8101",
+      "last_sequence": 86,
+      "last_timestamp_ms": 229546,
+      "method": "GET",
+      "observed_count": 1,
+      "path_template": "/life-insurance/apply/payment/index.txt",
       "rate_limited": false,
       "request_keys": [],
       "resource_types": [
@@ -1523,32 +1570,33 @@
   "fields_needing_seed": [],
   "fields_needing_seed_detail": [],
   "filled_by_kind": {
-    "date": 5,
-    "select": 29,
-    "text": 33
+    "date": 6,
+    "select": 37,
+    "text": 38
   },
   "flow_summary": {
-    "advance_contradicts_fills": 2,
+    "advance_contradicts_fills": 3,
     "advances_by_tier": {
-      "1": 11,
-      "3": 4
+      "1": 15,
+      "2": 1,
+      "3": 6
     },
-    "boundaries_crossed": 1,
+    "boundaries_crossed": 0,
     "branch_coverage": false,
     "branch_coverage_note": "One path per journey. At each decision point a single option was taken, so business paths behind the other options were not visited.",
     "deepest_flow_capped": true,
-    "deepest_flow_proven_steps": 5,
-    "deepest_flow_steps": 7,
+    "deepest_flow_proven_steps": 0,
+    "deepest_flow_steps": 12,
     "deepest_flow_terminal": "loop",
-    "flows_completed": 1,
+    "flows_completed": 0,
     "flows_found": 3,
-    "flows_fully_answered": 1,
-    "flows_truncated": 2,
+    "flows_fully_answered": 0,
+    "flows_truncated": 3,
     "intent_unmet": 0,
-    "journeys_completed": 1,
-    "oracle_advances": 4,
+    "journeys_completed": 0,
+    "oracle_advances": 6,
     "truncation_reasons": {
-      "loop": 2
+      "loop": 3
     }
   },
   "flows": [
@@ -2350,62 +2398,31 @@
       "terminal_url": "http://127.0.0.1:8101/life-insurance/quote/review/"
     },
     {
-      "advance_contradicts_fills": false,
-      "completed": true,
+      "advance_contradicts_fills": true,
+      "completed": false,
       "entry_fingerprint": "ec1479af73a6b1fa6efbe50fc4b898881ec231308f784fe2fe8c1faeb72dbc5b",
       "entry_title": "VKPower Life Insurance",
       "entry_url": "http://127.0.0.1:8101/life-insurance/apply/member-lookup/",
-      "fields_filled_total": 21,
-      "fields_unanswered": 0,
+      "fields_filled_total": 35,
+      "fields_unanswered": 4,
       "flow_id": "f20a7bce440a62974e99128c",
-      "fully_answered": true,
-      "journey_completed": true,
-      "outcome_milestone": {
-        "approval_id": "apr_c4f32cbd625bc83a",
-        "attestation_attributed_to": "characterization",
-        "attestation_env_kind": "disposable",
-        "boundary_key": "bnd_48814ea4205d8a33a32e",
-        "clicked_at_ms": 222686,
-        "confirmation_detail": "",
-        "confirmation_rung": "navigation",
-        "control_name": "Continue to Underwriting Decision",
-        "crossing_id": "cross_48814ea4205d_1",
-        "dom_digest_after": "dom_4cb5af940aa8a06b9c02_6",
-        "dom_digest_before": "dom_9e7d9deb0bd7966c5732_42",
-        "grant": {
-          "approval_id": "apr_c4f32cbd625bc83a",
-          "approved_at": "",
-          "approved_by": "gate2-operator",
-          "control": "Continue to Underwriting Decision",
-          "max_crossings": 1,
-          "state_fingerprint": "",
-          "url": ""
-        },
-        "guard_rule_id": "guard.submit.mutation_ok",
-        "latency_ms": 1766,
-        "milestone_id": "mst_2424ba850edc11d2",
-        "navigated": true,
-        "observed_at_ms": 224452,
-        "outcome": "navigation",
-        "outcome_values": [],
-        "refuse_pack_version": "refuse-pack-v1",
-        "screenshot_after": "frame_00021.png",
-        "screenshot_before": "frame_00020.png",
-        "state_fingerprint_after": "submit_2326ddf177158ea7",
-        "state_fingerprint_before": "747af30ce300a09b888765cbc08257c4c378ce8598e2016eb928d9b4111e75f5",
-        "url_after": "http://127.0.0.1:8101/life-insurance/apply/decision/",
-        "url_before": "http://127.0.0.1:8101/life-insurance/apply/lifestyle/",
-        "verified": true
-      },
+      "fully_answered": false,
+      "journey_completed": false,
+      "outcome_milestone": null,
       "outcome_values": [
         {
-          "label": "Do you participate in motor vehicle, motorcycle, or boat racing?YesNo",
-          "value": "Do you participate in rock climbing, mountaineering, or similar activities at heights above 14,000 feet?",
-          "value_type": "reference"
+          "label": "Estimated Monthly Premium",
+          "value": "$5.26",
+          "value_type": "currency"
+        },
+        {
+          "label": "Coverage Amount",
+          "value": "$50,000",
+          "value_type": "currency"
         }
       ],
       "step_budget": 20,
-      "step_count": 5,
+      "step_count": 12,
       "steps": [
         {
           "advance": {
@@ -2591,6 +2608,12 @@
           "url": "http://127.0.0.1:8101/life-insurance/apply/health/"
         },
         {
+          "advance": {
+            "control_name": "Continue to Underwriting Decision",
+            "oracle": false,
+            "signature": "e6b04abdfce3daa1939859bcce08fd87f7f06cac047d13446e5e262425a07c07",
+            "tier": 1
+          },
           "decision_points": [
             {
               "choice": "No",
@@ -2728,62 +2751,343 @@
           "fingerprint": "747af30ce300a09b888765cbc08257c4c378ce8598e2016eb928d9b4111e75f5",
           "title": "VKPower Life Insurance",
           "url": "http://127.0.0.1:8101/life-insurance/apply/lifestyle/"
+        },
+        {
+          "advance": {
+            "control_name": "Continue to Payment",
+            "oracle": false,
+            "tier": 2
+          },
+          "decision_points": [
+            {
+              "control_label": "Next action",
+              "control_signature": "nextaction:8dcf74ad762256281a92b47b37b5c4df",
+              "option_classes": {
+                "Back": "navigational",
+                "Continue to Payment": "forward",
+                "V VKPower Life Insurance": "navigational"
+              },
+              "options": [
+                "V VKPower Life Insurance",
+                "Continue to Payment",
+                "Back"
+              ],
+              "provenance": "next_action"
+            }
+          ],
+          "fields_filled": 0,
+          "fields_unfilled": 0,
+          "fingerprint": "6a21e28043f8524194e1b669de93d633675d07be762f058c9a677b84e7cbab16",
+          "title": "VKPower Life Insurance",
+          "url": "http://127.0.0.1:8101/life-insurance/apply/decision/"
+        },
+        {
+          "advance": {
+            "control_name": "Get a Quote",
+            "oracle": true,
+            "signature": "gate2-forward",
+            "tier": 3
+          },
+          "fields_filled": 0,
+          "fields_unfilled": 0,
+          "fingerprint": "8a8c9b817c420ab507247358159bcc9ae1406ae251053d300708b23c5afeefc2",
+          "title": "VKPower Life Insurance",
+          "url": "http://127.0.0.1:8101/life-insurance/apply/payment/"
+        },
+        {
+          "advance": {
+            "control_name": "Continue",
+            "oracle": false,
+            "signature": "0e64ddaec98e68777cbb79279cabcbc031a58e98966f48c3a4dc0c93d240699f",
+            "tier": 1
+          },
+          "decision_points": [
+            {
+              "control_label": "Term Life Insurance Affordable coverage for a specific period",
+              "control_signature": "38fe2dfc2b598dcd6c085f432e555acd",
+              "group_id": "0d7cf8053fe19f641bd1179dc4aaed66",
+              "options": [
+                "term life insurance affordable coverage for a specific period",
+                "whole life insurance lifetime coverage with cash value accumulation",
+                "universal life insurance flexible premiums and adjustable death benefit",
+                "variable universal life investment options with life insurance protection"
+              ],
+              "provenance": "needs_input"
+            },
+            {
+              "control_label": "Whole Life Insurance Lifetime coverage with cash value accumulation",
+              "control_signature": "2ebc7ec946fe1721a1c4fb9a8ecdc469",
+              "group_id": "0d7cf8053fe19f641bd1179dc4aaed66",
+              "options": [
+                "term life insurance affordable coverage for a specific period",
+                "whole life insurance lifetime coverage with cash value accumulation",
+                "universal life insurance flexible premiums and adjustable death benefit",
+                "variable universal life investment options with life insurance protection"
+              ],
+              "provenance": "needs_input"
+            },
+            {
+              "control_label": "Universal Life Insurance Flexible premiums and adjustable death benefit",
+              "control_signature": "a26d0473eba615ac2d96c36540931574",
+              "group_id": "0d7cf8053fe19f641bd1179dc4aaed66",
+              "options": [
+                "term life insurance affordable coverage for a specific period",
+                "whole life insurance lifetime coverage with cash value accumulation",
+                "universal life insurance flexible premiums and adjustable death benefit",
+                "variable universal life investment options with life insurance protection"
+              ],
+              "provenance": "needs_input"
+            },
+            {
+              "control_label": "Variable Universal Life Investment options with life insurance protection",
+              "control_signature": "fb2beae01a9ee53dc96a57f4b909aeb9",
+              "group_id": "0d7cf8053fe19f641bd1179dc4aaed66",
+              "options": [
+                "term life insurance affordable coverage for a specific period",
+                "whole life insurance lifetime coverage with cash value accumulation",
+                "universal life insurance flexible premiums and adjustable death benefit",
+                "variable universal life investment options with life insurance protection"
+              ],
+              "provenance": "needs_input"
+            }
+          ],
+          "fields_filled": 0,
+          "fields_unfilled": 4,
+          "fingerprint": "1b20e634b5ec7234934e7d3cfdf1c6ee82bbd7784990b16c503b88b030944c46",
+          "title": "VKPower Life Insurance",
+          "url": "http://127.0.0.1:8101/life-insurance/quote/start/"
+        },
+        {
+          "advance": {
+            "control_name": "Continue",
+            "oracle": false,
+            "signature": "b0931e0be89d0b2e44b02bb1c7efc33b4768b9804f08dedbde101b174f190477",
+            "tier": 1
+          },
+          "decision_points": [
+            {
+              "choice": "$50,000",
+              "control_label": "Coverage Amount",
+              "control_signature": "f29ddf0b1c6ade38bc5bbdb413cd254f",
+              "options": [
+                "$50,000",
+                "$100,000",
+                "$150,000",
+                "$200,000",
+                "$250,000",
+                "$300,000",
+                "$400,000",
+                "$500,000",
+                "$750,000",
+                "$1,000,000",
+                "$1,500,000",
+                "$2,000,000"
+              ],
+              "provenance": "synthesized"
+            },
+            {
+              "choice": "15 years",
+              "control_label": "Term Length",
+              "control_signature": "99f9e665039af94483b5a3d9b5f6ee66",
+              "options": [
+                "10 years",
+                "15 years",
+                "20 years",
+                "25 years",
+                "30 years",
+                "whole life"
+              ],
+              "provenance": "synthesized"
+            },
+            {
+              "choice": "active duty officer",
+              "control_label": "Military Affiliation",
+              "control_signature": "755faf33e87744db25af3eb735fb9f0f",
+              "options": [
+                "active duty officer",
+                "active duty enlisted",
+                "reserve/guard",
+                "veteran (honorable discharge)",
+                "veteran (other discharge)",
+                "retired military",
+                "military spouse/dependent",
+                "civilian"
+              ],
+              "provenance": "synthesized"
+            },
+            {
+              "choice": "army",
+              "control_label": "Branch of Service",
+              "control_signature": "662ce19c87af2fff0be506d4fa3d033e",
+              "options": [
+                "army",
+                "navy",
+                "air force",
+                "marine corps",
+                "coast guard",
+                "space force",
+                "army national guard",
+                "air national guard",
+                "army reserve",
+                "navy reserve",
+                "air force reserve",
+                "marine corps reserve",
+                "coast guard reserve"
+              ],
+              "provenance": "synthesized"
+            }
+          ],
+          "fields_filled": 4,
+          "fields_unfilled": 0,
+          "fingerprint": "a8da78d03d221b7ea2d7c5e4322f234bcccfd70eafe77b1ccc891e9c499bffc1",
+          "title": "VKPower Life Insurance",
+          "url": "http://127.0.0.1:8101/life-insurance/quote/coverage/"
+        },
+        {
+          "advance": {
+            "control_name": "Continue",
+            "oracle": false,
+            "signature": "b0931e0be89d0b2e44b02bb1c7efc33b4768b9804f08dedbde101b174f190477",
+            "tier": 1
+          },
+          "decision_points": [
+            {
+              "choice": "female",
+              "control_label": "Gender",
+              "control_signature": "a9608726f36d0f1b6a97fa25e498708c",
+              "options": [
+                "male",
+                "female",
+                "non-binary"
+              ],
+              "provenance": "synthesized"
+            },
+            {
+              "choice": "illinois",
+              "control_label": "State of residence",
+              "control_signature": "d6ee25c4100c361e85370dd780909b02",
+              "options": [
+                "alabama",
+                "alaska",
+                "arizona",
+                "arkansas",
+                "california",
+                "colorado",
+                "connecticut",
+                "delaware",
+                "florida",
+                "georgia",
+                "hawaii",
+                "idaho",
+                "illinois",
+                "indiana",
+                "iowa",
+                "kansas",
+                "kentucky",
+                "louisiana",
+                "maine",
+                "maryland",
+                "massachusetts",
+                "michigan",
+                "minnesota"
+              ],
+              "provenance": "synthesized"
+            }
+          ],
+          "fields_filled": 7,
+          "fields_unfilled": 0,
+          "fingerprint": "e31e8076a2aa3e28135a151563d677268126654da2cf890b4980591a31708902",
+          "title": "VKPower Life Insurance",
+          "url": "http://127.0.0.1:8101/life-insurance/quote/personal/"
+        },
+        {
+          "advance": {
+            "control_name": "See My Quote",
+            "oracle": true,
+            "signature": "gate2-forward",
+            "tier": 3
+          },
+          "decision_points": [
+            {
+              "choice": "4 ft",
+              "control_label": "Height (feet)",
+              "control_signature": "1ea4bbe6c3569a3e6476b4517e83ac32",
+              "options": [
+                "4 ft",
+                "5 ft",
+                "6 ft",
+                "7 ft"
+              ],
+              "provenance": "synthesized"
+            },
+            {
+              "choice": "0 in",
+              "control_label": "Height (inches)",
+              "control_signature": "af5c66993ce0dcb7cf65c9043d644c1b",
+              "options": [
+                "0 in",
+                "1 in",
+                "2 in",
+                "3 in",
+                "4 in",
+                "5 in",
+                "6 in",
+                "7 in",
+                "8 in",
+                "9 in",
+                "10 in",
+                "11 in"
+              ],
+              "provenance": "synthesized"
+            }
+          ],
+          "fields_filled": 3,
+          "fields_unfilled": 0,
+          "fingerprint": "9b8f808fba951bc16159b31cd0875d2b0dfac9dc5a9e34ae8eb4c57a35385fd4",
+          "title": "VKPower Life Insurance",
+          "url": "http://127.0.0.1:8101/life-insurance/quote/health-check/"
+        },
+        {
+          "decision_points": [
+            {
+              "control_label": "Next action",
+              "control_signature": "nextaction:bfb6ab9d7eff32a8570223bd78411dd0",
+              "option_classes": {
+                "Apply Now": "forward",
+                "Start Over": "navigational",
+                "V VKPower Life Insurance": "navigational"
+              },
+              "options": [
+                "V VKPower Life Insurance",
+                "Apply Now",
+                "Start Over"
+              ],
+              "provenance": "next_action"
+            }
+          ],
+          "fields_filled": 0,
+          "fields_unfilled": 0,
+          "fingerprint": "dd52903353bcc85db6df730930701e0cde3c13318ade140e1017e1ced011e7c7",
+          "title": "VKPower Life Insurance",
+          "url": "http://127.0.0.1:8101/life-insurance/quote/review/"
         }
       ],
-      "terminal": "submit_crossed",
-      "terminal_url": "http://127.0.0.1:8101/life-insurance/apply/decision/"
+      "terminal": "loop",
+      "terminal_url": "http://127.0.0.1:8101/life-insurance/quote/review/"
     }
   ],
-  "forms_confirmed": 1,
+  "forms_confirmed": 0,
   "forms_found": 3,
-  "forms_submitted": 1,
+  "forms_submitted": 0,
   "inventory_failure_detail": "",
   "inventory_failures": 0,
-  "journeys_completed": 1,
-  "network_events_observed": 91,
+  "journeys_completed": 0,
+  "network_events_observed": 90,
   "network_server_error_count": 0,
   "network_server_errors": [],
   "opaque_surfaces": [],
   "open_choice_unverified": 0,
-  "outcome_milestones": [
-    {
-      "approval_id": "apr_c4f32cbd625bc83a",
-      "attestation_attributed_to": "characterization",
-      "attestation_env_kind": "disposable",
-      "boundary_key": "bnd_48814ea4205d8a33a32e",
-      "clicked_at_ms": 222686,
-      "confirmation_detail": "",
-      "confirmation_rung": "navigation",
-      "control_name": "Continue to Underwriting Decision",
-      "crossing_id": "cross_48814ea4205d_1",
-      "dom_digest_after": "dom_4cb5af940aa8a06b9c02_6",
-      "dom_digest_before": "dom_9e7d9deb0bd7966c5732_42",
-      "grant": {
-        "approval_id": "apr_c4f32cbd625bc83a",
-        "approved_at": "",
-        "approved_by": "gate2-operator",
-        "control": "Continue to Underwriting Decision",
-        "max_crossings": 1,
-        "state_fingerprint": "",
-        "url": ""
-      },
-      "guard_rule_id": "guard.submit.mutation_ok",
-      "latency_ms": 1766,
-      "milestone_id": "mst_2424ba850edc11d2",
-      "navigated": true,
-      "observed_at_ms": 224452,
-      "outcome": "navigation",
-      "outcome_values": [],
-      "refuse_pack_version": "refuse-pack-v1",
-      "screenshot_after": "frame_00021.png",
-      "screenshot_before": "frame_00020.png",
-      "state_fingerprint_after": "submit_2326ddf177158ea7",
-      "state_fingerprint_before": "747af30ce300a09b888765cbc08257c4c378ce8598e2016eb928d9b4111e75f5",
-      "url_after": "http://127.0.0.1:8101/life-insurance/apply/decision/",
-      "url_before": "http://127.0.0.1:8101/life-insurance/apply/lifestyle/",
-      "verified": true
-    }
-  ],
+  "outcome_milestones": [],
   "rule_reuse": {
     "hits": 0,
     "known": 0,
@@ -3540,12 +3844,6 @@
         },
         {
           "method": "GET",
-          "path": "/life-insurance/apply/member-lookup/index.txt",
-          "response_mime": "text/plain",
-          "status": "200"
-        },
-        {
-          "method": "GET",
           "path": "/life-insurance/quote/start/index.txt",
           "response_mime": "text/plain",
           "status": "200"
@@ -3662,12 +3960,6 @@
         {
           "method": "GET",
           "path": "/index.txt",
-          "response_mime": "text/plain",
-          "status": "200"
-        },
-        {
-          "method": "GET",
-          "path": "/life-insurance/quote/coverage/index.txt",
           "response_mime": "text/plain",
           "status": "200"
         },
@@ -4367,19 +4659,6 @@
     {
       "ax_fingerprint": "747af30ce300a09b888765cbc08257c4c378ce8598e2016eb928d9b4111e75f5",
       "controls_total": 42,
-      "danger_controls": 2,
-      "danger_names": [
-        "Sign out",
-        "Continue to Underwriting Decision"
-      ],
-      "endpoints": [],
-      "form_snapshot_signals": {},
-      "location": "http://127.0.0.1:8101/life-insurance/apply/lifestyle/",
-      "question_groups": []
-    },
-    {
-      "ax_fingerprint": "78f0ad1f8f54a92f116f8488040e5cb6071c8e96bedd5792bd4f9df85be12026",
-      "controls_total": 6,
       "danger_controls": 1,
       "danger_names": [
         "Sign out"
@@ -4387,37 +4666,52 @@
       "endpoints": [
         {
           "method": "GET",
-          "path": "/index.txt",
+          "path": "/life-insurance/apply/lifestyle/index.txt",
           "response_mime": "text/plain",
           "status": "200"
-        },
+        }
+      ],
+      "form_snapshot_signals": {},
+      "location": "http://127.0.0.1:8101/life-insurance/apply/lifestyle/",
+      "question_groups": []
+    },
+    {
+      "ax_fingerprint": "6a21e28043f8524194e1b669de93d633675d07be762f058c9a677b84e7cbab16",
+      "controls_total": 8,
+      "danger_controls": 1,
+      "danger_names": [
+        "Sign out"
+      ],
+      "endpoints": [
         {
           "method": "GET",
           "path": "/life-insurance/apply/decision/index.txt",
-          "response_mime": "text/plain",
-          "status": "200"
-        },
-        {
-          "method": "GET",
-          "path": "/life-insurance/quote/start/index.txt",
-          "response_mime": "text/plain",
-          "status": "200"
-        },
-        {
-          "method": "GET",
-          "path": "/portal/beneficiaries/index.txt",
-          "response_mime": "text/plain",
-          "status": "200"
-        },
-        {
-          "method": "GET",
-          "path": "/portal/dashboard/index.txt",
           "response_mime": "text/plain",
           "status": "200"
         }
       ],
       "form_snapshot_signals": {},
       "location": "http://127.0.0.1:8101/life-insurance/apply/decision/",
+      "question_groups": []
+    },
+    {
+      "ax_fingerprint": "8a8c9b817c420ab507247358159bcc9ae1406ae251053d300708b23c5afeefc2",
+      "controls_total": 14,
+      "danger_controls": 2,
+      "danger_names": [
+        "Sign out",
+        "ACH Bank Transfer Direct debit from checking or savings"
+      ],
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "/life-insurance/apply/payment/index.txt",
+          "response_mime": "text/plain",
+          "status": "200"
+        }
+      ],
+      "form_snapshot_signals": {},
+      "location": "http://127.0.0.1:8101/life-insurance/apply/payment/",
       "question_groups": []
     }
   ],
@@ -4429,9 +4723,10 @@
     "Back to Quote",
     "Continue to Replacement Information",
     "Continue to Health Questionnaire",
-    "Continue to Lifestyle Questions"
+    "Continue to Lifestyle Questions",
+    "Continue to Underwriting Decision"
   ],
-  "summary": "AUTHENTICATED AREAS NOT COVERED \u2014 the crawl SIGNED IN successfully, but this app drops the sign-in on every page load (it keeps the signed-in user in the page, not in a cookie), so pages behind the login could not be reached. Re-recording and new credentials will not change this. 3 form(s) found; 8 field(s) auto-filled with a default; 0 field(s) need a real seed; 1 submit(s) exercised (Phase-B), 1 irreversible boundary/ies awaiting approval; 1 journey(s) completed end-to-end through an approved crossing.",
+  "summary": "AUTHENTICATED AREAS NOT COVERED \u2014 the crawl SIGNED IN successfully, but this app drops the sign-in on every page load (it keeps the signed-in user in the page, not in a cookie), so pages behind the login could not be reached. Re-recording and new credentials will not change this. 3 form(s) found; 8 field(s) auto-filled with a default; 0 field(s) need a real seed; 0 submit(s) exercised (Phase-B), 3 irreversible boundary/ies awaiting approval; 0 journey(s) completed end-to-end through an approved crossing.",
   "tab_views_recorded": 0,
   "traversal": "full",
   "unblock_irreversible": [],

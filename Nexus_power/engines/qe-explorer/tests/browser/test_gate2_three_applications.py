@@ -71,19 +71,21 @@ DECLARED: dict[str, dict[str, Any]] = {
                 "once; the #/review one lands on a dialog confirmation.",
     },
     "vkpower-life": {
-        "population": {"flows": 3, "walked_depth": 10, "proven_depth": 0},
+        "population": {"flows": 3, "walked_depth": 12, "proven_depth": 0},
         "crossings": 0,
         "confirmation": False,
         "journeys": 0,
-        "note": "Walks the quote funnel and four apply steps, then stops at "
-                "'Continue to Underwriting Decision' -- a router.push flagged "
-                "DANGER because rp.verb.underwrite matches its button NAME. "
-                "Granting it walks four steps further but asserts a navigation "
-                "control commits, which makes OutcomeMilestone.verified accept "
-                "a bare navigation and report a completed journey at step 6 of "
-                "10 with an empty confirmation_detail. Measured, then reverted "
-                "-- see gate2_journey.grants_for. The funnel needs a reviewed "
-                "refuse-pack allow_overrides row, not a grant.",
+        "note": "Walks quote + member-lookup -> personal-info -> replacement "
+                "-> health -> lifestyle -> decision -> payment contiguously "
+                "(depth 12; tier 2 fires once on this application for the "
+                "first time). Stops at the payment step, whose Continue is "
+                "disabled={!method}: the method is chosen from two BUTTON-"
+                "shaped cards, and _answer_to_unblock handles checkboxes and "
+                "radio groups, not buttons. The right control IS in the "
+                "tier-3 candidate set; the deterministic stand-in cannot pick "
+                "it, which is A18's requirement rather than a defect here. "
+                "walked_depth is floored at 12 so the three fixes that bought "
+                "it cannot silently regress.",
     },
     "summit-life-carrier": {
         "population": {"flows": 5, "walked_depth": 1, "proven_depth": 1},

@@ -184,16 +184,48 @@ def _make_stub_oracle(log: list[dict[str, Any]]):
     button over a link among forward-shaped labels -- the rule the Golden Gate
     uses, and the reasoning a model applies to the same set.
     """
+    #: Labels seen on EVERY decision so far. Site chrome repeats; the controls
+    #: that belong to the step you are standing on do not.
+    seen_everywhere: dict[str, int] = {}
+    decisions = 0
+
     async def _oracle(candidates: Sequence[Mapping[str, Any]],
                       page_title: str, page_url: str) -> dict[str, Any]:
+        nonlocal decisions
         names = [str(c.get("name") or "") for c in candidates]
+        decisions += 1
+        for name in names:
+            seen_everywhere[name] = seen_everywhere.get(name, 0) + 1
+
+        # CHROME IS NOT A STEP. "Dashboard", "Beneficiaries", "Get a Quote" ride
+        # the header of every page in the application, so they are offered at
+        # every decision point -- and one of them ("Get a Quote") is
+        # forward-shaped, which is enough to beat the control that actually
+        # belongs to the step. Measured on vkpower-life's payment step: the
+        # candidate set was
+        #
+        #   [Dashboard, Beneficiaries, Get a Quote, Monthly, Quarterly,
+        #    Semi-Annual, Annual, Credit / Debit Card ..., Back]
+        #
+        # and this stand-in chose "Get a Quote", walking a twelve-step journey
+        # back to the start page. A model reading that set would not; the
+        # deterministic rule needed the same distinction, and repetition is a
+        # value-free way to make it -- no label list, no page knowledge.
+        def _is_chrome(name: str) -> bool:
+            return decisions >= 3 and seen_everywhere.get(name, 0) >= decisions
+
         best: Optional[int] = None
-        for want_button in (True, False):
-            for i, (name, control) in enumerate(zip(names, candidates)):
-                if (str(control.get("kind") or "") == "button") is not want_button:
-                    continue
-                if any(word in name.lower() for word in FORWARD):
-                    best = i
+        for allow_chrome in (False, True):
+            for want_button in (True, False):
+                for i, (name, control) in enumerate(zip(names, candidates)):
+                    if (str(control.get("kind") or "") == "button") is not want_button:
+                        continue
+                    if not allow_chrome and _is_chrome(name):
+                        continue
+                    if any(word in name.lower() for word in FORWARD):
+                        best = i
+                        break
+                if best is not None:
                     break
             if best is not None:
                 break

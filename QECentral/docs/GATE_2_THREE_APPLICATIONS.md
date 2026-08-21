@@ -8,11 +8,11 @@ Chromium through the production `Crawler` and `PlaywrightBrowserPort`.
 
 | WP | Claim | Verdict |
 |---|---|---|
-| A14 | vkpower-life completes a live journey | **NOT MET** on the app CI crawls. Met on a *different* app in the same directory — see §2 |
+| A14 | vkpower-life completes a live journey | **NOT MET** — depth 6 → 12 on the real app; blocked at the payment step by a decision only tier 3 can make (see §2) |
 | A15 | acme-life completes a live journey | **MET** — 2 crossings, 1 confirmation (`rung=dialog`), Docker-served |
 | A16 | summit-life-carrier completes a live journey | **PARTIAL** — 3 login defects fixed; it now signs in and explores the platform, but crosses nothing and reaches no confirmation |
 | A17 | Blocking proving-ground CI across all three | **BUILT, NOT ARMED** — job added and green locally; cannot be *required* until it has reported once in CI |
-| A18 | Tier-3 oracle consulted in a live execution | **NOT ATTEMPTED** — needs qe-central and a model |
+| A18 | Tier-3 oracle consulted in a live execution | **HALF MET** — the qualifying decision is identified and reproducible on a real app; the live consultation needs a model credential |
 | A19 | Deep-flow telemetry emits non-null values | **PREMISE DID NOT REPRODUCE; the real gap is CLOSED** — see §5 |
 
 ---
@@ -20,8 +20,8 @@ Chromium through the production `Crawler` and `PlaywrightBrowserPort`.
 ## §0 · The headline
 
 **"0 successful journeys" did not become "3". It became 1** — and the act of
-measuring the other two produced eight findings that were not previously
-recorded, six of them now fixed. One is a green-wash in the metric the whole
+measuring the other two produced eleven findings that were not previously
+recorded, nine of them now fixed — including one in this gate's own test suite. One is a green-wash in the metric the whole
 gate is denominated in; one is a login the crawler declared *failed* on an
 application it had already signed into.
 
@@ -35,6 +35,9 @@ Fixed here:
 | 4 | "Still busy" decided on the wrong signal, twice | `app/auth.py` |
 | 5 | A CI leg published a port nothing listened on | `browser-harness.yml` |
 | 6 | Three depth fields were computed, stored, and read by nothing | `qe-central/app/services/fleet_funnel.py` |
+| 7 | A destination advance was refused as an irreversible act | `app/refuse_pack.yaml` (reviewed carve-out) |
+| 8 | The hydration gate settled while the page was visibly working | `app/playwright_port.py` |
+| 9 | 7 of 8 of this gate's own assertions passed on an empty crawl | `tests/browser/test_gate2_three_applications.py` |
 
 Recorded, deliberately **not** fixed:
 
@@ -95,24 +98,72 @@ NUMBER VKPL-336267"*. Before the fix: zero.
 
 Engine suite after the change: **2016 passed, 0 failed.**
 
-### Why A14 is still NOT met
+### Why A14 is still NOT met — and how far it moved
 
-The Next.js app that the Docker image serves — the one CI crawls — does **not**
-complete. It walks the quote funnel and four apply steps and then stops at
-`Continue to Underwriting Decision`, a `router.push` flagged DANGER because
-`rp.verb.underwrite` matches its button *name*. The remaining funnel
-(`payment → beneficiary → signature → confirmation`) is behind it.
+The Next.js app the Docker image serves — the one CI crawls, and the one the
+live portal at `vkpowerlife.136-85-106-73.sslip.io` serves — is a fifteen-step
+funnel. Three fixes landed today took it from **depth 6 to depth 12**:
 
-Two further obstacles sit past that point, both measured:
+| depth | what unblocked it |
+|---|---|
+| 6 | baseline |
+| 10 | `walker.py` — a route revealed mid-walk is enqueued |
+| 11 | `rp.allow.destination_advance_step` — the reviewed carve-out below |
+| 12 | `_BUSY_JS` — the hydration gate waits while the page is visibly working |
 
-* `/apply/decision/` renders a **2.5-second processing state** — measured
-  `1:complete:725` for ~1.75s, then `3:complete:720` — so a walk that
-  inventories on arrival sees no forward control at all;
-* the signature step requires five consent checkboxes **and** a typed signature
-  matching the legal name entered seven steps earlier, which only a contiguous
-  walk (preserving the React store) can satisfy.
+The walk now runs `member-lookup → personal-info → replacement → health →
+lifestyle → decision → payment` contiguously, and **tier 2 fires for the first
+time** on this application (`advances_by_tier: {"1": 15, "2": 1, "3": 6}`).
 
----
+#### The third fix, because it generalises
+
+`/apply/decision/` renders a spinner for ~1.8s before mounting its verdict. The
+hydration gate has an empty-shell guard (`_MIN_INTERACTIVE`) designed for
+exactly this, and it never fired: the SIGNED-IN header alone offers Dashboard /
+Beneficiaries / Get a Quote, so the interactive count is comfortably over the
+floor while the spinner is still on screen. The walk inventoried a page whose
+only controls were nav links, tier 3 picked "Get a Quote", and a fifteen-step
+funnel became an eleven-step loop back to the start.
+
+A running CSS animation is the one statement a spinner makes in every framework,
+and it needs no vocabulary and no page knowledge to read. Checked only once the
+signature has otherwise gone stable, and bounded, so a page that is not
+animating pays a single extra evaluate.
+
+*(An earlier hypothesis — that the settle was completing against the page being
+LEFT — was wrong; the URL is now in the quiescence signature anyway, which is
+correct on its own terms, but it was not what stopped this walk. The measurement
+that separated them was the tier-3 candidate list, which showed header nav and
+nothing else.)*
+
+#### What stops it now, and why it is A18's problem
+
+The payment step's `Continue to Beneficiary Designation` is `disabled={!method}`.
+The method is chosen from two **button-shaped choice cards**, and the crawl's
+unblock experiment (`_answer_to_unblock`) handles checkboxes and radio groups —
+not buttons. So the decision falls to tier 3, whose candidate set was:
+
+```
+[Dashboard, Beneficiaries, Get a Quote, Monthly, Quarterly, Semi-Annual,
+ Annual, Credit / Debit Card Visa Mastercard Discover Amex, Back]
+```
+
+The right answer is there. The deterministic stand-in cannot reach it: choosing
+a payment method is a semantic judgement, not a label match, and no forward-word
+rule selects "Credit / Debit Card". Teaching the stand-in that answer would be
+tuning a test double to one application, which is the one thing it must not be.
+
+**This is A18's requirement, met in the only part that does not need a model: a
+navigation decision on a real application that Tier-1 and Tier-2 provably cannot
+resolve, identified and reproducible.** A18's remaining half — a live
+consultation that answers it — needs qe-central, a fleet HMAC secret and a model
+credential, none of which exist on this machine.
+
+Two steps sit behind that one: a beneficiary step, and a signature step gated on
+five consent checkboxes plus a typed signature matching the legal name entered
+seven steps earlier. The application stores its state in `sessionStorage`, so
+that cross-step match is reachable by a crawl — it does not require one
+unbroken page session, which was an earlier and wrong assumption recorded here.
 
 ## §3 · The green-wash this gate produced, then caught
 
@@ -178,6 +229,42 @@ The correct remedy for the vkpower blocker is the one the refuse pack already
 documents: a reviewed, versioned `allow_overrides` row — "adding a row is an
 auditable, human-reviewed decision" — not a grant that lies about what a control
 does.
+
+### That decision was subsequently taken, on evidence
+
+Classifying **every** forward control in vkpower-life's funnel against the pack
+produced the discriminator, rather than an argument:
+
+| control | refuse pack | `is_destination_advance` |
+|---|---|---|
+| Continue to Personal Information | safe | True |
+| Continue to Health Questionnaire | safe | True |
+| Continue to Lifestyle Questions | safe | True |
+| **Continue to Underwriting Decision** | **danger** `rp.verb.underwrite` | True |
+| **Continue to Payment** | **danger** `rp.verb.pay` | True |
+| **Continue to Signature** | **danger** `rp.verb.sign` | True |
+| **Sign & Submit Application** | **danger** `rp.verb.sign` | **False** |
+
+Every navigation is a Tier-2 destination advance and **the control that actually
+commits is not**. The rule the codebase already trusts at Tier 2 separates them
+exactly, on this application, without help — the refuse pack simply was not
+allowed to agree with it.
+
+`rp.allow.destination_advance_step` lets it. Full-string anchored, scoped to
+`button_name` only (no GET can be unblocked by it), and the destination noun is
+**enumerated from the three measured step names** rather than left open, so
+widening it later is another auditable decision instead of a silent consequence
+of this one. `Submit to Underwriting`, `Sign & Submit Application`,
+`Continue to Pay Now` and `Continue to Underwriting and Bind` all stay refused.
+
+This is the third time `rp.verb.underwrite` has over-blocked: it was scoped off
+`url_path` after marking 20 of 35 controls on one page as critical, including a
+Back button and a notification bell.
+
+Audited in `tests/test_refuse_pack_allow_overrides.py` — 21 assertions, of which
+the majority test what the row must still REFUSE. `test_guard.py`'s
+`allow_overrides == ()` pin caught the change, which is exactly what that pin is
+for; it now pins the reviewed set instead of emptiness.
 
 ---
 

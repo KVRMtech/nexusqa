@@ -42,6 +42,18 @@
       "tier3_source": "deterministic-stub"
     },
     {
+      "url": "https://vkpowerlife.136-85-106-73.sslip.io/portal/beneficiaries/",
+      "title": "VKPower Life Insurance",
+      "candidates": [
+        "Dashboard",
+        "Beneficiaries",
+        "Get a Quote",
+        "Add Beneficiary"
+      ],
+      "picked": "Get a Quote",
+      "tier3_source": "deterministic-stub"
+    },
+    {
       "url": "https://vkpowerlife.136-85-106-73.sslip.io/life-insurance/quote/review/",
       "title": "VKPower Life Insurance",
       "candidates": [
@@ -52,18 +64,6 @@
         "Back to Dashboard"
       ],
       "picked": "Start Over",
-      "tier3_source": "deterministic-stub"
-    },
-    {
-      "url": "https://vkpowerlife.136-85-106-73.sslip.io/portal/beneficiaries/",
-      "title": "VKPower Life Insurance",
-      "candidates": [
-        "Dashboard",
-        "Beneficiaries",
-        "Get a Quote",
-        "Add Beneficiary"
-      ],
-      "picked": "Get a Quote",
       "tier3_source": "deterministic-stub"
     }
   ],
@@ -79,15 +79,15 @@
     "flows_completed": 0,
     "journeys_completed": 0,
     "boundaries_crossed": 0,
-    "deepest_flow_steps": 7,
+    "deepest_flow_steps": 6,
     "deepest_flow_proven_steps": 0,
     "deepest_flow_capped": true,
     "deepest_flow_terminal": "loop",
     "advances_by_tier": {
-      "1": 7,
-      "3": 4
+      "1": 8,
+      "3": 2
     },
-    "oracle_advances": 4
+    "oracle_advances": 2
   },
   "stop_reason": null,
   "approvable_boundaries_seen": [
