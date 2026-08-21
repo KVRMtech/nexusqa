@@ -908,6 +908,60 @@ def test_the_key_id_derivation_matches():
         assert central_key_id(pub) == attest.key_id(pub)
 
 
+# CERT-FINDING-2 / A11a — the IPv6 class, checked against BOTH copies.
+#
+# ``normalize_origin`` is written twice, in two services that share no package,
+# and the copies must not diverge.  This module is the only place both are
+# loaded in one interpreter (the real shipping verifier is loaded BY PATH — see
+# ``_a11_kit``), so it is the only place "fix both, or pin them identical" can
+# be enforced rather than hoped for.
+#
+# Two invariants per vector:
+#   AGREEMENT   — the issuer's copy and the verifier's copy return the same
+#                 string.  A divergence is invisible to either service's own
+#                 tests and would refuse every genuine proof at once.
+#   IDEMPOTENCE — ``N(N(u)) == N(u)``.  The issuer SIGNS this output and the
+#                 verifier re-normalises it, so an output that cannot be
+#                 re-parsed is a valid proof guaranteed to be refused.
+#
+# The defect was the reassembly (``urlsplit`` reports ``hostname`` without
+# brackets and they were never put back), so it broke EVERY host containing a
+# ':'.  These vectors pin the class; the controls are the repair's guard.
+ORIGIN_VECTORS = [
+    ("https://[2001:db8::1]:8443/x", "https://[2001:db8::1]:8443"),
+    ("https://[2001:db8::1]/x",      "https://[2001:db8::1]"),
+    ("https://[::1]/x",              "https://[::1]"),
+    ("https://[::1]:8443/x",         "https://[::1]:8443"),
+    ("https://[fe80::1%25eth0]/x",   "https://[fe80::1%25eth0]"),
+    ("https://[::ffff:192.0.2.1]/x", "https://[::ffff:192.0.2.1]"),
+    ("https://[::]/x",               "https://[::]"),
+    ("https://[2001:0db8:0000:0000:0000:0000:0000:0001]/x",
+     "https://[2001:0db8:0000:0000:0000:0000:0000:0001]"),
+    ("https://[::1]:443/x",          "https://[::1]"),
+    ("http://[::1]:80/x",            "http://[::1]"),
+    # CONTROLS — unchanged by the repair.
+    ("https://192.0.2.1:8443/x",     "https://192.0.2.1:8443"),
+    ("https://example.test:8443/x",  "https://example.test:8443"),
+    # NEGATIVE CONTROLS — including the string the OLD code emitted, which must
+    # stay unusable rather than becoming parseable as a side effect.
+    ("https://[::1]:notaport/x",     ""),
+    ("https://2001:db8::1:8443",     ""),
+]
+
+
+@pytest.mark.parametrize("url,expected", ORIGIN_VECTORS)
+def test_origin_normalisation_is_idempotent_in_both_copies(url, expected):
+    from app.services.walk_attestation import normalize_origin as central
+
+    for name, fn in (("issuer", central), ("verifier", attest.normalize_origin)):
+        once = fn(url)
+        assert once == expected, f"{name} normalised {url!r} to {once!r}"
+        assert fn(once) == once, (
+            f"{name} emitted {once!r}, which it cannot re-parse: the issuer "
+            f"signs that string and the verifier re-normalises it, so this is "
+            f"a valid proof guaranteed to be refused as origin_mismatch")
+
+
 @pytest.mark.parametrize("url,expected", [
     ("https://example.test/x", "https://example.test"),
     ("https://example.test:443/x", "https://example.test"),

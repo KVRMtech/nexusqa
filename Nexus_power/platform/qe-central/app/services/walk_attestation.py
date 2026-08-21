@@ -122,6 +122,17 @@ def normalize_origin(url: str) -> str:
     Identical to ``app.attest.normalize_origin``, including its fail-closed
     empty return: the verifier treats an empty origin on EITHER side as a
     mismatch rather than a wildcard, so minting one guarantees a refusal.
+
+    That includes the IPv6 re-bracketing (CERT-FINDING-2 / A11a).  ``urlsplit``
+    reports ``hostname`` without brackets, so reassembling ``host:port`` emitted
+    ``https://::1:8443``, which this function re-parses to ``""``.  The issuer
+    SIGNS this output and the verifier re-normalises it, so the two must agree
+    AND the output must survive a second pass - an IPv6 environment was
+    otherwise issued a valid proof that was certain to be refused.
+
+    The copies are duplicated by design and MUST NOT diverge: this one and
+    ``app.attest.normalize_origin`` are fixed together, and the certification
+    harness checks both against one shared vector table.
     """
     try:
         parts = urlsplit((url or "").strip())
@@ -135,6 +146,8 @@ def normalize_origin(url: str) -> str:
         return ""
     if not scheme or not host:
         return ""
+    if ":" in host:             # IPv6 literal - urlsplit stripped its brackets
+        host = f"[{host}]"
     if port and not ((scheme == "https" and port == 443)
                      or (scheme == "http" and port == 80)):
         return f"{scheme}://{host}:{port}"

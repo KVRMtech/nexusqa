@@ -231,6 +231,64 @@ def test_origin_normalisation_elides_default_ports_only():
     assert normalize_origin("") == ""
 
 
+# ─── CERT-FINDING-2 / A11a — normalize_origin must be IDEMPOTENT ────────────
+#
+# The function's OUTPUT is what the issuer signs into ``claims.target_origin``,
+# and the verifier re-normalises that output before comparing it (attest.py
+# gate 9).  So an output this function cannot re-parse is not a cosmetic defect:
+# it is a cryptographically valid proof that is GUARANTEED to be refused as
+# ``origin_mismatch``, on a correctly-provisioned environment, with an error
+# that points away from its cause.
+#
+# The original defect: ``urlsplit`` reports ``hostname`` WITHOUT brackets, and
+# the reassembly never put them back —
+#
+#     'https://[::1]:8443/x'  ->  'https://::1:8443'  ->  ''
+#
+# It is the reassembly that is wrong, so EVERY host containing ':' broke.  The
+# table below is therefore a CLASS, not the list of forms that were reported;
+# fencing the reported forms would license a repair that leaves the class open.
+IDEMPOTENCE_VECTORS = [
+    # (url, expected origin)
+    ("https://[2001:db8::1]:8443/apply", "https://[2001:db8::1]:8443"),
+    ("https://[2001:db8::1]/apply",      "https://[2001:db8::1]"),
+    ("https://[::1]/apply",              "https://[::1]"),
+    ("https://[::1]:8443/apply",         "https://[::1]:8443"),
+    ("https://[fe80::1%25eth0]/apply",   "https://[fe80::1%25eth0]"),
+    ("https://[::ffff:192.0.2.1]/apply", "https://[::ffff:192.0.2.1]"),
+    ("https://[::]/apply",               "https://[::]"),
+    ("https://[2001:0db8:0000:0000:0000:0000:0000:0001]/apply",
+     "https://[2001:0db8:0000:0000:0000:0000:0000:0001]"),
+    # Default ports are still elided for IPv6, exactly as for a DNS host.
+    ("https://[::1]:443/apply",          "https://[::1]"),
+    ("http://[::1]:80/apply",            "http://[::1]"),
+    # CONTROLS — the repair's guard.  Re-bracketing too eagerly would break
+    # these, and they were idempotent before the fix as well.
+    ("https://192.0.2.1:8443/apply",     "https://192.0.2.1:8443"),
+    ("https://staging.example.test:8443/apply", "https://staging.example.test:8443"),
+    ("https://staging.example.test/apply", "https://staging.example.test"),
+    # NEGATIVE CONTROLS — an unparseable authority must still fail CLOSED to
+    # "", the verifier's mismatch sentinel, and must not become parseable as a
+    # side effect of the repair.  The middle two are the BROKEN OUTPUT the old
+    # code emitted: it must stay unusable rather than resolve to some other host.
+    ("https://[::1]:notaport/apply",     ""),
+    ("https://2001:db8::1:8443",         ""),
+    ("https://::1",                      ""),
+    ("not a url",                        ""),
+    ("",                                 ""),
+]
+
+
+@pytest.mark.parametrize("url,expected", IDEMPOTENCE_VECTORS)
+def test_origin_normalisation_is_idempotent(url, expected):
+    """``N(N(u)) == N(u)`` for every origin shape, IPv6 included."""
+    once = normalize_origin(url)
+    assert once == expected
+    assert normalize_origin(once) == once, (
+        f"normalize_origin emitted {once!r}, which it cannot re-parse; the "
+        f"issuer signs that string and the verifier re-normalises it")
+
+
 # ─── Revocation ─────────────────────────────────────────────────────────────
 
 def test_revoked_proof_id_refuses(issuer, guard):

@@ -189,6 +189,23 @@ def normalize_origin(url: str) -> str:
 
     Fail-closed: anything unparseable returns ``""``, and the caller treats an
     empty origin on either side as a MISMATCH rather than a wildcard.
+
+    An IPv6 host is RE-BRACKETED (CERT-FINDING-2 / A11a).  ``urlsplit`` reports
+    ``hostname`` without brackets, so reassembling ``host:port`` from it emitted
+    ``https://::1:8443`` - a string THIS function cannot re-parse, so a second
+    pass returned ``""``.  That is not cosmetic: the output is signed into
+    ``claims.target_origin`` and the verifier re-normalises it before comparing,
+    so a non-idempotent output is a cryptographically valid proof guaranteed to
+    be refused as ``origin_mismatch`` on a correctly-provisioned environment.
+
+    The test is ``":" in host`` and not a list of IPv6 shapes: the defect is the
+    reassembly, so EVERY host containing a colon breaks.  Enumerating the forms
+    that were reported would have left the class open.
+
+    ``N(N(u)) == N(u)`` is asserted for the whole origin-vector suite in
+    ``tests/test_walk_attestation.py``; the malformed-port vector still returns
+    ``""``, because a repair that made an unparseable authority parseable would
+    turn the verifier's mismatch sentinel into an origin.
     """
     try:
         parts = urlsplit((url or "").strip())
@@ -202,6 +219,8 @@ def normalize_origin(url: str) -> str:
         return ""
     if not scheme or not host:
         return ""
+    if ":" in host:             # IPv6 literal - urlsplit stripped its brackets
+        host = f"[{host}]"
     if port and not ((scheme == "https" and port == 443)
                      or (scheme == "http" and port == 80)):
         return f"{scheme}://{host}:{port}"

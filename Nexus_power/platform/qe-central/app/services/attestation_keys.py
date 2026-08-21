@@ -9,25 +9,53 @@ no human in the loop at mutation time — that is the whole design of M1.3.  So
 this key is not "a credential"; it is the platform's root of trust, and it is
 handled accordingly.
 
-WHY THE KEY IS SEALED AND NOT KMS-RESIDENT — the one real constraint
-====================================================================
+WHY THE KEY IS SEALED AND NOT KMS-RESIDENT — an operational choice, not a
+constraint
+=========================================================================
 The strongest possible custody is a key that never exists outside the HSM:
-Cloud KMS holds it and ``asymmetricSign`` is called for every signature.  THAT
-IS NOT AVAILABLE HERE, and the reason is worth stating precisely rather than
-leaving as folklore:
+Cloud KMS holds it and ``asymmetricSign`` is called for every signature.  We do
+not do that.  The reason is worth stating precisely rather than leaving as
+folklore — and the reason recorded here until 2026-08-21 was FALSE.
 
-  * ``app/attest.py`` — the shipped, red-teamed explorer verifier — pins
-    ``SIG_ALG = "ed25519"`` and accepts trust anchors ONLY as raw 32-byte
-    Ed25519 public keys (``TrustStore.from_public_keys`` drops anything else).
-  * Google Cloud KMS offers no Ed25519 asymmetric-signing key type.  Its
-    asymmetric sign algorithms are RSA and NIST-curve ECDSA.
+**CORRECTED (CERT-FINDING-1, A11 independent certification 2026-08-20).**  This
+docstring used to assert that *Cloud KMS offers no Ed25519 asymmetric-signing
+key type*, and that KMS-native signing would therefore mean changing the
+algorithm on BOTH sides of a red-teamed verifier.  Both claims are wrong:
 
-So KMS-native signing would require changing the algorithm on BOTH sides of a
-verifier that has already been through red-team review.  Trading an audited
-verifier for a marginally better custody model is a bad trade, and doing it
-silently would be worse.  We therefore use the ENVELOPE (KEK re-wrap) pattern
-established in M0.5, which is also what ``services/signing.py`` was written for
-("the envelope sealing of the private key lives in the persistence layer").
+  * Cloud KMS provides ``EC_SIGN_ED25519`` — EdDSA over Curve25519, pure mode,
+    raw input.  It is a supported asymmetric-signing algorithm, not an absence.
+  * The verifier therefore does not change AT ALL.  ``app/attest.py`` pins
+    ``SIG_ALG = "ed25519"`` and accepts trust anchors only as raw 32-byte
+    Ed25519 public keys, and ``EC_SIGN_ED25519`` emits exactly those bytes.
+    Only the issuer's sign call moves, plus unwrapping the raw 32 bytes from
+    the DER ``SubjectPublicKeyInfo`` that ``GetPublicKey`` returns.
+
+That matters beyond tidiness: a false impossibility is a decision nobody can
+re-open.  It read as "there is no alternative", and it was the stated
+justification for the residual risk below — a plaintext signing key in this
+process's heap.  A future engineer weighing key custody must weigh a real
+trade-off, not a fiction.
+
+THE ACTUAL GROUNDS FOR THE ENVELOPE (KEK re-wrap) PATTERN
+=========================================================
+The choice may well still be correct.  It is re-taken here on grounds that are
+true, and each is a cost a KMS-resident key would impose:
+
+  * LATENCY — KMS-native signing puts a KMS round-trip on every signature,
+    where the envelope pattern pays one unseal per signer and signs locally.
+  * AVAILABILITY COUPLING — issuance would fail whenever ``asymmetricSign`` is
+    unavailable.  Today a KMS outage blocks a fresh unseal; it does not block a
+    signer that is already live.
+  * PROVISIONING AND IAM — ``ASYMMETRIC_SIGN`` is a different key PURPOSE from
+    the ``ENCRYPT_DECRYPT`` KEK this platform already provisions (M0.5), so it
+    needs a new key, new IAM bindings and new rotation handling rather than
+    reusing what exists.
+
+None of these are impossibilities, and none of them are settled forever: this is
+an accepted trade, revisitable on evidence.  What we use instead is the ENVELOPE
+(KEK re-wrap) pattern established in M0.5, which is also what
+``services/signing.py`` was written for ("the envelope sealing of the private
+key lives in the persistence layer").
 
 THE HONEST SECURITY STATEMENT — no undocumented assumptions
 ===========================================================
@@ -50,8 +78,11 @@ What it does NOT give, stated plainly:
     erasure, and it is not claimed as more.
 
 That residual risk is bounded by rotation (below) and detected by KMS audit
-logs, and it is the price of keeping the audited Ed25519 verifier.  It is a
-documented, accepted assumption — not a gap.
+logs.  It is a documented, accepted assumption — not a gap.  It is NOT, as this
+file previously claimed, the unavoidable price of keeping the audited Ed25519
+verifier: ``EC_SIGN_ED25519`` would remove it without touching that verifier, at
+the latency, availability and provisioning costs listed above.  The risk is
+accepted on those grounds and can be revisited on them.
 
 THE PRIVATE KEY NEVER CROSSES A MODULE BOUNDARY
 ===============================================
