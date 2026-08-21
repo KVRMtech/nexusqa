@@ -92,6 +92,18 @@ Nexus_power/engines/qe-explorer/tests/browser/golden/**    text eol=lf
 # simply deleting and re-checking-out the files, closes it — but check
 # `git status` first: re-checkout destroys uncommitted work, and this tree is
 # shared between sessions.
+#
+# AND MEASURE BY SIZE, NOT BY GREP. On Windows git translates its own stdout, so
+# `git cat-file blob <sha> | grep -c $''` can report CR on every line of a blob
+# that is stored LF — a false POSITIVE that looks exactly like the bug. Compare
+# byte counts instead, which nothing translates:
+#
+#     git cat-file -s HEAD:<path>     vs     the file's size on disk
+#
+# Equal means the working copy is already LF. A difference equal to the LINE
+# COUNT means the working copy is CRLF and the blob is LF, which is the healthy
+# normalised state, not a defect. (Found by nexusqa-e3, who nearly filed a
+# shebang bug against a script that was fine.)
 
 # Binary — never touched, never diffed as text.
 *.png     binary
