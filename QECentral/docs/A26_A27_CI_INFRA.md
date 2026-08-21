@@ -596,7 +596,59 @@ the problem it warns about: **a record that is true only where its subject
 happens to live.** Landing the four files in §0 resolves it; until then, this
 caveat is the honest form of the claim.
 
-**Not yet proven:** the GitHub Actions run itself. Everything above is the CI
+**PROVEN IN CI.** Run `32485861007`, commit `f512fda`, job *QE-Central database
+& tenant-isolation contract*:
+
+| step | result |
+|---|---|
+| Phase 3b — start MinIO and bootstrap the evidence bucket | **success** |
+| A27.2 — no-silent-skip canary | **success** |
+| A26.2 — T-FL-03 object-storage handoff (first execution in CI) | **success** |
+| A26.2 — prove the six S3-gated tests were collected and executed | **success** |
+| Teardown — remove the MinIO container | **success** |
+
+**The six tests have now executed in CI.** The evidence step confirmed all six
+collected by name, passed, and nothing skipped.
+
+### What the first run found — the point of running it
+
+The previous run (`32483911098`) was red, on a defect no laptop could produce:
+
+```
+PermissionError: [Errno 13] Permission denied: '/app'
+  LocalStorage.__init__ -> self._root.mkdir(parents=True)
+```
+
+`settings.nexus_storage_path` ships as the **container** path
+`/app/service/data`. On a Linux runner creating it needs root; on a Windows
+laptop the same string resolves to a drive-relative path the developer can
+create. It passed locally every time and could only ever fail on the machine
+that matters. Fixed in `f512fda`, verified by reproducing an unwritable storage
+root locally and confirming the counterfactual — reverting just those lines
+reproduces CI's exact error.
+
+**And a false pass underneath it.** Two sibling tests hit the *same*
+`PermissionError` and passed, because `backend_name()` swallows construction
+errors and answers `"local"`. For a local deployment that is correct; for one
+configured `s3` it means `publish_crawl_dir` becomes a no-op returning 0 and every
+crawl's evidence is silently never published — this module's own defect, wearing
+the costume of a working local install. `is_object_backed()` is now fail-closed
+in that one direction, with both directions pinned by tests.
+
+### Still red, and not this milestone's
+
+Phase 6 (the whole suite against live infrastructure) fails with 98
+`permission denied for table tenants` errors. `qec_db_bootstrap.sql:103` grants
+`SELECT, INSERT ON tenants TO qec_substrate` with the deliberate comment *"No
+UPDATE/DELETE — existing tenants are never touched"*, while
+`tests/fleet/conftest.py::_clean_fleet` **deletes** tenants through that role. It
+is ordering-dependent — an `if tenants:` guard means the DELETE only fires once a
+`tfl%` tenant exists, which is why Phase 5 and the dedicated A26.2 step are green
+in the same job. The T-FL-03 tests appear among the 98 only because the shared
+fleet fixture errors at setup and takes the whole directory with it. Handed to
+the fleet-suite-in-CI lane with the recommendation to route the purge through
+`QEC_TEST_ADMIN_DATABASE_URL` rather than widen a least-privilege grant on the
+table tenant isolation is anchored to. Everything above is the CI
 recipe executed step for step on a developer machine, which is the strongest
 evidence obtainable before the workflow is pushed — but Linux runner behaviour
 (image pull time, loopback connect semantics, the `/tmp` junit path) is confirmed
