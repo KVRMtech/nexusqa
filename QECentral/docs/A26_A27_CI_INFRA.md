@@ -39,6 +39,16 @@ proof and is described in [§9](#9-what-is-proven-and-what-is-not).
 > stages exactly those eight paths, untracked ones included, and leaves the shared
 > index untouched. The `commit` step itself was not run.
 >
+> **A FINAL `git reset` IS PART OF THE RECIPE, NOT TIDYING.** Committing through a
+> private index leaves the SHARED index pointing at the old HEAD. Once HEAD
+> advances, every file your commit ADDED reads as a staged *deletion* there, and
+> every file it MODIFIED reads as a staged *revert* — so the next plain
+> `git add … && git commit` by any session silently removes your work inside a
+> commit about something else. This was observed, not theorised: immediately
+> after `0c26853` the shared index held all four new files as `D`. `git reset`
+> (no pathspec, no `--hard`) resyncs it; the working tree is untouched and
+> nothing is lost.
+>
 > **Part of A27.1 has already landed**, swept into two other sessions' commits
 > from that shared index: the skip-reason fix to `test_t_fl_01` is in `099a597`,
 > and `test_t_fl_06` / `test_t_fl_08` are in `3778c1a`. Those three are done and
@@ -550,6 +560,20 @@ What the outage *did* corrupt was **timing**. The canary took 408 s during the
 contention window against 15–32 s before and 15.0 s after. Anyone reading a slow
 canary in a CI log should suspect a loaded runner before suspecting the canary:
 its ~17 subprocess pytest sessions cost about a second each on a quiet machine.
+
+**Committed as `0c26853`** (9 files), through the private-index recipe, verified
+to contain exactly those files and nothing swept from concurrent sessions. The
+committed tree was checked for self-consistency: every file `ci.yml` references
+is present in the same commit, the shell script's committed blob begins
+`#!/usr/bin/env bash
+` with no CR, and the committed `conftest.py` imports the
+gate.
+
+**Not pushed.** `git push origin` returns *Permission to KVRMtech/nexusqa.git
+denied to Venkatareddy2012* — the SSH key belongs to an account without write
+access. An `origin-https` remote and a credential manager exist, but trying a
+second identity after an explicit access denial is an owner decision, not an
+automatic one. Six commits are unpushed on this branch (three squads').
 
 **Not reproducible from a clean clone yet.** The Gate 4 defect register
 (`b533a6a`, `6292518`) cites several findings from this milestone — the
