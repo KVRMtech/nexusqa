@@ -306,6 +306,34 @@ never a false acceptance. Severity: availability only.
 
 ---
 
+## 4.1 Implication for downstream work — do not extend the signed claims
+
+Recorded here because it follows from what was certified, and because the
+question reached the certifying squad from Gate 4 (session `nexusqa-9e`, re:
+A30's signed vision rung).
+
+**Adding any field to the signed claims de-certifies A11 and breaks every
+existing proof.** Two independent mechanisms make this stricter than it looks:
+
+1. `ProofClaims` is `extra="forbid"`, so an unknown field is **refused at schema
+   validation** (`malformed_claims`) — not ignored, not tolerated.
+2. Integrity is verified over the **raw claims, before the typed parse**
+   (`attest.py` step 4). So the signature covers exactly the bytes that arrived,
+   and a new field changes them.
+
+A new claim therefore requires re-cutting the frozen contract on **both** sides
+of a seam whose whole design exists because the two services cannot share an
+interpreter — and it edits `attest.py`, which this record pins, so it lapses
+this certification as a side effect.
+
+**The supported pattern instead:** derive the downstream fact on the explorer
+from its own verification verdict, exactly as `walk_attested` already does
+(`guard_context.walk_attested` reads `verdict.authorized` and nothing else). The
+verdict is already trustworthy at that point; re-signing a restatement of it buys
+nothing and costs a contract migration.
+
+---
+
 ## 5. Certification statement
 
 Against the A11 acceptance criteria:
