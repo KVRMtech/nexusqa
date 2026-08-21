@@ -85,6 +85,35 @@ now assert subject presence (≥50 modules parsed, ≥20 reasons extracted, a re
 `DB_ENV_VARS` containing a known DSN) and both mutations that previously passed
 now fail loudly.
 
+### The count stopped being the point
+
+Every squad that applied the question to their own work found instances. Gate 3
+fed each of its evidence modules a structurally valid recording of a crawl that
+observed **nothing**: A23 passed 9 of 10 claims, A24 passed 6 of 9. Their suites
+failed overall — one test in each asserts non-empty — while every individual
+claim went green on an empty population.
+
+Their own example is the one to remember:
+
+> A23's "unrelated requests are not attached to actions" — 61 navigation events,
+> zero borrowed labels — "is the assertion I was most pleased with. On an empty
+> recording it passed just as confidently, because zero of zero is zero."
+
+**The assertion you are proudest of is the likeliest to be vacuous**, because
+specificity is what makes it depend on two populations both being present, and
+nothing makes it say so.
+
+The fix that squad landed is also the better form, and it converges with the one
+A26/A27 arrived at independently: assert the population **at the scale the claim
+needs**, not merely non-empty. A two-event recording satisfies "non-empty" while
+proving nothing about a join, exactly as a scan that finds three modules
+satisfies it while proving nothing about a codebase.
+
+So the useful statement is not a total. It is that **the question has a hit rate
+close to one on any suite nobody has asked it of yet** — including, in every
+case so far, the suites written by the people who were pointing the class out in
+someone else's work.
+
 ### Two further shapes
 
 **The wrong subject, rather than an absent one.** Gate 2 nearly recorded a
