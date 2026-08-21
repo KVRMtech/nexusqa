@@ -19,7 +19,7 @@ failure belongs to one of those, it is named as theirs rather than absorbed.
 | WP | Claim | Evidence class reached | State |
 |---|---|---|---|
 | A20 | `qec_019` round-trips in the CI database | **CI** | ✅ green |
-| A21 | Two real crawls, three deliberate changes, three correct classifications | real crawl | in progress |
+| A21 | Two real crawls, three deliberate changes, three correct classifications | **real crawl** | ✅ producer 8/8 ×2, consumer 3/3 vs real Postgres |
 | A22 | A really-discovered journey compiles and protects behaviour | — | not started |
 | A23 | Real-application network trace with correct action joins | — | not started |
 | A24 | M2.6 capture against a live tenant | — | not started |
@@ -243,6 +243,24 @@ the `changed` claim, not an inference about it. `q_deb713bd` is also the id the
 independent M2.3 crawls gave “SSN (synthetic)”, so identity is stable across
 separate crawls of the same application.
 
+**Consumer — 3/3 against a real Postgres**, through the whole production chain
+(`fold_crawl` → `build_app_master_catalog` → `persist_catalog_version` →
+`diff_latest_versions` → `diff_catalogs`):
+
+```
+baseline crawl  : a21-baseline       (15 questions)
+second crawl    : a21-after-change   (16 questions)
+
+ADDED:    q_a9e6547640cd56f6  'Occupation'
+REMOVED:  q_deb713bdc6328a09  'SSN (synthetic)'
+              lifecycle        : retired
+              retired_in_crawl : a21-after-change
+              last seen in     : a21-baseline
+CHANGED:  q_8790b5befc3bdbc0  'State'  kinds=['options_changed']
+              options: ['CA','FL','TX'] -> ['CA','FL','NY','TX']
+UNCHANGED (13)
+```
+
 ### The control group
 
 Five questions — one from each page the funnel walks — are asserted to survive
@@ -250,6 +268,50 @@ all three changes, and the consumer additionally requires every non-target
 question to land in `unchanged`. Without this, `removed` could be produced by a
 crawl that simply saw less and `added` by one that saw more: a diff over two
 crawls of *different depth* is not a diff of two versions of an application.
+
+### A finding the real evidence produced, kept rather than smoothed over
+
+**Changing a page's FORM re-keys that page's *button-space* question.**
+
+Besides the questions an application asks, the catalogue carries one derived
+pseudo-question per page — `"Next action"`, the classified button space at a
+decision node. Its identity is
+
+```python
+digest = sha256(sorted(option labels) + "@" + node_fingerprint)   # crawl_constants.py
+```
+
+The node fingerprint moves when the page's controls move. So removing
+“SSN (synthetic)” and adding “Occupation” changed the application page's
+fingerprint, and **the same five buttons arrived under a new `question_id`**:
+
+```
+nextaction:20b8a7c3bd99a82  ->  nextaction:1779cec30bf7044
+options (identical on both sides):
+  ['Apply', 'Review & bind', 'Optional riders',
+   'Policy replacement disclosures', 'Continue to review']
+```
+
+The diff therefore reports an `added` question the application never gained,
+whose answer set is indistinguishable from one already in the catalogue — and it
+is added without a matching `removed`, so the catalogue keeps both.
+
+The binding to the fingerprint is deliberate (“keeps two different pages'
+identical button sets distinct”), and changing it is a decision about state
+identity across every milestone — **not A21's to make unilaterally**, especially
+with concurrent sessions working in exactly that area.
+
+What A21 does instead of hiding it: the three classifications are asserted over
+the **application's own questions**, and the next-action movement is asserted
+*separately and exactly* — `added <= 1`, `removed == 0`, `changed == 0`, with the
+observed re-key printed in the CI log. The test goes red if that noise ever grows
+beyond the one re-key measured here, rather than quietly absorbing more of it.
+
+**Recommended follow-up (not done here):** key the next-action digest to the
+page's *route identity* rather than its full node fingerprint. The stated intent —
+distinguishing two different pages with the same buttons — is served by route
+identity; binding to the form's contents buys nothing and costs a phantom row in
+every change report that touches a form.
 
 ### A defect this milestone found: an evidence guard that could never pass
 

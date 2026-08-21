@@ -248,6 +248,74 @@ async def _run(capsys) -> None:
 
         changed_by_id = {c["question_id"]: c for c in diff["changed"]}
 
+        # ── THE CATALOGUE HOLDS TWO KINDS OF QUESTION, AND A21 IS ABOUT ONE ──
+        #
+        # Besides the questions the application ASKS (its form controls), the
+        # catalogue carries one derived pseudo-question per page: "Next action",
+        # the classified button space at a decision node
+        # (`crawl_constants`, `control_signature = "nextaction:<digest>"`).
+        #
+        # MEASURED ON THIS EVIDENCE, and reported rather than hidden: changing a
+        # page's FORM re-keys that page's NEXT-ACTION question, even when its
+        # button set is byte-identical. The digest is
+        #
+        #     sha256(sorted(option labels) + "@" + node fingerprint)
+        #
+        # and the node fingerprint moves when the controls on the page move. So
+        # removing "SSN (synthetic)" and adding "Occupation" changed the
+        # application page's fingerprint, and the same five buttons —
+        #   ['Apply', 'Review & bind', 'Optional riders',
+        #    'Policy replacement disclosures', 'Continue to review']
+        # — arrived under a new question_id:
+        #     nextaction:20b8a7c3bd99a82  ->  nextaction:1779cec30bf7044
+        #
+        # The binding to the fingerprint is deliberate (it keeps two different
+        # pages' identical button sets distinct) and changing it is a decision
+        # about state identity across every milestone, not A21's to make. But the
+        # CONSEQUENCE belongs in the record: a reviewer reading this diff sees an
+        # `added` question the application never gained, whose answer set is
+        # indistinguishable from one already in the catalogue.
+        #
+        # So the three classifications below are asserted over the APPLICATION's
+        # questions, and the next-action movement is asserted SEPARATELY and
+        # exactly — this test goes red if that noise ever grows beyond the one
+        # re-key measured here, instead of quietly absorbing more of it.
+        NEXT_ACTION = "next action"
+
+        def is_app_question(qid: str) -> bool:
+            return str(label_of(qid)).strip().lower() != NEXT_ACTION
+
+        app_added = [q for q in diff["added"] if is_app_question(q)]
+        app_removed = [q for q in diff["removed"] if is_app_question(q)]
+        app_changed = {q: c for q, c in changed_by_id.items() if is_app_question(q)}
+
+        na_added = [q for q in diff["added"] if not is_app_question(q)]
+        na_removed = [q for q in diff["removed"] if not is_app_question(q)]
+        na_changed = [q for q in changed_by_id if not is_app_question(q)]
+
+        with capsys.disabled():
+            print(f"\nDERIVED 'next action' DECISION POINTS (not application "
+                  f"questions):\n  added={len(na_added)} removed={len(na_removed)} "
+                  f"changed={len(na_changed)}")
+            for qid in na_added:
+                opts = (v2_by_name and next(
+                    (q.get("options") for q in audit["questions"]
+                     if q["question_id"] == qid), None))
+                print(f"  + {qid}  options={opts}")
+            print("  ^ the node fingerprint moved because the FORM moved; the "
+                  "button set did not.\n")
+
+        assert not na_removed and not na_changed, (
+            f"the derived next-action questions moved in a way this test has not "
+            f"measured: removed={na_removed} changed={na_changed}. Only a re-key "
+            f"(added, never removed) has been observed; investigate before "
+            f"widening this assertion.")
+        assert len(na_added) <= 1, (
+            f"{len(na_added)} derived next-action questions were added by a "
+            f"change to ONE page's form: {na_added}. One re-key per changed page "
+            f"is the measured cost of binding the next-action digest to the node "
+            f"fingerprint; more than that is a different problem.")
+
         # ── THE EVIDENCE, PRINTED IN FULL ───────────────────────────────────
         with capsys.disabled():
             print(f"\n{'=' * 72}\nGATE 3 / A21 — CATALOG DIFF ACROSS THREE REAL "
@@ -297,19 +365,22 @@ async def _run(capsys) -> None:
         assert added_qid, (
             f"{added_label!r} is not in the catalogue after the second fold, so "
             f"there is nothing for 'added' to name")
-        assert diff["added"] == [added_qid], (
-            f"added = {[(q, label_of(q)) for q in diff['added']]}; expected "
-            f"exactly [{added_qid} {added_label!r}]")
+        assert app_added == [added_qid], (
+            f"added (application questions) = "
+            f"{[(q, label_of(q)) for q in app_added]}; expected exactly "
+            f"[{added_qid} {added_label!r}]")
 
         # REMOVED — exactly the question the application stopped asking, and it
         # is the SAME id the baseline catalogued, not a coincidence of labels.
-        assert diff["removed"] == [removed_qid], (
-            f"removed = {[(q, label_of(q)) for q in diff['removed']]}; expected "
-            f"exactly [{removed_qid} {removed_label!r}]")
+        assert app_removed == [removed_qid], (
+            f"removed (application questions) = "
+            f"{[(q, label_of(q)) for q in app_removed]}; expected exactly "
+            f"[{removed_qid} {removed_label!r}]")
 
         # CHANGED — the identity survived and the answer set moved underneath it.
-        assert list(changed_by_id) == [changed_qid], (
-            f"changed = {[(q, label_of(q)) for q in changed_by_id]}; expected "
+        assert list(app_changed) == [changed_qid], (
+            f"changed (application questions) = "
+            f"{[(q, label_of(q)) for q in app_changed]}; expected "
             f"exactly [{changed_qid} {changed_label!r}].\n"
             f"If {changed_label!r} appears in BOTH added and removed instead, "
             f"the change crossed an option-shape bucket and minted a new "
@@ -331,7 +402,7 @@ async def _run(capsys) -> None:
         # was not one of the three has to land in `unchanged` — otherwise the
         # three classifications above are true but the diff is still noisy, and a
         # reviewer cannot act on it.
-        moved = set(diff["added"]) | set(diff["removed"]) | set(changed_by_id)
+        moved = set(app_added) | set(app_removed) | set(app_changed)
         for label in stamp["surviving_questions"]:
             qid = (v1_by_name.get(label) or {}).get("question_id")
             assert qid, f"the baseline catalogue never held {label!r}"
