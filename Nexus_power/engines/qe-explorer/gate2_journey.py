@@ -340,6 +340,39 @@ async def run(app: str, url: str, *, oracle_kind: str, out_root: Path,
             "oracle_source": oracle_source, "work": work}
 
 
+def _producing_code() -> dict[str, Any]:
+    """WHICH CODE produced this bundle — the SHA, and whether the tree was dirty.
+
+    Two live runs of this instrument against the same application, hours apart,
+    measured depth 7 and depth 12. Both were correct; the difference was a
+    refuse-pack carve-out and a hydration-gate change that landed in between.
+    Reconstructing that took reading two commit messages and diffing a YAML
+    file, and it was only possible because both runs happened to be mine.
+
+    A bundle that cannot say what produced it is a measurement without units.
+    ``dirty`` matters as much as the SHA: most of these runs are made while
+    iterating, so a bundle stamped with a clean SHA it was not actually built
+    from would be worse than no stamp at all.
+    """
+    import subprocess
+
+    def _run(args: list[str]) -> str:
+        try:
+            done = subprocess.run(args, cwd=str(EXPLORER), capture_output=True,
+                                  timeout=30, text=True)
+            return done.stdout.strip() if done.returncode == 0 else ""
+        except Exception:
+            return ""
+
+    head = _run(["git", "rev-parse", "HEAD"])
+    dirty = _run(["git", "status", "--porcelain", "--", "app", "gate2_journey.py"])
+    return {
+        "head": head or "(unknown)",
+        "dirty": bool(dirty),
+        "dirty_paths": [ln[2:].strip() for ln in dirty.splitlines()][:20],
+    }
+
+
 def verdict_of(app: str, url: str, result: Mapping[str, Any]) -> dict[str, Any]:
     """The reviewable claim: what the journey did, and what proves it."""
     cov = result["coverage"]
@@ -356,6 +389,10 @@ def verdict_of(app: str, url: str, result: Mapping[str, Any]) -> dict[str, Any]:
         "app": app,
         "target_url": url,
         "explorer_version": EXPLORER_VERSION,
+        #: WHAT PRODUCED THIS BUNDLE. Without it, two honest runs of the same
+        #: journey that disagree are indistinguishable from one of them being
+        #: wrong -- see _producing_code.
+        "produced_by": _producing_code(),
         "commit_control": APPS[app]["commit"],
         "grants": grants_for(app),
         #: Controls the funnel cannot be walked past, which this journey

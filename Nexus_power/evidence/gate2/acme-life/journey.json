@@ -2,6 +2,13 @@
   "app": "acme-life",
   "target_url": "http://127.0.0.1:8102/",
   "explorer_version": "qe-explorer/1.0+inv-js-v12",
+  "produced_by": {
+    "head": "5c0f511dec5f820e776f50d20462c3cec0e0d3af",
+    "dirty": true,
+    "dirty_paths": [
+      "Nexus_power/engines/qe-explorer/gate2_journey.py"
+    ]
+  },
   "commit_control": "Bind policy",
   "grants": [
     {
@@ -11,6 +18,7 @@
       "role": "commit"
     }
   ],
+  "known_blockers": [],
   "oracle_source": "deterministic-stub",
   "oracle_telemetry": {},
   "oracle_decisions": [
@@ -38,8 +46,8 @@
       "outcome": "confirmation",
       "confirmed": true,
       "refusal_reason": "",
-      "reserved_at_ms": 56531,
-      "completed_at_ms": 58219
+      "reserved_at_ms": 49467,
+      "completed_at_ms": 50250
     },
     {
       "crossing_id": "cross_f56573b91ec3_1",
@@ -53,8 +61,8 @@
       "outcome": "dom_changed",
       "confirmed": false,
       "refusal_reason": "",
-      "reserved_at_ms": 158813,
-      "completed_at_ms": 165733
+      "reserved_at_ms": 148000,
+      "completed_at_ms": 151890
     }
   ],
   "crossings_refused": [],
@@ -81,9 +89,9 @@
       "attestation_attributed_to": "characterization",
       "refuse_pack_version": "refuse-pack-v1",
       "guard_rule_id": "guard.submit.mutation_ok",
-      "clicked_at_ms": 56733,
-      "observed_at_ms": 58000,
-      "latency_ms": 1267,
+      "clicked_at_ms": 49515,
+      "observed_at_ms": 50186,
+      "latency_ms": 671,
       "outcome_values": [
         {
           "label": "Coverage",
@@ -137,9 +145,9 @@
       "attestation_attributed_to": "characterization",
       "refuse_pack_version": "refuse-pack-v1",
       "guard_rule_id": "guard.submit.mutation_ok",
-      "clicked_at_ms": 164297,
-      "observed_at_ms": 165516,
-      "latency_ms": 1219,
+      "clicked_at_ms": 151156,
+      "observed_at_ms": 151827,
+      "latency_ms": 671,
       "outcome_values": [],
       "verified": false,
       "grant": {
