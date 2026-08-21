@@ -16,7 +16,10 @@ asserted about an object structurally incapable of failing it.
 This harness closes that gap. Everything in the egress path is the real thing:
 
   REAL Squid          the production image (``ubuntu/squid:latest``) running the
-                      repository's own ``engines/qe-explorer/squid.conf`` bytes,
+                      repository's own ``engines/qe-explorer/squid.conf`` bytes
+                      — verified CR-free before the run, so they are the bytes a
+                      Linux deployment loads and not a Windows checkout's
+                      rewrite of them (see assert_config_is_production_bytes),
                       started by the same entrypoint + HUP watcher that
                       ``docker-compose.qec.yml`` uses in production.
   REAL Chromium       Playwright-launched browsers, one browser context per
@@ -143,6 +146,37 @@ class Worker:
         pid1 = docker("exec", self.container, "sh", "-c",
                       "cat /proc/1/stat | awk '{print $22}'")
         return {"container_started_at": started, "pid1_starttime_jiffies": pid1}
+
+
+def assert_config_is_production_bytes() -> dict:
+    """Refuse to run against a squid.conf this platform has rewritten.
+
+    THE DEFECT THIS CLOSES, WHICH THIS HARNESS ITSELF SHIPPED.
+    ``squid.conf`` had no ``eol`` attribute, so with ``core.autocrlf=true`` a
+    Windows checkout produced a working copy with 71 CR bytes while the
+    committed blob is LF. This harness ``docker cp``s that working copy into
+    ``ubuntu/squid`` — so the first green A32/A33 run proved the fence against
+    CRLF config that no Linux deployment has ever loaded, while its own
+    docstring claimed it ran "the repository's own squid.conf bytes".
+
+    It passed, which is the problem: a security proof that runs against
+    different bytes than production is not a proof about production, and
+    nothing failed to say so. ``.gitattributes`` now pins the file to
+    ``eol=lf``; this check is the belt to that braces, because an attribute can
+    be missed again and a silently-passing proof is the failure mode.
+    """
+    raw = SQUID_CONF.read_bytes()
+    crs = raw.count(b"\r")
+    if crs:
+        raise RuntimeError(
+            f"REFUSING TO RUN: {SQUID_CONF} contains {crs} CR byte(s). The "
+            f"container would be handed CRLF config while production loads LF, "
+            f"so this run would prove the fence for bytes nobody deploys. Fix "
+            f"the checkout (.gitattributes pins this file to eol=lf; try "
+            f"`git add --renormalize` then re-checkout).")
+    import hashlib
+    return {"path": str(SQUID_CONF), "bytes": len(raw),
+            "sha256": hashlib.sha256(raw).hexdigest(), "cr_bytes": 0}
 
 
 def teardown(names: list[str]) -> None:
@@ -272,8 +306,9 @@ def body_marker(idx: int, tenant: str) -> str:
 async def run(n_workers: int, base_port: int, rounds: int, out: str) -> int:
     from playwright.async_api import async_playwright
 
+    config = assert_config_is_production_bytes()
     workers, created = build_infra(n_workers, base_port)
-    findings: dict = {"a32": {}, "a33": {}}
+    findings: dict = {"a32": {}, "a33": {}, "squid_conf": config}
     violations: list[dict] = []
     try:
         wait_for_squid(workers)

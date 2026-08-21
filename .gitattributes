@@ -24,6 +24,14 @@
 # rather than cosmetic, instead of a blanket `* text=auto` that would rewrite
 # every file in the tree as a side effect of a CI fix.
 *.sh      text eol=lf
+# Config consumed INSIDE a Linux container must be LF regardless of the
+# developer's platform. squid.conf is bind-mounted (compose) or docker cp'd
+# (the A32/A33 harness) straight into ubuntu/squid; with core.autocrlf=true a
+# Windows checkout hands the container CRLF bytes while the committed blob is
+# LF, so the proof runs against config production never sees. Caught by Gate 4
+# after A32/A33 shipped 71 CR bytes into the container and still passed.
+Nexus_power/engines/qe-explorer/squid.conf                 text eol=lf
+Nexus_power/engines/qe-explorer/squid_allowed_domains.txt  text eol=lf
 *.bash    text eol=lf
 
 # Interpreter shebang lines have the same problem as bash: a `#!/usr/bin/env

@@ -19,7 +19,7 @@ commits `1e7c5fd` and `7454a34`, pushed to `origin`.
 
 ---
 
-## §0 · The two results that were green and wrong
+## §0 · The three results that were green and wrong
 
 Both were caught, both are kept in the record, and each one is the reason a
 guard now exists.
@@ -37,6 +37,10 @@ registry and every step secretly measured 1 024 while being labelled 1, 8, 32…
 The guard asserted only `apps_returned >= n` — it caught under-reaching and was
 blind to over-reaching. It now purges first and asserts the enumerated fleet is
 exactly `baseline + n`.
+
+**A32/A33 passed against config bytes production never loads** — a Windows
+checkout's CRLF `squid.conf`, not the LF blob in git. Detail in §A32; the file
+is now pinned to `eol=lf` and the harness refuses to run on a CR byte.
 
 There was also a **near-miss in the other direction**: A35's control crawl bound
 two policies against a `max_crossings: 1` grant, which looked exactly like a
@@ -129,6 +133,38 @@ internet host, so fail-closed is verified before the first measurement.
 
 Also reproduced at 3 workers × 2 rounds (18 attempts, 12 cross-fence, 0
 violations).
+
+### A third false pass, found after the gate was signed off
+
+The first green A32/A33 runs shipped **the wrong config bytes into the
+container**, and passed anyway.
+
+`squid.conf` carried no `eol` attribute, so with `core.autocrlf=true` the
+working copy held **71 CR bytes** while the committed blob is LF. The harness
+`docker cp`s the *working copy*, so Squid was loading CRLF config that no Linux
+deployment has ever seen — while this document claimed the run used "the
+repository's own `squid.conf` bytes".
+
+It passed, and that is precisely the problem: a security proof executed against
+different bytes than production runs is not a proof about production, and
+nothing anywhere said so. Found by applying to my own work a defect class the
+Gate 1 squad hit independently (`sha256sum -c` treats a trailing CR as part of
+the filename, so a CRLF checkout of a digest manifest reports "sources have
+drifted" when nothing has).
+
+Closed two ways:
+
+* `.gitattributes` now pins `squid.conf` and `squid_allowed_domains.txt` to
+  `text eol=lf` — config consumed *inside a Linux container* must not depend on
+  the developer's platform.
+* `assert_config_is_production_bytes()` refuses to start the run if the file
+  contains a single CR, and records the file's sha256 in the evidence. An
+  attribute can be missed again; a silently-passing proof is the failure mode.
+
+Re-run against the corrected bytes: **4 workers × 3 rounds, 36 cross-fence
+attempts, 0 violations**, and the evidence's recorded digest
+`6b5bcc7505e82ed321ca167b5a0e60e631e581e5b3ce0fbb65ceec373cd77805` **equals the
+committed blob's digest** — so the proof now demonstrably ran the bytes in git.
 
 ---
 
