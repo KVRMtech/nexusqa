@@ -44,6 +44,29 @@ TEST_TENANT_PREFIX = "tfl"
 
 QEC_DB_URL = os.environ.get("QEC_TEST_QEC_DATABASE_URL", "")
 SUBSTRATE_DB_URL = os.environ.get("QEC_TEST_SUBSTRATE_DATABASE_URL", "")
+#: The SUPERUSER dsn, used ONLY to deregister this suite's own test tenants.
+#:
+#: WHY NOT THE SUBSTRATE ROLE. The purge below used it, and it cannot work: the
+#: production bootstrap grants `qec_substrate` SELECT and INSERT on `tenants` and
+#: deliberately withholds the rest —
+#:
+#:     scripts/qec_db_bootstrap.sql:103
+#:       GRANT SELECT, INSERT ON tenants TO qec_substrate;
+#:       -- No UPDATE/DELETE - existing tenants are never touched.
+#:
+#: so the DELETE raises InsufficientPrivilegeError: permission denied for table
+#: tenants. Reproduced against a role holding exactly that grant.
+#:
+#: THE FIX IS TEST-SIDE ON PURPOSE. Granting DELETE to `qec_substrate` would widen
+#: a least-privilege role that someone narrowed deliberately, on the table tenant
+#: isolation is anchored on, to make a cleanup fixture convenient. The admin DSN
+#: already exists for exactly this class of work — the migration round-trip uses
+#: it to create and drop throwaway databases — so the boundary stays where its
+#: author put it and the fixture stops leaning on it.
+#:
+#: Falls back to the substrate engine when unset, which is the pre-existing
+#: behaviour and still correct on a laptop whose substrate DSN is a superuser.
+ADMIN_DB_URL = os.environ.get("QEC_TEST_ADMIN_DATABASE_URL", "")
 
 
 @pytest.fixture(autouse=True)
@@ -81,10 +104,21 @@ def _clean_fleet():
                         await conn.execute(
                             text("DELETE FROM client_apps WHERE tenant_id = :t"),
                             {"t": t})
-                async with sub.begin() as conn:
-                    await conn.execute(text(
-                        "DELETE FROM tenants WHERE tenant_id LIKE :p"),
-                        {"p": TEST_TENANT_PREFIX + "%"})
+                # Deregistration goes through the ADMIN dsn — see ADMIN_DB_URL.
+                # The two deletes above stay on `qec` under the tenant GUC on
+                # purpose: qe_explorations is RLS-protected and the fixture
+                # should be subject to the same isolation as the code it tests.
+                # Only this one needs a privilege the substrate role is
+                # deliberately denied.
+                purge = create_async_engine(
+                    ADMIN_DB_URL or SUBSTRATE_DB_URL, poolclass=NullPool)
+                try:
+                    async with purge.begin() as conn:
+                        await conn.execute(text(
+                            "DELETE FROM tenants WHERE tenant_id LIKE :p"),
+                            {"p": TEST_TENANT_PREFIX + "%"})
+                finally:
+                    await purge.dispose()
         finally:
             await qec.dispose()
             await sub.dispose()

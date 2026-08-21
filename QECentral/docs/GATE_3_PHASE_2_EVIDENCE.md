@@ -141,6 +141,27 @@ the pipeline A20's evidence has to be green in.
 | 3 | **A leap-day persona contradicts itself**: `_reference_date_for` fell back to 28 February, the day *before* the birthday, so `age` and `date_of_birth` disagreed. Reads as flake and is not — the birth date comes from `date.today()`, so a seed only lands on 29 February on some days. Green 18 Aug, red 21 Aug, no code change | `app/fill_engine/persona.py` |
 | 4 | The jsdom lane installed pytest but not the service; `-m jsdom` deselects modules but pytest still **imports** them, so one module reaching `pydantic` killed collection for the whole lane | `.github/workflows/ci.yml` |
 
+**And a fifth, which defect 1 uncovered by moving the failure.** Once the fleet
+seed could insert a tenant, those 19 tests ran far enough to reach their own
+autouse cleanup fixture — which does `DELETE FROM tenants` through the
+**substrate** role. The production bootstrap grants that role `SELECT, INSERT`
+only, with an explicit *“No UPDATE/DELETE — existing tenants are never touched.”*
+So Phase 6 failed with 98 `InsufficientPrivilegeError: permission denied for
+table tenants`.
+
+It is ordering-dependent, which is why it hid: the fixture only deletes `if
+tenants:`, so the dedicated single-file steps pass (no `tfl%` tenant exists yet)
+and only the combined Phase 6 run trips it. Running the fleet file alone will not
+reproduce it.
+
+Fixed **test-side**, not with a grant. Widening `qec_substrate` to DELETE on
+`tenants` — the table tenant isolation is anchored on — to make a cleanup fixture
+convenient would undo a boundary someone drew deliberately. The purge now uses
+the admin DSN that already exists for exactly this class of work, falling back to
+the old path when it is unset. Reproduced against a role holding the production
+grant verbatim (`permission denied`), and verified through the real fixture: 0
+privilege errors with the admin DSN set. Diagnosed by nexusqa-e3.
+
 Defect 3 is a product defect, not a test defect: a generated persona would fill a
 real application with an age and a date of birth that contradict each other, and
 the carrier's rejection would then be reported as the application's fault —
