@@ -155,7 +155,28 @@ tuning a test double to one application, which is the one thing it must not be.
 
 **This is A18's requirement, met in the only part that does not need a model: a
 navigation decision on a real application that Tier-1 and Tier-2 provably cannot
-resolve, identified and reproducible.** A18's remaining half — a live
+resolve, identified and reproducible.**
+
+#### The live deployment reaches the same depth
+
+Run against `https://vkpowerlife.136-85-106-73.sslip.io/` with the same
+instrument and the same narrow grant, the crawl walks the identical route —
+`member-lookup → personal-info → replacement → health → lifestyle → decision
+(tier 2) → payment` — at **depth 12, 28 states**, and stops at the same payment
+step for the same reason. The platform behaves the same on the live deployment
+as on the container built from source.
+
+An earlier live run reached only **depth 5**: the walk logged `step_stalled
+clicked='See My Quote' outcome='none' same_fp=True` on the health-check step,
+while driving that same click directly navigated to `/quote/review/` in about
+three seconds. That is a real race — a prefetched client-side route change
+commits after the port settles — and `qec.wizard.relook` now looks again before
+calling such a step a stall.
+
+**It is not proven to be the repair.** The successful live run engaged that
+re-look zero times; the race did not occur, so the improvement was variance.
+Engagement is logged separately from the save precisely so the next occurrence
+is attributable rather than inferred. A18's remaining half — a live
 consultation that answers it — needs qe-central, a fleet HMAC secret and a model
 credential, none of which exist on this machine.
 

@@ -42,6 +42,19 @@
       "tier3_source": "deterministic-stub"
     },
     {
+      "url": "https://vkpowerlife.136-85-106-73.sslip.io/life-insurance/quote/review/",
+      "title": "VKPower Life Insurance",
+      "candidates": [
+        "Dashboard",
+        "Beneficiaries",
+        "Get a Quote",
+        "Start Over",
+        "Back to Dashboard"
+      ],
+      "picked": "Start Over",
+      "tier3_source": "deterministic-stub"
+    },
+    {
       "url": "https://vkpowerlife.136-85-106-73.sslip.io/portal/beneficiaries/",
       "title": "VKPower Life Insurance",
       "candidates": [
@@ -54,16 +67,20 @@
       "tier3_source": "deterministic-stub"
     },
     {
-      "url": "https://vkpowerlife.136-85-106-73.sslip.io/life-insurance/quote/review/",
+      "url": "https://vkpowerlife.136-85-106-73.sslip.io/life-insurance/apply/payment/",
       "title": "VKPower Life Insurance",
       "candidates": [
         "Dashboard",
         "Beneficiaries",
         "Get a Quote",
-        "Start Over",
-        "Back to Dashboard"
+        "Monthly",
+        "Quarterly",
+        "Semi-Annual",
+        "Annual",
+        "Credit / Debit Card Visa, Mastercard, Discover, Amex",
+        "Back"
       ],
-      "picked": "Start Over",
+      "picked": "Get a Quote",
       "tier3_source": "deterministic-stub"
     }
   ],
@@ -79,18 +96,21 @@
     "flows_completed": 0,
     "journeys_completed": 0,
     "boundaries_crossed": 0,
-    "deepest_flow_steps": 6,
+    "deepest_flow_steps": 12,
     "deepest_flow_proven_steps": 0,
     "deepest_flow_capped": true,
     "deepest_flow_terminal": "loop",
     "advances_by_tier": {
-      "1": 8,
-      "3": 2
+      "1": 15,
+      "3": 6,
+      "2": 1
     },
-    "oracle_advances": 2
+    "oracle_advances": 6
   },
   "stop_reason": null,
   "approvable_boundaries_seen": [
-    "Apply Now"
+    "ACH Bank Transfer Direct debit from checking or savings",
+    "Apply Now",
+    "Continue to Payment"
   ]
 }
