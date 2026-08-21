@@ -45,9 +45,20 @@ proof and is described in [§9](#9-what-is-proven-and-what-is-not).
 > every file it MODIFIED reads as a staged *revert* — so the next plain
 > `git add … && git commit` by any session silently removes your work inside a
 > commit about something else. This was observed, not theorised: immediately
-> after `0c26853` the shared index held all four new files as `D`. `git reset`
-> (no pathspec, no `--hard`) resyncs it; the working tree is untouched and
-> nothing is lost.
+> after `0c26853` the shared index held all four new files as `D`.
+>
+> Resync it **path-scoped**, not wholesale:
+>
+> ```bash
+> git reset -q HEAD -- <the paths you just committed>
+> ```
+>
+> A bare `git reset` also unstages every *other* session's legitimate entries.
+> It was safe here only because the index was checked first and held nothing but
+> these nine files; that check is not something to rely on in a nine-session
+> tree. To test a single entry before touching anything,
+> `git show :<path>` against `git show HEAD:<path>` tells you whether that entry
+> is a silent revert waiting to happen. Neither form touches the working tree.
 >
 > **Part of A27.1 has already landed**, swept into two other sessions' commits
 > from that shared index: the skip-reason fix to `test_t_fl_01` is in `099a597`,
