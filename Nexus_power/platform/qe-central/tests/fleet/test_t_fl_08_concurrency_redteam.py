@@ -177,8 +177,8 @@ async def _register_tenant(tenant: str) -> None:
             # — Gate 3 / A20 pushed the chain to CI for the first time and all
             # 19 of these tests failed on this one line.
             "INSERT INTO tenants (tenant_id, name, domain) "
-            "VALUES (:t, :t, :t || '.test') "
-            "ON CONFLICT (tenant_id) DO NOTHING"), {"t": tenant})
+            "VALUES (:t, :t, :d) "
+            "ON CONFLICT (tenant_id) DO NOTHING"), {"t": tenant, "d": f"{tenant}.test"})
 
 
 async def _mint(tenant: str, app_id: str, host: str) -> str:

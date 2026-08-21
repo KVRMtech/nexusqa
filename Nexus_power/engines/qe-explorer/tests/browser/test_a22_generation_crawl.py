@@ -210,7 +210,11 @@ def crawled(pw, tmp_path_factory) -> dict[str, Any]:
     (EVIDENCE_DIR / "stamp.json").write_text(
         json.dumps(stamp, indent=2, sort_keys=True), encoding="utf-8")
     return {"coverage": coverage, "events": events, "served": served,
-            "stamp": stamp, "fixture_app": fixture_app}
+            "stamp": stamp, "fixture_app": fixture_app,
+            # The manifest records, kept alongside the account deliberately: the
+            # blocker below is precisely that these two disagree.
+            "manifest_records": [json.loads(line) for line in manifest.splitlines()
+                                 if line.strip()]}
 
 
 def _diagnose(cov: Mapping[str, Any]) -> str:
@@ -290,6 +294,8 @@ def test_the_blocker_is_exactly_the_bare_button_wizard_gate(crawled) -> None:
     """
     cov = crawled["coverage"]
     served = {f"{m} {p}" for m, p in crawled["served"]}
+    manifest_states = [r for r in crawled["manifest_records"]
+                       if (r.get("type") or r.get("kind")) == "page_state"]
 
     # The application really did advance — this is not a crawl that failed to
     # reach anything.
@@ -298,18 +304,56 @@ def test_the_blocker_is_exactly_the_bare_button_wizard_gate(crawled) -> None:
         f"the server never served the result page, so the click did not advance "
         f"the funnel and the blocker below is a different one: {sorted(served)}")
 
-    # …and the crawl recorded none of it.
+    # ── LAYER 1 · THE WIZARD GATE, so no journey is recorded ────────────────
     assert int(cov.get("forms_found") or 0) == 0, (
         f"forms_found={cov.get('forms_found')} — the wizard gate is no longer "
         f"declining, so the xfail above is now covering a DIFFERENT failure. "
         f"Re-derive the blocker before trusting it.")
-    assert len(cov.get("states") or []) == 1, (
-        f"the crawl now records {len(cov.get('states') or [])} states; the "
-        f"blocker was one entry state and nothing else")
     assert not cov.get("flows"), "a flow is now recorded — re-derive the blocker"
-    assert not (cov["states"][0].get("actions") or []), (
-        "the entry state now carries actions; the click is being recorded and "
-        "the blocker has moved")
+
+    # ── LAYER 2 · AND THE OUTCOME PAGE IS DROPPED FROM THE ACCOUNT ──────────
+    #
+    # The MANIFEST recorded the walk correctly. It holds the click, the edge, and
+    # the result page — and the result page carries exactly what a hard outcome
+    # assertion needs:
+    #
+    #     displayed_values: [{"label": "Your monthly premium",
+    #                         "selector": "#premium-value", "text": "42.50",
+    #                         "value_type": "number",
+    #                         "value_reason": "number value under an outcome label"}]
+    #
+    # `coverage["states"]` does not have it, and the fold reads
+    # `coverage.states`. The cause is one line in
+    # state_identity.note_state_signals:
+    #
+    #     if not signals and not controls:
+    #         return
+    #
+    # A funnel's RESULT page is by construction a page with neither: no inputs to
+    # ask anything and no controls to press. So the one page whose VALUE the
+    # generated spec has to assert on is the one page the account is designed to
+    # discard. That is why crawl_evidence.py had to hand-write `outcome_values`
+    # into its traversal fixture — the real crawl cannot supply them through this
+    # path.
+    result_records = [r for r in manifest_states
+                      if "result" in str(r.get("location") or "")]
+    assert result_records, (
+        "the manifest no longer records the result page at all — that is a "
+        "different and worse failure than the one pinned here")
+    outcomes = [v for r in result_records for v in (r.get("displayed_values") or [])]
+    assert any(str(v.get("text") or "") == crawled["fixture_app"].BASELINE_PREMIUM
+               for v in outcomes), (
+        f"the manifest's result page no longer carries the premium as a "
+        f"displayed value, so this pin is about something else now: {outcomes}")
+
+    covered = {str(s.get("location") or "") for s in (cov.get("states") or [])}
+    assert not any("result" in loc for loc in covered), (
+        f"the result page now REACHES coverage.states ({sorted(covered)}) — the "
+        f"drop has been fixed and this pin should be removed along with the "
+        f"xfail above")
+    assert len(cov.get("states") or []) == 1, (
+        f"the crawl now records {len(cov.get('states') or [])} coverage states; "
+        f"the blocker was one entry state and nothing else")
 
 
 def test_the_backend_really_answered_the_crawl(crawled) -> None:

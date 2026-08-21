@@ -113,8 +113,8 @@ async def seed(engine, *, tenants: int, journeys: int) -> list[tuple[str, str]]:
                 await conn.execute(text(
                     # see the note in test_t_fl_01_durable_queue._register_tenant
                     "INSERT INTO tenants (tenant_id, name, domain) "
-                    "VALUES (:t, :t, :t || '.test') "
-                    "ON CONFLICT (tenant_id) DO NOTHING"), {"t": tenant})
+                    "VALUES (:t, :t, :d) "
+                    "ON CONFLICT (tenant_id) DO NOTHING"), {"t": tenant, "d": f"{tenant}.test"})
             async with engine.begin() as conn:
                 await conn.execute(text(
                     "SELECT set_config('nexus.current_tenant_id', :t, true)"),

@@ -96,8 +96,8 @@ async def _seed_app_with_journeys(tenant: str, app_id: str, n_journeys: int) -> 
             # — Gate 3 / A20 pushed the chain to CI for the first time and all
             # 19 of these tests failed on this one line.
             "INSERT INTO tenants (tenant_id, name, domain) "
-            "VALUES (:t, :t, :t || '.test') "
-            "ON CONFLICT (tenant_id) DO NOTHING"), {"t": tenant})
+            "VALUES (:t, :t, :d) "
+            "ON CONFLICT (tenant_id) DO NOTHING"), {"t": tenant, "d": f"{tenant}.test"})
 
     artifact = "art_" + uuid.uuid4().hex[:10]
     async with qec_engine.begin() as conn:

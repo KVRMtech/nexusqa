@@ -653,39 +653,79 @@ authorization, against the **same** application the M2.4 proof executes its
 generated spec against. Evidence recorded to
 `Nexus_power/evidence/a22_generation/`.
 
-### The blocker, measured
+### The blocker, measured — and it is two layers, not one
 
 The crawl **actuated the funnel**. The application's own server log — an
-independent record, kept by the app, not by the crawl — shows it happened:
+independent record kept by the app, not by the crawl — shows it happened:
 
 ```
 server saw : GET /   GET /api/config   POST /api/quote   GET /result.html
 ```
 
-The crawl **recorded almost none of it**:
+**The manifest recorded the walk correctly.** It has the click, the edge and the
+result page:
 
 ```
-states              : 1      (the entry page only)
-flows               : 0
-forms_found         : 0
-journeys_completed  : 0
-the single state's actions : []      <- not even the click
+page_state /             actions=1   click 'Get Quote' -> navigation /result.html
+edge       4d4c877… -> 160c7560…     target_label 'Get Quote'
+page_state /result.html
+crawl_meta stop_reason=completed
 ```
 
-So the crawler clicked the button, the backend answered the POST, the browser
-navigated to the result page — and the account contains no click, no navigation,
-and no result page.
+**The coverage account — which is what the fold consumes — does not:**
 
-**Root cause**, and it was already known: M2.1's own *architectural concerns
-discovered* names it and explicitly leaves it as somebody else's gap —
+```
+states : 1      (the entry page only; /result.html absent)
+flows  : 0
+forms_found : 0     journeys_completed : 0
+```
+
+#### Layer 1 — the bare-button wizard gate, so no journey exists
+
+Already known. M2.1's own *architectural concerns discovered* names it and
+explicitly leaves it as somebody else's gap:
 
 > A page whose only questions are bare buttons is never walked. `discovery.py`'s
 > wizard gate requires `fill.filled or fill.has_unanswered_decisions`, and a step
 > made of nothing but `<button>` answers commits nothing — so
 > `_answer_questionnaire` never runs on it.
 
-`forms_found == 0` is that gate declining, measured on a real crawl. This
-application has no inputs at all: one button, everything else in JavaScript.
+`forms_found == 0` is that gate declining, measured on a real crawl of an
+application with no inputs at all: one button, everything else in JavaScript.
+
+#### Layer 2 — the OUTCOME PAGE is dropped from the account (new)
+
+This one was not known, and it is the more interesting half.
+
+The manifest's `/result.html` record carries **exactly what a hard outcome
+assertion needs**, already located and already classified:
+
+```json
+"displayed_values": [{
+  "label": "Your monthly premium", "selector": "#premium-value",
+  "text": "42.50", "value_type": "number",
+  "value_reason": "number value under an outcome label"
+}]
+```
+
+It never reaches `coverage["states"]`, because of one line in
+`state_identity.note_state_signals`:
+
+```python
+if not signals and not controls:
+    return
+```
+
+A funnel's **result page is by construction a page with neither** — nothing to
+ask, nothing to press. So the one page whose VALUE a generated specification has
+to assert on is the one page the account is designed to discard. The rule is
+deliberate and defensible for hub pages (“a page that asks nothing can still
+REFUSE everything”); its effect on outcome pages appears to be unintended.
+
+This is very likely why `crawl_evidence.py` had to hand-write `outcome_values`
+into its traversal fixture in the first place: **a real crawl cannot supply them
+through this path.** Fixing Layer 1 alone would give A22 a journey with no
+outcome to assert on.
 
 ### Why choosing a different application does not solve it
 
