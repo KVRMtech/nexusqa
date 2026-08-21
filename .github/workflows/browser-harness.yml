@@ -13,10 +13,31 @@ name: Browser Test Harness (M0.2)
 
 on:
   push:
-    branches: [main, develop]
+    branches:
+      - main
+      - develop
+      # GATE 3 — BOOTSTRAP TRIGGER, the same one and for the same reason as
+      # ci.yml's. These lanes carry the ONLY CI evidence that a real crawl of a
+      # real application still records what the catalogue is built from — M2.3's
+      # retirement recording and A21's three-change recording — and on this
+      # branch they had never run even once:
+      #
+      #   * `pull_request` cannot fire: `origin/develop` is a single flattened
+      #     "Initial commit" sharing NO history with this branch, so GitHub
+      #     refuses to open the PR at all.
+      #   * `workflow_dispatch` cannot fire either — GitHub resolves a dispatch
+      #     against the DEFAULT branch, and that flattened develop does not
+      #     contain this file. `gh workflow run` answers 404.
+      #
+      # So a push trigger scoped to this one branch is the only way to execute
+      # these lanes before the histories are reconciled. The `paths:` filter
+      # below still applies, so it fires only when the explorer, a proving
+      # ground, or this workflow actually changes — not on every push.
+      - feat/qec-dynamic-catalog-p0-p6
     paths:
       - "Nexus_power/engines/qe-explorer/**"
       - "Nexus_power/proving-grounds/**"
+      - "Nexus_power/evidence/**"
       - ".github/workflows/browser-harness.yml"
   # GATE 0 / A5 — NO `paths:` FILTER HERE, DELIBERATELY.
   #
