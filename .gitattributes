@@ -56,6 +56,30 @@ Dockerfile* text eol=lf
 # a diff in one of these files always means the CAPTURE changed.
 *.golden  text eol=lf
 
+# …AND THE SAME ARTEFACTS THAT ARE SHAPED LIKE JSON, which the rule above does
+# not reach. The section says "characterization manifests and crawl recordings";
+# `*.golden` was the only pattern pinned, so every JSON-shaped recording was left
+# `unspecified` and therefore CRLF in a Windows working copy and LF in the blob.
+#
+# MEASURED, on evidence/a23_live_network/manifest.jsonl: 20 CRLF in the working
+# copy, 0 in the committed blob. Nothing broke — the guards that read these files
+# use `Path.read_text()`, which applies universal newlines and normalises CRLF
+# away before hashing — but that is invisible in the code and one refactor deep:
+#
+#     read_text()  -> 1f4f4f7d…  matches the sha256 pinned in stamp.json
+#     read_bytes() -> fe50c5ac…  DOES NOT
+#
+# `read_bytes()` is the obvious "hash the actual file" change for someone to make,
+# and it would fail on Windows only, reporting the evidence as EDITED when it is
+# byte-identical to what CI recorded. Pinning eol=lf removes the trap instead of
+# relying on a reader noticing it.
+#
+# The browser goldens are here for the same reason and are not hypothetical: CI
+# guards them with `git diff --quiet -- tests/browser/golden`, which is exactly
+# the comparison a line-ending difference corrupts.
+Nexus_power/evidence/**                                   text eol=lf
+Nexus_power/engines/qe-explorer/tests/browser/golden/**    text eol=lf
+
 # Binary — never touched, never diffed as text.
 *.png     binary
 *.jpg     binary
