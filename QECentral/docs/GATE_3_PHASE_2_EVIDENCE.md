@@ -638,11 +638,14 @@ letting the number drift.
 **GitHub Actions, on a clean Linux runner** — this is the strongest reproduction
 in the gate, because CI did not verify a recording, it *made its own*.
 
-[Run `32446412931`](https://github.com/KVRMtech/nexusqa/actions/runs/32446412931),
-*Chromium lane*, both steps green:
+[Run `32447553270`](https://github.com/KVRMtech/nexusqa/actions/runs/32447553270),
+*Chromium lane*, both steps green (and this run was not cancelled — it ran the
+lane to completion):
 
 ```
+tests/browser/test_a21_catalog_diff_regression.py ....... 8 passed in 304.00s
 ✅ A21 — three real application changes, recorded by two real crawls
+   "A21 crawl evidence is unchanged in substance."
 ✅ Fail if the A21 crawl evidence changed in substance
 ```
 
@@ -667,15 +670,10 @@ corrected guard.
 `postgres:16-alpine` — the fold, both catalogue versions and the diff are rebuilt
 from scratch on infrastructure the author does not control.
 
-*(That run ended `cancelled` — a later push to the same ref cancelled it at
-`Characterization — pass 1`, AFTER both A21 steps had reported. The A21 evidence
-is therefore complete and the cancellation is downstream of it. The
-characterization failure itself is real and proven separately: the
-`qe-explorer-characterization` job FAILED on the 28 stale goldens in run
-[`32446412929`](https://github.com/KVRMtech/nexusqa/actions/runs/32446412929).
-Either way A21's steps run BEFORE characterization now and report for themselves —
-that reordering is what made this evidence obtainable at all. See "Known red, and
-NOT mine".)*
+*(The job as a whole is RED — `Characterization — pass 1` FAILS on the 28 stale
+goldens owned by another milestone. Every step Gate 3 owns runs BEFORE it and
+reports for itself; that reordering is what made this evidence obtainable at
+all. See "Known red, and NOT mine".)*
 
 ---
 
@@ -805,8 +803,25 @@ crawl. That is a fact about the inventory, not a shortfall of effort.
 
 The producer is committed and green, with the milestone's stop condition kept as
 a **strict xfail** rather than deleted, plus a companion test that pins the
-*shape* of the blocker (server saw the POST; crawl recorded `forms_found=0`,
-one state, no actions). Two consequences, both deliberate:
+*shape* of the blocker (server saw the POST; crawl recorded `forms_found=0`, one
+coverage state; the result page in the manifest and not in the account).
+
+**It runs in CI, and the blocker reproduces there** — run
+[`32447553270`](https://github.com/KVRMtech/nexusqa/actions/runs/32447553270),
+step *A22 — the generation blocker is still exactly where it was*:
+
+```
+test_the_crawl_walked_the_funnel_to_its_result_page        XFAIL
+test_the_blocker_is_exactly_the_bare_button_wizard_gate    PASSED
+test_the_backend_really_answered_the_crawl                 PASSED
+test_the_crawl_captured_the_call_the_backend_answered      PASSED
+```
+
+That matters beyond bookkeeping: both layers of the blocker are properties of the
+**code**, not of one developer's machine. A clean Linux runner reaches the same
+two disagreeing records.
+
+Two consequences, both deliberate:
 
 * the day the bare-button gate closes, the xfail **XPASSes** and CI goes red
   until someone finishes A22 — the gap cannot be forgotten;
