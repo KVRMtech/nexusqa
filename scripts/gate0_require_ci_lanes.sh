@@ -28,6 +28,23 @@
 # Closure Plan A17 (Gate 2), and folding it into A5 would be exactly the
 # over-claim this gate exists to stop. Add them there, on evidence.
 #
+# ── A17 UPDATE (2026-08-20): "Gate 2 - three real applications" IS in ADD ──
+# It replaces those three matrix jobs rather than joining them: it builds and
+# crawls all three applications in ONE job, and asserts what each ACHIEVED
+# (boundaries crossed, confirmation observed, no boundary crossed twice) rather
+# than that a manifest was written. It was measured green twice locally, 18
+# assertions, against images built from each application's own Dockerfile.
+#
+# IT IS NOT YET SAFE TO APPLY. Precondition 2 below is not satisfied: this job
+# has never REPORTED on this repository, because the branch it was written on
+# has not been pushed. Running this script with --apply before that first report
+# arms exactly the outage the precondition describes — every pull request
+# blocked forever on a check GitHub is still waiting to hear from. The script
+# enforces this itself; the note is here so nobody overrides it by hand.
+#
+# SEQUENCE: push the branch -> let browser-harness.yml run -> confirm the job
+# reported -> THEN --apply.
+#
 # ── PRECONDITIONS, CHECKED BELOW ───────────────────────────────────────────
 #   1. gh is authenticated with `repo` scope.
 #   2. Each context being added has REPORTED at least once on a recent commit.
@@ -59,6 +76,12 @@ ADD=(
   "integrity-proof"
   "jsdom execution lane"
   "Chromium lane + characterization + coverage"
+  # A17 — the Gate 2 lane. It asserts what a crawl ACHIEVED on each of the three
+  # real applications (boundaries crossed, confirmation observed, no boundary
+  # crossed twice), which is the claim Phase 1 rests on and the one no other
+  # required check covers: the Chromium lane stops at capture behaviour, and the
+  # proving-ground lane stops at "an application was discovered".
+  "Gate 2 — three real applications"
 )
 
 command -v gh >/dev/null || { echo "FATAL: gh not on PATH" >&2; exit 2; }
@@ -96,7 +119,7 @@ for c in "${ADD[@]}"; do
 done
 
 if [ "${#MISSING[@]}" -eq 0 ]; then
-  echo "Nothing to do — all three contexts are already required."
+  echo "Nothing to do — all ${#ADD[@]} contexts are already required."
   exit 0
 fi
 
