@@ -161,6 +161,15 @@ from .inventory import (build_inventory, carry_earned_annotations,
 
 logger = logging.getLogger("app.crawler")
 
+#: A14 -- how long to keep looking at a step whose fingerprint did not move.
+#: A prefetched client-side route change can commit AFTER the port settles, so
+#: "nothing changed" and "nothing happened" are not the same observation. Paid
+#: only on a step that was about to be recorded as a stall, which is the one
+#: case that ends a journey.
+_STALL_RELOOK_MS = 700
+_STALL_RELOOKS = 3
+
+
 #: M1.4 — how much of a journey's text history the confirmation diff remembers.
 #: Bounded because the history grows with every step of a 60-step walk and a
 #: content-heavy application can render hundreds of text nodes per page; an
@@ -2114,6 +2123,62 @@ class WalkerMixin:
                     url=obs.url, controls=new_controls,
                     dialogs=obs.dialog_flags, perceptual_hash=probe_phash,
                     page_token=obs.page_token)
+                # ── A ROUTE CHANGE CAN LAND AFTER THE SETTLE RETURNS ─────────
+                #
+                # The port settles on network idle plus a DOM-quiescence gate.
+                # A client-side route change whose chunk Next.js ALREADY
+                # PREFETCHED produces no network at all, so there is nothing for
+                # networkidle to wait on, and the quiescence gate can reach its
+                # verdict on the page being LEFT before React commits the one
+                # being arrived at. The observation above then describes the old
+                # page, its fingerprint is unchanged, and the walk records a
+                # stall on a step that actually advanced.
+                #
+                # Measured against the LIVE deployment, where the extra latency
+                # widens the window: tier 3 correctly picked "See My Quote" on
+                # the health-check step, the click really did land on
+                # /quote/review/ (verified by driving the same click directly),
+                # and the walk logged
+                #
+                #     step_stalled clicked='See My Quote' outcome='none'
+                #                  same_fp=True
+                #
+                # then ended. Depth 5 live against depth 12 on the identical
+                # build in a container -- a difference that was entirely this.
+                #
+                # PAID ONLY WHERE THE WALK WAS ABOUT TO END. An unchanged
+                # fingerprint is the one case that stops a journey, so a second
+                # look here costs nothing on every advancing step and replaces a
+                # lost funnel on the rest. Bounded, and it re-reads rather than
+                # re-clicks: nothing is actuated twice.
+                if new_fp == cur_fp:
+                    # Logged on ENGAGEMENT, not only on success. Without this
+                    # line a run that never raced is indistinguishable from a
+                    # run this saved -- and the first live run that improved
+                    # after this landed had not raced at all, so crediting the
+                    # fix would have been crediting variance.
+                    logger.info(
+                        "qec.wizard.relook url=%s clicked=%r — the fingerprint "
+                        "did not move; looking again before calling it a stall",
+                        (obs.url or cur_url)[:120],
+                        str((trig or {}).get("name") or "")[:40])
+                    for _ in range(_STALL_RELOOKS):
+                        await asyncio.sleep(_STALL_RELOOK_MS / 1000.0)
+                        obs = await self._observe()
+                        new_controls = build_inventory(
+                            obs.raw_controls, self._refuse_pack, url=obs.url)
+                        new_fp, new_signals = identity.identify(
+                            url=obs.url, controls=new_controls,
+                            perceptual_hash=probe_phash,
+                            dialogs=obs.dialog_flags, page_token=obs.page_token)
+                        if new_fp != cur_fp:
+                            logger.info(
+                                "qec.wizard.late_advance url=%s clicked=%r — the "
+                                "page moved AFTER the settle returned; a stall "
+                                "here would have ended the journey",
+                                (obs.url or cur_url)[:120],
+                                str((trig or {}).get("name") or "")[:40])
+                            break
                 # a GENUINE advance: an observable effect AND a state this WALK
                 # has not already been through (see ``walk_seen``).
                 # A NEW STATE IS ITSELF THE EVIDENCE.
