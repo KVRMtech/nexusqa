@@ -1,0 +1,112 @@
+{
+ "app": "vkpower-life",
+ "target_url": "https://vkpowerlife.136-85-106-73.sslip.io/",
+ "explorer_version": "qe-explorer/1.0+inv-js-v12",
+ "produced_by": {
+  "head": "bbcb6f9e3e1328a8a6bb81c529c87b047285bf29",
+  "dirty": false,
+  "dirty_paths": []
+ },
+ "commit_control": "Sign & Submit Application",
+ "grants": [
+  {
+   "control": "Sign & Submit Application",
+   "approved_by": "gate2-operator",
+   "max_crossings": 1,
+   "role": "commit"
+  }
+ ],
+ "known_blockers": [
+  {
+   "control": "Apply Now",
+   "reason": "commit-shaped label on a route link; navigates to the application's first step and commits nothing"
+  },
+  {
+   "control": "Continue to Underwriting Decision",
+   "reason": "rp.verb.underwrite matches the button NAME; the handler is a router.push to the decision step and underwrites nothing"
+  }
+ ],
+ "oracle_source": "deterministic-stub",
+ "oracle_telemetry": {},
+ "oracle_decisions": [
+  {
+   "url": "https://vkpowerlife.136-85-106-73.sslip.io/life-insurance/quote/health-check/",
+   "title": "VKPower Life Insurance",
+   "candidates": [
+    "Dashboard",
+    "Beneficiaries",
+    "Get a Quote",
+    "No",
+    "Yes",
+    "No",
+    "Yes",
+    "See My Quote",
+    "Back"
+   ],
+   "picked": "See My Quote",
+   "tier3_source": "deterministic-stub"
+  },
+  {
+   "url": "https://vkpowerlife.136-85-106-73.sslip.io/life-insurance/quote/review/",
+   "title": "VKPower Life Insurance",
+   "candidates": [
+    "Dashboard",
+    "Beneficiaries",
+    "Get a Quote",
+    "Start Over",
+    "Back to Dashboard"
+   ],
+   "picked": "Start Over",
+   "tier3_source": "deterministic-stub"
+  },
+  {
+   "url": "https://vkpowerlife.136-85-106-73.sslip.io/portal/beneficiaries/",
+   "title": "VKPower Life Insurance",
+   "candidates": [
+    "Dashboard",
+    "Beneficiaries",
+    "Get a Quote",
+    "Add Beneficiary"
+   ],
+   "picked": "Get a Quote",
+   "tier3_source": "deterministic-stub"
+  },
+  {
+   "url": "https://vkpowerlife.136-85-106-73.sslip.io/life-insurance/apply/decision/",
+   "title": "VKPower Life Insurance",
+   "candidates": [
+    "Dashboard",
+    "Beneficiaries",
+    "Get a Quote"
+   ],
+   "picked": "Get a Quote",
+   "tier3_source": "deterministic-stub"
+  }
+ ],
+ "boundaries_crossed": 0,
+ "crossings": [],
+ "crossings_refused": [],
+ "outcome_milestones": [],
+ "confirmation_observed": false,
+ "confirmation_rungs": [],
+ "confirmation_details": [],
+ "telemetry": {
+  "flows_found": 3,
+  "flows_completed": 0,
+  "journeys_completed": 0,
+  "boundaries_crossed": 0,
+  "deepest_flow_steps": 11,
+  "deepest_flow_proven_steps": 0,
+  "deepest_flow_capped": true,
+  "deepest_flow_terminal": "loop",
+  "advances_by_tier": {
+   "1": 15,
+   "3": 6
+  },
+  "oracle_advances": 6
+ },
+ "stop_reason": null,
+ "approvable_boundaries_seen": [
+  "Apply Now"
+ ]
+}

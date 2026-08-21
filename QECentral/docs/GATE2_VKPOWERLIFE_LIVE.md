@@ -124,10 +124,82 @@ identity-shaped fields to it is the obvious remedy and is not attempted here.
 The commit control `Sign & Submit Application` was **never reached**, so no
 application was submitted. The grant existed and went unspent.
 
+## Finding 2 CONFIRMED by seeding the field — and the next blocker named
+
+The diagnosis above was a hypothesis. It was tested by the falsifying run it
+implies: seed the real member number the harness already holds for login, change
+**nothing else**, and see whether the journey goes further. If it did not, the
+diagnosis was wrong.
+
+It went further.
+
+Evidence: `Nexus_power/evidence/gate2/vkpower-life-LIVE-seeded/`. The value was
+injected via `recalled_values`, keyed by the field's **value-free signature**
+taken from the unseeded run's own `field_ledger` (`forms.py:646`) — tenant field
+memory, not a special case. `gate2_journey.py` was **not modified**; the driver
+wraps the `Crawler` symbol in its own process.
+
+| | unseeded | seeded |
+| --- | --- | --- |
+| distinct routes | 9 | **13** |
+| states / actions | 17 / 86 | **27 / 128** |
+| `deepest_flow_steps` | 7 | **11** |
+| advances | 11 (`1:7, 3:4`) | **21** (`1:15, 3:6`) |
+| terminal | `/apply/member-lookup/` | `/apply/decision/` |
+
+The four routes the seed unlocked, all previously unreachable:
+
+```
+/life-insurance/apply/replacement/
+/life-insurance/apply/health/
+/life-insurance/apply/lifestyle/
+/life-insurance/apply/decision/
+```
+
+**The Member Number was the blocker, and seeding it is the fix.** The reporting
+defect stands regardless: the crawl should have *said* it needed that value
+rather than inventing one, and `fields_needing_seed` was empty because the field
+was *filled* — `crawler.py:575` defines needing-a-seed as **"no seed AND no safe
+default"**, so a synthesized value that satisfies the widget but not the business
+rule is indistinguishable from a good fill by construction. That is the defect to
+fix, and it is separate from this run succeeding.
+
+### The journey still does not complete — the next blocker
+
+```
+boundaries_crossed 0 | confirmation_observed false | journeys_completed 0
+```
+
+`/life-insurance/apply/signature/` was **never reached** (0 occurrences in the
+manifest), and that is where the commit control lives. Per the application note
+in `gate2_journey.py APPS`, that step is *"gated on five consent checkboxes AND a
+typed signature matching the legal name entered seven steps earlier"* — a
+cross-step data-coherence requirement, not a single field. Whether the walk stops
+before it or at it is not yet measured.
+
+> **Evidence limitation, stated rather than hidden:** this run's `coverage.json`
+> was not persisted — the driver called `run()` and `verdict_of()` directly and
+> bypassed the `main()` that writes it, so the `field_ledger` proving the seed's
+> `provenance` for *this* run is not in the bundle. The claim rests on the route
+> progression: the walk passed the exact step that previously terminated it and
+> reached four routes beyond. The driver should persist coverage before the next
+> run.
+
 ## Honest statement
 
 Gate 1 made the journey *possible* and A6 is live-proven. Gate 2's claim — that
-the journey is **actual** — is **not met on the live deployment**. It is blocked
-by two specific, named things: an application that does not persist its session,
-and an identity field the fill engine cannot invent and does not flag. Both are
-now measured rather than suspected.
+the journey is **actual** — is **not met on the live deployment**.
+
+The blockers, in the order they were found and closed:
+
+1. ~~An identity field the fill engine invents and does not flag~~ — **confirmed
+   as a blocker and cleared by seeding.** The reporting defect remains open.
+2. **The application does not persist a verified login** across a fresh page
+   load. An application property; the crawl diagnoses it correctly.
+3. **The signature step is unreached** — five consent checkboxes plus a typed
+   signature that must match a legal name entered seven steps earlier. This is
+   the remaining distance to the commit control.
+
+Each was measured rather than suspected, and each was found only by running
+against the real deployment: none of the three is visible against a fixture or
+against the local replica.
