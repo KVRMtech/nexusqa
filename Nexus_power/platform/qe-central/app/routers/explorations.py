@@ -465,10 +465,42 @@ def _write_egress_allowlist(domains: list[str], allowlist_path: str) -> None:
     (fail-closed).
 
     Writes one destination domain per line to ``allowlist_path`` — the file that
-    the chosen worker's squid re-reads. Each worker has its OWN file (per-worker
-    egress isolation); a shared file would be raced by concurrent crawls and break
-    the fence. A write failure is FATAL to the dispatch (503) — never launch a
-    browser that can only reach a stale/empty allowlist, and never proceed silently.
+    the chosen worker's squid re-reads. A write failure is FATAL to the dispatch
+    (503) — never launch a browser that can only reach a stale/empty allowlist,
+    and never proceed silently.
+
+    WHAT PER-WORKER FILES DO AND DO NOT PREVENT — corrected, because this
+    docstring previously claimed a guarantee it does not have.
+
+    It said: "Each worker has its OWN file (per-worker egress isolation); a shared
+    file would be raced by concurrent crawls and break the fence." The hazard it
+    names is exactly right and the conclusion does not follow. One file per worker
+    prevents racing ACROSS workers. It does nothing about concurrent crawls ON one
+    worker — which is the case that sentence literally describes, because this
+    file IS shared between them:
+
+        _write_egress_allowlist(domains, allowlist_path)   <- keyed on the WORKER;
+                                                              takes no crawl id
+        await explorer_client.dispatch_crawl(...)          <- yields, with no lock
+
+    ``acquire_slot`` admits ``capacity`` concurrent crawls per worker. At
+    ``capacity > 1``, crawl A writes its allowlist, yields at the await, crawl B
+    overwrites the same file, and the browser running A is fenced by B's
+    destinations — a CROSS-TENANT egress leak.
+
+    LATENT, NOT LIVE, at the shipped default: ``capacity`` is
+    ``server_default="1"`` (qec_022), and at 1 the window never opens. It becomes
+    live the moment a worker is registered with ``capacity > 1``, which the schema,
+    the registry API and the scheduler all support and none refuse or warn about.
+
+    Proven by ``tests/fleet/test_t_fl_08_concurrency_redteam.py::
+    test_n_concurrent_crawls_multi_tenant_overlapping_domains``, which sets
+    capacity=2 and fails naming the foreign destination. NOT FIXED HERE: the
+    repair is an architecture choice (per-crawl fence files, a per-worker dispatch
+    lock, or refusing capacity > 1) with a matching explorer-side change, and it
+    belongs to M3.3's owner. See QECentral/docs/GATE_3_PHASE_2_EVIDENCE.md.
+
+    This paragraph replaces a sentence an auditor would have read and stopped at.
     """
     if not domains:
         raise HTTPException(

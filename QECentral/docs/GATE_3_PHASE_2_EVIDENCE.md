@@ -332,6 +332,37 @@ milestone's isolation model from an evidence gate is not this gate's call, and i
 is the same restraint applied to the next-action re-key and the catalogue
 duplication.
 
+### The sharpest part: the docstring asserted the guarantee
+
+`_write_egress_allowlist`'s own docstring said:
+
+> *“Each worker has its OWN file (per-worker egress isolation); a shared file
+> would be raced by concurrent crawls and break the fence.”*
+
+It **names the exact hazard** — raced by concurrent crawls — and then concludes
+per-worker files prevent it. Per-worker prevents racing *across* workers. It does
+nothing about concurrent crawls *on* one worker, which is the case the sentence
+literally describes, because that file is shared between them. The code reasoned
+about the right hazard in the wrong dimension and documented the conclusion as a
+property it does not have.
+
+This is the day's defect class in its most expensive form. A blind check reports
+green; **a comment asserting a guarantee is what the next reader trusts instead of
+re-deriving it.** Anyone auditing egress isolation would have read that sentence
+and stopped.
+
+**Corrected in place** — behaviour untouched, because correcting a false claim is
+not choosing between the three repairs. The docstring now states what per-worker
+files do and do not prevent, that the defect is latent at `capacity=1` and live
+above it, and which test proves it. *(Spotted by nexusqa-e3.)*
+
+### The cheapest honest interim, if the owner wants one
+
+Refuse `capacity > 1` at registration with a message naming this defect. A few
+lines, reversible, removes the live path without pretending the fence is fixed,
+and cannot be mistaken for the real repair. **Not done here** — it removes a
+documented feature, which is the owner's call. *(nexusqa-e3's suggestion.)*
+
 **What it does need is a person, not a retry.** A green rerun is not evidence the
 isolation holds — it is evidence the race did not fire, and an intermittent
 cross-tenant leak is worse than a deterministic one because isolation then depends
