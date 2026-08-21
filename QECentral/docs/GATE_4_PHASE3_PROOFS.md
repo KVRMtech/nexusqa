@@ -14,15 +14,17 @@ implemented when this gate opened; A36 is closed and was not touched.
 | A34 | `_scan_fleet` scalability | **DECIDED** — bound measured and formally accepted |
 | A35 | crossing journal recovery | **PASS** — both crash shapes, 0 double-submits |
 
-Evidence: `Nexus_power/evidence/gate4/*.json`. Branch `gate4/phase3-proofs`,
-commits `1e7c5fd` and `7454a34`, pushed to `origin`.
+Evidence: `Nexus_power/evidence/gate4/*.json`. Branch `gate4/phase3-proofs`
+on `origin` (`1e7c5fd` → `3f1fa63`).
 
 ---
 
 ## §0 · The three results that were green and wrong
 
-Both were caught, both are kept in the record, and each one is the reason a
-guard now exists.
+All three were caught, all three are kept in the record, and each one is the
+reason a guard now exists. The third was found *after* the gate had been signed
+off by an independent verifier — which is the honest reason it is listed here
+rather than quietly repaired.
 
 **A35 reported PASS with a ledger of zero binds in both runs.** The verdict said
 "zero double-submits". True, and worthless: the crawl had never submitted at
