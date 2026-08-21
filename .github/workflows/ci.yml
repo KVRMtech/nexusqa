@@ -19,6 +19,18 @@ on:
       # scans — on every feature push, which is a cost decision to take
       # deliberately rather than inherit from a bootstrap workaround.
       - feat/qec-dynamic-catalog-p0-p6
+      # Same bootstrap, same reason, and it inherits the same removal condition:
+      # this branch shares no history with `origin/develop` either, so a PR into
+      # it cannot be opened and CI can reach this work by no other route. The
+      # alternative was to land the work on the branch above, which four
+      # concurrent sessions are committing to — the tree instability that made an
+      # isolated branch necessary in the first place.
+      #
+      # DELETE THIS LINE when phase4/entry-gate-remediation merges. It is listed
+      # explicitly rather than as a pattern for the cost reason argued above: a
+      # `phase4/**` glob would run the fifteen-image docker-build and its Trivy
+      # scans on every push to every future Phase-4 branch.
+      - phase4/entry-gate-remediation
   # `develop` is this repository's DEFAULT and real integration branch — every
   # feature branch merges there, and `main` does not exist on the remote yet.
   # Validating only PRs into `main` therefore gated NOTHING: the entire
