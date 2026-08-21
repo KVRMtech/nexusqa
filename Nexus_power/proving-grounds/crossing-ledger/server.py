@@ -110,7 +110,22 @@ def _record(fields: dict) -> dict:
             "at_ms": int(time.time() * 1000),
             "fields": fields,
         }
-        with LEDGER_PATH.open("a", encoding="utf-8") as fh:
+        # newline="" DISABLES the platform's newline translation.
+        #
+        # Without it, text-mode append turns every "\n" into "\r\n" on Windows
+        # and leaves it as "\n" on Linux, so the SAME application writes
+        # different bytes depending on where it runs. This ledger is the
+        # measuring instrument for A35's "zero double-submits" claim, and a
+        # measuring instrument whose output is platform-dependent is one
+        # refactor away from being wrong: the count survives (JSON parses either
+        # way), but any future check that hashes or byte-compares the ledger
+        # would fail on Windows only and report a discrepancy that does not
+        # exist.
+        #
+        # In a JSONL file the newline IS the record delimiter, which is exactly
+        # the case a sibling squad found could be silently corrupted across a
+        # transport while a read_text()-based assertion stayed green.
+        with LEDGER_PATH.open("a", encoding="utf-8", newline="") as fh:
             fh.write(json.dumps(entry) + "\n")
         return entry
 

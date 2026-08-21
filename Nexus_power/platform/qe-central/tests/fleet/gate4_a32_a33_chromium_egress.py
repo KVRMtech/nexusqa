@@ -174,9 +174,47 @@ def assert_config_is_production_bytes() -> dict:
             f"so this run would prove the fence for bytes nobody deploys. Fix "
             f"the checkout (.gitattributes pins this file to eol=lf; try "
             f"`git add --renormalize` then re-checkout).")
+
+    # PORTABILITY OF THE PIN, PROVEN RATHER THAN ASSERTED.
+    #
+    # "No CR bytes" says this checkout is clean. It does NOT say another
+    # platform's checkout would be. A digest over a path whose `.gitattributes`
+    # rule is missing is not a function of the commit — the same commit hashes
+    # two ways, and both are "correct" on the machine that produced them.
+    #
+    # So compare the working copy against THE BLOB, which is identical on every
+    # platform. `--no-filters` is essential: without it git applies the clean
+    # filter, normalises CRLF to LF, and the comparison passes on exactly the
+    # broken checkout it is meant to catch.
+    #
+    # A match proves the pin is doing its job here, and — because the blob is
+    # platform-invariant — that any correctly-configured checkout anywhere
+    # produces these same bytes. That is the portability guarantee a
+    # single-OS CI lane cannot give.
     import hashlib
-    return {"path": str(SQUID_CONF), "bytes": len(raw),
-            "sha256": hashlib.sha256(raw).hexdigest(), "cr_bytes": 0}
+    digest = hashlib.sha256(raw).hexdigest()
+    blob_match = None
+    try:
+        repo = SQUID_CONF.parents[3]          # …/Nexus_power/..  → repo root
+        rel = SQUID_CONF.relative_to(repo).as_posix()
+        working = sh("git", "-C", str(repo), "hash-object", "--no-filters",
+                     str(SQUID_CONF))
+        committed = sh("git", "-C", str(repo), "rev-parse", f"HEAD:{rel}")
+        blob_match = (working == committed)
+        if not blob_match:
+            raise RuntimeError(
+                f"REFUSING TO RUN: the checked-out {rel} does not match the "
+                f"committed blob (working {working[:12]} vs blob "
+                f"{committed[:12]}). This checkout has transformed the file, so "
+                f"the fence would be proven for bytes that are not in git and "
+                f"the recorded digest would not reproduce anywhere else.")
+    except RuntimeError:
+        raise
+    except Exception as exc:                  # not a git checkout, shallow, …
+        blob_match = f"unverified ({type(exc).__name__})"
+
+    return {"path": str(SQUID_CONF), "bytes": len(raw), "sha256": digest,
+            "cr_bytes": 0, "matches_committed_blob": blob_match}
 
 
 def teardown(names: list[str]) -> None:

@@ -30,6 +30,20 @@
 # Windows checkout hands the container CRLF bytes while the committed blob is
 # LF, so the proof runs against config production never sees. Caught by Gate 4
 # after A32/A33 shipped 71 CR bytes into the container and still passed.
+# DELIBERATELY NARROW, AND KNOWN TO BE INCOMPLETE. These are pinned by PATH
+# rather than by `*.conf` because Gate 4 owns the egress-fence proof, not every
+# other squad's config file. That is also this rule's weakness: naming files
+# individually is precisely how the NEXT one gets missed — a repo-wide scan
+# found 727 tracked files with no eol rule (.tsx 190, .json 140, .md 126,
+# .ts 101, .html 61, .tf 35, .txt 30, .conf 5, .jsonl 4). Pinning by EXTENSION
+# across .conf .txt .json .jsonl .html .tf is tracked as Gate 0 item A3c, and
+# should supersede these two lines rather than sit beside them.
+#
+# NOTE FOR WHOEVER LANDS A3c: a rule here applies at checkout/normalise and does
+# NOT touch files already on disk. Adding the pin, confirming `git check-attr`
+# reports eol: lf, and still executing CRLF bytes are all true at once. Finish
+# with `git add --renormalize <path>` then `rm <path> && git checkout -- <path>`,
+# and re-measure the BYTES. Trusting the attribute is what hides it.
 Nexus_power/engines/qe-explorer/squid.conf                 text eol=lf
 Nexus_power/engines/qe-explorer/squid_allowed_domains.txt  text eol=lf
 *.bash    text eol=lf
