@@ -63,6 +63,7 @@ __all__ = [
     "IssuerError", "ProvisioningGrant", "SignedEnvelope",
     "key_id", "normalize_origin", "new_proof_id",
     "issue_provisioning_proof", "issue_revocation_list", "issue_attestation",
+    "revocation_claims",
     "self_check",
 ]
 
@@ -286,6 +287,47 @@ def issue_provisioning_proof(
     return _sign(private_key_b64, claims).as_dict()
 
 
+def revocation_claims(
+    *,
+    issuer: str,
+    issued_at_ms: int,
+    revoked_proof_ids: Iterable[str] = (),
+    revoked_environment_ids: Iterable[str] = (),
+    lifetime_ms: int = DEFAULT_REVOCATION_LIFETIME_MS,
+) -> dict[str, Any]:
+    """The revocation claims, VALIDATED but not yet signed.
+
+    Split out of :func:`issue_revocation_list` (A11.1) so a caller holding a
+    scoped SIGNING CAPABILITY rather than a private key can still build exactly
+    the claims this issuer would build.  ``app.services.attestation_keys.Signer``
+    deliberately never hands out key material, so ``issue_revocation_list``'s
+    ``private_key_b64`` parameter is unreachable from the API path — but the
+    validation here is not something the API path should reimplement.
+
+    Sorted and de-duplicated so the same revocation state signs to the same
+    bytes regardless of the order the database returned it in.
+    """
+    issuer = (issuer or "").strip()
+    if not issuer:
+        raise IssuerError("issuer is required")
+    if issued_at_ms < MIN_PLAUSIBLE_EPOCH_MS:
+        raise IssuerError(
+            f"issued_at_ms={issued_at_ms} is not an epoch-ms reading")
+    if lifetime_ms <= 0:
+        raise IssuerError("lifetime_ms must be positive")
+    return {
+        "v": CLAIMS_VERSION,
+        "issuer": issuer,
+        "issued_at_ms": int(issued_at_ms),
+        "expires_at_ms": int(issued_at_ms) + int(lifetime_ms),
+        "revoked_proof_ids": sorted({str(p).strip()
+                                     for p in revoked_proof_ids if str(p).strip()}),
+        "revoked_environment_ids": sorted({str(e).strip()
+                                           for e in revoked_environment_ids
+                                           if str(e).strip()}),
+    }
+
+
 def issue_revocation_list(
     *,
     private_key_b64: str,
@@ -302,30 +344,12 @@ def issue_revocation_list(
     positive statement the verifier can act on; no list at all is "revocation
     state unknown", which is a DENY.  So this is called on EVERY dispatch,
     including — especially — the ones with nothing revoked.
-
-    Sorted and de-duplicated so the same revocation state signs to the same
-    bytes regardless of the order the database returned it in.
     """
-    issuer = (issuer or "").strip()
-    if not issuer:
-        raise IssuerError("issuer is required")
-    if issued_at_ms < MIN_PLAUSIBLE_EPOCH_MS:
-        raise IssuerError(
-            f"issued_at_ms={issued_at_ms} is not an epoch-ms reading")
-    if lifetime_ms <= 0:
-        raise IssuerError("lifetime_ms must be positive")
-    claims = {
-        "v": CLAIMS_VERSION,
-        "issuer": issuer,
-        "issued_at_ms": int(issued_at_ms),
-        "expires_at_ms": int(issued_at_ms) + int(lifetime_ms),
-        "revoked_proof_ids": sorted({str(p).strip()
-                                     for p in revoked_proof_ids if str(p).strip()}),
-        "revoked_environment_ids": sorted({str(e).strip()
-                                           for e in revoked_environment_ids
-                                           if str(e).strip()}),
-    }
-    return _sign(private_key_b64, claims).as_dict()
+    return _sign(private_key_b64, revocation_claims(
+        issuer=issuer, issued_at_ms=issued_at_ms,
+        revoked_proof_ids=revoked_proof_ids,
+        revoked_environment_ids=revoked_environment_ids,
+        lifetime_ms=lifetime_ms)).as_dict()
 
 
 def issue_attestation(

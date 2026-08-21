@@ -86,6 +86,23 @@ _NO_TENANT_COLUMN: dict[str, str] = {
         "dispatch path, where it would present as 'no worker available' on a "
         "healthy fleet"
     ),
+    "attestation_issuer_keys": (
+        "qec_023 A11.1/T-WP-02 attestation ISSUER KEYS — FLEET INFRASTRUCTURE, "
+        "not tenant data. The explorer's trust store is fleet-wide "
+        "(`QEC_ATTESTATION_PUBLIC_KEYS` is one list, `QEC_ATTESTATION_ISSUER` "
+        "one name), so the issuer identity belongs to the DEPLOYMENT, not to a "
+        "customer. Per-tenant issuer keys would mean every explorer holding "
+        "every tenant's public key — strictly more key material for strictly "
+        "less isolation, since the proof already binds `tenant_id` INSIDE the "
+        "signed claims and the verifier checks it against the dispatch. The "
+        "row's SECRET is protected by KMS envelope encryption rather than by "
+        "RLS: `sealed_private_key` is an AES-GCM ciphertext whose DEK is "
+        "wrapped by Cloud KMS, so a reader of this table gains no signing "
+        "capability. The three TENANT tables in the same migration "
+        "(env_provisioning_records, attestation_revocations, "
+        "attestation_issuance_log) do carry `tenant_id` and are covered by the "
+        "assertions above."
+    ),
     "mechanic_priors": (
         "qec_009 federated control-mechanic priors — same value-free cross-tenant "
         "design as advance_label_priors: control SHAPES and success counts only, "

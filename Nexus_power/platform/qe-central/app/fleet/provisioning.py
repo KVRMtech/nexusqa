@@ -78,6 +78,13 @@ _TENANT_REGISTRY_UPSERT_SQL = text(
     "ON CONFLICT (tenant_id) DO NOTHING"
 )
 
+#: Tenant identifiers the PLATFORM uses for its own purposes and which therefore
+#: must never name a customer.  Currently one: the KEK "tenant" the attestation
+#: issuer's private key is sealed under (``attestation_keys.PLATFORM_KEK_TENANT``).
+#: Kept as a literal rather than an import to avoid a services→fleet cycle; the
+#: pairing is asserted in ``tests/security/test_a11_attestation_redteam.py``.
+RESERVED_TENANT_IDS = frozenset({"__platform__"})
+
 
 class ProvisioningError(Exception):
     """A provisioning/lifecycle operation was refused (fail-closed).
@@ -321,6 +328,26 @@ async def provision_tenant(
     overrides = dict(quota_overrides or {})
 
     tid = str(tenant_id or "").strip() or new_id()
+    # A11.1 — RESERVED PLATFORM IDENTIFIERS.
+    #
+    # ``tenant_id`` is taken verbatim from the caller (it is the idempotency
+    # key), so without this a platform admin could provision a tenant whose id
+    # collides with an identifier the PLATFORM uses for its own KMS envelopes —
+    # notably ``attestation_keys.PLATFORM_KEK_TENANT`` ("__platform__"), which is
+    # both the KEK derivation input and the AAD binding for the attestation
+    # issuer's private key.
+    #
+    # The collision is not directly exploitable today: unsealing re-derives the
+    # public key and refuses a row whose halves disagree, so a substituted blob
+    # cannot sign anything the fleet would honour. But "reserved" was ASSERTED in
+    # the A11 documentation before it was TRUE, and an assumption that holds only
+    # because a second control happens to catch it is exactly the kind of
+    # undocumented dependency this milestone is not allowed to have.
+    if tid in RESERVED_TENANT_IDS:
+        raise ProvisioningError(
+            f"tenant_id {tid!r} is reserved for platform infrastructure "
+            f"(KMS envelope namespacing) and cannot be assigned to a client",
+            status_code=422)
     registry_domain = _derive_domain(tid, display_name, domain)
 
     # ── 1) registry row (nexus.tenants) — INSERT-only, ON CONFLICT no-op ──────

@@ -656,6 +656,15 @@ async def _resolve_session(credentials: dict | None) -> dict | None:
     return None
 
 
+# ── A11.4 — the walk-persistence attestation attached to a dispatch ─────────
+# Imported under explicit names: `explorations` already has an `_explorer_attestation`
+# and an `env_attestation`, and a bare `issuer`/`normalize_origin` in this module
+# would be genuinely ambiguous to a reader.
+from ..db.attestation_models import PROVISIONING_ACTIVE, EnvProvisioningRecordRow
+from ..services import attestation_issuer as attest_issuer_svc
+from ..services.walk_attestation import normalize_origin as _attest_normalize_origin
+
+
 def resolve_crawl_observe_only(
     env_attestation: dict | None, fences: dict | None,
 ) -> tuple[bool, str]:
@@ -689,6 +698,150 @@ def resolve_crawl_observe_only(
     if bool(fen.get("observe_only")):
         return True, env_kind
     return env_kind != prod_guard.ENV_KIND_DISPOSABLE, env_kind
+
+
+def _merge_walk_attestation(legacy: dict | None,
+                            envelope: dict | None) -> dict | None:
+    """Carry the M1.3 ``proof``/``revocations`` alongside the legacy statement.
+
+    Kept as its own function so the merge direction is stated once and cannot
+    drift: the ENVELOPE never overwrites a legacy key, and the legacy statement
+    never overwrites the envelope. They describe different things — an operator's
+    signed rules of engagement, and the platform's cryptographic provisioning
+    proof — and the explorer consumes them through two independent paths.
+
+    A proof with no legacy attestation is still shipped: walk persistence does
+    not depend on the RoE statement, and refusing to send one because the other
+    is absent would make a cryptographic capability contingent on a free-text
+    form. Returns None only when there is nothing at all to send.
+    """
+    if not envelope:
+        return legacy
+    merged = dict(legacy or {})
+    merged.update({k: v for k, v in envelope.items()
+                   if k in ("proof", "revocations")})
+    return merged
+
+
+async def _walk_attestation_for_dispatch(
+    envelope, *, tenant_id: str, app_id: str, crawl_id: str,
+    base_url: str, actor: str,
+) -> dict | None:
+    """A11.4 — attach a signed provisioning proof to THIS dispatch, or nothing.
+
+    Returns ``{"proof": ..., "revocations": ...}`` when the platform has
+    certified an environment at the origin this crawl is about to visit, and
+    ``None`` in every other case.
+
+    NOTHING IN THE REQUEST SELECTS THE ENVIRONMENT.  The record is found by
+    matching the crawl's own ``base_url`` origin against the origin a PLATFORM
+    ADMIN pinned in ``env_provisioning_records``.  There is deliberately no
+    ``environment_id`` parameter on the crawl API for this: a caller-supplied
+    identifier would be one more tenant-controlled input on the path to
+    mutation authority, and the origin match is both sufficient and
+    unforgeable — a tenant who changes ``base_url`` to reach a certified record
+    moves the crawl to the certified origin, which is exactly the environment
+    the record authorises.
+
+    RETURNING ``None`` IS ALWAYS SAFE.  No proof means the explorer's verifier
+    denies with ``no_proof`` and the crawl behaves precisely as it did before
+    this milestone: it catalogues, it does not persist.  So every failure here
+    is swallowed into ``None`` rather than raised — a crawl must not fail
+    because an OPTIONAL capability could not be granted.  The log distinguishes
+    the two cases that matter: "nothing was certified" (ordinary, and true of
+    every production crawl forever) from "something was certified but issuance
+    failed" (an operator expected walk persistence and will not get it).
+    """
+    origin = _attest_normalize_origin(base_url or "")
+    if not origin or envelope is None:
+        return None
+    # ITS OWN TRANSACTION, deliberately. The dispatch's earlier session has
+    # already closed, and issuance must commit independently in any case: the
+    # audit row records that a proof WAS MINTED, which stays true even if the
+    # dispatch that requested it subsequently fails. An audit trail that rolls
+    # back with its caller is an audit trail that under-reports exactly the
+    # incidents it exists for.
+    try:
+        async with tenant_scoped_qec_session(tenant_id) as session:
+            return await _issue_walk_proof(
+                session, envelope, tenant_id=tenant_id, app_id=app_id,
+                crawl_id=crawl_id, origin=origin, actor=actor)
+    except Exception as exc:
+        logger.warning("qec.explorations.walk_attestation_failed error=%s",
+                       type(exc).__name__)
+        return None
+
+
+async def _issue_walk_proof(
+    session, envelope, *, tenant_id: str, app_id: str, crawl_id: str,
+    origin: str, actor: str,
+) -> dict | None:
+    """The body of :func:`_walk_attestation_for_dispatch`, inside a session."""
+    try:
+        records = (await session.execute(
+            select(EnvProvisioningRecordRow).where(
+                EnvProvisioningRecordRow.tenant_id == tenant_id,
+                EnvProvisioningRecordRow.app_id == app_id,
+                EnvProvisioningRecordRow.status == PROVISIONING_ACTIVE,
+                EnvProvisioningRecordRow.env_kind == attest_issuer_svc.DISPOSABLE,
+            )
+        )).scalars().all()
+    except Exception as exc:
+        logger.warning("qec.explorations.walk_record_lookup_failed error=%s",
+                       type(exc).__name__)
+        return None
+
+    matching = [r for r in records
+                if _attest_normalize_origin(r.target_origin) == origin]
+    if not matching:
+        # The ordinary case. DEBUG, not WARNING: for every production crawl —
+        # that is, almost all of them — "no walk persistence" is correct, and
+        # logging it as a problem would train operators to ignore the line that
+        # matters.
+        logger.debug(
+            "qec.explorations.no_walk_certification tenant=%s app=%s origin=%s",
+            tenant_id, app_id, origin)
+        return None
+    if len(matching) > 1:
+        # Cannot happen through the API (one active record per environment), so
+        # it means hand-edited data. Refusing to CHOOSE is the only safe move:
+        # any tie-break rule is a rule an attacker who can create a row exploits.
+        logger.error(
+            "qec.explorations.ambiguous_walk_certification tenant=%s app=%s "
+            "origin=%s records=%d — refusing to choose; no proof issued",
+            tenant_id, app_id, origin, len(matching))
+        return None
+
+    record = matching[0]
+    try:
+        issued = await attest_issuer_svc.issue_for_crawl(
+            session, envelope,
+            tenant_id=tenant_id, app_id=app_id,
+            environment_id=record.environment_id,
+            crawl_id=crawl_id, target_url=origin,
+            issued_to=actor or "crawl-dispatch",
+            request_id=crawl_id,
+        )
+    except Exception as exc:
+        # An operator DID certify this environment and is expecting walk
+        # persistence, so this one is loud — but it is still not fatal to the
+        # crawl, which proceeds read-only.
+        reason = getattr(exc, "reason", type(exc).__name__)
+        logger.warning(
+            "qec.explorations.walk_proof_not_issued tenant=%s app=%s env=%s "
+            "crawl=%s reason=%s — this environment IS certified disposable but "
+            "no proof could be issued; the crawl will catalogue without "
+            "persisting", tenant_id, app_id, record.environment_id, crawl_id,
+            reason)
+        return None
+
+    logger.warning(
+        "qec.explorations.walk_proof_attached tenant=%s app=%s env=%s crawl=%s "
+        "proof_id=%s budget=%d — this dispatch carries MUTATION authority",
+        tenant_id, app_id, record.environment_id, crawl_id, issued.proof_id,
+        issued.max_walk_mutations_per_step)
+    await session.commit()
+    return dict(issued.attestation)
 
 
 def _explorer_attestation(att: dict | None) -> dict | None:
@@ -1143,6 +1296,15 @@ async def _dispatch_explorer(
         _vision_enabled = bool((await _bp.autonomy_flags(tenant_id)).get("vision"))
     except Exception:
         _vision_enabled = False
+    # A11.4 — ask the issuer for a proof for THIS crawl. Returns None unless a
+    # platform admin has certified an environment at this exact origin; None is
+    # the safe, ordinary answer and leaves the crawl read-only.
+    walk_attestation_envelope = await _walk_attestation_for_dispatch(
+        _envelope_for(request), tenant_id=tenant_id, app_id=app_id,
+        crawl_id=crawl_id, base_url=base_url,
+        actor=str((getattr(getattr(request, "state", None), "user", None) or {})
+                  .get("sub") or "") if request is not None else "",
+    )
     dispatch_request = ExploreDispatchRequest(
         crawl_id=crawl_id,
         tenant_id=tenant_id,
@@ -1155,7 +1317,19 @@ async def _dispatch_explorer(
         idp_domains=_idp_domains(fences),
         plan=plan,
         phase="explore",
-        attestation=_explorer_attestation(env_attestation),
+        # A11.4 / T-WP-02 — the operator's legacy RoE statement (which gates the
+        # SUBMIT tier) PLUS, when the platform has certified this origin as
+        # disposable, the signed provisioning proof + revocation list that are
+        # the ONLY way walk persistence is ever enabled. The explorer strips the
+        # two envelope keys before parsing the legacy half, so a dispatch that
+        # carries a proof cannot break the submit tier that has nothing to do
+        # with it (``main._WALK_ENVELOPE_KEYS``).
+        #
+        # `walk_attested` is NOT set here and cannot be: the explorer derives it
+        # from its OWN verification verdict over these bytes. Attaching a proof
+        # requests mutation authority; it does not grant it.
+        attestation=_merge_walk_attestation(
+            _explorer_attestation(env_attestation), walk_attestation_envelope),
         submit_approvals=submit_approvals,
         boundary_approvals=boundary_approvals,
         session=auth_session,

@@ -48,6 +48,7 @@ from app.db import (
     is_substrate_connected,
 )
 from app.routers.apps import router as apps_router
+from app.routers.attestation import router as attestation_router
 from app.routers.explorations import router as explorations_router
 from app.routers.harness import router as harness_router
 from app.routers.internal import router as internal_router
@@ -366,6 +367,13 @@ app.include_router(compliance_router)
 # (role admin + platform_admin marker), so a tenant admin can NOT manage other
 # tenants. Additive; a tenant with no control record behaves exactly as today.
 app.include_router(fleet_router)
+# A11 / T-WP-02 attestation issuer — the platform half of the walk-persistence
+# trust chain: issuer key custody (KMS-sealed), the AUTHORITATIVE provisioning
+# record a tenant cannot write, proof issuance, and revocation. Additive, and
+# inert until an operator bootstraps an issuer key: with no key nothing is
+# issued, every dispatch verifies with `no_proof`, and every crawl behaves
+# exactly as it did before this milestone existed.
+app.include_router(attestation_router)
 # Phase-1 Test Studio bridge — reverse-proxy the artifact-keyed factory (test-factory /
 # artifacts / test-runs / eyes) so the crawl portal's Test Studio reaches it with one
 # login. Mounted AFTER the /api/v1/qec/* routers; its distinct prefixes never shadow
