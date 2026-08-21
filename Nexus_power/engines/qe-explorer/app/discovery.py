@@ -48,7 +48,7 @@ from .auth import (
     match_login_controls,
     match_secret_field,
 )
-from .browser import BrowserPort, PageObservation
+from .browser import BrowserPort, PageObservation, _norm_url
 from .coverage import CoverageLedger
 from .emitter import MetaEmitter
 from .filler import ControlFiller, _FIELD_KINDS
@@ -598,7 +598,36 @@ class DiscoveryMixin:
         last_seen = self._clock.now_ms()
         # ANSWERS P1.B — capture rendered value nodes in the page's FINAL state (after
         # fills + discovery clicks reveal outputs like a computed premium).
+        #
+        # A2.2 — ...BUT ONLY IF IT IS STILL THIS PAGE. The whole point of reading
+        # LAST is that a discovery click can REVEAL an output in place, and that
+        # revealed premium belongs to this state. A discovery click can equally
+        # NAVIGATE, and then this read lands on a different document while
+        # ``fingerprint`` still names the one we started on — so another page's
+        # outputs are attributed to this state.
+        #
+        # Measured on the M2.4 quote funnel: `_discover` clicked "Get Quote", the
+        # browser moved to /result.html, and the ENTRY state was recorded carrying
+        # "Your monthly premium = 42.50" — a value that page never renders. The
+        # fold then produced an entry node claiming the result node's outcome.
+        # Invisible until A2.2 admitted outcome states into coverage, because
+        # before that neither page reached the index at all.
+        #
+        # The same-document test is ``browser._norm_url``, deliberately: it is the
+        # one R0 already uses to decide whether a click navigated, so "did we move"
+        # gets one answer across the engine — cosmetic anchors and trailing slashes
+        # do not count, an SPA hash-route change does.
         displayed_values = await self._port.collect_displayed_values()
+        if displayed_values:
+            url_now = await self._port.current_url()
+            if _norm_url(url_now or "") != _norm_url(obs.url or ""):
+                logger.info(
+                    "qec.discovery.displayed_values_dropped from=%s to=%s count=%d "
+                    "— discovery navigated away, so these values are another "
+                    "page's and are not this state's evidence",
+                    (obs.url or "")[:120], (url_now or "")[:120],
+                    len(displayed_values))
+                displayed_values = []
         # API/network mining — drain the XHR/fetch calls the app made during this
         # visit (diagnostics-only; the app's real API surface as grounded evidence).
         # Best-effort: a port without the verb yields nothing, never breaks a crawl.
