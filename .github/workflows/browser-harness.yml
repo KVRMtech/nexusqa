@@ -154,33 +154,22 @@ jobs:
         working-directory: ${{ env.EXPLORER }}
         run: python -m pytest tests/browser/test_known_bugs.py tests/browser/test_capture_contract.py -v -rxX
 
-      # Run the characterization suite TWICE in the same job. A golden that only
-      # holds on the first run is not a golden, and a nondeterminism that appears
-      # once per ten runs is far cheaper to find here than as an unexplained red
-      # build three months from now.
-      - name: Characterization — pass 1
-        working-directory: ${{ env.EXPLORER }}
-        run: python -m pytest tests/browser/test_browser_characterization.py -v
-
-      - name: Characterization — pass 2 (determinism)
-        working-directory: ${{ env.EXPLORER }}
-        run: python -m pytest tests/browser/test_browser_characterization.py -v
-
-      # Goldens are recorded artefacts under version control. If a run rewrote
-      # one, the behaviour changed and the diff must be reviewed by a human —
-      # never absorbed silently by CI.
-      - name: Fail if any golden was rewritten
-        working-directory: ${{ env.EXPLORER }}
-        run: |
-          if ! git diff --quiet -- tests/browser/golden; then
-            echo "::error::A characterization golden changed during this run."
-            echo "Capture behaviour has changed. Review the diff below and, if the"
-            echo "change is intended, re-record with QEC_UPDATE_GOLDENS=1 and commit."
-            git diff -- tests/browser/golden
-            exit 1
-          fi
-          echo "All characterization goldens are byte-identical."
-
+      # ── ORDERING, AND IT IS DELIBERATE ─────────────────────────────────
+      # These four REAL CRAWLS used to sit AFTER the characterization steps, and
+      # that made them unreachable. A GitHub step failure halts the job, the 28
+      # committed `tests/browser/golden/manifest_*.json` files have been stale
+      # since commit 3420d88 added `journey_crossings`/`journeys_walked` without
+      # re-recording them, and so characterization goes red and every step below
+      # it is SKIPPED — including the only CI evidence that a real application
+      # change is still recorded by a real crawl.
+      #
+      # Nothing here depends on a golden: these steps write under
+      # `Nexus_power/evidence/`, the characterization steps write under
+      # `tests/browser/golden/`, and the two guards diff their own paths. So the
+      # recordings run first and report for themselves, and a stale golden owned
+      # by another milestone can no longer take the crawl evidence down with it.
+      # The job is still RED while those goldens are stale — this changes what
+      # gets measured before the red, not whether it is red.
       # ── THE GOLDEN GATE ──────────────────────────────────────────────────
       # A real crawl, in real Chromium, must still walk a real application's
       # funnel to its end and CROSS the irreversible control it was granted.
@@ -280,6 +269,33 @@ jobs:
             exit 1
           fi
           echo "A21 crawl evidence is unchanged in substance."
+
+      # Run the characterization suite TWICE in the same job. A golden that only
+      # holds on the first run is not a golden, and a nondeterminism that appears
+      # once per ten runs is far cheaper to find here than as an unexplained red
+      # build three months from now.
+      - name: Characterization — pass 1
+        working-directory: ${{ env.EXPLORER }}
+        run: python -m pytest tests/browser/test_browser_characterization.py -v
+
+      - name: Characterization — pass 2 (determinism)
+        working-directory: ${{ env.EXPLORER }}
+        run: python -m pytest tests/browser/test_browser_characterization.py -v
+
+      # Goldens are recorded artefacts under version control. If a run rewrote
+      # one, the behaviour changed and the diff must be reviewed by a human —
+      # never absorbed silently by CI.
+      - name: Fail if any golden was rewritten
+        working-directory: ${{ env.EXPLORER }}
+        run: |
+          if ! git diff --quiet -- tests/browser/golden; then
+            echo "::error::A characterization golden changed during this run."
+            echo "Capture behaviour has changed. Review the diff below and, if the"
+            echo "change is intended, re-record with QEC_UPDATE_GOLDENS=1 and commit."
+            git diff -- tests/browser/golden
+            exit 1
+          fi
+          echo "All characterization goldens are byte-identical."
 
       - name: Execution coverage for the injected capture JS
         working-directory: ${{ env.EXPLORER }}
@@ -409,3 +425,55 @@ jobs:
       - name: Stop the application
         if: always()
         run: docker rm -f pg-${{ matrix.app }} || true
+
+  # ── Lane 4: GATE 2 — the three applications, and what each one PROVES ─────
+  # A17. The proving-ground lane above asserts that a crawl DISCOVERED an
+  # application. This one asserts what the crawl ACHIEVED on it: how many
+  # irreversible boundaries it crossed, whether a confirmation was observed,
+  # and that no boundary was crossed twice.
+  #
+  # It is a two-way ratchet against a committed declaration, not a floor. An
+  # application that stops crossing fails here — the regression this job
+  # exists to catch. An application that STARTS crossing also fails here,
+  # because its declaration is now understated and a human has to look at the
+  # new evidence and raise it deliberately. A one-way floor would let a lucky
+  # crawl satisfy the gate and would never tell anyone the platform improved.
+  #
+  # Each application is built from its OWN Dockerfile and crawled over HTTP,
+  # never served from its source directory: for vkpower-life those are two
+  # different applications (a hand-written hash-routed index.html vs the
+  # Next.js export in out/), and a journey proven against the wrong one would
+  # not reproduce here.
+  gate2-journeys:
+    name: Gate 2 — three real applications
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install Python deps
+        working-directory: ${{ env.EXPLORER }}
+        run: pip install -r requirements.txt pytest pytest-asyncio
+
+      - name: Install Chromium
+        working-directory: ${{ env.EXPLORER }}
+        run: python -m playwright install --with-deps chromium
+
+      # The test builds and runs each image itself, so a port or Dockerfile
+      # change is exercised by the same code path that reads it — there is no
+      # second copy of the port table in this workflow to drift out of sync.
+      - name: Crawl all three applications and assert what each achieved
+        working-directory: ${{ env.EXPLORER }}
+        run: python -m pytest tests/browser/test_gate2_three_applications.py -v
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: gate2-journey-evidence
+          path: ${{ env.EXPLORER }}/tests/browser/_crawl_out/gate2/**
+          if-no-files-found: warn
