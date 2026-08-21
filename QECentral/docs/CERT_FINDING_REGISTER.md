@@ -67,6 +67,38 @@ never report "clean"** — the same fail-closed rule the subsystem under
 certification follows. The finding closes automatically when the sentence is
 corrected, and cannot be closed by anyone forgetting it existed.
 
+#### Attacked, and it held
+
+`nexusqa-39` did not read this design — they attacked it, in an isolated copy of
+the tree, by hiding the probe's target:
+
+```
+mv attestation_keys.py attestation_keys.py.hidden
+issue_side.py  -> exit 0   (kms_probe_read=False, kms_claim_present=False)
+verify_side.py -> CHECKS RUN 150 | FAILURES 3
+   FAIL: CERT-FINDING-1 probe could READ attestation_keys.py
+```
+
+The finding did **not** convert to passing. The third failure **changed
+identity** — from *"the claim is still present"* to *"the probe could not see its
+target"* — a one-for-one swap: count stays 3, reason moves.
+
+#### The rule for the next prose-to-tool conversion
+
+**Use TWO separate assertions, never one truthy test.**
+
+```python
+check(data.get("kms_probe_read") is True,   ...)   # I could see the target
+check(data.get("kms_claim_present") is False, ...) # and the defect is gone
+```
+
+Collapsing these into a single boolean **passes on a missing file**, because
+*"the sentence is absent"* and *"the file is absent"* are indistinguishable from
+one truthy value. That is the failure mode a prose-to-tool conversion is most
+likely to introduce, and it would silently convert an open finding into a closed
+one — the precise harm the conversion exists to prevent. The next person
+converting a finding will reach for the single check; this is why not to.
+
 ---
 
 ## CERT-FINDING-2 — `normalize_origin` is not idempotent for IPv6 literals
