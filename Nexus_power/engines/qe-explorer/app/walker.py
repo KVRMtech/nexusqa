@@ -802,10 +802,23 @@ class WalkerMixin:
         try:
             observation = await self._port.set_checked(pick, True)
             if observation.intent_met is False:
+                # WHY IT REFUSED, not only THAT it refused.  "The control did
+                # not take the answer" has two entirely different causes with
+                # opposite fixes: the locator never resolved (the control the
+                # inventory named is not reachable — a crawler defect), or it
+                # resolved and the read-back disagreed with the intent (the
+                # application rejected the value — an application statement).
+                # Measured on a live deployment, this line named a radio the
+                # SAME production port sets successfully in isolation, and the
+                # log could not say which of the two had happened. An honest
+                # failure that cannot be diagnosed is only half honest.
                 logger.warning(
-                    "qec.wizard.unblock_fill_failed url=%s field=%r — the control "
-                    "did not take the answer; block stands", url[:120],
-                    pick_name[:40])
+                    "qec.wizard.unblock_fill_failed url=%s field=%r kind=%s "
+                    "intended=%r committed=%r detail=%r — the control did not "
+                    "take the answer; block stands", url[:120], pick_name[:40],
+                    pick.get("kind"), getattr(observation, "intended_value", ""),
+                    getattr(observation, "committed_value", None),
+                    (getattr(observation, "error_detail", "") or "")[:120])
                 return controls
             reobs = await self._observe()
             refreshed = build_inventory(reobs.raw_controls, self._refuse_pack,

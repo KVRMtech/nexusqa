@@ -51,6 +51,11 @@ class CoverageHost(Protocol):
     _outcome_milestones: list[dict[str, Any]]
     _crossings: Any
     _advance_blocked: list[dict[str, Any]]
+    #: T-RG-01 - unblock experiments that could NOT be undone.  Declared
+    #: here for the reason stated twice above, and because this ledger is
+    #: the one case where the crawl CHANGED the application and could not
+    #: change it back: a residue nothing reads is not an audit trail.
+    _unblock_irreversible: list[dict[str, Any]]
     #: M2.5 - the network-evidence accumulators the account renders. Declared
     #: here for the same reason the M1.7 fields above are: a field that appears
     #: in the payload but not in this contract is how the crawler and its
@@ -389,6 +394,14 @@ class CoverageLedger:
             # Why a funnel stopped one step in, named. A walk that declines is
             # honest but silent; this is the sentence that makes it actionable.
             "advance_blocked": c._advance_blocked[:40],
+            # T-RG-01 - THE EXPERIMENTS THAT COULD NOT BE PUT BACK.  A
+            # radio group the app left unanswered has no unanswered state
+            # to restore, so an attempt that bought nothing still leaves
+            # one committed answer behind on the test environment.  The
+            # walker records each one; without this line that record died
+            # with the Crawler, and an operator reading the form snapshot
+            # below had no way to tell the app's state from ours.
+            "unblock_irreversible": c._unblock_irreversible[:40],
             # ── M1.7 / T-GW-04 · DURABLE LEARNING ───────────────────────────
             # The rules THIS crawl proved, keyed and versioned, for qe-central to
             # persist against (tenant, app). Until this existed the proof lived

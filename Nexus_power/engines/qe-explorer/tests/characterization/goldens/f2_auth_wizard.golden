@@ -362,6 +362,7 @@
     "summary": "AUTHENTICATED AREAS NOT COVERED \u2014 the crawl SIGNED IN successfully, but this app drops the sign-in on every page load (it keeps the signed-in user in the page, not in a cookie), so pages behind the login could not be reached. Re-recording and new credentials will not change this. 1 form(s) found; 2 field(s) auto-filled with a default; 0 field(s) need a real seed; 0 submit(s) exercised (Phase-B), 0 irreversible boundary/ies awaiting approval; 0 journey(s) completed end-to-end through an approved crossing.",
     "tab_views_recorded": 0,
     "traversal": "probe",
+    "unblock_irreversible": [],
     "unhandled_controls": [],
     "vision_budget": {
       "breaker_open": false,

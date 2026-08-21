@@ -234,6 +234,7 @@
     "summary": "2 form(s) found; 2 field(s) auto-filled with a default; 0 field(s) need a real seed; 0 submit(s) exercised (Phase-B), 2 irreversible boundary/ies awaiting approval; 0 journey(s) completed end-to-end through an approved crossing.",
     "tab_views_recorded": 0,
     "traversal": "probe",
+    "unblock_irreversible": [],
     "unhandled_controls": [],
     "vision_budget": {
       "breaker_open": false,

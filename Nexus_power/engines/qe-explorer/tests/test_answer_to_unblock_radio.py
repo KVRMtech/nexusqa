@@ -509,3 +509,61 @@ async def test_a_frequency_question_is_answered_with_its_denial():
     await _run(me, controls, SimpleNamespace(unfilled_fields=list(declined)))
 
     assert port.calls == [("Never", True)]
+
+
+# ─── the residue must LEAVE the crawl (T-RG-01 · audit) ──────────────────────
+#
+# THE HOLE THESE TWO PIN.  The irreversible-experiment ledger above is asserted
+# in memory and nowhere else: `_unblock_irreversible` had exactly three code
+# sites in the whole engine — declared on the crawler, appended to by the
+# walker, and read by the test on line 282.  Nothing carried it into the
+# coverage payload, so the one fact it exists to preserve — this test
+# environment now holds a committed answer the crawl put there and could not
+# take back — died with the Crawler object.
+#
+# That is the exact failure `advance_blocked` was built to avoid, six lines
+# above it in the same constructor, and it escapes via coverage.py.  The
+# comment on the ledger promises the residue is "auditable rather than merely
+# absent"; until these tests passed, it was precisely absent.
+
+def _real_crawler(tmp_path) -> Crawler:
+    """A REAL Crawler, because the thing under test is the payload builder — a
+    stub that returned a dict would be testing the test."""
+    from app.config import Settings
+    from app.crawler import Budget, GuardContext
+    from app.guard import load_refuse_pack
+    pack = load_refuse_pack(Settings().refuse_pack_path)
+    return Crawler(
+        None, crawl_id="c1", tenant_id="t1", target_url="https://app.example/",
+        work_dir=str(tmp_path), refuse_pack=pack,
+        budget=Budget(rate_per_s=0, max_states=4),
+        explorer_version="test/1.0", guard_version="test",
+        refuse_pack_version=pack.version, config_fingerprint="fp",
+        guard_context=GuardContext(refuse_pack=pack),
+    )
+
+
+def test_an_irreversible_experiment_is_reported_out_of_the_crawl(tmp_path):
+    """An operator deciding whether the form snapshot reflects the app's state
+    or ours cannot read a Python list that was garbage-collected."""
+    c = _real_crawler(tmp_path)
+    c._unblock_irreversible.append({
+        "url": "https://app/x", "advance": "Continue", "field": "No",
+        "reason": "radio_group_has_no_unanswered_state"})
+
+    payload = c._build_coverage()
+
+    assert "unblock_irreversible" in payload, (
+        "the residue of an experiment that could not be undone must leave the "
+        "crawl; in memory only is how it was lost")
+    assert payload["unblock_irreversible"] == [{
+        "url": "https://app/x", "advance": "Continue", "field": "No",
+        "reason": "radio_group_has_no_unanswered_state"}]
+
+
+def test_the_irreversible_ledger_is_declared_in_the_coverage_contract():
+    """coverage.py states this law twice in its own Protocol: "a payload key
+    with no contract entry is how the crawler and its ledger drift apart"."""
+    from app.coverage import CoverageHost
+    assert "_unblock_irreversible" in getattr(CoverageHost, "__annotations__", {}), (
+        "the payload reads this attribute, so the Protocol must declare it")
