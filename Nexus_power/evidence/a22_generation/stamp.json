@@ -1,0 +1,20 @@
+{
+  "app": "m24_generation/fixture_app.py (quote funnel, real HTTP backend)",
+  "coverage_sha256": "8268396f833c51ade677164dc4a91ecccd203d4dab4a0373e2a330f260d3c90b",
+  "crawl_id": "a22-generation",
+  "flows": 0,
+  "milestone": "GATE3-A22",
+  "mode": "baseline",
+  "network_events": 3,
+  "server_saw": [
+    "GET /",
+    "GET /api/config",
+    "GET /",
+    "GET /api/config",
+    "POST /api/quote",
+    "GET /result.html",
+    "GET /result.html"
+  ],
+  "states": 1,
+  "tenant_id": "a22-generation"
+}

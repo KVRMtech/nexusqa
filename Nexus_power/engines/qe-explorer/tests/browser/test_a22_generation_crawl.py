@@ -1,0 +1,349 @@
+"""GATE 3 / A22 — THE PRODUCER HALF: the journey a generated spec is built from
+is DISCOVERED BY THE CRAWLER, not written by hand.
+
+WHAT A22 CHANGES ABOUT M2.4
+===========================
+M2.4's proof already does the hard end of this: it compiles a journey into a
+Playwright spec, EXECUTES it in a real browser against a real HTTP application,
+and shows it turning red under two orthogonal seeded regressions. What it does
+not do is discover the journey. ``m24_generation/crawl_evidence.py`` says so in
+its own first paragraph:
+
+    FIXTURE: the raw network events and the journey graph rows — i.e. what a
+    crawl of the quote application WOULD have recorded.
+
+So the pipeline has always been fed a hand-built account of a crawl that never
+happened. Everything downstream of that account is production code and is
+genuinely exercised; the account itself is the fixture A22 exists to replace.
+
+This module runs the real thing: the production :class:`app.crawler.Crawler` and
+:class:`app.main.PlaywrightBrowserPort`, in real Chromium, against the SAME
+application the M2.4 proof executes its generated spec against — so the journey
+that gets compiled and the application that gets tested are the same
+application, discovered rather than described.
+
+WHY THIS APPLICATION AND NOT A PROVING GROUND
+=============================================
+``proving-grounds/acme-life`` is the richer application and A21 uses it, but it
+makes **zero** network calls — measured, ``grep -c 'fetch(' index.html`` is 0.
+A22 requires the generated specification to carry NETWORK assertions, and an
+application that never calls a backend cannot ground one.
+
+``m24_generation/fixture_app.py`` is a two-page quote funnel with a real HTTP
+backend: the entry page reads ``GET /api/config`` on load, the button POSTs
+``/api/quote`` and renders the premium the backend returned. It also carries the
+two seeded regressions the consumer half needs, and they are deliberately
+orthogonal — ``NETWORK_SILENT`` renders the same premium from a constant so every
+UI assertion still passes, and ``OUTCOME_DRIFT`` calls the API correctly and
+returns a different number.
+
+It is crawled here in BASELINE mode only. The regressions belong to the
+consumer, which runs the compiled spec against them.
+
+WHAT IS WRITTEN, AND WHY BOTH
+=============================
+``coverage.json``  — the coverage account, which the journey fold reads to build
+                     the real journey graph rows (nodes, edges, traversals).
+``manifest.jsonl`` — the manifest, which carries the per-visit ``network_calls``
+                     the M2.5 endpoint inventory is built from. The inventory is
+                     what grounds the spec's network assertions, and A23 has just
+                     shown that reading it back off a manifest is a different code
+                     path from reading it in-process.
+"""
+from __future__ import annotations
+
+import hashlib
+import importlib.util
+import json
+import shutil
+import sys
+from pathlib import Path
+from typing import Any, Mapping, Sequence
+
+import pytest
+
+import _harness as H
+
+pytestmark = [pytest.mark.browser, pytest.mark.playwright, pytest.mark.proving_ground]
+
+EVIDENCE_DIR = H.SERVICE_ROOT.parent.parent / "evidence" / "a22_generation"
+#: The seeded quote application lives with the M2.4 proof that executes against
+#: it. Loaded by PATH rather than imported as a package: `Nexus_power/tests` is
+#: not on this service's sys.path, and putting it there would drag three other
+#: services' `app` packages into the same interpreter (M1.7).
+_FIXTURE_APP = (H.SERVICE_ROOT.parent.parent / "tests" / "m24_generation"
+                / "fixture_app.py")
+
+CRAWL_ID = "a22-generation"
+TENANT_ID = "a22-generation"
+
+#: The one control that advances this funnel. Named as an approval because
+#: ``Crawler._submit_enabled`` is False without one, and a walk that cannot
+#: actuate the button never reaches the result page — which is the whole journey.
+FUNNEL_ADVANCES = [
+    {"control": "Get Quote", "approved_by": "a22-generation", "max_crossings": 4},
+]
+
+_FORWARD = ("quote", "continue", "next", "proceed", "get", "start", "see")
+
+
+def _load_fixture_app():
+    assert _FIXTURE_APP.is_file(), f"the quote application is missing: {_FIXTURE_APP}"
+    spec = importlib.util.spec_from_file_location("a22_fixture_app", _FIXTURE_APP)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["a22_fixture_app"] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+async def _stub_advance_oracle(candidates: Sequence[Mapping[str, Any]],
+                               page_title: str, page_url: str) -> dict[str, Any]:
+    """The deterministic stub every gate here uses — a gate that needs a live
+    model is a gate that fails on network weather."""
+    forward = [c for c in candidates
+               if any(f in str(c.get("name") or "").lower() for f in _FORWARD)]
+    if not forward:
+        return {}
+    buttons = [c for c in forward if str(c.get("kind") or "").lower() == "button"]
+    pick = (buttons or forward)[0]
+    return {"name": pick.get("name"), "kind": pick.get("kind"),
+            "reason": "deterministic stub: forward-shaped, button preferred"}
+
+
+def _walk_authorization(target_url: str) -> Any:
+    from app.attest import ProofReplayGuard, verify_provisioning_proof
+    from app.walk_persist import MutationAuditLog, WalkAuthorization
+    from _attest_kit import Issuer
+
+    issuer = Issuer()
+    scheme, _, rest = target_url.partition("//")
+    origin = f"{scheme}//{rest.split('/')[0]}"
+    verdict = verify_provisioning_proof(
+        {"proof": issuer.proof(crawl_id=CRAWL_ID, tenant_id=TENANT_ID,
+                               target_origin=origin,
+                               max_walk_mutations_per_step=8),
+         "revocations": issuer.revocations()},
+        trust=issuer.trust(), crawl_id=CRAWL_ID, tenant_id=TENANT_ID,
+        target_url=target_url, replay_guard=ProofReplayGuard())
+    assert verdict.authorized, (
+        f"could not build a walk authorization: {verdict.reason}")
+    return WalkAuthorization.from_verdict(
+        verdict, workflow_id=CRAWL_ID, audit=MutationAuditLog())
+
+
+@pytest.fixture(scope="module")
+def crawled(pw, tmp_path_factory) -> dict[str, Any]:
+    """ONE real crawl of the healthy quote application; coverage + manifest."""
+    fixture_app = _load_fixture_app()
+    from app.auth import AuthWindow
+    from app.crawl_constants import TRAVERSAL_FULL
+    from app.crawler import Budget, Crawler, GuardContext
+    from app.guard import load_refuse_pack
+    from app.main import EXPLORER_VERSION, PlaywrightBrowserPort
+    from tests.characterization.harness import disposable_attestation
+
+    server = fixture_app.QuoteAppServer(fixture_app.BASELINE).start()
+    work = H.HERE / "_crawl_out" / "a22_generation"
+    shutil.rmtree(work, ignore_errors=True)
+    work.mkdir(parents=True, exist_ok=True)
+    try:
+        url = f"{server.origin}/"
+        pack = load_refuse_pack(str(H.SERVICE_ROOT / "app" / "refuse_pack.yaml"))
+        guard_ctx = GuardContext(
+            refuse_pack=pack,
+            auth_window=AuthWindow(max_requests=400, window_ms=240_000),
+            attestation=disposable_attestation(),
+            submit_flow_approved=True,
+            walk_authorization=_walk_authorization(url),
+            idp_domains=frozenset(),
+        )
+        crawler = Crawler(
+            PlaywrightBrowserPort(pw.page, pw.context),
+            crawl_id=CRAWL_ID, tenant_id=TENANT_ID, target_url=url,
+            work_dir=str(work), refuse_pack=pack,
+            budget=Budget.from_dict({"max_states": 20, "max_actions": 120,
+                                     "max_requests": 2000,
+                                     "max_duration_ms": 240_000}),
+            explorer_version=EXPLORER_VERSION, guard_version=EXPLORER_VERSION,
+            refuse_pack_version=pack.version,
+            config_fingerprint="a22-generation",
+            guard_context=guard_ctx, identity_seed="qec-a22-generation",
+            observe_only=False, traversal=TRAVERSAL_FULL,
+            advance_oracle=_stub_advance_oracle,
+            boundary_approvals=FUNNEL_ADVANCES,
+        )
+        pw.run(crawler.run())
+        coverage = crawler._coverage.build()
+        manifest = (work / CRAWL_ID / "manifest.jsonl").read_text(encoding="utf-8")
+        served = list(server.requests)
+    finally:
+        server.stop()
+
+    events = []
+    for line in manifest.splitlines():
+        if not line.strip():
+            continue
+        record = json.loads(line)
+        for call in (record.get("network_calls") or []):
+            events.append(call)
+
+    EVIDENCE_DIR.mkdir(parents=True, exist_ok=True)
+    (EVIDENCE_DIR / "coverage.json").write_text(
+        json.dumps(coverage, indent=2, sort_keys=True, default=str), encoding="utf-8")
+    (EVIDENCE_DIR / "manifest.jsonl").write_text(manifest, encoding="utf-8")
+    stamp = {
+        "milestone": "GATE3-A22",
+        "app": "m24_generation/fixture_app.py (quote funnel, real HTTP backend)",
+        "mode": fixture_app.BASELINE,
+        "crawl_id": CRAWL_ID,
+        "tenant_id": TENANT_ID,
+        "states": len(coverage.get("states") or []),
+        "flows": len(coverage.get("flows") or []),
+        "network_events": len(events),
+        # What the SERVER says it answered — an independent record, so a claim
+        # about the crawl's traffic is not made only by the crawl.
+        "server_saw": [f"{m} {p}" for m, p in served],
+        "coverage_sha256": hashlib.sha256(
+            (EVIDENCE_DIR / "coverage.json").read_text(encoding="utf-8")
+            .encode("utf-8")).hexdigest(),
+    }
+    (EVIDENCE_DIR / "stamp.json").write_text(
+        json.dumps(stamp, indent=2, sort_keys=True), encoding="utf-8")
+    return {"coverage": coverage, "events": events, "served": served,
+            "stamp": stamp, "fixture_app": fixture_app}
+
+
+def _diagnose(cov: Mapping[str, Any]) -> str:
+    return (f"\n  states       : {len(cov.get('states') or [])}"
+            f"\n  flows        : {len(cov.get('flows') or [])}"
+            f"\n  advance_blocked: {cov.get('advance_blocked')}"
+            f"\n  boundaries   : {cov.get('boundaries_crossed')}")
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="GATE 3 / A22 BLOCKER — the crawler ACTUATES this funnel but records "
+           "no journey for it: an application whose only control is a bare "
+           "<button> never passes discovery's wizard gate. Measured, see "
+           "test_the_blocker_is_exactly_the_bare_button_wizard_gate. Strict, so "
+           "the day that gap closes this XPASSes and A22 can proceed.",
+)
+def test_the_crawl_walked_the_funnel_to_its_result_page(crawled) -> None:
+    """A journey is only a journey if the walk got to the end of it.
+
+    THIS IS THE ONE A22 NEEDS AND CANNOT HAVE TODAY. It is left in, strict-xfail,
+    because deleting it would delete the milestone's stop condition; the
+    companion test below pins the SHAPE of the gap so the xfail cannot quietly
+    start covering a different failure.
+    """
+    cov = crawled["coverage"]
+    assert cov.get("states"), "the crawl observed no states" + _diagnose(cov)
+    locations = {str(s.get("location") or "") for s in (cov.get("states") or [])}
+    assert any("result" in loc for loc in locations), (
+        f"the crawl never reached the result page, so there is no completed "
+        f"journey to compile. Saw: {sorted(locations)}" + _diagnose(cov))
+    assert cov.get("flows"), (
+        "the crawl recorded states but walked no journey — entry snapshots, not "
+        "an observation of the application" + _diagnose(cov))
+
+
+def test_the_blocker_is_exactly_the_bare_button_wizard_gate(crawled) -> None:
+    """PIN THE BLOCKER, so the xfail above cannot drift onto a different cause.
+
+    What the evidence says, and the two halves do not agree:
+
+      the SERVER's own log      GET /, GET /api/config, POST /api/quote,
+                                GET /result.html
+      the CRAWL's own account   states=1, flows=0, forms_found=0,
+                                journeys_completed=0, and the single recorded
+                                state carries ZERO actions
+
+    So the crawler really did click the button — the backend answered the POST
+    and served the result page — and then recorded none of it. Not the click,
+    not the navigation, not the page it landed on.
+
+    The cause is named in M2.1's own "architectural concerns discovered", where
+    it was found and explicitly left as somebody else's gap:
+
+        A page whose only questions are bare buttons is never walked.
+        discovery.py's wizard gate requires `fill.filled or
+        fill.has_unanswered_decisions`, and a step made of nothing but <button>
+        answers commits nothing — so `_answer_questionnaire` never runs on it.
+
+    ``forms_found == 0`` is that gate declining, measured. This application has
+    no inputs at all: one button, and everything else in JavaScript.
+
+    WHY IT BLOCKS A22 SPECIFICALLY, and why picking a different application does
+    not help:
+
+      * A22 requires the generated specification to carry NETWORK assertions, so
+        the crawled application must call a backend. The only application in this
+        repository that does is this one.
+      * The applications the crawler walks WELL — acme-life, questionnaire-life,
+        vkpower-life — make zero backend calls between them; acme-life's
+        `grep -c 'fetch('` is 0 and vkpower-life is a static export whose every
+        request is a route prefetch (A23 measured 68 GETs, all 200).
+
+    So no application currently in the repository can produce a real discovered
+    journey AND real endpoint traffic at the same time. That is the blocker,
+    stated as a fact about the inventory rather than as a shortfall of effort.
+    """
+    cov = crawled["coverage"]
+    served = {f"{m} {p}" for m, p in crawled["served"]}
+
+    # The application really did advance — this is not a crawl that failed to
+    # reach anything.
+    assert any(s.startswith("POST") and s.endswith("/api/quote") for s in served)
+    assert any(s.endswith("/result.html") for s in served), (
+        f"the server never served the result page, so the click did not advance "
+        f"the funnel and the blocker below is a different one: {sorted(served)}")
+
+    # …and the crawl recorded none of it.
+    assert int(cov.get("forms_found") or 0) == 0, (
+        f"forms_found={cov.get('forms_found')} — the wizard gate is no longer "
+        f"declining, so the xfail above is now covering a DIFFERENT failure. "
+        f"Re-derive the blocker before trusting it.")
+    assert len(cov.get("states") or []) == 1, (
+        f"the crawl now records {len(cov.get('states') or [])} states; the "
+        f"blocker was one entry state and nothing else")
+    assert not cov.get("flows"), "a flow is now recorded — re-derive the blocker"
+    assert not (cov["states"][0].get("actions") or []), (
+        "the entry state now carries actions; the click is being recorded and "
+        "the blocker has moved")
+
+
+def test_the_backend_really_answered_the_crawl(crawled) -> None:
+    """THE INDEPENDENT RECORD. The server keeps its own list of what it served,
+    so 'the crawl called the API' is not a claim the crawl makes about itself.
+
+    This is what makes the evidence usable for a NETWORK assertion: a spec
+    generated from a journey whose POST was never actually made would be
+    asserting on a call the application does not make.
+    """
+    served = crawled["served"]
+    posts = [f"{m} {p}" for m, p in served if m == "POST"]
+    assert any(p.endswith("/api/quote") for p in posts), (
+        f"the server never answered POST /api/quote during the crawl, so the "
+        f"funnel's commit did not reach the backend. It served: {served}")
+
+
+def test_the_crawl_captured_the_call_the_backend_answered(crawled) -> None:
+    """…and the crawl SAW it. The server's record and the crawl's record have to
+    agree, or the endpoint inventory is built from a different application than
+    the one that ran."""
+    captured = {(str(e.get("method") or "").upper(), str(e.get("url") or ""))
+                for e in crawled["events"]}
+    assert captured, (
+        "the crawl recorded no network events at all, so the generated spec "
+        "could carry no network assertion")
+    quote = [url for method, url in captured
+             if method == "POST" and url.endswith("/api/quote")]
+    assert quote, (
+        f"the backend answered POST /api/quote but the crawl did not capture "
+        f"it. Captured: {sorted(captured)}")
+
+
+def test_the_evidence_is_written_for_the_consumer_half(crawled) -> None:
+    for name in ("coverage.json", "manifest.jsonl", "stamp.json"):
+        path = EVIDENCE_DIR / name
+        assert path.is_file() and path.stat().st_size > 0, f"{path} was not written"

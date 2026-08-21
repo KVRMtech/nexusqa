@@ -20,10 +20,10 @@ failure belongs to one of those, it is named as theirs rather than absorbed.
 |---|---|---|---|
 | A20 | `qec_019` round-trips in the CI database | **CI** | ✅ green |
 | A21 | Two real crawls, three deliberate changes, three correct classifications | **real crawl** | ✅ producer 8/8 ×2, consumer 3/3 vs real Postgres |
-| A22 | A really-discovered journey compiles and protects behaviour | — | not started |
+| A22 | A really-discovered journey compiles and protects behaviour | real crawl attempted | ⛔ **BLOCKED** — no app in the repo is both walkable and backend-calling |
 | A23 | Real-application network trace with correct action joins | **live deployment** | ✅ 10/10 on 68 real events, 2 defects fixed |
 | A24 | M2.6 capture against a live tenant | **live tenant** | ✅ 9/9 capture + 2/2 persisted; 1 defect pinned |
-| A25 | M2.1 passes on the deployed artifact | — | not started |
+| A25 | M2.1 passes on the deployed artifact | — | ⛔ **NOT ATTEMPTED** — A22 blocked, CI not green, and M2.1 has no deployed-services variant |
 
 ---
 
@@ -163,6 +163,27 @@ session commits.
 
 **`test_t_fl_03_object_storage_handoff.py::test_producer_key_layout_matches_the_sdk_build_key`** —
 the A26/A27 owner has an uncommitted fix in the working tree.
+
+**`Crawl summit-life-carrier` — the proving ground does not start in CI.**
+Surfaced by this gate rather than caused by it: `browser-harness.yml` had never
+run on this branch at all (see A21), so this lane's first-ever execution is what
+found it. The image builds — `npm ci` and `npm run build` both succeed, the build
+step takes ~47s — and then:
+
+```
+::error::summit-life-carrier never served on :8099
+```
+
+after the step's 60-second wait. `acme-life` and `vkpower-life` pass in the same
+matrix, on the same runner, in the same run, so it is specific to this
+application (a Next.js SSR app, unlike the two nginx-served static ones). The
+crawl step then runs anyway and finds a single page state with 2 form signals,
+which is the login page of an app that is not up.
+
+Not diagnosed further here: it belongs to the proving-ground owner, and the
+container's own logs are what will name the cause. It is recorded because
+enabling this lane is what made it visible, and because A22's application table
+lists it as an unusable option partly for this reason.
 
 ---
 
@@ -597,4 +618,155 @@ letting the number drift.
 
 ---
 
-*Sections for A22 and A25 are appended as each milestone produces its evidence.*
+## A22 — Real journey → executable specification ⛔ BLOCKED
+
+**Not delivered. The blocker is a property of the application inventory, and it
+is measured rather than asserted.**
+
+### What A22 asks for
+
+A journey **actually discovered by the crawler**, compiled into a specification
+that executes against the real application, carries **network assertions** and
+hard outcome assertions, PASSES on the healthy app, and goes RED under a seeded
+regression.
+
+### What already existed, and what was fixture
+
+M2.4's proof does the hard end of this and does it well: 21 tests, real
+`@playwright/test`, a real HTTP application, two orthogonal seeded regressions,
+green on healthy and red on both. Verified locally in this gate — **21 passed in
+96s**.
+
+What it does **not** do is discover the journey.
+`m24_generation/crawl_evidence.py` says so in its own first paragraph:
+
+> FIXTURE: the raw network events and the journey graph rows — i.e. what a crawl
+> of the quote application **WOULD** have recorded.
+
+That hand-built account is exactly the fixture A22 exists to replace.
+
+### What was built and run
+
+`engines/qe-explorer/tests/browser/test_a22_generation_crawl.py` — a real crawl,
+real Chromium, production `Crawler` and `PlaywrightBrowserPort`, real walk
+authorization, against the **same** application the M2.4 proof executes its
+generated spec against. Evidence recorded to
+`Nexus_power/evidence/a22_generation/`.
+
+### The blocker, measured
+
+The crawl **actuated the funnel**. The application's own server log — an
+independent record, kept by the app, not by the crawl — shows it happened:
+
+```
+server saw : GET /   GET /api/config   POST /api/quote   GET /result.html
+```
+
+The crawl **recorded almost none of it**:
+
+```
+states              : 1      (the entry page only)
+flows               : 0
+forms_found         : 0
+journeys_completed  : 0
+the single state's actions : []      <- not even the click
+```
+
+So the crawler clicked the button, the backend answered the POST, the browser
+navigated to the result page — and the account contains no click, no navigation,
+and no result page.
+
+**Root cause**, and it was already known: M2.1's own *architectural concerns
+discovered* names it and explicitly leaves it as somebody else's gap —
+
+> A page whose only questions are bare buttons is never walked. `discovery.py`'s
+> wizard gate requires `fill.filled or fill.has_unanswered_decisions`, and a step
+> made of nothing but `<button>` answers commits nothing — so
+> `_answer_questionnaire` never runs on it.
+
+`forms_found == 0` is that gate declining, measured on a real crawl. This
+application has no inputs at all: one button, everything else in JavaScript.
+
+### Why choosing a different application does not solve it
+
+| application | crawler walks it? | calls a backend? |
+|---|---|---|
+| `m24_generation/fixture_app.py` (quote funnel) | ❌ bare-button gate | ✅ real `POST /api/quote` |
+| `proving-grounds/acme-life` | ✅ (A21: 15 questions, real flows) | ❌ `grep -c 'fetch('` = **0** |
+| `proving-grounds/vkpower-life` (deployed) | ✅ (A24: 9 states, 19 controls) | ⚠️ static export — A23 measured 68 requests, **all GET, all 200** |
+| `proving-grounds/summit-life-carrier` | ❌ does not start in CI (see below) | unknown |
+
+**No application currently in the repository can produce a real discovered
+journey and real endpoint traffic at the same time.** A22 needs both in one
+crawl. That is a fact about the inventory, not a shortfall of effort.
+
+### How it is left
+
+The producer is committed and green, with the milestone's stop condition kept as
+a **strict xfail** rather than deleted, plus a companion test that pins the
+*shape* of the blocker (server saw the POST; crawl recorded `forms_found=0`,
+one state, no actions). Two consequences, both deliberate:
+
+* the day the bare-button gate closes, the xfail **XPASSes** and CI goes red
+  until someone finishes A22 — the gap cannot be forgotten;
+* if the crawl starts failing for a *different* reason, the companion test goes
+  red instead of the xfail silently absorbing it.
+
+### What would unblock it
+
+Either of these, in preference order:
+
+1. **Close the bare-button wizard gate** (relax `discovery.py` so a step whose
+   only control is a commit-shaped button is still walked). This is the real fix
+   and it benefits every SPA-shaped application, not just this one. M2.1 declined
+   it because *“it alters what a crawl clicks”* — a deliberate, reviewed change,
+   not a Gate-3 side effect.
+2. **Give the quote funnel one real input** (an age field, which the page already
+   hard-codes as “35” in JavaScript). Cheaper, but it edits a fixture another
+   milestone's 21 passing tests are pinned to, and it makes A22's proof depend on
+   the application having been reshaped to be crawlable — the same criticism this
+   gate levels at M2.6's use of acme-life.
+
+---
+
+## A25 — Deployment & deployed-build proof ⛔ NOT ATTEMPTED
+
+**Not delivered, and deliberately not attempted.** A25's own rule is that it must
+be last, and its preconditions are not met:
+
+* **A22 is blocked** (above), so Phase 2 is not complete to deploy.
+* **CI is not green on this branch.** Three jobs are red for reasons owned by
+  other sessions — 28 stale browser goldens from commit `3420d88`, the
+  `test_t_fl_03` object-storage handoff, and the `summit-life-carrier` proving
+  ground, which does not start within its 60-second wait in CI (`acme-life` and
+  `vkpower-life` both pass in the same lane). See *Known red, and NOT mine*.
+* Deploying a feature branch to the VM would run migrations `qec_018`…`qec_023`
+  against the database currently serving the live `vkpowerlife` and
+  `summitlife-admin` demos — the same deployment A23 and A24 just used as their
+  real-application evidence.
+
+A second, independent obstacle is worth recording because it is not a scheduling
+problem and will not go away when the others do:
+
+> **M2.1 as it exists cannot execute against deployed services.**
+> `tests/browser/test_questionnaire_catalog_e2e.py` drives an **in-process**
+> `Crawler` and imports qe-central's pure functions directly. Nothing in it
+> reaches a deployed qe-explorer or a deployed qe-central. Pointing it at the VM
+> is not configuration — it needs a variant that dispatches a crawl through the
+> deployed explorer's API and reads the catalogue back out of the deployed
+> database. That work does not exist yet, and A25 cannot be honestly closed
+> without it, because *“M2.1 executes against deployed services”* is the
+> acceptance criterion.
+
+Verified reachable and healthy, so the target is not the obstacle:
+
+```
+https://vkpowerlife.136-85-106-73.sslip.io/        200
+https://summitlife-admin.136-85-106-73.sslip.io/   200
+https://136.85.106.73/                             200
+gcloud: authenticated, project project-8d85a07a-396c-40aa-9b6
+```
+
+---
+
+*A22 and A25 remain open. Everything above is complete and reproducible.*

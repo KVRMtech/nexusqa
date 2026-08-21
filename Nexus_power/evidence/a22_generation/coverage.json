@@ -1,0 +1,188 @@
+{
+  "advance_blocked": [],
+  "advance_oracle": {
+    "consults": 0,
+    "errors": 0,
+    "latency_ms_total": 0,
+    "picks": 0,
+    "state": "configured",
+    "unavailable": 0
+  },
+  "approvable_boundary": [],
+  "auth_blocked": false,
+  "auth_blocked_reason": "",
+  "auth_incomplete": false,
+  "auth_reason": "",
+  "boundaries_crossed": 0,
+  "boundary_crossings": [],
+  "crawl_mode": "explore",
+  "discovered_rules": [],
+  "endpoint_inventory": [
+    {
+      "actions": [
+        {
+          "action_token": "a1",
+          "label": "",
+          "verb": "navigate"
+        }
+      ],
+      "auth_pattern": "none",
+      "first_sequence": 1,
+      "first_timestamp_ms": 2625,
+      "has_server_error": false,
+      "host": "127.0.0.1:64346",
+      "last_sequence": 2,
+      "last_timestamp_ms": 33219,
+      "method": "GET",
+      "observed_count": 2,
+      "path_template": "/api/config",
+      "rate_limited": false,
+      "request_keys": [],
+      "resource_types": [
+        "fetch"
+      ],
+      "response_shape": "json",
+      "retried": true,
+      "status_classes": [
+        "2xx"
+      ],
+      "statuses": {
+        "200": 2
+      }
+    },
+    {
+      "actions": [
+        {
+          "action_token": "a2",
+          "label": "Get Quote",
+          "verb": "click"
+        }
+      ],
+      "auth_pattern": "none",
+      "first_sequence": 3,
+      "first_timestamp_ms": 48329,
+      "has_server_error": false,
+      "host": "127.0.0.1:64346",
+      "last_sequence": 3,
+      "last_timestamp_ms": 48329,
+      "method": "POST",
+      "observed_count": 1,
+      "path_template": "/api/quote",
+      "rate_limited": false,
+      "request_keys": [
+        "age",
+        "product"
+      ],
+      "resource_types": [
+        "fetch"
+      ],
+      "response_shape": "json",
+      "retried": false,
+      "status_classes": [
+        "2xx"
+      ],
+      "statuses": {
+        "200": 1
+      }
+    }
+  ],
+  "endpoint_inventory_truncated": false,
+  "expansions_opened": 0,
+  "expansions_skipped": 0,
+  "field_ledger": [],
+  "fields_inferred": [],
+  "fields_needing_seed": [],
+  "fields_needing_seed_detail": [],
+  "filled_by_kind": {},
+  "flow_summary": {
+    "advance_contradicts_fills": 0,
+    "advances_by_tier": {},
+    "boundaries_crossed": 0,
+    "branch_coverage": false,
+    "branch_coverage_note": "One path per journey. At each decision point a single option was taken, so business paths behind the other options were not visited.",
+    "deepest_flow_capped": false,
+    "deepest_flow_proven_steps": 0,
+    "deepest_flow_steps": 0,
+    "deepest_flow_terminal": "",
+    "flows_completed": 0,
+    "flows_found": 0,
+    "flows_fully_answered": 0,
+    "flows_truncated": 0,
+    "intent_unmet": 0,
+    "journeys_completed": 0,
+    "oracle_advances": 0,
+    "truncation_reasons": {}
+  },
+  "flows": [],
+  "forms_confirmed": 0,
+  "forms_found": 0,
+  "forms_submitted": 0,
+  "inventory_failure_detail": "",
+  "inventory_failures": 0,
+  "journeys_completed": 0,
+  "network_events_observed": 3,
+  "network_server_error_count": 0,
+  "network_server_errors": [],
+  "opaque_surfaces": [],
+  "open_choice_unverified": 0,
+  "outcome_milestones": [],
+  "rule_reuse": {
+    "hits": 0,
+    "known": 0,
+    "lookups": 0,
+    "misses": 0,
+    "reuse_rate": 0.0
+  },
+  "states": [
+    {
+      "ax_fingerprint": "4d4c87704c694b1a35a56f6f609d4997c08ede85c3536c663270485f441c1443",
+      "controls_total": 1,
+      "danger_controls": 0,
+      "danger_names": [],
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "/api/config",
+          "response_mime": "application/json",
+          "status": "200"
+        },
+        {
+          "method": "POST",
+          "path": "/api/quote",
+          "response_mime": "application/json",
+          "status": "200"
+        }
+      ],
+      "form_snapshot_signals": {},
+      "location": "http://127.0.0.1:64346/",
+      "question_groups": []
+    }
+  ],
+  "submit_candidates": [],
+  "summary": "0 form(s) found; 0 field(s) auto-filled with a default; 0 field(s) need a real seed; 0 submit(s) exercised (Phase-B), 0 irreversible boundary/ies awaiting approval; 0 journey(s) completed end-to-end through an approved crossing.",
+  "tab_views_recorded": 0,
+  "traversal": "full",
+  "unblock_irreversible": [],
+  "unhandled_controls": [],
+  "vision_budget": {
+    "breaker_open": false,
+    "breaker_threshold": 3,
+    "calls": 0,
+    "consecutive_failures": 0,
+    "failures": 0,
+    "gate": {
+      "attestation_rung": "none",
+      "attested": false,
+      "enabled": false,
+      "reason": "no_oracle",
+      "tenant_enabled": false
+    },
+    "latency_ms": 0,
+    "max_calls": 0,
+    "refusals": {},
+    "timeout_s": 20.0
+  },
+  "vision_ledger": [],
+  "vision_refused": 0,
+  "vision_verified": 0
+}
