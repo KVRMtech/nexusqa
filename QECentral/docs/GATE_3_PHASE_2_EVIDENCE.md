@@ -278,6 +278,67 @@ commit here from `2c27a67` onward used the private index.
 
 ---
 
+## A cross-tenant egress finding, surfaced by making the fleet suite runnable
+
+**Not Gate 3, not fixed here, and not a flake.** Recorded because it is a
+tenant-isolation defect that only became visible once these tests could run, and
+because the obvious response — rerun it — would bury it.
+
+`test_t_fl_08_concurrency_redteam.py::test_n_concurrent_crawls_multi_tenant_overlapping_domains`:
+
+```
+EGRESS FENCE VIOLATION on w0_1104b771: a crawl for tfl08_t0_1104b771 was
+fenced with another tenant's destination(s) ['tfl08_t2_1104b771.example']
+— concurrent dispatch clobbered a live fence
+```
+
+### The mechanism, read out of the production path
+
+```python
+# routers/explorations.py:1487
+_write_egress_allowlist(allowed_hosts, worker["allowlist_path"])   # per-WORKER file
+result = await explorer_client.dispatch_crawl(...)                 # await → yields
+```
+
+* the egress allowlist is a **per-worker file**, overwritten at every dispatch;
+* `acquire_slot` admits **`capacity`** concurrent crawls on one worker;
+* the write is followed immediately by an `await`, and **no lock** serialises
+  write-then-dispatch per worker.
+
+So two crawls for different tenants dispatched to the same worker interleave:
+A writes its allowlist, yields, B overwrites the same file, and the browser
+running A's crawl is fenced by **B's** destinations.
+
+### Severity, stated precisely
+
+`capacity` has a schema default of **1** (`qec_022`), and at 1 the window never
+opens. The defect is **latent at the default and live the moment any worker is
+registered with `capacity > 1`** — which the schema, the registry API and the
+scheduler all support as first-class configuration. Nothing refuses it, and
+nothing warns.
+
+This is adjacent to M3.3's recorded *“config-only cross-tenant egress leak
+(shared allowlist file)”*: that fix moved the fence from one shared file to one
+file **per worker**. Per-worker is still shared across concurrent crawls **on**
+that worker.
+
+### Why it is not fixed here
+
+Every repair is an M3.3 architecture decision with a matching change on the
+explorer side — per-crawl fence files (the right fix, needs a protocol change so
+the worker reads the right file for the right crawl), a per-worker dispatch lock,
+or refusing `capacity > 1` until the fence is per-crawl. Re-architecting another
+milestone's isolation model from an evidence gate is not this gate's call, and it
+is the same restraint applied to the next-action re-key and the catalogue
+duplication.
+
+**What it does need is a person, not a retry.** A green rerun is not evidence the
+isolation holds — it is evidence the race did not fire, and an intermittent
+cross-tenant leak is worse than a deterministic one because isolation then depends
+on timing. Diagnosed with nexusqa-e3, who flagged it rather than absorbing it.
+
+---
+
 ## Known red, and NOT mine — stated rather than absorbed
 
 **`qe-explorer-characterization` — 28 stale browser goldens.** Commit `3420d88`
