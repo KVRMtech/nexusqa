@@ -18,7 +18,7 @@ from app.services.fleet_funnel import crawl_row, summarize, worst_stage
 
 def _crawl(status="completed", *, visits=0, forms=0, flows=0, deepest=0,
            tests=0, app="app-1", reason="", attempted=True, advances=0,
-           outcome=None, degraded=False, blocked=0):
+           outcome=None, degraded=False, blocked=0, proven=None):
     generate = {"generated": tests, "no_cases_reason": reason,
                 "attempted": attempted}
     if outcome:
@@ -31,7 +31,9 @@ def _crawl(status="completed", *, visits=0, forms=0, flows=0, deepest=0,
             "traversal": "full",
             "advance_blocked": [{"label": "Continue"}] * blocked,
             "flow_summary": {"flows_found": flows, "deepest_flow_steps": deepest,
-                             "advances_by_tier": ({"1": advances} if advances else {})},
+                             "advances_by_tier": ({"1": advances} if advances else {}),
+                             **({} if proven is None
+                                else {"deepest_flow_proven_steps": proven})},
         },
     }
     if degraded:
@@ -137,3 +139,39 @@ def test_junk_rows_never_crash_the_dashboard():
     for rows in ([None, 3, "x"], [{}], [{"stats": "nope"}]):
         s = summarize([r for r in rows if isinstance(r, dict)])
         assert isinstance(s["yield_pct"], float)
+
+
+# ── A19 · depth that is a floor is not depth ───────────────────────────────
+
+def test_a_capped_walk_is_not_deep_enough_for_e2e():
+    """The regression Gate 2 measured: vkpower-life reported deepest_flow=10 and
+    had proven NONE of it -- the walk was cut off, not finished. Counted on
+    walked depth alone, a fleet of truncated traversals scores exactly like a
+    fleet of completed journeys at the one stage the product turns on."""
+    rows = [_crawl(visits=10, forms=1, flows=3, deepest=10, proven=0, tests=1)]
+    summary = summarize(rows)
+    stages = {s["stage"]: s for s in summary["stages"]}
+    assert stages["deep enough for E2E"]["crawls"] == 0, (
+        "a walk that proved no depth was counted as E2E-capable on the strength "
+        "of a number its own producer calls a floor")
+    assert summary["capped_depth_crawls"] == 1
+    assert any("floor" in n for n in summary["notes"]), (
+        "the crawls removed from the stage must be NAMED -- a stage that "
+        "silently drops rows is how a fleet report stops being believed")
+
+
+def test_a_proven_walk_is_deep_enough_for_e2e():
+    rows = [_crawl(visits=10, forms=1, flows=3, deepest=6, proven=6, tests=1)]
+    summary = summarize(rows)
+    stages = {s["stage"]: s for s in summary["stages"]}
+    assert stages["deep enough for E2E"]["crawls"] == 1
+    assert summary["capped_depth_crawls"] == 0
+
+
+def test_a_crawl_recorded_before_proven_depth_existed_is_not_reclassified():
+    """A row that carries no opinion about proven depth must not be read as
+    having proved nothing -- that would delete every historical crawl from the
+    E2E stage the day this shipped, and read as a fleet-wide regression."""
+    rows = [_crawl(visits=10, forms=1, flows=3, deepest=6, tests=1)]  # proven absent
+    stages = {s["stage"]: s for s in summarize(rows)["stages"]}
+    assert stages["deep enough for E2E"]["crawls"] == 1

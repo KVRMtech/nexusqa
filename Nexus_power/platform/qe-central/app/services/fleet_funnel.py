@@ -78,6 +78,26 @@ def crawl_row(exploration: Mapping[str, Any]) -> dict[str, Any]:
         "forms": _int(coverage.get("forms_found")),
         "flows": _int(flow.get("flows_found")),
         "deepest_flow": _int(flow.get("deepest_flow_steps")),
+        # ── A19 · THE THREE FIELDS THAT MAKE `deepest_flow` READABLE ────────
+        # `deepest_flow` alone cannot be read, and the explorer says so where it
+        # computes it: "Six steps because the application has six, and six steps
+        # because the walk was cut off at six, are the same integer and opposite
+        # facts." It emits three more fields to separate them -- and until now
+        # NOTHING in this service read any of them, so every fleet report showed
+        # exactly the ambiguous number they exist to disambiguate.
+        #
+        # Measured on the Gate 2 crawls: vkpower-life reported deepest_flow=10,
+        # which reads as deep coverage and was actually proven=0, capped=true,
+        # terminal="loop" -- a truncated traversal that proved nothing.
+        "deepest_flow_proven": _int(flow.get("deepest_flow_proven_steps")),
+        #: Whether this row can be judged on PROVEN depth at all. A crawl
+        #: recorded before the explorer emitted the field carries no opinion
+        #: about it, and reading its absence as "proved nothing" would delete
+        #: every historical crawl from the E2E stage on the day this shipped --
+        #: a reporting change masquerading as a fleet-wide regression.
+        "deepest_flow_proven_known": "deepest_flow_proven_steps" in flow,
+        "deepest_flow_capped": bool(flow.get("deepest_flow_capped")),
+        "deepest_flow_terminal": str(flow.get("deepest_flow_terminal") or ""),
         "advances": sum(_int(v) for v in _m(flow.get("advances_by_tier")).values()),
         "tests": generated,
         "generate_outcome": outcome,
@@ -109,7 +129,24 @@ def summarize(explorations: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     # "Deep enough to be an E2E" — a journey that actually walked more than its
     # entry page. This is the stage the whole product turns on, and separating it
     # keeps a fleet of one-step journeys from reading as success.
-    deep = [r for r in with_flows if r["deepest_flow"] > 1]
+    # A19: PROVEN depth, not walked depth. `deepest_flow` counts the steps the
+    # deepest walk TOOK, which includes a walk that was cut off by a budget --
+    # so a fleet of truncated traversals scored identically to a fleet of
+    # completed journeys at this stage, the one "the whole product turns on".
+    # `deepest_flow_proven` counts only walks that reached a genuine end.
+    def _proven_depth(r: Mapping[str, Any]) -> int:
+        """PROVEN depth where the crawl states one; walked depth where it cannot.
+
+        Pre-hardening rows fall back rather than being judged on a field they
+        never carried — see `deepest_flow_proven_known`."""
+        return (r["deepest_flow_proven"] if r["deepest_flow_proven_known"]
+                else r["deepest_flow"])
+
+    deep = [r for r in with_flows if _proven_depth(r) > 1]
+    # Kept visible rather than folded away: the crawls that LOOK deep and are
+    # only deep because nothing stopped them yet.
+    capped_only = [r for r in with_flows
+                   if r["deepest_flow"] > 1 and _proven_depth(r) <= 1]
 
     def stage(name: str, kept: list, prior: int) -> dict[str, Any]:
         lost = max(prior - len(kept), 0)
@@ -161,6 +198,15 @@ def summarize(explorations: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     degraded = sum(1 for r in rows if r["degraded"])
     if degraded:
         notes.append(f"{degraded} crawl(s) ran at a lower posture than requested")
+    # A19 — the crawls that LOOK deep and are only deep because a budget ran out
+    # before the funnel did. Named, because the "deep enough for E2E" stage above
+    # now excludes them and a stage that silently drops crawls is how a fleet
+    # report stops being believed.
+    if capped_only:
+        notes.append(
+            f"{len(capped_only)} crawl(s) walked more than one step but proved "
+            f"none of it — the deepest walk was cut off by a budget, not by the "
+            f"end of the funnel, so their depth is a floor and not a measurement")
 
     return {
         "crawls": n,
@@ -168,6 +214,9 @@ def summarize(explorations: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
         # THE headline: productive crawls that produced a test.
         "yield_pct": round(100.0 * len(with_tests) / n, 1),
         "e2e_capable_pct": round(100.0 * len(deep) / n, 1),
+        #: A19 — crawls whose depth is a floor rather than a measurement. Kept
+        #: beside the percentage it was removed from, so the two are read together.
+        "capped_depth_crawls": len(capped_only),
         "by_stop": dict(sorted(by_stop.items(), key=lambda kv: -kv[1])),
         "zero_yield_apps": zero_yield,
         "notes": notes,
