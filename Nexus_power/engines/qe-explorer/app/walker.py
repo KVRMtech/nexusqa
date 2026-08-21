@@ -83,6 +83,7 @@ from .crawl_constants import (  # noqa: F401  (re-exported public vocabulary)
     _ACTUATOR_KINDS,
     _AUTH_SESSION_RE,
     _BOUNDARY_OUTCOME_TYPES,
+    is_boundary_outcome,
     _E2E_WIZARD_ADVANCES,
     _E2E_WIZARD_STEPS,
     _ENTRY_GOTO_RETRIES,
@@ -1852,8 +1853,7 @@ class WalkerMixin:
                     terminal_url=cur_url,
                     outcome_values=[
                         v for v in _displayed_values(cur_dv or ())
-                        if str(v.get("value_type") or "")
-                        in _BOUNDARY_OUTCOME_TYPES],
+                        if is_boundary_outcome(v)],
                     max_steps=self._max_wizard_steps))
                 # The journey is recorded BEFORE the crossing is attempted, so a
                 # crossing that refuses, throws or never returns still leaves the
@@ -2106,8 +2106,7 @@ class WalkerMixin:
                     # thrown away one line before it was stored.
                     outcome_values=[
                         v for v in _displayed_values(cur_dv or ())
-                        if str(v.get("value_type") or "")
-                        in _BOUNDARY_OUTCOME_TYPES],
+                        if is_boundary_outcome(v)],
                     max_steps=self._max_wizard_steps,
                     # M1.4 — WHAT the app said and on which rung, recorded with
                     # the terminal it justifies. The ledger drops both unless the

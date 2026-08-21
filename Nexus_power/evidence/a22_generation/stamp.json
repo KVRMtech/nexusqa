@@ -1,6 +1,6 @@
 {
   "app": "m24_generation/fixture_app.py (quote funnel, real HTTP backend)",
-  "coverage_sha256": "9c97784316284a2d28994141d3734ebb8fa3a1742728e383cc361e9b61a7bf70",
+  "coverage_sha256": "57444c915d2c2cf15e5a9e8e75a9ce701437bf0d56576e7975a122cdaf0158a2",
   "crawl_id": "a22-generation",
   "flows": 1,
   "milestone": "GATE3-A22",

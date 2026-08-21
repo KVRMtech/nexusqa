@@ -75,6 +75,7 @@ from .crawl_constants import (  # noqa: F401  (re-exported public vocabulary)
     _ACTUATOR_KINDS,
     _AUTH_SESSION_RE,
     _BOUNDARY_OUTCOME_TYPES,
+    is_boundary_outcome,
     _E2E_WIZARD_ADVANCES,
     _E2E_WIZARD_STEPS,
     _ENTRY_GOTO_RETRIES,
@@ -818,8 +819,7 @@ class DiscoveryMixin:
                 # only after the value-oracle inference.
                 outcome_values=[
                     v for v in _displayed_values(displayed_values or ())
-                    if str(v.get("value_type") or "")
-                    in _BOUNDARY_OUTCOME_TYPES],
+                    if is_boundary_outcome(v)],
                 max_steps=self._max_wizard_steps))
             owned_flow_index = len(self._flows) - 1
         # A NON-form page that is a next-action fork (a quote summary: Apply Now /
@@ -843,8 +843,7 @@ class DiscoveryMixin:
                     terminal_url=obs.url,
                     outcome_values=[
                         v for v in _displayed_values(displayed_values or ())
-                        if str(v.get("value_type") or "")
-                        in _BOUNDARY_OUTCOME_TYPES],
+                        if is_boundary_outcome(v)],
                     max_steps=self._max_wizard_steps))
                 owned_flow_index = len(self._flows) - 1
         if not walked:
