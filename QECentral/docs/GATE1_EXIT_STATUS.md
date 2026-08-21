@@ -23,7 +23,7 @@ other gate on this branch and is currently undocumented.
 | **Independent second-squad certification** | ✅ | `A11_INDEPENDENT_CERTIFICATION.md` — certified with findings, re-affirmed against a commit |
 | WALK persistence for trusted environments only | ✅ | `A12_WALK_PERSISTENCE.md` — 7 tests, real Chromium |
 | F10 formally reconciled | ✅ | `qe-explorer/docs/GATE1_F_REGISTER.md` — VOID, never issued |
-| CI passes without regression | ⚠️ | see §3 |
+| CI passes without regression | ✅ | see §3 — full browser lane 600 passed, 0 failed |
 
 **Two premises in the Gate 1 brief were factually wrong** and would have
 produced the wrong work if taken at face value:
@@ -109,10 +109,12 @@ already mis-attributed one commit today.
 | A11 independent certification | 9/9 digests, **131 checks**, 1 known finding (CERT-FINDING-2) |
 | A12 walk persistence (Chromium) | **7 passed** |
 | Browser lane, targeted | **48 passed** |
-| Browser lane, full | 571 passed / **23 failed** — all `test_manifest_golden[...]` |
+| Browser lane, full (during concurrent golden rewrite) | 571 passed / **23 failed** — all `test_manifest_golden[...]` |
+| Browser lane, full (**confirmation run, after those goldens landed**) | **600 passed, 0 failed**, 299 skipped, 3 xfailed — 1:12:11 |
 
-The 23 golden failures are **not a regression**. Established by experiment, not
-assertion:
+**Confirmed: not a regression.** The confirmation run reproduces the same lane
+with zero failures. The diagnosis below was established by experiment before
+that run, and the run agrees with it:
 
 1. `[18-select-edge-cases]` **passes alone**, fails in the lane → order/state
    dependent, not a stale golden.
@@ -123,8 +125,11 @@ assertion:
 4. After those goldens were committed, a re-run of characterization 16–22 —
    which includes 7 of the 23 failures — gave **18 passed**.
 
-A shared-checkout race, not a defect. A full-lane confirmation run is the
-outstanding item.
+A shared-checkout race, not a defect — now closed by the confirmation run
+above. It is worth naming the failure mode, because it will recur: a full lane
+here takes ~70 minutes, and any session rewriting goldens during that window
+makes the run read half-written files. A lane result is only trustworthy if
+`git status -- .../tests/browser/golden/` was clean for its duration.
 
 The 299 lane skips were checked and are principled: each fixture declares which
 lanes can adjudicate it and states why the others cannot (no cross-origin
