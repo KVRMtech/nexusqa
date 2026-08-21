@@ -644,11 +644,26 @@ UPDATE/DELETE — existing tenants are never touched"*, while
 `tests/fleet/conftest.py::_clean_fleet` **deletes** tenants through that role. It
 is ordering-dependent — an `if tenants:` guard means the DELETE only fires once a
 `tfl%` tenant exists, which is why Phase 5 and the dedicated A26.2 step are green
-in the same job. The T-FL-03 tests appear among the 98 only because the shared
-fleet fixture errors at setup and takes the whole directory with it. Handed to
-the fleet-suite-in-CI lane with the recommendation to route the purge through
-`QEC_TEST_ADMIN_DATABASE_URL` rather than widen a least-privilege grant on the
-table tenant isolation is anchored to. Everything above is the CI
+in the same job. The T-FL-03 tests appear among the errors only because the
+shared fleet fixture errors at setup and takes the whole directory with it.
+
+The fleet lane took the recommendation to route the purge through a superuser DSN
+rather than widen the grant, and the privilege errors went 294 → 0. **The DSN
+this document named was the wrong one**, and that is worth recording rather than
+quietly correcting: `QEC_TEST_ADMIN_DATABASE_URL` is superuser on the `postgres`
+*maintenance* database — its documented purpose is creating and dropping
+throwaway databases — so the purge then reached a database with no `tenants`
+table (`relation "tenants" does not exist`). The right variable is
+`QEC_TEST_DATABASE_URL`: same superuser, on `nexus`, where the table lives.
+Recommending a variable without checking which database it targeted cost the
+lane one CI cycle.
+
+There is a second lesson in how that landed. The fix was verified as *"0 privilege
+errors"* — true, and blind. The fixture was still failing just as hard on a
+different exception, and an assertion scoped to the absence of the **old** error
+cannot see a **new** one. The durable form is to assert the purge *completes*, or
+that the tests pass, since neither can be satisfied by swapping one failure for
+another. Everything above is the CI
 recipe executed step for step on a developer machine, which is the strongest
 evidence obtainable before the workflow is pushed — but Linux runner behaviour
 (image pull time, loopback connect semantics, the `/tmp` junit path) is confirmed
