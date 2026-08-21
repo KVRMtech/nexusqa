@@ -90,6 +90,30 @@ def evidence() -> dict[str, Any]:
     }
 
 
+# ── SUBJECT PRESENCE ─────────────────────────────────────────────────────────
+#
+# MEASURED, by feeding this module a structurally valid recording of a crawl that
+# observed NOTHING: 9 of its 10 assertions passed. Every claim below is a
+# statement about a population — endpoints, joins, navigation events — and a
+# statement about an empty population is true and worthless. Only
+# `test_the_evidence_is_a_live_deployment_not_a_fixture` noticed, so the suite
+# failed, but each individual claim was reporting green on no evidence at all.
+#
+# That is the same blindness this gate spent its day finding in other people's
+# checks (a corruption assertion masked by newline translation; a migration gate
+# pinned to a revision that stopped being head), and the fix is the one nexusqa-9e
+# framed as a question: WOULD THIS STILL PASS IF THE SUBJECT WERE ABSENT?
+#
+# So every test that makes a claim first asserts the population that claim is
+# about, at the scale it needs — not merely "non-empty", which a two-event
+# recording would satisfy while proving nothing about a join.
+def _require(condition: bool, what: str) -> None:
+    assert condition, (
+        f"SUBJECT ABSENT: {what}. The assertion that follows would pass "
+        f"vacuously on this evidence, so it is refused instead of reported "
+        f"green. Re-record with measure_network_evidence.py.")
+
+
 # ── 1. IS IT REAL? ───────────────────────────────────────────────────────────
 
 def test_the_evidence_is_a_live_deployment_not_a_fixture(evidence) -> None:
@@ -129,6 +153,9 @@ def test_every_endpoint_is_backed_by_events_that_really_happened(evidence) -> No
     generated spec that the application does not serve, and a dropped one would
     silently narrow the API surface a spec is allowed to assert on.
     """
+    _require(len(evidence["events"]) >= 20 and evidence["inventory"]["endpoint_count"] >= 2,
+             f"only {len(evidence['events'])} events over "
+             f"{evidence['inventory']['endpoint_count']} endpoints")
     from urllib.parse import urlsplit
     from app import network_evidence as ne
 
@@ -174,6 +201,7 @@ def test_an_endpoints_sequence_and_timing_survive_the_manifest(evidence) -> None
     Python would hand ints back and reproduce the exact blindness this test
     exists to prevent.
     """
+    _require(bool(evidence["inventory"]["endpoints"]), "no endpoint rows to check")
     rows = evidence["inventory"]["endpoints"]
     blind = [r["path_template"] for r in rows if r["first_sequence"] is None]
     assert not blind, (
@@ -192,6 +220,8 @@ def test_the_inventory_is_ordered_by_first_observation(evidence) -> None:
     reads as the funnel happened. With every ``first_sequence`` None it was
     sorted by the 1<<30 fallback and then alphabetically — a legible order, but
     not the application's."""
+    _require(len(evidence["inventory"]["endpoints"]) >= 2,
+             "fewer than two endpoints, so any order is sorted")
     firsts = [r["first_sequence"] for r in evidence["inventory"]["endpoints"]]
     assert firsts == sorted(firsts), (
         f"endpoints are not ordered by first observation: {firsts}")
@@ -207,6 +237,8 @@ def test_every_endpoint_names_the_actions_that_really_fired_it(evidence) -> None
     because a generated assertion would then claim a button causes a call it
     never caused.
     """
+    _require(any(r["actions"] for r in evidence["inventory"]["endpoints"]),
+             "no endpoint carries any action, so there is no join to check")
     from urllib.parse import urlsplit
     from app import network_evidence as ne
 
@@ -246,6 +278,11 @@ def test_page_load_traffic_is_never_attributed_to_a_button(evidence) -> None:
     7 click-attributed events all carry theirs. The two populations are cleanly
     separated on real traffic.
     """
+    verbs_seen = [str(e.get("action_verb") or "").strip() for e in evidence["events"]]
+    _require(verbs_seen.count("navigate") > 0 and verbs_seen.count("click") > 0,
+             f"both populations must exist for 'no borrowed labels' to mean "
+             f"anything; saw navigate={verbs_seen.count('navigate')} "
+             f"click={verbs_seen.count('click')}")
     borrowed = [
         (e.get("url"), e.get("action_label")) for e in evidence["events"]
         if str(e.get("action_verb") or "").strip() == "navigate"
@@ -285,6 +322,8 @@ def test_the_join_is_deterministic_under_reordering(evidence) -> None:
     Five seeds, not one: a single shuffle can agree by luck, particularly for an
     endpoint whose action count is under the cap.
     """
+    _require(sum(len(r["actions"]) for r in evidence["inventory"]["endpoints"]) >= 10,
+             "too few joined actions for a reordering to be able to differ")
     canonical = json.dumps(evidence["inventory"], sort_keys=True)
     for seed in (1, 7, 42, 99, 12345):
         shuffled = list(evidence["events"])
@@ -300,6 +339,7 @@ def test_the_join_is_deterministic_under_reordering(evidence) -> None:
 def test_the_recording_carries_no_raw_credential(evidence) -> None:
     """A live crawl signs in. The evidence it leaves behind must not be a place
     to read the password back out of — this recording is committed."""
+    _require(bool(evidence["events"]), "no events, so 'no credential' is trivial")
     raw = MANIFEST.read_text(encoding="utf-8")
     for pattern in ("authorization", "Authorization", "set-cookie", "Set-Cookie",
                     "bearer ", "Bearer "):

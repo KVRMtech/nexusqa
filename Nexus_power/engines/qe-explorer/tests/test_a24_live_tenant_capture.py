@@ -91,6 +91,24 @@ def capture() -> dict[str, Any]:
     }
 
 
+# ── SUBJECT PRESENCE ─────────────────────────────────────────────────────────
+#
+# MEASURED, by feeding this module a structurally valid capture of a crawl that
+# saw NOTHING — zero states, zero controls, zero actions: six of its nine
+# assertions passed. Every claim here is about a POPULATION (controls, answer
+# sets, recorded actions), and a claim about an empty population is true and
+# worthless.
+#
+# nexusqa-9e's question is the fix: WOULD THIS STILL PASS IF THE SUBJECT WERE
+# ABSENT? Where the answer was yes and the test makes a claim, the population it
+# needs is now asserted first.
+def _require(condition: bool, what: str) -> None:
+    assert condition, (
+        f"SUBJECT ABSENT: {what}. The assertion that follows would pass "
+        f"vacuously, so it is refused rather than reported green. Re-record "
+        f"with record_live_capture.py.")
+
+
 # ── IS IT REAL, AND IS IT INTACT? ────────────────────────────────────────────
 
 def test_the_capture_is_of_a_live_tenant_over_the_internet(capture) -> None:
@@ -169,6 +187,10 @@ def test_no_captured_control_is_a_clipped_answer_set_reported_as_complete(
     but on this application nothing was clipped, and any future divergence must
     be a deliberate, reported one rather than a silent truncation.
     """
+    with_options = [n for n, s in capture["controls"].items() if s.get("options")]
+    _require(len(with_options) >= 3,
+             f"only {len(with_options)} control(s) carry an answer set, so "
+             f"'nothing was clipped' is a claim about almost nothing")
     clipped = {
         name: (len(sig.get("options") or []), int(sig.get("options_total") or 0))
         for name, sig in capture["controls"].items()
@@ -184,6 +206,8 @@ def test_every_captured_control_declares_a_verified_locator(capture) -> None:
     """A catalogued question that cannot point at its control is not reviewable
     against the application — the reason ``locator`` became a catalogue column in
     qec_019."""
+    _require(len(capture["controls"]) >= 10,
+             f"only {len(capture['controls'])} controls captured")
     missing = [name for name, sig in capture["controls"].items()
                if not (sig.get("locator") or {}).get("strategy")]
     assert not missing, f"controls captured with no locator strategy: {missing}"
@@ -229,6 +253,10 @@ def test_the_disclosure_field_is_emitted_for_every_recorded_action(capture) -> N
     """The field must be PRESENT even when empty. An absent field and an empty
     one are the same to a reader and opposite to a gate: absent means this build
     cannot see collapsed UI at all, empty means it looked and found none."""
+    _require(len(capture["actions"]) >= 10,
+             f"only {len(capture['actions'])} recorded actions — 'every action "
+             f"carries disclosure' would be near-vacuous, and this test is what "
+             f"makes the zero-expansion result meaningful")
     absent = [a.get("target_label") for a in capture["actions"]
               if "disclosure" not in (a.get("qec") or {})]
     assert not absent, (
