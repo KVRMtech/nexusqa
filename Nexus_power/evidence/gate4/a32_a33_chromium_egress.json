@@ -1,0 +1,68 @@
+{
+  "a32": {
+    "negative_control": [
+      {
+        "worker": 0,
+        "host": "origin-a.gate4.test",
+        "reached_own_origin": true,
+        "outcome": "REACHED",
+        "how": "http_200"
+      },
+      {
+        "worker": 1,
+        "host": "origin-b.gate4.test",
+        "reached_own_origin": true,
+        "outcome": "REACHED",
+        "how": "http_200"
+      },
+      {
+        "worker": 2,
+        "host": "origin-c.gate4.test",
+        "reached_own_origin": true,
+        "outcome": "REACHED",
+        "how": "http_200"
+      },
+      {
+        "worker": 3,
+        "host": "origin-d.gate4.test",
+        "reached_own_origin": true,
+        "outcome": "REACHED",
+        "how": "http_200"
+      }
+    ],
+    "workers": 4,
+    "rounds": 3,
+    "attempts": 48,
+    "cross_fence_attempts": 36,
+    "violations": [],
+    "verdict": "PASS - zero fence violations"
+  },
+  "a33": {
+    "fence_before": "origin-a.gate4.test",
+    "fence_after_file": "origin-b.gate4.test",
+    "before": {
+      "own": "REACHED",
+      "other": "REFUSED"
+    },
+    "after": {
+      "own": "REFUSED",
+      "other": "REACHED"
+    },
+    "squid_identity_before": {
+      "container_started_at": "2026-08-21T04:01:30.96972197Z",
+      "pid1_starttime_jiffies": "152414"
+    },
+    "squid_identity_after": {
+      "container_started_at": "2026-08-21T04:01:30.96972197Z",
+      "pid1_starttime_jiffies": "152414"
+    },
+    "restarted": false,
+    "verdict": "PASS - the rewritten fence took effect on a live browser with no Squid restart"
+  },
+  "squid_logs": {
+    "gate4-squid-0": "1787284906.169      1 172.20.0.1 TCP_MISS/304 223 GET http://origin-a.gate4.test/ - HIER_DIRECT/172.20.0.2 -\n1787284906.291      0 172.20.0.1 TCP_DENIED/403 3360 GET http://origin-b.gate4.test/ - HIER_NONE/- text/html\n1787284906.321      0 172.20.0.1 TCP_DENIED/403 3424 GET http://e2be969729ef:3128/squid-internal-static/icons/SN.png - HIER_NONE/- text/html\n1787284906.343      0 172.20.0.1 TCP_DENIED/403 3360 GET http://origin-c.gate4.test/ - HIER_NONE/- text/html\n1787284906.365      0 172.20.0.1 TCP_DENIED/403 3424 GET http://e2be969729ef:3128/squid-internal-static/icons/SN.png - HIER_NONE/- text/html\n1787284906.446      0 172.20.0.1 TCP_DENIED/403 3360 GET http://origin-d.gate4.test/ - HIER_NONE/- text/html\n1787284906.472      0 172.20.0.1 TCP_DENIED/403 3424 GET http://e2be969729ef:3128/squid-internal-static/icons/SN.png - HIER_NONE/- text/html\n1787284908.318      5 172.20.0.1 TCP_MISS/304 223 GET http://origin-a.gate4.test/ - HIER_DIRECT/172.20.0.2 -\n1787284908.508      0 172.20.0.1 TCP_DENIED/403 3360 GET http://origin-b.gate4.test/ - HIER_NONE/- text/html\n1787284908.526      1 172.20.0.1 TCP_DENIED/403 3424 GET http://e2be969729ef:3128/squid-internal-static/icons/SN.png - HIER_NONE/- text/html\n1787284913.331      0 172.20.0.1 TCP_DENIED/403 3355 GET http://origin-a.gate4.test/ - HIER_NONE/- text/html\n1787284913.351      0 172.20.0.1 TCP_DENIED/403 3424 GET http://e2be969729ef:3128/squid-internal-static/icons/SN.png - HIER_NONE/- text/html\n1787284913.532      7 172.20.0.1 TCP_MISS/200 299 GET http://origin-b.gate4.test/ - HIER_DIRECT/172.20.0.3 text/html",
+    "gate4-squid-1": "1787284902.160      5 172.20.0.1 TCP_MISS/200 304 GET http://origin-b.gate4.test/ - HIER_DIRECT/172.20.0.3 text/html\n1787284903.264      0 172.20.0.1 TCP_DENIED/403 3360 GET http://origin-a.gate4.test/ - HIER_NONE/- text/html\n1787284903.298      0 172.20.0.1 TCP_DENIED/403 3424 GET http://b379f2807095:3128/squid-internal-static/icons/SN.png - HIER_NONE/- text/html\n1787284903.407      0 172.20.0.1 TCP_DENIED/403 3360 GET http://origin-c.gate4.test/ - HIER_NONE/- text/html\n1787284903.444      0 172.20.0.1 TCP_DENIED/403 3424 GET http://b379f2807095:3128/squid-internal-static/icons/SN.png - HIER_NONE/- text/html\n1787284903.554      0 172.20.0.1 TCP_DENIED/403 3360 GET http://origin-d.gate4.test/ - HIER_NONE/- text/html\n1787284903.588      0 172.20.0.1 TCP_DENIED/403 3424 GET http://b379f2807095:3128/squid-internal-static/icons/SN.png - HIER_NONE/- text/html\n1787284904.894      0 172.20.0.1 TCP_DENIED/403 3360 GET http://origin-a.gate4.test/ - HIER_NONE/- text/html\n1787284904.917      0 172.20.0.1 TCP_DENIED/403 3424 GET http://b379f2807095:3128/squid-internal-static/icons/SN.png - HIER_NONE/- text/html\n1787284904.961      2 172.20.0.1 TCP_MISS/304 223 GET http://origin-b.gate4.test/ - HIER_DIRECT/172.20.0.3 -\n1787284905.047      0 172.20.0.1 TCP_DENIED/403 3360 GET http://origin-c.gate4.test/ - HIER_NONE/- text/html\n1787284905.072      0 172.20.0.1 TCP_DENIED/403 3424 GET http://b379f2807095:3128/squid-internal-static/icons/SN.png - HIER_NONE/- text/html\n1787284905.124      0 172.20.0.1 TCP_DENIED/403 3360 GET http://origin-d.gate4.test/ - HIER_NONE/- text/html\n1787284905.147      0 172.20.0.1 TCP_DENIED/403 3424 GET http://b379f2807095:3128/squid-internal-static/icons/SN.png - HIER_NONE/- text/html\n1787284906.567      0 172.20.0.1 TCP_DENIED/403 3360 GET http://origin-a.gate4.test/ - HIER_NONE/- text/html\n1787284906.615      0 172.20.0.1 TCP_DENIED/403 3424 GET http://b379f2807095:3128/squid-internal-static/icons/SN.png - HIER_NONE/- text/html\n1787284906.634      1 172.20.0.1 TCP_MISS/304 223 GET http://origin-b.gate4.test/ - HIER_DIRECT/172.20.0.3 -\n1787284906.766      0 172.20.0.1 TCP_DENIED/403 3360 GET http://origin-c.gate4.test/ - HIER_NONE/- text/html\n1787284906.790      0 172.20.0.1 TCP_DENIED/403 3424 GET http://b379f2807095:3128/squid-internal-static/icons/SN.png - HIER_NONE/- text/html\n1787284906.813      0 172.20.0.1 TCP_DENIED/403 3360 GET http://origin-d.gate4.test/ - HIER_NONE/- text/html\n1787284906.846      0 172.20.0.1 TCP_DENIED/403 3424 GET http://b379f2807095:3128/squid-internal-static/icons/SN.png - HIER_NONE/- text/html",
+    "gate4-squid-2": "1787284902.440      5 172.20.0.1 TCP_MISS/200 304 GET http://origin-c.gate4.test/ - HIER_DIRECT/172.20.0.4 text/html\n1787284903.597      1 172.20.0.1 TCP_DENIED/403 3360 GET http://origin-a.gate4.test/ - HIER_NONE/- text/html\n1787284903.626      0 172.20.0.1 TCP_DENIED/403 3424 GET http://4fbab8b6cb2e:3128/squid-internal-static/icons/SN.png - HIER_NONE/- text/html\n1787284903.679      0 172.20.0.1 TCP_DENIED/403 3360 GET http://origin-b.gate4.test/ - HIER_NONE/- text/html\n1787284903.719      0 172.20.0.1 TCP_DENIED/403 3424 GET http://4fbab8b6cb2e:3128/squid-internal-static/icons/SN.png - HIER_NONE/- text/html\n1787284903.756      2 172.20.0.1 TCP_MISS/304 223 GET http://origin-c.gate4.test/ - HIER_DIRECT/172.20.0.4 -\n1787284903.839      1 172.20.0.1 TCP_DENIED/403 3360 GET http://origin-d.gate4.test/ - HIER_NONE/- text/html\n1787284903.863      1 172.20.0.1 TCP_DENIED/403 3424 GET http://4fbab8b6cb2e:3128/squid-internal-static/icons/SN.png - HIER_NONE/- text/html\n1787284905.199      1 172.20.0.1 TCP_DENIED/403 3360 GET http://origin-a.gate4.test/ - HIER_NONE/- text/html\n1787284905.230      0 172.20.0.1 TCP_DENIED/403 3424 GET http://4fbab8b6cb2e:3128/squid-internal-static/icons/SN.png - HIER_NONE/- text/html\n1787284905.296      1 172.20.0.1 TCP_DENIED/403 3360 GET http://origin-b.gate4.test/ - HIER_NONE/- text/html\n1787284905.317      0 172.20.0.1 TCP_DENIED/403 3424 GET http://4fbab8b6cb2e:3128/squid-internal-static/icons/SN.png - HIER_NONE/- text/html\n1787284905.380      2 172.20.0.1 TCP_MISS/304 223 GET http://origin-c.gate4.test/ - HIER_DIRECT/172.20.0.4 -\n1787284905.474      0 172.20.0.1 TCP_DENIED/403 3360 GET http://origin-d.gate4.test/ - HIER_NONE/- text/html\n1787284905.507      1 172.20.0.1 TCP_DENIED/403 3424 GET http://4fbab8b6cb2e:3128/squid-internal-static/icons/SN.png - HIER_NONE/- text/html\n1787284906.893      1 172.20.0.1 TCP_DENIED/403 3360 GET http://origin-a.gate4.test/ - HIER_NONE/- text/html\n1787284906.921      0 172.20.0.1 TCP_DENIED/403 3424 GET http://4fbab8b6cb2e:3128/squid-internal-static/icons/SN.png - HIER_NONE/- text/html\n1787284906.963      0 172.20.0.1 TCP_DENIED/403 3360 GET http://origin-b.gate4.test/ - HIER_NONE/- text/html\n1787284906.992      0 172.20.0.1 TCP_DENIED/403 3424 GET http://4fbab8b6cb2e:3128/squid-internal-static/icons/SN.png - HIER_NONE/- text/html\n1787284907.072      1 172.20.0.1 TCP_MISS/304 223 GET http://origin-c.gate4.test/ - HIER_DIRECT/172.20.0.4 -\n1787284907.159      1 172.20.0.1 TCP_DENIED/403 3360 GET http://origin-d.gate4.test/ - HIER_NONE/- text/html\n1787284907.187      0 172.20.0.1 TCP_DENIED/403 3424 GET http://4fbab8b6cb2e:3128/squid-internal-static/icons/SN.png - HIER_NONE/- text/html",
+    "gate4-squid-3": "1787284902.667      3 172.20.0.1 TCP_MISS/200 304 GET http://origin-d.gate4.test/ - HIER_DIRECT/172.20.0.5 text/html\n1787284903.913      0 172.20.0.1 TCP_DENIED/403 3360 GET http://origin-a.gate4.test/ - HIER_NONE/- text/html\n1787284903.981      0 172.20.0.1 TCP_DENIED/403 3424 GET http://81aa9ef53cde:3128/squid-internal-static/icons/SN.png - HIER_NONE/- text/html\n1787284903.990      0 172.20.0.1 TCP_DENIED/403 3360 GET http://origin-b.gate4.test/ - HIER_NONE/- text/html\n1787284904.032      0 172.20.0.1 TCP_DENIED/403 3424 GET http://81aa9ef53cde:3128/squid-internal-static/icons/SN.png - HIER_NONE/- text/html\n1787284904.079      0 172.20.0.1 TCP_DENIED/403 3360 GET http://origin-c.gate4.test/ - HIER_NONE/- text/html\n1787284904.102      0 172.20.0.1 TCP_DENIED/403 3424 GET http://81aa9ef53cde:3128/squid-internal-static/icons/SN.png - HIER_NONE/- text/html\n1787284904.182      1 172.20.0.1 TCP_MISS/304 223 GET http://origin-d.gate4.test/ - HIER_DIRECT/172.20.0.5 -\n1787284905.609      0 172.20.0.1 TCP_DENIED/403 3360 GET http://origin-a.gate4.test/ - HIER_NONE/- text/html\n1787284905.634      0 172.20.0.1 TCP_DENIED/403 3424 GET http://81aa9ef53cde:3128/squid-internal-static/icons/SN.png - HIER_NONE/- text/html\n1787284905.693      0 172.20.0.1 TCP_DENIED/403 3360 GET http://origin-b.gate4.test/ - HIER_NONE/- text/html\n1787284905.727      0 172.20.0.1 TCP_DENIED/403 3424 GET http://81aa9ef53cde:3128/squid-internal-static/icons/SN.png - HIER_NONE/- text/html\n1787284905.737      0 172.20.0.1 TCP_DENIED/403 3360 GET http://origin-c.gate4.test/ - HIER_NONE/- text/html\n1787284905.772      0 172.20.0.1 TCP_DENIED/403 3424 GET http://81aa9ef53cde:3128/squid-internal-static/icons/SN.png - HIER_NONE/- text/html\n1787284905.888      1 172.20.0.1 TCP_MISS/304 223 GET http://origin-d.gate4.test/ - HIER_DIRECT/172.20.0.5 -\n1787284907.224      0 172.20.0.1 TCP_DENIED/403 3360 GET http://origin-a.gate4.test/ - HIER_NONE/- text/html\n1787284907.249      0 172.20.0.1 TCP_DENIED/403 3424 GET http://81aa9ef53cde:3128/squid-internal-static/icons/SN.png - HIER_NONE/- text/html\n1787284907.348      0 172.20.0.1 TCP_DENIED/403 3360 GET http://origin-b.gate4.test/ - HIER_NONE/- text/html\n1787284907.375      0 172.20.0.1 TCP_DENIED/403 3424 GET http://81aa9ef53cde:3128/squid-internal-static/icons/SN.png - HIER_NONE/- text/html\n1787284907.402      0 172.20.0.1 TCP_DENIED/403 3360 GET http://origin-c.gate4.test/ - HIER_NONE/- text/html\n1787284907.425      0 172.20.0.1 TCP_DENIED/403 3424 GET http://81aa9ef53cde:3128/squid-internal-static/icons/SN.png - HIER_NONE/- text/html\n1787284907.542      1 172.20.0.1 TCP_MISS/304 223 GET http://origin-d.gate4.test/ - HIER_DIRECT/172.20.0.5 -"
+  }
+}

@@ -203,7 +203,14 @@ ORACLE_CONFIGURED_UNUSED = "configured_unused"
 ORACLE_STATES = frozenset({ORACLE_USED, ORACLE_UNCONFIGURED, ORACLE_CONFIGURED_UNUSED})
 
 #: Which oracle.  One label value per oracle KIND — never per call.
-ORACLE_KINDS = frozenset({"advance", "medic", "vision", OTHER})
+#:
+#: A28 added ``vision_medic`` (R5: "where inside this control do I click?"),
+#: which is a DIFFERENT oracle from ``vision`` (U2: "what controls are on this
+#: screen?") — different endpoint, different prompt, different failure modes.
+#: It has to be named here or ``_enum`` folds it into ``other``, and the one
+#: number that says how much the new rung costs would be pooled with every
+#: unclassified call.
+ORACLE_KINDS = frozenset({"advance", "medic", "vision", "vision_medic", OTHER})
 
 #: Bounded oracle outcomes across all three oracle kinds.
 ORACLE_OUTCOMES = frozenset({

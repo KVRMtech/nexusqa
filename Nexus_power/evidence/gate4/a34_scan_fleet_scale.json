@@ -1,0 +1,99 @@
+{
+  "posture": {
+    "current_user": "qec",
+    "bypassrls": false,
+    "force_rls": true
+  },
+  "limit": 50,
+  "repeats": 5,
+  "results": [
+    {
+      "tenants_seeded": 1,
+      "tenants_enumerated": 9,
+      "p50_s": 0.0882,
+      "min_s": 0.0768,
+      "max_s": 0.1269,
+      "apps_returned": 1,
+      "active_returned": 0,
+      "per_tenant_ms": 88.209,
+      "round_trips": 3
+    },
+    {
+      "tenants_seeded": 8,
+      "tenants_enumerated": 16,
+      "p50_s": 0.1649,
+      "min_s": 0.1287,
+      "max_s": 0.2477,
+      "apps_returned": 8,
+      "active_returned": 0,
+      "per_tenant_ms": 20.607,
+      "round_trips": 24
+    },
+    {
+      "tenants_seeded": 32,
+      "tenants_enumerated": 40,
+      "p50_s": 0.4453,
+      "min_s": 0.3368,
+      "max_s": 0.5138,
+      "apps_returned": 32,
+      "active_returned": 0,
+      "per_tenant_ms": 13.914,
+      "round_trips": 96
+    },
+    {
+      "tenants_seeded": 64,
+      "tenants_enumerated": 72,
+      "p50_s": 0.7651,
+      "min_s": 0.6674,
+      "max_s": 1.5579,
+      "apps_returned": 64,
+      "active_returned": 0,
+      "per_tenant_ms": 11.955,
+      "round_trips": 192
+    },
+    {
+      "tenants_seeded": 128,
+      "tenants_enumerated": 136,
+      "p50_s": 1.626,
+      "min_s": 1.3841,
+      "max_s": 2.1179,
+      "apps_returned": 128,
+      "active_returned": 0,
+      "per_tenant_ms": 12.703,
+      "round_trips": 384
+    },
+    {
+      "tenants_seeded": 256,
+      "tenants_enumerated": 264,
+      "p50_s": 2.7148,
+      "min_s": 2.4226,
+      "max_s": 3.4198,
+      "apps_returned": 256,
+      "active_returned": 0,
+      "per_tenant_ms": 10.605,
+      "round_trips": 768
+    },
+    {
+      "tenants_seeded": 512,
+      "tenants_enumerated": 520,
+      "p50_s": 6.2002,
+      "min_s": 5.3,
+      "max_s": 7.7033,
+      "apps_returned": 512,
+      "active_returned": 0,
+      "per_tenant_ms": 12.11,
+      "round_trips": 1536
+    },
+    {
+      "tenants_seeded": 1024,
+      "tenants_enumerated": 1032,
+      "p50_s": 11.9813,
+      "min_s": 9.4943,
+      "max_s": 23.6463,
+      "apps_returned": 1024,
+      "active_returned": 0,
+      "per_tenant_ms": 11.7,
+      "round_trips": 3072
+    }
+  ]
+}

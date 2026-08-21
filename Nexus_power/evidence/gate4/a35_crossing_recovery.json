@@ -1,0 +1,118 @@
+{
+  "milestone": "A35",
+  "control": {
+    "returncode": 0,
+    "binds": 1,
+    "entries": [
+      {
+        "seq": 1,
+        "policy": "MRD-000001",
+        "at_ms": 1787285713491,
+        "fields": {
+          "fullName": "Keith Northcote",
+          "email": "keith.northcote88@example.com",
+          "coverage": "250000"
+        }
+      }
+    ],
+    "output_tail": "reason=no_advance_control url=http://127.0.0.1:8713/ tier=0 oracle=not_consulted controls=4 verdicts=['Bind policy:btn=True:dis=False:dang=True:appr=False:adv=False']\nWARNING:app.crawler:qec.boundary.crossing crossing_id=cross_d9fe9f68e34c_1 control='Bind policy' url=http://127.0.0.1:8713/ authority=boundary_grant approval_id=apr_2a29269c2c05102b attestation=disposable - ONE irreversible click, explicitly authorised, about to fire.\nINFO:app.forms:qec.forms.phase_a filled=3 inferred=3 intent_unmet=0 flow_candidates=1 dangerous=1 unfilled=0\nINFO:app.forms:qec.forms.repair first_pass=3 repaired=0 unrepairable=0 alerts_suppressed=0 verdict_reads=0 widgets={'text': 2, 'native_select': 1}\nINFO:app.forms:qec.forms.submit_executed rule_id=guard.submit.mutation_ok outcome=navigation confirmed=True baseline=True\nWARNING:app.crawler:qec.boundary.outcome_milestone milestone_id=mst_1fc0191d2406590e crossing_id=cross_d9fe9f68e34c_1 outcome=navigation rung=navigation verified=True url_after=http://127.0.0.1:8713/bind - JOURNEY COMPLETED\nINFO:app.inventory:qec.inventory.built controls=0 anchored=0 dangerous=0 radio_groups=0 radio_grouped=0 declared_questions=0 verified_locators=0\nINFO:app.crawler:qec.crawler.completed crawl_id=gate4-a35-crossing stop_reason=completed states=2 actions=5 screenshots=4 guard_blocks=0\nWARNING:app.crawler:qec.oracle.liveness crawl_id=gate4-a35-crossing advance_oracle=configured consults=0 picks=0 unavailable=0 errors=0\nA35_CHILD resume=False crossings=1 states=2\n",
+    "exceeded_grant": false
+  },
+  "run1": {
+    "killed": true,
+    "kill_landed_on": {
+      "approval_id": "apr_2a29269c2c05102b",
+      "boundary_key": "bnd_d9fe9f68e34cb83f9953",
+      "completed_at_ms": 0,
+      "confirmed": false,
+      "control_name": "Bind policy",
+      "crossing_id": "cross_d9fe9f68e34c_1",
+      "outcome": "",
+      "refusal_reason": "",
+      "reserved_at_ms": 5342,
+      "sequence_index": 1,
+      "state_fingerprint": "59b6dccedce6a7b920de42f57882abac2c3418c4ca418acdf481c51445143a3b",
+      "status": "reserved",
+      "timestamp_ms": 5342,
+      "type": "crossing",
+      "url": "http://127.0.0.1:8713/"
+    },
+    "returncode": 1,
+    "crossing_records_durable": [
+      {
+        "approval_id": "apr_2a29269c2c05102b",
+        "boundary_key": "bnd_d9fe9f68e34cb83f9953",
+        "completed_at_ms": 0,
+        "confirmed": false,
+        "control_name": "Bind policy",
+        "crossing_id": "cross_d9fe9f68e34c_1",
+        "outcome": "",
+        "refusal_reason": "",
+        "reserved_at_ms": 5342,
+        "sequence_index": 1,
+        "state_fingerprint": "59b6dccedce6a7b920de42f57882abac2c3418c4ca418acdf481c51445143a3b",
+        "status": "reserved",
+        "timestamp_ms": 5342,
+        "type": "crossing",
+        "url": "http://127.0.0.1:8713/"
+      }
+    ],
+    "ledger_binds_after_kill": 0
+  },
+  "write_ahead_durable": true,
+  "run2": {
+    "returncode": 0,
+    "completed": true,
+    "crossing_records_after_resume": [
+      {
+        "approval_id": "apr_2a29269c2c05102b",
+        "boundary_key": "bnd_d9fe9f68e34cb83f9953",
+        "completed_at_ms": 0,
+        "confirmed": false,
+        "control_name": "Bind policy",
+        "crossing_id": "cross_d9fe9f68e34c_1",
+        "outcome": "",
+        "refusal_reason": "",
+        "reserved_at_ms": 5342,
+        "sequence_index": 1,
+        "state_fingerprint": "59b6dccedce6a7b920de42f57882abac2c3418c4ca418acdf481c51445143a3b",
+        "status": "reserved",
+        "timestamp_ms": 5342,
+        "type": "crossing",
+        "url": "http://127.0.0.1:8713/"
+      }
+    ],
+    "refusals": [],
+    "ledger_binds_after_resume": 0,
+    "output_tail": "C:\\Users\\srika\\AppData\\Local\\Programs\\Python\\Python310\\lib\\site-packages\\starlette\\formparsers.py:12: FutureWarning: Please use `import python_multipart` instead.\n  import multipart\nINFO:app.guard:qec.guard.refuse_pack_loaded\nINFO:app.attest:qec.attest.authorized proof_id=prf-000000000000abcd env=env-disposable-7f2a kid=a3f1862fb6aca728 budget=3\nWARNING:app.crawler:qec.crawler.crossings_restored crawl_id=gate4-a35-crossing journalled=1 flows=1 - this run INHERITS the irreversible actions the killed run took; it will not repeat them\nINFO:app.inventory:qec.inventory.built controls=4 anchored=0 dangerous=1 radio_groups=0 radio_grouped=0 declared_questions=0 verified_locators=4\nINFO:app.crawler:qec.crawler.completed crawl_id=gate4-a35-crossing stop_reason=completed states=0 actions=0 screenshots=0 guard_blocks=0\nWARNING:app.crawler:qec.oracle.liveness crawl_id=gate4-a35-crossing advance_oracle=configured consults=0 picks=0 unavailable=0 errors=0\nA35_CHILD resume=True crossings=0 states=0\n"
+  },
+  "ledger": {
+    "binds_after_kill": 0,
+    "binds_after_resume": 0,
+    "delta_across_resume": 0,
+    "entries": []
+  },
+  "scenario_b": {
+    "description": "process killed while the bind response was still in flight - the effect had already landed",
+    "killed": true,
+    "binds_after_kill": 1,
+    "binds_after_resume": 1,
+    "delta_across_resume": 0,
+    "entries": [
+      {
+        "seq": 1,
+        "policy": "MRD-000001",
+        "at_ms": 1787285780489,
+        "fields": {
+          "fullName": "Keith Northcote",
+          "email": "keith.northcote88@example.com",
+          "coverage": "250000"
+        }
+      }
+    ],
+    "resume_completed": true,
+    "verdict": "PASS - the effect had landed, the crawler never saw the outcome, and the resume did NOT bind again"
+  },
+  "crash_shape": "kill landed BEFORE the request reached the server - the boundary was spent in the journal but never actuated",
+  "verdict": "PASS - the crossing was journalled before the click, the process was killed mid-crossing, the resumed crawl inherited the journal and did NOT repeat the crossing: zero double-submits at the application."
+}
