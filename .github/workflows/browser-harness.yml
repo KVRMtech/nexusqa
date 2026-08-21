@@ -270,6 +270,24 @@ jobs:
           fi
           echo "A21 crawl evidence is unchanged in substance."
 
+      # ── GATE 3 / A22 · THE BLOCKER'S TRIPWIRE ────────────────────────────
+      # A22 is BLOCKED: no application in this repository is both walkable by
+      # the crawler AND calling a backend, so a real discovered journey with real
+      # endpoint traffic cannot be produced. The milestone's stop condition is
+      # kept in the file as a STRICT xfail rather than deleted.
+      #
+      # A strict xfail is only a tripwire if it RUNS. This step is what makes it
+      # one: the day either half of the blocker closes — the bare-button wizard
+      # gate in discovery.py, or the `if not signals and not controls: return`
+      # that discards a funnel's result page from coverage.states — the xfail
+      # XPASSes, this step goes RED, and A22 cannot be quietly forgotten.
+      #
+      # It is NOT in ci.yml's fast browser lane: it drives a real crawl and
+      # carries the `proving_ground` mark that lane now excludes.
+      - name: A22 — the generation blocker is still exactly where it was
+        working-directory: ${{ env.EXPLORER }}
+        run: python -m pytest tests/browser/test_a22_generation_crawl.py -v -rxX
+
       # Run the characterization suite TWICE in the same job. A golden that only
       # holds on the first run is not a golden, and a nondeterminism that appears
       # once per ten runs is far cheaper to find here than as an unexplained red

@@ -19,7 +19,7 @@ failure belongs to one of those, it is named as theirs rather than absorbed.
 | WP | Claim | Evidence class reached | State |
 |---|---|---|---|
 | A20 | `qec_019` round-trips in the CI database | **CI** | ✅ green |
-| A21 | Two real crawls, three deliberate changes, three correct classifications | **real crawl** | ✅ producer 8/8 ×2, consumer 3/3 vs real Postgres |
+| A21 | Two real crawls, three deliberate changes, three correct classifications | **real crawl + CI** | ✅ producer 8/8; **CI re-crawled and the stamp matched byte-for-byte**; consumer 3/3 |
 | A22 | A really-discovered journey compiles and protects behaviour | real crawl attempted | ⛔ **BLOCKED** — no app in the repo is both walkable and backend-calling |
 | A23 | Real-application network trace with correct action joins | **live deployment** | ✅ 10/10 on 68 real events, 2 defects fixed |
 | A24 | M2.6 capture against a live tenant | **live tenant** | ✅ 9/9 capture + 2/2 persisted; 1 defect pinned |
@@ -371,7 +371,18 @@ neither has A21's, until dispatched manually via `workflow_dispatch`.
 
 ### Who reproduced it
 
-*(pending — see status table)*
+**The crawl** was run once from the author's machine — it needs the network and a
+credential, so CI cannot run it.
+
+**The verification was reproduced independently.** `test_a23_live_network_evidence.py`
+lives in the fast `qe-explorer-tests` job, so GitHub Actions re-executed all ten
+assertions against the committed manifest on a clean Linux runner
+([run `32446412929`](https://github.com/KVRMtech/nexusqa/actions/runs/32446412929),
+`1967 passed, 4 skipped`) and printed the endpoint map into its own log.
+
+That is verification of the *evidence*, not a second live crawl — stated as such.
+The manifest's sha256 is pinned in `stamp.json` and checked on every run, so the
+artifact CI verified is provably the artifact the crawl produced.
 
 ### Reproduce it yourself
 
@@ -499,7 +510,17 @@ in its own docstring so its green cannot be read as covering them.
 
 ### Who reproduced it
 
-*(pending — see status table)*
+**The crawl** was run once from the author's machine (network + credential).
+
+**Both gates were reproduced independently by CI.** The capture half runs in
+`qe-explorer-tests` — GitHub Actions re-executed its nine assertions on a clean
+runner and printed the live-tenant capture table into its log
+([run `32446412929`](https://github.com/KVRMtech/nexusqa/actions/runs/32446412929)).
+The persistence half runs in the `qec-database` job against that job's own
+`postgres:16-alpine`, so the fold, the catalogue and the 52-option durable row
+are rebuilt from scratch on infrastructure the author does not control.
+
+`coverage.json`'s sha256 is pinned in `stamp.json` and re-checked every run.
 
 ---
 
@@ -614,7 +635,42 @@ letting the number drift.
 
 ### Who reproduced it
 
-*(pending — see status table)*
+**GitHub Actions, on a clean Linux runner** — this is the strongest reproduction
+in the gate, because CI did not verify a recording, it *made its own*.
+
+[Run `32446412931`](https://github.com/KVRMtech/nexusqa/actions/runs/32446412931),
+*Chromium lane*, both steps green:
+
+```
+✅ A21 — three real application changes, recorded by two real crawls
+✅ Fail if the A21 crawl evidence changed in substance
+```
+
+The first re-ran the whole producer: two fresh Chromium crawls of acme-life, the
+three deliberate surgeries between them, and all eight assertions — on a
+different machine, a different OS, and different ephemeral ports.
+
+The second is the one that matters. It re-recorded `stamp.json` from those fresh
+crawls and diffed it against the copy committed from a Windows box. **It matched
+byte for byte.** The questions each crawl asked, their types and their answer
+sets are identical across machines.
+
+That is also the substance-fingerprint decision vindicated: the raw coverage
+accounts could never have matched (ephemeral ports, wall-clock `*_ms`,
+port-dependent `state_fingerprint`), so a byte guard over them would have failed
+here while nothing about the application had changed.
+
+The M2.3 recording reproduced identically in the same run, under the same
+corrected guard.
+
+**The consumer half** was reproduced by CI too, in the `qec-database` job's own
+`postgres:16-alpine` — the fold, both catalogue versions and the diff are rebuilt
+from scratch on infrastructure the author does not control.
+
+*(The job as a whole is RED, at `Characterization — pass 1`, on 28 stale goldens
+owned by another milestone. A21's steps run before it and report for themselves —
+that reordering is what made this evidence obtainable at all. See "Known red, and
+NOT mine".)*
 
 ---
 
