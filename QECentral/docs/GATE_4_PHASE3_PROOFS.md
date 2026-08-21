@@ -164,6 +164,24 @@ The first catches vacuity. The second catches a check that fired confidently on
 the wrong thing, which is the harder one to see afterwards, because it leaves a
 green result with a plausible-looking cause attached.
 
+**And it applies to reading evidence, not only to writing checks.** A CI log was
+read as proving a proving-ground app never served:
+
+```
+::error::summit-life-carrier never served on :8099
+```
+
+That line is GitHub Actions **echoing the step's script**, not the error firing —
+every line of a `run:` block is echoed before execution, so *both* branches of a
+wait loop appear whichever one runs. Four lines later the same log says
+`summit-life-carrier is serving after 2s`. Verified here directly: the echoed
+lines carry the `ESC[36;1m` command-echo escape and the real output does not.
+
+The mistaken reading survived one relay (mine — I passed it on labelled as
+unverified) and was caught by the person it was about, who checked the run. A
+false conclusion drawn from evidence that *resembles* evidence is the same defect
+as a check that fires on a subject that resembles the subject.
+
 **A muted check and a blind check are indistinguishable in a log.** A CR
 verification heuristic phrased as "delta equals line count" fires on healthy
 files — an already-LF file, or a mixed-ending one — and a check that cries wolf
@@ -190,6 +208,28 @@ Two corollaries worth keeping:
   check before the belief.** A26/A27 assumed their fresh anchor was wrong rather
   than their scanner, and it was the scanner. Recorded because that first
   reaction is the one that discards a true finding.
+
+### Why none of these were found by reading
+
+A26/A27's closing observation, and the most transferable thing in this document:
+
+> "I re-read that `except SyntaxError: continue` several times while writing the
+> guard around it, and its comment — *a broken file fails elsewhere* — read as a
+> reasonable engineering decision every time. It was wrong, but not obviously
+> wrong; it was wrong in a way that requires executing it against a broken file
+> to see."
+
+That is the practical case for **mutation over review** on anything load-bearing:
+review asks whether the code says what you meant, and every defect in this
+section is one where the code said exactly what was meant **and the meaning was
+blind**.
+
+Checked against my own five rather than accepted: four were found by execution or
+measurement — an absurd result (32,175 ms → 13.6 ms), reading an output (ledger 0
+in both runs), running a control at all, and measuring bytes after a peer's
+prompt. Exactly one was found by reasoning — `--no-filters` — and only while
+implementing a check, days-fresh from being burned by the same class. **4 of 5,
+and the reasoning case needed a recent burn to fire.**
 
 ---
 
