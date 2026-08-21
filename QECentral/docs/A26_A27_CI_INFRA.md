@@ -667,6 +667,46 @@ that a green rerun would be evidence the race did not fire, not evidence the
 isolation holds — an intermittent cross-tenant leak is worse than a deterministic
 one, because it means isolation depends on timing.
 
+### Making a known defect visible — the same doctrine, applied to a defect
+
+The `qec-database` job later went **green with that egress leak untouched**:
+`git diff` showed no file under `app/routers/`, the unlocked write-then-await was
+unchanged, zero locks, and the test still ran at `capacity > 1`. The finder is a
+race; it simply did not fire, and the board flipped from *1 failed* to *2576
+passed* on identical code.
+
+That is worse than red. A known cross-tenant hole that CI no longer mentions, on
+a test whose intermittent red is cured by the word "rerun" — a check that cries
+wolf gets muted, and one that cries wolf *at random* mutes itself. It is the same
+green-wash this milestone exists to refuse, so it was refused here too.
+
+Two complementary records now keep it visible, deliberately split:
+
+* **The defect record** lives with the behaviour, in
+  `test_t_fl_08_concurrency_redteam.py`, as a deterministic
+  `xfail(strict=True, raises=AssertionError)`. Green while the defect exists;
+  **red the day it is repaired** (XPASS under `strict`), which forces the record
+  to be deleted rather than left to rot into folklore. `raises=` is load-bearing:
+  a bare `strict=True` is satisfied by *any* exception, so a broken test would be
+  absorbed as a clean xfail.
+* **The latent → live tripwire** is
+  `tests/contract/test_egress_fence_latent_to_live_tripwire.py`. The defect
+  record says *"latent at capacity=1"* in prose, and prose does not fail a build.
+  Nothing in the schema, registry API or scheduler refuses a larger capacity, so
+  one `server_default` is the only reason this is not an incident. The tripwire
+  fails at the commit that raises it while the fence is still shared.
+
+Kept in separate files on purpose: different triggers and different lifetimes.
+The record is deleted when the fence is fixed; the tripwire must keep working
+through the window between *someone raises capacity* and *someone fixes the
+fence*, which is exactly when the leak would go live unnoticed.
+
+Mutation-proven in both directions: raising the default to 2 fails with
+*"CAPACITY DEFAULT RAISED WHILE THE EGRESS FENCE IS STILL SHARED"*, and hiding
+the migration fails with *"this tripwire cannot see the schema default it
+guards"* rather than passing silently. Neither the xfail nor the tripwire trips
+the no-silent-skip gate — verified, since an xfail reports as `skipped`.
+
 ### The earlier red, and not this milestone's
 
 Phase 6 (the whole suite against live infrastructure) fails with 98
