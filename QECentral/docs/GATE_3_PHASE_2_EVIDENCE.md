@@ -223,26 +223,52 @@ session commits.
 **`test_t_fl_03_object_storage_handoff.py::test_producer_key_layout_matches_the_sdk_build_key`** —
 the A26/A27 owner has an uncommitted fix in the working tree.
 
-**`Crawl summit-life-carrier` — the proving ground does not start in CI.**
+**`Crawl summit-life-carrier` — the crawl reaches only the sign-in screen.**
 Surfaced by this gate rather than caused by it: `browser-harness.yml` had never
 run on this branch at all (see A21), so this lane's first-ever execution is what
-found it. The image builds — `npm ci` and `npm run build` both succeed, the build
-step takes ~47s — and then:
+found it.
 
 ```
-::error::summit-life-carrier never served on :8099
+AssertionError: [summit-life-carrier] the crawl discovered 1 page state(s)
+but only 2 form signals and 0 actions — fewer than the 5 required.
 ```
 
-after the step's 60-second wait. `acme-life` and `vkpower-life` pass in the same
-matrix, on the same runner, in the same run, so it is specific to this
-application (a Next.js SSR app, unlike the two nginx-served static ones). The
-crawl step then runs anyway and finds a single page state with 2 form signals,
-which is the login page of an app that is not up.
+One page state is the sign-in screen. This is an **auth** defect, root-caused by
+nexusqa-b3, whose fix is uncommitted — so CI runs without it. `acme-life` and
+`vkpower-life` pass in the same matrix, on the same runner, in the same run.
 
-Not diagnosed further here: it belongs to the proving-ground owner, and the
-container's own logs are what will name the cause. It is recorded because
-enabling this lane is what made it visible, and because A22's application table
-lists it as an unusable option partly for this reason.
+> ### CORRECTION — I recorded the wrong cause here, and the mistake is instructive
+>
+> This section previously said the application *“never served on :8099”* within
+> its 60-second wait. **That is false. It serves in two seconds.** I read this
+> line out of the CI log as the failure firing:
+>
+> ```
+> ::error::summit-life-carrier never served on :8099
+> ```
+>
+> GitHub Actions **echoes every line of a `run:` block before executing it**, so
+> both branches of a wait loop appear in the log whichever one actually ran. The
+> tell is in the escape codes, and it was in output I printed myself and read
+> straight past:
+>
+> ```
+> ^[[36;1m    echo "summit-life-carrier is serving after ${i}s"^[[0m   <- echo: escapes, ${i} unexpanded
+> ^[[36;1mecho "::error::summit-life-carrier never served..."^[[0m     <- echo
+> summit-life-carrier is serving after 2s                            <- REAL: no escapes, expanded
+> ```
+>
+> I had both facts — the echoed error and the crawl assertion — and combined them
+> into a causal story that was wrong: *the app never started, therefore the crawl
+> only saw the login page.* The app started fine. The crawl stops at sign-in for
+> an unrelated reason.
+>
+> This is the companion to the vacuous-pass findings below, pointed at **reading**
+> evidence instead of **writing** checks. Those asked *“could this check pass on
+> an absent subject?”*; this asks *“could this line be something that merely
+> RESEMBLES evidence of failure?”* Same rule, two activities. Caught by
+> nexusqa-b3, verified independently by nexusqa-9e, re-verified here from the log
+> before correcting.
 
 ---
 
@@ -913,8 +939,10 @@ be last, and its preconditions are not met:
 * **CI is not green on this branch.** Three jobs are red for reasons owned by
   other sessions — 28 stale browser goldens from commit `3420d88`, the
   `test_t_fl_03` object-storage handoff, and the `summit-life-carrier` proving
-  ground, which does not start within its 60-second wait in CI (`acme-life` and
-  `vkpower-life` both pass in the same lane). See *Known red, and NOT mine*.
+  ground, whose crawl reaches only the sign-in screen — an auth defect whose fix
+  is uncommitted (`acme-life` and `vkpower-life` both pass in the same lane; the
+  app itself serves in two seconds). See *Known red, and NOT mine*, including the
+  correction to the cause I originally recorded.
 * Deploying a feature branch to the VM would run migrations `qec_018`…`qec_023`
   against the database currently serving the live `vkpowerlife` and
   `summitlife-admin` demos — the same deployment A23 and A24 just used as their
