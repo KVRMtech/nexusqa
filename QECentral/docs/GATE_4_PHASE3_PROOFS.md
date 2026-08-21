@@ -454,10 +454,17 @@ for two reasons — the second matters more than the first:
    same way — attach bytes, let the verifier decide — rather than by widening
    the signed claims.
 
-A11's author and its independent certifier have both since confirmed this
-independently, and sharpened it: the verifier checks integrity over the **raw**
-claims *before* the typed parse, so an unknown field is refused at schema
-validation rather than merely ignored. `attest.py` is one of the nine pinned
+**The authoritative statement of this constraint now lives in
+`QECentral/docs/A11_INDEPENDENT_CERTIFICATION.md` §4.1, "Implication for
+downstream work — do not extend the signed claims."** It belongs there rather
+than here: it is a property of `attest.py`, which that squad certified, and a
+single authority beats two copies that can drift. A30's implementer should read
+§4.1 first; this section only says why Gate 4 asked the question.
+
+Their record names two independent mechanisms, which is stronger than the one I
+found: `extra="forbid"` refuses an unknown field at schema validation, **and**
+integrity is checked over the **raw** claims *before* the typed parse, so the
+signature covers the bytes that arrived. `attest.py` is one of the nine pinned
 files, so touching it fails the drift gate, de-certifies A11, and re-blocks A12
 — which is now unblocked. The same applies to the open IPv6 finding
 (CERT-FINDING-2): its fix touches `attest.py` and `walk_attestation.py`, both
