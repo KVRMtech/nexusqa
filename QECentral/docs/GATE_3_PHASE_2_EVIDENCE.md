@@ -148,6 +148,32 @@ precisely the failure `fill_engine/persona.py` exists to prevent.
 
 ---
 
+## A caveat on the committed evidence, found by auditing my own commits
+
+**The recorded coverage accounts contain a key that no committed code emits.**
+
+`evidence/a21_catalog_diff/*.json`, `evidence/a22_generation/coverage.json` and
+`evidence/a24_live_capture/coverage.json` all carry `unblock_irreversible`. That
+field comes from an **uncommitted** change to `app/coverage.py` in this shared
+checkout (a concurrent session's Gate-1 work). The crawls that produced this
+evidence ran the working tree, so they recorded it.
+
+Consequences, stated exactly:
+
+* **No gate is affected, and one of them proves it.** A21's guard compares only
+  the substance fingerprint — questions, types, answer sets — so when CI
+  re-recorded the crawl from a *clean clone of HEAD* (which does not emit the
+  key) the stamp still matched byte for byte. Had that guard compared the
+  coverage bytes, as it originally did, it would have failed on this alone.
+* **A23/A24's sha256 pins are self-consistent**: they hash the committed
+  artefact and are checked against the committed artefact.
+* **But "reproduce it yourself" will not byte-match.** Re-running a producer
+  from a clean clone of HEAD yields coverage *without* `unblock_irreversible`.
+  The substance is identical; the bytes are not. Once the Gate-1 coverage change
+  lands, this resolves itself.
+
+---
+
 ## Known red, and NOT mine — stated rather than absorbed
 
 **`qe-explorer-characterization` — 28 stale browser goldens.** Commit `3420d88`
