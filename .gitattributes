@@ -80,6 +80,19 @@ Dockerfile* text eol=lf
 Nexus_power/evidence/**                                   text eol=lf
 Nexus_power/engines/qe-explorer/tests/browser/golden/**    text eol=lf
 
+# AND PINNING IS NOT RETROACTIVE. The attribute applies at checkout and at
+# `git add --renormalize`; a file already sitting on disk keeps its CRLF until
+# one of those happens. Measured immediately after adding the rule above: one
+# evidence file read 0 CRLF (it had been re-checked-out to verify the fix) while
+# four others still read 218, 187, 2360 and 13. "Pinned" and "actually LF on
+# disk" are different states, and only the first survives a clean clone.
+#
+# So a checkout that predates this rule still carries the trap locally even
+# though CI does not. `git rm --cached -r <path> && git checkout -- <path>`, or
+# simply deleting and re-checking-out the files, closes it — but check
+# `git status` first: re-checkout destroys uncommitted work, and this tree is
+# shared between sessions.
+
 # Binary — never touched, never diffed as text.
 *.png     binary
 *.jpg     binary
