@@ -194,8 +194,14 @@ the completion terminal reported here is provisional.**
 
 It cannot be cleared by re-running. `git branch -a --contains e1200b7` returns
 only `phase4/entry-gate-remediation`; it diverged from this branch at `cfab4ed`
-and has never landed on it, so no run on this branch can contain it until that
-branch merges.
+and has never landed on it, so **no run on this branch, past or future, contains
+that fix until the branch merges** — a re-run now reproduces the terminal rather
+than clearing it.
+
+**That merge is the action that resolves this flag**, and it is now carried as an
+open decision rather than an assumption. Until it is taken, the honest reading of
+every `terminal=loop` in this document is "unresolved between an application
+dead-end and a known collapse defect", not "the application dead-ends".
 
 What is separable and does stand: the ROUTE claim. The walk reaches
 `/apply/payment/` and stops at `disabled={!method}`. That is a statement about
