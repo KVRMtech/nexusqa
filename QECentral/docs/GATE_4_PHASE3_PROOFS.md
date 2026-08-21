@@ -366,7 +366,14 @@ for two reasons — the second matters more than the first:
 1. **It depends on A29**, which is blocked. There is no successful vision
    operation to promote onto a trusted rung.
 
-2. **The obvious implementation would invalidate A11's certification.**
+2. **The obvious implementation would invalidate A11's certification — and
+   that certification is now real.** When this gate opened, A11 existed in no
+   commit and its certification pinned digests of working-tree files, so the
+   constraint was theoretical. It is not any more: A11 was committed, the six
+   CRLF-mismatched sources were normalised, the manifest regenerated, and the
+   result verified **from a clean detached checkout** — 9/9 digests OK, 131
+   independent checks, 143 tests passing. Breaking it now breaks something that
+   actually holds.
    `app/attest.py::ProofClaims` is `extra="forbid"`, so a vision rung cannot
    simply be added to the signed claims — it is a two-sided change to a
    red-teamed verifier plus a `CLAIMS_VERSION` bump. And A11's certification
@@ -380,6 +387,15 @@ for two reasons — the second matters more than the first:
    file and fails if the name appears). A30's vision rung should be built the
    same way — attach bytes, let the verifier decide — rather than by widening
    the signed claims.
+
+A11's author and its independent certifier have both since confirmed this
+independently, and sharpened it: the verifier checks integrity over the **raw**
+claims *before* the typed parse, so an unknown field is refused at schema
+validation rather than merely ignored. `attest.py` is one of the nine pinned
+files, so touching it fails the drift gate, de-certifies A11, and re-blocks A12
+— which is now unblocked. The same applies to the open IPv6 finding
+(CERT-FINDING-2): its fix touches `attest.py` and `walk_attestation.py`, both
+pinned, so it needs a re-certified follow-up rather than a quiet patch.
 
 Recorded here so whoever picks A30 up starts from the constraint rather than
 discovering it after de-certifying A11.
