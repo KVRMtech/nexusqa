@@ -174,6 +174,39 @@ Consequences, stated exactly:
 
 ---
 
+## Provenance: three of my commits carry other squads' work
+
+Recorded because a reader of this document will otherwise take these commits to
+be what their messages say. The shared checkout has ONE git index, so
+`git add <paths> && git commit` picks up whatever a concurrent session has
+already staged. Nothing was lost or reverted; it landed under the wrong message.
+
+| my commit | carries | whose |
+|---|---|---|
+| `099a597` | A27.1 skip-reason hunk in `test_t_fl_01_durable_queue.py` | nexusqa-e3 |
+| `3778c1a` | same hunk in `test_t_fl_06`, `test_t_fl_08` | nexusqa-e3 |
+| `7d79739` | the `gate2-journeys` job + the summit-life-carrier port work in `browser-harness.yml` | nexusqa-b3 |
+
+Both owners were told directly and both chose **not** to rewrite pushed history in
+a tree nine sessions are writing to; e3 has corrected their write-up to record
+those three files as landed rather than pending.
+
+Two consequences that are live rather than cosmetic:
+
+* **`7d79739` is not only what its message says.** The proving-ground matrix
+  gained an explicit per-image `port` field and a new `gate2-journeys` job, and
+  neither is Gate-3 work.
+* **`gate2-journeys` is at HEAD but has never reported.** It must not be promoted
+  to a required check until it has a green run — a required check that has never
+  run blocks every PR forever waiting for it.
+
+Note that `git commit -- <paths>` does **not** prevent this when the peer's hunk
+is in a file you are legitimately committing; only a private index
+(`GIT_INDEX_FILE` + `git read-tree HEAD`) or a separate worktree does. Every
+commit here from `2c27a67` onward used the private index.
+
+---
+
 ## Known red, and NOT mine — stated rather than absorbed
 
 **`qe-explorer-characterization` — 28 stale browser goldens.** Commit `3420d88`
