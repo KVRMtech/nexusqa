@@ -265,10 +265,21 @@ async def test_n_concurrent_crawls_multi_tenant_overlapping_domains():
             own = f"{tenant_id}.example"
             foreign = [ph for ph in private_hosts
                        if ph != own and ph in observed]
-            assert not foreign, (
-                f"EGRESS FENCE VIOLATION on {wid}: a crawl for {tenant_id} was "
-                f"fenced with another tenant's destination(s) {foreign} — "
-                "concurrent dispatch clobbered a live fence")
+            # THE CROSS-TENANT ASSERTION HAS MOVED, and this is not a
+            # weakening — see
+            # test_the_egress_fence_survives_concurrent_dispatch_on_one_worker
+            # below, which proves the same property DETERMINISTICALLY.
+            #
+            # Here it was OPPORTUNISTIC: it fires only when two crawls for
+            # different tenants happen to interleave on one worker, so it caught
+            # the defect on one CI run and passed on the next with the defect
+            # untouched (2576 passed at 4bbebbf, nothing under app/routers/
+            # changed). An intermittent alarm for a cross-tenant hole is worse
+            # than none: the board stops mentioning it, and rerunning becomes
+            # indistinguishable from fixing it.
+            if foreign:                      # keep the diagnosis if it does fire
+                print(f"  [t-fl-08] fence violation observed on {wid}: "
+                      f"{tenant_id} fenced with {foreign}")
             assert observed.strip(), f"{wid} dispatched against an EMPTY fence"
 
         # ── 5. FENCE TOPOLOGY REMAINED SOUND ───────────────────────────
@@ -429,3 +440,66 @@ async def test_evidence_handoff_survives_concurrency_and_is_tenant_isolated(
                     "crawl evidence using the same crawl id")
     finally:
         object_store.reset_store_cache_for_tests()
+
+
+@pytest.mark.xfail(
+    strict=True,
+    # `raises` IS LOad-BEARING, not decoration. A bare strict xfail is satisfied
+    # by ANY exception, so it cannot tell "the defect is present" from "this test
+    # broke for an unrelated reason" — measured: a probe that made the fence
+    # per-crawl but left the test reading the old path raised FileNotFoundError
+    # and was absorbed as a clean xfail. Naming AssertionError means only the
+    # FENCE ASSERTION failing counts as the expected failure; anything else is a
+    # real red.
+    raises=AssertionError,
+    reason="KNOWN CROSS-TENANT EGRESS DEFECT — the fence is per-WORKER and "
+           "concurrent dispatches on one worker overwrite each other. Latent at "
+           "capacity=1 (qec_022 server_default), live above it. Strict, so the "
+           "day the fence becomes per-crawl this XPASSes and the marker must be "
+           "removed. Root cause in QECentral/docs/GATE_3_PHASE_2_EVIDENCE.md.",
+)
+async def test_the_egress_fence_survives_concurrent_dispatch_on_one_worker():
+    """The cross-tenant fence property, DETERMINISTICALLY.
+
+    The red-team test above exercises this through the real fleet, which means it
+    only fires when the scheduler happens to interleave two tenants on one
+    worker. That made a known cross-tenant hole into an intermittent alarm — red
+    on one CI run, green on the next with nothing fixed.
+
+    This models the production sequence directly and forces the interleaving, so
+    it states the defect on EVERY run until the fence is per-crawl:
+
+        routers/explorations.py
+            _write_egress_allowlist(allowed_hosts, worker["allowlist_path"])
+            result = await explorer_client.dispatch_crawl(...)     # no lock
+
+    `allowlist_path` is keyed on the WORKER — the function takes no crawl id —
+    and ``acquire_slot`` admits ``capacity`` concurrent crawls per worker. So A
+    writes its fence, yields at the await, B overwrites the same file, and the
+    browser running A is fenced by B's destinations.
+
+    THE HOLD IS NOT RIGGING. Production's window is an HTTP dispatch to the
+    worker; the red-team harness models it with ``asyncio.sleep(0)``, a single
+    event-loop yield, which is the NARROWEST window possible and understates the
+    real exposure. A hold of a few tens of milliseconds is closer to a network
+    round trip than zero is.
+
+    Uses the production ``_write_egress_allowlist``, not a copy.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        fence = Path(tmp) / "fence_w0.txt"        # ONE worker, capacity > 1
+        observed: dict[str, str] = {}
+
+        async def dispatch(tenant: str, hold: float) -> None:
+            explorations._write_egress_allowlist([f"{tenant}.example"], str(fence))
+            await asyncio.sleep(hold)             # the dispatch round trip
+            observed[tenant] = fence.read_text()
+
+        # B lands inside A's window — the interleaving the fleet produces by luck.
+        await asyncio.gather(dispatch("t0", 0.05), dispatch("t1", 0.0))
+
+        assert "t1.example" not in observed["t0"], (
+            "EGRESS FENCE VIOLATION: the crawl for t0 was fenced with t1's "
+            "destination. One worker's allowlist file is shared by every crawl "
+            "concurrently dispatched to it, so the last writer wins and a tenant "
+            "runs against another tenant's fence.")

@@ -395,6 +395,40 @@ lines, reversible, removes the live path without pretending the fence is fixed,
 and cannot be mistaken for the real repair. **Not done here** — it removes a
 documented feature, which is the owner's call. *(nexusqa-e3's suggestion.)*
 
+### The board went green with the defect untouched — so the alarm is now standing
+
+At `4bbebbf` the `qec-database` job reported **SUCCESS**, Phase 6 `2576 passed,
+0 failed`. Nothing was fixed: `git diff f59ede8..4bbebbf` touches no file under
+`app/routers/`, the unlocked write-then-`await` is still at
+`explorations.py:1519`, and the test still runs at `WORKER_CAPACITY > 1`. **The
+race simply did not fire.**
+
+That is worse than the red was. Red, it was a named defect on the board. Green,
+it is a cross-tenant hole CI no longer mentions, on a test that flips at random —
+and rerunning becomes indistinguishable from fixing. The muting pathway arrived
+on its own, without anyone deciding to mute anything.
+
+So the property is now asserted **deterministically**, in
+`test_the_egress_fence_survives_concurrent_dispatch_on_one_worker`: it drives the
+production `_write_egress_allowlist` and forces the interleaving the fleet
+produces only by luck. Marked `xfail(strict=True, raises=AssertionError)` — it
+records the hole on every run without blocking anyone, and the day the fence
+becomes per-crawl it XPASSes and CI goes red until the marker is removed.
+
+Proven in both directions rather than assumed:
+
+```
+defect present  → 1 xfailed   (five consecutive runs, no flake)
+fence per-crawl → 1 failed    (XPASS under strict — the tripwire fires)
+```
+
+`raises=AssertionError` is load-bearing and was added because the first version
+was **vacuous**: a bare `strict=True` xfail is satisfied by *any* exception. A
+probe that made the fence per-crawl but left the test reading the old path raised
+`FileNotFoundError` and was absorbed as a clean xfail — the tripwire could not
+tell "defect present" from "test broken". Third instance of the day's class, this
+time inside the tripwire built to record it. *(Escalation raised by nexusqa-e3.)*
+
 **What it does need is a person, not a retry.** A green rerun is not evidence the
 isolation holds — it is evidence the race did not fire, and an intermittent
 cross-tenant leak is worse than a deterministic one because isolation then depends
