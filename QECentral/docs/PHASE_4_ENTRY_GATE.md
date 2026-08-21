@@ -517,7 +517,7 @@ the shared branch moves (B1). Nothing below is pushed.
 | **P2a** | bare-button wizard gate | **CLOSED** — `discovery.py`; the walk was always able to handle it, the entry condition refused to ask |
 | **P2b** | outcome page discarded | **CLOSED** — `state_identity.py`; state admitted AND its selector carried |
 | **B3 / A22** | producer half | **CLOSED** — the strict xfail XPASSed and was retired; 5 passed |
-| **B3 / A22** | consumer half | **COMPILES** — see below |
+| **B3 / A22** | consumer half | **CLOSED** — compiles, executes GREEN on the healthy application, and goes RED under a seeded silent-API regression |
 
 ### The chain, on evidence a crawl actually produced
 
@@ -531,9 +531,49 @@ real crawl -> coverage -> journey_fold (Postgres 16 @ qec_023) -> nodes=2 edges=
               provenance      journey_direct
 ```
 
-Reproducible from the repository: `platform/qe-central/tests/contract/
-test_a22_generation_from_real_crawl.py`, wired into CI's `qec-database` job as its
-own named step beside A20/A21/A24.
+...and then EXECUTES:
+
+```
+compile payload -> Playwright spec -> GREEN on the healthy application
+                -> seeded silent-API regression -> RED, at the network assertion
+```
+
+Reproducible from the repository, in three stages because no one process can hold
+all three services (M1.7):
+
+| stage | test | produces |
+|---|---|---|
+| crawl | `engines/qe-explorer/tests/browser/test_a22_generation_crawl.py` | `coverage.json` |
+| fold + compile | `platform/qe-central/tests/contract/test_a22_generation_from_real_crawl.py` | `compile_payload.json` |
+| execute | `tests/m24_generation/test_a22_real_journey_executes.py` | the verdict |
+
+The middle stage is wired into CI's `qec-database` job as its own named step
+beside A20/A21/A24.
+
+### A sixth defect, found by executing rather than by compiling
+
+The first execution went **RED against a healthy application**: step 1 waited 30
+seconds for a `POST /api/quote` that only happens on step 2's click. A false
+regression is the mirror of a green-wash and worse in one respect — a green-wash
+lies once, a suite that reds on a working system teaches an operator to ignore it.
+
+Same drain-timing shape as defect 5, in the network channel: a state's endpoint
+map is everything DRAINED during the visit, so the entry state inherited a POST
+fired by a discovery click that then navigated away. The entry step's own comment
+stated the premise it relied on — *"nothing precedes it, so no earlier state's
+boot traffic can be confused with the calls this navigation made"* — which is true
+about what precedes and false about what follows.
+
+The M2.5 inventory had the correct answer all along (`/api/config` joined to
+`navigate`, `/api/quote` to the `Get Quote` click) and nothing read it, because
+`inventory_by_action` indexes on the clicked LABEL and a page load has a verb and
+no label. `endpoint_map.navigate_caused()` reads that verb join:
+`endpoints_asserted 3 -> 2`, `recorded_cause 1 -> 2`. Both steps are now RECORDED.
+
+**This is why "it compiles" is not the acceptance criterion.** Every assertion in
+that first spec was grounded in real recorded evidence, the lint executed with
+zero errors, and the HONEST-10 audit scored it 10/certified — and it was still
+wrong in the one way that matters to whoever has to read the result.
 
 ### Five defects, and why none of them had ever been caught
 
