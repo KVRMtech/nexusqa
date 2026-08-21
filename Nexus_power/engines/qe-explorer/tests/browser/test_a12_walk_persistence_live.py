@@ -5,8 +5,12 @@ WHY THIS FILE EXISTS, GIVEN T-WP-01 ALREADY HAD 20 TESTS
 ``tests/test_gate1_twp01_execution.py`` proves the AUTHORISATION ALGEBRA: four
 conditions, a budget, an audit chain, an origin binding. Every one of those
 tests calls ``authorize_mutation`` directly and reads its boolean.
+``tests/test_save_draft_wizard_e2e.py`` goes considerably further — the real
+Crawler, the real GuardContext and a scripted application that will not serve
+step 2 until a draft has really been persisted — and it is real prior art that
+this module does not supersede.
 
-None of them proves the thing A12 is actually accepted on — *"the save-draft
+Neither proves the thing A12 is actually accepted on — *"the save-draft
 wizard successfully persists WALK state"* — because no request ever left a
 browser and no server state ever changed. A subsystem that returns ``True`` and
 a subsystem that lets a POST through to an application are different claims, and

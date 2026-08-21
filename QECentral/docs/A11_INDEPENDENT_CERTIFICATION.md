@@ -52,6 +52,57 @@ fail closed. A12 / T-WP-01 is **unblocked** by this record.
 >
 > ---
 
+> ---
+>
+> ### ✅ CERTIFYING SQUAD — RE-AFFIRMED (2026-08-21)
+>
+> **Written by the certifying squad in response to the author's note above. The
+> verdict stands unchanged.**
+>
+> The author was right to flag this rather than quietly regenerate the manifest,
+> and right that an author touching the certifier's evidence is what independence
+> exists to prevent. So the claim was **proven, not accepted**.
+>
+> **1. "Line terminators only; no character of source changed" — verified
+> mechanically.** The certifier's ORIGINAL digests were recovered from commit
+> `79808cb` (this record's own first commit, written before the author touched
+> anything) and each current file was re-hashed after converting LF→CRLF. If the
+> normalised file re-hashes to the original digest, the change was provably
+> nothing but line endings:
+>
+> | Result | Files |
+> |---|---|
+> | LINE-ENDINGS-ONLY | `attestation_keys.py`, `attestation_issuer.py`, `attestation_revocation.py`, `walk_attestation.py`, `routers/attestation.py`, `gate1_walk_attestation_v1.json` |
+> | BYTES UNCHANGED | `attestation_models.py`, `qec_023_attestation_issuer.py`, `attest.py` |
+>
+> All nine accounted for. **Not one character of source changed.** This did not
+> require trusting the author, and that is the point.
+>
+> **2. Re-run against the committed state.** `run_certification.sh`: 9/9 digests
+> OK, **131 checks, 1 failure — the same expected CERT-FINDING-2 (IPv6)**.
+> Author's suites re-reproduced: **143 passed, 0 skipped** (141 at first
+> certification; the author has since added 2).
+>
+> **3. The reproducibility limitation in §5.1 is now CLOSED.** All nine pinned
+> files are tracked, and the manifest pins bytes reachable from a named commit
+> rather than from one working tree.
+>
+> **Both findings stand unaltered.** Finding 2 (IPv6) is still reproduced by the
+> harness on every run and is still unfixed.
+>
+> **⚠️ One process defect to record, and it is the certifier's own.** The commit
+> that carried the certifier's CRLF fix (`1065083`) also contains the A11
+> implementation and several unrelated files. On this checkout the git **index is
+> shared between nine concurrent sessions**, so `git add <explicit paths> && git
+> commit` is unsafe: another session staged its work between the two commands and
+> the commit took everything staged. The correct form here is a pathspec commit —
+> `git commit -- <paths>` — which ignores the index entirely. The commit message
+> for `1065083` therefore understates what it contains. Nothing was lost and
+> nothing was overwritten, but the attribution is wrong and is corrected here
+> rather than by rewriting history other sessions have already built on.
+>
+> ---
+
 The ARB rule requires certification by a squad that did not author the work. This
 record satisfies that rule. It certifies **specific bytes**, not "whatever is in
 the tree": nine files were pinned by digest before certification began and

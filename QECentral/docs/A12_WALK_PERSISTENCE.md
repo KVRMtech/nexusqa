@@ -11,14 +11,28 @@ ARB gate satisfied: A11 was independently certified before this work began.
 
 ## 0. What already existed, and what was actually missing
 
-T-WP-01 was not a greenfield milestone. The authorisation algebra, the per-step
-budget, the audit chain and the origin binding were all built and covered by 20
-tests in `tests/test_gate1_twp01_execution.py`.
+T-WP-01 was not a greenfield milestone, and the honest accounting matters more
+than a large-sounding gap. Two suites already existed:
 
-**Every one of those tests calls `authorize_mutation()` directly and reads its
-boolean return.** No request ever left a browser and no application state ever
-changed. That is a complete proof of the *decision* and no proof at all of the
-*effect*.
+* **`tests/test_gate1_twp01_execution.py` (20 tests)** — the authorisation
+  algebra: four conditions, budget, window, audit chain, origin binding. **Every
+  one calls `authorize_mutation()` directly and reads its boolean return.**
+* **`tests/test_save_draft_wizard_e2e.py` (M1.3 / T-WP-05+06, 7 tests)** — a
+  genuine crawl-level proof: the real `Crawler`, the real `GuardContext`, the
+  real refuse pack, and a scripted application that refuses to serve step 2
+  until a draft has actually been persisted, so walk depth measures what the
+  network policy permitted. This is substantial prior art and A12 does not
+  supersede it.
+
+What neither covers is the same thing: **no request ever left a browser.** The
+characterization harness wires the fake application's network to the real guard
+by calling `guard.decide(...)` itself (`tests/characterization/harness.py`). That
+proves the *decision* under a faithful simulation of the network layer — it does
+not execute the code that enforces the decision in production.
+
+`app.main._make_route_handler` is the only place a WALK decision is ever applied
+to a real request, and before A12 it was referenced by exactly one file in the
+repository: `app/main.py` itself. No test had ever executed it.
 
 A12's acceptance criterion is not "the authorizer returns True". It is **"the
 save-draft wizard successfully persists WALK state."** Those are different
