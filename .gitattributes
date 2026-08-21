@@ -41,6 +41,15 @@ Dockerfile* text eol=lf
 # so it keeps CRLF rather than being dragged into the Linux convention.
 *.ps1     text eol=crlf
 
+# THE FILE THAT GOVERNS LINE ENDINGS DID NOT GOVERN ITSELF.
+# `.gitattributes` matched none of the patterns above, so it was `unspecified`.
+# An edit written from a Windows tool therefore committed the WHOLE file as CRLF:
+# measured on this very file, 12 real content lines and 101 lines of pure
+# line-ending churn in one commit, and the blob flipped LF -> CRLF. Pinned, so
+# the rules cannot arrive in a form that contradicts what they say.
+.gitattributes  text eol=lf
+.gitignore      text eol=lf
+
 # Recorded evidence — goldens, characterization manifests and crawl recordings.
 #
 # WHY. These files are compared BYTE FOR BYTE, both by pytest (the M0.3
