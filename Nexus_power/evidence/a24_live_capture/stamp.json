@@ -1,0 +1,15 @@
+{
+  "coverage_sha256": "e79d1f0c6d3deeaf971d96c2f2f0d4413c3842a6bc870602c68700027ffe7d39",
+  "crawl_id": "a24-live-capture",
+  "expansions_opened": 0,
+  "expansions_skipped": 0,
+  "explorer_version": "qe-explorer/1.0+inv-js-v12",
+  "flows": 2,
+  "kind": "live deployed tenant application, crawled read-only",
+  "milestone": "GATE3-A24",
+  "posture": "no boundary approvals, no walk attestation",
+  "states": 9,
+  "tab_views_recorded": 0,
+  "target_url": "https://vkpowerlife.136-85-106-73.sslip.io/",
+  "tenant_id": "a24-live-tenant"
+}

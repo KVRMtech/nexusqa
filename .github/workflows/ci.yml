@@ -873,6 +873,26 @@ jobs:
         run: |
           pytest platform/qe-central/tests/contract/test_a21_catalog_diff_regression.py                  -v --tb=short -p no:cacheprovider -s
 
+      # ── GATE 3 / A24 · LIVE-TENANT CAPTURE (consumer half) ───────────────
+      # The capture half runs in qe-explorer-tests (no database needed). This is
+      # the rest of what A24 asks for — catalog generation, PERSISTENCE, and the
+      # correctness of what was captured — by folding a real tenant crawl of
+      # vkpowerlife.136-85-106-73.sslip.io into this Postgres and reading the
+      # durable rows back through the ORM.
+      #
+      # The row that matters is `State of residence`: 52 options on a live
+      # application, against a catalogue that used to hold a private ceiling of
+      # 48. It is only proven when all 52 reach the durable row a reviewer reads.
+      #
+      # It also PINS a defect rather than hiding it: four controls on this tenant
+      # are catalogued as two questions each, because the field-ledger signature
+      # is merged per (url, name) and a control observed-but-not-filled on a page
+      # falls back to its name-derived id. Pinned by id, so a fifth duplication
+      # goes red instead of drifting.
+      - name: A24 — a live tenant's capture becomes a persisted catalogue
+        run: |
+          pytest platform/qe-central/tests/contract/test_a24_live_tenant_catalog.py                  -v --tb=short -p no:cacheprovider -s
+
       # ── Phase 6 — Integration. The whole qe-central suite WITH the databases
       #    wired, so the ~40 DB-gated tests that skip in the no-service job
       #    actually execute here. QEC_REQUIRE_DB makes any remaining db-shaped

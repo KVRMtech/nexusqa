@@ -22,7 +22,7 @@ failure belongs to one of those, it is named as theirs rather than absorbed.
 | A21 | Two real crawls, three deliberate changes, three correct classifications | **real crawl** | ✅ producer 8/8 ×2, consumer 3/3 vs real Postgres |
 | A22 | A really-discovered journey compiles and protects behaviour | — | not started |
 | A23 | Real-application network trace with correct action joins | **live deployment** | ✅ 10/10 on 68 real events, 2 defects fixed |
-| A24 | M2.6 capture against a live tenant | — | not started |
+| A24 | M2.6 capture against a live tenant | **live tenant** | ✅ 9/9 capture + 2/2 persisted; 1 defect pinned |
 | A25 | M2.1 passes on the deployed artifact | — | not started |
 
 ---
@@ -482,5 +482,119 @@ in its own docstring so its green cannot be read as covering them.
 
 ---
 
-*Sections for A22, A24 and A25 are appended as each milestone produces its
-evidence.*
+## A24 — Live-tenant capture
+
+### What was tested
+
+The M2.6 capture fixes, and the capture → catalogue → **persistence** chain, on a
+live tenant application.
+
+### Was it real
+
+**Live deployed tenant, over the public internet.**
+`https://vkpowerlife.136-85-106-73.sslip.io/`, crawled read-only (no boundary
+approvals, no walk attestation) by `record_live_capture.py` through the
+production `Crawler` and `PlaywrightBrowserPort`.
+
+```
+stop_reason : completed
+states      : 9      flows: 2      distinct controls: 19
+inventory_failures : 0
+```
+
+This matters because M2.6's existing proof is first-party in a specific way:
+`proving-grounds/acme-life` **was edited for M2.6** — it grew an accordion and a
+`<details>` so the expansion pass would have something to open. A24's question is
+whether the fixes hold on an application nobody shaped for them.
+
+Evidence at `Nexus_power/evidence/a24_live_capture/` (`coverage.json`,
+`manifest.jsonl`, `stamp.json` with the coverage sha256).
+
+### What proves success
+
+* **`tests/test_a24_live_tenant_capture.py` — 9/9** (explorer, no DB, fast job)
+* **`tests/contract/test_a24_live_tenant_catalog.py` — 2/2** (qe-central, real Postgres)
+
+**T-CAP-01, the option ceiling, on real data.** The defect M2.6 verified was a
+stack of private ceilings — browser snippet 300, Python refiner 60, **catalogue
+48**. This tenant's `State of residence` offers **52 options**:
+
+```
+State of residence     carried= 52  counted= 52   <-- over the old catalogue ceiling of 48
+Branch of Service      carried= 14  counted= 14
+Coverage Amount        carried= 13  counted= 13
+Relationship           carried= 11  counted= 11
+Military Affiliation   carried= 10  counted= 10
+Term Length            carried=  7  counted=  7
+```
+
+and it survives **all the way into the durable row**: the persisted
+`catalog_questions` row carries 52 options with `options_total = 52`. One live
+control that the catalogue ceiling alone would have clipped, proven end to end.
+
+**Persistence.** `fold_crawl` → 6 nodes, 4 edges, 2 traversals, 147 branches,
+23 catalogue questions → **23 durable rows read back through the ORM**, each
+carrying a `locator` and a `business_rule_state` (the qec_019 columns A20
+round-tripped).
+
+**T-CAP-03, proven NEGATIVE and stated as such.** `expansions_opened`,
+`expansions_skipped` and `tab_views_recorded` are all **0**. That is only
+evidence if the application really has nothing shut — so it is not assumed:
+capture emits `disclosure` for every recorded action, and across **all 40**
+recorded actions the value is `""`. No `<details>`, no `aria-expanded`, no
+`role=tab`. The counters read zero because the pages had nothing collapsed, not
+because the pass failed to look.
+
+> **T-CAP-03's positive path is NOT proven on a live tenant.** It is proven on
+> acme-life and on the M2.6 fixtures. Finding a live tenant with a real accordion
+> is remaining work, named rather than papered over.
+
+### The defect this milestone found: one control, two catalogue questions
+
+23 durable rows for **16 distinct labels**. Seven labels appear twice, and the
+two populations are not the same thing:
+
+| label | locators | verdict |
+|---|---|---|
+| `First name`, `Last name`, `Date of birth` | `q_first`/`b_first`, … | **correct** — two genuinely different controls that share a label, on the quote form and the beneficiary form, differing in required-ness |
+| `Branch of Service`, `Coverage Amount`, `Military Affiliation`, `Term Length` | one locator each | **defect** — one control, catalogued as two questions |
+
+**Root cause, established rather than guessed.** `question_id_for` prefers the
+control SIGNATURE and falls back to the normalised NAME. `extract_controls`
+merges the signature in from the field ledger keyed by **`(url, name)`** — so a
+control gets its signature-derived id on the page where the walk *filled* it and
+its name-derived id on a page where the walk only *observed* it.
+
+The proof is arithmetic:
+
+```
+question_id_for({'name': 'Branch of Service'})    -> q_58aea59e5b186336
+                the second row's id               == q_58aea59e5b186336   ✓
+field ledger signatures for that name, crawl-wide : exactly ONE
+
+… and for the legitimate pairs:
+field ledger signatures for 'First name'          : TWO   (neither id is the fallback)
+```
+
+This is M2.1's Δ2 failure resurfacing on a live tenant — the same shape as “three
+questions had produced seven catalogue rows”. It inflates this application's
+question count by 4 in 16.
+
+**Not fixed here, deliberately.** The repair is small in shape — resolve the
+signature crawl-wide when a name has exactly one — but it **re-keys
+`question_id`**, which is the join key for the catalogue, the diff, retirement,
+and the committed M2.3 and A21 evidence, while two other sessions are working in
+catalogue and state-identity code. Re-keying the catalogue as a side effect of an
+evidence gate is not this milestone's decision to take alone.
+
+So it is **pinned**: exactly these four, by id. A fifth duplication, or one of
+these disappearing, turns the test red and puts a human in the loop instead of
+letting the number drift.
+
+### Who reproduced it
+
+*(pending — see status table)*
+
+---
+
+*Sections for A22 and A25 are appended as each milestone produces its evidence.*
