@@ -1,0 +1,11 @@
+{
+  "crawl_id": "measure-network",
+  "endpoints": 7,
+  "explorer_version": "qe-explorer/1.0+inv-js-v12",
+  "kind": "live deployed application, crawled read-only",
+  "manifest_sha256": "1f4f4f7d80770b78cd4f51620bbc1363f7efa13ef728770984d6df7b850a118d",
+  "milestone": "GATE3-A23",
+  "network_events": 68,
+  "posture": "no boundary approvals, no walk attestation",
+  "target_url": "https://vkpowerlife.136-85-106-73.sslip.io/"
+}

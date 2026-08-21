@@ -46,6 +46,24 @@ def _int_or_zero(value: Any) -> int:
         return 0
 
 
+def _int_or_none(value: Any) -> int | None:
+    """An integer field that may legitimately be ABSENT.
+
+    Distinct from :func:`_int_or_zero` on purpose: ``sequence`` and
+    ``timestamp_ms`` use ``None`` to mean "not observed", and folding that to 0
+    would claim an endpoint was first seen at ordinal zero.
+
+    Accepts a string as well as an int, and that is the whole point — see
+    :func:`build_inventory`'s note on reading an event back off a manifest.
+    """
+    if value is None or value == "":
+        return None
+    try:
+        return int(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+
+
 def _status_class(status: int) -> str:
     """The status FAMILY, so an inventory row is legible at a glance."""
     if status <= 0:
@@ -78,7 +96,34 @@ def build_inventory(events: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
     #: (endpoint key, action token) pairs seen — how ``retried`` is derived.
     per_action_counts: dict[tuple[str, str], int] = {}
 
-    for event in events or ():
+    # GATE 3 / A23 — AGGREGATE IN CAPTURE ORDER, NOT ARRIVAL ORDER.
+    #
+    # A23 requires the action↔endpoint join to be DETERMINISTIC, and it was not:
+    # feeding the same 68 live events in a different order produced a different
+    # inventory. Endpoint identity, counts and statuses were stable; the
+    # `actions` list was not, and for three of the seven endpoints the shuffled
+    # run kept a DIFFERENT SET — because MAX_ACTIONS_PER_ENDPOINT is a prefix cap
+    # and a prefix of an unordered stream is arbitrary.
+    #
+    # Every event already carries `sequence`, the crawl-wide ordinal assigned at
+    # capture (T-NET-02) — it exists precisely so order can be recovered after
+    # the fact. Sorting by it makes the whole aggregation a function of the event
+    # SET rather than of how it happened to be delivered, which in turn makes the
+    # cap keep the first-observed actions rather than the first-delivered ones.
+    #
+    # Stable and total: events with no readable sequence keep their relative
+    # order and sort after everything that has one, so an inventory built from a
+    # source that never assigned ordinals behaves exactly as it did before.
+    ordered = sorted(
+        enumerate(e for e in (events or ()) if isinstance(e, Mapping)),
+        key=lambda pair: (
+            _int_or_none(pair[1].get("sequence")) is None,
+            _int_or_none(pair[1].get("sequence")) or 0,
+            pair[0],
+        ),
+    )
+
+    for _index, event in ordered:
         if not isinstance(event, Mapping):
             continue
         url = str(event.get("url") or "").strip()
@@ -150,14 +195,36 @@ def build_inventory(events: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
         elif shape and not row["response_shape"]:
             row["response_shape"] = shape
 
-        sequence = event.get("sequence")
-        if isinstance(sequence, int):
+        # GATE 3 / A23 — PARSED, NOT ``isinstance``-CHECKED.
+        #
+        # These two read `isinstance(value, int)`, which is true for an event
+        # handed straight over by the port and FALSE for the identical event read
+        # back off a manifest: the manifest's network-event fields are typed
+        # `dict[str, str]`, so `sequence` comes back as "1" and `timestamp_ms` as
+        # "5983". The result was silent and total — on a real crawl's stored
+        # evidence EVERY endpoint row carried
+        # first_sequence=None last_sequence=None first_timestamp_ms=None,
+        # measured on 68 live events across 7 endpoints from
+        # vkpowerlife.136-85-106-73.sslip.io.
+        #
+        # It matters twice over: the endpoint ordering below keys on
+        # `first_sequence` and so fell through to its 1<<30 fallback for every
+        # row, and M2.4's generation reads this inventory, so a compiled spec
+        # could not know when an endpoint was first observed.
+        #
+        # This is the SAME defect class the `request_body_keys` note thirty lines
+        # down already records and fixes — "an event re-read from a written
+        # manifest carries the flattened string … an inventory that looked
+        # complete and had lost the API contract". Two fields were missed. A
+        # fixture cannot catch either, because a fixture passes Python ints.
+        sequence = _int_or_none(event.get("sequence"))
+        if sequence is not None:
             if row["first_sequence"] is None:
                 row["first_sequence"] = sequence
             row["last_sequence"] = sequence
 
-        timestamp = event.get("timestamp_ms")
-        if isinstance(timestamp, int):
+        timestamp = _int_or_none(event.get("timestamp_ms"))
+        if timestamp is not None:
             if row["first_timestamp_ms"] is None:
                 row["first_timestamp_ms"] = timestamp
             row["last_timestamp_ms"] = timestamp

@@ -21,7 +21,7 @@ failure belongs to one of those, it is named as theirs rather than absorbed.
 | A20 | `qec_019` round-trips in the CI database | **CI** | ✅ green |
 | A21 | Two real crawls, three deliberate changes, three correct classifications | **real crawl** | ✅ producer 8/8 ×2, consumer 3/3 vs real Postgres |
 | A22 | A really-discovered journey compiles and protects behaviour | — | not started |
-| A23 | Real-application network trace with correct action joins | — | not started |
+| A23 | Real-application network trace with correct action joins | **live deployment** | ✅ 10/10 on 68 real events, 2 defects fixed |
 | A24 | M2.6 capture against a live tenant | — | not started |
 | A25 | M2.1 passes on the deployed artifact | — | not started |
 
@@ -365,4 +365,122 @@ QEC_TEST_DATABASE_URL="postgresql+asyncpg://postgres:postgres@localhost:5432/nex
 
 ---
 
-*Sections for A22–A25 are appended as each milestone produces its evidence.*
+## A23 — Real-application network evidence
+
+### What was tested
+
+The M2.5 network-evidence stack — capture, `endpoint_inventory.build_inventory`,
+and the action↔endpoint join — against a **live deployed application**, not
+fixture `30-network-retry-poll-ratelimit`.
+
+### Was it real
+
+**Live deployment, over the public internet.**
+`https://vkpowerlife.136-85-106-73.sslip.io/` — a deployed Next.js application on
+a real VM, reached over real HTTPS. Not a proving ground, not localhost, not a
+fixture. Crawled through the production `Crawler` and `PlaywrightBrowserPort`
+with **no boundary approvals and no walk attestation** (read-only posture,
+because it is a live deployment).
+
+```
+target       : https://vkpowerlife.136-85-106-73.sslip.io/
+explorer     : qe-explorer/1.0+inv-js-v12
+events       : 68        endpoints: 7
+attribution  : {'navigate': 61, 'click': 7}
+```
+
+Evidence preserved at `Nexus_power/evidence/a23_live_network/`
+(`manifest.jsonl` + `stamp.json` carrying its sha256).
+
+### What proves success
+
+`tests/test_a23_live_network_evidence.py` — **10 assertions, green**, run in the
+fast `qe-explorer-tests` job so it gates on every push. The M2.5 instrument
+already crawled a live app but **asserts nothing by design**; an instrument
+nobody runs proves nothing next month.
+
+The endpoint map, printed as the attached artifact:
+
+```
+seq[ 1..66] GET /life-insurance/quote/start/index.txt      seen=15  {200:15}
+seq[ 2..35] GET /login/index.txt                           seen= 8  {200: 8}
+seq[ 3..65] GET /portal/dashboard/index.txt                seen=15  {200:15}
+                triggered by: click 'Verify & Sign In'
+seq[ 4..56] GET /portal/beneficiaries/index.txt            seen=15  {200:15}
+                triggered by: click 'Verify & Sign In'
+seq[30..64] GET /index.txt                                 seen=11  {200:11}
+seq[48..67] GET /life-insurance/quote/coverage/index.txt   seen= 2  {200: 2}
+                triggered by: click 'Continue'
+seq[49..68] GET /life-insurance/quote/personal/index.txt   seen= 2  {200: 2}
+                triggered by: click 'Continue'
+```
+
+### The four properties A23 requires
+
+| requirement | result |
+|---|---|
+| endpoints correctly identified | inventory ↔ raw events agree on the endpoint **set** in both directions, and per-endpoint counts sum to 68 |
+| requests not incorrectly attributed | every `actions` entry is present on an event **of that endpoint** — no invented attribution |
+| unrelated requests not attached to actions | **61 navigation-time requests carry no click label; 7 click-attributed events all carry theirs. Zero borrowed labels.** |
+| joins deterministic | identical inventory across **5 different shuffles** of the same event set |
+
+### Two defects this milestone found — both invisible to a fixture
+
+**1. Every endpoint's sequence and timing were `None` on stored evidence.**
+`build_inventory` read `sequence` and `timestamp_ms` with
+`isinstance(value, int)`. That is true for an event handed straight over by the
+port and **false for the identical event read back off a manifest**, whose
+network-event fields are typed `dict[str, str]` — `sequence` comes back as
+`"1"`, `timestamp_ms` as `"5983"`.
+
+Measured: **7 of 7 endpoint rows, across 68 live events, carried
+`first_sequence=None last_sequence=None first_timestamp_ms=None`.**
+
+It cost twice over: the inventory's own ordering keys on `first_sequence`, so
+every row fell through to its `1<<30` fallback; and M2.4's generation reads this
+inventory, so a compiled spec could not know when an endpoint was first observed.
+
+This is the **same defect class the function already documents and fixes for
+`request_body_keys`** — “an event re-read from a written manifest carries the
+flattened string … an inventory that looked complete and had lost the API
+contract”. Two more fields were missed. A fixture cannot catch any of them,
+because a fixture passes Python ints.
+
+**2. The action↔endpoint join was not deterministic.** The same 68 events in a
+different order produced a different inventory. Endpoint identity, counts and
+statuses were stable; `actions` was not, and for **three of the seven endpoints a
+shuffled run kept a different SET** — `MAX_ACTIONS_PER_ENDPOINT` is a prefix cap,
+and a prefix of an unordered stream is arbitrary. `build_inventory` now
+aggregates in `sequence` order, the ordinal already assigned at capture for
+exactly this purpose.
+
+### Anti-green-wash: mutation-probed
+
+Reverting both fixes turns **3 of the 10 tests RED**, each naming what it saw
+(`7 of 7 endpoint rows carry no first_sequence…`, `the inventory differs when the
+same events arrive in a different order (seed 1)`). The other 7 stay green — they
+test properties that were already correct, so the separation is real rather than
+a blanket.
+
+Regression check: 2016 explorer tests + 83 endpoint/network + 69 qe-central
+M2.4/endpoint tests, all green.
+
+### What this application CANNOT prove — stated, not worked around
+
+Every one of the 68 requests is a `GET` that returned `200`: the app is a static
+export behind a catch-all, and a direct probe confirmed even a nonexistent route
+answers 200. So on this application there is **no auth pattern** to observe
+(`auth_pattern: none` on all 68), **no request bodies**, and the 5xx oracle
+correctly stays **silent** — a real no-false-positive result over 68 events of
+genuine traffic, and *not* evidence that the oracle fires. Those axes are proven
+on the M2.5 fixture and the frozen-data contract test. The A23 test file says so
+in its own docstring so its green cannot be read as covering them.
+
+### Who reproduced it
+
+*(pending — see status table)*
+
+---
+
+*Sections for A22, A24 and A25 are appended as each milestone produces its
+evidence.*
