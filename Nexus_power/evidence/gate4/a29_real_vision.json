@@ -1,0 +1,28 @@
+{
+  "milestone": "A29",
+  "fixture": "23-canvas-app",
+  "target": "Recalculate",
+  "dom_controls_before": [],
+  "image": {
+    "sha256": "b14c93a4300d97463e67df21b44a11704c307acfb7988f55bb7383f379bfb76d",
+    "regions_masked": 1,
+    "page_w": 1280,
+    "page_h": 900,
+    "bytes": 15067
+  },
+  "bbox": {
+    "x": 0,
+    "y": 107.5,
+    "width": 900,
+    "height": 620
+  },
+  "model_call": {
+    "provider": "openai_compat",
+    "model": "gpt-4o",
+    "finish_reason": "error",
+    "latency_s": 0.58,
+    "raw_reply": "",
+    "error": "openai_compat_http_401:{\n  \"error\": {\n    \"message\": \"Incorrect API key provided: sk-proj-********************************************************************************************************************************************************vXwA. You can find your API key at https://platform.openai"
+  },
+  "verdict": "FAIL - the provider returned no text; no prediction was produced"
+}
