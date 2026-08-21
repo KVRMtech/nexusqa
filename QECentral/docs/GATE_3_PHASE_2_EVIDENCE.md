@@ -352,7 +352,39 @@ re-deriving it.** Anyone auditing egress isolation would have read that sentence
 and stopped.
 
 **Corrected in place** — behaviour untouched, because correcting a false claim is
-not choosing between the three repairs. The docstring now states what per-worker
+not choosing between the three repairs.
+
+> **And “comment-only” turned a CI job red — because a check read comments as
+> source.** `test_crawl_quota_enforcement_m34` asserts structurally that every
+> dispatch route funnels through the guarded choke point. It called `ast.parse`
+> and then discarded the structure, substring-matching `ast.dump(node)` — which
+> renders docstrings, since a docstring is an `ast.Constant` in the body. My
+> corrected docstring illustrates the defect with the line
+> `await explorer_client.dispatch_crawl(...)`, and the test read that **mention**
+> as a **route**.
+>
+> One weakness, both directions: a real dispatch reached through an alias also
+> never puts the literal text where a callee-match can see it. Too loud and too
+> quiet for the same reason.
+>
+> **My first fix made it worse in the quiet direction, and only a mutation probe
+> showed it:**
+>
+> | probe | old (substring) | fix v1 (callees) | fix v2 (references) |
+> |---|---|---|---|
+> | direct `client.dispatch_crawl(...)` | caught | caught | **caught** |
+> | aliased `_f = client.dispatch_crawl` | caught *by accident* | **MISSED** | **caught** |
+> | mention in a docstring | **false positive** | ok | **ok** |
+>
+> Matching `ast.Call` callees fixed the false positive and lost the aliased case
+> the old version caught incidentally — one blindness traded for another. The
+> landed version matches **name references**: an `ast.Attribute` or `ast.Name` is
+> code however it is later used, and a mention in a string is an `ast.Constant`,
+> which is neither.
+>
+> The general lesson is narrower than “verify your fixes”: **“comment-only” is
+> only true if nothing downstream treats comments as source.** Here something
+> did. *(Caught by nexusqa-e3.)* The docstring now states what per-worker
 files do and do not prevent, that the defect is latent at `capacity=1` and live
 above it, and which test proves it. *(Spotted by nexusqa-e3.)*
 

@@ -213,16 +213,58 @@ def test_every_crawl_dispatch_route_funnels_through_the_guarded_choke_point():
     source = inspect.getsource(explorations)
     tree = ast.parse(source)
 
+    # CALLS, NOT SUBSTRINGS. This walked the AST and then threw the structure
+    # away — `ast.dump(node)` renders the whole subtree to text, docstrings
+    # included (a docstring is an ast.Constant in the body), and the checks
+    # substring-matched that text. So the test could not tell a CALL from a
+    # MENTION IN A STRING.
+    #
+    # It went red on a comment-only commit: a docstring in `_write_egress_allowlist`
+    # illustrating the concurrency defect with the line
+    # `await explorer_client.dispatch_crawl(...)` was read as a dispatch route.
+    #
+    # The same weakness runs the other way and matters more: a real dispatch
+    # reached through an alias or a dynamically resolved attribute never puts the
+    # literal text into the dump either, so it would be INVISIBLE here. One cause,
+    # both directions — too loud and too quiet.
+    #
+    # Matching ast.Call nodes by callee name fixes both: a string cannot be a
+    # Call, and a call is one whatever the surrounding prose says.
+    # REFERENCES, not call sites — and that is a correction to this fix, caught
+    # by mutation-probing it rather than by reading it.
+    #
+    # Matching only `ast.Call` callees fixed the false positive and introduced a
+    # false NEGATIVE the old substring version did not have:
+    #
+    #     _f = explorer_client.dispatch_crawl      # aliased, then called as _f()
+    #
+    # is a Call whose func is `Name(id='_f')`, so callee-matching misses it —
+    # while the old `ast.dump` substring saw the name in the ASSIGNMENT and
+    # flagged it. Narrowing the test would have traded one blindness for another.
+    #
+    # Matching any NAME REFERENCE keeps both properties: an Attribute or a Name
+    # node is code however it is later used, and a mention in a docstring is an
+    # `ast.Constant`, which is neither.
+    def _referenced_names(fn: ast.AST) -> set[str]:
+        """Every identifier this function REFERENCES in code — never in a string."""
+        out: set[str] = set()
+        for sub in ast.walk(fn):
+            if isinstance(sub, ast.Attribute):     # obj.dispatch_crawl (call OR alias)
+                out.add(sub.attr)
+            elif isinstance(sub, ast.Name):        # enforce_crawl_quota, or a rebind
+                out.add(sub.id)
+        return out
+
     guarded = None
     dispatchers = set()
     for node in ast.walk(tree):
         if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             continue
-        body = ast.dump(node)
-        if "enforce_crawl_quota" in body:
+        calls = _referenced_names(node)
+        if "enforce_crawl_quota" in calls:
             guarded = node.name
         # Anything that hands a crawl to a worker.
-        if "dispatch_crawl" in body and node.name != "dispatch_crawl":
+        if "dispatch_crawl" in calls and node.name != "dispatch_crawl":
             dispatchers.add(node.name)
 
     assert guarded == "_dispatch_explorer", (
