@@ -227,17 +227,36 @@ advance whose precondition the experiment cannot express:
    cards; the experiment handles checkboxes and radio groups. It is also the
    tier-3 decision described above, so either layer could resolve it.
 2. **A "check ALL of these" consent block.** The signature step needs all six
-   boxes. The experiment is deliberately ONE attempt per blocked step — "if
-   answering one question does not clear the validation, the block is about
-   something else and a second guess would be a search rather than an
-   experiment." That reasoning is right for a *choose at least one* rule and
-   wrong for a *consent to every one* rule, and the two are indistinguishable
-   from markup: both are N optional-looking checkboxes gating a script
-   validator.
+   boxes. The experiment answers ONE declined question per blocked step, and its
+   own comment says that suffices because "the walk re-enters this function on
+   the next observation if the block persists — one app-confirmed answer at a
+   time".
 
-Neither was attempted here. Both change how a crawl decides to act on controls it
-was not asked to act on, which is the part of this system that most deserves a
-deliberate design pass rather than a fix improvised at the end of a gate.
+   **That is true for radios and false for checkboxes, and the reason is the
+   undo.** A radio group with no prior selection cannot be un-answered, so a
+   failed attempt leaves its answer standing; the page has MOVED and the next
+   re-entry picks a different question. A checkbox CAN be un-checked, so a failed
+   attempt is reverted, restoring the page byte for byte — and the next re-entry
+   computes the identical pick and reverts it again. **The property that makes
+   the checkbox path safe is what makes it unable to progress.**
+
+   Measured, not argued: `tests/test_answer_to_unblock_consent_block.py` drives
+   three re-entries against a port that remembers what is checked and asserts
+   that exactly one distinct question was ever tried. Under
+   `QEC_BUG_REPRO_STRICT=1` the log shows the same field attempted and reverted
+   seven times in a row. The defect is on the record as a strict-xfail
+   reproduction, so the moment it is fixed CI fails until the marker is removed
+   and the test is promoted to a permanent guard.
+
+Neither was FIXED here, deliberately. Both change how a crawl decides to act on
+controls nobody asked it to act on, which is the part of this system that most
+deserves a design pass rather than a fix improvised at the end of a gate — and
+(2) in particular means resolving a real tension the code states explicitly: a
+failed attempt must be undone so a change that bought nothing never reaches the
+recorded snapshot, while progress requires keeping answers the application has
+not yet accepted. The radio path already chose the other horn, so a coherent
+answer probably exists. Gap (2) is now an executable reproduction rather than a
+paragraph; gap (1) is A18's decision and is described above.
 
 ## §3 · The green-wash this gate produced, then caught
 
