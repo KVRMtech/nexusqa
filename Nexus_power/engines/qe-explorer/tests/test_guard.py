@@ -79,8 +79,26 @@ class TestRefusePackLoading:
         assert pack.version == "refuse-pack-v1"
         assert pack.irreversible_verbs, "pack must ship irreversible verbs"
         assert pack.mutation_signal_get_rules, "pack must ship mutation-signal rules"
-        # ships with no escape hatches enabled
-        assert pack.allow_overrides == ()
+        # ── the escape hatch, and why this assertion changed ────────────────
+        # This pinned `allow_overrides == ()` -- the pack shipped with no escape
+        # hatches at all -- and it did its job: adding the first row broke this
+        # test, which is precisely the human decision the pack header asks for
+        # ("adding a row is an auditable human decision, stamped with the pack
+        # version").
+        #
+        # It is now pinned to the REVIEWED SET rather than to emptiness, because
+        # a list that may legitimately grow cannot be guarded by a count of
+        # zero. Every row must arrive with its own audit, and the audit for this
+        # one -- what it permits, and at greater length what it must still
+        # refuse -- is tests/test_refuse_pack_allow_overrides.py.
+        assert [r.id for r in pack.allow_overrides] == [
+            "rp.allow.destination_advance_step",
+        ], (
+            "the reviewed carve-out set changed. Every row here defeats the "
+            "refuse pack for the labels it matches, so a new one needs its own "
+            "review and its own tests in test_refuse_pack_allow_overrides.py "
+            "before this list is updated."
+        )
 
     def test_all_rule_ids_are_unique(self, pack: RefusePack):
         ids = [r.id for r in (*pack.irreversible_verbs,

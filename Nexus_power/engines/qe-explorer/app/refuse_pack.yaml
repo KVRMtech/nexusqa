@@ -224,4 +224,64 @@ mutation_signal_get_rules:
 # the refuse pack. Adding a row is an auditable human decision, stamped with the
 # pack version.
 # -----------------------------------------------------------------------------
-allow_overrides: []
+allow_overrides:
+  # ---------------------------------------------------------------------------
+  # A14 / Gate 2 — "Continue to Underwriting Decision" NAVIGATES to a step.
+  #
+  # WHY THIS ROW EXISTS. `rp.verb.underwrite` matches the accessible NAME of
+  # vkpower-life's lifestyle-step forward button. Measured against that
+  # application's own source, its handler is:
+  #
+  #     router.push('/life-insurance/apply/decision/')
+  #
+  # It changes route. It underwrites nothing. Flagged danger, it is removed from
+  # every advance tier and the funnel's remaining four steps (payment ->
+  # beneficiary -> signature -> confirmation) become unreachable, so the crawl
+  # cannot complete a journey on this application at all.
+  #
+  # This is the SAME over-block that already forced `rp.verb.underwrite` to be
+  # scoped off `url_path`, where it had marked 20 of 35 controls on
+  # /underwriting/new-business/new-application as critical — including the Back
+  # button and the notification bell. This row narrows the remaining case on
+  # `button_name`, and only for a label whose shape says navigation.
+  #
+  # WHY IT IS SAFE. It encodes the Tier-2 destination rule the codebase already
+  # trusts (`app/vocab.is_destination_advance`): an advance word, then the
+  # preposition "to", then the destination. The regex is FULL-STRING anchored,
+  # scoped to `button_name` ONLY (never a url — no GET can be unblocked by it),
+  # and the destination noun is enumerated rather than open. So:
+  #
+  #     "Continue to Underwriting Decision"   -> allowed  (navigates)
+  #     "Continue to Payment"                 -> allowed  (navigates)
+  #     "Continue to Signature"               -> allowed  (navigates)
+  #     "Submit to Underwriting"              -> STILL REFUSED (rp.verb.underwrite)
+  #     "Continue to Underwriting and Bind"   -> STILL REFUSED (not full-string)
+  #     "Underwrite Now"                      -> STILL REFUSED
+  #     "Continue to Pay Now"                 -> STILL REFUSED (noun not enumerated)
+  #     "Sign & Submit Application"           -> STILL REFUSED (the real commit)
+  #
+  # THE DISCRIMINATOR IS MEASURED, NOT ASSUMED. Classified against this pack,
+  # every forward control in that funnel is `is_destination_advance() == True`
+  # — and the control that actually commits, "Sign & Submit Application", is
+  # False. The Tier-2 shape rule already separates the navigations from the
+  # commit on this application, exactly and without help. This row lets the
+  # refuse pack agree with it for three enumerated destinations.
+  #
+  # THE NOUNS ARE ENUMERATED FROM EVIDENCE, not from imagination: underwriting,
+  # payment and signature are the three step names measured as danger-flagged
+  # navigations. A noun nobody has observed is not in this list, so widening it
+  # later is another auditable decision rather than a silent consequence of
+  # this one.
+  #
+  # Pinned by tests/test_refuse_pack_allow_overrides.py, which asserts every
+  # refusal above as hard as it asserts the allowances. An override that only
+  # proved what it permits would be half a review.
+  - id: "rp.allow.destination_advance_step"
+    match: '^\s*(continue|proceed|next|go)\s+to\s+(the\s+)?(underwriting|payment|signature)(\s+(decision|details?|information|step|page|review|results?|status|designation|questionnaire|questions))?\s*$'
+    applies_to: ["button_name"]
+    severity: "medium"
+    description: >-
+      A destination-shaped advance to a named wizard STEP ("Continue to
+      Underwriting Decision", "Continue to Payment", "Continue to Signature").
+      Navigation, not the act the step is named after; the commit forms
+      ("Submit to Underwriting", "Sign & Submit Application") stay refused.
