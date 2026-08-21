@@ -51,6 +51,43 @@ for `GET /bind`, inventing a second boundary. Fixed to post-redirect-get; the
 control now binds exactly once. **No defect was reported, because there was
 none.**
 
+### The class these all belong to
+
+Three squads hit the same shape today from unrelated directions, which is what
+turns it from an anecdote into a rule:
+
+> **A check can be structurally incapable of failing on its own subject, and
+> when it is, it reports success.**
+
+Not "the check was wrong" — the check was *well-formed and passed for a reason
+unrelated to the property it names*. Every green-and-wrong result in this gate
+is an instance, and so were two found elsewhere:
+
+| check | what it asserted | what it was blind to |
+|---|---|---|
+| A34 fleet guard | `apps_returned >= n` | over-reaching — 1 024 leftover tenants satisfied it at every step |
+| A35 double-submit | `binds <= 1` | zero — satisfied by a crawl that never submitted |
+| A32 fence denial | cross-fence `== REFUSED` | broken egress — a dead proxy denies everything |
+| A32 config integrity | `git hash-object` | CRLF — the clean filter normalises the byte under test |
+| T-FL-08 explorer (M3.3) | a fence is not violated | a coroutine has no network stack |
+| T-FL-03 manifest (A26) | "arrived CORRUPTED" | `read_text()` on both sides normalises the newline that IS the delimiter |
+
+The tell is always the same: **the check would still pass if the subject were
+absent.** No tenants, no submission, no egress, no bytes, no browser, no
+newline. That question — *what would make this pass for the wrong reason?* — is
+cheaper to ask than any of these were to find, and it is the question each of
+the guards in this branch now encodes.
+
+Two corollaries worth keeping:
+
+* **A negative control is not optional padding.** A32 must reach its own origin
+  before a denial means anything; A35 must bind once before "no double-submit"
+  means anything. Both were retrofitted after the fact, and both would have
+  caught their own defect on the first run.
+* **A mutation that turns several tests red has not yet told you which one is
+  load-bearing** (A26's method, and their own correction — their first mutation
+  reddened three tests, none of which was the new assertion).
+
 ---
 
 ## §A31 · KEDA on a real cluster — PASS
