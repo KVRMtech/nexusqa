@@ -299,6 +299,8 @@
     "actions": 5,
     "frontier": [],
     "frontier_truncated": false,
+    "journey_crossings": 0,
+    "journeys_walked": 0,
     "sequence_index": 1,
     "spent_keys": [
       "127.0.0.1/19-native-confirm-dialog/index.html"
