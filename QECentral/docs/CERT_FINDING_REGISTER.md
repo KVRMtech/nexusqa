@@ -77,20 +77,82 @@ its cause.
 an ASCII host. A fixed envelope proves the two services agree on *one* payload;
 the certifier's randomized grant set covers ten, including an IPv6 literal.
 
+### Scope corrected 2026-08-21 — the defect is CATEGORICAL, not a few cases
+
+Originally raised from one IPv6 grant. `nexusqa-39` measured it as five forms.
+Measured again by the certifier across a spread of IPv6 shapes: **8 of 8
+non-idempotent — every IPv6 form tested.**
+
+| Vector | `N(u)` | `N(N(u))` |
+| --- | --- | --- |
+| `https://[2001:db8::1]:8443/` | `https://2001:db8::1:8443` | `""` |
+| `https://[2001:db8::1]/` | `https://2001:db8::1` | `""` |
+| `https://[::1]/` | `https://::1` | `""` |
+| `https://[::1]:8443/` | `https://::1:8443` | `""` |
+| `https://[fe80::1%25eth0]/` | `https://fe80::1%25eth0` | `""` |
+| `https://[::ffff:192.0.2.1]/` | `https://::ffff:192.0.2.1` | `""` |
+| `https://[::]/` | `https://::` | `""` |
+| `https://[2001:0db8:…:0001]/` | `https://2001:0db8:…:0001` | `""` |
+| **control** `https://192.0.2.1:8443/` | unchanged | **idempotent** |
+| **control** `https://staging.example.test:8443/` | unchanged | **idempotent** |
+| **negative control** `https://[::1]:notaport/` | `""` | `""` (correctly fail-closed) |
+
+It is not an enumeration of cases. The function reformats `host:port` **without
+ever re-bracketing**, so *any* host containing `:` breaks. Stating it as "five
+forms" would license a fix that repairs the listed examples and leaves the class
+open.
+
+### A11b — the class is now fenced by the harness
+
+The certification harness carries a **shared origin-vector table**, defined once
+in `issue_side.py` and shipped in the payload so both services provably test the
+same vectors. It pins two invariants against **both** copies of
+`normalize_origin`:
+
+1. **Agreement** — the two duplicated copies must not diverge. This is what makes
+   *"fix both or pin identical"* enforceable rather than hoped. **All 12
+   agreement checks currently PASS: the copies have not diverged.**
+2. **Idempotence** — `N(N(u)) == N(u)`. The output is signed into the claims and
+   re-normalised by the verifier, so an output it cannot re-parse is a proof
+   guaranteed to be refused.
+
+The controls are the *fix's* guard: a repair that re-brackets too eagerly would
+break IPv4/DNS idempotence, and the malformed-port negative control ensures an
+unparseable authority still fails closed to `""` — the verifier's mismatch
+sentinel — rather than becoming parseable as a side effect.
+
 **Reproduced on every run of** `Nexus_power/certification/a11/run_certification.sh`:
 
 ```
-CHECKS RUN : 131
-FAILURES   : 1
+CHECKS RUN : 148
+FAILURES   : 2
   FAIL: [CERT-FINDING-2 | IPv6] ipv6: genuine attestation AUTHORIZED
         (got 'origin_mismatch' "proof_origin='' target_origin='https://2001:db8::1:8443'")
+  FAIL: [CERT-FINDING-2 | A11b] normalize_origin is idempotent for every IPv6
+        form (8/8 non-idempotent: ...)
 EXIT CODE = 1
 ```
 
-Confirmed identical from a clean `git-archive` tree by `nexusqa-39` at
-`8be8fff`. **Exit 1 is the expected, correct output while this finding is open**
-— the harness is honest, not broken. It must not be read as a failed run, and
-must not be silenced.
+The two failures are the same defect at two layers — the **symptom** (a genuine
+attestation refused end to end) and the **cause** (the idempotence invariant).
+Both are kept: a fix that silences one without the other has not closed this.
+
+Confirmed identical at 131 checks / 1 failure from a clean `git-archive` tree by
+`nexusqa-39` at `8be8fff`, before the A11b table was added. **Exit 1 is the
+expected, correct output while this finding is open** — the harness is honest,
+not broken. It must not be read as a failed run, and must not be silenced.
+
+### CI gate shape (proposed by `nexusqa-db`, adopted here)
+
+When `run_certification.sh` lands in CI, encode **expected failures = OPEN
+register entries** — strict-xfail semantics keyed to *this file*. The gate goes
+red only on a **new** finding, or on an **unexpectedly passing** one, which
+forces this register to be updated in the same diff before the pipeline can
+green. The pattern is already proven in platform-api's `_KNOWN_REGRESSIONS` +
+XPASS-fails gate.
+
+**Expected failure count while CERT-FINDING-2 is open: 2.** A gate must fail if
+that count moves in *either* direction.
 
 **Required remediation:** re-bracket hosts containing `:` when reformatting, in
 **both** copies — `qe-explorer/app/attest.py:187` and

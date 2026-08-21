@@ -27,6 +27,39 @@ CASES = [
     ("big_budget",     "https://staging.example.test/apply",            "wipe-db", 10),
 ]
 
+# A11b -- THE SHARED ORIGIN-VECTOR TABLE.
+#
+# Defined HERE and shipped in the payload so both services provably test the
+# SAME vectors. normalize_origin is duplicated by design (the two services share
+# no package), and the stated remediation for CERT-FINDING-2 is "fix both or pin
+# identical" -- which is only enforceable if one side cannot quietly test a
+# different list from the other.
+ORIGIN_VECTORS = [
+    # label,                url,                                          control?
+    ("ipv6_full_port",      "https://[2001:db8::1]:8443/apply",           False),
+    ("ipv6_full_noport",    "https://[2001:db8::1]/apply",                False),
+    ("ipv6_loopback",       "https://[::1]/apply",                        False),
+    ("ipv6_loopback_port",  "https://[::1]:8443/apply",                   False),
+    ("ipv6_zone_id",        "https://[fe80::1%25eth0]/apply",             False),
+    ("ipv6_v4mapped",       "https://[::ffff:192.0.2.1]/apply",           False),
+    ("ipv6_all_zeros",      "https://[::]/apply",                         False),
+    ("ipv6_full_8group",    "https://[2001:0db8:0000:0000:0000:0000:0000:0001]/apply", False),
+    # CONTROLS -- these must stay idempotent through any fix. A repair that
+    # re-brackets too eagerly would break these, so they are the fix's guard.
+    ("ctl_ipv4_port",       "https://192.0.2.1:8443/apply",               True),
+    ("ctl_dns_port",        "https://staging.example.test:8443/apply",    True),
+    ("ctl_dns_plain",       "https://staging.example.test/apply",         True),
+    # NEGATIVE CONTROL -- unparseable authority must fail CLOSED to "" and stay
+    # there. "" is the verifier's mismatch sentinel, so this must never become
+    # a parseable origin as a side effect of the repair.
+    ("ctl_malformed_port",  "https://[::1]:notaport/apply",               True),
+]
+
+origin_probe = {}
+for label, url, _is_ctl in ORIGIN_VECTORS:
+    once = normalize_origin(url)
+    origin_probe[label] = {"url": url, "once": once, "twice": normalize_origin(once)}
+
 out = []
 for name, url, reset, budget in CASES:
     g = ProvisioningGrant(
@@ -44,5 +77,8 @@ for name, url, reset, budget in CASES:
         "budget_requested": budget,
     })
 
-json.dump({"public_key": pub, "issuer": ISSUER, "now_ms": NOW, "cases": out},
+json.dump({"public_key": pub, "issuer": ISSUER, "now_ms": NOW, "cases": out,
+           "origin_vectors": [{"label": l, "url": u, "control": c}
+                              for l, u, c in ORIGIN_VECTORS],
+           "issuer_origin_probe": origin_probe},
           sys.stdout)

@@ -86,6 +86,54 @@ r3 = verify_provisioning_proof(c0["attestation"], trust=empty, crawl_id=c0["craw
 check(not r3.authorized and r3.reason == AttestReason.NO_TRUST_ANCHOR,
       f"unconfigured trust store denies (reason={r3.reason!r})")
 
+# ---------------------------------------------------------------------------
+# A11b -- ORIGIN-VECTOR TABLE: fence the CLASS, not the one instance.
+#
+# CERT-FINDING-2 was found through a single IPv6 grant. Measurement since shows
+# the defect is CATEGORICAL rather than a handful of cases: normalize_origin
+# reformats host:port without ever re-bracketing, so EVERY host containing ':'
+# breaks. A finding fenced by one example is a finding that comes back in a form
+# nobody tested, so the whole class is pinned here.
+#
+# Two invariants, both checked against BOTH services' copies:
+#   1. AGREEMENT  -- the duplicated copies must not diverge. This is what makes
+#                    "fix both or pin identical" enforceable rather than hoped.
+#   2. IDEMPOTENCE -- N(N(u)) == N(u). The function's OUTPUT is signed into the
+#                    claims and re-normalised by the verifier, so an output it
+#                    cannot re-parse is a proof guaranteed to be refused.
+vectors = data.get("origin_vectors") or []
+probe = data.get("issuer_origin_probe") or {}
+broken = []
+for v in vectors:
+    label, url, is_ctl = v["label"], v["url"], v["control"]
+    once = normalize_origin(url)
+    twice = normalize_origin(once)
+    iss = probe.get(label) or {}
+
+    # 1 - the two copies must agree, control or not. A divergence here is its
+    #     own defect and would not be caught by either service's own tests.
+    check(iss.get("once") == once,
+          f"origin[{label}]: the two normalize_origin copies AGREE "
+          f"(issuer={iss.get('once')!r} verifier={once!r})")
+
+    # 2 - idempotence. Controls MUST hold it today and must still hold it after
+    #     any repair; a fix that re-brackets too eagerly breaks them.
+    if is_ctl:
+        check(twice == once,
+              f"origin[{label}]: CONTROL is idempotent "
+              f"({once!r} -> {twice!r})")
+    elif twice != once:
+        broken.append(f"{label} {url!r} -> {once!r} -> {twice!r}")
+
+# One aggregated line for the open finding, so the failure COUNT stays stable
+# and meaningful: a CI gate keyed to "expected failures" must go red on a NEW
+# defect, not on the size of a known one.
+check(not broken,
+      "[CERT-FINDING-2 | A11b] normalize_origin is idempotent for every IPv6 "
+      f"form ({len(broken)}/{len([v for v in vectors if not v['control']])} "
+      f"non-idempotent: {'; '.join(broken[:3])}"
+      + (" ..." if len(broken) > 3 else "") + ")")
+
 print(f"CHECKS RUN : {len(results)}")
 print(f"FAILURES   : {len(failures)}")
 for f in failures:
