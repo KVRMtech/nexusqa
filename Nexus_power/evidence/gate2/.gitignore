@@ -1,0 +1,5 @@
+# The crawl working directory: screenshots and the raw manifest.
+# Reproducible with `python gate2_journey.py <app> --url ...`, so only the
+# reviewable account (journey.json / coverage.json) is versioned -- matching
+# every other bundle under evidence/.
+crawl/

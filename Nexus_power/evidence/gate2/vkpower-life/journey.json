@@ -1,0 +1,154 @@
+{
+  "app": "vkpower-life",
+  "target_url": "http://127.0.0.1:8101/",
+  "explorer_version": "qe-explorer/1.0+inv-js-v12",
+  "commit_control": "Sign & Submit Application",
+  "grants": [
+    {
+      "control": "Sign & Submit Application",
+      "approved_by": "gate2-operator",
+      "max_crossings": 1,
+      "role": "commit"
+    },
+    {
+      "control": "Apply Now",
+      "approved_by": "gate2-operator",
+      "max_crossings": 1,
+      "role": "transit",
+      "reason": "commit-shaped label on a route link; navigates to the application's first step and commits nothing"
+    },
+    {
+      "control": "Continue to Underwriting Decision",
+      "approved_by": "gate2-operator",
+      "max_crossings": 1,
+      "role": "transit",
+      "reason": "rp.verb.underwrite matches the button NAME; the handler is a router.push to the decision step and underwrites nothing"
+    }
+  ],
+  "oracle_source": "deterministic-stub",
+  "oracle_telemetry": {},
+  "oracle_decisions": [
+    {
+      "url": "http://127.0.0.1:8101/life-insurance/quote/health-check/",
+      "title": "VKPower Life Insurance",
+      "candidates": [
+        "Dashboard",
+        "Beneficiaries",
+        "Get a Quote",
+        "No",
+        "Yes",
+        "No",
+        "Yes",
+        "See My Quote",
+        "Back"
+      ],
+      "picked": "See My Quote",
+      "tier3_source": "deterministic-stub"
+    },
+    {
+      "url": "http://127.0.0.1:8101/life-insurance/quote/review/",
+      "title": "VKPower Life Insurance",
+      "candidates": [
+        "Dashboard",
+        "Beneficiaries",
+        "Get a Quote",
+        "Start Over",
+        "Back to Dashboard"
+      ],
+      "picked": "Start Over",
+      "tier3_source": "deterministic-stub"
+    },
+    {
+      "url": "http://127.0.0.1:8101/portal/beneficiaries/",
+      "title": "VKPower Life Insurance",
+      "candidates": [
+        "Dashboard",
+        "Beneficiaries",
+        "Get a Quote",
+        "Add Beneficiary"
+      ],
+      "picked": "Get a Quote",
+      "tier3_source": "deterministic-stub"
+    }
+  ],
+  "boundaries_crossed": 1,
+  "crossings": [
+    {
+      "crossing_id": "cross_48814ea4205d_1",
+      "boundary_key": "bnd_48814ea4205d8a33a32e",
+      "control_name": "Continue to Underwriting Decision",
+      "url": "http://127.0.0.1:8101/life-insurance/apply/lifestyle/",
+      "state_fingerprint": "747af30ce300a09b888765cbc08257c4c378ce8598e2016eb928d9b4111e75f5",
+      "approval_id": "apr_c4f32cbd625bc83a",
+      "sequence_index": 20,
+      "status": "crossed",
+      "outcome": "navigation",
+      "confirmed": true,
+      "refusal_reason": "",
+      "reserved_at_ms": 222467,
+      "completed_at_ms": 224842
+    }
+  ],
+  "crossings_refused": [],
+  "outcome_milestones": [
+    {
+      "milestone_id": "mst_2424ba850edc11d2",
+      "crossing_id": "cross_48814ea4205d_1",
+      "approval_id": "apr_c4f32cbd625bc83a",
+      "boundary_key": "bnd_48814ea4205d8a33a32e",
+      "control_name": "Continue to Underwriting Decision",
+      "url_before": "http://127.0.0.1:8101/life-insurance/apply/lifestyle/",
+      "url_after": "http://127.0.0.1:8101/life-insurance/apply/decision/",
+      "navigated": true,
+      "outcome": "navigation",
+      "confirmation_detail": "",
+      "confirmation_rung": "navigation",
+      "state_fingerprint_before": "747af30ce300a09b888765cbc08257c4c378ce8598e2016eb928d9b4111e75f5",
+      "state_fingerprint_after": "submit_2326ddf177158ea7",
+      "dom_digest_before": "dom_9e7d9deb0bd7966c5732_42",
+      "dom_digest_after": "dom_4cb5af940aa8a06b9c02_6",
+      "screenshot_before": "frame_00020.png",
+      "screenshot_after": "frame_00021.png",
+      "attestation_env_kind": "disposable",
+      "attestation_attributed_to": "characterization",
+      "refuse_pack_version": "refuse-pack-v1",
+      "guard_rule_id": "guard.submit.mutation_ok",
+      "clicked_at_ms": 222686,
+      "observed_at_ms": 224452,
+      "latency_ms": 1766,
+      "outcome_values": [],
+      "verified": true,
+      "grant": {
+        "approval_id": "apr_c4f32cbd625bc83a",
+        "control": "Continue to Underwriting Decision",
+        "url": "",
+        "state_fingerprint": "",
+        "max_crossings": 1,
+        "approved_by": "gate2-operator",
+        "approved_at": ""
+      }
+    }
+  ],
+  "confirmation_observed": false,
+  "confirmation_rungs": [],
+  "confirmation_details": [],
+  "telemetry": {
+    "flows_found": 3,
+    "flows_completed": 1,
+    "journeys_completed": 1,
+    "boundaries_crossed": 1,
+    "deepest_flow_steps": 7,
+    "deepest_flow_proven_steps": 5,
+    "deepest_flow_capped": true,
+    "deepest_flow_terminal": "loop",
+    "advances_by_tier": {
+      "1": 11,
+      "3": 4
+    },
+    "oracle_advances": 4
+  },
+  "stop_reason": null,
+  "approvable_boundaries_seen": [
+    "Apply Now"
+  ]
+}
