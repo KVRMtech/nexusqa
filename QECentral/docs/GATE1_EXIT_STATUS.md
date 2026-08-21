@@ -14,7 +14,7 @@ other gate on this branch and is currently undocumented.
 
 | Criterion | Status | Evidence |
 | --- | --- | --- |
-| Radio-group unblock implemented | ✅ | `walker.py` / `forms.py` / `matcher.GROUP_ASSEMBLE` |
+| Radio-group unblock implemented | ✅ | `walker.py` / `forms.py` / `matcher.GROUP_ASSEMBLE` — **LIVE-PROVEN, see §5** |
 | Radio-group validation suite | ✅ | `tests/test_answer_to_unblock_radio.py` |
 | Honest adjudication prevents false completion | ✅ | `crawler._journeys_walked`, incremented at the two WALK-path append sites |
 | Chromium validates same-page wizard progression | ✅ | fixture **27** `27-wizard-20-step-samefingerprint` |
@@ -148,6 +148,68 @@ isolation in jsdom, no `innerText`, no canvas 2D context, no frame-locator).
 * **CERT-FINDING-1 (KMS rationale)** — the documented justification for holding a
   plaintext Ed25519 key in process heap is factually false; the decision needs
   re-taking on true grounds. Not a code change by itself.
-* **Nothing in Gate 1 is deployed or live-proven.** A12 is a local Chromium
-  demonstration against a purpose-built application. Gate 2 is where the journey
-  becomes actual.
+* **Gate 1 is not DEPLOYED.** A6 is now live-proven (§5); A7–A13 are not. A12 is
+  a local Chromium demonstration against a purpose-built application. Gate 2 is
+  where the whole journey becomes actual.
+
+---
+
+## 5. A6 — LIVE-PROVEN on vkpowerlife (2026-08-21)
+
+**A6's own acceptance criteria were *"vkpowerlife product-selection step
+successfully traversed"* and *"journey advances beyond the product page"*. Both
+are now met against the real deployment**, not a fixture and not the local
+replica on `127.0.0.1:8101` that the earlier Gate 2 evidence used.
+
+Target: `https://vkpowerlife.136-85-106-73.sslip.io/`
+Instrument: `measure_radio_unblock.py` — asserts nothing, prints what came back.
+Evidence: `Nexus_power/evidence/gate1/a6-vkpowerlife-live/coverage.json`
+
+### The gate, and the experiment that cleared it
+
+```
+url      : /life-insurance/quote/start/
+advance  : 'Continue'   reason = advance_disabled_by_app_validation
+missing  : [Term Life, Whole Life, Universal Life, Variable Universal Life]   <- the radio group
+answered : 'Term Life Insurance Affordable coverage for a specific period'
+rule     : Continue requires an answer to 'product = ...' before it is enabled
+           (proven: the app enabled it when the agent answered)
+rule_reused : False        <- discovered on this run, not replayed
+```
+
+The app disabled `Continue`; the crawl discovered *why* by experiment, answered
+the radio, and the app enabled it. That is the mechanism A6 was built for,
+working on a real application.
+
+### The journey advanced well beyond the product page
+
+21 states, 15 advances (`{tier 1: 11, tier 3: 4}`), 12 distinct routes:
+
+```
+/  ->  /life-insurance/quote/start/   <- the gate
+   ->  /quote/coverage/  ->  /quote/personal/  ->  /quote/health-check/
+   ->  /quote/review/                <- stopped here
+   /login/  /apply/member-lookup/  /apply/personal-info/  /apply/replacement/
+   /portal/dashboard/  /portal/beneficiaries/
+```
+
+### What it did NOT do, which matters more
+
+| | |
+| --- | --- |
+| `boundaries_crossed` | **0** |
+| `forms_submitted` | **0** |
+| `journeys_completed` | **0** — honestly reported, no false completion |
+| `unblock_irreversible` | **0** — no experiment was left committed on the app |
+| `network_server_error_count` | **0** — the crawl caused no 5xx |
+| `approvable_boundary` | **1** — `Apply Now` at `/quote/review/`, `commit_shaped_label`, severity high |
+
+The instrument deliberately withholds `boundary_approvals` and walk attestation
+because this is a live deployment. The crawl therefore fills and advances and
+**stops at the commit boundary**, which is where a measurement of *progression*
+should stop. Crossing `Apply Now` would submit a real application and is a
+separate, explicitly-approved decision.
+
+Reproduced independently by a second run (the first, by another session, reached
+6 advances / 5 routes; this one 15 advances / 12 routes — same gate, same rule,
+same `rule_reused=False`).
