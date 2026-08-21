@@ -126,6 +126,30 @@ _STABLE_READS = 2          # consecutive equal reads that count as settled
 # must NOT satisfy the hydration gate, else the crawler inventories a blank shell
 # (0 forms) and misses the client-rendered login/form.
 _MIN_INTERACTIVE = 2
+#: Is the page VISIBLY WORKING? A running CSS animation is the one statement a
+#: spinner makes in every framework, and it needs no vocabulary, no class name
+#: and no page knowledge to read.
+#:
+#: WHY `_MIN_INTERACTIVE` IS NOT ENOUGH. That guard waits while a page has too
+#: FEW interactive controls to be rendered. It is defeated by any application
+#: whose chrome renders before its content: on vkpower-life's underwriting step,
+#: the signed-in header alone offers Dashboard / Beneficiaries / Get a Quote, so
+#: the count is comfortably over the floor for the ~1.8s the decision spinner is
+#: on screen. The gate settled, the walk inventoried a page whose only controls
+#: were nav links, tier 3 picked "Get a Quote", and a fifteen-step funnel became
+#: an eleven-step loop back to the start.
+#:
+#: Checked ONLY once the signature has otherwise gone stable, so a page that is
+#: not animating pays a single extra evaluate at the settle moment. Bounded by
+#: `_MAX_BUSY_POLLS`, because a decorative infinite animation is not a reason to
+#: wait forever -- after that the page settles regardless and the crawl is no
+#: worse off than before this existed.
+_BUSY_JS = (
+    "(()=>{try{if(!document.getAnimations)return 0;"
+    "var a=document.getAnimations();for(var i=0;i<a.length;i++){"
+    "if(a[i].playState==='running')return 1;}return 0;}catch(x){return 0;}})()"
+)
+_MAX_BUSY_POLLS = 14       # ~3s at _STABLE_POLL_MS, inside _STABILIZE_MS
 # Viewport materialization (lazy-load / virtual-scroll) — bounded step-scroll.
 _MATERIALIZE_STEPS = 8
 # Adaptive backoff on an explicit server rate-limit (429), then ONE retry.
@@ -167,13 +191,34 @@ _MAX_FRAME_CONTROLS = 60
 
 #: Cheap page-quiescence signature: visible-interactive count : readyState :
 #: scrollHeight. Stable across two reads ⇒ the DOM has stopped mounting controls.
+#: The DOM-quiescence signature the hydration gate polls.
+#:
+#: ``location.pathname`` is part of it, and that is not cosmetic. A client-side
+#: route change (``router.push``) settles network instantly, so without the path
+#: the gate could reach its "stable for N reads" verdict against the page being
+#: LEFT — many interactive controls, nothing changing — and the observation that
+#: follows would then read the page being ARRIVED AT, mid-render.
+#:
+#: Measured on vkpower-life: clicking "Continue to Underwriting Decision" routes
+#: to /apply/decision/, which renders a spinner for ~1.8s before mounting
+#: "Continue to Payment". The walk saw a state with ZERO controls, concluded
+#: there was nothing to advance on, and tier 3 sent it back to the quote page —
+#: turning a fifteen-step funnel into an eleven-step loop. The empty-shell guard
+#: (``_MIN_INTERACTIVE``) was already designed to wait for exactly this and
+#: never got the chance, because the signature it was watching belonged to the
+#: previous page.
+#:
+#: With the path in the signature, a navigation mid-gate resets stability and
+#: the gate waits for the page it actually landed on. Costs nothing when no
+#: navigation happens: the path is constant and the signature is unchanged.
 _QUIESCENCE_JS = (
     "(()=>{try{var e=document.querySelectorAll("
     "'a[href],button,input,select,textarea,[role],[tabindex]');"
     "var n=0;for(var i=0;i<e.length;i++){var el=e[i];"
     "if(el.offsetParent!==null||(el.getClientRects&&el.getClientRects().length))n++;}"
     "return n+':'+document.readyState+':'+Math.round("
-    "document.body?document.body.scrollHeight:0);}catch(x){return 'err';}})()"
+    "document.body?document.body.scrollHeight:0)+':'+"
+    "(location.pathname||'')+(location.hash||'');}catch(x){return 'err';}})()"
 )
 
 
@@ -2422,6 +2467,7 @@ class PlaywrightBrowserPort(BrowserPort):
         try:
             last = None
             stable = 0
+            busy_polls = 0
             for _ in range(max(1, _STABILIZE_MS // _STABLE_POLL_MS)):
                 sig = await self._page.evaluate(_QUIESCENCE_JS)
                 # Empty-shell guard: a signature with too few interactive controls is an
@@ -2435,6 +2481,21 @@ class PlaywrightBrowserPort(BrowserPort):
                 if sig == last and _interactive >= _MIN_INTERACTIVE:
                     stable += 1
                     if stable >= _STABLE_READS:
+                        # The DOM has stopped changing -- but a page can be
+                        # perfectly still and still be working. See _BUSY_JS:
+                        # a spinner holds its own shape while the content it is
+                        # waiting for has not mounted, so "nothing changed" and
+                        # "nothing left to do" are not the same page.
+                        if busy_polls < _MAX_BUSY_POLLS:
+                            try:
+                                working = bool(await self._page.evaluate(_BUSY_JS))
+                            except Exception:
+                                working = False
+                            if working:
+                                busy_polls += 1
+                                stable = 0
+                                await asyncio.sleep(_STABLE_POLL_MS / 1000.0)
+                                continue
                         break
                 else:
                     stable = 0
