@@ -417,3 +417,119 @@ def test_match_login_controls_none_without_password_or_pin():
     # an identifier + Continue only (no secret on this screen) → not a single-screen
     # login match; the multi-screen Authenticator.login handles that path.
     assert match_login_controls(_inv([_user("Member Number"), _btn("Continue")])) is None
+
+
+# ─── A16 · a login that answers LATE, and a password typed once ─────────────
+#
+# Both defects were found by crawling summit-life-carrier, whose sign-in awaits
+# 1200ms before revealing its MFA step. Neither was reachable from any existing
+# fake, because every fake here answers a click synchronously.
+
+
+class LateAnsweringBrowser(FakeBrowser):
+    """A login whose submit handler answers on a TIMER, not on the click.
+
+    Models the real shape exactly: the click returns immediately, the screen
+    goes BUSY (the submit button is replaced by a disabled "Authenticating..."),
+    and the next step appears only on a later observation. `busy_reads` is how
+    many observations the crawl gets before the application has answered.
+    """
+
+    def __init__(self, pages: dict, start: str, *, busy_reads: int = 2) -> None:
+        super().__init__(pages, start)
+        self._busy_left = 0
+        self._busy_reads = busy_reads
+        self._pending: str | None = None
+        self.fills: list[str] = []
+
+    async def collect_controls(self):
+        if self._busy_left > 0:
+            self._busy_left -= 1
+            if self._busy_left == 0 and self._pending:
+                self._cur, self._pending = self._pending, None
+            # The screen the application shows while it is working: the form is
+            # still there, and its submit is DISABLED. That disabled control is
+            # the only honest signal that no answer has arrived yet.
+            return [dict(_user()), dict(_pass()),
+                    dict(_btn("Authenticating..."), disabled=True)]
+        return await super().collect_controls()
+
+    async def click(self, control):
+        dest = self._p().get("nav", {}).get(control.get("name"))
+        before = self._cur
+        if dest:
+            self._pending = dest
+            self._busy_left = self._busy_reads
+            return RawObservation(url_before=before, url_after=before)
+        return RawObservation(url_before=before, url_after=before)
+
+    async def fill(self, control, value):
+        self.fills.append(str(control.get("name") or ""))
+        return await super().fill(control, value)
+
+
+_LATE_PAGES = {
+    "https://app/login": {
+        "controls": [_user(), _pass(), _btn("Continue")],
+        "errors": [], "nav": {"Continue": "https://app/mfa"},
+    },
+    "https://app/mfa": {
+        "controls": [_user(), _pass(), _otp("MFA Verification Code"),
+                     _btn("Verify & Sign In")],
+        "errors": [], "nav": {"Verify & Sign In": "https://app/home"},
+    },
+    "https://app/home": {"controls": [_btn("Sign out")], "errors": [], "nav": {}},
+}
+
+
+def test_a_login_that_answers_late_is_not_declared_stuck():
+    """THE A16 DEFECT. Read once, a busy screen is indistinguishable from a form
+    that refused to advance — and the loop abandoned the login on that reading.
+
+    Measured before the fix: summit-life-carrier reported stop_reason=auth_failed
+    with states=1 on an application it was 1200ms from being signed into."""
+    creds = Credentials.from_payload(
+        {"username": "u", "password": "p", "mfa": {"kind": "otp", "otp": "123456"}})
+    port = LateAnsweringBrowser(_LATE_PAGES, "https://app/login", busy_reads=2)
+    a = Authenticator(port, creds, FakeClock(), _REFUSE,
+                      AuthWindow(max_requests=50, window_ms=10 ** 9), max_relogins=1)
+    a.LATE_ADVANCE_WAIT_MS = 30  # the LOOP is under test, not the duration
+    result = asyncio.run(a.login(_observe(port)))
+    assert result.success, (
+        "a login that answered late was reported as failed: %s" % result.reason)
+
+
+def test_a_busy_screen_is_not_read_as_an_advance():
+    """The FIRST attempted fix moved on as soon as the fingerprint changed, and
+    a busy screen changes it — "Continue" becomes "Authenticating...". That is
+    the application saying it has NOT answered, so it must not count as one."""
+    creds = Credentials.from_payload(
+        {"username": "u", "password": "p", "mfa": {"kind": "otp", "otp": "123456"}})
+    # Four busy reads: far more than any fingerprint-only rule would survive.
+    port = LateAnsweringBrowser(_LATE_PAGES, "https://app/login", busy_reads=3)
+    a = Authenticator(port, creds, FakeClock(), _REFUSE,
+                      AuthWindow(max_requests=50, window_ms=10 ** 9), max_relogins=1)
+    a.LATE_ADVANCE_WAIT_MS = 30
+    assert asyncio.run(a.login(_observe(port))).success
+
+
+def test_a_committed_password_is_never_retyped():
+    """A password is typed ONCE per login sequence — the guard the username
+    branch always had.
+
+    Without it the loop re-derives a password control from a screen the browser
+    is leaving and re-types the secret into it. Measured on summit-life-carrier:
+    the fill spent a full 30s action timeout, returned committed_value=None from
+    /dashboard/overview, and a login that had ALREADY SUCCEEDED was reported as
+    an uncommitted credential."""
+    creds = Credentials.from_payload(
+        {"username": "u", "password": "p", "mfa": {"kind": "otp", "otp": "123456"}})
+    port = LateAnsweringBrowser(_LATE_PAGES, "https://app/login", busy_reads=2)
+    a = Authenticator(port, creds, FakeClock(), _REFUSE,
+                      AuthWindow(max_requests=50, window_ms=10 ** 9), max_relogins=1)
+    a.LATE_ADVANCE_WAIT_MS = 30
+    asyncio.run(a.login(_observe(port)))
+    assert port.fills.count("Password") == 1, (
+        "the password was typed %d times; every repeat is a secret written into "
+        "a screen the login had already left: %s"
+        % (port.fills.count("Password"), port.fills))

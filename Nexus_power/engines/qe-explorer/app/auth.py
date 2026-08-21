@@ -22,6 +22,7 @@ is PII-scrubbed like any value; the password value is emptied at source).
 """
 from __future__ import annotations
 
+import asyncio
 import base64
 import binascii
 import hashlib
@@ -635,6 +636,20 @@ class Authenticator:
     #: password → delivery → OTP → done is 5; 6 gives headroom without looping).
     MAX_LOGIN_STEPS = 6
 
+    #: A16 -- how long to keep looking after a submit that appears to have
+    #: changed nothing. A login handler may answer LATE: summit-life-carrier's
+    #: awaits 1200ms before revealing its MFA step, so the click returns, the
+    #: port settles on network idle + hydration (both already quiet -- the work
+    #: is a timer, not a request), and the screen the crawl reads is the one it
+    #: just submitted. Read once, that is indistinguishable from a form that
+    #: refused to advance.
+    #:
+    #: Paid ONLY on the path that was about to abandon the login entirely, so a
+    #: healthy login pays nothing: the fingerprint has already moved and the
+    #: loop below breaks on its first pass.
+    LATE_ADVANCE_WAIT_MS = 4000
+    LATE_ADVANCE_LOOKS = 4
+
     async def login(self, observation: PageObservation) -> AuthResult:
         """Drive a login SEQUENCE from ``observation`` and verify it.
 
@@ -722,7 +737,32 @@ class Authenticator:
                     ))
                     filled_username = True
                     acted = True
-            if password_ctrl is not None and _norm(password_ctrl.get("name")):
+            # A PASSWORD IS TYPED ONCE PER LOGIN SEQUENCE — the same guard the
+            # username branch above has carried all along, and its absence here
+            # cost an entire application.
+            #
+            # THE DEFECT (A16, measured on summit-life-carrier). Its sign-in
+            # handler awaits 1200ms and THEN calls router.push, so the click
+            # returns and the port settles while the navigation is still only
+            # scheduled. The next iteration therefore re-derives a password
+            # control from a screen the browser is about to leave, re-types a
+            # password already committed two iterations earlier, and the fill
+            # spends a full 30s action timeout watching the element detach:
+            #
+            #   fill#2 committed_value='...'   url=/portal/sign-in
+            #   fill#4 committed_value=None    url=/dashboard/overview   <-- IN
+            #
+            # The login had SUCCEEDED. `committed_value is None` was then read as
+            # an uncommitted credential, and a crawl that was already signed in
+            # ended `stop_reason=auth_failed`, states=1. Nothing about the
+            # application was ever discovered.
+            #
+            # Re-typing buys nothing in any login shape: on a screen that did not
+            # advance the "stuck" check below breaks the loop, and a screen that
+            # rejected the credential is caught by the live-error branch. It can
+            # only ever repeat a secret into a page that has moved on.
+            if (password_ctrl is not None and _norm(password_ctrl.get("name"))
+                    and not filled_password):
                 obs_p = await self._port.fill(dict(password_ctrl), self._creds.password)
                 if obs_p.committed_value is None:
                     # An uncommitted password fill is NOT recorded and does NOT set
@@ -782,10 +822,61 @@ class Authenticator:
                 break
 
             observation = await self._observe_current()
-            after_controls = build_inventory(observation.raw_controls, self._refuse_pack, url=observation.url)
-            after_fp = self._identity.fingerprint(
-                url=observation.url, controls=after_controls,
-                dialogs=observation.dialog_flags)
+            # THE SECOND LOOK (A16). See LATE_ADVANCE_WAIT_MS: a submit whose
+            # effect is SCHEDULED rather than immediate leaves the first
+            # observation showing the pre-submit screen, and every fact derived
+            # below -- has_password, has_otp, after_submit, and the "stuck" break
+            # at the bottom of the loop -- then describes a screen that no longer
+            # exists. Measured on summit-life-carrier: the crawl declared a
+            # two-phase sign-in stuck before its MFA step had rendered, and
+            # reported auth_failed on an application it was one click away from
+            # being signed into.
+            #
+            # Bounded and self-limiting: it stops the instant the fingerprint
+            # moves, so the only crawls that pay for it are the ones that would
+            # otherwise have abandoned the login.
+            _looks = max(1, self.LATE_ADVANCE_LOOKS)
+            for _look in range(_looks):
+                after_controls = build_inventory(
+                    observation.raw_controls, self._refuse_pack, url=observation.url)
+                after_fp = self._identity.fingerprint(
+                    url=observation.url, controls=after_controls,
+                    dialogs=observation.dialog_flags)
+                if not acted or _look == _looks - 1:
+                    break
+                # IS THE APPLICATION STILL WORKING?
+                #
+                # Not "did the fingerprint move" -- that was the first version of
+                # this check and summit-life-carrier walked straight through it.
+                # Its submit flips the button to "Authenticating..." and DISABLES
+                # it, which moves the fingerprint while saying precisely that the
+                # answer has not arrived. Read as an advance, the loop then
+                # inventories a screen holding a spinner, finds no OTP field, and
+                # abandons a login 1200ms from its MFA step.
+                #
+                # Nor "is there something to submit" -- the second version tried
+                # that and was fooled just as fast: this page carries "Sign in
+                # with Google SSO" and "Sign in with Enterprise SSO", so a
+                # submit-shaped control is present on EVERY observation, busy or
+                # not.
+                #
+                # A DISABLED control is the application's own structural
+                # statement that it is mid-flight. It needs no vocabulary, no
+                # spinner detection and no page knowledge, and it clears itself
+                # the moment the work finishes. Costs a few seconds once on a
+                # screen with a permanently disabled button, and only inside the
+                # login loop.
+                _busy = any(bool(c.get("disabled")) for c in after_controls)
+                if not _busy:
+                    break
+                await asyncio.sleep(
+                    self.LATE_ADVANCE_WAIT_MS / 1000.0 / max(1, _looks - 1))
+                observation = await self._observe_current()
+            if acted and after_fp == screen_fp:
+                logger.info(
+                    "qec.auth.no_advance_after_submit url=%s looks=%d wait_ms=%d "
+                    "- the screen did not move, and was given time to",
+                    (observation.url or "")[:120], _looks, self.LATE_ADVANCE_WAIT_MS)
             live_errors = [e for e in observation.error_texts if _norm(e)]
             has_password = _match_password_control(after_controls) is not None
             has_otp = self._creds.mfa is not None and match_otp_control(after_controls, self._creds.otp_hints) is not None
