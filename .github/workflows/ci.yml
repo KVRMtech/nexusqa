@@ -893,6 +893,19 @@ jobs:
         run: |
           pytest platform/qe-central/tests/contract/test_a24_live_tenant_catalog.py                  -v --tb=short -p no:cacheprovider -s
 
+      # A22's CONSUMER half. The producer (engines/qe-explorer, browser lane) drives
+      # the real crawler at the M2.4 quote funnel and commits the coverage account it
+      # recorded; this folds THAT account through the production fold and compiles it.
+      # Named as its own step, like A20/A21/A24, so the milestone's own verdict is
+      # legible in the job log instead of being one dot inside Phase 6.
+      #
+      # `-s` because the test prints the compiled evidence — steps, the RECORDED
+      # network assertion, the outcome's captured selector, and the oracle strength.
+      # A22's claim is that those exist and are grounded; a green dot does not show it.
+      - name: A22 — a DISCOVERED journey compiles with its assertions
+        run: |
+          pytest platform/qe-central/tests/contract/test_a22_generation_from_real_crawl.py                  -v --tb=short -p no:cacheprovider -s
+
       # ── Phase 6 — Integration. The whole qe-central suite WITH the databases
       #    wired, so the ~40 DB-gated tests that skip in the no-service job
       #    actually execute here. QEC_REQUIRE_DB makes any remaining db-shaped
