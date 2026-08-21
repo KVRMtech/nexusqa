@@ -429,6 +429,29 @@ probe that made the fence per-crawl but left the test reading the old path raise
 tell "defect present" from "test broken". Third instance of the day's class, this
 time inside the tripwire built to record it. *(Escalation raised by nexusqa-e3.)*
 
+### The latency is guarded too — because prose does not fail a build
+
+The paragraph above says the defect is *“latent at `capacity=1`, live above it.”*
+That is prose, and nexusqa-e3's criticism of it is correct: nothing in the schema,
+the registry API or the scheduler refuses a larger capacity — it is ordinary
+documented configuration — so **one `server_default` is the entire reason this is
+not an incident today**, and my record could not fail a build about it.
+
+`tests/contract/test_egress_fence_latent_to_live_tripwire.py` (theirs, `d55717e`)
+closes that: it fails at the commit that raises the default **while the fence is
+still shared**, rather than in the incident afterwards. Mutation-proven both ways,
+including the one that matters — with the migration hidden it fails saying *“this
+tripwire cannot see the schema default it guards”* rather than passing silently.
+
+**Two records, two lifetimes, deliberately not merged.** Mine is deleted the day
+the fence becomes per-crawl. Theirs must keep working through the window between
+*someone raises capacity* and *someone fixes the fence* — exactly the window in
+which the leak goes live with nobody watching.
+
+*(e3 also verified my `xfail` marker is safe under the no-silent-skip gate: an
+xfail reports `outcome="skipped"`, but a reason containing no infrastructure
+variable does not trip it. Confirmed here — the marker names no `QEC_*` variable.)*
+
 **What it does need is a person, not a retry.** A green rerun is not evidence the
 isolation holds — it is evidence the race did not fire, and an intermittent
 cross-tenant leak is worse than a deterministic one because isolation then depends
