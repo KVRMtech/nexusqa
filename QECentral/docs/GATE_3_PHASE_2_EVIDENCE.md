@@ -667,8 +667,13 @@ corrected guard.
 `postgres:16-alpine` — the fold, both catalogue versions and the diff are rebuilt
 from scratch on infrastructure the author does not control.
 
-*(The job as a whole is RED, at `Characterization — pass 1`, on 28 stale goldens
-owned by another milestone. A21's steps run before it and report for themselves —
+*(That run ended `cancelled` — a later push to the same ref cancelled it at
+`Characterization — pass 1`, AFTER both A21 steps had reported. The A21 evidence
+is therefore complete and the cancellation is downstream of it. The
+characterization failure itself is real and proven separately: the
+`qe-explorer-characterization` job FAILED on the 28 stale goldens in run
+[`32446412929`](https://github.com/KVRMtech/nexusqa/actions/runs/32446412929).
+Either way A21's steps run BEFORE characterization now and report for themselves —
 that reordering is what made this evidence obtainable at all. See "Known red, and
 NOT mine".)*
 
