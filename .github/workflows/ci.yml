@@ -494,12 +494,13 @@ jobs:
           # missing node or a missing Chromium from going green having executed
           # none of the production capture JavaScript.
           QEC_REQUIRE_BROWSER_LANES: "1"
-        # `not proving_ground` TOO, and the exclusion is a scope decision
-        # rather than a convenience. The proving-ground modules each drive TWO
-        # real crawls of a real application end to end — M2.3 records a removal
-        # in ~7 minutes, Gate 3 / A21 records three changes in ~8. They belong
-        # to the browser-harness workflow, which budgets 75 minutes for exactly
-        # that and which also commits their recordings and guards them.
+        # `not proving_ground` TOO, and the exclusion is a scope decision rather
+        # than a convenience. The proving-ground modules each drive TWO real
+        # crawls of a real application end to end — M2.3 records a removal in
+        # ~7 minutes, Gate 3 / A21 records three changes in ~8. They belong to
+        # the browser-harness workflow, which budgets 75 minutes for exactly
+        # that, and which also commits their recordings and guards them against
+        # drift.
         #
         # Left in, they do not merely slow this job down — they SILENCE it. On
         # run 32441252806 this step was CANCELLED at the job's 25-minute limit,
@@ -593,10 +594,10 @@ jobs:
       # THE SERVICE'S OWN REQUIREMENTS, not just pytest. `-m jsdom` DESELECTS
       # the non-jsdom modules but pytest still IMPORTS every file under
       # tests/browser to find their marks — so one module importing the app
-      # (test_wizard_20_step.py -> app.completion -> app.guard -> pydantic)
-      # kills collection for the whole lane with ModuleNotFoundError, and the
-      # lane reports red without a single jsdom test having been deselected,
-      # let alone run. Deselection is not isolation from imports.
+      # (test_wizard_20_step.py → app.completion → app.guard → pydantic) kills
+      # collection for the whole lane with ModuleNotFoundError, and the lane
+      # reports red without a single jsdom test having been deselected, let
+      # alone run. Deselection is not isolation from imports.
       - name: Install test dependencies
         run: |
           pip install -r requirements.txt
@@ -607,10 +608,22 @@ jobs:
           QEC_REQUIRE_BROWSER_LANES: "1"
         run: pytest tests/browser -m jsdom -q --tb=short -p no:cacheprovider
 
-  # ── M0.x — QE-Central DATABASE contract (real Postgres + real Redis) ──────
+  # ── M0.x + A26 — QE-Central INFRASTRUCTURE contract ───────────────────────
+  #  (real Postgres + real Redis + real S3-compatible object storage)
   #
   #  Clean Postgres → bootstrap → migrations → RLS → indexes → DB-backed tests
   #  → tenant-isolation attack → downgrade → upgrade again → all green.
+  #
+  #  A26 ADDS OBJECT STORAGE, and the job's `name:` deliberately does NOT change
+  #  to say so. That name is a REQUIRED status check on `develop` (branch
+  #  protection, M0 closure). Renaming it would silently retire the required
+  #  check — every future PR would wait forever on a context that no longer
+  #  reports. The scope is recorded here and in QECentral/docs/A26_A27_CI_INFRA.md
+  #  instead; the check name is an interface, not a label.
+  #
+  #  Object storage lands HERE rather than in a new job for the same reason: a
+  #  new job would not be a required check, so the six T-FL-03 tests would run
+  #  without gating anything, which is most of the way back to not running.
   #
   #  Everything above the line "the qe-central suite self-skips DB tests" in the
   #  qe-central-tests job is what this job exists to stop being true. That job
@@ -694,6 +707,22 @@ jobs:
       QEC_TEST_ADMIN_DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/postgres
       QEC_TEST_REDIS_URL: redis://localhost:6379/0
 
+      # ── A26.2 — the OBJECT STORAGE the T-FL-03 handoff proof consumes.
+      # Provisioned by scripts/qec_ci_minio_setup.sh in Phase 3b below (MinIO
+      # cannot be a `services:` container — it needs a command, which that block
+      # cannot supply; the script's header carries the full reasoning).
+      #
+      # NOTE what is deliberately NOT set here: NEXUS_STORAGE_BACKEND and the
+      # S3_* variables. Exporting those job-wide would repoint the HOUSE storage
+      # layer for the entire ~1400-test suite — every screenshot, asset and
+      # artifact write in tests that expect the local backend. The T-FL-03
+      # fixture monkeypatches them per-test, which is the only scope at which
+      # they are correct.
+      QEC_TEST_S3_ENDPOINT: http://localhost:9000
+      QEC_TEST_S3_BUCKET: qec-evidence
+      AWS_ACCESS_KEY_ID: minioadmin
+      AWS_SECRET_ACCESS_KEY: minioadmin
+
       # ── The APPLICATION's own DSNs. app/db builds its module-level
       # `qec_engine` / `substrate_engine` from these at import time, defaulting
       # to the docker-compose hostname `postgres` — which does not resolve on a
@@ -704,9 +733,20 @@ jobs:
       QEC_DATABASE_URL: postgresql+asyncpg://qec:qec_ci_pw@localhost:5432/qecentral
       NEXUS_DATABASE_URL_SUBSTRATE: postgresql+asyncpg://qec_substrate:qec_sub_ci_pw@localhost:5432/nexus
 
-      # THE anti-green-wash switch: with this set, a DB-gated test that cannot
-      # run FAILS the session instead of skipping it.
+      # THE anti-green-wash switches (A27.1): with these set, an
+      # infrastructure-gated test that cannot run FAILS the session instead of
+      # skipping it. One flag per category, so the job declares exactly what it
+      # provisioned and a service that fails to start cannot hide.
       QEC_REQUIRE_DB: "1"
+      # Redis was already enforced THROUGH the database flag (QEC_TEST_REDIS_URL
+      # is a DB skip signature and remains one). This names it in its own right
+      # so the declaration matches the provisioning; it cannot weaken anything,
+      # because enforcement is the union of the two.
+      QEC_REQUIRE_REDIS: "1"
+      # NEW. Before this line, the six T-FL-03 object-storage tests had never
+      # executed in any environment: no CI service existed, they skipped, and the
+      # database-shaped gate could not see an S3 skip.
+      QEC_REQUIRE_S3: "1"
       # Each DB contract test drives its own asyncio.run loop; a pooled
       # connection bound to a closed loop would resurface as a cross-loop
       # RuntimeError. Test-only — production keeps its long-lived pool.
@@ -732,6 +772,16 @@ jobs:
           ( cd platform/qe-central && pip install -r requirements.txt )
           ( cd platform/api && pip install -r requirements.txt )
           pip install pytest pytest-asyncio alembic asyncpg redis
+          # boto3 is REQUIRED, not optional, and its absence is one of the gaps
+          # the first execution of T-FL-03 exposed. The service depends on
+          # aiobotocore (via the SDK's storage-s3 extra) which pulls botocore but
+          # NOT boto3 — yet the handoff proof uses a synchronous boto3 client to
+          # read object LastModified timestamps and assert the manifest was
+          # published last. Without it that test dies at import with
+          # ModuleNotFoundError, which reads as a broken test rather than a
+          # missing dependency. It is TEST-ONLY (production is aiobotocore), so
+          # it belongs here and not in platform/qe-central/requirements.txt.
+          pip install boto3
 
       # ── Phase 3 — Readiness. The service health checks already gate step
       #    start; this is the explicit, bounded, FAIL-LOUD confirmation. No
@@ -770,6 +820,20 @@ jobs:
           print(f"::error::Redis never answered PING after 30s ({last})")
           sys.exit(1)
           PY
+
+      # ── Phase 3b — Object storage (A26.1). Starts the SAME pinned MinIO
+      #    release docker-compose.yml deploys, waits on the SAME
+      #    /minio/health/live probe compose uses, then proves the S3 API answers
+      #    WITH CREDENTIALS and survives a real PUT/GET/DELETE on the evidence
+      #    bucket. No sleeps, no timing assumptions: every check is bounded and
+      #    fails loudly with the container's logs attached.
+      #
+      #    The bucket is created HERE rather than left to the SDK's lazy
+      #    auto-create, which swallows its own failure — depending on that would
+      #    make a provisioning fault surface as six confusing test failures
+      #    instead of one named step.
+      - name: Phase 3b — start MinIO and bootstrap the evidence bucket
+        run: bash scripts/qec_ci_minio_setup.sh
 
       # ── Phase 4 — Schema. Builds BOTH databases from empty:
       #      nexus     (root alembic chain + create_all substrate + RLS)
@@ -861,11 +925,11 @@ jobs:
       #              while its answer set moved underneath it
       #
       # `changed` is the one that tests the catalogue's identity model, and it
-      # is why the third change is exactly ONE option: the answer set grows
-      # 3 -> 4 and field_signature._option_shape buckets both as "few", so the
-      # question_id survives. Four more options would cross into "many", mint a
-      # new id, and the same real-world change would be reported as a removal
-      # plus an addition.
+      # is the reason the third change is exactly one option: the answer set
+      # grows 3 -> 4 and field_signature._option_shape buckets both as "few", so
+      # the question_id survives. Four more options would cross into "many",
+      # mint a new id, and the same real-world change would be reported as a
+      # removal plus an addition.
       #
       # Prints the full diff with -s: a reviewer should be able to read the
       # classification out of the CI log without re-running anything.
@@ -893,18 +957,113 @@ jobs:
         run: |
           pytest platform/qe-central/tests/contract/test_a24_live_tenant_catalog.py                  -v --tb=short -p no:cacheprovider -s
 
+      # ── A27.2 · THE CANARY ───────────────────────────────────────────────
+      # Phase 5 already ran this file; it is named separately because it is the
+      # only proof that the no-silent-skip gate can still FIRE. Each arm drives a
+      # throwaway pytest session in a subprocess against the REAL gate module and
+      # asserts the session went red for the right reason — and the inverse arms
+      # assert it stays green for a laptop skip and for an unrelated skip, so the
+      # gate cannot pass by simply failing everything.
+      #
+      # A gate that has never been seen to fire is indistinguishable from a gate
+      # that cannot fire. That is precisely how six T-FL-03 tests skipped under a
+      # green build for an entire milestone.
+      - name: A27.2 — no-silent-skip canary (the gate must be able to fail CI)
+        run: |
+          pytest platform/qe-central/tests/contract/test_infra_skip_gate_canary.py                  -v --tb=short -p no:cacheprovider
+
+      # ── A26.2 · T-FL-03, EXECUTED IN CI FOR THE FIRST TIME ───────────────
+      # Six tests that had never run in ANY environment. Named as its own step so
+      # a reader of a CI run can see the object-storage handoff hold without
+      # unfolding a 1400-test log, and so a failure here is attributed to the
+      # handoff rather than to "the suite".
+      #
+      # --junitxml is not decoration: the verification step below reads it and
+      # asserts the six tests were COLLECTED and PASSED and that NOTHING was
+      # skipped. "The step exited 0" is not evidence of execution — a suite in
+      # which every test skipped also exits 0, which is the whole defect.
+      - name: A26.2 — T-FL-03 object-storage handoff (first execution in CI)
+        run: |
+          pytest platform/qe-central/tests/fleet/test_t_fl_03_object_storage_handoff.py                  -v --tb=short -p no:cacheprovider                  --junitxml=/tmp/tfl03-junit.xml
+
+      - name: A26.2 — prove the six S3-gated tests were collected and executed
+        run: |
+          python - <<'PY'
+          import sys, xml.etree.ElementTree as ET
+
+          # The six tests gated on a real S3 endpoint. Listed EXPLICITLY: a count
+          # would still pass if a test were renamed away and another added.
+          REQUIRED = {
+              "test_producer_and_consumer_share_no_filesystem",
+              "test_pod_restart_between_write_and_ingestion_loses_nothing",
+              "test_ingestion_is_idempotent_and_reads_through",
+              "test_the_manifest_is_published_last",
+              "test_evidence_is_written_under_the_tenant_prefix",
+              "test_a_local_manifest_short_circuits_the_store",
+          }
+
+          root = ET.parse("/tmp/tfl03-junit.xml").getroot()
+          cases = root.iter("testcase")
+          seen = {}
+          for c in cases:
+              outcome = "passed"
+              for child in c:
+                  if child.tag in ("skipped", "failure", "error"):
+                      outcome = child.tag
+              seen[c.get("name")] = outcome
+
+          missing = sorted(REQUIRED - set(seen))
+          if missing:
+              print(f"::error::NOT COLLECTED: {missing}")
+              sys.exit(1)
+
+          not_passed = sorted(n for n in REQUIRED if seen[n] != "passed")
+          if not_passed:
+              print(f"::error::did not pass: "
+                    f"{[(n, seen[n]) for n in not_passed]}")
+              sys.exit(1)
+
+          skipped = sorted(n for n, o in seen.items() if o == "skipped")
+          if skipped:
+              print(f"::error::tests SKIPPED in a run that provisions every "
+                    f"required service: {skipped}")
+              sys.exit(1)
+
+          print(f"T-FL-03: {len(seen)} tests collected, 0 skipped.")
+          for n in sorted(REQUIRED):
+              print(f"  EXECUTED + PASSED  {n}")
+          PY
+
+      - name: A26.2 — publish the T-FL-03 execution evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tfl03-first-execution-junit
+          path: /tmp/tfl03-junit.xml
+          if-no-files-found: warn
+
       # ── Phase 6 — Integration. The whole qe-central suite WITH the databases
-      #    wired, so the ~40 DB-gated tests that skip in the no-service job
-      #    actually execute here. QEC_REQUIRE_DB makes any remaining db-shaped
-      #    skip a failure.
-      - name: Phase 6 — qe-central suite against the live databases
+      #    AND object storage wired, so the ~40 DB-gated tests and the six
+      #    S3-gated ones that skip in the no-service job actually execute here.
+      #    The QEC_REQUIRE_* flags make any remaining infrastructure-shaped skip
+      #    a failure.
+      - name: Phase 6 — qe-central suite against the live infrastructure
         run: pytest platform/qe-central/tests -q --tb=short -p no:cacheprovider
 
       # ── Phase 7 — Result. Every step above is fail-closed (`set -e` /
       #    non-zero pytest exit), so reaching here means the whole chain held.
       - name: Phase 7 — summarise
         run: |
-          echo "Postgres UP → Redis UP → bootstrap → alembic head → contract → integration → PASS"
+          echo "Postgres UP → Redis UP → MinIO UP → bootstrap → alembic head → contract → canary → T-FL-03 → integration → PASS"
+
+      # ── Teardown. `services:` containers are reaped by the runner; a container
+      #    this job started itself is not, so it is removed explicitly. `always()`
+      #    so a failing test still cleans up. A hosted runner is discarded after
+      #    the job anyway — this is what makes the same script safe to run
+      #    repeatedly on a laptop or a self-hosted runner.
+      - name: Teardown — remove the MinIO container
+        if: always()
+        run: bash scripts/qec_ci_minio_setup.sh --down
 
   # ── M0.1 / T-CI-07 — CRAWL SMOKE ─────────────────────────────────────────
   #

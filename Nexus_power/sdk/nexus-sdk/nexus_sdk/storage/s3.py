@@ -32,8 +32,14 @@ class S3Storage(StorageBackend):
             return self._client
 
         try:
+            from aiobotocore.config import AioConfig
             from aiobotocore.session import AioSession
 
+            # BOUNDED FAILURE. Without an explicit config botocore applies its
+            # public-internet defaults (60s connect, 5 attempts), which made a
+            # configured-but-unreachable endpoint take 53.6s to surface — on the
+            # crawl ingestion path. See StorageConfig for the full reasoning and
+            # for why read_timeout is deliberately NOT shortened.
             self._session = AioSession()
             self._client = await self._session.create_client(
                 "s3",
@@ -42,25 +48,48 @@ class S3Storage(StorageBackend):
                 aws_access_key_id=self._config.s3_access_key,
                 aws_secret_access_key=self._config.s3_secret_key,
                 use_ssl=self._config.s3_use_ssl,
+                config=AioConfig(
+                    connect_timeout=self._config.s3_connect_timeout,
+                    read_timeout=self._config.s3_read_timeout,
+                    retries={"max_attempts": self._config.s3_max_attempts,
+                             "mode": "standard"},
+                ),
             ).__aenter__()
 
             # Ensure bucket exists
             try:
                 await self._client.head_bucket(Bucket=self._config.s3_bucket)
-            except Exception:
-                try:
-                    await self._client.create_bucket(
-                        Bucket=self._config.s3_bucket,
-                        CreateBucketConfiguration={
-                            "LocationConstraint": self._config.s3_region,
-                        }
-                        if self._config.s3_region != "us-east-1"
-                        else {},
+            except Exception as head_exc:
+                # DO NOT try to CREATE a bucket on a store we could not REACH.
+                # head_bucket failing for want of a network is a connectivity
+                # fault, not a missing bucket, and the create attempt that
+                # followed it bought nothing except a second full retry cycle
+                # (measurably the larger half of the stall a caller sees) and a
+                # "bucket creation note" log line that names the wrong problem.
+                # A genuine 404/403 still falls through to the create below.
+                from botocore.exceptions import ConnectionError as BotoConnError
+
+                if isinstance(head_exc, BotoConnError):
+                    logger.warning(
+                        "S3: endpoint %s unreachable while checking bucket %s "
+                        "(%s) - not attempting to create it",
+                        self._config.s3_endpoint or "<default>",
+                        self._config.s3_bucket, type(head_exc).__name__,
                     )
-                    logger.info("S3: created bucket %s", self._config.s3_bucket)
-                except Exception as e:
-                    if "BucketAlreadyOwnedByYou" not in str(e):
-                        logger.warning("S3: bucket creation note: %s", e)
+                else:
+                    try:
+                        await self._client.create_bucket(
+                            Bucket=self._config.s3_bucket,
+                            CreateBucketConfiguration={
+                                "LocationConstraint": self._config.s3_region,
+                            }
+                            if self._config.s3_region != "us-east-1"
+                            else {},
+                        )
+                        logger.info("S3: created bucket %s", self._config.s3_bucket)
+                    except Exception as e:
+                        if "BucketAlreadyOwnedByYou" not in str(e):
+                            logger.warning("S3: bucket creation note: %s", e)
 
             return self._client
 

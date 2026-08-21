@@ -46,16 +46,28 @@ import pytest
 
 from app.storage import object_store
 
+from _infra_gate import infra_gate, require_infra
+
 S3_ENDPOINT = os.environ.get("QEC_TEST_S3_ENDPOINT", "")
 S3_BUCKET = os.environ.get("QEC_TEST_S3_BUCKET", "qec-evidence")
 
+ENV_S3 = "QEC_TEST_S3_ENDPOINT"
 TENANT = "tfl03tenant"
 
-needs_s3 = pytest.mark.skipif(
-    not S3_ENDPOINT,
-    reason=("QEC_TEST_S3_ENDPOINT not set — the T-FL-03 handoff proof needs a "
-            "real S3-compatible endpoint (MinIO locally). A mocked store would "
-            "prove the test doubles agree, not that the handoff works."),
+# A26.2 / A27.1 — TWO-STATE, not a plain skipif.
+#
+# These six tests had never executed in ANY environment: CI provided no object
+# storage, so the mark below skipped every one of them and the build stayed
+# green. A plain `skipif` cannot tell "no MinIO on this laptop" (fine) from "CI
+# was supposed to provide MinIO and did not" (a hole). So the mark stops being a
+# skip the moment QEC_REQUIRE_S3 declares the service mandatory — and the
+# `require_infra` call in the s3_env fixture then fails them by name.
+needs_s3 = infra_gate(
+    S3_ENDPOINT, ENV_S3,
+    purpose=("the T-FL-03 handoff proof needs a real S3-compatible endpoint "
+             "(MinIO locally). A mocked store would prove the test doubles "
+             "agree, not that the handoff works."),
+    category="s3",
 )
 
 
@@ -67,6 +79,10 @@ def s3_env(monkeypatch):
     ``substrate/assets.py`` already read — one deployment configures every
     service, which is the design §3.1 co-readability requirement.
     """
+    # The CI-side half of the two-state gate. All six S3-gated tests take this
+    # fixture, so this single call is what turns "CI forgot to provision MinIO"
+    # into six named failures instead of six silent skips.
+    require_infra(S3_ENDPOINT, ENV_S3, "s3")
     monkeypatch.setenv("NEXUS_STORAGE_BACKEND", "s3")
     monkeypatch.setenv("S3_BUCKET", S3_BUCKET)
     monkeypatch.setenv("S3_ENDPOINT", S3_ENDPOINT)
@@ -92,9 +108,13 @@ def _write_crawl_evidence(root: Path, crawl_id: str) -> Path:
     (d / "frames" / "001.png").write_bytes(b"\x89PNG\r\n\x1a\nFRAME-ONE")
     (d / "frames" / "002.png").write_bytes(b"\x89PNG\r\n\x1a\nFRAME-TWO")
     (d / "artifacts" / "policy.pdf").write_bytes(b"%PDF-1.4 policy")
-    (d / object_store.MANIFEST_FILENAME).write_text(
-        '{"type":"state","state_id":"s1"}\n{"type":"action","idx":1}\n',
-        encoding="utf-8")
+    # write_BYTES, not write_text. `write_text` applies the platform's newline
+    # translation, so on Windows this fixture wrote CRLF and on Linux LF - the
+    # laptop proof and the CI proof would run against DIFFERENT BYTES, and the
+    # one that matters is whichever nobody looked at. The manifest is JSONL:
+    # the newline IS the record delimiter, so it is payload here, not layout.
+    (d / object_store.MANIFEST_FILENAME).write_bytes(
+        b'{"type":"state","state_id":"s1"}\n{"type":"action","idx":1}\n')
     return d
 
 
@@ -129,9 +149,27 @@ async def test_producer_and_consumer_share_no_filesystem(s3_env):
             "the consumer pod could not obtain the manifest — this is the "
             "pod-local emptyDir defect: a completed crawl reads as "
             "'no manifest produced'")
-        assert manifest.read_text() == (
-            (crawl_dir / object_store.MANIFEST_FILENAME).read_text()), (
-            "the manifest arrived CORRUPTED across the handoff")
+        # BYTE equality, not text equality. Comparing read_text() on both
+        # sides runs both through newline translation, which MASKS exactly
+        # the corruption this assertion exists to detect: a handoff that
+        # rewrote the manifest's line endings would pass a text comparison
+        # having changed every record boundary in a newline-delimited file.
+        # The transfer is byte-exact today (upload opens "rb", fetch calls
+        # write_bytes); this is what stops that silently ceasing to be true.
+        original = (crawl_dir / object_store.MANIFEST_FILENAME).read_bytes()
+        # RIGHT SUBJECT, not merely a resembling one: b"" == b"" is also a pass,
+        # so a handoff that delivered an empty file on both sides would satisfy
+        # a bare equality check. Pin what the manifest must actually BE.
+        assert (len(original.splitlines()) == 2
+                and original.startswith(b'{"type"')), (
+            f"the fixture no longer produces the 2-record JSONL this proof "
+            f"assumes: {original!r}")
+        assert manifest.read_bytes() == original, (
+            "the manifest arrived CORRUPTED across the handoff: "
+            f"{manifest.read_bytes()!r} != {original!r}")
+        assert b'\r' not in manifest.read_bytes(), (
+            "the handoff introduced CR bytes into a JSONL manifest - every "
+            "record delimiter in the file has changed")
 
         # The frames the manifest references must travel with it, or ingestion
         # writes a substrate that points at screenshots nobody has.

@@ -42,6 +42,30 @@ class StorageConfig:
         default_factory=lambda: os.environ.get("S3_USE_SSL", "true").lower() == "true"
     )
 
+    # ── Bounded failure (M3.3 / A26.2) ──────────────────────────────────────
+    # WHY THESE EXIST. The first CI execution of the T-FL-03 handoff proof
+    # measured a CONFIGURED-BUT-UNREACHABLE store taking 53.6s to raise. That
+    # is not a test-speed problem: `object_store.ensure_local` sits on the crawl
+    # INGESTION path and on the reaper's completion-recovery sweep, so an
+    # object-storage outage stalled each affected crawl for the better part of a
+    # minute before failing — serialised across a fleet, that is an outage
+    # amplifier. botocore's defaults are tuned for AWS over the public internet
+    # (60s connect, 5 attempts); a private MinIO/S3 endpoint that is up answers
+    # in milliseconds, so the long tail buys nothing and costs a stall.
+    #
+    # read_timeout stays at botocore's 60s ON PURPOSE: it bounds a single read
+    # of a LARGE object, and shortening it would break big evidence uploads to
+    # fix a problem those uploads do not have.
+    s3_connect_timeout: int = field(
+        default_factory=lambda: int(os.environ.get("S3_CONNECT_TIMEOUT", "10"))
+    )
+    s3_read_timeout: int = field(
+        default_factory=lambda: int(os.environ.get("S3_READ_TIMEOUT", "60"))
+    )
+    s3_max_attempts: int = field(
+        default_factory=lambda: int(os.environ.get("S3_MAX_ATTEMPTS", "3"))
+    )
+
     # Local filesystem fallback (dev mode)
     local_root: str = field(
         default_factory=lambda: os.environ.get("NEXUS_STORAGE_PATH", "/data/nexus")
