@@ -15,7 +15,21 @@ implemented when this gate opened; A36 is closed and was not touched.
 | A35 | crossing journal recovery | **PASS** — both crash shapes, 0 double-submits |
 
 Evidence: `Nexus_power/evidence/gate4/*.json`. Branch `gate4/phase3-proofs`
-on `origin` (`1e7c5fd` → `3f1fa63`).
+on `origin`, `1e7c5fd` onward.
+
+**Attribution, because git cannot supply it here.** Every commit in this
+repository carries the same identity (`srika`), so commit → author does not
+exist as a queryable fact — a live routing problem this week, when an
+overwritten evidence bundle could not be returned to whoever produced it. Until
+the fleet's `Session:` commit-trailer convention is in place, the anchor for this
+work is the **branch**: every Gate 4 commit is on `gate4/phase3-proofs` and
+nowhere else, and every artefact is under `Nexus_power/evidence/gate4/`, which
+`git log --all -- Nexus_power/evidence/gate4/` confirms has a single writer.
+Anything found in either place belongs to this gate and can be addressed here.
+
+(The stale commit range this line used to carry is gone on purpose: a hand-
+maintained range in a document the range itself keeps changing is a fact with a
+short half-life, and it was already three commits out of date.)
 
 ---
 
