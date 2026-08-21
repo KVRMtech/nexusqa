@@ -103,6 +103,57 @@ fail closed. A12 / T-WP-01 is **unblocked** by this record.
 >
 > ---
 
+> ---
+>
+> ### 🔗 RE-ATTESTATION AGAINST COMMITTED BLOBS (2026-08-21)
+>
+> Requested by the ARB record-keeper (`nexusqa-db`), and a fair request: every
+> prior verification in this document compared **working-tree** files. A record
+> that binds to a working tree is the thing §5.1 was written about.
+>
+> **This attestation compares the COMMITTED BLOBS.** Each path in
+> `A11_SNAPSHOT.sha256` was read with `git cat-file blob <sha>:<path>` — never
+> from disk — and hashed:
+>
+> ```
+> committed blobs matching : 9/9
+> certified bytes landed at : 1065083e017ffdcc8fbef972dc477ad65154e510
+> re-verified unchanged at  : db509f644703d3bb9fd80ecdd86b04e4475283fb (HEAD)
+> ```
+>
+> **The certification is pinned to `1065083`** — the commit in which the
+> certified bytes landed and the last commit to touch any of the nine paths.
+> `HEAD` has since moved for unrelated work; the nine blobs are byte-identical
+> there, which is why the record still holds. It lapses when any of those nine
+> paths changes, not when `HEAD` moves.
+>
+> ### ⚠️ RELAY CORRECTION — this certification never reported a pass
+>
+> A relayed account of the certifier's run stated that it passed. **It did not,
+> and this document never said it did.** Re-run at the commit above, exit code
+> captured verbatim:
+>
+> ```
+> CHECKS RUN : 131
+> FAILURES   : 1
+>   FAIL: [CERT-FINDING-2 | IPv6] ipv6: genuine attestation AUTHORIZED
+>         (got 'origin_mismatch' "proof_origin='' target_origin='https://2001:db8::1:8443'")
+> EXIT CODE = 1
+> ```
+>
+> That is **identical** to the independent clean-`git-archive` run by
+> `nexusqa-39` at `8be8fff`: 131 checks, 1 failure, exit 1. **There is no
+> environmental discrepancy between the two trees, and exit 1 was never read as
+> success.** The verdict line of this document has read *"CERTIFIED WITH
+> FINDINGS"* since it was written, §3.1 has read *"131 checks, 1 failure"*, and
+> Finding 2 has carried a required remediation throughout.
+>
+> The ARB disposition *"certified with one open finding"* is therefore **correct
+> as it stands** and this document needs no correction on that point. The defect
+> was in the relay, not in either run.
+>
+> ---
+
 The ARB rule requires certification by a squad that did not author the work. This
 record satisfies that rule. It certifies **specific bytes**, not "whatever is in
 the tree": nine files were pinned by digest before certification began and
