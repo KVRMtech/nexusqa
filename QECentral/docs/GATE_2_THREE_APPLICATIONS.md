@@ -176,7 +176,28 @@ calling such a step a stall.
 **It is not proven to be the repair.** The successful live run engaged that
 re-look zero times; the race did not occur, so the improvement was variance.
 Engagement is logged separately from the save precisely so the next occurrence
-is attributable rather than inferred. A18's remaining half — a live
+is attributable rather than inferred.
+
+#### Two live runs, and a collision I caused
+
+A second session ran the same live journey at 08:59 and committed its bundle to
+the same path (`8eaf38e`), measuring **depth 7**. My later runs wrote over that
+file; its measurement survives in git at that commit, but the working bundle is
+now the depth-12 run. The two are not in conflict — theirs predates the carve-out
+and the busy gate, which are what moved the number — but the evidence path was
+never mine alone and I should have checked before writing to it.
+
+**Their finding reproduces in my run, and it is the sharper one.** At
+`/apply/member-lookup/` the engine fills *Member Number* with
+`provenance=synthesized` (its `name_tokens` basis reads "Number" as a quantity;
+a member number is an IDENTITY), the app accepts it, and — the actionable part —
+**`fields_needing_seed` comes back EMPTY**. Confirmed independently here: my
+live coverage also carries `Member Number` as inferred with `fields_needing_seed:
+0`. My walk advanced past that step where theirs dead-ended, so the lookup is not
+a hard block; but on either run an operator reading the result cannot learn that
+a real member number is the one input that would change it. A crawl that is
+honest about not completing and silent about why is the failure mode this gate
+exists to remove. A18's remaining half — a live
 consultation that answers it — needs qe-central, a fleet HMAC secret and a model
 credential, none of which exist on this machine.
 
