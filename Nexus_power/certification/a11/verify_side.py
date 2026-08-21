@@ -134,6 +134,22 @@ check(not broken,
       f"non-idempotent: {'; '.join(broken[:3])}"
       + (" ..." if len(broken) > 3 else "") + ")")
 
+# ---------------------------------------------------------------------------
+# CERT-FINDING-1 -- emitted by the harness, not left in prose.
+#
+# See issue_side.py for why a crypto harness asserts on documentation: the defect
+# IS documentation, it is load-bearing (it justifies a plaintext signing key in
+# process heap), and a finding only a human wrote down is one an outside reviewer
+# cannot see. This closes automatically when the rationale is corrected.
+check(data.get("kms_probe_read") is True,
+      "CERT-FINDING-1 probe could READ attestation_keys.py (a probe that cannot "
+      "read its target must not report 'clean')")
+check(data.get("kms_claim_present") is False,
+      "[CERT-FINDING-1 | KMS] attestation_keys.py no longer claims Cloud KMS "
+      "'offers no Ed25519 asymmetric-signing key type' -- it does provide "
+      "EC_SIGN_ED25519, and that false claim is what justifies keeping a "
+      "plaintext signing key in process heap")
+
 print(f"CHECKS RUN : {len(results)}")
 print(f"FAILURES   : {len(failures)}")
 for f in failures:

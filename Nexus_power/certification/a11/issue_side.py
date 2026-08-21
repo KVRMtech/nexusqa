@@ -5,6 +5,7 @@ FRESHLY GENERATED key -- not the committed test key, not the frozen golden.
 Emits JSON on stdout for the verifier half to consume in a separate process.
 """
 import json, sys
+from pathlib import Path
 from app.services.signing import generate_keypair
 from app.services.walk_attestation import ProvisioningGrant, issue_attestation, normalize_origin
 
@@ -55,6 +56,30 @@ ORIGIN_VECTORS = [
     ("ctl_malformed_port",  "https://[::1]:notaport/apply",               True),
 ]
 
+# CERT-FINDING-1 -- MAKE A PROSE FINDING TOOL-EMITTED.
+#
+# The lesson this whole certification produced (credit: nexusqa-39): a finding a
+# TOOL emits gets tracked; a finding only a HUMAN wrote down gets lost. On first
+# contact with an outside reviewer, CERT-FINDING-1 was invisible -- the ARB board
+# read "certified with ONE open finding" because CERT-FINDING-2 is the one the
+# harness prints and CERT-FINDING-1 lived only in prose.
+#
+# So the harness now emits it too. This is a DOCUMENTATION assertion, which is
+# unusual in a crypto harness and is deliberate: the defect IS documentation. The
+# claim below is false (Cloud KMS provides EC_SIGN_ED25519), it is load-bearing
+# because it justifies keeping a plaintext signing key in process heap, and it is
+# what a future engineer will read when deciding whether to revisit key custody.
+# Pinning the sentence means the finding closes automatically when the rationale
+# is corrected, and cannot be closed by anyone forgetting it existed.
+_KEYS_SRC = Path(__file__).resolve().parents[2] / "platform" / "qe-central"     / "app" / "services" / "attestation_keys.py"
+_FALSE_KMS_CLAIM = "offers no Ed25519 asymmetric-signing key type"
+try:
+    _keys_text = _KEYS_SRC.read_text(encoding="utf-8")
+    kms_claim_present = _FALSE_KMS_CLAIM in _keys_text
+    kms_probe_read = True
+except Exception:
+    kms_claim_present, kms_probe_read = False, False
+
 origin_probe = {}
 for label, url, _is_ctl in ORIGIN_VECTORS:
     once = normalize_origin(url)
@@ -80,5 +105,7 @@ for name, url, reset, budget in CASES:
 json.dump({"public_key": pub, "issuer": ISSUER, "now_ms": NOW, "cases": out,
            "origin_vectors": [{"label": l, "url": u, "control": c}
                               for l, u, c in ORIGIN_VECTORS],
-           "issuer_origin_probe": origin_probe},
+           "issuer_origin_probe": origin_probe,
+           "kms_claim_present": kms_claim_present,
+           "kms_probe_read": kms_probe_read},
           sys.stdout)

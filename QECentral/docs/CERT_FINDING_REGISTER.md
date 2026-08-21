@@ -46,6 +46,27 @@ require re-certification (it does not change the certified bytes' behaviour),
 but does change `attestation_keys.py`, which the snapshot pins — so in practice
 it lapses the record and should be landed with CERT-FINDING-2.
 
+### Now TOOL-EMITTED (2026-08-21) — it used to be prose only
+
+This finding was invisible on first contact with an outside reviewer: the ARB
+board read *"certified with ONE open finding"* because CERT-FINDING-2 is the one
+the harness prints and this one lived only in a document. The general lesson,
+credited to `nexusqa-39`: **a finding a tool emits gets tracked; a finding only
+a human wrote down gets lost.**
+
+So the harness now emits it. `issue_side.py` reads `attestation_keys.py` and
+reports whether the false sentence is still present; `verify_side.py` asserts it
+is gone. A crypto harness asserting on documentation is unusual and deliberate —
+**the defect *is* documentation**, it is load-bearing (it justifies a plaintext
+signing key in process heap), and it is what a future engineer will read when
+deciding whether to revisit key custody.
+
+It carries its own probe-integrity check: if the harness cannot READ
+`attestation_keys.py`, that fails too. **A probe that cannot see its target must
+never report "clean"** — the same fail-closed rule the subsystem under
+certification follows. The finding closes automatically when the sentence is
+corrected, and cannot be closed by anyone forgetting it existed.
+
 ---
 
 ## CERT-FINDING-2 — `normalize_origin` is not idempotent for IPv6 literals
@@ -151,8 +172,27 @@ forces this register to be updated in the same diff before the pipeline can
 green. The pattern is already proven in platform-api's `_KNOWN_REGRESSIONS` +
 XPASS-fails gate.
 
-**Expected failure count while CERT-FINDING-2 is open: 2.** A gate must fail if
-that count moves in *either* direction.
+**Expected failure count while both findings are open: 3.**
+
+| Emitted failure | Finding | Layer |
+| --- | --- | --- |
+| `[CERT-FINDING-2 \| IPv6]` | 2 | symptom — a genuine attestation refused end to end |
+| `[CERT-FINDING-2 \| A11b]` | 2 | cause — the idempotence invariant, 8/8 |
+| `[CERT-FINDING-1 \| KMS]` | 1 | the false rationale, still present in source |
+
+A gate must fail if that count moves in *either* direction. **History of the
+count, so a reviewer can tell a hardening from a regression:**
+
+| Checks / failures | What changed |
+| --- | --- |
+| 131 / 1 | original certification — CERT-FINDING-2 found via one IPv6 grant |
+| 148 / 2 | A11b: the IPv6 class fenced (symptom + cause separated) |
+| 150 / 3 | CERT-FINDING-1 made tool-emitted instead of prose-only |
+
+Each rise is the harness covering *more*, not the product getting worse. **All
+three go to 0 in one commit** when A11a and CERT-FINDING-1 land together; if the
+count is not 0 after that commit, the fix is incomplete rather than the harness
+being wrong.
 
 **Required remediation:** re-bracket hosts containing `:` when reformatting, in
 **both** copies — `qe-explorer/app/attest.py:187` and
