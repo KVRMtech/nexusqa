@@ -63,7 +63,8 @@ async def _register_tenant(tenant: str) -> None:
     try:
         async with engine.begin() as conn:
             await conn.execute(
-                text("INSERT INTO tenants (tenant_id) VALUES (:t) "
+                # see the note in test_t_fl_01_durable_queue._register_tenant
+                text("INSERT INTO tenants (tenant_id, name) VALUES (:t, :t) "
                      "ON CONFLICT (tenant_id) DO NOTHING"), {"t": tenant})
     finally:
         await engine.dispose()

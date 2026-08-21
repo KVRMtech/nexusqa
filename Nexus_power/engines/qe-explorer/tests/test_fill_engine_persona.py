@@ -51,6 +51,49 @@ def test_age_is_recomputed_from_the_birth_date_not_merely_stored():
     assert recomputed == persona.applicant.age
 
 
+def test_a_leap_day_applicant_is_coherent_on_every_day_of_the_year():
+    """29 February, pinned — the one birth date the age arithmetic cannot round.
+
+    ``_reference_date_for`` recovers the day a persona's ages are true on by
+    moving the birth date forward by the claimed age. For a leap-day birth that
+    day does not exist in a common year, and the fallback used to be 28 February
+    — the day BEFORE the birthday, on which the person is a year younger than
+    they say they are. Every leap-day persona was therefore internally
+    incoherent: it presented an application with an age and a date of birth that
+    contradicted each other, which is exactly the rejection this module exists
+    to stop being blamed on the application.
+
+    It is pinned HERE, with the identity supplied, rather than left to the seed
+    sweep above. ``identity_pack.derive`` builds the birth date from
+    ``date.today()``, so whether any of the 120 seeds lands on 29 February
+    depends on the DAY THE SUITE RUNS: the defect passed CI for weeks and then
+    failed on 21 August 2026 with no code change between the two runs. A rule
+    that only holds on most days is not a rule.
+    """
+    from dataclasses import replace
+
+    base = derive_identity("leap::probe")
+    # LEAP YEARS, named rather than computed from the current year — including
+    # 2000, the century that IS a leap year, and 1900 is deliberately absent
+    # because it is not. `date.fromisoformat` below refuses 29 February in a
+    # common year, so a typo here fails loudly instead of silently testing an
+    # ordinary date.
+    age = 40
+    for birth_year in (1984, 1988, 1996, 2000):
+        dob = f"{birth_year}-02-29"
+        assert date.fromisoformat(dob).day == 29
+        ident = replace(base, date_of_birth=dob, age=age)
+
+        persona = derive_persona("leap::probe", identity=ident)
+        broken = [rule for rule, ok in persona.coherence_report().items() if not ok]
+        assert not broken, (
+            f"a persona born on 29 February {birth_year} claiming age {age} "
+            f"is incoherent: {broken}")
+        assert persona.applicant.age == age, (
+            f"the leap-day applicant's age was rewritten to "
+            f"{persona.applicant.age}, expected {age}")
+
+
 def test_marital_status_and_the_spouse_agree_in_both_directions():
     """A form that asks for a marital status AND spouse details cross-validates
     them; declaring "single" and then naming a spouse is rejected, and so is the

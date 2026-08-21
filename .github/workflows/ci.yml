@@ -579,8 +579,17 @@ jobs:
       # No Chromium in this job, so the Playwright lane is legitimately absent —
       # `-m jsdom` selects only the jsdom-lane tests and the gate below then
       # holds them to "must actually run".
+      # THE SERVICE'S OWN REQUIREMENTS, not just pytest. `-m jsdom` DESELECTS
+      # the non-jsdom modules but pytest still IMPORTS every file under
+      # tests/browser to find their marks — so one module importing the app
+      # (test_wizard_20_step.py -> app.completion -> app.guard -> pydantic)
+      # kills collection for the whole lane with ModuleNotFoundError, and the
+      # lane reports red without a single jsdom test having been deselected,
+      # let alone run. Deselection is not isolation from imports.
       - name: Install test dependencies
-        run: pip install pytest pytest-asyncio
+        run: |
+          pip install -r requirements.txt
+          pip install pytest pytest-asyncio
 
       - name: jsdom lane
         env:

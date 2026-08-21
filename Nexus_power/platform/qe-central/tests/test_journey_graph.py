@@ -214,8 +214,16 @@ async def _run_next_action_classification():
         assert r["branches"] == 3
 
         async with _scoped(factory, tenant) as s:
+            # FILTERED BY TENANT, deliberately. QEC_TEST_DATABASE_URL is a
+            # SUPERUSER dsn, and a superuser BYPASSES row-level security — so an
+            # unfiltered select here reads every tenant's branches out of the
+            # shared CI database, and this dict, keyed on the option LABEL,
+            # silently takes the last writer's row. Run alone it passed; run in
+            # the full suite another test's 'yes' branch (status=discovered)
+            # won the key and the assertion read as a fold regression.
             by = {b.option_label_norm: b for b in (await s.execute(
-                select(JourneyBranchRow))).scalars().all()}
+                select(JourneyBranchRow).where(
+                    JourneyBranchRow.tenant_id == tenant))).scalars().all()}
             assert by["apply now"].status == BRANCH_DISCOVERED
             assert by["start over"].status == BRANCH_BLOCKED
             assert "destructive" in by["start over"].blocked_reason
@@ -1208,8 +1216,16 @@ async def _run_reveals_fold():
         assert r["branches"] == 2
 
         async with _scoped(factory, tenant) as s:
+            # FILTERED BY TENANT, deliberately. QEC_TEST_DATABASE_URL is a
+            # SUPERUSER dsn, and a superuser BYPASSES row-level security — so an
+            # unfiltered select here reads every tenant's branches out of the
+            # shared CI database, and this dict, keyed on the option LABEL,
+            # silently takes the last writer's row. Run alone it passed; run in
+            # the full suite another test's 'yes' branch (status=discovered)
+            # won the key and the assertion read as a fold regression.
             by = {b.option_label_norm: b for b in (await s.execute(
-                select(JourneyBranchRow))).scalars().all()}
+                select(JourneyBranchRow).where(
+                    JourneyBranchRow.tenant_id == tenant))).scalars().all()}
             assert by["yes"].status == BRANCH_WALKED
             assert by["yes"].reveals == [
                 "button:yes", "button:no", "input:cigarettes per day"]

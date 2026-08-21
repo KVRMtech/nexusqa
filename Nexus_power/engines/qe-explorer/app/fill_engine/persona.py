@@ -305,8 +305,19 @@ def _reference_date_for(ident: Identity) -> date:
     birth = date.fromisoformat(ident.date_of_birth)
     try:
         return birth.replace(year=birth.year + ident.age)
-    except ValueError:                       # 29 February
-        return birth.replace(year=birth.year + ident.age, day=28)
+    except ValueError:
+        # 29 FEBRUARY, and the direction matters. This fell back to 28 February,
+        # which is the day BEFORE a leap-day birthday has happened — so
+        # ``_age_on`` recomputed the person as one year YOUNGER than the age
+        # they claim, and ``age_matches_dob`` was false for every leap-day
+        # persona. The reference day has to be one the claimed age is actually
+        # TRUE on, so it moves forward to 1 March rather than back.
+        #
+        # It surfaced as a once-in-a-while CI failure because identity_pack
+        # derives the birth date from ``date.today()``: a given seed only lands
+        # on 29 February on some days of the year, so the same seed was coherent
+        # on one day's run and incoherent on the next.
+        return date(birth.year + ident.age, 3, 1)
 
 
 def _age_on(iso_birth: str, ref: date) -> int:

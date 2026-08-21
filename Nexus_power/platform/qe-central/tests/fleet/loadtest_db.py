@@ -111,7 +111,8 @@ async def seed(engine, *, tenants: int, journeys: int) -> list[tuple[str, str]]:
             app_id = f"app_{run}_{i}"
             async with sub.begin() as conn:
                 await conn.execute(text(
-                    "INSERT INTO tenants (tenant_id) VALUES (:t) "
+                    # see the note in test_t_fl_01_durable_queue._register_tenant
+                    "INSERT INTO tenants (tenant_id, name) VALUES (:t, :t) "
                     "ON CONFLICT (tenant_id) DO NOTHING"), {"t": tenant})
             async with engine.begin() as conn:
                 await conn.execute(text(

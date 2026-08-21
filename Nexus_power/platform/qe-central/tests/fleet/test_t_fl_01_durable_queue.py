@@ -51,7 +51,13 @@ async def _register_tenant(tenant: str) -> None:
     from app.db import substrate_engine
     async with substrate_engine.begin() as conn:
         await conn.execute(text(
-            "INSERT INTO tenants (tenant_id) VALUES (:t) "
+            # `tenants.name` is NOT NULL (nexus_sdk.db.models.TenantRow), so an
+            # insert naming only tenant_id cannot succeed against the real
+            # substrate schema. It went unnoticed because the fleet suite had
+            # never been run against a database built from the migration chain
+            # — Gate 3 / A20 pushed the chain to CI for the first time and all
+            # 19 of these tests failed on this one line.
+            "INSERT INTO tenants (tenant_id, name) VALUES (:t, :t) "
             "ON CONFLICT (tenant_id) DO NOTHING"), {"t": tenant})
 
 

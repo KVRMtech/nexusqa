@@ -62,7 +62,14 @@ from app.routers import explorations  # noqa: E402
 
 needs_db = pytest.mark.skipif(
     not (QEC_DB_URL and SUBSTRATE_DB_URL),
-    reason="T-FL-08 needs the qecentral + substrate test DSNs",
+    # The reason must NAME the variables. The A27.1 no-silent-skip gate
+    # recognises an infrastructure skip by the environment variable in its
+    # reason, so "needs the ... test DSNs" was invisible to it: had the CI
+    # database failed to start, these tests would have skipped under
+    # QEC_REQUIRE_DB and the build would still have gone green. Exactly the
+    # hole that let six T-FL-03 object-storage tests never run.
+    reason=("QEC_TEST_QEC_DATABASE_URL / QEC_TEST_SUBSTRATE_DATABASE_URL "
+            "not set — T-FL-08 needs the qecentral + substrate test DSNs"),
 )
 pytestmark = [needs_db, pytest.mark.asyncio]
 
@@ -161,7 +168,13 @@ async def _register_tenant(tenant: str) -> None:
     from app.db import substrate_engine
     async with substrate_engine.begin() as conn:
         await conn.execute(text(
-            "INSERT INTO tenants (tenant_id) VALUES (:t) "
+            # `tenants.name` is NOT NULL (nexus_sdk.db.models.TenantRow), so an
+            # insert naming only tenant_id cannot succeed against the real
+            # substrate schema. It went unnoticed because the fleet suite had
+            # never been run against a database built from the migration chain
+            # — Gate 3 / A20 pushed the chain to CI for the first time and all
+            # 19 of these tests failed on this one line.
+            "INSERT INTO tenants (tenant_id, name) VALUES (:t, :t) "
             "ON CONFLICT (tenant_id) DO NOTHING"), {"t": tenant})
 
 
