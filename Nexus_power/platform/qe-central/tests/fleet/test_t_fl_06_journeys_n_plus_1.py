@@ -87,13 +87,16 @@ async def _seed_app_with_journeys(tenant: str, app_id: str, n_journeys: int) -> 
 
     async with substrate_engine.begin() as conn:
         await conn.execute(text(
-            # `tenants.name` is NOT NULL (nexus_sdk.db.models.TenantRow), so an
-            # insert naming only tenant_id cannot succeed against the real
-            # substrate schema. It went unnoticed because the fleet suite had
+            # `tenants.name` AND `tenants.domain` are both NOT NULL
+            # (nexus_sdk.db.models.TenantRow), and domain is UNIQUE as well, so
+            # an insert naming only tenant_id cannot succeed against the real
+            # substrate schema. Deriving the domain from the tenant id keeps it
+            # unique for free. It went unnoticed because the fleet suite had
             # never been run against a database built from the migration chain
             # — Gate 3 / A20 pushed the chain to CI for the first time and all
             # 19 of these tests failed on this one line.
-            "INSERT INTO tenants (tenant_id, name) VALUES (:t, :t) "
+            "INSERT INTO tenants (tenant_id, name, domain) "
+            "VALUES (:t, :t, :t || '.test') "
             "ON CONFLICT (tenant_id) DO NOTHING"), {"t": tenant})
 
     artifact = "art_" + uuid.uuid4().hex[:10]
