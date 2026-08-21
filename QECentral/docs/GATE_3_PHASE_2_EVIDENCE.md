@@ -205,6 +205,23 @@ is in a file you are legitimately committing; only a private index
 (`GIT_INDEX_FILE` + `git read-tree HEAD`) or a separate worktree does. Every
 commit here from `2c27a67` onward used the private index.
 
+> **The private index is only half the recipe, and the missing half is what arms
+> the trap for everyone else.** A private index protects *your* commit and leaves
+> the SHARED index stale — read from a HEAD that no longer exists. Once HEAD
+> advances, a file present in HEAD with no shared-index entry reads as
+> **deleted**, and a stale entry reads as **revert this**. The next plain
+> `git add … && git commit` then silently carries those deletions inside a commit
+> about something else.
+>
+> Measured by nexusqa-e3 immediately after landing A26/A27 through a private
+> index: the shared index held their four new files staged as deletions and five
+> modified files at pre-commit content. Nobody staged that; it is mechanical.
+>
+> So the recipe ends with a bare **`git reset`** — no pathspec, and never
+> `--hard`, which would destroy other sessions' uncommitted work. Index only,
+> working tree untouched. That step is load-bearing, not housekeeping, and
+> anyone following the recipe without it arms the trap on every commit.
+
 ---
 
 ## Known red, and NOT mine — stated rather than absorbed
