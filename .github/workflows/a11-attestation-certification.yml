@@ -1,0 +1,237 @@
+name: A11 Attestation Certification
+
+# THE A11 / T-WP-02 CERTIFICATION GATE.
+#
+# A11's independent certification (`QECentral/docs/A11_INDEPENDENT_CERTIFICATION.md`)
+# binds to NINE FILES BY SHA-256. Nothing was checking that binding, so the
+# certification could lapse silently — and it already did once, between the
+# commit that created it and the commit that fixed it:
+#
+#   79808cb  certification committed, pinning CRLF bytes from one working tree
+#   1065083  implementation committed; git normalised it to LF
+#            -> 6 of 9 digests now described bytes NO checkout produces
+#   14e9175  manifest regenerated over the committed bytes
+#   cf70ae9  contracts/*.json pinned to LF (it had NO rule, so ONE COMMIT
+#            hashed TWO WAYS: LF on Linux, CRLF on Windows)
+#
+# For that whole window the reproducer exited 2 — "REFUSING: A11 sources have
+# drifted ... the certification record has LAPSED" — against sources that had
+# not drifted at all. Nobody was told, because nothing was looking.
+#
+# The live hazard this now guards is not malice. This checkout is shared by many
+# concurrent sessions and the git INDEX is shared with it: after any commit the
+# index is stale relative to HEAD, `git diff --cached` shows the just-committed
+# work as DELETIONS, and the next plain `git commit` SILENTLY REVERTS it. A
+# revert of the CRLF->LF normalisation would re-break the digest match and lapse
+# the certification without anyone touching A11 deliberately.
+#
+# So the binding is checked by a machine, on every push, and it is cheap.
+
+on:
+  push:
+    branches: [main, develop, "feat/**", "fix/**"]
+  pull_request:
+    branches: [main, develop]
+  workflow_dispatch:
+
+concurrency:
+  group: a11-attestation-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ── 1. The binding itself. No interpreter, no dependencies, no flakiness. ──
+  snapshot-integrity:
+    name: certified bytes unchanged (linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: The nine pinned files must hash to the certified digests
+        run: |
+          set -euo pipefail
+          # `sha256sum -c` treats a trailing CR as part of the FILENAME, so a
+          # CRLF manifest fails to OPEN all nine and reports it identically to
+          # real drift. Normalise the manifest, never the sources — the whole
+          # point is to hash the sources exactly as checked out.
+          tr -d '\r' < Nexus_power/certification/a11/A11_SNAPSHOT.sha256 > /tmp/snap.sha256
+          if ! sha256sum -c /tmp/snap.sha256; then
+            cat >&2 <<'EOF'
+
+          A11 CERTIFICATION LAPSED — a pinned file no longer hashes to its
+          certified digest.
+
+          This is NOT a formatting nit. The independent certification record
+          binds to these exact bytes; if they move, the record certifies
+          something that no longer exists and A12 loses its basis.
+
+          Two causes, and they need opposite responses:
+
+            * A DELIBERATE change to a pinned file (a fix to attest.py,
+              walk_attestation.py, the issuer, the migration...). Correct
+              response: land it, then have a NON-AUTHOR squad re-run
+              `Nexus_power/certification/a11/run_certification.sh` and re-affirm
+              the record. Regenerating the manifest without re-certifying is
+              forging a certification.
+
+            * An ACCIDENTAL revert — most likely the shared-index hazard: after
+              any commit in this checkout the shared git index is stale, and the
+              next plain `git commit` re-applies it as a revert. Correct
+              response: restore the bytes; do NOT touch the manifest.
+
+          EOF
+            exit 1
+          fi
+          echo "A11: nine certified files unchanged"
+
+  # ── 2. The same check on Windows, because that is the only place the bug
+  #      this guards against can appear. ─────────────────────────────────────
+  #
+  #  cf70ae9 fixed `contracts/gate1_walk_attestation_v1.json`, which had NO
+  #  .gitattributes rule at all. `core.autocrlf` therefore decided its bytes per
+  #  platform: LF on Linux, CRLF on Windows. ONE COMMIT, TWO DIGESTS — and both
+  #  of the pins that existed before were "correct" on whichever machine
+  #  produced them.
+  #
+  #  A digest over a path with no eol rule is not a function of the commit. A
+  #  linux-only gate cannot see that, and would have reported green throughout
+  #  the entire lapse window above. This job is the one that makes the fix real.
+  snapshot-integrity-windows:
+    name: certified bytes unchanged (windows)
+    runs-on: windows-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: The same nine digests must hold on a Windows checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          tr -d '\r' < Nexus_power/certification/a11/A11_SNAPSHOT.sha256 > /tmp/snap.sha256
+          if ! sha256sum -c /tmp/snap.sha256; then
+            cat >&2 <<'EOF'
+
+          A11 CERTIFICATION LAPSED ON WINDOWS ONLY.
+
+          The digests hold on Linux and not here, which means a pinned path has
+          no `.gitattributes` end-of-line rule and `core.autocrlf` is choosing
+          its bytes. One commit then hashes two ways and the "certified bytes"
+          are a property of the machine, not of the commit.
+
+          Fix the RULE (`text eol=lf` for that path), not the digest.
+
+          EOF
+            exit 1
+          fi
+          echo "A11: nine certified files unchanged on Windows too"
+
+  # ── 3. Behaviour, not just bytes: the certifier's own reproducer. ─────────
+  reproducer:
+    name: independent reproducer (131 checks)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          pip install -e Nexus_power/sdk/nexus-sdk/
+          ( cd Nexus_power/platform/qe-central && pip install -r requirements.txt )
+          ( cd Nexus_power/engines/qe-explorer && pip install -r requirements.txt )
+          pip install pytest pytest-asyncio
+
+      # The reproducer mints attestations in the qe-central interpreter and
+      # verifies them in the qe-explorer one, because both services ship a
+      # top-level `app` package and collide in a single process.
+      #
+      # KNOWN-OPEN ACCOUNTING. It currently exits non-zero on exactly one
+      # failure: CERT-FINDING-2 (normalize_origin drops IPv6 brackets), which is
+      # open by design — the fix touches two PINNED files and therefore needs a
+      # re-certified follow-up, not a quiet patch. So this step asserts the
+      # failure set is EXACTLY the known-open one.
+      #
+      # When FINDING 2 is fixed, this step goes red until EXPECTED_FAILURES is
+      # dropped to 0. That is deliberate: closing a certification finding should
+      # require touching the gate that tracks it.
+      - name: Run the certifier's reproducer and account for every failure
+        run: |
+          set -uo pipefail
+          EXPECTED_FAILURES=1
+          EXPECTED_MARKER='CERT-FINDING-2'
+
+          set +e
+          out="$(bash Nexus_power/certification/a11/run_certification.sh 2>&1)"
+          rc=$?
+          set -e
+          echo "$out" | tail -40
+
+          # Exit 2 is the DRIFT gate, and it must never be how we learn about a
+          # change — job 1 exists to catch that first, with a better message.
+          if [ "$rc" -eq 2 ]; then
+            echo "::error::A11 reproducer refused to run: the certified bytes moved." >&2
+            exit 1
+          fi
+
+          failures="$(echo "$out" | sed -n 's/^FAILURES *: *//p' | tail -1)"
+          checks="$(echo "$out" | sed -n 's/^CHECKS RUN *: *//p' | tail -1)"
+          echo "checks run: ${checks:-?}   failures: ${failures:-?}   (expected ${EXPECTED_FAILURES})"
+
+          if [ -z "${failures:-}" ]; then
+            echo "::error::the reproducer produced no FAILURES line — it did not complete." >&2
+            exit 1
+          fi
+
+          if [ "$failures" -ne "$EXPECTED_FAILURES" ]; then
+            echo "::error::A11 reproducer: ${failures} failures, expected ${EXPECTED_FAILURES}." >&2
+            echo "More than expected = a NEW certification failure. Fewer = a finding was" >&2
+            echo "fixed; drop EXPECTED_FAILURES here and have a non-author squad re-affirm." >&2
+            exit 1
+          fi
+
+          if [ "$EXPECTED_FAILURES" -gt 0 ] && ! echo "$out" | grep -q "$EXPECTED_MARKER"; then
+            echo "::error::the single failure is NOT the known-open ${EXPECTED_MARKER}." >&2
+            echo "A different check is failing and is being masked by the expected count." >&2
+            exit 1
+          fi
+
+          echo "A11 reproducer: ${checks} checks, only the known-open finding failing"
+
+      # The author's suite. Already covered by the M0.5 security lane, repeated
+      # here so this gate is readable on its own: "A11 is certified and still
+      # behaves that way" should not require reading another workflow.
+      - name: A11 suites (red-team, API authorization, dispatch, contract)
+        run: |
+          cd Nexus_power/platform/qe-central
+          pytest tests/security/test_a11_attestation_redteam.py \
+                 tests/security/test_a11_api_authorization.py \
+                 tests/security/test_a11_dispatch_integration.py \
+                 tests/contract/test_gate1_walk_attestation_contract.py \
+                 -q --tb=short -p no:cacheprovider
+
+  # ── The single required check. ───────────────────────────────────────────
+  a11-gate:
+    name: A11 certification gate
+    runs-on: ubuntu-latest
+    needs: [snapshot-integrity, snapshot-integrity-windows, reproducer]
+    if: always()
+    steps:
+      - name: Fail the build if the certification is not intact
+        run: |
+          set -euo pipefail
+          linux='${{ needs.snapshot-integrity.result }}'
+          windows='${{ needs.snapshot-integrity-windows.result }}'
+          repro='${{ needs.reproducer.result }}'
+          echo "certified bytes (linux)   : $linux"
+          echo "certified bytes (windows) : $windows"
+          echo "independent reproducer    : $repro"
+          for r in "$linux" "$windows" "$repro"; do
+            if [ "$r" != "success" ]; then
+              echo "NO-GO - the A11 certification is not intact; A12 has no basis." >&2
+              exit 1
+            fi
+          done
+          echo "GO - A11 certification intact"
