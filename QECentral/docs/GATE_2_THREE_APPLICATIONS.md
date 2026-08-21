@@ -180,11 +180,43 @@ is attributable rather than inferred. A18's remaining half — a live
 consultation that answers it — needs qe-central, a fleet HMAC secret and a model
 credential, none of which exist on this machine.
 
-Two steps sit behind that one: a beneficiary step, and a signature step gated on
-five consent checkboxes plus a typed signature matching the legal name entered
-seven steps earlier. The application stores its state in `sessionStorage`, so
-that cross-step match is reachable by a crawl — it does not require one
-unbroken page session, which was an earlier and wrong assumption recorded here.
+#### The end of the funnel is REACHABLE — measured, not assumed
+
+Driving the remaining steps directly, with the application's own state seeded the
+way the earlier steps would have left it:
+
+```
+/apply/beneficiary/   "Continue to Signature"        NOT disabled   -> tier 2 walks it
+/apply/signature/     6 consent checkboxes + one field
+                      placeholder "Type your full legal name"
+                      6 checked + name typed -> submit ENABLED
+                      -> /apply/confirmation/  ->  H1 "Application Submitted"
+```
+
+So the far side exists and is arrivable. The application stores state in
+`sessionStorage`, so the cross-step name match does not require one unbroken page
+session — an earlier assumption recorded here, and wrong.
+
+#### Exactly two gaps now stand between the crawl and that page
+
+Both are in the same place, `_answer_to_unblock`, and both are about a disabled
+advance whose precondition the experiment cannot express:
+
+1. **A choice rendered as BUTTONS.** The payment method is two button-shaped
+   cards; the experiment handles checkboxes and radio groups. It is also the
+   tier-3 decision described above, so either layer could resolve it.
+2. **A "check ALL of these" consent block.** The signature step needs all six
+   boxes. The experiment is deliberately ONE attempt per blocked step — "if
+   answering one question does not clear the validation, the block is about
+   something else and a second guess would be a search rather than an
+   experiment." That reasoning is right for a *choose at least one* rule and
+   wrong for a *consent to every one* rule, and the two are indistinguishable
+   from markup: both are N optional-looking checkboxes gating a script
+   validator.
+
+Neither was attempted here. Both change how a crawl decides to act on controls it
+was not asked to act on, which is the part of this system that most deserves a
+deliberate design pass rather than a fix improvised at the end of a gate.
 
 ## §3 · The green-wash this gate produced, then caught
 
