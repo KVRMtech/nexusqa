@@ -182,6 +182,25 @@ unverified) and was caught by the person it was about, who checked the run. A
 false conclusion drawn from evidence that *resembles* evidence is the same defect
 as a check that fires on a subject that resembles the subject.
 
+**The author's own diagnosis is sharper than "a line was misread", and it is the
+part to keep.** They had *both* pieces of evidence in front of them — the echoed
+error and the crawl's assertion failure — and combined them into a causal story:
+*the app never started, therefore the crawl only saw the login page.* Tidy, uses
+all the evidence, wrong.
+
+> "It survived because I never checked it against the one line that
+> distinguishes it."
+
+That is the failure mode, and it is not carelessness — **a story that explains
+every piece of evidence you hold is not thereby true**, and the tidier it is, the
+less likely you are to go looking for the observation that separates it from a
+rival explanation. Two explanations fit that log equally well; exactly one line
+told them apart, and coherence is precisely what stopped anyone reading it.
+
+So the reading question has a third form: not only *is this evidence, or
+something resembling it?* but **what would this log look like if my explanation
+were wrong — and have I looked at that?**
+
 **A muted check and a blind check are indistinguishable in a log.** A CR
 verification heuristic phrased as "delta equals line count" fires on healthy
 files — an already-LF file, or a mixed-ending one — and a check that cries wolf
