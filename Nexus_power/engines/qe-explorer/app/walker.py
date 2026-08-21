@@ -1927,6 +1927,40 @@ class WalkerMixin:
                 outcome = str((action.after or {}).get("outcome") or "")
                 obs = await self._observe()
                 new_controls = build_inventory(obs.raw_controls, self._refuse_pack, url=obs.url)
+                # -- A14 . A DESTINATION REVEALED MID-WALK IS STILL A DESTINATION
+                #
+                # :meth:`_enqueue_link_hrefs` runs ONLY in the discovery pass,
+                # over the controls a state had when the frontier first opened
+                # it. An SPA that reveals its next route AFTER an in-page
+                # interaction is therefore invisible to it: discovery looked
+                # before the link existed, and the walk that made it exist does
+                # not enqueue. Observed on vkpower-life, whose quote page renders
+                # "Apply now" into the page only once the quote form has been
+                # submitted -- the entire second half of that funnel
+                # (#/apply -> #/review -> #/confirm) was unreachable for this
+                # reason alone, and the crawl ended re-clicking "See my quote"
+                # until the step stalled.
+                #
+                # THIS FOLLOWS AN HREF; IT NEVER CLICKS. Enqueuing a link's
+                # destination is a GET navigation to a route -- exactly what the
+                # discovery pass already does for a nav bar -- not an actuation.
+                # So the boundary model is untouched: a commit-shaped link like
+                # "Apply now" is still classified approvable, still recorded for
+                # the operator, and still never actuated without a grant. The
+                # filter below is the SAME danger/disabled/nameless filter
+                # :meth:`_discover` applies, so nothing the crawl refuses to look
+                # at becomes reachable through here.
+                #
+                # Deliberately BEFORE the advance test below: whether this click
+                # counted as an advance is a question about the WALK, and a route
+                # the application just revealed is a fact about the APPLICATION.
+                # A stalled step that revealed the way onward must still hand it
+                # to the frontier, which is precisely the vkpower-life case.
+                self._enqueue_link_hrefs(
+                    [c for c in new_controls
+                     if c.get("kind") == "link" and not c.get("disabled")
+                     and not c.get("danger") and str(c.get("name") or "").strip()],
+                    replace(item, url=obs.url or cur_url), cur_fp)
                 # ── M1.4 · THE CLASSIFIER THE WALK NEVER CALLED ─────────────
                 #
                 # ``build_action_record`` above runs ``classify_after``, which
