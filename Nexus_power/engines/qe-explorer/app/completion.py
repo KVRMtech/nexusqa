@@ -289,7 +289,40 @@ def adjudicate(stop_reason: str, evidence: CrawlEvidence) -> CompletionVerdict:
     #    diagnosis and every check above is a better answer to "what went wrong"
     #    when both are true: a crawl that read no page cannot be said to have
     #    failed to advance one.
-    if evidence.journeys_walked > 0 and evidence.total_crossings <= 0:
+    #
+    #    A2.2 — AND ONE STATE IS ONE STATE, which extends the same reasoning by
+    #    exactly one step rather than weakening the rule. Check 4 above already
+    #    says a crawl that read NO page cannot be said to have failed to advance
+    #    one. A crawl that observed exactly ONE state cannot have recorded a
+    #    transition either: a crossing is a relation BETWEEN two states, so with
+    #    one state there was never an observation that could have shown it.
+    #    Calling that a funnel that does not advance is a category error — it
+    #    reports the absence of an opportunity as the absence of a capability.
+    #
+    #    ``journey_zero_crossing`` names a specific remediation; its own
+    #    disposition note says "the remediation is a look at the funnel (an
+    #    unanswerable question, a gate needing credentials), not at the engine".
+    #    Measured on characterization fixture
+    #    ``09-questionnaire-20-samefingerprint``: a twenty-question questionnaire
+    #    crawled with ``max_states=1`` walked one journey, could not reach a
+    #    second state because the cap forbade it, and was reported as a funnel
+    #    that does not advance. Nothing is wrong with that funnel; the crawl was
+    #    configured so that nothing could be.
+    #
+    #    IT IS NOT A BUDGET EXEMPTION, and that distinction is the whole of it.
+    #    ``test_a_budget_stop_with_no_crossing_is_also_refused`` protects the real
+    #    production failure — "a crawl that burned its whole budget re-observing
+    #    one wizard step covered no journey ... it never errors, it runs out of
+    #    wall clock". That crawl saw MANY states and crossed none, so it still
+    #    refuses, exactly as before. The condition here is about how many states
+    #    were observed, not about why the crawl stopped.
+    #
+    #    THE ASYMMETRY IS UNTOUCHED: every check ABOVE still adjudicates a
+    #    one-state crawl, so this cannot smuggle through an inventory failure or
+    #    an unrecoverable resume.
+    if (evidence.journeys_walked > 0
+            and evidence.total_crossings <= 0
+            and evidence.total_states > 1):
         return CompletionVerdict(
             stop_reason=STOP_JOURNEY_ZERO_CROSSING,
             disposition=DISPOSITION_INCOMPLETE,

@@ -285,3 +285,83 @@ def test_a_resume_whose_predecessor_also_crossed_nothing_is_still_refused():
         resumed_crossings=plan.prior_crossings))
 
     assert verdict.stop_reason == completion.STOP_JOURNEY_ZERO_CROSSING
+
+
+# ─── A2.2 · one state cannot have shown a crossing ──────────────────────────
+
+def test_a_one_state_crawl_is_not_accused_of_a_dead_funnel():
+    """THE MISDIAGNOSIS THIS PREVENTS.
+
+    ``journey_zero_crossing`` names a specific remediation — its own disposition
+    note says "the remediation is a look at the funnel ... not at the engine".
+    That is a category error for a crawl that observed ONE state: a crossing is a
+    relation BETWEEN two states, so there was never an observation that could
+    have shown one. It reports the absence of an opportunity as the absence of a
+    capability.
+
+    Measured on characterization fixture ``09-questionnaire-20-samefingerprint``
+    — a twenty-question questionnaire crawled with ``max_states=1``. It walked
+    one journey, could not reach a second state because the cap forbade it, and
+    was reported as a funnel that does not advance.
+    """
+    verdict = adjudicate("budget_max_states",
+                         _ev(states=1, journeys_walked=1, journey_crossings=0))
+
+    assert verdict.stop_reason == "budget_max_states", (
+        f"a one-state crawl was re-labelled {verdict.stop_reason!r}, which sends "
+        f"the operator to look at a funnel the crawl never had room to try")
+    assert verdict.disposition == DISPOSITION_COMPLETED
+    assert not verdict.downgraded
+
+
+def test_two_states_and_no_crossing_is_still_refused():
+    """THE BOUNDARY IS EXACTLY ONE. With two states observed and no crossing
+    between them, the crawl DID have the opportunity and did not take it — which
+    is the finding the gate exists for."""
+    verdict = adjudicate("budget_max_states",
+                         _ev(states=2, journeys_walked=1, journey_crossings=0))
+
+    assert verdict.stop_reason == completion.STOP_JOURNEY_ZERO_CROSSING
+    assert verdict.disposition == DISPOSITION_INCOMPLETE
+    assert verdict.downgraded
+
+
+def test_it_is_not_a_budget_exemption():
+    """THE DISTINCTION THAT MAKES THIS SAFE, asserted rather than described.
+
+    ``test_a_budget_stop_with_no_crossing_is_also_refused`` above protects the
+    real production failure: "a crawl that burned its whole budget re-observing
+    one wizard step covered no journey ... it never errors, it runs out of wall
+    clock". That crawl saw MANY states and crossed none. Exempting budget stops
+    would have hidden it; this condition is about how many states were OBSERVED,
+    not about why the crawl stopped.
+    """
+    verdict = adjudicate("budget_wall_ms",
+                         _ev(states=40, journeys_walked=8, journey_crossings=0))
+
+    assert verdict.stop_reason == completion.STOP_JOURNEY_ZERO_CROSSING
+    assert verdict.disposition == DISPOSITION_INCOMPLETE
+
+
+def test_a_one_state_crawl_is_still_adjudicated_by_every_check_above_it():
+    """The new clause cannot smuggle anything through: the checks ABOVE the
+    zero-crossing rule still apply, so a one-state crawl whose inventory failed
+    is still FAILED."""
+    verdict = adjudicate("budget_max_states",
+                         _ev(states=1, journeys_walked=1, journey_crossings=0,
+                             inventory_failures=1))
+
+    assert verdict.stop_reason == completion.STOP_INVENTORY_FAILED
+    assert verdict.disposition != DISPOSITION_COMPLETED
+
+
+def test_a_resume_whose_states_are_inherited_is_judged_on_the_total():
+    """``total_states`` is the reading, not this run's count — the same doctrine
+    the resume tests above establish. A resume that adds one state to a
+    predecessor's forty had every opportunity to cross."""
+    verdict = adjudicate(STOP_COMPLETED,
+                         _ev(states=1, resumed=True, resumed_states=40,
+                             journeys_walked=2, journey_crossings=0,
+                             resumed_crossings=0))
+
+    assert verdict.stop_reason == completion.STOP_JOURNEY_ZERO_CROSSING
