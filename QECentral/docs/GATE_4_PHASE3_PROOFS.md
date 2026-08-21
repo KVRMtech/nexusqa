@@ -78,8 +78,15 @@ nothing. The manifest's most carefully-argued comment — that a 300 s cooldown
 protects a pod holding a live crawl — describes behaviour the cluster does not
 implement. The protection is real but comes from
 `behavior.scaleDown.stabilizationWindowSeconds: 300`, which IS honoured (the
-fleet stayed at 4 after the queue emptied). **Recommendation:** correct the
-comments, or set `minReplicaCount: 0` deliberately if scale-to-zero is wanted.
+fleet stayed at 4 after the queue emptied).
+
+**Actioned:** the manifest's comments are corrected in this branch to say the
+two fields are inert and to attribute the protection to the HPA `behavior`
+block. The **configuration is deliberately unchanged** — removing the fields, or
+setting `minReplicaCount: 0` to make them take effect, is a scale-to-zero
+behaviour decision belonging to the fleet owner, and the manifest's cold-start
+argument against scale-to-zero still stands. What was wrong was the
+explanation, not the configuration.
 
 **Boundaries.** The queue gauge is published by a stand-in exporter, not by
 `queue_drainer._publish_fleet_metrics`. The scaled container is a sleeping
@@ -205,6 +212,54 @@ scenario B — killed once the SERVER had recorded the bind, response in flight
 Scenario B is the one that matters. The irreversible effect had already landed
 and the crawler never learned that it did — the exact ambiguity a naive "retry
 what did not complete" resolves by binding a second policy. It did not.
+
+### What the resume actually did — and the half this does NOT prove
+
+The mechanism is directly observable in the resumed run's log, and it is worth
+stating precisely because it is easy to describe more flatteringly than the
+evidence supports:
+
+```
+qec.crawler.crossings_restored crawl_id=gate4-a35-crossing journalled=1 flows=1
+  - this run INHERITS the irreversible actions the killed run took;
+    it will not repeat them
+qec.inventory.built controls=4 ... dangerous=1
+qec.crawler.completed stop_reason=completed states=0 actions=0
+```
+
+So: the write-ahead record was **read back off disk and restored into the
+ledger** (`journalled=1 flows=1`), and the resumed crawl **did load the page and
+inventory the boundary control** (`controls=4 dangerous=1`). It then completed
+with **0 new states**, because the entry state was already in the restored
+visited set.
+
+In both scenarios the manifest ends holding exactly one crossing record, status
+`reserved` — it never becomes `crossed` or `refused`, and `refusals` is `[]`.
+
+**Therefore, stated exactly:**
+
+* **PROVEN** — the reservation survives a real `SIGKILL`; a resumed process
+  inherits it; and the application's non-deduplicating ledger shows no second
+  bind (delta 0 in both scenarios; total 1 in scenario B).
+* **NOT PROVEN HERE** — the explicit `CROSSING_REFUSED` path. The resumed crawl
+  never re-attempted the boundary, so nothing refused it. That path is covered
+  by `tests/test_resume_crossing_journal_m34.py`, where a scripted browser does
+  re-reach the boundary and is refused — but A35 did **not** reproduce that
+  live.
+
+A reviewer described this as "the crossing is refused on resume". It is not:
+**it is inherited as already-spent and never re-attempted.** The exactly-once
+outcome is the same and the durability claim stands, but the two are different
+mechanisms and only the first is evidenced here.
+
+**Operator-visible consequence.** In scenario A the boundary is spent in the
+journal but was never actuated at the application (`binds = 0`). The resumed
+crawl does not retry it, so the funnel stays honestly *uncrossed* and the
+journey is not completed. That is the correct trade — a missing outcome
+milestone is recoverable, a duplicate irreversible action is not — but it means
+a killed crawl can leave a boundary permanently unspendable for that crawl id,
+and an operator seeing "reserved, never crossed" should read it as *deliberate
+refusal to guess*, not as a stuck crawl.
 
 ---
 
