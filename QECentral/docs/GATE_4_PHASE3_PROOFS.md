@@ -116,12 +116,26 @@ someone else's work.
 
 ### Two further shapes
 
-**The wrong subject, rather than an absent one.** Gate 2 nearly recorded a
+**Resemblance accepted in place of the thing.** Gate 2 nearly recorded a
 boundary crossing on `summit-life-carrier` that never happened: the grant was
 spent on a navigation LINK that shared the commit button's label. The check
 fired, on the wrong object. "Would this pass if the subject were absent?" does
-not catch that one; the companion question does — **could this pass on something
+not catch that; the companion question does — **could this pass on something
 that merely resembles the subject?** Fixed by URL-scoping the grant.
+
+That question cuts in **both directions**, which is the part worth keeping. The
+same squad's other near-miss was its mirror image: a `verified` flag that would
+have gone green on a URL change *merely resembling* a confirmation. One accepts
+a resembling **subject**, the other a resembling **outcome**, and a check that
+only asks "was the subject absent?" misses both. So the pair is:
+
+* would this still pass if the subject were **absent**?
+* could this pass on something that merely **resembles** the subject — or the
+  result?
+
+The first catches vacuity. The second catches a check that fired confidently on
+the wrong thing, which is the harder one to see afterwards, because it leaves a
+green result with a plausible-looking cause attached.
 
 **A muted check and a blind check are indistinguishable in a log.** A CR
 verification heuristic phrased as "delta equals line count" fires on healthy
