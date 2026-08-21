@@ -567,3 +567,100 @@ def test_the_irreversible_ledger_is_declared_in_the_coverage_contract():
     from app.coverage import CoverageHost
     assert "_unblock_irreversible" in getattr(CoverageHost, "__annotations__", {}), (
         "the payload reads this attribute, so the Protocol must declare it")
+
+
+# ─── the experiment must run on the page the block was recorded on ──────────
+#
+# THE DEFECT THIS PINS, measured on a live deployment (vkpowerlife).
+#
+# `_discover`'s click-pass follows links to reveal content, and one of the
+# controls it clicks on the product-selection page is the site LOGO — an <a>
+# whose accessible name is "V VKPower Life Insurance".  Clicking it navigates
+# the live page to `/`.  `_walk_wizard` already knows this can happen and
+# re-establishes the entry step; the OUTER form path in discovery.py does not.
+#
+# So `_answer_to_unblock` was handed `controls` and a `url` describing the quote
+# page while the browser was sitting on the home page.  It picked the right
+# radio, called set_checked, and Playwright waited 30 SECONDS for a control that
+# does not exist on `/` before failing — after which the log announced "the
+# control did not take the answer", blaming an application that had never been
+# asked.  Measured: URLB/URLA/LIVE all `…sslip.io/`, `radios=0`, while the walk
+# believed it was on `…/life-insurance/quote/start/`.
+#
+# Both halves are defects: the wrong page, and the misattribution.
+
+class _NavPort(_Port):
+    """A port that knows WHERE it is — which the real browser port does, and
+    the stub above deliberately did not."""
+
+    def __init__(self, *, at: str, accepts: bool = True, goto_lands: bool = True):
+        super().__init__(accepts=accepts)
+        self._at = at
+        self._goto_lands = goto_lands
+        self.navigations: list[str] = []
+
+    async def current_url(self):
+        return self._at
+
+    async def goto(self, url):
+        self.navigations.append(url)
+        if self._goto_lands:
+            self._at = url
+        return SimpleNamespace(url=self._at, ok=self._goto_lands)
+
+
+@pytest.mark.asyncio
+async def test_the_experiment_refuses_to_act_on_a_page_the_browser_has_left():
+    """No click is attempted while the browser is somewhere else.  The 30-second
+    timeout was the cost of finding that out by trying."""
+    controls = _tobacco() + [_button("Continue", disabled=True)]
+    port = _NavPort(at="https://app/somewhere-else", goto_lands=False)
+    me = _crawler(port, unblocks=False, controls=controls, declined=["Yes", "No"])
+    out = await _run(me, controls, SimpleNamespace(unfilled_fields=["Yes", "No"]))
+
+    assert port.calls == [], (
+        "a control was clicked on a page that does not contain it; that is the "
+        "30s timeout the live crawl spent before blaming the application")
+    assert out is controls
+    assert me._unblock_irreversible == [], "nothing was committed, so no residue"
+
+
+@pytest.mark.asyncio
+async def test_a_drifted_page_is_re_established_and_the_experiment_then_runs():
+    """The fix that unblocks the funnel: go back to the page the block was
+    recorded on, then run the experiment there."""
+    controls = _tobacco() + [_button("Continue", disabled=True)]
+    port = _NavPort(at="https://app/somewhere-else")
+    me = _crawler(port, unblocks=True, controls=controls, declined=["Yes", "No"])
+    out = await _run(me, controls, SimpleNamespace(unfilled_fields=["Yes", "No"]))
+
+    assert port.navigations == ["https://app/x"], (
+        "the walk must return to the page whose block it is testing")
+    assert port.calls == [("No", True)], "and only then answer the question"
+    assert me._rule_ledger.as_list(), "the app confirmed it; a rule is owed"
+
+
+@pytest.mark.asyncio
+async def test_a_page_that_never_drifted_is_not_re_navigated():
+    """THE NO-REGRESSION TEST.  The overwhelmingly common case is that the
+    browser is already where the walk thinks it is, and that case must not
+    acquire a navigation it never needed."""
+    controls = _tobacco() + [_button("Continue", disabled=True)]
+    port = _NavPort(at="https://app/x")
+    me = _crawler(port, unblocks=True, controls=controls, declined=["Yes", "No"])
+    await _run(me, controls, SimpleNamespace(unfilled_fields=["Yes", "No"]))
+
+    assert port.navigations == [], "no drift, so no navigation"
+    assert port.calls == [("No", True)]
+
+
+@pytest.mark.asyncio
+async def test_a_port_that_cannot_say_where_it_is_still_runs_the_experiment():
+    """Backward compatibility with every existing caller and test double: a port
+    with no ``current_url`` cannot be checked, and an unverifiable page is not
+    the same claim as a wrong one."""
+    controls = _tobacco() + [_button("Continue", disabled=True)]
+    port = _Port()                      # no current_url / goto
+    me = _crawler(port, unblocks=True, controls=controls, declined=["Yes", "No"])
+    await _run(me, controls, SimpleNamespace(unfilled_fields=["Yes", "No"]))
+    assert port.calls == [("No", True)]

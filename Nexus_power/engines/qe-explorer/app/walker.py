@@ -270,6 +270,73 @@ def _question_label(control: "Mapping[str, Any]") -> str:
     return key.rsplit(":", 1)[-1] if key else ""
 
 
+async def _experiment_page_ready(
+    port: Any, url: str, pick_name: str, blocked_label: str,
+) -> bool:
+    """Is the browser on ``url``, and if not, can it be put back there?
+
+    Returns False when the experiment must NOT be attempted — and says so
+    without issuing a click, because finding this out by clicking is what
+    cost thirty seconds and produced a sentence that blamed the application.
+
+    A port that cannot report its own location is not checked: unverifiable
+    is a different claim from wrong, and every existing caller and test
+    double predates this guard.
+    """
+    reader = getattr(port, "current_url", None)
+    if reader is None:
+        return True
+    try:
+        live = str(await reader() or "")
+    except Exception:
+        return True                  # cannot verify; do not invent a failure
+    if not live or _same_page(live, url):
+        return True
+    goto = getattr(port, "goto", None)
+    if goto is None:
+        logger.warning(
+            "qec.wizard.unblock_wrong_page url=%s live=%s field=%r — the "
+            "browser is not on the page this block was recorded on and the "
+            "port cannot navigate; experiment declined",
+            url[:120], live[:120], pick_name[:40])
+        return False
+    try:
+        await goto(url)
+        live = str(await reader() or "")
+    except Exception as exc:
+        logger.warning(
+            "qec.wizard.unblock_page_unrecoverable url=%s field=%r err=%s",
+            url[:120], pick_name[:40], exc)
+        return False
+    if not _same_page(live, url):
+        logger.warning(
+            "qec.wizard.unblock_page_unrecoverable url=%s live=%s field=%r "
+            "advance=%r — could not return to the page the block was "
+            "recorded on; experiment declined rather than run elsewhere",
+            url[:120], live[:120], pick_name[:40], blocked_label[:40])
+        return False
+    logger.info(
+        "qec.wizard.unblock_page_restored url=%s field=%r — the walk had "
+        "been navigated away from the blocked page (a revealed link) and "
+        "returned to it before answering",
+        url[:120], pick_name[:40])
+    return True
+
+
+def _same_page(a: str, b: str) -> bool:
+    """Do these two URLs name the SAME page for the purpose of an experiment?
+
+    Fragment-insensitive and trailing-slash-insensitive, because neither changes
+    which document the browser has loaded, and a walk that re-navigated on
+    ``/quote`` vs ``/quote/`` would reload the page it was already on.
+    """
+    def _norm(u: str) -> str:
+        u = str(u or "").strip()
+        u = u.split("#", 1)[0]
+        return u[:-1] if u.endswith("/") and len(u) > 1 else u
+    return _norm(a) == _norm(b)
+
+
 def _least_asserting(members: "Sequence[dict[str, Any]]") -> "dict[str, Any]":
     """The option that INVENTS THE LEAST — "No", "None", "N/A" — else DOM order.
 
@@ -799,6 +866,30 @@ class WalkerMixin:
                 break
         pick_name = str(pick.get("name") or "").strip()
         pick_is_radio = pick.get("kind") == "radio"
+        # ── THE EXPERIMENT MUST RUN ON THE PAGE THE BLOCK WAS RECORDED ON ──
+        # WHAT THIS COST, measured on a live deployment rather than reasoned
+        # about. `_discover`'s click-pass follows links to reveal content, and on
+        # vkpowerlife's product-selection page one of them is the site LOGO — an
+        # <a> named "V VKPower Life Insurance" — so the live page ended up on
+        # `/` while `controls` and `url` still described `/life-insurance/quote/
+        # start/`. `_walk_wizard` already knows this can happen and re-establishes
+        # its entry step; this outer form path never did.
+        #
+        # The consequence was not a caught error. The right radio was picked, the
+        # click was issued against a page with no radios on it, Playwright waited
+        # its full 30-SECOND timeout, and the log then reported "the control did
+        # not take the answer" — blaming an application that had never been asked
+        # the question. A funnel that stops for that reason looks exactly like a
+        # funnel the app refused, which is the one confusion this experiment
+        # exists to remove.
+        #
+        # A RE-ESTABLISHED PAGE IS A FRESH ONE, and that is honest in the safe
+        # direction: the fills are gone, so a block that needed three answers
+        # will not clear from this one and no rule is recorded. The experiment
+        # under-claims rather than inventing a gate the app never confirmed.
+        if not await _experiment_page_ready(self._port, url, pick_name,
+                                            blocked_label):
+            return controls
         try:
             observation = await self._port.set_checked(pick, True)
             if observation.intent_met is False:
