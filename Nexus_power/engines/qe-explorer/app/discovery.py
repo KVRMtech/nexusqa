@@ -711,11 +711,51 @@ class DiscoveryMixin:
                     snapshot_controls,
                     list(await self._answer_to_unblock(
                         snapshot_controls, blocked_label, obs.url or "", fill)))
-        if self._wizard_enabled and is_form and fill is not None and (fill.filled or fill.has_unanswered_decisions):
+        # A2.2 — A STEP WHOSE ONLY ANSWER IS A BUTTON IS STILL A STEP.
+        #
+        # ``is_form`` requires a FILLABLE control, so a page that asks its question
+        # with buttons alone (a "Get Quote" funnel, a Yes/No triage step, most
+        # SPA wizards) was never a form, never had a ``fill``, and could never open
+        # this gate. It fell to the ``not is_form`` fork branch below and was
+        # recorded as a one-step decision — so an application the crawl DID actuate
+        # end to end reported ``forms_found=0``, ``flows=0``, ``journeys_completed=0``.
+        # That is the A22 blocker, and it is not a property of the application.
+        #
+        # WHY OPENING THE GATE IS SAFE, stated as a property of the code and not as
+        # an intention. ``_walk_wizard`` never took ``fill`` — it picks its advance
+        # control out of ``controls`` and every gate that protects a click lives
+        # INSIDE it: the danger gate, the approved-submit-name exclusion, Tier 1's
+        # per-control commit veto, Tier 2's destination-only rule, the commit filter
+        # applied before Tier 3 sees a candidate, and the fail-closed advance rule
+        # (a real observed effect AND a new unseen state). Nothing here weakens any
+        # of them; this only stops refusing to ASK.
+        #
+        # AND IT CANNOT LOSE A RECORDING. ``walked`` is what suppresses the two
+        # fallback branches below. If the walk declines — ``_pick_advance`` returns
+        # no control, which is what a hub full of links does — ``walked`` stays
+        # False and the ``not is_form`` fork branch records exactly what it recorded
+        # before. The change is therefore strictly additive: it can turn "no journey"
+        # into "a walked journey", never the reverse.
+        #
+        # Scoped to pages holding a BUTTON. A page whose only controls are links is
+        # discovery's job (``_enqueue_link_hrefs``), and opening the gate for it
+        # would consult the advance tiers — including the Tier-3 oracle — on every
+        # hub in the crawl, which is a cost decision nobody asked for.
+        bare_button_step = (
+            not is_form
+            and any(c.get("kind") == "button" for c in snapshot_controls)
+        )
+        if self._wizard_enabled and (
+            (is_form and fill is not None
+             and (fill.filled or fill.has_unanswered_decisions))
+            or bare_button_step
+        ):
             entry_pick = await self._pick_advance(
                 snapshot_controls, obs.url, obs.title, fingerprint)
-            logger.info("qec.wizard.gate_open url=%s filled=%d pick=%r",
-                        obs.url, fill.filled,
+            logger.info("qec.wizard.gate_open url=%s filled=%s bare_button=%s pick=%r",
+                        obs.url,
+                        fill.filled if fill is not None else "n/a",
+                        bare_button_step,
                         str((entry_pick.control or {}).get("name") or "")[:40])
             walked = await self._walk_wizard(
                 item=item, url=obs.url, title=obs.title, controls=snapshot_controls,

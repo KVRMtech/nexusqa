@@ -99,15 +99,40 @@ def _load_fixture_app():
 async def _stub_advance_oracle(candidates: Sequence[Mapping[str, Any]],
                                page_title: str, page_url: str) -> dict[str, Any]:
     """The deterministic stub every gate here uses — a gate that needs a live
-    model is a gate that fails on network weather."""
-    forward = [c for c in candidates
-               if any(f in str(c.get("name") or "").lower() for f in _FORWARD)]
-    if not forward:
-        return {}
-    buttons = [c for c in forward if str(c.get("kind") or "").lower() == "button"]
-    pick = (buttons or forward)[0]
-    return {"name": pick.get("name"), "kind": pick.get("kind"),
-            "reason": "deterministic stub: forward-shaped, button preferred"}
+    model is a gate that fails on network weather.
+
+    IT MUST SPEAK THE ORACLE'S CONTRACT, AND IT DID NOT. This returned
+    ``{name, kind, reason}``. The walker reads ``status`` and ``index``
+    (``_pick_advance_e2e``, tier 3) and classifies everything else as
+    "a decision NOT made" — so this stub could never return a pick, on any page,
+    with any label. Every consultation it answered was scored
+    ``oracle=unavailable``.
+
+    That mattered more than a stub bug normally would, because this file carries
+    A22's stop condition. The strict xfail was attributed wholly to the
+    bare-button wizard gate; in fact a SECOND, independent cause sat inside the
+    test itself, and it would have kept the funnel unwalked after the product
+    gate was fixed. Two causes behind one xfail is exactly what the companion
+    blocker test exists to prevent, and it could not see this one because it pins
+    the crawl's OUTPUT, not the harness's own contract.
+
+    The shape below is the production oracle's, verbatim (``app/main.py``
+    ``_make_advance_oracle``): ``{"status": "picked", "index": <into candidates>,
+    "signature": ...}``, or ``{"status": "none", "index": None}``. ``index`` is
+    an offset into the ``candidates`` sequence this was handed — the walker
+    indexes straight back into it.
+    """
+    names = [str(c.get("name") or "").lower() for c in candidates]
+    # Button before link, mirroring the other gates' stubs: an anchor and a
+    # button can both read "forward" and the button is the funnel's own control.
+    for want_button in (True, False):
+        for index, (name, control) in enumerate(zip(names, candidates)):
+            if (str(control.get("kind") or "").lower() == "button") is not want_button:
+                continue
+            if any(f in name for f in _FORWARD):
+                return {"status": "picked", "index": index,
+                        "signature": "a22-forward"}
+    return {"status": "none", "index": None, "signature": "a22-forward"}
 
 
 def _walk_authorization(target_url: str) -> Any:
@@ -224,21 +249,36 @@ def _diagnose(cov: Mapping[str, Any]) -> str:
             f"\n  boundaries   : {cov.get('boundaries_crossed')}")
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="GATE 3 / A22 BLOCKER — the crawler ACTUATES this funnel but records "
-           "no journey for it: an application whose only control is a bare "
-           "<button> never passes discovery's wizard gate. Measured, see "
-           "test_the_blocker_is_exactly_the_bare_button_wizard_gate. Strict, so "
-           "the day that gap closes this XPASSes and A22 can proceed.",
-)
 def test_the_crawl_walked_the_funnel_to_its_result_page(crawled) -> None:
     """A journey is only a journey if the walk got to the end of it.
 
-    THIS IS THE ONE A22 NEEDS AND CANNOT HAVE TODAY. It is left in, strict-xfail,
-    because deleting it would delete the milestone's stop condition; the
-    companion test below pins the SHAPE of the gap so the xfail cannot quietly
-    start covering a different failure.
+    WAS THE A22 STOP CONDITION; IT NOW HOLDS. This carried
+    ``@pytest.mark.xfail(strict=True)`` from Gate 3, worded "the day that gap
+    closes this XPASSes and A22 can proceed". A2.2 closed it and it XPASSed, so
+    the marker is gone and this is an ordinary gate again — red if the funnel
+    ever stops being walked.
+
+    Three independent causes had to be removed, and only two of them were on
+    record:
+
+      1. **The bare-button wizard gate** (``discovery.py``). ``is_form`` requires
+         a FILLABLE control, so an application whose only control is a
+         ``<button>`` never reached the walk at all. Named in M2.1's
+         "architectural concerns discovered" and left as somebody else's gap.
+      2. **The outcome page dropped from the account**
+         (``state_identity.note_state_signals``). ``if not signals and not
+         controls: return`` discards a funnel's result page by construction —
+         it has neither. Found by Gate 3.
+      3. **This file's own stub oracle** — NOT previously on record. It returned
+         ``{name, kind, reason}`` while the walker reads ``status``/``index``,
+         so tier 3 scored every consultation ``oracle=unavailable`` and could
+         never pick. Fixing (1) alone would have left the funnel unwalked and
+         the cause would have looked like (1) again.
+
+    The walk is now earned by tier 3, which is the point of the fixture:
+    ``qec.oracle.picked control='Get Quote' — TIER 3 CHOSE A CONTROL no label
+    rule could reach``. Neither tier-1's regex nor tier-2's destination rule
+    matches "Get Quote"; a label-convention crawler cannot walk this funnel.
     """
     cov = crawled["coverage"]
     assert cov.get("states"), "the crawl observed no states" + _diagnose(cov)
@@ -251,8 +291,8 @@ def test_the_crawl_walked_the_funnel_to_its_result_page(crawled) -> None:
         "an observation of the application" + _diagnose(cov))
 
 
-def test_the_blocker_is_exactly_the_bare_button_wizard_gate(crawled) -> None:
-    """PIN THE BLOCKER, so the xfail above cannot drift onto a different cause.
+def test_the_bare_button_funnel_is_walked_and_its_outcome_indexed(crawled) -> None:
+    """THE A22 BLOCKER, KEPT AS A REGRESSION GATE NOW THAT IT IS CLOSED.
 
     What the evidence says, and the two halves do not agree:
 
@@ -304,12 +344,20 @@ def test_the_blocker_is_exactly_the_bare_button_wizard_gate(crawled) -> None:
         f"the server never served the result page, so the click did not advance "
         f"the funnel and the blocker below is a different one: {sorted(served)}")
 
-    # ── LAYER 1 · THE WIZARD GATE, so no journey is recorded ────────────────
+    # ── LAYER 1 · THE WIZARD GATE NOW OPENS ON A BARE-BUTTON STEP ───────────
+    #
+    # ``forms_found`` stays 0 and that is CORRECT, not a leftover: this page has
+    # no fillable control, so it is genuinely not a form and ``is_form`` is right
+    # to say so. What changed is that not-a-form no longer means not-walked. The
+    # assertion that matters is therefore the flow, not the form count.
     assert int(cov.get("forms_found") or 0) == 0, (
-        f"forms_found={cov.get('forms_found')} — the wizard gate is no longer "
-        f"declining, so the xfail above is now covering a DIFFERENT failure. "
-        f"Re-derive the blocker before trusting it.")
-    assert not cov.get("flows"), "a flow is now recorded — re-derive the blocker"
+        f"forms_found={cov.get('forms_found')} — this application has no input "
+        f"of any kind, so a non-zero count means the fixture changed shape and "
+        f"this gate is no longer measuring the bare-button path")
+    assert cov.get("flows"), (
+        "the funnel was not walked — the bare-button wizard gate has regressed "
+        "and an application the crawl ACTUATES is again recording no journey"
+        + _diagnose(cov))
 
     # ── LAYER 2 · AND THE OUTCOME PAGE IS DROPPED FROM THE ACCOUNT ──────────
     #
@@ -347,13 +395,25 @@ def test_the_blocker_is_exactly_the_bare_button_wizard_gate(crawled) -> None:
         f"displayed value, so this pin is about something else now: {outcomes}")
 
     covered = {str(s.get("location") or "") for s in (cov.get("states") or [])}
-    assert not any("result" in loc for loc in covered), (
-        f"the result page now REACHES coverage.states ({sorted(covered)}) — the "
-        f"drop has been fixed and this pin should be removed along with the "
-        f"xfail above")
-    assert len(cov.get("states") or []) == 1, (
-        f"the crawl now records {len(cov.get('states') or [])} coverage states; "
-        f"the blocker was one entry state and nothing else")
+    assert any("result" in loc for loc in covered), (
+        f"the result page is missing from coverage.states again ({sorted(covered)}) "
+        f"— the fold reads coverage.states, so a generated spec has nothing to "
+        f"assert the premium on and A22's chain is broken at the same place it "
+        f"was before")
+
+    # AND THE VALUES DID NOT FOLLOW IT INTO THE SHAPES CHANNEL. Admitting the
+    # state was deliberately not the same as importing its values:
+    # note_state_signals is value-free by construction, and the premium travels
+    # on the FLOW (flow_ledger.build_flow(outcome_values=...)) where a reader
+    # expects an outcome to live. If a text ever appears in a state's signals,
+    # the boundary that keeps answers out of the catalogue has been breached.
+    premium = crawled["fixture_app"].BASELINE_PREMIUM
+    for state in (cov.get("states") or []):
+        signal_blob = json.dumps(state.get("form_snapshot_signals") or {})
+        assert premium not in signal_blob, (
+            f"the outcome VALUE {premium!r} reached coverage.states signals for "
+            f"{state.get('location')!r}. Admitting the outcome state must never "
+            f"carry its values across; that channel is shapes only.")
 
 
 def test_the_backend_really_answered_the_crawl(crawled) -> None:

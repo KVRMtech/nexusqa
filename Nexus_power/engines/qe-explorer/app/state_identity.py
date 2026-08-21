@@ -873,6 +873,7 @@ class StateRecorder:
         self, fingerprint: str, url: str, signals: Mapping[str, Any],
         controls: Sequence[Mapping[str, Any]] = (),
         network_calls: Sequence[Mapping[str, Any]] = (),
+        displayed_values: Sequence[Mapping[str, Any]] = (),
     ) -> None:
         """Remember WHAT THIS STATE ASKED, keyed by the fingerprint the journey
         graph uses.
@@ -921,7 +922,27 @@ class StateRecorder:
         # A page that asks nothing can still REFUSE everything, and the page that
         # most needed the danger ratio — a hub whose only controls are links —
         # has no form fields at all. Recorded when it has questions OR controls.
-        if not signals and not controls:
+        #
+        # A2.2 — OR OUTCOMES. A funnel's RESULT page is by construction a page with
+        # neither: nothing left to ask, nothing left to press, just the number the
+        # application computed. Under the two-term rule it was dropped from the
+        # index — so the one page a generated specification most needs to assert on
+        # was the one page the account was built to discard. Measured on the M2.4
+        # quote funnel: the walk reached /result.html, the manifest recorded it
+        # twice carrying `Your monthly premium`, and `coverage.states` came back
+        # EMPTY. That is the second half of the A22 blocker.
+        #
+        # WHAT IS ADMITTED IS THE STATE, NOT THE VALUES. This function is
+        # value-free by construction (see above) and stays that way: the presence
+        # of outcome values is used only as EVIDENCE THAT THIS PAGE IS WORTH
+        # INDEXING. Nothing from `displayed_values` is stored here — no label, no
+        # text, no type. The values themselves already cross on the FLOW, where
+        # `flow_ledger.build_flow(outcome_values=...)` has always carried them and
+        # where a reader expects an outcome to live. Admitting the state gives the
+        # fold a node to hang that flow's terminal step on; importing the values
+        # here would put an answer in the shapes channel, which is the one thing
+        # this boundary exists to prevent.
+        if not signals and not controls and not displayed_values:
             return
         states = self._c._states
         prev = states.get(fingerprint)
@@ -1047,7 +1068,7 @@ class StateRecorder:
             ordered_actions.append(_action_to_dict(action))
 
         self.note_state_signals(fingerprint, url, form_signals, controls,
-                                network_calls)
+                                network_calls, displayed_values)
         record = emit.PageStateRecord(
             sequence_index=seq,
             location=url[:2000],
