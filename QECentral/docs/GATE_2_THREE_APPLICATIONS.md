@@ -178,6 +178,61 @@ re-look zero times; the race did not occur, so the improvement was variance.
 Engagement is logged separately from the save precisely so the next occurrence
 is attributable rather than inferred.
 
+#### The completion terminal is PROVISIONAL, and the route claim is not
+
+Every vkpower run here — mine and the other session's alike — reports
+`deepest_flow_terminal="loop"`, `deepest_flow_proven_steps=0`,
+`deepest_flow_capped=true`. A commit on another branch
+(`e1200b7`, `phase4/entry-gate-remediation`) fixes a defect with exactly that
+signature: a "Get Quote"-shaped control that both PERSISTS and NAVIGATES is
+actuated as non-advancing persistence, so the walk crosses a navigation
+believing it stood still and two states collapse onto one fingerprint.
+
+My own tier-3 log shows the walk leaving `/apply/payment/` for
+`/life-insurance/quote/start/` on a pick of "Get a Quote" — the same shape. **So
+the completion terminal reported here is provisional.**
+
+It cannot be cleared by re-running. `git branch -a --contains e1200b7` returns
+only `phase4/entry-gate-remediation`; it diverged from this branch at `cfab4ed`
+and has never landed on it, so no run on this branch can contain it until that
+branch merges.
+
+What is separable and does stand: the ROUTE claim. The walk reaches
+`/apply/payment/` and stops at `disabled={!method}`. That is a statement about
+where it got to, and the collapse-loop happens after it. Depth 12 is a floor
+either way.
+
+#### The Member Number is not a gate on this application
+
+Another session measured that seeding a real member number took their run four
+routes deeper and concluded the member number was the blocker. The application's
+own source does not support that, and it is worth stating because the reporting
+defect underneath it is real and the causal claim is not:
+
+```
+handleContinue:  const mn = memberNumber.trim() || '25000001';
+                 const profile = found || getDefaultProfile(mn);
+                 ... router.push('/apply/personal-info/')      // unconditional
+
+the control:     <button type="submit">Continue to Personal Information</button>
+                 // no `disabled`, and rendered OUTSIDE both {searched && …} blocks
+```
+
+Any value, or none, advances; the button exists before any lookup is performed.
+Empirically the runs here record `Member Number` as an INFERRED (synthesized)
+field and still reach all four of those routes plus `/apply/payment/`.
+
+A mechanism that would explain their result without the value mattering: the
+field is `useState(state.memberNumber || '')`, so a member number in the store
+PRE-FILLS it and changes what the fill engine does on that step — a fill-path
+difference, not a business-rule gate.
+
+**Their reporting defect stands entirely, and is the valuable half.**
+`crawler.py:575` defines needing-a-seed as "no seed AND no safe default", so a
+synthesized value that satisfies the widget but not the business rule is
+indistinguishable from a good fill BY CONSTRUCTION. That is true whether or not
+this particular field gates anything.
+
 #### Two live runs, and a collision I caused
 
 A second session ran the same live journey at 08:59 and committed its bundle to
