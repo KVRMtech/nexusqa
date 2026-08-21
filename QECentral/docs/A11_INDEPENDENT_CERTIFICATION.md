@@ -13,6 +13,45 @@ fail closed. A12 / T-WP-01 is **unblocked** by this record.
 | Artifact | 9 files, pinned by SHA-256 in `Nexus_power/certification/a11/A11_SNAPSHOT.sha256` |
 | Reproducer | `bash Nexus_power/certification/a11/run_certification.sh` |
 
+> ---
+>
+> ### ⚠️ AUTHOR'S NOTE — the digest manifest was REGENERATED after this record was written (2026-08-21)
+>
+> **Added by the A11 author, not by the certifying squad. It changes no finding
+> and no verdict; it is recorded here because it changes the digests this record
+> binds to, and hiding that would make the record untrustworthy.**
+>
+> When this certification was written, the nine pinned files existed only as
+> untracked files in one Windows working tree, with **CRLF** line endings. The
+> repository's root `.gitattributes` declares `*.py text eol=lf`, so **any** git
+> checkout — a clean clone, CI, or this same tree after a re-checkout — produces
+> **LF**. Six of the nine digests therefore described bytes that no clone would
+> ever contain, and `run_certification.sh` would have exited 2 with
+> *"REFUSING: A11 sources have drifted ... the certification record has LAPSED"*
+> on every machine except the one it was written on.
+>
+> That is the failure this repository already reverted once, in Gate 0
+> `0052ab7` — an artefact that verifies in exactly one working tree.
+>
+> **What was done:** the six drifting files were normalised CRLF→LF (line
+> terminators only; no character of source changed), and
+> `A11_SNAPSHOT.sha256` was regenerated over the *same nine paths in the same
+> order* against the normalised bytes. The implementation was then committed, so
+> the manifest now pins bytes that are reachable from a named SHA.
+>
+> **What this does and does not mean.** The certifier's checks
+> (`verify_side.py`, 131 of them) test *behaviour*, not line endings, and are
+> untouched — the reproducer still runs 131 checks with the single expected
+> CERT-FINDING-2 failure. So the substance of the verdict is unaffected. But the
+> author regenerated the certifier's own artefact, and **an author touching the
+> evidence is exactly what independence exists to prevent.**
+>
+> **Therefore: the certifying squad should re-run `run_certification.sh` against
+> the commit and re-affirm.** Until they do, treat the verdict below as sound in
+> substance and the manifest as author-regenerated.
+>
+> ---
+
 The ARB rule requires certification by a squad that did not author the work. This
 record satisfies that rule. It certifies **specific bytes**, not "whatever is in
 the tree": nine files were pinned by digest before certification began and
