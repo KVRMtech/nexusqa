@@ -629,6 +629,34 @@ every application, so the null A19 describes cannot appear without failing CI.
 
 ---
 
+## §6b · The Phase-1 exit criteria the brief names, with evidence
+
+The brief lists eighteen criteria and names ten. Those ten, each with where to
+check it rather than an assertion to believe:
+
+| # | Criterion | Status | Evidence |
+|---|---|---|---|
+| 1 | vkpowerlife completes autonomously | **NO** | depth 12 of 15; `evidence/gate2/vkpower-life-LIVE/` |
+| 2 | acme-life completes autonomously | **YES** | 2 crossings, confirmation `rung=dialog`; `evidence/gate2/acme-life/` |
+| 3 | summit-life-carrier completes autonomously | **NO** | logs in, crosses nothing; `evidence/gate2/summit-life-carrier/` |
+| 4 | Docker execution lane operational | **YES** | all three built from their own Dockerfile and crawled over HTTP |
+| 5 | Proving-ground CI implemented | **YES** | `gate2-journeys` in `browser-harness.yml`; 24 assertions |
+| 6 | Branch protection enforced | **NO** | registered in `gate0_require_ci_lanes.sh`; refuses to arm until the job reports once |
+| 7 | Tier-3 oracle consulted in a live execution | **PARTIAL** | the qualifying decision is identified and reproducible; `consults=0` live |
+| 8 | Deep-flow telemetry emits accurate non-null values | **YES** | all four fields consumed; 3 regression tests |
+| 9 | Every criterion supported by recorded evidence | **YES** | every claim here links to a bundle or a test |
+| 10 | Every result independently reproduced by a non-author squad | **NO** | not started for any milestone |
+
+Four of ten. Criteria 6, 7 and 10 are not blocked on effort: 6 needs the job to
+report once in CI, which needs a push this machine is denied; 7 needs a model
+credential; 10 needs a squad that is not me. Criterion 1 and 3 are blocked on the
+two design decisions in §2.
+
+The remaining eight criteria are not enumerated in the brief this gate was given,
+so they are not scored here rather than guessed at.
+
+---
+
 ## §7 · Reproducing everything above
 
 ```bash
