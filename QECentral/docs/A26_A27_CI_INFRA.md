@@ -635,7 +635,39 @@ crawl's evidence is silently never published — this module's own defect, weari
 the costume of a working local install. `is_object_backed()` is now fail-closed
 in that one direction, with both directions pinned by tests.
 
-### Still red, and not this milestone's
+### Final CI state
+
+Run `32487779642`, commit `c1fbed0`, after the fleet lane corrected the purge DSN:
+
+| measure | before | after |
+|---|---|---|
+| `permission denied for table tenants` | 294 | **0** |
+| `relation "tenants" does not exist` | 490 | **0** |
+| errors/failures in `test_t_fl_03` | 16 | **0** |
+| errors/failures in the A27.2 canary | 0 | **0** |
+| Phase 6 overall | 98 errors | **1 failure**, 2575 passed |
+
+Every A26/A27 step is green, and the dedicated T-FL-03 step reports *16 passed in
+7.35s*. The tests are no longer casualties of anything.
+
+The single remaining Phase 6 failure is **not** an infrastructure error and is not
+this milestone's:
+
+```
+test_t_fl_08…::test_n_concurrent_crawls_multi_tenant_overlapping_domains
+EGRESS FENCE VIOLATION: a crawl for tfl08_t0 was fenced with another
+tenant's destination(s) ['tfl08_t2…'] — concurrent dispatch clobbered a live fence
+```
+
+A cross-tenant assertion, on a test executing against a real database for the
+first time. M3.3 recorded a config-only cross-tenant egress leak via a shared
+allowlist file as fixed; this is either that fix being incomplete under
+concurrency or a regression on it. Flagged to the fleet lane with the argument
+that a green rerun would be evidence the race did not fire, not evidence the
+isolation holds — an intermittent cross-tenant leak is worse than a deterministic
+one, because it means isolation depends on timing.
+
+### The earlier red, and not this milestone's
 
 Phase 6 (the whole suite against live infrastructure) fails with 98
 `permission denied for table tenants` errors. `qec_db_bootstrap.sql:103` grants
