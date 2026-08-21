@@ -219,6 +219,12 @@ def normalize_origin(url: str) -> str:
         return ""
     if not scheme or not host:
         return ""
+    if "[" in host or "]" in host:
+        # A bracket SURVIVING the parse means the authority was malformed and
+        # urlsplit split it somewhere we did not intend: 'https://[::1@evil]/x'
+        # is read as userinfo '[::1' + host 'evil]'. Re-bracketing would emit an
+        # unbalanced origin, so refuse instead. NEW-CERT-FINDING-4.
+        return ""
     if ":" in host:             # IPv6 literal - urlsplit stripped its brackets
         host = f"[{host}]"
     if port and not ((scheme == "https" and port == 443)

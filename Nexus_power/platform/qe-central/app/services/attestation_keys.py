@@ -38,24 +38,52 @@ trade-off, not a fiction.
 
 THE ACTUAL GROUNDS FOR THE ENVELOPE (KEK re-wrap) PATTERN
 =========================================================
-The choice may well still be correct.  It is re-taken here on grounds that are
-true, and each is a cost a KMS-resident key would impose:
+The choice may well still be correct, but it is a WEAKER case than the false one
+it replaces, and stating it at full strength would repeat the original error in
+a new costume.  Corrected again after re-certification (NEW-CERT-FINDING-3):
+the first draft of this section claimed a latency and an availability advantage
+that this system, AS BUILT, does not have.  Measured against the code:
 
-  * LATENCY — KMS-native signing puts a KMS round-trip on every signature,
-    where the envelope pattern pays one unseal per signer and signs locally.
-  * AVAILABILITY COUPLING — issuance would fail whenever ``asymmetricSign`` is
-    unavailable.  Today a KMS outage blocks a fresh unseal; it does not block a
-    signer that is already live.
-  * PROVISIONING AND IAM — ``ASYMMETRIC_SIGN`` is a different key PURPOSE from
-    the ``ENCRYPT_DECRYPT`` KEK this platform already provisions (M0.5), so it
-    needs a new key, new IAM bindings and new rotation handling rather than
-    reusing what exists.
+  * PROVISIONING AND IAM — **this ground stands.** ``ASYMMETRIC_SIGN`` is a
+    different key PURPOSE from the ``ENCRYPT_DECRYPT`` KEK this platform already
+    provisions (M0.5), and a key's purpose is fixed at creation.  So it needs a
+    new key, new IAM bindings and new rotation handling rather than reusing what
+    exists.  That is real work, and it is the honest reason we have not done it.
 
-None of these are impossibilities, and none of them are settled forever: this is
-an accepted trade, revisitable on evidence.  What we use instead is the ENVELOPE
-(KEK re-wrap) pattern established in M0.5, which is also what
-``services/signing.py`` was written for ("the envelope sealing of the private
-key lives in the persistence layer").
+  * LATENCY — **real but modest, and much smaller than first written.** The
+    claim was "a KMS round-trip on every signature, versus one unseal per
+    signer".  That is only true of a signer amortised across issuances, and ours
+    is not: ``active_signer`` is opened inside ``issue_for_crawl`` and closed
+    when that block exits (``attestation_issuer.py``).  So the envelope already
+    pays ONE KMS ``decrypt`` per issuance; it then signs the proof AND the
+    revocation list locally.  KMS-native would be TWO ``asymmetricSign``
+    round-trips for the same issuance.  The true figure is roughly a doubling of
+    KMS calls on the issuance path — not the order-of-magnitude the first
+    version implied.
+
+  * AVAILABILITY COUPLING — **this ground is FALSE and is withdrawn.** It said a
+    KMS outage blocks a fresh unseal but not "a signer that is already live".
+    No signer is ever already live: the scope is one issuance.  ``_unseal``
+    raises ``KeyCustodyError`` on KMS failure and ``active_signer`` fails closed
+    when ``envelope is None``, so **issuance availability is already fully
+    coupled to KMS today.**  Moving to ``asymmetricSign`` would change WHICH KMS
+    method issuance depends on, not WHETHER it depends on KMS.
+
+Note what the second and third points cost us, because it is the same fact twice:
+the signer's one-issuance scope is a deliberate SECURITY property — it bounds the
+window in which a plaintext key is reachable to one request rather than one
+process lifetime — and it is exactly that property that destroys the latency and
+availability arguments for the envelope.  The custody design and the performance
+argument for it pull in opposite directions, and only one of them is load-bearing.
+
+So the honest summary is: we keep the envelope pattern because ``ASYMMETRIC_SIGN``
+provisioning has not been done, at a cost of roughly halving the KMS calls per
+issuance and a plaintext key in heap for the duration of one request.  That is an
+accepted trade, revisitable on evidence, and a thinner justification than this
+file has ever previously admitted to.  What we use is the ENVELOPE (KEK re-wrap)
+pattern established in M0.5, which is also what ``services/signing.py`` was
+written for ("the envelope sealing of the private key lives in the persistence
+layer").
 
 THE HONEST SECURITY STATEMENT — no undocumented assumptions
 ===========================================================
@@ -80,9 +108,9 @@ What it does NOT give, stated plainly:
 That residual risk is bounded by rotation (below) and detected by KMS audit
 logs.  It is a documented, accepted assumption — not a gap.  It is NOT, as this
 file previously claimed, the unavoidable price of keeping the audited Ed25519
-verifier: ``EC_SIGN_ED25519`` would remove it without touching that verifier, at
-the latency, availability and provisioning costs listed above.  The risk is
-accepted on those grounds and can be revisited on them.
+verifier: ``EC_SIGN_ED25519`` would remove it without touching that verifier, and
+the only ground that survives scrutiny for not doing so is the provisioning and
+IAM work above.  The risk is accepted on that ground and can be revisited on it.
 
 THE PRIVATE KEY NEVER CROSSES A MODULE BOUNDARY
 ===============================================

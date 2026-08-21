@@ -276,6 +276,15 @@ IDEMPOTENCE_VECTORS = [
     ("https://::1",                      ""),
     ("not a url",                        ""),
     ("",                                 ""),
+    # NEW-CERT-FINDING-4 — a bracket that SURVIVES the parse means urlsplit
+    # split the authority somewhere we did not intend: it reads '[::1' as
+    # userinfo and 'evil]' as the host. The host then contains no ':', so
+    # re-bracketing never fires and the old code emitted the unbalanced
+    # 'https://evil]', which it could not re-parse. Refuse instead.
+    ("https://[::1@evil]/x",             ""),
+    # ...but a bracket the parse CONSUMED is an ordinary host, unchanged.
+    ("https://[example.test]/x",         "https://example.test"),
+    ("https://user:pass@[::1]:8443/x",   "https://[::1]:8443"),
 ]
 
 

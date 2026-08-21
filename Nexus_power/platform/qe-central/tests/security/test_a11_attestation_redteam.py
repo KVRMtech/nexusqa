@@ -946,6 +946,12 @@ ORIGIN_VECTORS = [
     # stay unusable rather than becoming parseable as a side effect.
     ("https://[::1]:notaport/x",     ""),
     ("https://2001:db8::1:8443",     ""),
+    # NEW-CERT-FINDING-4 — a bracket surviving the parse means the authority
+    # was malformed ('[::1' as userinfo, 'evil]' as host); refuse rather than
+    # emit an unbalanced origin. A bracket the parse consumed is unaffected.
+    ("https://[::1@evil]/x",         ""),
+    ("https://[example.test]/x",     "https://example.test"),
+    ("https://user:pass@[::1]:8443/x", "https://[::1]:8443"),
 ]
 
 
