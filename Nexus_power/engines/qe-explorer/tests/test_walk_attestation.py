@@ -282,8 +282,12 @@ IDEMPOTENCE_VECTORS = [
     # re-bracketing never fires and the old code emitted the unbalanced
     # 'https://evil]', which it could not re-parse. Refuse instead.
     ("https://[::1@evil]/x",             ""),
-    # ...but a bracket the parse CONSUMED is an ordinary host, unchanged.
-    ("https://[example.test]/x",         "https://example.test"),
+    # A bracketed host that is NOT an IP-literal is a malformed authority
+    # (RFC 3986 3.2.2 reserves brackets for IP-literals). CPython 3.10
+    # strips the brackets and 3.11 does not -- CERT-FINDING-19 -- so this
+    # is pinned to the fail-closed answer, which is also the only one that
+    # does not alias it onto https://example.test/x.
+    ("https://[example.test]/x",         ""),
     ("https://user:pass@[::1]:8443/x",   "https://[::1]:8443"),
 ]
 

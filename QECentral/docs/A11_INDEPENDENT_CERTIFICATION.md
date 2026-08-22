@@ -20,6 +20,19 @@ every one failed closed. A12 / T-WP-01 is **unblocked** by this record.
 >
 > ### 🔒 CLOSING VERDICT — CERTIFIED at `876b105`, zero open findings (2026-08-21)
 >
+> **⚠️ CORRECTED SAME DAY. The verdict below was issued against `876b105`, and
+> `876b105`'s REQUIRED CI GATES WERE RED** — `A11 Attestation Certification` and
+> `M0.5 Security Gate` had both been failing since `60f0c10`, five commits
+> earlier. Neither the certifier nor the author looked at CI; the certification
+> ran from clean `git archive` extracts on a CPython **3.10** box while CI runs
+> **3.11**, and the divergence between them was the defect (CERT-FINDING-19).
+>
+> **The verdict's substance stands** — every finding it names is genuinely
+> closed, and the coverage statement below is accurate. What it did not do is
+> check the gates, and in this program **gates rule over records**. The
+> certification is re-affirmed only at the SHA where both gates are observed
+> green; see CERT-FINDING-19 in the register for the fix and its status.
+>
 > **Issued by the certifying squad after nine rounds. This is the certification
 > of record; everything above it is the history that produced it.**
 >

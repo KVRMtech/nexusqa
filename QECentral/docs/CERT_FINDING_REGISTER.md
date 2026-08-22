@@ -29,8 +29,13 @@ by assertion.
 | CERT-FINDING-16 | Medium–High (certification integrity; **blind verifier**) | **CLOSED** | `Nexus_power/certification/a11/` — the harness's own coverage | A11 re-certification round 7, 2026-08-21 | — |
 | CERT-FINDING-17 | Medium–High (certification coverage) | **CLOSED** | `Nexus_power/certification/a11/` — revocation had none | A11 re-certification round 8, 2026-08-21 | — |
 | CERT-FINDING-18 | Medium–High (certification scope; record accuracy) | **CLOSED** | `QECentral/docs/A11_INDEPENDENT_CERTIFICATION.md` §3.2 | A11 re-certification round 8, 2026-08-21 | — |
+| CERT-FINDING-19 | **High** (correctness; cross-interpreter divergence) | **CLOSED** | `qe-explorer/app/attest.py` + `qe-central/app/services/walk_attestation.py` | `nexusqa-db`, from CI, 2026-08-21 | — |
 
-**ZERO OPEN — 18 raised across 9 rounds, 18 closed.** The A11 certification is
+**ZERO OPEN — 19 raised, 19 closed.** `nexusqa-39` independently reproduced the
+reproducer at `876b105` from a clean `git archive` (exit 0, 168 checks, 0
+failures) — a real third-party measurement, and **note what it could not see:**
+that SHA's required CI gates were red. Reproducing the harness and checking the
+gates are different acts, and nine rounds did only the first. The A11 certification is
 CLOSED at `876b105` by a non-author squad; the closing verdict, and what "zero
 open findings" does and does not mean, are in `A11_INDEPENDENT_CERTIFICATION.md`.
 **It does NOT mean A11 is exhaustively verified:** the independent harness
@@ -507,6 +512,23 @@ hidden → 151/**1**, `FAIL: CERT-FINDING-1 probe could READ attestation_keys.py
 **A probe is worth least on the day it is written and most on the day its finding
 closes**, because that is the day its passing state becomes indistinguishable
 from its blind state.
+
+`nexusqa-39`, who wrote that probe and the two-assertion rule, states its failure
+less generously than this register first did, and their version is the useful one:
+
+> My two assertions were *"the sentence is gone"* and *"the probe could read its
+> target"*. I believed the second closed the blindness gap. It closed **one** —
+> the file being unreachable — and I then treated the whole class as handled.
+> **`kms_probe_read` was `True` throughout: the check I added to catch blindness
+> was itself reporting healthy while the probe was blind.** I reasoned about what
+> my check *implied* rather than testing what it *detected*. My green was
+> typography.
+
+**A blindness check that passes is not evidence the check can see.** And the rule
+that generalises the whole chain, adopted as standing by `nexusqa-39`: **every
+check must be tested by breaking the thing it guards; a check that has never been
+seen to go red is not evidence.** Guards that ran but could not fail, and controls
+with no check at all, are worse than a red gate — **a red gate announces itself.**
 
 ---
 
@@ -1301,3 +1323,77 @@ register exists to prevent. **What made them findable was asking, for each
 control, what would have to be deleted for the evidence to notice.** That question
 has now been asked of 27 guards and 9 files; before round 7 it had been asked of
 none.
+
+
+---
+
+## CERT-FINDING-19 — one input, two answers, by interpreter version
+
+**Status: CLOSED in code.** **High** (correctness). **Not found by any of the
+nine certification rounds.** Found by `nexusqa-db` **from CI**, after this record
+had already been closed and I had declared T1 complete.
+
+```
+N('https://[example.test]/x')
+    CPython 3.10  ->  'https://example.test'      brackets silently stripped
+    CPython 3.11  ->  ''                          malformed authority
+```
+
+**Every local suite was green while two REQUIRED gates were red.** This box runs
+3.10; CI runs 3.11. `A11 Attestation Certification` and `M0.5 Security Gate` had
+both been failing for **five consecutive commits — 60f0c10, d7b9272, bd8bd24,
+876b105, c431a7f — including the SHA the closing verdict names.**
+
+### Why this is a code fix and not a test fix
+
+The failing assertion was mine, and the obvious response is to change the
+expectation. That would be wrong twice over:
+
+1. **RFC 3986 §3.2.2 reserves square brackets in an authority for IP-literals**,
+   and every IP-literal contains `:`. `[example.test]` is not one, so the
+   authority is malformed and `""` — the verifier's mismatch sentinel — is the
+   correct answer. The 3.10 behaviour is the wrong one on its own merits.
+2. **Unwrapping creates ORIGIN ALIASING.** `https://[example.test]/x` and
+   `https://example.test/x` would normalise to one origin, inside the exact
+   string comparison an attestation turns on. **This is the mirror of
+   CERT-FINDING-2: there a genuine environment was wrongly REFUSED; here a
+   malformed authority would be wrongly ACCEPTED.** Refusing is consistent with
+   that fix, not in tension with it. (Diagnosis and both arguments: `nexusqa-db`.)
+
+**And the divergence itself is the deeper defect.** The two services share no
+package and need not share an interpreter. qe-central on 3.11 and qe-explorer on
+3.10 would **disagree** on this input — one refusing, one minting an origin. That
+is the *"fix both, or pin them identical"* invariant of CERT-FINDING-2 broken **by
+the runtime rather than by the source**, and no amount of reading the two copies
+side by side would show it. They are byte-identical and still divergent.
+
+**Remediation:** both copies now refuse a bracketed host that is not an
+IP-literal, which is the answer 3.11 already gave — so the two interpreters
+converge rather than one being taught the other's behaviour.
+
+### The lesson, and it invalidates a claim I made nine times
+
+**The certifier flagged this exact risk in every single round**, under *What I am
+NOT claiming*:
+
+> Both copies were exercised under the **same** interpreter version. I proved the
+> copies are AST-identical, which is stronger for source but says nothing about
+> `urlsplit` behaviour differing between CPython versions.
+
+That caveat was written nine times, correctly, and neither of us acted on it.
+**A limitation you have written down is not a limitation you have handled** — and
+a "not claimed" list is where a real finding can hide in plain sight, because
+restating it feels like diligence.
+
+**The operational rule:** *a green local suite is not evidence about CI.* Nine
+rounds of falsification testing, twelve pinned digests, a reproducer that could
+be tampered in three directions — and the defect that survived all of it was
+found by a peer who **looked at the gates instead of the record**. This
+program's rule that **gates rule over records** exists for exactly this, and I
+declared T1 complete without checking them.
+
+**Closure is contingent, and stated as such:** the fix is verified on 3.10 here
+and is the behaviour 3.11 already exhibited, but **the confirmation that matters
+is both required gates green on the pushed commit.** Until that is observed this
+row means "fixed and locally falsified", not "verified in the environment that
+found it".

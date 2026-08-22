@@ -225,6 +225,26 @@ def normalize_origin(url: str) -> str:
         # is read as userinfo '[::1' + host 'evil]'. Re-bracketing would emit an
         # unbalanced origin, so refuse instead. NEW-CERT-FINDING-4.
         return ""
+    if ("[" in parts.netloc or "]" in parts.netloc) and ":" not in host:
+        # A BRACKETED HOST THAT IS NOT AN IP-LITERAL. RFC 3986 3.2.2 reserves
+        # brackets in an authority for IP-literals, and every IP-literal contains
+        # ':'. So 'https://[example.test]/x' is a malformed authority and "" --
+        # the verifier's mismatch sentinel -- is the correct answer.
+        #
+        # CERT-FINDING-19, and it is why this is a CODE fix and not a test fix:
+        # CPython 3.10 strips those brackets and returns 'https://example.test',
+        # CPython 3.11 returns "". ONE INPUT, TWO ANSWERS, BY INTERPRETER. The two
+        # services share no package and need not share a Python, so that
+        # divergence breaks the "fix both or pin identical" invariant at runtime
+        # rather than in source -- and every local suite stayed green while two
+        # required CI gates were red, because this box is 3.10 and CI is 3.11.
+        #
+        # Refusing is also the safe direction on its own merits: unwrapping would
+        # ALIAS 'https://[example.test]/x' onto 'https://example.test/x', two
+        # distinct strings collapsing to one origin inside the comparison an
+        # attestation turns on. CERT-FINDING-2 was a genuine environment wrongly
+        # REFUSED; this is a malformed authority wrongly ACCEPTED.
+        return ""
     if ":" in host:             # IPv6 literal - urlsplit stripped its brackets
         host = f"[{host}]"
     if port and not ((scheme == "https" and port == 443)

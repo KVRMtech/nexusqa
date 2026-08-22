@@ -950,7 +950,10 @@ ORIGIN_VECTORS = [
     # was malformed ('[::1' as userinfo, 'evil]' as host); refuse rather than
     # emit an unbalanced origin. A bracket the parse consumed is unaffected.
     ("https://[::1@evil]/x",         ""),
-    ("https://[example.test]/x",     "https://example.test"),
+    # A bracketed non-IP-literal is a malformed authority; pinned to the
+    # fail-closed answer because CPython 3.10 and 3.11 disagreed here
+    # (CERT-FINDING-19) and unwrapping would alias two origins into one.
+    ("https://[example.test]/x",     ""),
     ("https://user:pass@[::1]:8443/x", "https://[::1]:8443"),
 ]
 
