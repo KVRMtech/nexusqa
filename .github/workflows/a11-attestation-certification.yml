@@ -127,7 +127,7 @@ jobs:
 
   # ── 3. Behaviour, not just bytes: the certifier's own reproducer. ─────────
   reproducer:
-    name: independent reproducer (161 checks)
+    name: independent reproducer (168 checks)
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:

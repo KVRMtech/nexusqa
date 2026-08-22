@@ -310,7 +310,44 @@ stripped, wrong origin at verification time, expired proof. Also confirmed:
 replaying one proof onto a second crawl is denied, and an unconfigured trust
 store denies with `no_trust_anchor` (fail-closed, not fail-open).
 
-### 3.2 Claims verified by reading the code against its own prose
+### 3.2 Claims checked by READING the code — a code review, not independent execution
+
+**RE-LABELLED 2026-08-21 (CERT-FINDING-18). This section was under the heading
+*Independent verification*, and its rows read as independently verified. They
+were READ, not RUN.** The distinction is the one this very record insists on
+elsewhere — *"certification is not re-running the author's suite"* — and it
+applies to reading just as much: a claim checked by reading is a code review,
+which is valuable and is not execution.
+
+**Measured, not estimated.** The independent harness was run under `runpy` and
+`sys.modules` inspected. Of the nine files this record pins by SHA-256, the
+harness executes **two**:
+
+| Pinned file | Executed by the independent harness? |
+|---|---|
+| `engines/qe-explorer/app/attest.py` | **yes** — the verifier half |
+| `qe-central/app/services/walk_attestation.py` | **yes** — the issuer half |
+| `qe-central/app/services/attestation_keys.py` | no — opened as *text* by the CERT-FINDING-1 probe, never imported |
+| `qe-central/app/services/attestation_issuer.py` | no — never imported |
+| `qe-central/app/services/attestation_revocation.py` | no — never imported |
+| `qe-central/app/routers/attestation.py` | no — never imported |
+| `qe-central/app/db/attestation_models.py` | no — never imported |
+| `alembic_qec/versions/qec_023_attestation_issuer.py` | no — never imported |
+| `contracts/gate1_walk_attestation_v1.json` | no — its only reference in the harness directory is the digest manifest itself |
+
+**Eight of the ten claims below live in modules the independent harness never
+runs.** Their only executable coverage is the author's own suites. That does not
+make them wrong — nothing here suggests they are — but it means this section is
+a **second reader's code review**, and should be relied on as one.
+
+What the independent half *does* cover, and what §3.1 correctly claims, is the
+cross-process interop seam that the author's design structurally cannot test:
+two services, two interpreters, one contract. That claim stands unchanged.
+
+**Not in this work package:** extending the harness across the issuance path
+(`attestation_issuer.py`, the router, the models) needs a database and is a
+different piece of work. The certifier recommended against holding certification
+for it, and recommended recording the gap instead. This table is that record.
 
 A docstring describing a control is not the control. Each was checked in the
 implementation:

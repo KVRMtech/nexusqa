@@ -27,6 +27,8 @@ by assertion.
 | CERT-FINDING-14 | Low (CI accounting; **fail-closed**) | **CLOSED** | `.github/workflows/a11-attestation-certification.yml` | The gate itself, 2026-08-21 | — |
 | CERT-FINDING-15 | Low (documentation / record accuracy) | **CLOSED** | `qe-central/app/services/attestation_keys.py` | A11 re-certification round 6, 2026-08-21 | — |
 | CERT-FINDING-16 | Medium–High (certification integrity; **blind verifier**) | **CLOSED** | `Nexus_power/certification/a11/` — the harness's own coverage | A11 re-certification round 7, 2026-08-21 | — |
+| CERT-FINDING-17 | Medium–High (certification coverage) | **CLOSED** | `Nexus_power/certification/a11/` — revocation had none | A11 re-certification round 8, 2026-08-21 | — |
+| CERT-FINDING-18 | Medium–High (certification scope; record accuracy) | **CLOSED** | `QECentral/docs/A11_INDEPENDENT_CERTIFICATION.md` §3.2 | A11 re-certification round 8, 2026-08-21 | — |
 
 **ZERO OPEN.** The A11 certification is intact with no open findings, re-issued
 against a named SHA by a non-author squad — see `A11_INDEPENDENT_CERTIFICATION.md`.
@@ -259,6 +261,7 @@ count, so a reviewer can tell a hardening from a regression:**
 | **151 / 0** | **both findings fixed at `d0605ba`** — read the note below before concluding anything |
 | **152 / 0** | CERT-FINDING-9: a third KMS assertion added — the correction must be PRESENT, not merely the false claim absent |
 | **161 / 0** | CERT-FINDING-16: nine checks that reach gates 7, 9, 11 and 12 for the first time |
+| **168 / 0** | CERT-FINDING-17: seven checks giving the revocation subsystem its first coverage |
 
 The **pinned-file count** also moved, and for a different reason: **9 → 12**. CERT-FINDING-10 added the three harness files to `A11_SNAPSHOT.sha256`. The nine original digests did not move (bar `attestation_keys.py`, which CERT-FINDING-11 edits); three rows were appended.
 
@@ -1152,3 +1155,128 @@ history and the only one that closed a hole rather than describing one.**
 isolated and falsification-tested; four gates were. **The coverage of the
 coverage is itself unmeasured**, and this finding exists because nobody had
 measured it for seven rounds.
+
+
+---
+
+## CERT-FINDING-17 — the revocation subsystem had no coverage at all
+
+**Status: CLOSED.** Medium–High (certification coverage). **Not a product
+defect** — every revocation guard works correctly. Raised in round 8, when the
+certifier extended the gate-deletion sweep from four guards to all twenty-seven.
+
+**19 of 27 verifier guards could be deleted with the harness reporting a clean
+161 / 0.** Eight of those nineteen are the whole revocation path, and the cause
+is one line that was never obviously wrong: **every revocation list the harness
+minted was EMPTY.**
+
+```
+revoked_proof_ids: []      revoked_environment_ids: []
+```
+
+A proof was never revoked and then presented, so verify-time revocation was never
+exercised once — while the record certifies *"Revocation is fail-closed …
+issue-time and verify-time."*
+
+**Why the empty list looked correct.** `issue_revocation_list`'s own docstring
+explains it: *"AN EMPTY LIST IS NOT THE ABSENCE OF A LIST, and the difference is
+the whole mechanism."* An empty signed list is a positive statement and it **was**
+genuinely exercised by all ten grants. The half that was missing is the other
+one: a list that revokes the thing being presented. **A fixture that is correct,
+meaningful, and exercised can still leave a control completely untested** — which
+is why "is this fixture realistic?" is a weaker question than "what would have to
+break for this to fail?"
+
+**Remediation and its falsification.** `issue_side.py` now mints a proof with a
+pinned `proof_id` and pairs it with four differently-populated lists; the verifier
+half adds seven checks. Each guard deleted from `attest.py` in turn — `attest.py`
+restored and digest-verified after every case, `__pycache__` purged and `-B` set
+so a stale `.pyc` cannot make a deleted guard look present:
+
+| Guard deleted | Before | After |
+| --- | --- | --- |
+| 10b — this `proof_id` is revoked | **161 / 0** | **168 / 1** |
+| 10c — this `environment_id` is revoked | **161 / 0** | **168 / 1** |
+| R3 — list issuer mismatch | **161 / 0** | **168 / 1** |
+| R6 — list expired | **161 / 0** | **168 / 1** |
+| R4 — list signature | **161 / 0** | **168 / 1** |
+| R1 — list alg | **161 / 0** | **168 / 1** |
+
+Sweep run three times, byte-identical output each time.
+
+**The control is load-bearing and is the first check added.** A list revoking
+*something else* must leave the proof AUTHORISED. Without it, all six checks above
+would pass on a verifier that refused every attestation — the absence-assertion
+trap `CLAUDE.md` §5 names by name.
+
+**Two of these could not be produced by tampering.** A wrong-issuer list must be
+*validly signed* by another issuer name: `issuer` is inside the signature, so a
+torn list dies as `revocation_bad_signature` and never reaches the issuer
+comparison. Same lesson as CERT-FINDING-16 — **reaching the gate is the
+load-bearing half, and only the issuer can mint what reaches it.**
+
+**Still uncovered, and named rather than left implicit:** eleven guards — issuer
+trust-anchor match (6), kid resolution (3), claims version (5), the freshness and
+lifetime block (8a–8d), verifier clock domain (1), and envelope shape (2a–2c).
+The `expired` check passes today for an incidental reason: the *revocation list*
+expires at the same timestamp, so gate 8c is never the refusal. **The coverage of
+the coverage is now measured rather than assumed, which it was not for eight
+rounds.**
+
+---
+
+## CERT-FINDING-18 — the independent harness executes 2 of the 9 pinned files
+
+**Status: CLOSED** by recording the scope honestly. Medium–High (certification
+scope / record accuracy). **Not a product defect.** Raised in round 8.
+
+Measured by running the harness under `runpy` and inspecting `sys.modules`:
+
+| Pinned file | Executed by the independent harness? |
+| --- | --- |
+| `attest.py` | **yes** — verifier half |
+| `walk_attestation.py` | **yes** — issuer half |
+| `attestation_keys.py` | no — opened as *text* by the CERT-FINDING-1 probe, never imported |
+| `attestation_issuer.py`, `attestation_revocation.py`, `routers/attestation.py`, `db/attestation_models.py`, `qec_023_attestation_issuer.py` | no — never imported |
+| `contracts/gate1_walk_attestation_v1.json` | no — its only reference in the harness directory is the digest manifest itself |
+
+**Eight of §3.2's ten claims live in modules the independent harness never runs.**
+They were checked by *reading*. That is a code review — valuable, and not
+execution — and §3.2 sat under the heading *"Independent verification (half 2)"*,
+where its rows read as independently verified.
+
+**The distinction is this record's own.** It says plainly that *"certification is
+not re-running the author's suite — that proves only that their tests agree with
+their code."* The same standard applied to reading gives the same answer: a claim
+checked by reading is not a claim proven by execution, and the record should not
+let one wear the other's heading.
+
+**§3.1's claim is untouched and remains true.** The independent half covers the
+cross-process interop seam that the author's design *structurally cannot* test:
+two services, two interpreters, one contract, and — since CERT-FINDING-16 and -17
+— the verifier's gates and revocation path exercised against proofs only the
+issuer can mint.
+
+**Closed by relabelling, deliberately not by extending the harness.** Reaching
+`attestation_issuer.py`, the router and the models needs a database and is a
+different work package. The certifier recommended against holding certification
+for it and recommended recording the gap instead; that recommendation is adopted.
+**The gap is now a documented scope decision rather than a hidden one**, which is
+the difference between a record that overclaims and a record that is merely
+narrow.
+
+### The pattern across findings 16, 17 and 18
+
+Three rounds, one shape: **the certification's evidence was narrower than the
+record implied, in three different ways.**
+
+* **16** — checks that ran but could not fail (mutations dying before their gate).
+* **17** — controls with no checks at all (an empty fixture that looked correct).
+* **18** — claims verified by a method the heading misdescribed.
+
+None was a product defect. All three were the same failure of *evidence*, and all
+three were invisible to a reader of the record — which is exactly the harm the
+register exists to prevent. **What made them findable was asking, for each
+control, what would have to be deleted for the evidence to notice.** That question
+has now been asked of 27 guards and 9 files; before round 7 it had been asked of
+none.

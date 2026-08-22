@@ -672,7 +672,7 @@ Stated explicitly, because no undocumented trust assumptions are permitted.
    and skipped without Postgres; CI runs it. The migration follows the qec_003
    pattern exactly, but "follows the pattern" is not "was verified against a
    database".
-7. **All findings from the independent certification are CLOSED.** Both original findings (CERT-FINDING-1, the false KMS rationale; CERT-FINDING-2, IPv6 `normalize_origin`) were fixed at `d0605ba`, and the four raised while closing them at `da5b5d0` and after. Zero open. See `CERT_FINDING_REGISTER.md`; the reproducer now runs **161 checks / 0 failures**, and `run_certification.sh` exits 0 end to end.
+7. **All findings from the independent certification are CLOSED.** Both original findings (CERT-FINDING-1, the false KMS rationale; CERT-FINDING-2, IPv6 `normalize_origin`) were fixed at `d0605ba`, and the four raised while closing them at `da5b5d0` and after. Zero open. See `CERT_FINDING_REGISTER.md`; the reproducer now runs **168 checks / 0 failures**, and `run_certification.sh` exits 0 end to end.
    Both were fixed in the pinned files themselves — `attestation_keys.py`,
    `attest.py` and `walk_attestation.py` — which lapsed the certification by
    construction, so the record was re-issued against the new SHA by a non-author
@@ -701,10 +701,11 @@ Reproduce:
 
 ```bash
 bash Nexus_power/certification/a11/run_certification.sh
-# 161 checks; 0 failures. (131/1 -> 150/3 while CERT-FINDING-1 and -2 were
+# 168 checks; 0 failures. (131/1 -> 150/3 while CERT-FINDING-1 and -2 were
 # open; 151/0 when they were fixed; 152/0 with CERT-FINDING-9's third KMS
 # assertion; 161/0 once CERT-FINDING-16 gave gates 7, 9, 11 and 12 any
-# coverage at all. Every rise is the harness covering MORE — see
+# coverage at all; 168/0 once CERT-FINDING-17 gave the revocation subsystem
+# its first. Every rise is the harness covering MORE — see
 # CERT_FINDING_REGISTER.md, which explains each one.)
 ```
 

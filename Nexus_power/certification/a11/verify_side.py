@@ -175,6 +175,71 @@ else:
 
 
 # ---------------------------------------------------------------------------
+# CERT-FINDING-17 -- REVOCATION, exercised for the first time.
+#
+# Every list this harness minted was EMPTY, so a proof was never revoked and then
+# presented. All eight revocation guards deleted cleanly at 161/0. These reach
+# them. The CONTROL is load-bearing: without it, a verifier that refused every
+# attestation would satisfy the two revocation checks below.
+rev = data.get("revocation") or {}
+r_kw = dict(trust=trust, crawl_id=data.get("revocation_crawl_id"),
+            tenant_id=data.get("hostile_tenant_id"),
+            target_url=data.get("revocation_target_url"), now_epoch_ms=NOW + 1000)
+
+def _rev(name, **over):
+    att = rev.get(name)
+    if att is None:
+        return None
+    k = dict(r_kw); k.update(over)
+    return verify_provisioning_proof(att, replay_guard=ProofReplayGuard(), **k)
+
+_rc = _rev("control_other_revoked")
+check(_rc is not None and _rc.authorized,
+      f"revocation[CONTROL]: a proof is AUTHORISED when the list revokes something "
+      f"else (got {_rc and _rc.reason!r}) -- without this control, the two checks "
+      f"below would pass on a verifier that refuses everything")
+
+for name, why, what in (
+    ("proof_revoked", AttestReason.REVOKED, "this proof_id is on the list"),
+    ("env_revoked",   AttestReason.REVOKED, "this environment_id is on the list"),
+    ("wrong_issuer",  AttestReason.REVOCATION_ISSUER_MISMATCH,
+     "a validly signed list from ANOTHER issuer"),
+):
+    r = _rev(name)
+    check(r is not None and not r.authorized and r.reason == why,
+          f"revocation[{name}]: {what} -> denied as {why!r} "
+          f"(got authorized={r and r.authorized} reason={r and r.reason!r})")
+
+# R6 - a STALE list proves nothing about what has been revoked since. The list
+# lives 10 minutes and the proof an hour, so at +20 minutes the proof is still
+# valid and only the list has expired -- which must still be a refusal.
+_re = _rev("control_other_revoked", now_epoch_ms=NOW + 20 * 60 * 1000)
+check(_re is not None and not _re.authorized
+      and _re.reason == AttestReason.REVOCATION_EXPIRED,
+      f"revocation[expired list]: a stale list is refused as revocation_expired "
+      f"even though the PROOF is still within its lifetime "
+      f"(got authorized={_re and _re.authorized} reason={_re and _re.reason!r})")
+
+# R4 - the list's own signature. Verifier-side tampering is legitimate here: this
+# gate exists precisely to catch a torn list.
+if rev.get("control_other_revoked") is not None:
+    _forged = copy.deepcopy(rev["control_other_revoked"])
+    _forged["revocations"]["signature"] = "A" * 86
+    _rf = verify_provisioning_proof(_forged, replay_guard=ProofReplayGuard(), **r_kw)
+    check(not _rf.authorized and _rf.reason == AttestReason.REVOCATION_BAD_SIGNATURE,
+          f"revocation[forged list signature]: denied as revocation_bad_signature "
+          f"(got authorized={_rf.authorized} reason={_rf.reason!r})")
+    _dg = copy.deepcopy(rev["control_other_revoked"])
+    _dg["revocations"]["alg"] = "hs256"
+    _rd = verify_provisioning_proof(_dg, replay_guard=ProofReplayGuard(), **r_kw)
+    check(not _rd.authorized and _rd.reason == AttestReason.REVOCATION_BAD_SIGNATURE,
+          f"revocation[list alg downgraded]: denied as revocation_bad_signature "
+          f"(got authorized={_rd.authorized} reason={_rd.reason!r})")
+else:
+    check(False, "revocation[control_other_revoked]: payload present")
+
+
+# ---------------------------------------------------------------------------
 # A11b -- ORIGIN-VECTOR TABLE: fence the CLASS, not the one instance.
 #
 # CERT-FINDING-2 was found through a single IPv6 grant. Measurement since shows

@@ -8,6 +8,7 @@ import json, sys
 from pathlib import Path
 from app.services.signing import generate_keypair
 from app.services.walk_attestation import (ProvisioningGrant, issue_attestation,
+                                           issue_revocation_list,
                                            normalize_origin, _sign)
 
 NOW = 1_760_000_000_000
@@ -184,6 +185,58 @@ hostile = {
 # admitted for another one. That needs two validly signed proofs SHARING a
 # proof_id, which only the issuer can mint -- which is why the old harness,
 # mutating claims verifier-side, could not test this gate at all.
+# CERT-FINDING-17 -- REVOCATION, WHICH THE HARNESS NEVER EXERCISED.
+#
+# Until now every revocation list minted here was EMPTY: no revoked_proof_ids, no
+# revoked_environment_ids. A proof was never revoked and then presented, so the
+# two enforcement gates and the list's own integrity gates were never reached.
+# Measured: all eight could be deleted from attest.py with the harness still
+# reporting 161 checks and 0 failures -- while the record certifies "Revocation is
+# fail-closed ... issue-time and verify-time".
+#
+# An EMPTY list is not the absence of a list -- that distinction is the whole
+# mechanism, and it is why the empty case was never obviously wrong. It is a
+# positive signed statement ("I have revoked nothing"), and it is genuinely
+# exercised by the ten grants above. What was missing is the other half: a list
+# that actually revokes the thing being presented.
+REVOKED_PROOF_ID = "a11cert0revoked0proof0id00000001"
+REV_ENV = "env-revoked"
+REV_CRAWL = "crawl-revoked"
+REV_URL = "https://staging.example.test/apply"
+
+_rev_grant = ProvisioningGrant(
+    environment_id=REV_ENV, tenant_id="tenant-cert", crawl_id=REV_CRAWL,
+    target_url=REV_URL, reset_procedure="wipe-db",
+    max_walk_mutations_per_step=1, proof_id=REVOKED_PROOF_ID,
+)
+_rev_claims = _rev_grant.claims(issuer=ISSUER, issued_at_ms=NOW, lifetime_ms=3_600_000)
+_rev_proof = _sign(priv, _rev_claims).as_dict()
+
+
+def _with_revocations(**kw):
+    """The same genuine proof, paired with a differently-populated list."""
+    return {"proof": _rev_proof,
+            "revocations": issue_revocation_list(
+                private_key_b64=priv, issuer=kw.pop("issuer", ISSUER),
+                issued_at_ms=NOW, **kw)}
+
+
+revocation = {
+    # CONTROL. Revoking something else must leave this proof authorised -- without
+    # it, the two checks below would pass on a verifier that refuses everything.
+    "control_other_revoked": _with_revocations(
+        revoked_proof_ids=["some-other-proof-id-0000000000001"],
+        revoked_environment_ids=["env-something-else"]),
+    # gate 10b - this exact proof is revoked.
+    "proof_revoked": _with_revocations(revoked_proof_ids=[REVOKED_PROOF_ID]),
+    # gate 10c - the environment is revoked, whatever the proof says.
+    "env_revoked": _with_revocations(revoked_environment_ids=[REV_ENV]),
+    # R3 - a validly signed list from a DIFFERENT issuer. Cannot be produced by
+    # tampering: `issuer` is inside the signature, so a torn list dies as
+    # REVOCATION_BAD_SIGNATURE and never reaches the issuer comparison.
+    "wrong_issuer": _with_revocations(issuer="cert.independent.OTHER"),
+}
+
 SHARED_PROOF_ID = "a11cert0replay0shared0id00000001"
 replay_pair = {
     "a": _hostile(crawl_id="crawl-replay-A", proof_id=SHARED_PROOF_ID),
@@ -221,6 +274,10 @@ json.dump({"public_key": pub, "issuer": ISSUER, "now_ms": NOW, "cases": out,
            "kms_probe_read": kms_probe_read,
            "hostile": hostile,
            "replay_pair": replay_pair,
+           "revocation": revocation,
+           "revocation_env_id": REV_ENV,
+           "revocation_crawl_id": REV_CRAWL,
+           "revocation_target_url": REV_URL,
            "hostile_crawl_id": "crawl-hostile",
            "hostile_tenant_id": "tenant-cert",
            "hostile_target_url": "https://staging.example.test/apply"},
