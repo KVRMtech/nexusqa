@@ -336,9 +336,101 @@ jobs:
                  -q --tb=short -p no:cacheprovider
 
   # ── The single required check. ───────────────────────────────────────────
+  # ── A11e. CROSS-INTERPRETER CONVERGENCE — ADVISORY, NOT REQUIRED. ─────────
+  #
+  #  THE GAP THIS CLOSES. `normalize_origin` is duplicated by value across two
+  #  services that run DIFFERENT CPython versions (qe-central 3.11; qe-explorer
+  #  ships a CPython 3.10 playwright image). At 14b3957 the two byte-identical
+  #  copies behaved differently because `urlsplit` changed between versions:
+  #  'https://[example.test]/x' -> 'https://example.test' on 3.10, '' on 3.11.
+  #  One service would mint an origin the other refuses.
+  #
+  #  The certification harness pins ONE interpreter, so its agreement invariant
+  #  is structurally incapable of seeing this: on the failing case both copies
+  #  agreed under 3.10 AND under 3.11 — the divergence existed only BETWEEN
+  #  them. The instance was fixed; the class was open, tracked as A11e.
+  #
+  #  ⚠ THE HALF THAT MATTERS is the ACROSS-version comparison. A matrix that
+  #  only re-runs the within-interpreter check on two Pythons is a job that
+  #  looks like the fix and is not one — verified empirically before this
+  #  landed: replaying the real pre-fix data, a within-only comparison PASSES
+  #  and the across-version comparison FAILS naming both copies.
+  #
+  #  WHY ADVISORY FIRST (`continue-on-error`, and absent from a11-gate's
+  #  `needs`). Adding a 3.10 leg to a REQUIRED check risks reddening
+  #  freshly-green gates for a dependency reason unrelated to the invariant, on
+  #  a tree whose merges have not started. But it EMITS from the moment it
+  #  lands, which is what "a tool emits it, not three people wrote it down"
+  #  demands. Promote to required once observed stable across several runs —
+  #  a deliberate, separate decision, and NOT during the merge sequence.
+  convergence-sweep:
+    name: "A11e convergence sweep (advisory, py${{ matrix.python }})"
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.10", "3.11"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      # No `pip install` anywhere in this job, deliberately. The sweep extracts
+      # the function's SOURCE and execs it with nothing but urllib.parse, so it
+      # imports neither service and cannot fail for a dependency reason that
+      # has nothing to do with the invariant.
+      - name: Sweep both copies under Python ${{ matrix.python }}
+        run: |
+          python Nexus_power/certification/a11/convergence_sweep.py \
+            --root . --out "sweep-${{ matrix.python }}.json"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: a11e-sweep-${{ matrix.python }}
+          path: sweep-${{ matrix.python }}.json
+          retention-days: 7
+
+  convergence-compare:
+    name: "A11e convergence: agree within AND across (advisory)"
+    runs-on: ubuntu-latest
+    needs: [convergence-sweep]
+    if: always()
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: a11e-sweep-*
+          merge-multiple: true
+
+      - name: Both copies must agree within each interpreter AND across both
+        run: |
+          set -euo pipefail
+          ls -1 sweep-*.json
+          # Refuse to report success on fewer than two interpreters: a compare
+          # that silently ran against one sweep would be the same blind check
+          # this job exists to replace.
+          count=$(ls -1 sweep-*.json | wc -l)
+          if [ "$count" -lt 2 ]; then
+            echo "::error::only ${count} sweep(s) present — the ACROSS-version" \
+                 "comparison cannot run, and that is the half that matters." >&2
+            exit 1
+          fi
+          python Nexus_power/certification/a11/convergence_sweep.py \
+            --compare sweep-*.json
+
   a11-gate:
     name: A11 certification gate
     runs-on: ubuntu-latest
+    # A11e's two jobs are DELIBERATELY ABSENT from this list. They are advisory
+    # until observed stable; adding them here is the promotion step, and it is a
+    # separate decision that must not be taken during a merge sequence.
     needs: [snapshot-integrity, snapshot-integrity-windows, reproducer]
     if: always()
     steps:
