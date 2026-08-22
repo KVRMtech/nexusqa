@@ -30,8 +30,13 @@ by assertion.
 | CERT-FINDING-17 | Medium–High (certification coverage) | **CLOSED** | `Nexus_power/certification/a11/` — revocation had none | A11 re-certification round 8, 2026-08-21 | — |
 | CERT-FINDING-18 | Medium–High (certification scope; record accuracy) | **CLOSED** | `QECentral/docs/A11_INDEPENDENT_CERTIFICATION.md` §3.2 | A11 re-certification round 8, 2026-08-21 | — |
 
-**ZERO OPEN.** The A11 certification is intact with no open findings, re-issued
-against a named SHA by a non-author squad — see `A11_INDEPENDENT_CERTIFICATION.md`.
+**ZERO OPEN — 18 raised across 9 rounds, 18 closed.** The A11 certification is
+CLOSED at `876b105` by a non-author squad; the closing verdict, and what "zero
+open findings" does and does not mean, are in `A11_INDEPENDENT_CERTIFICATION.md`.
+**It does NOT mean A11 is exhaustively verified:** the independent harness
+executes 2 of 9 pinned files and exercises 15 of 27 verifier guards. The gaps are
+measured and named rather than closed — an undocumented gap is a defect in the
+record, a measured one is a scope decision.
 The certifier numbered findings 3–5 `NEW-CERT-FINDING-n`; they are renumbered here
 without the prefix so the table has one id vocabulary.
 
@@ -1218,6 +1223,22 @@ load-bearing half, and only the issuer can mint what reaches it.**
 **Still uncovered, and named rather than left implicit:** eleven guards — issuer
 trust-anchor match (6), kid resolution (3), claims version (5), the freshness and
 lifetime block (8a–8d), verifier clock domain (1), and envelope shape (2a–2c).
+Of these, the two that matter to a future reader are **6** (a proof from a
+different issuer is never tested) and **8c** (the proof's own expiry — the
+`expired` check passes today only because the *revocation list* expires at the
+same timestamp). The rest are input-shape validation whose deletion is largely
+masked by downstream failures.
+
+**A twelfth guard is REDUNDANT BY CONSTRUCTION, not uncovered**, and the
+distinction is worth keeping. `R2` (the revocation list's kid resolution) and
+`R4` (its signature) return the **identical reason**, `REVOCATION_BAD_SIGNATURE`.
+Deleting `R2` is therefore unobservable at the API surface — an unresolvable kid
+yields an empty key, the signature check fails, and the verdict is byte-identical.
+It cannot be detected by deletion **and it cannot fail open**, because the guard
+behind it catches the same input. *A guard that a deletion sweep cannot see is
+not automatically a gap — check whether something else catches the same input
+before counting it.* So the accurate figure across 27 guards is **15 covered, 11
+genuine gaps, 1 redundant by design.**
 The `expired` check passes today for an incidental reason: the *revocation list*
 expires at the same timestamp, so gate 8c is never the refusal. **The coverage of
 the coverage is now measured rather than assumed, which it was not for eight

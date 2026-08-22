@@ -18,6 +18,60 @@ every one failed closed. A12 / T-WP-01 is **unblocked** by this record.
 
 > ---
 >
+> ### 🔒 CLOSING VERDICT — CERTIFIED at `876b105`, zero open findings (2026-08-21)
+>
+> **Issued by the certifying squad after nine rounds. This is the certification
+> of record; everything above it is the history that produced it.**
+>
+> **What "zero open findings" means here — the certifier's own words, kept
+> verbatim because the author is not the right party to phrase this:**
+>
+> > "Zero open findings" means every finding raised has been closed, and the
+> > record now describes its own coverage accurately — **not** that A11 is
+> > exhaustively verified. The independent harness executes **2 of the 9 pinned
+> > files** and exercises **15 of 27 verifier guards**; the eleven uncovered
+> > guards and the eight read-only claims are named in §3.2 and the register.
+> > Those are documented gaps, not closed ones. A reader relying on this
+> > certification is relying on a **measured boundary**, which is the strongest
+> > thing a certification can honestly offer.
+>
+> **The distinction that makes it defensible:** an undocumented gap is a defect
+> in the record; a measured and named gap is a scope decision. This record now
+> has the second kind. That is the difference between the state at `54e7735` and
+> the state now.
+>
+> | | |
+> |---|---|
+> | Certified SHA | `876b105` — twelve files pinned by SHA-256 |
+> | Reproducer | **168 checks, 0 failures, exit 0**, drift gate live |
+> | Findings | **18 raised across 9 rounds, 18 closed.** 6 against the product, 12 against the machinery that asserts it |
+> | Coverage | 15 of 27 verifier guards exercised; 11 named gaps; 1 (`R2`) redundant by construction |
+> | Files executed | 2 of 9 pinned (`attest.py`, `walk_attestation.py`) |
+> | Manifest | independently re-derived by a non-author **every round**, identical every time |
+>
+> **NOT claimed.** A11 is **implemented, certified against named bytes, NOT
+> deployed, NOT live-proven.** Nine rounds ran against source in scratch archives
+> on one Windows box under CPython 3.10.11 — no deployment, no real IPv6 host, no
+> live Cloud KMS, no database. The eleven uncovered guards all work at this SHA;
+> they were deleted only to measure what the harness notices. The issuer-side
+> revocation reads in `attestation_revocation.py` remain unexecuted.
+>
+> **The three-way shape worth carrying to the NEXT certification, not filed in
+> this one's history:**
+>
+> * **16** — checks that ran but could not fail (mutations dying before their gate)
+> * **17** — controls with no checks at all (an empty fixture that looked correct)
+> * **18** — claims verified by a method the heading misdescribed
+>
+> **None a product defect. All three invisible to a reader of the record.** What
+> made them findable was one question, asked of every control: *what would have
+> to be deleted for the evidence to notice?* It has now been asked of 27 guards
+> and 9 files; before round 7 it had been asked of none.
+>
+> ---
+
+> ---
+>
 > ### ✅ RE-CERTIFIED 2026-08-21 — BOTH ORIGINAL FINDINGS CLOSED, ZERO OPEN
 >
 > **Verdict on the nine pinned files: CERTIFIED at `54e7735`.** Issued by a
