@@ -876,11 +876,37 @@ So any *other* `urlsplit` behaviour difference between those versions is equally
 invisible today, and would surface the same way: **byte-identical source,
 divergent behaviour, one service minting what the other refuses.**
 
-**Proposed remediation (`nexusqa-db`):** run the convergence sweep as a **matrix**
-across 3.10 and 3.11 and assert the copies agree *within* each interpreter **and
-across both**. A matrix line plus a cross-version comparison. That converts *"we
-happened to notice a red test"* into *"a runtime divergence cannot reach
-production"*.
+**Remediation (`nexusqa-db`), with a de-risking sequence — land it in TWO steps:**
+
+1. **Land the 3.10 leg NON-BLOCKING first** — a separate advisory job (or
+   `continue-on-error`) running the convergence sweep under 3.10 alongside the
+   existing 3.11 leg, **reporting without gating**. It is not in `a11-gate`'s
+   `needs`, so it structurally cannot redden a required check.
+2. **Promote it to a required check** once it has been observed stable across
+   several runs.
+
+The sweep must assert the copies agree *within* each interpreter **and across
+both** — the cross-version comparison is the load-bearing half, because on the
+failing case both copies agreed under each interpreter separately.
+
+**Why the two-step sequence rather than one matrix line.** Adding a 3.10 leg to a
+required check risks reddening freshly-green gates for an unrelated dependency
+reason, on a tree whose merges have not started — a real hazard, not caution.
+But **step 1 is already a machine**: it EMITS, so the gap stops being prose the
+moment it lands, which is what CERT-FINDING-1's test actually demands. Emission
+now, gating after evidence.
+
+**Owner routing:** **T2**, who own CI and integration, as a post-merge follow-up.
+The Gate 5 trigger above stands as the backstop if it slips.
+
+**Deliberately NOT written by `nexusqa-db`.** They are the verification session
+for this chain — they reproduced CERT-FINDING-2, ran the 12-vector cross-check,
+held the closure at `876b105` and verified the 8/8 at `14b3957`. **If they write
+the matrix they cannot verify the matrix**, and author≠certifier is the rule that
+carried this entire chain, including the author's own refusal to certify their
+own fix. Declining implementation work to preserve that property is the correct
+trade, and it is recorded here so the next reader does not mistake it for
+reluctance.
 
 **Why this is not an OPEN row in the status table.** The table's OPEN rows are
 keyed to failures the harness EMITS — that is what makes the CI cross-check
