@@ -1,10 +1,10 @@
 {
   "advance_blocked": [],
   "advance_oracle": {
-    "consults": 0,
+    "consults": 1,
     "errors": 0,
     "latency_ms_total": 0,
-    "picks": 0,
+    "picks": 1,
     "state": "configured",
     "unavailable": 0
   },
@@ -24,17 +24,22 @@
           "action_token": "a1",
           "label": "",
           "verb": "navigate"
+        },
+        {
+          "action_token": "a3",
+          "label": "",
+          "verb": "navigate"
         }
       ],
       "auth_pattern": "none",
       "first_sequence": 1,
-      "first_timestamp_ms": 2625,
+      "first_timestamp_ms": 1141,
       "has_server_error": false,
-      "host": "127.0.0.1:64346",
-      "last_sequence": 2,
-      "last_timestamp_ms": 33219,
+      "host": "127.0.0.1:63189",
+      "last_sequence": 4,
+      "last_timestamp_ms": 57016,
       "method": "GET",
-      "observed_count": 2,
+      "observed_count": 3,
       "path_template": "/api/config",
       "rate_limited": false,
       "request_keys": [],
@@ -47,7 +52,7 @@
         "2xx"
       ],
       "statuses": {
-        "200": 2
+        "200": 3
       }
     },
     {
@@ -56,17 +61,22 @@
           "action_token": "a2",
           "label": "Get Quote",
           "verb": "click"
+        },
+        {
+          "action_token": "a4",
+          "label": "Get Quote",
+          "verb": "click"
         }
       ],
       "auth_pattern": "none",
       "first_sequence": 3,
-      "first_timestamp_ms": 48329,
+      "first_timestamp_ms": 43125,
       "has_server_error": false,
-      "host": "127.0.0.1:64346",
-      "last_sequence": 3,
-      "last_timestamp_ms": 48329,
+      "host": "127.0.0.1:63189",
+      "last_sequence": 5,
+      "last_timestamp_ms": 71938,
       "method": "POST",
-      "observed_count": 1,
+      "observed_count": 2,
       "path_template": "/api/quote",
       "rate_limited": false,
       "request_keys": [
@@ -82,7 +92,7 @@
         "2xx"
       ],
       "statuses": {
-        "200": 1
+        "200": 2
       }
     }
   ],
@@ -96,31 +106,80 @@
   "filled_by_kind": {},
   "flow_summary": {
     "advance_contradicts_fills": 0,
-    "advances_by_tier": {},
+    "advances_by_tier": {
+      "3": 1
+    },
     "boundaries_crossed": 0,
     "branch_coverage": false,
     "branch_coverage_note": "One path per journey. At each decision point a single option was taken, so business paths behind the other options were not visited.",
     "deepest_flow_capped": false,
-    "deepest_flow_proven_steps": 0,
-    "deepest_flow_steps": 0,
-    "deepest_flow_terminal": "",
-    "flows_completed": 0,
-    "flows_found": 0,
-    "flows_fully_answered": 0,
+    "deepest_flow_proven_steps": 2,
+    "deepest_flow_steps": 2,
+    "deepest_flow_terminal": "no_advance",
+    "flows_completed": 1,
+    "flows_found": 1,
+    "flows_fully_answered": 1,
     "flows_truncated": 0,
     "intent_unmet": 0,
     "journeys_completed": 0,
-    "oracle_advances": 0,
+    "oracle_advances": 1,
     "truncation_reasons": {}
   },
-  "flows": [],
+  "flows": [
+    {
+      "advance_contradicts_fills": false,
+      "completed": true,
+      "entry_fingerprint": "4d4c87704c694b1a35a56f6f609d4997c08ede85c3536c663270485f441c1443",
+      "entry_title": "Quote Start",
+      "entry_url": "http://127.0.0.1:63189/",
+      "fields_filled_total": 0,
+      "fields_unanswered": 0,
+      "flow_id": "12c52cafcece911c79070a79",
+      "fully_answered": true,
+      "journey_completed": false,
+      "outcome_milestone": null,
+      "outcome_values": [
+        {
+          "label": "Your monthly premium",
+          "value": "42.50",
+          "value_type": "number"
+        }
+      ],
+      "step_budget": 20,
+      "step_count": 2,
+      "steps": [
+        {
+          "advance": {
+            "control_name": "Get Quote",
+            "oracle": true,
+            "signature": "a22-forward",
+            "tier": 3
+          },
+          "fields_filled": 0,
+          "fields_unfilled": 0,
+          "fingerprint": "4d4c87704c694b1a35a56f6f609d4997c08ede85c3536c663270485f441c1443",
+          "title": "Quote Start",
+          "url": "http://127.0.0.1:63189/"
+        },
+        {
+          "fields_filled": 0,
+          "fields_unfilled": 0,
+          "fingerprint": "160c75605a41f618234fec56c34f67c38d20190f5e37ed40343bd7eb8d331224",
+          "title": "Quote Result",
+          "url": "http://127.0.0.1:63189/result.html"
+        }
+      ],
+      "terminal": "no_advance",
+      "terminal_url": "http://127.0.0.1:63189/result.html"
+    }
+  ],
   "forms_confirmed": 0,
   "forms_found": 0,
   "forms_submitted": 0,
   "inventory_failure_detail": "",
   "inventory_failures": 0,
   "journeys_completed": 0,
-  "network_events_observed": 3,
+  "network_events_observed": 5,
   "network_server_error_count": 0,
   "network_server_errors": [],
   "opaque_surfaces": [],
@@ -139,6 +198,7 @@
       "controls_total": 1,
       "danger_controls": 0,
       "danger_names": [],
+      "displayed_values": [],
       "endpoints": [
         {
           "method": "GET",
@@ -154,7 +214,41 @@
         }
       ],
       "form_snapshot_signals": {},
-      "location": "http://127.0.0.1:64346/",
+      "location": "http://127.0.0.1:63189/",
+      "question_groups": []
+    },
+    {
+      "ax_fingerprint": "160c75605a41f618234fec56c34f67c38d20190f5e37ed40343bd7eb8d331224",
+      "controls_total": 0,
+      "danger_controls": 0,
+      "danger_names": [],
+      "displayed_values": [
+        {
+          "label": "Your monthly premium",
+          "selector": "#premium-value",
+          "text": "42.50",
+          "value_candidate": "true",
+          "value_confidence": "0.55",
+          "value_reason": "number value under an outcome label",
+          "value_type": "number"
+        }
+      ],
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "/api/config",
+          "response_mime": "application/json",
+          "status": "200"
+        },
+        {
+          "method": "POST",
+          "path": "/api/quote",
+          "response_mime": "application/json",
+          "status": "200"
+        }
+      ],
+      "form_snapshot_signals": {},
+      "location": "http://127.0.0.1:63189/result.html",
       "question_groups": []
     }
   ],

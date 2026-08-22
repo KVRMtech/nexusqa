@@ -327,7 +327,49 @@ _NEGATIVE_OPTION_HINTS = frozenset({"no", "none", "n/a", "na", "decline", "never
 #: adds ``reference`` so a policy number / confirmation reference captured at the
 #: tail (policy issue) is kept as evidence — value_infer already classifies those
 #: as ``reference``. Value-free: a type label, never the value itself.
+#:
+#: These cross on their TYPE ALONE. P4 deliberately excluded ``number``/``date``
+#: as low-signal noise that would dilute the evidence, and that judgement stands
+#: — a bare number on a page is usually a count, an age or a page index.
 _BOUNDARY_OUTCOME_TYPES = ("currency", "decision", "percent", "reference")
+
+#: A2.2 — TYPES THAT CROSS ONLY WHEN value_infer CALLED THEM A CANDIDATE.
+#:
+#: THE CONFLICT THIS RESOLVES, because both sides were right. P4 excluded
+#: ``number`` as noise (above). qe-central's ``journey_spec._NUMERIC_VALUE_TYPES``
+#: — the set a compiled specification can assert numerically — is
+#: {currency, number, percent, decimal}, so the consumer has always been willing
+#: to assert a number. The two rules collide on exactly one shape, and it is the
+#: shape that matters: a funnel that renders its premium as a bare ``42.50``
+#: produced a walked journey with ``outcome_values: []`` and a generated spec
+#: with nothing to assert. Measured on the M2.4 quote funnel, where the manifest
+#: held both the value and its selector the whole time.
+#:
+#: The discrimination already exists and neither side was using it.
+#: ``value_infer.infer_candidate`` does not treat every number alike: a number is
+#: a candidate ONLY under an outcome label ("Your monthly premium"), and is
+#: ``is_candidate=False`` otherwise — the same rule it applies to ``reference``.
+#: So the noise P4 refused and the outcome M2.4 needs are already separable, and
+#: this admits the second without admitting the first.
+#:
+#: Deliberately NOT extended to ``date``: P4 excluded it, no consumer asserts on
+#: it, and nothing has measured a case for it. One type, one reason.
+_CANDIDATE_ONLY_OUTCOME_TYPES = ("number",)
+
+
+def is_boundary_outcome(value: Mapping[str, Any]) -> bool:
+    """Does this displayed value belong on a walked flow's terminal as evidence?
+
+    Replaces four copies of ``value_type in _BOUNDARY_OUTCOME_TYPES``, which is
+    why the candidacy rule could not previously be expressed: the filter had no
+    single home. ``value_candidate`` is the string ``"true"``/``"false"`` that
+    ``state_identity._displayed_values`` stamps from ``infer_candidate``.
+    """
+    vtype = str(value.get("value_type") or "")
+    if vtype in _BOUNDARY_OUTCOME_TYPES:
+        return True
+    return (vtype in _CANDIDATE_ONLY_OUTCOME_TYPES
+            and str(value.get("value_candidate") or "").lower() == "true")
 
 def _next_action_decisions(
     controls: Sequence[Mapping[str, Any]], fingerprint: str,

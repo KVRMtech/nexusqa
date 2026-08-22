@@ -42,3 +42,24 @@ boto3==1.35.36
 # timings-only without psutil rather than failing, so this pin is what makes the
 # memory and CPU columns of the baseline present instead of "not measured".
 psutil==7.0.0
+# M3.1 / T-VIS-05 — the pixel redaction that must run BEFORE any screenshot can
+# egress to a model (app/pixel_redaction.py), and the perceptual hash that gives a
+# canvas app distinct state fingerprints (app/perception.py).
+#
+# UNDECLARED UNTIL NOW, AND THAT WAS NOT A HARMLESS OMISSION. Both modules import
+# Pillow lazily and degrade honestly without it — `redact_screenshot` returns None
+# and the vision path treats None as "do not send", so no image has ever leaked.
+# What DID happen is quieter: four test modules skip at import when PIL is absent,
+# so `qe-explorer-tests` reported `1967 passed, 4 skipped` and the four skip lines
+# concealed 69 tests. Among them is the whole of test_vision_loop.py — the unit
+# suite for the law that a vision prediction is never catalog truth until R0
+# verifies it. The single most safety-critical promotion rule in this engine had
+# never executed in CI, and the lane was green throughout.
+#
+# The failure class is the one this repository keeps rediscovering: a missing
+# dependency produces a SMALLER true suite, never a failing one.
+#
+# Exact pin, like every other dependency in this container. 10.4.0 is the highest
+# release inside the >=10.2,<11.0 range that engines/eyes-engine already runs, so
+# the two services that decode PNGs agree on the decoder.
+Pillow==10.4.0

@@ -48,7 +48,7 @@ from .auth import (
     match_login_controls,
     match_secret_field,
 )
-from .browser import BrowserPort, PageObservation
+from .browser import BrowserPort, PageObservation, _norm_url
 from .coverage import CoverageLedger
 from .emitter import MetaEmitter
 from .filler import ControlFiller, _FIELD_KINDS
@@ -75,6 +75,7 @@ from .crawl_constants import (  # noqa: F401  (re-exported public vocabulary)
     _ACTUATOR_KINDS,
     _AUTH_SESSION_RE,
     _BOUNDARY_OUTCOME_TYPES,
+    is_boundary_outcome,
     _E2E_WIZARD_ADVANCES,
     _E2E_WIZARD_STEPS,
     _ENTRY_GOTO_RETRIES,
@@ -597,7 +598,36 @@ class DiscoveryMixin:
         last_seen = self._clock.now_ms()
         # ANSWERS P1.B — capture rendered value nodes in the page's FINAL state (after
         # fills + discovery clicks reveal outputs like a computed premium).
+        #
+        # A2.2 — ...BUT ONLY IF IT IS STILL THIS PAGE. The whole point of reading
+        # LAST is that a discovery click can REVEAL an output in place, and that
+        # revealed premium belongs to this state. A discovery click can equally
+        # NAVIGATE, and then this read lands on a different document while
+        # ``fingerprint`` still names the one we started on — so another page's
+        # outputs are attributed to this state.
+        #
+        # Measured on the M2.4 quote funnel: `_discover` clicked "Get Quote", the
+        # browser moved to /result.html, and the ENTRY state was recorded carrying
+        # "Your monthly premium = 42.50" — a value that page never renders. The
+        # fold then produced an entry node claiming the result node's outcome.
+        # Invisible until A2.2 admitted outcome states into coverage, because
+        # before that neither page reached the index at all.
+        #
+        # The same-document test is ``browser._norm_url``, deliberately: it is the
+        # one R0 already uses to decide whether a click navigated, so "did we move"
+        # gets one answer across the engine — cosmetic anchors and trailing slashes
+        # do not count, an SPA hash-route change does.
         displayed_values = await self._port.collect_displayed_values()
+        if displayed_values:
+            url_now = await self._port.current_url()
+            if _norm_url(url_now or "") != _norm_url(obs.url or ""):
+                logger.info(
+                    "qec.discovery.displayed_values_dropped from=%s to=%s count=%d "
+                    "— discovery navigated away, so these values are another "
+                    "page's and are not this state's evidence",
+                    (obs.url or "")[:120], (url_now or "")[:120],
+                    len(displayed_values))
+                displayed_values = []
         # API/network mining — drain the XHR/fetch calls the app made during this
         # visit (diagnostics-only; the app's real API surface as grounded evidence).
         # Best-effort: a port without the verb yields nothing, never breaks a crawl.
@@ -711,11 +741,51 @@ class DiscoveryMixin:
                     snapshot_controls,
                     list(await self._answer_to_unblock(
                         snapshot_controls, blocked_label, obs.url or "", fill)))
-        if self._wizard_enabled and is_form and fill is not None and (fill.filled or fill.has_unanswered_decisions):
+        # A2.2 — A STEP WHOSE ONLY ANSWER IS A BUTTON IS STILL A STEP.
+        #
+        # ``is_form`` requires a FILLABLE control, so a page that asks its question
+        # with buttons alone (a "Get Quote" funnel, a Yes/No triage step, most
+        # SPA wizards) was never a form, never had a ``fill``, and could never open
+        # this gate. It fell to the ``not is_form`` fork branch below and was
+        # recorded as a one-step decision — so an application the crawl DID actuate
+        # end to end reported ``forms_found=0``, ``flows=0``, ``journeys_completed=0``.
+        # That is the A22 blocker, and it is not a property of the application.
+        #
+        # WHY OPENING THE GATE IS SAFE, stated as a property of the code and not as
+        # an intention. ``_walk_wizard`` never took ``fill`` — it picks its advance
+        # control out of ``controls`` and every gate that protects a click lives
+        # INSIDE it: the danger gate, the approved-submit-name exclusion, Tier 1's
+        # per-control commit veto, Tier 2's destination-only rule, the commit filter
+        # applied before Tier 3 sees a candidate, and the fail-closed advance rule
+        # (a real observed effect AND a new unseen state). Nothing here weakens any
+        # of them; this only stops refusing to ASK.
+        #
+        # AND IT CANNOT LOSE A RECORDING. ``walked`` is what suppresses the two
+        # fallback branches below. If the walk declines — ``_pick_advance`` returns
+        # no control, which is what a hub full of links does — ``walked`` stays
+        # False and the ``not is_form`` fork branch records exactly what it recorded
+        # before. The change is therefore strictly additive: it can turn "no journey"
+        # into "a walked journey", never the reverse.
+        #
+        # Scoped to pages holding a BUTTON. A page whose only controls are links is
+        # discovery's job (``_enqueue_link_hrefs``), and opening the gate for it
+        # would consult the advance tiers — including the Tier-3 oracle — on every
+        # hub in the crawl, which is a cost decision nobody asked for.
+        bare_button_step = (
+            not is_form
+            and any(c.get("kind") == "button" for c in snapshot_controls)
+        )
+        if self._wizard_enabled and (
+            (is_form and fill is not None
+             and (fill.filled or fill.has_unanswered_decisions))
+            or bare_button_step
+        ):
             entry_pick = await self._pick_advance(
                 snapshot_controls, obs.url, obs.title, fingerprint)
-            logger.info("qec.wizard.gate_open url=%s filled=%d pick=%r",
-                        obs.url, fill.filled,
+            logger.info("qec.wizard.gate_open url=%s filled=%s bare_button=%s pick=%r",
+                        obs.url,
+                        fill.filled if fill is not None else "n/a",
+                        bare_button_step,
                         str((entry_pick.control or {}).get("name") or "")[:40])
             walked = await self._walk_wizard(
                 item=item, url=obs.url, title=obs.title, controls=snapshot_controls,
@@ -778,8 +848,7 @@ class DiscoveryMixin:
                 # only after the value-oracle inference.
                 outcome_values=[
                     v for v in _displayed_values(displayed_values or ())
-                    if str(v.get("value_type") or "")
-                    in _BOUNDARY_OUTCOME_TYPES],
+                    if is_boundary_outcome(v)],
                 max_steps=self._max_wizard_steps))
             owned_flow_index = len(self._flows) - 1
         # A NON-form page that is a next-action fork (a quote summary: Apply Now /
@@ -803,8 +872,7 @@ class DiscoveryMixin:
                     terminal_url=obs.url,
                     outcome_values=[
                         v for v in _displayed_values(displayed_values or ())
-                        if str(v.get("value_type") or "")
-                        in _BOUNDARY_OUTCOME_TYPES],
+                        if is_boundary_outcome(v)],
                     max_steps=self._max_wizard_steps))
                 owned_flow_index = len(self._flows) - 1
         if not walked:

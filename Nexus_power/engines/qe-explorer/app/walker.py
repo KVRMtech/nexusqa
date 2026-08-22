@@ -83,6 +83,7 @@ from .crawl_constants import (  # noqa: F401  (re-exported public vocabulary)
     _ACTUATOR_KINDS,
     _AUTH_SESSION_RE,
     _BOUNDARY_OUTCOME_TYPES,
+    is_boundary_outcome,
     _E2E_WIZARD_ADVANCES,
     _E2E_WIZARD_STEPS,
     _ENTRY_GOTO_RETRIES,
@@ -467,6 +468,51 @@ class WalkerMixin:
             if verdict.irreversible:
                 continue
             if name.lower() in getattr(self, "_submit_approvals", ()):  # a submit
+                continue
+            # A2.2 — FIFTH VETO: A STEP'S ONLY FORWARD CONTROL IS NOT PERSISTENCE.
+            #
+            # The four vetoes above are all LEXICAL, and the label cannot settle
+            # this one. "Get Quote" satisfies every rule here — PERSISTENCE_RE
+            # matches it whole, it carries no commit word and no advance word —
+            # and on the M2.4 quote funnel it is the funnel's ADVANCE: it POSTs
+            # /api/quote and navigates to the result page. On another application
+            # the same label recalculates a premium in place and genuinely is
+            # persistence. No regex can tell those apart, because the difference
+            # is in what the control DOES, not in what it is called.
+            #
+            # The STRUCTURE can. Persistence is by definition something a step
+            # offers ALONGSIDE its way forward — fixture 10's Save Draft sits next
+            # to a Continue, which is what makes "non-advancing" a meaningful
+            # claim about it. A control that is the step's ONLY actionable option
+            # cannot be non-advancing: if it does not move the funnel, the step is
+            # a dead end and the walk had nothing to do here anyway.
+            #
+            # WHAT IT COST TO LEARN THIS. Actuated as persistence, the click
+            # navigated, and the block that consumes the result declares
+            # "RESYNC, not advance ... the step counter must not move". So the
+            # walk silently crossed to /result.html while believing it stood
+            # still: cur_url and cur_fp were refreshed and cur_title was not,
+            # producing a page_state carrying the RESULT page's identity and the
+            # ENTRY page's title, with both states collapsed onto one
+            # fingerprint. Downstream, the journey had one step, terminal
+            # `no_advance`, zero crossings, and `build_journey_case` refused it —
+            # correctly — with "this walk never advanced past its first state".
+            #
+            # Narrow on purpose: this only ever REMOVES a persistence actuation,
+            # never adds one, and it cannot fire on any step that has a real
+            # advance to pick.
+            forward = [
+                c for c in controls or ()
+                if c is not control
+                and not c.get("disabled")
+                and c.get("kind") in ("button", "submit", "link")
+                and str(c.get("name") or "").strip()
+            ]
+            if not forward:
+                logger.info(
+                    "qec.walk.persist_declined reason=only_forward_control "
+                    "control=%r — a step's sole actionable control is its "
+                    "advance, not its persistence", name[:40])
                 continue
             return control
         return None
@@ -1836,6 +1882,10 @@ class WalkerMixin:
                         build_inventory(obs_q.raw_controls, self._refuse_pack,
                                         url=obs_q.url))
                     cur_url = obs_q.url
+                    # A2.2 — THE TITLE IS PART OF THE RESYNC. cur_url and cur_fp
+                    # were refreshed here and cur_title was not, so a step record
+                    # could carry one page's identity and another page's title.
+                    cur_title = obs_q.title or cur_title
                     # Record what THIS answer activated (trigger→child, P1): the
                     # controls that appeared after the click but were absent before
                     # it. Attached to the question just answered so the fold stores
@@ -1907,6 +1957,9 @@ class WalkerMixin:
                     build_inventory(obs_p.raw_controls, self._refuse_pack,
                                     url=obs_p.url))
                 cur_url = obs_p.url
+                # A2.2 — see the questionnaire path: the title resyncs with the
+                # url and the fingerprint, or the record is a chimera of two pages.
+                cur_title = obs_p.title or cur_title
                 # RESYNC, not advance — the same precedent (and the same
                 # reasoning) as the questionnaire path above: the page changed,
                 # we are still standing on the step we were standing on, so the
@@ -1952,8 +2005,7 @@ class WalkerMixin:
                     terminal_url=cur_url,
                     outcome_values=[
                         v for v in _displayed_values(cur_dv or ())
-                        if str(v.get("value_type") or "")
-                        in _BOUNDARY_OUTCOME_TYPES],
+                        if is_boundary_outcome(v)],
                     max_steps=self._max_wizard_steps))
                 # The journey is recorded BEFORE the crossing is attempted, so a
                 # crossing that refuses, throws or never returns still leaves the
@@ -2296,8 +2348,7 @@ class WalkerMixin:
                     # thrown away one line before it was stored.
                     outcome_values=[
                         v for v in _displayed_values(cur_dv or ())
-                        if str(v.get("value_type") or "")
-                        in _BOUNDARY_OUTCOME_TYPES],
+                        if is_boundary_outcome(v)],
                     max_steps=self._max_wizard_steps,
                     # M1.4 — WHAT the app said and on which rung, recorded with
                     # the terminal it justifies. The ledger drops both unless the

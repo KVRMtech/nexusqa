@@ -324,6 +324,9 @@ def build_journey_case(
         by_action = endpoint_map.by_action_from_edges(edges)
     attribution = endpoint_map.attribute_steps(
         path_fps, nodes_by_fp, step_labels=step_labels, by_action=by_action)
+    # A2.2 — the entry step's own recorded join; see the entry step below. Empty
+    # for a caller with no inventory, which keeps the old inferred path intact.
+    _entry_network = endpoint_map.navigate_caused(endpoint_inventory)
 
     steps: list[dict[str, Any]] = []
     entry_title = _text(_get(journey, "entry_title")) or _text(_get(nodes[0], "title"))
@@ -341,12 +344,27 @@ def build_journey_case(
             "label": "",
             "after": entry_title,
         },
-        # The entry step owns the entry state's whole endpoint map: nothing
-        # precedes it, so no earlier state's boot traffic can be confused with
-        # the calls this navigation made.
-        "network_expect": attribution[0]["assertable"] if attribution else [],
-        "network_attribution": (attribution[0]["attribution"] if attribution
-                                else endpoint_map.ATTRIBUTION_INFERRED),
+        # A2.2 — WHAT A PAGE LOAD WAS RECORDED CALLING, not what the visit
+        # drained. The line below used to read the entry state's whole endpoint
+        # map, on the reasoning that "nothing precedes it, so no earlier state's
+        # boot traffic can be confused with the calls this navigation made".
+        # Nothing EARLIER can, but something LATER can: the map is everything
+        # drained during the visit, and a discovery click fires calls too.
+        # Measured on the M2.4 quote funnel — the entry state carried both
+        # GET /api/config (its load) and POST /api/quote (a discovery click that
+        # then navigated away), so step 1 asserted a POST that opening the page
+        # does not make and the spec went RED on a healthy application.
+        #
+        # ``navigate_caused`` reads the recorded verb join the M2.5 inventory has
+        # always carried and nothing consulted, so this becomes RECORDED evidence
+        # rather than a better guess. The inferred path is kept as the fallback
+        # for a caller with no inventory (the API request path), unchanged.
+        "network_expect": (
+            _entry_network or (attribution[0]["assertable"] if attribution else [])),
+        "network_attribution": (
+            endpoint_map.ATTRIBUTION_RECORDED if _entry_network
+            else (attribution[0]["attribution"] if attribution
+                  else endpoint_map.ATTRIBUTION_INFERRED)),
     })
 
     unwalkable: list[str] = []

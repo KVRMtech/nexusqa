@@ -873,6 +873,7 @@ class StateRecorder:
         self, fingerprint: str, url: str, signals: Mapping[str, Any],
         controls: Sequence[Mapping[str, Any]] = (),
         network_calls: Sequence[Mapping[str, Any]] = (),
+        displayed_values: Sequence[Mapping[str, Any]] = (),
     ) -> None:
         """Remember WHAT THIS STATE ASKED, keyed by the fingerprint the journey
         graph uses.
@@ -921,16 +922,61 @@ class StateRecorder:
         # A page that asks nothing can still REFUSE everything, and the page that
         # most needed the danger ratio — a hub whose only controls are links —
         # has no form fields at all. Recorded when it has questions OR controls.
-        if not signals and not controls:
+        #
+        # A2.2 — OR OUTCOMES. A funnel's RESULT page is by construction a page with
+        # neither: nothing left to ask, nothing left to press, just the number the
+        # application computed. Under the two-term rule it was dropped from the
+        # index — so the one page a generated specification most needs to assert on
+        # was the one page the account was built to discard. Measured on the M2.4
+        # quote funnel: the walk reached /result.html, the manifest recorded it
+        # twice carrying `Your monthly premium`, and `coverage.states` came back
+        # EMPTY. That is the second half of the A22 blocker.
+        #
+        # WHAT IS ADMITTED IS THE STATE, NOT THE VALUES. This function is
+        # value-free by construction (see above) and stays that way: the presence
+        # of outcome values is used only as EVIDENCE THAT THIS PAGE IS WORTH
+        # INDEXING. Nothing from `displayed_values` is stored here — no label, no
+        # text, no type. The values themselves already cross on the FLOW, where
+        # `flow_ledger.build_flow(outcome_values=...)` has always carried them and
+        # where a reader expects an outcome to live. Admitting the state gives the
+        # fold a node to hang that flow's terminal step on; importing the values
+        # here would put an answer in the shapes channel, which is the one thing
+        # this boundary exists to prevent.
+        if not signals and not controls and not displayed_values:
             return
         states = self._c._states
         prev = states.get(fingerprint)
         endpoints = _merge_endpoints(
             (prev or {}).get("endpoints"), _state_endpoints(network_calls))
+        # A2.2 — THE RENDERED OUTCOMES, ACCUMULATED ON THE ENDPOINTS' RULE.
+        #
+        # Normalised through the SAME `_displayed_values` the page_state record
+        # uses, so what lands here is byte-identical to what the manifest already
+        # publishes for this state — scrubbed by `emit.scrub_value`, deduped by
+        # selector|text. This is not a new egress surface; it is the existing one,
+        # reaching the account that the fold actually reads.
+        #
+        # WHY THE VALUE AND NOT JUST THE PAGE. Admitting the state alone is not
+        # enough for A22 and the reason is specific: qe-central's
+        # `journey_spec.outcome_selectors` builds hard outcome assertions out of
+        # `node.displayed_outcomes`, whose ground is a captured SELECTOR
+        # ("an outcome with no captured selector is ungrounded"). The flow carries
+        # the outcome's VALUE; only the state can carry the selector that value is
+        # asserted against. Admit the page without them and the generated spec
+        # still cannot assert the premium — the blocker moves rather than closes.
+        #
+        # Unioned across sightings on the ENDPOINTS' rule, not the questions' rule:
+        # a value rendered on a later visit is a fact about the state whatever that
+        # visit's question count says, and the sighting that displays an outcome is
+        # very often the one that asks nothing.
+        outcomes = _displayed_values(
+            [*((prev or {}).get("displayed_values") or []), *(displayed_values or ())])
         if prev is not None and len(prev.get("form_snapshot_signals") or {}) >= len(signals):
             # The signals lose, the endpoints still win: this sighting's calls
             # are facts about the state whatever its question count says.
             prev["endpoints"] = endpoints
+            if outcomes:
+                prev["displayed_values"] = outcomes
             return
         if prev is None and len(states) >= _MAX_COVERAGE_STATES:
             return                      # bounded: coverage is a report, not a mirror
@@ -955,6 +1001,9 @@ class StateRecorder:
             },
             "controls_total": len(controls),
             "danger_controls": danger,
+            # A2.2 — see the accumulation note above. `catalog.extract_outcomes`
+            # reads exactly this key off the state.
+            "displayed_values": outcomes,
             # WHICH controls were refused, not just how many. A ratio catches a
             # rule that went broad; only the names catch a rule that took out
             # the ONE control a funnel depends on — live, `New Application`,
@@ -1047,7 +1096,7 @@ class StateRecorder:
             ordered_actions.append(_action_to_dict(action))
 
         self.note_state_signals(fingerprint, url, form_signals, controls,
-                                network_calls)
+                                network_calls, displayed_values)
         record = emit.PageStateRecord(
             sequence_index=seq,
             location=url[:2000],

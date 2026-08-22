@@ -143,7 +143,17 @@ def test_it_fires_on_a_form_the_walk_never_engages(tmp_path):
 
     src = inspect.getsource(Crawler._expand)
     call = src.index("_note_advance_blocked")
-    gate = src.index("self._wizard_enabled and is_form")
+    # ANCHORED ON THE FLAG, NOT ON THE CONDITION. This read
+    # ``"self._wizard_enabled and is_form"`` and broke the day A2.2 added a second
+    # way through the gate — a reformatting, with the guarantee below untouched.
+    # A guard that fails on its subject's punctuation reports edits, not
+    # regressions. ``self._wizard_enabled`` appears exactly once in ``_expand``
+    # (asserted here so this anchor cannot silently become ambiguous either) and
+    # it is the gate's opening token however the rest is written.
+    assert src.count("self._wizard_enabled") == 1, (
+        "the wizard gate is no longer a single site in _expand; this guard's "
+        "anchor is ambiguous and the ordering below no longer means what it says")
+    gate = src.index("self._wizard_enabled")
     assert call < gate, (
         "the legibility record is still gated behind the walk's precondition, "
         "so it cannot fire on a form the walk declines to engage")

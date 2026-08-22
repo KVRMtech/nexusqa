@@ -482,13 +482,43 @@ def test_answer_questionnaire_honors_a_forced_option_for_branch_walks(tmp_path):
 def test_boundary_outcome_types_capture_policy_reference_not_noise():
     """P4: a walked flow's terminal keeps `reference` outcomes (a policy number /
     confirmation proves issuance) alongside currency/decision/percent — but NOT
-    low-signal noise (other/number/date), which would dilute the evidence."""
+    low-signal noise (other/number/date), which would dilute the evidence.
+
+    A2.2 SHARPENED THE NUMBER RULE RATHER THAN REVERSING IT. P4's judgement — a
+    bare number is usually a count, an age or a page index, and admitting it
+    dilutes the evidence — still holds and is still asserted below. What P4 could
+    not express, because the filter was four copies of a type test with no single
+    home, is that ``value_infer`` already separates the noise from the signal: a
+    number is a CANDIDATE only under an outcome label, exactly as ``reference``
+    is. The conflict this resolves is real and was measured — qe-central's
+    ``journey_spec._NUMERIC_VALUE_TYPES`` has always been willing to assert a
+    number, so a funnel rendering its premium as ``42.50`` walked to a displayed
+    outcome and stored ``outcome_values: []``.
+    """
     from app.crawler import _BOUNDARY_OUTCOME_TYPES
+    from app.crawl_constants import is_boundary_outcome
     assert "reference" in _BOUNDARY_OUTCOME_TYPES
     assert {"currency", "decision", "percent"} <= set(_BOUNDARY_OUTCOME_TYPES)
     assert "other" not in _BOUNDARY_OUTCOME_TYPES
-    assert "number" not in _BOUNDARY_OUTCOME_TYPES
     assert "date" not in _BOUNDARY_OUTCOME_TYPES
+    # UNCHANGED: a number never crosses on its type alone.
+    assert "number" not in _BOUNDARY_OUTCOME_TYPES
+
+    # THE NOISE P4 REFUSED — still refused, now at the predicate.
+    assert not is_boundary_outcome(
+        {"value_type": "number", "value_candidate": "false"})
+    assert not is_boundary_outcome({"value_type": "number"})
+    assert not is_boundary_outcome(
+        {"value_type": "date", "value_candidate": "true"})
+    assert not is_boundary_outcome(
+        {"value_type": "other", "value_candidate": "true"})
+
+    # THE OUTCOME M2.4 ASSERTS ON — a number under an outcome label.
+    assert is_boundary_outcome(
+        {"value_type": "number", "value_candidate": "true"})
+    # Type-alone admission is unaffected by candidacy.
+    assert is_boundary_outcome(
+        {"value_type": "currency", "value_candidate": "false"})
 
 
 # ── M2.1 · T-QT-01/T-QT-04: the question, in the application's own words ───────

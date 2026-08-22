@@ -1,0 +1,72 @@
+{
+  "base_url": "http://127.0.0.1:63189",
+  "compilable": true,
+  "criticality": {},
+  "description": "",
+  "endpoints_asserted": 2,
+  "endpoints_recorded_cause": 2,
+  "expected_outcome": "no_advance",
+  "journey_id": "11a8fa3dae1fa1a7c7040b261284b96b46374a5b2bbd9a0b0cce8b8efe6713a9",
+  "name": "Verify Quote Start end to end",
+  "outcome_oracle": "soft",
+  "outcome_oracle_reason": "baseline captured \u2014 outcome criteria stay non-failing until a baseline is approved on a completed walk",
+  "provenance": "journey_direct",
+  "steps": [
+    {
+      "action": "Open Quote Start",
+      "confidence": "high",
+      "expected_result": "The Quote Start page is shown",
+      "network_attribution": "recorded",
+      "network_expect": [
+        {
+          "attribution": "recorded",
+          "method": "GET",
+          "path": "/api/config",
+          "response_mime": "json",
+          "status": "200"
+        }
+      ],
+      "observed": {
+        "after": "Quote Start",
+        "label": "",
+        "url": "http://127.0.0.1:63189/",
+        "verb": "navigate"
+      },
+      "provenance": "observed",
+      "step_number": 1
+    },
+    {
+      "action": "Click get quote",
+      "confidence": "high",
+      "expected_result": "The Quote Result state is shown",
+      "network_attribution": "recorded",
+      "network_expect": [
+        {
+          "attribution": "recorded",
+          "method": "POST",
+          "path": "/api/quote",
+          "response_mime": "json",
+          "status": "200"
+        }
+      ],
+      "observed": {
+        "after": "Quote Result",
+        "kind": "button",
+        "label": "get quote",
+        "navigation_grounded": true,
+        "next_url": "http://127.0.0.1:63189/result.html",
+        "url": "http://127.0.0.1:63189/",
+        "verb": "click"
+      },
+      "provenance": "observed",
+      "step_number": 2
+    }
+  ],
+  "test_id": "jny_9f9c6f1b0058c8081ff36e09",
+  "traversal_id": "ce1e58d66341d152a5357df56e85199eb12273a5d56d873277ba05559df9614e",
+  "unconfirmed_outcomes": [
+    "Your monthly premium"
+  ],
+  "ungrounded_outcomes": [],
+  "value_assertions": []
+}
