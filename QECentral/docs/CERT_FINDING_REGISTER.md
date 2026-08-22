@@ -834,9 +834,31 @@ record should show it.**
 
 ## A11e — OPEN FOLLOW-UP: the reproducer still runs ONE interpreter
 
-**Status: DEFERRED, not closed.** Raised by `nexusqa-db` at `14b3957`, after
-CERT-FINDING-19 was fixed and both gates went green. **Deliberately not an OPEN
-row in the table above** — see the note on why at the end of this section.
+**Status: DEFERRED, not closed.**
+**Owner: the squad that next touches `normalize_origin` or the A11 harness.**
+**Trigger: GATE 5 ENTRY — must be closed, or accepted in writing by a named
+owner, before Gate 5 certification is convened.** Raised by `nexusqa-db` at
+`14b3957`, after CERT-FINDING-19 was fixed and both gates went green.
+**Deliberately not an OPEN row in the table above** — see the note on why at the
+end of this section.
+
+> ### ⚠️ This deferral is PROSE-ONLY, and that is a known weakness of it
+>
+> A11e now has three homes: this section, a named tracked deferral against T1 in
+> the Closure Run, and the **Gate 5 ceremony read-out** — which `nexusqa-db`
+> amended so the ceremony reads the DEFERRED and *"not claimed"* lists aloud
+> beside the OPEN ones, each to be closed or accepted in writing.
+>
+> **All three are prose. None is a machine.** This register's oldest lesson
+> (CERT-FINDING-1) is that *a finding a tool emits gets tracked; a finding only a
+> human wrote down gets lost* — and the interpreter risk was already written
+> down, correctly, nine times, and handled zero times. **Three prose homes is
+> three shelves, not a forcing function.**
+>
+> **The only mechanism that converts A11e from prose into a machine is its own
+> remediation:** run the convergence sweep as a matrix over 3.10 and 3.11. Until
+> that lands, the honest description of A11e's containment is *"three people
+> wrote it down"*, and the reader should weigh it accordingly.
 
 CERT-FINDING-19 fixed the *instance*: `https://[example.test]/x` normalised two
 ways across CPython 3.10 and 3.11. **The class is still open.** The certification
