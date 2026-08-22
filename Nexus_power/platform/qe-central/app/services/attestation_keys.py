@@ -77,8 +77,11 @@ availability arguments for the envelope.  The custody design and the performance
 argument for it pull in opposite directions, and only one of them is load-bearing.
 
 So the honest summary is: we keep the envelope pattern because ``ASYMMETRIC_SIGN``
-provisioning has not been done, at a cost of roughly halving the KMS calls per
-issuance and a plaintext key in heap for the duration of one request.  That is an
+provisioning has not been done, at a cost of a plaintext key in heap for the
+duration of one request, in exchange for roughly halving the KMS calls per
+issuance.  (Halving is what the envelope BUYS — one ``decrypt`` where KMS-native
+would make two ``asymmetricSign`` calls — not what it costs; an earlier draft of
+this sentence had that sign inverted, which is NEW-CERT-FINDING-5.)  That is an
 accepted trade, revisitable on evidence, and a thinner justification than this
 file has ever previously admitted to.  What we use is the ENVELOPE (KEK re-wrap)
 pattern established in M0.5, which is also what ``services/signing.py`` was
@@ -109,8 +112,12 @@ That residual risk is bounded by rotation (below) and detected by KMS audit
 logs.  It is a documented, accepted assumption — not a gap.  It is NOT, as this
 file previously claimed, the unavoidable price of keeping the audited Ed25519
 verifier: ``EC_SIGN_ED25519`` would remove it without touching that verifier, and
-the only ground that survives scrutiny for not doing so is the provisioning and
-IAM work above.  The risk is accepted on that ground and can be revisited on it.
+the only ground substantial enough to be decisive is the provisioning and IAM
+work above.  (Two grounds survive scrutiny, not one — latency is retained above
+in reduced form, at roughly 2x the KMS calls per issuance; only AVAILABILITY
+COUPLING was withdrawn as false.  Saying "the only ground that survives" here
+understated the case and contradicted the bullets fifteen lines up.)  The risk is
+accepted on those grounds and can be revisited on them.
 
 THE PRIVATE KEY NEVER CROSSES A MODULE BOUNDARY
 ===============================================

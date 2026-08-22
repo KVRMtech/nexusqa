@@ -1,7 +1,10 @@
 # A11 / T-WP-02 — Independent Certification Record
 
-**Verdict: CERTIFIED WITH FINDINGS.** Neither finding is a security bypass; both
-fail closed. A12 / T-WP-01 is **unblocked** by this record.
+**Verdict: CERTIFIED. Zero open findings** as of the 2026-08-21 re-certification
+below. The original verdict was CERTIFIED WITH FINDINGS; both findings, and the
+four raised while closing them, are now closed and re-certified against a named
+SHA by a non-author squad. No finding in this chain was ever a security bypass —
+every one failed closed. A12 / T-WP-01 is **unblocked** by this record.
 
 | | |
 |---|---|
@@ -12,6 +15,62 @@ fail closed. A12 / T-WP-01 is **unblocked** by this record.
 | Branch | `feat/qec-dynamic-catalog-p0-p6` |
 | Artifact | 9 files, pinned by SHA-256 in `Nexus_power/certification/a11/A11_SNAPSHOT.sha256` |
 | Reproducer | `bash Nexus_power/certification/a11/run_certification.sh` |
+
+> ---
+>
+> ### ✅ RE-CERTIFIED 2026-08-21 — BOTH ORIGINAL FINDINGS CLOSED, ZERO OPEN
+>
+> **Verdict at `da5b5d0`: CERTIFIED. No open findings.** Issued by a non-author
+> squad from a clean `git archive` of the pushed SHA. The author of the fixes did
+> not certify them, and the certifier did not write, edit or review-by-authorship
+> any of the code it certified.
+>
+> | | |
+> |---|---|
+> | Implementation | `d0605ba` (CERT-FINDING-1 + CERT-FINDING-2), `da5b5d0` (CERT-FINDING-3 + CERT-FINDING-4) |
+> | Certified SHA | `da5b5d0`, plus the accounting commit that re-pins this record |
+> | Reproducer | **151 checks, 0 failures, exit 0** — `run_certification.sh` end to end, drift gate live |
+> | Findings open | **0** (six raised across the whole chain, six closed) |
+> | Corroboration | `nexusqa-db` and `nexusqa-39` each measured independently, neither told what to expect |
+>
+> **The check count is 151, not the 150 this record and the register both predict
+> in print, and that is the fix working.** `verify_side.py` gates its budget
+> assertion on `if v.authorized`, so while the IPv6 grant was refused that check
+> never ran. It runs now. The harness files are byte-identical across
+> `d0605ba^`, `d0605ba` and `da5b5d0`, so the count could not have been gamed;
+> the certifier proved the delta by set-differencing the check labels — exactly
+> one added, none removed. See the register for the full accounting.
+>
+> **What certification caught that the author's own tests could not.** The
+> author's suites were green at every point in this chain. Three of the six
+> findings were raised against the *fixes themselves*, by a party reading the code
+> behind the prose:
+>
+> * CERT-FINDING-3 — the replacement KMS rationale was false the same way the
+>   original was, because it claimed a latency and availability advantage this
+>   system does not have.
+> * CERT-FINDING-4 — a residual non-idempotent class (`https://[::1@evil]/x`) that
+>   the IPv6 class fence did not reach.
+> * CERT-FINDING-5 — the corrected rationale contradicted its own bullets, with an
+>   inverted sign on the one surviving figure.
+>
+> **It took three passes to state one design decision truthfully.** That is the
+> argument for independent certification stated as cheaply as it can be stated.
+>
+> **What this re-certification does NOT claim.** Everything ran against source in
+> scratch archives on one Windows box under CPython 3.10.11 — no deployment, no
+> real IPv6 host, no live Cloud KMS, no database. The IPv6 interop is proven
+> across two *processes*, not two deployed services. The vector space is not
+> exhausted: 134 hand-chosen vectors, not a fuzzer over the URL grammar —
+> CERT-FINDING-4 exists precisely because round 1's 98 were not enough. What
+> bounds the residual risk is not enumeration but the guard's monotonicity
+> (`N_new(u) ∈ {"", N_old(u)}`), which is proven by construction. Environments
+> provisioned before `d0605ba` on an IPv6 or malformed host are **not
+> auto-repaired** and must be re-certified; that consequence was established by
+> code-read, not executed against a provisioning table. The 2026-08-20 record's
+> claim-by-claim review of the security core was not repeated.
+>
+> ---
 
 > ---
 >

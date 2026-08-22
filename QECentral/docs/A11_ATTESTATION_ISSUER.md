@@ -672,7 +672,7 @@ Stated explicitly, because no undocumented trust assumptions are permitted.
    and skipped without Postgres; CI runs it. The migration follows the qec_003
    pattern exactly, but "follows the pattern" is not "was verified against a
    database".
-7. **Two findings from the independent certification are OPEN.** FINDING 1 (the
+7. **All findings from the independent certification are CLOSED.** Both original findings (CERT-FINDING-1, the false KMS rationale; CERT-FINDING-2, IPv6 `normalize_origin`) were fixed at `d0605ba`, and the four raised while closing them at `da5b5d0` and after. Zero open. See `CERT_FINDING_REGISTER.md`; the reproducer now runs **151 checks / 0 failures**, and `run_certification.sh` exits 0 end to end.
    false KMS rationale) is corrected in §2.1 of this document but **not yet in
    the `attestation_keys.py` docstring**, which is pinned by the certification
    snapshot. FINDING 2 (`normalize_origin` drops IPv6 brackets, so an
@@ -703,7 +703,9 @@ Reproduce:
 
 ```bash
 bash Nexus_power/certification/a11/run_certification.sh
-# 131 checks; 1 expected failure — CERT-FINDING-2 (IPv6), open by design.
+# 151 checks; 0 failures. (Was 131/1, then 150/3 as the harness grew, while
+# CERT-FINDING-1 and -2 were open. Both are closed; see CERT_FINDING_REGISTER.md
+# for why the check count ROSE to 151 as part of the fix.)
 ```
 
 ### Two findings, both open, neither a bypass

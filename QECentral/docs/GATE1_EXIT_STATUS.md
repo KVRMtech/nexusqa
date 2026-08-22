@@ -106,7 +106,7 @@ already mis-attributed one commit today.
 | qe-explorer non-browser | **2025 passed** |
 | qe-central | **2296 passed**, 146 skipped |
 | A11 author suites | **143 passed**, 0 skipped |
-| A11 independent certification | 9/9 digests, **131 checks**, 1 known finding (CERT-FINDING-2) |
+| A11 independent certification | 9/9 digests, **151 checks, 0 failures, 0 open findings** (re-certified 2026-08-21 at `da5b5d0`) |
 | A12 walk persistence (Chromium) | **7 passed** |
 | Browser lane, targeted | **48 passed** |
 | Browser lane, full (during concurrent golden rewrite) | 571 passed / **23 failed** — all `test_manifest_golden[...]` |
@@ -139,13 +139,13 @@ isolation in jsdom, no `innerText`, no canvas 2D context, no frame-locator).
 
 ## 4. Outstanding, carried forward
 
-* **CERT-FINDING-2 (IPv6)** — `normalize_origin` strips IPv6 brackets and cannot
+* **CERT-FINDING-2 (IPv6)** — **CLOSED at `d0605ba`, re-certified.** Retained below for the record. Originally: `normalize_origin` strips IPv6 brackets and cannot
   re-parse its own output, so an IPv6 environment receives a valid signed proof
   that is guaranteed to be refused. Fix must land in **both** duplicated copies
   (`qe-explorer/app/attest.py`, `qe-central/app/services/walk_attestation.py`).
   It edits `attest.py`, which the certification snapshot pins, so it must land
   **together with re-certification**.
-* **CERT-FINDING-1 (KMS rationale)** — the documented justification for holding a
+* **CERT-FINDING-1 (KMS rationale)** — **CLOSED at `d0605ba`, re-certified.** Retained below for the record. Originally: the documented justification for holding a
   plaintext Ed25519 key in process heap is factually false; the decision needs
   re-taking on true grounds. Not a code change by itself.
 * **Gate 1 is not DEPLOYED.** A6 is now live-proven (§5); A7–A13 are not. A12 is

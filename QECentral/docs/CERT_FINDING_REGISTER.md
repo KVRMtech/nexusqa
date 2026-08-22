@@ -11,8 +11,27 @@ by assertion.
 
 | ID | Severity | Status | Against | Raised by | Tracked as |
 | --- | --- | --- | --- | --- | --- |
-| CERT-FINDING-1 | Material (documentation / design rationale) | **OPEN** | `qe-central/app/services/attestation_keys.py` | A11 independent certification, 2026-08-20 | — |
-| CERT-FINDING-2 | Medium (correctness / availability; fails closed) | **OPEN** | `qe-explorer/app/attest.py` + `qe-central/app/services/walk_attestation.py` | A11 independent certification, 2026-08-20 | **A11a** |
+| CERT-FINDING-1 | Material (documentation / design rationale) | **CLOSED** | `qe-central/app/services/attestation_keys.py` | A11 independent certification, 2026-08-20 | — |
+| CERT-FINDING-2 | Medium (correctness / availability; fails closed) | **CLOSED** | `qe-explorer/app/attest.py` + `qe-central/app/services/walk_attestation.py` | A11 independent certification, 2026-08-20 | **A11a** |
+| CERT-FINDING-3 | Low (documentation / design rationale) | **CLOSED** | `qe-central/app/services/attestation_keys.py` | A11 re-certification round 1, 2026-08-21 | — |
+| CERT-FINDING-4 | Informational (correctness; fails closed; pre-existing) | **CLOSED** | `qe-explorer/app/attest.py` + `qe-central/app/services/walk_attestation.py` | A11 re-certification round 1, 2026-08-21 | — |
+| CERT-FINDING-5 | Low (documentation / design rationale) | **CLOSED** | `qe-central/app/services/attestation_keys.py` | A11 re-certification round 2, 2026-08-21 | — |
+| CERT-FINDING-6 | Medium (process / CI accounting) | **CLOSED** | `.github/workflows/a11-attestation-certification.yml` | Implementation squad 2026-08-21; confirmed by `nexusqa-39` + `nexusqa-db` | **A11d** |
+
+**ZERO OPEN.** The A11 certification is intact with no open findings, re-issued
+against a named SHA by a non-author squad — see `A11_INDEPENDENT_CERTIFICATION.md`.
+The certifier numbered findings 3–5 `NEW-CERT-FINDING-n`; they are renumbered here
+without the prefix so the table has one id vocabulary.
+
+> **This table is load-bearing for CI.** `a11-attestation-certification.yml`
+> parses these rows and fails unless its `EXPECTED_FAILURES` literal equals the
+> number of **OPEN** ones. Opening a finding without raising that count, or
+> dropping the count without closing a row, fails the build — so the number and
+> the reason for it can only move in the same diff. That is CERT-FINDING-6's
+> remediation, and it is why the Status column is a fixed vocabulary
+> (`OPEN` / `CLOSED`) rather than prose. The parser also fails closed when this
+> file is unreadable or the table shape changes: it must never mistake *"I cannot
+> see the register"* for *"nothing is open"*.
 
 Full statements: `A11_INDEPENDENT_CERTIFICATION.md` §4.
 
@@ -20,7 +39,10 @@ Full statements: `A11_INDEPENDENT_CERTIFICATION.md` §4.
 
 ## CERT-FINDING-1 — the KMS rationale is factually false
 
-**Status: OPEN.** Not a merge blocker. Not exploitable.
+**Status: CLOSED at `d0605ba`**, re-certified by a non-author squad. Never a
+merge blocker, never exploitable. Correcting it took three attempts: the
+replacement rationale was itself found false (CERT-FINDING-3) and then found to
+contradict its own bullets (CERT-FINDING-5). Both are closed; see below.
 
 `attestation_keys.py` accepts a real residual risk — the plaintext Ed25519
 private key lives in qe-central's heap for the duration of a signature, and
@@ -103,8 +125,10 @@ converting a finding will reach for the single check; this is why not to.
 
 ## CERT-FINDING-2 — `normalize_origin` is not idempotent for IPv6 literals
 
-**Status: OPEN.** Tracked as **A11a**. Not a merge blocker. **Not a bypass —
-fails closed.** Independently reproduced by `nexusqa-db`.
+**Status: CLOSED at `d0605ba`**, re-certified at `da5b5d0`. Tracked as **A11a**.
+Never a bypass — it failed closed throughout. Independently reproduced by
+`nexusqa-db`, who also independently confirmed the fix: 12/12 vectors clean, and
+both stale broken outputs still returning the mismatch sentinel.
 
 `normalize_origin` strips the brackets from an IPv6 host and emits a string it
 cannot re-parse:
@@ -204,7 +228,9 @@ forces this register to be updated in the same diff before the pipeline can
 green. The pattern is already proven in platform-api's `_KNOWN_REGRESSIONS` +
 XPASS-fails gate.
 
-**Expected failure count while both findings are open: 3.**
+**Expected failure count while both findings were open: 3. It is now 0**, and
+the workflow no longer carries that number as a hand-maintained literal alone -
+see CERT-FINDING-6.
 
 | Emitted failure | Finding | Layer |
 | --- | --- | --- |
@@ -220,6 +246,22 @@ count, so a reviewer can tell a hardening from a regression:**
 | 131 / 1 | original certification — CERT-FINDING-2 found via one IPv6 grant |
 | 148 / 2 | A11b: the IPv6 class fenced (symptom + cause separated) |
 | 150 / 3 | CERT-FINDING-1 made tool-emitted instead of prose-only |
+| **151 / 0** | **both findings fixed at `d0605ba`** — read the note below before concluding anything |
+
+**READ THE 150 → 151 RISE BEFORE CONCLUDING ANYTHING.** This register predicted
+150 in print, and *"expected 150, got 151"* is exactly the shape that reads as a
+regression to someone checking a literal. It is not. `verify_side.py` runs its
+budget assertion only `if v.authorized`, so while the IPv6 grant was refused,
+that one check never ran at all. With the grant authorising, the IPv6 case now
+executes the same **13** checks every other grant executes.
+
+Nothing was added to the harness: `issue_side.py` and `verify_side.py` are
+**byte-identical** at `d0605ba^`, `d0605ba` and `da5b5d0`, so the count cannot
+have been gamed. Three parties measured 151/0 independently — the certifier of
+record, `nexusqa-39`, and the implementation squad — and the certifier proved
+the delta by set-differencing the check LABELS: exactly one added
+(`ipv6: budget 1 == min(requested=1, fleet=3)`), none removed. **A dead check
+coming back to life is coverage restored, not a moved goalpost.**
 
 Each rise is the harness covering *more*, not the product getting worse. **All
 three go to 0 in one commit** when A11a and CERT-FINDING-1 land together; if the
@@ -235,8 +277,231 @@ diverge: **fix both, or pin them identical.**
 **Not fixed by the certifier, deliberately:** editing the artefact under
 certification destroys the independence the record depends on.
 
-**Closes when:** both copies are fixed together, an idempotency test exists, and
-the certification is **re-run and re-issued** against the new SHA — because the
-fix edits `attest.py`, which `A11_SNAPSHOT.sha256` pins, and therefore lapses
-the record by construction. Landing CERT-FINDING-1 in the same commit costs one
-re-certification instead of two.
+**CLOSED at `d0605ba`**, exactly as specified: `if ":" in host: host = f"[{host}]"`
+before the reassembly, **two identical executable lines in each copy**, with an
+idempotency test in both suites, and CERT-FINDING-1 landed in the same commit so
+it cost one re-certification rather than two.
+
+The certifier proved the copies had not diverged **mechanically**: the AST of
+`normalize_origin` with docstrings stripped is identical between the two files,
+with a control confirming the comparator can see a real difference. The
+idempotency tests were run against the **pre-fix** function to prove they can go
+red — 10 of 18 and 10 of 14 vectors fail there, while every control and negative
+control stays green.
+
+The fix targets the **reassembly**, not the eight reported forms. That was the
+point of the scope correction above, and it is what made the residual class
+(CERT-FINDING-4) findable rather than invisible.
+---
+
+## CERT-FINDING-3 — the *replacement* rationale was false the same way
+
+**Status: CLOSED at `da5b5d0`.** Low. Documentation only. Raised by the certifier
+of record against the fix for CERT-FINDING-1, in round 1 of re-certification.
+
+The correction to CERT-FINDING-1 replaced one false sentence with three grounds
+for keeping the envelope pattern. The certifier checked them against the code
+instead of reading them, and **two did not survive**:
+
+| Ground | Verdict |
+| --- | --- |
+| LATENCY — *"a KMS round-trip on every signature, versus one unseal per signer"* | **Misleading.** True only of a signer amortised across issuances. `active_signer` is opened inside `issue_for_crawl` and closed when the block exits — one call site, no reuse — so the envelope already pays **one KMS `decrypt` per issuance** and then signs two claims objects locally. KMS-native would be **two `asymmetricSign`** calls. The true figure is **exactly 2.0×**, not an order of magnitude. |
+| AVAILABILITY COUPLING — *"a KMS outage does not block a signer that is already live"* | **FALSE, withdrawn.** No signer is ever already live. `_unseal` raises `KeyCustodyError` and `active_signer` fails closed when `envelope is None`, so **issuance availability is already fully coupled to KMS**. Moving to `asymmetricSign` changes *which* KMS method issuance depends on, not *whether*. |
+| PROVISIONING AND IAM | **Stands.** `ASYMMETRIC_SIGN` and `ENCRYPT_DECRYPT` are distinct Cloud KMS key purposes and a key's purpose is fixed at creation, so a new key, new IAM bindings and new rotation handling are genuinely required. |
+
+**The lesson is sharper than the finding.** CERT-FINDING-1 was a false
+*impossibility*. Its replacement was a *flattering* justification — three grounds
+where the honest answer was one and a half. Both make a decision look more
+settled than it is, and the second is harder to catch precisely because nothing
+in it is flatly untrue. **Correcting a false rationale is not done when the false
+sentence is gone; it is done when the replacement has been checked against the
+code with the same hostility the original earned.**
+
+The file now also records the uncomfortable part, because it is the same fact
+twice: the signer's one-issuance scope is a deliberate *security* property — it
+bounds the plaintext-key window to one request — and it is exactly that property
+which destroys the latency and availability arguments for the envelope. The
+custody design and the performance case for it pull in opposite directions.
+
+---
+
+## CERT-FINDING-4 — a residual non-idempotent class the IPv6 fix did not reach
+
+**Status: CLOSED at `da5b5d0`.** Informational. Fails closed. **Pre-existing —
+not a regression:** byte-identical behaviour before and after `d0605ba`.
+
+```
+N('https://[::1@evil]/x')  ->  'https://evil]'  ->  ''
+```
+
+`urlsplit` splits the authority at the **last** `@`, reading `[::1` as userinfo
+and `evil]` as the host. That host contains no `:`, so the CERT-FINDING-2
+re-bracketing never fires, and the emitted origin carries an unmatched `]` it
+cannot re-parse. Of 19 non-idempotent cases in the certifier's injection round,
+`d0605ba` repaired **18**; this was the survivor.
+
+**Remediation:** in both copies, refuse when a bracket *survived* the parse —
+
+```python
+if "[" in host or "]" in host:
+    return ""
+```
+
+A bracket that survived means the authority was malformed. A bracket the parse
+*consumed* is an ordinary host and is untouched, which is what the two green
+control vectors (`https://[example.test]/x`, `https://user:pass@[::1]:8443/x`)
+exist to prove.
+
+**Why this one matters out of proportion to its severity.** CERT-FINDING-2's own
+scope correction insisted the defect was a class, not an enumeration — and the
+fix honoured that. This finding shows the *class fence itself* was drawn one step
+too narrow: "every host containing a colon" was true, and was still not the whole
+of "every host the reassembly mishandles". **A class fence is bounded by whoever
+writes the vectors.** What bounds the remaining risk is not enumeration but
+monotonicity: the guard is a pure early return, so for every input
+`N_new(u) ∈ {"", N_old(u)}` — it can only move things *into* the fail-closed
+sentinel, never out of it. The certifier verified 0 violations across 97 vectors,
+0 vectors moving out of `""`, and an equivalence-class partition in which the
+only classes that changed were malformed ones collapsing into `""`.
+
+---
+
+## CERT-FINDING-5 — the corrected rationale contradicted its own bullets
+
+**Status: CLOSED.** Low. Documentation only. Raised in round 2 of
+re-certification, against the fix for CERT-FINDING-3.
+
+Two errors in the summary paragraph, both **understating** the author's own case:
+
+1. **A sign inversion in the one surviving number.** *"…at a cost of roughly
+   halving the KMS calls per issuance and a plaintext key in heap"* — `at a cost
+   of` governed both items, but halving the KMS calls is what the envelope
+   **buys**, not what it costs. It contradicted the LATENCY bullet fifteen lines
+   above.
+2. *"the only ground that survives scrutiny"* — but LATENCY was **retained** in
+   reduced form; only AVAILABILITY was withdrawn. Two survive, not one.
+
+**The direction is the interesting part.** CERT-FINDING-1 and -3 were the file
+flattering itself. This one is the file running itself down. The correction
+overshot, which is the predictable failure mode of a third pass at the same
+paragraph — and it is still a defect, because a sign-inverted figure in the
+summary line is what a hurried engineer reads before deciding whether to revisit
+key custody. **Three passes to state one design decision truthfully**, and every
+pass was caught by someone who was not the author.
+
+---
+
+## CERT-FINDING-6 (A11d) — the gate that watches for a lapsed certification had itself lapsed
+
+**Status: CLOSED.** Medium (process). Found by the implementation squad while
+closing the accounting; independently confirmed at source by `nexusqa-39` and
+`nexusqa-db`.
+
+`a11-attestation-certification.yml` carried `EXPECTED_FAILURES=1` as a bare
+literal and referenced this register **zero times**. Nothing kept them in step:
+
+| Commit | Harness emits | Literal | State |
+| --- | --- | --- | --- |
+| `02181d0` | 1 | 1 | correct when written |
+| `0fb4275` | 2 (A11b fenced the IPv6 class) | 1 | **RED** |
+| `a947e33` | 3 (CERT-FINDING-1 made tool-emitted) | 1 | **RED** |
+| `d0605ba` | 0 (both findings fixed) | 1 | **RED** |
+
+**Proven, not inferred.** The reproducer was run from a clean `git archive` of
+`766ef3a` and its output fed through the workflow step's own logic verbatim:
+150 checks / 3 failures against an expected 1 → reproducer job fails → `a11-gate`
+**NO-GO**. So `a11-gate` had been red since `0fb4275`, for about six hours, *on a
+tree that was in exactly the state this register described*.
+
+**Why it went unnoticed is the finding, not the staleness.** A red gate with a
+plausible message — *"3 failures, expected 1"* — is indistinguishable from a
+genuinely failing gate. The certification gate failing closed looked exactly like
+the certification being incomplete, which it also was. **A gate can only be
+trusted while its expectations are as maintained as the thing it watches**, and
+this one's expectation was a hand-copied number. It has had four different
+correct values across four commits.
+
+**Remediation:** the literal stays — it is what someone greps for at 2am, and it
+still governs the comparison — but the workflow now asserts it **equals the
+number of OPEN rows in this register**, with the marker cross-checked. Moving one
+without the other fails the build.
+
+**Deliberately an assertion, not a derivation.** `nexusqa-db` proposed deriving
+the count from this register, then withdrew it in favour of the narrower form on
+the failure asymmetry: with derivation the parser is load-bearing, so a parsing
+bug produces a wrong expected count and — whenever that wrong number happens to
+equal the actual failure count — a **silent green with real failures
+outstanding**. With assert-equal, a parsing bug can only produce a **false red
+with a legible message**. Parser bugs should be noisy, not dangerous.
+
+**The parser fails closed on its own blindness.** An unreadable register, or a
+table whose shape has changed, must not read as "zero open findings" — that is
+the same shape as the single-truthy-test hole documented under CERT-FINDING-1,
+and it was reproduced during development before being fixed: with the table
+stripped out, the naive parser reported `open_count=0`, which *equals* the
+literal, and passed. It now fails with a distinct message. Verified against five
+states: both findings open (red), both closed (green), a third finding opened
+later (red), table removed (red), file missing (red).
+
+---
+
+## Two lessons this round produced, recorded because both are recurrences
+
+### 1. A check's own blind spot produces a false reading about its subject
+
+Credit: `nexusqa-db`. *"Before reporting an anomaly, verify the instrument on a
+case whose answer is known."*
+
+Three instances in one area in one day:
+
+* the single-truthy-test that would pass on a missing file (CERT-FINDING-1's
+  probe design);
+* `nexusqa-db`'s comment-stripper, which left trailing comments in place and
+  reported a divergence between the two `normalize_origin` copies that did not
+  exist — the sole delta was an inline `# malformed port in the authority`;
+* the certifier's own round-2 probe, which reported "30 unstable at 3rd
+  application" by merging two probe output formats in which index 2 meant
+  different things. The true figure was 0.
+
+In every case the instrument, not the subject, was defective — and in every case
+the false reading was *alarming* rather than reassuring, which is the only reason
+anyone looked. **The dangerous version of this class is the one that reads
+clean.** That is why every probe added in this round carries a
+"could-I-see-my-target" assertion separate from its verdict. Note that the
+certifier volunteered its own false start rather than quietly correcting it: a
+certification that hides its instrument failures is not auditable.
+
+### 2. Prose is not tracked; a tool is
+
+Already recorded under CERT-FINDING-1, and re-confirmed here from the other side.
+`nexusqa-39` re-ran the probe-integrity attack **after** the sentence was
+genuinely corrected, and that is the run that counted. Before the fix, "sentence
+corrected" and "file hidden" differed on two axes, so the probe could have
+separated them by accident. Once the finding closes, `kms_claim_present=False` is
+the *passing* value, and only the separate `kms_probe_read` assertion
+distinguishes "fixed" from "file missing". It held: file present → 151/0; file
+hidden → 151/**1**, `FAIL: CERT-FINDING-1 probe could READ attestation_keys.py`.
+
+**A probe is worth least on the day it is written and most on the day its finding
+closes**, because that is the day its passing state becomes indistinguishable
+from its blind state.
+
+---
+
+## Operational consequences carried out of this work — not findings
+
+* **No data migration ships for environments provisioned before `d0605ba`.** A
+  provisioning record whose `target_origin` was stored in the old broken form
+  (`https://2001:db8::1:8443`) now normalises to `""`, so issuance refuses at
+  `attestation_issuer.py` Gate 3 with *"pins no usable origin … re-certify the
+  environment"*. Fail-closed and self-describing, and the blast radius is nil —
+  such an environment could never have completed a walk anyway, which is the
+  defect. **But the row is not auto-repaired: affected environments must be
+  re-certified.** Established by code-read plus unit-verified `normalize_origin`
+  output; **not** executed against a provisioning table.
+* **`A11_SNAPSHOT.sha256` has no `.gitattributes` eol rule.** It is read as bytes
+  by `sha256sum -c`, which treats a trailing CR as part of the *filename*. Both
+  the reproducer and the CI job already strip CR before checking, so this is
+  currently harmless — but it is the same unpinned-extension shape that produced
+  the original lapse window, and it is recorded rather than fixed because it was
+  outside this task's scope.

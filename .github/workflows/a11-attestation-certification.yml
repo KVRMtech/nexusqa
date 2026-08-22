@@ -127,7 +127,7 @@ jobs:
 
   # ── 3. Behaviour, not just bytes: the certifier's own reproducer. ─────────
   reproducer:
-    name: independent reproducer (131 checks)
+    name: independent reproducer (151 checks)
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -148,19 +148,89 @@ jobs:
       # verifies them in the qe-explorer one, because both services ship a
       # top-level `app` package and collide in a single process.
       #
-      # KNOWN-OPEN ACCOUNTING. It currently exits non-zero on exactly one
-      # failure: CERT-FINDING-2 (normalize_origin drops IPv6 brackets), which is
-      # open by design — the fix touches two PINNED files and therefore needs a
-      # re-certified follow-up, not a quiet patch. So this step asserts the
-      # failure set is EXACTLY the known-open one.
+      # KNOWN-OPEN ACCOUNTING. Every failure the reproducer emits must be an
+      # OPEN row in QECentral/docs/CERT_FINDING_REGISTER.md, and every OPEN row
+      # must be emitting one. Today both are zero: CERT-FINDING-1 and -2 were
+      # closed at d0605ba/da5b5d0 and re-certified by a non-author squad.
       #
-      # When FINDING 2 is fixed, this step goes red until EXPECTED_FAILURES is
-      # dropped to 0. That is deliberate: closing a certification finding should
-      # require touching the gate that tracks it.
+      # WHY THE LITERAL IS NOW CROSS-CHECKED AGAINST THE REGISTER (A11d).
+      # This gate previously carried EXPECTED_FAILURES=1 as a bare literal, and
+      # referenced the register ZERO times. Nothing kept them in step, so the
+      # literal silently went stale the moment the harness grew:
+      #
+      #   02181d0  EXPECTED_FAILURES=1   correct when written
+      #   0fb4275  harness -> 2 failures (A11b fenced the IPv6 class)   LITERAL NOT MOVED
+      #   a947e33  harness -> 3 failures (CERT-FINDING-1 made tool-emitted)  NOT MOVED
+      #
+      # From 0fb4275 this job failed with "3 failures, expected 1" on a tree that
+      # was in exactly the state the register described — a gate whose job is to
+      # notice a lapsed certification had itself lapsed, and it stayed that way
+      # for about six hours because a red gate with a plausible-looking message
+      # is indistinguishable from a real one. Measured, not inferred: the
+      # reproducer was run from a clean git archive of 766ef3a and its output fed
+      # through this step's own logic verbatim -> 150 checks / 3 failures / NO-GO.
+      #
+      # A literal cannot track this. It has had FOUR different correct values
+      # across four commits, and it is wrong again on the next commit that
+      # touches EITHER the harness OR the findings — both of which are under
+      # active work by different sessions. So the literal stays (it is what
+      # someone greps for at 2am, and it still governs the comparison), but it
+      # must now AGREE with the number of OPEN rows in the register. Moving one
+      # without the other fails the build, which means the number and the reason
+      # for it can only change in the same diff.
+      #
+      # Deliberately an assertion and not a derivation: if this parser is wrong,
+      # a literal-governed comparison can only produce a false RED with a legible
+      # message. A derived count could produce a false GREEN whenever the wrong
+      # number happened to equal the actual failure count. Parser bugs should be
+      # noisy, not dangerous.
+      - name: The expected-failure count must match the register's OPEN findings
+        run: |
+          set -euo pipefail
+          EXPECTED_FAILURES=0
+          REG=QECentral/docs/CERT_FINDING_REGISTER.md
+
+          # PROBE INTEGRITY FIRST. A parser that cannot see the register finds
+          # zero OPEN rows, and zero equals the literal above, so it would PASS
+          # on a register nobody can read. That is the same shape as the finding
+          # this register already carries (a single truthy test that passes on a
+          # missing file), so prove the target is visible before trusting it.
+          if [ ! -r "$REG" ]; then
+            echo "::error::cannot read $REG — the expected-failure count is" >&2
+            echo "::error::checked against its OPEN rows, so an unreadable" >&2
+            echo "::error::register must FAIL here, never pass." >&2
+            exit 1
+          fi
+          rows="$(grep -cE '^\| *CERT-FINDING-[0-9]+ *\|' "$REG" || true)"
+          if [ "$rows" -eq 0 ]; then
+            echo "::error::found no CERT-FINDING rows in $REG. Either it is" >&2
+            echo "::error::empty or its table shape changed; both mean this" >&2
+            echo "::error::gate is blind and must not report clean." >&2
+            exit 1
+          fi
+          open_ids="$(awk -F'|' '
+            /^\| *CERT-FINDING-[0-9]+ *\|/ {
+              id = $2; status = $4
+              gsub(/[ *]/, "", id); gsub(/[ *]/, "", status)
+              if (status == "OPEN") print id
+            }' "$REG")"
+          open_count="$(printf "%s" "$open_ids" | grep -c . || true)"
+          echo "register: $rows finding rows, $open_count OPEN [$(echo $open_ids)]"
+          if [ "$open_count" -ne "$EXPECTED_FAILURES" ]; then
+            echo "::error::EXPECTED_FAILURES=${EXPECTED_FAILURES} in this file, but" >&2
+            echo "::error::${REG} lists ${open_count} OPEN finding(s): ${open_ids}" >&2
+            echo "The count and the reason for it must move in the SAME diff." >&2
+            echo "Opening a finding? Register it AND raise the count here." >&2
+            echo "Closing one? Close the row AND drop the count — after a" >&2
+            echo "NON-AUTHOR squad has re-run run_certification.sh and re-affirmed." >&2
+            exit 1
+          fi
+          echo "A11: the expected-failure count agrees with the register"
+
       - name: Run the certifier's reproducer and account for every failure
         run: |
           set -uo pipefail
-          EXPECTED_FAILURES=1
+          EXPECTED_FAILURES=0
           EXPECTED_MARKER='CERT-FINDING-2'
 
           set +e
@@ -188,7 +258,10 @@ jobs:
           if [ "$failures" -ne "$EXPECTED_FAILURES" ]; then
             echo "::error::A11 reproducer: ${failures} failures, expected ${EXPECTED_FAILURES}." >&2
             echo "More than expected = a NEW certification failure. Fewer = a finding was" >&2
-            echo "fixed; drop EXPECTED_FAILURES here and have a non-author squad re-affirm." >&2
+            echo "fixed; drop EXPECTED_FAILURES here, close its row in" >&2
+            echo "QECentral/docs/CERT_FINDING_REGISTER.md, and have a NON-AUTHOR squad" >&2
+            echo "re-run run_certification.sh and re-affirm. The step above enforces that" >&2
+            echo "the count and the register agree, so neither can move alone." >&2
             exit 1
           fi
 
