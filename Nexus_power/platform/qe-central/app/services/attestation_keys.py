@@ -41,8 +41,9 @@ THE ACTUAL GROUNDS FOR THE ENVELOPE (KEK re-wrap) PATTERN
 The choice may well still be correct, but it is a WEAKER case than the false one
 it replaces, and stating it at full strength would repeat the original error in
 a new costume.  Corrected again after re-certification (NEW-CERT-FINDING-3):
-the first draft of this section claimed a latency and an availability advantage
-that this system, AS BUILT, does not have.  Measured against the code:
+the first draft of this section claimed advantages this system does not have AS
+STATED.  Each ground is measured against the code below.  Read the bullets; they
+are the finding of record, and no sentence in this file summarises them:
 
   * PROVISIONING AND IAM — **this ground stands.** ``ASYMMETRIC_SIGN`` is a
     different key PURPOSE from the ``ENCRYPT_DECRYPT`` KEK this platform already
@@ -69,28 +70,36 @@ that this system, AS BUILT, does not have.  Measured against the code:
     coupled to KMS today.**  Moving to ``asymmetricSign`` would change WHICH KMS
     method issuance depends on, not WHETHER it depends on KMS.
 
-Note what the second and third points cost us, because it is the same fact twice:
-the signer's one-issuance scope is a deliberate SECURITY property — it bounds the
+One fact the bullets do not carry, because it belongs to none of them alone: the
+signer's one-issuance scope is a deliberate SECURITY property — it bounds the
 window in which a plaintext key is reachable to one request rather than one
-process lifetime — and it is exactly that property that destroys the AVAILABILITY
-argument for the envelope and SHRINKS the latency one.  (CERT-FINDING-11: this
-sentence used to say it destroyed both, contradicting the bullets fifteen lines
-above, where latency is retained in reduced form and only availability is
-withdrawn.  Third instance of one pattern in this paragraph block — see
-CERT-FINDING-5.)  The custody design and the performance argument for it pull in
-opposite directions, and the surviving half of the performance case is small.
+process lifetime — and that same scope is what weakens the performance case for
+the envelope.  The custody design and the performance argument for it pull in
+opposite directions.  Which grounds survive, and by how much, is stated in the
+bullets and is deliberately not restated here.
 
-So the honest summary is: we keep the envelope pattern because ``ASYMMETRIC_SIGN``
-provisioning has not been done, at a cost of a plaintext key in heap for the
-duration of one request, in exchange for roughly halving the KMS calls per
-issuance.  (Halving is what the envelope BUYS — one ``decrypt`` where KMS-native
-would make two ``asymmetricSign`` calls — not what it costs; an earlier draft of
-this sentence had that sign inverted, which is NEW-CERT-FINDING-5.)  That is an
-accepted trade, revisitable on evidence, and a thinner justification than this
-file has ever previously admitted to.  What we use is the ENVELOPE (KEK re-wrap)
-pattern established in M0.5, which is also what ``services/signing.py`` was
-written for ("the envelope sealing of the private key lives in the persistence
-layer").
+What we use is the ENVELOPE (KEK re-wrap) pattern established in M0.5, which is
+also what ``services/signing.py`` was written for ("the envelope sealing of the
+private key lives in the persistence layer").  It is an accepted trade,
+revisitable on evidence.
+
+WHY THIS SECTION HAS NO SUMMARY PARAGRAPH — do not add one back
+===============================================================
+It used to have two, and between them they produced FOUR separate certification
+findings (CERT-FINDING-3, -5 twice, -11, -13), each one a summary sentence
+contradicting the bullets it summarised, each found by a different certification
+pass, each correction introducing the next. The bullets themselves have been
+correct and unchanged throughout.
+
+The pattern was always the same: latency lumped in with availability when only
+availability was fully withdrawn. A summary of a three-way verdict wants to
+collapse to a two-way one, and the collapse is invisible to the person writing
+it because they know what they meant. Four passes, four instances, one per pass —
+so the fifth correction was not written and the summaries were deleted instead.
+
+**If you are about to add a sentence here that says which grounds survive, do not.**
+It will be wrong, and it will be wrong in the same direction. Say it in the
+bullets or not at all.
 
 THE HONEST SECURITY STATEMENT — no undocumented assumptions
 ===========================================================

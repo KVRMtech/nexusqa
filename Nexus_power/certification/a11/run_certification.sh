@@ -24,11 +24,23 @@ echo "== 0. the certified artifact set is unchanged (incl. this harness) =="
 # defect fully restored. An assertion that can be neutered without leaving a trace
 # is not an assertion.
 #
-# Not circular: this script verifies the manifest, so an edit to this script fails
-# the digest check exactly as an edit to attest.py does. The residual -- someone
-# edits the harness AND the manifest together -- is the same residual the
-# implementation always had, and the same answer applies: a non-author re-derives
-# the manifest every round.
+# TRUE FOR TWO OF THE THREE, NOT ALL THREE (CERT-FINDING-12). An edit to
+# issue_side.py or verify_side.py fails the digest check below exactly as an edit
+# to attest.py does -- proven in both directions. But THIS FILE cannot be
+# protected by its own row: the code that checks the manifest is the code being
+# checked, and a driver edited to skip the check reports green while diverging
+# from its own pin. That is inherent -- you cannot bootstrap trust in a checker
+# from the checker -- and the row is still worth keeping because it catches
+# accidental edits and makes deliberate ones show up in a diff.
+#
+# What actually protects this file is OUT OF BAND, and it is a standing
+# obligation on the certifier, not on this script:
+#   (a) diff all twelve pinned files against the last certified SHA and account
+#       for every difference; and
+#   (b) run the tamper test in BOTH directions -- neuter the probe, require
+#       exit 2; restore, require exit 0.
+# (b) is the only check that validates THIS script, because a neutered driver
+# yields exit 0 where 2 is required. See CERT_FINDING_REGISTER.md.
 #
 # Strip CR before checking. `sha256sum -c` treats a trailing CR as part of the
 # FILENAME, so on a core.autocrlf checkout every entry fails to open and is

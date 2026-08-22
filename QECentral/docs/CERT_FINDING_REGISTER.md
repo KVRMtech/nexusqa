@@ -22,6 +22,9 @@ by assertion.
 | CERT-FINDING-9 | Medium (certification integrity; **fail-open**) | **CLOSED** | `Nexus_power/certification/a11/issue_side.py` | A11 re-certification round 3, 2026-08-21 | — |
 | CERT-FINDING-10 | Medium–High (certification integrity; **fail-open**) | **CLOSED** | `Nexus_power/certification/a11/` — the harness itself | A11 re-certification round 4, 2026-08-21 | — |
 | CERT-FINDING-11 | Low (documentation / rationale) | **CLOSED** | `qe-central/app/services/attestation_keys.py` | A11 re-certification round 4, 2026-08-21 | — |
+| CERT-FINDING-12 | Low (record accuracy) | **CLOSED** | `CERT_FINDING_REGISTER.md` + `run_certification.sh` | A11 re-certification round 5, 2026-08-21 | — |
+| CERT-FINDING-13 | Low (documentation / rationale) | **CLOSED** | `qe-central/app/services/attestation_keys.py` | A11 re-certification round 5, 2026-08-21 | — |
+| CERT-FINDING-14 | Low (CI accounting; **fail-closed**) | **CLOSED** | `.github/workflows/a11-attestation-certification.yml` | The gate itself, 2026-08-21 | — |
 
 **ZERO OPEN.** The A11 certification is intact with no open findings, re-issued
 against a named SHA by a non-author squad — see `A11_INDEPENDENT_CERTIFICATION.md`.
@@ -726,13 +729,34 @@ the first time, to fix CERT-FINDING-9. **That argument retired at that commit an
 nothing replaced it.** A guarantee that quietly stops holding is worse than one
 that was never claimed, because the sentence asserting it stays on the page.
 
-**Remediation:** the three harness files are now pinned, 9 → 12. **Not circular:**
-`run_certification.sh` verifies the manifest, so an edit to the harness presents
-as drift and forces re-certification exactly as an edit to `attest.py` does. The
-residual — someone edits the harness *and* the manifest in one change — is the
-same residual the implementation has always had, and has the same answer: **a
-non-author re-derives the manifest every round**, which has now happened four
-times.
+**Remediation:** the three harness files are now pinned, 9 → 12. An edit to
+`issue_side.py` or `verify_side.py` presents as drift and forces re-certification
+exactly as an edit to `attest.py` does — proven in both directions. **This does
+NOT extend to `run_certification.sh` itself; see CERT-FINDING-12.**
+
+**And re-deriving the digests is NOT, by itself, sufficient** — the certifier
+proved this rather than asserting it. On a tampered tree with a regenerated
+manifest, an independent re-derivation **matches**. It proves manifest↔bytes
+consistency at a named SHA; it does not prove the bytes are the right bytes.
+
+### Standing obligations on the certifier — every round, not optional
+
+These are what actually close CERT-FINDING-10, and they are recorded here because
+**a future certifier who follows this register as written and only re-derives
+digests would be satisfied by a tampered tree.**
+
+1. **Diff all twelve pinned files against the last certified SHA and account for
+   every difference.** This is what catches a neutered `issue_side.py` or a
+   neutered `run_certification.sh`.
+2. **Run the tamper test in BOTH directions:** neuter the probe, require exit 2;
+   restore, require exit 0. This is the **only** check that validates
+   `run_certification.sh` itself, because a neutered driver yields exit 0 where
+   2 is required.
+
+The certifier accepted the arrangement — that it certifies an artefact whose
+re-pinning the author controls — **on the basis that (1) and (2) are standing
+obligations**. The acceptance is conditional on them and does not survive without
+them.
 
 **This is the finding the author was groping toward and mis-stated.** The author
 asked whether it was proper to have fixed CERT-FINDING-9 in the certifier's own
@@ -807,3 +831,145 @@ chain whose recurring shape is *an unrecognised input resolving to the reassurin
 answer*, and a status cell that reads "pending" must not count as closed. The
 cost is that the Status column takes no annotation; caveats belong in the
 finding's own section, which is where every other caveat in this register lives.
+
+
+---
+
+## CERT-FINDING-12 — "not circular" was true for two of the three
+
+**Status: CLOSED.** Low (record accuracy). Not a security issue. Raised in round
+5, against CERT-FINDING-10's own remediation.
+
+The register claimed pinning the harness was *"not circular: `run_certification.sh`
+verifies the manifest, so an edit to the harness presents as drift"*. **True for
+`issue_side.py` and `verify_side.py`, and proven so. False for
+`run_certification.sh` itself.**
+
+The certifier demonstrated it: with the drift gate disabled *inside*
+`run_certification.sh`, the probe neutered, the false claim re-asserted, and the
+honest manifest left untouched on disk —
+
+```
+manifest pins run_certification.sh : e71f20d4d370…
+actual file                        : 0f931773eeec…
+CHECKS RUN : 152   FAILURES : 0   EXIT CODE = 0
+```
+
+**The file diverges from its own pin and the run reports green**, because the
+code that checks the manifest is the code being checked. **You cannot bootstrap
+trust in a checker from the checker.**
+
+That much is inherent and not a defect in the fix. The defect was the register
+asserting blanket protection across all three files when it holds for two —
+overclaiming a guarantee is how the next person stops looking.
+
+**Remediation:** the claim is scoped correctly in both the register and the
+reproducer's own header, and the two out-of-band checks that *do* protect the
+driver are recorded above as standing obligations. The row for
+`run_certification.sh` is kept: it catches accidental edits and makes deliberate
+ones show up in a diff, which is worth having even though it cannot be
+self-enforcing.
+
+---
+
+## CERT-FINDING-13 — the fourth instance, and why there is no fifth correction
+
+**Status: CLOSED — structurally, not by correction.** Low (documentation). In a
+pinned file.
+
+The framing sentence of the KMS rationale said the first draft *"claimed **a
+latency and an availability advantage that this system, AS BUILT, does not
+have**"*. The relative clause governs both nouns, so it asserts the system has no
+latency advantage. The LATENCY bullet three lines later says it has one — one KMS
+`decrypt` where KMS-native makes two `asymmetricSign` calls.
+
+**Same pattern, same block, fourth occurrence**, and in the most load-bearing
+position yet: the sentence a reader meets *before* the bullets, introducing the
+correction where this whole sub-chain began.
+
+### The pattern, and the decision to stop correcting it
+
+| Finding | Instance | Found in |
+| --- | --- | --- |
+| CERT-FINDING-3 | the three grounds as originally written | round 1 |
+| CERT-FINDING-5(a) | *"at a cost of roughly halving"* — sign inverted | round 2 |
+| CERT-FINDING-5(b) | *"the only ground that survives scrutiny"* | round 2 |
+| CERT-FINDING-11 | *"destroys the latency and availability arguments"* | round 4 |
+| CERT-FINDING-13 | *"a latency and an availability advantage … does not have"* | round 5 |
+
+**Four passes, and each one found exactly one more.** Every instance is a
+**summary sentence contradicting the bullets it summarises**, and the bullets have
+been correct and unchanged since `da5b5d0`. Every correction introduced the next
+instance.
+
+The mechanism is worth naming because it is not carelessness: **a summary of a
+three-way verdict wants to collapse into a two-way one.** One ground stands, one
+is reduced, one is withdrawn — and "reduced" is the one that keeps getting
+swallowed into "withdrawn", always in the same direction. The collapse is
+invisible to whoever writes it, because they know what they meant.
+
+**So the fifth correction was not written.** On the certifier's recommendation,
+both summary paragraphs were **deleted** and the bullets left to speak for
+themselves. The file now carries an explicit instruction not to add one back, with
+this history as the reason — because the next person to read that section will
+feel it is missing a summary, and they will be wrong.
+
+**The general lesson:** when four independent passes each find exactly one more
+instance of one pattern, the next pass is not evidence of convergence. **Change
+the structure that keeps generating the instances**, not the instance. The
+certifier proposed this and was right to; correcting a fifth time would have been
+the obvious move and the wrong one.
+
+### One thing this closure does NOT claim
+
+The certifier's sweep extracted every docstring sentence containing any of sixteen
+keywords and checked each against the three bullets. **A contradiction phrased
+without those words would have been missed** — which is exactly why the summaries
+were deleted rather than audited again. The structural fix is what bounds this,
+not the sweep.
+
+
+---
+
+## CERT-FINDING-14 — the gate found this one on itself
+
+**Status: CLOSED.** Low (CI accounting). **Fail-closed** — which is the whole
+point of the entry. Found by the gate, not by a certifier and not by the author.
+
+Writing CERT-FINDING-13 added a table to this register listing the five instances
+of the contradiction pattern. Its rows begin `| CERT-FINDING-3 |`,
+`| CERT-FINDING-11 |`, `| CERT-FINDING-13 |` — finding-shaped, but they are prose,
+and their third column is an *Instance* description, not a Status.
+
+The gate matched a finding-shaped row **anywhere in the document**, read those
+three as status rows carrying an unrecognised status, and — under the
+CERT-FINDING-7 fail-closed rule — counted them **OPEN**:
+
+```
+register: 16 finding rows, 3 OPEN, 13 CLOSED
+::error::EXPECTED_FAILURES=0 in this file, but ... lists 3 OPEN finding(s):
+         CERT-FINDING-3 CERT-FINDING-11 CERT-FINDING-13
+```
+
+**The build went red on a register that was entirely correct.** A false positive,
+caught immediately, on the first commit where the register discussed findings in
+a table of its own.
+
+**Why it is recorded rather than quietly fixed.** This is the fail-closed rule
+paying for itself in the direction nobody tests. Every earlier finding in this
+chain — 7, 9, 10, 12 — was a check that would have gone **green** when it should
+have gone red. This is the mirror: a parse bug that went **red** when it should
+have gone green. Under the old prefix-and-anywhere parser the same rows would
+have been read as unrecognised and silently counted CLOSED, and the defect would
+have sat in the parser undetected. **A check that fails in the noisy direction
+reports its own bugs; a check that fails in the quiet direction accumulates
+them.** That trade was chosen deliberately in CERT-FINDING-7 and this is the
+first evidence it was the right choice.
+
+**Remediation:** the parse is scoped to the table containing the `Status` header
+— it begins at that header and ends at the first non-table line. A finding-shaped
+row elsewhere in the document is now ignored, which is what lets this register
+discuss findings in tables without confusing the gate that reads it. Verified
+with a new control: a prose table carrying an `**OPEN**` row, placed after the
+status table, must be **ignored** (exit 0), while every in-table adversarial
+state still fails. Fourteen states, all correct.

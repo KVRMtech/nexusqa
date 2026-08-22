@@ -212,9 +212,18 @@ jobs:
             # Locate the Status column by NAME. Position is not stable: inserting a column
             # before it silently re-points a hard-coded $4 at the wrong field.
             !col && /^[ \t]*\|/ {
-              for (i = 1; i <= NF; i++) if (clean($i) == "STATUS") { col = i; next }
+              for (i = 1; i <= NF; i++) if (clean($i) == "STATUS") { col = i; intable = 1; next }
             }
-            /^[ \t]*\| *CERT-FINDING-[0-9]+ *\|/ {
+            # SCOPED TO THE STATUS TABLE. The first version matched a
+            # finding-shaped row ANYWHERE in the document, so the moment this
+            # register discussed findings in a table of its OWN -- which it now
+            # does, listing the five instances of one pattern -- those rows read
+            # as status rows carrying an unrecognised status, and counted OPEN.
+            # Fail-closed turned that into a red build rather than a silent
+            # pass, which is the right failure; the parse was still wrong. Only
+            # rows inside the header table are status rows.
+            col && intable && $0 !~ /^[ 	]*[|]/ { intable = 0 }
+            intable && /^[ \t]*\| *CERT-FINDING-[0-9]+ *\|/ {
               rows++
               if (!col) next                       # no header yet: cannot judge, so do not
               s = clean($col)
