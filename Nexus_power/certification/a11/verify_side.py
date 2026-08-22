@@ -87,6 +87,94 @@ check(not r3.authorized and r3.reason == AttestReason.NO_TRUST_ANCHOR,
       f"unconfigured trust store denies (reason={r3.reason!r})")
 
 # ---------------------------------------------------------------------------
+# CERT-FINDING-16 -- assert the REASON, on proofs that reach the gate.
+#
+# Every check below would go RED today if its gate were deleted from attest.py,
+# which is the property the mutation checks above lack: those edit signed claims,
+# so they die at the signature check and pass whatever gates 6-12 do. Measured:
+# with production isolation deleted the harness still reported 152/0.
+#
+# Asserting the reason is half of the fix and the cheaper half. The other half is
+# that these proofs are validly signed, so they REACH the gate. One without the
+# other does not close this: reason-asserting a torn proof would demand
+# `not_disposable` and get `bad_signature` on correct code.
+hostile = data.get("hostile") or {}
+h_kw = dict(trust=trust, crawl_id=data.get("hostile_crawl_id"),
+            tenant_id=data.get("hostile_tenant_id"),
+            target_url=data.get("hostile_target_url"), now_epoch_ms=NOW + 1000)
+
+def hostile_denied(name, expect_reason):
+    att = hostile.get(name)
+    # A missing payload must FAIL, never silently skip: a check that cannot see
+    # its subject must not report clean.
+    if att is None:
+        check(False, f"hostile[{name}]: payload present (issuer half did not emit it)")
+        return
+    r = verify_provisioning_proof(att, replay_guard=ProofReplayGuard(), **h_kw)
+    check(not r.authorized and r.reason == expect_reason,
+          f"hostile[{name}]: SIGNED hostile claim denied as {expect_reason!r} "
+          f"(got authorized={r.authorized} reason={r.reason!r}) -- this proof is "
+          f"validly signed, so it reaches the gate instead of dying at step 4")
+
+hostile_denied("env_kind_prod",    AttestReason.NOT_DISPOSABLE)
+hostile_denied("env_kind_staging", AttestReason.NOT_DISPOSABLE)
+hostile_denied("env_kind_blank",   AttestReason.NOT_DISPOSABLE)
+hostile_denied("tenant_swapped",   AttestReason.TENANT_MISMATCH)
+hostile_denied("crawl_swapped",    AttestReason.CRAWL_BINDING_MISMATCH)
+
+# The claims SCHEMA: a signed budget above HARD_MAX is refused outright, not
+# clamped. Stronger than the clamp and a separate control, so pinned separately.
+hostile_denied("budget_over_hard_max", AttestReason.MALFORMED_CLAIMS)
+
+# gate 12 - the CLAMP, on a schema-valid signed budget above the FLEET ceiling.
+_b = hostile.get("budget_over_fleet")
+if _b is None:
+    check(False, "hostile[budget_over_fleet]: payload present")
+else:
+    rb = verify_provisioning_proof(_b, replay_guard=ProofReplayGuard(), **h_kw)
+    check(rb.authorized and rb.max_mutations_per_step == trust.max_mutations_per_step,
+          f"hostile[budget_over_fleet]: a SIGNED budget of 10 is AUTHORISED but "
+          f"clamped to the fleet ceiling {trust.max_mutations_per_step} "
+          f"(authorized={rb.authorized} budget={rb.max_mutations_per_step})")
+
+# gate 11 - THE REPLAY GUARD, actually reached.
+#
+# The pre-existing replay check replays onto a DIFFERENT crawl, which gate 9's
+# crawl-binding refuses FIRST -- so gate 11 is never evaluated, and deleting the
+# guard left the harness at 152/0.
+#
+# The guard's contract is "a proof_id may be admitted for exactly ONE crawl_id".
+# NOT "one use": re-verifying the same proof on the SAME crawl is deliberately
+# admitted (`return bound == cid`), so a second-use-same-crawl test asserts
+# something the guard never promised and fails on correct code. Reaching gate 11
+# requires two validly signed proofs that SHARE a proof_id but name DIFFERENT
+# crawls -- claims consistent, so gate 9 passes and the guard decides.
+_pair = data.get("replay_pair") or {}
+if not _pair.get("a") or not _pair.get("b"):
+    check(False, "replay_pair: payload present (issuer half did not emit it)")
+else:
+    _g = ProofReplayGuard()
+    _ra = verify_provisioning_proof(
+        _pair["a"], trust=trust, crawl_id="crawl-replay-A",
+        tenant_id=data["hostile_tenant_id"], target_url=data["hostile_target_url"],
+        now_epoch_ms=NOW + 1000, replay_guard=_g)
+    # CONTROL. Without it the check below could pass because the proof was never
+    # good -- the absence-assertion trap this repository names by name.
+    check(_ra.authorized,
+          f"replay[control]: proof A is authorised on its own crawl "
+          f"(got {_ra.reason!r})")
+    _rb = verify_provisioning_proof(
+        _pair["b"], trust=trust, crawl_id="crawl-replay-B",
+        tenant_id=data["hostile_tenant_id"], target_url=data["hostile_target_url"],
+        now_epoch_ms=NOW + 1000, replay_guard=_g)
+    check(not _rb.authorized and _rb.reason == AttestReason.PROOF_REPLAYED,
+          f"replay[gate 11]: a SECOND proof sharing proof_id, bound to a DIFFERENT "
+          f"crawl, is denied as proof_replayed -- its claims are internally "
+          f"consistent so gate 9 passes and the guard is what refuses it "
+          f"(got authorized={_rb.authorized} reason={_rb.reason!r})")
+
+
+# ---------------------------------------------------------------------------
 # A11b -- ORIGIN-VECTOR TABLE: fence the CLASS, not the one instance.
 #
 # CERT-FINDING-2 was found through a single IPv6 grant. Measurement since shows

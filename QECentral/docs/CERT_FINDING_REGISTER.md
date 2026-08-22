@@ -26,6 +26,7 @@ by assertion.
 | CERT-FINDING-13 | Low (documentation / rationale) | **CLOSED** | `qe-central/app/services/attestation_keys.py` | A11 re-certification round 5, 2026-08-21 | — |
 | CERT-FINDING-14 | Low (CI accounting; **fail-closed**) | **CLOSED** | `.github/workflows/a11-attestation-certification.yml` | The gate itself, 2026-08-21 | — |
 | CERT-FINDING-15 | Low (documentation / record accuracy) | **CLOSED** | `qe-central/app/services/attestation_keys.py` | A11 re-certification round 6, 2026-08-21 | — |
+| CERT-FINDING-16 | Medium–High (certification integrity; **blind verifier**) | **CLOSED** | `Nexus_power/certification/a11/` — the harness's own coverage | A11 re-certification round 7, 2026-08-21 | — |
 
 **ZERO OPEN.** The A11 certification is intact with no open findings, re-issued
 against a named SHA by a non-author squad — see `A11_INDEPENDENT_CERTIFICATION.md`.
@@ -257,6 +258,7 @@ count, so a reviewer can tell a hardening from a regression:**
 | 150 / 3 | CERT-FINDING-1 made tool-emitted instead of prose-only |
 | **151 / 0** | **both findings fixed at `d0605ba`** — read the note below before concluding anything |
 | **152 / 0** | CERT-FINDING-9: a third KMS assertion added — the correction must be PRESENT, not merely the false claim absent |
+| **161 / 0** | CERT-FINDING-16: nine checks that reach gates 7, 9, 11 and 12 for the first time |
 
 The **pinned-file count** also moved, and for a different reason: **9 → 12**. CERT-FINDING-10 added the three harness files to `A11_SNAPSHOT.sha256`. The nine original digests did not move (bar `attestation_keys.py`, which CERT-FINDING-11 edits); three rows were appended.
 
@@ -1040,3 +1042,113 @@ a sentence qualifies if it names a ground *and* carries a verdict construct, and
 without naming any of the three grounds would be missed.** The structural fix —
 no summaries anywhere in this docstring — is what bounds the risk. The sweep only
 confirms it landed.
+
+
+---
+
+## CERT-FINDING-16 — three verifier gates had ZERO coverage, and the record said otherwise
+
+**Status: CLOSED.** Medium–High (certification integrity). **Not a product
+defect** — gates 7, 9 and 11 are correct and always were. The defect is that the
+certification's central evidence did not test them while the record implied it
+did. Present since the original certification, 2026-08-20; untouched by every
+commit in this chain until round 7 went looking.
+
+### The mechanism
+
+Four of the ten adversarial mutations edit the **signed claims**. Integrity is
+checked at step 4, *before* gates 6–12. So they die as `bad_signature` and never
+reach the control they are named for. Measured:
+
+| mutation | denial reason | reaches its gate? |
+| --- | --- | --- |
+| `env_kind=prod` | `bad_signature` | **no** |
+| budget escalated in claims | `bad_signature` | **no** |
+| tenant swapped | `bad_signature` | **no** |
+| crawl swapped | `bad_signature` | **no** |
+| signature forged / unknown kid / alg / revocations stripped / wrong origin / expired | their own | yes |
+
+The harness asserted only `not authorized`, which is true either way.
+
+### The falsification — what the harness did NOT notice
+
+Each gate deleted from `attest.py` in isolation, `attest.py` restored and its
+digest re-verified after every case:
+
+| Gate deleted | Before the fix | After the fix |
+| --- | --- | --- |
+| 7 — production isolation (`env_kind != disposable`) | **152 / 0** | **161 / 3** |
+| 9 — tenant binding | **152 / 0** | **161 / 1** |
+| 9 — crawl binding | 152 / 1 | 161 / 2 |
+| 11 — replay guard | **152 / 0** | **161 / 1** |
+
+**Delete production isolation entirely — the control the whole milestone turns on
+— and the certification reported a perfect 152 / 0.** Same for tenant binding.
+Same for the replay guard. With gate 7 and both gate-9 bindings removed, one
+tenant's proof replayed onto another tenant and crawl returned
+`authorized=True`, and the harness was one check short of clean.
+
+### Why the record is the harm, not the harness
+
+`A11_INDEPENDENT_CERTIFICATION.md` §3.1 says *"Adversarial mutations confirmed
+DENIED for every case: `env_kind=prod`, budget escalated inside signed claims,
+tenant swapped, crawl swapped…"*. Every clause is **literally true** — they were
+denied. The implication a reader takes, that these confirm the named controls, is
+**false for four of them**.
+
+This is this repository's own **blind-verifier class**, named in `CLAUDE.md` §5
+and carried in the register since CERT-FINDING-1: *a check that would still pass
+if its subject were absent.* It is the same defect the certification was built to
+catch, sitting inside the certification.
+
+### Remediation — reaching the gate is the load-bearing half
+
+Asserting the *reason* rather than `not authorized` is the obvious half and the
+cheaper one. It is not sufficient alone: a reason-assertion on a torn proof would
+demand `not_disposable` and get `bad_signature` **on correct code**. The proof
+must be **validly signed and hostile**, which only the issuer half can mint.
+
+`issue_side.py` now mints a second set of attestations signed with the same fresh
+key, carrying claims the issuer should never have emitted — `env_kind` of `prod`,
+`staging` and blank; a swapped tenant; a swapped crawl; budgets above both
+ceilings. That is not a contrived shape: it models the threat the record already
+names — **a compromised or over-generous issuer** — which is exactly what gates
+6–12 exist for and the only way past step 4.
+
+### Two corrections to the remediation as proposed, both found by reading the contracts
+
+The certifier's proposed remediation was right in substance and wrong in two
+specifics. Both were caught by checking the code before implementing, and both
+would have shipped assertions that fail on correct behaviour:
+
+1. **The replay guard's contract is "one proof_id → one crawl_id", NOT "one
+   use".** `admit()` ends `return bound == cid`: re-verifying the same proof on
+   the *same* crawl is **deliberately admitted**. The proposed "replay onto the
+   same crawl" check asserts something the guard never promised and goes red on
+   correct code. Reaching gate 11 requires **two validly signed proofs sharing a
+   `proof_id` but naming different crawls** — claims internally consistent, so
+   gate 9 passes and the guard is what refuses. That is minted issuer-side, which
+   is precisely why a verifier-side mutation could never test this gate.
+2. **A signed budget of 999 is not clamped — it is refused as
+   `malformed_claims`.** `HARD_MAX_MUTATIONS_PER_STEP` is 10 and `ProofClaims`
+   enforces it at the schema, which is a *stronger* refusal than the clamp and a
+   *different* control. Both are now pinned separately: 999 → `malformed_claims`,
+   and 10 → authorised but clamped to the fleet ceiling of 3.
+
+**A remediation is a hypothesis about the code, and it needs the same
+verification the finding did.** Both of these were plausible, both were stated by
+the party that had been right every round, and both were wrong.
+
+### The check count 152 → 161
+
+Nine checks: three `env_kind` forms, tenant, crawl, the hard-max schema refusal,
+the fleet clamp, and the replay pair with its control. Every one of them can go
+red — that is the table above. **This is the largest single rise in the harness's
+history and the only one that closed a hole rather than describing one.**
+
+### What this does not claim
+
+`attest.py` has thirteen numbered steps. Steps 1, 2, 3, 5, 6, 8 and 10 were not
+isolated and falsification-tested; four gates were. **The coverage of the
+coverage is itself unmeasured**, and this finding exists because nobody had
+measured it for seven rounds.

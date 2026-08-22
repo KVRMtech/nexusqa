@@ -7,7 +7,8 @@ Emits JSON on stdout for the verifier half to consume in a separate process.
 import json, sys
 from pathlib import Path
 from app.services.signing import generate_keypair
-from app.services.walk_attestation import ProvisioningGrant, issue_attestation, normalize_origin
+from app.services.walk_attestation import (ProvisioningGrant, issue_attestation,
+                                           normalize_origin, _sign)
 
 NOW = 1_760_000_000_000
 priv, pub = generate_keypair()
@@ -120,6 +121,75 @@ except Exception:
     # content answers go to their FAILING values, not their passing ones.
     kms_claim_present, kms_correction_present, kms_probe_read = True, False, False
 
+# CERT-FINDING-16 -- MUTATIONS THAT ACTUALLY REACH THE GATE THEY NAME.
+#
+# The verifier checks the SIGNATURE at step 4, before gates 6-12. So a mutation
+# applied to the signed claims by the verifier half dies as `bad_signature` and
+# never touches the control it is named for. Four of the ten did exactly that:
+# env_kind=prod, budget escalated, tenant swapped, crawl swapped. The harness
+# asserted only `not authorized`, which is true either way -- so DELETING the
+# production-isolation gate from attest.py entirely still produced 152 checks and
+# 0 failures. A check that would still pass if its subject were absent.
+#
+# These proofs are VALIDLY SIGNED with the same fresh key and carry hostile
+# claims. That is not an artificial construction: it models the threat the
+# certification record already names -- a compromised or over-generous ISSUER --
+# which is precisely the threat gates 6-12 exist for, and the only way to reach
+# them past step 4. The verifier half asserts the SPECIFIC reason for each, so a
+# deleted gate changes the reason and fails the check.
+HOSTILE_BASE = ProvisioningGrant(
+    environment_id="env-hostile", tenant_id="tenant-cert",
+    crawl_id="crawl-hostile", target_url="https://staging.example.test/apply",
+    reset_procedure="wipe-db", max_walk_mutations_per_step=1,
+)
+_h_claims = HOSTILE_BASE.claims(issuer=ISSUER, issued_at_ms=NOW,
+                                lifetime_ms=3_600_000)
+_h_revocations = issue_attestation(
+    HOSTILE_BASE, private_key_b64=priv, issuer=ISSUER,
+    issued_at_ms=NOW, proof_lifetime_ms=3_600_000)["revocations"]
+
+
+def _hostile(**overrides):
+    """One attestation, signed for real, with the claims the issuer should never
+    have emitted. Every field is inside the signature, so the verifier cannot
+    reject it on integrity and MUST reject it on the named control instead."""
+    c = dict(_h_claims)
+    c.update(overrides)
+    return {"proof": _sign(priv, c).as_dict(), "revocations": _h_revocations}
+
+
+hostile = {
+    # gate 7 - PRODUCTION ISOLATION. The payload the whole milestone turns on.
+    "env_kind_prod":    _hostile(env_kind="prod"),
+    "env_kind_staging": _hostile(env_kind="staging"),
+    "env_kind_blank":   _hostile(env_kind=" "),
+    # gate 9 - BINDINGS. A proof is for one tenant, one crawl, one origin.
+    "tenant_swapped":   _hostile(tenant_id="tenant-OTHER"),
+    "crawl_swapped":    _hostile(crawl_id="crawl-OTHER"),
+    # gate 12 + the claims schema. 999 exceeds HARD_MAX_MUTATIONS_PER_STEP
+    # (10) so ProofClaims refuses it outright as malformed -- a STRONGER
+    # refusal than clamping, and a different control. The clamp itself needs
+    # a budget that is schema-valid and still above the FLEET ceiling.
+    "budget_over_hard_max": _hostile(max_walk_mutations_per_step=999),
+    "budget_over_fleet":    _hostile(max_walk_mutations_per_step=10),
+}
+
+# gate 11 - THE REPLAY GUARD, reached for real.
+#
+# Its contract is "a proof_id may be admitted for exactly ONE crawl_id" -- NOT
+# "one use". Re-verifying the same proof on the SAME crawl is deliberately
+# admitted, so a second-use-same-crawl test asserts something the guard never
+# promised. The guard is reached only by a proof whose CLAIMS name a different
+# crawl (so crawl-binding at gate 9 passes) while its proof_id was already
+# admitted for another one. That needs two validly signed proofs SHARING a
+# proof_id, which only the issuer can mint -- which is why the old harness,
+# mutating claims verifier-side, could not test this gate at all.
+SHARED_PROOF_ID = "a11cert0replay0shared0id00000001"
+replay_pair = {
+    "a": _hostile(crawl_id="crawl-replay-A", proof_id=SHARED_PROOF_ID),
+    "b": _hostile(crawl_id="crawl-replay-B", proof_id=SHARED_PROOF_ID),
+}
+
 origin_probe = {}
 for label, url, _is_ctl in ORIGIN_VECTORS:
     once = normalize_origin(url)
@@ -148,5 +218,10 @@ json.dump({"public_key": pub, "issuer": ISSUER, "now_ms": NOW, "cases": out,
            "issuer_origin_probe": origin_probe,
            "kms_claim_present": kms_claim_present,
            "kms_correction_present": kms_correction_present,
-           "kms_probe_read": kms_probe_read},
+           "kms_probe_read": kms_probe_read,
+           "hostile": hostile,
+           "replay_pair": replay_pair,
+           "hostile_crawl_id": "crawl-hostile",
+           "hostile_tenant_id": "tenant-cert",
+           "hostile_target_url": "https://staging.example.test/apply"},
           sys.stdout)
