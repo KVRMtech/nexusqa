@@ -1,0 +1,186 @@
+# GATE 5 / A37.4 — CLEAN-CLONE VERIFICATION ON HARDWARE NO AUTHOR CONTROLS.
+#
+# WHY THIS EXISTS SEPARATELY FROM scripts/gate0_verify_clean_clone.sh.
+# That script is correct and is reused verbatim below — but every recorded run
+# of it happened on an author's machine. "The commit is complete" and "the
+# commit is complete *and nobody who wrote it could have tilted the result*"
+# are different claims, and only the second one can anchor a certification.
+#
+# WHAT MAKES THIS RUNNER UNOWNED.
+# GitHub-hosted runners are provisioned per job, destroyed after, and no author
+# in this programme has shell on one. A SELF-HOSTED runner would look identical
+# in the logs and would silently void the whole property, so it is asserted
+# rather than assumed: RUNNER_ENVIRONMENT must be github-hosted or the job
+# fails before it verifies anything. That assertion is the negative control —
+# without it this workflow would still go green on author-controlled hardware,
+# which is precisely the failure it exists to prevent.
+#
+# WHAT IT ANCHORS TO.
+# One exact commit SHA, never a branch and never "latest". The SHA is resolved
+# from the REMOTE, re-asserted after cloning, and re-asserted again inside the
+# throwaway clone. A certification that drifted one commit during its own proof
+# would be worthless.
+name: gate5-clean-clone-attestation
+
+on:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: "Exact 40-hex commit SHA to certify (no branches, no tags)"
+        required: true
+        type: string
+  push:
+    branches:
+      - "gate5/**"
+
+permissions:
+  contents: read
+
+jobs:
+  clean-clone-on-unowned-hardware:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      # ── 0. THE NEGATIVE CONTROL, FIRST ────────────────────────────────
+      # Nothing below is worth reading if this runner is one an author owns.
+      - name: Assert the hardware is not author-controlled
+        run: |
+          echo "RUNNER_ENVIRONMENT = ${RUNNER_ENVIRONMENT:-<unset>}"
+          echo "RUNNER_NAME        = ${RUNNER_NAME:-<unset>}"
+          echo "RUNNER_OS          = ${RUNNER_OS:-<unset>}"
+          if [ "${RUNNER_ENVIRONMENT:-}" != "github-hosted" ]; then
+            echo ""
+            echo "REFUSING: RUNNER_ENVIRONMENT is '${RUNNER_ENVIRONMENT:-<unset>}', not 'github-hosted'."
+            echo "A self-hosted runner is hardware somebody in this programme controls."
+            echo "This attestation would be a lie. Stopping before any verification runs."
+            exit 1
+          fi
+          echo "OK — ephemeral GitHub-hosted runner, no author has shell on this machine."
+
+      - name: Resolve the target SHA
+        id: target
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            SHA="${{ inputs.sha }}"
+          else
+            SHA="${{ github.sha }}"
+          fi
+          # A SHA, not a branch, not a tag, not a prefix.
+          if ! printf '%s' "$SHA" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "REFUSING: '$SHA' is not a full 40-hex commit SHA."
+            echo "Gate 5 certifies one immutable commit. Branches and tags move."
+            exit 1
+          fi
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          echo "target SHA: $SHA"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      # ── 1. A GENUINELY FRESH CLONE FROM THE REMOTE ────────────────────
+      # Deliberately NOT actions/checkout of the triggering ref. The claim
+      # under test is "a second party, starting from the commit alone, gets the
+      # same answer" — so the bytes must come from the remote at that SHA.
+      - name: Clone the remote at the exact SHA
+        run: |
+          git clone --quiet "${{ github.server_url }}/${{ github.repository }}.git" src
+          cd src
+          git fetch --quiet origin "${{ steps.target.outputs.sha }}"
+          # A real branch, so the verifier's own --single-branch clone follows it.
+          git checkout -B cert-target "${{ steps.target.outputs.sha }}"
+          GOT="$(git rev-parse HEAD)"
+          echo "requested: ${{ steps.target.outputs.sha }}"
+          echo "got:       $GOT"
+          if [ "$GOT" != "${{ steps.target.outputs.sha }}" ]; then
+            echo "REFUSING: clone HEAD does not match the requested SHA."
+            exit 1
+          fi
+          echo "clone HEAD matches the requested SHA."
+
+      - name: Install the dependencies the verifier needs
+        working-directory: src
+        run: |
+          python -m pip install --quiet --upgrade pip
+          pip install --quiet ruff pytest pytest-asyncio
+          if [ -f Nexus_power/engines/qe-explorer/requirements.txt ]; then
+            pip install --quiet -r Nexus_power/engines/qe-explorer/requirements.txt
+          fi
+
+      # ── 2. THE REPOSITORY'S OWN VERIFIER, REUSED NOT RETYPED ──────────
+      # Drilling a re-typed copy proves the copy works. This invokes the same
+      # script an author would run locally, so a divergence between the two is
+      # impossible by construction.
+      - name: Run the clean-clone verifier
+        id: verify
+        working-directory: src
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          bash scripts/gate0_verify_clean_clone.sh "$PWD" "${RUNNER_TEMP}/gate5-cleanclone" 2>&1 | tee "${RUNNER_TEMP}/clean_clone.log"
+          echo "verifier_exit=$?" >> "$GITHUB_OUTPUT"
+
+      # The verifier clones internally; prove THAT clone was the right commit
+      # too. Independent of anything the script printed about itself.
+      - name: Re-assert the throwaway clone was the certified commit
+        id: reassert
+        run: |
+          INNER="${RUNNER_TEMP}/gate5-cleanclone"
+          if [ ! -d "$INNER/.git" ]; then
+            echo "inner_sha=<absent>" >> "$GITHUB_OUTPUT"
+            echo "verifier produced no clone — treated as a failed verification."
+            exit 0
+          fi
+          GOT="$(git -C "$INNER" rev-parse HEAD)"
+          echo "inner_sha=$GOT" >> "$GITHUB_OUTPUT"
+          echo "throwaway clone HEAD: $GOT"
+          if [ "$GOT" != "${{ steps.target.outputs.sha }}" ]; then
+            echo "REFUSING: the verified clone was NOT the certified commit."
+            exit 1
+          fi
+
+      # ── 3. THE ATTESTATION ────────────────────────────────────────────
+      - name: Emit the attestation
+        id: attest
+        run: |
+          RESULT=fail
+          if grep -q "^CLEAN_CLONE: PASS" "${RUNNER_TEMP}/clean_clone.log" 2>/dev/null; then
+            RESULT=pass
+          fi
+          mkdir -p out
+          cat > out/clean_clone_attestation.json <<JSON
+          {
+            "attestation": "gate5-clean-clone",
+            "certified_sha": "${{ steps.target.outputs.sha }}",
+            "verified_clone_sha": "${{ steps.reassert.outputs.inner_sha }}",
+            "result": "$RESULT",
+            "repository": "${{ github.repository }}",
+            "runner_environment": "${RUNNER_ENVIRONMENT}",
+            "runner_os": "${RUNNER_OS}",
+            "runner_arch": "${RUNNER_ARCH}",
+            "author_controlled_hardware": false,
+            "workflow_run_id": "${{ github.run_id }}",
+            "workflow_run_url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
+            "completed_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          }
+          JSON
+          cp "${RUNNER_TEMP}/clean_clone.log" out/clean_clone.log 2>/dev/null || true
+          cat out/clean_clone_attestation.json
+          echo "result=$RESULT" >> "$GITHUB_OUTPUT"
+
+      - name: Upload the attestation
+        uses: actions/upload-artifact@v4
+        with:
+          name: gate5-clean-clone-attestation-${{ steps.target.outputs.sha }}
+          path: out/
+          retention-days: 90
+
+      # The job's own verdict is the verifier's verdict. An attestation that
+      # says "fail" must not be reachable from a green check.
+      - name: Fail the job if the clean clone did not pass
+        if: steps.attest.outputs.result != 'pass'
+        run: |
+          echo "CLEAN_CLONE did not pass on unowned hardware for ${{ steps.target.outputs.sha }}."
+          echo "The attestation artifact records the failure; Gate 5 cannot use this SHA."
+          exit 1

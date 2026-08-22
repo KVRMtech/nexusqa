@@ -1,0 +1,103 @@
+{
+  "_README": [
+    "GATE 5 / A37.4 ARB CERTIFICATION CEREMONY RECORD.",
+    "This file is DELIBERATELY UNSIGNED and currently INVALID. Running",
+    "  python scripts/gate5_verify_ceremony.py QECentral/certification/gate5_ceremony_record.json",
+    "prints every condition still unmet and exits 1. That refusal is the honest",
+    "current state of the programme, not a bug in the record.",
+    "",
+    "Nothing here may be filled in speculatively. A name in this file is a person",
+    "asserting they personally checked the thing next to their seat. Do not add a",
+    "signatory who has not signed, and do not mark a gate PASS to make the",
+    "validator quiet -- the validator exists to stop exactly that.",
+    "",
+    "clean_clone_attestation is pasted verbatim from the artifact produced by",
+    ".github/workflows/gate5-clean-clone-attestation.yml. Do not hand-write it."
+  ],
+
+  "ceremony": "gate5-arb-certification",
+  "certified_repository": "KVRMtech/nexusqa",
+
+  "certified_sha": "",
+
+  "build_artifact": "",
+  "deployment": {
+    "environment": "verdict-box (GCP project-8d85a07a-396c-40aa-9b6, asia-southeast1-a)",
+    "version_sha": "",
+    "_observed_2026_08_21": "ede6bf26c68a1752358423702eaaa1f6c1984597 on branch develop, which is NOT any certification candidate"
+  },
+
+  "clean_clone_attestation": {},
+
+  "gates": {
+    "gate0": "PARTIAL",
+    "gate1": "PARTIAL",
+    "gate2": "IN_PROGRESS",
+    "gate3": "IN_PROGRESS",
+    "gate4": "NO_ACCEPTANCE_EVIDENCE"
+  },
+  "_gate_notes": {
+    "gate0": "A5 not met; push cleared mid-audit, first CI run in three days returned four defects",
+    "gate1": "tagged gate-1 at 3420d88, but A11 attestation issuer and A12 walk persistence are untracked/unstaged - in no commit",
+    "gate2": "14 commits as of 2026-08-21 (A14x8, A16x1, A17x3, A19x1); no commit labelled A15 or A18; live vkpowerlife journey does not complete",
+    "gate3": "under active construction by a concurrent session",
+    "gate4": "implementation present (MinIO, KEDA, crossing journal, live Squid) but no gate executed and no acceptance recorded"
+  },
+
+  "a37": {
+    "a37_1": "PASS",
+    "a37_2": "PARTIAL",
+    "a37_3": "PASS"
+  },
+  "_a37_notes": {
+    "a37_1": "9/9 production credentials decrypt through Cloud KMS, re-proven byte-identical after a full service rebuild",
+    "a37_2": "exposure removed from disk on verdict-box, but the PAT is STILL VALID until revoked at GitHub (fine-grained, Venkatareddy2012, ends ...p0Ox, expires 2026-09-05)",
+    "a37_3": "live three-service rollback drill on verdict-box: 19 checks passed, 0 failed"
+  },
+
+  "reproductions": [],
+  "_reproduction_notes": [
+    "EMPTY ON PURPOSE. No critical proof has yet been reproduced by a named",
+    "non-author.",
+    "",
+    "This cannot be reconstructed later from git. Every commit in this",
+    "repository carries an identical author, committer and Co-Authored-By",
+    "trailer, so the log cannot tell you who implemented anything. The",
+    "implementer and the reproducer must be recorded BY NAME at the time the",
+    "reproduction happens, or the claim is unfalsifiable forever.",
+    "",
+    "Two proofs are already packaged as one-command reruns for a non-author:",
+    "  A37.1  Nexus_power/scripts/a37_verify_kms_decrypt.py   (read-only, digests only)",
+    "  A37.3  Nexus_power/scripts/gate_rollback_drill.sh      (self-restoring)"
+  ],
+
+  "quorum_required": 3,
+
+  "roles": {
+    "release_director": {
+      "name": "",
+      "email": "",
+      "signed_at": "",
+      "attests": "I attest that the deployed artifact corresponds to the certified SHA, that the three-service rollback drill was executed against the real VM, and that no undocumented manual intervention was required."
+    },
+    "proof_guild": {
+      "name": "",
+      "email": "",
+      "signed_at": "",
+      "attests": "I attest that every critical acceptance proof has been reproduced by a named person who did not author the implementation, and that each reproduction is recorded with its SHA, environment and artifact."
+    }
+  },
+
+  "arb_signatories": [],
+  "_signatory_template": {
+    "name": "",
+    "email": "",
+    "signed_at": "",
+    "attests": "I have reviewed the complete Gate 0-5 evidence package against the certified SHA and find every exit criterion satisfied."
+  },
+
+  "certification_date": "",
+  "certification_outcome": "REFUSED",
+  "certification_record": "QECentral/docs/GATE_5_CERTIFICATION.md",
+  "ceremony_charter": "QECentral/docs/GATE_5_CEREMONY.md"
+}
