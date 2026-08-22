@@ -28,6 +28,31 @@
   },
 
   "clean_clone_attestation": {},
+  "_clean_clone_attestation_note": [
+    "EMPTY ON PURPOSE. This field takes the attestation for the CERTIFIED SHA,",
+    "and no certification candidate has been frozen. The validator correctly",
+    "refuses the record while it is empty.",
+    "",
+    "The mechanism itself is proven and is recorded below. Do not move that",
+    "block into the operative field: it attests the ceremony branch commit, not",
+    "a certification candidate, and using it would certify the wrong thing."
+  ],
+  "_clean_clone_mechanism_proven": {
+    "why_this_is_here": "Evidence that gate5-clean-clone-attestation.yml actually works on hardware no author controls. First real run, 2026-08-22.",
+    "attestation": "gate5-clean-clone",
+    "certified_sha": "07270915168be6f66c524d565ab3258cd07f152a",
+    "verified_clone_sha": "07270915168be6f66c524d565ab3258cd07f152a",
+    "result": "pass",
+    "repository": "KVRMtech/nexusqa",
+    "runner_environment": "github-hosted",
+    "runner_os": "Linux",
+    "runner_arch": "X64",
+    "author_controlled_hardware": false,
+    "workflow_run_id": "32579514902",
+    "workflow_run_url": "https://github.com/KVRMtech/nexusqa/actions/runs/32579514902",
+    "completed_at": "2026-08-22T14:45:11Z",
+    "verifier_result": "2024 passed, 4 skipped, 2 xfailed in 48.87s; ruff clean; every .py compiles; characterization goldens deterministic across two passes; 0 dirty entries in the fresh clone; no golden or evidence mutated by the run"
+  },
 
   "gates": {
     "gate0": "PARTIAL",

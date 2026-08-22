@@ -37,6 +37,38 @@ permissions:
   contents: read
 
 jobs:
+  # The ceremony validator is the thing standing between a half-filled record
+  # and a signed certification. Its negative controls have to run every time,
+  # not once when they were written -- a guard nobody re-runs is a guard that
+  # silently stops guarding.
+  ceremony-validator-selftest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Prove the validator can say yes AND no
+        run: python scripts/gate5_verify_ceremony_selftest.py
+
+      # The live record must stay REFUSED until the ceremony is genuinely held.
+      # If this ever exits 0 without a deliberate, reviewed ceremony, either the
+      # gates really closed or somebody filled the record in to quiet the check.
+      - name: The live ceremony record is still refused (expected today)
+        run: |
+          set +e
+          python scripts/gate5_verify_ceremony.py QECentral/certification/gate5_ceremony_record.json
+          CODE=$?
+          set -e
+          echo "validator exit: $CODE"
+          if [ "$CODE" = "0" ]; then
+            echo "::notice::The Gate 5 ceremony record now VALIDATES. This is a real event -- the ARB may sign."
+          else
+            echo "Record is refused, as expected while the gates are open."
+          fi
+
   clean-clone-on-unowned-hardware:
     runs-on: ubuntu-latest
     timeout-minutes: 45
