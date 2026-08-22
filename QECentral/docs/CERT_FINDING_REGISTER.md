@@ -25,6 +25,7 @@ by assertion.
 | CERT-FINDING-12 | Low (record accuracy) | **CLOSED** | `CERT_FINDING_REGISTER.md` + `run_certification.sh` | A11 re-certification round 5, 2026-08-21 | — |
 | CERT-FINDING-13 | Low (documentation / rationale) | **CLOSED** | `qe-central/app/services/attestation_keys.py` | A11 re-certification round 5, 2026-08-21 | — |
 | CERT-FINDING-14 | Low (CI accounting; **fail-closed**) | **CLOSED** | `.github/workflows/a11-attestation-certification.yml` | The gate itself, 2026-08-21 | — |
+| CERT-FINDING-15 | Low (documentation / record accuracy) | **CLOSED** | `qe-central/app/services/attestation_keys.py` | A11 re-certification round 6, 2026-08-21 | — |
 
 **ZERO OPEN.** The A11 certification is intact with no open findings, re-issued
 against a named SHA by a non-author squad — see `A11_INDEPENDENT_CERTIFICATION.md`.
@@ -973,3 +974,69 @@ discuss findings in tables without confusing the gate that reads it. Verified
 with a new control: a prose table carrying an `**OPEN**` row, placed after the
 status table, must be **ignored** (exit 0), while every in-table adversarial
 state still fails. Fourteen states, all correct.
+
+
+---
+
+## CERT-FINDING-15 — the remedy was applied where the defect was last seen, not everywhere it can occur
+
+**Status: CLOSED.** Low (documentation / record accuracy). In a pinned file.
+Raised in round 6, against CERT-FINDING-13's own remediation.
+
+**The pattern did not recur.** That is the first thing to say, because it is what
+the deletion was for: the certifier ran a *structural* sweep this time — every
+docstring sentence that names one of the three grounds **and** carries a
+verdict-bearing construct, which does not depend on guessing the words a
+contradiction might use — and **found no sixth contradiction.** The GROUNDS
+section is clean. The remedy worked where it was applied.
+
+**It was not applied everywhere summaries live.** Two parts:
+
+**(a) A surviving summary, in the section where CERT-FINDING-5(b) already lived
+once.** `THE HONEST SECURITY STATEMENT` still carried a full summary of the same
+three-way verdict:
+
+> *"…the only ground substantial enough to be decisive is the provisioning and
+> IAM work above. (Two grounds survive scrutiny, not one — latency is retained
+> above in reduced form…)"*
+
+It was **accurate when found.** It was deleted anyway, and that is the point of
+the finding: *being accurate today is not the property that matters.* The
+argument for deleting the other two summaries applies to this one unchanged — a
+summary of a three-way verdict wants to collapse into a two-way one, and the
+collapse is invisible to whoever writes it. This paragraph had already collapsed
+once.
+
+**(b) A false claim about the file's own contents, introduced by the commit that
+did the deleting.** The GROUNDS section was left reading *"no sentence in this
+**file** summarises them"* — disproven by (a), in the same file, at the moment it
+was written. That is the CERT-FINDING-1 harm class: **the record telling a future
+engineer something untrue about itself**, in the sentence a reader meets
+immediately before the bullets.
+
+**Remediation:** the surviving summary is replaced by a pointer to the bullets;
+the claim is scoped to *"this SECTION"*; and the deletion rule now states
+explicitly that it **governs the whole docstring, not the section where it was
+first applied**.
+
+### The lesson, which is not the same as CERT-FINDING-13's
+
+CERT-FINDING-13 was about a *defect* recurring. This is about a *remedy* being
+scoped too narrowly — and the two look identical from the outside, because both
+present as "the same problem, again". They need opposite responses. The defect
+recurring means the fix was wrong. The remedy under-scoped means the fix was
+right and was applied to one instance of its own domain.
+
+**A structural fix inherits the blast radius of wherever you happened to be
+looking.** Both summaries deleted in round 6 were in the section where the last
+four findings had been found; the third summary was two headings away and had
+been wrong there before. **After applying a structural remedy, the question is
+not "did I fix the instances?" but "where else does this construct occur?"** —
+and the honest way to answer it is a sweep, not a recollection.
+
+**A note on the sweep's own limits**, recorded because the certifier stated them:
+a sentence qualifies if it names a ground *and* carries a verdict construct, and
+"verdict construct" is still a hand-written list. **A sentence implying a verdict
+without naming any of the three grounds would be missed.** The structural fix —
+no summaries anywhere in this docstring — is what bounds the risk. The sweep only
+confirms it landed.

@@ -43,7 +43,7 @@ it replaces, and stating it at full strength would repeat the original error in
 a new costume.  Corrected again after re-certification (NEW-CERT-FINDING-3):
 the first draft of this section claimed advantages this system does not have AS
 STATED.  Each ground is measured against the code below.  Read the bullets; they
-are the finding of record, and no sentence in this file summarises them:
+are the finding of record, and no sentence in this SECTION summarises them:
 
   * PROVISIONING AND IAM — **this ground stands.** ``ASYMMETRIC_SIGN`` is a
     different key PURPOSE from the ``ENCRYPT_DECRYPT`` KEK this platform already
@@ -97,9 +97,16 @@ collapse to a two-way one, and the collapse is invisible to the person writing
 it because they know what they meant. Four passes, four instances, one per pass —
 so the fifth correction was not written and the summaries were deleted instead.
 
-**If you are about to add a sentence here that says which grounds survive, do not.**
+**If you are about to add a sentence that says which grounds survive, do not.**
 It will be wrong, and it will be wrong in the same direction. Say it in the
 bullets or not at all.
+
+**That rule governs this whole docstring, not this section.** It was first
+applied here only, and a summary survived in THE HONEST SECURITY STATEMENT below
+— accurate at the time, and previously wrong in exactly this way
+(CERT-FINDING-5(b)). A remedy applied where the defect was last seen, rather
+than everywhere the defect can occur, leaves the record asserting a cleanliness
+it does not have.
 
 THE HONEST SECURITY STATEMENT — no undocumented assumptions
 ===========================================================
@@ -124,13 +131,16 @@ What it does NOT give, stated plainly:
 That residual risk is bounded by rotation (below) and detected by KMS audit
 logs.  It is a documented, accepted assumption — not a gap.  It is NOT, as this
 file previously claimed, the unavoidable price of keeping the audited Ed25519
-verifier: ``EC_SIGN_ED25519`` would remove it without touching that verifier, and
-the only ground substantial enough to be decisive is the provisioning and IAM
-work above.  (Two grounds survive scrutiny, not one — latency is retained above
-in reduced form, at roughly 2x the KMS calls per issuance; only AVAILABILITY
-COUPLING was withdrawn as false.  Saying "the only ground that survives" here
-understated the case and contradicted the bullets fifteen lines up.)  The risk is
-accepted on those grounds and can be revisited on them.
+verifier: ``EC_SIGN_ED25519`` would remove it without touching that verifier.  The
+grounds for not doing so are the bullets above, and are deliberately NOT restated
+here.  The risk is accepted on those grounds and can be revisited on them.
+
+(CERT-FINDING-15: this paragraph used to summarise which of those grounds
+survive.  That is the same construct the GROUNDS section deleted two paragraphs
+for, and it had already been wrong here once — CERT-FINDING-5(b).  The summary
+was accurate at the time it was removed; it was removed anyway, because being
+accurate today is not the property that matters.  The deletion rule applies to
+every section of this docstring, not just the one where it was first applied.)
 
 THE PRIVATE KEY NEVER CROSSES A MODULE BOUNDARY
 ===============================================
