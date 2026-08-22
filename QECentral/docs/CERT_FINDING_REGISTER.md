@@ -832,6 +832,49 @@ record should show it.**
 
 ---
 
+## A11e — OPEN FOLLOW-UP: the reproducer still runs ONE interpreter
+
+**Status: DEFERRED, not closed.** Raised by `nexusqa-db` at `14b3957`, after
+CERT-FINDING-19 was fixed and both gates went green. **Deliberately not an OPEN
+row in the table above** — see the note on why at the end of this section.
+
+CERT-FINDING-19 fixed the *instance*: `https://[example.test]/x` normalised two
+ways across CPython 3.10 and 3.11. **The class is still open.** The certification
+workflow pins `python-version: "3.11"` — a single interpreter — so the reproducer
+exercises both copies of `normalize_origin` under **one runtime**.
+
+**The AGREEMENT invariant structurally cannot see runtime divergence**, and the
+bracketed-DNS case shows exactly why: on 3.10 *both* copies returned
+`https://example.test`; on 3.11 *both* returned `""`. **Agreement held under each
+interpreter.** The harness would have passed on either. What caught it was the
+product test suites pinning ABSOLUTE expected values — and those, too, run only
+under 3.11 in CI.
+
+So any *other* `urlsplit` behaviour difference between those versions is equally
+invisible today, and would surface the same way: **byte-identical source,
+divergent behaviour, one service minting what the other refuses.**
+
+**Proposed remediation (`nexusqa-db`):** run the convergence sweep as a **matrix**
+across 3.10 and 3.11 and assert the copies agree *within* each interpreter **and
+across both**. A matrix line plus a cross-version comparison. That converts *"we
+happened to notice a red test"* into *"a runtime divergence cannot reach
+production"*.
+
+**Why this is not an OPEN row in the status table.** The table's OPEN rows are
+keyed to failures the harness EMITS — that is what makes the CI cross-check
+meaningful. This gap is one the harness **structurally cannot emit**, because it
+runs one interpreter. Marking it OPEN would redden the gate for something no run
+can ever turn green, which is the same category error as CERT-FINDING-18: a
+**scope gap is recorded, not raised.** It is named here, with its remediation,
+and it is tracked as **A11e**.
+
+**And it is precisely the shape of this chain's own closing lesson**, which is why
+`nexusqa-db` flagged it before anyone could call the class closed: *a limitation
+you have written down is not a limitation you have handled.* The
+single-interpreter reproducer is, today, exactly that.
+
+---
+
 ## Accepted limitations — recorded, not fixed
 
 Two residuals the certifier graded below the finding bar. Both are recorded
