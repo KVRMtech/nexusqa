@@ -72,9 +72,13 @@ that this system, AS BUILT, does not have.  Measured against the code:
 Note what the second and third points cost us, because it is the same fact twice:
 the signer's one-issuance scope is a deliberate SECURITY property — it bounds the
 window in which a plaintext key is reachable to one request rather than one
-process lifetime — and it is exactly that property that destroys the latency and
-availability arguments for the envelope.  The custody design and the performance
-argument for it pull in opposite directions, and only one of them is load-bearing.
+process lifetime — and it is exactly that property that destroys the AVAILABILITY
+argument for the envelope and SHRINKS the latency one.  (CERT-FINDING-11: this
+sentence used to say it destroyed both, contradicting the bullets fifteen lines
+above, where latency is retained in reduced form and only availability is
+withdrawn.  Third instance of one pattern in this paragraph block — see
+CERT-FINDING-5.)  The custody design and the performance argument for it pull in
+opposite directions, and the surviving half of the performance case is small.
 
 So the honest summary is: we keep the envelope pattern because ``ASYMMETRIC_SIGN``
 provisioning has not been done, at a cost of a plaintext key in heap for the

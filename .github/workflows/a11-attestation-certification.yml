@@ -3,7 +3,7 @@ name: A11 Attestation Certification
 # THE A11 / T-WP-02 CERTIFICATION GATE.
 #
 # A11's independent certification (`QECentral/docs/A11_INDEPENDENT_CERTIFICATION.md`)
-# binds to NINE FILES BY SHA-256. Nothing was checking that binding, so the
+# binds to TWELVE FILES BY SHA-256. Nothing was checking that binding, so the
 # certification could lapse silently — and it already did once, between the
 # commit that created it and the commit that fixed it:
 #
@@ -47,7 +47,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: The nine pinned files must hash to the certified digests
+      - name: The twelve pinned files must hash to the certified digests
         run: |
           set -euo pipefail
           # `sha256sum -c` treats a trailing CR as part of the FILENAME, so a
@@ -82,7 +82,7 @@ jobs:
           EOF
             exit 1
           fi
-          echo "A11: nine certified files unchanged"
+          echo "A11: twelve certified files unchanged"
 
   # ── 2. The same check on Windows, because that is the only place the bug
   #      this guards against can appear. ─────────────────────────────────────
@@ -103,7 +103,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: The same nine digests must hold on a Windows checkout
+      - name: The same twelve digests must hold on a Windows checkout
         shell: bash
         run: |
           set -euo pipefail
@@ -123,7 +123,7 @@ jobs:
           EOF
             exit 1
           fi
-          echo "A11: nine certified files unchanged on Windows too"
+          echo "A11: twelve certified files unchanged on Windows too"
 
   # ── 3. Behaviour, not just bytes: the certifier's own reproducer. ─────────
   reproducer:
@@ -220,7 +220,11 @@ jobs:
               s = clean($col)
               # FAIL CLOSED: only an explicit CLOSED closes a row. Everything else —
               # OPEN, Open, REOPENED, a typo, an empty cell — counts as OPEN.
-              if (s ~ /^CLOSED/) closed++
+              # EXACT token, not a prefix: `~ /^CLOSED/` also matched
+              # `**CLOSED** (pending re-cert)`, which reads to a human as NOT
+              # yet closed and passed the gate. The cost is that the Status
+              # cell takes no annotation; caveats go in the finding section.
+              if (s == "CLOSED") closed++
               else { open++; ids = ids " " clean($2) }
             }
             END { printf "%d %d %d %d%s\n", (col ? 1 : 0), rows, open, closed, ids }
@@ -258,8 +262,9 @@ jobs:
             echo "Opening a finding? Register it AND raise the count here." >&2
             echo "Closing one? Close the row AND drop the count — after a NON-AUTHOR" >&2
             echo "squad has re-run run_certification.sh and re-affirmed." >&2
-            echo "Status not recognised? Only 'CLOSED' closes a row; anything else" >&2
-            echo "counts as OPEN, deliberately." >&2
+            echo "Status not recognised? Only the EXACT token 'CLOSED' closes a" >&2
+            echo "row; anything else - including 'CLOSED (pending ...)' - counts" >&2
+            echo "as OPEN, deliberately. Annotate the finding section, not here." >&2
             exit 1
           fi
           echo "A11: the expected-failure count agrees with the register"

@@ -48,8 +48,10 @@ every one failed closed. A12 / T-WP-01 is **unblocked** by this record.
 > | Findings | nine raised across the chain. See `CERT_FINDING_REGISTER.md` for the live count — **this document is not the register and must not be read as its status field** |
 > | Corroboration | `nexusqa-db` and `nexusqa-39` each reported an independent measurement. **Recorded by the implementation squad, NOT verified by the certifier** — the certifier has no evidence about what those sessions did and did not endorse this line |
 >
-> **The check count is 151, not the 150 this record and the register both predict
-> in print, and that is the fix working.** `verify_side.py` gates its budget
+> **The check count was 151 at `54e7735`, not the 150 this record and the register
+> both predicted in print, and that was the fix working.** (It is **152** at HEAD:
+> CERT-FINDING-9 added a third KMS assertion. The register's history table carries
+> every rise with its reason — read that, not this paragraph, for the live count.) `verify_side.py` gates its budget
 > assertion on `if v.authorized`, so while the IPv6 grant was refused that check
 > never ran. It runs now. The harness files are byte-identical across
 > `d0605ba^`, `d0605ba` and `da5b5d0`, so the count could not have been gamed;

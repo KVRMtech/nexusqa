@@ -20,6 +20,8 @@ by assertion.
 | CERT-FINDING-7 | Medium (process / CI accounting; **fail-open**) | **CLOSED** | `.github/workflows/a11-attestation-certification.yml` | A11 re-certification round 3, 2026-08-21 | — |
 | CERT-FINDING-8 | Low–Medium (record accuracy) | **CLOSED** | `QECentral/docs/A11_*.md`, `GATE1_EXIT_STATUS.md` | A11 re-certification round 3, 2026-08-21 | — |
 | CERT-FINDING-9 | Medium (certification integrity; **fail-open**) | **CLOSED** | `Nexus_power/certification/a11/issue_side.py` | A11 re-certification round 3, 2026-08-21 | — |
+| CERT-FINDING-10 | Medium–High (certification integrity; **fail-open**) | **CLOSED** | `Nexus_power/certification/a11/` — the harness itself | A11 re-certification round 4, 2026-08-21 | — |
+| CERT-FINDING-11 | Low (documentation / rationale) | **CLOSED** | `qe-central/app/services/attestation_keys.py` | A11 re-certification round 4, 2026-08-21 | — |
 
 **ZERO OPEN.** The A11 certification is intact with no open findings, re-issued
 against a named SHA by a non-author squad — see `A11_INDEPENDENT_CERTIFICATION.md`.
@@ -251,6 +253,8 @@ count, so a reviewer can tell a hardening from a regression:**
 | 150 / 3 | CERT-FINDING-1 made tool-emitted instead of prose-only |
 | **151 / 0** | **both findings fixed at `d0605ba`** — read the note below before concluding anything |
 | **152 / 0** | CERT-FINDING-9: a third KMS assertion added — the correction must be PRESENT, not merely the false claim absent |
+
+The **pinned-file count** also moved, and for a different reason: **9 → 12**. CERT-FINDING-10 added the three harness files to `A11_SNAPSHOT.sha256`. The nine original digests did not move (bar `attestation_keys.py`, which CERT-FINDING-11 edits); three rows were appended.
 
 **READ THE 150 → 151 RISE BEFORE CONCLUDING ANYTHING.** This register predicted
 150 in print, and *"expected 150, got 151"* is exactly the shape that reads as a
@@ -678,3 +682,128 @@ mechanical and two-directional (*the injected re-assertion must FAIL; the clean
 file must PASS*), and were re-checked by a non-author afterwards. **A fix to a
 probe, written by the party the probe watches, has to be verified by someone
 else or it is not a fix.**
+
+
+---
+
+## CERT-FINDING-10 — the harness that certifies everything was itself pinned by nothing
+
+**Status: CLOSED.** Medium–High (certification integrity). **Fail-open.**
+Pre-existing since the harness was written; became load-bearing at `15cceb9`.
+Raised by the certifier of record in round 4.
+
+`issue_side.py`, `verify_side.py` and `run_certification.sh` appeared in
+`A11_SNAPSHOT.sha256` **zero** times, and in no other digest file in the
+repository. **The nine files under certification were pinned. The three files
+doing the certifying were not.**
+
+The certifier demonstrated the consequence rather than arguing it. One token
+changed in the probe (`key type` → `key typo`), the false KMS claim re-asserted
+as plain fact in `attestation_keys.py`, and the manifest regenerated **the way
+any legitimate change regenerates it**:
+
+```
+all digests: OK
+CHECKS RUN : 152
+FAILURES   : 0
+EXIT CODE = 0
+
+attestation_keys.py:122:
+  Google Cloud KMS offers no Ed25519 asymmetric-signing key type, so KMS-native
+```
+
+**A perfect green with CERT-FINDING-1's defect fully restored in the certified
+file.** The drift gate catches the naive form of this — editing a pinned file
+without re-pinning still exits 2 — but not the realistic form, because any
+legitimate change to a pinned file requires a re-pin anyway, and once the
+manifest is regenerated a neutered probe is invisible to everything in the repo.
+
+**Why it became load-bearing exactly here.** Through rounds 1–3 the certifier
+could write *"the harness is byte-identical across all commits, so the count
+cannot have been gamed"* — and this register said so in print, twice, as the
+argument that the 150 → 151 rise was honest. At `15cceb9` the harness changed for
+the first time, to fix CERT-FINDING-9. **That argument retired at that commit and
+nothing replaced it.** A guarantee that quietly stops holding is worse than one
+that was never claimed, because the sentence asserting it stays on the page.
+
+**Remediation:** the three harness files are now pinned, 9 → 12. **Not circular:**
+`run_certification.sh` verifies the manifest, so an edit to the harness presents
+as drift and forces re-certification exactly as an edit to `attest.py` does. The
+residual — someone edits the harness *and* the manifest in one change — is the
+same residual the implementation has always had, and has the same answer: **a
+non-author re-derives the manifest every round**, which has now happened four
+times.
+
+**This is the finding the author was groping toward and mis-stated.** The author
+asked whether it was proper to have fixed CERT-FINDING-9 in the certifier's own
+artefact. The certifier's answer was that authorship is not what preserves
+independence — verification is, and the fix was verified against criteria set in
+advance. But the question was pointing at something real one level up: *nothing
+pinned the harness, so neither party could be checked on it.* **The instinct was
+right and the diagnosis was wrong**, which is a good reason to voice an unease
+even when you cannot name its cause.
+
+---
+
+## CERT-FINDING-11 — the connective sentence contradicted its own bullets
+
+**Status: CLOSED.** Low. Documentation only. **In a pinned file**, so this one
+did lapse the manifest — the only finding after `d0605ba` that does.
+
+`attestation_keys.py` said the signer's one-issuance scope *"destroys the latency
+and availability arguments for the envelope"*, while its own bullets fifteen
+lines above retain LATENCY as *"real but modest"* and withdraw only AVAILABILITY
+as *"FALSE"*. The scope destroys availability and **shrinks** latency.
+
+**Third instance of one pattern in one paragraph block** — CERT-FINDING-5 carried
+the other two. Corrected to *"destroys the AVAILABILITY argument and SHRINKS the
+latency one"*.
+
+**How it was found is the part worth keeping.** The certifier saw this in round
+2, did not report it; reported it in round 3 but graded it below the finding bar;
+and raised it in round 4 only after the author pushed back and asked directly.
+The certifier then named its own inconsistency: CERT-FINDING-5(b) was raised for
+*"the only ground that survives scrutiny"* — a sentence of **identical structure,
+contradicted by the same bullets** — and graded differently only because it was
+found first.
+
+**Two instances of one pattern cannot receive two verdicts because of the order
+they were noticed in.** The certifier volunteered this rather than quietly
+raising the finding, which is the same discipline it applied to its own
+instrument failure in round 2. **The certifier needed correcting too, and the
+record should show it.**
+
+---
+
+## Accepted limitations — recorded, not fixed
+
+Two residuals the certifier graded below the finding bar. Both are recorded
+because an accepted limitation that is not written down is indistinguishable from
+one nobody noticed.
+
+* **The CERT-FINDING-1 probe pins a STRING, not a CLAIM.** After the
+  CERT-FINDING-9 hardening it survives reflow, quotation and deletion of the
+  correction, but a **paraphrase** evades it — as do title case and a
+  hyphen-less spelling, both of which have been evadable since the probe was
+  written. The realistic regression is a future engineer restating the false idea
+  in their own words, not restating it byte-exactly. Catching that needs semantic
+  matching, which would introduce false reds against a file whose whole job is to
+  *discuss* the false claim. **Accepted:** this probe pins one sentence; a
+  paraphrase gets past it.
+* **Two evasions were CREATED by the CERT-FINDING-9 fix**, and they are the cost
+  of the refutation frame: an assertion smuggled within 80 characters after the
+  phrase *"used to assert that"*, or framed by an unrelated use of that phrase,
+  reads as a quotation. This is the standard shape of an exemption — the
+  exemption becomes the hiding place. It is accepted because the alternative
+  (no frame) false-REDs on the correct file, and because the frame is robust to
+  the thing that actually caused CERT-FINDING-9: whitespace normalisation removes
+  line breaks, and the frame sits about twelve characters from the needle.
+
+**A third residual was NOT accepted.** The gate's `^CLOSED` prefix match let
+`**CLOSED** (pending re-cert)` — which reads to a human as *not yet closed* —
+pass as closed. The certifier offered "accept and document" as legitimate. It was
+fixed instead, to an exact-token comparison: this is the eleventh finding in a
+chain whose recurring shape is *an unrecognised input resolving to the reassuring
+answer*, and a status cell that reads "pending" must not count as closed. The
+cost is that the Status column takes no annotation; caveats belong in the
+finding's own section, which is where every other caveat in this register lives.
