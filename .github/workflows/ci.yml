@@ -452,7 +452,24 @@ jobs:
   qe-explorer-browser:
     runs-on: ubuntu-latest
     needs: [lint, compile]
-    timeout-minutes: 25
+    # RAISED 25 -> 45 (2026-08-22), from measurement rather than by feel.
+    #
+    # This lane was killed at exactly 25m15s on the merge commit, and the
+    # cancellation read as "Nexus QA CI cancelled" — indistinguishable at a
+    # glance from the concurrency cancellations this branch produces constantly,
+    # which is why it went unnoticed. 14 of the 15 jobs had passed.
+    #
+    # It was not a hang and not flake. On the last green run (bc0f665) the same
+    # lane took 23m31s — 89 seconds inside a 25-minute budget. The T2 merges then
+    # added browser tests to it (A22's producer half drives a REAL crawl at the
+    # M2.4 quote funnel), and that margin was all there was.
+    #
+    # 45 keeps a real bound — a genuine hang still dies rather than burning a
+    # runner for six hours — while leaving room for a lane that legitimately
+    # grows as milestones land. If it approaches this again, split the lane
+    # rather than raising the number a second time: two raises in a row means
+    # the budget has stopped being a control.
+    timeout-minutes: 45
     defaults:
       run:
         working-directory: Nexus_power/engines/qe-explorer
