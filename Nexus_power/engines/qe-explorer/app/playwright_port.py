@@ -341,6 +341,7 @@ class PlaywrightBrowserPort(BrowserPort):
     def __init__(self, page: Any, context: Any, *,
                  proven_mechanics: dict[str, str] | None = None,
                  medic_oracle: Any = None,
+                 vision_medic_oracle: Any = None,
                  artifact_dir: str = "") -> None:
         # M1.5 — the ACTIVE page, not "the page".  A browser context holds many
         # pages and the journey's page can change (a popup, a target=_blank tab,
@@ -355,6 +356,12 @@ class PlaywrightBrowserPort(BrowserPort):
         self._context = context
         self._proven_mechanics = dict(proven_mechanics or {})
         self._medic_oracle = medic_oracle
+        # A28 / R5 — the VISION medic: the rung after the text medic, for a
+        # control whose behaviour is not in the DOM at all. Optional and
+        # None-by-default, so a deployment without vision behaves exactly as
+        # before: the ladder exhausts, the text medic tries, and the control
+        # becomes named residue.
+        self._vision_medic_oracle = vision_medic_oracle
         self._artifact_dir = str(artifact_dir or "")
         self._artifacts_written = 0
         # API/network mining — a bounded buffer of the XHR/fetch calls the app
@@ -2092,9 +2099,153 @@ class PlaywrightBrowserPort(BrowserPort):
             except Exception as exc:
                 logger.warning("qec.explorer.medic_failed control=%s error=%s",
                                control.get("name", "?"), str(exc)[:200])
+        # R5 VISION MEDIC (A28): the deterministic ladder AND the text medic are
+        # both exhausted. Everything tried so far has reasoned about the DOM; if
+        # the control's behaviour is not IN the DOM, none of it could have
+        # worked. So the last rung stops reading the page and looks at it.
+        vision_obs = await self._vision_medic_rung(control, kind, ladder_tried)
+        if vision_obs is not None:
+            return vision_obs
         return replace(last_obs, mechanic_used="") if last_obs else \
             RawObservation(error_detail="ladder_exhausted",
                            intended_value=value, intent_met=False)
+
+    async def _vision_medic_rung(
+        self, control: dict[str, Any], kind: str,
+        ladder_tried: list[dict[str, str]],
+    ) -> RawObservation | None:
+        """A28 / R5 — ask the vision medic WHERE to click, then click there.
+
+        Returns ``None`` whenever this rung declines (not wired, no bbox, medic
+        unavailable, unusable answer) so the caller falls through to its existing
+        residue path unchanged. It returns an observation ONLY when a real click
+        was executed, and that observation carries R0's honest verdict — a
+        vision-proposed click that changes nothing is ``intent_met=False``, the
+        same as any other rung's failure.
+
+        THE COORDINATE SPACE, WHICH IS WHERE THIS GOES WRONG
+        ====================================================
+        The endpoint returns ``click_x``/``click_y`` RELATIVE TO THE ELEMENT
+        BBOX. Playwright's ``bounding_box()`` is VIEWPORT-relative. And
+        :meth:`click_at` takes PAGE coordinates. Three spaces, and M3.1 already
+        lost a whole milestone's worth of vision clicks to conflating two of
+        them: every coordinate was silently off by the scroll offset, the click
+        landed on nothing, and R0 dutifully reported the model had hallucinated.
+
+        So the conversion is done once, here, explicitly:
+
+            page_point = bbox_viewport + scroll_offset + medic_offset
+
+        and ``click_at`` then performs its own page→viewport conversion. The
+        scroll offset is READ, never assumed to be zero.
+        """
+        if self._vision_medic_oracle is None:
+            return None
+        # A bbox is what makes the medic's answer meaningful — its contract is
+        # "where INSIDE this element". Without one there is nothing to be
+        # relative to, and a click at an invented origin is worse than no click.
+        try:
+            box = await self._locator(control).bounding_box()
+        except Exception as exc:
+            logger.info("qec.explorer.vision_medic_no_bbox control=%s error=%s",
+                        control.get("name", "?"), str(exc)[:160])
+            return None
+        if not isinstance(box, dict) or not box.get("width") or not box.get("height"):
+            return None
+
+        shot = await self._redacted_screenshot()
+        if shot is None:
+            # collect_pii_regions failed or the mask could not be proven. The
+            # image is NOT sent — an unmaskable screenshot of a real application
+            # is exactly what T-VIS-05 exists to stop.
+            return None
+        try:
+            scroll = await self._page.evaluate(
+                "() => ({sx: window.scrollX || 0, sy: window.scrollY || 0})")
+            sx, sy = int(scroll.get("sx") or 0), int(scroll.get("sy") or 0)
+        except Exception:
+            sx = sy = 0
+        page_box = {"x": float(box["x"]) + sx, "y": float(box["y"]) + sy,
+                    "width": float(box["width"]), "height": float(box["height"])}
+
+        try:
+            decision = await self._vision_medic_oracle(
+                screenshot_b64=shot.b64(),
+                control=control, kind=kind, bbox=page_box,
+                ladder_tried=ladder_tried,
+                page_context={"title": (await self._page.title()) if self._page else "",
+                              "url": self._safe_url(),
+                              "page_w": shot.page_w, "page_h": shot.page_h},
+                redaction=shot.receipt(),
+            ) or {}
+        except Exception as exc:
+            logger.warning("qec.explorer.vision_medic_failed control=%s error=%s",
+                           control.get("name", "?"), str(exc)[:200])
+            return None
+
+        status = str(decision.get("status") or "")
+        if status == "display_only":
+            # An honest "this is output, not a control" — the same terminal
+            # answer the text medic may give, and NOT a failure.
+            return RawObservation(url_before=self._safe_url(),
+                                  url_after=self._safe_url(),
+                                  mechanic_used="vision_medic:display_only",
+                                  intent_met=None)
+        if status != "proposed":
+            return None
+        try:
+            cx = float(decision.get("click_x"))
+            cy = float(decision.get("click_y"))
+        except (TypeError, ValueError):
+            return None
+        # REFUSE A POINT OUTSIDE THE ELEMENT. The medic was asked where inside
+        # this control to click; an offset beyond its box is either a
+        # hallucination or an answer in the wrong coordinate space, and clicking
+        # it would actuate some OTHER control while attributing the result to
+        # this one — a mis-attributed actuation is worse than no actuation.
+        if not (0 <= cx <= page_box["width"] and 0 <= cy <= page_box["height"]):
+            logger.warning(
+                "qec.explorer.vision_medic_refused reason=point_outside_bbox "
+                "control=%s point=%.1f,%.1f box=%.1fx%.1f",
+                control.get("name", "?"), cx, cy,
+                page_box["width"], page_box["height"])
+            return None
+
+        px = int(round(page_box["x"] + cx))
+        py = int(round(page_box["y"] + cy))
+        logger.info(
+            "qec.explorer.vision_medic_click control=%s action=%s page_point=%d,%d",
+            control.get("name", "?"), decision.get("action") or "click", px, py)
+        obs = await self.click_at(px, py)
+        from dataclasses import replace as _replace
+        return _replace(obs, mechanic_used=f"vision_medic:{decision.get('action') or 'click'}")
+
+    async def _redacted_screenshot(self):
+        """A masked full-page screenshot + its receipt, or ``None``.
+
+        Mirrors :mod:`app.vision_loop`'s discipline deliberately: the receipt is
+        computed over the SAME bytes that are sent, and a page whose sensitive
+        regions could not be located is never photographed.
+        """
+        from .pixel_redaction import redact_screenshot
+        try:
+            png = await self.screenshot_png()
+        except Exception as exc:
+            logger.warning("qec.explorer.vision_medic_screenshot_failed error=%s",
+                           str(exc)[:160])
+            return None
+        if not png:
+            return None
+        try:
+            probe = await self.collect_pii_regions() or {}
+        except Exception as exc:
+            logger.warning("qec.explorer.vision_medic_pii_probe_failed error=%s",
+                           str(exc)[:160])
+            return None
+        return redact_screenshot(
+            png, list(probe.get("regions") or []),
+            page_w=probe.get("page_w") or 0, page_h=probe.get("page_h") or 0,
+            regions_ok=bool(probe.get("ok")))
 
     async def _execute_medic_action(
         self, control: dict[str, Any], kind: str, action: str, *,

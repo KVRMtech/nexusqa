@@ -36,14 +36,34 @@
 #                         moves the bottleneck from the fleet to the database,
 #                         which fails far less gracefully.
 #
-#   pollingInterval: 15   the queue changes on the drain tick's timescale.
+#   pollingInterval: 15   INERT AS CONFIGURED — see below.
 #
-#   cooldownPeriod: 300   scale-DOWN stabilisation. A crawl can run for tens of
-#                         minutes; removing a pod that holds a live crawl throws
-#                         that crawl away. Five minutes of quiet is required
-#                         before the fleet shrinks, and the pods themselves also
-#                         drain (status='draining' stops NEW work while letting
-#                         the current crawl finish).
+#   cooldownPeriod: 300   INERT AS CONFIGURED — see below.
+#
+# ── TWO FIELDS ABOVE DO NOTHING, AND THE REASON MATTERS (A31) ───────────────
+# Applying this manifest to a real cluster (kind + KEDA 2.20.2) makes the
+# admission webhook say so out loud:
+#
+#   KEDAScalerInfo  PollingInterval is configured but is not relevant.
+#                   PollingInterval is only relevant when minReplicaCount = 0
+#                   or idleReplicaCount = 0 or useCachedMetrics is enabled
+#   KEDAScalerInfo  CooldownPeriod is configured but is not relevant.
+#                   CooldownPeriod is only relevant when minReplicaCount = 0
+#                   or idleReplicaCount = 0
+#
+# `minReplicaCount` is 1, so KEDA never owns the activation decision — it hands
+# scaling to the HPA and both fields are ignored. The earlier text here claimed
+# the 300s cooldown is what stops a pod holding a live crawl from being removed.
+# It is not. That protection is real but comes from
+# `behavior.scaleDown.stabilizationWindowSeconds: 300` below, which the HPA DOES
+# honour: with the queue emptied, a scaled-out fleet was still at 4 replicas 60s
+# later (evidence/gate4/a31_keda_cluster.json).
+#
+# The fields are LEFT IN PLACE deliberately. Removing them, or setting
+# `minReplicaCount: 0` to make them take effect, is a behaviour change and a
+# scale-to-zero decision that belongs to the fleet owner — the paragraph above
+# argues against scale-to-zero on cold-start grounds, and that argument still
+# stands. What was wrong was the explanation, not the configuration.
 #
 # EVERY WORKER STILL NEEDS ITS OWN EGRESS FENCE
 # =============================================

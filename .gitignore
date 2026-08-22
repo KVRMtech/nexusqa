@@ -133,3 +133,7 @@ provision_customer.py
 provision_customer.sh
 extract_token.sh
 add_onboarding_ttl.sh
+
+# Gate 4 fault-injection scratch (A35 writes real crawl output + ledgers here)
+Nexus_power/engines/qe-explorer/.gate4_a35/
+Nexus_power/engines/qe-explorer/.gate4_ctl/

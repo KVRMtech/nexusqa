@@ -1151,6 +1151,122 @@ def _make_vision_oracle(
     return perceive
 
 
+def _make_vision_medic_oracle(
+    http_client: httpx.AsyncClient, tenant_id: str, crawl_id: str,
+    telemetry: Optional[_CrawlTelemetry] = None,
+    budget: Optional[Any] = None,
+):
+    """A28 / R5 — the caller ``/internal/vision-operate`` never had.
+
+    THE DEFECT THIS CLOSES
+    ======================
+    ``/internal/vision-operate`` was built, authenticated, server-side
+    flag-gated, tested, deployed and LIVE — and no code in this engine ever
+    called it. ``OracleGateway.operate`` raises ``NotImplementedError``; the
+    interaction ladder's medic rung calls ``/internal/operate-control`` (the
+    TEXT medic) and stops there; the only vision the crawler ever performed went
+    through ``/internal/perceive-controls``, which answers a different question
+    ("what controls are on this screen?") from this one ("where inside THIS
+    control do I click?").
+
+    A live authenticated endpoint with no consumer is not free. It is billable
+    surface area that no test exercises end to end, and its existence implies a
+    capability the product does not actually have: on a DOM-opaque control the
+    ladder simply ran out and the control became named residue.
+
+    THE SHAPE, AND WHY IT MATCHES ITS SIBLINGS
+    ==========================================
+    Same HMAC signature + fleet token as ``perceive-controls`` and
+    ``pick-advance``; same :class:`app.vision_gate.VisionBudget`, so the double
+    gate (T-VIS-04) refuses every call when vision is shut even if this callable
+    is wired by mistake, and a vision outage cannot open the breaker the DOM
+    ladder depends on; same never-raises contract — every failure returns the
+    documented ``unavailable`` status, which the ladder already handles by
+    falling through to residue.
+
+    The REDACTION RECEIPT is passed through as a first-class field rather than
+    buried in the page context, because qe-central ENFORCES it against the bytes
+    it was handed (``platform_api._assert_image_egress_clean``). A receipt that
+    does not match the image is a refusal at the wire, not a warning.
+    """
+    from . import vision_gate as _vg
+
+    vbudget = budget if budget is not None else _vg.closed_budget()
+    unavailable = {"action": "", "status": "unavailable",
+                   "click_x": 0, "click_y": 0, "reason": ""}
+
+    async def vision_operate(*, screenshot_b64: str, control: dict[str, Any],
+                             kind: str, bbox: dict[str, Any],
+                             ladder_tried: list, page_context: dict[str, Any],
+                             redaction: dict[str, Any]) -> dict[str, Any]:
+        if not screenshot_b64:
+            return dict(unavailable)
+        allowed, why = vbudget.try_spend()
+        if not allowed:
+            metrics.record_oracle_call(oracle="vision_medic", outcome=why,
+                                       failure_reason=why)
+            logger.info(
+                "qec.explorer.vision_medic_refused crawl_id=%s reason=%s",
+                crawl_id, why)
+            return dict(unavailable)
+        if telemetry is not None:
+            telemetry.note_call()
+        started = time.monotonic()
+        crawl_context.emit(crawl_context.EV_ORACLE_CALLED, oracle="vision_medic")
+        body = {"crawl_id": crawl_id, "tenant_id": tenant_id,
+                "screenshot_b64": screenshot_b64,
+                "pixel_redaction": redaction or {},
+                "control": {**{k: v for k, v in (control or {}).items()
+                               if k in ("name", "role", "selector", "tag",
+                                        "frame_selector", "kind")},
+                            "kind": kind, "bbox": bbox},
+                "ladder_tried": ladder_tried or [],
+                "page_context": page_context or {}}
+        payload = json.dumps(body, sort_keys=True,
+                             separators=(",", ":")).encode("utf-8")
+        url = settings.callback_url.rstrip("/") + "/internal/vision-operate"
+        failure_reason = "bad_body"
+        try:
+            signature = settings.sign_payload(
+                payload, scope=f"vision-operate:{crawl_id}")
+            resp = await http_client.post(
+                url, content=payload,
+                headers=crawl_context.crawl_headers({
+                    "Content-Type": "application/json",
+                    "X-QEC-Signature": signature,
+                    "X-QEC-Token": settings.explorer_token,
+                }),
+                timeout=vbudget.timeout_s,
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                if telemetry is not None:
+                    telemetry.note_usage(data)
+                status = str(data.get("status") or "")
+                if status in ("proposed", "display_only", "unavailable"):
+                    vbudget.note_success()
+                    _note_oracle_outcome("vision_medic", status, started)
+                    return {"action": str(data.get("action") or ""),
+                            "status": status,
+                            "click_x": data.get("click_x") or 0,
+                            "click_y": data.get("click_y") or 0,
+                            "reason": str(data.get("reason") or "")}
+            else:
+                failure_reason = "http_error"
+        except Exception as exc:
+            failure_reason = (
+                "timeout" if isinstance(exc, httpx.TimeoutException) else "transport")
+            logger.warning(
+                "qec.explorer.vision_medic_failed crawl_id=%s error=%s",
+                crawl_id, str(exc)[:200])
+        _note_oracle_outcome("vision_medic", "unavailable", started,
+                             failure_reason=failure_reason)
+        vbudget.note_failure()
+        return dict(unavailable)
+
+    return vision_operate
+
+
 # ─── Job runner (owns the Playwright lifecycle) ──────────────────────────────
 
 
@@ -1380,6 +1496,15 @@ async def _run_job(
             port = PlaywrightBrowserPort(
                 page, context, proven_mechanics=req.proven_mechanics,
                 medic_oracle=medic,
+                # A28 — the R5 vision medic, gated by the SAME resolved vision
+                # decision as the perceiver. Not a second switch: if vision is
+                # off for this crawl the oracle is None and the ladder's last
+                # rung simply does not exist, which is the pre-A28 behaviour.
+                vision_medic_oracle=(
+                    _make_vision_medic_oracle(app.state.http, req.tenant_id,
+                                              req.crawl_id, telemetry,
+                                              budget=vision_budget)
+                    if vision_gate_decision.enabled else None),
                 # M1.5 / T-ND-03 — captured downloads are staged beside this
                 # crawl's manifest on the shared volume, so the artifact travels
                 # with the record that references it.
