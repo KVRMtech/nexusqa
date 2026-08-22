@@ -672,14 +672,12 @@ Stated explicitly, because no undocumented trust assumptions are permitted.
    and skipped without Postgres; CI runs it. The migration follows the qec_003
    pattern exactly, but "follows the pattern" is not "was verified against a
    database".
-7. **All findings from the independent certification are CLOSED.** Both original findings (CERT-FINDING-1, the false KMS rationale; CERT-FINDING-2, IPv6 `normalize_origin`) were fixed at `d0605ba`, and the four raised while closing them at `da5b5d0` and after. Zero open. See `CERT_FINDING_REGISTER.md`; the reproducer now runs **151 checks / 0 failures**, and `run_certification.sh` exits 0 end to end.
-   false KMS rationale) is corrected in §2.1 of this document but **not yet in
-   the `attestation_keys.py` docstring**, which is pinned by the certification
-   snapshot. FINDING 2 (`normalize_origin` drops IPv6 brackets, so an
-   IPv6-literal environment gets a valid proof that is guaranteed to be refused)
-   is **not fixed**. Both fail closed; neither is a bypass. Both require a
-   follow-up change that is **re-certified**, because the files they touch
-   (`attestation_keys.py`, `attest.py`, `walk_attestation.py`) are all pinned.
+7. **All findings from the independent certification are CLOSED.** Both original findings (CERT-FINDING-1, the false KMS rationale; CERT-FINDING-2, IPv6 `normalize_origin`) were fixed at `d0605ba`, and the four raised while closing them at `da5b5d0` and after. Zero open. See `CERT_FINDING_REGISTER.md`; the reproducer now runs **152 checks / 0 failures**, and `run_certification.sh` exits 0 end to end.
+   Both were fixed in the pinned files themselves — `attestation_keys.py`,
+   `attest.py` and `walk_attestation.py` — which lapsed the certification by
+   construction, so the record was re-issued against the new SHA by a non-author
+   squad rather than patched quietly. Neither was ever a bypass; both failed
+   closed throughout.
 
 ---
 
@@ -703,17 +701,23 @@ Reproduce:
 
 ```bash
 bash Nexus_power/certification/a11/run_certification.sh
-# 151 checks; 0 failures. (Was 131/1, then 150/3 as the harness grew, while
-# CERT-FINDING-1 and -2 were open. Both are closed; see CERT_FINDING_REGISTER.md
-# for why the check count ROSE to 151 as part of the fix.)
+# 152 checks; 0 failures. (131/1 -> 150/3 as the harness grew while
+# CERT-FINDING-1 and -2 were open; 151/0 when they were fixed; 152/0 once
+# CERT-FINDING-9 added a third KMS assertion. Every rise is the harness
+# covering MORE — see CERT_FINDING_REGISTER.md, which explains each one.)
 ```
 
-### Two findings, both open, neither a bypass
+### The two original findings — both CLOSED, neither ever a bypass
 
 | # | Finding | Severity | Status |
 | --- | --- | --- | --- |
-| 1 | The KMS rationale was factually false — `EC_SIGN_ED25519` exists and needs no verifier change | Material (rationale) | corrected in §2.1; **docstring still wrong** (pinned file) |
-| 2 | `normalize_origin` drops IPv6 brackets and is not idempotent → an IPv6 environment gets a valid proof guaranteed to be refused | Medium (availability) | **not fixed** — both copies are pinned |
+| 1 | The KMS rationale was factually false — `EC_SIGN_ED25519` exists and needs no verifier change | Material (rationale) | **CLOSED** at `d0605ba`; docstring corrected, re-certified |
+| 2 | `normalize_origin` drops IPv6 brackets and is not idempotent → an IPv6 environment gets a valid proof guaranteed to be refused | Medium (availability) | **CLOSED** at `d0605ba`; both copies fixed together, re-certified |
+
+Four further findings were raised *while closing these two* — three against the
+fixes themselves, one against the CI gate — and are also closed. The full set,
+with the reasoning, is in `CERT_FINDING_REGISTER.md`. It took three passes to
+state the KMS rationale truthfully, and every pass was caught by a non-author.
 
 Neither blocks merge. Both fail closed. **Both need a re-certified follow-up**,
 because every file they touch is inside the pinned snapshot — fixing them in

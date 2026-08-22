@@ -106,7 +106,7 @@ already mis-attributed one commit today.
 | qe-explorer non-browser | **2025 passed** |
 | qe-central | **2296 passed**, 146 skipped |
 | A11 author suites | **143 passed**, 0 skipped |
-| A11 independent certification | 9/9 digests, **151 checks, 0 failures, 0 open findings** (re-certified 2026-08-21 at `da5b5d0`) |
+| A11 independent certification | **9/9 digests, `run_certification.sh` exit 0** — the nine pinned files certified at `54e7735`, 2026-08-21. 9/9 was NOT true at `da5b5d0`; see `CERT_FINDING_REGISTER.md` for the live finding count |
 | A12 walk persistence (Chromium) | **7 passed** |
 | Browser lane, targeted | **48 passed** |
 | Browser lane, full (during concurrent golden rewrite) | 571 passed / **23 failed** — all `test_manifest_golden[...]` |

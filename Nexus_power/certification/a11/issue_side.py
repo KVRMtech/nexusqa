@@ -73,12 +73,52 @@ ORIGIN_VECTORS = [
 # is corrected, and cannot be closed by anyone forgetting it existed.
 _KEYS_SRC = Path(__file__).resolve().parents[2] / "platform" / "qe-central"     / "app" / "services" / "attestation_keys.py"
 _FALSE_KMS_CLAIM = "offers no Ed25519 asymmetric-signing key type"
+
+# The CORRECTION marker. The fixed file must AFFIRM the algorithm exists, not
+# merely omit the false sentence -- deleting the whole rationale would otherwise
+# read as "fixed".
+_KMS_CORRECTION = "EC_SIGN_ED25519"
+
+# The REFUTATION FRAME. The corrected docstring necessarily QUOTES the false
+# sentence in order to say it is false, so "the string appears" and "the claim
+# is made" are no longer the same question. An occurrence introduced by this
+# phrase is a quotation; any other occurrence is an assertion.
+_REFUTATION_FRAME = "used to assert that"
+_FRAME_WINDOW = 80          # chars of normalised text before the needle
+
+
+def _kms_claim_asserted(text: str) -> bool:
+    """True iff the false KMS claim is ASSERTED (not merely quoted) in ``text``.
+
+    CERT-FINDING-9. The first version of this probe was ``needle in text`` over
+    RAW source, and it went green only because the corrected docstring happens to
+    wrap the quoted sentence across a newline exactly at the needle boundary.
+    The certifier re-introduced the claim as a plain assertion, wrapped the way
+    the file already wraps, and the whole harness still reported 151/0.
+
+    So: normalise whitespace first -- a line break must not hide the claim --
+    then classify every occurrence. A probe that reports clean because of where
+    the text happened to wrap is not a probe, it is a coincidence.
+    """
+    norm = " ".join(text.split())
+    idx = norm.find(_FALSE_KMS_CLAIM)
+    while idx != -1:
+        window = norm[max(0, idx - _FRAME_WINDOW):idx]
+        if _REFUTATION_FRAME not in window:
+            return True                     # asserted, not quoted -> the defect
+        idx = norm.find(_FALSE_KMS_CLAIM, idx + 1)
+    return False
+
+
 try:
     _keys_text = _KEYS_SRC.read_text(encoding="utf-8")
-    kms_claim_present = _FALSE_KMS_CLAIM in _keys_text
+    kms_claim_present = _kms_claim_asserted(_keys_text)
+    kms_correction_present = _KMS_CORRECTION in _keys_text
     kms_probe_read = True
 except Exception:
-    kms_claim_present, kms_probe_read = False, False
+    # A probe that cannot see its target must never report clean, so the two
+    # content answers go to their FAILING values, not their passing ones.
+    kms_claim_present, kms_correction_present, kms_probe_read = True, False, False
 
 origin_probe = {}
 for label, url, _is_ctl in ORIGIN_VECTORS:
@@ -107,5 +147,6 @@ json.dump({"public_key": pub, "issuer": ISSUER, "now_ms": NOW, "cases": out,
                               for l, u, c in ORIGIN_VECTORS],
            "issuer_origin_probe": origin_probe,
            "kms_claim_present": kms_claim_present,
+           "kms_correction_present": kms_correction_present,
            "kms_probe_read": kms_probe_read},
           sys.stdout)

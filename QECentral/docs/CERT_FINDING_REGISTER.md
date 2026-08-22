@@ -17,6 +17,9 @@ by assertion.
 | CERT-FINDING-4 | Informational (correctness; fails closed; pre-existing) | **CLOSED** | `qe-explorer/app/attest.py` + `qe-central/app/services/walk_attestation.py` | A11 re-certification round 1, 2026-08-21 | — |
 | CERT-FINDING-5 | Low (documentation / design rationale) | **CLOSED** | `qe-central/app/services/attestation_keys.py` | A11 re-certification round 2, 2026-08-21 | — |
 | CERT-FINDING-6 | Medium (process / CI accounting) | **CLOSED** | `.github/workflows/a11-attestation-certification.yml` | Implementation squad 2026-08-21; confirmed by `nexusqa-39` + `nexusqa-db` | **A11d** |
+| CERT-FINDING-7 | Medium (process / CI accounting; **fail-open**) | **CLOSED** | `.github/workflows/a11-attestation-certification.yml` | A11 re-certification round 3, 2026-08-21 | — |
+| CERT-FINDING-8 | Low–Medium (record accuracy) | **CLOSED** | `QECentral/docs/A11_*.md`, `GATE1_EXIT_STATUS.md` | A11 re-certification round 3, 2026-08-21 | — |
+| CERT-FINDING-9 | Medium (certification integrity; **fail-open**) | **CLOSED** | `Nexus_power/certification/a11/issue_side.py` | A11 re-certification round 3, 2026-08-21 | — |
 
 **ZERO OPEN.** The A11 certification is intact with no open findings, re-issued
 against a named SHA by a non-author squad — see `A11_INDEPENDENT_CERTIFICATION.md`.
@@ -247,6 +250,7 @@ count, so a reviewer can tell a hardening from a regression:**
 | 148 / 2 | A11b: the IPv6 class fenced (symptom + cause separated) |
 | 150 / 3 | CERT-FINDING-1 made tool-emitted instead of prose-only |
 | **151 / 0** | **both findings fixed at `d0605ba`** — read the note below before concluding anything |
+| **152 / 0** | CERT-FINDING-9: a third KMS assertion added — the correction must be PRESENT, not merely the false claim absent |
 
 **READ THE 150 → 151 RISE BEFORE CONCLUDING ANYTHING.** This register predicted
 150 in print, and *"expected 150, got 151"* is exactly the shape that reads as a
@@ -505,3 +509,172 @@ from its blind state.
   currently harmless — but it is the same unpinned-extension shape that produced
   the original lapse window, and it is recorded rather than fixed because it was
   outside this task's scope.
+
+
+---
+
+## CERT-FINDING-7 — the gate built to stop drift reported GREEN with a finding open
+
+**Status: CLOSED.** Medium (process / CI accounting). **Fail-open**, which is why
+it is the most serious finding in this chain despite touching no product code.
+Raised by the certifier of record in round 3, against CERT-FINDING-6's own
+remediation.
+
+The register cross-check shipped in the accounting commit recognised a row as
+open only when its Status cleaned to the exact token `OPEN`, and treated
+**everything else as CLOSED**. Nine states in which a finding is open and the
+gate passed:
+
+| State | Shipped gate | Correct |
+| --- | --- | --- |
+| `Open` / `open` | **PASS** | FAIL |
+| `**OPEN** (A11a)` — this register's own annotation style | **PASS** | FAIL |
+| `**OPEN** — regression` | **PASS** | FAIL |
+| `REOPENED` | **PASS** | FAIL |
+| `CLOSD` — any typo, any unrecognised status | **PASS** | FAIL |
+| an empty Status cell | **PASS** | FAIL |
+| a column inserted before Status (`$4` silently re-points) | **PASS** | FAIL |
+| an OPEN row indented two spaces (`^\|` anchor misses it) | **PASS** | FAIL |
+
+**The shape is exact and it is the third recurrence in this file.** The gate
+guarded *"I cannot see the file"* and *"I cannot see the table"*, and both fail
+closed correctly. The uncovered case was **"I can see the table and silently
+misread a row"** — and it resolved to the reassuring answer. That is the same
+defect as the single-truthy-test that passes on a missing file, one level in:
+*an unrecognised input must never resolve to the value that means "nothing is
+wrong".*
+
+**Worse, the author wrote both the gate and its controls.** The five states
+verified before landing all held; they were the five the author thought of. The
+certifier's nine were the ones the author did not. **A control suite written by
+the person who wrote the check inherits its blind spots** — that is why this
+chain has a non-author certifier at all, and it caught the gate as readily as it
+caught the code.
+
+**Remediation, verified in both directions:** locate the Status column by its
+**header name** rather than by position, tolerate leading whitespace, upper-case
+before comparing, and **fail closed — only an explicit `CLOSED` closes a row;
+anything else counts as OPEN.** A fourth guard was added: if the number of
+classified rows does not equal the number of finding rows, the gate fails rather
+than silently dropping a row it could not read.
+
+Verified against thirteen states — the baseline passes, and all twelve
+adversarial states fail — using the step's `run:` script **extracted from the
+parsed YAML**, so the thing tested is the thing that ships, not a hand-copy of
+it. The install step re-parses the workflow and asserts the extracted script is
+byte-identical to the tested one.
+
+---
+
+## CERT-FINDING-8 — the record both overclaimed and underclaimed
+
+**Status: CLOSED.** Low–Medium (record accuracy). Raised in round 3.
+
+Four distinct defects, in the documents whose whole purpose is to be accurate:
+
+1. **A verdict attributed to a commit that did not receive it.**
+   `A11_INDEPENDENT_CERTIFICATION.md` said *"Verdict at `da5b5d0`: CERTIFIED. No
+   open findings."* The round-2 verdict at `da5b5d0` was CERTIFIED **WITH
+   FINDINGS**, with CERT-FINDING-5 open — as this register said on the same day,
+   in the same commit. **The document contradicted its own register.**
+2. **A `54e7735` result attributed to `da5b5d0`, in two files.** *"151 checks, 0
+   failures, exit 0 — `run_certification.sh` end to end"* was recorded under the
+   `da5b5d0` heading. At `da5b5d0` that script exits **2**; the 151/0 came from
+   running the halves directly past the lapsed drift gate. `GATE1_EXIT_STATUS.md`
+   repeated it with *"9/9 digests"*, which was true only at `54e7735`.
+3. **The record pre-declared its own certification.** *"Certified SHA:
+   `da5b5d0`, plus the accounting commit that re-pins this record"* — that
+   accounting commit was the one being written, which no non-author had seen. It
+   is true now because round 3 made it true; it was **circular when committed**.
+4. **The issuer doc simultaneously asserted both findings were still OPEN, in
+   three surviving passages.** The edit replaced only the first line of item 7
+   and orphaned its continuation, leaving *"not yet in the `attestation_keys.py`
+   docstring"*, a heading *"Two findings, both open, neither a bypass"*, and a
+   table reading *"docstring still wrong"* / *"not fixed"*. **A reader believes
+   whichever they reach first.**
+
+**Both directions of error, in one commit, in the same subject.** Defects 1–3
+claim more than was proven; defect 4 claims the work was never done. **A partial
+edit to a document is a worse outcome than no edit**, because the untouched half
+now carries the authority of a file that looks maintained. The mechanism was
+mundane: a single-line replacement against a multi-line claim.
+
+**Remediation:** each round's verdict is now recorded against **the SHA that
+actually received it**, in a table; the reproducer row states what is true at
+which SHA; the certification record explicitly says it is **not** the register
+and must not be read as its status field; and the issuer doc's three passages are
+corrected. Acceptance criteria were the certifier's, and are mechanical —
+`grep -c "both open"`, `"not fixed"`, `"still wrong"` all return 0.
+
+**One line was corrected by weakening it, deliberately.** The record claimed
+*"`nexusqa-db` and `nexusqa-39` each measured independently, neither told what to
+expect."* That is true, and the implementation squad has the message log — but
+**the certifier has no evidence for it and declined to endorse it.** It is now
+attributed to the implementation squad and explicitly marked as not verified by
+the certifier. A record should not launder an unverified claim through a
+certification.
+
+---
+
+## CERT-FINDING-9 — the CERT-FINDING-1 probe was green by line-wrap
+
+**Status: CLOSED.** Medium (certification integrity). **Fail-open.** Raised in
+round 3, against the **certifier's own artefact** — `issue_side.py`, not any
+file the author wrote.
+
+The probe tested `"offers no Ed25519 asymmetric-signing key type" in _keys_text`
+— a raw substring match. But the corrected docstring *legitimately quotes that
+sentence in order to refute it*, so the string **is** present in the file. The
+probe returned `False` only because the quotation happens to wrap across a
+newline at exactly the needle boundary:
+
+```
+docstring used to assert that *Cloud KMS offers no Ed25519 asymmetric-signing
+key type*, and that KMS-native signing would therefore mean …
+```
+
+**The green was a coincidence of typography.** The certifier proved the
+consequence rather than arguing it: injecting the claim back as a plain
+assertion, wrapped the way the file already wraps, produced
+`kms_claim_present=False` and **151 checks / 0 failures / exit 0**. The defect
+was restored and the certification harness reported clean.
+
+**This is the sharpest instance of the class in the whole chain**, because the
+probe passed its own integrity test: it *could* read its target — `kms_probe_read`
+was `True` — and still could not see the claim. **"I can see my target" and "I can
+see the thing I am looking for in my target" are different assertions**, and the
+register's existing rule only covered the first.
+
+**Remediation, verified in all four directions:**
+
+* **normalise whitespace before matching** — a line break must not hide the claim;
+* **distinguish assertion from quotation** — an occurrence introduced by the
+  refutation frame (*"used to assert that"*) is a quotation; any other occurrence
+  is an assertion and fails. A naive whitespace-normalisation alone would have
+  false-RED on the correct file, which is why this half is necessary;
+* **a third assertion: the correction must be PRESENT.** `EC_SIGN_ED25519` must
+  appear. *"The false sentence is absent"* and *"the rationale was deleted
+  wholesale"* were previously indistinguishable, and only one of them is a fix.
+
+| State | `probe_read` | `claim_asserted` | `correction_present` | Harness |
+| --- | --- | --- | --- | --- |
+| the corrected file | True | False | True | **PASS** |
+| claim re-asserted, wrapped | True | **True** | True | **FAIL** |
+| correction deleted | True | False | **False** | **FAIL** |
+| target hidden | **False** | True | False | **FAIL** |
+
+The exception path now sets the two content answers to their **failing** values
+rather than their passing ones, so an unreadable target cannot report clean by
+default.
+
+**Check count 151 → 152**, and the reason is this third assertion. Recorded here
+so the rise is not read as drift — the same discipline as the 150 → 151 note.
+
+**A note on who fixed it.** This finding is against the certifier's harness, and
+it was repaired by the **author** of the code under certification, which is the
+independence problem in mirror image. It is acceptable only because the
+acceptance criteria were stated by the certifier **before** the fix, are
+mechanical and two-directional (*the injected re-assertion must FAIL; the clean
+file must PASS*), and were re-checked by a non-author afterwards. **A fix to a
+probe, written by the party the probe watches, has to be verified by someone
+else or it is not a fix.**

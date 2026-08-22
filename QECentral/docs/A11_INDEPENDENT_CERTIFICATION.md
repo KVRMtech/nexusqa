@@ -20,18 +20,33 @@ every one failed closed. A12 / T-WP-01 is **unblocked** by this record.
 >
 > ### ✅ RE-CERTIFIED 2026-08-21 — BOTH ORIGINAL FINDINGS CLOSED, ZERO OPEN
 >
-> **Verdict at `da5b5d0`: CERTIFIED. No open findings.** Issued by a non-author
-> squad from a clean `git archive` of the pushed SHA. The author of the fixes did
-> not certify them, and the certifier did not write, edit or review-by-authorship
-> any of the code it certified.
+> **Verdict on the nine pinned files: CERTIFIED at `54e7735`.** Issued by a
+> non-author squad from a clean `git archive` of the pushed SHA. The author of
+> the fixes did not certify them, and the certifier did not write, edit or
+> review-by-authorship any of the code it certified.
+>
+> **Each round's verdict, against the SHA that actually received it** — an
+> earlier draft of this block collapsed these into one and attributed a clean
+> `54e7735` result to `da5b5d0`, which is CERT-FINDING-8:
+>
+> | SHA | Round | Verdict |
+> |---|---|---|
+> | `d0605ba` | 1 | CERTIFIED WITH FINDINGS — CERT-FINDING-1 and -2 closed; -3 and -4 raised |
+> | `da5b5d0` | 2 | CERTIFIED WITH FINDINGS — -3 and -4 closed; -5 raised |
+> | `54e7735` | 3 | **nine pinned files CERTIFIED**; -5 closed; -7, -8, -9 raised against the accounting layer, all outside the pinned nine |
+>
+> At `d0605ba` and `da5b5d0` the reproducer's drift gate correctly exits 2 — the
+> record is lapsed until re-pinned — and the 151/0 figures for those SHAs came
+> from running the two halves directly. **`run_certification.sh` passes end to
+> end only from `54e7735` onward.**
 >
 > | | |
 > |---|---|
-> | Implementation | `d0605ba` (CERT-FINDING-1 + CERT-FINDING-2), `da5b5d0` (CERT-FINDING-3 + CERT-FINDING-4) |
-> | Certified SHA | `da5b5d0`, plus the accounting commit that re-pins this record |
-> | Reproducer | **151 checks, 0 failures, exit 0** — `run_certification.sh` end to end, drift gate live |
-> | Findings open | **0** (six raised across the whole chain, six closed) |
-> | Corroboration | `nexusqa-db` and `nexusqa-39` each measured independently, neither told what to expect |
+> | Implementation | `d0605ba`, `da5b5d0`, and the accounting commits that follow |
+> | Certified SHA | `54e7735` for the nine pinned files; the accounting layer re-checked separately |
+> | Reproducer | **exit 0, 9/9 digests, drift gate live** — first full green in the chain, at `54e7735` |
+> | Findings | nine raised across the chain. See `CERT_FINDING_REGISTER.md` for the live count — **this document is not the register and must not be read as its status field** |
+> | Corroboration | `nexusqa-db` and `nexusqa-39` each reported an independent measurement. **Recorded by the implementation squad, NOT verified by the certifier** — the certifier has no evidence about what those sessions did and did not endorse this line |
 >
 > **The check count is 151, not the 150 this record and the register both predict
 > in print, and that is the fix working.** `verify_side.py` gates its budget

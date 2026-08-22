@@ -145,10 +145,21 @@ check(data.get("kms_probe_read") is True,
       "CERT-FINDING-1 probe could READ attestation_keys.py (a probe that cannot "
       "read its target must not report 'clean')")
 check(data.get("kms_claim_present") is False,
-      "[CERT-FINDING-1 | KMS] attestation_keys.py no longer claims Cloud KMS "
-      "'offers no Ed25519 asymmetric-signing key type' -- it does provide "
+      "[CERT-FINDING-1 | KMS] attestation_keys.py no longer ASSERTS that Cloud "
+      "KMS 'offers no Ed25519 asymmetric-signing key type' -- it does provide "
       "EC_SIGN_ED25519, and that false claim is what justifies keeping a "
       "plaintext signing key in process heap")
+
+# CERT-FINDING-9 -- the third assertion. "The false sentence is absent" and
+# "the rationale was deleted wholesale" are indistinguishable from the check
+# above, and only one of them is a fix. This one requires the corrected file to
+# AFFIRM the algorithm exists, so silence cannot pass as a correction. It is the
+# same two-assertions-never-one-truthy-test rule the register states for
+# probe-integrity, applied to the content instead of the file handle.
+check(data.get("kms_correction_present") is True,
+      "[CERT-FINDING-1 | KMS] attestation_keys.py AFFIRMS EC_SIGN_ED25519 "
+      "exists -- omitting the false sentence is not the same as correcting "
+      "the rationale, and deleting it entirely must not read as a fix")
 
 print(f"CHECKS RUN : {len(results)}")
 print(f"FAILURES   : {len(failures)}")

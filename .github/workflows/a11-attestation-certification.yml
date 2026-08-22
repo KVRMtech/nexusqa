@@ -127,7 +127,7 @@ jobs:
 
   # ── 3. Behaviour, not just bytes: the certifier's own reproducer. ─────────
   reproducer:
-    name: independent reproducer (151 checks)
+    name: independent reproducer (152 checks)
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -190,43 +190,79 @@ jobs:
           EXPECTED_FAILURES=0
           REG=QECentral/docs/CERT_FINDING_REGISTER.md
 
-          # PROBE INTEGRITY FIRST. A parser that cannot see the register finds
-          # zero OPEN rows, and zero equals the literal above, so it would PASS
-          # on a register nobody can read. That is the same shape as the finding
-          # this register already carries (a single truthy test that passes on a
-          # missing file), so prove the target is visible before trusting it.
+          # PROBE INTEGRITY, IN THREE LAYERS. Each is a way this check could be blind, and
+          # a blind check here reports "nothing is open" — the single most dangerous
+          # possible answer. CERT-FINDING-7 was the third layer being absent: the first
+          # version guarded "cannot see the file" and "cannot see the table", but silently
+          # resolved any status it did not recognise to CLOSED. `Open`, `open`,
+          # `**OPEN** (A11a)`, `REOPENED`, an indented row, an inserted column and a
+          # `CLOSD` typo all reported GREEN with a finding open.
+          #
+          # So: fail closed on anything not recognisably CLOSED, find the Status column by
+          # its HEADER NAME rather than by position, and tolerate leading whitespace.
           if [ ! -r "$REG" ]; then
-            echo "::error::cannot read $REG — the expected-failure count is" >&2
-            echo "::error::checked against its OPEN rows, so an unreadable" >&2
-            echo "::error::register must FAIL here, never pass." >&2
+            echo "::error::cannot read $REG — the expected-failure count is checked" >&2
+            echo "::error::against its OPEN rows, so an unreadable register must FAIL" >&2
+            echo "::error::here, never pass." >&2
             exit 1
           fi
-          rows="$(grep -cE '^\| *CERT-FINDING-[0-9]+ *\|' "$REG" || true)"
+
+          status=$(awk -F'|' '
+            function clean(s) { gsub(/[ \t\r*`]/, "", s); return toupper(s) }
+            # Locate the Status column by NAME. Position is not stable: inserting a column
+            # before it silently re-points a hard-coded $4 at the wrong field.
+            !col && /^[ \t]*\|/ {
+              for (i = 1; i <= NF; i++) if (clean($i) == "STATUS") { col = i; next }
+            }
+            /^[ \t]*\| *CERT-FINDING-[0-9]+ *\|/ {
+              rows++
+              if (!col) next                       # no header yet: cannot judge, so do not
+              s = clean($col)
+              # FAIL CLOSED: only an explicit CLOSED closes a row. Everything else —
+              # OPEN, Open, REOPENED, a typo, an empty cell — counts as OPEN.
+              if (s ~ /^CLOSED/) closed++
+              else { open++; ids = ids " " clean($2) }
+            }
+            END { printf "%d %d %d %d%s\n", (col ? 1 : 0), rows, open, closed, ids }
+          ' "$REG")
+
+          have_header=$(echo "$status" | cut -d' ' -f1)
+          rows=$(echo "$status" | cut -d' ' -f2)
+          open_count=$(echo "$status" | cut -d' ' -f3)
+          closed_count=$(echo "$status" | cut -d' ' -f4)
+          open_ids=$(echo "$status" | cut -d' ' -f5-)
+
+          if [ "$have_header" -ne 1 ]; then
+            echo "::error::no 'Status' header column found in $REG. The table shape" >&2
+            echo "::error::changed and this gate cannot read it — that is a FAILURE," >&2
+            echo "::error::never a pass." >&2
+            exit 1
+          fi
           if [ "$rows" -eq 0 ]; then
-            echo "::error::found no CERT-FINDING rows in $REG. Either it is" >&2
-            echo "::error::empty or its table shape changed; both mean this" >&2
-            echo "::error::gate is blind and must not report clean." >&2
+            echo "::error::found no CERT-FINDING rows in $REG. Either it is empty or" >&2
+            echo "::error::its table shape changed; both mean this gate is blind." >&2
             exit 1
           fi
-          open_ids="$(awk -F'|' '
-            /^\| *CERT-FINDING-[0-9]+ *\|/ {
-              id = $2; status = $4
-              gsub(/[ *]/, "", id); gsub(/[ *]/, "", status)
-              if (status == "OPEN") print id
-            }' "$REG")"
-          open_count="$(printf "%s" "$open_ids" | grep -c . || true)"
-          echo "register: $rows finding rows, $open_count OPEN [$(echo $open_ids)]"
+          if [ "$((open_count + closed_count))" -ne "$rows" ]; then
+            echo "::error::$rows finding rows but only $((open_count + closed_count))" >&2
+            echo "::error::could be classified. A row this gate cannot read must not" >&2
+            echo "::error::be silently dropped." >&2
+            exit 1
+          fi
+
+          echo "register: $rows finding rows, $open_count OPEN, $closed_count CLOSED"
           if [ "$open_count" -ne "$EXPECTED_FAILURES" ]; then
             echo "::error::EXPECTED_FAILURES=${EXPECTED_FAILURES} in this file, but" >&2
-            echo "::error::${REG} lists ${open_count} OPEN finding(s): ${open_ids}" >&2
+            echo "::error::${REG} lists ${open_count} OPEN finding(s):${open_ids}" >&2
             echo "The count and the reason for it must move in the SAME diff." >&2
             echo "Opening a finding? Register it AND raise the count here." >&2
-            echo "Closing one? Close the row AND drop the count — after a" >&2
-            echo "NON-AUTHOR squad has re-run run_certification.sh and re-affirmed." >&2
+            echo "Closing one? Close the row AND drop the count — after a NON-AUTHOR" >&2
+            echo "squad has re-run run_certification.sh and re-affirmed." >&2
+            echo "Status not recognised? Only 'CLOSED' closes a row; anything else" >&2
+            echo "counts as OPEN, deliberately." >&2
             exit 1
           fi
           echo "A11: the expected-failure count agrees with the register"
-
       - name: Run the certifier's reproducer and account for every failure
         run: |
           set -uo pipefail
