@@ -296,3 +296,91 @@ def test_a_page_you_pay_FROM_is_not_the_act_of_paying(href):
     and did NOT flag them, for this reason.
     """
     assert _link_danger(href) is False
+
+
+# ── THE POLARITY, and the WALK case that forced it ─────────────────────────
+# The red-team's fourth round found 18 more under-blocks (refund, void, reverse,
+# chargeback, settle, redeem, cash, issue …) and then made the argument that
+# mattered more than the list: enumerating ACT qualifiers with default-ALLOW is
+# FAIL-OPEN, and this rule is load-bearing in WALK.
+#
+# `classify_request` in Phase.WALK gates a MUTATING request on exactly one thing
+# once the disposable attestation is present — `classify_action_verb(name, url)`.
+# There is no network-guard second opinion on that path (the mutation-signal
+# rules only adjudicate reads). So an un-enumerated money verb in a URL, with a
+# benign button label, was a silent allowed mutation on a blanket-attested walk —
+# the one phase with no human in the loop.
+#
+# The vocabulary is open AND section-colliding on both ends (`/refunds` is a
+# browse page, `/payments/42/refund` is a commit), so no list can be complete.
+# The fix is therefore the POLARITY, not a seventh qualifier: `<money-verb>-<x>`
+# now REFUSES unless `<x>` is an enumerated SECTION noun. A miss is now a visible
+# over-block — a crawl cannot reach a page — instead of a silent payment.
+
+from app.guard import Phase, classify_request  # noqa: E402
+
+
+@pytest.mark.parametrize("href", [
+    "/pay-refund", "/payments/42/refund",
+    "/pay-void", "/payments/42/void",
+    "/pay-reverse", "/payments/42/reversal",
+    "/pay-chargeback", "/payments/42/chargeback",
+    "/pay-settle", "/payments/42/settle",
+    "/pay-redeem", "/payments/42/cash", "/payments/42/issue",
+])
+def test_an_unenumerated_money_verb_is_refused_by_default(href):
+    """Fail-CLOSED. None of these verbs is on any allow list; that is the point."""
+    assert _link_danger(href) is True, (
+        f"{href} is allowed. The qualifier list can never be complete, so an "
+        f"unknown qualifier after a money verb must REFUSE, not pass."
+    )
+
+
+@pytest.mark.parametrize("url", [
+    "https://app.example/payments/42/refund",
+    "https://app.example/pay-void",
+    "https://app.example/payments/42/chargeback",
+])
+def test_a_blanket_attested_WALK_mutation_is_refused_on_a_money_url(url):
+    """THE CASE THAT FORCED THE POLARITY.
+
+    Everything here is set to its most permissive: the walk is attested, the
+    button carries a wholly benign name, and the method mutates. The URL is the
+    only signal — and in WALK it is the only gate there is.
+    """
+    decision = classify_request(
+        "POST", url, Phase.WALK, _PACK, is_login_domain=False,
+        action_button_name="Save Draft", walk_attested=True)
+    assert not decision.allow, (
+        f"a blanket-attested WALK mutation to {url} is ALLOWED with a benign "
+        f"button name. classify_action_verb is the only danger gate on this path, "
+        f"so this is a silent money mutation with no human in the loop."
+    )
+
+
+def test_a_benign_WALK_mutation_is_still_allowed():
+    """The control: a fail-closed gate that refuses everything proves nothing."""
+    decision = classify_request(
+        "POST", "https://app.example/apply/lifestyle", Phase.WALK, _PACK,
+        is_login_domain=False, action_button_name="Save Draft", walk_attested=True)
+    assert decision.allow, "WALK now refuses an ordinary draft save — over-corrected"
+
+
+def test_the_three_vocabularies_that_must_agree_do_not_drift():
+    """The red-team's structural point, made mechanical.
+
+    This defect class appeared three times: two lists inside one rule
+    disagreeing, then the pay rule and the underwrite rule disagreeing with each
+    other. Each time it was found a round later by someone else. The section
+    vocabulary is now shared by all three positions, so assert that rather than
+    trusting it.
+    """
+    by_id = {r.id: r for r in _PACK.irreversible_verbs}
+    pay = by_id["rp.verb.pay_path"].match
+    uw = by_id["rp.verb.underwrite_path"].match
+    for noun in ("history", "advice", "summary", "settings", "bill", "invoice"):
+        assert noun in pay, f"pay_path lost the section noun {noun!r}"
+        assert noun in uw, f"underwrite_path lost the section noun {noun!r}"
+    # and both must still be destination-only
+    for rule_id in ("rp.verb.pay_path", "rp.verb.underwrite_path"):
+        assert "button_name" not in by_id[rule_id].applies_to
