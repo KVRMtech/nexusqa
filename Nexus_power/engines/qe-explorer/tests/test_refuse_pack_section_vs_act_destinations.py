@@ -384,3 +384,54 @@ def test_the_three_vocabularies_that_must_agree_do_not_drift():
     # and both must still be destination-only
     for rule_id in ("rp.verb.pay_path", "rp.verb.underwrite_path"):
         assert "button_name" not in by_id[rule_id].applies_to
+
+
+# ── R7(6): "loud AND cheap" is true for a leaf and FALSE for a funnel ───────
+# The inversion above made an unknown qualifier refuse, on the argument that an
+# over-block is cheap because it is visible. The red-team's fifth round showed
+# that argument holds for a leaf page and fails for a funnel ENTRANCE:
+#
+#     /payments/new   is the direct analog of
+#     /underwriting/new-business/new-application
+#
+# — a REST create FORM, the exact shape whose over-block sealed the summit funnel
+# and started this whole line of work. Re-sealing it from the fail-CLOSED side is
+# the same catastrophe with the opposite sign.
+#
+# The reconciliation: ACTS are a CLOSEABLE set — domain-bounded, ~25 verbs.
+# SECTIONS are UNBOUNDED — every noun plus new/edit/view/review/print/pdf and
+# every status word. The inversion had moved from enumerating the closeable set
+# (silent misses) to enumerating the uncloseable one (loud misses). So the
+# payments-noun branch now requires a KNOWN COMMIT VERB, and only the small
+# bare-verb surface keeps default-refuse.
+
+@pytest.mark.parametrize("href", [
+    # funnel entrances and pre-commit navigation — a GET here commits nothing
+    "/payments/new", "/payment/new", "/payments/create",
+    "/payments/42/edit", "/payments/42/view", "/payments/42/review",
+    "/pay-review", "/payout-review",
+    # ordinary billing-console status filters and artefacts
+    "/payments/pending", "/payments/failed", "/payments/completed",
+    "/payments/declined", "/payments/scheduled", "/payments/processing",
+    "/payments/reconciliation",
+    "/payments/42/receipt", "/payments/42/print", "/payments/42/pdf",
+])
+def test_a_funnel_entrance_is_not_sealed_by_the_inverted_polarity(href):
+    """The over-block that is NOT cheap. `/payments/new` unreachable drops a
+    funnel from every advance tier — the R1/R2 failure, re-created from the
+    fail-closed side."""
+    assert _link_danger(href) is False, (
+        f"{href} is refused. A create/edit/review FORM is navigation; sealing it "
+        f"is the exact defect this whole line of work exists to remove."
+    )
+
+
+@pytest.mark.parametrize("href", [
+    "/payments/42/refund", "/payments/42/void", "/payments/42/reverse",
+    "/payments/42/chargeback", "/payments/42/settle", "/payments/42/capture",
+    "/payments/42/execute", "/payments/42/authorize", "/payments/42/disburse",
+])
+def test_the_closeable_act_set_still_refuses_under_a_payments_noun(href):
+    """The other side: narrowing branch 2 to known commit verbs must not have
+    re-opened the money mutations the inversion was introduced to close."""
+    assert _link_danger(href) is True
