@@ -87,10 +87,16 @@ class DeepSpaBrowser(BrowserPort):
     fresh goto ALWAYS drops it), a dashboard that links the SECTION (not the
     wizard), and a queue page holding the wizard's actual entrance."""
 
-    def __init__(self, *, nameless_entry: bool = False) -> None:
+    def __init__(self, *, nameless_entry: bool = False,
+                 act_shaped_entry: bool = False) -> None:
         self._cur = _LOGIN
         self._signed_in = False
         self.nameless_entry = nameless_entry
+        #: R7' — point the entrance at a destination that IS the act, so the
+        #: danger-crossing safety test exercises a control the pack genuinely
+        #: refuses rather than one flagged only by a section name. See
+        #: test_reach_stays_closed_without_the_blanket.
+        self.act_shaped_entry = act_shaped_entry
         self.logins = 0
 
     async def goto(self, url: str) -> NavResult:
@@ -118,8 +124,11 @@ class DeepSpaBrowser(BrowserPort):
             )]
         if self._cur == _QUEUE:
             entry_name = "" if self.nameless_entry else "+ New Application"
+            entry_href = ("/underwriting/new-business/underwrite"
+                          if self.act_shaped_entry
+                          else "/underwriting/new-business/new-application")
             return [dict(c) for c in (
-                _link(entry_name, "/underwriting/new-business/new-application"),
+                _link(entry_name, entry_href),
                 _field("Search applicants..."),
             )]
         if self._cur == _WIZARD:
@@ -189,10 +198,10 @@ async def _no_sleep(_s: float) -> None:
 def _crawler(port, work_dir, *, target_url=_WIZARD, max_states=8) -> Crawler:
     # The LIVE configuration this pins ran under: a disposable-attested env with
     # the blanket submit approval (prod_guard emits ["*"] for every attested
-    # disposable app). The refuse pack flags "+ New Application" as danger
-    # (rp.verb.apply), and only the blanket lets reach cross it — an unattested
-    # crawl must keep refusing, which test_reach_stays_closed_without_the_blanket
-    # pins below.
+    # disposable app). Only the blanket lets reach cross a danger-flagged
+    # control — an unattested crawl must keep refusing, which
+    # test_reach_stays_closed_without_the_blanket pins below (and see its
+    # docstring: the rp.verb.apply this comment used to cite does not exist).
     guard_ctx = GuardContext(
         refuse_pack=_REFUSE,
         attestation=Attestation(
@@ -288,12 +297,32 @@ def test_href_pick_beats_label_pick_and_skips_danger():
 
 
 def test_reach_stays_closed_without_the_blanket(tmp_path):
-    """THE SAFETY HALF of the danger crossing. The refuse pack flags the wizard's
-    entrance ("+ New Application" → rp.verb.apply); only a disposable-attested
-    blanket lets reach cross it. A crawl WITHOUT that attestation must keep
+    """THE SAFETY HALF of the danger crossing: only a disposable-attested blanket
+    lets reach cross a danger-flagged control, and an unattested crawl must keep
     refusing — the relaxation is tied to the operator's signed statement, never
-    the default."""
-    port = DeepSpaBrowser()
+    the default.
+
+    R7' — WHY THE ENTRANCE MOVED, and it is not a weakening.
+
+    This docstring used to say the pack flags the entrance "+ New Application"
+    via ``rp.verb.apply``. **There is no ``rp.verb.apply`` rule in the pack and
+    there never was.** What actually refused this entrance was
+    ``rp.verb.underwrite`` matching the URL PATH ``/underwriting/…`` — every link
+    into the underwriting section, because the section is *named* underwriting.
+    R7' removes exactly that, since entering a section underwrites nothing.
+
+    So the property this test exists for — *reach does not cross danger without
+    the blanket* — was resting on an over-broad match, and its stated mechanism
+    was fiction. Rather than delete the test or re-point the assertion at a
+    control the pack no longer refuses (which would have made it vacuous, passing
+    whether or not reach is gated), the fixture now offers an entrance whose
+    destination IS the act: ``/underwriting/new-business/underwrite``, refused by
+    ``rp.verb.underwrite_path``.
+
+    The property is unchanged and still adjudicated. What changed is that the
+    danger is now real rather than incidental.
+    """
+    port = DeepSpaBrowser(act_shaped_entry=True)
     crawler = Crawler(
         port, crawl_id="c1", tenant_id="t1", target_url=_WIZARD,
         work_dir=str(tmp_path), refuse_pack=_REFUSE,
@@ -304,7 +333,7 @@ def test_reach_stays_closed_without_the_blanket(tmp_path):
         credentials=_CREDS,                       # no approvals, no attestation
     )
     asyncio.run(crawler.run())
-    assert "/underwriting/new-business/new-application" not in _paths_seen(tmp_path), (
+    assert "/underwriting/new-business/underwrite" not in _paths_seen(tmp_path), (
         "reach crossed a danger-flagged control WITHOUT the disposable blanket")
 
 

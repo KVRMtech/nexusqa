@@ -76,7 +76,7 @@ def _valid_attestation(now_ms: int | None = None, ttl_ms: int = 10_000) -> Attes
 
 class TestRefusePackLoading:
     def test_packaged_pack_loads_and_is_versioned(self, pack: RefusePack):
-        assert pack.version == "refuse-pack-v1"
+        assert pack.version == "refuse-pack-v2"
         assert pack.irreversible_verbs, "pack must ship irreversible verbs"
         assert pack.mutation_signal_get_rules, "pack must ship mutation-signal rules"
         # ── the escape hatch, and why this assertion changed ────────────────
@@ -243,14 +243,52 @@ _VERB_SAMPLES: dict[str, str] = {
     "rp.verb.admin": "Admin console",
 }
 
+#: R7' — PATH-MATCHED rules, which by construction cannot be caught by a name.
+#: `rp.verb.pay` and `rp.verb.underwrite` were split so their broad vocabulary
+#: binds to the LABEL while a narrow, segment-anchored pattern binds to the
+#: DESTINATION: "payments"/"underwriting" are section nouns, and matching them in
+#: a path refused every link into a billing or underwriting section. These two
+#: rules carry the destination half, and they need URL samples rather than name
+#: samples — but they must NOT escape coverage, so the completeness assertion
+#: below is over the union.
+_VERB_PATH_SAMPLES: dict[str, str] = {
+    "rp.verb.pay_path": "https://x.example.com/invoices/42/pay",
+    "rp.verb.underwrite_path": "https://x.example.com/applications/7/underwrite",
+}
+
 
 class TestClassifyActionVerb:
     def test_samples_cover_every_pack_verb(self, pack: RefusePack):
         pack_ids = {r.id for r in pack.irreversible_verbs}
-        assert set(_VERB_SAMPLES) == pack_ids, (
-            "every irreversible verb in the pack MUST have a caught-by-name "
-            "sample (missing coverage is a safety hole)"
+        assert set(_VERB_SAMPLES) | set(_VERB_PATH_SAMPLES) == pack_ids, (
+            "every irreversible verb in the pack MUST have a sample — by name in "
+            "_VERB_SAMPLES, or by destination in _VERB_PATH_SAMPLES for the "
+            "path-matched rules (missing coverage is a safety hole)"
         )
+
+    def test_the_two_sample_tables_do_not_overlap(self):
+        """A rule is matched by its label or by its destination, not filed under
+        both — otherwise a path rule could be 'covered' by a name sample that
+        never exercises it."""
+        assert not (set(_VERB_SAMPLES) & set(_VERB_PATH_SAMPLES))
+
+    @pytest.mark.parametrize("rule_id,url", sorted(_VERB_PATH_SAMPLES.items()))
+    def test_each_path_verb_is_flagged_by_its_destination(self, pack, rule_id, url):
+        """The destination half of the split, pinned from both sides."""
+        result = classify_action_verb("", url, pack)
+        assert result.irreversible is True
+        assert result.rule_id == rule_id
+
+    @pytest.mark.parametrize("path", [
+        "/underwriting/new-business",                  # a SECTION, not an act
+        "/underwriting/new-business/new-application",
+        "/policy-admin/payments",
+        "/billing/payments/history",
+    ])
+    def test_a_section_named_after_a_verb_is_not_an_act(self, pack, path):
+        """R7' — the half that was wrong before. Entering the underwriting
+        section underwrites nothing and opening a payments list pays nobody."""
+        assert classify_action_verb("", f"https://x.example.com{path}", pack).irreversible is False
 
     @pytest.mark.parametrize("rule_id,button", sorted(_VERB_SAMPLES.items()))
     def test_each_verb_is_flagged_irreversible(self, pack, rule_id, button):

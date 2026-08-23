@@ -41,7 +41,7 @@
 # backslashes literally (double-quoted YAML would interpret \b, \s, ...).
 # =============================================================================
 
-version: "refuse-pack-v1"
+version: "refuse-pack-v2"
 
 # -----------------------------------------------------------------------------
 # IRREVERSIBLE VERBS — the point of no return.
@@ -75,9 +75,23 @@ irreversible_verbs:
   # ── Money movement ─────────────────────────────────────────────────────
   - id: "rp.verb.pay"
     match: '\b(pay|pays|paying|paid|payment|payments|payout|payouts|repay|prepay|autopay|remit|remits|remittance)\b'
-    applies_to: ["button_name", "url_path", "url_query"]
+    applies_to: ["button_name"]
     severity: "critical"
-    description: "Payment / disbursement of funds."
+    description: "Payment / disbursement of funds (by control label)."
+
+  # R7' — the PATH half, split out. The broad vocabulary above is right for a
+  # LABEL and wrong for a PATH: "payment"/"payments" are SECTION nouns, so
+  # /policy-admin/payments matched and every link into a billing section was
+  # refused as an irreversible commit. Navigating to the payments section pays
+  # nobody. Same reasoning rp.verb.admin already carries ("an /admin PATH is a
+  # fence concern, not an irreversible verb"), and the same shape as
+  # rp.get.destructive_path: enumerate the ACT segments, anchor them to whole
+  # path segments, leave the section nouns out.
+  - id: "rp.verb.pay_path"
+    match: '(^|/)(pay|payout|payouts|repay|prepay|autopay|remit|remittance)(/|$)'
+    applies_to: ["url_path"]
+    severity: "critical"
+    description: "A destination that IS the act of paying - /pay, /payout, /remit."
 
   - id: "rp.verb.charge"
     match: '\b(charge|charges|charging|charged)\b'
@@ -157,9 +171,21 @@ irreversible_verbs:
 
   - id: "rp.verb.underwrite"
     match: '\b(underwrite|underwrites|underwriting|underwritten)\b|submit[\s\-_]*(to[\s\-_]*)?underwriting'
-    applies_to: ["button_name", "url_path", "url_query"]
+    applies_to: ["button_name"]
     severity: "critical"
-    description: "Underwrite / submit-to-underwriting — commits the application."
+    description: "Underwrite / submit-to-underwriting by control label - commits the application."
+
+  # R7' — the PATH half, same reasoning as rp.verb.pay_path. "underwriting" is
+  # the name of a SECTION of every carrier admin console, so
+  # /underwriting/new-business matched and the only nav link into the section
+  # was refused - which is why the summit-life-carrier crawl visited 8 routes
+  # and never reached the wizard holding its commit control. Entering the
+  # underwriting section underwrites nothing.
+  - id: "rp.verb.underwrite_path"
+    match: '(^|/)(underwrite)(/|$)'
+    applies_to: ["url_path"]
+    severity: "critical"
+    description: "A destination that IS the act of underwriting - /underwrite."
 
   # ── Credit inquiry (soft/hard pull mutates the credit file) ────────────
   - id: "rp.verb.credit_pull"
