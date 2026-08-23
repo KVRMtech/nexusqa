@@ -435,3 +435,54 @@ def test_the_closeable_act_set_still_refuses_under_a_payments_noun(href):
     """The other side: narrowing branch 2 to known commit verbs must not have
     re-opened the money mutations the inversion was introduced to close."""
     assert _link_danger(href) is True
+
+
+# ── R7(7): the two branches must not run OPPOSITE polarities ───────────────
+# Round 6, and the red-team was correcting its own round-5 advice. Making
+# branch 2 "require a known commit verb" turned it FAIL-OPEN while branch 1
+# stayed FAIL-CLOSED, so the same money verb got opposite verdicts by URL shape:
+#
+#     /pay-debit            REFUSED      (branch 1, default-refuse)
+#     /payments/42/debit    ALLOWED      (branch 2, not on the commit list)
+#
+# debit and payoff are unambiguous money movement with no sibling rule, so this
+# was the round-4 fail-open hole back in miniature — WALK-crossable with a benign
+# label. Branch 2 is now fail-closed again, sharing branch 1's section
+# vocabulary; the funnel-seal that motivated the split is handled by the section
+# list instead, which is where it belonged.
+#
+# The old drift test could not see this: it diffed the section vocabulary across
+# the pay and underwrite RULES, but branch 1 and branch 2 shared no vocabulary to
+# diff — one carried a section list, the other a commit list. This one compares
+# VERDICTS, so it cannot be blinded that way.
+
+@pytest.mark.parametrize("verb", [
+    "debit", "payoff", "fund", "collect", "allocate", "credit", "adjust",
+    "apply", "ach", "refund", "void", "settle", "capture", "execute",
+    "receipt", "review", "edit", "summary", "history",
+])
+def test_both_url_shapes_agree_about_the_same_word(verb):
+    """One word, two shapes, one verdict — whatever that verdict is.
+
+    Deliberately asserts AGREEMENT rather than danger: some of these are acts and
+    some are sections, and the property under test is that the pack does not
+    change its mind based on whether the verb follows a hyphen or a path
+    separator.
+    """
+    bare = _link_danger(f"/pay-{verb}")
+    noun = _link_danger(f"/payments/42/{verb}")
+    assert bare == noun, (
+        f"/pay-{verb} is {bare} but /payments/42/{verb} is {noun}. The two "
+        f"branches are running opposite polarities, so the same money verb is "
+        f"refused in one URL shape and allowed in the other."
+    )
+
+
+@pytest.mark.parametrize("href", [
+    "/payments/42/debit", "/payments/42/payoff", "/payments/42/fund",
+    "/payments/42/collect", "/payments/42/allocate",
+])
+def test_a_money_verb_absent_from_every_list_is_still_refused(href):
+    """The point of one unified fail-closed polarity: a verb nobody enumerated
+    still refuses. None of these appears on any list in the pack."""
+    assert _link_danger(href) is True
