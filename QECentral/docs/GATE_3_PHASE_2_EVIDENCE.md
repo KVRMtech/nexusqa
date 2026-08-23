@@ -23,7 +23,7 @@ failure belongs to one of those, it is named as theirs rather than absorbed.
 | A22 | A really-discovered journey compiles and protects behaviour | real crawl attempted | ⛔ **BLOCKED** — no app in the repo is both walkable and backend-calling |
 | A23 | Real-application network trace with correct action joins | **live deployment** | ✅ 10/10 on 68 real events, 2 defects fixed |
 | A24 | M2.6 capture against a live tenant | **live tenant** | ✅ 9/9 capture + 2/2 persisted; 1 defect pinned |
-| A25 | M2.1 passes on the deployed artifact | — | ⛔ **NOT ATTEMPTED** — A22 blocked, CI not green, and M2.1 has no deployed-services variant |
+| A25 | M2.1 passes on the deployed artifact | **deployed VM, measured** | ⛔ **PHASE 2 IS NOT DEPLOYED** — the VM runs an 18-Aug build, 108 commits behind, at schema `qec_017` |
 
 ---
 
@@ -1182,10 +1182,74 @@ Either of these, in preference order:
 
 ---
 
-## A25 — Deployment & deployed-build proof ⛔ NOT ATTEMPTED
+## A25 — Deployment & deployed-build proof ⛔ PHASE 2 IS NOT DEPLOYED
 
-**Not delivered, and deliberately not attempted.** A25's own rule is that it must
-be last, and its preconditions are not met:
+**Upgraded from “not attempted” to a measurement.** I originally recorded this as
+declined on preconditions. That was an inference about my own scheduling; the
+deployed environment itself had not been inspected. It has been now, and the
+finding is stronger and different in kind.
+
+### What is actually running on the target
+
+Read-only inspection of `verdict-box` (`asia-southeast1-a`), 21 August:
+
+```
+GET https://136.85.106.73/health
+{"status":"healthy","service":"qe-central","db_qec":"connected",
+ "db_substrate":"connected","storage_backend":"local",
+ "kek":{"provider":"gcp_kms","is_production_grade":true,"envelope_ready":true}}
+
+/home/srika/nexus-src   git HEAD  ede6bf2   branch  develop      (18 August)
+qecentral               alembic_version      qec_017
+```
+
+The service is up, healthy, and on production-grade KMS. It is also **108 commits
+behind** this branch, and its database is at **`qec_017`**.
+
+### Why that settles A25 rather than deferring it
+
+Six migrations are absent from the running database:
+
+```
+qec_018_business_rules          qec_021_journey_endpoints
+qec_019_catalog_evidence  ←—    qec_022_explorer_worker_registry
+qec_020_catalog_retirement      qec_023_attestation_issuer
+```
+
+`qec_019` is the migration **A20 exists to prove**. It is not on the target. Nor
+is any Gate-3 evidence — `a21_catalog_diff`, `a23_live_network`,
+`a24_live_capture` are all absent from the deployed tree.
+
+So the gate's premise is unstarted: **there is no deployed Phase-2 build to
+re-prove M2.1 against.** A25 cannot fail its acceptance test, because its subject
+does not exist. That is a different statement from “I did not get to it”, and it
+is the one the evidence supports.
+
+### The second blocker is unchanged and independent
+
+Even after a deploy, `tests/browser/test_questionnaire_catalog_e2e.py` — M2.1's
+14-assertion proof — constructs an **in-process** `Crawler`. It has no HTTP
+client and no service URL. It cannot execute against deployed services at all, so
+“M2.1 passes on the deployed artifact” needs a deployed-services variant of that
+proof to be written first. That is buildable work, and it is named here rather
+than counted as done.
+
+### What a deploy would carry, stated because it is not a small action
+
+Deploying this branch to that VM would run those six migrations against the
+database currently serving live `vkpowerlife` — the same deployment my A23 and
+A24 evidence was crawled from — and would ship 108 commits from nine concurrent
+sessions, which I have not reviewed. It is a decision for the repository's owner,
+not a step an evidence gate takes on its own initiative.
+
+### Preconditions, re-checked rather than restated
+
+| precondition | when first recorded | now |
+|---|---|---|
+| CI green on the branch | ❌ three jobs red | ✅ **run `32583735522`, every job success** |
+| A22 complete | ⛔ blocked | ⛔ blocked (and a sibling of A25, not a dependency) |
+| M2.1 can target deployed services | ❌ | ❌ unchanged — in-process `Crawler` |
+| a deployed Phase-2 build exists | *not checked* | ❌ **measured: `qec_017`, 108 behind** |
 
 * **A22 is blocked** (above), so Phase 2 is not complete to deploy.
 * **CI is not green on this branch.** Three jobs are red for reasons owned by
