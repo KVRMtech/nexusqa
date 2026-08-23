@@ -120,6 +120,40 @@ scoped off, all eight over-blocked controls go safe while the control group —
 `Transfer Funds`, `Underwrite Now` — **every one stays refused**. The probe exits
 1 if that ever breaches.
 
+### R1's other acceptance item: the merged collapse fix IS exercised — verified
+
+R1 asks for confirmation that the merged save+navigation / state-collapse fix
+(`e1200b7` via `c9b891b` — the persist+navigate veto in `walker.py` and the
+`displayed_values` drop in `discovery.py`) is actually exercised, not merely
+present. It is, and this is measured from the R1 crawl's own coverage rather than
+inferred from the merge:
+
+```
+total states: 19 | distinct locations: 15 | distinct state identities: 19
+```
+
+**19 states, 19 identities — nothing collapsed.** Four locations were visited
+twice and the identity ladder split every one of them:
+
+```
+/                                  -> 2 distinct state identities
+/life-insurance/apply/health/      -> 2 distinct state identities
+/life-insurance/quote/coverage/    -> 2 distinct state identities
+/life-insurance/quote/start/       -> 2 distinct state identities
+```
+
+That is exactly the failure `e1200b7` fixed (same `state_id` for
+`/result.html` "Quote Start" and `/result.html` "Quote Result"), and it does not
+occur here. Corroborating depth: the R1 crawl reached member-lookup →
+personal-info → replacement → health → lifestyle → decision → payment at
+33 states / 162 actions, against the historical unseeded baseline of 17 / 86 that
+dead-ended at member-lookup.
+
+**So R1's failure is not the collapse defect and not the login.** The login
+completed (`member_number` → `password` → 6-digit Security PIN, the app's
+`useMfa` default path, matching the `mfa: {kind: otp, otp: "123456"}` block in
+`APPS`). The crawl walked seven funnel steps and stopped at the payment page.
+
 ### The remaining blockers, per app
 
 * **R1 vkpower-life — a second, independent blocker.** `ACH Bank Transfer Direct
