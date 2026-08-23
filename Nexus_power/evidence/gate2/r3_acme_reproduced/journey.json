@@ -1,0 +1,191 @@
+{
+  "app": "acme-life",
+  "target_url": "http://127.0.0.1:8102/",
+  "explorer_version": "qe-explorer/1.0+inv-js-v12",
+  "produced_by": {
+    "head": "e24bcf54d0883a452185d49cfabe81f40458ccd3",
+    "dirty": false,
+    "dirty_paths": []
+  },
+  "commit_control": "Bind policy",
+  "grants": [
+    {
+      "control": "Bind policy",
+      "approved_by": "gate2-operator",
+      "max_crossings": 1,
+      "role": "commit"
+    }
+  ],
+  "known_blockers": [],
+  "oracle_source": "deterministic-stub",
+  "oracle_telemetry": {},
+  "oracle_decisions": [
+    {
+      "url": "http://127.0.0.1:8102/#/quote",
+      "title": "Acme Life Insurance",
+      "candidates": [
+        "Get quote"
+      ],
+      "picked": "Get quote",
+      "tier3_source": "deterministic-stub"
+    }
+  ],
+  "boundaries_crossed": 2,
+  "crossings": [
+    {
+      "crossing_id": "cross_ad02b7a2a5a5_1",
+      "boundary_key": "bnd_ad02b7a2a5a5fc725b34",
+      "control_name": "Bind policy",
+      "url": "http://127.0.0.1:8102/#/review",
+      "state_fingerprint": "259bdf67be966f8b478bccbdc77bdba85c3da47948d0ad2a8788aac42d7ca087",
+      "approval_id": "apr_2a29269c2c05102b",
+      "sequence_index": 3,
+      "status": "crossed",
+      "outcome": "confirmation",
+      "confirmed": true,
+      "refusal_reason": "",
+      "reserved_at_ms": 43436,
+      "completed_at_ms": 44250
+    },
+    {
+      "crossing_id": "cross_f56573b91ec3_1",
+      "boundary_key": "bnd_f56573b91ec3a5566ae6",
+      "control_name": "Bind policy",
+      "url": "http://127.0.0.1:8102/#/quote",
+      "state_fingerprint": "ddd50f14b290034356ab44de14a4d9c3f7a460198711de7e1c0548a9e2da4e4f",
+      "approval_id": "apr_2a29269c2c05102b",
+      "sequence_index": 5,
+      "status": "crossed",
+      "outcome": "dom_changed",
+      "confirmed": false,
+      "refusal_reason": "",
+      "reserved_at_ms": 142000,
+      "completed_at_ms": 146000
+    }
+  ],
+  "crossings_refused": [],
+  "outcome_milestones": [
+    {
+      "milestone_id": "mst_96720841b7b7732f",
+      "crossing_id": "cross_ad02b7a2a5a5_1",
+      "approval_id": "apr_2a29269c2c05102b",
+      "boundary_key": "bnd_ad02b7a2a5a5fc725b34",
+      "control_name": "Bind policy",
+      "url_before": "http://127.0.0.1:8102/#/review",
+      "url_after": "http://127.0.0.1:8102/#/review",
+      "navigated": false,
+      "outcome": "confirmation",
+      "confirmation_detail": "",
+      "confirmation_rung": "dialog",
+      "state_fingerprint_before": "259bdf67be966f8b478bccbdc77bdba85c3da47948d0ad2a8788aac42d7ca087",
+      "state_fingerprint_after": "submit_b7cca68779803e99",
+      "dom_digest_before": "dom_b277a9de4261c1724f50_5",
+      "dom_digest_after": "dom_e3804b3b456b9ec78736_8",
+      "screenshot_before": "frame_00003.png",
+      "screenshot_after": "frame_00004.png",
+      "attestation_env_kind": "disposable",
+      "attestation_attributed_to": "characterization",
+      "refuse_pack_version": "refuse-pack-v1",
+      "guard_rule_id": "guard.submit.mutation_ok",
+      "clicked_at_ms": 43500,
+      "observed_at_ms": 44186,
+      "latency_ms": 686,
+      "outcome_values": [
+        {
+          "label": "Coverage",
+          "selector": "div",
+          "text": "$900,000",
+          "value_type": "currency",
+          "value_candidate": "true",
+          "value_confidence": "0.90",
+          "value_reason": "currency value under an outcome label"
+        },
+        {
+          "label": "Monthly premium",
+          "selector": "div",
+          "text": "$177.12",
+          "value_type": "currency",
+          "value_candidate": "true",
+          "value_confidence": "0.90",
+          "value_reason": "currency value under an outcome label"
+        }
+      ],
+      "verified": true,
+      "grant": {
+        "approval_id": "apr_2a29269c2c05102b",
+        "control": "Bind policy",
+        "url": "",
+        "state_fingerprint": "",
+        "max_crossings": 1,
+        "approved_by": "gate2-operator",
+        "approved_at": ""
+      }
+    },
+    {
+      "milestone_id": "mst_4a977fb24c7f40ab",
+      "crossing_id": "cross_f56573b91ec3_1",
+      "approval_id": "apr_2a29269c2c05102b",
+      "boundary_key": "bnd_f56573b91ec3a5566ae6",
+      "control_name": "Bind policy",
+      "url_before": "http://127.0.0.1:8102/#/quote",
+      "url_after": "http://127.0.0.1:8102/#/quote",
+      "navigated": false,
+      "outcome": "dom_changed",
+      "confirmation_detail": "",
+      "confirmation_rung": "",
+      "state_fingerprint_before": "ddd50f14b290034356ab44de14a4d9c3f7a460198711de7e1c0548a9e2da4e4f",
+      "state_fingerprint_after": "submit_1eb446f0298c132d",
+      "dom_digest_before": "dom_e9a6639f7c083594b601_14",
+      "dom_digest_after": "dom_3c67a93c42549485ba15_11",
+      "screenshot_before": "frame_00006.png",
+      "screenshot_after": "frame_00007.png",
+      "attestation_env_kind": "disposable",
+      "attestation_attributed_to": "characterization",
+      "refuse_pack_version": "refuse-pack-v1",
+      "guard_rule_id": "guard.submit.mutation_ok",
+      "clicked_at_ms": 145155,
+      "observed_at_ms": 145921,
+      "latency_ms": 766,
+      "outcome_values": [],
+      "verified": false,
+      "grant": {
+        "approval_id": "apr_2a29269c2c05102b",
+        "control": "Bind policy",
+        "url": "",
+        "state_fingerprint": "",
+        "max_crossings": 1,
+        "approved_by": "gate2-operator",
+        "approved_at": ""
+      }
+    }
+  ],
+  "confirmation_observed": true,
+  "confirmation_rungs": [
+    "dialog"
+  ],
+  "confirmation_details": [
+    ""
+  ],
+  "telemetry": {
+    "flows_found": 3,
+    "flows_completed": 3,
+    "journeys_completed": 1,
+    "boundaries_crossed": 2,
+    "deepest_flow_steps": 3,
+    "deepest_flow_proven_steps": 3,
+    "deepest_flow_capped": false,
+    "deepest_flow_terminal": "submit_crossed",
+    "advances_by_tier": {
+      "1": 3
+    },
+    "oracle_advances": 0
+  },
+  "stop_reason": null,
+  "approvable_boundaries_seen": [
+    "Apply",
+    "Bind policy",
+    "Cancel",
+    "Confirm \u2014 bind this policy?",
+    "Review & bind"
+  ]
+}

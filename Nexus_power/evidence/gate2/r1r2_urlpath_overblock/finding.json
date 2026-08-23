@@ -1,0 +1,171 @@
+{
+  "finding": "rp.verb.pay and rp.verb.underwrite are scoped to url_path, so every actuator on a payment/underwriting page is critical",
+  "produced_by": {
+    "head": "2164ac3d17caa723b85d4d1b1ebb3a03844b49a3",
+    "dirty": true,
+    "dirty_paths": [
+      "Nexus_power/scripts/r1r2_measure_urlpath_overblock.py"
+    ]
+  },
+  "pack_version": "refuse-pack-v1",
+  "false_claim_in_pack": "refuse_pack.yaml allow_overrides states rp.verb.underwrite was 'already forced to be scoped off url_path'; line 160 still lists url_path and git log -S shows it never was",
+  "overblocked": [
+    {
+      "control": "Back",
+      "url": "http://127.0.0.1:8101/life-insurance/apply/payment/",
+      "why_harmless": "router.back() - navigates",
+      "baseline": {
+        "danger": true,
+        "rule": "rp.verb.pay",
+        "severity": "critical"
+      },
+      "counterfactual": {
+        "danger": false,
+        "rule": "",
+        "severity": ""
+      }
+    },
+    {
+      "control": "Notifications",
+      "url": "http://127.0.0.1:8101/life-insurance/apply/payment/",
+      "why_harmless": "header bell - opens a panel",
+      "baseline": {
+        "danger": true,
+        "rule": "rp.verb.pay",
+        "severity": "critical"
+      },
+      "counterfactual": {
+        "danger": false,
+        "rule": "",
+        "severity": ""
+      }
+    },
+    {
+      "control": "Monthly",
+      "url": "http://127.0.0.1:8101/life-insurance/apply/payment/",
+      "why_harmless": "billing-frequency selector - sets local state",
+      "baseline": {
+        "danger": true,
+        "rule": "rp.verb.pay",
+        "severity": "critical"
+      },
+      "counterfactual": {
+        "danger": false,
+        "rule": "",
+        "severity": ""
+      }
+    },
+    {
+      "control": "Annual",
+      "url": "http://127.0.0.1:8101/life-insurance/apply/payment/",
+      "why_harmless": "billing-frequency selector - sets local state",
+      "baseline": {
+        "danger": true,
+        "rule": "rp.verb.pay",
+        "severity": "critical"
+      },
+      "counterfactual": {
+        "danger": false,
+        "rule": "",
+        "severity": ""
+      }
+    },
+    {
+      "control": "Credit / Debit Card",
+      "url": "http://127.0.0.1:8101/life-insurance/apply/payment/",
+      "why_harmless": "payment-METHOD selector - sets local state",
+      "baseline": {
+        "danger": true,
+        "rule": "rp.verb.pay",
+        "severity": "critical"
+      },
+      "counterfactual": {
+        "danger": false,
+        "rule": "",
+        "severity": ""
+      }
+    },
+    {
+      "control": "Continue to Beneficiary Designation",
+      "url": "http://127.0.0.1:8101/life-insurance/apply/payment/",
+      "why_harmless": "router.push to /apply/beneficiary/ - navigates",
+      "baseline": {
+        "danger": true,
+        "rule": "rp.verb.pay",
+        "severity": "critical"
+      },
+      "counterfactual": {
+        "danger": false,
+        "rule": "",
+        "severity": ""
+      }
+    },
+    {
+      "control": "New Business Queue",
+      "url": "http://127.0.0.1:8103/underwriting/new-business/new-application",
+      "why_harmless": "left-nav route link - navigates",
+      "baseline": {
+        "danger": true,
+        "rule": "rp.verb.underwrite",
+        "severity": "critical"
+      },
+      "counterfactual": {
+        "danger": false,
+        "rule": "",
+        "severity": ""
+      }
+    },
+    {
+      "control": "Back",
+      "url": "http://127.0.0.1:8103/underwriting/new-business/new-application",
+      "why_harmless": "wizard back - navigates",
+      "baseline": {
+        "danger": true,
+        "rule": "rp.verb.underwrite",
+        "severity": "critical"
+      },
+      "counterfactual": {
+        "danger": false,
+        "rule": "",
+        "severity": ""
+      }
+    }
+  ],
+  "control_group": [
+    {
+      "control": "Sign & Submit Application",
+      "still_refused": true,
+      "rule": "rp.verb.sign"
+    },
+    {
+      "control": "Pay Now",
+      "still_refused": true,
+      "rule": "rp.verb.pay"
+    },
+    {
+      "control": "Make Payment",
+      "still_refused": true,
+      "rule": "rp.verb.pay"
+    },
+    {
+      "control": "Submit to Underwriting",
+      "still_refused": true,
+      "rule": "rp.verb.underwrite"
+    },
+    {
+      "control": "Transfer Funds",
+      "still_refused": true,
+      "rule": "rp.verb.transfer"
+    },
+    {
+      "control": "Underwrite Now",
+      "still_refused": true,
+      "rule": "rp.verb.underwrite"
+    }
+  ],
+  "blocks": {
+    "R1 vkpower-life": "payment -> beneficiary -> signature sealed; commit control 'Sign & Submit Application' never reached",
+    "R2 summit-life-carrier": "underwriting wizard sealed; the nav link into it is flagged"
+  },
+  "second_independent_blocker_R1": "'ACH Bank Transfer Direct debit from checking or savings' also trips rp.verb.transfer on its own BUTTON NAME, so scoping url_path off does NOT by itself unblock vkpower-life's payment step"
+}
