@@ -14,7 +14,7 @@
     "explorer_version": "qe-explorer/1.0+inv-js-v12",
     "frame_count": 0,
     "guard_version": "qe-explorer/1.0+inv-js-v12",
-    "refuse_pack_version": "refuse-pack-v1",
+    "refuse_pack_version": "refuse-pack-v2",
     "stop_reason": "",
     "target_url": "http://127.0.0.1:<port>/26-opaque-surface-rungs/index.html",
     "type": "crawl_meta",
@@ -173,7 +173,7 @@
     "frame_count": 1,
     "guard_blocks": 0,
     "guard_version": "qe-explorer/1.0+inv-js-v12",
-    "refuse_pack_version": "refuse-pack-v1",
+    "refuse_pack_version": "refuse-pack-v2",
     "stats": {
       "actions": 0,
       "elapsed_ms": "<normalized:elapsed_ms>",
