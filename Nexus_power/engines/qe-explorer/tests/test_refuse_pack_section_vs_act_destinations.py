@@ -267,6 +267,15 @@ def test_a_verb_named_section_with_a_qualifier_is_still_navigation(href):
 @pytest.mark.parametrize("href", [
     "/pay-now", "/pay.php", "/remit-now", "/autopay-enroll",
     "/pay-confirm", "/underwrite-submit",
+    # The red-team's closing attack. `capture` was in the payments-noun commit
+    # list (`/payments/42/capture` refused) but NOT in the bare-verb qualifier
+    # list, so `/pay-capture` fell through — an inconsistency inside one rule,
+    # not a judgement call. It was the ONLY one of {authorize, capture, charge}
+    # to fall through, because rp.verb.charge and rp.verb.authorize still catch
+    # the other two by  on the path; capture has no sibling rule to land on.
+    "/pay-capture", "/payout-capture", "/underwrite-capture",
+    # Money-movement qualifiers from the same sweep.
+    "/remit-send", "/payout-send", "/payout-release", "/pay-initiate",
 ])
 def test_a_verb_with_an_ACT_qualifier_is_still_refused(href):
     """The other side of Finding B's fix: narrowing the suffix must not undo the
@@ -275,3 +284,15 @@ def test_a_verb_with_an_ACT_qualifier_is_still_refused(href):
         f"{href} is allowed. `-now`/`.php`/`-enroll` mark the act, and losing "
         f"them re-opens the under-block the red-team found first."
     )
+
+
+@pytest.mark.parametrize("href", ["/pay-bill", "/pay-invoice", "/pay-premium"])
+def test_a_page_you_pay_FROM_is_not_the_act_of_paying(href):
+    """The boundary of the act-qualifier list, stated so it is not widened by
+    reflex. `/pay-bill` is the FORM you pay a bill on; a GET there commits
+    nothing, and refusing it would seal the funnel exactly as the section
+    over-block did. `-capture`/`-send`/`-release` move money; `-bill`/`-invoice`/
+    `-premium` name the thing being paid. The red-team raised these separately
+    and did NOT flag them, for this reason.
+    """
+    assert _link_danger(href) is False

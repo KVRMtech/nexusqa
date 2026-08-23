@@ -88,7 +88,7 @@ irreversible_verbs:
   # rp.get.destructive_path: enumerate the ACT segments, anchor them to whole
   # path segments, leave the section nouns out.
   - id: "rp.verb.pay_path"
-    match: '(^|/)(pay|payout|payouts|repay|prepay|autopay|remit|remittance)(\.(php|aspx?|jsp|do|cgi)|[-_](now|confirm|submit|execute|process|enroll))?(/|$)|(^|/)(payment|payments)(/[^/]+)*/(execute|confirm|process|submit|authorize|capture|charge)(/|$)|(^|[?&])[a-z_]+=(pay|payout|repay|prepay|autopay|remit|remittance)(&|$)|(^|[?&])(pay|payout|repay|prepay|autopay|remit|remittance)='
+    match: '(^|/)(pay|payout|payouts|repay|prepay|autopay|remit|remittance)(\.(php|aspx?|jsp|do|cgi)|[-_](now|confirm|submit|execute|process|enroll|capture|send|release|initiate))?(/|$)|(^|/)(payment|payments)(/[^/]+)*/(execute|confirm|process|submit|authorize|capture|charge)(/|$)|(^|[?&])[a-z_]+=(pay|payout|repay|prepay|autopay|remit|remittance)(&|$)|(^|[?&])(pay|payout|repay|prepay|autopay|remit|remittance)='
     applies_to: ["url_path", "url_query"]
     severity: "critical"
     description: "A destination that IS the act of paying - /pay, /payout, /remit."
@@ -182,7 +182,7 @@ irreversible_verbs:
   # and never reached the wizard holding its commit control. Entering the
   # underwriting section underwrites nothing.
   - id: "rp.verb.underwrite_path"
-    match: '(^|/)underwrite(\.(php|aspx?|jsp|do|cgi)|[-_](now|confirm|submit|execute|process))?(/|$)|submit[-_\s]*to[-_\s]*underwriting|(^|[?&])[a-z_]+=underwrite(&|$)|(^|[?&])underwrite='
+    match: '(^|/)underwrite(\.(php|aspx?|jsp|do|cgi)|[-_](now|confirm|submit|execute|process|enroll|capture|send|release|initiate))?(/|$)|submit[-_\s]*to[-_\s]*underwriting|(^|[?&])[a-z_]+=underwrite(&|$)|(^|[?&])underwrite='
     applies_to: ["url_path", "url_query"]
     severity: "critical"
     description: "A destination that IS the act of underwriting - /underwrite."
