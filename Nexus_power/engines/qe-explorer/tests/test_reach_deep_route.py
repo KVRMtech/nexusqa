@@ -97,6 +97,12 @@ class DeepSpaBrowser(BrowserPort):
         #: refuses rather than one flagged only by a section name. See
         #: test_reach_stays_closed_without_the_blanket.
         self.act_shaped_entry = act_shaped_entry
+        #: Every href this port was ASKED to click, in order. The danger
+        #: assertions below read this rather than the recorded page states:
+        #: reach discards an observation whose landing is not its target, so
+        #: a rogue crossing can happen and leave no REC_PAGE_STATE behind.
+        #: Asserting on the click cannot be defeated that way.
+        self.clicked_hrefs: list[str] = []
         self.logins = 0
 
     async def goto(self, url: str) -> NavResult:
@@ -160,6 +166,7 @@ class DeepSpaBrowser(BrowserPort):
         if self._signed_in and href.startswith("/"):
             # pushState routing: the login survives, the click event reports
             # no navigation — exactly the live shape.
+            self.clicked_hrefs.append(href)
             self._cur = f"{_HOST}{href}"
         return RawObservation(url_before=before, url_after=before)
 
@@ -296,6 +303,36 @@ def test_href_pick_beats_label_pick_and_skips_danger():
     assert (picked.get("qec") or {}).get("href") == "/underwriting/new-business/new-application"
 
 
+def test_reach_crosses_the_act_shaped_entrance_WITH_the_blanket(tmp_path):
+    """THE PRESENCE HALF, and without it the safety half below proves nothing.
+
+    A test that only ever asserts an absence passes just as well when reach is
+    broken, when the fixture stops offering the entrance, or when the label match
+    silently fails. This pins that the very same entrance IS crossed once the
+    operator's disposable attestation is present — so the refusal below is
+    attributable to the missing blanket and to nothing else.
+
+    (The red-team found this half missing: after the entrance moved to an
+    act-shaped href, no test crossed it with the blanket any more.)
+    """
+    port = DeepSpaBrowser(act_shaped_entry=True)
+    # SAME target as the safety half below, so the pair differs ONLY in the
+    # attestation. Note the target (/new-application) is deliberately NOT the
+    # entrance href (/underwrite): that mismatch is what makes the click recorder
+    # necessary — see the assertion note.
+    crawler = _crawler(port, tmp_path, target_url=_WIZARD)
+    asyncio.run(crawler.run())
+    assert "/underwriting/new-business/underwrite" in port.clicked_hrefs, (
+        "reach did NOT cross the danger-flagged entrance even WITH the disposable "
+        "blanket — the safety assertion below would then pass for the wrong reason")
+    # THE INSTRUMENT NOTE, measured: this very crossing leaves NO page state,
+    # because reach discards a landing that is not its target. So the assertion
+    # this test used to make — on _paths_seen — is blind to a real crossing:
+    assert "/underwriting/new-business/underwrite" not in _paths_seen(tmp_path), (
+        "a crossing now DOES leave a page state; if that becomes true, the "
+        "click recorder is no longer load-bearing and this note is stale")
+
+
 def test_reach_stays_closed_without_the_blanket(tmp_path):
     """THE SAFETY HALF of the danger crossing: only a disposable-attested blanket
     lets reach cross a danger-flagged control, and an unattested crawl must keep
@@ -333,8 +370,10 @@ def test_reach_stays_closed_without_the_blanket(tmp_path):
         credentials=_CREDS,                       # no approvals, no attestation
     )
     asyncio.run(crawler.run())
-    assert "/underwriting/new-business/underwrite" not in _paths_seen(tmp_path), (
-        "reach crossed a danger-flagged control WITHOUT the disposable blanket")
+    assert "/underwriting/new-business/underwrite" not in port.clicked_hrefs, (
+        "reach CLICKED a danger-flagged control WITHOUT the disposable blanket")
+    # …and, redundantly, never landed there either.
+    assert "/underwriting/new-business/underwrite" not in _paths_seen(tmp_path)
 
 
 # ── honesty bounds ──────────────────────────────────────────────────────────

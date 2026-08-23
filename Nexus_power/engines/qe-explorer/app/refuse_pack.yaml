@@ -88,8 +88,8 @@ irreversible_verbs:
   # rp.get.destructive_path: enumerate the ACT segments, anchor them to whole
   # path segments, leave the section nouns out.
   - id: "rp.verb.pay_path"
-    match: '(^|/)(pay|payout|payouts|repay|prepay|autopay|remit|remittance)(/|$)'
-    applies_to: ["url_path"]
+    match: '(^|/)(pay|payout|payouts|repay|prepay|autopay|remit|remittance)([-._][a-z0-9-]*)?(/|$)|(^|/)(payment|payments)(/[^/]+)*/(execute|confirm|process|submit|authorize|capture|charge)(/|$)|(^|[?&])[a-z_]+=(pay|payout|repay|prepay|autopay|remit|remittance)(&|$)|(^|[?&])(pay|payout|repay|prepay|autopay|remit|remittance)='
+    applies_to: ["url_path", "url_query"]
     severity: "critical"
     description: "A destination that IS the act of paying - /pay, /payout, /remit."
 
@@ -182,8 +182,8 @@ irreversible_verbs:
   # and never reached the wizard holding its commit control. Entering the
   # underwriting section underwrites nothing.
   - id: "rp.verb.underwrite_path"
-    match: '(^|/)(underwrite)(/|$)'
-    applies_to: ["url_path"]
+    match: '(^|/)underwrite([-._][a-z0-9-]*)?(/|$)|submit[-_\s]*to[-_\s]*underwriting|(^|[?&])[a-z_]+=underwrite(&|$)|(^|[?&])underwrite='
+    applies_to: ["url_path", "url_query"]
     severity: "critical"
     description: "A destination that IS the act of underwriting - /underwrite."
 
@@ -227,7 +227,7 @@ mutation_signal_get_rules:
     description: "REST method-override smuggling a mutation through a GET."
 
   - id: "rp.get.action_mutation"
-    match: '(^|[?&])(action|act|cmd|command|op|operation|do|mode|task|func|method)=(delete|remove|destroy|purge|drop|logout|signout|log-?out|sign-?out|cancel|disable|deactivate|revoke|reset|update|edit|save|store|submit|create|add|insert|pay|charge|transfer|withdraw|disburse|approve|reject|sign|bind|surrender|lapse|rescind|escheat|activate|confirm|apply|process)\b'
+    match: '(^|[?&])(action|act|cmd|command|op|operation|do|mode|task|func|method)=(delete|remove|destroy|purge|drop|logout|signout|log-?out|sign-?out|cancel|disable|deactivate|revoke|reset|update|edit|save|store|submit|create|add|insert|pay|charge|transfer|withdraw|disburse|approve|reject|sign|bind|surrender|lapse|rescind|escheat|activate|confirm|apply|process|underwrite|remit)\b'
     applies_to: ["url_query"]
     severity: "high"
     description: "Explicit mutating verb carried in a query parameter of a GET."
