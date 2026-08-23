@@ -52,7 +52,25 @@ CRAWL_OUT = H.HERE / "_crawl_out"
 TARGETS = {
     "acme-life": {"serving": "static", "min_controls": 5},
     "vkpower-life": {"serving": "static", "min_controls": 5},
-    "summit-life-carrier": {"serving": "built", "min_controls": 5},
+    "summit-life-carrier": {"serving": "built", "min_controls": 5,
+                            # R8 — THIS APP IS LOGIN-GATED AT ITS ROOT, and this
+                            # lane crawled it anonymously. Everything reachable
+                            # without signing in is a two-field form, so the
+                            # crawl recorded 1 page state / 2 form signals /
+                            # 0 actions and failed the >=5 assertion — on every
+                            # commit, for as long as the lane has run. That is
+                            # the lane never logging in, not the app being
+                            # uncrawlable and not a crawler defect: the same
+                            # image crawls 11 routes when credentials are
+                            # supplied. acme-life and vkpower-life have public
+                            # landing pages, which is why only this one failed.
+                            # Read from the application's own seed data, and the
+                            # same values gate2_journey.py APPS carries.
+                            "credentials": {
+                                "username": "qec.gate@summitlife.com",
+                                "password": "Gate!Passw0rd",
+                                "mfa": {"kind": "otp", "otp": "123456"},
+                            }},
 }
 
 
@@ -66,14 +84,14 @@ def ground_server() -> Any:
     srv.stop()
 
 
-def _crawl(pw, url: str, name: str) -> list[dict[str, Any]]:
+def _crawl(pw, url: str, name: str, credentials: Any = None) -> list[dict[str, Any]]:
     """Run a REAL crawl of ``url`` and return the manifest records.
 
     Budgets are larger than the fixture characterization crawls — a proving
     ground is a multi-page application and the point is to discover it — but
     still DECLARED, so the crawl stops on a bound rather than on a timeout.
     """
-    from app.auth import AuthWindow
+    from app.auth import AuthWindow, Credentials
     from app.crawler import Budget, Crawler, GuardContext
     from app.guard import load_refuse_pack
     from app.main import EXPLORER_VERSION, PlaywrightBrowserPort
@@ -97,6 +115,9 @@ def _crawl(pw, url: str, name: str) -> list[dict[str, Any]]:
     work_dir.mkdir(parents=True, exist_ok=True)
 
     crawl_id = f"pg-{name}"
+    #: A login-gated ground is crawled AS a signed-in user or not at all; without
+    #: this the lane measures the sign-in page and calls the app uncrawlable.
+    creds = Credentials.from_payload(credentials) if credentials else None
     crawler = Crawler(
         PlaywrightBrowserPort(pw.page, pw.context),
         crawl_id=crawl_id,
@@ -112,6 +133,7 @@ def _crawl(pw, url: str, name: str) -> list[dict[str, Any]]:
         guard_context=guard_ctx,
         identity_seed="qec-proving-ground",
         observe_only=True,
+        credentials=creds,
     )
     pw.run(crawler.run())
 
@@ -160,7 +182,7 @@ def test_proving_ground_is_crawlable(pw, ground_server, name: str) -> None:
     url = _resolve_url(name, ground_server)
     min_controls = int(os.environ.get("QEC_PROVING_GROUND_MIN_CONTROLS",
                                       TARGETS[name]["min_controls"]))
-    records = _crawl(pw, url, name)
+    records = _crawl(pw, url, name, TARGETS[name].get("credentials"))
 
     by_type: dict[str, list[dict[str, Any]]] = {}
     for rec in records:
