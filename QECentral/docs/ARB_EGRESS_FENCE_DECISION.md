@@ -1,6 +1,10 @@
 # ARB decision record — the cross-tenant egress fence (T4 · task 11)
 
-**Status: DECISION REQUIRED. This record does not make it.**
+**Status: SUPERSEDED — the decision has been MADE.**
+> This record is the *analysis*. The decision it asks for was taken at
+> `8c443f2` and is recorded in **[`ARB_EGRESS_FENCE_DECISION_RECORD.md`](ARB_EGRESS_FENCE_DECISION_RECORD.md)**:
+> **(B) ACCEPT — `capacity = 1` is a shipped security constraint.**
+> The analysis below stands as written and is adopted by that decision.
 Prepared 2026-08-22 against `c40cf6c`. Author: A11/T2 session — **not** the
 decision owner.
 
