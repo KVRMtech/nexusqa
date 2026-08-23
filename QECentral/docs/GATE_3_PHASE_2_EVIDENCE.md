@@ -20,7 +20,7 @@ failure belongs to one of those, it is named as theirs rather than absorbed.
 |---|---|---|---|
 | A20 | `qec_019` round-trips in the CI database | **CI** | ✅ green |
 | A21 | Two real crawls, three deliberate changes, three correct classifications | **real crawl + CI** | ✅ producer 8/8; **CI re-crawled and the stamp matched byte-for-byte**; consumer 3/3 |
-| A22 | A really-discovered journey compiles and protects behaviour | real crawl attempted | ⛔ **BLOCKED** — no app in the repo is both walkable and backend-calling |
+| A22 | A really-discovered journey compiles and protects behaviour | **real crawl** | ✅ **CLOSED by another session** (`0deadd5`) — my strict-xfail tripwire XPASSed and forced the marker's removal |
 | A23 | Real-application network trace with correct action joins | **live deployment** | ✅ 10/10 on 68 real events, 2 defects fixed |
 | A24 | M2.6 capture against a live tenant | **live tenant** | ✅ 9/9 capture + 2/2 persisted; 1 defect pinned |
 | A25 | M2.1 passes on the deployed artifact | **deployed VM, measured** | ⛔ **PHASE 2 IS NOT DEPLOYED** — the VM runs an 18-Aug build, 108 commits behind, at schema `qec_017` |
@@ -1182,6 +1182,55 @@ Either of these, in preference order:
 
 ---
 
+## A22 — CLOSED after this gate, by the tripwire firing
+
+**Update, 21 August.** A22 is no longer blocked. Another session
+(`0deadd5 phase4(P2c): A22 closes — a DISCOVERED journey executes green, and a
+silent API regression turns it red`) removed the gaps and added
+`test_a22_real_journey_executes.py`. Recorded here because the mechanism is the
+one this gate built.
+
+### The tripwire did its job, in its own words
+
+My blocked stop-condition carried `@pytest.mark.xfail(strict=True)`, worded *“the
+day that gap closes this XPASSes and A22 can proceed”*. Their commit reports
+exactly that:
+
+> *“WAS THE A22 STOP CONDITION; IT NOW HOLDS. This carried
+> `@pytest.mark.xfail(strict=True)` from Gate 3 … A2.2 closed it and it XPASSed,
+> so the marker is gone and this is an ordinary gate again — red if the funnel
+> ever stops being walked.”*
+
+Strict xfail is what made that automatic. Had it been a skip, a comment or a
+sentence in this document, the closure would have been silent and the milestone
+would have stayed “blocked” on paper indefinitely.
+
+### One of the three causes was mine, and it was in the harness
+
+I recorded **two** causes. There were three, and the missing one was a defect in
+the stub oracle **I wrote for the A22 producer**:
+
+> *“The strict xfail was attributed wholly to the bare-button wizard gate; in fact
+> a SECOND, independent cause sat inside the test itself, and it would have kept
+> the funnel unwalked after the product gate was fixed.”*
+
+My stub returned `{name, kind, reason}`. The walker reads `status` and `index`
+(`_pick_advance_e2e`, tier 3) and classifies anything else as *a decision not
+made* — so the stub could never return a pick, on any page, with any label, and
+every consultation scored `oracle=unavailable`.
+
+That matters beyond the bug. My A22 write-up presented a two-cause diagnosis as
+complete; one of those causes was real product behaviour and the other was **my
+own test being wrong**, which I had attributed to the product. Fixing the product
+alone would not have closed A22, and my record would have been the reason nobody
+expected that.
+
+The companion blocker test could not catch it either, and their note says why: it
+pins the crawl's **output**, not the harness's own contract. A blocker test that
+watches the subject cannot see a defect in the instrument watching it.
+
+---
+
 ## A25 — Deployment & deployed-build proof ⛔ PHASE 2 IS NOT DEPLOYED
 
 **Upgraded from “not attempted” to a measurement.** I originally recorded this as
@@ -1247,7 +1296,7 @@ not a step an evidence gate takes on its own initiative.
 | precondition | when first recorded | now |
 |---|---|---|
 | CI green on the branch | ❌ three jobs red | ✅ **run `32583735522`, every job success** |
-| A22 complete | ⛔ blocked | ⛔ blocked (and a sibling of A25, not a dependency) |
+| A22 complete | ⛔ blocked | ✅ **CLOSED** by `0deadd5` — the tripwire XPASSed |
 | M2.1 can target deployed services | ❌ | ❌ unchanged — in-process `Crawler` |
 | a deployed Phase-2 build exists | *not checked* | ❌ **measured: `qec_017`, 108 behind** |
 
