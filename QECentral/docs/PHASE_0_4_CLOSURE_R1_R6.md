@@ -263,6 +263,52 @@ unfalsifiable forever. R3 was reproduced twice (at `8c443f2` and again at
 
 ---
 
+## CI at the final SHA — and the lane that is red
+
+Measured, not assumed. At `201bdd7`:
+
+| workflow | conclusion |
+| --- | --- |
+| Nexus QA CI | **success** (29m34s) |
+| M0.5 Security Gate | **success** |
+| A11 Attestation Certification | **success** |
+| Browser Test Harness (M0.2) | **did not trigger** — path-filtered off a docs-only commit |
+
+**The browser lane is RED on this branch, and it was red before this run.** Its
+run on `fc34c51` concluded **failure** after ~1h04m, in one job:
+
+```
+Crawl summit-life-carrier :: failure
+  test_proving_ground_is_crawlable[summit-life-carrier] FAILED
+  AssertionError: [summit-life-carrier] the crawl discovered 1 page state(s) but
+  only 2 form signals and 0 actions — fewer than the 5 required. A crawl that
+  reaches an application and captures nothing is a failure, not a pass.
+  assert (2 + 0) >= 5
+```
+
+**Not caused by this run's commits.** The same job failed identically on
+`0b88bf4` — four commits before the first commit of this run — and this run added
+only markdown, evidence JSON and one standalone script under
+`Nexus_power/scripts/`. Every other job in both runs passed, including
+`Crawl vkpower-life`, `Crawl acme-life` and `Gate 2 — three real applications`.
+
+Two things follow, and the second is the uncomfortable one:
+
+1. It is a **third, independent** confirmation that summit-life-carrier is the
+   broken leg — CI's own lane, not this session's crawl.
+2. **"All required CI checks green" has not been true on this branch.** The three
+   fast workflows go green on every push and are what recent commit messages
+   cite; the browser lane runs for an hour, is path-filtered so it often does not
+   trigger at all, and its **last two completed runs are both failures**. A gate
+   that reads "CI is green" off the three fast lanes would have certified over a
+   red one.
+
+Note also that the `fc34c51` Nexus QA CI run concluded **`cancelled`** (superseded
+by the next push) while `gh run watch --exit-status` returned **exit 0** on it. A
+cancelled run is not a pass; this is the same failure mode `7491adf` records for
+the browser lane, and it was re-encountered here. The green above is taken from
+`conclusion`, not from the watcher's exit code.
+
 ## Findings opened by this run
 
 1. **The refuse pack documents a remediation that was never applied** (§ root
