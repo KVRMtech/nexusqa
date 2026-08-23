@@ -22,8 +22,8 @@ TASK | RESULT | SHA | VERDICT | EVIDENCE | BLOCKER / NEXT ACTION
 
 | Task | Result | SHA | Verdict line | Evidence | Blocker / next action |
 |---|---|---|---|---|---|
-| **R1** vkpower-life | **BLOCKED** | `8c443f2` | `crossed : 0 []` · `confirmation observed: False []` | `evidence/gate2/r1_vkpower_live/` | `rp.verb.pay` url_path over-block **plus** `rp.verb.transfer` on the ACH label. Two fixes. Owner: refuse-policy owner |
-| **R2** summit-life-carrier | **BLOCKED** | `8c443f2` | `crossed : 0 []` · `confirmation observed: False []` | `evidence/gate2/r2_summit_live/`, counterfactual in `r2_summit_counterfactual/` | `rp.verb.underwrite` url_path over-block seals entry; then 6 unfillable fields. Two fixes, in order |
+| **R1** vkpower-life | **BLOCKED** | `8c443f2` | `crossed : 0 []` · `confirmation observed: False []` | `evidence/gate2/r1_vkpower_live/` | ⛔ *cause retracted — see banner.* NOT pack-blocked: a safe path past ACH existed. Real cause = **R9** (formless plan-picker) |
+| **R2** summit-life-carrier | **BLOCKED** | `8c443f2` | `crossed : 0 []` · `confirmation observed: False []` | `evidence/gate2/r2_summit_live/`, counterfactual in `r2_summit_counterfactual/` | ⛔ *cause partly retracted — see banner.* Entrance block was section-name matching, fixed by **R7′** `d3ed533`; 6 unfillable fields remain |
 | **R3** acme-life | **PASS** | `e24bcf5` | `crossed : 2 ['Bind policy','Bind policy']` · `confirmation observed: True ['dialog']` | `evidence/gate2/r3_acme_reproduced/` | none — `[ADMISSIBLE] 1/1` against the T3 gate |
 | **R4** egress fence | **DONE** | `2164ac3` | Decision **(B) ACCEPT capacity=1** | `QECentral/docs/ARB_EGRESS_FENCE_DECISION_RECORD.md` | owner seat for (b+) runtime refusal is **VACANT** |
 | **R5** Phase 2 deploy | **BLOCKED — not attempted** | — | VM at `ede6bf2`, **145 commits behind** | §R5 below | the M2.1 proof cannot target a deployed service; deploying would not yield the required evidence |
@@ -57,7 +57,58 @@ the run.
 
 ---
 
+---
+
+> # ⛔ RETRACTION — the R1/R2 root cause below is WRONG
+>
+> **Retracted 2026-08-23 at `d3ed533`. The section "The single root cause behind
+> R1 and R2" is left standing exactly as written, and is wrong.** It is kept
+> rather than edited because the reasoning error is the useful artefact — the
+> same precedent the A4.3 record set by keeping its own wrong reading.
+>
+> **What it claims:** that `rp.verb.*` rules carrying `url_path` blanket-flag
+> *every actuator on a page* whose URL contains the verb — "the notification bell
+> is not a payment" — and that the pack documents a remediation never applied.
+>
+> **Why it is wrong:** that measurement called `classify_control_danger` directly,
+> **passing the page URL**. `build_inventory` — the only path the crawler uses —
+> passes each control's **own destination**, never the page. Measured correctly
+> against the *unmodified* pack:
+>
+> ```
+> Back / Notifications / Monthly on /life-insurance/apply/payment/   danger=False
+> "3" (bell) on /underwriting/new-business/new-application            danger=False
+> link -> /account/delete                                            danger=True
+> ```
+>
+> The page-contamination bug **did not exist**. It had already been fixed at the
+> inventory layer, and `tests/test_danger_scope.py` exists to hold that line —
+> its docstring is the very fix this record "discovered".
+>
+> **The counterfactual proved the opposite of what this record says it proved.**
+> Summit reached `/underwriting/...` because the patch removed a **legitimate
+> destination-based refusal**, not because a blanket lifted. See
+> `evidence/gate2/r2_summit_counterfactual/NOT_ADMISSIBLE.md`.
+>
+> **What was really wrong**, and is now fixed by **R7′** (`d3ed533`): a much
+> narrower thing. `rp.verb.pay` and `rp.verb.underwrite` used one broad regex for
+> both label and destination, so *section names* matched —
+> `/underwriting/new-business` and `/policy-admin/payments` — and every link into
+> those sections was refused. Two rules split, not nineteen re-scoped.
+>
+> **R1 was never pack-blocked at all.** On the payment page only the ACH button is
+> flagged; `Credit / Debit Card` and `Continue to Beneficiary Designation` are
+> both safe, so a safe path past it existed. R1's real cause is **R9** below.
+>
+> **Method note this cost:** verifying a rule means reading the call path, not the
+> rule text. Both the original diagnosis and its first review checked the rule.
+
+---
+
 ## The single root cause behind R1 and R2
+
+**⛔ RETRACTED — see the banner above. Left standing deliberately.**
+
 
 Both remaining funnels dead-end for **one reason, and it is neither the
 applications nor the walk logic.**

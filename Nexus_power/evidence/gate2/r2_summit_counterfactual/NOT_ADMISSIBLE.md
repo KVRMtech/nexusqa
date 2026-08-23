@@ -1,5 +1,28 @@
 # This bundle is a DIAGNOSTIC. It is NOT admissible evidence.
 
+> ## ⛔ AND IT PROVED THE OPPOSITE OF WHAT IT CLAIMED
+>
+> **Retracted 2026-08-23 at `d3ed533`.** This bundle was produced to prove that a
+> page-level "over-block" sealed the underwriting funnel, and that removing
+> `url_path` from the verb rules lifted it. **Both halves are wrong.**
+>
+> The page-level over-block did not exist: `build_inventory` passes each control's
+> own **destination**, never the page it sits on, and `tests/test_danger_scope.py`
+> already holds that line. The patched pack this crawl ran against did not remove a
+> blanket — it removed **destination refusal itself**, so a link to `/account/delete`
+> would have stopped being refused. Landing it would have turned 13 tests red.
+>
+> So the route expansion recorded below (8 routes → 13, reaching
+> `/underwriting/new-business/new-application`) is **evidence of a safety property
+> being removed**, not of a defect being fixed. It is the single most misleading
+> artefact this run produced, and it is kept for that reason.
+>
+> The real defect was narrower and is fixed by **R7′**: `rp.verb.pay` and
+> `rp.verb.underwrite` used one broad regex for both label and destination, so
+> *section names* (`/underwriting/…`, `/policy-admin/payments`) matched. Two rules
+> split; destination refusal intact.
+
+
 `journey.json` in this directory reports:
 
 ```json
