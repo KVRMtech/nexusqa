@@ -314,6 +314,50 @@ unfalsifiable forever. R3 was reproduced twice (at `8c443f2` and again at
 
 ---
 
+## Second phase — R7′…R7(5), R8, R9 (2026-08-23)
+
+After the retraction above, the architect authorised a **narrowed** change and the
+sequence was re-run. Roll-call for that phase:
+
+| Task | Result | SHA | What it settled |
+|---|---|---|---|
+| **R7′** | LANDED | `d3ed533` | `rp.verb.pay` / `rp.verb.underwrite` split: broad vocabulary keeps `button_name`, a narrow pattern takes the destination. 2 rules, not 19 |
+| **R7″** | LANDED | `897da04` | 13 under-blocks the red-team found in R7′ — `/pay-now`, `/submit-to-underwriting`, `?action=underwrite` … — plus the missing route-layer backstop |
+| **R7‴** | LANDED | `22da0d7` | Finding B: my R7″ suffix widening reopened the over-block for `/remittance-advice`, `/payout-history` … |
+| **R7⁗** | LANDED | `4aeccfd` | `capture` fell through a gap between two of my own lists; `-send`/`-release`/`-initiate` too |
+| **R7(5)** | LANDED | `2fc403f` | **Polarity inverted.** Enumerating acts under default-ALLOW was fail-OPEN, and `classify_action_verb` is the *sole* gate for a mutating WALK request |
+| **R8** | FIXED | `24da99f` | The browser lane crawled a login-gated app anonymously. Verified locally: 1 passed, 25m57s |
+| **R9** | DIAGNOSED | `a725b28` | vkpower's payment step is a formless picker — 14 controls, 0 questions, no `advance_blocked`. Silent stall |
+| **R2 re-run** | reached the commit URL | `24da99f` | 8 routes → 11, `flows 5→10`, `Submit Application` offered. Still `crossed: 0` — six unfillable fields remain |
+| **R1 re-run** | unchanged | `2fc403f` | `crossed: 0`. Confirms R1 was never pack-blocked; R9 is its cause |
+| **R3 reproduction** | **REPRODUCED** | `24da99f` | By peer session `nexusqa-21`, fresh clone. Identical on all three claimed lines. Fills no signatory seat |
+
+### The one that matters most
+
+**R7(5) closed a fail-open hole I opened.** In `Phase.WALK`, once `walk_attested`
+is true, a mutating request is adjudicated by `classify_action_verb(name, url)`
+**and nothing else** — the mutation-signal rules only adjudicate reads. WALK is
+also the phase whose own code comment says it "has no human in the loop". So
+between `d3ed533` and `4aeccfd`, `POST /payments/42/refund` with the button name
+"Save Draft" was **allowed** on a blanket-attested walk, and had been **blocked**
+before. Fixed by inverting the polarity so an unknown qualifier refuses.
+
+**Not claimed:** that a lexical path rule is a sufficient guarantee. It is not —
+the payment vocabulary is open and section-colliding at both ends, so inverting
+only makes the incompleteness loud rather than silent. Moving the guarantee to
+request-observation, so WALK does not adjudicate money movement by reading a URL
+string, is the named next piece of work and is **not done**.
+
+### Four rounds of non-author red-team
+
+Peer session `nexusqa-2d`, each round from a fresh clone of the pushed SHA, never
+the shared checkout. It found, in order: the page-vs-destination error that
+produced the retraction; 13 under-blocks; the reintroduced over-block; and the
+fail-open polarity. **The `d3ed533` version would have shipped and been wrong in a
+way no existing test would have caught.**
+
+---
+
 ## CI at the final SHA — and the lane that is red
 
 Measured, not assumed. At `201bdd7`:
