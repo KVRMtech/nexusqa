@@ -234,3 +234,44 @@ def test_the_label_rules_no_longer_match_urls():
             f"{rule_id} matches a URL again — its vocabulary contains section "
             f"nouns, so this is the over-block returning."
         )
+
+
+# ── FINDING B, from the red-team's RE-verification of the fix for findings 1-3 ──
+# The first repair of finding 1 widened the act segments with `[-._][a-z0-9-]*`
+# — verb followed by ANYTHING. That closed `/pay-now` and simultaneously
+# reopened the R7 class in miniature: a read-only section whose name is a verb
+# plus a hyphenated qualifier was refused as an act. Fail-closed, so a coverage
+# loss rather than a safety hole, but `/remittance-advice` and `/payout-history`
+# are ordinary pages in a carrier billing console.
+#
+# The fix is the same discipline as everywhere else in this pack: ENUMERATE. An
+# act qualifier (`-now`, `-confirm`, `-submit`, `-execute`, `-process`,
+# `-enroll`) or an endpoint extension (`.php`, `.aspx`, …) is an act; an
+# arbitrary noun is a section. A regex cannot tell "pay-NOW" from
+# "payout-HISTORY" structurally, so the vocabulary is listed rather than guessed.
+
+@pytest.mark.parametrize("href", [
+    "/remittance-advice", "/remittance-report", "/remittance-detail/42",
+    "/remit-advice", "/remit-summary",
+    "/payout-history", "/repay-plan", "/prepay-calculator", "/autopay-settings",
+    "/underwrite-checklist",
+])
+def test_a_verb_named_section_with_a_qualifier_is_still_navigation(href):
+    """Finding B: these read; they do not act."""
+    assert _link_danger(href) is False, (
+        f"{href} is refused. A verb followed by a NOUN is a section — this is the "
+        f"R7 over-block class returning through the suffix alternation."
+    )
+
+
+@pytest.mark.parametrize("href", [
+    "/pay-now", "/pay.php", "/remit-now", "/autopay-enroll",
+    "/pay-confirm", "/underwrite-submit",
+])
+def test_a_verb_with_an_ACT_qualifier_is_still_refused(href):
+    """The other side of Finding B's fix: narrowing the suffix must not undo the
+    original finding-1 repair."""
+    assert _link_danger(href) is True, (
+        f"{href} is allowed. `-now`/`.php`/`-enroll` mark the act, and losing "
+        f"them re-opens the under-block the red-team found first."
+    )
