@@ -157,6 +157,7 @@ from .guard import (
     registrable_domain,
     same_registrable_domain,
 )
+from .fill_engine.validation import signals_for_control
 from .inventory import (build_inventory, carry_earned_annotations,
                         form_signal_for, question_identity)
 
@@ -766,6 +767,92 @@ class WalkerMixin:
             "disabled its own forward control because these fields are unfilled",
             url[:120], blocked_label[:40], missing[:6])
         return blocked_label
+
+    async def _name_validation_rejections(self, url: str, trigger: str) -> int:
+        """BLOCKER 3 — name the field the APP rejected, and the rule it cited.
+
+        THE GAP THIS CLOSES, measured over four seeded rounds on
+        summit-life-carrier. ``fields_needing_seed`` means "could not be filled",
+        never "filled with something the application rejected". So a journey that
+        stops because a value failed the app's own schema reports a clean list
+        and says nothing:
+
+            crossed 1 ['Submit Application']   outcome "none"
+            /api/v1/ calls fired: 0            fields_needing_seed: ['Risk Classification']
+
+        The form validated its whole schema before its submit handler ran, and
+        the two values that actually failed — a synthesized ``Face Amount ($)``
+        and an unrecorded ``Gender`` — never appeared on that list once. Four
+        rounds of seeding chased a list that could not, by construction, name the
+        blocker.
+
+        WHAT THIS READS. Nothing new: :mod:`app.fill_engine.validation` already
+        attributes a message to a control through the accessibility contract the
+        application itself published — ``aria-errormessage`` /
+        ``aria-describedby``, then ``aria-invalid`` plus the native
+        ``validationMessage``, then conventional error-node ids, then a message
+        that names the control. It was only ever run DURING a fill. A schema
+        rejection happens on SUBMIT, after every fill is done, so nothing was
+        looking when the app finally spoke.
+
+        FAIL-CLOSED IN THE HONEST DIRECTION, inherited from that module: an alert
+        anchored to nothing is page context and never becomes a verdict on a
+        field. A page whose cookie banner is ``role=alert`` produces no
+        rejections here.
+
+        Returns the number of rejections named.
+        """
+        try:
+            reobs = await self._observe()
+            after = build_inventory(reobs.raw_controls, self._refuse_pack,
+                                    url=reobs.url)
+        except Exception as exc:                       # never fail the crawl
+            logger.warning("qec.fill.rejection_read_failed url=%s %s: %s",
+                           url[:120], type(exc).__name__, str(exc)[:120])
+            return 0
+
+        named = 0
+        for control in after:
+            if control.get("kind") not in _FILLABLE_KINDS:
+                continue
+            name = str(control.get("name") or "").strip()
+            if not name:
+                continue
+            # No fresh_alerts: this is a post-submit read, so there is no
+            # before-snapshot to make an alert "fresh". Anchoring therefore comes
+            # from the control's OWN declarations (rungs 1-3) and from a message
+            # that names it (rung 4) — never from an unanchored page alert.
+            signals = signals_for_control(control, after_controls=after,
+                                          control_name=name)
+            if not signals:
+                continue
+            best = signals[0]
+            record = {
+                "url": str(url)[:300],
+                "field": name[:120],
+                # The application's OWN words. "Enter a valid SSN (XXX-XX-XXXX)"
+                # names the rule better than any inference could, and it is the
+                # thing an operator can act on.
+                "rule": str(best.message or "")[:240],
+                "code": str(best.code or ""),
+                # WHICH RUNG anchored it, so a reader can weigh the claim rather
+                # than trust it.
+                "anchored_by": str(best.source or ""),
+                "rejected_on": trigger[:120],
+            }
+            if not any(r.get("url") == record["url"]
+                       and r.get("field") == record["field"]
+                       for r in self._validation_rejections):
+                self._validation_rejections.append(record)
+                named += 1
+
+        if named:
+            logger.info(
+                "qec.fill.rejections_named url=%s trigger=%r count=%d "
+                "— the app rejected these fields BY NAME; "
+                "fields_needing_seed cannot see this class",
+                url[:120], trigger[:40], named)
+        return named
 
     async def _pick_card_to_unblock(
         self, controls: "Sequence[dict[str, Any]]", blocked_label: str, url: str,
@@ -2175,6 +2262,25 @@ class WalkerMixin:
                     control=pick.submit_control, url=cur_url, fingerprint=cur_fp,
                     depth=item.depth, renavigate=False)
                 self._link_crossing_to_flow(flow_index, milestones_before)
+                # BLOCKER 3 — A CROSSING THAT LANDED ON NOTHING STILL OWES A
+                # REASON. summit-life-carrier clicks its commit control, the
+                # form's own schema validation rejects before the submit handler
+                # runs, and the milestone records outcome "none" / navigated
+                # false with ZERO api calls fired. The click is real and the
+                # effect is absent, so the honest bundle has to say which field
+                # the application refused — otherwise the only evidence is a
+                # crossing that looks like a pass and a confirmation that is
+                # simply missing.
+                last = (self._outcome_milestones[-1]
+                        if len(self._outcome_milestones) > milestones_before
+                        else None)
+                if last is not None and not str(
+                        (last.get("confirmation_rung")
+                         if isinstance(last, dict)
+                         else getattr(last, "confirmation_rung", "")) or ""):
+                    await self._name_validation_rejections(
+                        cur_url, "commit:%s" % str(
+                            pick.submit_control.get("name") or "")[:60])
                 return True
             trig = pick.control
             advance: Optional[tuple[Any, list[dict[str, Any]], str]] = None
@@ -2489,6 +2595,11 @@ class WalkerMixin:
                                    and b.get("label") == rec["label"]
                                    for b in self._advance_blocked):
                             self._advance_blocked.append(rec)
+                        # BLOCKER 3 — the app declined the click. Ask it WHICH
+                        # field and WHY, now, while the rejection is still on the
+                        # page. Naming the control is not naming the reason.
+                        await self._name_validation_rejections(
+                            cur_url, "advance:%s" % stalled_name[:60])
 
             # record the CURRENT step (its fills + the onward advance click if any).
             self._record_state(

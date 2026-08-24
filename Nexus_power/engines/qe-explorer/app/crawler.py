@@ -547,6 +547,11 @@ class Crawler(AuthFlowMixin, SubmitMixin, DiscoveryMixin, WalkerMixin,
         # field whose absence stopped the walk, so a one-step journey explains
         # itself instead of being investigated.
         self._advance_blocked: list[dict[str, Any]] = []
+        #: BLOCKER 3 — fields the APPLICATION rejected by name, with the
+        #: rule it cited. Distinct from `fields_needing_seed`, which means
+        #: "could not be filled" and is structurally blind to a value that
+        #: satisfied the widget and failed the app's schema.
+        self._validation_rejections: list[dict[str, Any]] = []
         # Unblock experiments that could NOT be undone: a radio question the app
         # had left unanswered has no unanswered state to be put back to, so an
         # attempt that bought nothing still leaves one committed answer behind.

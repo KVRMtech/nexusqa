@@ -291,6 +291,7 @@
     "traversal": "probe",
     "unblock_irreversible": [],
     "unhandled_controls": [],
+    "validation_rejections": [],
     "vision_budget": {
       "breaker_open": false,
       "breaker_threshold": 3,

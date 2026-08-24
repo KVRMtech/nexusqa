@@ -51,6 +51,7 @@ class CoverageHost(Protocol):
     _outcome_milestones: list[dict[str, Any]]
     _crossings: Any
     _advance_blocked: list[dict[str, Any]]
+    _validation_rejections: list[dict[str, Any]]
     #: T-RG-01 - unblock experiments that could NOT be undone.  Declared
     #: here for the reason stated twice above, and because this ledger is
     #: the one case where the crawl CHANGED the application and could not
@@ -394,6 +395,7 @@ class CoverageLedger:
             # Why a funnel stopped one step in, named. A walk that declines is
             # honest but silent; this is the sentence that makes it actionable.
             "advance_blocked": c._advance_blocked[:40],
+            "validation_rejections": c._validation_rejections[:40],
             # T-RG-01 - THE EXPERIMENTS THAT COULD NOT BE PUT BACK.  A
             # radio group the app left unanswered has no unanswered state
             # to restore, so an attempt that bought nothing still leaves
