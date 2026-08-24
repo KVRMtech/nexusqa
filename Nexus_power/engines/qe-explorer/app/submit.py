@@ -509,6 +509,32 @@ class SubmitMixin:
                 (milestone.url_after or "")[:120],
                 "JOURNEY COMPLETED" if milestone.verified else
                 "crossed but NOT verified: the far side was not a confirmation")
+        # ── BLOCKER 3 · A CROSSING THAT LANDED ON NOTHING OWES A REASON ────
+        # This is the one place every crossing mints its milestone, which is why
+        # the check lives here and not at a caller: an earlier attempt wired it
+        # into `_walk_wizard`'s submit branch and never fired on
+        # summit-life-carrier at all, because that funnel crosses through a
+        # different path. One choke point, every path, by construction.
+        #
+        # A milestone with NO confirmation rung is a click the application
+        # accepted and did nothing with — summit's Submit Application records
+        # outcome "none", navigated false, and fires ZERO /api/v1/ calls because
+        # the form's own schema validation rejected before its handler ran. That
+        # artefact reads like a pass with a confirmation merely missing, which is
+        # the most misleading shape a bundle can carry. So it now asks the page
+        # WHICH field was refused and on what rule, while the rejection is still
+        # rendered.
+        if milestone is not None and not (milestone.confirmation_rung or ""):
+            namer = getattr(self, "_name_validation_rejections", None)
+            if namer is not None:
+                try:
+                    await namer(str(getattr(result, "url_after", "") or
+                                    record.url or ""),
+                                "commit:%s" % str(record.control_name or "")[:60])
+                except Exception as exc:            # never fail a crossing
+                    logger.warning(
+                        "qec.fill.rejection_hook_failed crossing_id=%s %s: %s",
+                        record.crossing_id, type(exc).__name__, str(exc)[:120])
         return True
 
     def _record_outcome_milestone(

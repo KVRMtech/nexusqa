@@ -852,7 +852,57 @@ class WalkerMixin:
                 "— the app rejected these fields BY NAME; "
                 "fields_needing_seed cannot see this class",
                 url[:120], trigger[:40], named)
-        return named
+            return named
+
+        # ── NOTHING ANCHORED, AND THAT IS NOT THE SAME AS NOTHING SAID ───────
+        # Measured on vkpower-life's beneficiary step: the app refuses via
+        # `setError(...)`, which renders ONE page-level message —
+        # "Primary beneficiary allocations must total 100%. Currently at N%." —
+        # and never marks a field. The attribution ladder is right to return
+        # nothing (rung 5: an unanchored alert is page context, never a verdict
+        # on a field), so a field-only reporter records silence on a step whose
+        # rule the application stated in plain words.
+        #
+        # So a rule with no field is recorded AGAINST THE STEP, labelled as such.
+        # `field` is deliberately empty rather than guessed — attributing this to
+        # "Percentage (%)" would be the invention rung 5 exists to prevent.
+        reader = getattr(self._port, "error_texts", None)
+        if reader is None:
+            return 0
+        try:
+            texts = [str(x).strip() for x in (await reader() or []) if str(x).strip()]
+        except Exception:
+            return 0
+        if not texts:
+            # RAN AND FOUND NOTHING is not the same as NEVER RAN, and telling
+            # them apart cost a 35-minute crawl to work out. Logged on every
+            # engagement so the next reader can see the reader was looking.
+            logger.info(
+                "qec.fill.rejection_none_visible url=%s trigger=%r fields=%d "
+                "— the reader ran and the application exposed no anchored "
+                "rejection and no ARIA alert; silence here is a fact about the "
+                "app's markup, not about the crawl",
+                url[:120], trigger[:40], len(after))
+            return 0
+        rule = max(texts, key=len)[:240]
+        record = {
+            "url": str(url)[:300],
+            "field": "",
+            "rule": rule,
+            "code": "page_level",
+            "anchored_by": "page",
+            "rejected_on": trigger[:120],
+        }
+        if not any(r.get("url") == record["url"] and r.get("rule") == record["rule"]
+                   for r in self._validation_rejections):
+            self._validation_rejections.append(record)
+            logger.info(
+                "qec.fill.rejection_page_level url=%s trigger=%r rule=%r "
+                "— the app stated a rule and named no field; recorded "
+                "against the STEP rather than guessed onto one",
+                url[:120], trigger[:40], rule[:80])
+            return 1
+        return 0
 
     async def _pick_card_to_unblock(
         self, controls: "Sequence[dict[str, Any]]", blocked_label: str, url: str,
@@ -2262,25 +2312,6 @@ class WalkerMixin:
                     control=pick.submit_control, url=cur_url, fingerprint=cur_fp,
                     depth=item.depth, renavigate=False)
                 self._link_crossing_to_flow(flow_index, milestones_before)
-                # BLOCKER 3 — A CROSSING THAT LANDED ON NOTHING STILL OWES A
-                # REASON. summit-life-carrier clicks its commit control, the
-                # form's own schema validation rejects before the submit handler
-                # runs, and the milestone records outcome "none" / navigated
-                # false with ZERO api calls fired. The click is real and the
-                # effect is absent, so the honest bundle has to say which field
-                # the application refused — otherwise the only evidence is a
-                # crossing that looks like a pass and a confirmation that is
-                # simply missing.
-                last = (self._outcome_milestones[-1]
-                        if len(self._outcome_milestones) > milestones_before
-                        else None)
-                if last is not None and not str(
-                        (last.get("confirmation_rung")
-                         if isinstance(last, dict)
-                         else getattr(last, "confirmation_rung", "")) or ""):
-                    await self._name_validation_rejections(
-                        cur_url, "commit:%s" % str(
-                            pick.submit_control.get("name") or "")[:60])
                 return True
             trig = pick.control
             advance: Optional[tuple[Any, list[dict[str, Any]], str]] = None
