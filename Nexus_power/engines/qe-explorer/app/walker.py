@@ -767,6 +767,139 @@ class WalkerMixin:
             url[:120], blocked_label[:40], missing[:6])
         return blocked_label
 
+    async def _pick_card_to_unblock(
+        self, controls: "Sequence[dict[str, Any]]", blocked_label: str, url: str,
+    ) -> bool:
+        """R9 — A FORMLESS STEP WHOSE ONLY ANSWER IS A CARD GRID.
+
+        THE STEP THIS EXISTS FOR, measured rather than imagined. vkpower-life's
+        payment step renders its question as a grid of ``<button type="button">``
+        cards (``updatePayment({method:'ach'})``) and gates its submit on
+        ``disabled={!method}``. There is no form control anywhere on it, so:
+
+            controls_total 14 | question_groups [] | form_snapshot_signals {}
+            field_ledger for this url: NONE | advance_blocked: NONE
+
+        Fourteen controls, zero questions, and no record of a blocked advance.
+        ``is_form`` is False because nothing is fillable, so the fill never runs,
+        so :meth:`_answer_to_unblock` — which answers a DECLINED FIELD — has
+        nothing to work from. The walk stopped on the step that ends the journey
+        and said nothing about why.
+
+        IT IS THE SAME EXPERIMENT, on a different widget. Answer the question the
+        step is asking, re-read the page, and let the application render its own
+        verdict on the forward control. Nothing is inferred from markup.
+
+        WHAT IT WILL AND WILL NOT CLICK — the whole safety surface:
+
+        * never a ``danger`` member. On this very step ``ACH Bank Transfer Direct
+          debit from checking or savings`` trips ``rp.verb.transfer`` on its own
+          label. That classification is CORRECT and is left alone; the grid is
+          answered with a sibling instead (``Credit / Debit Card``, danger=False).
+          A picker that reached for the danger member would be laundering a
+          refusal through a UI affordance.
+        * never the advance control, never a disabled control, never session
+          teardown, never an unnamed one.
+        * ONE attempt per blocked step, exactly as the field path allows. If
+          answering the question does not clear the app's validation, the block
+          is about something else and a second click would be a search.
+        * RECORD ONLY IF VERIFIED. Returns True only when the application itself
+          re-enables ``blocked_label``; a click that buys nothing returns False
+          and the block stands, named.
+
+        Returns True when the app confirmed the step is unblocked.
+        """
+        if not blocked_label:
+            return False
+        # A card grid is a question only where there is no fillable control to be
+        # the question instead. This keeps the picker off every ordinary form.
+        if any(c.get("kind") in _FILLABLE_KINDS for c in controls):
+            return False
+
+        members: list[dict[str, Any]] = []
+        for c in controls:
+            if c.get("kind") != "button":
+                continue
+            if c.get("disabled") or c.get("danger"):
+                continue
+            name = str(c.get("name") or "").strip()
+            if not name or name == blocked_label:
+                continue
+            if _WIZARD_ADVANCE_RE.search(name):
+                continue            # a second forward control is not an answer
+            if _AUTH_SESSION_RE.search(name):
+                continue        # belt-and-braces: teardown is danger already
+            members.append(c)
+        if len(members) < 2:
+            # One button is a control, not a choice. Two siblings are a question.
+            return False
+
+        # ── ONE STEP CAN HOLD MORE THAN ONE GRID, and only one of them is the
+        # question the advance is waiting on. Measured on vkpower-life's payment
+        # step: six non-danger cards in TWO groups — Billing Frequency
+        # (Monthly/Quarterly/Semi-Annual/Annual) and Payment Method
+        # (ACH[danger] / Credit-Debit-Card) — and `disabled={!method}` depends on
+        # the SECOND. A single least-asserting pick chose "Monthly", the app
+        # correctly did not enable Continue, and the honest verdict was
+        # `cleared=False` on a step that was in fact answerable.
+        #
+        # Nothing in the DOM says which grid gates the button, so the grid is
+        # identified the only way that cannot be wrong: ASK THE APPLICATION. Try
+        # a card, read its verdict, stop the moment the app enables the control.
+        #
+        # WHY A BOUNDED SEARCH IS STILL AN EXPERIMENT AND NOT A SPREE, which is
+        # the distinction the field path draws with its one-attempt budget. Each
+        # click here is a non-danger, non-advance, non-teardown selection whose
+        # entire effect is which card is highlighted — the same class of act as
+        # choosing a radio, and idempotent: picking Quarterly after Monthly
+        # leaves one frequency chosen, not two. The field path's budget exists
+        # because answering several DECLINED QUESTIONS fabricates data; choosing
+        # among the options of ONE question does not. The cap keeps it finite and
+        # every attempt is logged with the app's verdict.
+        _MAX_CARD_ATTEMPTS = 8
+        tried: list[str] = []
+        for pick in members[:_MAX_CARD_ATTEMPTS]:
+            pick_name = str(pick.get("name") or "").strip()
+            if not await _experiment_page_ready(self._port, url, pick_name,
+                                                blocked_label):
+                break
+            try:
+                await self._port.click(pick)
+            except Exception as exc:                   # never fail the crawl
+                logger.warning(
+                    "qec.wizard.card_pick_error url=%s pick=%r %s: %s",
+                    url[:120], pick_name[:40], type(exc).__name__,
+                    str(exc)[:120])
+                continue
+            tried.append(pick_name)
+            reobs = await self._observe()
+            refreshed = build_inventory(reobs.raw_controls, self._refuse_pack,
+                                        url=reobs.url)
+            cleared = any(
+                str(c.get("name") or "").strip() == blocked_label
+                and not c.get("disabled")
+                for c in refreshed
+                if c.get("kind") in ("button", "link"))
+            logger.info(
+                "qec.wizard.card_pick url=%s members=%d attempt=%d pick=%r "
+                "cleared=%s — the app's own verdict on %r is the evidence, "
+                "not the click", url[:120], len(members), len(tried),
+                pick_name[:40], cleared, blocked_label[:40])
+            if cleared:
+                self._last_unblock_field = pick_name
+                return True
+
+        # Bought nothing. Unlike a checkbox there is no gesture that un-picks a
+        # card grid, so this is NOT reverted and the log says so rather than
+        # claiming an undo that did not happen. The step is left as the clicks
+        # left it and the block stands, NAMED by `_note_advance_blocked`.
+        logger.info(
+            "qec.wizard.card_pick_exhausted url=%s tried=%s blocked=%r "
+            "— the step is a card grid the app did not accept an answer "
+            "from; the block is recorded rather than the walk stopping silently",
+            url[:120], tried[:8], blocked_label[:40])
+        return False
+
     async def _answer_to_unblock(
         self, controls: Sequence[dict[str, Any]], blocked_label: str,
         url: str, fill: Any,
@@ -1987,6 +2120,28 @@ class WalkerMixin:
             # rather than one more step, and it is deliberately the ONLY thing
             # that changes here: a walk that never observed a confirmation takes
             # exactly the path it always took, loop detection included.
+            # ── R9 · A FORMLESS STEP INSIDE THE WALK ────────────────────────
+            # The discovery-side legibility gate never sees this page: a wizard
+            # step reached mid-walk is recorded IN PLACE and never re-enters
+            # `_maybe_expand`, so neither `is_form` branch runs on it. That is
+            # why vkpower-life's payment step produced NO `advance_blocked`
+            # record while the walk's own verdict line for the same page read
+            # `Continue to Beneficiary : dis=True dang=False adv=True` — the
+            # disabled advance was in hand and had nowhere to be written down.
+            #
+            # NAME IT FIRST, then try to answer it. If the picker cannot handle
+            # the step the run still says which control the app disabled, which
+            # is the difference between a named blocker and a silent stall.
+            if not confirm_rung:
+                step_blocked = self._note_advance_blocked(
+                    cur_controls, cur_url, None)
+                if step_blocked and await self._pick_card_to_unblock(
+                        cur_controls, step_blocked, cur_url):
+                    reobs_card = await self._observe()
+                    cur_controls = build_inventory(
+                        reobs_card.raw_controls, self._refuse_pack,
+                        url=reobs_card.url)
+                    cur_url = reobs_card.url or cur_url
             pick = (AdvanceDecision() if confirm_rung
                     else await self._pick_advance(
                         cur_controls, cur_url, cur_title, cur_fp))
@@ -2296,6 +2451,44 @@ class WalkerMixin:
                         cur_url, str((trig or {}).get("name") or "")[:30],
                         outcome or "(none)", new_fp == cur_fp,
                         new_fp in walk_seen)
+                    # ── R9 · A STALL IS A BLOCKER AND MUST BE NAMED ─────────
+                    # `_note_advance_blocked` only fires on a DISABLED forward
+                    # control. This is the other shape: the control is enabled,
+                    # the walk clicks it, and the application silently declines
+                    # — vkpower-life's beneficiary step, whose handleSubmit
+                    # refuses unless allocations total exactly 100% and renders
+                    # the reason as page text instead of disabling the button.
+                    #
+                    # Until now that produced a log line and NOTHING on the
+                    # coverage ledger, so a funnel that stopped one step from
+                    # the end read as a clean finish. Same rule as the disabled
+                    # case: a walk that stops says why, on the record.
+                    #
+                    # The app's own message is carried when it rendered one —
+                    # it names the rule better than any inference could.
+                    stalled_name = str((trig or {}).get("name") or "").strip()
+                    if stalled_name and new_fp == cur_fp:
+                        alert_text = ""
+                        for a in (getattr(obs, "page_alerts", None) or ())[:3]:
+                            txt = str(getattr(a, "text", None) or a or "").strip()
+                            if txt:
+                                alert_text = txt[:240]
+                                break
+                        rec = {
+                            "url": str(cur_url)[:300],
+                            "label": stalled_name[:120],
+                            # NOT "disabled_by_app_validation": the app did not
+                            # disable anything. It accepted the click and did
+                            # nothing, which is a different diagnosis.
+                            "reason": "advance_clicked_but_app_declined",
+                            "missing_fields": [],
+                        }
+                        if alert_text:
+                            rec["business_rule"] = alert_text
+                        if not any(b.get("url") == rec["url"]
+                                   and b.get("label") == rec["label"]
+                                   for b in self._advance_blocked):
+                            self._advance_blocked.append(rec)
 
             # record the CURRENT step (its fills + the onward advance click if any).
             self._record_state(

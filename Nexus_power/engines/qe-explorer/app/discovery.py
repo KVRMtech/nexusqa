@@ -741,6 +741,45 @@ class DiscoveryMixin:
                     snapshot_controls,
                     list(await self._answer_to_unblock(
                         snapshot_controls, blocked_label, obs.url or "", fill)))
+        # ── R9 · A FORMLESS STEP MUST STILL SAY WHY IT STOPPED ──────────────
+        # The legibility gate above is behind ``is_form``, and ``is_form``
+        # requires a FILLABLE control. A step that asks its question with cards
+        # alone therefore has no fill, never reaches `_note_advance_blocked`, and
+        # stops in SILENCE — the exact failure R9 measured on vkpower-life's
+        # payment step:
+        #
+        #     controls_total 14 | question_groups [] | form_snapshot_signals {}
+        #     advance_blocked for this url: NONE
+        #
+        # while the walker's own verdict line for that page read
+        # ``Continue to Beneficiary : dis=True dang=False adv=True`` — it could
+        # see the disabled advance the whole time and had nowhere to record it.
+        #
+        # So the block is NAMED here whether or not there was a form to blame it
+        # on, and only then is the card grid tried. Naming comes first on purpose:
+        # if the picker cannot handle the step, the run still says which control
+        # the application disabled instead of reporting a clean stop.
+        if not is_form:
+            formless_blocked = self._note_advance_blocked(
+                snapshot_controls, obs.url, None)
+            if formless_blocked:
+                logger.info(
+                    "qec.wizard.formless_step url=%s controls=%d blocked=%r "
+                    "— a step with no fillable control still has a forward "
+                    "control the app disabled; naming it before trying to answer",
+                    (obs.url or "")[:120], len(snapshot_controls or ()),
+                    formless_blocked[:40])
+            if formless_blocked and await self._pick_card_to_unblock(
+                    snapshot_controls, formless_blocked, obs.url or ""):
+                # The APP re-enabled its own forward control. Re-read the step so
+                # the walk advances from what the page is now, not from the
+                # snapshot taken before the question was answered.
+                reobs_card = await self._observe()
+                snapshot_controls = carry_earned_annotations(
+                    snapshot_controls,
+                    build_inventory(reobs_card.raw_controls, self._refuse_pack,
+                                    url=reobs_card.url))
+
         # A2.2 — A STEP WHOSE ONLY ANSWER IS A BUTTON IS STILL A STEP.
         #
         # ``is_form`` requires a FILLABLE control, so a page that asks its question
