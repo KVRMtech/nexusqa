@@ -140,7 +140,7 @@ accessibility annotation.
      already exists in this codebase for dependent-field discovery.
 * **Non-author verification:** peer session `nexusqa-2d` has offered to verify
   this one fresh; it is large enough to deserve its own pass.
-* **Appointed owner:** *pending — Phase-5 entry.*
+* **Appointed owner:** **KVR**, at Phase-5 entry (appointed 2026-08-24 by the programme owner).
 
 ### B2 · Constraint-aware repair
 
@@ -154,7 +154,7 @@ crawler discovers, rather than values that satisfy the widget.
   schema before its handler ran — so nothing was submitted and nothing was said.
 * **Depends on B1**: a repair loop driven by anything other than the
   application's own words is a guess wearing a retry's clothes.
-* **Appointed owner:** *pending — Phase-5 entry.*
+* **Appointed owner:** **KVR**, at Phase-5 entry (appointed 2026-08-24 by the programme owner).
 
 ### B3 · List sub-action, allocation rule, and cross-step coherence (vkpower)
 
@@ -167,7 +167,7 @@ Three shapes behind vkpower's remaining two blockers:
 * **cross-step coherence** at `/apply/signature/`, never reached: five consent
   checkboxes plus a typed signature that must match a legal name entered seven
   steps earlier.
-* **Appointed owner:** *pending — Phase-5 entry.*
+* **Appointed owner:** **KVR**, at Phase-5 entry (appointed 2026-08-24 by the programme owner).
 
 ### B4 · Seed targeting and ledger completeness
 
@@ -186,7 +186,7 @@ Operator seeds cannot reach the field instances that actually block a funnel.
   never appeared on that list once. Candidate remedies: key seeds by
   `(label, url)` as well as signature, and make unfillable custom widgets
   ledger-visible.
-* **Appointed owner:** *pending — Phase-5 entry.*
+* **Appointed owner:** **KVR**, at Phase-5 entry (appointed 2026-08-24 by the programme owner).
 
 ---
 
