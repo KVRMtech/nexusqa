@@ -46,13 +46,22 @@ history at `Nexus_power/evidence/gate2/r3_acme_reproduced/`.
 | Containers | `nexus-qe-central`/`nexus-qe-explorer` healthy; created `2026-08-27T02:46:52Z` — **not** rebuilt during the fast-forward from `3d7e0f5` to `7d7408b`, which is sound only because `git diff --stat be20767..7d7408b` (run independently) touches exactly one file, `tests/browser/test_gate2_three_applications.py`, and zero service files |
 | Health | re-queried live by `nexusqa-ae` this turn: `{"status":"healthy","service":"qe-central","db_qec":"connected","db_substrate":"connected","kek":{"provider":"gcp_kms","is_production_grade":true,"envelope_ready":true}}` |
 | Schema | `qec_023`, per `Nexus_power/evidence/r5_deployed_service/deployed_service.json` (captured before the fast-forward) — **not independently re-queried after** the fast-forward, but no migration ran between the two states, only a git checkout, so it is not expected to have changed |
+| Golden crawl gate | `GATE_VERDICT=PASS`, exploration `c57abb74-cae3-4efc-92a8-a5b7328c2326`, 11 ratchet metrics **RISE** (new floors: pages 22→30, forms 7→8, submitted 9→13, flows 7→12, catalog_questions 67→80, five more), 0 regressions. Artifact: `Nexus_power/evidence/r5_golden_gate/golden_gate_output.txt`. Exploration row independently re-queried by `nexusqa-ae` directly against the VM's own database this turn (`docker exec nexus-postgres psql -U nexus -d qecentral`), not taken from the artifact's own claim: `c57abb74-cae3-4efc-92a8-a5b7328c2326\|completed`. |
 
-**A claim NOT included here.** A peer session referenced "golden-gate PASS,
-exploration `c57abb74`, nine floors raised" as supporting evidence for this
-deployment. `nexusqa-ae` grepped the full working tree for `c57abb74` and
-found no matching artifact. It is omitted from this record rather than
-included on trust — if it exists, whoever locates it should add it with its
-own citation.
+**Caveat that governs how the row above may be cited, stated in the artifact
+itself and repeated here:** the gate ran while the VM was at `be20767`,
+*before* the fast-forward to `7d7408b`. It is evidence about the deployed
+**service code**, which the `be20767..7d7408b` delta does not touch (§1.2
+above), and **not** evidence about the certified commit's test files.
+
+**How this claim reached this record, for the honesty of the record itself:**
+it was first offered as a bare assertion with no committed artifact;
+`nexusqa-ae` grepped the tree, found nothing, and omitted it rather than
+write it in on a peer's word. The peer then ran the gate again, committed
+the verbatim output (`35cdb34`), and the exploration row above was
+independently re-verified before being added. The first omission was the
+correct call at the time it was made, not a mistake corrected — the
+evidence did not yet exist on disk.
 
 ### 1.3 · Two applications, driven to their boundaries, gaps measured and named
 
@@ -185,4 +194,6 @@ written here — SSH to the VM, a direct re-run of `t3_verify_crossing_evidence.
 a direct re-run of `gate5_verify_ceremony.py`, and direct reads of every gate
 document cited in §2 — none of it taken from the peer's or the owner's word
 alone. Written at repository HEAD `7f641a0`, working tree clean apart from
-this new file.
+this new file; §1.2's golden-gate row added in a follow-up edit at HEAD
+`35cdb34`, after the peer committed the artifact this record had originally
+omitted for lacking one.
