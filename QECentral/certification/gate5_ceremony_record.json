@@ -24,20 +24,30 @@
   "build_artifact": "",
   "deployment": {
     "environment": "verdict-box (GCP project-8d85a07a-396c-40aa-9b6, asia-southeast1-a)",
-    "version_sha": "3d7e0f50df4747b964fbb1dfed94fc99aaa56204",
-    "_discrepancy_from_certified_sha": [
-      "NOT the same commit as certified_sha above -- one commit apart.",
-      "R5' (be20767, deployed_service.json) deployed at 3d7e0f5, the tip that",
-      "existed when that deploy ran. certified_sha (7d7408b) is one commit later",
-      "-- the walked_depth floor fix, a tests/browser/**-only change; it does not",
-      "touch any file the deployed build runs. Stated here rather than silently",
-      "aligned: release_director's attestation is 'the deployed artifact",
-      "corresponds to the certified SHA', and byte-for-byte it currently does",
-      "not. Whoever signs that seat must judge whether a test-only commit",
-      "delta is within that attestation's meaning, or whether it requires a",
-      "re-deploy at 7d7408b before signing."
+    "version_sha": "7d7408bf0ca359a1ccec9a093523dc74b9dc37a9",
+    "_version_sha_verification": [
+      "Independently checked live over SSH, 2026-08-27, not taken from any",
+      "session's report: `gcloud compute ssh verdict-box -- git rev-parse HEAD`",
+      "returned 7d7408bf0ca359a1ccec9a093523dc74b9dc37a9 exactly, `git status",
+      "--short` empty (clean tree), branch feat/qec-dynamic-catalog-p0-p6.",
+      "`docker ps` shows nexus-qe-central/qe-explorer healthy, created",
+      "2026-08-27T02:46:52Z -- i.e. NOT rebuilt just now; the source was",
+      "fast-forwarded from be20767 to 7d7408b without a container rebuild.",
+      "That is only safe because `git diff --stat be20767..7d7408b`, run",
+      "independently in this pass, shows exactly one file changed",
+      "(tests/browser/test_gate2_three_applications.py) and zero service files",
+      "-- the running containers are therefore byte-identical to what 7d7408b",
+      "would build.",
+      "",
+      "Prior state (superseded, kept for the record): a peer session had",
+      "deployed at 3d7e0f5 before be20767/7d7408b landed, and separately, the",
+      "VM's git remote (Venkatareddy2012/nexus-power-snapshot, a downstream",
+      "mirror) was itself lagging origin at be20767 -- so the VM could not",
+      "reach 7d7408b until the mirror was updated. Both fixed by the peer",
+      "session that reported this; the fix is recorded here only after being",
+      "reproduced independently above, not on the report alone."
     ],
-    "_deployed_service_provenance_note": "Nexus_power/evidence/r5_deployed_service/deployed_service.json stamps produced_by.dirty=true with dirty_paths=[] -- an unexplained combination, flagged rather than resolved; does not affect the version_sha fact above."
+    "_deployed_service_provenance_note": "Nexus_power/evidence/r5_deployed_service/deployed_service.json was NOT regenerated after the fast-forward above and still describes the earlier 3d7e0f5 deploy (including its unexplained produced_by.dirty=true/dirty_paths=[] combination) -- it is stale and is not cited for version_sha; the live SSH check above is the evidence for that field instead."
   },
 
   "clean_clone_attestation": {
