@@ -23,6 +23,7 @@ importing it can never pull Playwright, FastAPI or httpx into a pure-logic test.
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Any, Mapping, Protocol, Sequence, runtime_checkable
 
@@ -256,6 +257,45 @@ def verify_intent(
     return None
 
 
+#: Refusal vocabulary, matched on WORD BOUNDARIES against a live-region's text.
+#:
+#: WHY A VOCABULARY AND NOT A SELECTOR.  ``role=status`` and ``role=alert`` do
+#: not partition messages into successes and failures.  ``role=status`` is an
+#: implicitly-polite live region and is the CORRECT markup for a
+#: non-interrupting validation message, so applications legitimately refuse in
+#: it.  Polarity therefore has to be read from what the application wrote, not
+#: from which region carried it.
+#:
+#: THIS IS A HEURISTIC AND IS BIASED ON PURPOSE.  It decides only whether a
+#: candidate CONFIRMATION is really a refusal, so its two error modes are not
+#: symmetric: a missed refusal green-washes a failed submit, while a
+#: false positive merely declines to award a confirmation the crawl did not
+#: need. When a phrase is genuinely ambiguous ("declined", "rejected" — which a
+#: carrier also uses for legitimate adverse DECISIONS) it is listed, and the
+#: milestone is simply not credited. Never fabricate a positive.
+_REJECTION_MARKERS = (
+    r"invalid", r"not valid", r"incorrect", r"wrong",
+    r"required", r"must be", r"must have", r"cannot", r"can not", r"can't",
+    r"unable", r"failed", r"failure", r"denied", r"rejected", r"declined",
+    r"not match", r"does not match", r"doesn't match", r"no match",
+    r"try again", r"correct the", r"please enter", r"please select",
+    r"please provide", r"please correct", r"not allowed", r"not permitted",
+    r"missing", r"error",
+)
+_REJECTION_RE = re.compile(
+    r"\b(?:%s)\b" % "|".join(_REJECTION_MARKERS), re.IGNORECASE)
+
+
+def is_rejection_text(text: str) -> bool:
+    """Did the application write this live region to REFUSE, not to confirm?
+
+    Pure and browser-free, so the polarity decision is testable without a page.
+    See :data:`_REJECTION_MARKERS` for why this reads words rather than roles,
+    and why its bias runs toward refusing to confirm.
+    """
+    return bool(_REJECTION_RE.search(text or ""))
+
+
 def classify_submit_after(obs: RawObservation) -> AfterOutcome:
     """Classify the TERMINAL outcome of a Phase-B submit click (design §3.2).
 
@@ -292,6 +332,12 @@ def classify_submit_after(obs: RawObservation) -> AfterOutcome:
                             False, False)
     detail = (obs.confirmation_detail or "").strip()
     if detail:
+        # A live region is only a CONFIRMATION if the application wrote it to
+        # confirm. `role=status` carries refusals too, and a refusal read as a
+        # confirmation is the one misclassification that turns a failed submit
+        # into a green journey -- so polarity is checked, not assumed.
+        if is_rejection_text(detail):
+            return AfterOutcome(OUTCOME_ERROR, detail[:_MAX_DETAIL], False, False)
         return AfterOutcome(OUTCOME_CONFIRMATION, detail[:_MAX_DETAIL], False, False)
     if obs.dialog_opened:
         return AfterOutcome(OUTCOME_CONFIRMATION,

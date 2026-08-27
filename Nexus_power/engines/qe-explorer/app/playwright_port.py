@@ -38,7 +38,8 @@ from . import field_signature
 from . import network_evidence as netev
 from . import page_lifecycle as pl
 from . import perception
-from .browser import BrowserPort, NavResult, RawObservation, verify_intent
+from .browser import (BrowserPort, NavResult, RawObservation,
+                      is_rejection_text, verify_intent)
 from .fingerprint import interactive_signature
 from .interaction_ladder import Rung, ladder_for
 from . import observation_health
@@ -1612,6 +1613,23 @@ class PlaywrightBrowserPort(BrowserPort):
         return flags
 
     async def error_texts(self) -> list[str]:
+        """Visible REJECTION texts, wherever the application marked them.
+
+        ``[role=alert]`` / ``[aria-live=assertive]`` are read unconditionally --
+        those regions exist to interrupt, so their content is a rejection by
+        construction.  ``[role=status]`` / ``[aria-live=polite]`` are read too,
+        but ONLY where the text is rejection-shaped: a polite region is the
+        correct markup for a non-interrupting validation message and
+        applications legitimately refuse in it, while the same region also
+        carries genuine success banners that must not be reported as errors.
+        Polarity is decided by :func:`app.browser.is_rejection_text`.
+
+        Measured on a third-party carrier platform: a failed sign-in rendered
+        ``<div role="status" class="message error">Invalid member ID or PIN.</div>``
+        and this method returned ``[]`` -- so ``validation_rejections`` was
+        empty on every application crawled that day, and every refusal was
+        recorded with ``missing_fields: []``.
+        """
         texts: list[str] = []
         for selector in ('[role="alert"]', '[aria-live="assertive"]'):
             try:
@@ -1622,6 +1640,18 @@ class PlaywrightBrowserPort(BrowserPort):
                     if await node.is_visible():
                         txt = (await node.inner_text()).strip()
                         if txt:
+                            texts.append(txt[:300])
+            except Exception:
+                continue
+        for selector in ('[role="status"]', '[aria-live="polite"]'):
+            try:
+                loc = self._page.locator(selector)
+                count = await loc.count()
+                for i in range(min(count, 5)):
+                    node = loc.nth(i)
+                    if await node.is_visible():
+                        txt = (await node.inner_text()).strip()
+                        if txt and is_rejection_text(txt) and txt[:300] not in texts:
                             texts.append(txt[:300])
             except Exception:
                 continue
