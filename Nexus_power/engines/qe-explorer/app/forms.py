@@ -483,6 +483,8 @@ def _slider_default(control: Mapping[str, Any]) -> str:
 PROV_PROVIDED = "provided"        # the client's answer key — explicit, highest trust
 PROV_JOURNEY = "journey"          # answered earlier in THIS crawl (see below)
 PROV_RECALLED = "recalled"        # remembered from a previous crawl of THIS client
+PROV_APP_SUPPLIED = "app_supplied"  # the application shipped a valid value and we
+                                    # could not justify replacing it
 PROV_SYNTHESIZED = "synthesized"  # generated from the crawl's fictional identity
 PROV_NEEDS_INPUT = "needs_input"  # nothing honest could be produced — ask the client
 PROV_INTENT_UNMET = "intent_unmet"  # R0: fill attempted but intent verification failed
@@ -648,6 +650,28 @@ def resolve_field(control: Mapping[str, Any], kind: str, name: str,
             entry.update(provenance=PROV_RECALLED, filled=True)
             return {"value": str(prior_value), "entry": entry}
 
+    if (verdict["basis"] == "structural"
+            and kind not in _TOGGLE_KINDS and kind not in _ENUMERABLE_KINDS):
+        # Rung 3.5 — THE APPLICATION ALREADY ANSWERED THIS, AND WE CANNOT DO BETTER.
+        #
+        # Reaching here means the semantic vocabulary produced nothing: we did
+        # not recognise the field. If the application has nonetheless committed
+        # a value, that value is better evidence than the structural guess below
+        # it — it is the app's own data, valid by construction, and our
+        # replacement would carry the lowest confidence in the system.
+        #
+        # Measured: LifeOps ships "178" in a field named "Weight". free_text /
+        # structural / 0.4 overwrote it, the app answered "Enter a valid weight."
+        # and the walk stalled on step 4 of a wizard that advances untouched.
+        # All 36 of 36 fields were overwritten; none survived.
+        #
+        # BELOW every semantic rung on purpose. Recognising a field is the
+        # licence to replace its value; failing to recognise it is not. Toggles
+        # are excluded — their value_committed is "true"/"false" state, not data.
+        existing = str(control.get("value_committed") or "").strip()
+        if existing:
+            entry.update(provenance=PROV_APP_SUPPLIED, filled=True)
+            return {"value": existing, "entry": entry}
     generated = field_values.value_for(verdict["type"], control, identity, kind=kind,
                                        data_mode=data_mode)
     if generated is None and not (kind in _TOGGLE_KINDS and kind == "radio"
