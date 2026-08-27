@@ -327,6 +327,31 @@ def _text_fields(controls: Sequence[Mapping[str, Any]]) -> list[Mapping[str, Any
     ]
 
 
+def _hinted_username_control(
+    controls: Sequence[Mapping[str, Any]],
+    username_hints: Sequence[str] = DEFAULT_USERNAME_HINTS,
+) -> Optional[Mapping[str, Any]]:
+    """A username field matched BY HINT — no positional fallback.
+
+    :func:`_match_username_control` ends in ``return text_fields[0]``, which is
+    correct where it is used (the step loop, driving a screen already known to
+    be a login) but wrong as evidence that a login form is PRESENT: it never
+    answers None on any page carrying a text input.
+
+    Measured (LifeOps, 2026-08-27): a landing page whose quote form has an
+    ``Age`` field — normalised by ``build_inventory`` from role=spinbutton to
+    kind="text" — claimed that field as the username, so the sign-in hop below
+    was suppressed and three visible affordances ("Login", "Sign in", "Member
+    login") were never clicked. A correct member number, PIN and OTP went
+    unused and the authenticated application was never reached.
+
+    Asking "is there a login form here?" needs a CONFIDENT match; a field that
+    matched no hint is not one.
+    """
+    return next((c for c in _text_fields(controls)
+                 if _name_matches_any(str(c.get("name")), username_hints)), None)
+
+
 def _match_username_control(
     controls: Sequence[Mapping[str, Any]],
     username_hints: Sequence[str] = DEFAULT_USERNAME_HINTS,
@@ -354,16 +379,45 @@ def _match_username_control(
 
 def _match_submit_control(
     controls: Sequence[Mapping[str, Any]], submit_hints: Sequence[str] = DEFAULT_SUBMIT_HINTS,
+    *, after: Optional[Mapping[str, Any]] = None,
 ) -> Optional[Mapping[str, Any]]:
-    """First non-danger button whose accessible name is a sign-in / advance verb."""
-    for c in controls:
-        if _norm(c.get("kind")) != "button" or not _norm(c.get("name")):
-            continue
-        if c.get("danger"):  # never choose an irreversible-verb button as submit
-            continue
-        if _name_matches_any(str(c.get("name")), submit_hints):
-            return c
-    return None
+    """The login form's own submit — a non-danger button named with a sign-in
+    or advance verb.
+
+    ``after`` anchors the search to a control belonging to the FORM (the
+    password or username field), and the form's submit is looked for BELOW it
+    before the page is searched as a whole.
+
+    WHY THE ANCHOR EXISTS.  The hints are matched against an accessible name
+    over every control on the page, and site chrome wins on DOM order.
+    Measured (LifeOps, 2026-08-27): the sign-in screen carries a persistent top
+    navigation whose items include a button named "Login", emitted long before
+    the form's own "Continue":
+
+        username -> Member ID     password -> PIN     SUBMIT -> Login
+
+    Clicking that nav item re-rendered the same screen, so the sequence
+    reported "the screen did not move, and was given time to" and the login
+    failed with correct credentials already typed in.
+
+    The fallback to a page-wide search is deliberate: a form whose submit sits
+    ABOVE its fields is unusual but legal, and this must not stop finding it.
+    """
+    def _named_buttons(seq: Sequence[Mapping[str, Any]]):
+        for c in seq:
+            if _norm(c.get("kind")) != "button" or not _norm(c.get("name")):
+                continue
+            if c.get("danger"):  # never choose an irreversible-verb button as submit
+                continue
+            if _name_matches_any(str(c.get("name")), submit_hints):
+                yield c
+
+    if after is not None:
+        anchor = _index_of(controls, after)
+        below = next(_named_buttons(list(controls)[anchor + 1:]), None)
+        if below is not None:
+            return below
+    return next(_named_buttons(controls), None)
 
 
 def match_login_controls(
@@ -674,7 +728,10 @@ class Authenticator:
         while (
             hops < 2
             and _match_password_control(controls) is None
-            and _match_username_control(controls, self._creds.username_hints) is None
+            # HINT-matched, not positional: an unrelated text field on the
+            # landing page must not stand in for a login form and suppress the
+            # hop. The step loop below keeps the permissive matcher.
+            and _hinted_username_control(controls, self._creds.username_hints) is None
         ):
             affordance = _match_login_affordance(controls)
             if affordance is None:
@@ -711,7 +768,13 @@ class Authenticator:
                 if (self._creds.mfa and self._creds.mfa.delivery and not filled_delivery)
                 else None
             )
-            submit_ctrl = _match_submit_control(controls, self._creds.submit_hints)
+            # Anchor on the form's own field so site chrome cannot supply the
+            # submit button — see _match_submit_control.
+            submit_ctrl = _match_submit_control(
+                controls, self._creds.submit_hints,
+                after=(_match_password_control(controls)
+                       or _match_username_control(controls,
+                                                  self._creds.username_hints)))
 
             acted = False
             if username_ctrl is not None and _norm(username_ctrl.get("name")) and not filled_username:
