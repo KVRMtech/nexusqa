@@ -18,24 +18,63 @@
   "ceremony": "gate5-arb-certification",
   "certified_repository": "KVRMtech/nexusqa",
 
-  "certified_sha": "",
+  "certified_sha": "7d7408bf0ca359a1ccec9a093523dc74b9dc37a9",
+  "_certified_sha_named": "Named by the architect, 2026-08-27, under delegation from the programme owner.",
 
   "build_artifact": "",
   "deployment": {
     "environment": "verdict-box (GCP project-8d85a07a-396c-40aa-9b6, asia-southeast1-a)",
-    "version_sha": "",
-    "_observed_2026_08_21": "ede6bf26c68a1752358423702eaaa1f6c1984597 on branch develop, which is NOT any certification candidate"
+    "version_sha": "3d7e0f50df4747b964fbb1dfed94fc99aaa56204",
+    "_discrepancy_from_certified_sha": [
+      "NOT the same commit as certified_sha above -- one commit apart.",
+      "R5' (be20767, deployed_service.json) deployed at 3d7e0f5, the tip that",
+      "existed when that deploy ran. certified_sha (7d7408b) is one commit later",
+      "-- the walked_depth floor fix, a tests/browser/**-only change; it does not",
+      "touch any file the deployed build runs. Stated here rather than silently",
+      "aligned: release_director's attestation is 'the deployed artifact",
+      "corresponds to the certified SHA', and byte-for-byte it currently does",
+      "not. Whoever signs that seat must judge whether a test-only commit",
+      "delta is within that attestation's meaning, or whether it requires a",
+      "re-deploy at 7d7408b before signing."
+    ],
+    "_deployed_service_provenance_note": "Nexus_power/evidence/r5_deployed_service/deployed_service.json stamps produced_by.dirty=true with dirty_paths=[] -- an unexplained combination, flagged rather than resolved; does not affect the version_sha fact above."
   },
 
-  "clean_clone_attestation": {},
+  "clean_clone_attestation": {
+    "attestation": "gate5-clean-clone",
+    "certified_sha": "7d7408bf0ca359a1ccec9a093523dc74b9dc37a9",
+    "verified_clone_sha": "7d7408bf0ca359a1ccec9a093523dc74b9dc37a9",
+    "result": "pass",
+    "repository": "KVRMtech/nexusqa",
+    "runner_environment": "github-hosted",
+    "runner_os": "Linux",
+    "runner_arch": "X64",
+    "author_controlled_hardware": false,
+    "workflow_run_id": "33094648136",
+    "workflow_run_url": "https://github.com/KVRMtech/nexusqa/actions/runs/33094648136",
+    "completed_at": "2026-08-27T16:48:59Z"
+  },
   "_clean_clone_attestation_note": [
-    "EMPTY ON PURPOSE. This field takes the attestation for the CERTIFIED SHA,",
-    "and no certification candidate has been frozen. The validator correctly",
-    "refuses the record while it is empty.",
+    "Pasted verbatim from the artifact, not hand-written. Triggered via the",
+    "push-based fallback (pushing branch gate5/certify-7d7408b), because",
+    "workflow_dispatch 422s on this branch -- same default-branch resolution",
+    "gap documented for ci.yml/browser-harness.yml. Verified before trusting",
+    "the result: the clone URL is github.server_url/github.repository (a",
+    "server-side Actions value fixed to KVRMtech/nexusqa, independent of any",
+    "local remote config), and for the push trigger SHA=github.sha, i.e.",
+    "exactly the commit the pushed branch points to. Both confirmed by reading",
+    "the workflow YAML, not assumed.",
     "",
-    "The mechanism itself is proven and is recorded below. Do not move that",
-    "block into the operative field: it attests the ceremony branch commit, not",
-    "a certification candidate, and using it would certify the wrong thing."
+    "KNOWN DORMANT GAP in this same workflow, filed and NOT fixed during this",
+    "ceremony: ceremony-validator-selftest's checkout has no ref:, so it reads",
+    "github.ref rather than a resolved SHA. Harmless on the push path used here",
+    "(ref tip == github.sha). Live the day workflow_dispatch's 422 is repaired:",
+    "on that path job 1 would validate a record read from the DISPATCH branch,",
+    "not from inputs.sha -- a different commit than clean-clone-on-unowned-",
+    "hardware is certifying, with no needs: binding the two jobs together.",
+    "Fix: add `ref: ${{ github.event_name == 'workflow_dispatch' && inputs.sha",
+    "|| github.sha }}` to that checkout step before the dispatch trigger is",
+    "next repaired."
   ],
   "_clean_clone_mechanism_proven": {
     "why_this_is_here": "Evidence that gate5-clean-clone-attestation.yml actually works on hardware no author controls. First real run, 2026-08-22.",
@@ -80,10 +119,22 @@
     "a37_3": "live three-service rollback drill on verdict-box: 19 checks passed, 0 failed"
   },
 
-  "reproductions": [],
-  "_reproduction_notes": [
-    "EMPTY ON PURPOSE. No critical proof has yet been reproduced by a named",
-    "non-author.",
+  "reproductions": [
+    {
+      "proof": "R3 acme-life crossing",
+      "implementer": "nexusqa-1c (session identifier -- this programme's implementation session for R1-R9)",
+      "reproducer": "nexusqa-21 (session identifier -- self-identified: verification session / Proof-guild role)",
+      "sha": "24da99f0459eb82f79ff7f77bb157487c84079da",
+      "environment": "fresh blobless clone, own container, own port, own --out directory -- not the shared checkout",
+      "artifact": "Nexus_power/evidence/gate2/r3_acme_reproduced/NON_AUTHOR_REPRODUCTION.md",
+      "result": "PASS",
+      "_result_detail": "crossed:2 ['Bind policy','Bind policy'], confirmation_observed:True['dialog'], journeys_completed:1, [ADMISSIBLE] exit 0 -- identical to the implementer's own run on all three claimed lines",
+      "recorded_at": "2026-08-23, at the moment the reproduction happened, per this ceremony's own rule that authorship cannot be reconstructed from git after the fact"
+    }
+  ],
+  "_reproductions_note": "Session-level identifiers, not human names -- consistent with this programme's standing rule that evidence independence is session-level while signature accountability is human-level (see roles / arb_signatories below, which remain empty for exactly the opposite reason). This one reproduction does not by itself satisfy proof_guild's attestation, which requires EVERY critical acceptance proof reproduced -- summit and vkpower have no crossing to reproduce (both REFUSED / crossed:0), so R3 is the only crossing this programme currently has to reproduce.",
+  "_reproduction_notes_ORIGINAL": [
+    "Preserved for history -- the state before the entry above was added.",
     "",
     "This cannot be reconstructed later from git. Every commit in this",
     "repository carries an identical author, committer and Co-Authored-By",
