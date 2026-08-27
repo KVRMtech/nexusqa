@@ -106,14 +106,16 @@
   "gates": {
     "gate0": "PARTIAL",
     "gate1": "PARTIAL",
-    "gate2": "IN_PROGRESS",
+    "gate2": "MET_UNDER_RESCOPE",
     "gate3": "IN_PROGRESS",
     "gate4": "NO_ACCEPTANCE_EVIDENCE"
   },
+  "_gate_status_note": "The validator (scripts/gate5_verify_ceremony.py) requires the LITERAL string \"PASS\" for every gate and fails any other value identically, quoting whatever string is here -- so this edit changes what the record SAYS about gate2, not whether Gate 5 can certify: gate2 still fails, and is meant to. gates.gate0/1/3/4 were checked against their own named docs (GATE_0_DURABILITY.md, GATE1_EXIT_STATUS.md, PHASE_4_ENTRY_GATE.md; gate3 has no such doc found) and none of them is about the three-crossings claim PHASE_1_EXIT_RESCOPE.md redefines -- they are left untouched, each still its owner's assessment.",
   "_gate_notes": {
     "gate0": "A5 not met; push cleared mid-audit, first CI run in three days returned four defects",
     "gate1": "tagged gate-1 at 3420d88, but A11 attestation issuer and A12 walk persistence are untracked/unstaged - in no commit",
-    "gate2": "14 commits as of 2026-08-21 (A14x8, A16x1, A17x3, A19x1); no commit labelled A15 or A18; live vkpowerlife journey does not complete",
+    "gate2": "MET UNDER THE RESCOPED CRITERION, NOT the original one -- see PHASE_1_EXIT_RESCOPE.md. The original exit bar (three applications, each crossed with observed confirmation) is NOT met and this record must keep saying so; gate2 is not a bare PASS and the validator will not treat it as one. What changed: the architect's 2026-08-24 re-scope redefined Phase 1's exit as ONE admissible crossing plus two applications driven to their boundaries with capability gaps measured and named (B1-B4). That narrower claim is evidenced: acme-life crossed+confirmed and now non-author-reproduced AT THE CERTIFIED SHA itself (reproductions[0], 7d7408b); summit-life-carrier crossed:1 and REFUSED by the t3 gate for no observed confirmation (cited as evidence the gate has teeth, not apologised for); vkpower-life driven to /apply/beneficiary/ with its two remaining stalls named on the coverage ledger. Independently, this gate's own machine check (tests/browser/test_gate2_three_applications.py, which encodes vkpower's expected crossings:0 and acme/summit's floors) is green at 7d7408b -- verified live by this session, 9/9 passed, produced_by.head=7d7408b dirty=false.",
+    "gate2_ORIGINAL_2026-08-21": "14 commits as of 2026-08-21 (A14x8, A16x1, A17x3, A19x1); no commit labelled A15 or A18; live vkpowerlife journey does not complete -- preserved for history; superseded by the note above once the re-scope existed to compare it against.",
     "gate3": "under active construction by a concurrent session",
     "gate4": "implementation present (MinIO, KEDA, crossing journal, live Squid) but no gate executed and no acceptance recorded"
   },
@@ -133,16 +135,26 @@
     {
       "proof": "R3 acme-life crossing",
       "implementer": "nexusqa-1c (session identifier -- this programme's implementation session for R1-R9)",
-      "reproducer": "nexusqa-21 (session identifier -- self-identified: verification session / Proof-guild role)",
-      "sha": "24da99f0459eb82f79ff7f77bb157487c84079da",
-      "environment": "fresh blobless clone, own container, own port, own --out directory -- not the shared checkout",
-      "artifact": "Nexus_power/evidence/gate2/r3_acme_reproduced/NON_AUTHOR_REPRODUCTION.md",
+      "reproducer": "nexusqa-0b (session identifier -- verification/Proof-guild role this ceremony)",
+      "sha": "7d7408bf0ca359a1ccec9a093523dc74b9dc37a9",
+      "environment": "independent clone, own container, own port 8113, own --out directory -- not the shared checkout",
+      "artifact": "Nexus_power/evidence/gate2/r3_acme_reproduced_7d7408b/NON_AUTHOR_REPRODUCTION.md",
       "result": "PASS",
-      "_result_detail": "crossed:2 ['Bind policy','Bind policy'], confirmation_observed:True['dialog'], journeys_completed:1, [ADMISSIBLE] exit 0 -- identical to the implementer's own run on all three claimed lines",
-      "recorded_at": "2026-08-23, at the moment the reproduction happened, per this ceremony's own rule that authorship cannot be reconstructed from git after the fact"
+      "_result_detail": "crossed:2 ['Bind policy','Bind policy'], confirmation_observed:True['dialog'], journeys_completed:1, produced_by.head=7d7408b dirty=false -- re-run independently by this session against the reproducer's own copied journey.json: t3_verify_crossing_evidence.py --sha 7d7408b -> [ADMISSIBLE] admissible:1/1 exit 0",
+      "recorded_at": "2026-08-27, at the moment the reproduction happened, per this ceremony's own rule that authorship cannot be reconstructed from git after the fact"
     }
   ],
   "_reproductions_note": "Session-level identifiers, not human names -- consistent with this programme's standing rule that evidence independence is session-level while signature accountability is human-level (see roles / arb_signatories below, which remain empty for exactly the opposite reason). This one reproduction does not by itself satisfy proof_guild's attestation, which requires EVERY critical acceptance proof reproduced -- summit and vkpower have no crossing to reproduce (both REFUSED / crossed:0), so R3 is the only crossing this programme currently has to reproduce.",
+  "_reproductions_prior": [
+    {
+      "proof": "R3 acme-life crossing -- superseded, kept for history",
+      "implementer": "nexusqa-1c",
+      "reproducer": "nexusqa-21",
+      "sha": "24da99f0459eb82f79ff7f77bb157487c84079da",
+      "note": "Reproduced one commit before certified_sha (7d7408b), so gate5_verify_ceremony.py correctly refused to count it toward this ceremony. Replaced above by a second reproduction at the exact certified SHA rather than argued past. Original artifact remains at Nexus_power/evidence/gate2/r3_acme_reproduced/.",
+      "artifact": "Nexus_power/evidence/gate2/r3_acme_reproduced/NON_AUTHOR_REPRODUCTION.md"
+    }
+  ],
   "_reproduction_notes_ORIGINAL": [
     "Preserved for history -- the state before the entry above was added.",
     "",
