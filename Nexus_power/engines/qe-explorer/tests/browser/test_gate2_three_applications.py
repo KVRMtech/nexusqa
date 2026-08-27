@@ -71,21 +71,54 @@ DECLARED: dict[str, dict[str, Any]] = {
                 "once; the #/review one lands on a dialog confirmation.",
     },
     "vkpower-life": {
-        "population": {"flows": 3, "walked_depth": 12, "proven_depth": 0},
+        "population": {"flows": 3, "walked_depth": 9, "proven_depth": 0},
         "crossings": 0,
         "confirmation": False,
         "journeys": 0,
+        # R9/6aedd6a — THE OLD PAYMENT STALL THIS NOTE USED TO DESCRIBE IS
+        # FIXED. It read: "Stops at the payment step, whose Continue is
+        # disabled={!method}: the method is chosen from two BUTTON-shaped
+        # cards, and _answer_to_unblock handles checkboxes and radio groups,
+        # not buttons." That defect is what `_pick_card_to_unblock` (walker.py,
+        # landed in 6aedd6a) closes: it answers a card-grid step by the same
+        # experiment `_answer_to_unblock` already runs on checkboxes and radio
+        # groups — click a non-danger member, re-read, let the app's own
+        # verdict decide. Measured: attempt 5, "Credit / Debit Card",
+        # cleared=True. The app itself re-enables Continue.
+        #
+        # walked_depth DROPPED 12 -> 9 measuring this fix, and that is NOT a
+        # regression — verify the route list, not the counter, before reading
+        # it as one. The depth-12 crawl was STUCK at /apply/payment/, and its
+        # 12 counted RETRIES against an unanswerable card grid before the walk
+        # gave up in a loop. The depth-9 crawl resolves that step cleanly and
+        # walks one step FURTHER — reaching /life-insurance/apply/beneficiary/,
+        # never reached before — where it hits a genuinely NEW, later stall:
+        # Continue to Signature is clicked and the application silently
+        # declines it (advance_clicked_but_app_declined; handleSubmit refuses
+        # unless primary allocations total exactly 100%, rendered as page text
+        # rather than a disabled control). Fewer retries, more real ground:
+        # 19 states -> 21 states, a strict superset of the old route list.
+        #
+        # That new stall is Phase-5 backlog item B3 (list sub-action +
+        # 100%-allocation rule + cross-step signature coherence;
+        # QECentral/docs/PHASE_1_EXIT_RESCOPE.md) — a beneficiary must be
+        # committed via "Add Beneficiary" and its allocation balanced before
+        # the step's own submit will accept it. Not this driver's job.
+        #
+        # walked_depth is lowered here to keep THIS metric honest — a counter
+        # that rewards a crawl for flailing at a step it cannot pass is not a
+        # protection worth preserving at its old, inflated value. The REAL
+        # regression guard for the improvement this note describes is
+        # test_vkpower_reaches_the_route_the_card_driver_unblocked below,
+        # which checks the route reached and the state count directly rather
+        # than a raw step tally that cannot distinguish progress from retry.
         "note": "Walks quote + member-lookup -> personal-info -> replacement "
-                "-> health -> lifestyle -> decision -> payment contiguously "
-                "(depth 12; tier 2 fires once on this application for the "
-                "first time). Stops at the payment step, whose Continue is "
-                "disabled={!method}: the method is chosen from two BUTTON-"
-                "shaped cards, and _answer_to_unblock handles checkboxes and "
-                "radio groups, not buttons. The right control IS in the "
-                "tier-3 candidate set; the deterministic stand-in cannot pick "
-                "it, which is A18's requirement rather than a defect here. "
-                "walked_depth is floored at 12 so the three fixes that bought "
-                "it cannot silently regress.",
+                "-> health -> lifestyle -> decision -> payment -> beneficiary "
+                "contiguously (tier 2 fires once on this application for the "
+                "first time). The payment step's card-grid method picker is "
+                "now answered by _pick_card_to_unblock (6aedd6a); the crawl "
+                "stops one step later, at the beneficiary step's silently-"
+                "declined submit -- Phase-5 backlog item B3.",
     },
     "summit-life-carrier": {
         "population": {"flows": 5, "walked_depth": 1, "proven_depth": 1},
@@ -199,6 +232,16 @@ def journey(request) -> dict[str, Any]:
         verdict = G.verdict_of(app, url, result)
         (out / "journey.json").write_text(
             json.dumps(verdict, indent=2, default=str), encoding="utf-8")
+        # TEST-ONLY ANNOTATION, attached AFTER the file above is written so the
+        # bundle on disk matches gate2_journey's real output exactly -- this
+        # key is not part of that shape and must never appear in a committed
+        # evidence bundle. Distinct locations visited, for the route-based
+        # regression guard raw step telemetry cannot express (see
+        # test_vkpower_reaches_the_route_the_card_driver_unblocked).
+        verdict["_states_visited"] = [
+            str(s.get("location") or "")
+            for s in (result["coverage"].get("states") or [])
+        ]
         return verdict
     finally:
         container.stop()
@@ -346,6 +389,67 @@ def test_the_claim_rests_on_a_population_big_enough_to_support_it(journey):
         "and capped=true, which looks like coverage and is a floor."
         % (journey["app"], telemetry.get("deepest_flow_proven_steps"),
            floor["proven_depth"]) + _diagnose(journey))
+
+
+#: vkpower-life only. min_states and the route are both measured, three times,
+#: with clean produced_by at the exact commit that introduced the fix:
+#: head=6aedd6a, dirty=false, deepest_flow_steps=9, states=21, reproduced
+#: identically across three separate crawls. 19 states was the depth-12
+#: baseline's count; 21 is this fix's.
+_VKPOWER_ROUTE_GUARD = {
+    "min_states": 21,
+    "must_reach_route": "/life-insurance/apply/beneficiary/",
+}
+
+
+def test_vkpower_reaches_the_route_the_card_driver_unblocked(journey):
+    """THE REAL REGRESSION GUARD for the fix walked_depth used to stand in for.
+
+    ``deepest_flow_steps`` counts steps taken inside one continuous wizard
+    walk, not distinct progress -- a crawl RETRYING an unanswerable card grid
+    before giving up in a loop accumulates step count without covering any
+    new ground, and a crawl that resolves the same grid cleanly and walks one
+    step further can post a LOWER raw count while covering strictly MORE of
+    the application. Measured on this exact pair:
+
+        depth 12 (pre-6aedd6a)   19 states, terminal stuck at /apply/payment/
+        depth  9 (6aedd6a)       21 states, terminal at /apply/beneficiary/,
+                                  a route never reached before -- STRICT
+                                  SUPERSET of the depth-12 route list plus two
+
+    So the number that dropped was never the signal worth protecting; the
+    routes reached are. This asserts them directly: enough states to rule out
+    a crawl that got shallower by accident, AND the specific route whose
+    reachability is the entire claim this fix makes. If a future change
+    breaks `_pick_card_to_unblock` and the walk falls back to looping at
+    payment, THIS is the assertion that goes red -- not a step counter that a
+    stuck retry loop can inflate past any floor.
+
+    vkpower-life only; the other two applications' population floors are
+    unrelated to this fix and are asserted by
+    test_the_claim_rests_on_a_population_big_enough_to_support_it above,
+    unchanged.
+    """
+    if journey["app"] != "vkpower-life":
+        pytest.skip("this regression guard is specific to the card-grid fix "
+                    "on vkpower-life's payment step")
+
+    guard = _VKPOWER_ROUTE_GUARD
+    states = journey.get("_states_visited") or []
+
+    assert len(states) >= guard["min_states"], (
+        "vkpower-life visited %d states; the card-driver fix (6aedd6a) needs "
+        "at least %d. A count at or below the pre-fix 19 means the walk did "
+        "not get further than it used to, whatever deepest_flow_steps says."
+        % (len(states), guard["min_states"]) + _diagnose(journey))
+
+    assert any(guard["must_reach_route"] in loc for loc in states), (
+        "vkpower-life never reached %r. That route is only reachable by "
+        "resolving the payment step's card-grid method picker -- if this "
+        "fails, _pick_card_to_unblock stopped working and the walk fell back "
+        "to looping at /apply/payment/, the pre-6aedd6a failure mode."
+        % guard["must_reach_route"] + _diagnose(journey)
+        + "\n  states visited      : %s" % states)
 
 
 def test_the_crawl_got_past_the_front_door(journey):
