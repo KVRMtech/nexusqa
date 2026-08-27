@@ -91,8 +91,14 @@ class TestRefusePackLoading:
         # zero. Every row must arrive with its own audit, and the audit for this
         # one -- what it permits, and at greater length what it must still
         # refuse -- is tests/test_refuse_pack_allow_overrides.py.
+        # 2026-08-27: `rp.allow.customer_record_row` added. Measured on
+        # summit-life-carrier, a case-list ROW whose accessible name carries the
+        # customer's own record ("Michael Thornberry UW-2026-00142
+        # $2,000,000.00 underwriting") was refused CRITICAL by rp.verb.underwrite.
+        # Its audit is tests/test_refuse_pack_data_row_override.py.
         assert [r.id for r in pack.allow_overrides] == [
             "rp.allow.destination_advance_step",
+            "rp.allow.customer_record_row",
         ], (
             "the reviewed carve-out set changed. Every row here defeats the "
             "refuse pack for the labels it matches, so a new one needs its own "

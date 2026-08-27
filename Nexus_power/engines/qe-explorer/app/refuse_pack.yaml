@@ -311,3 +311,57 @@ allow_overrides:
       Underwriting Decision", "Continue to Payment", "Continue to Signature").
       Navigation, not the act the step is named after; the commit forms
       ("Submit to Underwriting", "Sign & Submit Application") stay refused.
+
+  # ---------------------------------------------------------------------------
+  # Gate 2 / Phase 5 — A CUSTOMER RECORD IS NOT A CONTROL THAT ACTS ON IT.
+  #
+  # WHY THIS ROW EXISTS. `rp.verb.*` rules match against a control's accessible
+  # NAME, and in a carrier back-office the accessible name of a table ROW is the
+  # customer record it displays. Those records carry the industry's irreversible
+  # vocabulary as ordinary DATA. Measured on summit-life-carrier (2026-08-27,
+  # from 7d7408b) and flagged `rp.verb.underwrite`, severity CRITICAL:
+  #
+  #     "Michael Thornberry UW-2026-00142 $2,000,000.00 underwriting"
+  #
+  # It is a row in a case list. It underwrites nothing — the word is the case's
+  # STATUS. 15 distinct label+rule over-blocks were measured across four
+  # applications that day. A case list is the entry point to a back-office
+  # workflow, so refusing its rows removes the workflow from the crawl.
+  #
+  # WHY IT IS SAFE. The regex demands TWO independent record shapes in the SAME
+  # label — a formatted currency amount AND a reference identifier — and then
+  # refuses anyway when the label OPENS with a command verb. That is the
+  # discriminator: a control that acts is named for the act, and named that
+  # FIRST; a row is named for its subject. Full-string anchored, and scoped to
+  # `button_name` ONLY, so no GET can be unblocked by it.
+  #
+  #     "Michael Thornberry UW-2026-00142 $2,000,000.00 underwriting" -> allowed
+  #     "Jennifer Walsh UW-2026-00145 $3,000,000.00 submitted"        -> allowed
+  #     "Pay invoice INV-2026-00142 $2,000,000.00"     -> STILL REFUSED (opens with the act)
+  #     "Transfer $2,000,000.00 to account ACC-2026-00999" -> STILL REFUSED (opens with the act)
+  #     "Surrender contract UW-2026-00142 $2,000,000.00"   -> STILL REFUSED (opens with the act)
+  #     "Pay $2,000,000.00"                            -> STILL REFUSED (no reference id)
+  #     "Approve UW-2026-00142"                        -> STILL REFUSED (no amount)
+  #     "Process Payment" / "Delete" / "Underwrite Now" -> STILL REFUSED (no record data)
+  #
+  # WHAT THIS ROW DELIBERATELY DOES NOT COVER. The other measured shape is a
+  # bare navigation item whose whole name is a section noun — a site nav with an
+  # "Underwriting" entry, flagged critical on every screen of a third-party
+  # platform the same day. Separating that from a genuine one-word command needs
+  # the control's landmark ancestry, which `classify_action_verb` is not given.
+  # A name-only rule for it would risk under-blocking a real commit, so it stays
+  # refused and stays open. Widening this row later is another auditable
+  # decision, not a silent consequence of this one.
+  #
+  # Pinned by tests/test_refuse_pack_data_row_override.py, which asserts every
+  # refusal above as hard as it asserts the allowances.
+  - id: "rp.allow.customer_record_row"
+    match: '^(?!\s*(?:pay|paying|delete|deleting|remove|removing|submit|submitting|sign|signing|approve|approving|authori[sz]e|authori[sz]ing|transfer|transferring|bind|binding|surrender|surrendering|lapse|rescind|escheat|disburse|underwrite|underwriting|issue|issuing|send|sending|confirm|confirming|process|processing|void|cancel|terminate|withdraw|purchase|place|charge|refund|activate|deactivate|reset|revoke)\b)(?=.*\$[0-9][0-9,]*\.[0-9]{2})(?=.*\b[A-Za-z]{2,}-[0-9]{4}-[0-9]{3,}\b).*$'
+    applies_to: ["button_name"]
+    severity: "medium"
+    description: >-
+      A CUSTOMER RECORD rendered as a clickable row: a formatted currency amount
+      and a reference identifier in the same accessible name, not opening with a
+      command verb. The irreversible word in it is record DATA (a case status),
+      not the act the control performs. Command forms that carry the same data
+      ("Pay invoice INV-2026-00142 $2,000,000.00") stay refused.

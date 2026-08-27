@@ -138,12 +138,20 @@ def test_the_override_agrees_with_the_tier_2_shape_rule():
         "discriminator this override rests on has broken.")
 
 
-def test_the_pack_ships_exactly_one_reviewed_override():
+def test_the_pack_ships_exactly_the_reviewed_overrides():
     """A carve-out list that grows without anyone noticing is how the escape
     hatch becomes the rule. Adding a row is meant to be an auditable decision,
-    so the count is pinned and a second row has to come with its own audit."""
+    so the LIST is pinned by id and a new row has to come with its own audit.
+
+    `rp.allow.customer_record_row` was added 2026-08-27 for a measured
+    over-block on summit-life-carrier — a case-list ROW whose accessible name
+    carries the customer's record ("… UW-2026-00142 $2,000,000.00 underwriting")
+    was refused as an irreversible control. Its audit is
+    tests/test_refuse_pack_data_row_override.py, which asserts what it refuses
+    at greater length than what it permits.
+    """
     ids = [rule.id for rule in _PACK.allow_overrides]
-    assert ids == [_OVERRIDE_ID], (
+    assert ids == [_OVERRIDE_ID, "rp.allow.customer_record_row"], (
         "allow_overrides is %s. Every row here defeats the refuse pack for the "
         "labels it matches; each one needs its own review and its own tests."
         % ids)
