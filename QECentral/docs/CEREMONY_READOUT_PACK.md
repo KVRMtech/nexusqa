@@ -75,6 +75,21 @@ ACROSS axes, exit 1. Both the passing run and the negative control are committed
 promotion. Promote-later is a decision, not an oversight.
 Evidence: `Nexus_power/evidence/a11e_interpreter_matrix/`.
 
+**Correction, read aloud 2026-08-27:** `CERT_FINDING_REGISTER.md` states A11e
+carries its own separate trigger — *"Trigger: GATE 5 ENTRY — must be closed, or
+accepted in writing by a named owner, before Gate 5 certification is convened."*
+That trigger is about the finding, not about promoting the CI jobs to blocking,
+and it is now checked live rather than recalled: on `.github/workflows/a11-attestation-certification.yml`,
+run at the certified SHA itself (`7d7408b`, run
+[33039740426](https://github.com/KVRMtech/nexusqa/actions/runs/33039740426)),
+job-level conclusions are `success` for all three —
+`A11e convergence sweep (advisory, py3.10)`, `A11e convergence sweep (advisory, py3.11)`,
+and `A11e convergence: agree within AND across (advisory)`. The remediation the
+register calls for has landed and is green on the SHA being certified; the
+trigger's "closed" branch is satisfied. The jobs remain `continue-on-error: true`
+and outside `a11-gate`'s `needs:` — advisory-by-design and the register's
+Gate-5-entry trigger are two different questions, and both are answered.
+
 ### ③ Phase-1 exit re-scope — the item that changes the claim
 
 `QECentral/docs/PHASE_1_EXIT_RESCOPE.md`. Phase 1 exits at **one admissible
