@@ -1562,7 +1562,7 @@ async def execute_submit_phase_b(
     elif outcome.outcome == OUTCOME_CONFIRMATION and not confirm_rung:
         # A dialog-borne confirmation: classify_submit_after reached it through
         # ``dialog_opened``, which the text diff cannot see.
-        confirm_rung = RUNG_DIALOG if observation.dialog_opened else ""
+        confirm_rung = (RUNG_DIALOG if (observation.dialog_opened and not observation.dialog_is_challenge) else "")
     submit_action = emit.build_action_record(
         dict(control), verb="submit", value=None, observation=observation,
         phase=Phase.SUBMIT.value, state_id=state_id, timestamp_ms=clock.now_ms(),

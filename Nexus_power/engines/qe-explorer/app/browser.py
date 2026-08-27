@@ -103,6 +103,12 @@ class RawObservation:
     committed_value: str | None = None
     dialog_opened: bool = False
     dialog_detail: str = ""
+    #: True when the open dialog ASKS rather than TELLS -- it carries an
+    #: interactive field, or re-offers the commit verb, so the commit is still
+    #: pending. A receipt confirms; a challenge does not. Kept separate from
+    #: ``dialog_opened`` so the bare "a modal appeared" signal stays available
+    #: to the fingerprinter, which cares only that the DOM changed shape.
+    dialog_is_challenge: bool = False
     error_detail: str = ""
     dom_changed: bool = False
     #: A grounded, positive success/confirmation live-region text captured after
@@ -296,6 +302,46 @@ def is_rejection_text(text: str) -> bool:
     return bool(_REJECTION_RE.search(text or ""))
 
 
+#: Buttons that RE-OFFER the commit. A receipt never asks you to commit again,
+#: so a modal presenting one of these has not completed the action it is about.
+#: Deliberately excludes acknowledgement verbs ("ok", "done", "close",
+#: "dismiss", "print") and the ambiguous bare "continue", which receipts use.
+_COMMIT_BUTTON_MARKERS = (
+    r"sign", r"confirm", r"submit", r"pay", r"authorise", r"authorize",
+    r"approve", r"issue", r"send", r"purchase", r"place order", r"transfer",
+    r"delete", r"remove", r"bind",
+)
+_COMMIT_BUTTON_RE = re.compile(
+    r"\b(?:%s)\b" % "|".join(_COMMIT_BUTTON_MARKERS), re.IGNORECASE)
+
+
+def is_challenge_dialog(field_count: int,
+                        button_labels: Sequence[str] = ()) -> bool:
+    """Does this modal ASK for something rather than TELL you something?
+
+    Pure, so the distinction is testable without a browser.
+
+    ``RUNG_DIALOG`` means "a receipt or confirmation overlay", but the only
+    signal behind it has been ``dialog_opened`` -- a bare "did a modal appear".
+    The same argument ``DECLARED_CONFIRMATION_RUNGS`` already makes against
+    ``RUNG_NAVIGATION`` applies here: a dialog opening proves a modal appeared,
+    not that it is a receipt.
+
+    Two structural signals, either of which means the commit is still pending:
+
+      * it carries an interactive field -- a receipt does not ask you to type;
+      * it re-offers the commit verb -- a receipt does not ask you to commit.
+
+    Measured: LifeOps' e-signature modal carried ``#sign-pin`` and
+    ["Sign document", "Cancel"], and the document was unchanged after the click
+    the platform had already scored as a completed journey.
+    """
+    if field_count > 0:
+        return True
+    return any(_COMMIT_BUTTON_RE.search(str(label or ""))
+               for label in (button_labels or ()))
+
+
 def classify_submit_after(obs: RawObservation) -> AfterOutcome:
     """Classify the TERMINAL outcome of a Phase-B submit click (design §3.2).
 
@@ -339,7 +385,7 @@ def classify_submit_after(obs: RawObservation) -> AfterOutcome:
         if is_rejection_text(detail):
             return AfterOutcome(OUTCOME_ERROR, detail[:_MAX_DETAIL], False, False)
         return AfterOutcome(OUTCOME_CONFIRMATION, detail[:_MAX_DETAIL], False, False)
-    if obs.dialog_opened:
+    if obs.dialog_opened and not obs.dialog_is_challenge:
         return AfterOutcome(OUTCOME_CONFIRMATION,
                             (obs.dialog_detail or "").strip()[:_MAX_DETAIL], False, False)
     return classify_after(obs)

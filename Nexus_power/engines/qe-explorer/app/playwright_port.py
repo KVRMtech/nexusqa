@@ -39,7 +39,7 @@ from . import network_evidence as netev
 from . import page_lifecycle as pl
 from . import perception
 from .browser import (BrowserPort, NavResult, RawObservation,
-                      is_rejection_text, verify_intent)
+                      is_challenge_dialog, is_rejection_text, verify_intent)
 from .fingerprint import interactive_signature
 from .interaction_ladder import Rung, ladder_for
 from . import observation_health
@@ -1612,6 +1612,44 @@ class PlaywrightBrowserPort(BrowserPort):
             pass
         return flags
 
+    async def _dialog_challenge(self) -> bool:
+        """Does the open dialog ASK for something rather than TELL you something?
+
+        Reads two structural facts out of the first visible ``role=dialog`` --
+        how many interactive fields it carries, and what its buttons are called
+        -- and hands them to the pure :func:`app.browser.is_challenge_dialog`.
+        The judgement lives there so it is testable without a browser; this
+        method only gathers.
+
+        Never raises (same contract as the readings around it) and is called
+        only when a dialog is already known to be open, so a page without a
+        modal pays nothing.
+        """
+        try:
+            node = self._page.get_by_role("dialog")
+            if not await node.count():
+                return False
+            first = node.first
+            if not await first.is_visible():
+                return False
+            facts = await first.evaluate(
+                """(el) => {
+                    const vis = e => { const r = e.getBoundingClientRect();
+                        return r.width > 0 && r.height > 0; };
+                    const fields = [...el.querySelectorAll(
+                        'input:not([type=hidden]),select,textarea')]
+                        .filter(e => vis(e) && !e.disabled && !e.readOnly).length;
+                    const labels = [...el.querySelectorAll('button,[role=button]')]
+                        .filter(vis)
+                        .map(e => (e.innerText || e.getAttribute('aria-label') || '').trim());
+                    return {fields, labels};
+                }"""
+            )
+            return is_challenge_dialog(int((facts or {}).get("fields") or 0),
+                                       list((facts or {}).get("labels") or []))
+        except Exception:
+            return False
+
     async def error_texts(self) -> list[str]:
         """Visible REJECTION texts, wherever the application marked them.
 
@@ -1881,6 +1919,7 @@ class PlaywrightBrowserPort(BrowserPort):
         return RawObservation(
             url_before=url_before, url_after=url_after, committed_value=committed,
             dialog_opened=bool(dialogs), dialog_detail=(dialogs[0] if dialogs else ""),
+            dialog_is_challenge=(await self._dialog_challenge() if dialogs else False),
             error_detail=err,
             dom_changed=(sig_before != sig_after),
             intended_value=intended, intent_met=met,
@@ -1972,6 +2011,7 @@ class PlaywrightBrowserPort(BrowserPort):
         return RawObservation(
             url_before=url_before, url_after=url_after,
             dialog_opened=bool(dialogs), dialog_detail=(dialogs[0] if dialogs else ""),
+            dialog_is_challenge=(await self._dialog_challenge() if dialogs else False),
             error_detail=err, dom_changed=(sig_before != sig_after),
             intent_met=met,
         )
@@ -2003,6 +2043,7 @@ class PlaywrightBrowserPort(BrowserPort):
         return RawObservation(
             url_before=url_before, url_after=url_after,
             dialog_opened=bool(dialogs), dialog_detail=(dialogs[0] if dialogs else ""),
+            dialog_is_challenge=(await self._dialog_challenge() if dialogs else False),
             error_detail=err, dom_changed=(sig_before != sig_after), intent_met=met)
 
     async def drag(self, path) -> RawObservation:
@@ -2374,6 +2415,7 @@ class PlaywrightBrowserPort(BrowserPort):
                 committed_value=committed,
                 dialog_opened=bool(dialogs),
                 dialog_detail=(dialogs[0] if dialogs else ""),
+                dialog_is_challenge=(await self._dialog_challenge() if dialogs else False),
                 error_detail=err,
                 dom_changed=(sig_before != sig_after),
                 intended_value=intended, intent_met=met)
@@ -2427,6 +2469,7 @@ class PlaywrightBrowserPort(BrowserPort):
             committed_value=committed,
             dialog_opened=bool(dialogs),
             dialog_detail=(dialogs[0] if dialogs else ""),
+            dialog_is_challenge=(await self._dialog_challenge() if dialogs else False),
             error_detail=err,
             dom_changed=(sig_before != sig_after),
             intended_value=value, intent_met=met)

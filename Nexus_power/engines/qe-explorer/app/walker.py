@@ -2436,7 +2436,7 @@ class WalkerMixin:
                     # A dialog-borne confirmation: ``classify_submit_after``
                     # reached it through ``dialog_opened``, which the text diff
                     # cannot see. Same reconciliation as the submit path.
-                    landed_rung = RUNG_DIALOG if observation.dialog_opened else ""
+                    landed_rung = (RUNG_DIALOG if (observation.dialog_opened and not observation.dialog_is_challenge) else "")
                 # T-SI-01/02 — IDENTIFY, never hash directly. The identity layer
                 # decides which signals this observation has EARNED (see
                 # WalkIdentity); the walk's job is to hand it everything it has
