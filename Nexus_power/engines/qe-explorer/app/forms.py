@@ -1476,6 +1476,7 @@ async def execute_submit_phase_b(
     fill_controls: Sequence[Mapping[str, Any]] = (),
     renavigate: bool = True,
     navigate: Optional[Callable[[str], Any]] = None,
+    challenge_secret: str = "",
 ) -> SubmitResult:
     """Phase-5 submit entry point: REFUSE unless attestation + approval permit,
     else re-drive the approved flow, submit, and capture the confirmation.
@@ -1558,6 +1559,17 @@ async def execute_submit_phase_b(
 
     # ── Submit + observe the grounded terminal outcome ───────────────────────
     observation = await port.click(control)
+    # ── The approved commit asked for a second factor ────────────────────────
+    # A re-authentication modal is part of THIS commit, not a second one: the
+    # application is asking us to prove we meant the click it has already
+    # accepted, and `gate_submit` authorised that click above. So the answer is
+    # bounded to the dialog this click opened, uses the secret the operator
+    # ALREADY supplied for the tenant, and is attempted once. With no secret
+    # configured nothing is invented and the crawl halts at the modal.
+    if getattr(observation, "dialog_is_challenge", False) and challenge_secret:
+        answered = await _answer_commit_challenge(port, challenge_secret)
+        if answered is not None:
+            observation = answered
     after = await _capture_crossing_side(port)
     observed_at_ms = clock.now_ms()
 
@@ -1707,6 +1719,27 @@ async def capture_page_declarations(port: BrowserPort) -> dict[str, list[str]]:
         except Exception:
             logger.warning("qec.forms.crossing_texts_failed", exc_info=True)
     return {"status": status, "texts": texts}
+
+
+async def _answer_commit_challenge(port: Any, secret: str):
+    """Answer the re-auth modal an APPROVED commit opened, once.
+
+    Optional port verb, read the same best-effort way as ``status_texts``: a
+    port that does not implement it yields ``None`` and the caller keeps the
+    original observation, so the crawl halts at the modal rather than crashing.
+
+    Measured on two applications — LifeOps' "Confirm PIN" e-signature modal and
+    acme-life's bind modal — where the commit the operator approved could not
+    complete because nothing answered the challenge it raised.
+    """
+    verb = getattr(port, "answer_challenge_dialog", None)
+    if verb is None:
+        return None
+    try:
+        return await verb(secret)
+    except Exception:
+        logger.warning("qec.forms.challenge_answer_failed", exc_info=True)
+        return None
 
 
 # ─── Phase-B terminal-state helpers (mirror crawler._record_state shape) ─────

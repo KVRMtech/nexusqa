@@ -461,6 +461,13 @@ class SubmitMixin:
                 # re-fill then acts on the real form. Cookie apps see the same goto
                 # they always did.
                 navigate=self._goto_keeping_login,
+                # The operator's OWN secret, for a re-auth challenge this
+                # approved commit raises. Never a new permission: the modal
+                # belongs to the click gate_submit already authorised. Empty
+                # when no credentials were configured, and then nothing is
+                # invented — the crawl halts at the modal.
+                challenge_secret=str(
+                    getattr(self._credentials, "password", "") or ""),
             )
         finally:
             self._guard.phase = prev_phase

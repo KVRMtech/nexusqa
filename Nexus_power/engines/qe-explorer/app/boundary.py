@@ -51,6 +51,11 @@ from __future__ import annotations
 
 import hashlib
 import re
+
+# `is_rejection_text` lives with the classifier so the adapter, the submit
+# classifier and this ladder all decide polarity the same way. browser.py
+# imports nothing from here, so this direction stays acyclic.
+from .browser import is_rejection_text
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Mapping, Optional, Sequence
 
@@ -727,6 +732,18 @@ _SUCCESS_RE = re.compile(
     r"|application\s+(id|number|reference|received|submitted)"
     r"|(reference|confirmation|policy|claim)\s*(number|no\.?|id)"
     r"|completed\s+successfully"
+    # A TERMINAL BUSINESS EVENT, stated as completed. Both forms below require
+    # the act to have HAPPENED: an auxiliary ("was signed", "has been issued"),
+    # or a past participle joined to its durable consequence ("signed and
+    # retained", "issued and filed") -- the banner form that states an act and
+    # where it now lives. Neither matches an invitation ("Ready to sign"), an
+    # in-flight state ("Awaiting signature") or a button label ("Sign document").
+    # The pack already calls these verbs irreversible (rp.verb.sign / .bind /
+    # .pay), so their COMPLETION is exactly what this ladder exists to record.
+    r"|(has\s+been|have\s+been|was|were)\s+"
+    r"(signed|issued|bound|approved|paid|released|activated)"
+    r"|(signed|issued|bound|paid|executed)\s+and\s+"
+    r"(retained|stored|recorded|filed|archived|sent|issued|delivered)"
     r")\b",
     re.IGNORECASE,
 )
@@ -798,13 +815,17 @@ def confirmation_transition(
         # half-finished journey being reported as a finished one.
         if _norm_label(text) in banned:
             continue
-        if _SUCCESS_RE.search(text):
+        if _SUCCESS_RE.search(text) and not is_rejection_text(text):
             return text[:300], RUNG_ARIA_STATUS
 
     for text in _fresh(before, after):
         if _norm_label(text) in banned:
             continue
-        if _SUCCESS_RE.search(text):
+        # A REQUIREMENT IS NOT A CONFIRMATION. "PIN confirmation is required
+        # to create an auditable electronic signature event" carries the word
+        # `confirmation` and declares the act has NOT happened. Measured on
+        # LifeOps, as the text of the challenge modal itself.
+        if _SUCCESS_RE.search(text) and not is_rejection_text(text):
             return text[:300], RUNG_TRANSITION_TEXT
 
     return "", ""

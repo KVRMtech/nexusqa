@@ -1650,6 +1650,83 @@ class PlaywrightBrowserPort(BrowserPort):
         except Exception:
             return False
 
+    async def answer_challenge_dialog(self, secret: str):
+        """Answer the re-auth modal an APPROVED commit opened, once.
+
+        Bounded to the dialog that is already open: fills its visible, enabled
+        fields with the operator's OWN secret and clicks its affirmative button
+        — the one that re-offers the commit, never Cancel/Close/Dismiss. Returns
+        the resulting observation, or ``None`` when there is nothing to answer
+        (no dialog, no field, or no affirmative button), which leaves the caller
+        holding the original observation and the crawl halting at the modal.
+
+        A SECRET IS NEVER INVENTED. The caller passes the credential the
+        operator already supplied for this tenant; with none configured this is
+        never called.
+
+        Measured: LifeOps' "Confirm PIN" e-signature modal (one required
+        password field, buttons ["Sign document", "Cancel"]).
+        """
+        from .browser import is_commit_button_label
+        try:
+            dialog = self._page.get_by_role("dialog")
+            if not await dialog.count():
+                return None
+            box = dialog.first
+            if not await box.is_visible():
+                return None
+            url_before = self._safe_url()
+            sig_before = await self._interactive_signature()
+
+            fields = box.locator("input:not([type=hidden]), textarea")
+            filled = 0
+            for i in range(min(await fields.count(), 5)):
+                node = fields.nth(i)
+                try:
+                    if await node.is_visible() and await node.is_enabled():
+                        await node.fill(secret)
+                        filled += 1
+                except Exception:
+                    continue
+
+            buttons = box.locator("button, [role=button]")
+            target = None
+            for i in range(min(await buttons.count(), 12)):
+                node = buttons.nth(i)
+                try:
+                    if not (await node.is_visible() and await node.is_enabled()):
+                        continue
+                    label = ((await node.inner_text())
+                             or (await node.get_attribute("aria-label")) or "").strip()
+                except Exception:
+                    continue
+                if is_commit_button_label(label):
+                    target = node
+                    break
+            if target is None:
+                logger.info("qec.explorer.challenge_no_affirmative filled=%d", filled)
+                return None
+            await target.click()
+            await self._settle()
+
+            errors = await self.error_texts()
+            statuses = await self.status_texts()
+            dialogs = await self.dialog_flags()
+            logger.info("qec.explorer.challenge_answered fields=%d dialog_still_open=%s",
+                        filled, bool(dialogs))
+            return RawObservation(
+                url_before=url_before, url_after=self._safe_url(),
+                error_detail=(errors[0] if errors else ""),
+                confirmation_detail=(statuses[0] if statuses else ""),
+                dialog_opened=bool(dialogs),
+                dialog_detail=(dialogs[0] if dialogs else ""),
+                dialog_is_challenge=(await self._dialog_challenge() if dialogs else False),
+                dom_changed=(sig_before != await self._interactive_signature()),
+            )
+        except Exception:
+            logger.warning("qec.explorer.challenge_answer_failed", exc_info=True)
+            return None
+
     async def error_texts(self) -> list[str]:
         """Visible REJECTION texts, wherever the application marked them.
 

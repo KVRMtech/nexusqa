@@ -315,6 +315,15 @@ _COMMIT_BUTTON_RE = re.compile(
     r"\b(?:%s)\b" % "|".join(_COMMIT_BUTTON_MARKERS), re.IGNORECASE)
 
 
+def is_commit_button_label(label: str) -> bool:
+    """Does this button label RE-OFFER the commit? (see _COMMIT_BUTTON_MARKERS)
+
+    Shared so the adapter that answers a challenge modal and the classifier that
+    recognises one cannot drift apart on what counts as committing.
+    """
+    return bool(_COMMIT_BUTTON_RE.search(str(label or "")))
+
+
 def is_challenge_dialog(field_count: int,
                         button_labels: Sequence[str] = ()) -> bool:
     """Does this modal ASK for something rather than TELL you something?
