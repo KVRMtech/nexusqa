@@ -1037,6 +1037,109 @@ class WalkerMixin:
             url[:120], tried[:8], blocked_label[:40])
         return False
 
+    #: How many authorised crossings one blocked step may spend to clear the
+    #: application's own gate. The real bound is the operator's grant budget —
+    #: this only stops a pathological page from looping. Measured need: a
+    #: three-document e-signature gate.
+    _MAX_GATE_CROSSINGS = 6
+
+    async def _cross_to_unblock(
+        self, controls: Sequence[dict[str, Any]], url: str, fingerprint: str,
+    ) -> Sequence[dict[str, Any]]:
+        """The app disabled its own forward control and the thing it is waiting
+        for is an AUTHORISED irreversible action. Perform it, and ask again.
+
+        THE HOLE THIS CLOSES. ``_answer_to_unblock`` handles a gate whose
+        condition is an unanswered QUESTION. A gate whose condition is a
+        completed ACT — sign these documents, authorise this premium — cannot be
+        cleared by filling anything, so the walk named the block honestly and
+        stopped one step into an application it had already been given
+        permission to walk.
+
+        MEASURED (LifeOps, 2026-08-27). Post-login the platform presents three
+        documents and disables its own ``Continue`` until every one is signed.
+        With ``Sign`` granted for three crossings the walk performed ONE, ended
+        that flow at ``submit_crossed``, and never returned: the remaining two
+        signatures were authorised and never attempted, so the gate stayed shut
+        and the application's other sections stayed unreached.
+
+        SAME EXPERIMENT AS ``_answer_to_unblock``, one rung up. We do not infer
+        how many times the act is required; we perform one authorised crossing,
+        re-read the page, and let the application render its own verdict on the
+        forward control. A gate that opens after two proves the rule was "two";
+        a gate still shut after the grant is exhausted proves the operator
+        authorised less than the journey needs, and that is worth recording too.
+
+        AUTHORISATION IS NEVER WIDENED HERE. Every crossing goes through
+        ``_execute_approved_submit``, which re-runs ``gate_submit`` at click
+        time; ``_may_attempt_crossing`` is asked first so an unapproved boundary
+        is not even attempted. The loop's real bound is the grant's own
+        ``max_crossings`` — when that is spent, ``_may_attempt_crossing`` returns
+        False and this returns. :data:`_MAX_GATE_CROSSINGS` is only a
+        pathological-page stop.
+        """
+        self._last_gate_crossings = 0
+        current = list(controls)
+        # PRECONDITION: only a gate the APPLICATION ITSELF shut. Without this the
+        # method would cross authorised boundaries any time the walk merely ran
+        # out of advances, which is a different situation with a different fix.
+        if not self._note_advance_blocked(current, url, None):
+            return current
+        crossed = 0
+        cur_fp = fingerprint
+        while crossed < self._MAX_GATE_CROSSINGS:
+            if self._tracker.stop_reason() or self._cancelled or self._hard_stop:
+                break
+            target = None
+            for c in current:
+                name = str(c.get("name") or "").strip()
+                if not name or c.get("disabled"):
+                    continue
+                if not c.get("danger"):
+                    continue          # only the gate-shaped controls belong here
+                if self._may_attempt_crossing(name=name, control=c, url=url,
+                                              fingerprint=fingerprint):
+                    target = (name, c)
+                    break
+            if target is None:
+                break
+            name, control = target
+            ok = await self._execute_approved_submit(
+                name=name, control=dict(control), url=url,
+                fingerprint=cur_fp, depth=0, renavigate=False)
+            if not ok:
+                break
+            crossed += 1
+            obs = await self._observe()
+            if not obs.inventory_ok:
+                break
+            current = list(build_inventory(obs.raw_controls, self._refuse_pack,
+                                           url=obs.url))
+            # RE-FINGERPRINT. The exactly-once guard keys on
+            # ``fingerprint::label``, and after one signature the page IS a
+            # different state — one document now reads Signed. Re-using the
+            # entry fingerprint made every crossing after the first collide with
+            # the first one's key and be refused as already_crossed, so the
+            # operator's remaining authorised crossings were unreachable.
+            prev_fp = cur_fp
+            cur_fp = self._fingerprinter.fingerprint(
+                url=obs.url, controls=current, dialogs=obs.dialog_flags,
+                page_token=obs.page_token, observation_ok=obs.inventory_ok)
+            logger.info("qec.wizard.gate_step crossings=%d fp_moved=%s "
+                        "danger_left=%d", crossed, cur_fp != prev_fp,
+                        sum(1 for c in current if c.get("danger")))
+            if not self._note_advance_blocked(current, obs.url or url, None):
+                logger.info(
+                    "qec.wizard.gate_opened url=%s crossings=%d - the application "
+                    "enabled its own forward control after the authorised act(s)",
+                    (url or "")[:120], crossed)
+                break
+        self._last_gate_crossings = crossed
+        if crossed:
+            logger.info("qec.wizard.cross_to_unblock url=%s crossings=%d",
+                        (url or "")[:120], crossed)
+        return current
+
     async def _answer_to_unblock(
         self, controls: Sequence[dict[str, Any]], blocked_label: str,
         url: str, fill: Any,
@@ -1948,7 +2051,24 @@ class WalkerMixin:
                         url, entry_pick.tier, entry_pick.oracle_status,
                         len(controls or ()),
                         getattr(self, "_last_advance_verdicts", []))
-            return False
+            # A WIZARD GATED ON AN AUTHORISED ACT DIES EXACTLY HERE. Every tier
+            # correctly refuses to treat an irreversible control as an advance,
+            # so a step whose only forward move is "sign these three documents"
+            # has no advance to pick and the walk stops — with the operator's
+            # permission to perform that act unspent. Perform it, then ask the
+            # tiers again; nothing below is reached unless the application's own
+            # forward control came back enabled.
+            refreshed = await self._cross_to_unblock(controls, url, fingerprint)
+            if not getattr(self, "_last_gate_crossings", 0):
+                return False
+            controls = list(refreshed)
+            entry_pick = await self._pick_advance(controls, url, title, fingerprint)
+            if entry_pick.control is None:
+                logger.info("qec.wizard.declined reason=gate_still_shut url=%s "
+                            "crossings=%d - the authorised act(s) did not open "
+                            "the application's own forward control",
+                            url, self._last_gate_crossings)
+                return False
         self._wizard_states.add(fingerprint)
 
         # _discover (hover-reveal + click-pass) may have navigated the live page via a
@@ -2778,6 +2898,13 @@ class WalkerMixin:
                 # this is where the question has to be asked.
                 blocked = self._note_advance_blocked(
                     new_controls, obs.url or "", filled)
+                if blocked:
+                    # A gate waiting on an AUTHORISED ACT, not an answer, is
+                    # cleared by performing the act — see _cross_to_unblock.
+                    new_controls = list(await self._cross_to_unblock(
+                        new_controls, obs.url or "", new_fp))
+                    blocked = self._note_advance_blocked(
+                        new_controls, obs.url or "", filled)
                 if blocked:
                     new_controls = list(await self._answer_to_unblock(
                         new_controls, blocked, obs.url or "", filled))
