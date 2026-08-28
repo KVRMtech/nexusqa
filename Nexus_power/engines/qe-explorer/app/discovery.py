@@ -1369,14 +1369,55 @@ class DiscoveryMixin:
             if view_fp in self._visited_fingerprints:
                 continue
             self._visited_fingerprints.add(view_fp)
+            # FILL THE SECTION'S OWN FORM, exactly as the expansion pass does.
+            #
+            # Recording a section without filling it catalogues controls and
+            # tests nothing. Measured on LifeOps: the sweep found 16 pages
+            # carrying 23 distinct fields and the crawl filled ONE of them (4%)
+            # — the persona selector — because the fill pass runs only on the
+            # expansion path and these views are reached from here. Same engine,
+            # same answer key, same ledger; the fields simply had nobody asking.
+            step_actions = [action]
+            if not self._observe_only and any(
+                    (c.get("kind") in _FILLABLE_KINDS) and not _is_password(c)
+                    for c in view):
+                self._forms_found += 1
+                fill = await fill_form_phase_a(
+                    self._port, view, self._answer_key or AnswerKey(), self._clock,
+                    phase=Phase.EXPLORE.value, state_id=view_fp,
+                    identity=self._identity, recalled=self._recalled_values,
+                    journey_values=self._journey_values,
+                    priors=self._field_priors, data_mode=self._data_mode,
+                    choice_overrides=self._choice_overrides,
+                )
+                step_actions.extend(fill.actions)
+                self._tracker.note_action(len(fill.actions))
+                self._fields_inferred.extend(fill.inferred_fields)
+                self._open_choice_unverified += fill.open_choice_unverified
+                self._note_fills_by_kind(fill.filled_by_kind)
+                self._fields_unfilled.extend(fill.unfilled_fields)
+                self._fields_seed_detail.extend(
+                    {"label": lbl, "url": view_obs.url or ""}
+                    for lbl in fill.unfilled_fields)
+                self._collect_ledger(fill.field_ledger, view_obs.url or "")
+                # Re-read: the fill may have revealed dependent questions, and
+                # the recorded state must be the page as it stands after it.
+                after_fill = await self._observe()
+                if after_fill.inventory_ok:
+                    view = list(build_inventory(after_fill.raw_controls,
+                                                self._refuse_pack,
+                                                url=after_fill.url))
+                    view_obs = after_fill
             now = self._clock.now_ms()
             action.state_id = view_fp
             if parent and parent != view_fp:
                 self._emitter.emit_edge(from_state=parent, to_state=view_fp,
                                         verb="click", target_label=label)
+            for act in step_actions:
+                act.state_id = view_fp
             self._record_state(
                 url=view_obs.url, title=view_obs.title, controls=view,
-                fingerprint=view_fp, actions=[action],
+                fingerprint=view_fp, actions=step_actions,
                 screenshots=[(await self._port.screenshot_png(), now)],
                 first_seen_ms=now, last_seen_ms=self._clock.now_ms(),
             )
