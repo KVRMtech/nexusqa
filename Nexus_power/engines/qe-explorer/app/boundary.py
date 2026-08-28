@@ -207,6 +207,34 @@ def classify_boundary(control: Mapping[str, Any]) -> BoundaryClassification:
     return BoundaryClassification(BOUNDARY_SAFE, REASON_SAFE)
 
 
+#: Locator strategies that carry an identifier the APPLICATION authored, and
+#: which therefore names the same control on every traversal. A positional or
+#: text-derived locator is deliberately absent: it describes WHERE a control
+#: sits, so the same button acquires a new one when a row above it disappears —
+#: and two keys for one button is the double-submit this ledger exists to make
+#: impossible.
+_STABLE_LOCATOR_STRATEGIES = frozenset({"testid", "dom_id"})
+
+
+def stable_control_ref(control: Mapping[str, Any]) -> str:
+    """The control's own stable identity, or "" when it has none.
+
+    `boundary_key` is `(url_template, label)`, which assumes one button per page
+    per action. An application that renders the same action once per OBJECT —
+    sign each of three documents, void each of four invoices — presents several
+    genuinely different controls under one label. This is what tells them apart.
+
+    Returns "" for anything but an app-authored id, and an empty ref keys
+    exactly as it always did, so an application without test ids is unaffected.
+    """
+    loc = control.get("locator") if isinstance(control, Mapping) else None
+    if not isinstance(loc, Mapping):
+        return ""
+    if str(loc.get("strategy") or "").strip().lower() not in _STABLE_LOCATOR_STRATEGIES:
+        return ""
+    return str(loc.get("value") or "").strip().lower()[:120]
+
+
 def boundary_key(url: str, control_name: str) -> str:
     """The stable LOGICAL identity of one boundary — the exactly-once key.
 
@@ -490,13 +518,24 @@ class CrossingLedger:
     # -- keys -----------------------------------------------------------------
 
     @staticmethod
-    def _legacy_key(state_fingerprint: str, control_name: str) -> str:
-        return "%s::%s" % (state_fingerprint, (control_name or "").strip().lower())
+    def _legacy_key(state_fingerprint: str, control_name: str,
+                    control_ref: str = "") -> str:
+        base = "%s::%s" % (state_fingerprint, (control_name or "").strip().lower())
+        # The control's OWN identity, when the application authored one. Three
+        # `Sign` buttons for three documents are three boundaries, not one
+        # crossed three times; the same button is still one.
+        return ("%s::%s" % (base, control_ref)) if control_ref else base
 
     def keys_for(self, *, control_name: str, url: str,
-                 state_fingerprint: str) -> tuple[str, str]:
+                 state_fingerprint: str, control_ref: str = "") -> tuple[str, str]:
+        """``(budget key, exactly-once key)``.
+
+        The BUDGET key stays ``(url, label)`` on purpose: ``max_crossings`` must
+        cap the TOTAL, so a grant of three signatures authorises three, never
+        three per button. Only the exactly-once key distinguishes controls.
+        """
         return (boundary_key(url, control_name),
-                self._legacy_key(state_fingerprint, control_name))
+                self._legacy_key(state_fingerprint, control_name, control_ref))
 
     # -- queries --------------------------------------------------------------
 
@@ -505,13 +544,14 @@ class CrossingLedger:
         return self._by_boundary.get(boundary_key(url, control_name), 0)
 
     def is_spent(self, *, control_name: str, url: str,
-                 state_fingerprint: str = "") -> bool:
+                 state_fingerprint: str = "", control_ref: str = "") -> bool:
         """True when this boundary may not be crossed again under either key."""
         return any(k in self._spent for k in self.keys_for(
-            control_name=control_name, url=url, state_fingerprint=state_fingerprint))
+            control_name=control_name, url=url, state_fingerprint=state_fingerprint,
+            control_ref=control_ref))
 
     def would_exceed(self, *, control_name: str, url: str, state_fingerprint: str,
-                     max_crossings: int) -> bool:
+                     max_crossings: int, control_ref: str = "") -> bool:
         """Would one more crossing exceed the grant's budget?
 
         ``max_crossings`` defaults to 1 everywhere, so this normally reduces to
@@ -520,7 +560,8 @@ class CrossingLedger:
         explicitly authorised N times) is a data change, not a code change.
         """
         bkey, lkey = self.keys_for(control_name=control_name, url=url,
-                                   state_fingerprint=state_fingerprint)
+                                   state_fingerprint=state_fingerprint,
+                                   control_ref=control_ref)
         # The legacy key is absolute: this exact control at this exact state has
         # already been operated, and repeating it is a duplicate however
         # generous the budget.
@@ -536,10 +577,11 @@ class CrossingLedger:
 
     def reserve(self, *, control_name: str, url: str, state_fingerprint: str,
                 approval_id: str, sequence_index: int,
-                now_ms: int = 0) -> CrossingRecord:
+                now_ms: int = 0, control_ref: str = "") -> CrossingRecord:
         """Spend the boundary and return its record.  Call BEFORE the click."""
         bkey, lkey = self.keys_for(control_name=control_name, url=url,
-                                   state_fingerprint=state_fingerprint)
+                                   state_fingerprint=state_fingerprint,
+                                   control_ref=control_ref)
         self._spent.add(bkey)
         self._spent.add(lkey)
         self._by_boundary[bkey] = self._by_boundary.get(bkey, 0) + 1

@@ -121,7 +121,8 @@ from .crawl_constants import (  # noqa: F401  (re-exported public vocabulary)
 from .boundary import (AUTHORITY_BLANKET, AUTHORITY_GRANT, AUTHORITY_NAMED,
                        BOUNDARY_APPROVABLE, BOUNDARY_NEVER, REASON_DANGER_VERB,
                        ApprovalGrant, CrossingRecord, OutcomeMilestone,
-                       classify_boundary, milestone_id_for)
+                       classify_boundary, milestone_id_for,
+                       stable_control_ref)
 from .guard_context import GuardContext
 from .budget import (STOP_MAX_REQUESTS, STOP_MAX_STATES, STOP_MAX_WALL_MS,
                      Budget, BudgetTracker)
@@ -390,10 +391,19 @@ class SubmitMixin:
         # fingerprint-scoped dedup and stays; the ledger adds the LOGICAL key
         # (page + label), which is the one that survives a second traversal
         # arriving with a different DOM and therefore a different fingerprint.
-        flow_key = "%s::%s" % (fingerprint, name.lower())
+        #
+        # BOTH keys additionally carry the control's OWN identity when the
+        # application authored one. An app that renders the same action once per
+        # object presents several genuinely different buttons under one label —
+        # three `Sign`s for three documents — and without this they collapse into
+        # one boundary that can be crossed once, leaving the app's own gate shut
+        # and the operator's remaining authorised crossings unreachable. The
+        # BUDGET key is untouched, so `max_crossings` still caps the total.
+        control_ref = stable_control_ref(control)
+        flow_key = "%s::%s::%s" % (fingerprint, name.lower(), control_ref)
         if flow_key in self._submitted_flows or self._crossings.would_exceed(
                 control_name=name, url=url, state_fingerprint=fingerprint,
-                max_crossings=max_crossings):
+                control_ref=control_ref, max_crossings=max_crossings):
             logger.info(
                 "qec.boundary.already_crossed control=%r url=%s - this boundary "
                 "has been crossed under this approval; NOT submitting again.",
@@ -405,6 +415,7 @@ class SubmitMixin:
         self._next_seq += 1
         record = self._crossings.reserve(
             control_name=name, url=url, state_fingerprint=fingerprint,
+            control_ref=control_ref,
             approval_id=(grant.approval_id if grant is not None else authority),
             sequence_index=seq, now_ms=self._clock.now_ms())
         # -- WRITE AHEAD (M3.4 / T-RS-01) ------------------------------------
