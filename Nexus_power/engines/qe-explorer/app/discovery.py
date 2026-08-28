@@ -143,7 +143,24 @@ from .guard import (
 from .inventory import (build_inventory, carry_earned_annotations,
                         form_signal_for)
 
+# The SAME vocabulary the walk uses to spot an advance, so the section
+# sweep and the wizard walk cannot disagree about what a step is.
+from .vocab import ADVANCE_RE, COMMIT_RE
+
 logger = logging.getLogger("app.crawler")
+
+#: How many view-switching navigation controls one sweep will visit. A
+#: single-URL application's whole section list is site chrome, so this bounds a
+#: sweep of the WHOLE application, not of one page.
+_MAX_VIEW_SECTIONS = 24
+
+#: How many candidates make a SECTION LIST rather than a couple of stray
+#: buttons. A form with one "Yes" and one "No" is not an application navigating
+#: without URLs, and sweeping it buys nothing while costing a click each -
+#: measured on the f3_questionnaire_submit characterization fixture, where the
+#: sweep added 2 actions and not one new state. The frontier and the walk
+#: already cover an application that small.
+_MIN_VIEW_SECTIONS = 3
 
 
 class DiscoveryMixin:
@@ -162,6 +179,20 @@ class DiscoveryMixin:
                 return
             item = self._frontier.pop()
             if item is None:
+                # An application that navigates WITHOUT URLs leaves the frontier
+                # empty after the entry, however many screens it has. Sweep its
+                # own navigation once before calling the crawl complete; an app
+                # with routes finds no candidates and pays a single observation.
+                # ONLY for an application that navigates without URLs. If a
+                # single link href was ever enqueued, discovery had a frontier
+                # to work with and the sweep is not what ended the crawl — so a
+                # routed application pays nothing at all here, not even the
+                # observation.
+                if (not getattr(self, "_view_sweep_done", False)
+                        and not getattr(self, "_link_hrefs_enqueued", 0)):
+                    self._view_sweep_done = True
+                    if await self._sweep_view_navigation():
+                        continue
                 return  # frontier exhausted → completed
             # Depth reached is recorded on DEQUEUE, not on enqueue: a URL pushed
             # at depth 5 that the budget never let us visit was never reached,
@@ -1235,6 +1266,130 @@ class DiscoveryMixin:
                 == str(b.get("name") or "").strip().lower()
                 and str(qa.get("css_hint") or "") == str(qb.get("css_hint") or ""))
 
+    def _view_navigation_candidates(
+        self, controls: Sequence[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """Named, safe, enabled BUTTONS that switch the view — the section list
+        of an application that navigates without URLs.
+
+        Pure and separately testable. Danger controls are excluded outright:
+        this pass exists to find sections, and it is not an authorisation to
+        cross anything. Links are excluded because discovery already follows
+        their hrefs; sweeping them again would only re-walk the frontier.
+        """
+        out: list[dict[str, Any]] = []
+        for c in controls:
+            if str(c.get("kind") or "").lower() != "button":
+                continue
+            if c.get("danger") or c.get("disabled"):
+                continue
+            name = str(c.get("name") or "").strip()
+            if not name:
+                continue
+            # A WIZARD ADVANCE IS NOT A SECTION. "Next" / "Continue" / "Save and
+            # continue" belong to the walk, which has its own tiers, its own
+            # evidence and its own kill switch -- clicking them here would drive
+            # a funnel from a pass that is only meant to enumerate the
+            # application's sections, and would do it even with the walk
+            # switched off.
+            if ADVANCE_RE.search(name) or COMMIT_RE.search(name):
+                continue
+            out.append(c)
+        return out
+
+    async def _sweep_view_navigation(self) -> int:
+        """Visit each section of an application that navigates WITHOUT URLs.
+
+        WHY THIS EXISTS. Discovery expands the frontier from link HREFS
+        (:meth:`_enqueue_link_hrefs`), which is the right and cheap thing to do
+        for an application with routes. An application whose navigation is
+        buttons calling a client-side view switcher offers discovery nothing to
+        enqueue, so the frontier drains after the entry and the crawl ends
+        having seen one screen.
+
+        MEASURED, after authentication, on 2026-08-27:
+
+            summit-life-carrier   14 link destinations, 3 buttons  -> 14 pages
+            LifeOps (client)       0 link destinations, 22 buttons ->  2 pages
+
+        LifeOps runs quote, apply, underwrite, issue, service and claim at a
+        single address. Its 12 sections were unreachable by construction, not by
+        budget — the crawl was not blocked and did not fail, it had nothing left
+        to follow.
+
+        Runs ONLY once the frontier is exhausted, so an application with routes
+        pays nothing for it. The navigation is persistent site chrome, so each
+        section is entered from wherever the previous one left the page — there
+        is no base to return to and none is needed. Bounded by
+        :data:`_MAX_VIEW_SECTIONS`, by the crawl budget, and by the fingerprint
+        dedup: a control that switches to a view already recorded costs one
+        click and adds no state.
+        """
+        obs = await self._observe()
+        if not obs.inventory_ok or not self._in_scope(obs.url):
+            return 0
+        base = build_inventory(obs.raw_controls, self._refuse_pack, url=obs.url)
+        candidates = self._view_navigation_candidates(base)
+        if len(candidates) < _MIN_VIEW_SECTIONS:
+            return 0
+        base_fp = self._fingerprinter.fingerprint(
+            url=obs.url, controls=base, dialogs=obs.dialog_flags,
+            page_token=obs.page_token, observation_ok=obs.inventory_ok)
+        if len(candidates) > _MAX_VIEW_SECTIONS:
+            logger.info(
+                "qec.crawler.view_sweep_bounded url=%s sections=%d visiting=%d - "
+                "the rest are not visited and their fields stay uncatalogued",
+                (obs.url or "")[:120], len(candidates), _MAX_VIEW_SECTIONS)
+        recorded = 0
+        parent = base_fp
+        for control in candidates[:_MAX_VIEW_SECTIONS]:
+            if self._tracker.stop_reason() or self._cancelled or self._hard_stop:
+                break
+            label = str(control.get("name") or "").strip()
+            live = self._relocate(control, base) if hasattr(self, "_relocate") else control
+            observation = await self._port.click(dict(live or control))
+            action = emit.build_action_record(
+                dict(live or control), verb="click", value=None,
+                observation=observation, phase=Phase.EXPLORE.value, state_id="",
+                timestamp_ms=self._clock.now_ms(),
+            )
+            self._tracker.note_action()
+            after = action.after or {}
+            if str(after.get("outcome") or "") in ("none", "error"):
+                continue
+            view_obs = await self._observe()
+            if not view_obs.inventory_ok or not self._in_scope(view_obs.url):
+                continue
+            view = build_inventory(view_obs.raw_controls, self._refuse_pack,
+                                   url=view_obs.url)
+            view_fp = self._fingerprinter.fingerprint(
+                url=view_obs.url, controls=view, dialogs=view_obs.dialog_flags,
+                page_token=view_obs.page_token,
+                observation_ok=view_obs.inventory_ok)
+            if view_fp in self._visited_fingerprints:
+                continue
+            self._visited_fingerprints.add(view_fp)
+            now = self._clock.now_ms()
+            action.state_id = view_fp
+            if parent and parent != view_fp:
+                self._emitter.emit_edge(from_state=parent, to_state=view_fp,
+                                        verb="click", target_label=label)
+            self._record_state(
+                url=view_obs.url, title=view_obs.title, controls=view,
+                fingerprint=view_fp, actions=[action],
+                screenshots=[(await self._port.screenshot_png(), now)],
+                first_seen_ms=now, last_seen_ms=self._clock.now_ms(),
+            )
+            parent = view_fp
+            recorded += 1
+        if recorded:
+            logger.info(
+                "qec.crawler.view_sweep recorded=%d of %d section(s) - an "
+                "application that navigates without URLs, enumerated by its own "
+                "navigation rather than by hrefs it does not have",
+                recorded, min(len(candidates), _MAX_VIEW_SECTIONS))
+        return recorded
+
     async def _tab_views(
         self, item: FrontierItem, controls: Sequence[dict[str, Any]],
         parent_fingerprint: str,
@@ -1652,6 +1807,10 @@ class DiscoveryMixin:
                 ),
                 key=_url_key(dest),
             )
+            # Whether this application gave discovery ANYTHING to follow. The
+            # section sweep runs only when the answer is no — see
+            # :meth:`_sweep_view_navigation`.
+            self._link_hrefs_enqueued = getattr(self, "_link_hrefs_enqueued", 0) + 1
 
     async def _menu_reveal(
         self, item: FrontierItem, controls: Sequence[dict[str, Any]], fingerprint: str,
