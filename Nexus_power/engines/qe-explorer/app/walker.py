@@ -2681,7 +2681,8 @@ class WalkerMixin:
                 # on step two would end a nine-step funnel.
                 if is_confirmation_landing(
                         outcome=landed.outcome, rung=landed_rung,
-                        changed=bool(landed.navigated or new_fp != cur_fp)):
+                        changed=bool(landed.navigated or new_fp != cur_fp),
+                        detail=landed_detail):
                     confirm_rung, confirm_detail = landed_rung, landed_detail
                     logger.warning(
                         "qec.wizard.confirmation url=%s rung=%s detail=%r — the "

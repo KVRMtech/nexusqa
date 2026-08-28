@@ -338,10 +338,16 @@ def test_the_recognizer_needs_a_DECLARED_rung_not_a_navigation():
 
 @pytest.mark.parametrize("rung", [RUNG_ARIA_STATUS, RUNG_TRANSITION_TEXT, RUNG_DIALOG])
 def test_the_recognizer_accepts_every_way_an_app_declares_success(rung):
+    # 2026-08-27: a DETAIL is now required — every rung here asserts that the
+    # APPLICATION declared success, and an empty detail is the application
+    # saying nothing (see test_a_silent_dialog_declares_nothing.py, and OWASP
+    # Juice Shop's welcome overlay, which ended a crawl at 3 pages by being
+    # read as a completed journey). The rung must not do the declaring alone.
+    said = "Your order was placed. Confirmation #4471."
     assert is_confirmation_landing(outcome="confirmation", rung=rung,
-                                   changed=True) is True
+                                   changed=True, detail=said) is True
     assert is_confirmation_landing(outcome="navigation", rung=rung,
-                                   changed=True) is True
+                                   changed=True, detail=said) is True
 
 
 def test_the_recognizer_refuses_an_error():
@@ -361,8 +367,12 @@ def test_the_recognizer_names_no_url_label_or_title():
     """GENERIC BY CONSTRUCTION. The predicate takes three arguments, none of
     which is a url, a control name, a page title or an application identity —
     so there is nowhere for a "Back to Dashboard" special case to live."""
+    # ``detail`` joined the signature on 2026-08-27 and does NOT weaken this
+    # property: it is the text the APPLICATION itself rendered, handed in by the
+    # caller, not a url, a control name or an application identity. There is
+    # still nowhere for a "Back to Dashboard" special case to live.
     params = set(inspect.signature(is_confirmation_landing).parameters)
-    assert params == {"outcome", "rung", "changed"}
+    assert params == {"outcome", "rung", "changed", "detail"}
     src = inspect.getsource(is_confirmation_landing)
     for banned in ("dashboard", "http", "confirmation.", "/apply", "title"):
         assert banned not in src.lower().split('"""')[-1]

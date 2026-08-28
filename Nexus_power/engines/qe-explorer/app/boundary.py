@@ -731,7 +731,8 @@ DECLARED_CONFIRMATION_RUNGS = frozenset({RUNG_ARIA_STATUS, RUNG_TRANSITION_TEXT,
 _POSITIVE_TERMINAL_OUTCOMES = frozenset({"navigation", "confirmation"})
 
 
-def is_confirmation_landing(*, outcome: str, rung: str, changed: bool) -> bool:
+def is_confirmation_landing(*, outcome: str, rung: str, changed: bool,
+                            detail: str = "") -> bool:
     """Did this transition land on a RECOGNIZED confirmation?  (M1.4 / T-CF-03)
 
     THE SAME THREE CONJUNCTS AS :attr:`OutcomeMilestone.verified`, over the
@@ -757,6 +758,21 @@ def is_confirmation_landing(*, outcome: str, rung: str, changed: bool) -> bool:
     if str(outcome or "") not in _POSITIVE_TERMINAL_OUTCOMES:
         return False
     if str(rung or "") not in DECLARED_CONFIRMATION_RUNGS:
+        return False
+    # A MODAL THAT SAYS NOTHING HAS DECLARED NOTHING. Every rung in
+    # DECLARED_CONFIRMATION_RUNGS asserts that the APPLICATION ITSELF said so,
+    # and an empty detail is the application saying nothing — the rung would be
+    # doing the declaring on its own, which is exactly the reasoning that keeps
+    # RUNG_NAVIGATION out of that set.
+    #
+    # Measured on OWASP Juice Shop, the first third-party application this
+    # crawler was ever pointed at: `rung=dialog detail=''` on the site's WELCOME
+    # overlay — on screen before the user has done anything — ended the walk at
+    # 3 pages of a shop whose catalogue, basket, login and registration were
+    # never reached. d232c52 does not catch it: a welcome overlay asks for
+    # nothing, so it is not a challenge. "No text, no declaration" subsumes
+    # both — a receipt SAYS something.
+    if not str(detail or "").strip():
         return False
     return bool(changed)
 
