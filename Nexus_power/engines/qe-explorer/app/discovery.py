@@ -163,8 +163,147 @@ _MAX_VIEW_SECTIONS = 24
 _MIN_VIEW_SECTIONS = 3
 
 
+#: What a consent layer's exit is called. Tight on purpose: every term here is
+#: one an application uses to CLOSE something that is merely in the way.
+_DISMISS_RE = re.compile(
+    r"^\s*(?:"
+    r"dismiss.*"
+    r"|close.*"
+    r"|got\s*it.*"
+    r"|no\s*thanks?.*"
+    r"|(?:i\s+)?agree.*"
+    r"|ok(?:ay)?"
+    r"|understood|acknowledge"
+    r"|(?:accept|allow)\s+(?:all\s+)?(?:cookies?|tracking|analytics).*"
+    r")\s*$",
+    re.IGNORECASE)
+
+#: CONSENT, NAMED. "Accept cookies" says what it accepts and is a doorway.
+#: A bare "Accept" or "I agree" does not — agreeing to terms can be a legal act
+#: on a real form — so only the bound form is admitted, and it is admitted
+#: BEFORE the commit-word veto that would otherwise (correctly) reject it.
+_CONSENT_RE = re.compile(
+    r"^\s*(?:accept|allow)\s+(?:all\s+)?(?:cookies?|tracking|analytics).*$",
+    re.IGNORECASE)
+
+#: A DOORWAY IS NEVER ABOUT THE BUSINESS. "Close" opens the vocabulary wide, so
+#: any label naming a business object is vetoed however it starts: "Close
+#: Policy", "Close Case", "Close Claim" are acts, not banners.
+_NOT_A_DOORWAY_RE = re.compile(
+    r"(?:policy|policies|account|case|claim|order|quote|ticket|invoice|"
+    r"contract|application|payment|session|member|customer|task|deal)",
+    re.IGNORECASE)
+
+
+def overlay_dismiss_candidates(
+    controls: Sequence[Mapping[str, Any]],
+) -> list[Mapping[str, Any]]:
+    """Controls that CLOSE something standing in front of the application.
+
+    Pure and separately testable. Measured on OWASP Juice Shop, whose entry
+    inventory carried "dismiss cookie message" and "Close Welcome Banner" —
+    both catalogued correctly, neither ever clicked, and the crawl ended at two
+    pages of a shop.
+
+    Excluded by construction: anything the refuse pack flagged, anything
+    advance- or commit-shaped, and anything disabled or unnamed. "Accept Quote"
+    is a business act; "Accept cookies" is a doorway, and only the second form
+    matches.
+    """
+    out: list[Mapping[str, Any]] = []
+    for c in controls:
+        if c.get("danger") or c.get("disabled"):
+            continue
+        name = str(c.get("name") or "").strip()
+        if not name or str(c.get("kind") or "").lower() not in ("button", "link"):
+            continue
+        if _NOT_A_DOORWAY_RE.search(name):
+            continue
+        if _CONSENT_RE.match(name):
+            out.append(c)
+            continue
+        if ADVANCE_RE.search(name) or COMMIT_RE.search(name):
+            continue
+        if _DISMISS_RE.match(name):
+            out.append(c)
+    return out
+
+
 class DiscoveryMixin:
     """Mixed into :class:`app.crawler.Crawler` (T-DE-12)."""
+
+    #: How many stacked layers one doorway may have. Juice Shop has two (a
+    #: welcome banner over a cookie bar); more than a few is not a doorway.
+    _MAX_DOORWAY_LAYERS = 4
+
+    async def _clear_the_doorway(self) -> int:
+        """Close whatever is standing in FRONT of the application, once.
+
+        MEASURED (OWASP Juice Shop, 2026-08-27). The site opens behind a welcome
+        banner over a cookie-consent bar. The inventory was not wrong -- it
+        reported the nine controls genuinely on screen, "dismiss cookie message"
+        and "Close Welcome Banner" among them -- and the crawl ended with TWO
+        pages of a shop that has a catalogue, a basket, a login and a
+        registration form. The exits were catalogued and never taken.
+
+        ENTRY-TIME ONLY, and that is the whole safety argument. Clicking "close"
+        wherever it appears would shut panels the crawl had deliberately opened,
+        and mid-journey it could dismiss the very confirmation a walk was driven
+        to reach. A consent layer is on screen exactly once, before anything
+        else has happened, which is when this runs and the only time it does.
+
+        Never clicks anything the refuse pack flagged, anything advance- or
+        commit-shaped, or anything naming a business object -- see
+        :func:`overlay_dismiss_candidates`.
+        """
+        cleared = 0
+        tried: set[str] = set()
+        for _ in range(self._MAX_DOORWAY_LAYERS):
+            obs = await self._observe()
+            if not obs.inventory_ok:
+                break
+            controls = build_inventory(obs.raw_controls, self._refuse_pack,
+                                       url=obs.url)
+            # EACH EXIT ONCE. A layer's "dismiss" is not always clickable -- Juice
+            # Shop's cookie bar exposes a `dismiss cookie message` LINK that
+            # Playwright cannot click (it times out behind its own overlay) while
+            # the neighbouring `Close Welcome Banner` button works. Retrying the
+            # first candidate spent the whole budget on the one exit that does
+            # nothing and left the doorway shut; measured, four times over.
+            candidates = [c for c in overlay_dismiss_candidates(controls)
+                          if str(c.get("name") or "").strip().lower() not in tried]
+            if not candidates:
+                break
+            target = candidates[0]
+            label = str(target.get("name") or "").strip()
+            tried.add(label.lower())
+            before_fp = self._fingerprinter.fingerprint(
+                url=obs.url, controls=controls, dialogs=obs.dialog_flags,
+                page_token=obs.page_token, observation_ok=obs.inventory_ok)
+            try:
+                await self._port.click(dict(target))
+            except Exception:
+                logger.info("qec.crawler.doorway_click_failed control=%r", label[:60])
+                continue
+            self._tracker.note_action()
+            after = await self._observe()
+            if not after.inventory_ok:
+                break
+            after_controls = build_inventory(after.raw_controls, self._refuse_pack,
+                                             url=after.url)
+            moved = before_fp != self._fingerprinter.fingerprint(
+                url=after.url, controls=after_controls, dialogs=after.dialog_flags,
+                page_token=after.page_token, observation_ok=after.inventory_ok)
+            if not moved:
+                # The click landed on nothing. Say so and try the next exit
+                # rather than counting a layer that is still there.
+                logger.info("qec.crawler.doorway_no_effect control=%r - the layer "
+                            "is still up; trying the next exit", label[:60])
+                continue
+            cleared += 1
+            logger.info("qec.crawler.doorway_cleared control=%r - closed a layer "
+                        "standing in front of the application", label[:60])
+        return cleared
 
     async def _explore_loop(self) -> None:
         while True:
@@ -377,6 +516,14 @@ class DiscoveryMixin:
             await materialize()
 
         obs = await self._observe()
+        # CLEAR THE DOORWAY, ONCE, on the first page that actually loaded. It
+        # cannot run before the loop: with no credentials the auth step does not
+        # navigate, so the browser is still on about:blank and there is nothing
+        # to dismiss (measured -- the first placement never fired).
+        if not getattr(self, "_doorway_done", False) and obs.inventory_ok:
+            self._doorway_done = True
+            if await self._clear_the_doorway():
+                obs = await self._observe()
         # ── M1.7 / T-GW-01 · THE EVIDENCE GATE ───────────────────────────────
         # An inventory read that FAILED is not a page with no controls, and this
         # is the last point at which the two are still distinguishable. Below
