@@ -473,12 +473,37 @@ def _form_snapshot(controls: Sequence[dict[str, Any]]) -> tuple[dict[str, str], 
         signal = form_signal_for(control)
         if signal is None:
             continue
-        label = str(control.get("name") or "").strip()
+        # NAME THE ROW BY THE QUESTION, NOT BY THE ANSWER.
+        #
+        # MEASURED (health-declaration fixture, 2026-08-29). A page of 25 Yes/No
+        # questions -- the shape every life-insurance funnel is built from --
+        # produced `form_snapshot == {"No": "false", "Yes": "false"}`. The same
+        # run's inventory had it right (`radio_groups=25 radio_grouped=50`), so
+        # all 25 questions and 50 options were seen; this function then keyed
+        # each control on its ACCESSIBLE NAME, which for a radio is the OPTION,
+        # and 25 questions landed on two keys. The field ledger and the seed
+        # request inherit these keys, so the loss travelled everywhere.
+        #
+        # `question_label` is the application's OWN wording, taken by
+        # inventory_js from a declared accessible-name rung only (aria-labelledby
+        # -> aria-label -> <legend> -> heading in the container) and left "" when
+        # the page declared nothing. Reading it here invents no wording: when the
+        # page declared none, the control keeps its own name exactly as before.
+        #
+        # Two radios of one question share a key deliberately: one question is
+        # one row, and its value is whichever option the form actually holds.
+        question = str(control.get("question_label") or "").strip()
+        label = question or str(control.get("name") or "").strip()
         if not label:
             continue
         secret = _is_password(control)
         raw = control.get("value_committed") or ""
-        snapshot[label] = emit.scrub_value(raw, is_secret=secret).value
+        value = emit.scrub_value(raw, is_secret=secret).value
+        # A question is one row fed by several controls. The ANSWER is whichever
+        # option carries a committed value; an unselected sibling arriving later
+        # must not erase it.
+        if not (label in snapshot and snapshot[label] and not value):
+            snapshot[label] = value
         if secret:
             # A password input refines to kind 'text' (its password-ness lives in
             # input_type); stamp the signal so the substrate writer's redaction

@@ -489,6 +489,25 @@ def form_signal_for(record: ControlRecord) -> Optional[dict[str, Any]]:
     if signal_type is None:
         return None
     options = list(record.get("options") or [])
+    if not options:
+        # A RADIO'S ANSWERS ARE ITS SIBLINGS, NOT ITS CHILDREN.
+        #
+        # MEASURED (health-declaration fixture, 2026-08-29): a 25-question Yes/No
+        # health page produced a bundle where every question reported `opts=0 []`
+        # -- no answers at all -- while the same run's inventory reported
+        # `radio_groups=25 radio_grouped=50`, so all fifty options were seen.
+        #
+        # The browser fills `options` for a <select>, whose answers are its own
+        # children. A radio group's answers are recorded by the grouping pass in
+        # `group_options` ("every answer the question offers, in DOM order"), and
+        # this function -- the only boundary qe-central reads a question's
+        # answers from -- never looked there. Every radio question in every crawl
+        # this product has run reached the catalogue with an empty answer list,
+        # and `options_total` (the marker that exists so a CLIPPED enumeration
+        # can never be read as complete) reported 0 for a complete one.
+        #
+        # A <select> is unaffected: it has its own options and no group.
+        options = list(record.get("group_options") or [])
     sig = {
         "type": signal_type,
         "options": options,
