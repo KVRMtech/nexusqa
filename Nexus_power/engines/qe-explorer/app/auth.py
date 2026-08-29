@@ -579,6 +579,41 @@ def _index_of(controls: Sequence[Mapping[str, Any]], target: Mapping[str, Any]) 
     return len(controls)
 
 
+
+def login_screen_is_still_settling(
+    *, busy: bool, fingerprint_moved: bool, password_present: bool,
+) -> bool:
+    """Should the login loop keep waiting before judging the screen?
+
+    TWO SIGNALS, and the order matters because each answers a different failure.
+
+    1. A DISABLED control -- the application's own structural statement that it
+       is mid-flight. summit-life-carrier flips its button to "Authenticating..."
+       and disables it, which MOVES the fingerprint while saying the answer has
+       not arrived; only this signal survives that.
+
+    2. A PASSWORD FIELD still on screen AND a fingerprint that has not moved --
+       the application saying, equally structurally, that nothing has happened
+       yet. MEASURED (ERPNext v16, 2026-08-28): ERPNext signs in by XHR and
+       redirects client-side, disabling nothing while the request is in flight.
+       Signal 1 was therefore false on the first look, the loop broke instantly,
+       and a login that SUCCEEDED server-side was judged a refusal -- while the
+       log said the screen "was given time to" move, which it had not been.
+
+    Deliberately NOT "is there something to submit": summit's page carries "Sign
+    in with Google SSO" and "Sign in with Enterprise SSO", so a submit-shaped
+    control is present on every observation, busy or not. That was tried and
+    fooled. A password FIELD is not a submit BUTTON.
+
+    Both signals are bounded by the same ``LATE_ADVANCE_WAIT_MS`` budget, so a
+    genuinely refused login costs at most that before being reported honestly --
+    the predicate delays the verdict, it never softens it.
+    """
+    if busy:
+        return True
+    return (not fingerprint_moved) and password_present
+
+
 def verify_login_success(
     *,
     before_fingerprint: str,
@@ -930,7 +965,11 @@ class Authenticator:
                 # screen with a permanently disabled button, and only inside the
                 # login loop.
                 _busy = any(bool(c.get("disabled")) for c in after_controls)
-                if not _busy:
+                if not login_screen_is_still_settling(
+                        busy=_busy,
+                        fingerprint_moved=bool(after_fp and after_fp != screen_fp),
+                        password_present=_match_password_control(
+                            after_controls) is not None):
                     break
                 await asyncio.sleep(
                     self.LATE_ADVANCE_WAIT_MS / 1000.0 / max(1, _looks - 1))
