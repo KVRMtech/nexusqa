@@ -139,13 +139,38 @@ def crawl_one(target: Mapping[str, Any], out_root: Path) -> dict[str, Any]:
         "boundaries_crossed": cov.get("boundaries_crossed", 0),
         "risky_controls_seen": len({b.get("label")
                                     for b in (cov.get("approvable_boundary") or [])}),
-        "authenticated": not cov.get("auth_incomplete"),
+        # NOT `not auth_incomplete`. Those are different questions, and the
+        # gap between them printed `auth=True` for a crawl that never got in.
+        #
+        # MEASURED (ERPNext v16, 2026-08-28): the crawl drove the login form
+        # correctly -- typed the email, typed the password, submitted -- and the
+        # application refused it, so the crawl stopped `auth_failed` with one
+        # state. `auth_incomplete` stayed False, deliberately: app/coverage.py
+        # reserves that flag for a crawl that found NO login form and explored
+        # public content anyway, which is a different terminal with partial
+        # coverage to report. Conflating the two would mislead in the other
+        # direction, and tests/test_crawler_logic.py pins that distinction.
+        #
+        # The summary asks a third question -- "did this crawl end up
+        # authenticated?" -- and for `auth_failed` the answer is no, whatever
+        # the flag says. Read the terminal, not one flag that never claimed to
+        # answer this.
+        "authenticated": (not cov.get("auth_incomplete")
+                          and _stop_reason_of(cov) != "auth_failed"),
         "auth_reason": (cov.get("auth_reason") or "")[:90],
         "stop_reason": cov.get("summary", {}).get("stop_reason", "")
         if isinstance(cov.get("summary"), dict) else "",
         "evidence": str(out),
     }
 
+
+
+def _stop_reason_of(cov: dict) -> str:
+    """The crawl's terminal, wherever the bundle happens to carry it."""
+    summary = cov.get("summary")
+    if isinstance(summary, dict) and summary.get("stop_reason"):
+        return str(summary["stop_reason"])
+    return str(cov.get("stop_reason") or "")
 
 def main() -> None:
     ap = argparse.ArgumentParser()
