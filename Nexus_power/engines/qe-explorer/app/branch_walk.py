@@ -149,6 +149,34 @@ def should_descend(depth: int, *, max_depth: int = MAX_BRANCH_DEPTH) -> bool:
     return depth < max_depth
 
 
+async def answer(port: Any, control: Mapping[str, Any], option: str) -> None:
+    """Commit ONE answer, with the verb the control kind actually needs.
+
+    A radio is CLICKED, a select has its option CHOSEN, a checkbox is CHECKED.
+    Calling ``port.fill`` for all of them types into the control, which for a
+    radio dispatches no `change` event -- so the page's conditional logic never
+    runs and a sweep reports every answer taken and nothing revealed. That was
+    the first live result: 60 questions, 138 answers, 0 reveals, on a page that
+    demonstrably reveals 3 more when its first question is answered Yes.
+
+    Mirrors app/filler.py, which has always dispatched by kind.
+    """
+    kind = str(control.get("kind") or "").strip().lower()
+    if kind == "select":
+        select = getattr(port, "select_option", None)
+        if select is not None:
+            await select(dict(control), option)
+            return
+        await port.fill(dict(control), option)
+        return
+    if kind in ("checkbox", "toggle"):
+        set_checked = getattr(port, "set_checked", None)
+        if set_checked is not None:
+            await set_checked(dict(control), True)
+            return
+    await port.click(dict(control))
+
+
 # ── the walk itself ─────────────────────────────────────────────────────────
 
 
@@ -180,6 +208,7 @@ async def sweep_page(
     question is reached the way a person reaches it, not by being conjured.
     """
     ledger = BranchLedger()
+    pending: list[tuple[list[tuple[Mapping[str, Any], str]], int]]
 
     async def _inventory() -> tuple[Any, list[Mapping[str, Any]]]:
         obs = await observe()
@@ -190,19 +219,31 @@ async def sweep_page(
         await reset()
         _, controls = await _inventory()
         for ctrl, option in prefix:
-            live = _match(controls, ctrl)
+            live = _match(controls, ctrl, option)
             if live is None:
                 return []
-            await port.fill(dict(live), option)
+            await answer(port, live, option)
             _, controls = await _inventory()
         return controls
 
-    def _match(controls: Sequence[Mapping[str, Any]], want: Mapping[str, Any]):
+    def _match(controls: Sequence[Mapping[str, Any]], want: Mapping[str, Any],
+               option: str = ""):
+        """The live control for a question -- and, for a radio, for its ANSWER.
+
+        A select is one control carrying every option, so the question is enough.
+        A radio group is one control PER ANSWER, so answering "No" means clicking
+        the No member: matching the question alone would click whichever member
+        came first and record the wrong answer as taken.
+        """
         key = question_key(want)
-        for c in controls:
-            if question_key(c) == key:
-                return c
-        return None
+        members = [c for c in controls if question_key(c) == key]
+        if not members:
+            return None
+        if option:
+            for c in members:
+                if str(c.get("name") or "").strip().lower() == option.strip().lower():
+                    return c
+        return members[0]
 
     async def _sweep(prefix: Sequence[tuple[Mapping[str, Any], str]], depth: int) -> None:
         if not should_descend(depth, max_depth=max_depth):
@@ -220,13 +261,13 @@ async def sweep_page(
                                 reason="budget_exhausted")
                     return
                 base = await _apply(prefix)
-                live = _match(base, q["control"])
+                live = _match(base, q["control"], option)
                 if live is None:
                     ledger.skip(question=q["key"], option=option,
                                 reason="question_not_present_after_reset")
                     continue
                 try:
-                    await port.fill(dict(live), option)
+                    await answer(port, live, option)
                 except Exception:
                     ledger.skip(question=q["key"], option=option, reason="fill_failed")
                     continue
@@ -240,7 +281,29 @@ async def sweep_page(
                         "revealed=%d", q["label"][:60], option[:40], depth,
                         len(revealed))
                 if revealed and should_descend(depth + 1, max_depth=max_depth):
-                    await _sweep(list(prefix) + [(q["control"], option)], depth + 1)
+                    # BREADTH BEFORE DEPTH. Queued, not recursed.
+                    #
+                    # MEASURED (underwriting fixture, 2026-08-29): the first live
+                    # sweep recursed immediately and spent its budget like this --
+                    #
+                    #     answers by depth: {0:5, 1:5, 2:5, 3:19, 4:51, 5:315}
+                    #
+                    # -- 315 of 400 answers four levels down ONE cascade, while
+                    # 59 of the page's 64 questions had never been asked at all.
+                    # For "prove every question on this page was covered" that is
+                    # exactly the wrong order: the budget must buy the page first
+                    # and the depths with what remains.
+                    pending.append((list(prefix) + [(q["control"], option)],
+                                    depth + 1))
 
-    await _sweep([], 0)
+    # A LEVEL AT A TIME. Every question at this depth is asked with every answer
+    # before any reveal is followed, so a budget that runs out has bought the
+    # widest coverage it could rather than the deepest single path.
+    pending = [([], 0)]
+    while pending and not budget_exhausted(ledger, max_visits=max_visits):
+        prefix, depth = pending.pop(0)
+        await _sweep(prefix, depth)
+    for prefix, depth in pending:
+        ledger.skip(question=f"depth{depth}", option="",
+                    reason="budget_exhausted_before_this_branch")
     return ledger

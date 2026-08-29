@@ -70,8 +70,27 @@ class FakePage:
 
 
 class _Port:
-    def __init__(self, page): self._p = page
-    async def fill(self, control, value): await self._p.fill(control, value)
+    """Models the REAL port's surface: a radio is clicked, not typed into.
+
+    The first version of this fake offered only `fill`, so the sweep passed
+    against it while the live crawl reported 60 questions, 138 answers and ZERO
+    reveals -- a radio filled rather than clicked dispatches no `change` event,
+    and the page's conditional logic never runs. A fake that cannot express that
+    difference cannot catch it.
+    """
+
+    def __init__(self, page):
+        self._p = page
+
+    async def click(self, control):
+        # The clicked MEMBER carries the answer, exactly as in the DOM.
+        await self._p.fill(control, str(control.get("name") or ""))
+
+    async def select_option(self, control, value):
+        await self._p.fill(control, value)
+
+    async def fill(self, control, value):
+        raise AssertionError("a radio must be CLICKED, not filled")
 
 
 def _run(max_visits=400, max_depth=6):
@@ -138,3 +157,31 @@ def test_the_visit_budget_stops_the_sweep_and_says_so():
 def test_the_depth_limit_stops_the_descent():
     _, led = _run(max_depth=1)
     assert led.questions_seen == {"q1", "q2"}, "descent should not have happened"
+
+
+# ── breadth before depth ───────────────────────────────────────────────────
+
+def test_every_top_level_question_is_asked_before_any_descent():
+    """MEASURED (underwriting fixture, 2026-08-29). The first live sweep recursed
+    on the first reveal it found and spent its budget like this:
+
+        answers by depth: {0:5, 1:5, 2:5, 3:19, 4:51, 5:315}
+
+    315 of 400 answers four levels down ONE cascade, while 59 of the page's 64
+    questions had never been asked at all. For "prove every question on this page
+    was covered" that is exactly the wrong order.
+    """
+    _, led = _run()
+    order = [(v["depth"], i) for i, v in enumerate(led.visits)]
+    first_deeper = next((i for d, i in order if d > 0), None)
+    assert first_deeper is not None, "the cascade was never followed"
+    depth0_before = {v["question"] for v in led.visits[:first_deeper] if v["depth"] == 0}
+    assert depth0_before == {"q1", "q2"}, (
+        f"descended before finishing the page: {depth0_before}")
+
+
+def test_a_budget_that_runs_out_buys_the_page_not_one_cascade():
+    """With only enough budget for the top level, it must buy the top level."""
+    _, led = _run(max_visits=4)
+    assert {v["question"] for v in led.visits} == {"q1", "q2"}
+    assert all(v["depth"] == 0 for v in led.visits)

@@ -315,6 +315,10 @@ class Crawler(AuthFlowMixin, SubmitMixin, DiscoveryMixin, WalkerMixin,
         # BUSINESS FLOWS: one entry per journey walked, carrying whether it actually
         # REACHED THE END. Six steps of a fifteen-step funnel is not the Apply flow.
         self._flows: list[dict[str, Any]] = []
+
+        #: BRANCH COVERAGE (opt-in). One entry per page swept: what was asked,
+        #: what each answer revealed, and what was skipped and why.
+        self._branch_ledgers: list[dict[str, Any]] = []
         # Gate 1 / T-JC-01 — journeys the WALKER entered, which is NOT
         # ``len(self._flows)``: discovery also mints one-step flows for a form
         # page it never walked and for a next-action fork, and counting those as

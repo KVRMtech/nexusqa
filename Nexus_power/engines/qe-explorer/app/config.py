@@ -98,6 +98,15 @@ class Settings(BaseSettings):
 
     # ── Crawl budgets (design §3.2 §API surface defaults) ─────
     max_states: int = Field(default=200, alias="QEC_MAX_STATES")
+
+    #: BRANCH COVERAGE. Off by default: a sweep re-loads the page once per
+    #: answer, so on a 60-question page it is the most expensive thing the crawl
+    #: can do, and an operator must ask for it. See app/branch_walk.py.
+    branch_sweep: bool = Field(default=False, alias="QEC_BRANCH_SWEEP")
+    #: Ceiling on (question, answer) pairs visited per page.
+    branch_max_visits: int = Field(default=400, alias="QEC_BRANCH_MAX_VISITS")
+    #: How deep a reveal chain is followed. Level 0 is the page as it loaded.
+    branch_max_depth: int = Field(default=6, alias="QEC_BRANCH_MAX_DEPTH")
     max_depth: int = Field(default=6, alias="QEC_MAX_DEPTH")
     max_actions_per_state: int = Field(default=30, alias="QEC_MAX_ACTIONS_PER_STATE")
     max_wall_ms: int = Field(default=1_800_000, alias="QEC_MAX_WALL_MS")

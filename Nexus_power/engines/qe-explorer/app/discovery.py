@@ -698,6 +698,9 @@ class DiscoveryMixin:
             self._tracker.note_action(len(fill.actions))
             self._fields_inferred.extend(fill.inferred_fields)
             self._open_choice_unverified += fill.open_choice_unverified
+            # AFTER the ordinary fill, so the sweep costs nothing on a crawl that
+            # did not ask for it and never changes what a normal crawl records.
+            await self._branch_sweep(item, item.url or "")
             self._note_fills_by_kind(fill.filled_by_kind)
             self._fields_unfilled.extend(fill.unfilled_fields)
             # Tag each unfilled field with the page it appeared on (grounds flow grouping).
@@ -1209,6 +1212,65 @@ class DiscoveryMixin:
                       str(c.get("name") or "").strip().lower(),
                       str(q.get("css_hint") or "")))
         return keys
+
+
+    async def _branch_sweep(self, item: Any, url: str) -> None:
+        """Ask every question on this page with every answer (T-BR / branch).
+
+        Opt-in (``QEC_BRANCH_SWEEP``) because a sweep RELOADS the page once per
+        answer: on a 60-question page it is the most expensive thing a crawl can
+        do, and an operator must ask for it rather than discover the cost.
+
+        The four collaborators branch_walk needs already exist on the crawler --
+        `_read_controls` is the cheapest inventory there is, and `goto` is the
+        only honest reset for a page whose reveals are stateful.
+        """
+        from . import branch_walk
+
+        # The Crawler takes explicit constructor params, not a Settings object,
+        # so the flag is read from the environment-backed Settings once and
+        # cached. Read per crawl, not per page: constructing it 60 times to
+        # answer the same question would be its own small waste.
+        settings = getattr(self, "_branch_settings", None)
+        if settings is None:
+            from .config import Settings
+            try:
+                settings = Settings()
+            except Exception:                        # noqa: BLE001
+                settings = None
+            self._branch_settings = settings
+        if not getattr(settings, "branch_sweep", False):
+            return
+
+        def _build(_obs):
+            return self._branch_controls
+
+        async def _reset():
+            await self._port.goto(url)
+            self._tracker.note_request()
+            self._branch_controls = await self._read_controls(url)
+
+        async def observe():
+            self._branch_controls = await self._read_controls(url)
+            return url
+
+        try:
+            ledger = await branch_walk.sweep_page(
+                port=self._port, observe=observe, build_controls=_build,
+                reset=_reset,
+                max_visits=int(getattr(settings, "branch_max_visits", 400)),
+                max_depth=int(getattr(settings, "branch_max_depth", 6)),
+                logger=logger,
+            )
+        except Exception:
+            logger.exception("qec.branch.sweep_failed url=%s", url[:120])
+            return
+        summary = ledger.summary()
+        self._branch_ledgers.append({"url": url, **summary, "visits": ledger.visits[:400]})
+        logger.info(
+            "qec.branch.swept url=%s questions=%d answers=%d revealed=%d skipped=%d",
+            url[:120], summary["questions_swept"], summary["answers_taken"],
+            summary["questions_revealed"], summary["skipped"])
 
     async def _read_controls(self, url: str) -> list[dict[str, Any]]:
         """A control-only re-read of the live page (no screenshot, no dialog or

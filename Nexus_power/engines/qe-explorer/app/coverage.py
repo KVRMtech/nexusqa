@@ -310,7 +310,7 @@ class CoverageLedger:
         # action each endpoint was seen to fire behind.
         inventory = endpoint_inventory.merge_inventories(c._endpoint_inventories)
         server_errors = list(c._network_server_errors or [])
-        return {
+        payload = {
             "forms_found": c._forms_found,
             # M2.6 / T-CAP-03 - collapsed sections this crawl deliberately
             # opened before cataloguing, and disclosures it declined to
@@ -486,6 +486,14 @@ class CoverageLedger:
                 f"completed end-to-end through an approved crossing."
             ),
         }
+        # BRANCH COVERAGE (opt-in, QEC_BRANCH_SWEEP). Added ONLY when the
+        # sweep actually ran: an opt-in feature must leave an ordinary crawl's
+        # bundle byte-identical, which is what the characterization goldens
+        # exist to hold us to.
+        branch = list(getattr(c, "_branch_ledgers", []) or [])
+        if branch:
+            payload["branch_ledgers"] = branch[:50]
+        return payload
 
 
 __all__ = ["CoverageHost", "CoverageLedger"]
