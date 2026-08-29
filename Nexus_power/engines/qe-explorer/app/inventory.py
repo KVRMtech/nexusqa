@@ -478,6 +478,39 @@ def question_groups_of(
     return out
 
 
+
+def _norm_kind(kind: Any) -> str:
+    return str(kind or "").strip().lower()
+
+
+def question_name_of(record: Mapping[str, Any]) -> str:
+    """The name a control should be RECORDED under: its question, or its own.
+
+    ONE RULE IN ONE PLACE. Two paths leave the inventory carrying a control's
+    identity -- ``state_identity._form_snapshot`` (the evidence bundle) and
+    ``forms.py`` (the field ledger, and through it the seed request sent to the
+    client). Both named a control by its accessible name, which for a radio is
+    the OPTION. MEASURED (health-declaration fixture, 2026-08-29): a 25-question
+    Yes/No health page produced a snapshot of two rows called "Yes" and "No",
+    and a seed request asking the client to supply values for two fields called
+    "Yes" and "No".
+
+    ``question_label`` is the application's OWN wording, taken by inventory_js
+    from a declared accessible-name rung only (aria-labelledby -> aria-label ->
+    <legend> -> heading in the container) and left "" when the page declared
+    none. So this invents nothing: with no declared question the control keeps
+    its own name, exactly as before.
+
+    A BUTTON is never a question. "Submit Declaration" is not something anyone
+    supplies an answer for, and a button that happens to sit inside a declared
+    question container must not be recorded as that question.
+    """
+    own = str(record.get("name") or "").strip()
+    if _norm_kind(record.get("kind")) == "button":
+        return own
+    return str(record.get("question_label") or "").strip() or own
+
+
 def form_signal_for(record: ControlRecord) -> Optional[dict[str, Any]]:
     """``form_snapshot_signals[label]`` value for a value-bearing control, or
     ``None`` for a button/link (not a form field).

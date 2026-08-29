@@ -59,7 +59,7 @@ from .fill_engine.repair import (RepairBudget, RepairOutcome, RetryPolicy,
 from .fill_engine.validation import PageAlertFilter
 from .identity_pack import Identity, derive as derive_identity
 from .guard import GuardDecision, Phase, classify_request, registrable_domain
-from .inventory import target_kind_for
+from .inventory import target_kind_for, question_name_of
 
 logger = logging.getLogger(__name__)
 
@@ -788,7 +788,11 @@ async def fill_form_phase_a(
 
     for control in controls:
         kind = _norm(control.get("kind"))
-        name = str(control.get("name") or "")
+        # THE LEDGER ASKS ABOUT THE QUESTION, NOT THE ANSWER. See
+        # inventory.question_name_of: for a radio, `name` is the OPTION, so a
+        # 25-question health page produced a seed request asking the client for
+        # two fields called "Yes" and "No". A button keeps its own name.
+        name = question_name_of(control)
         if kind == "button":
             result.flow_candidates.append(FlowCandidate(
                 name=name,

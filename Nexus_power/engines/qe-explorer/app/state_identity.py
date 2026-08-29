@@ -38,7 +38,7 @@ from . import value_infer
 from .browser import PageObservation
 from .fingerprint import state_fingerprint
 from .guard import registrable_domain
-from .inventory import form_signal_for, question_groups_of
+from .inventory import form_signal_for, question_groups_of, question_name_of
 
 logger = logging.getLogger(__name__)
 
@@ -492,8 +492,7 @@ def _form_snapshot(controls: Sequence[dict[str, Any]]) -> tuple[dict[str, str], 
         #
         # Two radios of one question share a key deliberately: one question is
         # one row, and its value is whichever option the form actually holds.
-        question = str(control.get("question_label") or "").strip()
-        label = question or str(control.get("name") or "").strip()
+        label = question_name_of(control)
         if not label:
             continue
         secret = _is_password(control)
