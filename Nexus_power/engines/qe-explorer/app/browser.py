@@ -66,10 +66,16 @@ def _norm_url(url: str) -> str:
     base, _sep, frag = u.partition("#")
     if len(base) > 1 and base.endswith("/"):
         base = base[:-1]
-    # Keep a hash-ROUTE fragment (SPA routing: ``#/path`` or ``#!/path``); drop a
-    # pure scroll-anchor (``#section``) — it is not a navigation.
+    # Keep a hash-ROUTE fragment; drop a pure scroll-anchor (``#section``) — it
+    # is not a navigation. A fragment is a ROUTE in two shapes:
+    #   * path-style   ``#/dash`` / ``#!/dash``  — Angular, Vue, older React;
+    #   * query-style  ``#action=123&menu_id=81`` — Odoo and much enterprise
+    #     SPA tooling, which carry the whole view in key=value fragment state.
+    # MEASURED: the query-style shape was dropped, so a full ERP normalised to
+    # ONE url and the crawl of it ended after two states. A scroll anchor is a
+    # bare identifier and carries no ``=``, which is what separates the two.
     frag = frag.strip()
-    if frag[:1] in ("/", "!"):
+    if frag[:1] in ("/", "!") or "=" in frag:
         return base + "#" + frag
     return base
 

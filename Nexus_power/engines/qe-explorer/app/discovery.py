@@ -320,15 +320,8 @@ class DiscoveryMixin:
             if item is None:
                 # An application that navigates WITHOUT URLs leaves the frontier
                 # empty after the entry, however many screens it has. Sweep its
-                # own navigation once before calling the crawl complete; an app
-                # with routes finds no candidates and pays a single observation.
-                # ONLY for an application that navigates without URLs. If a
-                # single link href was ever enqueued, discovery had a frontier
-                # to work with and the sweep is not what ended the crawl — so a
-                # routed application pays nothing at all here, not even the
-                # observation.
-                if (not getattr(self, "_view_sweep_done", False)
-                        and not getattr(self, "_link_hrefs_enqueued", 0)):
+                # own navigation once before calling the crawl complete.
+                if self._view_sweep_is_warranted():
                     self._view_sweep_done = True
                     if await self._sweep_view_navigation():
                         continue
@@ -1443,6 +1436,39 @@ class DiscoveryMixin:
                 continue
             out.append(c)
         return out
+
+    def _view_sweep_is_warranted(self) -> bool:
+        """Whether to sweep client-side navigation now the frontier is empty.
+
+        ONCE PER CRAWL, and that is the whole rule. It deliberately does NOT
+        consult how many link hrefs discovery enqueued earlier.
+
+        MEASURED (Odoo 17, 2026-08-28). The gate used to require that no href
+        had EVER been enqueued, on the reasoning that "if discovery had a
+        frontier to work with, the sweep is not what ended the crawl". That
+        reasoning holds for an application which is routed THROUGHOUT. It fails
+        for the ordinary shape of enterprise software: a server-rendered login
+        page in front of a single-page application.
+
+        Odoo's login page carries four links — signup, reset password, database
+        manager, odoo.com. Enqueuing any ONE of them set the counter, and the
+        counter then disabled view-sweeping for the entire ERP behind the login,
+        whose authenticated UI reports ``anchored=0`` on every page. The crawl
+        of a full ERP ended with two states and ``stop_reason=completed``: not
+        blocked, not out of budget, simply nothing left to follow.
+
+        The property being approximated — "this application navigates without
+        URLs" — is a property of the AREA the crawl is standing in, not of the
+        crawl's history. Judging it from a counter that spans the login page and
+        the application behind it asks one page about another.
+
+        Cost is already bounded where it belongs: :meth:`_sweep_view_navigation`
+        observes the current page and returns 0 unless it finds at least
+        ``_MIN_VIEW_SECTIONS`` view-switching controls, so a routed application
+        that reaches an empty frontier pays one observation and nothing more —
+        which is exactly what that method's own docstring promises.
+        """
+        return not getattr(self, "_view_sweep_done", False)
 
     async def _sweep_view_navigation(self) -> int:
         """Visit each section of an application that navigates WITHOUT URLs.
