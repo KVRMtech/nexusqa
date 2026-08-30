@@ -735,6 +735,7 @@ class DiscoveryMixin:
                 journey_values=self._journey_values,
                 priors=self._field_priors, data_mode=self._data_mode,
                 choice_overrides=self._choice_overrides,
+                llm=self._llm_data_agent(),
             )
             actions.extend(fill.actions)
             self._tracker.note_action(len(fill.actions))
@@ -1256,6 +1257,35 @@ class DiscoveryMixin:
         return keys
 
 
+
+    def _llm_data_agent(self):
+        """Rung 8's agent, built once per crawl when the operator turned it on.
+
+        None when QEC_DATA_LLM is off — and None keeps every fill path and every
+        bundle byte-identical to the pre-LLM behaviour, which the goldens hold.
+        """
+        agent = getattr(self, "_llm_agent", "unset")
+        if agent != "unset":
+            return agent
+        settings = getattr(self, "_branch_settings", None)
+        if settings is None:
+            from .config import Settings
+            try:
+                settings = Settings()
+            except Exception:                        # noqa: BLE001
+                settings = None
+            self._branch_settings = settings
+        if not getattr(settings, "data_llm", False):
+            self._llm_agent = None
+            return None
+        from .llm_data import LLMDataAgent
+        self._llm_agent = LLMDataAgent(
+            model=getattr(settings, "data_llm_model", ""),
+            max_calls=int(getattr(settings, "data_llm_max_calls", 150)))
+        logger.info("qec.llm_data.enabled model=%s cap=%d",
+                    self._llm_agent.model, self._llm_agent.max_calls)
+        return self._llm_agent
+
     async def _branch_sweep(self, item: Any, url: str) -> None:
         """Ask every question on this page with every answer (T-BR / branch).
 
@@ -1666,6 +1696,7 @@ class DiscoveryMixin:
                     journey_values=self._journey_values,
                     priors=self._field_priors, data_mode=self._data_mode,
                     choice_overrides=self._choice_overrides,
+                    llm=self._llm_data_agent(),
                 )
                 step_actions.extend(fill.actions)
                 self._tracker.note_action(len(fill.actions))

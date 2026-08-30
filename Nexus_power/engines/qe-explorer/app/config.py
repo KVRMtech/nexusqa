@@ -107,6 +107,16 @@ class Settings(BaseSettings):
     branch_max_visits: int = Field(default=400, alias="QEC_BRANCH_MAX_VISITS")
     #: How deep a reveal chain is followed. Level 0 is the page as it loaded.
     branch_max_depth: int = Field(default=6, alias="QEC_BRANCH_MAX_DEPTH")
+
+    #: RUNG 8 — the LLM data agent. Off by default: the operator chooses it in
+    #: the portal (LLM / User+LLM data modes). Values are provenance-stamped
+    #: "llm" so a model's plausible answer is never confused with the client's.
+    data_llm: bool = Field(default=False, alias="QEC_DATA_LLM")
+    #: Model for the data agent (OpenAI chat completions).
+    data_llm_model: str = Field(default="gpt-4o-mini", alias="QEC_DATA_LLM_MODEL")
+    #: Per-crawl ceiling on agent calls — a pathological form cannot spend
+    #: unbounded tokens.
+    data_llm_max_calls: int = Field(default=150, alias="QEC_DATA_LLM_MAX_CALLS")
     max_depth: int = Field(default=6, alias="QEC_MAX_DEPTH")
     max_actions_per_state: int = Field(default=30, alias="QEC_MAX_ACTIONS_PER_STATE")
     max_wall_ms: int = Field(default=1_800_000, alias="QEC_MAX_WALL_MS")

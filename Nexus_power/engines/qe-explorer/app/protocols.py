@@ -120,13 +120,22 @@ class StateIdentity(Protocol):
 
 class Filler(Protocol):
     """Phase-A form filling: answer what can be answered honestly, record the
-    residue, and NEVER invent a value an LLM supplied.
+    residue, and stamp every value with the rung that produced it.
 
-    The value ladder (answer key → recalled → journey memory → priors →
-    synthesised default) lives in :mod:`app.forms` and :mod:`app.field_values`
-    and is not re-implemented behind this seam.  An LLM may say WHICH control
-    to operate (see :class:`OracleGateway`); it may never say what to type
-    into one.
+    THE CONTRACT CHANGED HERE, deliberately (2026-08-30). This seam used to
+    forbid model-supplied values outright. The operator can now choose, in the
+    portal, that a crawl must never stop for data — and under that choice a
+    model answers what no truer rung could (rung 8, ``provenance: llm``),
+    consulted only after the client's answer key, the journey's own memory,
+    recalled values and the constrained generator have all had their turn.
+
+    What did NOT change is the part that made the old rule matter: a model's
+    value may never override the client's data or a real generated value; an
+    enumerable field can only be answered with an option it offers; credentials
+    are never invented; and provenance keeps a journey completed on model data
+    visibly distinct from one proven on the client's own. The value ladder
+    lives in :mod:`app.forms` / :mod:`app.field_values` / :mod:`app.llm_data`
+    and is not re-implemented behind this seam.
     """
 
     async def fill(

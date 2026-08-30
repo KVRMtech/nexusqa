@@ -486,6 +486,9 @@ PROV_RECALLED = "recalled"        # remembered from a previous crawl of THIS cli
 PROV_APP_SUPPLIED = "app_supplied"  # the application shipped a valid value and we
                                     # could not justify replacing it
 PROV_SYNTHESIZED = "synthesized"  # generated from the crawl's fictional identity
+PROV_LLM = "llm"                  # rung 8: model-written because nothing truer could
+#                                   answer; opt-in via the portal's data mode and
+#                                   always visibly distinct from the client's data
 PROV_NEEDS_INPUT = "needs_input"  # nothing honest could be produced — ask the client
 PROV_INTENT_UNMET = "intent_unmet"  # R0: fill attempted but intent verification failed
 #: A radio-group member that is NOT the chosen answer. Not a gap and not a
@@ -510,13 +513,28 @@ PROV_UNBLOCK = "answered_to_unblock"
 MECHANIC_OPEN_CHOICE_UNVERIFIED = "open_choice_unverified"
 
 
+
+def _llm_should_answer(generated) -> bool:
+    """May the model answer this field? Only when nothing truer did.
+
+    ``None`` is the ladder saying it has nothing. ``"autotest"`` is the
+    generator's own placeholder — its admission it had nothing to SAY (measured:
+    39 of 48 live fill rejections were exactly this string typed into free-text
+    fields). Any other value came from a real rung and the model stays silent.
+    """
+    if generated is None:
+        return True
+    return str(generated).strip().lower() == "autotest"
+
+
 def resolve_field(control: Mapping[str, Any], kind: str, name: str,
                   answer_key: "AnswerKey", identity: Identity,
                   *, recalled: Optional[Mapping[str, str]] = None,
                   journey_values: Optional[Mapping[str, str]] = None,
                   priors: Optional[Mapping[str, Any]] = None,
                   data_mode: str = field_values.DATA_MODE_USER,
-                  choice_overrides: Optional[Mapping[str, str]] = None) -> dict[str, Any]:
+                  choice_overrides: Optional[Mapping[str, str]] = None,
+                  llm: Any = None) -> dict[str, Any]:
     """Decide what to type into one control, and record HOW it was decided.
 
     The order is fixed and fails toward asking rather than guessing:
@@ -679,6 +697,34 @@ def resolve_field(control: Mapping[str, Any], kind: str, name: str,
         # Last resort: the structural default ladder, which knows control shapes the
         # semantic vocabulary does not cover. Still synthesized, still declared.
         generated = _synthesize_default(control, kind, name)
+    # Rung 8 — THE MODEL ANSWERS WHAT NOTHING TRUER COULD (opt-in).
+    # Consulted only when every deterministic rung produced nothing (or the
+    # generator's own "autotest" placeholder), so it can never override the
+    # client's data, the journey's memory, or a real generated value. The
+    # options travel with the ask and the agent clamps off-list replies, so an
+    # enumerable field can only ever be answered with an option it offers.
+    llm_answered = False
+    if llm is not None and _llm_should_answer(generated):
+        # The CONTROL'S OWN labels, verbatim — the entry's decision-point copy
+        # is normalised to lowercase, and the agent returns whichever label it
+        # was given, so sending the normalised copy would commit "yes" to a
+        # control whose label is "Yes".
+        _opts = [str(o) for o in (control.get("group_options")
+                                  or control.get("options")
+                                  or entry.get("options") or ())
+                 if str(o).strip()]
+        _cons = " ".join(
+            f"{k}={str(control.get(k)).strip()}"
+            for k in ("pattern", "minlength", "maxlength", "min", "max")
+            if str(control.get(k) or "").strip())
+        _candidate = llm.value_for(
+            name=name, semantic_type=str(verdict.get("type") or ""),
+            kind=kind, options=_opts, constraints=_cons,
+            section=str(control.get("section") or ""))
+        if _candidate is not None:
+            generated = _candidate
+            llm_answered = True
+
     if generated is not None:
         # ONE QUESTION, ONE ANSWER. Every member of a radio group resolves to the
         # SAME chosen option, so filling each in turn checks them one after
@@ -698,10 +744,18 @@ def resolve_field(control: Mapping[str, Any], kind: str, name: str,
         # every box: on a health-conditions question that means answering "all
         # of them", inventing a medical history for a synthetic applicant out of
         # nothing but the order the fill happened to iterate in.
-        if kind in ("radio", "checkbox") and group_id and _norm(name) != _norm(str(generated)):
+        # THE MEMBER'S OWN LABEL, not the question. Since the ledger began
+        # naming rows by their question (aee5214), ``name`` here is "Do you
+        # smoke?" — which never equals "Yes", so this comparison marked EVERY
+        # radio member a sibling and no radio question could be answered at all
+        # (measured: filled_by_kind showed selects only). The answer picks a
+        # MEMBER, and membership is decided by the member's own option label.
+        member_label = str(control.get("name") or "")
+        if kind in ("radio", "checkbox") and group_id and _norm(member_label) != _norm(str(generated)):
             entry.update(provenance=PROV_GROUP_SIBLING, filled=False)
             return {"value": None, "entry": entry}
-        entry.update(provenance=PROV_SYNTHESIZED, filled=True)
+        entry.update(provenance=(PROV_LLM if llm_answered else PROV_SYNTHESIZED),
+                     filled=True)
         return {"value": generated, "entry": entry}
 
     # Rung 4.5 — AN ENUMERATION WE CANNOT READ YET IS NOT AN UNANSWERABLE ONE.
@@ -745,6 +799,9 @@ async def fill_form_phase_a(
     priors: Optional[Mapping[str, Any]] = None,
     data_mode: str = field_values.DATA_MODE_USER,
     choice_overrides: Optional[Mapping[str, str]] = None,
+    #: Rung 8, opt-in: the LLM data agent (app.llm_data.LLMDataAgent) or None.
+    #: None keeps every bundle byte-identical to the pre-LLM behaviour.
+    llm: Any = None,
     #: T-FE-01 — how many COMMITS one field may take, the first one included.
     #: Bounded on purpose: an unbounded loop against an application that rejects
     #: everything is a denial of service aimed at our own crawl.  Three means one
@@ -835,7 +892,7 @@ async def fill_form_phase_a(
         decision = resolve_field(control, kind, name, answer_key, identity,
                                  recalled=recalled, journey_values=journey_values,
                                  priors=priors, data_mode=data_mode,
-                                 choice_overrides=choice_overrides)
+                                 choice_overrides=choice_overrides, llm=llm)
         entry, value = decision["entry"], decision["value"]
 
         # WHICH WIDGET THIS IS.  Counted whether or not it is answered, so a
@@ -862,7 +919,7 @@ async def fill_form_phase_a(
             port, control, kind, value, clock, phase=phase, state_id=state_id,
             alerts=alerts, persona=persona, entry=entry, result=result,
             data_mode=data_mode, repair_budget=repair_budget,
-            retry_policy=retry_policy)
+            retry_policy=retry_policy, llm=llm)
         action, mechanic = outcome.action, outcome.mechanic
 
         if action is None:
@@ -963,6 +1020,7 @@ async def _fill_with_repair(
     data_mode: str,
     repair_budget: RepairBudget,
     retry_policy: RetryPolicy = RetryPolicy(),
+    llm: Any = None,
 ) -> _FillOutcome:
     """Commit one value, read the application's verdict, and repair on evidence.
 
@@ -1006,7 +1064,7 @@ async def _fill_with_repair(
     cons = fe_constraints.extract(control, kind=kind)
 
     provenance = str(entry.get("provenance") or "")
-    repairable = provenance == PROV_SYNTHESIZED
+    repairable = provenance in (PROV_SYNTHESIZED, PROV_LLM)
     semantic = str(entry.get("semantic_type") or "")
 
     def _regenerate(tightened: fe_constraints.Constraints,
@@ -1022,10 +1080,27 @@ async def _fill_with_repair(
             semantic, control, persona, kind=kind,
             name=str(control.get("name") or ""), cons=tightened,
             answer_choices=(_norm(data_mode) == field_values.DATA_MODE_AGENT))
-        if candidate.value is None or candidate.value in refused:
-            return None
-        entry["repair_rationale"] = candidate.rationale[:300]
-        return candidate.value
+        if candidate.value is not None and candidate.value not in refused:
+            entry["repair_rationale"] = candidate.rationale[:300]
+            return candidate.value
+        # The deterministic generator is out of candidates. The agent gets the
+        # application's own tightened rule and one chance to satisfy it — the
+        # rejection IS the constraint, which is the one situation a model
+        # handles better than a pattern table. Off-list and refused values are
+        # clamped exactly as at generation time.
+        if llm is not None:
+            hint = str(tightened)[:300]
+            candidate_llm = llm.value_for(
+                name=str(control.get("question_label") or control.get("name") or ""),
+                semantic_type=semantic, kind=kind,
+                options=[str(o) for o in (control.get("group_options")
+                                          or control.get("options") or ())],
+                constraints=hint, rejection=hint)
+            if candidate_llm is not None and candidate_llm not in refused:
+                entry["repair_rationale"] = "llm: satisfied the tightened rule"
+                entry["provenance"] = PROV_LLM
+                return candidate_llm
+        return None
 
     outcome: RepairOutcome = await repair_loop(
         driver, control, first_value=value, cons=cons,
