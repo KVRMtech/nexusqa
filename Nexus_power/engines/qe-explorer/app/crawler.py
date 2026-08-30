@@ -276,7 +276,13 @@ class Crawler(AuthFlowMixin, SubmitMixin, DiscoveryMixin, WalkerMixin,
         # ONE person for the whole crawl: regenerating per form would produce a
         # postcode belonging to a different region than the one selected two steps
         # earlier, which is exactly what an application cross-validates.
-        self._identity = derive_identity(identity_seed or "qec")
+        # The SEED keeps the person stable across crawls (a comparable rate
+        # quote); the RUN TOKEN moves only the fields an application refuses to
+        # see twice — email and username — so a second crawl of an
+        # account-opening funnel is not answered "already registered". See
+        # identity_pack.derive.
+        self._identity = derive_identity(identity_seed or "qec",
+                                         run_token=crawl_id or "")
         # "user" = today's behaviour (a radio group is the client's choice to make);
         # "agent" = answer everything honestly answerable, recording each choice.
         self._data_mode = str(data_mode or "user").strip().lower()

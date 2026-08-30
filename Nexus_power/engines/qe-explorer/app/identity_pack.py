@@ -165,8 +165,24 @@ class Identity:
         }
 
 
+
+def _run_tag(run_token: str) -> str:
+    """A short, stable, readable token for one run — or "" for none.
+
+    Hashed rather than used raw so a crawl id of any shape or length becomes a
+    few URL-safe characters, and readable so a human reading the evidence can
+    still recognise the address as ours.
+    """
+    token = (run_token or "").strip()
+    if not token:
+        return ""
+    digest = hashlib.sha256(token.encode("utf-8")).hexdigest()
+    return digest[:6]
+
+
 def derive(seed: str, *, today: Optional[date] = None,
-           min_age: int = 30, max_age: int = 55) -> Identity:
+           min_age: int = 30, max_age: int = 55,
+           run_token: str = "") -> Identity:
     """Build the one person this crawl will present itself as.
 
     ``seed`` should be stable for a tenant+application so the same client keeps
@@ -203,7 +219,24 @@ def derive(seed: str, *, today: Optional[date] = None,
     street = f"{street_no} {_STREETS[b[7] % len(_STREETS)]} {_STREET_TYPES[b[8] % len(_STREET_TYPES)]}"
     unit = f"Suite {1 + (b[9] % 40)}" if b[10] % 3 == 0 else ""
 
+    # UNIQUENESS WITHOUT LOSING THE PERSON.
+    #
+    # The seed is stable on purpose — the same client keeps the same person, so
+    # a rate quote is comparable between runs. That is exactly wrong for the one
+    # class of field an application refuses to see twice: crawl an
+    # account-opening funnel today and it completes; crawl it tomorrow and the
+    # same email arrives at the same application, which answers "already
+    # registered" — a rejection no repair can satisfy, because the constraint is
+    # about the value's HISTORY, not its shape.
+    #
+    # So only the fields whose validity depends on never having been used before
+    # carry the run token. Name, birth date, address, national id and card are
+    # untouched, and an empty token reproduces the old value exactly, so every
+    # existing caller and golden is unchanged.
     username = f"{given.lower()}.{family.lower()}{b[11] % 100:02d}"
+    tag = _run_tag(run_token)
+    if tag:
+        username = f"{username}.{tag}"
     # RFC 2606 reserves example.com for documentation — it can never be a real
     # mailbox, so a synthetic address can never reach a real person.
     email = f"{username}@example.com"
