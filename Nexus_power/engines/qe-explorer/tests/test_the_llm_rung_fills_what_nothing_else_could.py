@@ -112,7 +112,11 @@ def test_the_placeholder_rule():
 # ── the agent's own guarantees ─────────────────────────────────────────────
 
 def _agent(handler, **kw):
-    return LLMDataAgent(transport=httpx.MockTransport(handler), **kw)
+    """DIRECT mode on purpose: these tests exercise the provider-call rules
+    (clamp, breaker, cap) in isolation. Direct refuses without the dev flag —
+    which its own test below asserts — so the flag is set here explicitly."""
+    os.environ["QEC_DATA_LLM_DIRECT"] = "true"
+    return LLMDataAgent(mode="direct", transport=httpx.MockTransport(handler), **kw)
 
 
 def _ok(value):
@@ -167,3 +171,89 @@ def test_the_cap_ends_consultations_quietly():
     assert a.value_for(name="B", semantic_type="free_text", kind="text") == "fine"
     assert a.value_for(name="C", semantic_type="free_text", kind="text") is None
     assert a.calls == 2
+
+
+
+# ── the wire itself: no second route ───────────────────────────────────────
+
+def test_direct_mode_refuses_itself_without_the_dev_flag(monkeypatch):
+    """T-SEC-12's point, held on THIS side of the fleet: a direct provider call
+    bypasses the PII egress guard, so it must refuse unless a developer
+    explicitly opted in — and the refusal costs no HTTP call."""
+    monkeypatch.delenv("QEC_DATA_LLM_DIRECT", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+
+    def explode(request):
+        raise AssertionError("no request may leave direct mode without the flag")
+
+    a = LLMDataAgent(mode="direct", transport=httpx.MockTransport(explode))
+    assert a.value_for(name="Notes", semantic_type="free_text", kind="text") is None
+
+
+def test_central_mode_posts_a_signed_request_and_takes_the_answer(monkeypatch):
+    """The DEFAULT transport: qe-central's /internal/pick-value, signed with the
+    same envelope as /pick-advance. The server owns the model and the scan."""
+    seen = {}
+
+    class _Settings:
+        callback_url = "http://qe-central:8000"
+        explorer_token = "tok-1"
+
+        def sign_payload(self, payload, *, scope=""):
+            seen["scope"] = scope
+            return "sig-abc"
+
+    def handler(request):
+        seen["url"] = str(request.url)
+        seen["sig"] = request.headers.get("X-QEC-Signature")
+        seen["tok"] = request.headers.get("X-QEC-Token")
+        import json as _json
+        seen["body"] = _json.loads(request.content.decode("utf-8"))
+        return httpx.Response(200, json={"value": "No", "status": "answered",
+                                         "usage": {}})
+
+    a = LLMDataAgent(settings=_Settings(), crawl_id="c-9",
+                     transport=httpx.MockTransport(handler))
+    got = a.value_for(name="Do you smoke?", semantic_type="choice", kind="radio",
+                      options=["Yes", "No"])
+    assert got == "No"
+    assert seen["url"].endswith("/internal/pick-value")
+    assert seen["scope"] == "pick-value:c-9"
+    assert seen["sig"] == "sig-abc" and seen["tok"] == "tok-1"
+    assert seen["body"]["options"] == ["Yes", "No"]
+
+
+def test_central_none_and_unavailable_both_become_residue():
+    class _Settings:
+        callback_url = "http://qe-central:8000"
+        explorer_token = "t"
+
+        def sign_payload(self, payload, *, scope=""):
+            return "s"
+
+    for status in ("none", "unavailable"):
+        def handler(request, _s=status):
+            return httpx.Response(200, json={"value": None, "status": _s})
+        a = LLMDataAgent(settings=_Settings(), crawl_id="c",
+                         transport=httpx.MockTransport(handler))
+        assert a.value_for(name="Notes", semantic_type="free_text",
+                           kind="text") is None
+        assert a.breaker_open is False, "an honest non-answer is not a failure"
+
+
+def test_no_module_but_this_one_may_even_name_a_model_host():
+    """The explorer-side mirror of qe-central's T-SEC-12 AST guard. A second
+    model client in this service would again sail past qe-central's suite, so
+    the invariant is pinned where the first violation actually lived."""
+    import pathlib
+    app_dir = pathlib.Path(__file__).resolve().parents[1] / "app"
+    offenders = []
+    for py in app_dir.rglob("*.py"):
+        if py.name == "llm_data.py":
+            continue
+        text = py.read_text(encoding="utf-8", errors="replace")
+        for host in ("api.openai.com", "api.anthropic.com",
+                     "generativelanguage.googleapis.com"):
+            if host in text:
+                offenders.append(f"{py.name}: {host}")
+    assert offenders == [], offenders

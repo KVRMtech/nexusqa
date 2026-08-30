@@ -1279,11 +1279,17 @@ class DiscoveryMixin:
             self._llm_agent = None
             return None
         from .llm_data import LLMDataAgent
+        # CENTRAL BY DEFAULT: the model is reached only through qe-central's
+        # /internal/pick-value, where the PII egress guard scans every payload
+        # (T-SEC-12 — "no second route"). The direct provider path exists for a
+        # developer's bench and refuses itself unless QEC_DATA_LLM_DIRECT=true.
         self._llm_agent = LLMDataAgent(
+            settings=settings, crawl_id=str(getattr(self, "crawl_id", "") or ""),
             model=getattr(settings, "data_llm_model", ""),
             max_calls=int(getattr(settings, "data_llm_max_calls", 150)))
-        logger.info("qec.llm_data.enabled model=%s cap=%d",
-                    self._llm_agent.model, self._llm_agent.max_calls)
+        logger.info("qec.llm_data.enabled mode=%s model=%s cap=%d",
+                    self._llm_agent.mode, self._llm_agent.model,
+                    self._llm_agent.max_calls)
         return self._llm_agent
 
     async def _branch_sweep(self, item: Any, url: str) -> None:

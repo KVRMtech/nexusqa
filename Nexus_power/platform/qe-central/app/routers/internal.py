@@ -623,6 +623,44 @@ async def pick_advance(request: Request) -> dict:
             "signature": decision.signature, "usage": decision.usage}
 
 
+@router.post("/pick-value")
+async def pick_value(request: Request) -> dict:
+    """Rung 8 of the data ladder: ONE test value for ONE field.
+
+    Called mid-crawl when every deterministic value rung produced nothing.
+    HMAC-authenticated (same shared secret as pick-advance), and the model is
+    reached ONLY through ``platform_api.complete_llm`` — the guarded wire that
+    PII-scans every outbound payload. This endpoint exists precisely so the
+    explorer never needs its own model client (T-SEC-12: "no second route").
+
+    Three-state contract, mirroring pick-advance:
+
+        {"value": str|null, "status": "answered"|"none"|"unavailable",
+         "usage": {...}}
+
+    ``none`` and ``unavailable`` are both HTTP 200 (best-effort contract): the
+    field stays residue and the crawl continues. Only a bad signature errors.
+    """
+    body, binding = await _authenticate_internal(request, "pick-value")
+
+    from ..services import value_agent
+
+    decision = await value_agent.pick_value(
+        # binding.tenant_id — the SERVER's answer, not the body's claim.
+        tenant_id=binding.tenant_id,
+        name=str(body.get("name") or ""),
+        semantic_type=str(body.get("semantic_type") or ""),
+        kind=str(body.get("kind") or ""),
+        options=[str(o) for o in (body.get("options") or [])][:60],
+        constraints=str(body.get("constraints") or "")[:400],
+        section=str(body.get("section") or "")[:200],
+        page_title=str(body.get("page_title") or "")[:200],
+        rejection=str(body.get("rejection") or "")[:400],
+    )
+    return {"value": decision.value, "status": decision.status,
+            "usage": decision.usage}
+
+
 @router.post("/operate-control")
 async def operate_control(request: Request) -> dict:
     """R3 Crawl Medic: which action might operate a stuck control?
