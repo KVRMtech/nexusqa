@@ -27,8 +27,9 @@ Accessible-name ladder (design order — label[for] FIRST, deliberately):
     5. name-from-content text  → "content"      (buttons / links / menuitems)
     6. ``title``               → "title"        (best_effort)
     7. ``placeholder``         → "placeholder"   (best_effort)
+    8. row label cell          → "row-label"     (best_effort)
 
-``best_effort`` is set on rungs 6-7 — a placeholder/title is NOT a reliable
+``best_effort`` is set on rungs 6-8 — a placeholder/title is NOT a reliable
 accessible name and the refiner surfaces that as an a11y weakness rather than
 silently trusting it.
 
@@ -81,8 +82,9 @@ RawControl shape (one object per visible interactive element):
                     dropdown/disclosure toggle (a Bootstrap ``dropdown-toggle`` etc.
                     whose menu items are hidden until it is clicked), "" otherwise
     landmark        {role, name} of the nearest landmark ancestor (anchor seed)
-    filter_scope    "thead" when the control sits in a data table's FILTER
-                    row, "tbody"/"tfoot" for the data itself, "" otherwise.
+    filter_scope    "thead" when the control sits in a table HEADER, "grid"
+                    when inside a table carrying many rows (a list of records),
+                    "table" for a small layout table, "" outside a table.
                     Structural: a list filter is not a business field.
 
 THE CAPTURE COMPLETENESS CONTRACT (M0.x)
@@ -585,6 +587,47 @@ INVENTORY_JS = (r"""
   }
 
   // Accessible name via the design-ordered subset. Returns {name, source}.
+  // 8. THE ROW'S OWN LABEL CELL — a form laid out in a table.
+  //
+  // MEASURED (Dolibarr third-party form, 2026-08-30): 94% of that form's fields
+  // reached the classifier with no usable name, and the page had the labels all
+  // along — in the first cell of each control's own <tr>:
+  //
+  //     <tr><td>Country</td><td><select name="country_id">…  ->  ""
+  //     <tr><td>Status</td> <td><select name="status">…      ->  ""
+  //
+  // Everything downstream keys off the name: the semantic classifier fell back
+  // to "structural" (confidence 0.5) for all of them, the value generator was
+  // therefore working blind, and the seed request could not say what it was
+  // asking about. A JS-enhanced combobox (select2 and its kind) makes it worse
+  // by presenting its CURRENT SELECTION as the widget's accessible name, so the
+  // catalogue recorded a field called "India (IN)".
+  //
+  // This is a DECLARED rung, not an inference: the label cell is the page's own
+  // wording, in the page's own structure, and it is read only when every rung
+  // above produced nothing. Marked best_effort — a layout convention is weaker
+  // evidence than <label for>, and the refiner should keep saying so.
+  function rowLabel(el) {
+    var cell = el.closest ? el.closest("td, th") : null;
+    if (!cell) return "";
+    var row = cell.parentElement;
+    if (!row || lc(row.tagName) !== "tr") return "";
+    var cells = row.children;
+    if (!cells || cells.length < 2) return "";
+    // The first cell of the row, and only when the control is NOT in it — a
+    // one-cell row, or a control sitting in the label cell itself, tells us
+    // nothing.
+    var first = cells[0];
+    if (first === cell) return "";
+    // A label cell holds words, not more controls.
+    try {
+      if (first.querySelector("input, select, textarea, button")) return "";
+    } catch (e) {}
+    var text = norm(first.textContent || "");
+    if (!text || text.length > MAX_LANDMARK) return "";
+    return text.replace(/[:*\s]+$/, "");
+  }
+
   function accessibleName(el, doc) {
     var role = implicitRole(el);
     var tag = lc(el.tagName);
@@ -637,6 +680,9 @@ INVENTORY_JS = (r"""
     // 7. placeholder (best-effort)
     var ph = norm(attr(el, "placeholder"));
     if (ph) return { name: ph, source: "placeholder" };
+    // 8. the row's label cell — a form laid out in a table (see rowLabel)
+    var rl = rowLabel(el);
+    if (rl) return { name: rl, source: "row-label" };
     return { name: "", source: "none" };
   }
 
@@ -1129,13 +1175,29 @@ INVENTORY_JS = (r"""
   // had to supply values for -- "Third parties with sales representative",
   // "Cust./Prosp. tags/categories". Structure, never vocabulary: "search" is a
   // word in one language and this crawls applications in many.
+  //: A table carrying at least this many rows is a LIST OF RECORDS, not a form
+  //: laid out in a table. Dolibarr's proposal list has 54; a legacy form laid
+  //: out in a table has a handful.
+  var GRID_MIN_ROWS = 8;
+
   function filterScopeOf(el) {
     var cur = el;
     var hops = 0;
+    var head = false;
     while (cur && cur.nodeType === 1 && hops < 30) {
       var tag = lc(cur.tagName);
-      if (tag === "thead") return "thead";
-      if (tag === "tbody" || tag === "tfoot") return tag;
+      if (tag === "thead") head = true;
+      if (tag === "table") {
+        // MEASURED (Dolibarr, 2026-08-29): keying on <thead> alone found NOTHING
+        // there -- inputs in thead = 0, in tbody = 92 -- because it puts its
+        // filter row in the body. A DATA GRID declares itself by shape instead:
+        // many sibling rows of records. That is the signal, and it needs no
+        // vocabulary and no per-application knowledge.
+        var rows = 0;
+        try { rows = cur.querySelectorAll("tr").length; } catch (e) {}
+        if (head) return "thead";
+        return rows >= GRID_MIN_ROWS ? "grid" : "table";
+      }
       if (tag === "form" || tag === "body") return "";
       cur = parentAcross(cur);
       hops++;

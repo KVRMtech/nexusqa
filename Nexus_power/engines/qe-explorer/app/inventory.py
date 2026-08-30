@@ -504,8 +504,11 @@ def is_filter_control(record: Mapping[str, Any]) -> bool:
 
       * ``input type=search``            -- the platform's own statement
       * an ancestor with ``role=search`` -- ARIA's own statement
-      * ``filter_scope == "thead"``      -- structural. A filter row lives in the
-        table HEADER; the data lives in the body.
+      * ``filter_scope`` is ``"thead"`` or ``"grid"`` -- structural. A filter row
+        lives in the table HEADER; and where an application puts it in the BODY
+        instead (Dolibarr does), a DATA GRID still declares itself by shape:
+        many sibling rows of records. A data-entry form does not have 26 rows,
+        so a small layout table is left alone.
 
     Fails toward ASKING. Anything else is a business field, because a filter
     wrongly treated as a field costs one wasted fill, while a field wrongly
@@ -516,7 +519,7 @@ def is_filter_control(record: Mapping[str, Any]) -> bool:
     landmark = record.get("landmark") or {}
     if isinstance(landmark, Mapping) and _norm_kind(landmark.get("role")) == "search":
         return True
-    return _norm_kind(record.get("filter_scope")) == "thead"
+    return _norm_kind(record.get("filter_scope")) in ("thead", "grid")
 
 
 def question_name_of(record: Mapping[str, Any]) -> str:
@@ -1026,7 +1029,12 @@ def build_control_record(
     record: ControlRecord = {
         "name": name,
         "name_source": _s(raw.get("name_source")) or "none",
-        "best_effort_name": bool(raw.get("best_effort")) or (not name),
+        # A row-label is the page's own wording read from its LAYOUT rather
+        # than a declared association, so it carries the same best_effort mark
+        # as title/placeholder — weaker evidence than <label for>, and the
+        # refiner should keep saying so.
+        "best_effort_name": (bool(raw.get("best_effort")) or (not name)
+                             or _s(raw.get("name_source")) == "row-label"),
         "role": role,
         "kind": kind,
         "tag": tag,
