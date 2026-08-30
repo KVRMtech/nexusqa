@@ -31,14 +31,23 @@ def _s(value: Any) -> str:
     return "" if value is None else str(value)
 
 
-def explorer_fill_contract(answer_key: Mapping[str, Any] | None) -> dict:
+def explorer_fill_contract(answer_key: Mapping[str, Any] | None,
+                           env_overlay: Mapping[str, str] | None = None) -> dict:
     """Project a canonical ``answer_key`` onto ``{exact, semantic, regex_rules}``.
 
     Precedence (highest first): explicit ``exact`` → ``regex_rules`` → ``semantic``
-    → the Data-tab ``fill`` map.  ``fill`` entries become ``semantic`` (substring)
-    matches — the most forgiving against real labels like ``"Coverage amount ($)"``
-    where an exact accessible-name match would miss.  A key already present as
-    ``exact`` is never downgraded to ``semantic``.
+    → the Data-tab ``fill`` map → ``env_overlay``.  ``fill`` entries become
+    ``semantic`` (substring) matches — the most forgiving against real labels like
+    ``"Coverage amount ($)"`` where an exact accessible-name match would miss.  A
+    key already present as ``exact`` is never downgraded to ``semantic``.
+
+    ``env_overlay`` is RUNG 2: answers fetched from the client's own test
+    environment (see :mod:`app.services.env_data`).  It enters LAST and never
+    overwrites anything above it, because a value the client typed into this app
+    is a more specific and more recent instruction than a fixture endpoint's
+    standing answer.  Omitting it leaves this projection byte-identical to what
+    every existing caller already gets — which is what keeps the characterization
+    bundles unchanged.
     """
     ak = dict(answer_key or {})
     exact: dict[str, str] = {}
@@ -68,6 +77,13 @@ def explorer_fill_contract(answer_key: Mapping[str, Any] | None) -> dict:
     src_fill = ak.get("fill")
     if isinstance(src_fill, Mapping):
         for k, v in src_fill.items():
+            key = _s(k).strip()
+            if key and key not in exact:
+                semantic.setdefault(key, _s(v))
+
+    # RUNG 2, entering beneath everything the client stated directly.
+    if isinstance(env_overlay, Mapping):
+        for k, v in env_overlay.items():
             key = _s(k).strip()
             if key and key not in exact:
                 semantic.setdefault(key, _s(v))
