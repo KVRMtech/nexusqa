@@ -62,6 +62,11 @@ class ExploreDispatchRequest(BaseModel):
     identity_seed: str = Field(default="", max_length=200)
     #: DATA MODE — "user" (default, byte-identical to before) or "agent".
     data_mode: str = Field(default="user", max_length=16)
+    #: Whether the explorer may consult the LLM data agent (rung 8). Carried
+    #: SEPARATELY from data_mode because the portal's three modes span both
+    #: dials — see services/data_posture — and a crawl reporting "LLM" with the
+    #: agent off is exactly the drift that seam exists to prevent.
+    data_llm: bool = Field(default=False)
     #: "explore" / "target" / "e2e" — the step budget, never the safety gates.
     crawl_mode: str = Field(default="explore", max_length=16)
     #: TRAVERSAL POSTURE — "full" | "probe" | "observe" (prod_guard.traversal_posture).
@@ -176,6 +181,7 @@ def _log_safe(req: ExploreDispatchRequest) -> dict:
         "resume": bool(req.resume),
         "mechanics_count": len(req.proven_mechanics or {}),
         "data_mode": req.data_mode,
+        "data_llm": req.data_llm,
         "crawl_mode": req.crawl_mode,
         "traversal": req.traversal,
         # Booleans only — never the raw routing cookies/headers/basic-auth (secret).

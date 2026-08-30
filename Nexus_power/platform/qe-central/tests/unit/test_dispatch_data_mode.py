@@ -30,6 +30,7 @@ import pytest
 
 from app.db import utc_now
 from app.security import prod_guard
+from app.services import data_posture
 
 
 def _app(env_kind: str = "", schedule: dict | None = None) -> SimpleNamespace:
@@ -47,10 +48,19 @@ def _app(env_kind: str = "", schedule: dict | None = None) -> SimpleNamespace:
 
 
 def _resolved_data_mode(row) -> str:
-    """The dispatcher's rule, exercised exactly as ``start_exploration`` runs it."""
+    """The dispatcher's rule, exercised exactly as ``start_exploration`` runs it.
+
+    The decision itself now lives in ``services.data_posture`` — the portal's
+    three modes span TWO explorer dials, and resolving them in one place is what
+    stops a crawl reporting "LLM" while the agent is off. This calls the real
+    resolver rather than re-modelling it, so the policy below cannot drift from
+    the code the way a hand-copied rule can.
+    """
     traversal = prod_guard.traversal_posture(row)
     declared = str((row.schedule or {}).get("data_mode") or "").strip().lower()
-    return declared or ("agent" if traversal == prod_guard.TRAVERSAL_FULL else "user")
+    return data_posture.resolve(
+        declared,
+        attested_default_agent=(traversal == prod_guard.TRAVERSAL_FULL)).data_mode
 
 
 # ── the operator's explicit choice is never overridden ──────────────────────
@@ -112,5 +122,13 @@ def test_the_dispatcher_uses_exactly_this_rule():
 
     src = inspect.getsource(explorations)
     assert "declared_data_mode" in src
-    assert 'if traversal == prod_guard.TRAVERSAL_FULL else "user"' in src
+    # The rule moved OUT of the router and into services/data_posture, so the
+    # tripwire follows it: the dispatcher must DELEGATE, and must still carry
+    # both dials to the explorer. Asserting the old inline literal here would
+    # only prove the refactor had not happened.
+    assert "data_posture.resolve(" in src
+    assert "attested_default_agent=(traversal == prod_guard.TRAVERSAL_FULL)" in src
     assert "data_mode=data_mode," in src
+    assert "data_llm=data_llm," in src, (
+        "both dials must reach the explorer, or a crawl can run with the model "
+        "off while its report says otherwise")

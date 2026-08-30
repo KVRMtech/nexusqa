@@ -693,7 +693,7 @@ async def _resolve_session(credentials: dict | None) -> dict | None:
 # and an `env_attestation`, and a bare `issuer`/`normalize_origin` in this module
 # would be genuinely ambiguous to a reader.
 from ..db.attestation_models import PROVISIONING_ACTIVE, EnvProvisioningRecordRow
-from ..services import attestation_issuer as attest_issuer_svc
+from ..services import attestation_issuer as attest_issuer_svc, data_posture
 from ..services.walk_attestation import normalize_origin as _attest_normalize_origin
 
 
@@ -1078,9 +1078,17 @@ async def _dispatch_explorer(
         # by PROVENANCE, not by refusing to answer: every generated value is
         # recorded as synthesized in the field ledger, so a journey completed with
         # invented data is a valid traversal and a clearly-labelled one.
+        # THREE PORTAL MODES, TWO EXPLORER DIALS, resolved in ONE place so the
+        # report's claim and the crawl's behaviour cannot drift apart — see
+        # services/data_posture. `data_llm` is False unless the operator chose
+        # a mode that includes the model: an unmade decision must never start
+        # consulting a third party.
         declared_data_mode = str((row.schedule or {}).get("data_mode") or "").strip().lower()
-        data_mode = declared_data_mode or (
-            "agent" if traversal == prod_guard.TRAVERSAL_FULL else "user")
+        posture = data_posture.resolve(
+            declared_data_mode,
+            attested_default_agent=(traversal == prod_guard.TRAVERSAL_FULL))
+        data_mode = posture.data_mode
+        data_llm = posture.data_llm
 
         # E2E DOES NOT SILENTLY DEGRADE.
         #
@@ -1377,6 +1385,7 @@ async def _dispatch_explorer(
         # behaviour that existed before field learning — an unset app must never be
         # silently upgraded into letting an agent choose its business paths.
         data_mode=data_mode,
+        data_llm=data_llm,
         # Absent ⇒ derived from the scope, which is exactly how mode worked before
         # this key existed: a confined crawl is Target, an unconfined one Explore.
         # Only an explicit "e2e" opts into the deeper walk — and a planned
