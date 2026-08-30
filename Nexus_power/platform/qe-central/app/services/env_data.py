@@ -36,7 +36,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import Mapping, Optional, Protocol, Sequence
+from typing import Any, Mapping, Optional, Protocol, Sequence
 
 from . import data_library
 
@@ -166,3 +166,29 @@ def answer_key_overlay(provider: Optional[EnvProvider],
     if overlay:
         logger.info("qec.env_data.overlay fields=%d", len(overlay))
     return overlay
+
+
+def overlay_for_app(answer_key: Optional[Mapping[str, Any]],
+                    field_labels: Sequence[str],
+                    *, token: str = "") -> dict[str, str]:
+    """The last mile: a stored app row -> the answers its environment gives.
+
+    WHERE THE CONFIGURATION LIVES, and why it is split. The non-secret half —
+    which door, which URL — sits under ``answer_key["environment"]``, because an
+    environment IS part of the client's data configuration and putting it there
+    needs no new column and no migration. The TOKEN is a credential and never
+    goes there: it belongs in the tenant's envelope-encrypted ``credentials``
+    blob like every other secret, and is passed in here already decrypted by the
+    caller that was entitled to read it.
+
+    Returns {} for an app with no environment configured, which is every app
+    today — so this is inert until a client opts in, by construction rather than
+    by a flag someone has to remember to check.
+    """
+    config = dict((answer_key or {}).get("environment") or {})
+    if not config:
+        return {}
+    if token and not config.get("token"):
+        config["token"] = token
+    from .env_data_transports import build          # local: avoids a cycle
+    return answer_key_overlay(build(config), field_labels)

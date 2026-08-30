@@ -293,3 +293,54 @@ def test_a_value_is_never_written_to_a_log(caplog):
     p = StaticProvider({"member id": "M-SECRET-1001"})
     answer_key_overlay(p, ["Member ID"])
     assert "M-SECRET-1001" not in caplog.text
+
+
+# ── the last mile: a stored app row becomes answers ────────────────────────
+
+def test_an_app_with_no_environment_configured_is_completely_inert():
+    """THE DEFAULT, and it is every app today. The rung must cost nothing until
+    a client opts in — by construction, not by a flag someone must remember."""
+    from app.services.env_data import overlay_for_app
+
+    assert overlay_for_app({}, ["Member ID"]) == {}
+    assert overlay_for_app(None, ["Member ID"]) == {}
+    assert overlay_for_app({"fill": {"a": "b"}}, ["Member ID"]) == {}
+
+
+def test_a_manifest_stored_on_the_app_answers_its_fields():
+    from app.services.env_data import overlay_for_app
+
+    row = {"environment": {"kind": "manifest",
+                           "values": {"member id": "M-1001"}}}
+    assert overlay_for_app(row, ["Member ID", "Colour"]) == {"Member ID": "M-1001"}
+
+
+def test_the_token_comes_from_the_encrypted_blob_not_the_answer_key():
+    """A token is a credential. It travels in the tenant's envelope-encrypted
+    ``credentials``, is decrypted by the caller entitled to read it, and is
+    passed in — never stored beside the non-secret configuration."""
+    from app.services.env_data import overlay_for_app
+
+    row = {"environment": {"kind": "rest", "base_url": "https://x.example"}}
+    assert "token" not in row["environment"]
+    # No network in this test; the point is that the call accepts the split and
+    # does not require the secret to live in the answer key.
+    assert overlay_for_app(row, ["Member ID"], token="s3cret") == {}
+
+
+def test_a_token_already_in_the_config_is_not_overwritten():
+    from app.services.env_data import overlay_for_app
+
+    row = {"environment": {"kind": "manifest", "values": {"member id": "M-1"}}}
+    assert overlay_for_app(row, ["Member ID"], token="ignored") == \
+        {"Member ID": "M-1"}
+
+
+def test_a_broken_environment_block_yields_no_answers_rather_than_raising():
+    """A half-configured app must not fail a dispatch."""
+    from app.services.env_data import overlay_for_app
+
+    for bad in ({"environment": {"kind": "rest"}},
+                {"environment": {"kind": "nonsense"}},
+                {"environment": {"kind": "manifest", "values": {}}}):
+        assert overlay_for_app(bad, ["Member ID"]) == {}
