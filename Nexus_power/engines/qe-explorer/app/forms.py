@@ -50,6 +50,7 @@ from .browser import (
     classify_submit_after,
 )
 from . import field_semantics, field_signature, field_values
+from . import sandbox_registry as _sandbox_registry
 from .fill_engine import constraints as fe_constraints
 from .fill_engine import generator as fe_generator
 from .fill_engine import widgets as fe_widgets
@@ -486,6 +487,10 @@ PROV_RECALLED = "recalled"        # remembered from a previous crawl of THIS cli
 PROV_APP_SUPPLIED = "app_supplied"  # the application shipped a valid value and we
                                     # could not justify replacing it
 PROV_SYNTHESIZED = "synthesized"  # generated from the crawl's fictional identity
+PROV_SANDBOX = "sandbox"          # rung 7.5: a value the EMBEDDED SERVICE
+#                                   publishes for its own sandbox (Stripe's test
+#                                   card, Plaid's user_good) — a convention, not
+#                                   a secret, and rejected by any real endpoint
 PROV_HARVESTED = "harvested"      # rung 3: a value THIS application displayed
 #                                   on one of its own list pages — referentially
 #                                   real, invented by nobody
@@ -694,6 +699,23 @@ def resolve_field(control: Mapping[str, Any], kind: str, name: str,
         if existing:
             entry.update(provenance=PROV_APP_SUPPLIED, filled=True)
             return {"value": existing, "entry": entry}
+    # Rung 7.5 — THE EMBEDDED SERVICE'S OWN PUBLISHED TEST VALUE.
+    #
+    # Decided by the FRAME's origin, never by the label: a control inside
+    # js.stripe.com is a Stripe control whatever the page calls it, and a
+    # control on the application's own page is never one however much its label
+    # looks like it. Reversing that would post Stripe's test card to the
+    # client's own gateway.
+    #
+    # Above the generator because a persona has no idea what Plaid wants; below
+    # harvest and the client's data, which are about this application rather
+    # than the widget embedded in it.
+    sandbox_value = _sandbox_registry.value_for(
+        control, semantic_type=str(verdict.get("type") or ""))
+    if sandbox_value is not None:
+        entry.update(provenance=PROV_SANDBOX, filled=True)
+        return {"value": sandbox_value, "entry": entry}
+
     # Rung 3 — A VALUE THIS APPLICATION ITSELF DISPLAYED.
     #
     # ABOVE the generator, deliberately. No generator and no model can invent a
