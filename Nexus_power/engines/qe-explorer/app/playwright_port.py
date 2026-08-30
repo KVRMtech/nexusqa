@@ -1922,6 +1922,19 @@ class PlaywrightBrowserPort(BrowserPort):
         except Exception:                                        # noqa: BLE001
             return []
 
+    async def collect_labelled_values(self) -> list[dict[str, Any]]:
+        """Read this page's "label: value" pairs (rung 4 — see app.minted).
+
+        Best-effort by construction, for collect_grids' reason: a page with no
+        such pairs returns [], and any evaluation failure returns [] too,
+        because a rung that cannot run must cost the crawl nothing.
+        """
+        from .minted import MINTED_JS
+        try:
+            return list(await self._page.evaluate(MINTED_JS) or [])
+        except Exception:                                        # noqa: BLE001
+            return []
+
     async def storage_state(self) -> dict[str, Any]:
         return await self._context.storage_state()
 

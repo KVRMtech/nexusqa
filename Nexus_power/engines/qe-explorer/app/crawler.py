@@ -145,6 +145,7 @@ from .state_identity import (_MAX_COVERAGE_STATES, _MAX_DANGER_NAMES,
                              _form_snapshot, _is_password, _network_calls)
 from . import flow_ledger
 from .harvest import HarvestPool as _HarvestPool
+from .minted import MintRegistry as _MintRegistry
 from .identity_pack import derive as derive_identity
 from . import vision_gate
 from .vision_loop import VisionEscalation
@@ -277,6 +278,8 @@ class Crawler(AuthFlowMixin, SubmitMixin, DiscoveryMixin, WalkerMixin,
         #: In-process for the life of one crawl, never emitted, never logged;
         #: the same contract as _journey_values above, and for the same reason.
         self._harvest = _HarvestPool()
+        #: RUNG 4 — references THIS crawl caused the app to create.
+        self._minted = _MintRegistry()
         self._field_priors = dict(field_priors or {})
         # ONE person for the whole crawl: regenerating per form would produce a
         # postcode belonging to a different region than the one selected two steps

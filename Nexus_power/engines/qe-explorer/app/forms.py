@@ -491,6 +491,12 @@ PROV_SANDBOX = "sandbox"          # rung 7.5: a value the EMBEDDED SERVICE
 #                                   publishes for its own sandbox (Stripe's test
 #                                   card, Plaid's user_good) — a convention, not
 #                                   a secret, and rejected by any real endpoint
+PROV_MINTED = "minted"            # rung 4: a reference THIS crawl caused the
+#                                   application to CREATE — an application number
+#                                   off a confirmation screen. Above harvest
+#                                   because it is live by construction: it was
+#                                   minted minutes ago by this run, not merely
+#                                   displayed and possibly already consumed.
 PROV_HARVESTED = "harvested"      # rung 3: a value THIS application displayed
 #                                   on one of its own list pages — referentially
 #                                   real, invented by nobody
@@ -543,7 +549,8 @@ def resolve_field(control: Mapping[str, Any], kind: str, name: str,
                   data_mode: str = field_values.DATA_MODE_USER,
                   choice_overrides: Optional[Mapping[str, str]] = None,
                   llm: Any = None,
-                  harvest: Any = None) -> dict[str, Any]:
+                  harvest: Any = None,
+                  minted: Any = None) -> dict[str, Any]:
     """Decide what to type into one control, and record HOW it was decided.
 
     The order is fixed and fails toward asking rather than guessing:
@@ -670,6 +677,29 @@ def resolve_field(control: Mapping[str, Any], kind: str, name: str,
         if seen_value not in (None, ""):
             entry.update(provenance=PROV_JOURNEY, filled=True)
             return {"value": str(seen_value), "entry": entry}
+
+    # Rung 4 — A REFERENCE THIS CRAWL CAUSED THE APPLICATION TO CREATE.
+    #
+    # A service or claims flow opens by demanding something that did not exist
+    # until an earlier flow made it: a policy number, a claim reference, a quote
+    # id. No generator can invent one — the application checks its own database —
+    # and the client cannot list them in advance because they do not exist until
+    # the crawl runs. Without this rung a crawl covers the front of a product and
+    # nothing behind it.
+    #
+    # ABOVE `recalled` on purpose. A reference remembered from a crawl last month
+    # has very likely been consumed or expired; one minted by THIS run minutes ago
+    # is live by construction. Below `journey`, which is this walk's own committed
+    # answer and truer still.
+    #
+    # STRICT label match only (minted.MintRegistry.value_for): a loose one would
+    # type a policy number into a claim-reference field and dead-end the very flow
+    # this rung exists to open.
+    if minted is not None and kind not in _TOGGLE_KINDS:
+        reference = minted.value_for(name)
+        if reference is not None:
+            entry.update(provenance=PROV_MINTED, filled=True)
+            return {"value": reference, "entry": entry}
 
     if recalled:
         prior_value = recalled.get(sig["signature"])
@@ -846,6 +876,9 @@ async def fill_form_phase_a(
     llm: Any = None,
     #: Rung 3's pool (app.harvest.HarvestPool) or None.
     harvest: Any = None,
+    #: Rung 4's registry (app.minted.MintRegistry) or None.  None keeps every
+    #: bundle byte-identical to the pre-rung-4 behaviour.
+    minted: Any = None,
     #: T-FE-01 — how many COMMITS one field may take, the first one included.
     #: Bounded on purpose: an unbounded loop against an application that rejects
     #: everything is a denial of service aimed at our own crawl.  Three means one
@@ -937,7 +970,7 @@ async def fill_form_phase_a(
                                  recalled=recalled, journey_values=journey_values,
                                  priors=priors, data_mode=data_mode,
                                  choice_overrides=choice_overrides, llm=llm,
-                                 harvest=harvest)
+                                 harvest=harvest, minted=minted)
         entry, value = decision["entry"], decision["value"]
 
         # WHICH WIDGET THIS IS.  Counted whether or not it is answered, so a

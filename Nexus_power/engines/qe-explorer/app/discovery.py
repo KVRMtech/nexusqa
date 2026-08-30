@@ -732,6 +732,11 @@ class DiscoveryMixin:
             # source of a referentially valid value — a customer that EXISTS —
             # and reading them costs one evaluation on a page we are on anyway.
             await self._harvest_grids()
+            # RUNG 4's BASELINE. Whatever is already on this page was NOT
+            # created by an action that has not happened yet, so recording it
+            # here is what lets the post-submit read tell "the app minted this"
+            # apart from "the app was already showing it".
+            await self._observe_minted()
             fill = await fill_form_phase_a(
                 self._port, controls, self._answer_key or AnswerKey(), self._clock,
                 phase=Phase.EXPLORE.value, state_id=fingerprint,
@@ -740,6 +745,7 @@ class DiscoveryMixin:
                 priors=self._field_priors, data_mode=self._data_mode,
                 choice_overrides=self._choice_overrides,
                 llm=self._llm_data_agent(), harvest=self._harvest,
+                minted=self._minted,
             )
             actions.extend(fill.actions)
             self._tracker.note_action(len(fill.actions))
@@ -1314,6 +1320,40 @@ class DiscoveryMixin:
             logger.info("qec.harvest.ingested entities=%d pool=%s",
                         added, self._harvest.stats())
 
+    async def _read_labelled_values(self) -> list:
+        """This page's "label: value" pairs, or [] — see app.minted."""
+        collect = getattr(self._port, "collect_labelled_values", None)
+        if collect is None:
+            return []
+        try:
+            return list(await collect() or [])
+        except Exception:                                        # noqa: BLE001
+            return []
+
+    async def _observe_minted(self) -> None:
+        """Record what a page shows WITHOUT crediting the crawl for it."""
+        pairs = await self._read_labelled_values()
+        if pairs:
+            self._minted.observe(pairs)
+
+    async def _mint_from_confirmation(self) -> None:
+        """Fold a POST-SUBMIT page in, keeping only what the submit created.
+
+        Called ONLY after a CONFIRMED submit. Calling it on an ordinary page
+        would credit the application's existing data to the crawl and collapse
+        rung 4 into a worse version of harvest.
+        """
+        pairs = await self._read_labelled_values()
+        if not pairs:
+            return
+        minted = self._minted.mint(pairs)
+        if minted:
+            # LABELS and counts only. A minted reference is real client-system
+            # data, so the question travels and the answer does not — the same
+            # line the rest of the evidence pipeline holds.
+            logger.info("qec.minted.recorded labels=%s total=%d",
+                        ",".join(minted[:5]), self._minted.count)
+
     async def _branch_sweep(self, item: Any, url: str) -> None:
         """Ask every question on this page with every answer (T-BR / branch).
 
@@ -1725,6 +1765,7 @@ class DiscoveryMixin:
                     priors=self._field_priors, data_mode=self._data_mode,
                     choice_overrides=self._choice_overrides,
                     llm=self._llm_data_agent(), harvest=self._harvest,
+                    minted=self._minted,
                 )
                 step_actions.extend(fill.actions)
                 self._tracker.note_action(len(fill.actions))

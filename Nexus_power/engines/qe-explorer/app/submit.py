@@ -496,6 +496,25 @@ class SubmitMixin:
         # HAPPENED, so it is the last place a count may be generous.
         if getattr(result, "confirmed", False):
             self._forms_confirmed += 1
+            # RUNG 4 — THE MOMENT A REFERENCE IS MINTED. A confirmed submit is
+            # precisely "the application answered with a navigation or a success
+            # confirmation", which is the only page that can be carrying a
+            # reference this crawl caused to exist. Read it here and a service or
+            # claims flow downstream has the key it otherwise could never get.
+            #
+            # ONLY on `confirmed`, never on `submitted`: a submit that merely
+            # FIRED may have left an error page showing the application's
+            # pre-existing data, and crediting that to the crawl would hand a
+            # downstream flow a reference this run never created.
+            mint = getattr(self, "_mint_from_confirmation", None)
+            if mint is not None:
+                try:
+                    await mint()
+                except Exception:                                # noqa: BLE001
+                    # Best-effort, deliberately: the crossing already happened
+                    # and is durably recorded. Losing a reference costs the next
+                    # flow a rung, not this one its evidence.
+                    logger.info("qec.minted.read_failed")
         self._crossings.complete(
             record, outcome=str(getattr(result, "outcome", "") or ""),
             confirmed=bool(getattr(result, "confirmed", False)),
