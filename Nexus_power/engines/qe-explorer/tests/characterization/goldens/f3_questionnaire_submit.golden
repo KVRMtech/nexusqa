@@ -53,6 +53,9 @@
       }
     ],
     "crawl_mode": "e2e",
+    "data_account": {
+      "synthesized": 1
+    },
     "discovered_rules": [],
     "endpoint_inventory": [],
     "endpoint_inventory_truncated": false,

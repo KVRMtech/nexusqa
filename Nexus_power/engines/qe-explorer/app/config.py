@@ -129,6 +129,12 @@ class Settings(BaseSettings):
     #: ``auth_window_ms`` on the same registrable domain.
     auth_max_requests: int = Field(default=10, alias="QEC_AUTH_MAX_REQUESTS")
     auth_window_ms: int = Field(default=30_000, alias="QEC_AUTH_WINDOW_MS")
+    #: How long to wait before re-reading a page that offered NO field and NO
+    #: button — an async decision step still rendering "Processing...".
+    #: MEASURED on vkpowerlife 2026-08-30: networkidle at 670ms, the forward
+    #: control at 2857ms, so 3000 leaves headroom over the real gap. 0 disables.
+    undecided_settle_ms: int = Field(default=3_000,
+                                     alias="QEC_UNDECIDED_SETTLE_MS")
     #: Re-login attempts on session expiry (design §3.2 auth.py: ≤3).
     max_relogins: int = Field(default=3, alias="QEC_MAX_RELOGINS")
 

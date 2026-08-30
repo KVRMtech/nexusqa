@@ -26,6 +26,22 @@ from .auth import (AUTH_NO_CREDENTIALS, AUTH_NOT_PERSISTED,
                    AUTH_SESSION_EXPIRED)
 
 
+def _provenance_counts(ledger) -> dict[str, int]:
+    """How many fields each rung answered. COUNTS, never values.
+
+    Keyed on the ladder's OWN provenance names rather than a list restated here,
+    so a rung added later appears in the account without this function changing —
+    the alternative is an account that silently under-reports the rung nobody
+    remembered to add.
+    """
+    counts: dict[str, int] = {}
+    for entry in ledger or ():
+        name = str((entry or {}).get("provenance") or "").strip()
+        if name:
+            counts[name] = counts.get(name, 0) + 1
+    return dict(sorted(counts.items()))
+
+
 class CoverageHost(Protocol):
     """The slice of crawl state the coverage account reads.
 
@@ -452,6 +468,23 @@ class CoverageLedger:
             # Committed fills per control kind — lets a gate hold "the five
             # dropdowns were answered" instead of only "29 fields were".
             "filled_by_kind": dict(c._filled_by_kind),
+            # THE DATA ACCOUNT — where every answered field's value CAME FROM.
+            #
+            # The client's first question about an autonomous crawl is "what did
+            # you type into my application, and who decided it?", and until now
+            # the honest answer required reading 500 ledger rows. Each rung
+            # already stamps a `provenance`; this is the roll-up, so a sentence
+            # like "of 240 answered fields, 96 came from your own data and 12
+            # were written by the model" is DERIVABLE rather than asserted.
+            #
+            # COUNTS, NEVER VALUES — the same line the rest of the evidence
+            # pipeline holds. The keys are the ladder's own provenance names, so
+            # a rung added later appears here without this code changing.
+            #
+            # Derived from the FULL ledger, not the truncated copy emitted
+            # above: a 500-row cap on what an operator reads must not silently
+            # become a cap on what the account counts.
+            "data_account": _provenance_counts(c._field_ledger),
             # TIER-3 LIVENESS + TELEMETRY (Track 3.1/3.3). `configured` says the
             # mechanism was WIRED; the counts say whether it was ever asked and
             # what it answered. Without this, "is tier-3 alive" is an inference

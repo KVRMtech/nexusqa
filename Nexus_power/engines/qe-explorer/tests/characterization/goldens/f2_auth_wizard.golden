@@ -31,6 +31,9 @@
     "boundaries_crossed": 0,
     "boundary_crossings": [],
     "crawl_mode": "e2e",
+    "data_account": {
+      "synthesized": 4
+    },
     "discovered_rules": [],
     "endpoint_inventory": [],
     "endpoint_inventory_truncated": false,

@@ -578,6 +578,7 @@ class DiscoveryMixin:
                         item.depth, (obs.url or "")[:120])
             return
         controls = build_inventory(obs.raw_controls, self._refuse_pack, url=obs.url)
+        controls = await self._settle_undecided_page(obs, controls)
         # An auth wall is a STEP IN THE JOURNEY, not the end of it. Real business
         # journeys cross one all the time (public quote → authenticated apply →
         # e-sign); stopping here would catalogue two fragments and never the flow
@@ -1411,6 +1412,61 @@ class DiscoveryMixin:
             "qec.branch.swept url=%s questions=%d answers=%d revealed=%d skipped=%d",
             url[:120], summary["questions_swept"], summary["answers_taken"],
             summary["questions_revealed"], summary["skipped"])
+
+    async def _settle_undecided_page(
+        self, obs: Any, controls: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """Re-read a page that has not finished deciding what it is.
+
+        THE FAILURE THIS CLOSES, measured on the live vkpowerlife funnel
+        2026-08-30. Its underwriting step renders "Processing Your
+        Application" and reveals "Continue to Payment" 2.2 SECONDS LATER, on a
+        client-side timer. ``networkidle`` fired at 670ms — correctly, there was
+        no network call to wait for — so the crawl catalogued a state with zero
+        fields and zero buttons and moved on. The funnel stopped at step 6 of
+        10, nothing was recorded as blocking it (there was nothing to click),
+        and ``forms_confirmed`` stayed 0. Every async decision step in a
+        financial funnel has this shape.
+
+        THE TRIGGER IS A STATE THAT OFFERS NOTHING, which is the cheapest honest
+        signal available and the only one worth paying for:
+
+          * a page with a field or a button has already decided what it is, and
+            returns here immediately having cost one comprehension;
+          * a page with NEITHER is a dead end for the crawl regardless — the
+            wait is spent only where the alternative is recording nothing.
+
+        ONE re-read, bounded. If the page is genuinely empty the crawl loses
+        ``settle_ms`` once on a state it could not have used anyway; if it was
+        mid-decision, the funnel continues. The re-read is counted as the
+        request it is rather than hidden from the budget.
+        """
+        if any(str(c.get("kind") or "") in _FILLABLE_KINDS
+               or str(c.get("kind") or "") == "button" for c in controls):
+            return controls
+        try:
+            from .config import Settings
+            settle_ms = int(getattr(Settings(), "undecided_settle_ms", 3000) or 0)
+        except Exception:                                        # noqa: BLE001
+            settle_ms = 3000
+        if settle_ms <= 0:
+            return controls
+        sleep = getattr(self._port, "sleep_ms", None)
+        if sleep is None:
+            return controls
+        try:
+            await sleep(settle_ms)
+            settled = await self._read_controls(obs.url)
+        except Exception:                                        # noqa: BLE001
+            # A page that cannot be re-read is reported as it was first seen.
+            return controls
+        gained = len(settled) - len(controls)
+        if gained > 0:
+            logger.info(
+                "qec.crawler.page_settled url=%s waited_ms=%d controls=%d->%d",
+                (obs.url or "")[:120], settle_ms, len(controls), len(settled))
+            return settled
+        return controls
 
     async def _read_controls(self, url: str) -> list[dict[str, Any]]:
         """A control-only re-read of the live page (no screenshot, no dialog or

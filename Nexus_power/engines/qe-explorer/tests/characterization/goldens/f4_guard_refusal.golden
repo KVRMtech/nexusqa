@@ -44,6 +44,9 @@
     "boundaries_crossed": 0,
     "boundary_crossings": [],
     "crawl_mode": "explore",
+    "data_account": {
+      "synthesized": 2
+    },
     "discovered_rules": [],
     "endpoint_inventory": [],
     "endpoint_inventory_truncated": false,

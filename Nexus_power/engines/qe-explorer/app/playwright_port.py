@@ -1922,6 +1922,12 @@ class PlaywrightBrowserPort(BrowserPort):
         except Exception:                                        # noqa: BLE001
             return []
 
+    async def sleep_ms(self, ms: int) -> None:
+        """Wait, for a page still deciding what it is (see
+        ``_settle_undecided_page``). Bounded by its one caller; the port merely
+        provides the primitive so a test double can supply its own."""
+        await asyncio.sleep(max(0, int(ms)) / 1000.0)
+
     async def collect_labelled_values(self) -> list[dict[str, Any]]:
         """Read this page's "label: value" pairs (rung 4 — see app.minted).
 
