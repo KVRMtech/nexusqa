@@ -1626,6 +1626,33 @@ class WalkerMixin:
             outcome_milestone=milestone,
         )
 
+    #: The refuse pack's OWN name for a destination-shaped advance to a named
+    #: wizard step ("Continue to Payment", "Continue to Signature"). Using the
+    #: pack's rule id rather than a vocabulary restated here is what keeps this
+    #: rule and the pack from drifting apart — and the pack is where a reviewer
+    #: already looks to decide what such a control means.
+    _NAMED_STEP_RULE = "rp.allow.destination_advance_step"
+
+    def _named_next_step(self, controls, page_url: str) -> str:
+        """The label of a control offering the NEXT NAMED STEP of this funnel.
+
+        Empty when there is none — a bare "Continue", a "Back to Dashboard", a
+        "Print Confirmation" all return "" because the pack assigns them no
+        rule. That separation is the whole point: it is what lets a confirmation
+        page that merely offers an exit still end the journey.
+        """
+        for control in controls or ():
+            name = str((control or {}).get("name") or "").strip()
+            if not name:
+                continue
+            try:
+                verdict = classify_action_verb(name, page_url, self._refuse_pack)
+            except Exception:                                    # noqa: BLE001
+                continue
+            if str(getattr(verdict, "rule_id", "")) == self._NAMED_STEP_RULE:
+                return name
+        return ""
+
     def _pick_wizard_advance(self, controls: Sequence[dict[str, Any]]) -> Optional[dict[str, Any]]:
         """The first non-danger advance control (Next/Continue/Proceed/Forward) to
         step the wizard, or ``None``.  Fail-closed: skips danger/disabled/nameless
@@ -2679,10 +2706,56 @@ class WalkerMixin:
                 # actually moved (a new URL, or an interactive shape this journey
                 # has not seen). Without it an inline "Saved successfully" toast
                 # on step two would end a nine-step funnel.
-                if is_confirmation_landing(
-                        outcome=landed.outcome, rung=landed_rung,
-                        changed=bool(landed.navigated or new_fp != cur_fp),
-                        detail=landed_detail):
+                # THE FOURTH CONJUNCT — A CONFIRMATION THAT STILL OFFERS THE
+                # NEXT NAMED STEP IS NOT THE END OF THE JOURNEY.
+                #
+                # MEASURED on the live vkpowerlife funnel 2026-08-30. Its
+                # underwriting page declares "Congratulations! Based on the
+                # information you provided, your application has been approved"
+                # — genuine success-shaped text that really did appear as a
+                # result of the crossing, so all three conjuncts above hold and
+                # the walk stopped. It was step 6 of 10 (Decision; Payment,
+                # Beneficiary, Signature and Confirmation still to come) and the
+                # page was offering "Continue to Payment" at that moment.
+                #
+                # The underwriting DECISION succeeded. The JOURNEY did not, and
+                # reporting one as the other is the same green-wash
+                # RUNG_NAVIGATION is excluded to prevent, arriving through the
+                # text rung instead.
+                #
+                # THE DISCRIMINATOR IS THE REFUSE PACK'S OWN RULE, not a
+                # vocabulary invented here. ``rp.allow.destination_advance_step``
+                # already names this exact class — "a destination-shaped advance
+                # to a named wizard STEP ... navigation, not the act the step is
+                # named after" — and it separates the two cases exactly:
+                #
+                #     Continue to Payment   rp.allow.destination_advance_step
+                #     Continue              (no rule)
+                #     Back to Dashboard     (no rule)
+                #     Print Confirmation    (no rule)
+                #     New Application       (no rule)
+                #
+                # So a genuine confirmation page offering a bare "Continue" or
+                # "Back to Dashboard" still ends the journey — which
+                # test_TCF04_back_to_dashboard_does_not_stop_it_completing and
+                # test_TCF04_clickable_navigation_does_not_become_a_loop exist
+                # to guarantee, and which a looser "any strict advance" rule was
+                # measured to break.
+                declared = is_confirmation_landing(
+                    outcome=landed.outcome, rung=landed_rung,
+                    changed=bool(landed.navigated or new_fp != cur_fp),
+                    detail=landed_detail)
+                next_step = (self._named_next_step(new_controls, obs.url or cur_url)
+                             if declared else None)
+                if declared and next_step:
+                    logger.warning(
+                        "qec.wizard.confirmation_not_terminal url=%s rung=%s "
+                        "next=%r — the application declared success AND is still "
+                        "offering a named next step, so this is a milestone in "
+                        "the journey rather than the end of it; the walk "
+                        "continues.",
+                        (obs.url or cur_url)[:120], landed_rung, next_step[:40])
+                elif declared:
                     confirm_rung, confirm_detail = landed_rung, landed_detail
                     logger.warning(
                         "qec.wizard.confirmation url=%s rung=%s detail=%r — the "
