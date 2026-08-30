@@ -229,6 +229,48 @@ def overlay_dismiss_candidates(
     return out
 
 
+
+def area_priority(dest: str, entry_url: str) -> int:
+    """Frontier priority for a destination, relative to the area we were given.
+
+    MEASURED (Dolibarr, 2026-08-29). Pointed at the proposals list, the crawl
+    spent all 19 of its states in /adherents/, /societe/, /product/, /mrp/,
+    /projet/, /hrm/, /admin/ ... and opened no proposal at all. `card.php`
+    appears ZERO times in the bundle.
+
+    The list page carries 26 links to /comm/propal/card.php?id=N and 25 top-nav
+    links to other modules. All are plain in-scope hrefs; all were enqueued. The
+    frontier orders on (priority, novelty_rank, depth, seq); nothing set
+    priority, the id-routes collapse to ONE reach key so the cards contribute a
+    single item, every nav link is its own section -- so everything tied and the
+    tiebreak fell through to `seq`, which is DOM order. The nav menu sits above
+    the table, so site chrome spent the whole budget.
+
+    The rule is structural and language-free: a destination that stays under the
+    path the operator onboarded is the work; one that leaves it is chrome. No
+    vocabulary decides what a menu is called, which matters because this product
+    crawls applications in many languages.
+
+    ORDERING ONLY. Nothing becomes unreachable -- chrome is still crawled, after
+    the thing we were asked to crawl. A shallow entry (the site root) promotes
+    nothing, because there everything is "in area" and the old order was right.
+    """
+    if not dest or not entry_url:
+        return 0
+    try:
+        d = urlsplit(dest)
+        e = urlsplit(entry_url)
+    except Exception:                                    # noqa: BLE001
+        return 0
+    if (d.netloc or "").lower() != (e.netloc or "").lower():
+        return 1
+    entry_dir = e.path.rsplit("/", 1)[0]
+    # A root-ish entry gives no area to prefer; leave ordering untouched.
+    if len([p for p in entry_dir.split("/") if p]) < 1:
+        return 0
+    return -1 if d.path.startswith(entry_dir + "/") or d.path == entry_dir else 1
+
+
 class DiscoveryMixin:
     """Mixed into :class:`app.crawler.Crawler` (T-DE-12)."""
 
@@ -2080,6 +2122,9 @@ class DiscoveryMixin:
                     url=dest, depth=item.depth + 1,
                     discovered_via=str(control.get("name") or ""),
                     parent_fingerprint=fingerprint,
+                    # Stay-in-area before site chrome. Ordering only -- see
+                    # :func:`area_priority` for the measurement that forced it.
+                    priority=area_priority(dest, self.target_url),
                 ),
                 key=_url_key(dest),
             )

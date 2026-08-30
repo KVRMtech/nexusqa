@@ -147,7 +147,23 @@ def compute(control: Mapping[str, Any], *, kind: str = "",
     q = _qec(control)
     # RAW, not normalised: `_tokens` splits camelCase, and lowering first would
     # destroy the boundary that makes `firstName` and `first_name` one signature.
-    name_raw = (control.get("name") or q.get("name")
+    # THE QUESTION IS THE FIELD; ITS ANSWERS ARE NOT SEPARATE FIELDS.
+    #
+    # MEASURED (underwriting fixture, 2026-08-29): a page of 63 questions
+    # produced a field ledger with THREE entries. The ledger dedups on this
+    # signature, and this line began with `control["name"]` -- for a radio, the
+    # OPTION. All 126 radio controls on the page therefore hashed to TWO
+    # signatures ("Yes", "No") and the selects to a third; everything else was
+    # discarded as a duplicate of something it had nothing to do with.
+    #
+    # `question_label` is the application's own wording, taken from a declared
+    # accessible-name rung only and left "" when the page declared none -- so a
+    # control with no declared question keeps exactly the identity it had, which
+    # is pinned as a control test. Preferring it here also satisfies this
+    # function's own contract: "the same field must resolve to the same signature
+    # wherever it appears". "Do you smoke?" is that field; "Yes" never was.
+    name_raw = (control.get("question_label") or q.get("question_label")
+                or control.get("name") or q.get("name")
                 or control.get("label") or q.get("label")
                 or control.get("accessible_name") or q.get("accessible_name") or "")
     input_type = _first(control, "input_type", "type")
