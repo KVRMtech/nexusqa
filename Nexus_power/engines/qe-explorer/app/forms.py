@@ -486,6 +486,9 @@ PROV_RECALLED = "recalled"        # remembered from a previous crawl of THIS cli
 PROV_APP_SUPPLIED = "app_supplied"  # the application shipped a valid value and we
                                     # could not justify replacing it
 PROV_SYNTHESIZED = "synthesized"  # generated from the crawl's fictional identity
+PROV_HARVESTED = "harvested"      # rung 3: a value THIS application displayed
+#                                   on one of its own list pages — referentially
+#                                   real, invented by nobody
 PROV_LLM = "llm"                  # rung 8: model-written because nothing truer could
 #                                   answer; opt-in via the portal's data mode and
 #                                   always visibly distinct from the client's data
@@ -534,7 +537,8 @@ def resolve_field(control: Mapping[str, Any], kind: str, name: str,
                   priors: Optional[Mapping[str, Any]] = None,
                   data_mode: str = field_values.DATA_MODE_USER,
                   choice_overrides: Optional[Mapping[str, str]] = None,
-                  llm: Any = None) -> dict[str, Any]:
+                  llm: Any = None,
+                  harvest: Any = None) -> dict[str, Any]:
     """Decide what to type into one control, and record HOW it was decided.
 
     The order is fixed and fails toward asking rather than guessing:
@@ -690,6 +694,22 @@ def resolve_field(control: Mapping[str, Any], kind: str, name: str,
         if existing:
             entry.update(provenance=PROV_APP_SUPPLIED, filled=True)
             return {"value": existing, "entry": entry}
+    # Rung 3 — A VALUE THIS APPLICATION ITSELF DISPLAYED.
+    #
+    # ABOVE the generator, deliberately. No generator and no model can invent a
+    # customer that EXISTS, and a form demanding one refuses "Alex Morgan"
+    # forever — so a real value read off this application's own list page beats
+    # a plausible invented one every time. Below the client's answer key and
+    # this journey's memory, which are truer still.
+    #
+    # STRICT label match only (harvest.HarvestPool.candidates): a loose one
+    # would type a customer code into a postcode. A toggle is state, not data.
+    if harvest is not None and kind not in _TOGGLE_KINDS:
+        picked = harvest.value_for(name)
+        if picked is not None:
+            entry.update(provenance=PROV_HARVESTED, filled=True)
+            return {"value": picked, "entry": entry}
+
     generated = field_values.value_for(verdict["type"], control, identity, kind=kind,
                                        data_mode=data_mode)
     if generated is None and not (kind in _TOGGLE_KINDS and kind == "radio"
@@ -802,6 +822,8 @@ async def fill_form_phase_a(
     #: Rung 8, opt-in: the LLM data agent (app.llm_data.LLMDataAgent) or None.
     #: None keeps every bundle byte-identical to the pre-LLM behaviour.
     llm: Any = None,
+    #: Rung 3's pool (app.harvest.HarvestPool) or None.
+    harvest: Any = None,
     #: T-FE-01 — how many COMMITS one field may take, the first one included.
     #: Bounded on purpose: an unbounded loop against an application that rejects
     #: everything is a denial of service aimed at our own crawl.  Three means one
@@ -892,7 +914,8 @@ async def fill_form_phase_a(
         decision = resolve_field(control, kind, name, answer_key, identity,
                                  recalled=recalled, journey_values=journey_values,
                                  priors=priors, data_mode=data_mode,
-                                 choice_overrides=choice_overrides, llm=llm)
+                                 choice_overrides=choice_overrides, llm=llm,
+                                 harvest=harvest)
         entry, value = decision["entry"], decision["value"]
 
         # WHICH WIDGET THIS IS.  Counted whether or not it is answered, so a

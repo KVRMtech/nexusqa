@@ -144,6 +144,7 @@ from .state_identity import (_MAX_COVERAGE_STATES, _MAX_DANGER_NAMES,
                              _action_to_dict, _displayed_values,
                              _form_snapshot, _is_password, _network_calls)
 from . import flow_ledger
+from .harvest import HarvestPool as _HarvestPool
 from .identity_pack import derive as derive_identity
 from . import vision_gate
 from .vision_loop import VisionEscalation
@@ -272,6 +273,10 @@ class Crawler(AuthFlowMixin, SubmitMixin, DiscoveryMixin, WalkerMixin,
         # Same discipline as ``recalled_values``: in-process for the life of one
         # crawl, never logged, never emitted, never persisted.
         self._journey_values: dict[str, str] = {}
+        #: RUNG 3 — values this application itself displayed, entity-shaped.
+        #: In-process for the life of one crawl, never emitted, never logged;
+        #: the same contract as _journey_values above, and for the same reason.
+        self._harvest = _HarvestPool()
         self._field_priors = dict(field_priors or {})
         # ONE person for the whole crawl: regenerating per form would produce a
         # postcode belonging to a different region than the one selected two steps

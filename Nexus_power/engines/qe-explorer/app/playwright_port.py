@@ -1909,6 +1909,19 @@ class PlaywrightBrowserPort(BrowserPort):
     async def set_checked(self, control: dict[str, Any], checked: bool) -> RawObservation:
         return await self._act_with_ladder(control, "checked", checked=checked, read_back=True)
 
+    async def collect_grids(self) -> list[dict[str, Any]]:
+        """Read this page's data grids as entities (rung 3 — see app.harvest).
+
+        Best-effort by construction: a page with no grid returns [], and any
+        evaluation failure returns [] as well, because a harvest that cannot run
+        must cost the crawl nothing.
+        """
+        from .harvest import GRID_JS
+        try:
+            return list(await self._page.evaluate(GRID_JS) or [])
+        except Exception:                                        # noqa: BLE001
+            return []
+
     async def storage_state(self) -> dict[str, Any]:
         return await self._context.storage_state()
 

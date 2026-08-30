@@ -728,6 +728,10 @@ class DiscoveryMixin:
             # low-confidence values so validation-gated forms advance and deeper flows
             # become reachable (client seeds still win where present).
             self._forms_found += 1
+            # HARVEST BEFORE FILLING. A list page's own records are the only
+            # source of a referentially valid value — a customer that EXISTS —
+            # and reading them costs one evaluation on a page we are on anyway.
+            await self._harvest_grids()
             fill = await fill_form_phase_a(
                 self._port, controls, self._answer_key or AnswerKey(), self._clock,
                 phase=Phase.EXPLORE.value, state_id=fingerprint,
@@ -735,7 +739,7 @@ class DiscoveryMixin:
                 journey_values=self._journey_values,
                 priors=self._field_priors, data_mode=self._data_mode,
                 choice_overrides=self._choice_overrides,
-                llm=self._llm_data_agent(),
+                llm=self._llm_data_agent(), harvest=self._harvest,
             )
             actions.extend(fill.actions)
             self._tracker.note_action(len(fill.actions))
@@ -1292,6 +1296,24 @@ class DiscoveryMixin:
                     self._llm_agent.max_calls)
         return self._llm_agent
 
+    async def _harvest_grids(self) -> None:
+        """Fold this page's data grids into the crawl's harvest pool."""
+        collect = getattr(self._port, "collect_grids", None)
+        if collect is None:
+            return
+        try:
+            grids = await collect()
+        except Exception:                                        # noqa: BLE001
+            return
+        if not grids:
+            return
+        added = self._harvest.ingest(grids)
+        if added:
+            # Counts only — the VALUES are the client's own and never leave
+            # this process, which is why nothing here logs one.
+            logger.info("qec.harvest.ingested entities=%d pool=%s",
+                        added, self._harvest.stats())
+
     async def _branch_sweep(self, item: Any, url: str) -> None:
         """Ask every question on this page with every answer (T-BR / branch).
 
@@ -1702,7 +1724,7 @@ class DiscoveryMixin:
                     journey_values=self._journey_values,
                     priors=self._field_priors, data_mode=self._data_mode,
                     choice_overrides=self._choice_overrides,
-                    llm=self._llm_data_agent(),
+                    llm=self._llm_data_agent(), harvest=self._harvest,
                 )
                 step_actions.extend(fill.actions)
                 self._tracker.note_action(len(fill.actions))
