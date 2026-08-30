@@ -59,7 +59,7 @@ from .fill_engine.repair import (RepairBudget, RepairOutcome, RetryPolicy,
 from .fill_engine.validation import PageAlertFilter
 from .identity_pack import Identity, derive as derive_identity
 from .guard import GuardDecision, Phase, classify_request, registrable_domain
-from .inventory import target_kind_for, question_name_of
+from .inventory import target_kind_for, question_name_of, is_filter_control
 
 logger = logging.getLogger(__name__)
 
@@ -793,6 +793,13 @@ async def fill_form_phase_a(
         # 25-question health page produced a seed request asking the client for
         # two fields called "Yes" and "No". A button keeps its own name.
         name = question_name_of(control)
+        # A LIST FILTER IS NOT A FIELD THE CLIENT MUST ANSWER. It is
+        # catalogued like any control, but it never joins
+        # `unfilled_fields` -- the list that becomes the seed request --
+        # because asking a client for a value to type into a search box
+        # is the wrong question, and an LLM rung reading that list would
+        # invent one. See inventory.is_filter_control.
+        is_filter = is_filter_control(control)
         if kind == "button":
             result.flow_candidates.append(FlowCandidate(
                 name=name,
@@ -817,7 +824,8 @@ async def fill_form_phase_a(
                 result.inferred += 1
                 result.inferred_fields.append(name)
             else:
-                result.unfilled_fields.append(name)
+                if not is_filter:
+                    result.unfilled_fields.append(name)
             continue
         if kind not in FILLABLE_KINDS or _is_password(control) or control.get("disabled"):
             continue
@@ -844,7 +852,8 @@ async def fill_form_phase_a(
             # residue the client is asked to supply — asking someone for an
             # answer we have.
             if entry.get("provenance") != PROV_GROUP_SIBLING:
-                result.unfilled_fields.append(name)
+                if not is_filter:
+                    result.unfilled_fields.append(name)
             result.field_ledger.append(entry)
             continue
 
@@ -858,7 +867,8 @@ async def fill_form_phase_a(
 
         if action is None:
             entry.update(filled=False, provenance=PROV_INTENT_UNMET)
-            result.unfilled_fields.append(name)
+            if not is_filter:
+                result.unfilled_fields.append(name)
             result.intent_unmet += 1
             # A CHOICE WIDGET THAT WOULD NOT CONFIRM ITS OWN ANSWER is its own
             # failure class, and it was only ever a log line — invisible to the

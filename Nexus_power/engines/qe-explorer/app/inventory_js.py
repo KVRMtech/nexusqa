@@ -81,6 +81,9 @@ RawControl shape (one object per visible interactive element):
                     dropdown/disclosure toggle (a Bootstrap ``dropdown-toggle`` etc.
                     whose menu items are hidden until it is clicked), "" otherwise
     landmark        {role, name} of the nearest landmark ancestor (anchor seed)
+    filter_scope    "thead" when the control sits in a data table's FILTER
+                    row, "tbody"/"tfoot" for the data itself, "" otherwise.
+                    Structural: a list filter is not a business field.
 
 THE CAPTURE COMPLETENESS CONTRACT (M0.x)
 ========================================
@@ -1118,6 +1121,28 @@ INVENTORY_JS = (r"""
     return lm && lm.name ? clip(lm.name, MAX_LANDMARK) : "";
   }
 
+  // IS THIS CONTROL IN A LIST'S FILTER ROW?
+  //
+  // A data table declares the difference itself: the filter row lives in
+  // <thead> and the data lives in <tbody>. MEASURED (Dolibarr, 2026-08-29):
+  // a list page's filter inputs were catalogued as business fields the client
+  // had to supply values for -- "Third parties with sales representative",
+  // "Cust./Prosp. tags/categories". Structure, never vocabulary: "search" is a
+  // word in one language and this crawls applications in many.
+  function filterScopeOf(el) {
+    var cur = el;
+    var hops = 0;
+    while (cur && cur.nodeType === 1 && hops < 30) {
+      var tag = lc(cur.tagName);
+      if (tag === "thead") return "thead";
+      if (tag === "tbody" || tag === "tfoot") return tag;
+      if (tag === "form" || tag === "body") return "";
+      cur = parentAcross(cur);
+      hops++;
+    }
+    return "";
+  }
+
   function nearestLandmark(el, doc) {
     var cur = parentAcross(el);
     var hops = 0;
@@ -1302,7 +1327,9 @@ __FRAME_SELECTOR_JS__
       validation_message: nativeValidationMessage(el),
       // POSSESSOR CONTEXT (see sectionOf).
       section: sectionOf(el, doc),
-      landmark: nearestLandmark(el, doc)
+      landmark: nearestLandmark(el, doc),
+      // "thead" when the control sits in a table's filter row.
+      filter_scope: filterScopeOf(el)
     };
   }
 

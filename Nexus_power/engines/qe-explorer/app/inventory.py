@@ -215,6 +215,9 @@ class ControlRecord(TypedDict):
     #: the members of a declared container holding 2+ controls that acquired NO
     #: ``group_id`` — a bare-<button> Yes/No pair is one question too, and until
     #: this existed the only identity it could be given was its DOM ordinal.
+    #: "thead" when the control sits in a data table's FILTER row — a list
+    #: filter, not a business field. See :func:`is_filter_control`.
+    filter_scope: str
     question_key: str
     question_label: str
     question_label_source: str
@@ -481,6 +484,39 @@ def question_groups_of(
 
 def _norm_kind(kind: Any) -> str:
     return str(kind or "").strip().lower()
+
+
+
+def is_filter_control(record: Mapping[str, Any]) -> bool:
+    """Is this control a LIST FILTER rather than a business field?
+
+    MEASURED (Dolibarr + Odoo, 2026-08-29): of 233 fields the crawl could not
+    fill, a large share were the filter row above a list -- "Search", "Third
+    parties with sales representative", "Cust./Prosp. tags/categories". Counting
+    them as unfilled business fields understates coverage, and once an LLM rung
+    exists it would send a model off inventing a company name to type into a
+    search box.
+
+    DECLARED SIGNALS ONLY, never vocabulary. "Search" is a word in one language
+    and this product crawls applications in many: a rule that read labels would
+    call a German filter a business field, and a field genuinely named "Search
+    Criteria" a filter. Three signals the page itself declares:
+
+      * ``input type=search``            -- the platform's own statement
+      * an ancestor with ``role=search`` -- ARIA's own statement
+      * ``filter_scope == "thead"``      -- structural. A filter row lives in the
+        table HEADER; the data lives in the body.
+
+    Fails toward ASKING. Anything else is a business field, because a filter
+    wrongly treated as a field costs one wasted fill, while a field wrongly
+    treated as a filter silently drops a question the client needed to answer.
+    """
+    if _norm_kind(record.get("input_type")) == "search":
+        return True
+    landmark = record.get("landmark") or {}
+    if isinstance(landmark, Mapping) and _norm_kind(landmark.get("role")) == "search":
+        return True
+    return _norm_kind(record.get("filter_scope")) == "thead"
 
 
 def question_name_of(record: Mapping[str, Any]) -> str:
@@ -1075,6 +1111,7 @@ def build_control_record(
         # DOM-declared QUESTION identity + wording; QUESTION_ASSEMBLE (pass 3b)
         # turns question_key into question_group_id once it knows the siblings.
         "question_key": _s(raw.get("question_key")).strip(),
+        "filter_scope": _s(raw.get("filter_scope")).strip(),
         "question_label": _clip(_s(raw.get("question_label")).strip(), _MAX_NAME),
         "question_label_source": _s(raw.get("question_label_source")).strip(),
         "question_group_id": "",
