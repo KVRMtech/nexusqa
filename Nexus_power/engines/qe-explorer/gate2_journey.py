@@ -260,6 +260,7 @@ def _walk_authorization(crawl_id: str, tenant_id: str, url: str):
 
 
 async def run(app: str, url: str, *, oracle_kind: str, out_root: Path,
+              data_mode: str = "user",
               max_states: int, max_duration_ms: int) -> dict[str, Any]:
     from playwright.async_api import async_playwright
     from app.playwright_port import context_defaults
@@ -317,6 +318,7 @@ async def run(app: str, url: str, *, oracle_kind: str, out_root: Path,
             explorer_version=EXPLORER_VERSION, guard_version=EXPLORER_VERSION,
             refuse_pack_version=pack.version, config_fingerprint="gate2-%s" % app,
             guard_context=guard_ctx, identity_seed="qec-gate2-%s" % app,
+            data_mode=data_mode,
             observe_only=False, traversal=TRAVERSAL_FULL,
             advance_oracle=advance_oracle,
             # THE NARROWEST AUTHORISATION THE SYSTEM OFFERS: one named control,
@@ -429,6 +431,9 @@ def main() -> None:
     parser.add_argument("--url", required=True,
                         help="the served application root (a running container)")
     parser.add_argument("--oracle", default="stub", choices=("stub", "live"))
+    parser.add_argument("--data-mode", default="user",
+                        choices=("user", "agent"),
+                        help="agent answers semantic CHOICES; user leaves them")
     parser.add_argument("--out", default="")
     parser.add_argument("--max-states", type=int, default=60)
     parser.add_argument("--max-duration-ms", type=int, default=900000)
@@ -438,6 +443,7 @@ def main() -> None:
     out_root.mkdir(parents=True, exist_ok=True)
 
     result = asyncio.run(run(args.app, args.url, oracle_kind=args.oracle,
+                             data_mode=args.data_mode,
                              out_root=out_root, max_states=args.max_states,
                              max_duration_ms=args.max_duration_ms))
     verdict = verdict_of(args.app, args.url, result)

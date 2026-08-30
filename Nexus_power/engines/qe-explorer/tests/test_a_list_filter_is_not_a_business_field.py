@@ -75,3 +75,32 @@ def test_a_control_in_a_table_BODY_is_not_a_filter():
 def test_an_empty_record_is_a_business_field():
     """Fail toward asking: an unknown control is a field, not a filter."""
     assert is_filter_control({}) is False
+
+
+# ── the shape thead alone does not catch ───────────────────────────────────
+
+def test_a_filter_in_a_data_grid_is_a_filter_even_outside_thead():
+    """MEASURED (Dolibarr, 2026-08-29). The first version of this rule keyed on
+    <thead>, and Dolibarr puts its filter row in <tbody>:
+
+        inputs in thead = 0
+        inputs in tbody = 92
+
+    So the rule was correct HTML and fired on none of the application it was
+    written for. Of 48 fills the applications refused to keep, nearly all were
+    these -- "Third parties with sales representative", "Cust./Prosp.
+    tags/categories", "Including products/services with the tag".
+
+    A DATA GRID declares itself by shape: many sibling rows of records. A
+    data-entry form does not have 26 rows. `filter_scope="grid"` is set by
+    inventory_js when the control sits inside a table carrying that many rows.
+    """
+    assert is_filter_control({"name": "Ref", "kind": "text",
+                              "filter_scope": "grid"}) is True
+
+
+def test_a_form_laid_out_in_a_small_table_is_not_a_grid():
+    """THE CONTROL. Legacy forms use tables for layout; a handful of rows is a
+    layout table, not a list of records, and its fields must stay fields."""
+    assert is_filter_control({"name": "First Name", "kind": "text",
+                              "filter_scope": "table"}) is False
