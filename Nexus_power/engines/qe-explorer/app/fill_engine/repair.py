@@ -36,6 +36,8 @@ no Playwright, no selectors and no I/O.
 """
 from __future__ import annotations
 
+import inspect
+
 import logging
 from dataclasses import dataclass, field, replace
 from typing import Any, Awaitable, Callable, Mapping, Optional, Protocol, Sequence
@@ -274,7 +276,13 @@ class FillDriver(Protocol):
 #: of values already refused, produce the next value to try — or ``None`` when
 #: nothing satisfies them.  Injected so the loop never has to know about
 #: personas or semantics.
-Regenerate = Callable[[C.Constraints, "frozenset[str]"], Optional[str]]
+Regenerate = Callable[..., Optional[str]]
+#: ``regenerate(tightened, refused, rejection="")`` — the third argument is the
+#: application's OWN rejection sentence, verbatim. A deterministic generator
+#: needs only the tightened constraints and may ignore it; a model does far
+#: better with the words than with a Constraints repr, and passing the repr as
+#: if it were the message is how the LLM rung was first wired. Optional-keyword
+#: so every existing two-argument regenerator keeps working unchanged.
 
 
 def tighten(cons: C.Constraints, hint: ConstraintHint) -> C.Constraints:
@@ -332,6 +340,47 @@ def _reason_for(signal: ValidationSignal, hint: ConstraintHint,
     return (f"the application rejected the previous value; it published "
             f"{signal.message[:120]!r} (anchored by {signal.source}), read as "
             f"{hint.code or 'an unspecified'} — tightened {tightened}")
+
+
+
+def reads_prose(regenerate: Regenerate) -> bool:
+    """Can this regenerator act on the application's SENTENCE, not just bounds?
+
+    THE SIGNATURE IS THE DECLARATION. A regenerator that accepts the rejection
+    text is telling us it can read it; a two-argument one is telling us it
+    cannot, and for it a message naming nothing to change genuinely leaves
+    nothing to do.
+
+    This distinction is what keeps RULE 2 intact. "Something went wrong" names
+    no bound, so a numeric generator bumping 1 to 2 would be a blind search —
+    and a search that succeeds by accident produces a green result nobody can
+    explain, which is the failure this loop exists to refuse. A model reading
+    that same sentence is not searching blindly, so it alone is offered the
+    attempt.
+    """
+    try:
+        sig = inspect.signature(regenerate)
+    except (TypeError, ValueError):                              # noqa: BLE001
+        return False
+    if any(p.kind is inspect.Parameter.VAR_POSITIONAL or
+           p.kind is inspect.Parameter.VAR_KEYWORD
+           for p in sig.parameters.values()):
+        return True
+    return len(sig.parameters) >= 3
+
+
+def _ask_regenerate(regenerate: Regenerate, cons: C.Constraints,
+                    refused: "frozenset[str]", rejection: str) -> Optional[str]:
+    """Call ``regenerate``, passing the rejection when it accepts one.
+
+    Every regenerator in the tree today takes two arguments; the message is a
+    new, optional third. Rather than change every call site at once — and every
+    test that fakes one — the arity decides, so an older regenerator is simply
+    given what it always got.
+    """
+    if reads_prose(regenerate):
+        return regenerate(cons, refused, rejection)
+    return regenerate(cons, refused)
 
 
 async def repair_loop(
@@ -472,13 +521,38 @@ async def repair_loop(
         signal = anchored[0]
         hint = interpret(signal.message)
         if not hint.actionable:
-            return RepairOutcome(accepted=False, value=None,
-                                 attempts=tuple(attempts),
-                                 transient_retries=transient_retries,
-                                 stop_reason=STOP_NOT_ACTIONABLE)
+            # A PROSE REJECTION IS STILL A REJECTION.
+            #
+            # "Please enter a valid weight" names no bound, no pattern and no
+            # number, so `interpret` has nothing to fold into the constraints
+            # and `tighten` would be a no-op. That is a fact about the PATTERN
+            # TABLE, not about the message: a model reads that sentence and
+            # produces a weight. Stopping here made every prose rejection
+            # unreachable — measured live: the LifeOps wizard stalled on
+            # "Enter a valid weight" with the repair loop never consulted.
+            #
+            # The rejection still has to be ANCHORED to reach this line, so
+            # RULE 1 is untouched; and a regenerator with nothing to offer
+            # still ends the attempt one line below.
+            candidate = (_ask_regenerate(regenerate, current, frozenset(refused),
+                                         signal.message)
+                         if reads_prose(regenerate) else None)
+            if candidate is None or candidate in refused:
+                return RepairOutcome(accepted=False, value=None,
+                                     attempts=tuple(attempts),
+                                     transient_retries=transient_retries,
+                                     stop_reason=STOP_NOT_ACTIONABLE)
+            reason = (f"the application said {signal.message[:120]!r} "
+                      f"(anchored by {signal.source}); no constraint could be "
+                      f"derived from it, so the value was regenerated on the "
+                      f"message itself")
+            value = candidate
+            refused.add(candidate)
+            continue
 
         tightened = tighten(current, hint)
-        candidate = regenerate(tightened, frozenset(refused))
+        candidate = _ask_regenerate(regenerate, tightened, frozenset(refused),
+                                    signal.message)
         if candidate is None:
             return RepairOutcome(accepted=False, value=None,
                                  attempts=tuple(attempts),

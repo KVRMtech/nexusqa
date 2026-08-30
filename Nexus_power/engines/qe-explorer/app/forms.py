@@ -1068,7 +1068,8 @@ async def _fill_with_repair(
     semantic = str(entry.get("semantic_type") or "")
 
     def _regenerate(tightened: fe_constraints.Constraints,
-                    refused: "frozenset[str]") -> Optional[str]:
+                    refused: "frozenset[str]",
+                    rejection: str = "") -> Optional[str]:
         # Still refuses, and for the same reason: a value that did not come from
         # the generator must never be replaced by one that did.  The difference
         # is that the loop is now TOLD this up front (``repairable=`` below), so
@@ -1089,13 +1090,16 @@ async def _fill_with_repair(
         # handles better than a pattern table. Off-list and refused values are
         # clamped exactly as at generation time.
         if llm is not None:
-            hint = str(tightened)[:300]
+            # THE APPLICATION'S OWN SENTENCE, not a Constraints repr. The first
+            # wiring passed `str(tightened)` as BOTH the constraints and the
+            # rejection, so the model was told "Constraints(min=18, max=85)"
+            # and never "Applicant must be 18-85" — the words it reads best.
             candidate_llm = llm.value_for(
                 name=str(control.get("question_label") or control.get("name") or ""),
                 semantic_type=semantic, kind=kind,
                 options=[str(o) for o in (control.get("group_options")
                                           or control.get("options") or ())],
-                constraints=hint, rejection=hint)
+                constraints=str(tightened)[:300], rejection=str(rejection)[:400])
             if candidate_llm is not None and candidate_llm not in refused:
                 entry["repair_rationale"] = "llm: satisfied the tightened rule"
                 entry["provenance"] = PROV_LLM
