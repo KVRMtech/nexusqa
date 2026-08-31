@@ -39,15 +39,29 @@
     },
     "reason": "The previous floors were seeded from a BROKEN funnel. Before the danger-scope fix the crawler could not advance the wizard, so it recorded each step as an unrelated one-step flow and re-submitted the same form repeatedly - 11 submits for a form that is submitted once. Walking the funnel properly consolidates those fragments into one 3-deep journey, which necessarily lowers the page, flow, submit and test counts while strictly improving the result. Verified before lowering: seq 1 captured the Applicant step (Gender, names, DOB, SSN, email, phone) and seq 2 captured Address & Employment (street, city, state, ZIP, occupation, employer, income) - seven fields that had NEVER been captured before. deepest_flow 1->3 and wizard_advances 0->2 are the same change seen from the other side. Left as floors so a future regression below the consolidated numbers still fails."
   },
-  "auto_filled": 29,
-  "catalog_questions": 67,
-  "deepest_flow": 5,
-  "flows": 7,
-  "forms": 7,
-  "forms_confirmed": 0,
-  "pages": 22,
-  "selects_filled": 10,
-  "submitted": 9,
-  "tests": 9,
-  "wizard_advances": 4
+  "_rebaselined_2026_08_31": {
+    "exploration": "7f427431-31fd-4c23-94b6-5b32e4e7d323",
+    "lowered": {
+      "deepest_flow": [
+        5,
+        4
+      ],
+      "wizard_advances": [
+        4,
+        3
+      ]
+    },
+    "reason": "ONE STEP RECLASSIFIED, VERIFIED IN THE FLOW RECORD BEFORE LOWERING. The wizard's final step used to be counted as its fifth advance; the engine at 46f9460 records that page as the flow's SUBMIT BOUNDARY (terminal=submit_boundary, completed=true, 4 steps) and then CROSSES it through the attested submit path - which the old engine could not do here at all. The same crawl measured boundaries_crossed=14 and forms_confirmed 0->5 (a floor that had been zero for the product's entire life), plus rises in pages 22->32, forms 7->8, auto_filled 29->33, selects_filled 10->11, submitted 9->14, flows 7->13, tests 9->23 and catalog_questions 67->83. deepest_flow 5->4 and wizard_advances 4->3 are that one reclassified step seen from the other side - the funnel went strictly forward while the counting became honest. Left as floors so a regression below the reclassified numbers still fails."
+  },
+  "auto_filled": 33,
+  "catalog_questions": 83,
+  "deepest_flow": 4,
+  "flows": 13,
+  "forms": 8,
+  "forms_confirmed": 5,
+  "pages": 32,
+  "selects_filled": 11,
+  "submitted": 14,
+  "tests": 23,
+  "wizard_advances": 3
 }
