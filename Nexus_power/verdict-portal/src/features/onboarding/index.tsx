@@ -67,11 +67,31 @@ interface WizardForm {
    *  to (one per line / comma-separated, e.g. "/quote"). Compiled to
    *  schedule.scope_paths on submit. BLANK ⇒ Explore mode (whole-app crawl). */
   scope_paths: string;
-  /** DATA dial: 'user' (default) = you supply the values and the crawl names what
-   *  it could not fill; 'agent' = a coherent fictional person answers every field
-   *  it honestly can. Compiled to schedule.data_mode; 'user' is written as ABSENT
-   *  so an app nobody configured keeps the pre-agent behaviour. */
-  data_mode: 'user' | 'agent';
+  /** DATA dial — the portal's three modes, resolved server-side by
+   *  services/data_posture into the explorer's two dials (generator + rung-8
+   *  model):
+   *    'user'      your own data only; anything unanswered is reported back as
+   *                a request rather than invented (model OFF);
+   *    'llm'       the data agent answers everything it safely can; only fields
+   *                no rung could honestly produce are asked of you (model ON);
+   *    'user_llm'  your data wins wherever you supplied it and the model fills
+   *                the rest, so only true secrets are asked (model ON).
+   *  'agent' is the LEGACY dial older apps carry; the resolver still honours it
+   *  but this wizard no longer writes it. Every mode is written EXPLICITLY —
+   *  'user' included — because an attested environment defaults an UNDECLARED
+   *  mode to the agent generator, and "You provide the data" is a decision,
+   *  not an absence of one. */
+  data_mode: 'user' | 'llm' | 'user_llm' | 'agent';
+  /** RUNG 2 — the client's own test environment answering for itself.
+   *  '' = none (every ordinary app; the rung is inert by construction).
+   *  The DOOR and the URL are configuration and travel in
+   *  answer_key.environment; the TOKEN is a credential and travels in the
+   *  envelope-encrypted credentials blob, never beside the URL. */
+  env_door: '' | 'manifest' | 'rest' | 'mcp';
+  env_door_url: string;
+  env_door_token: string;
+  /** Manifest lines, one per slot: `member id = M-1001`. */
+  env_door_values: string;
   /** SCOPE dial. 'explore' / 'target' / 'e2e'. Only 'e2e' is stored on the app;
    *  the other two stay derivable from scope_paths, so an app configured before
    *  this key existed keeps behaving exactly the same way. */
@@ -164,6 +184,10 @@ const EMPTY: WizardForm = {
   run_environment: '',
   scope_paths: '',
   data_mode: 'user',
+  env_door: '',
+  env_door_url: '',
+  env_door_token: '',
+  env_door_values: '',
   crawl_mode: 'explore',
 };
 
@@ -796,14 +820,18 @@ export function OnboardingWizard() {
     // than adding a new mechanism. Typed credentials still ride along so the login
     // can be re-driven when the session expires.
     const recordedSession = recorded?.usable ? recorded.session : null;
+    // RUNG 2's token is a CREDENTIAL: it rides in this envelope-encrypted blob
+    // like every other secret, never in answer_key beside the URL it opens.
+    const envToken = form.env_door && form.env_door !== 'manifest' ? form.env_door_token.trim() : '';
     const credentials =
-      form.username || form.password || authHook || recordedSession
+      form.username || form.password || authHook || recordedSession || envToken
         ? {
             username: form.username,
             password: form.password,
             ...(mfa ? { mfa } : {}),
             ...(authHook ? { auth_hook: authHook } : {}),
             ...(recordedSession ? { session: recordedSession } : {}),
+            ...(envToken ? { env_token: envToken } : {}),
           }
         : null;
     return {
@@ -819,7 +847,32 @@ export function OnboardingWizard() {
       ...(Object.values(slotValues).some((v) => String(v || '').trim())
         ? { slot_values: slotValues } : {}),
       repo_binding: { provider: form.repo_provider, project: form.repo_project, webhook_secret: form.webhook_secret },
-      answer_key: { fill, notes: form.seed_notes, outcomes: answers },
+      answer_key: {
+        fill, notes: form.seed_notes, outcomes: answers,
+        // RUNG 2 — which door and where, never the token (see credentials).
+        // A manifest's values are the client's own test data, entered once.
+        ...(form.env_door === 'manifest'
+          ? (() => {
+              const values: Record<string, string> = {};
+              for (const line of form.env_door_values.split('\n')) {
+                const at = line.indexOf('=');
+                if (at > 0) {
+                  const k = line.slice(0, at).trim();
+                  const v = line.slice(at + 1).trim();
+                  if (k && v) values[k] = v;
+                }
+              }
+              return Object.keys(values).length
+                ? { environment: { kind: 'manifest', values } } : {};
+            })()
+          : form.env_door && form.env_door_url.trim()
+            ? {
+                environment: form.env_door === 'rest'
+                  ? { kind: 'rest', base_url: form.env_door_url.trim() }
+                  : { kind: 'mcp', endpoint: form.env_door_url.trim() },
+              }
+            : {}),
+      },
       env_attestation: {
         env_kind: form.env_kind,
         attested_by: form.attested_by.trim(),
@@ -832,9 +885,12 @@ export function OnboardingWizard() {
       schedule: {
         cadence: form.cadence,
         ...(scopePaths.length ? { scope_paths: scopePaths } : {}),
-        // 'user' is written as ABSENT, not as a value: the conservative default
-        // must be what an app gets when nobody decided, on every read path.
-        ...(form.data_mode === 'agent' ? { data_mode: 'agent' } : {}),
+        // EVERY mode is written EXPLICITLY, 'user' included. An attested
+        // environment defaults an UNDECLARED mode to the agent generator
+        // (services/data_posture), so "You provide the data" written as
+        // absence would be silently overridden on exactly the environments
+        // where clients test — a decision is not an absence of one.
+        data_mode: form.data_mode,
         ...(form.crawl_mode === 'e2e' ? { crawl_mode: 'e2e' } : {}),
       },
       budgets: form.usd_per_cycle ? { usd_per_cycle: Number(form.usd_per_cycle) } : {},
@@ -1422,23 +1478,102 @@ export function OnboardingWizard() {
                 )}
               </div>
 
-              {/* DATA — who supplies the values. */}
+              {/* DATA — the portal's three modes. Resolved server-side by
+                  services/data_posture into the explorer's two dials; the note
+                  under each option is that resolver's own summary wording, so
+                  the promise made here and the report made later cannot say
+                  different things. */}
               <div className="space-y-1.5" role="radiogroup" aria-label="Test data">
                 <p className="text-2xs font-semibold uppercase tracking-wide text-ink-faint">
                   Data — who supplies the values
                 </p>
                 <WizardRadio
-                  checked={form.data_mode === 'user'}
-                  onSelect={() => set('data_mode', 'user')}
-                  title="You provide the data"
-                  note="The crawl fills what it can from your test data and names anything it could not, so you supply only what is actually missing."
+                  checked={form.data_mode === 'llm'}
+                  onSelect={() => set('data_mode', 'llm')}
+                  title="LLM — the data agent fills everything it safely can"
+                  note="The crawl never stops for data: a coherent fictional person answers every field, the model answers what the generator cannot, and only fields no rung could honestly produce — one-time codes, document uploads — are asked of you. Every value is labelled with who decided it."
                 />
                 <WizardRadio
-                  checked={form.data_mode === 'agent'}
-                  onSelect={() => set('data_mode', 'agent')}
-                  title="Let the agent fill what it can"
-                  note="A coherent fictional person answers every field it honestly can — including the choices that decide which path a funnel takes. Every choice is recorded. One-time codes and document uploads are still asked for."
+                  checked={form.data_mode === 'user' || form.data_mode === 'agent'}
+                  onSelect={() => set('data_mode', 'user')}
+                  title="User — you provide the data"
+                  note="Your own data only. The crawl fills what your test data covers and reports anything it could not as a named request rather than inventing it. No model is consulted."
                 />
+                <WizardRadio
+                  checked={form.data_mode === 'user_llm'}
+                  onSelect={() => set('data_mode', 'user_llm')}
+                  title="User + LLM — your data wins, the model fills the rest"
+                  note="Wherever you supplied a value it is used exactly as given; the model fills only what is left, so you are asked for nothing but true secrets. Every value is labelled with who decided it."
+                />
+              </div>
+
+              {/* RUNG 2 — the client's own test environment. Some values cannot
+                  be invented by anybody: a member id that exists, a policy in
+                  force, the fixed OTP a test environment issues. This is the
+                  ask that gets them without a spreadsheet. */}
+              <div className="space-y-1.5">
+                <p className="text-2xs font-semibold uppercase tracking-wide text-ink-faint">
+                  Your test environment (optional) — real records, answered by your own system
+                </p>
+                <p className="text-2xs text-ink-faint leading-snug">
+                  Some values cannot be invented: a member ID that exists, a policy in
+                  force. Connect your test environment once and the crawl asks it —
+                  read-only — before asking you. Leave off and every crawl behaves
+                  exactly as before.
+                </p>
+                <div className="flex gap-2">
+                  {([['', 'Off'], ['manifest', 'Paste values'], ['rest', 'REST endpoint'], ['mcp', 'MCP endpoint']] as const).map(([kind, label]) => (
+                    <button
+                      key={kind || 'off'}
+                      type="button"
+                      onClick={() => set('env_door', kind)}
+                      className={`px-2 py-1 rounded border text-2xs ${form.env_door === kind ? 'border-accent text-accent font-semibold' : 'border-line text-ink-faint'}`}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+                {form.env_door === 'manifest' && (
+                  <div className="space-y-1">
+                    <textarea
+                      className={INPUT_CLS + ' h-24 font-mono'}
+                      value={form.env_door_values}
+                      onChange={(e) => set('env_door_values', e.target.value)}
+                      placeholder={'member id = M-1001\npolicy number = POL-44120'}
+                      aria-label="environment values, one slot per line"
+                    />
+                    <p className="text-2xs text-ink-faint leading-snug">
+                      One slot per line, <span className="font-mono">name = value</span>. A field matching
+                      two slots is refused rather than guessed — the crawl never gambles
+                      with which of your values goes where.
+                    </p>
+                  </div>
+                )}
+                {(form.env_door === 'rest' || form.env_door === 'mcp') && (
+                  <div className="space-y-1">
+                    <input
+                      className={INPUT_CLS}
+                      value={form.env_door_url}
+                      onChange={(e) => set('env_door_url', e.target.value)}
+                      placeholder={form.env_door === 'rest' ? 'https://fixtures.your-test-env.example' : 'https://mcp.your-test-env.example'}
+                      aria-label="environment endpoint URL"
+                    />
+                    <input
+                      className={INPUT_CLS}
+                      type="password"
+                      value={form.env_door_token}
+                      onChange={(e) => set('env_door_token', e.target.value)}
+                      placeholder="read-only token (stored encrypted, like a password)"
+                      aria-label="environment token"
+                    />
+                    <p className="text-2xs text-ink-faint leading-snug">
+                      Two read-only endpoints are all it takes:{' '}
+                      <span className="font-mono">GET /slots</span> and{' '}
+                      <span className="font-mono">GET /value/&#123;slot&#125;</span>. If your
+                      environment is down the crawl simply falls back — it never stops for it.
+                    </p>
+                  </div>
+                )}
               </div>
             </div>
           </div>
