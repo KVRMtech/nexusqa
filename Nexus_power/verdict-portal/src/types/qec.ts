@@ -352,6 +352,38 @@ export interface Coverage {
   measures_captured_only?: boolean;
 }
 
+/** Client-readable, value-free projection of one persisted crawl bundle (Team E). */
+export interface ClientCoverageReport {
+  report_version: string;
+  headline: string;
+  journeys: {
+    completed: number;
+    found: number;
+    truncated: number;
+    branch_coverage: boolean;
+    branch_coverage_note: string;
+  };
+  pages: Array<{
+    page: string;
+    title: string;
+    observed_steps: number;
+    fields_filled: number;
+    fields_unfilled: number;
+    completed_journeys: number;
+  }>;
+  data_account: Record<string, number>;
+  seed_near_misses: Array<Record<string, string>>;
+  notes: string[];
+}
+
+export interface ClientCoverageReportResponse {
+  app_id: string;
+  status: 'ready' | 'no_live_bundle';
+  reason?: string;
+  source?: { exploration_id: string; crawl_status: string; completed_at: string | null };
+  report: ClientCoverageReport;
+}
+
 /** GET /apps/{id}/seed-manifest — the discovery-first Seed Manifest. */
 export interface SeedManifest {
   artifact_id: string;

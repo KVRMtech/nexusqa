@@ -31,6 +31,7 @@ function pctTone(pct: number): 'good' | 'warn' | 'crit' {
 
 export default function CoveragePanel({ appId }: { appId: string }) {
   const manifest = useAsync((signal) => api.getSeedManifest(appId, 'full', { signal }), [appId]);
+  const clientReport = useAsync((signal) => api.getClientCoverageReport(appId, { signal }), [appId]);
   const [showAll, setShowAll] = useState(false);
   const cov = manifest.data?.coverage;
 
@@ -54,7 +55,14 @@ export default function CoveragePanel({ appId }: { appId: string }) {
       </Panel>
     );
   }
-  if (!cov || cov.total === 0) return null;
+  if (!cov || cov.total === 0) {
+    if (clientReport.data?.status !== 'ready') return null;
+    return (
+      <Panel tone="elevated">
+        <ClientCoverageSummary report={clientReport.data.report} />
+      </Panel>
+    );
+  }
 
   const pt = pctTone(cov.coverage_pct);
   const gaps = cov.gaps ?? [];
@@ -134,6 +142,56 @@ export default function CoveragePanel({ appId }: { appId: string }) {
           {cov.opaque === 0 ? ' (none found here)' : ''}, never silently assumed covered.
         </p>
       )}
+
+      {clientReport.data?.status === 'ready' && (
+        <ClientCoverageSummary report={clientReport.data.report} />
+      )}
     </Panel>
+  );
+}
+
+function labelForAccount(key: string): string {
+  return key.replaceAll('_', ' ');
+}
+
+function ClientCoverageSummary({ report }: { report: {
+  headline: string;
+  journeys: { completed: number; found: number; truncated: number; branch_coverage: boolean; branch_coverage_note: string };
+  pages: Array<{ page: string; title: string; fields_filled: number; fields_unfilled: number; completed_journeys: number }>;
+  data_account: Record<string, number>;
+  seed_near_misses: Array<Record<string, string>>;
+} }) {
+  const account = Object.entries(report.data_account).filter(([, count]) => count > 0);
+  return (
+    <section className="mt-5 border-t border-line pt-4">
+      <SectionHead title="Client coverage report" subtitle={report.headline} />
+      {!report.journeys.branch_coverage && report.journeys.branch_coverage_note && (
+        <p className="mt-2 text-2xs text-ink-low leading-relaxed">{report.journeys.branch_coverage_note}</p>
+      )}
+      <div className="mt-3 grid gap-3 sm:grid-cols-2">
+        <div className="rounded-lg bg-inset ring-1 ring-line px-3 py-2">
+          <div className="text-2xs font-medium text-ink">Where answers came from</div>
+          {account.length ? <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-1 text-2xs text-ink-low">
+            {account.map(([kind, count]) => <span key={kind}>{count} {labelForAccount(kind)}</span>)}
+          </div> : <p className="mt-1 text-2xs text-ink-low">No answer provenance was recorded.</p>}
+        </div>
+        <div className="rounded-lg bg-inset ring-1 ring-line px-3 py-2">
+          <div className="text-2xs font-medium text-ink">Seeds to clarify</div>
+          <p className="mt-1 text-2xs text-ink-low">
+            {report.seed_near_misses.length
+              ? `${report.seed_near_misses.length} close seed match${report.seed_near_misses.length === 1 ? '' : 'es'} need review; no value was applied.`
+              : 'No close seed matches need review.'}
+          </p>
+        </div>
+      </div>
+      {report.pages.length > 0 && (
+        <div className="mt-3 overflow-x-auto rounded-lg ring-1 ring-line">
+          <table className="w-full text-left text-2xs">
+            <thead className="bg-inset text-ink-low"><tr><th className="px-3 py-2 font-medium">Page</th><th className="px-3 py-2 font-medium">Fields filled</th><th className="px-3 py-2 font-medium">Still blank</th><th className="px-3 py-2 font-medium">Completed journeys</th></tr></thead>
+            <tbody>{report.pages.map((page) => <tr key={page.page} className="border-t border-line text-ink"><td className="px-3 py-2"><div>{page.title || page.page}</div><div className="text-ink-low">{page.page}</div></td><td className="px-3 py-2">{page.fields_filled}</td><td className="px-3 py-2">{page.fields_unfilled}</td><td className="px-3 py-2">{page.completed_journeys}</td></tr>)}</tbody>
+          </table>
+        </div>
+      )}
+    </section>
   );
 }

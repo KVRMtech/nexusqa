@@ -35,6 +35,7 @@ from ..fleet import quota
 from ..security import prod_guard
 from ..security.host_policy import HostPolicyError, validate_allowed_hosts
 from ..services.crawl_diagnosis import diagnose as diagnose_crawl
+from ..services.client_coverage_report import build as build_client_coverage_report
 from ..services.data_agent import (
     LLM_SYSTEM as DATA_AGENT_SYSTEM,
     build_llm_prompt,
@@ -1076,6 +1077,50 @@ async def get_seed_manifest(
     manifest["mode"] = mode
     manifest["items"] = manifest["full"] if mode == "full" else manifest["recommended"]
     return manifest
+
+
+@router.get("/apps/{app_id}/client-coverage-report")
+async def get_client_coverage_report(
+    app_id: str, user: dict = Depends(require_auth),
+) -> dict:
+    """Team E: renderable, client-readable coverage from the newest live bundle.
+
+    This deliberately reads the durable exploration callback rather than a folded
+    catalogue or an operator-authored note.  If no crawl supplied a coverage
+    account, it says so explicitly; it does not turn an absent bundle into an
+    all-zero success report.
+    """
+    tenant_id = user["tenant_id"]
+    async with tenant_scoped_qec_session(tenant_id) as session:
+        await _require_app(session, tenant_id, app_id)
+        rows = (await session.execute(
+            select(QEExplorationRow).where(
+                QEExplorationRow.tenant_id == tenant_id,
+                QEExplorationRow.app_id == app_id,
+            ).order_by(QEExplorationRow.created_at.desc()).limit(25)
+        )).scalars().all()
+    source = next((row for row in rows
+                   if isinstance(row.stats, dict)
+                   and isinstance(row.stats.get("coverage"), dict)), None)
+    if source is None:
+        return {
+            "app_id": app_id,
+            "status": "no_live_bundle",
+            "reason": "no persisted crawl coverage bundle is available yet",
+            "report": build_client_coverage_report({}),
+        }
+    coverage = source.stats.get("coverage") or {}
+    return {
+        "app_id": app_id,
+        "status": "ready",
+        "source": {
+            "exploration_id": source.exploration_id,
+            "crawl_status": source.status,
+            "completed_at": (source.finished_at.isoformat()
+                             if source.finished_at else None),
+        },
+        "report": build_client_coverage_report(coverage),
+    }
 
 
 #: Generic step-advance labels. Approving one of these as a Phase-B SUBMIT

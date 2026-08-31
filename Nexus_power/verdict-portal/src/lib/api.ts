@@ -35,6 +35,7 @@ import type {
   AutonomyByBand,
   AutonomyTrend,
   ClientApp,
+  ClientCoverageReportResponse,
   SeedManifest,
   EnvAttestation,
   CoverageGap,
@@ -458,6 +459,22 @@ export class QecApiClient {
   getCoverage(appId: string, opts?: RequestOpts): Promise<CoverageScorecard> {
     if (this.mock) return this.mocked(() => mock.mockGetCoverage(appId), opts?.signal);
     return this.get<CoverageScorecard>(`${QEC}/apps/${encodeURIComponent(appId)}/coverage`, opts);
+  }
+
+  getClientCoverageReport(appId: string, opts?: RequestOpts): Promise<ClientCoverageReportResponse> {
+    if (this.mock) return this.mocked(() => ({
+      app_id: appId,
+      status: 'no_live_bundle' as const,
+      reason: 'mock mode has no persisted crawl bundle',
+      report: {
+        report_version: 'team-e-client-coverage-v1',
+        headline: '0 completed journeys from 0 discovered flows.',
+        journeys: { completed: 0, found: 0, truncated: 0, branch_coverage: false, branch_coverage_note: '' },
+        pages: [], data_account: {}, seed_near_misses: [], notes: [],
+      },
+    }), opts?.signal);
+    return this.get<ClientCoverageReportResponse>(
+      `${QEC}/apps/${encodeURIComponent(appId)}/client-coverage-report`, opts);
   }
 
   listGaps(appId: string, query: { status?: string } = {}, opts?: RequestOpts): Promise<GapListResponse> {
