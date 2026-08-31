@@ -1,0 +1,4203 @@
+{
+  "advance_blocked": [
+    {
+      "business_rule": "Continue requires an answer to 'None' before it is enabled (proven: the app enabled it when the agent answered)",
+      "label": "Continue",
+      "missing_fields": [],
+      "reason": "advance_disabled_by_app_validation",
+      "resolved_by_agent": "None",
+      "rule_reused": false,
+      "url": "http://127.0.0.1:8123/underwriting/new-business/new-application"
+    }
+  ],
+  "advance_oracle": {
+    "consults": 7,
+    "errors": 0,
+    "latency_ms_total": 17,
+    "picks": 1,
+    "state": "configured",
+    "unavailable": 0
+  },
+  "approvable_boundary": [
+    {
+      "boundary_key": "bnd_e928e33131c653b86897",
+      "label": "Submit Application",
+      "reason": "commit_shaped_label",
+      "rule_id": "",
+      "severity": "high",
+      "url": "http://127.0.0.1:8123/dashboard/overview"
+    },
+    {
+      "boundary_key": "bnd_2c3279d397e8a18628f7",
+      "label": "Process Payment",
+      "reason": "refuse_pack_irreversible_verb",
+      "rule_id": "rp.verb.pay",
+      "severity": "critical",
+      "url": "http://127.0.0.1:8123/dashboard/overview"
+    },
+    {
+      "boundary_key": "bnd_7256c4efc483834dcbca",
+      "label": "Submit Application",
+      "reason": "commit_shaped_label",
+      "rule_id": "",
+      "severity": "high",
+      "url": "http://127.0.0.1:8123/underwriting/new-business/app-5a1b9c3d/review"
+    },
+    {
+      "boundary_key": "bnd_77a748f3d6d133d0ac84",
+      "label": "Process Payment",
+      "reason": "refuse_pack_irreversible_verb",
+      "rule_id": "rp.verb.pay",
+      "severity": "critical",
+      "url": "http://127.0.0.1:8123/underwriting/new-business/app-5a1b9c3d/review"
+    },
+    {
+      "boundary_key": "bnd_8a734bfb4641d5a4cffd",
+      "label": "Submit Application",
+      "reason": "commit_shaped_label",
+      "rule_id": "",
+      "severity": "high",
+      "url": "http://127.0.0.1:8123/underwriting/new-business"
+    },
+    {
+      "boundary_key": "bnd_7c3ef365f1d2e10ffe21",
+      "label": "Process Payment",
+      "reason": "refuse_pack_irreversible_verb",
+      "rule_id": "rp.verb.pay",
+      "severity": "critical",
+      "url": "http://127.0.0.1:8123/underwriting/new-business"
+    },
+    {
+      "boundary_key": "bnd_c693007970bd521e68a7",
+      "label": "Review & Submit",
+      "reason": "commit_shaped_label",
+      "rule_id": "",
+      "severity": "high",
+      "url": "http://127.0.0.1:8123/underwriting/new-business/new-application"
+    },
+    {
+      "boundary_key": "bnd_a7b792443fd5aca8d53c",
+      "label": "Submit Application",
+      "reason": "commit_shaped_label",
+      "rule_id": "",
+      "severity": "high",
+      "url": "http://127.0.0.1:8123/underwriting/new-business/new-application"
+    },
+    {
+      "boundary_key": "bnd_475991affc31ceb7f294",
+      "label": "Process Payment",
+      "reason": "refuse_pack_irreversible_verb",
+      "rule_id": "rp.verb.pay",
+      "severity": "critical",
+      "url": "http://127.0.0.1:8123/underwriting/new-business/new-application"
+    },
+    {
+      "boundary_key": "bnd_5d4f44f6bb794ecfef80",
+      "label": "Submit Application",
+      "reason": "commit_shaped_label",
+      "rule_id": "",
+      "severity": "high",
+      "url": "http://127.0.0.1:8123/underwriting/new-business/app-7f3a9b2e/review"
+    },
+    {
+      "boundary_key": "bnd_29d61589eae4fe06ee00",
+      "label": "Process Payment",
+      "reason": "refuse_pack_irreversible_verb",
+      "rule_id": "rp.verb.pay",
+      "severity": "critical",
+      "url": "http://127.0.0.1:8123/underwriting/new-business/app-7f3a9b2e/review"
+    },
+    {
+      "boundary_key": "bnd_704a2fffbfc8d096a662",
+      "label": "Submit Application",
+      "reason": "commit_shaped_label",
+      "rule_id": "",
+      "severity": "high",
+      "url": "http://127.0.0.1:8123/underwriting/new-business/app-2c8d4e1f/review"
+    },
+    {
+      "boundary_key": "bnd_a3e339b261ccaa687213",
+      "label": "Process Payment",
+      "reason": "refuse_pack_irreversible_verb",
+      "rule_id": "rp.verb.pay",
+      "severity": "critical",
+      "url": "http://127.0.0.1:8123/underwriting/new-business/app-2c8d4e1f/review"
+    },
+    {
+      "boundary_key": "bnd_6a83cdbc123d12dde883",
+      "label": "Submit Application",
+      "reason": "commit_shaped_label",
+      "rule_id": "",
+      "severity": "high",
+      "url": "http://127.0.0.1:8123/underwriting/new-business/app-8e2f6a4b/review"
+    },
+    {
+      "boundary_key": "bnd_5af3bfe785ec001565d2",
+      "label": "Process Payment",
+      "reason": "refuse_pack_irreversible_verb",
+      "rule_id": "rp.verb.pay",
+      "severity": "critical",
+      "url": "http://127.0.0.1:8123/underwriting/new-business/app-8e2f6a4b/review"
+    }
+  ],
+  "auth_blocked": false,
+  "auth_blocked_reason": "",
+  "auth_incomplete": true,
+  "auth_reason": "not_persisted",
+  "boundaries_crossed": 1,
+  "boundary_crossings": [
+    {
+      "approval_id": "apr_6c152fcd357d3e35",
+      "boundary_key": "bnd_a7b792443fd5aca8d53c",
+      "completed_at_ms": 430780,
+      "confirmed": false,
+      "control_name": "Submit Application",
+      "crossing_id": "cross_a7b792443fd5_1",
+      "outcome": "none",
+      "refusal_reason": "",
+      "reserved_at_ms": 428296,
+      "sequence_index": 9,
+      "state_fingerprint": "6f7a1e62a096bf1899e5de1d3871d29b4f48962ede3887fb66ad74e01baed253",
+      "status": "crossed",
+      "url": "http://127.0.0.1:8123/underwriting/new-business/new-application"
+    }
+  ],
+  "crawl_mode": "explore",
+  "data_account": {
+    "answered_to_unblock": 1,
+    "group_sibling": 1,
+    "harvested": 1,
+    "needs_input": 7,
+    "synthesized": 20
+  },
+  "discovered_rules": [
+    {
+      "blocked_label": "Continue",
+      "field_label": "None",
+      "key": "rule:20787e2174e04e5b0eb0a16a",
+      "kind": "advance_gate",
+      "proof": "Continue requires an answer to 'None' before it is enabled (proven: the app enabled it when the agent answered)",
+      "schema_version": 1,
+      "url_template": "127.0.0.1/underwriting/new-business/new-application"
+    }
+  ],
+  "endpoint_inventory": [
+    {
+      "actions": [
+        {
+          "action_token": "a1",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a7",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a11",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a13",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a15",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a17",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a19",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a21",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a23",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a25",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a27",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a29",
+          "label": "",
+          "verb": "navigate"
+        }
+      ],
+      "auth_pattern": "none",
+      "first_sequence": 1,
+      "first_timestamp_ms": 1250,
+      "has_server_error": false,
+      "host": "127.0.0.1:8123",
+      "last_sequence": 1247,
+      "last_timestamp_ms": 1359983,
+      "method": "GET",
+      "observed_count": 65,
+      "path_template": "/portal/sign-in",
+      "rate_limited": false,
+      "request_keys": [],
+      "resource_types": [
+        "fetch"
+      ],
+      "response_shape": "text",
+      "retried": true,
+      "status_classes": [
+        "2xx"
+      ],
+      "statuses": {
+        "200": 65
+      }
+    },
+    {
+      "actions": [
+        {
+          "action_token": "a6",
+          "label": "Verify & Sign In",
+          "verb": "click"
+        },
+        {
+          "action_token": "a7",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a11",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a13",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a15",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a17",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a19",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a21",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a23",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a25",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a27",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a29",
+          "label": "",
+          "verb": "navigate"
+        }
+      ],
+      "auth_pattern": "none",
+      "first_sequence": 2,
+      "first_timestamp_ms": 7921,
+      "has_server_error": false,
+      "host": "127.0.0.1:8123",
+      "last_sequence": 1248,
+      "last_timestamp_ms": 1360062,
+      "method": "GET",
+      "observed_count": 65,
+      "path_template": "/dashboard/overview",
+      "rate_limited": false,
+      "request_keys": [],
+      "resource_types": [
+        "fetch"
+      ],
+      "response_shape": "text",
+      "retried": true,
+      "status_classes": [
+        "2xx"
+      ],
+      "statuses": {
+        "200": 65
+      }
+    },
+    {
+      "actions": [
+        {
+          "action_token": "a6",
+          "label": "Verify & Sign In",
+          "verb": "click"
+        },
+        {
+          "action_token": "a7",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a11",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a13",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a15",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a17",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a19",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a21",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a23",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a25",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a27",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a29",
+          "label": "",
+          "verb": "navigate"
+        }
+      ],
+      "auth_pattern": "none",
+      "first_sequence": 3,
+      "first_timestamp_ms": 8062,
+      "has_server_error": false,
+      "host": "127.0.0.1:8123",
+      "last_sequence": 1249,
+      "last_timestamp_ms": 1360093,
+      "method": "GET",
+      "observed_count": 61,
+      "path_template": "/underwriting/new-business",
+      "rate_limited": false,
+      "request_keys": [],
+      "resource_types": [
+        "fetch"
+      ],
+      "response_shape": "text",
+      "retried": true,
+      "status_classes": [
+        "2xx"
+      ],
+      "statuses": {
+        "200": 61
+      }
+    },
+    {
+      "actions": [
+        {
+          "action_token": "a6",
+          "label": "Verify & Sign In",
+          "verb": "click"
+        },
+        {
+          "action_token": "a7",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a11",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a13",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a15",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a17",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a19",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a21",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a23",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a25",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a27",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a29",
+          "label": "",
+          "verb": "navigate"
+        }
+      ],
+      "auth_pattern": "none",
+      "first_sequence": 4,
+      "first_timestamp_ms": 8062,
+      "has_server_error": false,
+      "host": "127.0.0.1:8123",
+      "last_sequence": 1253,
+      "last_timestamp_ms": 1360141,
+      "method": "GET",
+      "observed_count": 59,
+      "path_template": "/underwriting/new-business/new-application",
+      "rate_limited": false,
+      "request_keys": [],
+      "resource_types": [
+        "fetch"
+      ],
+      "response_shape": "text",
+      "retried": true,
+      "status_classes": [
+        "2xx"
+      ],
+      "statuses": {
+        "200": 59
+      }
+    },
+    {
+      "actions": [
+        {
+          "action_token": "a6",
+          "label": "Verify & Sign In",
+          "verb": "click"
+        },
+        {
+          "action_token": "a7",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a11",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a13",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a15",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a17",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a19",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a21",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a23",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a25",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a27",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a29",
+          "label": "",
+          "verb": "navigate"
+        }
+      ],
+      "auth_pattern": "none",
+      "first_sequence": 5,
+      "first_timestamp_ms": 8078,
+      "has_server_error": false,
+      "host": "127.0.0.1:8123",
+      "last_sequence": 1251,
+      "last_timestamp_ms": 1360108,
+      "method": "GET",
+      "observed_count": 65,
+      "path_template": "/customers/profile",
+      "rate_limited": false,
+      "request_keys": [],
+      "resource_types": [
+        "fetch"
+      ],
+      "response_shape": "text",
+      "retried": true,
+      "status_classes": [
+        "2xx"
+      ],
+      "statuses": {
+        "200": 65
+      }
+    },
+    {
+      "actions": [
+        {
+          "action_token": "a6",
+          "label": "Verify & Sign In",
+          "verb": "click"
+        },
+        {
+          "action_token": "a7",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a11",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a13",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a15",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a17",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a19",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a21",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a23",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a25",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a27",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a29",
+          "label": "",
+          "verb": "navigate"
+        }
+      ],
+      "auth_pattern": "none",
+      "first_sequence": 6,
+      "first_timestamp_ms": 8078,
+      "has_server_error": false,
+      "host": "127.0.0.1:8123",
+      "last_sequence": 1250,
+      "last_timestamp_ms": 1360093,
+      "method": "GET",
+      "observed_count": 65,
+      "path_template": "/payments/process",
+      "rate_limited": false,
+      "request_keys": [],
+      "resource_types": [
+        "fetch"
+      ],
+      "response_shape": "text",
+      "retried": true,
+      "status_classes": [
+        "2xx"
+      ],
+      "statuses": {
+        "200": 65
+      }
+    },
+    {
+      "actions": [
+        {
+          "action_token": "a6",
+          "label": "Verify & Sign In",
+          "verb": "click"
+        },
+        {
+          "action_token": "a7",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a11",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a13",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a15",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a17",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a19",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a21",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a23",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a25",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a27",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a29",
+          "label": "",
+          "verb": "navigate"
+        }
+      ],
+      "auth_pattern": "none",
+      "first_sequence": 7,
+      "first_timestamp_ms": 8078,
+      "has_server_error": false,
+      "host": "127.0.0.1:8123",
+      "last_sequence": 1252,
+      "last_timestamp_ms": 1360125,
+      "method": "GET",
+      "observed_count": 65,
+      "path_template": "/policy-admin/in-force",
+      "rate_limited": false,
+      "request_keys": [],
+      "resource_types": [
+        "fetch"
+      ],
+      "response_shape": "text",
+      "retried": true,
+      "status_classes": [
+        "2xx"
+      ],
+      "statuses": {
+        "200": 65
+      }
+    },
+    {
+      "actions": [
+        {
+          "action_token": "a6",
+          "label": "Verify & Sign In",
+          "verb": "click"
+        },
+        {
+          "action_token": "a7",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a11",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a13",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a15",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a17",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a19",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a21",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a23",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a25",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a27",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a29",
+          "label": "",
+          "verb": "navigate"
+        }
+      ],
+      "auth_pattern": "none",
+      "first_sequence": 8,
+      "first_timestamp_ms": 8125,
+      "has_server_error": false,
+      "host": "127.0.0.1:8123",
+      "last_sequence": 1255,
+      "last_timestamp_ms": 1360171,
+      "method": "GET",
+      "observed_count": 65,
+      "path_template": "/claims/reported",
+      "rate_limited": false,
+      "request_keys": [],
+      "resource_types": [
+        "fetch"
+      ],
+      "response_shape": "text",
+      "retried": true,
+      "status_classes": [
+        "2xx"
+      ],
+      "statuses": {
+        "200": 65
+      }
+    },
+    {
+      "actions": [
+        {
+          "action_token": "a6",
+          "label": "Verify & Sign In",
+          "verb": "click"
+        },
+        {
+          "action_token": "a7",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a11",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a13",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a15",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a17",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a19",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a21",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a23",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a24",
+          "label": "Settings",
+          "verb": "click"
+        },
+        {
+          "action_token": "a25",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a27",
+          "label": "",
+          "verb": "navigate"
+        }
+      ],
+      "auth_pattern": "none",
+      "first_sequence": 9,
+      "first_timestamp_ms": 8171,
+      "has_server_error": false,
+      "host": "127.0.0.1:8123",
+      "last_sequence": 1254,
+      "last_timestamp_ms": 1360155,
+      "method": "GET",
+      "observed_count": 129,
+      "path_template": "/settings/preferences",
+      "rate_limited": false,
+      "request_keys": [],
+      "resource_types": [
+        "fetch"
+      ],
+      "response_shape": "text",
+      "retried": true,
+      "status_classes": [
+        "4xx",
+        "failed"
+      ],
+      "statuses": {
+        "404": 65,
+        "failed": 64
+      }
+    },
+    {
+      "actions": [
+        {
+          "action_token": "a6",
+          "label": "Verify & Sign In",
+          "verb": "click"
+        },
+        {
+          "action_token": "a7",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a11",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a13",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a15",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a17",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a19",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a21",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a23",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a25",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a26",
+          "label": "Michael Thornberry UW-2026-00142 $2,000,000.00 underwriting",
+          "verb": "click"
+        },
+        {
+          "action_token": "a27",
+          "label": "",
+          "verb": "navigate"
+        }
+      ],
+      "auth_pattern": "none",
+      "first_sequence": 10,
+      "first_timestamp_ms": 8187,
+      "has_server_error": false,
+      "host": "127.0.0.1:8123",
+      "last_sequence": 1267,
+      "last_timestamp_ms": 1373655,
+      "method": "GET",
+      "observed_count": 469,
+      "path_template": "/underwriting/new-business/{token}/review",
+      "rate_limited": false,
+      "request_keys": [],
+      "resource_types": [
+        "fetch"
+      ],
+      "response_shape": "none",
+      "retried": true,
+      "status_classes": [
+        "2xx",
+        "failed"
+      ],
+      "statuses": {
+        "200": 258,
+        "failed": 211
+      }
+    },
+    {
+      "actions": [
+        {
+          "action_token": "a20",
+          "label": "Reported Claims",
+          "verb": "click"
+        }
+      ],
+      "auth_pattern": "none",
+      "first_sequence": 138,
+      "first_timestamp_ms": 49375,
+      "has_server_error": false,
+      "host": "127.0.0.1:8123",
+      "last_sequence": 138,
+      "last_timestamp_ms": 49375,
+      "method": "GET",
+      "observed_count": 1,
+      "path_template": "/claims/reported/new-fnol",
+      "rate_limited": false,
+      "request_keys": [],
+      "resource_types": [
+        "fetch"
+      ],
+      "response_shape": "text",
+      "retried": false,
+      "status_classes": [
+        "2xx"
+      ],
+      "statuses": {
+        "200": 1
+      }
+    },
+    {
+      "actions": [
+        {
+          "action_token": "a22",
+          "label": "Product Pricing",
+          "verb": "click"
+        }
+      ],
+      "auth_pattern": "none",
+      "first_sequence": 153,
+      "first_timestamp_ms": 54593,
+      "has_server_error": false,
+      "host": "127.0.0.1:8123",
+      "last_sequence": 154,
+      "last_timestamp_ms": 54608,
+      "method": "GET",
+      "observed_count": 2,
+      "path_template": "/actuarial/product-pricing",
+      "rate_limited": false,
+      "request_keys": [],
+      "resource_types": [
+        "fetch"
+      ],
+      "response_shape": "text",
+      "retried": true,
+      "status_classes": [
+        "2xx"
+      ],
+      "statuses": {
+        "200": 2
+      }
+    },
+    {
+      "actions": [
+        {
+          "action_token": "a26",
+          "label": "Michael Thornberry UW-2026-00142 $2,000,000.00 underwriting",
+          "verb": "click"
+        },
+        {
+          "action_token": "a28",
+          "label": "Sarah Jennings UW-2026-00143 $5,000,000.00 requirements pending",
+          "verb": "click"
+        },
+        {
+          "action_token": "a30",
+          "label": "Robert Vasquez UW-2026-00144 $1,000,000.00 in review",
+          "verb": "click"
+        },
+        {
+          "action_token": "a32",
+          "label": "Jennifer Walsh UW-2026-00145 $3,000,000.00 submitted",
+          "verb": "click"
+        },
+        {
+          "action_token": "a37",
+          "label": "Robert Vasquez UW-2026-00144 $1,000,000.00 in review",
+          "verb": "click"
+        },
+        {
+          "action_token": "a151",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a157",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a164",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a173",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a180",
+          "label": "Requirements",
+          "verb": "click"
+        },
+        {
+          "action_token": "a181",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a189",
+          "label": "",
+          "verb": "navigate"
+        }
+      ],
+      "auth_pattern": "none",
+      "first_sequence": 189,
+      "first_timestamp_ms": 76891,
+      "has_server_error": false,
+      "host": "127.0.0.1:8123",
+      "last_sequence": 1259,
+      "last_timestamp_ms": 1360266,
+      "method": "GET",
+      "observed_count": 81,
+      "path_template": "/underwriting/new-business/{token}/requirements",
+      "rate_limited": false,
+      "request_keys": [],
+      "resource_types": [
+        "fetch"
+      ],
+      "response_shape": "none",
+      "retried": true,
+      "status_classes": [
+        "2xx",
+        "failed"
+      ],
+      "statuses": {
+        "200": 50,
+        "failed": 31
+      }
+    },
+    {
+      "actions": [
+        {
+          "action_token": "a26",
+          "label": "Michael Thornberry UW-2026-00142 $2,000,000.00 underwriting",
+          "verb": "click"
+        },
+        {
+          "action_token": "a28",
+          "label": "Sarah Jennings UW-2026-00143 $5,000,000.00 requirements pending",
+          "verb": "click"
+        },
+        {
+          "action_token": "a30",
+          "label": "Robert Vasquez UW-2026-00144 $1,000,000.00 in review",
+          "verb": "click"
+        },
+        {
+          "action_token": "a32",
+          "label": "Jennifer Walsh UW-2026-00145 $3,000,000.00 submitted",
+          "verb": "click"
+        },
+        {
+          "action_token": "a37",
+          "label": "Robert Vasquez UW-2026-00144 $1,000,000.00 in review",
+          "verb": "click"
+        },
+        {
+          "action_token": "a151",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a157",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a164",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a173",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a181",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a188",
+          "label": "Risk Decision",
+          "verb": "click"
+        },
+        {
+          "action_token": "a189",
+          "label": "",
+          "verb": "navigate"
+        }
+      ],
+      "auth_pattern": "none",
+      "first_sequence": 190,
+      "first_timestamp_ms": 76891,
+      "has_server_error": false,
+      "host": "127.0.0.1:8123",
+      "last_sequence": 1258,
+      "last_timestamp_ms": 1360266,
+      "method": "GET",
+      "observed_count": 75,
+      "path_template": "/underwriting/new-business/{token}/decision",
+      "rate_limited": false,
+      "request_keys": [],
+      "resource_types": [
+        "fetch"
+      ],
+      "response_shape": "none",
+      "retried": true,
+      "status_classes": [
+        "2xx",
+        "failed"
+      ],
+      "statuses": {
+        "200": 50,
+        "failed": 25
+      }
+    }
+  ],
+  "endpoint_inventory_truncated": false,
+  "expansions_opened": 0,
+  "expansions_skipped": 0,
+  "field_ledger": [
+    {
+      "basis": "structural",
+      "confidence": 0.4,
+      "filled": true,
+      "name": "Search applicants...",
+      "provenance": "harvested",
+      "semantic_type": "free_text",
+      "sensitive": false,
+      "signature": "7274ad32951fc8e3280492196a3e9e9c",
+      "url": "http://127.0.0.1:8123/underwriting/new-business",
+      "widget": "text"
+    },
+    {
+      "basis": "name_tokens",
+      "confidence": 0.8,
+      "filled": true,
+      "name": "First Name",
+      "provenance": "synthesized",
+      "semantic_type": "given_name",
+      "sensitive": true,
+      "signature": "f1f681ea2d53613c865959331447d2e2",
+      "url": "http://127.0.0.1:8123/underwriting/new-business/new-application",
+      "widget": "text"
+    },
+    {
+      "basis": "name_tokens",
+      "confidence": 0.8,
+      "filled": true,
+      "name": "Last Name",
+      "provenance": "synthesized",
+      "semantic_type": "family_name",
+      "sensitive": true,
+      "signature": "5770580e2130a2a007f2cb31e0db1257",
+      "url": "http://127.0.0.1:8123/underwriting/new-business/new-application",
+      "widget": "text"
+    },
+    {
+      "basis": "name_tokens",
+      "confidence": 0.72,
+      "filled": true,
+      "name": "Date of Birth",
+      "provenance": "synthesized",
+      "semantic_type": "date_of_birth",
+      "sensitive": true,
+      "signature": "7f510ea7baa3531d4a26a05a7b87103b",
+      "url": "http://127.0.0.1:8123/underwriting/new-business/new-application",
+      "widget": "text"
+    },
+    {
+      "basis": "structural",
+      "choice": "male",
+      "confidence": 0.5,
+      "filled": true,
+      "mechanic": "open_pick",
+      "name": "Gender",
+      "options": [
+        "male"
+      ],
+      "provenance": "synthesized",
+      "semantic_type": "choice",
+      "sensitive": false,
+      "signature": "ec243d3f3ae1f79b25433fb8078cc486",
+      "url": "http://127.0.0.1:8123/underwriting/new-business/new-application",
+      "widget": "aria_combobox"
+    },
+    {
+      "basis": "name_tokens",
+      "confidence": 0.72,
+      "filled": true,
+      "name": "Social Security Number",
+      "provenance": "synthesized",
+      "semantic_type": "national_id",
+      "sensitive": true,
+      "signature": "da823e0cb66311950637a77d6b0fea10",
+      "url": "http://127.0.0.1:8123/underwriting/new-business/new-application",
+      "widget": "text"
+    },
+    {
+      "basis": "input_type",
+      "confidence": 0.9,
+      "filled": true,
+      "name": "Email Address",
+      "provenance": "synthesized",
+      "semantic_type": "email",
+      "sensitive": true,
+      "signature": "1183e3dbb35de8ea904fca4de9bd75b7",
+      "url": "http://127.0.0.1:8123/underwriting/new-business/new-application",
+      "widget": "text"
+    },
+    {
+      "basis": "input_type",
+      "confidence": 0.9,
+      "filled": true,
+      "name": "Phone Number",
+      "provenance": "synthesized",
+      "semantic_type": "phone",
+      "sensitive": true,
+      "signature": "84725fd1ebf7dbc2d05fc6e2e56a015d",
+      "url": "http://127.0.0.1:8123/underwriting/new-business/new-application",
+      "widget": "text"
+    },
+    {
+      "basis": "name_tokens",
+      "confidence": 0.72,
+      "filled": true,
+      "name": "Street Address",
+      "provenance": "synthesized",
+      "semantic_type": "street_address",
+      "sensitive": true,
+      "signature": "d24af1eeea6a2082183179cfeb917869",
+      "url": "http://127.0.0.1:8123/underwriting/new-business/new-application",
+      "widget": "text"
+    },
+    {
+      "basis": "name_tokens",
+      "confidence": 0.72,
+      "filled": true,
+      "name": "City",
+      "provenance": "synthesized",
+      "semantic_type": "city",
+      "sensitive": false,
+      "signature": "8fcad6901839f6523f4c100401305842",
+      "url": "http://127.0.0.1:8123/underwriting/new-business/new-application",
+      "widget": "text"
+    },
+    {
+      "basis": "name_tokens",
+      "choice": "al",
+      "confidence": 0.72,
+      "filled": true,
+      "mechanic": "open_pick",
+      "name": "State",
+      "options": [
+        "al"
+      ],
+      "provenance": "synthesized",
+      "semantic_type": "region",
+      "sensitive": false,
+      "signature": "f34b0680da37f161cac95f1b5727be37",
+      "url": "http://127.0.0.1:8123/underwriting/new-business/new-application",
+      "widget": "aria_combobox"
+    },
+    {
+      "basis": "name_tokens",
+      "confidence": 0.72,
+      "filled": true,
+      "name": "ZIP Code",
+      "provenance": "synthesized",
+      "semantic_type": "postal_code",
+      "sensitive": false,
+      "signature": "79ee2994b7260f7cc20c387b2c78a16b",
+      "url": "http://127.0.0.1:8123/underwriting/new-business/new-application",
+      "widget": "text"
+    },
+    {
+      "basis": "name_tokens",
+      "confidence": 0.72,
+      "filled": true,
+      "name": "Occupation",
+      "provenance": "synthesized",
+      "semantic_type": "job_title",
+      "sensitive": false,
+      "signature": "aa88240768fc4c53bc650275163c0b50",
+      "url": "http://127.0.0.1:8123/underwriting/new-business/new-application",
+      "widget": "text"
+    },
+    {
+      "basis": "name_tokens",
+      "confidence": 0.72,
+      "filled": true,
+      "name": "Employer",
+      "provenance": "synthesized",
+      "semantic_type": "company",
+      "sensitive": false,
+      "signature": "b29f80fb1f63f1021c7a3be321e29bdd",
+      "url": "http://127.0.0.1:8123/underwriting/new-business/new-application",
+      "widget": "text"
+    },
+    {
+      "basis": "name_tokens",
+      "confidence": 0.72,
+      "filled": true,
+      "name": "Annual Income",
+      "provenance": "synthesized",
+      "semantic_type": "currency_amount",
+      "sensitive": false,
+      "signature": "352599e3ecdf232392b736321ada4726",
+      "url": "http://127.0.0.1:8123/underwriting/new-business/new-application",
+      "widget": "text"
+    },
+    {
+      "basis": "structural",
+      "choice": "term life - 10 year",
+      "confidence": 0.5,
+      "filled": true,
+      "mechanic": "open_pick",
+      "name": "Product",
+      "options": [
+        "term life - 10 year"
+      ],
+      "provenance": "synthesized",
+      "semantic_type": "choice",
+      "sensitive": false,
+      "signature": "7433c2321ab15b5040af4e7191f1e6c5",
+      "url": "http://127.0.0.1:8123/underwriting/new-business/new-application",
+      "widget": "aria_combobox"
+    },
+    {
+      "basis": "name_tokens",
+      "confidence": 0.72,
+      "filled": true,
+      "name": "Face Amount ($)",
+      "provenance": "synthesized",
+      "semantic_type": "currency_amount",
+      "sensitive": false,
+      "signature": "c0b9e022e460bb104b705604007ba669",
+      "url": "http://127.0.0.1:8123/underwriting/new-business/new-application",
+      "widget": "text"
+    },
+    {
+      "basis": "name_tokens",
+      "choice": "monthly",
+      "confidence": 0.72,
+      "filled": true,
+      "mechanic": "open_pick",
+      "name": "Premium Mode",
+      "options": [
+        "monthly"
+      ],
+      "provenance": "synthesized",
+      "semantic_type": "currency_amount",
+      "sensitive": false,
+      "signature": "b75c1237ccb43c8f58a3c172962973a4",
+      "url": "http://127.0.0.1:8123/underwriting/new-business/new-application",
+      "widget": "aria_combobox"
+    },
+    {
+      "basis": "structural",
+      "choice": "true",
+      "confidence": 0.5,
+      "filled": true,
+      "group_id": "dd97384911b6c039c665018274a50ab1",
+      "name": "No",
+      "options": [
+        "no",
+        "yes"
+      ],
+      "provenance": "synthesized",
+      "semantic_type": "choice",
+      "sensitive": false,
+      "signature": "e23cc9b9bd7c1b0c554d5607880a2d40",
+      "url": "http://127.0.0.1:8123/underwriting/new-business/new-application",
+      "widget": "radio_group"
+    },
+    {
+      "basis": "structural",
+      "confidence": 0.5,
+      "filled": false,
+      "group_id": "dd97384911b6c039c665018274a50ab1",
+      "name": "Yes",
+      "options": [
+        "no",
+        "yes"
+      ],
+      "provenance": "group_sibling",
+      "semantic_type": "choice",
+      "sensitive": false,
+      "signature": "55c2d05f07b27c8b9bf1ed73300b105a",
+      "url": "http://127.0.0.1:8123/underwriting/new-business/new-application",
+      "widget": "radio_group"
+    },
+    {
+      "basis": "structural",
+      "choice": "checked",
+      "confidence": 0.45,
+      "filled": true,
+      "name": "None",
+      "options": [
+        "checked",
+        "unchecked"
+      ],
+      "provenance": "answered_to_unblock",
+      "reason": "no_value_rung_answered",
+      "semantic_type": "consent",
+      "sensitive": false,
+      "signature": "74449c52e6f499ca1401fa5a2ac7df82",
+      "url": "http://127.0.0.1:8123/underwriting/new-business/new-application",
+      "widget": "toggle"
+    },
+    {
+      "basis": "structural",
+      "confidence": 0.45,
+      "filled": false,
+      "name": "Controlled Hypertension",
+      "options": [
+        "checked",
+        "unchecked"
+      ],
+      "provenance": "needs_input",
+      "reason": "no_value_rung_answered",
+      "semantic_type": "consent",
+      "sensitive": false,
+      "signature": "29539a4bf1ff88d08da4f2e5501d2248",
+      "url": "http://127.0.0.1:8123/underwriting/new-business/new-application",
+      "widget": "toggle"
+    },
+    {
+      "basis": "structural",
+      "confidence": 0.45,
+      "filled": false,
+      "name": "Type 2 Diabetes",
+      "options": [
+        "checked",
+        "unchecked"
+      ],
+      "provenance": "needs_input",
+      "reason": "no_value_rung_answered",
+      "semantic_type": "consent",
+      "sensitive": false,
+      "signature": "451f3ca42819d7fc7538023cae257f4f",
+      "url": "http://127.0.0.1:8123/underwriting/new-business/new-application",
+      "widget": "toggle"
+    },
+    {
+      "basis": "structural",
+      "confidence": 0.45,
+      "filled": false,
+      "name": "Elevated BMI",
+      "options": [
+        "checked",
+        "unchecked"
+      ],
+      "provenance": "needs_input",
+      "reason": "no_value_rung_answered",
+      "semantic_type": "consent",
+      "sensitive": false,
+      "signature": "ae30c8aca5e03dc29e041b9120176b7a",
+      "url": "http://127.0.0.1:8123/underwriting/new-business/new-application",
+      "widget": "toggle"
+    },
+    {
+      "basis": "structural",
+      "confidence": 0.45,
+      "filled": false,
+      "name": "Sleep Apnea (Treated)",
+      "options": [
+        "checked",
+        "unchecked"
+      ],
+      "provenance": "needs_input",
+      "reason": "no_value_rung_answered",
+      "semantic_type": "consent",
+      "sensitive": false,
+      "signature": "0aa3a53dd31f05cd35bfe392214d6c60",
+      "url": "http://127.0.0.1:8123/underwriting/new-business/new-application",
+      "widget": "toggle"
+    },
+    {
+      "basis": "structural",
+      "confidence": 0.45,
+      "filled": false,
+      "name": "Asthma",
+      "options": [
+        "checked",
+        "unchecked"
+      ],
+      "provenance": "needs_input",
+      "reason": "no_value_rung_answered",
+      "semantic_type": "consent",
+      "sensitive": false,
+      "signature": "ef46ac07587462a72c8652dacaf4f3ec",
+      "url": "http://127.0.0.1:8123/underwriting/new-business/new-application",
+      "widget": "toggle"
+    },
+    {
+      "basis": "structural",
+      "confidence": 0.45,
+      "filled": false,
+      "name": "Anxiety (Treated)",
+      "options": [
+        "checked",
+        "unchecked"
+      ],
+      "provenance": "needs_input",
+      "reason": "no_value_rung_answered",
+      "semantic_type": "consent",
+      "sensitive": false,
+      "signature": "9bc8c4d2a8b5fed2e0e7b52761956fce",
+      "url": "http://127.0.0.1:8123/underwriting/new-business/new-application",
+      "widget": "toggle"
+    },
+    {
+      "basis": "structural",
+      "confidence": 0.45,
+      "filled": false,
+      "name": "High Cholesterol",
+      "options": [
+        "checked",
+        "unchecked"
+      ],
+      "provenance": "needs_input",
+      "reason": "no_value_rung_answered",
+      "semantic_type": "consent",
+      "sensitive": false,
+      "signature": "25518f32ebd67d1082fffe5e92e209e9",
+      "url": "http://127.0.0.1:8123/underwriting/new-business/new-application",
+      "widget": "toggle"
+    },
+    {
+      "basis": "structural",
+      "confidence": 0.4,
+      "filled": true,
+      "name": "Primary Physician",
+      "provenance": "synthesized",
+      "semantic_type": "free_text",
+      "sensitive": false,
+      "signature": "df61d4b96a5952a73c30e9a4ab3c8742",
+      "url": "http://127.0.0.1:8123/underwriting/new-business/new-application",
+      "widget": "text"
+    },
+    {
+      "basis": "input_type",
+      "confidence": 0.6,
+      "filled": true,
+      "name": "Last Physical Exam",
+      "provenance": "synthesized",
+      "semantic_type": "date",
+      "sensitive": false,
+      "signature": "947461388e84b71c7adcc0bf4ddfd6d1",
+      "url": "http://127.0.0.1:8123/underwriting/new-business/new-application",
+      "widget": "text"
+    }
+  ],
+  "fields_inferred": [
+    "Search applicants...",
+    "First Name",
+    "Last Name",
+    "Date of Birth",
+    "Gender",
+    "Social Security Number",
+    "Email Address",
+    "Phone Number"
+  ],
+  "fields_needing_seed": [
+    "Controlled Hypertension",
+    "Type 2 Diabetes",
+    "Elevated BMI",
+    "Sleep Apnea (Treated)",
+    "Asthma",
+    "Anxiety (Treated)",
+    "High Cholesterol"
+  ],
+  "fields_needing_seed_detail": [
+    {
+      "label": "Controlled Hypertension",
+      "url": "http://127.0.0.1:8123/underwriting/new-business/new-application"
+    },
+    {
+      "label": "Type 2 Diabetes",
+      "url": "http://127.0.0.1:8123/underwriting/new-business/new-application"
+    },
+    {
+      "label": "Elevated BMI",
+      "url": "http://127.0.0.1:8123/underwriting/new-business/new-application"
+    },
+    {
+      "label": "Sleep Apnea (Treated)",
+      "url": "http://127.0.0.1:8123/underwriting/new-business/new-application"
+    },
+    {
+      "label": "Asthma",
+      "url": "http://127.0.0.1:8123/underwriting/new-business/new-application"
+    },
+    {
+      "label": "Anxiety (Treated)",
+      "url": "http://127.0.0.1:8123/underwriting/new-business/new-application"
+    },
+    {
+      "label": "High Cholesterol",
+      "url": "http://127.0.0.1:8123/underwriting/new-business/new-application"
+    }
+  ],
+  "filled_by_kind": {
+    "date": 3,
+    "radio": 1,
+    "select": 5,
+    "text": 19
+  },
+  "flow_summary": {
+    "advance_contradicts_fills": 0,
+    "advances_by_tier": {
+      "1": 4,
+      "3": 1
+    },
+    "boundaries_crossed": 1,
+    "branch_coverage": false,
+    "branch_coverage_note": "One path per journey. At each decision point a single option was taken, so business paths behind the other options were not visited.",
+    "deepest_flow_capped": false,
+    "deepest_flow_proven_steps": 5,
+    "deepest_flow_steps": 5,
+    "deepest_flow_terminal": "submit_crossed",
+    "flows_completed": 6,
+    "flows_found": 6,
+    "flows_fully_answered": 5,
+    "flows_truncated": 0,
+    "intent_unmet": 0,
+    "journeys_completed": 0,
+    "oracle_advances": 1,
+    "truncation_reasons": {}
+  },
+  "flows": [
+    {
+      "advance_contradicts_fills": false,
+      "completed": true,
+      "entry_fingerprint": "8f6dd585062d80a98f0ab9da4335d4360dc55b2b6440e80eabce8b076c3881b7",
+      "entry_title": "Summit Life Carrier Administration",
+      "entry_url": "http://127.0.0.1:8123/dashboard/overview",
+      "fields_filled_total": 0,
+      "fields_unanswered": 0,
+      "flow_id": "83e23c28b0fec5465e097bd3",
+      "fully_answered": true,
+      "journey_completed": false,
+      "outcome_milestone": null,
+      "outcome_values": [
+        {
+          "label": "Robert Vasquezin review",
+          "value": "UW-2026-00144 | universal life | $1,000,000.00",
+          "value_type": "currency"
+        },
+        {
+          "label": "Annual Income",
+          "value": "$185,000.00",
+          "value_type": "currency"
+        },
+        {
+          "label": "Face Amount",
+          "value": "$1,000,000.00",
+          "value_type": "currency"
+        }
+      ],
+      "step_budget": 20,
+      "step_count": 2,
+      "steps": [
+        {
+          "advance": {
+            "control_name": "Robert Vasquez UW-2026-00144 $1,000,000.00 in review",
+            "oracle": true,
+            "signature": "gate2-forward",
+            "tier": 3
+          },
+          "decision_points": [
+            {
+              "control_label": "Next action",
+              "control_signature": "nextaction:a57c855d18293e49fe1b5c706f2b5983",
+              "option_classes": {
+                "3": "navigational",
+                "MC Margaret Chen": "navigational",
+                "Process Payment": "destructive",
+                "Submit Application": "forward"
+              },
+              "options": [
+                "Submit Application",
+                "Process Payment",
+                "3",
+                "MC Margaret Chen"
+              ],
+              "provenance": "next_action"
+            }
+          ],
+          "fields_filled": 0,
+          "fields_unfilled": 0,
+          "fingerprint": "8f6dd585062d80a98f0ab9da4335d4360dc55b2b6440e80eabce8b076c3881b7",
+          "title": "Summit Life Carrier Administration",
+          "url": "http://127.0.0.1:8123/dashboard/overview"
+        },
+        {
+          "decision_points": [
+            {
+              "choice": "Overview",
+              "control_label": "",
+              "control_signature": "q:0d3758b066ae0977580a5813",
+              "options": [
+                "Overview"
+              ],
+              "provenance": "questionnaire"
+            },
+            {
+              "choice": "Overview",
+              "control_label": "",
+              "control_signature": "q:a487000a9ec945a5807a1a17",
+              "options": [
+                "Overview"
+              ],
+              "provenance": "questionnaire"
+            },
+            {
+              "control_label": "Next action",
+              "control_signature": "nextaction:9d05b79fbef311977d40a22df46adc47",
+              "option_classes": {
+                "3": "navigational",
+                "Financial": "navigational",
+                "Health Profile": "navigational",
+                "MC Margaret Chen": "navigational",
+                "Notes (1)": "navigational",
+                "Overview": "navigational",
+                "Process Payment": "destructive",
+                "Requirements": "navigational",
+                "Risk Decision": "navigational",
+                "Submit Application": "forward",
+                "Suspense (0)": "navigational",
+                "Vendor Reports (4)": "navigational"
+              },
+              "options": [
+                "Submit Application",
+                "Process Payment",
+                "3",
+                "MC Margaret Chen",
+                "Requirements",
+                "Risk Decision",
+                "Overview",
+                "Health Profile",
+                "Financial",
+                "Vendor Reports (4)",
+                "Suspense (0)",
+                "Notes (1)"
+              ],
+              "provenance": "next_action"
+            }
+          ],
+          "fields_filled": 0,
+          "fields_unfilled": 0,
+          "fingerprint": "ad87f3a2d9a6ef0f40e6fbd1c7c44d17b43d55e5fb859c955569335634c63843",
+          "title": "Summit Life Carrier Administration",
+          "url": "http://127.0.0.1:8123/underwriting/new-business/app-5a1b9c3d/review"
+        }
+      ],
+      "terminal": "no_advance",
+      "terminal_url": "http://127.0.0.1:8123/underwriting/new-business/app-5a1b9c3d/review"
+    },
+    {
+      "advance_contradicts_fills": false,
+      "completed": true,
+      "entry_fingerprint": "6ef17a6b707538aa545e720d4b52a2540b3df1ecaf8aa8ac152c0cf1589af3a1",
+      "entry_title": "Summit Life Carrier Administration",
+      "entry_url": "http://127.0.0.1:8123/underwriting/new-business",
+      "fields_filled_total": 1,
+      "fields_unanswered": 0,
+      "flow_id": "0c13b8c5df94b3708e8929c0",
+      "fully_answered": true,
+      "journey_completed": false,
+      "outcome_milestone": null,
+      "outcome_values": [
+        {
+          "label": "Term Life 20",
+          "value": "$2,000,000.00",
+          "value_type": "currency"
+        },
+        {
+          "label": "Whole Life",
+          "value": "$5,000,000.00",
+          "value_type": "currency"
+        },
+        {
+          "label": "Universal Life",
+          "value": "$1,000,000.00",
+          "value_type": "currency"
+        },
+        {
+          "label": "Term Life 30",
+          "value": "$3,000,000.00",
+          "value_type": "currency"
+        },
+        {
+          "label": "Indexed Universal",
+          "value": "$2,500,000.00",
+          "value_type": "currency"
+        }
+      ],
+      "step_budget": 20,
+      "step_count": 1,
+      "steps": [
+        {
+          "fields_filled": 1,
+          "fields_unfilled": 0,
+          "fingerprint": "6ef17a6b707538aa545e720d4b52a2540b3df1ecaf8aa8ac152c0cf1589af3a1",
+          "title": "Summit Life Carrier Administration",
+          "url": "http://127.0.0.1:8123/underwriting/new-business"
+        }
+      ],
+      "terminal": "no_advance",
+      "terminal_url": "http://127.0.0.1:8123/underwriting/new-business"
+    },
+    {
+      "advance_contradicts_fills": false,
+      "completed": true,
+      "entry_fingerprint": "811a43e96d2892c2ef0f6ad37ad3423173e78bb132e6975a1420f8042c4a97bd",
+      "entry_title": "Summit Life Carrier Administration",
+      "entry_url": "http://127.0.0.1:8123/underwriting/new-business/new-application",
+      "fields_filled_total": 21,
+      "fields_unanswered": 7,
+      "flow_id": "c49a329cecde0db20e558ab7",
+      "fully_answered": false,
+      "journey_completed": false,
+      "outcome_milestone": {
+        "approval_id": "apr_6c152fcd357d3e35",
+        "attestation_attributed_to": "characterization",
+        "attestation_env_kind": "disposable",
+        "boundary_key": "bnd_a7b792443fd5aca8d53c",
+        "clicked_at_ms": 428358,
+        "confirmation_detail": "",
+        "confirmation_rung": "",
+        "control_name": "Submit Application",
+        "crossing_id": "cross_a7b792443fd5_1",
+        "dom_digest_after": "dom_cd979a2fc57d917cca0f_24",
+        "dom_digest_before": "dom_cd979a2fc57d917cca0f_24",
+        "grant": {
+          "approval_id": "apr_6c152fcd357d3e35",
+          "approved_at": "",
+          "approved_by": "gate2-operator",
+          "control": "Submit Application",
+          "max_crossings": 1,
+          "state_fingerprint": "",
+          "url": "http://127.0.0.1:8123/underwriting/new-business/new-application"
+        },
+        "guard_rule_id": "guard.submit.mutation_ok",
+        "latency_ms": 2329,
+        "milestone_id": "mst_aba02ec1de7f21e7",
+        "navigated": false,
+        "observed_at_ms": 430687,
+        "outcome": "none",
+        "outcome_values": [
+          {
+            "label": "Employer: Ashgrove Holdings",
+            "selector": "p",
+            "text": "$67,000.00",
+            "value_candidate": "true",
+            "value_confidence": "0.75",
+            "value_reason": "currency value",
+            "value_type": "currency"
+          },
+          {
+            "label": "Product: Term Life - 10 Year",
+            "selector": "p",
+            "text": "$650,000.00",
+            "value_candidate": "true",
+            "value_confidence": "0.75",
+            "value_reason": "currency value",
+            "value_type": "currency"
+          }
+        ],
+        "refuse_pack_version": "refuse-pack-v2",
+        "screenshot_after": "frame_00010.png",
+        "screenshot_before": "frame_00009.png",
+        "state_fingerprint_after": "submit_95a1abede35ae26b",
+        "state_fingerprint_before": "6f7a1e62a096bf1899e5de1d3871d29b4f48962ede3887fb66ad74e01baed253",
+        "url_after": "http://127.0.0.1:8123/underwriting/new-business/new-application",
+        "url_before": "http://127.0.0.1:8123/underwriting/new-business/new-application",
+        "verified": false
+      },
+      "outcome_values": [
+        {
+          "label": "Employer: Ashgrove Holdings",
+          "value": "$67,000.00",
+          "value_type": "currency"
+        },
+        {
+          "label": "Product: Term Life - 10 Year",
+          "value": "$650,000.00",
+          "value_type": "currency"
+        }
+      ],
+      "step_budget": 20,
+      "step_count": 5,
+      "steps": [
+        {
+          "advance": {
+            "control_name": "Continue",
+            "oracle": false,
+            "signature": "0a6621b8a3b4464509593c1471056fc0d8e9a8d23df88a56d61bf7902cc1ae7e",
+            "tier": 1
+          },
+          "decision_points": [
+            {
+              "choice": "male",
+              "control_label": "Gender",
+              "control_signature": "ec243d3f3ae1f79b25433fb8078cc486",
+              "options": [
+                "male"
+              ],
+              "provenance": "synthesized"
+            },
+            {
+              "control_label": "Next action",
+              "control_signature": "nextaction:4b0889118901ebcee4068a540777622c",
+              "option_classes": {
+                "3": "navigational",
+                "Address & Employment": "navigational",
+                "Applicant": "navigational",
+                "Continue": "navigational",
+                "Coverage": "navigational",
+                "Health": "navigational",
+                "MC Margaret Chen": "navigational",
+                "Process Payment": "destructive",
+                "Review & Submit": "forward",
+                "Submit Application": "forward"
+              },
+              "options": [
+                "Submit Application",
+                "Process Payment",
+                "3",
+                "MC Margaret Chen",
+                "Applicant",
+                "Address & Employment",
+                "Coverage",
+                "Health",
+                "Review & Submit",
+                "Continue"
+              ],
+              "provenance": "next_action"
+            }
+          ],
+          "fields_filled": 7,
+          "fields_unfilled": 0,
+          "fingerprint": "811a43e96d2892c2ef0f6ad37ad3423173e78bb132e6975a1420f8042c4a97bd",
+          "title": "Summit Life Carrier Administration",
+          "url": "http://127.0.0.1:8123/underwriting/new-business/new-application"
+        },
+        {
+          "advance": {
+            "control_name": "Continue",
+            "oracle": false,
+            "signature": "ef58f31f8e170ef8a496531519317fe01f46fc47e21c231055e8422902f2e9f3",
+            "tier": 1
+          },
+          "decision_points": [
+            {
+              "choice": "al",
+              "control_label": "State",
+              "control_signature": "f34b0680da37f161cac95f1b5727be37",
+              "options": [
+                "al"
+              ],
+              "provenance": "synthesized"
+            },
+            {
+              "control_label": "Next action",
+              "control_signature": "nextaction:89d1657631bee15547db09db25dbfc1b",
+              "option_classes": {
+                "3": "navigational",
+                "Address & Employment": "navigational",
+                "Applicant": "navigational",
+                "Back": "navigational",
+                "Continue": "navigational",
+                "Coverage": "navigational",
+                "Health": "navigational",
+                "MC Margaret Chen": "navigational",
+                "Process Payment": "destructive",
+                "Review & Submit": "forward",
+                "Submit Application": "forward"
+              },
+              "options": [
+                "Submit Application",
+                "Process Payment",
+                "3",
+                "MC Margaret Chen",
+                "Applicant",
+                "Address & Employment",
+                "Coverage",
+                "Health",
+                "Review & Submit",
+                "Back",
+                "Continue"
+              ],
+              "provenance": "next_action"
+            }
+          ],
+          "fields_filled": 7,
+          "fields_unfilled": 0,
+          "fingerprint": "e540d24041e4826e0d1b1245bc8a67922dc6264bc85c73a9a81cb49ea3a83c61",
+          "title": "Summit Life Carrier Administration",
+          "url": "http://127.0.0.1:8123/underwriting/new-business/new-application"
+        },
+        {
+          "advance": {
+            "control_name": "Continue",
+            "oracle": false,
+            "signature": "ef58f31f8e170ef8a496531519317fe01f46fc47e21c231055e8422902f2e9f3",
+            "tier": 1
+          },
+          "decision_points": [
+            {
+              "choice": "term life - 10 year",
+              "control_label": "Product",
+              "control_signature": "7433c2321ab15b5040af4e7191f1e6c5",
+              "options": [
+                "term life - 10 year"
+              ],
+              "provenance": "synthesized"
+            },
+            {
+              "choice": "monthly",
+              "control_label": "Premium Mode",
+              "control_signature": "b75c1237ccb43c8f58a3c172962973a4",
+              "options": [
+                "monthly"
+              ],
+              "provenance": "synthesized"
+            },
+            {
+              "choice": "true",
+              "control_label": "No",
+              "control_signature": "e23cc9b9bd7c1b0c554d5607880a2d40",
+              "group_id": "dd97384911b6c039c665018274a50ab1",
+              "options": [
+                "no",
+                "yes"
+              ],
+              "provenance": "synthesized"
+            },
+            {
+              "control_label": "Yes",
+              "control_signature": "55c2d05f07b27c8b9bf1ed73300b105a",
+              "group_id": "dd97384911b6c039c665018274a50ab1",
+              "options": [
+                "no",
+                "yes"
+              ],
+              "provenance": "group_sibling"
+            },
+            {
+              "control_label": "Next action",
+              "control_signature": "nextaction:3ba7d3c7d70eb1d30f76927584ae0c23",
+              "option_classes": {
+                "3": "navigational",
+                "Address & Employment": "navigational",
+                "Applicant": "navigational",
+                "Back": "navigational",
+                "Continue": "navigational",
+                "Coverage": "navigational",
+                "Health": "navigational",
+                "MC Margaret Chen": "navigational",
+                "Process Payment": "destructive",
+                "Review & Submit": "forward",
+                "Submit Application": "forward"
+              },
+              "options": [
+                "Submit Application",
+                "Process Payment",
+                "3",
+                "MC Margaret Chen",
+                "Applicant",
+                "Address & Employment",
+                "Coverage",
+                "Health",
+                "Review & Submit",
+                "Back",
+                "Continue"
+              ],
+              "provenance": "next_action"
+            }
+          ],
+          "fields_filled": 4,
+          "fields_unfilled": 0,
+          "fingerprint": "8cb6105d4bd56427517ee0b00732ce14aba6ac0ea459f505f0a238526343d15e",
+          "title": "Summit Life Carrier Administration",
+          "url": "http://127.0.0.1:8123/underwriting/new-business/new-application"
+        },
+        {
+          "advance": {
+            "control_name": "Continue",
+            "oracle": false,
+            "signature": "ef58f31f8e170ef8a496531519317fe01f46fc47e21c231055e8422902f2e9f3",
+            "tier": 1
+          },
+          "decision_points": [
+            {
+              "choice": "checked",
+              "control_label": "None",
+              "control_signature": "74449c52e6f499ca1401fa5a2ac7df82",
+              "options": [
+                "checked",
+                "unchecked"
+              ],
+              "provenance": "answered_to_unblock"
+            },
+            {
+              "control_label": "Controlled Hypertension",
+              "control_signature": "29539a4bf1ff88d08da4f2e5501d2248",
+              "options": [
+                "checked",
+                "unchecked"
+              ],
+              "provenance": "needs_input"
+            },
+            {
+              "control_label": "Type 2 Diabetes",
+              "control_signature": "451f3ca42819d7fc7538023cae257f4f",
+              "options": [
+                "checked",
+                "unchecked"
+              ],
+              "provenance": "needs_input"
+            },
+            {
+              "control_label": "Elevated BMI",
+              "control_signature": "ae30c8aca5e03dc29e041b9120176b7a",
+              "options": [
+                "checked",
+                "unchecked"
+              ],
+              "provenance": "needs_input"
+            },
+            {
+              "control_label": "Sleep Apnea (Treated)",
+              "control_signature": "0aa3a53dd31f05cd35bfe392214d6c60",
+              "options": [
+                "checked",
+                "unchecked"
+              ],
+              "provenance": "needs_input"
+            },
+            {
+              "control_label": "Asthma",
+              "control_signature": "ef46ac07587462a72c8652dacaf4f3ec",
+              "options": [
+                "checked",
+                "unchecked"
+              ],
+              "provenance": "needs_input"
+            },
+            {
+              "control_label": "Anxiety (Treated)",
+              "control_signature": "9bc8c4d2a8b5fed2e0e7b52761956fce",
+              "options": [
+                "checked",
+                "unchecked"
+              ],
+              "provenance": "needs_input"
+            },
+            {
+              "control_label": "High Cholesterol",
+              "control_signature": "25518f32ebd67d1082fffe5e92e209e9",
+              "options": [
+                "checked",
+                "unchecked"
+              ],
+              "provenance": "needs_input"
+            },
+            {
+              "control_label": "Next action",
+              "control_signature": "nextaction:41a84ca38cf3227e8cd4ee705947fd74",
+              "option_classes": {
+                "3": "navigational",
+                "Address & Employment": "navigational",
+                "Applicant": "navigational",
+                "Back": "navigational",
+                "Continue": "navigational",
+                "Coverage": "navigational",
+                "Health": "navigational",
+                "MC Margaret Chen": "navigational",
+                "Process Payment": "destructive",
+                "Review & Submit": "forward",
+                "Submit Application": "forward"
+              },
+              "options": [
+                "Submit Application",
+                "Process Payment",
+                "3",
+                "MC Margaret Chen",
+                "Applicant",
+                "Address & Employment",
+                "Coverage",
+                "Health",
+                "Review & Submit",
+                "Back",
+                "Continue"
+              ],
+              "provenance": "next_action"
+            }
+          ],
+          "fields_filled": 3,
+          "fields_unfilled": 7,
+          "fingerprint": "5fd1d29b96f6286c7fd8c61cd92855ad075676ce988e4374b4efd7a56610dffd",
+          "title": "Summit Life Carrier Administration",
+          "url": "http://127.0.0.1:8123/underwriting/new-business/new-application"
+        },
+        {
+          "decision_points": [
+            {
+              "control_label": "Next action",
+              "control_signature": "nextaction:67d41280a1543c8016596b93c8379040",
+              "option_classes": {
+                "3": "navigational",
+                "Address & Employment": "navigational",
+                "Applicant": "navigational",
+                "Back": "navigational",
+                "Coverage": "navigational",
+                "Health": "navigational",
+                "MC Margaret Chen": "navigational",
+                "Process Payment": "destructive",
+                "Review & Submit": "forward",
+                "Submit Application": "forward"
+              },
+              "options": [
+                "Submit Application",
+                "Process Payment",
+                "3",
+                "MC Margaret Chen",
+                "Applicant",
+                "Address & Employment",
+                "Coverage",
+                "Health",
+                "Review & Submit",
+                "Back"
+              ],
+              "provenance": "next_action"
+            }
+          ],
+          "fields_filled": 0,
+          "fields_unfilled": 0,
+          "fingerprint": "6f7a1e62a096bf1899e5de1d3871d29b4f48962ede3887fb66ad74e01baed253",
+          "title": "Summit Life Carrier Administration",
+          "url": "http://127.0.0.1:8123/underwriting/new-business/new-application"
+        }
+      ],
+      "terminal": "submit_crossed",
+      "terminal_url": "http://127.0.0.1:8123/underwriting/new-business/new-application"
+    },
+    {
+      "advance_contradicts_fills": false,
+      "completed": true,
+      "entry_fingerprint": "51bbb891a4bfae0fd059924a6dcd5377700cf1f82b810149cc81e3220db83384",
+      "entry_title": "Summit Life Carrier Administration",
+      "entry_url": "http://127.0.0.1:8123/underwriting/new-business/app-7f3a9b2e/review",
+      "fields_filled_total": 0,
+      "fields_unanswered": 0,
+      "flow_id": "c71e3d8ee783eb5fa6d57a0c",
+      "fully_answered": true,
+      "journey_completed": false,
+      "outcome_milestone": null,
+      "outcome_values": [
+        {
+          "label": "Michael Thornberryunderwriting",
+          "value": "UW-2026-00142 | term life 20 | $2,000,000.00",
+          "value_type": "currency"
+        }
+      ],
+      "step_budget": 20,
+      "step_count": 1,
+      "steps": [
+        {
+          "decision_points": [
+            {
+              "control_label": "Next action",
+              "control_signature": "nextaction:9652981825935fb2ea1114a56b7841a4",
+              "option_classes": {
+                "3": "navigational",
+                "Financial": "navigational",
+                "Health Profile": "navigational",
+                "MC Margaret Chen": "navigational",
+                "Notes (1)": "navigational",
+                "Overview": "navigational",
+                "Process Payment": "destructive",
+                "Requirements": "navigational",
+                "Risk Decision": "navigational",
+                "Submit Application": "forward",
+                "Suspense (0)": "navigational",
+                "Vendor Reports (4)": "navigational"
+              },
+              "options": [
+                "Submit Application",
+                "Process Payment",
+                "3",
+                "MC Margaret Chen",
+                "Requirements",
+                "Risk Decision",
+                "Overview",
+                "Health Profile",
+                "Financial",
+                "Vendor Reports (4)",
+                "Suspense (0)",
+                "Notes (1)"
+              ],
+              "provenance": "next_action"
+            }
+          ],
+          "fields_filled": 0,
+          "fields_unfilled": 0,
+          "fingerprint": "51bbb891a4bfae0fd059924a6dcd5377700cf1f82b810149cc81e3220db83384",
+          "title": "Summit Life Carrier Administration",
+          "url": "http://127.0.0.1:8123/underwriting/new-business/app-7f3a9b2e/review"
+        }
+      ],
+      "terminal": "submit_boundary",
+      "terminal_url": "http://127.0.0.1:8123/underwriting/new-business/app-7f3a9b2e/review"
+    },
+    {
+      "advance_contradicts_fills": false,
+      "completed": true,
+      "entry_fingerprint": "89843d3ea10704306640a71b6636e31b140a02457b5c9524f75c3a585195b34a",
+      "entry_title": "Summit Life Carrier Administration",
+      "entry_url": "http://127.0.0.1:8123/underwriting/new-business/app-2c8d4e1f/review",
+      "fields_filled_total": 0,
+      "fields_unanswered": 0,
+      "flow_id": "301814c01295c5b01ea4b336",
+      "fully_answered": true,
+      "journey_completed": false,
+      "outcome_milestone": null,
+      "outcome_values": [
+        {
+          "label": "Sarah Jenningsrequirements pending",
+          "value": "UW-2026-00143 | whole life | $5,000,000.00",
+          "value_type": "currency"
+        }
+      ],
+      "step_budget": 20,
+      "step_count": 1,
+      "steps": [
+        {
+          "decision_points": [
+            {
+              "control_label": "Next action",
+              "control_signature": "nextaction:5d1d5b996df4ccce0fe299602cfd7eea",
+              "option_classes": {
+                "3": "navigational",
+                "Financial": "navigational",
+                "Health Profile": "navigational",
+                "MC Margaret Chen": "navigational",
+                "Notes (1)": "navigational",
+                "Overview": "navigational",
+                "Process Payment": "destructive",
+                "Requirements": "navigational",
+                "Risk Decision": "navigational",
+                "Submit Application": "forward",
+                "Suspense (2)": "navigational",
+                "Vendor Reports (2)": "navigational"
+              },
+              "options": [
+                "Submit Application",
+                "Process Payment",
+                "3",
+                "MC Margaret Chen",
+                "Requirements",
+                "Risk Decision",
+                "Overview",
+                "Health Profile",
+                "Financial",
+                "Vendor Reports (2)",
+                "Suspense (2)",
+                "Notes (1)"
+              ],
+              "provenance": "next_action"
+            }
+          ],
+          "fields_filled": 0,
+          "fields_unfilled": 0,
+          "fingerprint": "89843d3ea10704306640a71b6636e31b140a02457b5c9524f75c3a585195b34a",
+          "title": "Summit Life Carrier Administration",
+          "url": "http://127.0.0.1:8123/underwriting/new-business/app-2c8d4e1f/review"
+        }
+      ],
+      "terminal": "submit_boundary",
+      "terminal_url": "http://127.0.0.1:8123/underwriting/new-business/app-2c8d4e1f/review"
+    },
+    {
+      "advance_contradicts_fills": false,
+      "completed": true,
+      "entry_fingerprint": "b5a85f080932a20ba364a1707b3851cba234993f3eb8ab31316b61cddee4caf4",
+      "entry_title": "Summit Life Carrier Administration",
+      "entry_url": "http://127.0.0.1:8123/underwriting/new-business/app-8e2f6a4b/review",
+      "fields_filled_total": 0,
+      "fields_unanswered": 0,
+      "flow_id": "3f6d208a851ec16b36ea4039",
+      "fully_answered": true,
+      "journey_completed": false,
+      "outcome_milestone": null,
+      "outcome_values": [
+        {
+          "label": "Jennifer Walshsubmitted",
+          "value": "UW-2026-00145 | term life 30 | $3,000,000.00",
+          "value_type": "currency"
+        }
+      ],
+      "step_budget": 20,
+      "step_count": 1,
+      "steps": [
+        {
+          "decision_points": [
+            {
+              "control_label": "Next action",
+              "control_signature": "nextaction:348be8ef5d1325e10cb0cea7180f85b5",
+              "option_classes": {
+                "3": "navigational",
+                "Financial": "navigational",
+                "Health Profile": "navigational",
+                "MC Margaret Chen": "navigational",
+                "Notes (0)": "navigational",
+                "Overview": "navigational",
+                "Process Payment": "destructive",
+                "Requirements": "navigational",
+                "Risk Decision": "navigational",
+                "Submit Application": "forward",
+                "Suspense (0)": "navigational",
+                "Vendor Reports (0)": "navigational"
+              },
+              "options": [
+                "Submit Application",
+                "Process Payment",
+                "3",
+                "MC Margaret Chen",
+                "Requirements",
+                "Risk Decision",
+                "Overview",
+                "Health Profile",
+                "Financial",
+                "Vendor Reports (0)",
+                "Suspense (0)",
+                "Notes (0)"
+              ],
+              "provenance": "next_action"
+            }
+          ],
+          "fields_filled": 0,
+          "fields_unfilled": 0,
+          "fingerprint": "b5a85f080932a20ba364a1707b3851cba234993f3eb8ab31316b61cddee4caf4",
+          "title": "Summit Life Carrier Administration",
+          "url": "http://127.0.0.1:8123/underwriting/new-business/app-8e2f6a4b/review"
+        }
+      ],
+      "terminal": "submit_boundary",
+      "terminal_url": "http://127.0.0.1:8123/underwriting/new-business/app-8e2f6a4b/review"
+    }
+  ],
+  "forms_confirmed": 0,
+  "forms_found": 2,
+  "forms_submitted": 1,
+  "inventory_failure_detail": "",
+  "inventory_failures": 0,
+  "journeys_completed": 0,
+  "network_events_observed": 1267,
+  "network_server_error_count": 0,
+  "network_server_errors": [],
+  "opaque_surfaces": [],
+  "open_choice_unverified": 0,
+  "outcome_milestones": [
+    {
+      "approval_id": "apr_6c152fcd357d3e35",
+      "attestation_attributed_to": "characterization",
+      "attestation_env_kind": "disposable",
+      "boundary_key": "bnd_a7b792443fd5aca8d53c",
+      "clicked_at_ms": 428358,
+      "confirmation_detail": "",
+      "confirmation_rung": "",
+      "control_name": "Submit Application",
+      "crossing_id": "cross_a7b792443fd5_1",
+      "dom_digest_after": "dom_cd979a2fc57d917cca0f_24",
+      "dom_digest_before": "dom_cd979a2fc57d917cca0f_24",
+      "grant": {
+        "approval_id": "apr_6c152fcd357d3e35",
+        "approved_at": "",
+        "approved_by": "gate2-operator",
+        "control": "Submit Application",
+        "max_crossings": 1,
+        "state_fingerprint": "",
+        "url": "http://127.0.0.1:8123/underwriting/new-business/new-application"
+      },
+      "guard_rule_id": "guard.submit.mutation_ok",
+      "latency_ms": 2329,
+      "milestone_id": "mst_aba02ec1de7f21e7",
+      "navigated": false,
+      "observed_at_ms": 430687,
+      "outcome": "none",
+      "outcome_values": [
+        {
+          "label": "Employer: Ashgrove Holdings",
+          "selector": "p",
+          "text": "$67,000.00",
+          "value_candidate": "true",
+          "value_confidence": "0.75",
+          "value_reason": "currency value",
+          "value_type": "currency"
+        },
+        {
+          "label": "Product: Term Life - 10 Year",
+          "selector": "p",
+          "text": "$650,000.00",
+          "value_candidate": "true",
+          "value_confidence": "0.75",
+          "value_reason": "currency value",
+          "value_type": "currency"
+        }
+      ],
+      "refuse_pack_version": "refuse-pack-v2",
+      "screenshot_after": "frame_00010.png",
+      "screenshot_before": "frame_00009.png",
+      "state_fingerprint_after": "submit_95a1abede35ae26b",
+      "state_fingerprint_before": "6f7a1e62a096bf1899e5de1d3871d29b4f48962ede3887fb66ad74e01baed253",
+      "url_after": "http://127.0.0.1:8123/underwriting/new-business/new-application",
+      "url_before": "http://127.0.0.1:8123/underwriting/new-business/new-application",
+      "verified": false
+    }
+  ],
+  "rule_reuse": {
+    "hits": 0,
+    "known": 0,
+    "lookups": 1,
+    "misses": 1,
+    "reuse_rate": 0.0
+  },
+  "seed_near_misses": [],
+  "states": [
+    {
+      "ax_fingerprint": "f48d963a38df401958976e719e949d7d3dabf6fb533d3643357d54e0b8d15a93",
+      "controls_total": 7,
+      "danger_controls": 0,
+      "danger_names": [],
+      "displayed_values": [],
+      "endpoints": [],
+      "form_snapshot_signals": {
+        "Corporate Email": {
+          "locator": {
+            "bindable": false,
+            "role": "textbox",
+            "strategy": "dom_id",
+            "value": "_r_0_-form-item",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": false,
+          "type": "text"
+        },
+        "Password": {
+          "locator": {
+            "bindable": false,
+            "role": "textbox",
+            "strategy": "dom_id",
+            "value": "_r_1_-form-item",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": false,
+          "type": "password"
+        }
+      },
+      "location": "http://127.0.0.1:8123/portal/sign-in",
+      "question_groups": []
+    },
+    {
+      "ax_fingerprint": "8f6dd585062d80a98f0ab9da4335d4360dc55b2b6440e80eabce8b076c3881b7",
+      "controls_total": 20,
+      "danger_controls": 1,
+      "danger_names": [
+        "Process Payment"
+      ],
+      "displayed_values": [],
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "/actuarial/product-pricing",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/claims/reported",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/claims/reported/new-fnol",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/customers/profile",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/dashboard/overview",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/payments/process",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/policy-admin/in-force",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/portal/sign-in",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/underwriting/new-business",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/underwriting/new-business/app-2c8d4e1f/decision",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/underwriting/new-business/app-2c8d4e1f/requirements",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/underwriting/new-business/app-2c8d4e1f/review",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/underwriting/new-business/app-5a1b9c3d/decision",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/underwriting/new-business/app-5a1b9c3d/requirements",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/underwriting/new-business/app-5a1b9c3d/review",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/underwriting/new-business/app-7f3a9b2e/decision",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/underwriting/new-business/app-7f3a9b2e/requirements",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/underwriting/new-business/app-7f3a9b2e/review",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/underwriting/new-business/app-8e2f6a4b/decision",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/underwriting/new-business/app-8e2f6a4b/requirements",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/underwriting/new-business/app-8e2f6a4b/review",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/underwriting/new-business/new-application",
+          "response_mime": "text/x-component",
+          "status": "200"
+        }
+      ],
+      "form_snapshot_signals": {},
+      "location": "http://127.0.0.1:8123/dashboard/overview",
+      "question_groups": []
+    },
+    {
+      "ax_fingerprint": "ad87f3a2d9a6ef0f40e6fbd1c7c44d17b43d55e5fb859c955569335634c63843",
+      "controls_total": 29,
+      "danger_controls": 1,
+      "danger_names": [
+        "Process Payment"
+      ],
+      "displayed_values": [
+        {
+          "label": "Robert Vasquezin review",
+          "selector": "p.text-muted-foreground",
+          "text": "UW-2026-00144 | universal life | $1,000,000.00",
+          "value_candidate": "true",
+          "value_confidence": "0.75",
+          "value_reason": "currency value",
+          "value_type": "currency"
+        },
+        {
+          "label": "Annual Income",
+          "selector": "div.font-medium",
+          "text": "$185,000.00",
+          "value_candidate": "true",
+          "value_confidence": "0.75",
+          "value_reason": "currency value",
+          "value_type": "currency"
+        },
+        {
+          "label": "Face Amount",
+          "selector": "div.font-medium",
+          "text": "$1,000,000.00",
+          "value_candidate": "true",
+          "value_confidence": "0.90",
+          "value_reason": "currency value under an outcome label",
+          "value_type": "currency"
+        }
+      ],
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "/claims/reported",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/customers/profile",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/dashboard/overview",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/payments/process",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/policy-admin/in-force",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/portal/sign-in",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/underwriting/new-business",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/underwriting/new-business/app-2c8d4e1f/review",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/underwriting/new-business/app-5a1b9c3d/decision",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/underwriting/new-business/app-5a1b9c3d/requirements",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/underwriting/new-business/app-5a1b9c3d/review",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/underwriting/new-business/app-7f3a9b2e/review",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/underwriting/new-business/app-8e2f6a4b/review",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/underwriting/new-business/new-application",
+          "response_mime": "text/x-component",
+          "status": "200"
+        }
+      ],
+      "form_snapshot_signals": {},
+      "location": "http://127.0.0.1:8123/underwriting/new-business/app-5a1b9c3d/review",
+      "question_groups": []
+    },
+    {
+      "ax_fingerprint": "6ef17a6b707538aa545e720d4b52a2540b3df1ecaf8aa8ac152c0cf1589af3a1",
+      "controls_total": 28,
+      "danger_controls": 1,
+      "danger_names": [
+        "Process Payment"
+      ],
+      "displayed_values": [
+        {
+          "label": "Term Life 20",
+          "selector": "span.font-mono",
+          "text": "$2,000,000.00",
+          "value_candidate": "true",
+          "value_confidence": "0.75",
+          "value_reason": "currency value",
+          "value_type": "currency"
+        },
+        {
+          "label": "Whole Life",
+          "selector": "span.font-mono",
+          "text": "$5,000,000.00",
+          "value_candidate": "true",
+          "value_confidence": "0.75",
+          "value_reason": "currency value",
+          "value_type": "currency"
+        },
+        {
+          "label": "Universal Life",
+          "selector": "span.font-mono",
+          "text": "$1,000,000.00",
+          "value_candidate": "true",
+          "value_confidence": "0.75",
+          "value_reason": "currency value",
+          "value_type": "currency"
+        },
+        {
+          "label": "Term Life 30",
+          "selector": "span.font-mono",
+          "text": "$3,000,000.00",
+          "value_candidate": "true",
+          "value_confidence": "0.75",
+          "value_reason": "currency value",
+          "value_type": "currency"
+        },
+        {
+          "label": "Indexed Universal",
+          "selector": "span.font-mono",
+          "text": "$2,500,000.00",
+          "value_candidate": "true",
+          "value_confidence": "0.75",
+          "value_reason": "currency value",
+          "value_type": "currency"
+        }
+      ],
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "/claims/reported",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/customers/profile",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/dashboard/overview",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/payments/process",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/policy-admin/in-force",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/portal/sign-in",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/underwriting/new-business/app-2c8d4e1f/review",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/underwriting/new-business/app-5a1b9c3d/review",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/underwriting/new-business/app-7f3a9b2e/review",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/underwriting/new-business/app-8e2f6a4b/review",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/underwriting/new-business/new-application",
+          "response_mime": "text/x-component",
+          "status": "200"
+        }
+      ],
+      "form_snapshot_signals": {
+        "Search applicants...": {
+          "locator": {
+            "bindable": true,
+            "role": "textbox",
+            "strategy": "accessible_name",
+            "value": "Search applicants...",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": false,
+          "type": "text"
+        }
+      },
+      "location": "http://127.0.0.1:8123/underwriting/new-business",
+      "question_groups": []
+    },
+    {
+      "ax_fingerprint": "811a43e96d2892c2ef0f6ad37ad3423173e78bb132e6975a1420f8042c4a97bd",
+      "controls_total": 31,
+      "danger_controls": 1,
+      "danger_names": [
+        "Process Payment"
+      ],
+      "displayed_values": [],
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "/claims/reported",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/customers/profile",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/dashboard/overview",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/payments/process",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/policy-admin/in-force",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/portal/sign-in",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/underwriting/new-business",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/underwriting/new-business/app-2c8d4e1f/review",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/underwriting/new-business/app-5a1b9c3d/review",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/underwriting/new-business/app-7f3a9b2e/review",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/underwriting/new-business/app-8e2f6a4b/review",
+          "response_mime": "text/x-component",
+          "status": "200"
+        }
+      ],
+      "form_snapshot_signals": {
+        "Date of Birth": {
+          "locator": {
+            "bindable": false,
+            "role": "textbox",
+            "strategy": "dom_id",
+            "value": "_r_17_-form-item",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": false,
+          "type": "date"
+        },
+        "Email Address": {
+          "locator": {
+            "bindable": false,
+            "role": "textbox",
+            "strategy": "dom_id",
+            "value": "_r_1b_-form-item",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": false,
+          "type": "text"
+        },
+        "First Name": {
+          "locator": {
+            "bindable": false,
+            "role": "textbox",
+            "strategy": "dom_id",
+            "value": "_r_15_-form-item",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": false,
+          "type": "text"
+        },
+        "Gender": {
+          "locator": {
+            "bindable": false,
+            "role": "combobox",
+            "strategy": "dom_id",
+            "value": "_r_18_-form-item",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": false,
+          "type": "select"
+        },
+        "Last Name": {
+          "locator": {
+            "bindable": false,
+            "role": "textbox",
+            "strategy": "dom_id",
+            "value": "_r_16_-form-item",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": false,
+          "type": "text"
+        },
+        "Phone Number": {
+          "locator": {
+            "bindable": false,
+            "role": "textbox",
+            "strategy": "dom_id",
+            "value": "_r_1c_-form-item",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": false,
+          "type": "text"
+        },
+        "Social Security Number": {
+          "locator": {
+            "bindable": false,
+            "role": "textbox",
+            "strategy": "dom_id",
+            "value": "_r_1a_-form-item",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": false,
+          "type": "text"
+        }
+      },
+      "location": "http://127.0.0.1:8123/underwriting/new-business/new-application",
+      "question_groups": []
+    },
+    {
+      "ax_fingerprint": "e540d24041e4826e0d1b1245bc8a67922dc6264bc85c73a9a81cb49ea3a83c61",
+      "controls_total": 32,
+      "danger_controls": 1,
+      "danger_names": [
+        "Process Payment"
+      ],
+      "displayed_values": [],
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "/claims/reported",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/customers/profile",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/dashboard/overview",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/payments/process",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/policy-admin/in-force",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/portal/sign-in",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/underwriting/new-business",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/underwriting/new-business/app-2c8d4e1f/review",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/underwriting/new-business/app-5a1b9c3d/review",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/underwriting/new-business/app-7f3a9b2e/review",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/underwriting/new-business/app-8e2f6a4b/review",
+          "response_mime": "text/x-component",
+          "status": "200"
+        }
+      ],
+      "form_snapshot_signals": {
+        "Annual Income": {
+          "locator": {
+            "bindable": false,
+            "role": "spinbutton",
+            "strategy": "dom_id",
+            "value": "_r_1r_-form-item",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": false,
+          "type": "text"
+        },
+        "City": {
+          "locator": {
+            "bindable": false,
+            "role": "textbox",
+            "strategy": "dom_id",
+            "value": "_r_1l_-form-item",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": false,
+          "type": "text"
+        },
+        "Employer": {
+          "locator": {
+            "bindable": false,
+            "role": "textbox",
+            "strategy": "dom_id",
+            "value": "_r_1q_-form-item",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": false,
+          "type": "text"
+        },
+        "Occupation": {
+          "locator": {
+            "bindable": false,
+            "role": "textbox",
+            "strategy": "dom_id",
+            "value": "_r_1p_-form-item",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": false,
+          "type": "text"
+        },
+        "State": {
+          "locator": {
+            "bindable": false,
+            "role": "combobox",
+            "strategy": "dom_id",
+            "value": "_r_1m_-form-item",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": false,
+          "type": "select"
+        },
+        "Street Address": {
+          "locator": {
+            "bindable": false,
+            "role": "textbox",
+            "strategy": "dom_id",
+            "value": "_r_1k_-form-item",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": false,
+          "type": "text"
+        },
+        "ZIP Code": {
+          "locator": {
+            "bindable": false,
+            "role": "textbox",
+            "strategy": "dom_id",
+            "value": "_r_1o_-form-item",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": false,
+          "type": "text"
+        }
+      },
+      "location": "http://127.0.0.1:8123/underwriting/new-business/new-application",
+      "question_groups": []
+    },
+    {
+      "ax_fingerprint": "8cb6105d4bd56427517ee0b00732ce14aba6ac0ea459f505f0a238526343d15e",
+      "controls_total": 29,
+      "danger_controls": 1,
+      "danger_names": [
+        "Process Payment"
+      ],
+      "displayed_values": [],
+      "endpoints": [],
+      "form_snapshot_signals": {
+        "Face Amount ($)": {
+          "locator": {
+            "bindable": false,
+            "role": "spinbutton",
+            "strategy": "dom_id",
+            "value": "_r_6l_-form-item",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": false,
+          "step": "10000",
+          "type": "text"
+        },
+        "No": {
+          "locator": {
+            "bindable": true,
+            "group_id": "dd97384911b6c039c665018274a50ab1",
+            "role": "radio",
+            "strategy": "accessible_name",
+            "value": "No",
+            "verified": true
+          },
+          "options": [
+            "No",
+            "Yes"
+          ],
+          "options_total": 2,
+          "required": false,
+          "type": "radio"
+        },
+        "Premium Mode": {
+          "locator": {
+            "bindable": false,
+            "role": "combobox",
+            "strategy": "dom_id",
+            "value": "_r_6m_-form-item",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": false,
+          "type": "select"
+        },
+        "Product": {
+          "locator": {
+            "bindable": false,
+            "role": "combobox",
+            "strategy": "dom_id",
+            "value": "_r_6j_-form-item",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": false,
+          "type": "select"
+        },
+        "Yes": {
+          "locator": {
+            "bindable": true,
+            "group_id": "dd97384911b6c039c665018274a50ab1",
+            "role": "radio",
+            "strategy": "accessible_name",
+            "value": "Yes",
+            "verified": true
+          },
+          "options": [
+            "No",
+            "Yes"
+          ],
+          "options_total": 2,
+          "required": false,
+          "type": "radio"
+        }
+      },
+      "location": "http://127.0.0.1:8123/underwriting/new-business/new-application",
+      "question_groups": [
+        {
+          "group_id": "dd97384911b6c039c665018274a50ab1",
+          "label": "",
+          "label_source": "",
+          "members": [
+            {
+              "kind": "radio",
+              "name": "No"
+            },
+            {
+              "kind": "radio",
+              "name": "Yes"
+            }
+          ],
+          "options": [
+            "No",
+            "Yes"
+          ],
+          "options_total": 2,
+          "required": false,
+          "type": "radio"
+        }
+      ]
+    },
+    {
+      "ax_fingerprint": "5fd1d29b96f6286c7fd8c61cd92855ad075676ce988e4374b4efd7a56610dffd",
+      "controls_total": 34,
+      "danger_controls": 1,
+      "danger_names": [
+        "Process Payment"
+      ],
+      "displayed_values": [],
+      "endpoints": [],
+      "form_snapshot_signals": {
+        "Anxiety (Treated)": {
+          "locator": {
+            "bindable": true,
+            "role": "checkbox",
+            "strategy": "accessible_name",
+            "value": "Anxiety (Treated)",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": false,
+          "type": "checkbox"
+        },
+        "Asthma": {
+          "locator": {
+            "bindable": true,
+            "role": "checkbox",
+            "strategy": "accessible_name",
+            "value": "Asthma",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": false,
+          "type": "checkbox"
+        },
+        "Controlled Hypertension": {
+          "locator": {
+            "bindable": true,
+            "role": "checkbox",
+            "strategy": "accessible_name",
+            "value": "Controlled Hypertension",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": false,
+          "type": "checkbox"
+        },
+        "Elevated BMI": {
+          "locator": {
+            "bindable": true,
+            "role": "checkbox",
+            "strategy": "accessible_name",
+            "value": "Elevated BMI",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": false,
+          "type": "checkbox"
+        },
+        "High Cholesterol": {
+          "locator": {
+            "bindable": true,
+            "role": "checkbox",
+            "strategy": "accessible_name",
+            "value": "High Cholesterol",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": false,
+          "type": "checkbox"
+        },
+        "Last Physical Exam": {
+          "locator": {
+            "bindable": false,
+            "role": "textbox",
+            "strategy": "dom_id",
+            "value": "_r_7t_-form-item",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": false,
+          "type": "date"
+        },
+        "None": {
+          "locator": {
+            "bindable": true,
+            "role": "checkbox",
+            "strategy": "accessible_name",
+            "value": "None",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": false,
+          "type": "checkbox"
+        },
+        "Primary Physician": {
+          "locator": {
+            "bindable": false,
+            "role": "textbox",
+            "strategy": "dom_id",
+            "value": "_r_7s_-form-item",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": false,
+          "type": "text"
+        },
+        "Sleep Apnea (Treated)": {
+          "locator": {
+            "bindable": true,
+            "role": "checkbox",
+            "strategy": "accessible_name",
+            "value": "Sleep Apnea (Treated)",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": false,
+          "type": "checkbox"
+        },
+        "Type 2 Diabetes": {
+          "locator": {
+            "bindable": true,
+            "role": "checkbox",
+            "strategy": "accessible_name",
+            "value": "Type 2 Diabetes",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": false,
+          "type": "checkbox"
+        }
+      },
+      "location": "http://127.0.0.1:8123/underwriting/new-business/new-application",
+      "question_groups": []
+    },
+    {
+      "ax_fingerprint": "6f7a1e62a096bf1899e5de1d3871d29b4f48962ede3887fb66ad74e01baed253",
+      "controls_total": 24,
+      "danger_controls": 1,
+      "danger_names": [
+        "Process Payment"
+      ],
+      "displayed_values": [
+        {
+          "label": "Employer: Ashgrove Holdings",
+          "selector": "p",
+          "text": "$67,000.00",
+          "value_candidate": "true",
+          "value_confidence": "0.75",
+          "value_reason": "currency value",
+          "value_type": "currency"
+        },
+        {
+          "label": "Product: Term Life - 10 Year",
+          "selector": "p",
+          "text": "$650,000.00",
+          "value_candidate": "true",
+          "value_confidence": "0.75",
+          "value_reason": "currency value",
+          "value_type": "currency"
+        }
+      ],
+      "endpoints": [],
+      "form_snapshot_signals": {},
+      "location": "http://127.0.0.1:8123/underwriting/new-business/new-application",
+      "question_groups": []
+    },
+    {
+      "ax_fingerprint": "51bbb891a4bfae0fd059924a6dcd5377700cf1f82b810149cc81e3220db83384",
+      "controls_total": 29,
+      "danger_controls": 1,
+      "danger_names": [
+        "Process Payment"
+      ],
+      "displayed_values": [
+        {
+          "label": "Michael Thornberryunderwriting",
+          "selector": "p.text-muted-foreground",
+          "text": "UW-2026-00142 | term life 20 | $2,000,000.00",
+          "value_candidate": "true",
+          "value_confidence": "0.75",
+          "value_reason": "currency value",
+          "value_type": "currency"
+        }
+      ],
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "/claims/reported",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/customers/profile",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/dashboard/overview",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/payments/process",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/policy-admin/in-force",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/portal/sign-in",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/underwriting/new-business",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/underwriting/new-business/app-2c8d4e1f/review",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/underwriting/new-business/app-5a1b9c3d/review",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/underwriting/new-business/app-7f3a9b2e/decision",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/underwriting/new-business/app-7f3a9b2e/requirements",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/underwriting/new-business/app-7f3a9b2e/review",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/underwriting/new-business/app-8e2f6a4b/review",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/underwriting/new-business/new-application",
+          "response_mime": "text/x-component",
+          "status": "200"
+        }
+      ],
+      "form_snapshot_signals": {},
+      "location": "http://127.0.0.1:8123/underwriting/new-business/app-7f3a9b2e/review",
+      "question_groups": []
+    },
+    {
+      "ax_fingerprint": "89843d3ea10704306640a71b6636e31b140a02457b5c9524f75c3a585195b34a",
+      "controls_total": 29,
+      "danger_controls": 1,
+      "danger_names": [
+        "Process Payment"
+      ],
+      "displayed_values": [
+        {
+          "label": "Sarah Jenningsrequirements pending",
+          "selector": "p.text-muted-foreground",
+          "text": "UW-2026-00143 | whole life | $5,000,000.00",
+          "value_candidate": "true",
+          "value_confidence": "0.75",
+          "value_reason": "currency value",
+          "value_type": "currency"
+        }
+      ],
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "/claims/reported",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/customers/profile",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/dashboard/overview",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/payments/process",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/policy-admin/in-force",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/portal/sign-in",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/underwriting/new-business",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/underwriting/new-business/app-2c8d4e1f/decision",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/underwriting/new-business/app-2c8d4e1f/requirements",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/underwriting/new-business/app-2c8d4e1f/review",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/underwriting/new-business/app-5a1b9c3d/review",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/underwriting/new-business/app-7f3a9b2e/decision",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/underwriting/new-business/app-7f3a9b2e/requirements",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/underwriting/new-business/app-7f3a9b2e/review",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/underwriting/new-business/app-8e2f6a4b/review",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/underwriting/new-business/new-application",
+          "response_mime": "text/x-component",
+          "status": "200"
+        }
+      ],
+      "form_snapshot_signals": {},
+      "location": "http://127.0.0.1:8123/underwriting/new-business/app-2c8d4e1f/review",
+      "question_groups": []
+    },
+    {
+      "ax_fingerprint": "b5a85f080932a20ba364a1707b3851cba234993f3eb8ab31316b61cddee4caf4",
+      "controls_total": 29,
+      "danger_controls": 1,
+      "danger_names": [
+        "Process Payment"
+      ],
+      "displayed_values": [
+        {
+          "label": "Jennifer Walshsubmitted",
+          "selector": "p.text-muted-foreground",
+          "text": "UW-2026-00145 | term life 30 | $3,000,000.00",
+          "value_candidate": "true",
+          "value_confidence": "0.75",
+          "value_reason": "currency value",
+          "value_type": "currency"
+        }
+      ],
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "/claims/reported",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/customers/profile",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/dashboard/overview",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/payments/process",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/policy-admin/in-force",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/portal/sign-in",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/underwriting/new-business",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/underwriting/new-business/app-2c8d4e1f/decision",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/underwriting/new-business/app-2c8d4e1f/requirements",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/underwriting/new-business/app-2c8d4e1f/review",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/underwriting/new-business/app-5a1b9c3d/decision",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/underwriting/new-business/app-5a1b9c3d/requirements",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/underwriting/new-business/app-5a1b9c3d/review",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/underwriting/new-business/app-7f3a9b2e/review",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/underwriting/new-business/app-8e2f6a4b/decision",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/underwriting/new-business/app-8e2f6a4b/requirements",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/underwriting/new-business/app-8e2f6a4b/review",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/underwriting/new-business/new-application",
+          "response_mime": "text/x-component",
+          "status": "200"
+        }
+      ],
+      "form_snapshot_signals": {},
+      "location": "http://127.0.0.1:8123/underwriting/new-business/app-8e2f6a4b/review",
+      "question_groups": []
+    }
+  ],
+  "submit_candidates": [
+    "Continue",
+    "3",
+    "MC Margaret Chen",
+    "New Application",
+    "Case Number",
+    "Applicant",
+    "Product",
+    "Face Amount",
+    "Status",
+    "Underwriter",
+    "Submitted",
+    "Address & Employment",
+    "Coverage",
+    "Health",
+    "Back"
+  ],
+  "summary": "AUTHENTICATED AREAS NOT COVERED \u2014 the crawl SIGNED IN successfully, but this app drops the sign-in on every page load (it keeps the signed-in user in the page, not in a cookie), so pages behind the login could not be reached. Re-recording and new credentials will not change this. 2 form(s) found; 8 field(s) auto-filled with a default; 7 field(s) need a real seed; 1 submit(s) exercised (Phase-B), 14 irreversible boundary/ies awaiting approval; 0 journey(s) completed end-to-end through an approved crossing.",
+  "tab_views_recorded": 0,
+  "traversal": "full",
+  "unblock_irreversible": [],
+  "unhandled_controls": [],
+  "validation_rejections": [],
+  "vision_budget": {
+    "breaker_open": false,
+    "breaker_threshold": 3,
+    "calls": 0,
+    "consecutive_failures": 0,
+    "failures": 0,
+    "gate": {
+      "attestation_rung": "none",
+      "attested": false,
+      "enabled": false,
+      "reason": "no_oracle",
+      "tenant_enabled": false
+    },
+    "latency_ms": 0,
+    "max_calls": 0,
+    "refusals": {},
+    "timeout_s": 20.0
+  },
+  "vision_ledger": [],
+  "vision_refused": 0,
+  "vision_verified": 0
+}

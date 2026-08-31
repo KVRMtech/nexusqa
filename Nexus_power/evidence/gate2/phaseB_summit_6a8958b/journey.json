@@ -1,0 +1,310 @@
+{
+  "app": "summit-life-carrier",
+  "target_url": "http://127.0.0.1:8123/",
+  "explorer_version": "qe-explorer/1.0+inv-js-v12",
+  "produced_by": {
+    "head": "6a8958bbe359df83c8b4b620573482bbd58ae4a9",
+    "dirty": true,
+    "dirty_paths": [
+      "Nexus_power/engines/qe-explorer/app/crawler.py",
+      "Nexus_power/engines/qe-explorer/app/discovery.py"
+    ]
+  },
+  "commit_control": "Submit Application",
+  "grants": [
+    {
+      "control": "Submit Application",
+      "approved_by": "gate2-operator",
+      "max_crossings": 1,
+      "role": "commit",
+      "url": "http://127.0.0.1:8123/underwriting/new-business/new-application"
+    }
+  ],
+  "known_blockers": [],
+  "oracle_source": "deterministic-stub",
+  "oracle_telemetry": {},
+  "oracle_decisions": [
+    {
+      "url": "http://127.0.0.1:8123/dashboard/overview",
+      "title": "Summit Life Carrier Administration",
+      "candidates": [
+        "Dashboard",
+        "New Business Queue",
+        "New Customer",
+        "In-Force Policies",
+        "Reported Claims",
+        "Product Pricing",
+        "Settings",
+        "3",
+        "MC Margaret Chen",
+        "View all",
+        "Michael Thornberry UW-2026-00142 $2,000,000.00 underwriting",
+        "Sarah Jennings UW-2026-00143 $5,000,000.00 requirements pending",
+        "Robert Vasquez UW-2026-00144 $1,000,000.00 in review",
+        "Jennifer Walsh UW-2026-00145 $3,000,000.00 submitted"
+      ],
+      "picked": "Robert Vasquez UW-2026-00144 $1,000,000.00 in review",
+      "tier3_source": "deterministic-stub"
+    },
+    {
+      "url": "http://127.0.0.1:8123/underwriting/new-business/app-5a1b9c3d/review",
+      "title": "Summit Life Carrier Administration",
+      "candidates": [
+        "Dashboard",
+        "New Business Queue",
+        "New Customer",
+        "In-Force Policies",
+        "Reported Claims",
+        "Product Pricing",
+        "Settings",
+        "3",
+        "MC Margaret Chen",
+        "Requirements",
+        "Requirements",
+        "Risk Decision",
+        "Risk Decision",
+        "Overview",
+        "Health Profile",
+        "Financial",
+        "Vendor Reports (4)",
+        "Suspense (0)",
+        "Notes (1)",
+        "Overview"
+      ],
+      "picked": null,
+      "tier3_source": "deterministic-stub"
+    },
+    {
+      "url": "http://127.0.0.1:8123/underwriting/new-business",
+      "title": "Summit Life Carrier Administration",
+      "candidates": [
+        "Dashboard",
+        "New Business Queue",
+        "New Customer",
+        "In-Force Policies",
+        "Reported Claims",
+        "Product Pricing",
+        "Settings",
+        "3",
+        "MC Margaret Chen",
+        "New Application",
+        "Case Number",
+        "Applicant",
+        "Product",
+        "Face Amount",
+        "Status",
+        "Underwriter",
+        "Submitted"
+      ],
+      "picked": null,
+      "tier3_source": "deterministic-stub"
+    },
+    {
+      "url": "http://127.0.0.1:8123/underwriting/new-business/new-application",
+      "title": "Summit Life Carrier Administration",
+      "candidates": [
+        "Dashboard",
+        "New Business Queue",
+        "New Customer",
+        "In-Force Policies",
+        "Reported Claims",
+        "Product Pricing",
+        "Settings",
+        "3",
+        "MC Margaret Chen",
+        "Applicant",
+        "Address & Employment",
+        "Coverage",
+        "Health",
+        "Back"
+      ],
+      "picked": null,
+      "tier3_source": "deterministic-stub"
+    },
+    {
+      "url": "http://127.0.0.1:8123/underwriting/new-business/app-7f3a9b2e/review",
+      "title": "Summit Life Carrier Administration",
+      "candidates": [
+        "Dashboard",
+        "New Business Queue",
+        "New Customer",
+        "In-Force Policies",
+        "Reported Claims",
+        "Product Pricing",
+        "Settings",
+        "3",
+        "MC Margaret Chen",
+        "Requirements",
+        "Requirements",
+        "Risk Decision",
+        "Risk Decision",
+        "Overview",
+        "Health Profile",
+        "Financial",
+        "Vendor Reports (4)",
+        "Suspense (0)",
+        "Notes (1)",
+        "Overview"
+      ],
+      "picked": null,
+      "tier3_source": "deterministic-stub"
+    },
+    {
+      "url": "http://127.0.0.1:8123/underwriting/new-business/app-2c8d4e1f/review",
+      "title": "Summit Life Carrier Administration",
+      "candidates": [
+        "Dashboard",
+        "New Business Queue",
+        "New Customer",
+        "In-Force Policies",
+        "Reported Claims",
+        "Product Pricing",
+        "Settings",
+        "3",
+        "MC Margaret Chen",
+        "Requirements",
+        "Requirements",
+        "Risk Decision",
+        "Risk Decision",
+        "Overview",
+        "Health Profile",
+        "Financial",
+        "Vendor Reports (2)",
+        "Suspense (2)",
+        "Notes (1)",
+        "Overview"
+      ],
+      "picked": null,
+      "tier3_source": "deterministic-stub"
+    },
+    {
+      "url": "http://127.0.0.1:8123/underwriting/new-business/app-8e2f6a4b/review",
+      "title": "Summit Life Carrier Administration",
+      "candidates": [
+        "Dashboard",
+        "New Business Queue",
+        "New Customer",
+        "In-Force Policies",
+        "Reported Claims",
+        "Product Pricing",
+        "Settings",
+        "3",
+        "MC Margaret Chen",
+        "Requirements",
+        "Requirements",
+        "Risk Decision",
+        "Risk Decision",
+        "Overview",
+        "Health Profile",
+        "Financial",
+        "Vendor Reports (0)",
+        "Suspense (0)",
+        "Notes (0)",
+        "Overview"
+      ],
+      "picked": null,
+      "tier3_source": "deterministic-stub"
+    }
+  ],
+  "boundaries_crossed": 1,
+  "crossings": [
+    {
+      "crossing_id": "cross_a7b792443fd5_1",
+      "boundary_key": "bnd_a7b792443fd5aca8d53c",
+      "control_name": "Submit Application",
+      "url": "http://127.0.0.1:8123/underwriting/new-business/new-application",
+      "state_fingerprint": "6f7a1e62a096bf1899e5de1d3871d29b4f48962ede3887fb66ad74e01baed253",
+      "approval_id": "apr_6c152fcd357d3e35",
+      "sequence_index": 9,
+      "status": "crossed",
+      "outcome": "none",
+      "confirmed": false,
+      "refusal_reason": "",
+      "reserved_at_ms": 428296,
+      "completed_at_ms": 430780
+    }
+  ],
+  "crossings_refused": [],
+  "outcome_milestones": [
+    {
+      "milestone_id": "mst_aba02ec1de7f21e7",
+      "crossing_id": "cross_a7b792443fd5_1",
+      "approval_id": "apr_6c152fcd357d3e35",
+      "boundary_key": "bnd_a7b792443fd5aca8d53c",
+      "control_name": "Submit Application",
+      "url_before": "http://127.0.0.1:8123/underwriting/new-business/new-application",
+      "url_after": "http://127.0.0.1:8123/underwriting/new-business/new-application",
+      "navigated": false,
+      "outcome": "none",
+      "confirmation_detail": "",
+      "confirmation_rung": "",
+      "state_fingerprint_before": "6f7a1e62a096bf1899e5de1d3871d29b4f48962ede3887fb66ad74e01baed253",
+      "state_fingerprint_after": "submit_95a1abede35ae26b",
+      "dom_digest_before": "dom_cd979a2fc57d917cca0f_24",
+      "dom_digest_after": "dom_cd979a2fc57d917cca0f_24",
+      "screenshot_before": "frame_00009.png",
+      "screenshot_after": "frame_00010.png",
+      "attestation_env_kind": "disposable",
+      "attestation_attributed_to": "characterization",
+      "refuse_pack_version": "refuse-pack-v2",
+      "guard_rule_id": "guard.submit.mutation_ok",
+      "clicked_at_ms": 428358,
+      "observed_at_ms": 430687,
+      "latency_ms": 2329,
+      "outcome_values": [
+        {
+          "label": "Employer: Ashgrove Holdings",
+          "selector": "p",
+          "text": "$67,000.00",
+          "value_type": "currency",
+          "value_candidate": "true",
+          "value_confidence": "0.75",
+          "value_reason": "currency value"
+        },
+        {
+          "label": "Product: Term Life - 10 Year",
+          "selector": "p",
+          "text": "$650,000.00",
+          "value_type": "currency",
+          "value_candidate": "true",
+          "value_confidence": "0.75",
+          "value_reason": "currency value"
+        }
+      ],
+      "verified": false,
+      "grant": {
+        "approval_id": "apr_6c152fcd357d3e35",
+        "control": "Submit Application",
+        "url": "http://127.0.0.1:8123/underwriting/new-business/new-application",
+        "state_fingerprint": "",
+        "max_crossings": 1,
+        "approved_by": "gate2-operator",
+        "approved_at": ""
+      }
+    }
+  ],
+  "confirmation_observed": false,
+  "confirmation_rungs": [],
+  "confirmation_details": [],
+  "telemetry": {
+    "flows_found": 6,
+    "flows_completed": 6,
+    "journeys_completed": 0,
+    "boundaries_crossed": 1,
+    "deepest_flow_steps": 5,
+    "deepest_flow_proven_steps": 5,
+    "deepest_flow_capped": false,
+    "deepest_flow_terminal": "submit_crossed",
+    "advances_by_tier": {
+      "3": 1,
+      "1": 4
+    },
+    "oracle_advances": 1
+  },
+  "stop_reason": null,
+  "approvable_boundaries_seen": [
+    "Process Payment",
+    "Review & Submit",
+    "Submit Application"
+  ]
+}

@@ -215,8 +215,72 @@ its own Continue:
 (the gate-2 default) a semantic CHOICE is deliberately left to the client, and
 the open-and-pick path is agent-mode only. **That is exactly the
 `choice_left_to_client` reason this milestone shipped** — the residue naming
-its own blocker on the first live run after it was built. An agent-mode pinned
-run and its user-mode control are the outstanding measurement.
+its own blocker on the first live run after it was built.
+
+#### The measured pair — one axis apart
+
+Both runs frontier-pinned with the same two `--plan-pattern` fragments, same
+budget, same container, same grant. Only the data mode differs.
+
+| | `--data-mode user` (CONTROL) | `--data-mode agent` |
+| --- | --- | --- |
+| deepest flow | 2 steps, `no_advance` | **5 steps, `submit_crossed`** |
+| crossed | 0 | **1 `['Submit Application']`** |
+| stopped by | `Continue` disabled, `missing=['Gender']` | reached the commit |
+
+**SUMMIT CROSSES ON THIS ENGINE.** The funnel walked all five steps: Gender
+answered by opening the widget and taking a real option, the health-conditions
+gate cleared by the unblock experiment answering `None`
+(`answered_to_unblock: 1`), and `Submit Application` crossed under the
+operator's named grant. The control proves the axis: identical everything,
+user mode, and it stops dead on Gender.
+
+#### What the crossing found — B1-S's first live engagement, and an honest silence
+
+    outcome none · navigated false · verified False
+    /api/v1/ calls fired: 0   (1267 network events observed, 0 server errors)
+    qec.stepback.read depth=1 … named=0
+    qec.stepback.read depth=2 … named=0
+    qec.stepback.read depth=3 … named=0
+    qec.stepback.read depth=4 … named=0
+    qec.stepback.exhausted budget=4 named=0
+
+**This is the first time B1-S has run against the application it was written
+for.** It engaged, clicked Back four times, re-read through the full
+attribution ladder at every field step, restored the page, and reported
+silence — and B2 correctly did NOT retry, because nothing was named
+(invariant 2: no signal, no retry).
+
+That result is worth more than a green one. `a07cb59`'s hypothesis was "the
+messages live on the earlier steps, and the reader has to go there". The
+reader went there, to **every** step, and **the messages are not there
+either**. Zero `/api/v1/` calls means `handleSubmit` never reached
+`executeFlow`, so the schema did refuse — and summit anchors no readable
+rejection anywhere in its wizard, on any step. The silence is a property of
+the application's markup, now measured across the whole funnel rather than
+inferred from one step.
+
+**NOT diagnosed, deliberately:** *why* the schema refused a form whose own
+`canAdvance()` let every step through is not established here. The leading
+candidate is that the walk's re-navigation plus this app's per-page-load
+relogin re-mounts the form and drops earlier steps' values — but that is a
+hypothesis, and this record does not carry hypotheses as findings.
+
+#### The bundle is REFUSED, on two grounds, and both are recorded
+
+    [REFUSED] produced from a DIRTY tree — 2 modified path(s):
+              app/crawler.py, app/discovery.py
+    [REFUSED] no confirmation observed — a crossing without an observed
+              outcome proves a click, not an effect
+    admissible: 0/1, exit 1
+
+The dirty flag is **not the engine's doing**: a concurrent session in this
+shared checkout was editing those two files while the run was in flight (see
+CLAUDE.md §1). A clean-tree re-run is owed before this crossing can be
+claimed as admissible, and the tree is not currently Team B's to clean.
+Archived exactly as produced, dirty flag and all, at
+`Nexus_power/evidence/gate2/phaseB_summit_6a8958b/`, with the user-mode
+control beside it as `CONTROL_user_mode_journey.json`.
 
 ---
 
@@ -225,10 +289,12 @@ run and its user-mode control are the outstanding measurement.
 * **Nothing here is deployed.** Every commit is on
   `feat/qec-dynamic-catalog-p0-p6` and none has been through CI (this machine
   cannot push to `origin`; see G8).
-* **Summit does not cross on this engine yet**, and B1-S/B2 therefore have
-  **no live trigger on summit** — both are proven against a transcription of
-  that application and against fixture 32 in real Chromium, not against the
-  application.
+* **Summit crosses but its bundle is REFUSED** — no confirmation observed (the
+  application renders none) and dirty provenance from a concurrent session's
+  edits. A clean-tree re-run is owed. B1-S is now live-verified on summit and
+  its live result is a measured SILENCE, not a naming; B2 has therefore still
+  never had a live trigger anywhere — its proof is fixture 32 in real Chromium
+  and the scripted-schema e2e, not summit.
 * vkpower's quote-start product **card grid** goes through the card picker,
   not the product rung; its coherence with later product questions is
   unmeasured.
