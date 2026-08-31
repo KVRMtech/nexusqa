@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<!--
+  FIXTURE 32 — a TWO-STEP form that refuses its submit SILENTLY, with the
+  refusal rendered where the FIELD lives, not where the commit lives.
+
+  This is the summit-life-carrier shape reduced to its smallest reproduction,
+  with one deliberate difference: the error node is a PLAIN <p> with no ARIA
+  role, no aria-invalid, no aria-describedby — the vkpower styling of the
+  summit failure. Between them the two proving grounds cover both halves of
+  B1-S, and this fixture is the half no fixture had:
+
+    * step 1 "Contact" owns the Phone field AND its message node;
+    * step 2 "Review" owns "Submit Application" and NO message node at all;
+    * submit validates the phone against (999) 999-9999, writes the refusal
+      into step 1's message node — which is display:none while step 2 is
+      shown — and changes NOTHING visible. The commit is refused and the
+      page says nothing, exactly as measured live;
+    * clicking Back re-shows step 1, where the message has been waiting;
+    * a phone that satisfies the mask replaces the form with a confirmation
+      banner (an undecorated div — the transition rung's shape).
+
+  Values persist across steps because the inputs never leave the DOM — they
+  are hidden with their step, which is also what makes the hidden message
+  node invisible to the inventory while step 2 is up (the capture's own
+  visibility rule, not a special case).
+
+  NO framework, NO network, NO timer, NO randomness. Every transition is a
+  synchronous function of (step, values), so a replay is byte-comparable.
+-->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Fixture 32 — two-step silent refusal</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 2rem; max-width: 40rem; }
+    .step { border: 1px solid #ccc; padding: 1rem; }
+    button[disabled] { opacity: .5; }
+    .msg { color: #b00; min-height: 1.2em; }
+    [hidden] { display: none !important; }
+  </style>
+</head>
+<body>
+  <h1>Coverage application</h1>
+
+  <form id="wizard" novalidate>
+    <div class="step" id="step1">
+      <h2>Contact</h2>
+      <label>Full Name <input type="text" id="name"></label><br>
+      <label>Phone Number <input type="text" id="phone"></label>
+      <!-- THE MESSAGE NODE THE COMMIT WRITES INTO. Plain <p>: no role, no
+           aria-live, no class the reader is allowed to know about. It lives
+           HERE, inside the step that owns the field. -->
+      <p class="msg" id="msg"></p>
+    </div>
+
+    <div class="step" id="step2" hidden>
+      <h2>Review &amp; Submit</h2>
+      <p>Review the application before submitting.</p>
+      <p id="summary"></p>
+    </div>
+
+    <button type="button" id="back" disabled>Back</button>
+    <button type="button" id="next" disabled>Continue</button>
+    <button type="button" id="submit" hidden>Submit Application</button>
+  </form>
+
+  <div id="done" hidden>
+    <p>Application received. Confirmation #TS-204.</p>
+  </div>
+
+  <script>
+    (function () {
+      var step = 1;
+      var name = document.getElementById('name');
+      var phone = document.getElementById('phone');
+      var msg = document.getElementById('msg');
+      var PHONE_RULE = /^\(\d{3}\) \d{3}-\d{4}$/;
+
+      function sync() {
+        document.getElementById('step1').hidden = (step !== 1);
+        document.getElementById('step2').hidden = (step !== 2);
+        document.getElementById('back').disabled = (step === 1);
+        document.getElementById('next').hidden = (step === 2);
+        document.getElementById('next').disabled =
+          !(name.value.trim() && phone.value.trim());
+        document.getElementById('submit').hidden = (step !== 2);
+        document.getElementById('summary').textContent =
+          name.value + ' · ' + phone.value;
+      }
+
+      name.addEventListener('input', sync);
+      phone.addEventListener('input', sync);
+
+      document.getElementById('next').addEventListener('click', function () {
+        if (step === 1) { step = 2; sync(); }
+      });
+      document.getElementById('back').addEventListener('click', function () {
+        if (step === 2) { step = 1; sync(); }
+      });
+      document.getElementById('submit').addEventListener('click', function () {
+        if (!PHONE_RULE.test(phone.value)) {
+          // THE SILENT REFUSAL. The reason is written into step 1's message
+          // node, which is hidden right now. Nothing visible changes on the
+          // page the click happened on.
+          msg.textContent = 'Phone Number must be (999) 999-9999';
+          return;
+        }
+        document.getElementById('wizard').hidden = true;
+        document.getElementById('done').hidden = false;
+      });
+
+      sync();
+    })();
+  </script>
+</body>
+</html>

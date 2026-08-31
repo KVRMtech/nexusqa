@@ -1,0 +1,18 @@
+{
+  "purpose": "A TWO-STEP form whose submit is refused SILENTLY: the validator writes the refusal into step 1's plain <p> message node — hidden while step 2 is shown — and changes nothing visible on the page the commit was clicked on. The message lives where the FIELD lives (step 1 owns Phone Number and its message node); the review step owns 'Submit Application' and no message node at all. This is the summit-life-carrier failure wearing vkpower's markup: no ARIA role, no aria-invalid, no error id convention — nothing the anchored attribution ladder can read, so only the step-back walk plus the forward-pass text snapshot can name the refusal.",
+  "targeted_defect": "Regression guard for B1-S (the step-back rejection reader) and its forward-walk text licence: a crawler that only reads the page it crossed from records outcome=none with zero rejections named, which is the most misleading bundle shape there is. Also guards the B2 closed loop's live shape: the refusal names its field and draws its mask, so one evidence-driven re-fill and one retry must complete the journey.",
+  "lanes": ["playwright"],
+  "lane_note": "The behaviour under test is a real step transition driven by input events (Continue enables only once both fields hold text), visibility-scoped capture of display:none regions, and a live submit handler writing into a hidden node — exactly the rendered-layout semantics (getBoundingClientRect-based visibility) jsdom does not implement, so the jsdom lane cannot adjudicate this fixture.",
+  "snippet": "INVENTORY_JS",
+  "min_controls": 4,
+  "exact_control_count": 4,
+  "expect_controls": [
+    {"where": {"css_hint": "input#name"}, "fields": {"name": "Full Name", "role": "textbox"}},
+    {"where": {"css_hint": "input#phone"}, "fields": {"name": "Phone Number", "role": "textbox"}},
+    {"where": {"css_hint": "button#back"}, "fields": {"name": "Back", "role": "button", "disabled": true}},
+    {"where": {"css_hint": "button#next"}, "fields": {"name": "Continue", "role": "button", "disabled": true}}
+  ],
+  "hidden_step_is_invisible": {
+    "why": "The Submit Application button and step 2's texts are display:none on load; the inventory's own visibility rule must exclude them, because that same rule is what makes the hidden message node unreadable from step 2 — the phenomenon under test, not a special case."
+  }
+}
