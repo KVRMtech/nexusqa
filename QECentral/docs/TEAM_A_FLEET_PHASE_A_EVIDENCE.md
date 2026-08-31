@@ -278,11 +278,32 @@ suite **2774 passed, 2 xfailed, 0 failed** on the post-commit tree.
 (An earlier run of that suite showed 3 walker-area reds — `test_crawler_logic`,
 `test_decision_points`, `test_e2e_advance`. They passed in isolation at the
 time and are green in this full run: another session was landing Team B's
-walker/submit rewrite into this shared checkout mid-lane. Recorded because a
-red on a shared tree is not evidence until it survives a rerun.)
+walker/submit rewrite into this shared checkout mid-lane, which that session
+confirmed independently. Recorded because a red on a shared tree is not
+evidence until it survives a rerun — and, symmetrically, neither is a green.)
 
 DB lane provenance: throwaway `postgres:16-alpine` + the production
 `scripts/qec_ci_db_setup.sh` (same bootstrap SQL, same least-privilege
 `qec`/`qec_substrate` roles, both alembic chains at head — qec_025), driven
 from a `python:3.11-slim` runner with the service's own requirements — the
 same shape as the CI job this branch cannot currently reach (G8).
+
+Whole qe-central suite on that lane: **2645 passed, 156 skipped, 2 failed** —
+and the 2 are MY HARNESS, not the code, diagnosed rather than assumed:
+
+```
+tests/security/test_deploy_environment.py::test_the_deploy_script_passes_the_production_env_file
+tests/security/test_deploy_environment.py::test_the_deploy_script_refuses_to_run_without_the_env_file
+E  FileNotFoundError: '/scripts/deploy.ps1'
+```
+
+Those tests read `deploy.ps1` at the REPOSITORY ROOT (`REPO = ROOT.parent`),
+and this runner mounts only `Nexus_power/`, so the path resolves to `/scripts`
+and does not exist. Re-run with the repo root mounted: **11 passed**. The lane
+could not see the subject, so its red said nothing about it — recorded here
+because an earlier draft of this file guessed "stale mid-edit read" and that
+guess was wrong; the mount is the actual cause.
+
+Consequence for anyone reusing this lane: mount the REPO ROOT, not
+`Nexus_power/`, or `tests/security/test_deploy_environment.py` cannot be
+adjudicated by it.
