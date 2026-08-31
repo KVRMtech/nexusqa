@@ -1,0 +1,136 @@
+{
+  "app": "acme-life",
+  "target_url": "http://127.0.0.1:8124/",
+  "explorer_version": "qe-explorer/1.0+inv-js-v12",
+  "produced_by": {
+    "head": "ff8f150e2ad2740cb56920b876c21afb52b10da0",
+    "dirty": false,
+    "dirty_paths": []
+  },
+  "commit_control": "Bind policy",
+  "grants": [
+    {
+      "control": "Bind policy",
+      "approved_by": "gate2-operator",
+      "max_crossings": 1,
+      "role": "commit"
+    }
+  ],
+  "known_blockers": [],
+  "oracle_source": "deterministic-stub",
+  "oracle_telemetry": {},
+  "oracle_decisions": [
+    {
+      "url": "http://127.0.0.1:8124/#/quote",
+      "title": "Acme Life Insurance",
+      "candidates": [
+        "Get quote"
+      ],
+      "picked": "Get quote",
+      "tier3_source": "deterministic-stub"
+    }
+  ],
+  "boundaries_crossed": 1,
+  "crossings": [
+    {
+      "crossing_id": "cross_ad02b7a2a5a5_1",
+      "boundary_key": "bnd_ad02b7a2a5a5fc725b34",
+      "control_name": "Bind policy",
+      "url": "http://127.0.0.1:8124/#/review",
+      "state_fingerprint": "259bdf67be966f8b478bccbdc77bdba85c3da47948d0ad2a8788aac42d7ca087",
+      "approval_id": "apr_2a29269c2c05102b",
+      "sequence_index": 3,
+      "status": "crossed",
+      "outcome": "confirmation",
+      "confirmed": true,
+      "refusal_reason": "",
+      "reserved_at_ms": 94280,
+      "completed_at_ms": 98437
+    }
+  ],
+  "crossings_refused": [],
+  "outcome_milestones": [
+    {
+      "milestone_id": "mst_96720841b7b7732f",
+      "crossing_id": "cross_ad02b7a2a5a5_1",
+      "approval_id": "apr_2a29269c2c05102b",
+      "boundary_key": "bnd_ad02b7a2a5a5fc725b34",
+      "control_name": "Bind policy",
+      "url_before": "http://127.0.0.1:8124/#/review",
+      "url_after": "http://127.0.0.1:8124/#/review",
+      "navigated": false,
+      "outcome": "confirmation",
+      "confirmation_detail": "Review & bind Confirm the details, then bind your policy. POLICY BOUND Confirmation #AL-1149472095 Insured Leonard Prescott Beneficiary autotest Coverage $900,000 Monthly premium $177.12 Applicant age 47",
+      "confirmation_rung": "aria_status",
+      "state_fingerprint_before": "259bdf67be966f8b478bccbdc77bdba85c3da47948d0ad2a8788aac42d7ca087",
+      "state_fingerprint_after": "submit_ae4a1fb3d022237d",
+      "dom_digest_before": "dom_b277a9de4261c1724f50_5",
+      "dom_digest_after": "dom_dcf20115b6578b3124c6_4",
+      "screenshot_before": "frame_00003.png",
+      "screenshot_after": "frame_00004.png",
+      "attestation_env_kind": "disposable",
+      "attestation_attributed_to": "characterization",
+      "refuse_pack_version": "refuse-pack-v2",
+      "guard_rule_id": "guard.submit.mutation_ok",
+      "clicked_at_ms": 94515,
+      "observed_at_ms": 98187,
+      "latency_ms": 3672,
+      "outcome_values": [
+        {
+          "label": "Coverage",
+          "selector": "div",
+          "text": "$900,000",
+          "value_type": "currency",
+          "value_candidate": "true",
+          "value_confidence": "0.90",
+          "value_reason": "currency value under an outcome label"
+        },
+        {
+          "label": "Monthly premium",
+          "selector": "div",
+          "text": "$177.12",
+          "value_type": "currency",
+          "value_candidate": "true",
+          "value_confidence": "0.90",
+          "value_reason": "currency value under an outcome label"
+        }
+      ],
+      "verified": true,
+      "grant": {
+        "approval_id": "apr_2a29269c2c05102b",
+        "control": "Bind policy",
+        "url": "",
+        "state_fingerprint": "",
+        "max_crossings": 1,
+        "approved_by": "gate2-operator",
+        "approved_at": ""
+      }
+    }
+  ],
+  "confirmation_observed": true,
+  "confirmation_rungs": [
+    "aria_status"
+  ],
+  "confirmation_details": [
+    "Review & bind Confirm the details, then bind your policy. POLICY BOUND Confirmation #AL-1149472095 Insured Leonard Prescott Beneficiary autotest Coverage $900,000 Monthly premium $177.12 Applicant age 47"
+  ],
+  "telemetry": {
+    "flows_found": 2,
+    "flows_completed": 2,
+    "journeys_completed": 1,
+    "boundaries_crossed": 1,
+    "deepest_flow_steps": 3,
+    "deepest_flow_proven_steps": 3,
+    "deepest_flow_capped": false,
+    "deepest_flow_terminal": "submit_crossed",
+    "advances_by_tier": {
+      "1": 3
+    },
+    "oracle_advances": 0
+  },
+  "stop_reason": null,
+  "approvable_boundaries_seen": [
+    "Apply",
+    "Review & bind"
+  ]
+}

@@ -1,0 +1,216 @@
+{
+  "app": "vkpower-life",
+  "target_url": "http://127.0.0.1:8122/",
+  "explorer_version": "qe-explorer/1.0+inv-js-v12",
+  "produced_by": {
+    "head": "c8dfd295952332cb918d64d53dc535c3125dd8c7",
+    "dirty": false,
+    "dirty_paths": []
+  },
+  "commit_control": "Sign & Submit Application",
+  "grants": [
+    {
+      "control": "Sign & Submit Application",
+      "approved_by": "gate2-operator",
+      "max_crossings": 1,
+      "role": "commit"
+    }
+  ],
+  "known_blockers": [
+    {
+      "control": "Apply Now",
+      "reason": "commit-shaped label on a route link; navigates to the application's first step and commits nothing"
+    },
+    {
+      "control": "Continue to Underwriting Decision",
+      "reason": "rp.verb.underwrite matches the button NAME; the handler is a router.push to the decision step and underwrites nothing"
+    }
+  ],
+  "oracle_source": "deterministic-stub",
+  "oracle_telemetry": {},
+  "oracle_decisions": [
+    {
+      "url": "http://127.0.0.1:8122/",
+      "title": "VKPower Life Insurance",
+      "candidates": [
+        "Dashboard",
+        "Beneficiaries",
+        "Get a Quote",
+        "Get a Free Quote"
+      ],
+      "picked": "Get a Quote",
+      "tier3_source": "deterministic-stub"
+    },
+    {
+      "url": "http://127.0.0.1:8122/life-insurance/quote/health-check/",
+      "title": "VKPower Life Insurance",
+      "candidates": [
+        "Dashboard",
+        "Beneficiaries",
+        "Get a Quote",
+        "No",
+        "Yes",
+        "No",
+        "Yes",
+        "See My Quote",
+        "Back"
+      ],
+      "picked": "See My Quote",
+      "tier3_source": "deterministic-stub"
+    },
+    {
+      "url": "http://127.0.0.1:8122/life-insurance/quote/review/",
+      "title": "VKPower Life Insurance",
+      "candidates": [
+        "Dashboard",
+        "Beneficiaries",
+        "Get a Quote",
+        "Start Over",
+        "Back to Dashboard"
+      ],
+      "picked": "Start Over",
+      "tier3_source": "deterministic-stub"
+    },
+    {
+      "url": "http://127.0.0.1:8122/portal/dashboard/",
+      "title": "VKPower Life Insurance",
+      "candidates": [
+        "Dashboard",
+        "Beneficiaries",
+        "Get a Quote",
+        "Manage Beneficiaries",
+        "Get a New Quote"
+      ],
+      "picked": "Get a New Quote",
+      "tier3_source": "deterministic-stub"
+    },
+    {
+      "url": "http://127.0.0.1:8122/portal/beneficiaries/",
+      "title": "VKPower Life Insurance",
+      "candidates": [
+        "Dashboard",
+        "Beneficiaries",
+        "Get a Quote",
+        "Add Beneficiary"
+      ],
+      "picked": "Get a Quote",
+      "tier3_source": "deterministic-stub"
+    },
+    {
+      "url": "http://127.0.0.1:8122/life-insurance/apply/confirmation/",
+      "title": "VKPower Life Insurance",
+      "candidates": [
+        "Dashboard",
+        "Beneficiaries",
+        "Get a Quote",
+        "Print Confirmation",
+        "Go to Dashboard",
+        "New Application"
+      ],
+      "picked": "Get a Quote",
+      "tier3_source": "deterministic-stub"
+    }
+  ],
+  "boundaries_crossed": 1,
+  "crossings": [
+    {
+      "crossing_id": "cross_effca7291f32_1",
+      "boundary_key": "bnd_effca7291f3289327e55",
+      "control_name": "Sign & Submit Application",
+      "url": "http://127.0.0.1:8122/life-insurance/apply/signature/",
+      "state_fingerprint": "6a8ba4313a51d5c87dbdfc887f3c8822aad84a6149a45dd749c30d817f497d21",
+      "approval_id": "apr_7b3e5b5afac8bb66",
+      "sequence_index": 31,
+      "status": "crossed",
+      "outcome": "navigation",
+      "confirmed": true,
+      "refusal_reason": "",
+      "reserved_at_ms": 521467,
+      "completed_at_ms": 524358
+    }
+  ],
+  "crossings_refused": [],
+  "outcome_milestones": [
+    {
+      "milestone_id": "mst_946f069d85af7f46",
+      "crossing_id": "cross_effca7291f32_1",
+      "approval_id": "apr_7b3e5b5afac8bb66",
+      "boundary_key": "bnd_effca7291f3289327e55",
+      "control_name": "Sign & Submit Application",
+      "url_before": "http://127.0.0.1:8122/life-insurance/apply/signature/",
+      "url_after": "http://127.0.0.1:8122/life-insurance/apply/confirmation/",
+      "navigated": true,
+      "outcome": "navigation",
+      "confirmation_detail": "Application Submitted",
+      "confirmation_rung": "navigation",
+      "state_fingerprint_before": "6a8ba4313a51d5c87dbdfc887f3c8822aad84a6149a45dd749c30d817f497d21",
+      "state_fingerprint_after": "submit_fd427f02dddd2366",
+      "dom_digest_before": "dom_cee28d0b61afb7ccf92f_15",
+      "dom_digest_after": "dom_3cc788dff2dd23d63e10_9",
+      "screenshot_before": "frame_00031.png",
+      "screenshot_after": "frame_00032.png",
+      "attestation_env_kind": "disposable",
+      "attestation_attributed_to": "characterization",
+      "refuse_pack_version": "refuse-pack-v2",
+      "guard_rule_id": "guard.submit.mutation_ok",
+      "clicked_at_ms": 521655,
+      "observed_at_ms": 523717,
+      "latency_ms": 2062,
+      "outcome_values": [
+        {
+          "label": "Coverage Amount",
+          "selector": "div.font-medium",
+          "text": "$50,000",
+          "value_type": "currency",
+          "value_candidate": "true",
+          "value_confidence": "0.90",
+          "value_reason": "currency value under an outcome label"
+        },
+        {
+          "label": "Estimated Premium",
+          "selector": "div.font-medium",
+          "text": "$5.26/mo",
+          "value_type": "currency",
+          "value_candidate": "true",
+          "value_confidence": "0.90",
+          "value_reason": "currency value under an outcome label"
+        }
+      ],
+      "verified": true,
+      "grant": {
+        "approval_id": "apr_7b3e5b5afac8bb66",
+        "control": "Sign & Submit Application",
+        "url": "",
+        "state_fingerprint": "",
+        "max_crossings": 1,
+        "approved_by": "gate2-operator",
+        "approved_at": ""
+      }
+    }
+  ],
+  "confirmation_observed": false,
+  "confirmation_rungs": [],
+  "confirmation_details": [],
+  "telemetry": {
+    "flows_found": 5,
+    "flows_completed": 1,
+    "journeys_completed": 1,
+    "boundaries_crossed": 1,
+    "deepest_flow_steps": 11,
+    "deepest_flow_proven_steps": 11,
+    "deepest_flow_capped": false,
+    "deepest_flow_terminal": "submit_crossed",
+    "advances_by_tier": {
+      "3": 10,
+      "1": 23,
+      "2": 1
+    },
+    "oracle_advances": 10
+  },
+  "stop_reason": null,
+  "approvable_boundaries_seen": [
+    "ACH Bank Transfer Direct debit from checking or savings",
+    "Apply Now",
+    "Continue to Payment"
+  ]
+}
