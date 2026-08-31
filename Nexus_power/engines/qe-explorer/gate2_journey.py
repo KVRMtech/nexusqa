@@ -272,7 +272,8 @@ def _walk_authorization(crawl_id: str, tenant_id: str, url: str):
 
 async def run(app: str, url: str, *, oracle_kind: str, out_root: Path,
               data_mode: str = "user",
-              max_states: int, max_duration_ms: int) -> dict[str, Any]:
+              max_states: int, max_duration_ms: int,
+              plan_patterns: Sequence[str] = ()) -> dict[str, Any]:
     from playwright.async_api import async_playwright
     from app.playwright_port import context_defaults
 
@@ -339,6 +340,19 @@ async def run(app: str, url: str, *, oracle_kind: str, out_root: Path,
                                           "max_crossings", "url")}
                                 for g in grants_for(app, url)],
             credentials=Credentials.from_payload(cfg["credentials"]),
+            # THE OPERATOR'S OWN FRONTIER WEIGHTING — the production `plan`
+            # dispatch field, exposed. Measured need (2026-08-31): three runs
+            # against summit-life-carrier burned their whole budget in the
+            # admin chrome (per-page-load relogin lands on /dashboard, whose
+            # tables out-populate the frontier) and never entered the funnel
+            # under measurement, while the SAME instrument had reached it two
+            # days earlier — ordering variance, not engine behaviour. A
+            # priority pattern says "this journey is about THAT part of the
+            # application"; it re-orders the frontier and forbids nothing, so
+            # a run with no --plan-pattern is byte-identical to before.
+            plan=({"priority_patterns": [{"pattern": p, "weight": 100}
+                                         for p in plan_patterns]}
+                  if plan_patterns else None),
         )
         await crawler.run()
     finally:
@@ -448,6 +462,11 @@ def main() -> None:
     parser.add_argument("--out", default="")
     parser.add_argument("--max-states", type=int, default=60)
     parser.add_argument("--max-duration-ms", type=int, default=900000)
+    parser.add_argument(
+        "--plan-pattern", action="append", default=[],
+        help="frontier priority pattern (repeatable; lowercase URL fragment, "
+             "e.g. 'underwriting/new-business'). Weights matching routes to "
+             "the front of the frontier; restricts nothing.")
     args = parser.parse_args()
 
     out_root = Path(args.out) if args.out else (EVIDENCE / args.app)
@@ -456,7 +475,8 @@ def main() -> None:
     result = asyncio.run(run(args.app, args.url, oracle_kind=args.oracle,
                              data_mode=args.data_mode,
                              out_root=out_root, max_states=args.max_states,
-                             max_duration_ms=args.max_duration_ms))
+                             max_duration_ms=args.max_duration_ms,
+                             plan_patterns=tuple(args.plan_pattern)))
     verdict = verdict_of(args.app, args.url, result)
 
     (out_root / "coverage.json").write_text(
