@@ -576,8 +576,27 @@ def generate(semantic_type: str, control: Mapping[str, Any], persona: Persona, *
                 source = f"money.{attribute}"
             raw = str(amount)
         elif sem == S.PERCENT:
-            raw = "10"
-            source = "percent_default"
+            # AN ALLOCATION IS FILLED TO ITS WHOLE. A percent whose control
+            # declares min>=1 and max=100 is a SHARE the application requires to
+            # be claimed and allows to be total — a beneficiary allocation, a
+            # fund split, an ownership stake. The walk adds exactly one row, so
+            # the coherent single-row scenario is the whole: 100. MEASURED on
+            # vkpowerlife's beneficiary step (min=1 max=100, "allocations must
+            # total 100%"), where the old constant 10 dead-ended the funnel one
+            # page from e-sign.
+            #
+            # STRUCTURE, NEVER VOCABULARY — the same doctrine as filterScopeOf:
+            # the rule reads the control's own declared bounds, so it holds in
+            # every language the crawled application might speak. A percent
+            # without that declared shape (a discount, an unconstrained rate)
+            # keeps the modest default.
+            if (cons.minimum is not None and cons.minimum >= 1
+                    and cons.maximum == 100):
+                raw = "100"
+                source = "percent_whole_allocation"
+            else:
+                raw = "10"
+                source = "percent_default"
         elif sem == S.QUANTITY:
             raw = "1"
             source = "quantity_default"

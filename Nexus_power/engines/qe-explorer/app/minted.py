@@ -105,6 +105,22 @@ MINTED_JS = r"""() => {
     const m = whole.match(/^(.{2,60}?)\s*[:#]\s*(.+)$/);
     if (m) push(m[1], m[2]);
   }
+
+  // 4. SIBLING pairs: <div><p>Application Number</p><p>APP-2026-8871</p></div>
+  //    — the definition-list shape without the definition list, and the idiom
+  //    utility-CSS applications actually ship. MEASURED on vkpowerlife's
+  //    confirmation page: the first live completed journey minted NOTHING
+  //    because both its references were rendered exactly this way.
+  for (const box of document.querySelectorAll('div, li, section')) {
+    const kids = [...box.children];
+    if (kids.length !== 2) continue;
+    if (kids[0].children.length > 1 || kids[1].children.length > 1) continue;
+    const label = text(kids[0]);
+    const value = text(kids[1]);
+    if (label && value && label.length <= 60 && value.length <= 80) {
+      push(label, value);
+    }
+  }
   return out;
 }"""
 

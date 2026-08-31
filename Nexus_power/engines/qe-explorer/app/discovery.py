@@ -1346,8 +1346,17 @@ class DiscoveryMixin:
         """
         pairs = await self._read_labelled_values()
         if not pairs:
+            # LOGGED, not silent — today's lesson, twice over: a mint that reads
+            # nothing and says nothing is indistinguishable from a mint that
+            # never ran, and diagnosing the difference costs a full crawl.
+            logger.info("qec.minted.no_pairs — the confirmation page yielded "
+                        "no label/value pairs to consider")
             return
         minted = self._minted.mint(pairs)
+        if not minted:
+            logger.info("qec.minted.none_minted pairs=%d — pairs were read but "
+                        "none was a NEW reference (pre-existing, or not "
+                        "id-shaped)", len(pairs))
         if minted:
             # LABELS and counts only. A minted reference is real client-system
             # data, so the question travels and the answer does not — the same

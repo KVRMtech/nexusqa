@@ -4,17 +4,16 @@
 and nothing about whether anything can ever feed it — the failure this repository
 calls a blind verifier: a check that passes with its subject absent.
 
-So these drive ``MINTED_JS`` itself, in Chromium, over the three shapes real
-confirmation screens actually use (a definition list, a two-cell table row, and
-a "Label: VALUE" line), and then run the registry over what the browser really
-returned. If the extractor stops seeing a confirmation panel, this goes red.
+So these drive ``MINTED_JS`` itself, in Chromium, over the four shapes real
+confirmation screens actually use (a definition list, a two-cell table row, a
+"Label: VALUE" line, and a sibling label/value pair), and then run the registry
+over what the browser really returned. If the extractor stops seeing a confirmation panel, this goes red.
 
-WHAT IS NOT CLAIMED HERE. This proves the extractor reads a confirmation page
-and the registry mints from it. It does NOT prove a live crawl has reached one:
-as of 2026-08-30 the vkpowerlife funnel stops at ``/apply/decision/`` — an async
-processing step, step 6 of 10 — so ``forms_confirmed`` is still 0 and no crawl
-has yet minted a reference in the field. That is a traversal gap, recorded in
-the crawl evidence, not a gap in this rung.
+LIVE STATUS, 2026-08-30 (evening): the vkpowerlife funnel now completes end to
+end — settle fix, non-terminal confirmation, sub-form commit and the consent
+wall each opened one page — and the first completed journey's confirmation
+page rendered BOTH its references (Application Number, Confirmation Number) in
+the sibling-pair shape (4), which is why that shape exists.
 """
 from __future__ import annotations
 
@@ -39,6 +38,7 @@ _CONFIRMATION = """
   <tr><th>Annual Premium</th><td>$1,240.00</td></tr>
 </table>
 <span>Account Number: ACCT-0001</span>
+<div><p>Confirmation Number</p><p>8871-2026</p></div>
 """
 
 #: The page as it looked BEFORE the submit. The account number is already here,
@@ -64,6 +64,10 @@ def test_a_real_browser_finds_the_reference_in_all_three_shapes():
     assert found.get("Application Number") == "APP-2026-8871", "the inline shape"
     assert found.get("Policy Number") == "POL-44120", "the definition list"
     assert found.get("Claim Reference") == "CLM-2026-0091", "the table row"
+    assert found.get("Confirmation Number") == "8871-2026", (
+        "the SIBLING-pair shape — a div holding a label p and a value p, the "
+        "utility-CSS idiom the first live completed journey was measured to "
+        "use for BOTH its references, which minted nothing until this shape")
 
 
 def test_the_registry_mints_from_what_the_browser_actually_returned():

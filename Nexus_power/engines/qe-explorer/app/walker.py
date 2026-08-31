@@ -733,7 +733,17 @@ class WalkerMixin:
             if c.get("kind") not in ("button", "link"):
                 continue
             name = str(c.get("name") or "").strip()
-            if not name or not _WIZARD_ADVANCE_RE.search(name):
+            if not name:
+                continue
+            # A COMMIT IS THE FORWARD CONTROL OF A FUNNEL'S LAST PAGE, and it is
+            # never advance-SHAPED — "Sign & Submit Application" carries no
+            # continue/next word, so a disabled commit was invisible here and
+            # the walk wandered off the signature step through a nav link
+            # (measured live: tier 3 picked "Get a Quote" while the granted
+            # commit sat disabled on the page). Recognised ONLY under the
+            # operator's own named approval — no vocabulary is guessed.
+            if not _WIZARD_ADVANCE_RE.search(name) and \
+                    not self._approved_commit_grant(name, url):
                 continue
             if c.get("disabled"):
                 blocked_label = name
@@ -903,6 +913,104 @@ class WalkerMixin:
                 url[:120], trigger[:40], rule[:80])
             return 1
         return 0
+
+    async def _commit_subform_to_unblock(
+        self, controls: "Sequence[dict[str, Any]]", url: str,
+    ) -> bool:
+        """R9's SIBLING FOR FORM PAGES — the row must be ADDED before the step
+        can be LEFT.
+
+        THE STEP THIS EXISTS FOR, measured rather than imagined. vkpower-life's
+        beneficiary page is a sub-form (name, relationship, percentage) plus a
+        "+ Add Beneficiary" button that commits the row into the application's
+        own state, and a "Continue to Signature" that refuses — silently, in
+        page text with no ARIA and no anchor — until at least one row exists.
+        The walk filled all seven fields perfectly, clicked Continue, and the
+        funnel ended one page from e-sign:
+
+            step_stalled clicked='Continue to Signature' outcome='none'
+                         same_fp=True
+
+        The same shape is everywhere in financial applications: invoice line
+        items, dependants on a health plan, drivers on an auto policy, holdings
+        in a portfolio. Fill-then-advance is not enough on any of them; the row
+        must be committed first, and the commit control is a plain non-danger
+        button the EXPLORE phase deliberately never clicks on form states.
+
+        IT IS THE SAME EXPERIMENT AS THE CARD PICKER, on the complementary page
+        class: the card picker runs only where NOTHING is fillable; this runs
+        only where something IS. Click the one commit-shaped button, re-read the
+        page, and let the application's own rendering say whether a row was
+        accepted. Nothing is inferred from markup.
+
+        WHAT IT WILL AND WILL NOT CLICK — the same safety surface as R9:
+
+        * never a ``danger`` member, never the advance control, never a disabled
+          control, never session teardown, never an unnamed one;
+        * only a button whose name carries the ADD verb — the commit vocabulary
+          of a sub-form. "Remove" is danger already; "Save draft" is not a row
+          commit and is left alone;
+        * ONE attempt. One added row is the minimal coherent scenario; adding
+          several would fabricate a household nobody asked to test;
+        * VERIFIED BY THE APPLICATION: returns True only when the re-read page
+          differs from the one before the click — the committed row renders (a
+          table row, a remove button). A click that changed nothing returns
+          False and the stall stands, named.
+        """
+        if not any(c.get("kind") in _FILLABLE_KINDS for c in controls):
+            return False                     # the card picker's page, not ours
+        candidate = None
+        verdicts: list[str] = []             # why each button was passed over
+        for c in controls:
+            if c.get("kind") != "button":
+                continue
+            name = str(c.get("name") or "").strip()
+            if c.get("disabled") or c.get("danger"):
+                verdicts.append(f"{name[:24]}:dis/danger")
+                continue
+            if not name:
+                verdicts.append("(nameless)")
+                continue
+            if _WIZARD_ADVANCE_RE.search(name):
+                verdicts.append(f"{name[:24]}:advance")
+                continue
+            if _AUTH_SESSION_RE.search(name):
+                verdicts.append(f"{name[:24]}:session")
+                continue
+            if re.search(r"\badd\b", name, re.IGNORECASE):
+                candidate = c
+                break
+            verdicts.append(f"{name[:24]}:no-commit-verb")
+        if candidate is None:
+            # LOGGED, not silent. A silent decline here cost a diagnosis round:
+            # the mechanism looked absent when it had run and passed over every
+            # button, and nothing said which rule each one tripped.
+            logger.info(
+                "qec.wizard.subform_commit_no_candidate url=%s verdicts=%s",
+                url[:120], verdicts[:8])
+            return False
+
+        before_names = sorted(str(c.get("name") or "") for c in controls)
+        pick_name = str(candidate.get("name") or "").strip()
+        try:
+            await self._port.click(candidate)
+        except Exception as exc:                       # never fail the crawl
+            logger.warning(
+                "qec.wizard.subform_commit_error url=%s pick=%r %s: %s",
+                url[:120], pick_name[:40], type(exc).__name__, str(exc)[:120])
+            return False
+        self._tracker.note_action()
+        reobs = await self._observe()
+        refreshed = build_inventory(reobs.raw_controls, self._refuse_pack,
+                                    url=reobs.url)
+        after_names = sorted(str(c.get("name") or "") for c in refreshed)
+        committed = after_names != before_names
+        logger.info(
+            "qec.wizard.subform_commit url=%s pick=%r committed=%s "
+            "controls=%d->%d — the app's own rendering is the evidence, not "
+            "the click", url[:120], pick_name[:40], committed,
+            len(before_names), len(after_names))
+        return committed
 
     async def _pick_card_to_unblock(
         self, controls: "Sequence[dict[str, Any]]", blocked_label: str, url: str,
@@ -1139,6 +1247,158 @@ class WalkerMixin:
             logger.info("qec.wizard.cross_to_unblock url=%s crossings=%d",
                         (url or "")[:120], crossed)
         return current
+
+    def _approved_commit_grant(self, control_name: str, url: str) -> bool:
+        """Is this control the operator's own NAMED commit, here?
+
+        The one honest source: the per-control boundary grants and the
+        submit-approvals label list the operator configured. No vocabulary, no
+        shape — a control is an approved commit because a person wrote its name
+        into an approval, and for no other reason.
+        """
+        name = str(control_name or "").strip()
+        if not name:
+            return False
+        if name.lower() in (getattr(self, "_submit_approvals", None) or set()):
+            return True
+        grants = getattr(self, "_boundary_grants", None)
+        if grants is None:
+            return False
+        try:
+            return grants.grant_for(control_name=name, url=url) is not None
+        except Exception:                                        # noqa: BLE001
+            return False
+
+    async def _consent_wall_to_unblock(
+        self, controls: Sequence[dict[str, Any]], blocked_label: str,
+        url: str, fill: Any,
+    ) -> Sequence[dict[str, Any]]:
+        """N REQUIRED ACKNOWLEDGEMENTS GATE THE OPERATOR-APPROVED COMMIT.
+
+        MEASURED on the live vkpowerlife funnel. Its signature page holds SIX
+        consent checkboxes (HIPAA release, MIB authorization, fraud notice,
+        e-signature consent, truthfulness certification, replacement notice), a
+        typed-signature field, and a "Sign & Submit Application" that stays
+        DISABLED until every box is checked. The fill typed the signature and —
+        correctly, by its own doctrine — declined all six checkboxes: an
+        optional-looking consent is the client's to give, and none of them
+        carries ``required`` because the gate lives in script.
+
+        The single-question experiment (:meth:`_answer_to_unblock`) cannot pass
+        this wall by construction: its budget is ONE answer per blocked step,
+        and a wall of six needs six. Raising that budget for ordinary steps
+        would turn an experiment into a form-filling spree, so the wall is its
+        own rule with its own, NARROWER licence:
+
+        THE LICENCE IS THE OPERATOR'S OWN NAMED GRANT. This runs only when the
+        disabled control is a commit the operator approved BY NAME (a boundary
+        grant or a submit-approvals entry). Approving "Sign & Submit
+        Application" and refusing the acknowledgements it legally requires is
+        not a coherent position — the consents are the approved act's own
+        prerequisites, and checking them is subsumed by the approval the same
+        way filling the signature field is. On a page whose forward control
+        carries no such grant this method does nothing at all, so every
+        ordinary "choose at least one" step keeps the one-answer experiment
+        unchanged.
+
+        STILL AN EXPERIMENT, NOT AN ASSERTION. Check the declined consents,
+        re-read the page, and let the application render its own verdict on the
+        commit control. If it stays disabled the wall was the wrong theory:
+        every box is UNCHECKED again and the block stands, named — nothing
+        reaches the record that the application did not confirm.
+        """
+        if not self._approved_commit_grant(blocked_label, url):
+            return controls
+        declined = {_norm_label(n)
+                    for n in getattr(fill, "unfilled_fields", ()) or ()}
+        consents = [
+            c for c in controls
+            if c.get("kind") == "checkbox"
+            and not c.get("disabled") and not c.get("danger")
+            and _norm_label(str(c.get("name") or "")) in declined
+            and str(c.get("value_committed") or "").strip().lower() != "true"
+        ]
+        if len(consents) < 2:
+            return controls          # the one-question experiment owns this
+        if not await _experiment_page_ready(
+                self._port, url, str(consents[0].get("name") or ""),
+                blocked_label):
+            return controls
+
+        checked: list[dict[str, Any]] = []
+        try:
+            for consent in consents:
+                observation = await self._port.set_checked(consent, True)
+                if getattr(observation, "intent_met", None) is False:
+                    # One box refusing is the whole wall refusing: revert what
+                    # was set and let the block stand, named.
+                    for done in checked:
+                        await self._port.set_checked(done, False)
+                    logger.warning(
+                        "qec.wizard.consent_wall_refused url=%s field=%r — a "
+                        "consent did not take; all %d reverted, block stands",
+                        url[:120], str(consent.get("name") or "")[:60],
+                        len(checked))
+                    return controls
+                checked.append(consent)
+            reobs = await self._observe()
+            refreshed = build_inventory(reobs.raw_controls, self._refuse_pack,
+                                        url=reobs.url)
+            cleared = any(
+                str(c.get("name") or "").strip() == blocked_label
+                and not c.get("disabled")
+                for c in refreshed
+                if c.get("kind") in ("button", "link"))
+            if not cleared:
+                for done in checked:
+                    await self._port.set_checked(done, False)
+                logger.warning(
+                    "qec.wizard.consent_wall_declined url=%s advance=%r "
+                    "consents=%d — checking every declined consent did not "
+                    "enable the commit, so the block is about something else; "
+                    "all reverted", url[:120], blocked_label[:40], len(checked))
+                return controls
+        except Exception as exc:                   # never fail the crawl
+            logger.warning("qec.wizard.consent_wall_error url=%s err=%s",
+                           url[:120], exc)
+            return controls
+
+        # THE APP CONFIRMED IT: the commit is enabled with nothing else changed.
+        # The same bookkeeping as the single-question path, for every box: the
+        # residue's claim — "these fields' absence stopped the funnel" — is now
+        # disproven by the application itself.
+        answered = {_norm_label(str(c.get("name") or "")) for c in checked}
+        names = [str(c.get("name") or "")[:60] for c in checked]
+        for b in self._advance_blocked:
+            if b.get("url") == url[:300] and b.get("label") == blocked_label[:120]:
+                b["resolved_by_agent"] = (
+                    "consent wall (%d acknowledgements)" % len(checked))
+                b["business_rule"] = (
+                    "every acknowledgement must be checked before %r enables"
+                    % blocked_label[:60])
+        self._fields_unfilled = [n for n in self._fields_unfilled
+                                 if _norm_label(n) not in answered]
+        self._fields_seed_detail = [
+            d for d in self._fields_seed_detail
+            if not (_norm_label(d.get("label")) in answered
+                    and d.get("url") == url)]
+        for ledger in (self._field_ledger,
+                       getattr(fill, "field_ledger", None) or ()):
+            for row in ledger:
+                if _norm_label(row.get("label") or row.get("name")) in answered:
+                    row["provenance"] = PROV_UNBLOCK
+                    row["filled"] = True
+        unfilled = getattr(fill, "unfilled_fields", None)
+        if isinstance(unfilled, list):
+            unfilled[:] = [n for n in unfilled
+                           if _norm_label(n) not in answered]
+        logger.warning(
+            "qec.wizard.consent_wall_cleared url=%s advance=%r consents=%d "
+            "fields=%s — the application enabled its own commit control; the "
+            "acknowledgements were checked under the operator's named grant "
+            "for exactly that commit", url[:120], blocked_label[:40],
+            len(checked), names[:6])
+        return list(refreshed)
 
     async def _answer_to_unblock(
         self, controls: Sequence[dict[str, Any]], blocked_label: str,
@@ -2670,6 +2930,42 @@ class WalkerMixin:
                                 (obs.url or cur_url)[:120],
                                 str((trig or {}).get("name") or "")[:40])
                             break
+                # ── THE ROW MUST BE ADDED BEFORE THE STEP CAN BE LEFT ────────
+                #
+                # Still stalled after the relooks: the app accepted the click and
+                # did nothing. On a sub-form page (vkpower-life's beneficiary
+                # step; invoice lines; dependants) that silence usually means the
+                # filled row was never COMMITTED — the "+ Add" button is a plain
+                # non-danger button the EXPLORE phase deliberately never clicks.
+                # Run the commit experiment; if the application visibly accepts a
+                # row, the SAME advance is retried exactly once. A retry that
+                # still stalls falls through to the named-blocker record below,
+                # so a wrong theory costs one bounded click and nothing is
+                # recorded that did not happen.
+                if new_fp == cur_fp and await self._commit_subform_to_unblock(
+                        new_controls, obs.url or cur_url):
+                    trig_name_retry = str((trig or {}).get("name") or "")
+                    async with self._walk_persistence_window(trig_name_retry):
+                        retry_obs = await self._port.click(trig)
+                    self._tracker.note_action()
+                    # The action record follows the click that actually decided
+                    # the step: rebuilt from the retry's observation so the
+                    # manifest never carries outcome=none for a step that moved.
+                    action = emit.build_action_record(
+                        dict(trig), verb="click", value=None,
+                        observation=retry_obs, phase=Phase.EXPLORE.value,
+                        state_id=cur_fp, timestamp_ms=self._clock.now_ms())
+                    obs = await self._observe()
+                    new_controls = build_inventory(
+                        obs.raw_controls, self._refuse_pack, url=obs.url)
+                    new_fp, new_signals = identity.identify(
+                        url=obs.url, controls=new_controls,
+                        dialogs=obs.dialog_flags, perceptual_hash="",
+                        page_token=obs.page_token)
+                    logger.info(
+                        "qec.wizard.retry_after_commit url=%s clicked=%r "
+                        "moved=%s", (obs.url or cur_url)[:120],
+                        trig_name_retry[:40], new_fp != cur_fp)
                 # a GENUINE advance: an observable effect AND a state this WALK
                 # has not already been through (see ``walk_seen``).
                 # A NEW STATE IS ITSELF THE EVIDENCE.
@@ -2977,6 +3273,15 @@ class WalkerMixin:
                     # cleared by performing the act — see _cross_to_unblock.
                     new_controls = list(await self._cross_to_unblock(
                         new_controls, obs.url or "", new_fp))
+                    blocked = self._note_advance_blocked(
+                        new_controls, obs.url or "", filled)
+                if blocked:
+                    # THE CONSENT WALL FIRST — it acts only under the operator's
+                    # named grant for the blocked commit and does nothing on any
+                    # other page, so the single-question experiment below is
+                    # reached exactly as before everywhere else.
+                    new_controls = list(await self._consent_wall_to_unblock(
+                        new_controls, blocked, obs.url or "", filled))
                     blocked = self._note_advance_blocked(
                         new_controls, obs.url or "", filled)
                 if blocked:
