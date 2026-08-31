@@ -44,15 +44,26 @@ def test_workers_drops_incomplete_entries_and_falls_back_on_garbage():
     assert len(Phase1Settings(explorer_pool=json.dumps([{"url": "http://x:1"}])).workers()) == 1
 
 
-def test_write_egress_allowlist_is_per_path_isolated(tmp_path):
-    p1, p2 = tmp_path / "aw1.txt", tmp_path / "aw2.txt"
-    _write_egress_allowlist(["a.example"], str(p1))
-    _write_egress_allowlist(["b.example"], str(p2))
-    # each worker's file holds ONLY its own crawl's hosts — no cross-worker bleed.
-    assert "a.example" in p1.read_text() and "b.example" not in p1.read_text()
-    assert "b.example" in p2.read_text() and "a.example" not in p2.read_text()
+def test_write_egress_allowlist_is_per_crawl_isolated(tmp_path):
+    """Team A / Phase A: the fence is PER-CRAWL now (fleet_egress_fence_v1) —
+    two crawls on TWO workers, and two crawls on ONE worker, each read back
+    only their own destinations."""
+    from app.controlplane.scheduling import egress_fence
+
+    p1, p2 = tmp_path / "w1" / "aw.txt", tmp_path / "w2" / "aw.txt"
+    _write_egress_allowlist(["a.example"], str(p1), crawl_id="ca")
+    _write_egress_allowlist(["b.example"], str(p2), crawl_id="cb")
+    a_body = egress_fence.crawl_fence_path(str(p1), "ca").read_text()
+    b_body = egress_fence.crawl_fence_path(str(p2), "cb").read_text()
+    assert "a.example" in a_body and "b.example" not in a_body
+    assert "b.example" in b_body and "a.example" not in b_body
+    # and WITHIN one worker: a second concurrent crawl no longer overwrites.
+    _write_egress_allowlist(["c.example"], str(p1), crawl_id="cc")
+    assert "a.example" in egress_fence.crawl_fence_path(str(p1), "ca").read_text()
+    assert "c.example" in egress_fence.crawl_fence_path(str(p1), "cc").read_text()
 
 
 def test_write_egress_allowlist_refuses_empty_fail_closed():
     with pytest.raises(HTTPException):
-        _write_egress_allowlist([], str("/tmp/qec-should-not-write.txt"))
+        _write_egress_allowlist([], str("/tmp/qec-should-not-write.txt"),
+                                crawl_id="c1")

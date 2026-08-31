@@ -81,6 +81,43 @@ async def _publish_fleet_metrics(workers: list, capacity: dict) -> None:
         logger.debug("qec.queue.metrics_publish_failed", exc_info=True)
 
 
+#: Env: opt-in to draining against the STATIC pool (no registry). Off by
+#: default — see the refusal in ``drain_once``.
+ENV_DRAIN_STATIC_POOL = "QEC_QUEUE_DRAIN_STATIC_POOL"
+
+#: Refusal-log pacing: WARN on the first refused tick and every Nth after, so
+#: an hour of "registry still empty" is visible without drowning the log.
+_REFUSAL_LOG_EVERY = 60
+_refused_ticks = 0
+
+
+def _static_drain_enabled() -> bool:
+    import os
+    return (os.environ.get(ENV_DRAIN_STATIC_POOL, "") or "").strip() in (
+        "1", "true", "yes", "on")
+
+
+def _log_registry_empty_refusal() -> None:
+    global _refused_ticks
+    if _refused_ticks % _REFUSAL_LOG_EVERY == 0:
+        logger.warning(
+            "qec.queue.drain_refused_registry_empty",
+            extra={"refused_ticks": _refused_ticks + 1,
+                   "detail": ("no explorer worker has REGISTERED (A1 heartbeat "
+                              "protocol) - queued crawls stay queued rather "
+                              "than dispatching blind into the static pool; "
+                              "set QEC_QUEUE_DRAIN_STATIC_POOL=1 to override")})
+    _refused_ticks += 1
+
+
+def _log_registry_populated() -> None:
+    global _refused_ticks
+    if _refused_ticks:
+        logger.warning("qec.queue.drain_registry_populated",
+                       extra={"after_refused_ticks": _refused_ticks})
+        _refused_ticks = 0
+
+
 async def drain_once() -> dict:
     """One drain pass. Returns a counts dict for logging/metrics/tests.
 
@@ -95,6 +132,24 @@ async def drain_once() -> dict:
         ttl = worker_registry.heartbeat_ttl_seconds()
         capacity = worker_registry.fleet_capacity(workers, now=now, ttl_s=ttl)
         free = int(capacity.get("free") or 0)
+        # ── TEAM A / PHASE A — A QUEUE WITH NO REGISTERED WORKERS SAYS SO ──
+        # Draining against the static-pool fallback would dispatch blind: a
+        # static worker declares no capacity and cannot heartbeat, so every
+        # tick would burn a dispatch attempt against a worker that may be
+        # busy, gone, or running an image that never announces itself — and a
+        # queued crawl would cycle claim→409→requeue forever while the log
+        # said nothing about WHY. Until a worker has REGISTERED (A1), the
+        # drainer refuses each pass loudly instead of spinning; the reaper's
+        # queue-timeout still terminalizes rows honestly if nothing ever
+        # registers. An operator who really wants static-pool draining can say
+        # so with QEC_QUEUE_DRAIN_STATIC_POOL=1.
+        if source != "registry" and not _static_drain_enabled():
+            await _publish_fleet_metrics(workers, capacity)
+            _log_registry_empty_refusal()
+            return {"started": 0, "requeued": 0, "failed": 0,
+                    "free_slots": free, "source": source,
+                    "refused": "registry_empty"}
+        _log_registry_populated()
         if free <= 0:
             # Publish here too: a fleet at zero free capacity is precisely when
             # the autoscaler most needs the queue depth. Returning early without

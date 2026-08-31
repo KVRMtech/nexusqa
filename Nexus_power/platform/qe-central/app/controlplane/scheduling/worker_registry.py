@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from collections.abc import Iterable, Mapping
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -60,6 +61,14 @@ STATUS_ACTIVE = "active"
 STATUS_DRAINING = "draining"
 #: Operator-parked.
 STATUS_DISABLED = "disabled"
+#: RETIRED BY STALENESS (Team A / Phase A): the sweeper marks an ``active``
+#: worker ``stale`` once its heartbeat ages past the TTL, so the registry
+#: TABLE says what the pure staleness verdict already enforced — an operator
+#: SELECTing the table sees the retirement, not a row that looks alive. A
+#: worker that resumes heartbeating re-activates itself (every heartbeat
+#: carries the worker's own status), and the reaper deletes the row after the
+#: retention window.
+STATUS_STALE = "stale"
 
 #: Env: how long after its last heartbeat a worker is considered STALE.
 ENV_HEARTBEAT_TTL = "QEC_WORKER_HEARTBEAT_TTL_SECONDS"
@@ -121,27 +130,31 @@ def is_stale(worker: Mapping[str, Any], *, now: datetime, ttl_s: float) -> bool:
     return (now - hb) > timedelta(seconds=max(0.0, ttl_s))
 
 
-#: THE EGRESS FENCE IS STILL PER-WORKER, so a worker may hold at most ONE
-#: in-flight crawl regardless of its registered capacity.
+#: THE EGRESS FENCE IS PER-CRAWL (Team A / Phase A) — capacity means capacity.
 #:
-#: THE DEFECT THIS CLAMP MAKES UNREACHABLE, recorded in full at
-#: tests/fleet/test_t_fl_08_concurrency_redteam.py (strict xfail) and
-#: QECentral/docs/GATE_3_PHASE_2_EVIDENCE.md: ``_write_egress_allowlist`` is
-#: keyed on the WORKER and takes no crawl id, and the dispatch yields between
-#: the fence write and the crawl launch. At capacity > 1, crawl A writes its
-#: allowlist, crawl B overwrites the same file inside A's window, and the
-#: browser running A is fenced by B's destinations — a CROSS-TENANT egress
-#: leak. It was latent only because qec_022's server_default is "1", and
-#: nothing anywhere refused a larger value; the Phase 0-4 closure record
-#: carries it as accepted-with-findings item 4, owner seat vacant.
+#: HISTORY, kept because the guards live on. This was ``True`` while
+#: ``_write_egress_allowlist`` was keyed on the WORKER and took no crawl id:
+#: at capacity > 1, concurrent dispatches to one worker overwrote each other's
+#: live fence — a cross-tenant egress leak, recorded by a strict xfail in
+#: tests/fleet/test_t_fl_08_concurrency_redteam.py and made unreachable by
+#: this clamp (the ARB's accepted posture, ARB_EGRESS_FENCE_DECISION_RECORD).
 #:
-#: The clamp closes the REACHABLE PATH — the scheduler will not place a second
-#: concurrent crawl on a worker whose fence is shared — while the strict xfail
-#: keeps stating the underlying defect against the writer itself. The day the
-#: fence becomes per-crawl (the writer takes a crawl id, the xfail XPASSes and
-#: is removed), flip this to False and capacity means capacity again. The
-#: latent-to-live tripwire pins the pairing: writer shared ⇒ clamp present.
-FENCE_IS_PER_WORKER = True
+#: The REAL fix required the CONSUMER to select the fence per request, which
+#: the ARB record correctly said per-crawl files alone could not do. That is
+#: what landed: the writer takes ``crawl_id`` and writes one dstdomain file
+#: per crawl; squid authenticates every request (basic_fake_auth) and the
+#: generated ACL pair keys each fence on the crawl's PROXY LOGIN; each browser
+#: context authenticates as its own crawl id. Frozen shape:
+#: ``contracts/fleet_egress_fence_v1.json``. The xfail XPASSed (2026-08-31,
+#: ``[XPASS(strict)]`` in the run log), its marker came off, and this flag
+#: flipped in the same change — the exact sequence the pairing test dictated.
+#:
+#: THE PAIRING SURVIVES, INVERTED: tests/test_a_shared_fence_admits_one_crawl_
+#: per_worker.py now fails the build if the writer ever loses its crawl id
+#: while this is False (revert ⇒ the clamp must come back), and the per-crawl
+#: tripwire in tests/contract/ fails it if squid.conf stops selecting fences
+#: per crawl while capacity is unclamped.
+FENCE_IS_PER_WORKER = False
 
 
 def effective_capacity(worker: Mapping[str, Any]) -> int:
@@ -159,12 +172,13 @@ def effective_capacity(worker: Mapping[str, Any]) -> int:
 def has_capacity(worker: Mapping[str, Any]) -> bool:
     """True when the worker can accept at least one more crawl.
 
-    Uses :func:`effective_capacity`, not the registered value: while the
-    egress fence is per-worker, admitting a second concurrent crawl onto one
-    worker is the exact sequence that re-fences a running crawl with another
-    tenant's destinations. A worker registered with capacity 8 therefore runs
-    one crawl at a time — visibly, in the fleet numbers, rather than silently
-    in an incident.
+    Uses :func:`effective_capacity`, not the registered value, so the clamp
+    seam stays in one place: with the per-crawl fence (FENCE_IS_PER_WORKER
+    False, today) the two are equal and capacity means capacity; if the fence
+    writer ever regresses to a shared file and the flag returns to True,
+    admitting a second concurrent crawl onto one worker becomes — again — the
+    exact sequence that re-fences a running crawl with another tenant's
+    destinations, and this function is where that stops.
     """
     try:
         return int(worker.get("in_flight") or 0) < effective_capacity(worker)
@@ -499,6 +513,105 @@ async def release_slot(*, worker_id: str) -> bool:
             "SET in_flight = GREATEST(in_flight - 1, 0), updated_at = now() "
             "WHERE worker_id = :wid"), {"wid": worker_id})
     return bool(res.rowcount)
+
+
+#: Env: the registry sweeper's tick. Unset/<=0 ⇒ the sweeper is INERT (logs
+#: once and returns), the shipped-off-by-default convention every daemon in
+#: this service follows. Staleness itself needs no sweep — it is judged pure,
+#: per decision — the sweeper only makes the TABLE tell the same truth.
+ENV_REGISTRY_TICK = "QEC_WORKER_REGISTRY_TICK_SECONDS"
+
+#: Contract-pinned validation for a REGISTRATION (fleet_heartbeat_v1.json).
+WORKER_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+CAPACITY_MIN, CAPACITY_MAX = 1, 64
+
+
+def validate_registration(body: Mapping[str, Any]) -> str:
+    """Why this registration must be refused — empty string when it is sound.
+
+    PURE, so the route's refusal set is testable without a database. Refusals
+    are fail-closed in the safe direction: a worker that cannot be validly
+    described is NOT added to the fleet, and dispatch keeps its static-pool
+    fallback exactly as before.
+    """
+    wid = str(body.get("worker_id") or "")
+    if not WORKER_ID_RE.match(wid):
+        return f"worker_id {wid!r} does not match {WORKER_ID_RE.pattern}"
+    url = str(body.get("url") or "").strip()
+    if not (url.startswith("http://") or url.startswith("https://")) or len(url) > 500:
+        return "url must be http(s) and at most 500 chars"
+    ap = str(body.get("allowlist_path") or "").strip()
+    if not ap or not ap.startswith("/") or len(ap) > 500:
+        return ("allowlist_path must be an absolute path - without it "
+                "qe-central cannot fence this worker and must not offer it work")
+    try:
+        cap = int(body.get("capacity"))
+    except (TypeError, ValueError):
+        return "capacity must be an integer"
+    if not (CAPACITY_MIN <= cap <= CAPACITY_MAX):
+        return f"capacity must be in [{CAPACITY_MIN}, {CAPACITY_MAX}]"
+    aff = str(body.get("tenant_affinity") or "")
+    if len(aff) > 64:
+        return "tenant_affinity too long"
+    return ""
+
+
+async def retire_stale_workers(*, now: datetime | None = None) -> int:
+    """Mark every ``active`` worker whose heartbeat aged past the TTL ``stale``.
+
+    STALENESS RETIRES A ROW — visibly. Scheduling already ignores a stale
+    worker (the pure ``is_stale`` check needs no sweep), so this changes no
+    dispatch decision; it changes what the TABLE says, which is what an
+    operator and the A1 exit measurement read. Guarded on ``status = active``
+    so a draining/disabled worker keeps its operator-chosen state, and a
+    worker that beats again flips itself back (heartbeats carry status).
+    """
+    now = now or utc_now()
+    cutoff = now - timedelta(seconds=heartbeat_ttl_seconds())
+    async with qec_engine.begin() as conn:
+        res = await conn.execute(text(
+            "UPDATE explorer_workers SET status = :stale, updated_at = :now "
+            "WHERE status = :active AND last_heartbeat_at < :cutoff"),
+            {"stale": STATUS_STALE, "active": STATUS_ACTIVE,
+             "cutoff": cutoff, "now": now})
+    n = int(res.rowcount or 0)
+    if n:
+        logger.warning(
+            "qec.worker_registry.retired",
+            extra={"workers": n, "ttl_s": heartbeat_ttl_seconds(),
+                   "detail": ("no heartbeat within the TTL - retired from "
+                              "scheduling; the row is kept until the "
+                              "retention window for debugging")})
+    return n
+
+
+async def worker_registry_sweeper_daemon() -> None:
+    """Env-gated, leader-hosted sweep: retire at TTL, delete at retention.
+
+    Mirrors the reaper daemon's proven shape exactly: unset tick ⇒ logs once
+    and does zero DB work; per-tick try/except so one bad pass never kills the
+    loop; CancelledError re-raised for clean shutdown.
+    """
+    import asyncio
+
+    tick = _env_float(ENV_REGISTRY_TICK, 0.0)
+    if tick <= 0:
+        logger.info("qec.worker_registry.sweeper_disabled",
+                    extra={"reason": f"{ENV_REGISTRY_TICK} not set / <= 0"})
+        return
+    logger.warning("qec.worker_registry.sweeper_started",
+                   extra={"tick_s": tick, "ttl_s": heartbeat_ttl_seconds(),
+                          "retention_s": worker_retention_seconds()})
+    while True:
+        try:
+            await retire_stale_workers()
+            await reap_stale_workers()
+        except asyncio.CancelledError:
+            logger.info("qec.worker_registry.sweeper_cancelled")
+            raise
+        except Exception:  # pragma: no cover — a pass never kills the loop
+            logger.warning("qec.worker_registry.sweep_failed", exc_info=True)
+        await asyncio.sleep(tick)
 
 
 async def reap_stale_workers(*, now: datetime | None = None) -> int:

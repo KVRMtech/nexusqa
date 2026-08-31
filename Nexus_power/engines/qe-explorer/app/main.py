@@ -38,7 +38,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, status
 from pydantic import BaseModel, Field
 
 from . import (completion_manifest, crawl_context, emit,
-               evidence_publisher, metrics)
+               evidence_publisher, fence, heartbeat, metrics)
 from .config import settings
 from .crawl_context import CrawlTokenUsage
 from .crawler import TRAVERSAL_FULL, Budget, Crawler, CrawlSummary, GuardContext
@@ -260,7 +260,7 @@ def _config_fingerprint(req: ExploreRequest, refuse_pack_version: str) -> str:
     return hashlib.sha256(material.encode("utf-8")).hexdigest()
 
 
-# ─── Job manager (single-flight — one heavy browser at a time) ───────────────
+# ─── Job manager (capacity-bounded slots; default 1 = single-flight) ─────────
 
 
 class _Job:
@@ -287,14 +287,21 @@ _FINISHED_RETAIN = 32
 
 
 class JobManager:
-    """At most ONE active crawl per explorer container (409 otherwise).
+    """At most ``capacity`` active crawls per explorer container (409 beyond).
+
+    TEAM A / PHASE A: the shipped default stays ``capacity=1`` — byte-identical
+    to the single-flight behaviour every existing proof ran against. Raising it
+    (``QEC_EXPLORER_CAPACITY``) is safe ONLY on a fleet whose egress fence is
+    per-crawl end to end (contracts/fleet_egress_fence_v1.json): squid selects
+    the fence by proxy login, so two concurrent crawls here can no longer share
+    one, and each context is created with its own crawl-id credentials.
 
     A crawl is ``created`` from :meth:`reserve` until its browser+crawler are
     built, then ``running`` until it finishes, then ``finished`` — at which
     point it is EVICTED from the active map into a small bounded terminal
     ring.  The reservation gate checks and marks atomically (FastAPI handlers
     run single-threaded on the loop, so there is no await between check and
-    mark) — the authoritative single-flight.
+    mark) — the authoritative admission.
 
     OWNERSHIP (M0.5 T-SEC-03/T-SEC-07): every reservation records the tenant
     that made it.  A later ``explore``/``status``/``cancel`` for that crawl id
@@ -302,8 +309,9 @@ class JobManager:
     another tenant's job on a shared worker.
     """
 
-    def __init__(self) -> None:
-        self._active: Optional[_Job] = None
+    def __init__(self, capacity: int = 1) -> None:
+        #: Concurrent-crawl slots. 1 = the proven single-flight posture.
+        self.capacity = max(1, int(capacity))
         self._pending: set[str] = set()
         self._by_id: dict[str, _Job] = {}
         #: crawl_id → owning tenant, for every non-terminal crawl.
@@ -315,7 +323,8 @@ class JobManager:
 
     @property
     def busy(self) -> bool:
-        return self._active is not None or bool(self._pending)
+        """No slot free: reserved + running crawls have filled ``capacity``."""
+        return self.active_count >= self.capacity
 
     @property
     def active_count(self) -> int:
@@ -325,7 +334,8 @@ class JobManager:
     # ── reservation ──────────────────────────────────────────────────────
 
     def reserve(self, crawl_id: str, tenant_id: str) -> None:
-        """Atomically claim the single-flight slot for ``tenant_id``, or 409.
+        """Atomically claim a slot for ``tenant_id``, or 409 when all
+        ``capacity`` slots are held (capacity 1 = the single-flight posture).
 
         This is the ONLY place the slot is taken.  qe-central calls it BEFORE it
         writes this worker's egress allowlist, so a worker that is busy with
@@ -401,7 +411,6 @@ class JobManager:
 
     def activate(self, job: _Job) -> None:
         crawl_id = job.crawler.crawl_id
-        self._active = job
         self._by_id[crawl_id] = job
         self._pending.discard(crawl_id)
         self._state[crawl_id] = JOB_RUNNING
@@ -449,11 +458,6 @@ class JobManager:
         self._by_id.pop(crawl_id, None)
         self._owner.pop(crawl_id, None)
         self._state.pop(crawl_id, None)
-        if job is not None and self._active is job:
-            self._active = None
-        elif job is None and not self._by_id:
-            # a crawl that never activated still frees the slot.
-            self._active = None
 
         self._finished[crawl_id] = (tenant_id, terminal)
         self._finished.move_to_end(crawl_id)
@@ -470,7 +474,7 @@ async def lifespan(app: FastAPI):
     # starting (guard.load_refuse_pack raises FileNotFoundError/ValueError).
     refuse_pack: RefusePack = load_refuse_pack(settings.refuse_pack_path)
     app.state.refuse_pack = refuse_pack
-    app.state.jobs = JobManager()
+    app.state.jobs = JobManager(capacity=settings.explorer_capacity)
     app.state.http = httpx.AsyncClient(timeout=30.0)
     # Publish build identity the moment the process is scrapeable, so a
     # freshly-started explorer with no crawl yet still exports a series — the
@@ -494,16 +498,24 @@ async def lifespan(app: FastAPI):
     # the port opening, and an explorer that cannot answer /health because it is
     # busy recovering looks exactly like an explorer that is down.
     app.state.sweeper = asyncio.ensure_future(_startup_and_periodic_sweep())
+    # TEAM A / PHASE A — announce this worker to qe-central's registry and stay
+    # announced (app/heartbeat.py; contracts/fleet_heartbeat_v1.json). A
+    # background task like the sweeper: it never blocks the port opening, and
+    # every failure degrades to "not registered" — the static-pool behaviour.
+    app.state.announcer = asyncio.ensure_future(
+        heartbeat.FleetAnnouncer(http=app.state.http, jobs=app.state.jobs,
+                                 version=EXPLORER_VERSION).run())
     try:
         yield
     finally:
-        sweeper = getattr(app.state, "sweeper", None)
-        if sweeper is not None:
-            sweeper.cancel()
-            try:
-                await sweeper
-            except (asyncio.CancelledError, Exception):     # pragma: no cover
-                pass
+        for _task_name in ("sweeper", "announcer"):
+            _task = getattr(app.state, _task_name, None)
+            if _task is not None:
+                _task.cancel()
+                try:
+                    await _task
+                except (asyncio.CancelledError, Exception):  # pragma: no cover
+                    pass
         await app.state.http.aclose()
         logger.info("qec.explorer.stopped")
         crawl_context.emit(crawl_context.EV_EXPLORER_STOPPED,
@@ -564,12 +576,17 @@ async def health() -> dict[str, Any]:
         "refuse_pack_version": pack.version,
         "egress_proxy_configured": bool(settings.egress_proxy),
         "busy": jobs.busy,
+        # TEAM A / PHASE A — the fleet numbers this worker reports (the same
+        # ones its heartbeat carries), so a human and the registry read one truth.
+        "capacity": jobs.capacity,
+        "in_flight": jobs.active_count,
+        "fleet_register": bool(settings.fleet_register),
     }
 
 
 @app.post("/api/v1/explore", status_code=status.HTTP_202_ACCEPTED)
 async def explore(req: ExploreRequest, _: None = Depends(require_token)) -> dict[str, Any]:
-    """Start a contained crawl (202); single-flight → 409 when busy."""
+    """Start a contained crawl (202); 409 when every capacity slot is held."""
     pack: RefusePack = app.state.refuse_pack
     jobs: JobManager = app.state.jobs
 
@@ -592,7 +609,7 @@ async def explore(req: ExploreRequest, _: None = Depends(require_token)) -> dict
         idp_domains=frozenset(req.idp_domains),
     )
 
-    # Atomically reserve the single-flight slot (409 if busy). The Crawler is
+    # Atomically reserve a capacity slot (409 if all held). The Crawler is
     # built inside the task (it needs the live port); the reservation bridges the
     # gap so a second request cannot slip in before the browser is ready.
     #
@@ -626,7 +643,7 @@ async def explore(req: ExploreRequest, _: None = Depends(require_token)) -> dict
 
 
 class ReserveRequest(BaseModel):
-    """Claim the single-flight slot BEFORE the caller fences this worker's egress.
+    """Claim a worker slot BEFORE the caller fences this crawl's egress.
 
     M0.5 T-SEC-03.  The old order was: write the worker's squid allowlist, then
     POST /explore and find out it was busy.  That let tenant B rewrite the fence
@@ -1278,7 +1295,7 @@ async def _run_job(
     """Build the browser + crawler, run the crawl, fire the completion callback.
 
     A single ``try/finally`` guarantees the browser is torn down and the
-    single-flight slot released even on failure — a crashed crawl never wedges
+    worker slot released even on failure — a crashed crawl never wedges
     the container.  The SAME ``finally`` emits the terminal telemetry, so the
     metrics are structurally incapable of being success-only: a crawl that threw
     during browser launch, was cancelled, or timed out on its wall budget all
@@ -1380,6 +1397,17 @@ async def _run_job(
             # a second copy of it. Without ``accept_downloads`` a download is
             # cancelled at the browser edge and no listener can ever see it.
             _ctx_kwargs: dict[str, Any] = dict(context_defaults())
+            # TEAM A / PHASE A — the crawl's EGRESS IDENTITY (app/fence.py;
+            # contracts/fleet_egress_fence_v1.json). The context authenticates
+            # to squid with username = crawl id, so the proxy can select THIS
+            # crawl's fence however many crawls share the worker. The server is
+            # the SAME egress proxy as the launch flag — only the identity is
+            # added. A crawl id that cannot be a proxy login raises here,
+            # before any page exists: better an honestly failed crawl than an
+            # unfenceable browser.
+            _proxy = fence.proxy_settings(req.crawl_id, settings.egress_proxy)
+            if _proxy is not None:
+                _ctx_kwargs["proxy"] = _proxy
             # sessionStorage is NOT part of Playwright's storageState, so a captured
             # session carries it under our own namespaced key. It must be stripped
             # before the state reaches Playwright (an unknown key is a schema error)
@@ -2074,8 +2102,9 @@ def _walk_authorization(req: "ExploreRequest"):
 def _run() -> None:
     """Launch the ASGI server binding 0.0.0.0:${QEC_EXPLORER_PORT}.
 
-    A single uvicorn worker enforces the single-flight invariant (one heavy
-    browser per container) at the process level.
+    A single uvicorn worker keeps the JobManager's capacity accounting in one
+    event loop (default capacity 1 = the proven one-heavy-browser posture;
+    QEC_EXPLORER_CAPACITY raises it only on a per-crawl-fenced fleet).
     """
     import uvicorn
 

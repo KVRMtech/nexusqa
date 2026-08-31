@@ -87,6 +87,37 @@ class Settings(BaseSettings):
         default="http://qec-egress-proxy:3128", alias="EGRESS_PROXY",
     )
 
+    # ── Fleet registration + heartbeat (Team A / Phase A) ─────────────────
+    # Frozen wire shape: Nexus_power/contracts/fleet_heartbeat_v1.json; the
+    # loop lives in app/heartbeat.py. Fail-safe: anything missing here means
+    # the worker simply never registers and qe-central falls back to the
+    # static pool — exactly the pre-registry behaviour, loudly logged.
+    #: Master switch for the announcer task (on by default; tests turn it off).
+    fleet_register: bool = Field(default=True, alias="QEC_FLEET_REGISTER")
+    #: Stable worker identity (the pod/container name). Empty ⇒ hostname.
+    worker_id: str = Field(default="", alias="QEC_WORKER_ID")
+    #: The URL qe-central should dispatch to for THIS worker. Empty ⇒
+    #: ``http://<hostname>:<port>`` (correct under a K8s headless service;
+    #: compose sets it explicitly to the service DNS name).
+    worker_url: str = Field(default="", alias="QEC_WORKER_URL")
+    #: This worker's fence path AS SEEN BY QE-CENTRAL (the qec_022
+    #: ``allowlist_path`` column — qe-central derives the per-crawl fence
+    #: directory from it). REQUIRED for registration: a worker whose fence
+    #: qe-central cannot write must not be offered work.
+    worker_allowlist_path: str = Field(
+        default="", alias="QEC_WORKER_ALLOWLIST_PATH",
+    )
+    #: Operator dedication of this worker to one tenant (empty ⇒ shared).
+    worker_tenant_affinity: str = Field(
+        default="", alias="QEC_WORKER_TENANT_AFFINITY",
+    )
+    #: Concurrent crawls THIS worker accepts (JobManager slots). Default 1 —
+    #: byte-identical to the single-flight shipped behaviour; raise it only on
+    #: a fleet whose fence is per-crawl end to end (squid.conf + qe-central
+    #: both on the fleet_egress_fence_v1 mechanism) and whose memory budget
+    #: carries N concurrent Chromiums.
+    explorer_capacity: int = Field(default=1, alias="QEC_EXPLORER_CAPACITY")
+
     # ── Filesystem (shared crawl-storage volume) ──────────────
     #: Explorer-side mount of the shared ``qec-crawl-storage`` volume;
     #: manifests + screenshots are written under ``{work_dir}/{crawl_id}/``.

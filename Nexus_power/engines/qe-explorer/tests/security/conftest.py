@@ -17,6 +17,9 @@ if _SERVICE_ROOT not in sys.path:
 
 os.environ.setdefault("NEXUS_ENV", "test")
 os.environ.setdefault("QEC_EXPLORER_TOKEN", "unit-test-explorer-token")
+# Team A / Phase A — keep the fleet announcer off in the unit suite (see
+# tests/conftest.py).
+os.environ.setdefault("QEC_FLEET_REGISTER", "0")
 
 import pytest  # noqa: E402
 

@@ -13,13 +13,18 @@ make one tenant's crawl egress through another tenant's fence.
 WHAT IS PROVEN
 ==============
   1. RESERVE-THEN-WRITE (M0.5 T-SEC-03) still holds — a worker that refuses the
-     reservation never has its allowlist file opened.
-  2. Each worker's fence contains ONLY its own crawl's destinations.
-  3. Under CONCURRENT dispatch for different tenants, every worker's file ends
-     up with its own tenant's allowlist — no interleaving, no last-writer-wins.
-  4. Worker A's file is never written by a crawl dispatched to worker B.
-  5. A SHARED allowlist path (two workers, one file) is detected and REFUSED —
-     the configuration-only cross-tenant leak that nothing previously caught.
+     reservation never has its fence written.
+  2. Each CRAWL's fence contains ONLY its own destinations (Team A / Phase A:
+     the fence is per-crawl — contracts/fleet_egress_fence_v1.json — selected
+     by squid via the crawl's proxy login, so what a browser is fenced by is
+     its crawl's OWN file, however many crawls share a worker).
+  3. Under CONCURRENT dispatch for different tenants, every crawl's fence ends
+     up with its own tenant's destinations — no interleaving, no
+     last-writer-wins, on separate workers AND on one.
+  4. Crawl A's fence is never rewritten by crawl B's dispatch.
+  5. A SHARED allowlist path (two workers, one registered path) is still
+     detected and REFUSED — defence in depth for a worker whose proxy might
+     still be running the legacy shared-file squid.conf.
   6. The fence is written BEFORE any dispatch (i.e. before the browser can make
      a request), and released safely on every failure path.
   7. An unsafe allowlist entry is refused rather than trimmed.
@@ -34,6 +39,7 @@ from pathlib import Path
 import pytest
 
 from app.clients.explorer_client import ExplorerDispatchError
+from app.controlplane.scheduling import egress_fence
 from app.controlplane.scheduling import worker_registry as wr
 from app.routers import explorations
 
@@ -95,20 +101,47 @@ def test_a_worker_with_no_allowlist_path_is_not_treated_as_a_conflict():
 # 2. REAL FILES — each worker's fence holds only its own crawl's destinations
 # ══════════════════════════════════════════════════════════════════════════
 
-def test_each_worker_fence_holds_only_its_own_crawls_destinations():
+def test_each_crawls_fence_holds_only_its_own_destinations():
+    """Two workers, one crawl each — and the file each crawl is fenced by
+    (its own per-crawl file, selected by proxy login) holds only its host."""
     with tempfile.TemporaryDirectory() as tmp:
-        a = Path(tmp) / "w1.txt"
-        b = Path(tmp) / "w2.txt"
-        explorations._write_egress_allowlist(["tenant-a.example"], str(a))
-        explorations._write_egress_allowlist(["tenant-b.example"], str(b))
+        a = Path(tmp) / "w1" / "aw.txt"
+        b = Path(tmp) / "w2" / "aw.txt"
+        explorations._write_egress_allowlist(["tenant-a.example"], str(a),
+                                             crawl_id="crawl-a")
+        explorations._write_egress_allowlist(["tenant-b.example"], str(b),
+                                             crawl_id="crawl-b")
 
-        a_body, b_body = a.read_text(), b.read_text()
+        a_body = egress_fence.crawl_fence_path(str(a), "crawl-a").read_text()
+        b_body = egress_fence.crawl_fence_path(str(b), "crawl-b").read_text()
         assert "tenant-a.example" in a_body
         assert "tenant-b.example" not in a_body, (
-            "EGRESS LEAK: worker A's fence contains tenant B's destination")
+            "EGRESS LEAK: crawl A's fence contains tenant B's destination")
         assert "tenant-b.example" in b_body
         assert "tenant-a.example" not in b_body, (
-            "EGRESS LEAK: worker B's fence contains tenant A's destination")
+            "EGRESS LEAK: crawl B's fence contains tenant A's destination")
+
+
+def test_two_crawls_on_one_worker_keep_independent_fences():
+    """THE PROPERTY THE PER-WORKER FILE COULD NEVER HAVE. Two crawls on the
+    SAME worker (same allowlist_path): the second dispatch must not rewrite
+    the first crawl's live fence, and the generated squid include must carry
+    BOTH fences keyed by their own crawl ids."""
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp) / "w" / "aw.txt"
+        explorations._write_egress_allowlist(["tenant-a.example"], str(root),
+                                             crawl_id="crawl-a")
+        explorations._write_egress_allowlist(["tenant-b.example"], str(root),
+                                             crawl_id="crawl-b")
+
+        a_body = egress_fence.crawl_fence_path(str(root), "crawl-a").read_text()
+        assert "tenant-a.example" in a_body and "tenant-b.example" not in a_body, (
+            "EGRESS LEAK: the second crawl's dispatch rewrote the first "
+            "crawl's live fence on a shared worker — the exact T-FL-08 defect")
+        conf = (root.parent / egress_fence.ACL_INCLUDE).read_text()
+        for cid in ("crawl-a", "crawl-b"):
+            assert f"proxy_auth {cid}" in conf, (
+                f"{cid} has no proxy-login ACL — squid could not select its fence")
 
 
 def test_a_rewrite_replaces_rather_than_appends():
@@ -116,13 +149,16 @@ def test_a_rewrite_replaces_rather_than_appends():
     tenant ever crawled — the slowest, quietest version of the same leak."""
     with tempfile.TemporaryDirectory() as tmp:
         f = Path(tmp) / "w.txt"
-        explorations._write_egress_allowlist(["first.example"], str(f))
-        explorations._write_egress_allowlist(["second.example"], str(f))
-        body = f.read_text()
+        explorations._write_egress_allowlist(["first.example"], str(f),
+                                             crawl_id="c1")
+        explorations._write_egress_allowlist(["second.example"], str(f),
+                                             crawl_id="c1")
+        body = egress_fence.crawl_fence_path(str(f), "c1").read_text()
         assert "second.example" in body
         assert "first.example" not in body, (
-            "the allowlist ACCUMULATED across crawls — a worker would keep "
-            "egress permission for every host it ever crawled for anyone")
+            "the allowlist ACCUMULATED across dispatches of one crawl — a "
+            "resumed crawl would keep egress permission for every host it "
+            "was ever pointed at")
 
 
 def test_an_empty_allowlist_is_refused_never_written():
@@ -132,9 +168,11 @@ def test_an_empty_allowlist_is_refused_never_written():
     with tempfile.TemporaryDirectory() as tmp:
         f = Path(tmp) / "w.txt"
         with pytest.raises(HTTPException) as exc:
-            explorations._write_egress_allowlist([], str(f))
+            explorations._write_egress_allowlist([], str(f), crawl_id="c1")
         assert exc.value.status_code == 422
         assert not f.exists(), "an empty allowlist was written to disk"
+        assert not egress_fence.crawl_fence_path(str(f), "c1").exists(), (
+            "an empty per-crawl fence was written to disk")
 
 
 def test_an_unwritable_fence_aborts_the_dispatch():
@@ -146,7 +184,8 @@ def test_an_unwritable_fence_aborts_the_dispatch():
         blocker.write_text("i am a file, not a directory")
         target = blocker / "sub" / "allow.txt"
         with pytest.raises(HTTPException) as exc:
-            explorations._write_egress_allowlist(["x.example"], str(target))
+            explorations._write_egress_allowlist(["x.example"], str(target),
+                                                 crawl_id="c1")
         assert exc.value.status_code == 503, (
             "a fence that could not be written did not abort the dispatch")
 
@@ -168,16 +207,19 @@ class _FenceRecorder:
         self.events.append(("reserve", tenant))
         if not reserve_ok:
             return "busy"
-        explorations._write_egress_allowlist(domains, worker["allowlist_path"])
+        explorations._write_egress_allowlist(domains, worker["allowlist_path"],
+                                             crawl_id=f"cid-{tenant}")
         self.events.append(("fence", tenant))
-        # Yield control here: with several of these in flight, any cross-worker
-        # clobbering has a real window to happen before the content is read.
+        # Yield control here: with several of these in flight, any clobbering
+        # has a real window to happen before the content is read.
         await asyncio.sleep(0)
         if dispatch_raises is not None:
             self.events.append(("release", tenant))
             raise dispatch_raises
-        # What the BROWSER would actually be fenced by at request time.
-        self.seen_at_dispatch[tenant] = Path(worker["allowlist_path"]).read_text()
+        # What the BROWSER would actually be fenced by at request time — the
+        # crawl's OWN file, which is what squid selects by its proxy login.
+        self.seen_at_dispatch[tenant] = egress_fence.crawl_fence_path(
+            worker["allowlist_path"], f"cid-{tenant}").read_text()
         self.events.append(("dispatch", tenant))
         return "dispatched"
 
@@ -208,12 +250,14 @@ def test_concurrent_workers_maintain_independent_fences():
                     f"EGRESS LEAK: {t}'s crawl was fenced with {other}'s "
                     "destination — concurrent dispatch clobbered a live fence")
 
-        # …and on disk afterwards, each file still holds exactly its own tenant.
+        # …and on disk afterwards, each crawl's fence still holds exactly its
+        # own tenant's destination.
         for i, t in enumerate(tenants):
-            body = (Path(tmp) / f"w{i}.txt").read_text()
+            body = egress_fence.crawl_fence_path(
+                str(Path(tmp) / f"w{i}.txt"), f"cid-{t}").read_text()
             assert f"{t}.example" in body
             assert sum(1 for o in tenants if f"{o}.example" in body) == 1, (
-                f"worker w{i}'s fence holds more than one tenant's destinations")
+                f"crawl cid-{t}'s fence holds more than one tenant's destinations")
 
 
 def test_crawl_a_cannot_leak_through_crawl_b_fence():
@@ -234,8 +278,8 @@ def test_crawl_a_cannot_leak_through_crawl_b_fence():
                               domains=[f"attacker-{i}.evil.example"], worker=w_b)
         asyncio.run(main())
 
-        victim_fence = Path(tmp) / "wa.txt"
-        body = victim_fence.read_text()
+        body = egress_fence.crawl_fence_path(
+            str(Path(tmp) / "wa.txt"), "cid-victim").read_text()
         assert "victim.example" in body, "the victim's own fence was destroyed"
         assert "evil.example" not in body, (
             "EGRESS LEAK: the attacker's destinations reached the victim's fence")
@@ -249,21 +293,27 @@ def test_a_busy_worker_never_has_its_fence_touched():
         worker = {"worker_id": "w", "url": "http://w",
                   "allowlist_path": str(Path(tmp) / "w.txt")}
 
+        incumbent_fence = egress_fence.crawl_fence_path(
+            worker["allowlist_path"], "cid-incumbent")
+
         async def main():
             await rec.run(tenant="incumbent", domains=["incumbent.example"],
                           worker=worker)
-            before = Path(worker["allowlist_path"]).read_text()
+            before = incumbent_fence.read_text()
             outcome = await rec.run(tenant="intruder", domains=["intruder.example"],
                                     worker=worker, reserve_ok=False)
-            after = Path(worker["allowlist_path"]).read_text()
+            after = incumbent_fence.read_text()
             return before, after, outcome
 
         before, after, outcome = asyncio.run(main())
         assert outcome == "busy"
         assert before == after, (
             "EGRESS LEAK: a tenant refused at the reservation still rewrote the "
-            "worker's fence — this is exactly the M0.5 T-SEC-03 defect")
+            "incumbent crawl's fence — this is exactly the M0.5 T-SEC-03 defect")
         assert "intruder.example" not in after
+        assert not egress_fence.crawl_fence_path(
+            worker["allowlist_path"], "cid-intruder").exists(), (
+            "a refused reservation still wrote the intruder's fence file")
         assert ("fence", "intruder") not in rec.events, (
             "the fence was written for a tenant that never held the worker")
 

@@ -137,7 +137,28 @@ services:
       # qe-central-side mount of the shared crawl volume (manifests + PNGs).
       QEC_CRAWL_STORAGE_ROOT: /work
       # Squid allowlist file qe-central populates before each dispatch.
+      # Team A / Phase A: the fence is PER-CRAWL now — this path's DIRECTORY is
+      # the fence root (crawls/allowlist.<crawl_id>.txt + generated crawls.conf
+      # + reload.stamp; contracts/fleet_egress_fence_v1.json). The legacy
+      # allowed_domains.txt file itself is no longer written or read.
       QEC_EGRESS_ALLOWLIST_PATH: /qec/egress-allowlist/allowed_domains.txt
+      # The same fence root AS SQUID SEES IT — what the generated crawls.conf
+      # must name (see egress_fence.squid_root).
+      QEC_EGRESS_SQUID_ROOT: /etc/squid/allowlist
+      # ── Team A / Phase A — fleet scheduling daemons ─────────────────────
+      # A2: the queue DRAINER. A tick > 0 turns queued crawls back into running
+      # ones the moment the fleet has room; it refuses to dispatch while no
+      # worker has REGISTERED (a queue with no workers says so, loudly, instead
+      # of spinning against the blind static pool).
+      QEC_QUEUE_DRAIN_TICK_SECONDS: ${QEC_QUEUE_DRAIN_TICK_SECONDS:-5}
+      # A1: the registry sweeper — retire a silent worker at the TTL (status →
+      # stale), delete the row after retention. Retention is deliberately set
+      # BELOW the TTL here so the A1 exit measurement holds on this box:
+      # `SELECT count(*) FROM explorer_workers` drops to 0 within one TTL (90s)
+      # of stopping the explorer. The retirement WARNING in the log is the
+      # operator's corpse-for-debugging; the row itself does not linger.
+      QEC_WORKER_REGISTRY_TICK_SECONDS: ${QEC_WORKER_REGISTRY_TICK_SECONDS:-15}
+      QEC_WORKER_RETENTION_SECONDS: ${QEC_WORKER_RETENTION_SECONDS:-60}
       # ── C4/C5 planned branch walks + autowalk (Journey Graph) ─────────────
       # A decision point (insurance type, coverage tier) is a business choice
       # the crawl must not make unilaterally — the ONLY sanctioned way past it
@@ -178,6 +199,8 @@ services:
     - qec-crawl-storage:/work
     # Shared squid allowlist — qe-central WRITES the per-crawl target domain(s).
     - qec-egress-allowlist:/qec/egress-allowlist
+    # Worker 2's fence root (profile `fleet2`; empty and harmless otherwise).
+    - qec-egress-allowlist-2:/qec/egress-allowlist-2
     mem_limit: 1g
     networks:
     - nexus
@@ -210,6 +233,20 @@ services:
       # launched with --proxy-server=<this>; squid enforces the host allowlist.
       EGRESS_PROXY: ${EGRESS_PROXY:-http://qec-egress-proxy:3128}
       WORK_DIR: /work
+      # ── Team A / Phase A — fleet registration (A1) ──────────────────────
+      # The worker announces itself to qe-central's registry on boot and
+      # heartbeats on the interval the registry advertises
+      # (contracts/fleet_heartbeat_v1.json; app/heartbeat.py). The allowlist
+      # path is this worker's fence path AS QE-CENTRAL SEES IT (its mount of
+      # the shared qec-egress-allowlist volume).
+      QEC_WORKER_ID: ${QEC_WORKER_ID:-qe-explorer-1}
+      QEC_WORKER_URL: ${QEC_WORKER_URL:-http://qe-explorer:8210}
+      QEC_WORKER_ALLOWLIST_PATH: ${QEC_WORKER_ALLOWLIST_PATH:-/qec/egress-allowlist/allowed_domains.txt}
+      # Concurrent crawls this worker accepts. DEFAULT 1 — the proven
+      # single-flight posture. Raise to 2 only with the per-crawl fence
+      # deployed end to end (new squid.conf + this build on both services) and
+      # the memory budget for two Chromiums (see mem_limit below).
+      QEC_EXPLORER_CAPACITY: ${QEC_EXPLORER_CAPACITY:-1}
     volumes:
     # Explorer-side mount of the shared crawl volume (writes manifests + PNGs).
     - qec-crawl-storage:/work
@@ -243,16 +280,94 @@ services:
     # the pidfile, which is unreliable under `squid -N` and silently no-ops
     # (TCP_DENIED despite a correct allowlist write). The old form stays as a
     # fallback only.
+    # Team A / Phase A (per-crawl fence): seed an EMPTY crawls.conf (squid
+    # FATALs on a missing include; empty = deny-all real egress, fail-closed)
+    # plus the reload stamp, then watch the STAMP's CONTENT — qe-central writes
+    # a fresh uuid into it on every fence change, so two regenerations inside
+    # one second can never collapse into a missed reload the way an mtime
+    # compare could. The watcher initialises L to the current content so boot
+    # never fires a spurious HUP at the entrypoint shell (PID 1 pre-exec).
     entrypoint: ["/bin/sh", "-c"]
     command:
     - >
-      mkdir -p /etc/squid/allowlist &&
-      { [ -s /etc/squid/allowlist/allowed_domains.txt ] ||
-        printf '%s\n' '# fail-closed default — no real host until a crawl populates it' '.qec-egress-denied.invalid'
-          > /etc/squid/allowlist/allowed_domains.txt; } &&
+      mkdir -p /etc/squid/allowlist/crawls &&
+      { [ -f /etc/squid/allowlist/crawls.conf ] ||
+        printf '%s\n' '# empty per-crawl fence set - deny all real egress until qe-central writes one'
+          > /etc/squid/allowlist/crawls.conf; } &&
+      { [ -f /etc/squid/allowlist/reload.stamp ] ||
+        echo boot > /etc/squid/allowlist/reload.stamp; } &&
       { chown proxy:proxy /dev/stdout /dev/stderr 2>/dev/null || true; } &&
-      { A=/etc/squid/allowlist/allowed_domains.txt; L=; while :; do
-          C=$$(stat -c %Y "$$A" 2>/dev/null || echo 0);
+      { S=/etc/squid/allowlist/reload.stamp; L=$$(cat "$$S" 2>/dev/null); while :; do
+          C=$$(cat "$$S" 2>/dev/null || echo 0);
+          [ "$$C" != "$$L" ] && { L=$$C;
+            kill -HUP 1 2>/dev/null || squid -k reconfigure 2>/dev/null || true; };
+          sleep 1; done & } &&
+      exec squid -N -f /etc/squid/squid.conf -d1
+    mem_limit: 512m
+    networks:
+    - qec-egress
+
+  # ── Team A / Phase A — a SECOND worker + its own proxy (profile `fleet2`) ──
+  # The A-team exit measurement needs two REGISTERED workers. Off by default:
+  # `docker compose --profile fleet2 up -d qe-explorer-2 qec-egress-proxy-2`
+  # starts the pair. Worker 2 has its own egress proxy and its own fence root
+  # (volume qec-egress-allowlist-2, mounted into qe-central at
+  # /qec/egress-allowlist-2) — per-worker roots keep T-FL-04's shared-path
+  # refusal meaningful, while per-crawl files isolate crawls WITHIN a worker.
+  qe-explorer-2:
+    profiles: ["fleet2"]
+    build:
+      context: ./engines/qe-explorer
+      dockerfile: Dockerfile
+    image: nexus_power-qe-explorer
+    container_name: nexus-qe-explorer-2
+    restart: unless-stopped
+    environment:
+      NEXUS_ENV: ${NEXUS_ENV:-development}
+      QEC_EXPLORER_PORT: '8210'
+      QEC_EXPLORER_LOG_LEVEL: ${QEC_EXPLORER_LOG_LEVEL:-INFO}
+      QEC_CALLBACK_URL: ${QEC_CALLBACK_URL:-http://qe-central:8093}
+      QEC_EXPLORER_TOKEN: ${QEC_EXPLORER_TOKEN:?QEC_EXPLORER_TOKEN must be set to a strong random value and match the qe-central service}
+      QEC_EXPLORER_TOKEN_PREVIOUS: ${QEC_EXPLORER_TOKEN_PREVIOUS:-}
+      QEC_EXPLORER_TOKEN_PREVIOUS_EXPIRES_AT: ${QEC_EXPLORER_TOKEN_PREVIOUS_EXPIRES_AT:-0}
+      QEC_HMAC_SKEW_SECONDS: ${QEC_HMAC_SKEW_SECONDS:-300}
+      EGRESS_PROXY: http://qec-egress-proxy-2:3128
+      WORK_DIR: /work
+      QEC_WORKER_ID: qe-explorer-2
+      QEC_WORKER_URL: http://qe-explorer-2:8210
+      QEC_WORKER_ALLOWLIST_PATH: /qec/egress-allowlist-2/allowed_domains.txt
+      QEC_EXPLORER_CAPACITY: ${QEC_EXPLORER_CAPACITY:-1}
+    volumes:
+    - qec-crawl-storage:/work
+    shm_size: 1gb
+    mem_limit: 2g
+    networks:
+    - qec-internal
+    - qec-egress
+    depends_on:
+    - qec-egress-proxy-2
+
+  qec-egress-proxy-2:
+    profiles: ["fleet2"]
+    image: ${QEC_SQUID_IMAGE:-ubuntu/squid:latest}
+    container_name: nexus-qec-egress-proxy-2
+    restart: unless-stopped
+    volumes:
+    - ./engines/qe-explorer/squid.conf:/etc/squid/squid.conf:ro
+    - qec-egress-allowlist-2:/etc/squid/allowlist
+    # Same per-crawl seed + stamp watcher as proxy 1 (see its comment block).
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+    - >
+      mkdir -p /etc/squid/allowlist/crawls &&
+      { [ -f /etc/squid/allowlist/crawls.conf ] ||
+        printf '%s\n' '# empty per-crawl fence set - deny all real egress until qe-central writes one'
+          > /etc/squid/allowlist/crawls.conf; } &&
+      { [ -f /etc/squid/allowlist/reload.stamp ] ||
+        echo boot > /etc/squid/allowlist/reload.stamp; } &&
+      { chown proxy:proxy /dev/stdout /dev/stderr 2>/dev/null || true; } &&
+      { S=/etc/squid/allowlist/reload.stamp; L=$$(cat "$$S" 2>/dev/null); while :; do
+          C=$$(cat "$$S" 2>/dev/null || echo 0);
           [ "$$C" != "$$L" ] && { L=$$C;
             kill -HUP 1 2>/dev/null || squid -k reconfigure 2>/dev/null || true; };
           sleep 1; done & } &&
@@ -381,5 +496,7 @@ volumes:
   qec-crawl-storage: null
   # Shared qe-central→squid egress allowlist file.
   qec-egress-allowlist: null
+  # Worker 2's fence root (profile `fleet2`).
+  qec-egress-allowlist-2: null
   # repo-intel per-tenant clone workdir (profile: repo-intel).
   repo-intel-workdir: null

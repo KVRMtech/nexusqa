@@ -106,10 +106,24 @@ def test_least_loaded_is_chosen_by_utilisation_not_raw_count(monkeypatch):
     assert chosen["worker_id"] == "big", "did not rank on utilisation"
 
 
-def test_under_the_shared_fence_a_busy_worker_is_not_chosen_at_all():
-    """The clamped world's own ranking fact: with one crawl in flight a worker
-    is FULL whatever its registered capacity, because a second concurrent crawl
-    on one worker is the cross-tenant re-fence sequence."""
+def test_capacity_ranks_scheduling_now_that_the_fence_is_per_crawl():
+    """Team A / Phase A: with the per-crawl fence, a cap-8 worker with one
+    crawl in flight has SEVEN free slots and is chosen; a genuinely full
+    worker is not."""
+    workers = [_w("small", cap=2, inflight=2), _w("big", cap=8, inflight=1)]
+    chosen = wr.choose_worker(workers, tenant_id="t1", now=NOW, ttl_s=TTL)
+    assert chosen is not None and chosen["worker_id"] == "big"
+    full = [_w("f1", cap=2, inflight=2), _w("f2", cap=8, inflight=8)]
+    assert wr.choose_worker(full, tenant_id="t1", now=NOW, ttl_s=TTL) is None
+
+
+def test_under_a_shared_fence_a_busy_worker_is_not_chosen_at_all(monkeypatch):
+    """THE REVERT PATH, kept live. If the fence writer ever regresses to a
+    shared file and FENCE_IS_PER_WORKER returns to True, one crawl in flight
+    must again make a worker FULL whatever its registered capacity — a second
+    concurrent crawl on one worker would be the cross-tenant re-fence
+    sequence. A clamp that rotted while unused is a revert that no-ops."""
+    monkeypatch.setattr(wr, "FENCE_IS_PER_WORKER", True)
     workers = [_w("small", cap=2, inflight=1), _w("big", cap=8, inflight=2)]
     assert wr.choose_worker(workers, tenant_id="t1", now=NOW, ttl_s=TTL) is None
     free = [_w("busy", cap=8, inflight=1), _w("idle", cap=2, inflight=0)]
@@ -156,10 +170,13 @@ def test_fleet_capacity_excludes_stale_and_draining(monkeypatch):
     assert cap == {"workers_alive": 1, "capacity": 4, "in_flight": 1, "free": 3}
 
 
-def test_fleet_capacity_under_the_shared_fence_counts_one_slot_per_worker():
-    """The clamped truth the queue is actually told today: a live cap-4 worker
-    with one crawl in flight has NO free room, and the dead and draining
-    workers still contribute nothing."""
+def test_fleet_capacity_under_a_shared_fence_counts_one_slot_per_worker(monkeypatch):
+    """THE REVERT PATH for the fleet totals: under a forced clamp a live cap-4
+    worker with one crawl in flight has NO free room, and the dead and
+    draining workers still contribute nothing. (The per-crawl world's
+    registered totals are asserted by the pairing test and by
+    ``test_fleet_capacity_excludes_stale_and_draining`` beside this one.)"""
+    monkeypatch.setattr(wr, "FENCE_IS_PER_WORKER", True)
     workers = [_w("live", cap=4, inflight=1),
                _w("dead", cap=8, age_s=TTL + 5),
                _w("draining", cap=8, status=wr.STATUS_DRAINING)]
@@ -176,13 +193,12 @@ def test_unavailability_is_explained_not_asserted():
                                   now=NOW, ttl_s=TTL)
     assert "STALE" in dead
 
-    # Under the shared-fence clamp a cap-2 worker holds ONE slot, and the
-    # explanation must quote the room that actually exists (1/1) — quoting the
-    # registered 2/2 would tell an operator the fleet is twice as large as the
-    # scheduler will ever use while the fence is per-worker.
+    # With the per-crawl fence the explanation quotes the REGISTERED room —
+    # the room the scheduler now actually grants. (Under a forced clamp the
+    # same line would read 1/1; the revert-path tests above own that world.)
     busy = wr.explain_unavailable([_w("a", cap=2, inflight=2)], tenant_id="t",
                                   now=NOW, ttl_s=TTL)
-    assert "at capacity" in busy and "1/1" in busy
+    assert "at capacity" in busy and "2/2" in busy
 
     parked = wr.explain_unavailable([_w("a", status=wr.STATUS_DISABLED)],
                                     tenant_id="t", now=NOW, ttl_s=TTL)
@@ -330,3 +346,73 @@ async def test_stale_worker_row_is_reaped_after_retention(monkeypatch):
     await wr.reap_stale_workers(now=wr.utc_now() + timedelta(seconds=5))
     rows = {w["worker_id"] for w in await wr.list_workers()}
     assert wid not in rows, "a long-dead worker row was never reaped"
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# TEAM A / PHASE A — registration validation (pure) + staleness RETIREMENT
+# ══════════════════════════════════════════════════════════════════════════
+
+def test_a_registration_the_fleet_cannot_use_is_refused_pure():
+    """The refusal set is PURE (fleet.py's route delegates here), so a worker
+    the fleet cannot fence or address is refused identically everywhere."""
+    ok = {"worker_id": "w1", "url": "http://w:8210",
+          "allowlist_path": "/eg/aw.txt", "capacity": 2}
+    assert wr.validate_registration(ok) == ""
+    for field, bad in [
+        ("worker_id", ""), ("worker_id", "has spaces"), ("worker_id", "x" * 65),
+        ("url", "ftp://x:21"), ("url", "not-a-url"),
+        ("allowlist_path", ""), ("allowlist_path", "relative/aw.txt"),
+        ("capacity", 0), ("capacity", wr.CAPACITY_MAX + 1), ("capacity", "lots"),
+    ]:
+        problem = wr.validate_registration({**ok, field: bad})
+        assert problem, f"{field}={bad!r} was accepted as a registration"
+    # The one refusal an operator will actually hit names its consequence.
+    assert "fence" in wr.validate_registration({**ok, "allowlist_path": ""})
+
+
+def test_a_stale_status_row_is_never_eligible_pure():
+    """STATUS_STALE is a retirement, not a suggestion: even under an absurdly
+    generous TTL (fresh heartbeat timestamp), a retired row schedules nothing."""
+    w = _w("retired", age_s=0.0, status=wr.STATUS_STALE)
+    assert wr.eligible_workers([w], tenant_id="t", now=NOW, ttl_s=1e9) == []
+    got = wr.fleet_capacity([w], now=NOW, ttl_s=1e9)
+    assert got["capacity"] == 0 and got["workers_alive"] == 0
+
+
+@needs_db
+@pytest.mark.asyncio
+async def test_staleness_retires_the_row_and_a_heartbeat_revives_it(monkeypatch):
+    """A1: 'staleness retires a row' — visibly, in the table an operator
+    SELECTs, not only in the pure verdict scheduling already applied."""
+    wid = "w_" + uuid.uuid4().hex[:10]
+    await wr.register_worker(worker_id=wid, url="http://x:1",
+                             allowlist_path="/eg/x/aw.txt")
+
+    from sqlalchemy import text as _text
+
+    from app.db import qec_engine
+    async with qec_engine.begin() as conn:
+        await conn.execute(_text(
+            "UPDATE explorer_workers SET last_heartbeat_at = :p "
+            "WHERE worker_id = :w"),
+            {"p": wr.utc_now() - timedelta(
+                seconds=wr.heartbeat_ttl_seconds() + 5), "w": wid})
+
+    assert await wr.retire_stale_workers() >= 1
+    rows = {w["worker_id"]: w for w in await wr.list_workers()}
+    assert rows[wid]["status"] == wr.STATUS_STALE
+
+    # CONTROL in both directions: a fresh worker is NOT retired…
+    wid2 = "w_" + uuid.uuid4().hex[:10]
+    await wr.register_worker(worker_id=wid2, url="http://y:1",
+                             allowlist_path="/eg/y/aw.txt")
+    await wr.retire_stale_workers()
+    rows = {w["worker_id"]: w for w in await wr.list_workers()}
+    assert rows[wid2]["status"] == wr.STATUS_ACTIVE
+
+    # …and the retired one revives the moment it beats again (its heartbeat
+    # carries its own status), with in_flight reconciled from its report.
+    assert await wr.heartbeat(worker_id=wid, in_flight=0,
+                              status=wr.STATUS_ACTIVE) is True
+    rows = {w["worker_id"]: w for w in await wr.list_workers()}
+    assert rows[wid]["status"] == wr.STATUS_ACTIVE

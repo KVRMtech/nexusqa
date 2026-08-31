@@ -51,6 +51,7 @@ from app.routers.apps import router as apps_router
 from app.routers.attestation import router as attestation_router
 from app.routers.explorations import router as explorations_router
 from app.routers.harness import router as harness_router
+from app.routers.fleet import worker_router as fleet_worker_router
 from app.routers.internal import router as internal_router
 from app.routers.journeys import router as journeys_router
 from app.routers.scenario_gov import router as scenario_gov_router
@@ -251,6 +252,25 @@ async def lifespan(application: FastAPI):
     application.state.gc_task = gc_task
     application.state.gc_stop = gc_stop
 
+    # TEAM A / PHASE A — the worker-registry sweeper: retire at TTL (status →
+    # 'stale', so the TABLE says what the pure staleness verdict already
+    # enforces), delete at retention. Leader-elected like every other daemon —
+    # N replicas must not each sweep — and env-gated on
+    # QEC_WORKER_REGISTRY_TICK_SECONDS: unset ⇒ inert, today's behaviour.
+    from app.controlplane.scheduling.worker_registry import (
+        worker_registry_sweeper_daemon,
+    )
+    sweeper_election = build_leader_election(
+        lock_key_str="qec-worker-registry-sweeper-leader")
+    sweeper_stop = asyncio.Event()
+    sweeper_task = asyncio.create_task(
+        sweeper_election.run_as_leader(
+            worker_registry_sweeper_daemon, stop_event=sweeper_stop),
+        name="qec-worker-registry-sweeper",
+    )
+    application.state.registry_sweeper_task = sweeper_task
+    application.state.registry_sweeper_stop = sweeper_stop
+
     logger.info(
         "qe_central.started",
         port=settings.port,
@@ -276,7 +296,9 @@ async def lifespan(application: FastAPI):
     drainer_task.cancel()
     gc_stop.set()
     gc_task.cancel()
-    for _task in (driver_task, reaper_task, drainer_task, gc_task):
+    sweeper_stop.set()
+    sweeper_task.cancel()
+    for _task in (driver_task, reaper_task, drainer_task, gc_task, sweeper_task):
         try:
             await _task
         except (asyncio.CancelledError, Exception):  # noqa: BLE001 - clean shutdown
@@ -383,6 +405,13 @@ app.include_router(factory_proxy_router)
 # the /api/* prefix (the explorer holds no JWT — only the HMAC token), so the
 # fail-closed JWT middleware skips it; internal.py verifies the HMAC itself.
 app.include_router(internal_router)
+# TEAM A / PHASE A — the worker announcement seam (register + heartbeat), the
+# routes that stop the explorer_workers registry being empty (G1). Mounted
+# under /internal ON PURPOSE: the explorer holds no JWT, and /internal is the
+# prefix the per-fleet token middleware authenticates BEFORE any handler runs
+# (T-SEC-02); the handlers then verify the scope-bound body signature — the
+# same two factors as the completion callback.
+app.include_router(fleet_worker_router)
 # Phase-5.5 metrics exposition — mounted OUTSIDE the /api/* prefix (default path
 # /metrics; QEC_METRICS_PATH) so the fail-closed JWT gate skips it, the same
 # public posture as /health.  The payload is a single empty-scrape comment when

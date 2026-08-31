@@ -461,64 +461,49 @@ def _allowlist_domains(base_url: str, fences: dict) -> list[str]:
         )
 
 
-def _write_egress_allowlist(domains: list[str], allowlist_path: str) -> None:
-    """Populate a WORKER's squid allowlist file BEFORE dispatching to that worker
-    (fail-closed).
+def _write_egress_allowlist(domains: list[str], allowlist_path: str, *,
+                            crawl_id: str) -> None:
+    """Publish THIS CRAWL's egress fence BEFORE dispatching it (fail-closed).
 
-    Writes one destination domain per line to ``allowlist_path`` — the file that
-    the chosen worker's squid re-reads. A write failure is FATAL to the dispatch
-    (503) — never launch a browser that can only reach a stale/empty allowlist,
-    and never proceed silently.
+    TEAM A / PHASE A — THE FENCE IS PER-CRAWL. The long defect record that
+    lived here (the per-worker file shared by concurrent crawls on one worker;
+    the T-FL-08 strict xfail; the FENCE_IS_PER_WORKER admission clamp) is
+    repaired, not restated: this function now REQUIRES the crawl id, writes the
+    crawl's OWN dstdomain file under the worker's fence root, and regenerates
+    the squid ACL include that keys each fence on the crawl's PROXY LOGIN — the
+    consumer-side identity the ARB record named as the only thing that could
+    close the leak within one worker
+    (``QECentral/docs/ARB_EGRESS_FENCE_DECISION.md`` §1; frozen shape:
+    ``contracts/fleet_egress_fence_v1.json``; mechanism:
+    ``controlplane/scheduling/egress_fence.py``).
 
-    WHAT PER-WORKER FILES DO AND DO NOT PREVENT — corrected, because this
-    docstring previously claimed a guarantee it does not have.
+    Two crawls concurrently dispatched to one worker now write two different
+    files and squid applies each to exactly the browser context that
+    authenticates as that crawl — proven deterministically by the formerly
+    xfailed ``tests/fleet/test_t_fl_08_concurrency_redteam.py::
+    test_the_egress_fence_survives_concurrent_dispatch_on_one_worker``.
 
-    It said: "Each worker has its OWN file (per-worker egress isolation); a shared
-    file would be raced by concurrent crawls and break the fence." The hazard it
-    names is exactly right and the conclusion does not follow. One file per worker
-    prevents racing ACROSS workers. It does nothing about concurrent crawls ON one
-    worker — which is the case that sentence literally describes, because this
-    file IS shared between them:
-
-        _write_egress_allowlist(domains, allowlist_path)   <- keyed on the WORKER;
-                                                              takes no crawl id
-        await explorer_client.dispatch_crawl(...)          <- yields, with no lock
-
-    ``acquire_slot`` admits ``capacity`` concurrent crawls per worker. At
-    ``capacity > 1``, crawl A writes its allowlist, yields at the await, crawl B
-    overwrites the same file, and the browser running A is fenced by B's
-    destinations — a CROSS-TENANT egress leak.
-
-    LATENT, NOT LIVE, at the shipped default: ``capacity`` is
-    ``server_default="1"`` (qec_022), and at 1 the window never opens. It becomes
-    live the moment a worker is registered with ``capacity > 1``, which the schema,
-    the registry API and the scheduler all support and none refuse or warn about.
-
-    Proven by ``tests/fleet/test_t_fl_08_concurrency_redteam.py::
-    test_n_concurrent_crawls_multi_tenant_overlapping_domains``, which sets
-    capacity=2 and fails naming the foreign destination. NOT FIXED HERE: the
-    repair is an architecture choice (per-crawl fence files, a per-worker dispatch
-    lock, or refusing capacity > 1) with a matching explorer-side change, and it
-    belongs to M3.3's owner. See QECentral/docs/GATE_3_PHASE_2_EVIDENCE.md.
-
-    This paragraph replaces a sentence an auditor would have read and stopped at.
+    Failure semantics, unchanged in direction: an empty/unsafe fence is 422
+    (the dispatch is refused, nothing reaches disk); a write failure is 503 —
+    never launch a browser that could only reach a stale, empty or foreign
+    fence, and never proceed silently.
     """
     if not domains:
         raise HTTPException(
             status_code=422,
             detail="cannot dispatch: no allowed_hosts fence and no resolvable base_url host",
         )
-    from pathlib import Path
+    from ..controlplane.scheduling import egress_fence
 
-    path = Path(allowlist_path)
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        body = "# populated by qe-central at dispatch (fail-closed)\n" + "\n".join(domains) + "\n"
-        path.write_text(body, encoding="utf-8")
+        egress_fence.write_crawl_fence(domains, allowlist_path, crawl_id=crawl_id)
+    except egress_fence.FenceError as exc:
+        raise HTTPException(status_code=422, detail=f"cannot dispatch: {exc}")
     except Exception as exc:
         logger.error(
             "qec.explorations.egress_allowlist_write_failed",
-            extra={"path": str(path), "error": str(exc)[:300]},
+            extra={"path": str(allowlist_path), "crawl_id": crawl_id,
+                   "error": str(exc)[:300]},
         )
         raise HTTPException(
             status_code=503,
@@ -934,6 +919,57 @@ def _explorer_attestation(att: dict | None) -> dict | None:
     if _dt is not None:
         out["expires_at_ms"] = int(_dt.timestamp() * 1000)
     return out
+
+
+async def _stamp_worker(tenant_id: str, exploration_id: str, worker: dict) -> None:
+    """Record WHICH worker took this crawl on the row's stats (Team A/Phase A).
+
+    ``jsonb_set`` rather than ``_mark``: ``_mark`` replaces ``stats`` wholesale,
+    and a fast crawl can complete between dispatch and this write — a wholesale
+    replace would clobber the completed stats, while a targeted set merges. The
+    completion callback and the reaper read ``worker_id`` back to hand the
+    registry slot back to the right worker. Best-effort: a failed stamp only
+    means the slot is reconciled by the worker's next heartbeat instead.
+    """
+    wid = str(worker.get("worker_id") or "")
+    ap = str(worker.get("allowlist_path") or "")
+    if not wid:
+        return
+    try:
+        from sqlalchemy import text as _text
+
+        from ..controlplane.tenant_scope import scope_to_tenant
+        from ..db import qec_engine
+        async with qec_engine.begin() as conn:
+            await scope_to_tenant(conn, tenant_id)
+            await conn.execute(_text(
+                "UPDATE qe_explorations SET stats = jsonb_set(jsonb_set("
+                "  COALESCE(stats, '{}'::jsonb),"
+                "  '{worker_id}', to_jsonb(CAST(:wid AS text)), true),"
+                "  '{worker_allowlist_path}', to_jsonb(CAST(:ap AS text)), true),"
+                "  updated_at = now() "
+                "WHERE exploration_id = :eid AND tenant_id = :t"),
+                {"wid": wid, "ap": ap, "eid": exploration_id, "t": tenant_id})
+    except Exception as exc:  # pragma: no cover — accounting must never raise
+        logger.warning("qec.explorations.worker_stamp_failed",
+                       extra={"exploration_id": exploration_id,
+                              "error": str(exc)[:200]})
+
+
+def _release_crawl_fence(allowlist_path: str, crawl_id: str) -> None:
+    """Retire a crawl's egress fence after a failed dispatch, best-effort.
+
+    A fence written for a dispatch that never launched must not stay live: the
+    generated squid ACL would keep authorising that crawl id's egress until the
+    age GC caught it. Never raises — fence cleanup must not convert a
+    recoverable dispatch error into a 500 (the GC is the backstop).
+    """
+    try:
+        from ..controlplane.scheduling import egress_fence
+        egress_fence.release_crawl_fence(allowlist_path, crawl_id)
+    except Exception as exc:  # pragma: no cover — cleanup must never raise
+        logger.warning("qec.explorations.fence_release_failed",
+                       extra={"crawl_id": crawl_id, "error": str(exc)[:200]})
 
 
 async def _release_registry_slot(worker_id: str) -> None:
@@ -1578,7 +1614,8 @@ async def _dispatch_explorer(
             claimed_worker_id = _wid
 
         try:
-            _write_egress_allowlist(allowed_hosts, worker["allowlist_path"])
+            _write_egress_allowlist(allowed_hosts, worker["allowlist_path"],
+                                    crawl_id=crawl_id)
             result = await explorer_client.dispatch_crawl(
                 dispatch_request, explorer_url=worker["url"],
             )
@@ -1590,6 +1627,7 @@ async def _dispatch_explorer(
                 explorer_url=worker["url"], crawl_id=crawl_id, tenant_id=tenant_id)
             await _release_registry_slot(claimed_worker_id)
             claimed_worker_id = ""
+            _release_crawl_fence(worker["allowlist_path"], crawl_id)
             if exc.status_code in (409, 502):
                 continue  # this worker busy/unreachable → try the next
             break  # deterministic error (token unset / bad request) — same for all
@@ -1600,6 +1638,7 @@ async def _dispatch_explorer(
                 explorer_url=worker["url"], crawl_id=crawl_id, tenant_id=tenant_id)
             await _release_registry_slot(claimed_worker_id)
             claimed_worker_id = ""
+            _release_crawl_fence(worker["allowlist_path"], crawl_id)
             raise
     if result is None:
         # ── M3.3 / T-FL-01 · A BUSY FLEET IS NOT A FAILED CRAWL ───────────
@@ -1673,6 +1712,11 @@ async def _dispatch_explorer(
             status_code=(last_exc.status_code if last_exc else 503) or 502,
             detail=detail,
         )
+
+    # TEAM A / PHASE A — remember which worker holds this crawl, so completion
+    # and the reaper can hand its registry slot back and retire its fence.
+    if worker:
+        await _stamp_worker(tenant_id, exploration_id, worker)
 
     # PERSIST the status this response reports. 'dispatched' was returned in the
     # body and never written, so the row said 'pending' while the API said

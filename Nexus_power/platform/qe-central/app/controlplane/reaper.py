@@ -199,6 +199,30 @@ def _reason_for(status: str) -> str:
     return _QUEUE_TIMEOUT_REASON if (status or "").lower() in ("queued", "claimed") else _REAP_REASON
 
 
+async def _settle_worker_after_reap(row: Mapping) -> None:
+    """TEAM A / PHASE A — a reaped crawl must not keep fleet state taken.
+
+    The crawl's registry slot (``stats.worker_id``, stamped at dispatch) and
+    its per-crawl egress fence would otherwise stay held by a crawl that will
+    never call back. Best-effort on purpose: the worker's own heartbeat
+    reconciles ``in_flight`` and the fence age-GC is the backstop, so a
+    failure here degrades to slower recovery, never a broken sweep.
+    """
+    try:
+        stats = _as_mapping(row.get("stats"))
+        wid = str(stats.get("worker_id") or "")
+        cid = str(stats.get("crawl_id") or "")
+        if wid:
+            from .scheduling import worker_registry
+            await worker_registry.release_slot(worker_id=wid)
+        if cid:
+            from .scheduling import egress_fence
+            await egress_fence.release_crawl_fence_everywhere(cid)
+    except Exception as exc:  # pragma: no cover — never break the sweep
+        logger.warning("qec.reaper.worker_settle_failed",
+                       extra={"error": str(exc)[:200]})
+
+
 async def _tenant_ids() -> list[str]:
     """Enumerate tenants so the reap can scope PER-TENANT under RLS.
 
@@ -323,6 +347,7 @@ async def reap_stale_explorations(now: datetime | None = None) -> int:
                     })
                     if (result.rowcount or 0) > 0:
                         reaped += 1
+                        await _settle_worker_after_reap(r)
                         logger.warning(
                             "qec.reaper.reaped",
                             extra={"exploration_id": r["exploration_id"], "tenant_id": tenant,

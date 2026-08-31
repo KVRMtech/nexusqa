@@ -163,9 +163,21 @@ if ($qecBuild -contains "qe-central") {
 # of T-GT-01: the rollback read the survivor of that collision.
 if ($qecBuild.Count -gt 0) {
     $qecSvcList = $qecBuild -join " "
+    # Team A / Phase A: the egress proxy is a DEPLOY ARTIFACT too - its
+    # squid.conf is bind-mounted from the repo and its entrypoint watcher lives
+    # in compose, and the per-crawl fence (contracts/fleet_egress_fence_v1)
+    # needs producer (qe-central) and consumer (squid) on the same protocol.
+    # Recreate the proxy whenever qe-explorer deploys, so the consumer can
+    # never lag the producer: an old squid.conf against the new writer denies
+    # all egress (fail-closed but broken); recreating closes that window.
+    # Deliberately NOT in the build list (stock image, nothing to build) and
+    # NOT in the rollback manifest (a rollback checks out the old squid.conf,
+    # and the next deploy's recreate applies it the same way).
+    $qecUpList = $qecSvcList
+    if ($qecBuild -contains "qe-explorer") { $qecUpList = "$qecSvcList qec-egress-proxy" }
     $cmds += "; cd $VM_SRC/Nexus_power"
     $cmds += "; docker compose --env-file $ENV_FILE -f $QEC_COMPOSE build $qecSvcList"
-    $cmds += "; docker compose --env-file $ENV_FILE -f $QEC_COMPOSE up -d --force-recreate $qecSvcList"
+    $cmds += "; docker compose --env-file $ENV_FILE -f $QEC_COMPOSE up -d --force-recreate $qecUpList"
 }
 
 if ($mainBuild.Count -gt 0) {

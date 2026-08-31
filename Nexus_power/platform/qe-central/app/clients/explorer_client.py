@@ -368,11 +368,28 @@ async def crawl_liveness(crawl_id: str, tenant_id: str = "") -> str:
     try:
         workers = list(phase1_settings.workers() or ())
     except Exception:
-        return "unknown"
+        workers = []
+    # TEAM A / PHASE A — ask the REGISTERED workers too. On a registry-scheduled
+    # fleet the static pool names one URL; asking only it would let worker 1's
+    # definitive 404 read as "dead" for a crawl actually running on worker 2,
+    # and the reaper would kill a healthy crawl. Union by URL; an unreadable
+    # registry makes the verdict INCONCLUSIVE, never "dead".
+    registry_unreadable = False
+    try:
+        from ..controlplane.scheduling import worker_registry as _wr
+
+        seen = {str((w or {}).get("url") or "").rstrip("/") for w in workers}
+        for w in await _wr.list_workers():
+            u = str(w.get("url") or "").rstrip("/")
+            if u and u not in seen:
+                workers.append({"url": u})
+                seen.add(u)
+    except Exception:
+        registry_unreadable = True
     if not workers:
         return "unknown"
 
-    inconclusive = False
+    inconclusive = registry_unreadable
     for worker in workers:
         target = (worker.get("url") if isinstance(worker, Mapping)
                   else str(worker or ""))

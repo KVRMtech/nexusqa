@@ -888,6 +888,42 @@ async def _autowalk_convergence(tenant_id: str, app_id: str) -> dict:
         return {"stuck": False, "barren_streak": 0, "reason": "", "best": {}}
 
 
+async def _settle_worker_accounting(
+    tenant_id: str, exploration_id: str, crawl_id: str,
+) -> None:
+    """TEAM A / PHASE A — hand the WORKER's accounting back at completion.
+
+    A completion callback means the worker's browser for this crawl is torn
+    down (the explorer fires it strictly after its ``finally``). Two pieces of
+    fleet state must not stay taken: the registry slot acquired at dispatch
+    (``worker_id`` stamped on the row's stats) and the crawl's per-crawl egress
+    fence (the generated squid ACL would otherwise keep authorising this crawl
+    id's egress until the age GC). Callers invoke this only on the FIRST
+    callback for a crawl — duplicates return idempotently before it — so a
+    double release cannot manufacture capacity. Best-effort throughout:
+    heartbeats reconcile ``in_flight`` from the worker's own count, and the
+    fence age-GC is the backstop.
+    """
+    try:
+        wid = ""
+        async with tenant_scoped_qec_session(tenant_id) as session:
+            stats = (await session.execute(
+                select(QEExplorationRow.stats).where(
+                    QEExplorationRow.exploration_id == exploration_id,
+                    QEExplorationRow.tenant_id == tenant_id,
+                ))).scalar_one_or_none()
+        if isinstance(stats, dict):
+            wid = str(stats.get("worker_id") or "")
+        if wid:
+            from ..controlplane.scheduling import worker_registry
+            await worker_registry.release_slot(worker_id=wid)
+        from ..controlplane.scheduling import egress_fence
+        await egress_fence.release_crawl_fence_everywhere(crawl_id)
+    except Exception:  # noqa: BLE001 — settlement must never fail a callback
+        logger.warning("qec.internal.worker_settle_failed",
+                       extra={"crawl_id": crawl_id}, exc_info=True)
+
+
 @router.post("/crawls/{crawl_id}/complete")
 async def complete_crawl(crawl_id: str, request: Request) -> dict:
     """Ingest a finished crawl: verify HMAC → map manifest → write substrate.
@@ -993,6 +1029,12 @@ async def complete_crawl(crawl_id: str, request: Request) -> dict:
             "extractor_version": row_extractor_version,
             "idempotent": True,
         }
+
+    # ── TEAM A / PHASE A — settle the worker's accounting exactly once ────
+    # Past the idempotency gate above, so a duplicate callback can never
+    # double-release a slot another crawl now holds. The worker is done with
+    # this crawl whatever the verdict below turns out to be.
+    await _settle_worker_accounting(tenant_id, exploration_id, crawl_id)
 
     # ── 3b) M1.7 · AN ADJUDICATED FAILURE IS A FAILURE ────────────────────
     # Checked BEFORE the manifest is opened, and that ordering is the whole

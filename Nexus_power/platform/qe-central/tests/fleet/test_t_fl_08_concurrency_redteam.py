@@ -54,6 +54,7 @@ from sqlalchemy import text  # noqa: E402
 
 from app.controlplane.scheduling import (  # noqa: E402
     crawl_queue,
+    egress_fence,
     queue_store,
     worker_registry as wr,
 )
@@ -140,9 +141,14 @@ class FleetHarness:
                 self.peak_per_worker[wid] = max(self.peak_per_worker[wid],
                                                 self.live_per_worker[wid])
             # RESERVE-THEN-FENCE, then read back what the browser would see.
-            explorations._write_egress_allowlist([host], chosen["allowlist_path"])
+            # PER-CRAWL (fleet_egress_fence_v1): squid selects the fence by the
+            # crawl's proxy login, so what this crawl's browser is fenced by is
+            # the crawl's OWN file — that is the file to observe at dispatch.
+            explorations._write_egress_allowlist(
+                [host], chosen["allowlist_path"], crawl_id=exploration_id)
             await asyncio.sleep(0)               # a real scheduling window
-            observed = Path(chosen["allowlist_path"]).read_text()
+            observed = egress_fence.crawl_fence_path(
+                chosen["allowlist_path"], exploration_id).read_text()
             self.fence_observations.append((wid, tenant_id, observed))
             await asyncio.sleep(0.01)            # "crawling"
             await self._mark(tenant_id, exploration_id, "completed")
@@ -442,24 +448,16 @@ async def test_evidence_handoff_survives_concurrency_and_is_tenant_isolated(
         object_store.reset_store_cache_for_tests()
 
 
-@pytest.mark.xfail(
-    strict=True,
-    # `raises` IS LOad-BEARING, not decoration. A bare strict xfail is satisfied
-    # by ANY exception, so it cannot tell "the defect is present" from "this test
-    # broke for an unrelated reason" — measured: a probe that made the fence
-    # per-crawl but left the test reading the old path raised FileNotFoundError
-    # and was absorbed as a clean xfail. Naming AssertionError means only the
-    # FENCE ASSERTION failing counts as the expected failure; anything else is a
-    # real red.
-    raises=AssertionError,
-    reason="KNOWN CROSS-TENANT EGRESS DEFECT — the fence is per-WORKER and "
-           "concurrent dispatches on one worker overwrite each other. Latent at "
-           "capacity=1 (qec_022 server_default), live above it. Strict, so the "
-           "day the fence becomes per-crawl this XPASSes and the marker must be "
-           "removed. Root cause in QECentral/docs/GATE_3_PHASE_2_EVIDENCE.md.",
-)
 async def test_the_egress_fence_survives_concurrent_dispatch_on_one_worker():
     """The cross-tenant fence property, DETERMINISTICALLY.
+
+    MARKER REMOVED 2026-08-31 (Team A / Phase A). This test carried a strict
+    ``xfail(raises=AssertionError)`` recording the per-worker fence defect from
+    the day it was found. With the per-crawl fence landed it XPASSed —
+    ``[XPASS(strict)]`` in the run log, as the marker's reason string always
+    said it must — and the marker came off. It now stands as the permanent
+    regression proof that two concurrent dispatches on ONE worker keep
+    independent fences.
 
     The red-team test above exercises this through the real fleet, which means it
     only fires when the scheduler happens to interleave two tenants on one
@@ -473,10 +471,18 @@ async def test_the_egress_fence_survives_concurrent_dispatch_on_one_worker():
             _write_egress_allowlist(allowed_hosts, worker["allowlist_path"])
             result = await explorer_client.dispatch_crawl(...)     # no lock
 
-    `allowlist_path` is keyed on the WORKER — the function takes no crawl id —
+    `allowlist_path` WAS keyed on the WORKER — the function took no crawl id —
     and ``acquire_slot`` admits ``capacity`` concurrent crawls per worker. So A
-    writes its fence, yields at the await, B overwrites the same file, and the
-    browser running A is fenced by B's destinations.
+    wrote its fence, yielded at the await, B overwrote the same file, and the
+    browser running A was fenced by B's destinations.
+
+    TEAM A / PHASE A — the repair this test was waiting for: the writer now
+    takes ``crawl_id`` and each crawl gets its OWN dstdomain file, selected by
+    squid via the crawl's proxy login (contracts/fleet_egress_fence_v1.json).
+    What a crawl's browser is fenced by at dispatch is therefore its own file,
+    which is what each dispatch below reads back inside the other's window.
+    The day this XPASSes under the strict marker, the marker comes off — the
+    reason string on the marker has said so since the defect was recorded.
 
     THE HOLD IS NOT RIGGING. Production's window is an HTTP dispatch to the
     worker; the red-team harness models it with ``asyncio.sleep(0)``, a single
@@ -491,9 +497,12 @@ async def test_the_egress_fence_survives_concurrent_dispatch_on_one_worker():
         observed: dict[str, str] = {}
 
         async def dispatch(tenant: str, hold: float) -> None:
-            explorations._write_egress_allowlist([f"{tenant}.example"], str(fence))
+            cid = f"cid-{tenant}"
+            explorations._write_egress_allowlist(
+                [f"{tenant}.example"], str(fence), crawl_id=cid)
             await asyncio.sleep(hold)             # the dispatch round trip
-            observed[tenant] = fence.read_text()
+            observed[tenant] = egress_fence.crawl_fence_path(
+                str(fence), cid).read_text()
 
         # B lands inside A's window — the interleaving the fleet produces by luck.
         await asyncio.gather(dispatch("t0", 0.05), dispatch("t1", 0.0))

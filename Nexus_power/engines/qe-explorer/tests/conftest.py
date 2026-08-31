@@ -23,3 +23,8 @@ if _SERVICE_ROOT not in sys.path:
 # import time.
 os.environ.setdefault("NEXUS_ENV", "test")
 os.environ.setdefault("QEC_EXPLORER_TOKEN", "unit-test-explorer-token")
+# Team A / Phase A — the fleet announcer (app/heartbeat.py) is a background
+# task that POSTs to qe-central; in a unit suite there is no qe-central to
+# announce to, so the loop must stay off rather than log unreachable warnings
+# from every lifespan-driven test.
+os.environ.setdefault("QEC_FLEET_REGISTER", "0")
