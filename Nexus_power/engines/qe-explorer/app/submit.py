@@ -43,6 +43,7 @@ from . import danger_signals
 from . import emit
 from . import matcher
 from . import perception
+from . import refusal_repair
 from . import step_back
 from . import value_infer
 from . import vocab
@@ -619,14 +620,117 @@ class SubmitMixin:
                         "never mistaken for a mechanism that did not run",
                         record.crossing_id, verdict.reason, verdict.max_steps)
                 else:
+                    # ── B2 · ARM THE CLOSED LOOP, OR DON'T ──────────────────
+                    # The crossing window's network stream is drained FIRST:
+                    # invariant 4 (no mutating request was allowed through)
+                    # must be judged on the window between the click and now,
+                    # not on a window the scan's own clicks have polluted.
+                    # The drained events still reach the endpoint inventory —
+                    # counted here, never dropped.
+                    events: list = []
+                    try:
+                        events = list(await self._drain_network() or [])
+                    except Exception:                           # noqa: BLE001
+                        events = []
+                    if events:
+                        noter = getattr(self, "_note_network_stream", None)
+                        if noter is not None:
+                            try:
+                                noter(events, url=read_url)
+                            except Exception:                   # noqa: BLE001
+                                logger.warning(
+                                    "qec.repair.network_note_failed")
+                    mutations = refusal_repair.mutations_allowed_in(events)
+                    arm = (refusal_repair.max_retries_configured() > 0
+                           and mutations == 0
+                           and self._crossings.has_refund(
+                               control_name=name, url=str(record.url or "")))
                     try:
                         await stepper(url=read_url, trigger=trigger,
-                                      max_steps=verdict.max_steps)
+                                      max_steps=verdict.max_steps,
+                                      repair=arm,
+                                      commit_label=str(
+                                          record.control_name or ""),
+                                      state_fingerprint=str(fingerprint or ""))
                     except Exception as exc:        # never fail a crossing
                         logger.warning(
                             "qec.stepback.failed crossing_id=%s %s: %s",
                             record.crossing_id, type(exc).__name__,
                             str(exc)[:120])
+                    # ── B2 · ONE RETRY OF THE SAME COMMIT ───────────────────
+                    # The walker reports whether a repaired wizard is standing
+                    # at its commit again; the pure gate re-derives the licence
+                    # from observations; the ledger's refund keeps it to ONE
+                    # per boundary, ever.  The retry goes through the same
+                    # authorised path as every crossing — guard, journal,
+                    # milestone — so its outcome is recorded exactly as the
+                    # first attempt's was, whatever it turns out to be.
+                    repair_state = dict(
+                        getattr(self, "_last_stepback_repair", None) or {})
+                    if arm and repair_state.get("ready"):
+                        named_now = len(refusal_repair.repairable_rejections(
+                            self._validation_rejections, trigger=trigger))
+                        retry = refusal_repair.may_repair_retry(
+                            crossing_spent=self._crossings.is_spent(
+                                control_name=name,
+                                url=str(record.url or ""),
+                                state_fingerprint=str(fingerprint or "")),
+                            confirmation_rung=str(
+                                milestone.confirmation_rung or ""),
+                            url_before=str(record.url or ""),
+                            url_after=str(
+                                getattr(result, "url_after", "") or ""),
+                            named_for_trigger=named_now,
+                            mutations_allowed=mutations,
+                            repair_ready=True,
+                            retries_taken=(
+                                0 if self._crossings.has_refund(
+                                    control_name=name,
+                                    url=str(record.url or "")) else 1))
+                        control_ref = stable_control_ref(control)
+                        if retry.permitted and self._crossings.refund_app_refused(
+                                control_name=name, url=str(record.url or ""),
+                                state_fingerprint=str(fingerprint or ""),
+                                control_ref=control_ref):
+                            self._submitted_flows.discard(
+                                "%s::%s::%s" % (fingerprint, name.lower(),
+                                                control_ref))
+                            logger.warning(
+                                "qec.repair.retrying crossing_id=%s "
+                                "refilled=%s — ONE retry of the same commit, "
+                                "carrying values the application itself "
+                                "dictated", record.crossing_id,
+                                repair_state.get("refilled", [])[:4])
+                            retried = await self._execute_approved_submit(
+                                name=name,
+                                control=dict(repair_state.get("commit_control")
+                                             or control),
+                                url=url, fingerprint=fingerprint, depth=depth,
+                                fill_controls=(), renavigate=False)
+                            logger.warning(
+                                "qec.repair.retry_done crossing_id=%s "
+                                "clicked=%s — the outcome is on its own "
+                                "milestone, judged by the same rules as the "
+                                "first", record.crossing_id, retried)
+                        else:
+                            logger.info(
+                                "qec.repair.retry_declined crossing_id=%s "
+                                "reason=%s — the named refusals stand as the "
+                                "finding", record.crossing_id,
+                                retry.reason if not retry.permitted
+                                else "refund_spent")
+                            # The repair walked the wizard forward and no retry
+                            # will use it: restore the page as the scan's own
+                            # decline path would have.
+                            navigator = getattr(
+                                self, "_goto_keeping_login", None)
+                            if navigator is not None:
+                                try:
+                                    await navigator(read_url)
+                                except Exception:               # noqa: BLE001
+                                    logger.warning(
+                                        "qec.repair.restore_failed url=%s",
+                                        read_url[:120])
         return True
 
     def _record_outcome_milestone(

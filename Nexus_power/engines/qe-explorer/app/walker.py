@@ -146,7 +146,14 @@ from .boundary import (AUTHORITY_BLANKET, BOUNDARY_APPROVABLE, BOUNDARY_SAFE,
                        RUNG_DIALOG, boundary_key, classify_boundary,
                        confirmation_transition, is_confirmation_landing)
 from .identity_pack import derive as derive_identity
-from .forms import (AnswerKey, PROV_UNBLOCK, capture_page_declarations,
+from . import field_values
+from . import refusal_repair as _refusal_repair
+from .fill_engine import constraints as _fe_constraints
+from .fill_engine import generator as _fe_generator
+from .fill_engine.repair import tighten as _tighten
+from .fill_engine.validation import interpret as _interpret
+from .forms import (AnswerKey, PROV_LLM, PROV_SYNTHESIZED, PROV_UNBLOCK,
+                    _fill_one, capture_page_declarations,
                     execute_submit_phase_b, fill_form_phase_a)
 from .guard import (
     EVENT_BLOCKED_METHOD,
@@ -779,6 +786,30 @@ class WalkerMixin:
             url[:120], blocked_label[:40], missing[:6])
         return blocked_label
 
+    #: B1-S hardening — how many wizard steps' pre-click text snapshots the
+    #: walk remembers for the step-back reader.  Comfortably above the deepest
+    #: funnel measured here (vkpower's ten steps), bounded because a walk is.
+    _MAX_STEP_TEXT_SNAPSHOTS = 32
+
+    def _note_step_texts(self, signature: str, texts: "Sequence[str]") -> None:
+        """Remember one step's pre-click visible texts, keyed by its
+        actionable-set signature (:func:`_candidate_sig` — the same
+        discriminator the step-back scan uses to tell steps apart, and for the
+        same reason: a page fingerprint cannot see a step swap on one URL)."""
+        if not signature:
+            return
+        store = getattr(self, "_walk_step_texts", None)
+        if store is None:
+            store = {}
+            self._walk_step_texts = store
+        if signature not in store and len(store) >= self._MAX_STEP_TEXT_SNAPSHOTS:
+            store.pop(next(iter(store)))
+        store[signature] = tuple(str(t) for t in (texts or ())[:40])
+
+    def _step_texts_for(self, signature: str) -> "tuple[str, ...]":
+        return tuple((getattr(self, "_walk_step_texts", None) or {})
+                     .get(signature or "", ()))
+
     async def _name_validation_rejections(
         self, url: str, trigger: str,
         before_texts: "Sequence[str]" = (),
@@ -832,6 +863,23 @@ class WalkerMixin:
             logger.warning("qec.fill.rejection_read_failed url=%s %s: %s",
                            url[:120], type(exc).__name__, str(exc)[:120])
             return 0
+
+        if not before_texts and steps_back:
+            # ── B1-S HARDENING · THE FORWARD WALK IS THE BEFORE SIDE ────────
+            # A stepped-back page has no same-moment before-snapshot, which is
+            # why a07cb59 withheld the plain-text rung here.  But the walk
+            # STOOD on this very step on its way to the commit and captured
+            # its texts then (:meth:`_note_step_texts`) — so a licensed diff
+            # exists after all: text present at this read that was absent when
+            # the walk left the step APPEARED as a result of the refused
+            # commit.  Summit's shadcn errors are ARIA-anchored and never need
+            # this; an app that renders per-field refusals as bare <p> inside
+            # a multi-step form (vkpower's own style) is unreadable without
+            # it.  No snapshot for this step's signature — every pre-existing
+            # caller and test double — leaves the rung withheld exactly as
+            # before, and the adopted record still carries ``steps_back`` so
+            # the weaker claim stays legible.
+            before_texts = self._step_texts_for(_candidate_sig(after))
 
         named = 0
         for control in after:
@@ -963,6 +1011,12 @@ class WalkerMixin:
                                     else "text_transition"),
                     "rejected_on": trigger[:120],
                 }
+                if steps_back:
+                    # B1-S provenance, exactly as the anchored path carries it:
+                    # a rung licensed by the forward walk's snapshot is a
+                    # weaker claim than a same-moment diff, and the record
+                    # says so rather than flattening the two.
+                    record["steps_back"] = int(steps_back)
                 if not any(r.get("url") == record["url"]
                            and r.get("rule") == record["rule"]
                            for r in self._validation_rejections):
@@ -1010,6 +1064,8 @@ class WalkerMixin:
 
     async def _read_rejections_by_stepping_back(
         self, *, url: str, trigger: str, max_steps: "Optional[int]" = None,
+        repair: bool = False, commit_label: str = "",
+        state_fingerprint: str = "",
     ) -> int:
         """B1-S — GO WHERE THE MESSAGE LIVES.
 
@@ -1040,15 +1096,30 @@ class WalkerMixin:
         this method owns only the clicking, the same split the rest of the
         engine uses.
 
-        WHAT IT MAY CLAIM. Anchored rejections only. ``before_texts`` is
-        deliberately NOT passed: the plain-text rung is licensed by ACT-THEN-DIFF
-        and there is no before-snapshot for a step the reader was not standing
-        on when the commit was refused. Offering it here would let a step's
-        ordinary helper text — "All fields are required" — be read as a verdict
-        the commit produced. Anchored or nothing, and the record says which.
+        WHAT IT MAY CLAIM. Anchored rejections, plus ONE licensed use of the
+        plain-text rung: when the forward walk captured this very step's texts
+        on its way to the commit (:meth:`_note_step_texts`), that snapshot is a
+        real before-side and the ACT-THEN-DIFF licence holds — text present at
+        the read that was absent then appeared as a result of the refused
+        commit. Without a snapshot for the step's signature the rung stays
+        withheld exactly as it always was: an after-only read would let a
+        step's ordinary helper text — "All fields are required" — be read as a
+        verdict the commit produced. Either way the record carries
+        ``steps_back``, so the weaker claim is legible.
+
+        ``repair`` (B2) arms the closed loop: the scan sweeps the FULL budget
+        instead of stopping at the first named field (a repair that fixes step
+        2's field and not step 0's retries a commit the schema will refuse
+        identically), and afterwards :meth:`_repair_where_the_fields_live`
+        re-fills what was named and walks forward to ``commit_label``.  The
+        result is left in ``self._last_stepback_repair`` for the submit mixin,
+        which owns the retry click; nothing here clicks a commit.  With
+        ``repair=False`` — every pre-existing caller — behaviour is
+        byte-identical to before this parameter existed.
 
         Returns the number of rejections named across every step visited.
         """
+        self._last_stepback_repair = None
         # ``None`` means "use the shipped default"; ZERO MEANS DISABLED and
         # must not fall through to it. Writing this as ``max_steps or DEFAULT``
         # made ``QEC_STEP_BACK_MAX=0`` silently run four steps — the config
@@ -1065,7 +1136,21 @@ class WalkerMixin:
         clicks = 0
         try:
             named_total, clicks = await self._step_back_scan(
-                url=url, trigger=trigger, budget=budget)
+                url=url, trigger=trigger, budget=budget,
+                stop_at_named=not repair)
+            if repair and clicks and _refusal_repair.repairable_rejections(
+                    self._validation_rejections, trigger=trigger):
+                # B2 — the reader is standing where (some of) the fields live.
+                # Repair on the walk FORWARD, so a refusal named on step 0 and
+                # one named on step 2 are both fixed before the commit is
+                # retried.  Budget: the steps walked back, plus one page of
+                # slack for a wizard that inserts a step on re-validation.
+                self._last_stepback_repair = (
+                    await self._repair_where_the_fields_live(
+                        url=url, trigger=trigger,
+                        commit_label=commit_label,
+                        budget_forward=clicks + 1,
+                        state_fingerprint=state_fingerprint))
             return named_total
         finally:
             # ── LEAVE THE PAGE AS IT WAS FOUND ──────────────────────────
@@ -1083,7 +1168,13 @@ class WalkerMixin:
             # session per page load answers the raw form with its SIGN-IN WALL
             # — the exact failure that once put five sign-in "pages" into a
             # journey where business pages belonged.
-            if clicks:
+            #
+            # B2 — a repair that walked the wizard forward to its commit again
+            # IS the restore, and a better one: a reload would wipe the
+            # client-side form state the retry needs, leaving the retry to
+            # click a commit on an empty step 0. When the repair reports NOT
+            # ready, the ordinary restore below runs exactly as before.
+            if clicks and not (self._last_stepback_repair or {}).get("ready"):
                 navigator = getattr(self, "_goto_keeping_login", None)
                 if navigator is None:
                     logger.warning(
@@ -1101,8 +1192,15 @@ class WalkerMixin:
 
     async def _step_back_scan(
         self, *, url: str, trigger: str, budget: int,
+        stop_at_named: bool = True,
     ) -> "tuple[int, int]":
         """The loop itself: step back, read, stop when named.
+
+        ``stop_at_named=False`` (B2's sweep) keeps walking to the full budget
+        so every step's refusals are on the record before a repair acts — a
+        repair that satisfies one step's rule and not the next step's buys a
+        retry the schema refuses identically.  Default True is byte-identical
+        to the shipped behaviour, click for click.
 
         Split from :meth:`_read_rejections_by_stepping_back` so that method's
         ``finally`` can restore the page on EVERY exit path — the early returns
@@ -1173,20 +1271,235 @@ class WalkerMixin:
                 "— read on the step the FIELD lives on, not the step the "
                 "commit lives on", url[:120], depth, pick_name[:40], named)
             if named:
-                # The message has been found. Every further step back is
-                # another click this crawl would have to own for no new fact.
                 logger.warning(
                     "qec.stepback.named url=%s depth=%d count=%d — a commit "
                     "that looked silent was refused with reasons %d step(s) "
                     "back; the reader went to where the message lives",
                     url[:120], depth, named, depth)
-                return named_total, clicks
+                if stop_at_named:
+                    # The message has been found. Every further step back is
+                    # another click this crawl would have to own for no new
+                    # fact.  (The B2 sweep keeps going: a repair needs EVERY
+                    # step's refusals, not the nearest one's.)
+                    return named_total, clicks
         logger.info(
             "qec.stepback.exhausted url=%s budget=%d named=%d — every step "
             "back was read and the application anchored no rejection anywhere; "
             "the silence is a fact about its markup",
             url[:120], budget, named_total)
         return named_total, clicks
+
+    #: B2 — how many DISTINCT named fields one repair pass may re-fill.  The
+    #: same spirit as the fill-time ``RepairBudget``: enough for every schema
+    #: that states its rules honestly, bounded because an unbounded sweep over
+    #: an application that rejects everything is a form-filling spree.
+    _MAX_REPAIR_FIELDS = 3
+
+    def _ledger_row_for(self, name: str) -> "Optional[dict[str, Any]]":
+        """This crawl's ledger row for a field label, or None.
+
+        The PROVENANCE gate reads it: only a value the crawl itself invented
+        (synthesized / llm) may be regenerated.  A value the client seeded or
+        an earlier journey committed is not ours to overwrite — the rejection
+        of it IS the finding (:func:`app.forms._fill_with_repair` holds the
+        same line at fill time, for the same reason).
+        """
+        want = _norm_label(name)
+        if not want:
+            return None
+        for row in getattr(self, "_field_ledger", None) or ():
+            if _norm_label(row.get("name") or row.get("label")) == want:
+                return row
+        return None
+
+    async def _repair_where_the_fields_live(
+        self, *, url: str, trigger: str, commit_label: str,
+        budget_forward: int, state_fingerprint: str = "",
+    ) -> "dict[str, Any]":
+        """B2's DRIVER — re-fill the named fields in place, walk back to the
+        commit, and report whether a retry has anything to click.
+
+        THE POSITION THIS RUNS FROM is the whole design: the step-back sweep
+        has just finished, so the browser is standing on the deepest wizard
+        step the reader visited, the form's client-side state is INTACT (only
+        Back was clicked — never a reload), and every refusal the application
+        rendered is on ``self._validation_rejections`` with the field's own
+        name and the application's own words.  A reload here would wipe the
+        wizard and turn the retry into a click on an empty form, which is why
+        this walks FORWARD instead of restoring.
+
+        EVERY RE-FILL IS EVIDENCE-DRIVEN, never a second guess: the value is
+        regenerated under constraints tightened by :func:`interpret` from the
+        application's own rejection sentence — the same two rules the fill-time
+        repair loop enforces (a retry must be CAUSED by an observed rejection,
+        and must CHANGE what it named).  A field whose rule yields nothing
+        actionable, whose value the crawl did not invent, or whose widget
+        refuses the new value is SKIPPED with a recorded reason; skipping every
+        field means no retry, and the named refusals stand as the finding.
+
+        WHAT IT NEVER CLICKS: the commit.  It stops the moment ``commit_label``
+        is visible and enabled, and hands the verdict back — the submit mixin
+        owns the retry through the same authorised, journalled, guarded path as
+        every crossing.  Advances are tier-1 only (:meth:`_pick_wizard_advance`
+        — commit words veto), so nothing here can cross a boundary by accident.
+
+        Returns ``{"ready", "refilled", "skipped", "commit_control",
+        "steps_forward"}`` — ``ready`` only when at least one field was
+        actually re-filled AND the commit is standing enabled again.
+        """
+        state: dict[str, Any] = {"ready": False, "refilled": [], "skipped": [],
+                                 "commit_control": None, "steps_forward": 0}
+        wanted: dict[str, Mapping[str, Any]] = {}
+        for record in _refusal_repair.repairable_rejections(
+                self._validation_rejections, trigger=trigger):
+            key = _norm_label(record.get("field"))
+            if key and key not in wanted:
+                wanted[key] = record
+            if len(wanted) >= self._MAX_REPAIR_FIELDS:
+                break
+        if not wanted or not str(commit_label or "").strip():
+            logger.info(
+                "qec.repair.nothing_to_repair url=%s trigger=%r — no named "
+                "field qualifies, so no retry can be earned", url[:120],
+                trigger[:40])
+            return state
+        persona = field_values.persona_for(self._identity)
+        done: set[str] = set()
+        prev_sig = ""
+        for hop in range(budget_forward + 1):
+            try:
+                obs = await self._observe()
+                controls = build_inventory(obs.raw_controls, self._refuse_pack,
+                                           url=obs.url)
+            except Exception as exc:               # never fail a crossing
+                logger.warning("qec.repair.observe_failed url=%s hop=%d %s: %s",
+                               url[:120], hop, type(exc).__name__,
+                               str(exc)[:120])
+                return state
+            sig = _candidate_sig(controls)
+            if hop and sig == prev_sig:
+                logger.info(
+                    "qec.repair.no_movement url=%s hop=%d — the advance did "
+                    "not change the actionable set; stopping rather than "
+                    "clicking it again", url[:120], hop)
+                return state
+            prev_sig = sig
+
+            for control in controls:
+                name = str(control.get("name") or "").strip()
+                key = _norm_label(name)
+                if not key or key in done or key not in wanted:
+                    continue
+                done.add(key)
+                ok, why = await self._refill_named_field(
+                    control, wanted[key], persona,
+                    state_fingerprint=state_fingerprint)
+                if ok:
+                    state["refilled"].append(name[:120])
+                else:
+                    state["skipped"].append("%s:%s" % (name[:40], why))
+                    logger.info(
+                        "qec.repair.field_skipped url=%s field=%r reason=%s — "
+                        "the named refusal stands as the finding",
+                        url[:120], name[:40], why)
+
+            commit = next(
+                (c for c in controls
+                 if c.get("kind") == "button" and not c.get("disabled")
+                 and str(c.get("name") or "").strip() == commit_label),
+                None)
+            if commit is not None:
+                state["commit_control"] = dict(commit)
+                state["ready"] = bool(state["refilled"])
+                logger.warning(
+                    "qec.repair.at_commit url=%s refilled=%s skipped=%s "
+                    "ready=%s — %s", url[:120], state["refilled"][:4],
+                    state["skipped"][:4], state["ready"],
+                    "the repaired wizard is standing at its commit again"
+                    if state["ready"] else
+                    "nothing was re-filled, so there is nothing to retry")
+                return state
+
+            advance = self._pick_wizard_advance(controls)
+            if advance is None:
+                logger.info(
+                    "qec.repair.no_advance url=%s hop=%d — no tier-1 advance "
+                    "on this step; the walk cannot reach the commit again",
+                    url[:120], hop)
+                return state
+            try:
+                await self._port.click(dict(advance))
+            except Exception as exc:               # never fail a crossing
+                logger.warning("qec.repair.advance_failed url=%s hop=%d %s: %s",
+                               url[:120], hop, type(exc).__name__,
+                               str(exc)[:120])
+                return state
+            self._tracker.note_action()
+            state["steps_forward"] = int(state["steps_forward"]) + 1
+        logger.info(
+            "qec.repair.budget_exhausted url=%s budget=%d — the commit was "
+            "not reached within the steps walked back",
+            url[:120], budget_forward)
+        return state
+
+    async def _refill_named_field(
+        self, control: "Mapping[str, Any]", record: "Mapping[str, Any]",
+        persona: Any, *, state_fingerprint: str = "",
+    ) -> "tuple[bool, str]":
+        """One evidence-driven re-fill, or a named reason why not.
+
+        The reasons mirror the fill-time repair loop's stop vocabulary on
+        purpose: a reader of either record is reading the same doctrine.
+        """
+        name = str(control.get("name") or "").strip()
+        kind = str(control.get("kind") or "").strip()
+        if kind not in _FILLABLE_KINDS or control.get("disabled"):
+            return False, "not_fillable"
+        row = self._ledger_row_for(name)
+        provenance = str((row or {}).get("provenance") or "")
+        if provenance not in (PROV_SYNTHESIZED, PROV_LLM):
+            # A seeded, recalled or journey-committed value is not ours to
+            # overwrite; and a row we cannot find is a value whose origin we
+            # cannot vouch for.  Both fail closed.
+            return False, "provenance_locked:%s" % (provenance or "unknown")
+        hint = _interpret(str(record.get("rule") or ""))
+        if not hint.actionable:
+            return False, "rule_not_actionable"
+        cons = _fe_constraints.extract(control, kind=kind)
+        tightened = _tighten(cons, hint)
+        candidate = _fe_generator.generate(
+            str((row or {}).get("semantic_type") or ""), control, persona,
+            kind=kind, name=name, cons=tightened)
+        if candidate.value is None:
+            return False, "no_better_value"
+        try:
+            action, _mechanic = await _fill_one(
+                self._port, control, kind, str(candidate.value), self._clock,
+                phase=Phase.EXPLORE.value, state_id=state_fingerprint)
+        except Exception as exc:                   # never fail a crossing
+            logger.warning("qec.repair.fill_error field=%r %s: %s",
+                           name[:40], type(exc).__name__, str(exc)[:120])
+            return False, "fill_error"
+        if action is None:
+            return False, "widget_refused"
+        # THE RETRY IS ON THE RECORD before it happens: the fill is emitted as
+        # an ordinary grounded action, and the rejection record that caused it
+        # says it was acted on — so a bundle shows named refusal → repair →
+        # retry as three joined facts, not a green light with no history.
+        try:
+            self._emitter.emit_action(action)
+        except Exception:                          # noqa: BLE001 — evidence
+            logger.warning("qec.repair.action_emit_failed field=%r", name[:40])
+        self._tracker.note_action()
+        if isinstance(record, dict):
+            record["repaired"] = True
+        if isinstance(row, dict):
+            row["repair_rationale"] = str(candidate.rationale or "")[:300]
+        logger.warning(
+            "qec.repair.refilled field=%r rule=%r — the application's own "
+            "words drove the new value; nothing was guessed",
+            name[:40], str(record.get("rule") or "")[:80])
+        return True, ""
 
     async def _commit_subform_to_unblock(
         self, controls: "Sequence[dict[str, Any]]", url: str,
@@ -3040,6 +3353,16 @@ class WalkerMixin:
                     walk_texts + before_side["texts"])
                 walk_status = _recent_text_history(
                     walk_status + before_side["status"])
+                # B1-S hardening — remember what THIS step said before the walk
+                # left it, keyed by its actionable-set signature. If a commit
+                # later refuses silently and the reader steps back to this very
+                # step, this snapshot is the missing "before" side that
+                # licenses the plain-text rung there: text present at the read
+                # that is absent here APPEARED as a result of the refused
+                # commit. Costs a dict entry per step and no I/O — the capture
+                # above already paid for the read.
+                self._note_step_texts(_candidate_sig(cur_controls),
+                                      before_side["texts"])
                 async with self._walk_persistence_window(trig_name):
                     observation = await self._port.click(trig)
                 after_side = await capture_page_declarations(self._port)

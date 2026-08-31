@@ -413,6 +413,11 @@ class Fixture:
     kwargs: dict[str, Any] = field(default_factory=dict)
     advance_reply: Optional[dict[str, Any]] = None
     vision_reply: Optional[dict[str, Any]] = None
+    #: A ``ScriptedBrowser`` subclass for fixtures whose application must
+    #: REMEMBER what was typed (a schema that accepts the second value after
+    #: refusing the first — B2's shape).  ``None`` — every pre-existing
+    #: fixture — constructs the plain fake exactly as before.
+    port_factory: Optional[Any] = None
 
 
 _TMP_PATH_RE = re.compile(r"[A-Za-z]:[\\/][^\"]*?[\\/]qec_char_[^\"\\/]*")
@@ -439,7 +444,7 @@ def run_fixture(fixture: Fixture, work_dir: Path,
         if hasattr(module, "date"):
             monkeypatch.setattr(module, "date", FrozenDate)
 
-    port = ScriptedBrowser(fixture.pages, fixture.start)
+    port = (fixture.port_factory or ScriptedBrowser)(fixture.pages, fixture.start)
     # COPY, never pop the fixture's own dict. ``Fixture.kwargs`` is a MODULE-LEVEL
     # mapping shared by every consumer, so popping from it permanently stripped
     # the fixture of its guard context after the first run - F3's disposable

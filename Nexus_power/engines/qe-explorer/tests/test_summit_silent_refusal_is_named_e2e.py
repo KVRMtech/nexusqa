@@ -125,6 +125,12 @@ def _refusing_pages(*, with_back: bool = True) -> dict[str, ScriptedPage]:
 
 
 def _crawl(tmp_path, monkeypatch, *, with_back=True, step_back_max=None):
+    # THIS FILE PROVES THE READER, NOT THE REPAIR. B2's closed loop (repair +
+    # one retry of the same commit) is switched OFF so every assertion here —
+    # exactly one crossing, exactly one milestone — keeps measuring B1-S in
+    # isolation. The loop has its own end-to-end proof:
+    # test_a_refused_commit_is_repaired_and_retried_e2e.py.
+    monkeypatch.setenv("QEC_REFUSAL_RETRY_MAX", "0")
     if step_back_max is not None:
         monkeypatch.setenv("QEC_STEP_BACK_MAX", str(step_back_max))
     work = tmp_path / "qec_char_work"

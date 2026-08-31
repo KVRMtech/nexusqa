@@ -59,12 +59,15 @@ WHAT IT MAY CLAIM.  A message read on a stepped-back page is attributed through
 the SAME accessibility ladder as any other rejection
 (:mod:`app.fill_engine.validation` - ``aria-errormessage`` / ``aria-invalid`` +
 ``validationMessage`` / error-node ids), so the app's own annotation is what
-anchors it.  What it may NOT claim is a transition: there is no before-snapshot
-for a step the reader was not standing on when the commit was refused, so the
-ACT-THEN-DIFF property that licenses B1's plain-text rung is unavailable here.
-Records are therefore labelled with ``steps_back`` so a reader can weigh the
-claim, and the plain-text rung is deliberately NOT offered on a stepped-back
-page - anchored or nothing.  Saying which of the two you have is the point.
+anchors it.  A transition claim needs a before-snapshot, and the reader was not
+standing on this step when the commit was refused — but the WALK was, on its
+way forward, and where it recorded the step's texts then
+(``walker._note_step_texts``) that snapshot licenses B1's plain-text rung here
+too: text present at the read that was absent when the walk left the step
+appeared as a result of the refused commit.  With no snapshot the rung stays
+withheld — anchored or nothing.  Records are labelled with ``steps_back``
+either way, so a reader can weigh the claim.  Saying which of these you have
+is the point.
 """
 from __future__ import annotations
 

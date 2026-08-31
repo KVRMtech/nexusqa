@@ -504,12 +504,18 @@ class CrossingLedger:
     key would relax a dedup that is already shipped and already relied upon.
     """
 
-    __slots__ = ("_spent", "_records", "_by_boundary", "_inherited")
+    __slots__ = ("_spent", "_records", "_by_boundary", "_inherited", "_refunds")
 
     def __init__(self) -> None:
         self._spent: set[str] = set()
         self._records: list[CrossingRecord] = []
         self._by_boundary: dict[str, int] = {}
+        #: B2 — boundaries whose ONE app-refused crossing was refunded for a
+        #: single repair-retry (:meth:`refund_app_refused`).  In-RAM only, and
+        #: deliberately NOT restored from the journal: a resumed run sees every
+        #: journalled reservation as spent, refund included, so a kill between
+        #: refund and retry can never yield a duplicate click.
+        self._refunds: dict[str, int] = {}
         #: How many crossing records this ledger INHERITED from a durable
         #: journal (see :meth:`restore`).  Kept apart from ``_records`` so
         #: reporting stays this-run-only while id minting stays globally unique.
@@ -571,7 +577,55 @@ class CrossingLedger:
         # crossed", which is True the instant the first reservation lands — so
         # short-circuiting on it made ``max_crossings`` unreachable for every
         # value above 1. The budget has to be compared against the COUNT.
-        return self._by_boundary.get(bkey, 0) >= max(1, int(max_crossings))
+        #
+        # B2 — an APP-REFUSED crossing that was refunded does not consume the
+        # grant: the application's own validation refused it before anything
+        # irreversible happened, and the operator's ``max_crossings`` counts
+        # irreversible acts, not attempts the application bounced.  At most one
+        # refund per boundary, ever (:meth:`refund_app_refused`).
+        spent_count = (self._by_boundary.get(bkey, 0)
+                       - self._refunds.get(bkey, 0))
+        return spent_count >= max(1, int(max_crossings))
+
+    # -- B2 · the one repair-retry refund ------------------------------------
+
+    def has_refund(self, *, control_name: str, url: str) -> bool:
+        """May this boundary still take its ONE app-refused refund?"""
+        return self._refunds.get(boundary_key(url, control_name), 0) < 1
+
+    def refund_app_refused(self, *, control_name: str, url: str,
+                           state_fingerprint: str = "",
+                           control_ref: str = "") -> bool:
+        """The application refused this crossing by its OWN validation — the
+        irreversible act never happened.  Re-arm the boundary for EXACTLY ONE
+        retry, once per boundary, ever.
+
+        WHAT THIS DOES AND DELIBERATELY DOES NOT DO.  The exactly-once legacy
+        key is discarded so one more :meth:`reserve` under the same
+        ``(fingerprint, label, ref)`` can land; the budget comparison in
+        :meth:`would_exceed` subtracts the refund.  The BOUNDARY key stays in
+        the spent set — :meth:`is_spent` keeps answering True, because the
+        boundary HAS been operated and every consumer of that fact (the
+        step-back gate's invariant 1, resume) must keep seeing it.  The
+        original crossing record is untouched: it happened, it is journalled,
+        and the retry reserves a NEW record with a distinct crossing id.
+
+        THE CALLER OWNS THE EVIDENCE for "app-refused" (a named validation
+        rejection, no confirmation, same document, zero allowed mutations —
+        :mod:`app.refusal_repair`).  This ledger owns only the arithmetic that
+        keeps it to one, which is why a second call for the same boundary
+        returns False whatever the evidence says.
+        """
+        bkey, lkey = self.keys_for(control_name=control_name, url=url,
+                                   state_fingerprint=state_fingerprint,
+                                   control_ref=control_ref)
+        if self._refunds.get(bkey, 0) >= 1:
+            return False
+        if self._by_boundary.get(bkey, 0) < 1:
+            return False                  # nothing was ever reserved to refund
+        self._refunds[bkey] = self._refunds.get(bkey, 0) + 1
+        self._spent.discard(lkey)
+        return True
 
     # -- mutation -------------------------------------------------------------
 
