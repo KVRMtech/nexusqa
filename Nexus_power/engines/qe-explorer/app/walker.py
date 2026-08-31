@@ -1564,7 +1564,15 @@ class WalkerMixin:
             if _AUTH_SESSION_RE.search(name):
                 verdicts.append(f"{name[:24]}:session")
                 continue
-            if re.search(r"\badd\b", name, re.IGNORECASE):
+            if vocab.SUBFORM_COMMIT_RE.search(name):
+                # THE BELT ON THE WIDENED VOCABULARY: a label that also says
+                # commit or advance is that other thing wearing an add word —
+                # "Add & Pay Now" pays, "Add and Continue" advances. Vetoed
+                # here so the row-commit list can only ever widen what is
+                # TRIED, never what a commit control gets away with.
+                if _WIZARD_COMMIT_RE.search(name) or _WIZARD_ADVANCE_RE.search(name):
+                    verdicts.append(f"{name[:24]}:commit-or-advance")
+                    continue
                 candidate = c
                 break
             verdicts.append(f"{name[:24]}:no-commit-verb")
@@ -1900,7 +1908,13 @@ class WalkerMixin:
                     for n in getattr(fill, "unfilled_fields", ()) or ()}
         consents = [
             c for c in controls
-            if c.get("kind") == "checkbox"
+            # "toggle" as well as "checkbox": a component-library consent
+            # renders as <button role="checkbox"> (inventory kind: checkbox)
+            # or <button role="switch"> (kind: toggle), and a wall built of
+            # switches was invisible to this experiment while behaving
+            # identically to the user. Same driving primitive either way
+            # (set_checked reads aria-checked back), so nothing else moves.
+            if c.get("kind") in ("checkbox", "toggle")
             and not c.get("disabled") and not c.get("danger")
             and _norm_label(str(c.get("name") or "")) in declined
             and str(c.get("value_committed") or "").strip().lower() != "true"

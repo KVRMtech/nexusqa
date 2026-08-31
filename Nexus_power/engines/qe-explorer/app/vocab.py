@@ -195,6 +195,50 @@ def compile_back_re() -> re.Pattern[str]:
 BACK_RE = compile_back_re()
 
 
+#: Phase-B — SUB-FORM ROW-COMMIT vocabulary: a control whose purpose is to
+#: commit ONE ROW into the page's own list state before the step can be left.
+#: Measured shapes: vkpower's "+ Add Beneficiary"; the same gate is everywhere
+#: in financial applications — invoice line items, dependants on a health
+#: plan, drivers on an auto policy, holdings in a portfolio — and their labels
+#: are "Add line item", "Add another driver", "Insert row", "New entry".
+#:
+#: Deliberately OUTSIDE ``LANGUAGE_PACKS`` for the reason stated on the three
+#: packs above: that table is byte-mirrored in qe-central with parity pins,
+#: and this vocabulary has no counterpart there.
+#:
+#: MATCHING THIS LIST GRANTS NOTHING. It only makes a button ELIGIBLE for the
+#: one bounded row-commit experiment (`walker._commit_subform_to_unblock`),
+#: which additionally requires a stalled fillable step, a non-danger enabled
+#: button, NO commit word and NO advance word in the label, one attempt, and
+#: the application's own re-render as the verdict. The list widens what the
+#: experiment will TRY, never what the guard will ALLOW.
+SUBFORM_COMMIT_PACKS: dict[str, list[str]] = {
+    "en": [
+        r"add",
+        r"insert",
+        r"new\s*(?:row|line|item|entry)",
+        r"attach",
+    ],
+}
+
+
+def compile_subform_commit_re() -> re.Pattern[str]:
+    """WORD-BOUNDARY match, unlike the full-string BACK/PERSISTENCE rules,
+    and on purpose: a row commit NAMES its row — "+ Add Beneficiary", "Add
+    another driver", "Insert line item" — so the whole label can never say
+    only the verb. The belt is worn by the caller instead: any label that
+    ALSO carries a commit or advance word is vetoed there, so "Add & Pay Now"
+    pays and "Add and Continue" advances, and neither is ever clicked as a
+    row commit however the vocabulary grows."""
+    alts: list[str] = []
+    for pack in SUBFORM_COMMIT_PACKS.values():
+        alts.extend(pack)
+    return re.compile(r"\b(?:" + "|".join(alts) + r")\b", re.I)
+
+
+SUBFORM_COMMIT_RE = compile_subform_commit_re()
+
+
 def _union(kind: str) -> list[str]:
     """All alternatives of ``kind`` across every pack, order-preserving and
     de-duplicated (first pack wins the position — 'en' stays byte-stable)."""

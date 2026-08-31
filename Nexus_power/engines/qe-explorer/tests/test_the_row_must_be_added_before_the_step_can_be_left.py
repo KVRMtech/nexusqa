@@ -372,3 +372,48 @@ def test_the_same_disabled_commit_without_a_grant_stays_invisible():
                                     "http://x/apply/signature/",
                                     _Fill(_CONSENTS))
     assert label == ""
+
+
+# ── Phase-B · THE SAME GATE ON EVERY LIST SHAPE ────────────────────────────
+# The docstring above already names them: invoice line items, dependants on a
+# health plan, drivers on an auto policy. The vocabulary that reaches them is
+# DATA now (vocab.SUBFORM_COMMIT_PACKS), and the veto that keeps the widening
+# fail-closed is asserted right beside it.
+
+def _page_with_button(label):
+    page = [c for c in _beneficiary_page()
+            if c["name"] != "+ Add Beneficiary"]
+    page.insert(-2, {"kind": "button", "name": label})
+    return page
+
+
+def test_an_invoice_line_a_dependant_and_a_driver_are_all_committed():
+    """The three named shapes, each through the real picker: the label names
+    its row, the verb is the vocabulary's, and one click is attempted."""
+    for label in ("Add line item", "Add another driver", "Add Dependant",
+                  "Insert row", "New entry"):
+        w = _W(_page_with_button(label))
+        _run(w, _page_with_button(label))
+        assert w._port.clicked == [label], (
+            "the row-commit experiment must try %r" % label)
+
+
+def test_control_add_wearing_a_commit_word_is_never_clicked():
+    """THE BELT. "Add & Pay Now" pays and "Add and Continue" advances; the
+    widened vocabulary must fail CLOSED on both, or a row-commit experiment
+    becomes an unapproved commit with a friendly prefix."""
+    for label in ("Add & Pay Now", "Add and Continue", "Add & Checkout",
+                  "Add and Submit Application"):
+        w = _W(_page_with_button(label))
+        _run(w, _page_with_button(label))
+        assert w._port.clicked == [], (
+            "%r carries a commit/advance word and was clicked anyway" % label)
+
+
+def test_control_the_shipped_beneficiary_button_still_wins_unchanged():
+    """The compatibility pin: vkpower's own button, byte for byte, through
+    the widened vocabulary — the generalisation must not move the one shape
+    that is already live-proven."""
+    w = _W(_beneficiary_page())
+    _run(w, _beneficiary_page())
+    assert w._port.clicked == ["+ Add Beneficiary"]

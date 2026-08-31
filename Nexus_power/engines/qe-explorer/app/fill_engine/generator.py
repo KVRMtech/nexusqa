@@ -219,6 +219,19 @@ _EMPLOYMENT_TOKENS = frozenset({"employment", "employed", "occupationstatus",
 _DEPENDENTS_TOKENS = frozenset({"dependents", "dependants", "children",
                                 "numberofchildren", "kids"})
 _TERM_TOKENS = frozenset({"term", "termlength", "duration", "policyterm"})
+#: A choice of PRODUCT — the fork every insurance funnel opens with, and one
+#: that must be answered the SAME way on every page that asks (a quote taken
+#: on one product and an application submitted on another is a cross-step
+#: incoherence, not a data gap).
+_PRODUCT_TOKENS = frozenset({"product", "producttype", "plan", "plantype",
+                             "policytype", "coveragetype"})
+#: Premium/payment CADENCE ("Premium Mode", "Payment Frequency", "Billing
+#: Cycle").  Two sets ANDed, because each word alone is too generic: "premium"
+#: alone is a money amount (_MONEY_RULES owns it) and "mode" alone is any
+#: setting.
+_PREMIUM_CADENCE_TOKENS = frozenset({"premium", "payment", "billing"})
+_CADENCE_WORD_TOKENS = frozenset({"mode", "frequency", "cadence", "schedule",
+                                  "cycle"})
 _YESNO = frozenset({"yes", "no", "y", "n", "true", "false"})
 
 
@@ -297,6 +310,31 @@ def _choice_targets(sem: str, control: Mapping[str, Any], persona: Persona,
     if tokens & _DEPENDENTS_TOKENS:
         return ([str(persona.dependents)], "dependents",
                 f"the household has {persona.dependents} dependent(s)")
+
+    if tokens & _PRODUCT_TOKENS:
+        # ONE PRODUCT PER HOUSEHOLD, wherever the application asks. A quote
+        # page that took "Whole Life" and an application step answered "Term
+        # Life - 10 Year" is the cross-step incoherence an underwriting rule
+        # rejects — the same defect the household closed for people, arriving
+        # through the catalogue. The persona's term length picks the concrete
+        # option when the application offers one ("Term Life - 20 Year");
+        # the generic forms reach any product list that names term at all.
+        ty = persona.term_years
+        return ([f"term life - {ty} year", f"{ty} year term", f"term {ty}",
+                 "term life", "term"],
+                "term_years",
+                f"the persona's product is a {ty}-year term life policy, and "
+                "every step of the journey answers product questions with it")
+
+    if (tokens & _PREMIUM_CADENCE_TOKENS) and (tokens & _CADENCE_WORD_TOKENS):
+        # The persona's money is derived monthly-first (monthly_income,
+        # monthly_premium), so the payment cadence that agrees with it is
+        # monthly — and it must be the SAME answer on the quote page and the
+        # application step, or the premium shown on one contradicts the mode
+        # chosen on the other.
+        return (["monthly"], "money.monthly_premium",
+                "premiums are budgeted monthly, agreeing with the persona's "
+                "monthly_premium figure wherever the funnel asks")
 
     if tokens & _TERM_TOKENS:
         return ([f"{persona.term_years} years", str(persona.term_years)],
