@@ -1564,6 +1564,11 @@ async def _dispatch_explorer(
     result = None
     last_exc: ExplorerDispatchError | None = None
     claimed_worker_id = ""
+    #: The worker that ACCEPTED the crawl — bound explicitly at the moment of
+    #: success rather than read off the loop variable afterwards, so the
+    #: accounting stamp below cannot silently follow a refactor that leaves
+    #: ``worker`` bound to a worker that refused (or unbound entirely).
+    dispatched_worker: dict = {}
     for worker in ranked:
         # ── M0.5 T-SEC-03: RESERVE FIRST, FENCE SECOND ────────────────────
         # 1. authenticate (done: require_role on the route)
@@ -1620,6 +1625,7 @@ async def _dispatch_explorer(
                 dispatch_request, explorer_url=worker["url"],
             )
             last_exc = None
+            dispatched_worker = worker
             break
         except ExplorerDispatchError as exc:
             last_exc = exc
@@ -1715,8 +1721,8 @@ async def _dispatch_explorer(
 
     # TEAM A / PHASE A — remember which worker holds this crawl, so completion
     # and the reaper can hand its registry slot back and retire its fence.
-    if worker:
-        await _stamp_worker(tenant_id, exploration_id, worker)
+    if dispatched_worker:
+        await _stamp_worker(tenant_id, exploration_id, dispatched_worker)
 
     # PERSIST the status this response reports. 'dispatched' was returned in the
     # body and never written, so the row said 'pending' while the API said
