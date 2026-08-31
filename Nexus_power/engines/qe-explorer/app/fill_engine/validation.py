@@ -149,6 +149,11 @@ class ConstraintHint:
     exact_length: Optional[int] = None
     #: The message asked for a different KIND of value ("enter a valid email").
     wants_type: str = ""
+    #: B2 — a regex derived from a FORMAT MASK the message displayed
+    #: ("Enter a valid SSN (XXX-XX-XXXX)").  The application is showing the
+    #: shape it wants; this is that shape, in the form the generator already
+    #: knows how to satisfy (:mod:`app.fill_engine.patterns`).
+    pattern: str = ""
     #: Nothing actionable was extractable.  A retry on this alone would be blind.
     @property
     def actionable(self) -> bool:
@@ -156,6 +161,7 @@ class ConstraintHint:
             self.minimum is not None or self.maximum is not None
             or self.minlength is not None or self.maxlength is not None
             or self.exact_length is not None or self.wants_type
+            or self.pattern
             or self.code == C.CODE_REQUIRED))
 
 
@@ -326,6 +332,90 @@ def _classify_message(message: str) -> tuple[str, str]:
     return "", detail
 
 
+
+#: B2 · A FORMAT MASK IS THE APPLICATION SHOWING ITS OWN ANSWER.
+#:
+#: MEASURED on summit-life-carrier: its schema rejects with "Enter a valid SSN
+#: (XXX-XX-XXXX)" — the shape is right there in the sentence, and
+#: :func:`interpret` returned ``actionable=False`` for it, so the repair loop
+#: correctly refused to retry blind and the funnel stopped. A mask is the most
+#: literal form of "the application's own words" there is: it is not a hint
+#: about the value, it IS the value's shape.
+#:
+#: STRUCTURAL, NOT VOCABULARY. A mask is recognised by its SHAPE — placeholder
+#: runs joined by separators — never by the words around it, so it reads
+#: identically in any language the application speaks.
+_MASK_CHARS = "9#0XxAaDMYN"
+_MASK_SEPARATORS = "-/. ()"
+#: Parenthesised first (the strongest signal, and how summit writes it), then a
+#: bare token. Both REQUIRE a separator: without one, "XXX" is as likely to be
+#: a rating or a redaction as a format.
+_MASK_RE = re.compile(
+    r"[(\[]\s*([" + _MASK_CHARS + r"]{1,6}(?:[" + re.escape("-/. ") +
+    r"][" + _MASK_CHARS + r"]{1,6}){1,5})\s*[)\]]"
+    r"|(?:^|\s)([" + _MASK_CHARS + r"]{1,6}(?:[" + re.escape("-/.") +
+    r"][" + _MASK_CHARS + r"]{1,6}){1,5})(?=$|[\s.,;])")
+
+#: What each placeholder admits. A digit mask is by far the common case
+#: (SSN, phone, postcode, date); ``A`` is the only letter placeholder in
+#: general use, so anything else is read as a digit.
+_MASK_CLASS = {"A": "[A-Za-z]", "a": "[A-Za-z]"}
+
+
+def mask_pattern(message: str) -> str:
+    """The regex a FORMAT MASK inside ``message`` describes, or "".
+
+    Returns an anchored pattern the generator can satisfy directly. A mask that
+    is all separators, or shorter than a plausible format, yields "" — a
+    pattern nobody can satisfy is worse than no pattern, because it would turn
+    an honest ASK into a retry that can never converge.
+    """
+    body = _norm(message)
+    if not body:
+        return ""
+    found = _MASK_RE.search(body)
+    if not found:
+        return ""
+    mask = (found.group(1) or found.group(2) or "").strip()
+    if found.group(2):
+        # A BARE TOKEN THAT IS ONLY PART OF A FORMAT IS WORSE THAN NO FORMAT.
+        # Measured: "(999) 999-9999" — the parenthesised branch rejects "999"
+        # as too short, and the bare branch then matched the TAIL, yielding
+        # ^\d{3}-\d{4}$, a pattern a complete phone number FAILS. A run
+        # preceded by a closing paren or another mask character is a fragment,
+        # so it is refused and the field falls to an honest ASK.
+        head = body[:found.start(2)].rstrip()
+        if head.endswith(")") or (head and head[-1] in _MASK_CHARS):
+            return ""
+    if len(mask) < 5 or not any(ch in _MASK_CHARS for ch in mask):
+        return ""
+    out: list[str] = ["^"]
+    run_char = ""
+    run_len = 0
+
+    def _flush() -> None:
+        nonlocal run_char, run_len
+        if run_len:
+            out.append(_MASK_CLASS.get(run_char, r"\d") +
+                       ("{%d}" % run_len if run_len > 1 else ""))
+        run_char, run_len = "", 0
+
+    for ch in mask:
+        if ch in _MASK_CHARS:
+            cls = _MASK_CLASS.get(ch, "d")
+            if run_char and _MASK_CLASS.get(run_char, "d") != cls:
+                _flush()
+            run_char, run_len = ch, run_len + 1
+        elif ch in _MASK_SEPARATORS:
+            _flush()
+            out.append(re.escape(ch))
+        else:
+            return ""                    # not a mask after all
+    _flush()
+    out.append("$")
+    return "".join(out)
+
+
 def interpret(message: str) -> ConstraintHint:
     """Turn a rejection message into something the generator can act on.
 
@@ -338,7 +428,21 @@ def interpret(message: str) -> ConstraintHint:
         return ConstraintHint()
     code, detail = _classify_message(body)
     if not code:
+        # A MESSAGE THAT DRAWS A FORMAT IS A FORMAT COMPLAINT, whatever words
+        # surround it. Measured: "Phone must be (999) 999-9999" and "Value must
+        # be XXX-XXX" both classify as NOTHING — the vocabulary check finds no
+        # min/max/required/valid word it knows — and the shape in the sentence
+        # was thrown away with them. The mask is its own evidence.
+        drawn = mask_pattern(body)
+        if drawn:
+            return ConstraintHint(code=C.CODE_PATTERN, pattern=drawn)
         return ConstraintHint()
+
+    # B2 — computed ONCE, beside the code, because a mask is ORTHOGONAL to a
+    # numeric rule: "Phone must be (999) 999-9999" classifies as a MIN (the
+    # words "must be") with no number, and returning early on that path lost
+    # the one thing in the sentence the generator could actually act on.
+    mask = mask_pattern(body)
 
     number: Optional[float] = None
     try:
@@ -359,12 +463,14 @@ def interpret(message: str) -> ConstraintHint:
     if code == C.CODE_MINLENGTH:
         n = int(number) if number is not None else None
         if re.search(r"\bexactly\b", lower) and n is not None:
-            return ConstraintHint(code=code, exact_length=n, wants_type=wants)
-        return ConstraintHint(code=code, minlength=n, wants_type=wants)
+            return ConstraintHint(code=code, exact_length=n, wants_type=wants,
+                                  pattern=mask)
+        return ConstraintHint(code=code, minlength=n, wants_type=wants,
+                              pattern=mask)
     if code == C.CODE_MAXLENGTH:
         return ConstraintHint(code=code,
                               maxlength=int(number) if number is not None else None,
-                              wants_type=wants)
+                              wants_type=wants, pattern=mask)
     if code == C.CODE_MIN:
         # "must be between 18 and 65" names both bounds; take them both.
         both = re.search(r"between\s+(\d[\d,]*)\s+and\s+(\d[\d,]*)", lower)
@@ -372,13 +478,18 @@ def interpret(message: str) -> ConstraintHint:
             return ConstraintHint(code=code,
                                   minimum=float(both.group(1).replace(",", "")),
                                   maximum=float(both.group(2).replace(",", "")),
-                                  wants_type=wants)
-        return ConstraintHint(code=code, minimum=number, wants_type=wants)
+                                  wants_type=wants, pattern=mask)
+        return ConstraintHint(code=code, minimum=number, wants_type=wants,
+                          pattern=mask)
     if code == C.CODE_MAX:
-        return ConstraintHint(code=code, maximum=number, wants_type=wants)
+        return ConstraintHint(code=code, maximum=number, wants_type=wants,
+                          pattern=mask)
     if code == C.CODE_REQUIRED:
         return ConstraintHint(code=code)
-    return ConstraintHint(code=code, wants_type=wants)
+    # B2 — the message may have SHOWN the shape it wants. Read last, so an
+    # explicit numeric or length rule above still wins; a mask is the fallback
+    # that turns "pattern, nothing actionable" into a repair the app dictated.
+    return ConstraintHint(code=code, wants_type=wants, pattern=mask)
 
 
 def signals_for_control(

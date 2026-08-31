@@ -311,6 +311,23 @@ def tighten(cons: C.Constraints, hint: ConstraintHint) -> C.Constraints:
         updates["maxlength"] = hint.exact_length
     if hint.code == C.CODE_REQUIRED:
         updates["required"] = True
+    #: Input types whose FORMAT the browser and the generator already own. A
+    #: message's mask must never be adopted for one of them: "Enter a valid
+    #: date (MM/DD/YYYY)" yields ^\d{2}/\d{2}/\d{4}$, which a real date
+    #: satisfies only by accident and which a shape-only generator would answer
+    #: with 55/55/5555 — a value of the right shape and no meaning. The
+    #: semantic path for these is strictly better than the mask.
+    _FORMAT_OWNED = ("date", "month", "week", "time", "datetime-local",
+                     "email", "url", "number", "tel")
+    if (hint.pattern and not cons.pattern
+            and cons.input_type not in _FORMAT_OWNED
+            and hint.wants_type not in ("date", "email", "url", "number")):
+        # B2 — ADOPTED ONLY WHERE THE CONTROL DECLARED NONE. Two regexes cannot
+        # be intersected, so a message's mask can never narrow a pattern the
+        # DOM already published: that one is authoritative and this one would
+        # be replacing it, not tightening it. Where the control declared
+        # nothing the mask is strictly more information than we had.
+        updates["pattern"] = hint.pattern
     if hint.wants_type and not cons.input_type:
         # The message named a KIND the control never declared — "enter a valid
         # email address" on a bare text input.  Adopting it makes the generator's
